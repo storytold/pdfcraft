@@ -12679,6 +12679,51 @@ fn printer_marks_through_tools() {
     ));
 }
 
+/// Marks and bleeds when printing: the marks are on the printed sheets, the document gets none.
+#[test]
+fn printing_with_printer_marks_through_tools() {
+    let dir = workdir("print-marks");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let before = page_text(&mut a, doc);
+    let width = ok(&mut a, "doc_info", json!({ "doc": doc }))["pages"][1]["width"].clone();
+    let r =
+        ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "2", "layout": "actual", "marks": ["all"], "marks_weight": 0.5, "path": "marked.pdf" }));
+    assert_eq!(r["sheets"], 1);
+    let printed = ok(&mut a, "doc_open", json!({ "path": "marked.pdf" }))["doc"].as_u64().unwrap();
+    let sheet = page_text(&mut a, printed).concat();
+    assert!(sheet.contains("a.pdf") && sheet.contains("2 of 3"), "the page information line: {sheet}");
+    ok(&mut a, "doc_close", json!({ "doc": printed }));
+    ok(&mut a, "doc_print", json!({ "doc": doc, "pages": "2", "marks": ["trim", "registration"], "path": "trim.pdf" }));
+    let trim = ok(&mut a, "doc_open", json!({ "path": "trim.pdf" }))["doc"].as_u64().unwrap();
+    assert!(!page_text(&mut a, trim).concat().contains("2 of 3"), "only the marks asked for");
+    // The document itself is untouched.
+    assert_eq!(page_text(&mut a, doc), before);
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!((&info["pages"][1]["width"], &info["document"]["dirty"]), (&width, &json!(false)));
+    for (wrong, says) in [
+        (json!({ "marks": [] }), "marks must be a list"),
+        (json!({ "marks": ["crop"] }), "marks must be a list"),
+        (json!({ "marks": "all" }), "marks must be a list"),
+        (json!({ "marks": ["all"], "marks_weight": 10 }), "marks_weight must be from"),
+        (json!({ "marks_weight": 1 }), "marks_weight needs marks"),
+        (json!({ "marks": ["all"], "layout": "multiple", "per_sheet": 2 }), "one page a sheet"),
+        (json!({ "marks": ["all"], "layout": "booklet" }), "one page a sheet"),
+        (json!({ "marks": ["all"], "as_image": true }), "as they are"),
+        (json!({ "marks": ["all"], "pages": "1", "area": [0, 0, 50, 50] }), "without printer marks"),
+    ] {
+        let mut args = wrong.clone();
+        args["doc"] = json!(doc);
+        args["path"] = json!("x.pdf");
+        match a.call("doc_print", &args) {
+            Err(ToolError::InvalidArgs(m)) => assert!(m.contains(says), "{wrong}: {m}"),
+            other => panic!("{wrong}: {other:?}"),
+        }
+    }
+    assert!(!dir.join("x.pdf").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Convert colours through the tools: counts, converts, reports nothing to do.
 #[test]
 fn convert_colours_through_tools() {
