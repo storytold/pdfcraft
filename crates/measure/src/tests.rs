@@ -194,10 +194,65 @@ fn measurement_csv_quotes_newlines_and_blocks_formula_cells() {
     m.label = "=SUM(1,2)\n\"room\"".into();
     m.author = "  @cmd".into();
     add(&mut d, &m, &Meta::default()).unwrap();
-    let csv = csv(&list(&d).measurements);
+    let csv = csv(&d, &list(&d).measurements);
     assert!(csv.contains("\"'=SUM(1,2)\n\"\"room\"\"\""));
     assert!(csv.contains("\"'  @cmd\""));
-    assert!(csv.starts_with("Page,Index,Type,Value"));
+    assert!(csv.starts_with("Page,Index,Type,Value,Unit,Label,Author,Scale,MinX,MinY,MaxX,MaxY,Points\r\n1,1,distance,10,\"m\",\"'=SUM(1,2)\n\"\"room\"\"\",\"'  @cmd\",\"1 pt = 2 m\","));
+    assert!(csv.ends_with(",0,788,3,792,\"0 792; 3 788\"\r\n"), "{csv}");
+}
+
+#[test]
+fn measurement_csv_preserves_negative_coordinates_without_formula_cells() {
+    let mut d = fixture("", "", &[]);
+    add(&mut d, &new(Kind::Distance, vec![[-3.0, 4.0], [2.0, 1.0]]), &Meta::default()).unwrap();
+    let measurements = list(&d).measurements;
+    let exported = csv(&d, &measurements);
+    assert!(exported.ends_with(",-3,788,2,791,\"'-3 788; 2 791\"\r\n"), "{exported}");
+    assert_eq!(csv(&d, &[]), "Page,Index,Type,Value,Unit,Label,Author,Scale,MinX,MinY,MaxX,MaxY,Points\r\n");
+    let mut invalid = measurements;
+    invalid[0].points.clear();
+    assert!(csv(&d, &invalid).ends_with(",,,,,\r\n"));
+}
+
+#[test]
+fn measurement_csv_rounds_fractional_display_coordinates() {
+    for rotation in [90, 270] {
+        let mut d = fixture("", &format!("/UserUnit 1.3 /Rotate {rotation} /CropBox [10.1 20.2 210.3 320.4]"), &[]);
+        let points =
+            [[-0.000_000_000_000_01, 12.3456], [120.300_000_000_000_01, 30.2]].into_iter().map(|p| view_to_user(&d, 0, p).unwrap()).collect();
+        add(&mut d, &new(Kind::Distance, points), &Meta::default()).unwrap();
+        let exported = csv(&d, &list(&d).measurements);
+        assert!(exported.ends_with(",0,12.346,120.3,30.2,\"0 12.346; 120.3 30.2\"\r\n"), "rotation {rotation}: {exported}");
+    }
+}
+
+#[test]
+fn measurement_csv_retains_rows_when_display_geometry_is_unavailable() {
+    // Finite PDF numbers, but the second page's displayed extent overflows.
+    // A zero-width CropBox alone is repaired to MediaBox by model::Page::crop.
+    let huge = format!("{:.0}", 1e308); // PDF numbers have no exponent notation.
+    let pdf = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] >>")
+        .obj("<< /Type /Page /Parent 2 0 R >>")
+        .obj(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {huge} {huge}] /CropBox [0 0 {huge} {huge}] /UserUnit 75000 >>"));
+    let mut d = Document::open(Arc::new(pdf.build())).unwrap();
+    assert!(pdfcraft_model::pages(&d)[1].display_size(&d).1.is_infinite());
+    let mut measurement = new(Kind::Distance, vec![[0.0, 0.0], [3.0, 4.0]]);
+    add(&mut d, &measurement, &Meta::default()).unwrap();
+    measurement.page = 1;
+    add(&mut d, &measurement, &Meta::default()).unwrap();
+    let mut measurements = list(&d).measurements;
+    assert_eq!(measurements.len(), 2);
+    let mut missing = measurements[0].clone();
+    missing.page = 99;
+    measurements.push(missing);
+    let exported = csv(&d, &measurements);
+    let rows: Vec<_> = exported.lines().collect();
+    assert_eq!(rows.len(), 4);
+    assert!(rows[1].ends_with(",0,788,3,792,\"0 792; 3 788\""), "{exported}");
+    assert_eq!(rows[2], "2,1,distance,10,\"m\",\"Room 1\",\"A\",\"1 pt = 2 m\",,,,,");
+    assert_eq!(rows[3], "100,1,distance,10,\"m\",\"Room 1\",\"A\",\"1 pt = 2 m\",,,,,");
 }
 
 #[test]

@@ -10758,6 +10758,59 @@ fn measurements_calibrate_draw_save_reopen_and_export() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// #6915: spreadsheet bounds and vertices use the same displayed coordinates as the tools.
+#[test]
+fn measurement_csv_exports_displayed_bounds_and_vertices_after_reopen() {
+    use pdfcraft_cos::{Document, Object, SaveOptions, write_full};
+    let dir = workdir("measurement-csv-coordinates");
+    for rotation in [0, 90, 180, 270] {
+        let mut source = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+        let page = pdfcraft_model::pages(&source)[0].obj;
+        source
+            .update_dict(page, |d| {
+                d.set(b"CropBox".to_vec(), Object::Array([10, 20, 190, 280].map(Object::Int).to_vec()));
+                d.set(b"Rotate".to_vec(), Object::Int(rotation));
+                d.set(b"UserUnit".to_vec(), Object::Int(2));
+            })
+            .unwrap();
+        std::fs::write(dir.join("plan.pdf"), write_full(&source, &SaveOptions::default()).unwrap()).unwrap();
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({"path":"plan.pdf"}))["doc"].as_u64().unwrap();
+        ok(&mut a, "measure_scale", json!({"doc":doc,"page":1,"units_per_point":1,"unit":"m"}));
+        let shapes = [
+            ("measure_distance", json!([[80, 100], [20, 20]]), "20,20,80,100,\"80 100; 20 20\""),
+            ("measure_perimeter", json!([[20, 30], [80, 30], [80, 110]]), "20,30,80,110,\"20 30; 80 30; 80 110\""),
+            ("measure_area", json!([[30, 40], [90, 40], [90, 120], [30, 120]]), "30,40,90,120,\"30 40; 90 40; 90 120; 30 120\""),
+        ];
+        for (tool, points, _) in &shapes {
+            ok(&mut a, tool, json!({"doc":doc,"page":1,"points":points,"label":"Floor A","author":"Tester"}));
+        }
+        let before = ok(&mut a, "measure_list", json!({"doc":doc}));
+        ok(&mut a, "measure_export", json!({"doc":doc,"out":"before.csv"}));
+        ok(&mut a, "doc_save", json!({"doc":doc,"path":"measured.pdf"}));
+        let reopened = ok(&mut a, "doc_open", json!({"path":"measured.pdf"}))["doc"].as_u64().unwrap();
+        assert_eq!(ok(&mut a, "measure_list", json!({"doc":reopened})), before);
+        let exported = ok(&mut a, "measure_export", json!({"doc":reopened,"out":"after.csv"}));
+        assert_eq!(exported["count"], 3);
+        assert_eq!(exported["unsupported"], 0);
+        let csv = std::fs::read_to_string(dir.join("after.csv")).unwrap();
+        assert_eq!(csv, std::fs::read_to_string(dir.join("before.csv")).unwrap());
+        let mut rows = csv.lines();
+        assert_eq!(rows.next(), Some("Page,Index,Type,Value,Unit,Label,Author,Scale,MinX,MinY,MaxX,MaxY,Points"));
+        for (((_, points, geometry), kind), value) in shapes.iter().zip(["distance", "perimeter", "area"]).zip([100, 140, 4800]) {
+            let row = rows.next().unwrap();
+            assert!(
+                row.contains(&format!(",{kind},{value},\"m{}\",\"Floor A\",\"Tester\",", if kind == "area" { "^2" } else { "" })),
+                "rotation {rotation}: {row}"
+            );
+            assert!(row.ends_with(geometry), "rotation {rotation}: {row}, expected {points}");
+        }
+        assert_eq!(rows.next(), None);
+        assert!(a.call("measure_export", &json!({"doc":reopened,"out":"../outside.csv"})).is_err());
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn measurement_scale_ratio_takes_the_page_side_in_a_unit() {
     // #2752: a plan drawn at 1:50 is "1 mm = 50 mm", so a line 10 mm long on the page is 500 mm.
