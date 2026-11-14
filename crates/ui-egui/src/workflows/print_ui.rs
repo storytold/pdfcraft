@@ -297,6 +297,11 @@ impl PdfCraftApp {
             if self.print_draft.crops.len() != doc.info.pages.len() {
                 self.print_draft.crops.resize(doc.info.pages.len(), None);
             }
+            for (i, slot) in self.print_draft.crops.iter_mut().enumerate() {
+                if pages.binary_search(&i).is_err() {
+                    *slot = None;
+                }
+            }
             let (tx, rx) = std::sync::mpsc::channel();
             let wake = WakeOnExit(self.ctx.clone());
             let ctx = self.ctx.clone();

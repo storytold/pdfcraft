@@ -173,7 +173,7 @@ fn segmented_pills<T: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, current: 
         .inner_margin(egui::Margin::symmetric(2, 2))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 for &(value, label) in options {
                     let is_active = *current == value;
                     let font = theme::medium(12.0);
@@ -493,7 +493,7 @@ pub(crate) fn body(
 
                 // Card 2: Pages to Print
                 print_card(ui, t, tl!("Pages to Print"), Some("files"), 452.0, Some(68.0), |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(tl!("Range:"));
                         let area_label = d.area.as_ref().map(|(page, a)| {
                             crate::i18n::fmt(
