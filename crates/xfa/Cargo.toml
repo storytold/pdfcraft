@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 pdfcraft-cos = { workspace = true }
 pdfcraft-fonts = { workspace = true }
-roxmltree = "0.21"
+craft-xml = { workspace = true }
 base64 = "0.23"
 craft-image-codecs = { workspace = true }
 sha2 = "0.11"
