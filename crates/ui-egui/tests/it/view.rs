@@ -2615,6 +2615,44 @@ fn assert_final_spread_bottom_reachable(heights: &[u32], cover: bool) {
     assert!((viewport.bottom() - bottom - 28.0).abs() < 1.0, "scroll end leaves the bottom margin: pages={pages:?}, viewport={viewport:?}");
 }
 
+/// #7249: in a continuous two-page spread wider than the window, with a short left page and a
+/// tall right one, the short page clicked stays current after the release; before, the tall
+/// partner took it back on the next frame, as it shows more height (running off the side), so
+/// Rotate turned the wrong page.
+#[test]
+fn a_clicked_short_page_in_a_wide_spread_stays_current() {
+    let heights = [800, 1200, 800, 1200];
+    let kids = (0..heights.len()).map(|i| format!("{} 0 R", i + 3)).collect::<Vec<_>>().join(" ");
+    let mut pdf = format!("%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [{kids}] /Count 4 >> endobj\n");
+    for (i, height) in heights.iter().enumerate() {
+        pdf += &format!("{} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 600 {height}] >> endobj\n", i + 3);
+    }
+    pdf += "trailer << /Root 1 0 R >>\n%%EOF";
+    let mut h = Harness::builder().with_size(egui::vec2(1440.0, 1000.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("short-and-tall.pdf", None, pdf.into_bytes()).unwrap();
+        for (key, value) in [("left", "closed"), ("panel", "none"), ("layout", "two-up"), ("zoom", "100")] {
+            app.set_option(key, value).unwrap();
+        }
+        app
+    });
+    h.run_steps(12);
+    let view = &h.state().views[0];
+    let (short, tall, viewport) = (view.page_screen_rect(0).expect("page 1"), view.page_screen_rect(1).expect("page 2"), view.viewport_rect());
+    // The case reported: the tall partner shows more height, but runs off the side.
+    let seen = |r: egui::Rect| r.intersect(viewport);
+    assert!(seen(tall).height() > seen(short).height() && seen(tall).width() < tall.width(), "{short:?} {tall:?} {viewport:?}");
+    let at = seen(short).center();
+    h.event(egui::Event::PointerMoved(at));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(6);
+    assert_eq!(h.state().views[0].current, 0, "page 1, clicked, stays current");
+}
+
 #[test]
 fn two_up_scroll_end_reaches_a_taller_left_page() {
     assert_final_spread_bottom_reachable(&[400, 400, 400, 100], false);

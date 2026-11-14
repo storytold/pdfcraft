@@ -1470,6 +1470,19 @@ impl PageFrame<'_> {
 /// fraction of a point differently once the scroll offset is applied.
 const PAGE_TIE: f32 = 0.5;
 
+/// How much of page rect `r` the viewport `visible` shows, as the visible height weighted by the
+/// share of the page's width that is visible (points). A page as wide as the view counts its
+/// visible height, as before; in a two-page spread wider than the window, a short page shown
+/// whole counts for more than the taller partner that runs off the side (#7249). Below zero when
+/// the page is out of view.
+fn visible_share(r: Rect, visible: Rect) -> f32 {
+    let seen = r.intersect(visible);
+    if seen.width() <= 0.0 || seen.height() <= 0.0 || r.width() <= 0.0 {
+        return seen.height().min(0.0);
+    }
+    seen.height() * (seen.width() / r.width()).min(1.0)
+}
+
 /// Draws page `i` of the visible pages: its raster, the tools' input and overlays.
 /// One visible page: its index, its rectangle on screen and the transform to and from the page.
 #[derive(Clone, Copy)]
@@ -1732,7 +1745,7 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         view.screen_rects.push((i, r));
         view.screen_xforms.push((i, PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) }));
     }
-    let overlap = r.intersect(visible).height();
+    let overlap = visible_share(r, visible);
     if i == view.current {
         frame.current_overlap = overlap;
         frame.current_height = r.height();
