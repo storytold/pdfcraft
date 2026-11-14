@@ -1,0 +1,24 @@
+{
+  "name": "PdfCraft",
+  "short_name": "PdfCraft",
+  "description": "View, edit, organize and secure PDF files in the browser.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f1f1f3",
+  "theme_color": "#f1f1f3",
+  "icons": [
+    { "src": "icons/256x256/apps/ai.storyteller.pdfcraft.png", "sizes": "256x256", "type": "image/png" },
+    { "src": "icons/512x512/apps/ai.storyteller.pdfcraft.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/scalable/apps/ai.storyteller.pdfcraft.svg", "sizes": "any", "type": "image/svg+xml" }
+  ],
+  "launch_handler": { "client_mode": ["focus-existing", "auto"] },
+  "file_handlers": [
+    {
+      "action": "./",
+      "accept": { "application/pdf": [".pdf"] },
+      "launch_type": "single-client"
+    }
+  ]
+}
