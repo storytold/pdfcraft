@@ -48,12 +48,12 @@ let mut s = Session::new();
 let id = s.open("report.pdf", Some(path), bytes, None)?;   // -> DocId
 
 s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 })?;
-let label = s.undo(id)?;                                    // "Rotate pages"
+let label = s.undo(id)?;                                    // "Rotate page"
 s.redo(id)?;
 
 let doc = s.get(id).ok_or("gone")?;                         // &Document: queries, never edits
 doc.can_undo(); doc.editable(); doc.allows_printing();
-doc.text_blocks(page); doc.page_boxes(page); doc.security_summary();
+doc.text_blocks(page); doc.page_boxes(); doc.security_summary();
 
 let bytes = s.save_bytes(id)?;        // incremental: keeps signatures over earlier revisions valid
 let bytes = s.save_full_bytes(id)?;   // full rewrite, garbage-collected
