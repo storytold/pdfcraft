@@ -167,23 +167,25 @@ mod page_argument_tests {
         let bytes = fixture(3);
         std::fs::write(&path, &bytes).unwrap();
         let missing = dir.0.join("missing.pdf");
+        let bad_page = "pdfcraft-cli: bad --page: expected a positive page number";
+        let missing_page = "pdfcraft-cli: text: --page needs a value";
         let invalid = [
-            vec!["--page", "0"],
-            vec!["--page", ""],
-            vec!["--page", "bad"],
-            vec!["--page", "-1"],
-            vec!["--page", "1.5"],
-            vec!["--page", "18446744073709551616"],
-            vec!["--page"],
-            vec!["--page", "--password", "unused"],
-            vec!["--page", "2", "--page"],
+            (vec!["--page", "0"], bad_page),
+            (vec!["--page", ""], bad_page),
+            (vec!["--page", "bad"], bad_page),
+            (vec!["--page", "-1"], bad_page),
+            (vec!["--page", "1.5"], bad_page),
+            (vec!["--page", "18446744073709551616"], bad_page),
+            (vec!["--page"], missing_page),
+            (vec!["--page", "--password", "unused"], bad_page),
+            (vec!["--page", "2", "--page"], missing_page),
         ];
         for input in [&path, &missing] {
-            for args in &invalid {
+            for (args, expected) in &invalid {
                 let out = Command::new(BIN).arg("text").arg(input).args(args).output().unwrap();
                 assert_eq!(out.status.code(), Some(1), "{args:?}: {out:?}");
                 assert!(out.stdout.is_empty(), "{args:?}: no text may be printed");
-                assert_eq!(String::from_utf8(out.stderr).unwrap().trim(), "pdfcraft-cli: bad --page: expected a positive page number");
+                assert_eq!(String::from_utf8(out.stderr).unwrap().trim(), *expected);
                 assert_eq!(std::fs::read(&path).unwrap(), bytes);
                 assert!(!missing.exists());
             }
