@@ -120,6 +120,19 @@ impl Bitmap {
         Self::new_with(width, height, 0, 0, false)
     }
 
+    /// PdfCraft patch: a height class collective bitmap (6.5.9), `width` being its symbols' widths
+    /// added up (TOTWIDTH, 32 bits in T.88). It holds the pixels of the symbols cut from it, which
+    /// were paid for out of the decoding work before it is made, and it is held only while they
+    /// are cut, so the bound on pixels applies and the bound on its width doesn't: that bound
+    /// refused a class of a few thousand symbols, and a real dictionary of 262,144 symbols 9 × 2
+    /// (PDFBOX-6263) was refused for its collective bitmap of 2,359,296 × 2, and its page drew white.
+    pub(crate) fn new_collective(width: u32, height: u32) -> Result<Self> {
+        if height > MAX_DIMENSION || u64::from(width) * u64::from(height) > MAX_PIXELS {
+            bail!(OverflowError::BitmapLimit);
+        }
+        Ok(Self::filled(width, height, 0, 0, false))
+    }
+
     /// Create a new bitmap with full configuration.
     pub(crate) fn new_with(
         width: u32,
@@ -135,7 +148,11 @@ impl Bitmap {
         if u64::from(width) * u64::from(height) > MAX_PIXELS {
             bail!(OverflowError::BitmapLimit);
         }
+        Ok(Self::filled(width, height, x_location, y_location, default_pixel))
+    }
 
+    /// A bitmap its caller has held to its bounds (`new_with`, `new_collective`).
+    fn filled(width: u32, height: u32, x_location: u32, y_location: u32, default_pixel: bool) -> Self {
         let stride = width.div_ceil(WORD_BITS);
         let default_word: Word = if default_pixel { !0 } else { 0 };
         let data = vec![default_word; stride as usize * height as usize];
@@ -150,7 +167,7 @@ impl Bitmap {
         if default_pixel {
             bitmap.clear_padding();
         }
-        Ok(bitmap)
+        bitmap
     }
 
     /// PdfCraft patch: clear the bits past `width` in each row's last word. "All pixels lying
@@ -387,5 +404,19 @@ mod pdfcraft_limit_tests {
             Bitmap::new(1 << 14, 1 << 14).is_ok(),
             "2^28 pixels are within it"
         );
+    }
+
+    /// PdfCraft patch: a height class collective bitmap is bounded by its pixels and its height,
+    /// not by the bound on its width: PDFBOX-6263's is 2,359,296 × 2.
+    #[test]
+    fn a_collective_bitmap_is_bounded_by_its_pixels_not_its_width() {
+        let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
+        let collective = Bitmap::new_collective(2_359_296, 2).unwrap();
+        assert_eq!((collective.width, collective.stride), (2_359_296, 73_728));
+        assert_eq!(collective.data.len(), 147_456);
+        assert_eq!(Bitmap::new(2_359_296, 2).map(|_| ()), limit, "a region is still held to its side");
+        assert!(Bitmap::new_collective(1 << 28, 1).is_ok(), "2^28 pixels in a row");
+        assert_eq!(Bitmap::new_collective((1 << 28) + 1, 1).map(|_| ()), limit, "the pixels");
+        assert_eq!(Bitmap::new_collective(1, MAX_DIMENSION + 1).map(|_| ()), limit, "the height");
     }
 }

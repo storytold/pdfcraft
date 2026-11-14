@@ -207,8 +207,8 @@ mutually exclusive with `hide_text_block`.
 
 When the renderer reports a warning for the page, `page_render` and `render_preview` return a
 JSON part after the PNG, `{ "page": 1, "warnings": [...] }`, with the sentences
-`pdfcraft-cli render` prints, such as "content past the page's safety budget, or a picture whose
-JBIG2 mask is past a decoder limit, was skipped" and "a colour that could not be computed was
+`pdfcraft-cli render` prints, such as "content past the page's safety budget, or a JBIG2 image or
+mask past a decoder limit with the picture it masks, was skipped" and "a colour that could not be computed was
 painted in a fallback colour". A page without warnings returns
 the PNG alone.
 

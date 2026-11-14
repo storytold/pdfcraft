@@ -639,9 +639,10 @@ const ENTRY_WORDS: u64 = 32;
 const MAX_RETAINED_WORDS: u64 =
     2 * (bitmap::MAX_PIXELS / bitmap::WORD_BITS as u64 + bitmap::BITMAP_WORDS as u64 + ENTRY_WORDS);
 
-/// PdfCraft patch: the most symbols one segment may refer to, 2^20, far beyond the 65,535 a
-/// dictionary may export. References may repeat, so each names the same symbols again: without
-/// this, 65,535 references to one dictionary in a 78 KB stream collected 17 GB of pointers.
+/// PdfCraft patch: the most symbols one segment may refer to, 2^20, four times the largest
+/// dictionary seen in a real file (262,144 symbols, PDFBOX-6263). References may repeat, so each
+/// names the same symbols again: without this, 65,535 references to one dictionary in a 78 KB
+/// stream collected 17 GB of pointers.
 const MAX_REFERRED_SYMBOLS: u64 = 1 << 20;
 
 /// Page-level decoding state for a JBIG2 page.

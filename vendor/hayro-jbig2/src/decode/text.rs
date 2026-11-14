@@ -11,7 +11,7 @@ use super::{
 use super::{RegionBitmap, generic_refinement};
 use crate::ScratchBuffers;
 use crate::arithmetic_decoder::{ArithmeticDecoder, ArithmeticDecoderContext};
-use crate::bitmap::{Bitmap, INTEGER_WORK, copy_work, decode_work};
+use crate::bitmap::{Bitmap, INTEGER_WORK, MAX_WORK, copy_work, decode_work};
 use crate::error::{HuffmanError, OverflowError, ParseError, Result, SymbolError, bail};
 use crate::huffman_table::{HuffmanTable, StandardHuffmanTables, TableLine};
 use crate::integer_decoder::IntegerDecoder;
@@ -85,6 +85,10 @@ pub(crate) fn decode_into(
     Ok(())
 }
 
+/// PdfCraft patch: the integers each instance is charged for, at `bitmap::INTEGER_WORK` each: its
+/// S, its T in the strip and its symbol's ID, and one for the strip's T it may start (6.4.5).
+const INSTANCE_INTEGERS: u64 = 4;
+
 /// Decode a text region segment with a decode context (6.4).
 pub(crate) fn decode_with(
     mut ctx: DecodeContext<'_, '_>,
@@ -95,10 +99,13 @@ pub(crate) fn decode_with(
 ) -> Result<()> {
     let strip_size = header.strip_size();
 
-    // Arbitrarily chosen, but we need some limit to prevent timeouts.
-    const MAX_INSTANCES: u32 = 10_000;
-
-    if header.num_instances > MAX_INSTANCES {
+    // PdfCraft patch: a region's instances are bounded by the decoding work they take, not by a
+    // count of their own. Upstream refused more than 10,000 ("arbitrarily chosen ... to prevent
+    // timeouts"), and a scanned page of 10,508 characters (PDFBOX-1439) drew white. Each instance
+    // pays for its copy and its four integers out of the stream's work (`bitmap::MAX_WORK`) before
+    // it is placed, and holds nothing once placed, which bounds the time and the memory; a count
+    // that work could never pay for is refused before anything is read, as a limit.
+    if u64::from(header.num_instances).saturating_mul(INSTANCE_INTEGERS * INTEGER_WORK) > MAX_WORK {
         bail!(SymbolError::TooManyInstances);
     }
 
@@ -162,7 +169,8 @@ pub(crate) fn decode_with(
 
             // PdfCraft patch: see `bitmap::MAX_WORK`. An instance of a large symbol costs its copy,
             // and 10,000 of one took 64 s. Even one with no pixels reads its four integers.
-            let work = copy_work(symbol_bitmap_ref.width, symbol_bitmap_ref.height).saturating_add(4 * INTEGER_WORK);
+            let work = copy_work(symbol_bitmap_ref.width, symbol_bitmap_ref.height)
+                .saturating_add(INSTANCE_INTEGERS * INTEGER_WORK);
             *work_left = work_left.checked_sub(work).ok_or(OverflowError::DecodingWork)?;
 
             if !header.flags.transposed

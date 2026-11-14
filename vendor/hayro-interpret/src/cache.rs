@@ -145,8 +145,8 @@ pub(crate) struct DecodedImageKey {
 /// entry take in the map.
 const FAILED_DECODE_BYTES: usize = 128;
 
-/// PdfCraft patch (91): with the warnings of a failure kept, that it left out a JBIG2 mask for a
-/// limit its stream reaches by itself ([`note_stream_limited`]); no warning's flag.
+/// PdfCraft patch (91): with the warnings of a failure kept, that it left out a JBIG2 image or mask
+/// for a limit its stream reaches by itself ([`note_stream_limited`]); no warning's flag.
 const STREAM_LIMITED: u8 = 128;
 
 std::thread_local! {
@@ -154,9 +154,9 @@ std::thread_local! {
 }
 
 /// PdfCraft patch (73): note, wherever a decode reports `ContentTruncated` for an image or a kept
-/// failure replays it, whether that left out a JBIG2 mask for a limit its stream reaches by itself
-/// (`hayro_syntax::jbig2_limited_by_stream`): its failure, and the failure of the image it takes
-/// along, is then the stream's to keep, since decoding it again refuses it again.
+/// failure replays it, whether that left out a JBIG2 image or mask for a limit its stream reaches by
+/// itself (`hayro_syntax::jbig2_limited_by_stream`): its failure, and the failure of any image a
+/// mask takes along, is then the stream's to keep, since decoding it again refuses it again.
 pub(crate) fn note_stream_limited(limited: bool) {
     LEFT_OUT_BY_STREAM_LIMIT.with(|left_out| left_out.set(limited));
 }
@@ -321,7 +321,8 @@ impl DecodedImageCache {
         }
         let entry = match &val {
             Some(val) => DecodedEntry::Decoded(Box::new(val.clone())),
-            // Here only when a limit of its stream refused the mask that left it out (above).
+            // Here only when a limit of its stream refused the JBIG2 image, or the mask, that left
+            // it out (above).
             None if truncated => DecodedEntry::Failed(reported | STREAM_LIMITED),
             None => DecodedEntry::Failed(reported),
         };

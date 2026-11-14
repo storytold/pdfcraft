@@ -985,17 +985,18 @@ fn decode_context<'a>(
         .decoded_image(&decode_params)
         .map_err(|_| {
             // PdfCraft patch (73): left out for the page's allowance, it is content the page's
-            // budget skipped, which is reported, and no failure of this image. So is a picture's
-            // mask one of the decoder's limits refused, which takes the picture with it
-            // (`decode_raster`).
+            // budget skipped, which is reported, and no failure of this image. So is a JBIG2
+            // image one of the decoder's limits refused: a picture's mask, which takes the
+            // picture with it (`decode_raster`), and one drawn on its own, a stencil mask
+            // included. The file is within the format, and reported as a failed image, which the
+            // renderer doesn't show, such an image left white where it is with nothing said
+            // (PDFBOX-6263's page, before its dictionary decoded).
             // Reported so, the decoded-image cache (patch 91) keeps the failure only when the
             // limit is one the stream reaches by itself, whatever the page had left.
-            let limited = obj.masks_picture && hayro_syntax::jbig2_limited();
+            let limited = hayro_syntax::jbig2_limited();
             let left_out =
                 (hayro_syntax::page_jbig2_work_spent() || limited) && uses_jbig2(&obj.stream);
-            crate::cache::note_stream_limited(
-                left_out && obj.masks_picture && hayro_syntax::jbig2_limited_by_stream(),
-            );
+            crate::cache::note_stream_limited(left_out && hayro_syntax::jbig2_limited_by_stream());
             (obj.warning_sink)(if left_out {
                 InterpreterWarning::ContentTruncated
             } else {
