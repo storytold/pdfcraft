@@ -724,6 +724,7 @@ thread_local! {
 }
 
 #[cfg(test)]
+/// Returns the number of source-character measurements on this thread and resets the counter.
 pub(crate) fn take_source_character_measurements() -> usize {
     SOURCE_CHARACTER_MEASUREMENTS.with(|count| count.replace(0))
 }

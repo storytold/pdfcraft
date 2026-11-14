@@ -371,6 +371,7 @@ struct Advance<'a> {
 }
 
 impl Advance<'_> {
+    /// Measures the advance in user space, combining source and fallback glyph widths for mixed runs.
     fn of(&self, s: &str) -> f64 {
         // A variation selector draws nothing and adds no spacing: it takes no room.
         let extra = s.chars().filter(|ch| !is_variation_selector(*ch)).count() as f64 * self.char_spacing;
@@ -696,6 +697,7 @@ impl LineWriter<'_> {
         Ok((dx, dx + w, -(index as f64) * self.lead - self.size * 0.12))
     }
 
+    /// Emits text-showing operators for each source or fallback run and tracks the selected font across pieces.
     fn show_piece(&self, piece: &str, line: &str, tw: f64, cursor: &mut LineCursor, ops: &mut Vec<Op>) -> Result<(), EditError> {
         let n = pdfcraft_content::num;
         for (source, run) in source_fallback_runs(piece, self.partial_chars) {
@@ -918,7 +920,7 @@ pub(crate) fn rewrite_block_from(
     // Preserve every drawable source glyph; cache missing-glyph lookups as well.
     let visual_indic = source.metrics.as_ref().is_some_and(|m| m.visual_order) || first.visual_order;
     let hebrew = flat.chars().any(crate::bidi::is_hebrew);
-    let source_advances: HashMap<char, Option<f64>> = source
+    let mut source_advances: HashMap<char, Option<f64>> = source
         .metrics
         .as_ref()
         .filter(|_| !reuse && upright && !hebrew && !visual_indic && style.family.is_none() && style.bold.is_none() && needs_type3(&flat))
@@ -930,6 +932,11 @@ pub(crate) fn rewrite_block_from(
             advances
         })
         .unwrap_or_default();
+    // A fallback face needs a visible glyph. If only selectors are missing, use the whole
+    // paragraph as before; clear the advances too so measuring and drawing use the same font.
+    if !source_advances.is_empty() && flat.chars().filter(|ch| source_advances.get(ch).copied().flatten().is_none()).all(is_variation_selector) {
+        source_advances.clear();
+    }
     let source_chars: HashSet<char> = source_advances.iter().filter_map(|(&ch, width)| width.map(|_| ch)).collect();
     let partial_reuse = !source_chars.is_empty();
     // The chosen style also determines the real Japanese fallback outlines and advances.
