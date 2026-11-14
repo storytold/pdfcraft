@@ -2,8 +2,9 @@
 //!
 //! Content is marked for redaction with Redact annotations (§12.5.6.23); `pdfcraft-annot`
 //! creates them. [`apply`] then removes everything under the marks, for good:
-//! - text glyphs (the rest of each line keeps its position), inline images, and paths that the
-//!   marks cover; images and vectors partly under a mark lose the covered part;
+//! - text glyphs (the rest of each line keeps its position), inline images, and paths that paint
+//!   under the marks (by what they paint inside the clip in force, not by their bounding boxes);
+//!   images partly under a mark lose the covered part, and a path partly under one goes whole;
 //! - content inside form XObjects (rewritten as new objects, so pages sharing them keep theirs);
 //! - comments, links and form fields whose rectangle overlaps a mark;
 //! - the marks themselves, replaced by boxes in their fill colour (with their overlay text)

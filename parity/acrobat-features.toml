@@ -5955,8 +5955,8 @@ milestone = "M8"
 status = "shipped"
 commands = ["redact.apply"]
 tools = ["redact_apply"]
-evidence = ["crates/redact/src/tests.rs::vectors_are_removed_or_clipped_and_inline_images_go"]
-notes = "intersecting paths removed to avoid leaking geometry behind clipping; shadings clipped"
+evidence = ["crates/redact/src/tests.rs::vectors_are_removed_or_clipped_and_inline_images_go", "crates/redact/src/tests/painted_paths.rs::a_path_whose_box_crosses_a_mark_but_whose_paint_does_not_stays", "crates/redact/src/tests/painted_paths.rs::a_path_whose_paint_reaches_a_mark_still_goes_whole", "crates/redact/src/tests/painted_paths.rs::a_form_draws_nothing_past_its_bbox"]
+notes = "a path that paints under a mark is removed whole, so no geometry stays behind a clip (partly covered paths are not cut); what a path paints is measured (fill outline and fill rule, stroke reach, inside the clip in force as a box), not its bounding box, so a page frame or clipped map areas round a mark in an empty margin stay; shadings clipped"
 
 [[feature]]
 id = "protect.redact-annots-fields"

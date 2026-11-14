@@ -9,8 +9,10 @@
 //! - images: fully covered → the `Do` is removed; partly covered → the covered pixels are
 //!   cleared in a copy of the image (or the image is removed when its codec can't be re-encoded);
 //!   inline images under a region are removed;
-//! - vectors: fully covered paths are removed; partly covered ones are clipped so nothing shows
-//!   inside the regions; shadings are clipped the same way;
+//! - vectors: a path that paints under a region is removed whole: a fill whose outline crosses
+//!   the region or encloses it, a stroke within the pen's reach of it, counting only the part of
+//!   the region inside the clip in force (see `paint`); shadings are clipped so nothing shows
+//!   inside the regions;
 //! - form XObjects under a region are rewritten recursively into new objects (copy-on-write, so
 //!   other pages using the original are untouched).
 //!
@@ -27,6 +29,7 @@ use crate::{RedactError, Report, image, page_streams, tags};
 use pdfcraft_fonts::pdf::Metrics;
 
 mod layers;
+mod paint;
 mod prune;
 
 use layers::strip_hidden_layers;
@@ -110,6 +113,12 @@ struct Gs {
     /// names up in this scope's resources (ISO 32000-2 §9.6.4), so a shown glyph may paint with
     /// any of this scope's patterns.
     type3_inherits: bool,
+    /// A box in page space round the clip in force, `None` while nothing clips: the clipping
+    /// paths the output keeps and the forms' `/BBox`es, intersected (ISO 32000-2 §8.5.4, §8.10.1).
+    /// Nothing paints outside it, so a path is measured by the part inside it. A clip that only
+    /// narrows it further (text clipping, a clipping path's real shape) is left out, which only
+    /// keeps it wider; one redaction removes clips nothing and leaves it as it was.
+    clip: Option<[f64; 4]>,
 }
 
 /// What processing a scope produced.
@@ -371,6 +380,17 @@ struct Glyph {
     rects: Vec<usize>,
 }
 
+/// The clip box `clip` narrowed to `b` (`None`: nothing clips); a box that isn't a number
+/// leaves it as it was, which only keeps it wider.
+fn narrow(clip: Option<[f64; 4]>, b: Option<[f64; 4]>) -> Option<[f64; 4]> {
+    match (clip, b) {
+        (_, None) => clip,
+        (_, Some(b)) if b.iter().any(|v| v.is_nan()) => clip,
+        (None, b) => b,
+        (Some(c), Some(b)) => Some([c[0].max(b[0]), c[1].max(b[1]), c[2].min(b[2]), c[3].min(b[3])]),
+    }
+}
+
 /// Record the patterns an operator paints with, so [`prune_patterns`] keeps them. Only path
 /// painting knows exactly what it draws and whether the paint survived; text, images and forms
 /// are recorded as they are met, which can keep a pattern whose paint was in fact all redacted,
@@ -407,6 +427,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         fill_pattern: None,
         stroke_pattern: None,
         type3_inherits: false,
+        clip: None,
     };
     process_from(doc, scope, streams, resources, gs)
 }
@@ -515,6 +536,8 @@ struct Walk {
     /// The current path: its operators, its bounding box in user space, and whether it clips.
     path: Vec<Op>,
     path_box: Option<[f64; 4]>,
+    /// The same path as segments in page space, to tell what it paints from its box.
+    outline: paint::Outline,
     clip: bool,
     /// Line-state operators (`w`, `M`, `j`, `J`, `d`, `gs`) met while a path is open: they apply to
     /// the stroke that ends it, so the path stays whole for the hit test, and they are written
@@ -540,6 +563,7 @@ impl Walk {
             fallback: Rc::new(Metrics::fallback()),
             path: Vec::new(),
             path_box: None,
+            outline: paint::Outline::default(),
             clip: false,
             pending: Vec::new(),
             clipped: HashSet::new(),
@@ -568,6 +592,7 @@ impl Walk {
             piece.ops.append(&mut self.path);
             piece.ops.append(&mut self.pending);
             self.path_box = None;
+            self.outline.clear();
             self.clip = false;
         }
         let kept = match o {
@@ -646,6 +671,7 @@ impl Walk {
             });
         }
         self.clip |= matches!(o, b"W" | b"W*");
+        self.outline.push(&op, &self.gs.ctm);
         self.path.push(op);
     }
 
@@ -668,6 +694,24 @@ impl Walk {
         [b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad]
     }
 
+    /// The pen a stroke of the current path paints with, in page space: half the line width (as
+    /// [`Self::stroke_box`] takes it) stretched by the CTM's largest stretch, √2 times that for a
+    /// projecting cap's corner, the miter limit when joins are mitred, and whether the CTM keeps
+    /// angles (the limit is tested on the angle in user space, ISO 32000-2 §8.4.3.5).
+    fn pen(&self) -> paint::Pen {
+        let [a, b, c, d, _, _] = self.gs.ctm.0;
+        // The largest singular value of the CTM's linear part: how far it stretches a disc.
+        let t = a * a + b * b + c * c + d * d;
+        let det = a * d - b * c;
+        let stretch = ((t + (t * t - 4.0 * det * det).max(0.0).sqrt()) / 2.0).sqrt();
+        let cap = if self.gs.line_cap == 2 { std::f64::consts::SQRT_2 } else { 1.0 };
+        let half = (self.gs.line_width.max(1.0) / 2.0 * stretch).max(0.5) * cap;
+        // Angles are kept by [a b; −b a] and its mirror [a b; b −a], within rounding.
+        let eps = 1e-9 * stretch;
+        let conformal = ((a - d).abs() <= eps && (b + c).abs() <= eps) || ((a + d).abs() <= eps && (b - c).abs() <= eps);
+        paint::Pen { half, miter: (self.gs.line_join == 0).then(|| self.gs.miter_limit.max(1.0)), conformal }
+    }
+
     /// A painting operator ends the path; one under a region is removed (or kept as a clip).
     fn paint_path(&mut self, scope: &mut Scope<'_>, op: Op, piece: &mut Piece) {
         let strokes = matches!(op.op.as_slice(), b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
@@ -675,11 +719,17 @@ impl Walk {
         // what the painting itself covers.
         let path_box = self.path_box.take();
         let bbox = path_box.map(|b| if strokes { self.stroke_box(b) } else { b });
+        let hit = scope.mode == Mode::Apply && op.op.as_slice() != b"n" && bbox.is_some_and(|b| self.paints_under(scope, op.op.as_slice(), b));
+        let outline = std::mem::take(&mut self.outline);
         let body = std::mem::take(&mut self.path);
         let clips = std::mem::replace(&mut self.clip, false);
         let pending = std::mem::take(&mut self.pending);
-        let hit = scope.mode == Mode::Apply && op.op.as_slice() != b"n" && bbox.is_some_and(|b| scope.hits(b));
         if !hit {
+            // A clip the output keeps narrows the clip in force, from the next operator on
+            // (§8.5.4: the painting itself is not clipped by it).
+            if clips && outline.sure() {
+                self.gs.clip = narrow(self.gs.clip, path_box);
+            }
             // The paint survives, so the pattern it draws with is still in use. `n` paints
             // nothing, so it uses none. A hit path is removed whole (F-008), pattern and all.
             let o = op.op.as_slice();
@@ -702,11 +752,48 @@ impl Walk {
                 let operands = if o == "re" { vec![num(0.0); 4] } else { vec![] };
                 piece.ops.push(Op::new(o, operands));
             }
+            let (x, y) = self.gs.ctm.apply(0.0, 0.0);
+            self.gs.clip = narrow(self.gs.clip, Some([x, y, x, y]));
         } else {
             piece.ops.extend(pending);
         }
         // Partial vector redaction must not retain underlying drawing commands
         // behind clipping (F-008). Refuse partial clip retention and remove the path.
+    }
+
+    /// Does painting operator `o` of the current path, whose box is `b`, paint under a mark?
+    /// Under each mark the box overlaps, the part of the mark inside the clip in force is
+    /// tested against the path's segments: a fill whose outline crosses it or that encloses it
+    /// (by its fill rule), a stroke that comes within the pen's reach of it. A path the segments
+    /// can't follow, or too large to test against so many marks, is measured by its box.
+    fn paints_under(&self, scope: &Scope<'_>, o: &[u8], b: [f64; 4]) -> bool {
+        let fills = matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*");
+        let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
+        let even_odd = matches!(o, b"f*" | b"B*" | b"b*");
+        let close_last = matches!(o, b"s" | b"b" | b"b*");
+        let pen = self.pen();
+        let marks = scope.rects.iter().filter(|r| overlaps(**r, b, 0.0)).count();
+        let sure = self.outline.sure() && pen.half.is_finite() && marks.saturating_mul(self.outline.len().max(1)) <= paint::MAX_WORK;
+        scope.rects.iter().any(|r| {
+            if !overlaps(*r, b, 0.0) {
+                return false;
+            }
+            let r = match self.gs.clip {
+                Some(c) => [r[0].max(c[0]), r[1].max(c[1]), r[2].min(c[2]), r[3].min(c[3])],
+                None => *r,
+            };
+            if r.iter().any(|v| v.is_nan()) {
+                return true;
+            }
+            // The clip keeps everything away from this mark.
+            if r[0] > r[2] || r[1] > r[3] {
+                return false;
+            }
+            if !sure {
+                return true;
+            }
+            (fills && self.outline.fill_hits(r, even_odd)) || (strokes && self.outline.stroke_hits(r, pen, close_last))
+        })
     }
 
     fn graphics_state(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {
@@ -1251,7 +1338,13 @@ fn xobject(
             let res = own.clone().unwrap_or_else(|| resources.clone());
             let saved_fonts = std::mem::take(&mut scope.fonts);
             scope.depth += 1;
-            let inner = process_from(doc, scope, std::slice::from_ref(&data), &res, Gs { ctm: fctm, ..gs.clone() });
+            let inner = process_from(
+                doc,
+                scope,
+                std::slice::from_ref(&data),
+                &res,
+                Gs { ctm: fctm, clip: narrow(gs.clip, bbox.map(|bb| fctm.bbox(bb))), ..gs.clone() },
+            );
             scope.depth -= 1;
             scope.fonts = saved_fonts;
             out.residue += inner.residue;
