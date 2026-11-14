@@ -1131,7 +1131,7 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
         }
     };
     crate::support::open_menu(&mut h, menu);
-    h.get_by(menu_row(preferences)).click();
+    h.get_by(menu_row(preferences)).click_accesskit();
     h.run_steps(2);
     for (current, next, code) in [("日本語", "English", "en"), ("English", "Українська", "uk"), ("Українська", "日本語", "ja")]
     {
