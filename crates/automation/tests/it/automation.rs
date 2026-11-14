@@ -3826,6 +3826,23 @@ fn headers_watermarks_and_backgrounds_through_tools() {
     let dir = workdir("marks");
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "doc_info", json!({ "doc": doc }))["document"].clone();
+    let original_text = page_text(&mut a, doc);
+    for margins in [
+        json!("36,36,72,72"),
+        json!(false),
+        json!([36, 36, 72]),
+        json!([36, 36, 72, 72, 1]),
+        json!([36, "bad", 36, 72, 72]),
+        json!([36, null, 36, 72, 72]),
+        json!([36, 36, "72", 72]),
+        json!([-1, 36, 72, 72]),
+    ] {
+        let refused = a.call("doc_header_footer", &json!({ "doc": doc, "header_right": "REJECTED", "margins": margins }));
+        assert!(matches!(&refused, Err(ToolError::InvalidArgs(message)) if message.contains("margins")), "{margins}: {refused:?}");
+        assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["document"], before, "refused margins changed state: {margins}");
+        assert_eq!(page_text(&mut a, doc), original_text, "refused margins added content: {margins}");
+    }
     ok(&mut a, "doc_header_footer", json!({ "doc": doc, "footer_center": "<<Page 1 of n>>", "header_right": "ACME" }));
     let texts = page_text(&mut a, doc);
     assert!(texts[2].contains("Page 3 of 3") && texts[0].contains("ACME"), "{texts:?}");
@@ -3840,7 +3857,7 @@ fn headers_watermarks_and_backgrounds_through_tools() {
     // A standard face other than Helvetica (#3754), kept through save and reopen; one it doesn't
     // offer is refused with the faces it does.
     let mono = ok(&mut a, "doc_open", json!({ "path": "b.pdf" }))["doc"].as_u64().unwrap();
-    ok(&mut a, "doc_header_footer", json!({ "doc": mono, "header_left": "MONO", "font": "Courier" }));
+    ok(&mut a, "doc_header_footer", json!({ "doc": mono, "header_left": "MONO", "font": "Courier", "margins": [0, 0, 12.5, 18] }));
     assert!(page_text(&mut a, mono)[0].contains("MONO"));
     ok(&mut a, "doc_save", json!({ "doc": mono, "path": "courier.pdf" }));
     let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("courier.pdf")).unwrap())).unwrap();
