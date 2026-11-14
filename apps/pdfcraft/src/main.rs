@@ -719,6 +719,10 @@ fn stage_control_file(
 ///   is being resized, Windows stretched the window's swap chain, still at the old size, to the
 ///   new one, so the text shimmered and the left panel's width bounced for as long as the drag
 ///   lasted (issue #2738). A visual's last frame is shown at its own size instead.
+/// - On Windows, Direct3D 12 compiles shaders with FXC, part of Windows, unless
+///   `WGPU_DX12_COMPILER` asks for DXC. wgpu's default loads `dxcompiler.dll` by bare name, which
+///   PdfCraft doesn't ship, so Windows walked the DLL search path, PATH included, and loaded
+///   another program's copy, of whatever version it was (issue #392's DXC compile error).
 fn configure_gpu(native: &mut eframe::NativeOptions) {
     let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut native.wgpu_options.wgpu_setup else { return };
     // Nothing draws or dispatches indirectly, so wgpu's check of indirect arguments only costs a
@@ -768,6 +772,8 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
     }
     if cfg!(target_os = "windows") {
         setup.instance_descriptor.backend_options.dx12.presentation_system = dx12_presentation(eframe::wgpu::Dx12SwapchainKind::from_env());
+        setup.instance_descriptor.backend_options.dx12.shader_compiler =
+            eframe::wgpu::Dx12Compiler::from_env().unwrap_or(eframe::wgpu::Dx12Compiler::Fxc);
     }
 }
 

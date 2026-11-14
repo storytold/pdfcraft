@@ -209,6 +209,19 @@ fn gpu_setup_avoids_vulkan_and_stretched_resizes_on_windows_and_prefers_low_powe
 }
 
 #[test]
+fn dx12_compiles_shaders_with_fxc_so_no_dxcompiler_dll_is_searched_for() {
+    let mut native = eframe::NativeOptions::default();
+    super::configure_gpu(&mut native);
+    let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &native.wgpu_options.wgpu_setup else { panic!("default setup creates its own instance") };
+    if cfg!(target_os = "windows") && std::env::var_os("WGPU_DX12_COMPILER").is_none() {
+        // wgpu's default (`Auto`) loads "dxcompiler.dll" by bare name, so Windows takes the first
+        // copy on the DLL search path, PATH included: another program's, of any version (#392).
+        let compiler = &setup.instance_descriptor.backend_options.dx12.shader_compiler;
+        assert!(matches!(compiler, eframe::wgpu::Dx12Compiler::Fxc), "{compiler:?}");
+    }
+}
+
+#[test]
 fn restored_hidpi_window_fits_the_adapters_surface_limit() {
     // The Outlook launch crash: 3440 x 1369 saved points at 250% DPI requested this surface.
     let (width, height) = (8600, 3423);
