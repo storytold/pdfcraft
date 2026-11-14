@@ -367,7 +367,23 @@ fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict, retain: bool) -
         if map.contains_key(&r) {
             continue;
         }
-        let o = reader.get(r);
+        let o = match reader.try_get(r) {
+            Ok(o) => o,
+            Err(CosError::MissingObject(_))
+                if matches!(
+                    reader.document.xref_entry(r.num),
+                    Some(XrefEntry::InStream { stream, .. })
+                        if reader.document.is_edited(stream) || reader.document.accepted_generations(stream).is_empty()
+                ) =>
+            {
+                continue;
+            }
+            Err(_) if reader.document.reconstructed() => {
+                // `try_get` recorded this in the unreadable-object list shared with the source.
+                continue;
+            }
+            Err(error) => return Err(full_save_read_error(r, error)),
+        };
         if matches!(*o, Object::Null) {
             continue; // dangling reference: written as null by renumbering below
         }
@@ -386,6 +402,13 @@ fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict, retain: bool) -
         kept.push((retain && kept_budget.admit(&o, reader.document.bytes())).then_some(o));
     }
     Ok((map, order, kept))
+}
+
+fn full_save_read_error(reference: ObjRef, error: CosError) -> CosError {
+    match error {
+        CosError::MissingObject(_) | CosError::UnreadableObject(_) | CosError::Syntax { .. } => CosError::UnreadableObject(reference.num),
+        error => error,
+    }
 }
 
 /// The object numbers a full save of `doc` would write: exactly the objects [`write_full`]
