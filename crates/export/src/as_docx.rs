@@ -387,7 +387,7 @@ xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawin
             target: format!("media/{name}"),
             external: false,
         });
-        pkg.binary(&format!("word/media/{name}"), image_mime(&im.ext), im.bytes.to_vec());
+        pkg.binary(&format!("word/media/{name}"), image_mime(im.ext), im.bytes.to_vec());
     }
     if page_colour.is_some() {
         doc_rels.items.push(RelOut { id: "rIdSettings".into(), ty: format!("{RT_BASE}settings"), target: "settings.xml".into(), external: false });
