@@ -220,7 +220,7 @@ pub fn write_atomically_with(
 /// Provenance is managed by macOS for the new file, not writable document metadata.
 #[cfg(target_os = "macos")]
 fn preserve_target_xattrs(path: &Path, staged: &std::fs::File) -> std::io::Result<()> {
-    use rustix::fs::{Mode, OFlags, XattrFlags, fgetxattr, flistxattr, fsetxattr, open};
+    use rustix::fs::{Mode, OFlags, XattrFlags, fgetxattr, fgetxattr_query, flistxattr, fsetxattr, open};
     use rustix::io::Errno;
 
     // A new destination has nothing to retain. Replacing a symlink has always replaced the
@@ -257,12 +257,13 @@ fn preserve_target_xattrs(path: &Path, staged: &std::fs::File) -> std::io::Resul
             continue;
         }
         let name = std::ffi::CString::new(name).map_err(|_| std::io::Error::other("invalid extended attribute name"))?;
-        let size = fgetxattr(&source, &name, &mut [] as &mut [u8])?;
+        // rustix treats an empty read buffer as reading zero bytes, not a size query.
+        let size = fgetxattr_query(&source, &name)?;
         if size > MAX_VALUE_BYTES || size > MAX_TOTAL_BYTES.saturating_sub(total) {
             return Err(std::io::Error::other("extended attributes exceed the 16 MiB per-value or 64 MiB total limit"));
         }
         // Resource forks may return a prefix instead of ERANGE on growth; check the size again.
-        let value = read_xattr_value(size, |buffer| Ok(fgetxattr(&source, &name, buffer)?))?;
+        let value = read_xattr_value(size, |buffer| Ok(fgetxattr(&source, &name, buffer)?), || Ok(fgetxattr_query(&source, &name)?))?;
         fsetxattr(staged, &name, &value, XattrFlags::empty())?;
         total = total.saturating_add(value.len());
     }
@@ -271,10 +272,14 @@ fn preserve_target_xattrs(path: &Path, staged: &std::fs::File) -> std::io::Resul
 
 /// Read an already size-bounded attribute, refusing a partial result or a changed post-read size.
 #[cfg(target_os = "macos")]
-fn read_xattr_value(size: usize, mut read: impl FnMut(&mut [u8]) -> std::io::Result<usize>) -> std::io::Result<Vec<u8>> {
+fn read_xattr_value(
+    size: usize,
+    read: impl FnOnce(&mut [u8]) -> std::io::Result<usize>,
+    query_size: impl FnOnce() -> std::io::Result<usize>,
+) -> std::io::Result<Vec<u8>> {
     let mut value = vec![0u8; size.max(1)];
     let len = read(value.as_mut_slice())?;
-    let after = read(&mut [])?;
+    let after = query_size()?;
     if len != size || after != size {
         return Err(std::io::Error::other("extended attribute changed size while saving"));
     }

@@ -623,14 +623,18 @@ mod tests {
     #[test]
     fn a_large_binding_does_not_block_a_document_save() {
         let (_dir, path) = TempDir::new("large-binding-save", &fixture(2));
-        xattr::set(&path, "com.apple.LaunchServices.OpenWith", &vec![b'x'; 65537]).unwrap();
+        let binding = vec![b'x'; 65537];
+        xattr::set(&path, "com.apple.LaunchServices.OpenWith", &binding).unwrap();
         xattr::set(&path, "com.apple.quarantine", b"0082;1234;Preview;").unwrap();
         let mut h = harness(&path);
         let app = h.state_mut();
         app.views[0].select_pages(&[0]);
         app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
         assert!(app.save_active(SaveTarget::InPlace), "the document save uses upstream preservation limits");
-        assert_eq!(xattr::get(&path, "com.apple.LaunchServices.OpenWith").unwrap().unwrap().len(), 65537);
+        let mut saved = vec![0; binding.len()];
+        let count = rustix::fs::lgetxattr(&path, "com.apple.LaunchServices.OpenWith", saved.as_mut_slice()).unwrap();
+        assert_eq!(count, binding.len());
+        assert_eq!(saved, binding);
         assert_eq!(xattr::get(&path, "com.apple.quarantine").unwrap(), Some(b"0082;1234;Preview;".to_vec()));
     }
 
