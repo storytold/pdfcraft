@@ -126,25 +126,32 @@ pub fn page_backdrops(doc: &Document, pages: &[usize]) -> Vec<Option<Backdrop>> 
     pages.iter().map(|&p| all.get(p).and_then(|page| scan(doc, page, None)).map(|(b, _)| b)).collect()
 }
 
+/// Whether something in a page's content list `list` needs its own backdrop off: a background,
+/// or an added image behind the page content. [`restore`] waits until neither is left.
+pub(crate) fn keeps_backdrop_off(doc: &Document, list: &[Object]) -> bool {
+    list.iter().any(|o| crate::place::stream_tag(doc, o).as_deref() == Some(MarkKind::Background.tag()) || crate::added::behind_item(doc, o))
+}
+
 /// Pages (0-based, ascending) whose own white backdrop [`replace`] turned off and [`restore`]
-/// couldn't turn back on: a tagged copy is still in their content, with no background over it.
-/// They look the same on white paper.
+/// couldn't turn back on: a tagged copy is still in their content, with no background or image
+/// behind the content over it. They look the same on white paper.
 pub fn backdrops_left_off(doc: &Document) -> Vec<usize> {
-    let tag_of = |o: &Object| crate::place::stream_tag(doc, o);
+    pdfcraft_model::pages(doc).iter().enumerate().filter(|(_, p)| left_off(doc, p)).map(|(i, _)| i).collect()
+}
+
+/// Whether page `page` (0-based) is one of [`backdrops_left_off`]; `false` past the last page.
+pub fn backdrop_left_off(doc: &Document, page: usize) -> bool {
+    pdfcraft_model::pages(doc).get(page).is_some_and(|p| left_off(doc, p))
+}
+
+fn left_off(doc: &Document, p: &pdfcraft_model::Page) -> bool {
     let copy = |o: &Object| doc.resolve(o).as_dict().is_some_and(|d| d.get(TAG).is_some());
-    pdfcraft_model::pages(doc)
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| {
-            let list: Vec<Object> = match p.dict.get(b"Contents").map(|c| doc.resolve(c)).as_deref() {
-                Some(Object::Array(a)) => a.clone(),
-                Some(_) => p.dict.get(b"Contents").cloned().into_iter().collect(),
-                None => Vec::new(),
-            };
-            list.iter().any(copy) && !list.iter().any(|o| tag_of(o).as_deref() == Some(MarkKind::Background.tag()))
-        })
-        .map(|(i, _)| i)
-        .collect()
+    let list: Vec<Object> = match p.dict.get(b"Contents").map(|c| doc.resolve(c)).as_deref() {
+        Some(Object::Array(a)) => a.clone(),
+        Some(_) => p.dict.get(b"Contents").cloned().into_iter().collect(),
+        None => Vec::new(),
+    };
+    list.iter().any(copy) && !keeps_backdrop_off(doc, &list)
 }
 
 /// Replace `page`'s white backdrop fill, if it has one (see the module doc). Returns whether it

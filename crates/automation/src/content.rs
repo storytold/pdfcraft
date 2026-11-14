@@ -127,6 +127,12 @@ pub(crate) fn opt_aligns(a: &Args) -> Result<Option<Vec<Option<TextAlign>>>> {
         .map(Some)
 }
 
+/// Whether an image behind the content of `page` (0-based) is still hidden there: by a picture
+/// covering the page (a scan), or a white backdrop that couldn't be turned off.
+fn hidden_behind(doc: &pdfcraft_engine::Document, page: usize) -> bool {
+    doc.page_backdrop(page).is_some()
+}
+
 impl Automation {
     pub(crate) fn content_list(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
@@ -156,7 +162,10 @@ impl Automation {
                             None => {}
                         }
                     }
-                    AddedContent::Image(_) => v["type"] = json!("image"),
+                    AddedContent::Image(i) => {
+                        v["type"] = json!("image");
+                        v["behind"] = json!(i.behind);
+                    }
                 }
                 v
             })
@@ -191,11 +200,18 @@ impl Automation {
         let bytes = crate::read_input(&path)?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let rect = rect_arg(a, "rect")?.map(|r| to_display(r, ph));
-        let mut out = self.apply(a, Edit::AddImage { page, rect, name, bytes: std::sync::Arc::new(bytes) })?;
+        let behind = a.opt_bool("behind")?.unwrap_or(false);
+        let before: Vec<_> = self.doc(a)?.added().iter().filter(|x| x.page == page).map(|x| x.obj).collect();
+        let mut out = self.apply(a, Edit::AddImage { page, rect, name, bytes: std::sync::Arc::new(bytes), behind })?;
         let doc = self.doc(a)?;
+        // Behind the page content, the new item is not the page's last one: find it by what is new.
         let mine: Vec<_> = doc.added().iter().filter(|x| x.page == page).collect();
-        out["index"] = json!(mine.len());
-        out["rect"] = json!(mine.last().map(|x| to_view(x.content.rect(), ph)));
+        let new = mine.iter().position(|x| !before.contains(&x.obj));
+        out["index"] = json!(new.map(|i| i + 1));
+        out["rect"] = json!(new.and_then(|i| mine.get(i)).map(|x| to_view(x.content.rect(), ph)));
+        if behind {
+            out["hidden_behind"] = json!(hidden_behind(doc, page));
+        }
         Ok(out)
     }
 
@@ -228,8 +244,8 @@ impl Automation {
                     t.text = s.to_string();
                 }
                 style(a, t)?;
-                if ["rotate", "flip_h", "flip_v", "crop", "image"].iter().any(|k| a.get(k).is_some()) {
-                    return Err(bad("rotate, flip, crop and image apply to images"));
+                if ["rotate", "flip_h", "flip_v", "crop", "image", "behind"].iter().any(|k| a.get(k).is_some()) {
+                    return Err(bad("rotate, flip, crop, image and behind apply to images"));
                 }
             }
             AddedContent::Image(i) => {
@@ -252,6 +268,9 @@ impl Automation {
                 if a.opt_bool("flip_v")? == Some(true) {
                     i.flip_v = !i.flip_v;
                 }
+                if let Some(b) = a.opt_bool("behind")? {
+                    i.behind = b;
+                }
                 if let Some(c) = rect_arg(a, "crop")? {
                     if !pdfcraft_engine::AddedImage::crop_valid(c) {
                         return Err(bad(
@@ -264,13 +283,27 @@ impl Automation {
                     let path = self.resolve(p, false)?;
                     let bytes = crate::read_input(&path)?;
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    // Box and transforms first, then the new picture.
+                    // Box and transforms first, then the new picture. A change of layer moves the
+                    // item in the page's list: follow it there.
+                    let obj = self.doc(a)?.added().iter().filter(|x| x.page == page).nth(index).map(|x| x.obj);
                     self.apply(a, Edit::UpdateContent { page, index, content: content.clone() })?;
+                    let index = self.doc(a)?.added().iter().filter(|x| x.page == page).position(|x| Some(x.obj) == obj).unwrap_or(index);
                     return self.apply(a, Edit::ReplaceImage { page, index, name, bytes: std::sync::Arc::new(bytes) });
                 }
             }
         }
-        self.apply(a, Edit::UpdateContent { page, index, content })
+        let behind = matches!(&content, AddedContent::Image(i) if i.behind);
+        let obj = self.doc(a)?.added().iter().filter(|x| x.page == page).nth(index).map(|x| x.obj);
+        let mut out = self.apply(a, Edit::UpdateContent { page, index, content })?;
+        let doc = self.doc(a)?;
+        // A change of layer moves the item in the page's list: say where it is now.
+        if let Some(now) = doc.added().iter().filter(|x| x.page == page).position(|x| Some(x.obj) == obj) {
+            out["index"] = json!(now + 1);
+        }
+        if behind {
+            out["hidden_behind"] = json!(hidden_behind(doc, page));
+        }
+        Ok(out)
     }
 
     pub(crate) fn content_delete(&mut self, a: &Args) -> Result<Value> {

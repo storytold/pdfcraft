@@ -12,7 +12,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use pdfcraft_fonts::{GlyphError, GlyphOutline, ShapedScript, Std14, literal, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, win_ansi};
 use unicode_bidi::{Level, ParagraphBidiInfo};
 
-use crate::{EditError, MarkKind, check, contents, matrix_number, n, page_list, place_tagged};
+use crate::{EditError, MarkKind, check, contents, matrix_number, n, page_list, place_object};
 
 mod draw;
 mod layout;
@@ -31,6 +31,7 @@ pub(crate) use layout::shaped_width;
 pub use layout::{PASTE_STEP, first_undrawable, lines, paste_place, paste_rect, text_rect, text_width};
 #[cfg(test)]
 use pdfcraft_fonts::ShapedCluster;
+pub(crate) use store::behind_item;
 pub use store::{add_content, delete_content, isolate_content, list_added, scan_markers, update_content};
 pub use types::{Added, AddedImage, AddedText, Align, CHAR_SPACING_LIMIT, Family, Ink, MarkerScan};
 

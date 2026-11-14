@@ -23,6 +23,13 @@ them with the image's current orientation. Full turns retain its appearance, rec
 and flips. Angles that are not multiples of 90 are refused without changing the document or
 its undo/redo history.
 
+`page_add_image` and `content_update` take `behind` for images: under the page's own text and
+images, over its backgrounds, instead of on top. A white backdrop the page paints itself is
+turned off while an image or a background behind needs it, and on again once nothing does;
+`hidden_behind` in the result says when a picture covering the page (a scan) still hides the
+image. The image's index changes with its layer: `page_add_image` returns the new item's
+index, `content_update` the index it has now, and `content_list` reports `behind`.
+
 `page_add_text`, `content_update` and `text_edit` take per-line `aligns`. An `"inherit"` entry
 follows the box-level `align`; legacy `null` entries remain accepted with the same meaning.
 

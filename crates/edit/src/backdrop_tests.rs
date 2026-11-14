@@ -605,3 +605,95 @@ fn compressed_backdrop_content_is_refused_before_expanding_past_the_scan_budget(
     let Object::Stream(unchanged) = &*doc.get(source) else { panic!("stream") };
     assert_eq!(unchanged.decoded_strict().unwrap(), bytes, "refusal preserves the source");
 }
+
+/// What each entry of the page's content list is: a mark's `/PCMark`, `copy` for a stream whose
+/// backdrop fill [`replace`] turned off, or `page` for the page's own content. The q/Q wrapper an
+/// item on top puts around the page is left out.
+fn kinds(doc: &Document) -> Vec<String> {
+    all_kinds(doc).into_iter().filter(|k| k != "Wrap").collect()
+}
+
+/// The page's streams without the q/Q wrapper ([`kinds`]).
+fn unwrapped(doc: &Document) -> Vec<String> {
+    streams(doc).into_iter().zip(all_kinds(doc)).filter(|(_, k)| k != "Wrap").map(|(s, _)| s).collect()
+}
+
+fn all_kinds(doc: &Document) -> Vec<String> {
+    let p = &pdfcraft_model::pages(doc)[0];
+    let list = match p.dict.get(b"Contents").map(|c| doc.resolve(c)).as_deref() {
+        Some(Object::Array(a)) => a.clone(),
+        _ => vec![],
+    };
+    list.iter()
+        .map(|o| match doc.resolve(o).as_dict() {
+            Some(d) if d.get(TAG).is_some() => "copy".into(),
+            Some(d) => d.name(b"PCMark").map_or("page".into(), |n| String::from_utf8_lossy(n).into_owned()),
+            None => "page".into(),
+        })
+        .collect()
+}
+
+/// An image (the page's `/Im0`) added under the page's text, or on top.
+fn image(behind: bool) -> crate::Content {
+    crate::Content::Image(crate::AddedImage { behind, ..crate::AddedImage::new([20.0, 20.0, 120.0, 80.0], ObjRef { num: 4, generation: 0 }) })
+}
+
+#[test]
+fn an_image_behind_the_text_turns_the_backdrop_off_until_nothing_behind_needs_it() {
+    let content = format!("q 1 g 0 0 300 200 re f Q {TEXT}");
+    let mut doc = page(&[&content]);
+    let original = streams(&doc);
+    assert_eq!(crate::add_content(&mut doc, 0, &image(false)).unwrap(), 0);
+    assert_eq!(kinds(&doc), ["page", "Added"], "on top, the page keeps its backdrop");
+    assert_eq!(page_backdrop(&doc, 0).unwrap(), Some(Backdrop::Fill));
+    assert_eq!(crate::add_content(&mut doc, 0, &image(true)).unwrap(), 0, "behind, the new item comes first");
+    assert_eq!(kinds(&doc), ["Added", "copy", "Added"]);
+    assert_eq!(unwrapped(&doc)[1], format!("q 1 g 0 0 300 200 re n Q {TEXT}"), "only the fill operator changed");
+    assert_eq!(page_backdrop(&doc, 0).unwrap(), None, "nothing hides the image now");
+    let saved = reopen(&doc);
+    let behind: Vec<bool> = crate::list_added(&saved).iter().map(|a| matches!(&a.content, crate::Content::Image(i) if i.behind)).collect();
+    assert_eq!(behind, [true, false], "the layer is kept in the file");
+    // A background goes under the image; removing it leaves the backdrop off for the image.
+    add_background(&mut doc, &[0], &red(), false).unwrap();
+    assert_eq!(kinds(&doc), ["Background", "Added", "copy", "Added"]);
+    remove_marks(&mut doc, &[0], MarkKind::Background).unwrap();
+    assert_eq!(kinds(&doc), ["Added", "copy", "Added"], "still off: the image behind needs it");
+    assert!(backdrops_left_off(&doc).is_empty(), "off on purpose, not left off");
+    // Brought to the top, the image no longer needs it: the page's own content is back.
+    crate::update_content(&mut doc, 0, 0, &image(false)).unwrap();
+    assert_eq!(kinds(&doc), ["page", "Added", "Added"]);
+    assert_eq!(unwrapped(&doc)[0], content, "the fill is on again");
+    // Behind again, then deleted: the page is exactly as it was before the item on top.
+    crate::update_content(&mut doc, 0, 1, &image(true)).unwrap();
+    assert_eq!(kinds(&doc), ["Added", "copy", "Added"]);
+    crate::delete_content(&mut doc, 0, 0).unwrap();
+    crate::delete_content(&mut doc, 0, 0).unwrap();
+    assert_eq!(unwrapped(&reopen(&doc)), original);
+    assert_eq!(page_backdrop(&doc, 0).unwrap(), Some(Backdrop::Fill));
+}
+
+#[test]
+fn images_behind_the_text_go_over_backgrounds_and_watermarks_in_the_order_added() {
+    // No backdrop of its own: the images go behind the whole page.
+    let mut doc = page(&[TEXT]);
+    add_background(&mut doc, &[0], &red(), false).unwrap();
+    let wm = crate::Watermark { text: "Draft".into(), behind: true, ..crate::Watermark::default() };
+    crate::add_watermark(&mut doc, &[0], &wm, false).unwrap();
+    assert_eq!(kinds(&doc), ["Background", "Watermark", "page"]);
+    let first = crate::add_content(&mut doc, 0, &image(true)).unwrap();
+    let second = crate::add_content(&mut doc, 0, &image(true)).unwrap();
+    assert_eq!((first, second), (0, 1), "a later image goes over the earlier one");
+    assert_eq!(kinds(&doc), ["Background", "Watermark", "Added", "Added", "page"]);
+    // A background added now still goes under them.
+    add_background(&mut doc, &[0], &Background { color: [0.0, 0.0, 1.0], ..Background::default() }, false).unwrap();
+    assert_eq!(kinds(&doc), ["Background", "Background", "Watermark", "Added", "Added", "page"]);
+}
+
+#[test]
+fn a_scanned_page_keeps_its_picture_over_an_image_behind_the_text() {
+    let mut doc = page(&[&format!("q 300 0 0 200 0 0 cm /Im0 Do Q {TEXT}")]);
+    assert_eq!(page_backdrop(&doc, 0).unwrap(), Some(Backdrop::Image));
+    crate::add_content(&mut doc, 0, &image(true)).unwrap();
+    assert_eq!(kinds(&doc), ["Added", "page"], "the picture can't be turned off");
+    assert_eq!(page_backdrop(&doc, 0).unwrap(), Some(Backdrop::Image), "so it still hides the image");
+}

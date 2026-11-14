@@ -113,6 +113,9 @@ pub struct ContentView {
     pressed_at: Option<(usize, Pos2)>,
     /// A button is down on the pages this frame (for [`keys`], which runs after them).
     held: bool,
+    /// Whether an image behind the content of a page is still hidden there, for (document, edit
+    /// generation, page): the check reads the start of the page's content, so once per edit.
+    pub(crate) hidden_behind: Option<(pdfcraft_engine::DocId, u64, usize, bool)>,
     undrawable: UndrawableMemo,
     layout: Option<(AddedText, f32, f64, [f64; 4])>,
 }
@@ -1153,7 +1156,7 @@ impl crate::PdfCraftApp {
         let page = self.views[i].current;
         let before_img = self.session.get(id).map_or(0, |d| d.page_images(page).len());
         let before_added = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
-        if self.apply_edit(Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes) }) {
+        if self.apply_edit(Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes), behind: false }) {
             self.views[i].content.selected = Some((page, before_added));
             self.views[i].content.select_added = Some((page, before_added));
             self.views[i].image_selection = Some(crate::edit_text_ui::ImageSelection::at(page, before_img));
@@ -1325,7 +1328,7 @@ impl crate::PdfCraftApp {
 
         let added_before: std::collections::HashSet<_> =
             self.session.get(id).into_iter().flat_map(|doc| doc.added()).filter(|item| item.page == page).map(|item| item.obj).collect();
-        if self.apply_edit(pdfcraft_engine::Edit::AddImage { page, rect: target_rect, name, bytes: std::sync::Arc::new(bytes) }) {
+        if self.apply_edit(pdfcraft_engine::Edit::AddImage { page, rect: target_rect, name, bytes: std::sync::Arc::new(bytes), behind: false }) {
             let selection = self.session.get(id).and_then(|doc| {
                 let mut inserted =
                     doc.added().iter().filter(|item| item.page == page).enumerate().filter(|(_, item)| !added_before.contains(&item.obj));
@@ -1363,8 +1366,9 @@ pub(crate) enum ImageAction {
 const FLIP_HORIZONTAL_ICON: &str = "flip-vertical-2";
 const FLIP_VERTICAL_ICON: &str = "flip-horizontal-2";
 
-/// Edit image: rotate, flip, crop, replace (shown while an added image is selected).
-pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::AddedImage) -> Option<ImageAction> {
+/// Edit image: rotate, flip, crop, replace, behind the text (shown while an added image is
+/// selected). `hidden`: the page still hides an image behind its content (a scan's picture).
+pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::AddedImage, hidden: bool) -> Option<ImageAction> {
     let mut out = None;
     widgets::section_title(ui, tl!("Edit image"));
     ui.horizontal(|ui| {
@@ -1422,6 +1426,15 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::
         if i.crop != img.crop {
             out = Some(ImageAction::Update(AddedContent::Image(i)));
         }
+    }
+    let mut behind = img.behind;
+    if ui.add(widgets::checkbox(&mut behind, tl!("Behind text and images"))).changed() {
+        out = Some(ImageAction::Update(AddedContent::Image(pdfcraft_engine::AddedImage { behind, ..img.clone() })));
+    }
+    if img.behind && hidden {
+        ui.label(
+            egui::RichText::new(tl!("A picture covers this page (a scan?), so the image behind its text won't show.")).small().color(UNDRAWABLE),
+        );
     }
     out
 }
@@ -1539,7 +1552,7 @@ mod tests {
                     return;
                 }
                 let t = Tokens::get(ui.ctx());
-                if let Some(ImageAction::Update(AddedContent::Image(i))) = image_panel(ui, &t, &img) {
+                if let Some(ImageAction::Update(AddedContent::Image(i))) = image_panel(ui, &t, &img, false) {
                     *out = Some(i);
                 }
             },
@@ -1549,6 +1562,45 @@ mod tests {
         h.get_by_label(tooltip).click();
         h.run();
         h.state().clone().expect("the button updates the image")
+    }
+
+    /// The image panel for `img`, with the image the last frame's action left.
+    fn panel_harness(img: pdfcraft_engine::AddedImage, hidden: bool) -> egui_kittest::Harness<'static, Option<pdfcraft_engine::AddedImage>> {
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::new_ui_state(
+            move |ui, out: &mut Option<pdfcraft_engine::AddedImage>| {
+                // The app's fonts (the semibold section title) take effect from the next frame.
+                if !fonts {
+                    ui.ctx().set_fonts(crate::theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                let t = Tokens::get(ui.ctx());
+                if let Some(ImageAction::Update(AddedContent::Image(i))) = image_panel(ui, &t, &img, hidden) {
+                    *out = Some(i);
+                }
+            },
+            None,
+        );
+        h.run();
+        h
+    }
+
+    #[test]
+    fn behind_text_checkbox_changes_the_layer_and_warns_where_a_scan_hides_it() {
+        let img = pdfcraft_engine::AddedImage::new([0.0, 0.0, 100.0, 50.0], pdfcraft_cos::ObjRef::new(7, 0));
+        let mut h = panel_harness(img.clone(), true);
+        assert!(h.query_by_label_contains("won't show").is_none(), "no note while on top");
+        h.get_by_label("Behind text and images").click();
+        h.run();
+        assert!(h.state().as_ref().is_some_and(|i| i.behind), "checking it puts the image behind");
+        let behind = pdfcraft_engine::AddedImage { behind: true, ..img };
+        let mut h = panel_harness(behind.clone(), true);
+        assert!(h.query_by_label_contains("won't show").is_some());
+        h.get_by_label("Behind text and images").click();
+        h.run();
+        assert!(h.state().as_ref().is_some_and(|i| !i.behind), "unchecking it brings the image to the top");
+        assert!(panel_harness(behind, false).query_by_label_contains("won't show").is_none(), "a page that shows it");
     }
 
     #[test]

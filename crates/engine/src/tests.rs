@@ -4240,6 +4240,93 @@ fn remove_background_names_the_pages_whose_own_backdrop_stays_off() {
     assert_eq!(page_runs(&[]), "");
 }
 
+/// One 200 × 300 page that paints itself white, then a black square at (40, 140)–(60, 160), as
+/// office and accounting exports do. `item`: an image added behind the content before it
+/// (object 6, drawing image object 7 over the page's top half), and a backdrop copy tagged
+/// `item`'s value in place of the page's own stream.
+fn white_page_pdf(item: Option<&str>) -> Vec<u8> {
+    let (tag, fill) = match item {
+        Some(tag) => (format!("/PCBackdrop {tag} "), "n"),
+        None => (String::new(), "f"),
+    };
+    let content = format!("q 1 g 0 0 200 300 re {fill} Q 0 g 40 140 20 20 re f");
+    let draw = "q 200 0 0 150 0 150 cm /PCIm0 Do Q";
+    let (list, extra) = match item {
+        Some(_) => (
+            "6 0 R 5 0 R",
+            format!(
+                "6 0 obj << /PCMark /Added /PCAdded << /Kind /Image /Image 7 0 R /Rect [0 150 200 300] /Behind true >> /Length {} >> stream\n{draw}\nendstream endobj\n\
+                 7 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length 7 >> stream\n0000FF>\nendstream endobj\n",
+                draw.len()
+            ),
+        ),
+        None => ("5 0 R", String::new()),
+    };
+    format!(
+        "%PDF-1.7\n\
+         1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents [{list}] /Resources << /XObject << /PCIm0 7 0 R >> >> >> endobj\n\
+         5 0 obj << {tag}/Length {} >> stream\n{content}\nendstream endobj\n\
+         {extra}trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes()
+}
+
+/// An image behind the text shows on a page that paints itself white and stays under its
+/// content, through a change of layer, undo, saving and reopening; deleting it turns the page's
+/// own backdrop back on.
+#[test]
+fn images_behind_the_text_show_on_pages_that_paint_themselves_white() {
+    let (blue, black, white) = ([0, 0, 255, 255], [0, 0, 0, 255], [255, 255, 255, 255]);
+    let mut s = Session::new();
+    let id = s.open("white.pdf", None, Arc::new(white_page_pdf(None)), None).unwrap();
+    let bytes = Arc::new(bmp(2, 2, [255, 0, 0]));
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([0.0, 100.0, 200.0, 200.0]), name: "blue.bmp".into(), bytes, behind: true }).unwrap();
+    assert_eq!(pixel(&s, id, 0, 5, 150), blue, "the image shows where the page painted white");
+    assert_eq!(pixel(&s, id, 0, 50, 150), black, "and the page's content stays on top of it");
+    assert_eq!(pixel(&s, id, 0, 5, 5), white);
+    assert_eq!(s.get(id).unwrap().page_backdrop(0), None, "the backdrop is off");
+    let AddedContent::Image(img) = s.get(id).unwrap().added()[0].content.clone() else { panic!("an image") };
+    assert!(img.behind);
+    let front = AddedContent::Image(AddedImage { behind: false, ..img });
+    s.apply(id, Edit::UpdateContent { page: 0, index: 0, content: front }).unwrap();
+    assert_eq!(pixel(&s, id, 0, 50, 150), blue, "on top, it covers the content");
+    assert_eq!(s.get(id).unwrap().page_backdrop(0), Some(Backdrop::Fill), "and the backdrop is back");
+    s.undo(id).unwrap();
+    assert_eq!(pixel(&s, id, 0, 50, 150), black);
+    let saved = s.save_bytes(id).unwrap();
+    let again = s.open("again.pdf", None, saved, None).unwrap();
+    assert_eq!(pixel(&s, again, 0, 5, 150), blue);
+    assert_eq!(pixel(&s, again, 0, 50, 150), black);
+    assert!(matches!(&s.get(again).unwrap().added()[0].content, AddedContent::Image(i) if i.behind));
+    s.apply(again, Edit::DeleteContent { page: 0, index: 0 }).unwrap();
+    assert_eq!(s.get(again).unwrap().page_backdrop(0), Some(Backdrop::Fill));
+    assert!(s.get(again).unwrap().edit_notices.is_empty(), "turned back on: nothing to say");
+}
+
+/// Deleting an image behind the text says which pages keep their own white backdrop off (it
+/// couldn't be turned back on safely), and only for pages the edit left off.
+#[test]
+fn deleting_an_image_behind_the_text_names_the_pages_whose_backdrop_stays_off() {
+    let mut s = Session::new();
+    // A tag whose hash doesn't match the operators before the fill: something changed them since.
+    let tag = format!("<< /Index 6 /Op (f) /Before <{}> >>", "00".repeat(32));
+    let id = s.open("a.pdf", None, Arc::new(white_page_pdf(Some(&tag))), None).unwrap();
+    assert!(s.get(id).unwrap().added().first().is_some_and(|a| matches!(&a.content, AddedContent::Image(i) if i.behind)));
+    s.apply(id, Edit::DeleteContent { page: 0, index: 0 }).unwrap();
+    let d = s.get(id).unwrap();
+    assert_eq!(d.edit_notices, [EditNotice::ImageBackdropsLeftOff { pages: vec![0] }]);
+    let said = d.edit_notices[0].to_string();
+    assert!(said.starts_with("page 1 changed after an image was put behind the text"), "{said}");
+    // Left off before this edit: adding and deleting another item on top says nothing.
+    let bytes = Arc::new(bmp(2, 2, [255, 0, 0]));
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([0.0, 0.0, 20.0, 20.0]), name: "b.bmp".into(), bytes, behind: false }).unwrap();
+    s.apply(id, Edit::DeleteContent { page: 0, index: 0 }).unwrap();
+    assert!(s.get(id).unwrap().edit_notices.is_empty());
+}
+
 /// Update previews its marks on the page without the ones it replaces: a yellow background
 /// updated to blue isn't previewed as blue over yellow, nor a new watermark over the old one.
 /// The other kinds of mark and the page's own content stay, every page is prepared at once (the
@@ -4933,7 +5020,7 @@ fn added_text_and_images_render_and_stay_editable() {
     // A PNG, centred at its natural size.
     let img = craft_image_codecs::Image::from_u8(20, 10, craft_image_codecs::ChannelLayout::Rgb, vec![0u8; 600]).unwrap();
     let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
-    s.apply(id, Edit::AddImage { page: 0, rect: None, name: "dot.png".into(), bytes: Arc::new(png) }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: None, name: "dot.png".into(), bytes: Arc::new(png), behind: false }).unwrap();
     let d = s.get(id).unwrap();
     assert_eq!(d.added().len(), 2);
     assert_eq!(d.added()[1].content.rect(), [90.0, 145.0, 110.0, 155.0], "20×10 px at 72 dpi, centred on 200×300");
@@ -4977,7 +5064,8 @@ fn pasted_added_content_keeps_its_style_and_picture() {
     let px: Vec<u8> = (0..200).flat_map(|i| [(i % 256) as u8, 40, 200]).collect();
     let img = craft_image_codecs::Image::from_u8(20, 10, craft_image_codecs::ChannelLayout::Rgb, px).unwrap();
     let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 150.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 150.0]), name: "p.png".into(), bytes: Arc::new(png), behind: false })
+        .unwrap();
     let AddedContent::Image(mut img) = s.get(id).unwrap().added()[1].content.clone() else { panic!("the image is the page's second item") };
     (img.rotation, img.flip_h, img.crop) = (1, true, [0.1, 0.0, 0.2, 0.05]);
     s.apply(id, Edit::UpdateContent { page: 0, index: 1, content: AddedContent::Image(img.clone()) }).unwrap();
@@ -5034,8 +5122,11 @@ fn an_added_jpeg_2000_image_is_copied_as_its_file() {
     let file = [signature.as_slice(), &bx(b"ftyp", b"jp2 \0\0\0\0jp2 "), &bx(b"jp2h", &bx(b"ihdr", &ihdr)), &bx(b"jp2c", &[0xFF, 0x4F, 0xFF, 0x51])]
         .concat();
     let (mut s, id) = session_with(1);
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 110.0, 140.0]), name: "photo.jp2".into(), bytes: Arc::new(file.clone()) })
-        .unwrap();
+    s.apply(
+        id,
+        Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 110.0, 140.0]), name: "photo.jp2".into(), bytes: Arc::new(file.clone()), behind: false },
+    )
+    .unwrap();
     let (ext, copied) = s.get(id).unwrap().added_image_file(0, 0).unwrap();
     assert_eq!((ext, &copied), ("jp2", &file), "the file as it was added");
     let AddedContent::Image(img) = s.get(id).unwrap().added()[0].content.clone() else { panic!("an image was added") };
@@ -5090,7 +5181,8 @@ fn added_images_rotate_flip_and_crop_as_drawn() {
     let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     // A 100×100 box at (50, 100) on the 200×300 page.
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "rb.png".into(), bytes: Arc::new(png) }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "rb.png".into(), bytes: Arc::new(png), behind: false })
+        .unwrap();
     let colour_at = |s: &Session, x: u32, y_from_top: u32| -> [u8; 3] {
         let doc = s.get(id).unwrap();
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), Default::default());
@@ -10266,7 +10358,11 @@ fn mixed_object_moves_are_one_undo_step_and_survive_save_reopen() {
     let image = image::RgbImage::from_pixel(12, 8, image::Rgb([240, 20, 20]));
     let mut png = std::io::Cursor::new(Vec::new());
     image.write_to(&mut png, image::ImageFormat::Png).unwrap();
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([40.0, 40.0, 80.0, 70.0]), name: "red.png".into(), bytes: Arc::new(png.into_inner()) }).unwrap();
+    s.apply(
+        id,
+        Edit::AddImage { page: 0, rect: Some([40.0, 40.0, 80.0, 70.0]), name: "red.png".into(), bytes: Arc::new(png.into_inner()), behind: false },
+    )
+    .unwrap();
     let saved = s.save_bytes(id).unwrap();
     s.mark_saved(id, saved.clone(), None).unwrap();
     let before = s.get(id).unwrap().editable_objects(0).unwrap();
@@ -10357,8 +10453,17 @@ fn group_moves_preserve_rotated_added_content_raster_geometry() {
     let image = image::RgbImage::from_fn(20, 10, |x, _| image::Rgb(if x < 10 { [240, 20, 20] } else { [20, 20, 240] }));
     let mut png = std::io::Cursor::new(Vec::new());
     image.write_to(&mut png, image::ImageFormat::Png).unwrap();
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([40.0, 40.0, 80.0, 70.0]), name: "quadrants.png".into(), bytes: Arc::new(png.into_inner()) })
-        .unwrap();
+    s.apply(
+        id,
+        Edit::AddImage {
+            page: 0,
+            rect: Some([40.0, 40.0, 80.0, 70.0]),
+            name: "quadrants.png".into(),
+            bytes: Arc::new(png.into_inner()),
+            behind: false,
+        },
+    )
+    .unwrap();
     let AddedContent::Image(mut image) = s.get(id).unwrap().added()[1].content.clone() else { panic!() };
     image.flip_h = true;
     image.crop = [0.1, 0.0, 0.2, 0.0];
@@ -12669,7 +12774,7 @@ fn added_image_move_then_rotate_keeps_position() {
     let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
     let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png), behind: false }).unwrap();
     let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
     s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move([120.0, 120.0, 160.0, 160.0]) }).unwrap();
     let moved = rect(&s);
@@ -12686,7 +12791,7 @@ fn added_image_transform_then_rotate_keeps_position() {
     let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
     let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png), behind: false }).unwrap();
     let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
     // Translate by (100, 100): matrix [1, 0, 0, 1, 100, 100]
     s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform([1.0, 0.0, 0.0, 1.0, 100.0, 100.0]) }).unwrap();
@@ -12704,7 +12809,7 @@ fn added_image_move_then_rotate_by_keeps_position() {
     let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
     let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png), behind: false }).unwrap();
     let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
     s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move([120.0, 120.0, 160.0, 160.0]) }).unwrap();
     let moved = rect(&s);
@@ -12722,8 +12827,10 @@ fn added_image_arrange_converts_to_ordinary_image() {
     let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
     let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p1.png".into(), bytes: Arc::new(png.clone()) }).unwrap();
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([100.0, 100.0, 200.0, 200.0]), name: "p2.png".into(), bytes: Arc::new(png) }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p1.png".into(), bytes: Arc::new(png.clone()), behind: false })
+        .unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([100.0, 100.0, 200.0, 200.0]), name: "p2.png".into(), bytes: Arc::new(png), behind: false })
+        .unwrap();
     assert_eq!(s.get(id).unwrap().page_images(0).len(), 2);
     assert_eq!(s.get(id).unwrap().added().len(), 2);
     s.apply(id, Edit::EditPageImage { page: 0, index: 1, change: ImageEdit::Arrange(ArrangeOrder::SendToBack) }).unwrap();
@@ -12736,7 +12843,8 @@ fn added_image_crop_then_move_keeps_crop() {
     let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
     let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 100.0, 100.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 100.0, 100.0]), name: "p.png".into(), bytes: Arc::new(png), behind: false })
+        .unwrap();
     s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop([30.0, 30.0, 70.0, 70.0]) }).unwrap();
     s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move([50.0, 50.0, 130.0, 130.0]) }).unwrap();
     let img = s.get(id).unwrap().page_images(0)[0].clone();
@@ -12756,7 +12864,11 @@ fn added_image_move_and_transform_on_rotated_and_user_unit_pages() {
         let mut s = Session::new().with_clock(|| 1_700_000_000);
         let id = s.open("test.pdf", None, Arc::new(pdf), None).expect("opens");
 
-        s.apply(id, Edit::AddImage { page: 0, rect: Some([10.0, 10.0, 50.0, 50.0]), name: "img.png".into(), bytes: png_bytes.clone() }).unwrap();
+        s.apply(
+            id,
+            Edit::AddImage { page: 0, rect: Some([10.0, 10.0, 50.0, 50.0]), name: "img.png".into(), bytes: png_bytes.clone(), behind: false },
+        )
+        .unwrap();
 
         // Target user-space rectangle R
         let r = [30.0, 40.0, 80.0, 90.0];
@@ -12827,7 +12939,7 @@ fn replace_on_added_image_replaces_xobject_and_undo_restores() {
     let png2 = make_png([0, 0, 255]);
 
     let (mut s, id) = session_with(1);
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "img1.png".into(), bytes: png1 }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "img1.png".into(), bytes: png1, behind: false }).unwrap();
 
     let old_obj = s.get(id).unwrap().page_images(0)[0].object.expect("initial image object ref");
 
@@ -12863,7 +12975,7 @@ fn mirroring_transform_on_added_image_flips_and_non_finite_is_refused() {
     let png1 = make_png([255, 0, 0]);
 
     let (mut s, id) = session_with(1);
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([0.0, 0.0, 80.0, 40.0]), name: "img1.png".into(), bytes: png1 }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([0.0, 0.0, 80.0, 40.0]), name: "img1.png".into(), bytes: png1, behind: false }).unwrap();
 
     let initial_img = s.get(id).unwrap().page_images(0)[0].clone();
     assert_eq!(initial_img.rect, [0.0, 0.0, 80.0, 40.0]);
@@ -12918,7 +13030,7 @@ fn transform_on_added_image_folds_quarter_turns_and_promotes_non_axis_aligned() 
     let png1 = make_png([0, 128, 255]);
 
     let (mut s, id) = session_with(1);
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([100.0, 100.0, 200.0, 150.0]), name: "img.png".into(), bytes: png1 }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([100.0, 100.0, 200.0, 150.0]), name: "img.png".into(), bytes: png1, behind: false }).unwrap();
 
     // 1. A pure 90° clockwise rotation matrix about the image centre:
     let rot_90_cw = pdfcraft_edit::turn_about_centre([100.0, 100.0, 200.0, 150.0], 1, false, false);
@@ -13014,8 +13126,11 @@ fn test_added_image_transform_reflections_with_rotation() {
     {
         // 1a: Flip Horizontal after 90° rotation
         let (mut s, id) = session_with(1);
-        s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "img.png".into(), bytes: make_asymmetric_png() })
-            .unwrap();
+        s.apply(
+            id,
+            Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "img.png".into(), bytes: make_asymmetric_png(), behind: false },
+        )
+        .unwrap();
         check_quadrants(&s, id, is_red, is_green, is_blue, is_yellow, "initial");
 
         s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(1) }).unwrap();
@@ -13034,8 +13149,11 @@ fn test_added_image_transform_reflections_with_rotation() {
     {
         // 1b: Flip Vertical after 90° rotation
         let (mut s, id) = session_with(1);
-        s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "img.png".into(), bytes: make_asymmetric_png() })
-            .unwrap();
+        s.apply(
+            id,
+            Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "img.png".into(), bytes: make_asymmetric_png(), behind: false },
+        )
+        .unwrap();
         s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(1) }).unwrap();
 
         s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Flip { horizontal: false } }).unwrap();
@@ -13054,8 +13172,11 @@ fn test_added_image_transform_reflections_with_rotation() {
     {
         // 2a: Flip Horizontal after 270° rotation
         let (mut s, id) = session_with(1);
-        s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "img.png".into(), bytes: make_asymmetric_png() })
-            .unwrap();
+        s.apply(
+            id,
+            Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "img.png".into(), bytes: make_asymmetric_png(), behind: false },
+        )
+        .unwrap();
         s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(3) }).unwrap();
         check_quadrants(&s, id, is_green, is_yellow, is_red, is_blue, "270° CW");
 
@@ -13072,8 +13193,11 @@ fn test_added_image_transform_reflections_with_rotation() {
     {
         // 2b: Flip Vertical after 270° rotation
         let (mut s, id) = session_with(1);
-        s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "img.png".into(), bytes: make_asymmetric_png() })
-            .unwrap();
+        s.apply(
+            id,
+            Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "img.png".into(), bytes: make_asymmetric_png(), behind: false },
+        )
+        .unwrap();
         s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(3) }).unwrap();
 
         s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Flip { horizontal: false } }).unwrap();
@@ -14093,7 +14217,8 @@ fn resizing_an_added_image_back_inside_the_page_keeps_its_identity() {
     let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
     let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([-30.0, -20.0, 70.0, 80.0]), name: "edge.png".into(), bytes: Arc::new(png) }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([-30.0, -20.0, 70.0, 80.0]), name: "edge.png".into(), bytes: Arc::new(png), behind: false })
+        .unwrap();
     let original = s.get(id).unwrap().added()[0].obj;
     let target = [10.0, 10.0, 60.0, 60.0];
     s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move(target) }).unwrap();

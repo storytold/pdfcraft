@@ -181,6 +181,17 @@ pub(crate) fn backdrops_left_off_message(pages: &[usize]) -> String {
     )
 }
 
+/// The same after deleting an image behind the page text, or bringing it to the top.
+pub(crate) fn image_backdrops_left_off_message(pages: &[usize]) -> String {
+    pages_phrase(
+        pages,
+        tl!("Page {pages} changed after an image was put behind its text, so its own white backdrop stays off. It looks the same on white paper."),
+        tl!(
+            "Pages {pages} changed after an image was put behind their text, so their own white backdrops stay off. They look the same on white paper."
+        ),
+    )
+}
+
 /// `one` or `many` with `{pages}` replaced by `pages` (0-based, ascending) as 1-based runs
 /// ("1-3, 6"), so the message says which pages it means.
 fn pages_phrase(pages: &[usize], one: &str, many: &str) -> String {

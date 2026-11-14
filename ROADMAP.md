@@ -261,6 +261,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+- **2026-11-14 (M7, #2869):** Added images can go behind the page's own text and images (Edit image ▸ Behind text and images; `page_add_image` / `content_update` `behind`), over its backgrounds. Built on `edit::backdrop` (#2815): a white backdrop the page paints itself stays off while an image or a background behind needs it; a scan's picture still hides the image and the panel says so. Estimates unchanged.
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
 - **2026-10-27 (M10, #5005):** Vector printing retains each annotation's optional-content membership when drawing its appearance.

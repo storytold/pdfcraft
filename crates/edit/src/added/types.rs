@@ -246,11 +246,15 @@ pub struct AddedImage {
     /// The fraction trimmed from each side of the image: left, bottom, right, top (see
     /// [`AddedImage::crop_valid`]).
     pub crop: [f64; 4],
+    /// Under the page's own text and images (and over its backgrounds) instead of on top. A
+    /// white backdrop the page paints itself is turned off so the image shows (see
+    /// [`crate::backdrop`]).
+    pub behind: bool,
 }
 
 impl AddedImage {
     pub fn new(rect: [f64; 4], image: ObjRef) -> Self {
-        AddedImage { rect, image, rotation: 0, flip_h: false, flip_v: false, crop: [0.0; 4] }
+        AddedImage { rect, image, rotation: 0, flip_h: false, flip_v: false, crop: [0.0; 4], behind: false }
     }
 
     /// The least of the image's width and of its height that a crop keeps.

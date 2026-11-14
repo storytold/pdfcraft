@@ -566,12 +566,14 @@ pub enum Edit {
         text: AddedText,
     },
     /// Edit a PDF ▸ Add content ▸ Image: an image file placed at `rect` (display space), or at
-    /// its natural size centred on the page (shrunk to fit).
+    /// its natural size centred on the page (shrunk to fit). `behind`: under the page's own text
+    /// and images instead of on top (see [`AddedImage::behind`](pdfcraft_edit::AddedImage::behind)).
     AddImage {
         page: usize,
         rect: Option<[f64; 4]>,
         name: String,
         bytes: Arc<Vec<u8>>,
+        behind: bool,
     },
     /// Move, resize, retype or reformat an added item (`index` among the page's added items).
     UpdateContent {

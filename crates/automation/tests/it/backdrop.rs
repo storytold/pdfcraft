@@ -264,3 +264,54 @@ fn fills_the_graphics_state_changes_are_not_replaced() {
     assert!((100..=160).contains(&g) && (100..=160).contains(&b), "half-transparent white over red, not red: {:?}", [r, g, b]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A 2 × 2 blue PNG.
+fn blue_png() -> Vec<u8> {
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, [0, 0, 255].repeat(4)).unwrap();
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()
+}
+
+/// How many pixels of a page rendered at 72 dpi are near black (the page's text).
+fn dark_pixels(a: &mut Automation, doc: u64, page: u64) -> usize {
+    let rendered = a.call("page_render", &json!({ "doc": doc, "page": page, "dpi": 72 })).unwrap();
+    let Content::Png { data, .. } = &rendered[0] else { panic!("expected a PNG") };
+    let rgba = craft_image_codecs::decode(data).unwrap().to_rgba8();
+    rgba.chunks(4).filter(|p| p.iter().take(3).all(|c| *c < 60)).count()
+}
+
+const BLUE: [u8; 3] = [0, 0, 255];
+
+#[test]
+fn an_image_behind_the_text_shows_on_a_page_that_paints_its_own_white_backdrop() {
+    let dir = named_workdir("image-behind");
+    std::fs::write(dir.join("blue.png"), blue_png()).unwrap();
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let text = dark_pixels(&mut a, doc, 1);
+    assert!(text > 0, "the fixture's text");
+    // An item on top first: the image behind is then the page's first item, not its last.
+    ok(&mut a, "page_add_image", json!({ "doc": doc, "page": 1, "path": "blue.png", "rect": [0, 80, 20, 100] }));
+    let r = ok(&mut a, "page_add_image", json!({ "doc": doc, "page": 1, "path": "blue.png", "rect": [0, 0, 200, 100], "behind": true }));
+    assert_eq!((r["index"].as_u64(), r["hidden_behind"].as_bool()), (Some(1), Some(false)), "{r}");
+    assert_eq!(r["rect"], json!([0.0, 0.0, 200.0, 100.0]));
+    assert_eq!(blank_spot(&mut a, doc, 1), BLUE, "the image shows where the page painted white");
+    assert_eq!(dark_pixels(&mut a, doc, 1), text, "under all of the text");
+    let list = ok(&mut a, "content_list", json!({ "doc": doc }));
+    let behind: Vec<Option<bool>> = list["items"].as_array().unwrap().iter().map(|i| i["behind"].as_bool()).collect();
+    assert_eq!(behind, [Some(true), Some(false)], "{list}");
+    assert_eq!(ok(&mut a, "doc_backdrops", json!({ "doc": doc }))["pages"], json!([{ "page": 3, "backdrop": "image" }]), "page 1's is off");
+    // On top, it covers the text and becomes the last item; the page's own backdrop is back.
+    let r = ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "behind": false }));
+    assert_eq!(r["index"].as_u64(), Some(2), "{r}");
+    assert_eq!(dark_pixels(&mut a, doc, 1), 0);
+    assert_eq!(ok(&mut a, "doc_backdrops", json!({ "doc": doc }))["pages"][0], json!({ "page": 1, "backdrop": "fill" }));
+    // A scan's picture still hides it, and the result says so; bare paper doesn't.
+    let r = ok(&mut a, "page_add_image", json!({ "doc": doc, "page": 3, "path": "blue.png", "behind": true }));
+    assert_eq!(r["hidden_behind"].as_bool(), Some(true), "{r}");
+    let r = ok(&mut a, "page_add_image", json!({ "doc": doc, "page": 2, "path": "blue.png", "behind": true }));
+    assert_eq!(r["hidden_behind"].as_bool(), Some(false), "{r}");
+    // Text can't go behind.
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 2, "text": "Note", "rect": [20, 20, 120, 40] }));
+    let refused = a.call("content_update", &json!({ "doc": doc, "page": 2, "index": 2, "behind": true }));
+    assert!(matches!(refused, Err(pdfcraft_automation::ToolError::InvalidArgs(_))), "{refused:?}");
+}

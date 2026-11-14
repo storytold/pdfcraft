@@ -10260,6 +10260,7 @@ fn clicking_after_image_context_menu_action_resets_menu_state_and_updates_select
         rect: Some([50.0, 10.0, 70.0, 30.0]),
         name: "img2.png".into(),
         bytes: std::sync::Arc::new(png2),
+        behind: false,
     });
     h.run_steps(4);
 

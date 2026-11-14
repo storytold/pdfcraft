@@ -238,6 +238,9 @@ pub(super) fn params(c: &Content) -> Dict {
             if i.crop != [0.0; 4] {
                 d.set(b"Crop".to_vec(), arr(&i.crop));
             }
+            if i.behind {
+                d.set(b"Behind".to_vec(), Object::Bool(true));
+            }
         }
     }
     d

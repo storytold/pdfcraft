@@ -342,6 +342,17 @@ fn fail_after_mark_placement(kind: MarkKind) -> Result<(), EditError> {
 /// sequences are closed at the end too, so hidden optional content cannot hide the new mark; when
 /// their number is unknown, nothing is placed on top. Returns the new content stream.
 pub(crate) fn place_tagged(doc: &mut Document, page: &pdfcraft_model::Page, tag: &str, content: Vec<u8>, behind: bool) -> Result<ObjRef, EditError> {
+    place_object(doc, page, behind, |doc| doc.add(Object::Stream(Stream::flate(tagged(tag), &content))))
+}
+
+/// Put a content stream on a page as [`place_tagged`] does: `mark` makes it, or hands over one
+/// that already exists, once the page is known to take it.
+pub(crate) fn place_object(
+    doc: &mut Document,
+    page: &pdfcraft_model::Page,
+    behind: bool,
+    mark: impl FnOnce(&mut Document) -> ObjRef,
+) -> Result<ObjRef, EditError> {
     let mut list = contents(doc, page)?;
     // The behind-marks at the start: backgrounds in the order added, then watermarks.
     let behind_kinds = [MarkKind::Background.tag(), MarkKind::Watermark.tag()];
@@ -359,7 +370,7 @@ pub(crate) fn place_tagged(doc: &mut Document, page: &pdfcraft_model::Page, tag:
             Isolation::TooDeep => return Err(too_deep_on_top()),
         }
     };
-    let mark_ref = doc.add(Object::Stream(Stream::flate(tagged(tag), &content)));
+    let mark_ref = mark(doc);
     let mark = Object::Ref(mark_ref);
     if behind {
         // Right after the backgrounds already there, so a new background is painted over the

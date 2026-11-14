@@ -299,15 +299,19 @@ fn add_background_in_place(doc: &mut Document, pages: &[usize], bg: &Background,
 /// nothing after them go too, restoring the original content list; a wrapper that content
 /// after it still relies on (another tool's appended stream) stays. Removing backgrounds also
 /// turns a backdrop [`add_background`] replaced back on where that is still safe; the pages where
-/// it isn't are [`backdrops_left_off`].
+/// it isn't are [`backdrops_left_off`]; a page with an image behind its content keeps it off.
 pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Result<usize, EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
     let mut removed = 0;
     for &i in pages {
         let page = &all[i];
+        // Not while an image behind the content still needs the backdrop off.
         if kind == MarkKind::Background {
-            backdrop::restore(doc, page)?;
+            let others: Vec<Object> = contents(doc, page)?.into_iter().filter(|o| stream_tag(doc, o).as_deref() != Some(kind.tag())).collect();
+            if !backdrop::keeps_backdrop_off(doc, &others) {
+                backdrop::restore(doc, page)?;
+            }
         }
         let list = contents(doc, page)?;
         let before = list.len();
