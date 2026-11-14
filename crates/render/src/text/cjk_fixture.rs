@@ -65,6 +65,8 @@ pub(super) enum Show {
     Text(usize, Vec<u16>),
     /// A form XObject showing these, drawn `times` times.
     Form(Vec<Show>, usize),
+    /// Content operators as written (`/F0 10 Tf q /F1 10 Tf Q`).
+    Raw(&'static str),
 }
 
 /// A document of [`Font`]s and pages of [`Show`]s.
@@ -178,7 +180,7 @@ impl Doc {
             for show in shows {
                 match show {
                     Show::Text(f, codes) if *f == font => out.extend(codes),
-                    Show::Text(..) => {}
+                    Show::Text(..) | Show::Raw(_) => {}
                     Show::Form(inner, _) => walk(inner, font, out),
                 }
             }
@@ -220,6 +222,10 @@ impl Doc {
                     for _ in 0..*times {
                         let _ = write!(content, "q /X{at} Do Q ");
                     }
+                }
+                Show::Raw(ops) => {
+                    content.push_str(ops);
+                    content.push(' ');
                 }
             }
         }

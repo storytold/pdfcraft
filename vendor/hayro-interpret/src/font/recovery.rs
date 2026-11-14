@@ -494,6 +494,15 @@ pub(crate) struct Guards {
 }
 
 impl Guards {
+    /// Test hook: no rule takes the font.
+    #[cfg(feature = "test-counters")]
+    pub(crate) fn taking_nothing() -> Self {
+        Self {
+            numbered: None,
+            mac: None,
+        }
+    }
+
     /// Whether some rule can take a font of `kind` ([`Rule::KINDS`]).
     fn read(kind: FontKind) -> bool {
         NumberedLatin1Names::KINDS.contains(&kind) || MacGlyphOrder::KINDS.contains(&kind)
