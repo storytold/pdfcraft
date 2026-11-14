@@ -6,6 +6,7 @@ use egui::{Align, Color32, CornerRadius, Layout, Rect, Sense, Stroke, vec2};
 use crate::canvas::{DocView, Fit, PageLayout};
 use crate::panes::{Place, TabDrop};
 use crate::tab_context::Action;
+use crate::tab_group::TabGroupId;
 use crate::theme::{self, ThemePreference, Tokens};
 use crate::{Dialog, Mode, PdfCraftApp, PropsTab, RightPanel, icons, widgets, window_controls};
 
@@ -80,24 +81,22 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
                 let open_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Open").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
                 let mut tabs_width = (ui.available_width() - controls_width - open_width).max(0.0);
+
+                let animated = crate::motion::animated(ui.ctx());
+                let dt = ui.input(|i| i.stable_dt);
+                step_tab_animations(app, ui, animated, dt);
+
                 // Tabs shrink to share the strip (names end in "…") and scroll only once they reach
                 // their narrowest; then arrows either side say so and step through them.
-                let mut natural: Vec<f32> = Vec::with_capacity(app.views.len() + 1);
-                // (The main pane's tabs: split view's second pane has a strip of its own.)
-                for i in app.tabs_in(Place::Main) {
-                    if let Some(name) = crate::canvas::tab_label(app, i) {
-                        natural.push(tab_natural_width(ui, &t, &name));
-                    }
-                }
-                if app.combine_tab.open {
-                    natural.push(tab_natural_width(ui, &t, tl!("Combine files")));
-                }
+                let (natural, pills_width) = calculate_tabs_natural_widths(app, ui, &t, animated);
                 let gap = ui.spacing().item_spacing.x;
-                let overflow = tabs_overflow(&natural, tabs_width, gap, TAB_MIN_WIDTH);
+                let doc_budget = (tabs_width - pills_width).max(0.0);
+                let overflow = tabs_overflow(&natural, doc_budget, gap, TAB_MIN_WIDTH);
                 if overflow {
                     tabs_width = (tabs_width - 2.0 * (TAB_ARROW + gap)).max(0.0);
                 }
-                let cap = tab_cap(&natural, tabs_width, gap, TAB_MIN_WIDTH);
+                let remaining_doc_budget = (tabs_width - pills_width).max(0.0);
+                let cap = tab_cap(&natural, remaining_doc_budget, gap, TAB_MIN_WIDTH);
                 // Where the tabs were scrolled to last frame, and how far they can go.
                 let scroll_id = ui.scope_id().with("tab_scroll");
                 let (offset, max_offset) = ui.data(|d| d.get_temp::<(f32, f32)>(scroll_id)).unwrap_or((0.0, 0.0));
@@ -114,9 +113,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     data.insert_temp(id, state);
                     changed
                 });
-                let mut action = None;
-                let mut close = None;
-                // The pointer's x while a tab is dragged, for scrolling at the strip's edges.
+                let cfg = TabsStripConfig { t: &t, tab_h, cap, gap, animated, changed };
                 let mut drag_x = None;
                 ui.scope(|ui| {
                     ui.style_mut().always_scroll_the_only_direction = true;
@@ -126,89 +123,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                     let out = area.show(ui, |ui| {
                         ui.horizontal_centered(|ui| {
-                            // Each document tab's index and rect, and the one being dragged
-                            // (with whether it was just released).
-                            let mut slots = Vec::with_capacity(app.views.len());
-                            let mut dragged = None;
-                            for i in app.tabs_in(Place::Main) {
-                                let Some(doc) = app.session.get(app.views[i].id) else { continue };
-                                let Some(name) = crate::canvas::tab_label(app, i) else { continue };
-                                let dirty = doc.dirty;
-                                // A tab showing the document's title names its file on hover.
-                                let file = (name != doc.name).then_some(doc.name.as_str());
-                                let response = tab(
-                                    ui,
-                                    TabSpec {
-                                        id: ui.scope_id().with(("document-tab", app.views[i].id)),
-                                        theme: &t,
-                                        icon: "file-text",
-                                        name: &name,
-                                        file,
-                                        dirty,
-                                        active: app.pane_front(Place::Main) == Some(i),
-                                        index: i,
-                                        cap,
-                                        height: tab_h,
-                                        draggable: true,
-                                    },
-                                    &mut close,
-                                );
-                                slots.push((i, response.rect));
-                                if response.dragged() || response.drag_stopped() {
-                                    dragged = Some((i, response.drag_stopped()));
-                                }
-                                if changed && app.active == Some(i) && !app.combine_showing() {
-                                    response.scroll_to_me(Some(Align::Center));
-                                }
-                                response.context_menu(|ui| tab_menu(app, ui, i, &mut action));
-                                if response.clicked() {
-                                    app.active = Some(i);
-                                }
-                                // A middle click closes the tab, as in Acrobat and browsers (#1853);
-                                // unsaved changes ask first, as the close button does.
-                                if response.middle_clicked() {
-                                    close = Some(i);
-                                }
-                            }
-                            drag_x = tab_drag(app, ui, &slots, dragged, Place::Main, close.is_some() || action.is_some());
-                            if let Some(i) = close
-                                && let Some(view) = app.views.get(i)
-                            {
-                                action.get_or_insert(Action::Close(view.view_key()));
-                            }
-                            if let Some(action) = action {
-                                app.tab_action(action);
-                            }
-                            if app.combine_tab.open {
-                                // After the document tabs; its index can't clash with theirs.
-                                let mut close = None;
-                                let response = tab(
-                                    ui,
-                                    TabSpec {
-                                        id: ui.scope_id().with("combine-tab"),
-                                        theme: &t,
-                                        icon: "files",
-                                        name: tl!("Combine files"),
-                                        file: None,
-                                        dirty: false,
-                                        active: app.combine_showing(),
-                                        index: usize::MAX,
-                                        cap,
-                                        height: tab_h,
-                                        draggable: false,
-                                    },
-                                    &mut close,
-                                );
-                                if changed && app.combine_showing() {
-                                    response.scroll_to_me(Some(Align::Center));
-                                }
-                                if response.clicked() {
-                                    app.open_combine_tab();
-                                }
-                                if close.is_some() || response.middle_clicked() {
-                                    app.close_combine_tab();
-                                }
-                            }
+                            drag_x = show_main_tabs_content(app, ui, &cfg);
                         });
                     });
                     let max = (out.content_size.x - out.inner_rect.width()).max(0.0);
@@ -242,46 +157,460 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 if widgets::ghost_button_sized(ui, "plus", tl!("Open"), tab_h).on_hover_text(tip).clicked() {
                     app.open_dialog();
                 }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if !controls.right.is_empty() {
-                        // Laid out left to right inside the right-to-left run, so they read in
-                        // the desktop's order.
-                        let size = egui::vec2(window_controls::width(&controls.right) - window_controls::SIDE_GAP, window_controls::BUTTON);
-                        ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            window_controls::buttons(ui, &controls.right);
-                        });
-                        ui.add_space(window_controls::SIDE_GAP - 4.0);
-                    }
-                    if icons::button(ui, "settings", button, false, tl!("Preferences")).clicked() {
-                        app.execute("app.preferences");
-                    }
-                    let (icon, label) = match app.theme_preference {
-                        ThemePreference::System => ("monitor", tl!("Use system setting")),
-                        ThemePreference::Light => ("sun", tl!("Light gray")),
-                        ThemePreference::Dark => ("moon", tl!("Dark gray")),
-                    };
-                    let tip = format!("{}: {label}", tl!("Display theme"));
-                    let response = icons::button(ui, icon, button, false, &tip);
-                    // A click cycles System, Light, Dark; a right-click opens the menu.
-                    if response.clicked() {
-                        app.execute(match app.theme_preference {
-                            ThemePreference::System => "view.theme.light",
-                            ThemePreference::Light => "view.theme.dark",
-                            ThemePreference::Dark => "view.theme.system",
-                        });
-                    }
-                    egui::Popup::context_menu(&response).id(response.id.with("theme_menu")).show(|ui| appearance_menu(app, ui));
-                    if icons::button(ui, "circle-help", button, false, tl!("Keyboard shortcuts")).clicked() {
-                        app.dialog = Some(Dialog::Shortcuts);
-                    }
-                    // One click to the community, from anywhere in the app.
-                    if widgets::ghost_button_sized(ui, "messages-square", "Discord", tab_h).on_hover_text(pdfcraft_engine::links::DISCORD).clicked() {
-                        app.execute("help.discord");
-                    }
-                });
+                render_right_controls(app, ui, &controls.right, button, tab_h);
             });
         });
+}
+
+fn step_tab_animations(app: &mut PdfCraftApp, ui: &egui::Ui, animated: bool, dt: f32) {
+    let anim_speed = 6.0;
+    // Update group expand / collapse animations
+    for g in &mut app.tab_groups {
+        let target = if g.collapsed { 0.0 } else { 1.0 };
+        if !animated {
+            g.open_progress = target;
+        } else if (g.open_progress - target).abs() > 0.001 {
+            if g.open_progress < target {
+                g.open_progress = (g.open_progress + dt * anim_speed).min(target);
+            } else {
+                g.open_progress = (g.open_progress - dt * anim_speed).max(target);
+            }
+            ui.ctx().request_repaint();
+        } else {
+            g.open_progress = target;
+        }
+    }
+
+    // Update tab opening and closing animations
+    let mut to_close = Vec::new();
+    for (idx, v) in app.views.iter_mut().enumerate() {
+        if !animated {
+            v.open_progress = 1.0;
+            if v.closing {
+                to_close.push(idx);
+            }
+        } else {
+            if v.open_progress < 1.0 {
+                v.open_progress = (v.open_progress + dt * anim_speed).min(1.0);
+                ui.ctx().request_repaint();
+            }
+            if v.closing {
+                v.close_progress = (v.close_progress - dt * anim_speed).max(0.0);
+                if v.close_progress <= 0.001 {
+                    to_close.push(idx);
+                } else {
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
+    }
+    for idx in to_close.into_iter().rev() {
+        if let Some(v) = app.views.get_mut(idx) {
+            v.closing = false;
+            v.close_progress = 1.0;
+        }
+        app.request_close_tab(idx);
+    }
+}
+
+fn calculate_tabs_natural_widths(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, animated: bool) -> (Vec<f32>, f32) {
+    let mut natural: Vec<f32> = Vec::with_capacity(app.views.len() + 1);
+    let mut pills_width = 0.0;
+    let gap = ui.spacing().item_spacing.x;
+    let mut seen_groups = std::collections::HashSet::new();
+    for i in app.tabs_in(Place::Main) {
+        let Some(view) = app.views.get(i) else { continue };
+        let group_scale = if let Some(gid) = view.group {
+            if seen_groups.insert(gid)
+                && let Some(g) = app.group(gid)
+            {
+                pills_width += crate::tab_group::group_pill_natural_width(ui, &g.title) + gap;
+            }
+            if let Some(g) = app.group(gid) {
+                if animated {
+                    g.open_progress
+                } else if g.collapsed {
+                    0.0
+                } else {
+                    1.0
+                }
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+        let tab_scale = if animated { (view.open_progress * view.close_progress).clamp(0.0, 1.0) } else { 1.0 };
+        let total_scale = group_scale * tab_scale;
+        if total_scale <= 0.001 {
+            continue;
+        }
+        if view.pinned {
+            natural.push(36.0 * total_scale);
+        } else if let Some(name) = crate::canvas::tab_label(app, i) {
+            natural.push(tab_natural_width(ui, t, &name) * total_scale);
+        }
+    }
+    if app.combine_tab.open {
+        natural.push(tab_natural_width(ui, t, tl!("Combine files")));
+    }
+    (natural, pills_width)
+}
+
+struct TabsStripConfig<'a> {
+    t: &'a Tokens,
+    tab_h: f32,
+    cap: Option<f32>,
+    gap: f32,
+    animated: bool,
+    changed: bool,
+}
+
+struct GroupPillState<'a> {
+    rendered_groups: &'a mut std::collections::HashSet<TabGroupId>,
+    pill_slots: &'a mut Vec<(TabGroupId, egui::Id, Rect)>,
+    on_edit_group: &'a mut Option<TabGroupId>,
+    toggle_collapsed: &'a mut Option<TabGroupId>,
+}
+
+fn show_group_pill_if_needed(
+    app: &PdfCraftApp,
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    tab_h: f32,
+    view_group: Option<TabGroupId>,
+    state: &mut GroupPillState<'_>,
+) {
+    if let Some(gid) = view_group
+        && state.rendered_groups.insert(gid)
+        && let Some(g) = app.group(gid).cloned()
+    {
+        let pill_resp = crate::tab_group::group_pill(ui, &g, t, tab_h, state.on_edit_group);
+        state.pill_slots.push((gid, pill_resp.id, pill_resp.rect));
+        if pill_resp.clicked() {
+            *state.toggle_collapsed = Some(gid);
+        }
+    }
+}
+
+fn compute_tab_scale(app: &PdfCraftApp, view: &DocView, animated: bool) -> f32 {
+    let group_scale = if let Some(gid) = view.group {
+        if let Some(g) = app.group(gid) {
+            if animated {
+                g.open_progress
+            } else if g.collapsed {
+                0.0
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        }
+    } else {
+        1.0
+    };
+    let tab_scale = if animated { (view.open_progress * view.close_progress).clamp(0.0, 1.0) } else { 1.0 };
+    (group_scale * tab_scale).clamp(0.0, 1.0)
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct TabDragState {
+    from: usize,
+    to: usize,
+    grab_offset_x: f32,
+    pointer_x: f32,
+}
+
+fn compute_tab_shift(
+    ui: &egui::Ui,
+    active_drag: Option<TabDragState>,
+    from_slot: Option<usize>,
+    i_slot: Option<usize>,
+    from_w: f32,
+    view_key: u64,
+    animated: bool,
+) -> f32 {
+    let Some(drag) = active_drag else { return 0.0 };
+    let (Some(from_s), Some(i_s)) = (from_slot, i_slot) else { return 0.0 };
+    if from_s == i_s {
+        0.0
+    } else {
+        let to = drag.to;
+        let target_shift = if from_s < to && i_s > from_s && i_s <= to {
+            -from_w
+        } else if to < from_s && i_s >= to && i_s < from_s {
+            from_w
+        } else {
+            0.0
+        };
+        let shift_anim_id = ui.scope_id().with(("tab_shift_x", view_key));
+        let shift_duration = if animated { 0.16 } else { 0.0 };
+        ui.ctx().animate_value_with_time(shift_anim_id, target_shift, shift_duration)
+    }
+}
+
+fn show_group_editor_if_active(app: &mut PdfCraftApp, ui: &mut egui::Ui, pill_slots: &[(TabGroupId, egui::Id, Rect)]) {
+    if let Some(editing_gid) = app.editing_group
+        && let Some(&(_, pill_id, pill_rect)) = pill_slots.iter().find(|(gid, _, _)| *gid == editing_gid)
+    {
+        let mut is_open = true;
+        let mut close_editor = false;
+        egui::Popup::new(pill_id.with("group_editor_popup"), ui.ctx().clone(), pill_rect, ui.layer_id())
+            .open_bool(&mut is_open)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                crate::tab_group::group_editor_popup(app, ui, editing_gid, &mut close_editor);
+            });
+        if close_editor || !is_open {
+            app.editing_group = None;
+        }
+    }
+}
+
+fn request_tab_close(app: &mut PdfCraftApp, i: usize, animated: bool, action: &mut Option<Action>) {
+    let key = app.views.get(i).map(|v| v.view_key());
+    if let Some(key) = key {
+        if animated && !app.asks_before_closing(i) && !app.hold_close_for_ocr_review(i) {
+            if let Some(v) = app.views.get_mut(i)
+                && !v.closing
+            {
+                v.closing = true;
+                v.close_progress = 1.0;
+                let place = v.place();
+                if app.active == Some(i) {
+                    app.active = app.after_close(place, i);
+                }
+            }
+        } else {
+            action.get_or_insert(Action::Close(key));
+        }
+    }
+}
+
+fn show_main_tabs_content(app: &mut PdfCraftApp, ui: &mut egui::Ui, cfg: &TabsStripConfig<'_>) -> Option<f32> {
+    let mut slots = Vec::with_capacity(app.views.len());
+    let mut pill_slots = Vec::new();
+    let mut dragged = None;
+    let mut rendered_groups = std::collections::HashSet::new();
+    let mut on_edit_group = None;
+    let mut toggle_collapsed = None;
+    let mut last_group = None;
+    let mut last_tab_right = None;
+    let mut action = None;
+    let mut close = None;
+    let mut deferred_drag_tab = None;
+
+    let active_drag: Option<TabDragState> = ui.data(|d| d.get_temp(ui.scope_id().with("drag_reorder")));
+    let visible_indices: Vec<usize> = app
+        .tabs_in(Place::Main)
+        .into_iter()
+        .filter(|&idx| app.views.get(idx).is_some_and(|v| compute_tab_scale(app, v, cfg.animated) > 0.001))
+        .collect();
+    let from_slot = active_drag.and_then(|drag| visible_indices.iter().position(|&idx| idx == drag.from));
+    let from_w = active_drag.map_or(TAB_MIN_WIDTH + cfg.gap, |drag| {
+        let w = app.views.get(drag.from).map_or(TAB_MIN_WIDTH, |v| {
+            if v.pinned {
+                36.0 * compute_tab_scale(app, v, cfg.animated)
+            } else if let Some(name) = crate::canvas::tab_label(app, drag.from) {
+                tab_natural_width(ui, cfg.t, &name) * compute_tab_scale(app, v, cfg.animated)
+            } else {
+                TAB_MIN_WIDTH
+            }
+        });
+        if let Some(cap) = cfg.cap { w.min(cap) + cfg.gap } else { w + cfg.gap }
+    });
+
+    for i in app.tabs_in(Place::Main) {
+        let Some(view) = app.views.get(i) else { continue };
+        let (view_id, view_key, view_group, view_pinned) = (view.id, view.view_key(), view.group, view.pinned);
+        let Some(doc) = app.session.get(view_id) else { continue };
+        let Some(name) = crate::canvas::tab_label(app, i) else { continue };
+
+        let mut pill_state = GroupPillState {
+            rendered_groups: &mut rendered_groups,
+            pill_slots: &mut pill_slots,
+            on_edit_group: &mut on_edit_group,
+            toggle_collapsed: &mut toggle_collapsed,
+        };
+        show_group_pill_if_needed(app, ui, cfg.t, cfg.tab_h, view_group, &mut pill_state);
+
+        let total_scale = compute_tab_scale(app, view, cfg.animated);
+        if total_scale <= 0.001 {
+            continue;
+        }
+
+        let i_slot = visible_indices.iter().position(|&idx| idx == i);
+        let current_shift = compute_tab_shift(ui, active_drag, from_slot, i_slot, from_w, view_key, cfg.animated);
+
+        let same_group_as_prev = match (last_group, view_group) {
+            (Some(prev), Some(curr)) => prev == curr,
+            _ => false,
+        };
+        let bridge_left = if same_group_as_prev { last_tab_right } else { None };
+
+        let dirty = doc.dirty;
+        let file = (name != doc.name).then_some(doc.name.as_str());
+        let group_color = view_group.and_then(|gid| app.group(gid)).map(|g| g.color.color32());
+        let is_dragged_tab = active_drag.is_some_and(|d| d.from == i);
+        let (response, deferred) = tab(
+            ui,
+            TabSpec {
+                id: ui.scope_id().with(("document-tab", view_key)),
+                theme: cfg.t,
+                icon: "file-text",
+                name: &name,
+                file,
+                dirty,
+                active: app.pane_front(Place::Main) == Some(i),
+                index: i,
+                cap: cfg.cap,
+                height: cfg.tab_h,
+                draggable: true,
+                pinned: view_pinned,
+                group_color,
+                bridge_left,
+                scale: total_scale,
+                shift_x: current_shift,
+                drag: active_drag,
+                defer_paint: is_dragged_tab,
+            },
+            &mut close,
+        );
+        if let Some(d) = deferred {
+            deferred_drag_tab = Some((d, response.clone()));
+        }
+        last_group = view_group;
+        let effective_shift = if let Some(drag) = active_drag
+            && drag.from == i
+        {
+            drag.pointer_x - drag.grab_offset_x - response.rect.left()
+        } else {
+            current_shift
+        };
+        last_tab_right = Some(response.rect.right() + effective_shift);
+        slots.push((i, response.rect));
+        if response.dragged() || response.drag_stopped() {
+            dragged = Some((i, response.drag_stopped()));
+        }
+        if cfg.changed && app.active == Some(i) && !app.combine_showing() {
+            response.scroll_to_me(Some(Align::Center));
+        }
+        let popup = egui::Popup::menu(&response).open_memory(if response.secondary_clicked() {
+            Some(egui::SetOpenCommand::Bool(true))
+        } else if response.clicked() {
+            Some(egui::SetOpenCommand::Bool(false))
+        } else {
+            None
+        });
+        popup.show(|ui| tab_menu(app, ui, i, &mut action));
+        if response.clicked() {
+            app.active = Some(i);
+        }
+        if response.middle_clicked() && !view_pinned {
+            close = Some(i);
+        }
+    }
+
+    if let Some(gid) = toggle_collapsed {
+        app.toggle_group_collapsed(gid);
+    }
+    if let Some(gid) = on_edit_group {
+        app.editing_group = Some(gid);
+        if let Some(g) = app.group(gid) {
+            app.group_title_draft = g.title.clone();
+        }
+    }
+    if let Some((deferred, resp)) = deferred_drag_tab {
+        paint_tab_visuals(ui, cfg.t, &deferred, &resp, &mut close);
+    }
+    show_group_editor_if_active(app, ui, &pill_slots);
+
+    let drag_x = tab_drag(app, ui, &slots, dragged, Place::Main, close.is_some() || action.is_some());
+    if let Some(i) = close {
+        request_tab_close(app, i, cfg.animated, &mut action);
+    }
+    if let Some(action) = action {
+        app.tab_action(action);
+    }
+    if app.combine_tab.open {
+        let mut close = None;
+        let (response, _) = tab(
+            ui,
+            TabSpec {
+                id: ui.scope_id().with("combine-tab"),
+                theme: cfg.t,
+                icon: "files",
+                name: tl!("Combine files"),
+                file: None,
+                dirty: false,
+                active: app.combine_showing(),
+                index: usize::MAX,
+                cap: cfg.cap,
+                height: cfg.tab_h,
+                draggable: false,
+                pinned: false,
+                group_color: None,
+                bridge_left: None,
+                scale: 1.0,
+                shift_x: 0.0,
+                drag: None,
+                defer_paint: false,
+            },
+            &mut close,
+        );
+        if cfg.changed && app.combine_showing() {
+            response.scroll_to_me(Some(Align::Center));
+        }
+        if response.clicked() {
+            app.open_combine_tab();
+        }
+        if close.is_some() || response.middle_clicked() {
+            app.close_combine_tab();
+        }
+    }
+
+    drag_x
+}
+
+fn render_right_controls(app: &mut PdfCraftApp, ui: &mut egui::Ui, controls_right: &[window_controls::Button], button: f32, tab_h: f32) {
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        if !controls_right.is_empty() {
+            // Laid out left to right inside the right-to-left run, so they read in
+            // the desktop's order.
+            let size = egui::vec2(window_controls::width(controls_right) - window_controls::SIDE_GAP, window_controls::BUTTON);
+            ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                window_controls::buttons(ui, controls_right);
+            });
+            ui.add_space(window_controls::SIDE_GAP - 4.0);
+        }
+        if icons::button(ui, "settings", button, false, tl!("Preferences")).clicked() {
+            app.execute("app.preferences");
+        }
+        let (icon, label) = match app.theme_preference {
+            ThemePreference::System => ("monitor", tl!("Use system setting")),
+            ThemePreference::Light => ("sun", tl!("Light gray")),
+            ThemePreference::Dark => ("moon", tl!("Dark gray")),
+        };
+        let tip = format!("{}: {label}", tl!("Display theme"));
+        let response = icons::button(ui, icon, button, false, &tip);
+        // A click cycles System, Light, Dark; a right-click opens the menu.
+        if response.clicked() {
+            app.execute(match app.theme_preference {
+                ThemePreference::System => "view.theme.light",
+                ThemePreference::Light => "view.theme.dark",
+                ThemePreference::Dark => "view.theme.system",
+            });
+        }
+        egui::Popup::context_menu(&response).id(response.id.with("theme_menu")).show(|ui| appearance_menu(app, ui));
+        if icons::button(ui, "circle-help", button, false, tl!("Keyboard shortcuts")).clicked() {
+            app.dialog = Some(Dialog::Shortcuts);
+        }
+        // One click to the community, from anywhere in the app.
+        if widgets::ghost_button_sized(ui, "messages-square", "Discord", tab_h).on_hover_text(pdfcraft_engine::links::DISCORD).clicked() {
+            app.execute("help.discord");
+        }
+    });
 }
 
 /// The right-click menu on the title bar's theme button.
@@ -296,8 +625,78 @@ fn appearance_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 fn tab_menu(app: &PdfCraftApp, ui: &mut egui::Ui, index: usize, action: &mut Option<Action>) {
     let Some(view) = app.views.get(index) else { return };
     let (tab, id) = (view.view_key(), view.id);
+
+    // Grouping options (Edge standard)
+    if let Some(current_gid) = view.group {
+        if ui.button(tl!("Remove from group")).clicked() {
+            *action = Some(Action::RemoveFromGroup(tab));
+            ui.close();
+        }
+        if app.tab_groups.len() > 1 {
+            ui.menu_button(tl!("Move to another group"), |ui| {
+                for g in &app.tab_groups {
+                    if g.id != current_gid {
+                        let dot = format!("● {}", if g.title.is_empty() { g.color.name() } else { &g.title });
+                        if ui.button(dot).clicked() {
+                            *action = Some(Action::AddToGroup { tab, group_id: g.id });
+                            ui.close();
+                        }
+                    }
+                }
+            });
+        }
+    } else {
+        if ui.button(tl!("Add tab to new group")).clicked() {
+            *action = Some(Action::AddToNewGroup(tab));
+            ui.close();
+        }
+        if !app.tab_groups.is_empty() {
+            ui.menu_button(tl!("Add tab to group"), |ui| {
+                if ui.button(tl!("New group")).clicked() {
+                    *action = Some(Action::AddToNewGroup(tab));
+                    ui.close();
+                }
+                ui.separator();
+                for g in &app.tab_groups {
+                    let dot = format!("● {}", if g.title.is_empty() { g.color.name() } else { &g.title });
+                    if ui.button(dot).clicked() {
+                        *action = Some(Action::AddToGroup { tab, group_id: g.id });
+                        ui.close();
+                    }
+                }
+            });
+        }
+    }
+
+    ui.separator();
+
+    // Pinning (Edge standard)
+    let pin_label = if view.pinned { tl!("Unpin tab") } else { tl!("Pin tab") };
+    if ui.button(pin_label).clicked() {
+        *action = Some(Action::TogglePin(tab));
+        ui.close();
+    }
+
+    // Duplicate tab (Edge standard)
+    if ui.button(tl!("Duplicate tab")).clicked() {
+        *action = Some(Action::Duplicate(tab));
+        ui.close();
+    }
+
+    ui.separator();
+
+    // Close options (Edge standard)
     if ui.button(tl!("Close Tab")).clicked() {
         *action = Some(Action::Close(tab));
+        ui.close();
+    }
+    if ui.button(tl!("Close other tabs")).clicked() {
+        *action = Some(Action::CloseOthers(tab));
+        ui.close();
+    }
+    let has_tabs_to_right = index + 1 < app.views.len();
+    if ui.add_enabled(has_tabs_to_right, egui::Button::new(tl!("Close tabs to the right"))).clicked() {
+        *action = Some(Action::CloseToRight(tab));
         ui.close();
     }
     if ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked() {
@@ -330,18 +729,39 @@ fn tab_menu(app: &PdfCraftApp, ui: &mut egui::Ui, index: usize, action: &mut Opt
 /// there (`crate::panes`). `busy` is a close or menu choice this frame, which wins. Returns the
 /// pointer's x while the tab moves along the strip, for scrolling at the strip's edges.
 fn tab_drag(app: &mut PdfCraftApp, ui: &egui::Ui, slots: &[(usize, Rect)], dragged: Option<(usize, bool)>, place: Place, busy: bool) -> Option<f32> {
-    let (from, released) = dragged?;
+    let (from, released) = match dragged {
+        Some(d) => d,
+        None => {
+            ui.data_mut(|d| {
+                d.remove_temp::<TabDragState>(ui.scope_id().with("drag_reorder"));
+                d.remove_temp::<f32>(ui.scope_id().with("drag_grab_offset"));
+            });
+            return None;
+        }
+    };
     let pos = ui.ctx().pointer_latest_pos()?;
     match app.drop_target(pos, place) {
         TabDrop::Strip => {
             let x = pos.x;
             let to = drop_index(slots, from, x);
             if released {
+                ui.data_mut(|d| {
+                    d.remove_temp::<TabDragState>(ui.scope_id().with("drag_reorder"));
+                    d.remove_temp::<f32>(ui.scope_id().with("drag_grab_offset"));
+                });
                 if !busy {
                     app.move_tab_in_strip(from, slots, to);
                 }
                 return None;
             }
+            let grab_id = ui.scope_id().with("drag_grab_offset");
+            let grab_offset_x = ui.data_mut(|d| {
+                *d.get_temp_mut_or_insert_with(grab_id, || {
+                    slots.iter().find(|(i, _)| *i == from).map_or(20.0, |(_, r)| (x - r.left()).clamp(0.0, r.width()))
+                })
+            });
+            ui.data_mut(|d| d.insert_temp(ui.scope_id().with("drag_reorder"), TabDragState { from, to, grab_offset_x, pointer_x: x }));
+            ui.ctx().request_repaint();
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
             if let Some(marker) = drop_marker(slots, from, to, ui.spacing().item_spacing.x) {
                 let t = Tokens::get(ui.ctx());
@@ -355,6 +775,10 @@ fn tab_drag(app: &mut PdfCraftApp, ui: &egui::Ui, slots: &[(usize, Rect)], dragg
             Some(x)
         }
         target => {
+            ui.data_mut(|d| {
+                d.remove_temp::<TabDragState>(ui.scope_id().with("drag_reorder"));
+                d.remove_temp::<f32>(ui.scope_id().with("drag_grab_offset"));
+            });
             if !released {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                 app.panes.drop_hint = app.drop_hint_rect(target);
@@ -383,13 +807,22 @@ pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Re
     let mut action = None;
     let mut slots = Vec::with_capacity(tabs.len());
     let mut dragged = None;
+    let mut last_group = None;
+    let mut last_tab_right = None;
     for &i in &tabs {
         let Some(view) = app.views.get(i) else { continue };
         let Some(doc) = app.session.get(view.id) else { continue };
         let Some(name) = crate::canvas::tab_label(app, i) else { continue };
+        let same_group_as_prev = match (last_group, view.group) {
+            (Some(prev), Some(curr)) => prev == curr,
+            _ => false,
+        };
+        let bridge_left = if same_group_as_prev { last_tab_right } else { None };
         let dirty = doc.dirty;
         let file = (name != doc.name).then(|| doc.name.clone());
         let id = row.scope_id().with(("pane-tab", view.view_key()));
+        let group_color = view.group.and_then(|gid| app.group(gid)).map(|g| g.color.color32());
+        let view_pinned = view.pinned;
         let spec = TabSpec {
             id,
             theme: &t,
@@ -402,19 +835,35 @@ pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Re
             cap,
             height: inner.height(),
             draggable: true,
+            pinned: view_pinned,
+            group_color,
+            bridge_left,
+            scale: 1.0,
+            shift_x: 0.0,
+            drag: None,
+            defer_paint: false,
         };
-        let response = tab(&mut row, spec, &mut close);
+        let (response, _) = tab(&mut row, spec, &mut close);
+        last_group = view.group;
+        last_tab_right = Some(response.rect.right());
         slots.push((i, response.rect));
         if response.dragged() || response.drag_stopped() {
             dragged = Some((i, response.drag_stopped()));
         }
-        response.context_menu(|ui| tab_menu(app, ui, i, &mut action));
+        let popup = egui::Popup::menu(&response).open_memory(if response.secondary_clicked() {
+            Some(egui::SetOpenCommand::Bool(true))
+        } else if response.clicked() {
+            Some(egui::SetOpenCommand::Bool(false))
+        } else {
+            None
+        });
+        popup.show(|ui| tab_menu(app, ui, i, &mut action));
         if response.clicked() {
             app.active = Some(i);
             app.combine_tab.focused = false;
         }
         // A middle click closes the tab, as in the main strip (#1853).
-        if response.middle_clicked() {
+        if response.middle_clicked() && !view_pinned {
             close = Some(i);
         }
     }
@@ -519,65 +968,272 @@ struct TabSpec<'a> {
     cap: Option<f32>,
     height: f32,
     draggable: bool,
+    pinned: bool,
+    group_color: Option<Color32>,
+    bridge_left: Option<f32>,
+    scale: f32,
+    shift_x: f32,
+    drag: Option<TabDragState>,
+    defer_paint: bool,
 }
 
-fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui::Response {
-    let TabSpec { id, theme: t, icon, name, file, dirty, active, index, cap, height, draggable } = spec;
-    let font = theme::regular(13.0);
-    let mut label = tab_name(name);
-    // A shrunk tab shows as much of its name as fits (the tooltip has all of it).
-    if let Some(cap) = cap {
-        let room = (cap - TAB_CHROME).max(0.0);
-        label = crate::panels::ellipsized_prefix(&label, |s| crate::bidi::layout_ltr(ui, s.to_owned(), font.clone(), t.text).size().x <= room);
-    }
-    // Logical text, laid out explicitly left to right: the fork shapes and reorders it once,
-    // and an Arabic file name keeps its extension at the visual end. AccessKit names stay logical.
-    let label_color = if active { t.text } else { t.text_muted };
-    let label_galley = crate::bidi::layout_ltr(ui, label.clone(), font.clone(), label_color);
-    let text_w = label_galley.size().x;
-    let width = cap.map_or(text_w + TAB_CHROME, |cap| (text_w + TAB_CHROME).min(cap));
-    // Full strip height so the active tab sits on the mode bar instead of floating in the title bar.
-    let height = ui.available_height().max(height);
-    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-    let a11y = if dirty { format!("{name} (edited)") } else { name.to_string() };
-    let sense = if draggable { Sense::click_and_drag() } else { Sense::click() };
-    let resp = craft_ui::tabs::Tab::new(id, &a11y, active).sense(sense).focus_stroke(Stroke::new(1.0, t.accent)).show_at(ui, rect, |ui, resp| {
-        let press = theme::Press::track(ui, resp);
-        let bg = if active {
-            press.fill(t.chrome, t.chrome.lerp_to_gamma(t.hover, 0.65), t.hover)
-        } else {
-            press.fill(Color32::TRANSPARENT, t.hover, t.pressed)
-        };
-        if bg.a() > 0 {
-            ui.painter().rect_filled(rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg);
+struct DeferredTabPaint {
+    id: egui::Id,
+    icon: String,
+    dirty: bool,
+    active: bool,
+    index: usize,
+    pinned: bool,
+    group_color: Option<Color32>,
+    bridge_left: Option<f32>,
+    scale: f32,
+    height: f32,
+    draw_rect: Rect,
+    label_galley: Option<std::sync::Arc<egui::Galley>>,
+    label_color: Color32,
+    is_dragged: bool,
+}
+
+fn paint_tab_visuals(ui: &mut egui::Ui, t: &Tokens, p_data: &DeferredTabPaint, resp: &egui::Response, close: &mut Option<usize>) {
+    let DeferredTabPaint {
+        id,
+        ref icon,
+        dirty,
+        active,
+        index,
+        pinned,
+        group_color,
+        bridge_left,
+        scale,
+        height,
+        draw_rect,
+        ref label_galley,
+        label_color,
+        is_dragged,
+    } = *p_data;
+
+    let p = ui.painter().with_clip_rect(draw_rect);
+    let press = theme::Press::track(ui, resp);
+    let bg = if active || is_dragged {
+        press.fill(t.chrome, t.chrome.lerp_to_gamma(t.hover, 0.65), t.hover)
+    } else {
+        press.fill(t.titlebar, t.hover, t.pressed)
+    };
+
+    if pinned {
+        if is_dragged {
+            let shadow_rect = draw_rect.translate(vec2(0.0, 2.0));
+            ui.painter().rect_filled(shadow_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, Color32::from_black_alpha(40));
         }
+        if bg.a() > 0 {
+            p.rect_filled(draw_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg.linear_multiply(scale));
+        }
+        if resp.dragged() || is_dragged {
+            p.rect_stroke(draw_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
+        }
+        if let Some(gc) = group_color {
+            let start_x = bridge_left.unwrap_or(draw_rect.left());
+            p.hline(start_x..=draw_rect.right(), draw_rect.top() + 1.0, Stroke::new(2.5, gc.linear_multiply(scale)));
+        }
+        if !active && !resp.hovered() && group_color.is_none() && scale >= 0.99 {
+            p.vline(draw_rect.right() - 0.5, draw_rect.y_range().shrink(7.0), Stroke::new(1.0, t.divider));
+        }
+        if draw_rect.width() >= 16.0 {
+            icons::paint(
+                ui,
+                Rect::from_center_size(draw_rect.center(), vec2(16.0, 16.0)),
+                icon,
+                15.0,
+                if active { t.accent.linear_multiply(scale) } else { t.text_muted.linear_multiply(scale) },
+            );
+        }
+        if dirty && draw_rect.width() >= 20.0 {
+            p.circle_filled(
+                draw_rect.right_top() + vec2(-6.0, 6.0),
+                3.0,
+                if active { t.text.linear_multiply(scale) } else { t.text_muted.linear_multiply(scale) },
+            );
+        }
+        return;
+    }
+
+    if is_dragged {
+        let shadow_rect = draw_rect.translate(vec2(0.0, 2.0));
+        ui.painter().rect_filled(shadow_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, Color32::from_black_alpha(40));
+    }
+    if bg.a() > 0 {
+        p.rect_filled(draw_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg.linear_multiply(scale));
+    }
+    if resp.dragged() || is_dragged {
+        p.rect_stroke(draw_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
+    }
+    // Microsoft Edge standard group top accent line
+    if let Some(gc) = group_color {
+        let start_x = bridge_left.unwrap_or(draw_rect.left());
+        p.hline(start_x..=draw_rect.right(), draw_rect.top() + 1.0, Stroke::new(2.5, gc.linear_multiply(scale)));
+    }
+    // Hairline divider between passive adjacent tabs
+    if !active && !resp.hovered() && group_color.is_none() && scale >= 0.99 {
+        p.vline(draw_rect.right() - 0.5, draw_rect.y_range().shrink(7.0), Stroke::new(1.0, t.divider));
+    }
+    if draw_rect.width() >= 24.0 {
         icons::paint(
             ui,
-            Rect::from_min_size(rect.min + vec2(6.0, (height - 16.0) / 2.0), vec2(16.0, 16.0)),
+            Rect::from_min_size(draw_rect.min + vec2(6.0, (height - 16.0) / 2.0), vec2(16.0, 16.0)),
             icon,
             15.0,
-            if active { t.accent } else { t.text_muted },
+            if active { t.accent.linear_multiply(scale) } else { t.text_muted.linear_multiply(scale) },
         );
-        ui.painter().galley(rect.min + vec2(28.0, (rect.height() - label_galley.size().y) / 2.0), label_galley.clone(), label_color);
-    });
-    let x_rect = Rect::from_center_size(rect.right_center() - vec2(16.0, 0.0), vec2(20.0, 20.0));
-    let x = ui.interact(x_rect, id.with("close"), Sense::click());
-    let x_press = theme::Press::track(ui, &x);
-    x_press.wash(ui, x_rect, 4, false);
-    // Unsaved changes: a dot where the close button sits, until the tab is hovered.
-    if dirty && !resp.hovered() && !x.hovered() {
-        ui.painter().circle_filled(x_rect.center(), 4.0, if active { t.text } else { t.text_muted });
-    } else if active || resp.hovered() || x.hovered() {
-        icons::paint(ui, x_rect.translate(x_press.offset()), "x", 13.0, t.text_muted);
     }
-    if theme::hand(x).clicked() {
-        *close = Some(index);
+    if draw_rect.width() >= 40.0
+        && let Some(galley) = label_galley
+    {
+        let max_text_right = (draw_rect.right() - 28.0).max(draw_rect.min.x + 28.0);
+        let text_clip = Rect::from_min_max(draw_rect.min + vec2(28.0, 0.0), egui::pos2(max_text_right, draw_rect.max.y));
+        p.with_clip_rect(text_clip).galley(draw_rect.min + vec2(28.0, (draw_rect.height() - galley.size().y) / 2.0), galley.clone(), label_color);
     }
-    let shown = match file {
-        Some(file) => format!("{name}\n{file}"),
-        None => name.to_string(),
-    };
-    theme::hand(resp).on_hover_text(if dirty { crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", &shown)]) } else { shown })
+    if draw_rect.width() >= 36.0 {
+        let x_rect = Rect::from_center_size(draw_rect.right_center() - vec2(16.0, 0.0), vec2(20.0, 20.0));
+        let x = ui.interact(x_rect, id.with("close"), Sense::click());
+        let x_press = theme::Press::track(ui, &x);
+        x_press.wash(ui, x_rect, 4, false);
+        // Unsaved changes: a dot where the close button sits, until the tab is hovered.
+        if dirty && !resp.hovered() && !x.hovered() {
+            ui.painter().circle_filled(
+                x_rect.center(),
+                4.0,
+                if active { t.text.linear_multiply(scale) } else { t.text_muted.linear_multiply(scale) },
+            );
+        } else if active || resp.hovered() || x.hovered() {
+            icons::paint(ui, x_rect.translate(x_press.offset()), "x", 13.0, t.text_muted.linear_multiply(scale));
+        }
+        if theme::hand(x).clicked() {
+            *close = Some(index);
+        }
+    }
+}
+
+fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> (egui::Response, Option<DeferredTabPaint>) {
+    let TabSpec {
+        id,
+        theme: t,
+        icon,
+        name,
+        file,
+        dirty,
+        active,
+        index,
+        cap,
+        height,
+        draggable,
+        pinned,
+        group_color,
+        bridge_left,
+        scale,
+        shift_x,
+        drag,
+        defer_paint,
+    } = spec;
+    let font = theme::regular(13.0);
+    let height = ui.available_height().max(height);
+
+    if pinned {
+        let width = 36.0 * scale;
+        let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+        let (draw_rect, is_dragged) = if let Some(drag) = drag
+            && drag.from == index
+        {
+            let target_x = drag.pointer_x - drag.grab_offset_x;
+            (rect.translate(vec2(target_x - rect.left(), 0.0)), true)
+        } else {
+            (rect.translate(vec2(shift_x, 0.0)), false)
+        };
+        let a11y = if dirty { format!("{name} (pinned, edited)") } else { format!("{name} (pinned)") };
+        let sense = if draggable { Sense::click_and_drag() } else { Sense::click() };
+        let resp = craft_ui::tabs::Tab::new(id, &a11y, active).sense(sense).focus_stroke(Stroke::new(1.0, t.accent)).show_at(ui, rect, |_, _| {});
+        let shown = match file {
+            Some(file) => format!("{name}\n{file} (Pinned)"),
+            None => format!("{name} (Pinned)"),
+        };
+        let resp =
+            theme::hand(resp).on_hover_text(if dirty { crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", &shown)]) } else { shown });
+        let deferred = DeferredTabPaint {
+            id,
+            icon: icon.to_string(),
+            dirty,
+            active,
+            index,
+            pinned: true,
+            group_color,
+            bridge_left,
+            scale,
+            height,
+            draw_rect,
+            label_galley: None,
+            label_color: Color32::TRANSPARENT,
+            is_dragged,
+        };
+        if defer_paint {
+            (resp, Some(deferred))
+        } else {
+            paint_tab_visuals(ui, t, &deferred, &resp, close);
+            (resp, None)
+        }
+    } else {
+        let mut label = tab_name(name);
+        // A shrunk tab shows as much of its name as fits (the tooltip has all of it).
+        if let Some(cap) = cap {
+            let room = (cap - TAB_CHROME).max(0.0);
+            label = crate::panels::ellipsized_prefix(&label, |s| crate::bidi::layout_ltr(ui, s.to_owned(), font.clone(), t.text).size().x <= room);
+        }
+        // Logical text, laid out explicitly left to right: the fork shapes and reorders it once,
+        // and an Arabic file name keeps its extension at the visual end. AccessKit names stay logical.
+        let label_color = if active { t.text.linear_multiply(scale) } else { t.text_muted.linear_multiply(scale) };
+        let label_galley = crate::bidi::layout_ltr(ui, label.clone(), font.clone(), label_color);
+        let text_w = label_galley.size().x;
+        let full_width = cap.map_or(text_w + TAB_CHROME, |cap| (text_w + TAB_CHROME).min(cap));
+        let width = full_width * scale;
+        let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+        let (draw_rect, is_dragged) = if let Some(drag) = drag
+            && drag.from == index
+        {
+            let target_x = drag.pointer_x - drag.grab_offset_x;
+            (rect.translate(vec2(target_x - rect.left(), 0.0)), true)
+        } else {
+            (rect.translate(vec2(shift_x, 0.0)), false)
+        };
+        let a11y = if dirty { format!("{name} (edited)") } else { name.to_string() };
+        let sense = if draggable { Sense::click_and_drag() } else { Sense::click() };
+        let resp = craft_ui::tabs::Tab::new(id, &a11y, active).sense(sense).focus_stroke(Stroke::new(1.0, t.accent)).show_at(ui, rect, |_, _| {});
+        let shown = match file {
+            Some(file) => format!("{name}\n{file}"),
+            None => name.to_string(),
+        };
+        let resp =
+            theme::hand(resp).on_hover_text(if dirty { crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", &shown)]) } else { shown });
+        let deferred = DeferredTabPaint {
+            id,
+            icon: icon.to_string(),
+            dirty,
+            active,
+            index,
+            pinned: false,
+            group_color,
+            bridge_left,
+            scale,
+            height,
+            draw_rect,
+            label_galley: Some(label_galley),
+            label_color,
+            is_dragged,
+        };
+        if defer_paint {
+            (resp, Some(deferred))
+        } else {
+            paint_tab_visuals(ui, t, &deferred, &resp, close);
+            (resp, None)
+        }
+    }
 }
 
 /// Width the print, save and info buttons and their gaps take in the mode bar: three buttons, the

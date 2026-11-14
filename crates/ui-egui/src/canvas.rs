@@ -483,6 +483,15 @@ pub struct DocView {
     /// Where the tab shows (split view's panes) and the key that tells two
     /// views of one document apart (`crate::panes`).
     pub(crate) pane: crate::panes::ViewPane,
+    /// Browser tab group this document belongs to, if any.
+    pub group: Option<crate::tab_group::TabGroupId>,
+    /// Whether this tab is pinned to the beginning of the tab strip.
+    pub pinned: bool,
+    /// Smooth opening animation progress (0.0 = just opened, 1.0 = fully open).
+    pub open_progress: f32,
+    /// Smooth closing animation flag and progress (1.0 = normal, 0.0 = closed).
+    pub closing: bool,
+    pub close_progress: f32,
     pub id: DocId,
     /// The document and attached file this tab was opened from, when a form or the Attachments
     /// panel opened it: asking for that attachment again comes back to this tab.
@@ -1023,6 +1032,11 @@ impl DocView {
     pub fn new(id: DocId, info: &DocInfo, defaults: ViewDefaults) -> Self {
         Self {
             pane: Default::default(),
+            group: None,
+            pinned: false,
+            open_progress: 0.0,
+            closing: false,
+            close_progress: 1.0,
             id,
             from_attachment: None,
             zoom: defaults.zoom,
@@ -1255,6 +1269,8 @@ impl DocView {
         fresh.viewport_w = self.viewport_w;
         fresh.viewport_h = self.viewport_h;
         fresh.viewport_screen = self.viewport_screen;
+        fresh.group = self.group;
+        fresh.pinned = self.pinned;
         fresh.pane = self.pane.clone();
         *self = fresh;
         // Marks the kept images out of date and clamps the page to the new page count.
@@ -1280,6 +1296,11 @@ impl DocView {
         v.layout = self.layout;
         v.continuous = self.continuous;
         v.show_page_gaps = self.show_page_gaps;
+        v.group = self.group;
+        v.pinned = self.pinned;
+        v.open_progress = 0.0;
+        v.closing = false;
+        v.close_progress = 1.0;
         v.rotation = self.rotation;
         v.cover = self.cover;
         v.current = self.current;
