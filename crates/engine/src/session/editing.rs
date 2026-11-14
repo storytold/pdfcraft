@@ -361,6 +361,9 @@ impl Session {
             }
             return Err(e);
         }
+        if let Some(ed) = doc.editor.as_mut() {
+            ed.position += 1;
+        }
         doc.dirty = true;
         if let Ok(mut runtime) = doc.js_runtime.lock() {
             runtime.sync_field_ids(doc.form.iter().map(|f| crate::js::field_object_id(f.obj)));
@@ -411,6 +414,9 @@ impl Session {
             }
             return Err(e);
         }
+        if let Some(ed) = doc.editor.as_mut() {
+            ed.position -= 1;
+        }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
         if let Some(editor) = doc.editor.as_ref()
@@ -447,6 +453,9 @@ impl Session {
                 Self::show_released(doc);
             }
             return Err(e);
+        }
+        if let Some(ed) = doc.editor.as_mut() {
+            ed.position += 1;
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);

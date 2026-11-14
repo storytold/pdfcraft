@@ -1892,6 +1892,20 @@ fn copy_restricted_documents_refuse_extraction_unless_opened_by_the_owner() {
     assert!(s.get(plain).unwrap().check_copying().is_ok() && extracting.iter().all(|c| enabled(&s, plain, c)));
 }
 
+/// Remove Signature opens on a document that allows comments but not other changes: a Fill &
+/// Sign signature is a comment there, and the dialog says why each digital one can't go.
+#[test]
+fn remove_signature_is_available_when_only_comments_are_allowed() {
+    let bytes = protected("", "owner", -1 ^ 0b1000); // everything but "modify the contents"
+    let mut s = Session::new();
+    let id = s.open("r.pdf", None, bytes, None).unwrap();
+    let d = s.get(id).unwrap();
+    assert!(!d.allows_modification() && d.allows_annotation());
+    let enabled = |s: &Session, c| commands::is_enabled(commands::command(c).unwrap(), s, Some(id));
+    assert!(enabled(&s, "sign.remove"));
+    assert!(!enabled(&s, "form.add.signature"), "changing the form still needs modification");
+}
+
 /// The renderer can open an encrypted file the editing parser rejects. Its permission bits are
 /// then unknown, which is not the same as none: copying and printing stay refused.
 #[test]
