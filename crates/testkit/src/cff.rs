@@ -35,9 +35,10 @@ fn int(v: usize) -> Vec<u8> {
 
 /// A CID-keyed CFF program (registry `Adobe`, ordering `Identity`) with glyph 0 (`.notdef`, CID
 /// 0) and then one empty glyph for each of `cids`, in order (charset format 0, every glyph in
-/// font dict 0).
+/// font dict 0). Its `CIDCount` is one more than the largest CID, so every CID is below it.
 pub fn cid_keyed(cids: &[u16]) -> Vec<u8> {
     let n = cids.len().saturating_add(1);
+    let cid_count = cids.iter().max().map_or(1, |&max| usize::from(max).saturating_add(1));
     let header = vec![1, 0, 4, 1];
     let name = index(&[b"Synthetic".to_vec()]);
     // Custom strings start at SID 391: `Adobe`, `Identity`.
@@ -55,7 +56,7 @@ pub fn cid_keyed(cids: &[u16]) -> Vec<u8> {
             int(392),
             int(0),
             vec![12, 30],
-            int(n),
+            int(cid_count),
             vec![12, 34],
             int(charset_at),
             vec![15],
@@ -105,5 +106,23 @@ pub fn standard_string_id(c: char) -> u16 {
         '\u{2019}' => 8,
         '\u{2018}' => 65,
         _ => u16::try_from(u32::from(c)).unwrap_or(0).saturating_sub(31),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Review finding: `CIDCount` (TN #5176 Table 10) is one more than the largest CID, not the
+    /// number of glyphs: a CID must be below it.
+    #[test]
+    fn the_cid_count_is_past_the_largest_cid() {
+        let cid_count = |program: &[u8]| {
+            let at = program.windows(2).position(|w| w == [12, 34]).expect("CIDCount");
+            let operand = program.get(at - 4..at).expect("its operand");
+            i32::from_be_bytes(operand.try_into().expect("four bytes"))
+        };
+        assert_eq!(cid_count(&cid_keyed(&[5, 6, 7])), 8);
+        assert_eq!(cid_count(&cid_keyed(&[])), 1);
     }
 }
