@@ -575,6 +575,29 @@ fn sentences_that_run_on_into_links_are_not_a_table() {
 
 /// A continuation can drift into a grid column covered by the preceding cell's span.
 /// It must remain available as paragraph text if that slot never becomes an output cell.
+/// #7304: a short paragraph that starts at a table's left edge, a paragraph gap above or under
+/// it, stays a paragraph; a band as close as the table's rows still joins it.
+#[test]
+fn a_paragraph_a_paragraph_gap_from_a_table_is_not_its_row() {
+    let mut p = table_page();
+    // table_page's rows are 30 points apart; "Totals" is its band under the last row.
+    p.blocks.retain(|b| b.text != "Totals" && !b.text.starts_with("Notes"));
+    let short = |text: &str, y: f64| Block { text: text.into(), rect: [72.0, y, 312.0, y + 12.0], ..p.blocks[0].clone() };
+    let mut apart = p.clone();
+    apart.blocks.insert(0, short("Readings taken this month", 680.0));
+    apart.blocks.push(short("Paid by direct debit", 490.0));
+    let h = html(std::slice::from_ref(&apart), "Bill");
+    assert_eq!(h.matches("<tr>").count(), 3, "{h}");
+    assert!(h.contains("<p>Readings taken this month</p>") && h.contains("<p>Paid by direct debit</p>"), "{h}");
+
+    let mut band = p.clone();
+    band.blocks.insert(0, short("Electricity", 650.0));
+    band.blocks.push(short("Totals", 530.0));
+    let h = html(std::slice::from_ref(&band), "Bill");
+    assert_eq!(h.matches("<tr>").count(), 5, "{h}");
+    assert!(h.contains("<td colspan=\"2\">Electricity</td>") && h.contains("<td colspan=\"2\">Totals</td>"), "{h}");
+}
+
 #[test]
 fn table_spans_do_not_consume_text_they_do_not_emit() {
     let mut blocks = vec![
