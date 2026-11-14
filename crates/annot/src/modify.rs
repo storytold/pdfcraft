@@ -4,7 +4,7 @@ use super::create::{
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
 use super::info::{is_comment_subtype, is_group_subordinate, line_endings_of, own_popup, popup_info, text_value};
-use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, is_fill_sign, page_ref, set_annots};
+use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, change_annots, is_fill_sign, page_ref, set_annots};
 use super::text_style::{self, TextStyle};
 use super::types::{
     BorderShape, FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb,
@@ -117,7 +117,10 @@ pub(crate) fn touch(d: &mut Dict, meta: &Meta) {
 /// go together from either ([`own_deletion`]).
 pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
     let index = deleted_index(doc, page, index)?;
-    lift_annotation(doc, page, index)
+    lift_annotation(doc, page, index)?;
+    // Not in lift_annotation: a drag preview lifts on a throwaway copy and must not log a repair.
+    let p = page_ref(doc, page)?;
+    change_annots(doc, p, annots(doc, p))
 }
 
 /// Whether [`delete_annotation`] deletes the annotation at `(page, index)`, or why not, without
@@ -133,6 +136,10 @@ fn deleted_index(doc: &Document, page: usize, index: usize) -> Result<usize, Ann
     let list = annots(doc, page_ref(doc, page)?);
     let mut target = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
     let mut index = index;
+    let target_obj = target.as_ref().map_or_else(|| doc.resolve(target), |r| doc.get(super::info::final_ref(doc, r)));
+    if !target_obj.as_dict().is_some_and(super::lookup::is_comment_dict) {
+        return Err(AnnotError::NoSuchAnnotation { page, index });
+    }
     if let Some(r) = target.as_ref() {
         unlocked(doc, r)?;
     }
@@ -425,7 +432,7 @@ fn reply(
     let mut list = annots(doc, p);
     list.push(Object::Ref(r));
     let i = list.len() - 1;
-    set_annots(doc, p, list)?;
+    change_annots(doc, p, list)?;
     Ok(i)
 }
 
@@ -545,7 +552,7 @@ pub fn set_marked(doc: &mut Document, page: usize, index: usize, marked: bool, a
     let mut list = annots(doc, p);
     list.push(Object::Ref(r));
     let i = list.len() - 1;
-    set_annots(doc, p, list)?;
+    change_annots(doc, p, list)?;
     Ok(i)
 }
 
@@ -850,19 +857,38 @@ pub fn set_points(doc: &mut Document, page: usize, index: usize, points: &[[f64;
 
 /// Scale a drawing's strokes into `rect`. The margin between the strokes and the old `/Rect` (half
 /// the line width and a little more) stays the same on each side, so the line isn't clipped.
+/// Most stroke points a stored drawing may have for resizing or erasing it. Counted as each
+/// stroke is resolved, so one stroke array referenced again and again can't expand past it.
+const MAX_STORED_INK_POINTS: usize = 1_000_000;
+/// Most points the eraser densifies a drawing into before testing them against its path.
+const MAX_ERASE_SAMPLES: usize = 4_000_000;
+
+/// The strokes of an ink annotation's `/InkList`, at most [`MAX_STORED_INK_POINTS`] points.
+fn ink_strokes(doc: &Document, d: &Dict) -> Result<Vec<Vec<[f64; 2]>>, AnnotError> {
+    let too_many = || AnnotError::Invalid(format!("the drawing has more than {MAX_STORED_INK_POINTS} points"));
+    let list = d.get(b"InkList").map(|l| doc.resolve(l));
+    let mut points = 0usize;
+    let mut strokes = Vec::new();
+    for s in list.as_deref().and_then(Object::as_array).map(Vec::as_slice).unwrap_or_default() {
+        let stroke = doc.resolve(s);
+        let Some(a) = stroke.as_array() else {
+            strokes.push(Vec::new());
+            continue;
+        };
+        // Charged before the coordinates are read: a shared array costs each time it is listed.
+        points = points.saturating_add(a.len() / 2);
+        if points > MAX_STORED_INK_POINTS {
+            return Err(too_many());
+        }
+        let v: Vec<f64> = a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
+        strokes.push(v.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect());
+    }
+    Ok(strokes)
+}
+
 fn resize_ink(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta) -> Result<(), AnnotError> {
     let d = annot_dict(doc, r);
-    let strokes: Vec<Vec<[f64; 2]>> = d
-        .get(b"InkList")
-        .map(|l| doc.resolve(l))
-        .and_then(|l| l.as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .map(|s| {
-            let v: Vec<f64> = doc.resolve(s).as_array().map(|a| a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect()).unwrap_or_default();
-            v.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect()
-        })
-        .collect();
+    let strokes = ink_strokes(doc, &d)?;
     let Some(inner) = bounds(strokes.iter().flatten().copied()) else {
         return Err(AnnotError::Invalid("the drawing has no strokes".into()));
     };
@@ -1468,17 +1494,7 @@ pub fn erase_ink(doc: &mut Document, page: usize, index: usize, path: &[[f64; 2]
     if path.is_empty() || !path.iter().all(|p| finite(p)) || !radius.is_finite() || radius <= 0.0 {
         return Err(AnnotError::Invalid("invalid eraser path".into()));
     }
-    let strokes: Vec<Vec<[f64; 2]>> = d
-        .get(b"InkList")
-        .map(|l| doc.resolve(l))
-        .and_then(|l| l.as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .map(|s| {
-            let v: Vec<f64> = doc.resolve(s).as_array().map(|a| a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect()).unwrap_or_default();
-            v.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect()
-        })
-        .collect();
+    let strokes = ink_strokes(doc, &d)?;
     // Distance from a point to the eraser's path (segments, or a single point).
     let near = |p: [f64; 2]| -> bool {
         if path.len() == 1 {
@@ -1494,17 +1510,27 @@ pub fn erase_ink(doc: &mut Document, page: usize, index: usize, path: &[[f64; 2]
     };
     let mut kept: Vec<Vec<[f64; 2]>> = Vec::new();
     let mut erased = false;
+    let mut samples = 0usize;
     for s in &strokes {
         // Densify so long segments are cut where the eraser crosses them.
         let mut pts: Vec<[f64; 2]> = Vec::new();
         for w in s.windows(2) {
             let n = ((w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]) / (radius / 2.0)).ceil().clamp(1.0, 2000.0) as usize;
+            samples = samples.saturating_add(n);
+            if samples > MAX_ERASE_SAMPLES {
+                return Err(AnnotError::Invalid("the drawing is too large to erase at this eraser size".into()));
+            }
             for k in 0..n {
                 let t = k as f64 / n as f64;
                 pts.push([w[0][0] + (w[1][0] - w[0][0]) * t, w[0][1] + (w[1][1] - w[0][1]) * t]);
             }
         }
         if let Some(last) = s.last() {
+            // The final point is a sample too.
+            samples = samples.saturating_add(1);
+            if samples > MAX_ERASE_SAMPLES {
+                return Err(AnnotError::Invalid("the drawing is too large to erase at this eraser size".into()));
+            }
             pts.push(*last);
         }
         let mut run: Vec<[f64; 2]> = Vec::new();
@@ -1529,6 +1555,12 @@ pub fn erase_ink(doc: &mut Document, page: usize, index: usize, path: &[[f64; 2]
     if kept.is_empty() {
         delete_annotation(doc, page, index)?;
         return Ok(true);
+    }
+    // The retained runs are stored as the new `/InkList`: past the cap, writing them would leave a
+    // drawing that later `resize_ink` and `erase_ink` refuse to read.
+    let points: usize = kept.iter().map(Vec::len).sum();
+    if points > MAX_STORED_INK_POINTS {
+        return Err(AnnotError::Invalid(format!("erasing would leave a drawing with more than {MAX_STORED_INK_POINTS} points")));
     }
     let width = d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0);
     let rect = grow(bounds(kept.iter().flatten().copied()).unwrap_or_default(), width / 2.0 + 1.0);

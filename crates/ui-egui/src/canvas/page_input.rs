@@ -10,6 +10,7 @@ use super::{
     signature_badges, verdict_mark_rect,
 };
 use crate::page_cursor::{Layer, Subject};
+use crate::page_keys::PageKeys;
 use crate::page_pointer::PagePointer;
 use crate::page_router::{Owner, PagePress, top};
 use crate::{QuickTool, comments, icons};
@@ -45,6 +46,8 @@ pub(crate) struct PageToolContext<'a> {
     pub page: usize,
     pub doc: &'a pdfcraft_engine::Document,
     pub info: &'a DocInfo,
+    /// This frame's keys as the pages see them.
+    pub keys: PageKeys,
 }
 
 /// The tools' input on one page. The hits at the press point decide who holds the press, and the
@@ -64,6 +67,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         editing_content,
         form,
         info,
+        keys,
         placing,
         prefs,
         preparing,
@@ -76,8 +80,8 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     } = frame.env;
     let PageSlot { i, xf, .. } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
-    let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info, keys };
+    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark, keys };
     let (lines, images) =
         if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify { edit_inventory(view, doc, i) } else { Default::default() };
     let field_tool = match tool {
@@ -97,6 +101,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         tool,
         pcx: &pcx,
         form,
+        doc,
         can_fill,
         can_modify,
         editing_content,
@@ -210,7 +215,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // the palette, another window or another tab has it (`gate`), as before.
     let gate = !(tool == QuickTool::EditText && view.objects.input_blocked());
     if tool == QuickTool::EditText && can_modify && gate {
-        crate::edit_text_ui::picture_keys(ui.ctx(), view, i, &images, ptr.any_down);
+        crate::edit_text_ui::picture_keys(ui.ctx(), keys, view, i, &images, ptr.any_down);
     }
     let on_objects = tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(cx, press, view);
     let picks_up = matches!(tool, QuickTool::Select | QuickTool::AddText | QuickTool::EditText);
@@ -346,6 +351,7 @@ fn tool_input(
         doc,
         info,
         initials,
+        keys,
         signature,
         tool,
         units,
@@ -356,7 +362,7 @@ fn tool_input(
     } = frame.env;
     let PageSlot { i, xf, .. } = *slot;
     let PageFrame { resp, ptr, .. } = *frame;
-    let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
+    let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info, keys };
     let free = press == PagePress::Free;
     if let QuickTool::Measure(measure_tool) = tool {
         crate::measure_ui::page_input(ui, crate::measure_ui::Clicks::of(resp, free), doc, view, pcx, measure_tool, units);
@@ -481,6 +487,8 @@ struct PageHits<'a> {
     tool: QuickTool,
     pcx: &'a comments::PageCx<'a>,
     form: &'a [pdfcraft_engine::FormField],
+    /// Its document: what its scripts show while it is read (`Document::shown_by_scripts`).
+    doc: &'a pdfcraft_engine::Document,
     can_fill: bool,
     can_modify: bool,
     /// Edit a PDF is open: added text and pictures can be picked up.
@@ -571,6 +579,7 @@ impl PageHits<'_> {
             tool,
             pcx,
             form,
+            doc,
             can_fill,
             can_modify,
             editing_content,
@@ -606,7 +615,7 @@ impl PageHits<'_> {
         let fields = if preparing {
             crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p)
         } else if tool == QuickTool::Select {
-            crate::forms_ui::hit(xf, info, page, form, tabs, can_fill, p)
+            crate::forms_ui::hit(xf, info, page, doc, tabs, can_fill, p)
         } else {
             None
         };
@@ -870,6 +879,18 @@ fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageTex
     }
 }
 
+/// Full screen is turning to the current page, or waiting for it to render: the page under the
+/// pointer isn't the one on screen, so its links, fields, text and comments take no input.
+/// Turning the page (a click, a key) is handled apart and still works.
+pub(super) fn veiled(view: &DocView) -> bool {
+    view.presentation.is_some() && !view.presenter.settled_on(view.current)
+}
+
+/// The page and index of `l` when clicking it runs a JavaScript action (#2081).
+fn javascript_link(l: &pdfcraft_render::Link) -> Option<(usize, usize)> {
+    matches!(l.target, LinkTarget::JavaScript(_)).then_some((l.page, l.index))
+}
+
 /// Everything drawn over the page after its text: pictures, comments, content, links, fields, marks
 /// and badges.
 pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot, input: &PageInput) {
@@ -885,6 +906,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         form,
         generation,
         info,
+        keys,
         prepare_tab_order,
         prefs,
         preparing,
@@ -898,8 +920,8 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     let PageSlot { i, r, xf } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let painter = ui.painter();
-    let tool_cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let tool_cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info, keys };
+    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark, keys };
     // A press nobody holds picks the picture under it: a link's click follows the link only (ruling
     // 5), though its drag or double-click still lets the picked picture go, as does a drag the page
     // it is over first sees, whichever page it began on.
@@ -915,8 +937,9 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     }
     crate::image_pick::drop_stale(doc, view);
     crate::image_pick::paint(painter, &xf, i, info, view);
-    // A cancelled press ends no selection: no markup or redaction is made from it.
-    if !view.press_cancelled {
+    // A cancelled press ends no selection: no markup or redaction is made from it, nor from a
+    // page full screen doesn't show yet.
+    if !view.press_cancelled && !veiled(view) {
         comments::page_after_text(resp, &pcx, view);
         if tool == QuickTool::Redact && can_modify {
             crate::redact_ui::after_text(resp, i, info, view);
@@ -952,6 +975,9 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     } else {
         crate::forms_ui::paint_page(painter, &xf, i, info, form, view, input.hover.as_ref());
         crate::forms_ui::tooltip(resp, form, input.hover.as_ref());
+        if let Some(hovered) = crate::forms_ui::hovered(form, input.hover.as_ref()) {
+            frame.field_hover = Some(hovered);
+        }
     }
 
     // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
@@ -972,6 +998,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         && let Some(l) = info.links.iter().find(|l| l.page == i && l.index == index)
     {
         frame.out.clicked_link = Some(l.target.clone());
+        frame.out.javascript_link = javascript_link(l);
     }
     // A web or email address written as plain text (#4207): the same click as a link annotation,
     // and the same check and confirmation on opening.
@@ -1051,7 +1078,9 @@ fn paint_field_highlights(painter: &egui::Painter, xf: &PageXform, info: &DocInf
     if !enabled {
         return;
     }
-    for field in form.iter() {
+    // A push button holds no value, so it is left as drawn (the frames and controls of a LaTeX
+    // `animate` animation are push buttons).
+    for field in form.iter().filter(|f| f.kind != pdfcraft_engine::FormFieldKind::PushButton) {
         let required = field.has(pdfcraft_engine::field_flags::REQUIRED);
         for widget in field.widgets.iter().filter(|widget| widget.page == Some(page) && !widget.hidden && !widget.read_only) {
             let rect = widget.rect;

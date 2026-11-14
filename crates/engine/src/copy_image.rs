@@ -33,14 +33,14 @@ fn pictures(cos: &Cos, page: usize) -> Vec<PagePicture> {
         }
     };
     if !images.iter().any(|image| image.is_form) {
-        return images.into_iter().enumerate().collect();
+        return images.into_iter().enumerate().filter(|(_, image)| image.object.is_some()).collect();
     }
     let drawn = match pdfcraft_edit::reading_images(cos, page) {
         Ok(drawn) => drawn,
         Err(e) => {
             // Fail closed for groups whose bitmap bounds cannot be proved; direct images remain usable.
             let _ = writeln!(std::io::stderr(), "page {} grouped picture selection skipped: {e}", page.saturating_add(1));
-            return images.into_iter().enumerate().filter(|(_, image)| !image.is_form).collect();
+            return images.into_iter().enumerate().filter(|(_, image)| !image.is_form && image.object.is_some()).collect();
         }
     };
     // Index placements once: reused image objects and page-sized CAD groups are not picture bounds.

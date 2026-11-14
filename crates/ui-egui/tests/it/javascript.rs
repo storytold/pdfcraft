@@ -5,80 +5,18 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
-/// A schematic image with a component's JavaScript link above it.
-fn schematic() -> Vec<u8> {
-    let paint = "q 400 0 0 400 0 0 cm /Im Do Q\n";
-    let objects: [String; 6] = [
-        "<< /Type /Catalog /Pages 2 0 R >>".into(),
-        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources << /XObject << /Im 5 0 R >> >> /Contents 4 0 R /Annots [6 0 R] >>".into(),
-        format!("<< /Length {} >>\nstream\n{paint}endstream", paint.len()),
-        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\nabc\nendstream".into(),
-        "<< /Type /Annot /Subtype /Link /Rect [150 150 250 250] /A << /S /JavaScript /JS (app.popUpMenuEx\\({cName: 'Designator: R1'}, {cName: 'Value: 10k'}\\);) >> >>".into(),
-    ];
-    let mut out = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, object) in objects.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
-    }
-    let xref = out.len();
-    out.extend_from_slice(b"xref\n0 7\n0000000000 65535 f \n");
-    for offset in offsets {
-        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
-    out
-}
-
-#[test]
-fn schematic_link_opens_properties_without_selecting_the_background() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("schematic.pdf", None, schematic()).unwrap();
-        app
-    });
-    h.run_steps(4);
-    let at = h.state().views[0].page_screen_rect(0).unwrap().center();
-    h.hover_at(at);
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
-    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
-    h.run_steps(3);
-    h.get_by_label("Component Properties");
-    h.get_by_label("10k");
-    h.hover_at(at);
-    h.run_steps(2);
-    assert!(h.query_by_label("JavaScript action").is_none(), "the link tooltip must not cover the properties");
-    assert!(h.state().views[0].picked_image.is_none(), "the component link owns this click");
-    let popup = h.ctx.memory(|m| m.area_rect(egui::Id::unique("popup-menu"))).unwrap();
-    assert!(popup.min.distance(at) < 32.0, "properties open beside the component: {popup:?}, {at:?}");
-    h.get_by_label("Close (Esc)").click();
-    h.run_steps(2);
-    assert!(h.state().popup_menu.is_none());
-
-    h.state_mut().right = Some(pdfcraft_ui_egui::RightPanel::Pages);
-    h.run_steps(3);
-    let id = h.state().views[0].id;
-    h.state_mut().run_link_script(id, "app.popUpMenu('Value: 10k')");
-    h.state_mut().popup_menu.as_mut().unwrap().anchor = egui::pos2(1390.0, 890.0);
-    h.run_steps(4);
-    let popup = h.ctx.memory(|m| m.area_rect(egui::Id::unique("popup-menu"))).unwrap();
-    let sidebar = h.get_all_by_label("Pages").find(|n| n.rect().left() > 900.0).expect("right sidebar heading").rect();
-    assert!(h.ctx.content_rect().contains_rect(popup) && popup.right() < sidebar.left(), "properties stay out of the sidebar: {popup:?}");
-    h.key_press(egui::Key::Escape);
-    h.run_steps(2);
-    assert!(h.state().popup_menu.is_none());
-}
-
 /// A form with a text field and a push button whose Mouse Up script fills it in.
 fn form() -> Vec<u8> {
+    form_with_text_action("")
+}
+
+fn form_with_text_action(action: &str) -> Vec<u8> {
+    let greeting = format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (greeting) /Rect [20 250 280 270] /P 3 0 R /F 4 {action} >>");
     let objs = [
         "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >> >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>",
         "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
-        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (greeting) /Rect [20 250 280 270] /P 3 0 R /F 4 >>",
+        &greeting,
         "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (hello) /Rect [20 200 120 230] /P 3 0 R /F 4 /A << /S /JavaScript /JS (getField\\('greeting'\\).value = 'Hello from JavaScript'; app.alert\\('Filled in'\\);) >> >>",
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
     ];
@@ -106,117 +44,6 @@ fn harness() -> Harness<'static, PdfCraftApp> {
     });
     h.run_steps(4);
     h
-}
-
-#[test]
-fn link_scripts_receive_link_events_and_keep_all_popup_requests() {
-    let mut h = harness();
-    let id = h.state().views[0].id;
-    h.state_mut().run_link_script(id, "app.popUpMenu(event.type); app.popUpMenu(event.name);");
-    assert_eq!(h.state().popup_menu.as_ref().unwrap().items, ["Link", "Mouse Up"]);
-}
-
-#[test]
-fn escape_closes_component_popup_before_leaving_full_screen() {
-    let mut h = harness();
-    let id = h.state().views[0].id;
-    h.state_mut().full_screen = true;
-    h.state_mut().run_link_script(id, "app.popUpMenu('Value: 10k')");
-    h.run_steps(3);
-    h.key_press(egui::Key::Escape);
-    h.run_steps(2);
-    assert!(h.state().popup_menu.is_none());
-    assert!(h.state().full_screen);
-    h.key_press(egui::Key::Escape);
-    h.run_steps(2);
-    assert!(!h.state().full_screen);
-}
-
-#[test]
-fn link_scripts_commit_pending_typing_before_reading_or_writing_fields() {
-    let mut h = harness();
-    let id = h.state().views[0].id;
-    let at = {
-        let app = h.state();
-        let doc = app.session.get(id).unwrap();
-        let field = doc.form.iter().find(|f| f.name == "greeting").unwrap();
-        pdfcraft_ui_egui::forms_ui::field_screen_rect(&app.views[0], &doc.info, field, 0).unwrap().center()
-    };
-    h.hover_at(at);
-    h.run_steps(1);
-    h.drag_at(at);
-    h.run_steps(1);
-    h.drop_at(at);
-    h.run_steps(2);
-    h.state_mut().views[0].forms.focus.as_mut().expect("field is being edited").text = "pending".into();
-    h.state_mut().run_link_script(id, "app.popUpMenu('Value: ' + getField('greeting').value); getField('greeting').value = 'script';");
-    assert_eq!(h.state().popup_menu.as_ref().unwrap().items, ["Value: pending"]);
-    assert!(h.state().views[0].forms.focus.is_none());
-    h.run_steps(2);
-    assert_eq!(value(&h, "greeting"), ["script"]);
-}
-
-#[test]
-fn popup_wraps_long_values_in_a_narrow_viewport_and_clears_without_its_document() {
-    let mut h = Harness::builder().with_size(egui::vec2(480.0, 900.0)).build_eframe(|_| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("schematic.pdf", None, schematic()).unwrap();
-        app
-    });
-    h.run_steps(4);
-    let id = h.state().views[0].id;
-    h.state_mut().run_link_script(
-        id,
-        "app.popUpMenu('Value: a long multi word value that wraps across several lines in the narrow viewport', '-', 'plain label')",
-    );
-    h.state_mut().popup_menu.as_mut().unwrap().anchor = egui::pos2(470.0, 890.0);
-    h.run_steps(4);
-    let popup = h.ctx.memory(|m| m.area_rect(egui::Id::unique("popup-menu"))).unwrap();
-    assert!(h.ctx.content_rect().contains_rect(popup), "{popup:?}");
-    assert!(popup.width() <= 386.0, "{popup:?}");
-    h.get_by_label("plain label");
-    h.state_mut().active = None;
-    h.run_steps(2);
-    assert!(h.state().popup_menu.is_none());
-    h.state_mut().active = Some(0);
-    h.state_mut().run_link_script(id, "app.popUpMenu('Value: old document')");
-    h.state_mut().open_bytes("other.pdf", None, schematic()).unwrap();
-    h.run_steps(2);
-    assert!(h.state().popup_menu.is_none(), "switching documents clears the previous document's popup");
-}
-
-#[test]
-fn link_script_failures_report_errors_and_mutations_refresh_the_view() {
-    let mut h = harness();
-    let id = h.state().views[0].id;
-    h.state_mut().session.set_javascript(false);
-    h.state_mut().run_link_script(id, "app.popUpMenu('blocked')");
-    assert!(h.state().toast.as_ref().unwrap().0.contains("JavaScript link action failed"));
-    assert!(h.state().popup_menu.is_none());
-    h.state_mut().session.set_javascript(true);
-    h.state_mut().run_link_script(id, "throw new Error('link failure')");
-    assert!(h.state().js_console.log.iter().any(|s| s.contains("link failure")));
-    let before = h.state().session.get(id).unwrap().edit_generation();
-    h.state_mut().views[0].goto = Some((0, 0.0));
-    h.state_mut().run_link_script(id, "getField('greeting').value = 'changed'; app.popUpMenu('Value: changed')");
-    assert!(h.state().session.get(id).unwrap().edit_generation() > before);
-    assert_eq!(h.state().views[0].goto, None, "document_changed cleared the cached navigation");
-    assert_eq!(value(&h, "greeting"), ["changed"]);
-}
-
-#[test]
-fn popup_without_a_pointer_anchors_inside_the_document_viewport() {
-    let mut h = harness();
-    h.event(egui::Event::PointerGone);
-    h.run_steps(1);
-    let id = h.state().views[0].id;
-    h.state_mut().run_link_script(id, "app.popUpMenu('Value: 10k')");
-    let anchor = h.state().popup_menu.as_ref().unwrap().anchor;
-    assert!(anchor.x > 0.0 && anchor.y > 0.0 && h.ctx.content_rect().contains(anchor), "{anchor:?}");
-    h.run_steps(3);
-    let popup = h.ctx.memory(|m| m.area_rect(egui::Id::unique("popup-menu"))).unwrap();
-    assert!(popup.min.distance(anchor) < 32.0, "{popup:?}, {anchor:?}");
 }
 
 fn value(h: &Harness<'static, PdfCraftApp>, name: &str) -> Vec<String> {
@@ -254,9 +81,43 @@ fn button_scripts_run_and_alert() {
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;
     h.state_mut().run_button_script(id, "hello", "getField('greeting').value = 'Hello from JavaScript'; app.alert('Filled in');");
-    h.run_steps(2);
-    assert_eq!(value(&h, "greeting"), ["Hello from JavaScript"]);
-    assert_eq!(h.state().toast.clone().unwrap().0, "Filled in");
+    wait_for(&mut h, "Filled in");
+    h.get_by_label("OK").click();
+    wait_value(&mut h, "greeting", "Hello from JavaScript");
+}
+
+#[test]
+fn text_widget_mouse_up_runs_its_menu_and_keeps_the_result() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.set_option("left", "closed").unwrap();
+        let bytes = form_with_text_action(
+            r"/AA << /U << /S /JavaScript /JS (var choice = app.popUpMenuEx\({cName:'Choose test value',cReturn:'selected'}\); if \(choice\) getField\('greeting'\).value = choice;) >> >>",
+        );
+        app.open_bytes("text-action.pdf", None, bytes).unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    let point = {
+        let app = h.state();
+        let (index, id) = app.active_ids().unwrap();
+        let doc = app.session.get(id).unwrap();
+        let field = doc.form.iter().find(|field| field.name == "greeting").unwrap();
+        assert!(field.widgets[0].mouse_up_script.is_some());
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&app.views[index], &doc.info, field, 0).unwrap().center()
+    };
+    for _ in 0..2 {
+        h.hover_at(point);
+        h.run_steps(1);
+        h.drag_at(point);
+        h.run_steps(1);
+        h.drop_at(point);
+        wait_for(&mut h, "Choose test value");
+        h.get_by_label("Choose test value").click();
+        wait_value(&mut h, "greeting", "selected");
+        h.run_steps(8);
+    }
 }
 
 /// One run's messages are all shown, in order (#4294): the first takes the toast with its title
@@ -268,7 +129,12 @@ fn every_message_a_script_shows_takes_the_toast_in_turn() {
     use pdfcraft_engine::js::{MessageButtons, MessageIcon};
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;
-    h.state_mut().run_button_script(id, "hello", "app.alert('First', 1, 0, 'Order form'); app.alert('Second', 3); app.alert('Third');");
+    let out = h
+        .state_mut()
+        .session
+        .run_javascript(id, "app.alert('First', 1, 0, 'Order form'); app.alert('Second', 3); app.alert('Third');", None)
+        .unwrap();
+    h.state_mut().handle_js(id, pdfcraft_engine::js::JsOutput { alerts: out.alerts, ..Default::default() });
     h.run_steps(2);
     let shown = |h: &Harness<'static, PdfCraftApp>| h.state().toast.clone().map(|t| t.0);
     assert_eq!(shown(&h).as_deref(), Some("First"));
@@ -292,7 +158,8 @@ fn every_message_a_script_shows_takes_the_toast_in_turn() {
     // follows it.
     h.state_mut().toast = None;
     h.run_steps(2);
-    h.state_mut().run_button_script(id, "hello", "this.submitForm('https://example.com/form'); app.alert('Fourth');");
+    let out = h.state_mut().session.run_javascript(id, "this.submitForm('https://example.com/form'); app.alert('Fourth');", None).unwrap();
+    h.state_mut().handle_js(id, pdfcraft_engine::js::JsOutput { alerts: out.alerts, requests: out.requests, ..Default::default() });
     h.run_steps(2);
     let notice = shown(&h).unwrap_or_default();
     assert!(notice.contains("submitted"), "the submit notice stays: {notice}");
@@ -392,4 +259,440 @@ fn prepare_a_form_detects_fields_on_a_paper_form() {
     let names: Vec<String> = app.session.get(id).unwrap().form.iter().map(|f| f.name.clone()).collect();
     assert_eq!(names, ["Name", "Phone"]);
     assert_eq!(app.toast.clone().unwrap().0, "Detected 2 form fields");
+}
+
+/// Advance bounded UI frames until the synthetic prompt label becomes available.
+fn wait_for(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    while std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        if h.query_by_label(label).is_some() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("script dialog did not show {label}");
+}
+/// Advance bounded UI frames until the worker completion updates the expected synthetic field value.
+fn wait_value(h: &mut Harness<'static, PdfCraftApp>, name: &str, expected: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    while std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        if value(h, name) == [expected] {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(value(h, name), [expected]);
+}
+#[test]
+/// Every native script prompt identifies its document, even with misleading or empty titles.
+fn native_script_prompts_show_an_app_owned_caption() {
+    for (script, body, title) in [
+        ("app.response({cQuestion:'Type a value',cTitle:'PdfCraft security',bPassword:true});", "Type a value", Some("PdfCraft security")),
+        ("app.response({cQuestion:'Empty title prompt',cTitle:''});", "Empty title prompt", None),
+        ("app.alert({cMsg:'Script message',cTitle:'PdfCraft security'});", "Script message", Some("PdfCraft security")),
+        ("app.alert({cMsg:'Untitled alert',cTitle:''});", "Untitled alert", None),
+        ("app.popUpMenuEx({cName:'Pick a value',cReturn:'yes'});", "Pick a value", None),
+    ] {
+        let mut h = harness();
+        let id = h.state().active_ids().unwrap().1;
+        h.state_mut().run_button_script(id, "hello", script);
+        wait_for(&mut h, body);
+        assert!(h.query_by_label("This document's script is asking").is_some(), "{script}");
+        assert_eq!(
+            h.query_by_label("This request comes from the document, not PdfCraft. Only enter a password if you trust this document.").is_some(),
+            script.contains("bPassword:true"),
+            "{script}"
+        );
+        assert!(h.query_by_label("Document: form.pdf").is_some(), "{script}");
+        if let Some(title) = title {
+            assert!(h.query_by_label(title).is_some(), "{script}");
+        }
+        h.get_by_label("Cancel").click();
+        h.run_steps(2);
+    }
+}
+
+#[test]
+fn native_script_prompt_uses_the_german_catalog_when_available() {
+    use pdfcraft_ui_egui::i18n::{Lang, tr};
+
+    let Some(german) = Lang::from_code("de") else { return };
+    let source = "This document's script is asking";
+    let heading = "Das Skript dieses Dokuments fragt";
+    // Older catalog pins can still build the application with the English fallback.
+    if tr(german, source) == source && std::env::var_os("PDFCRAFT_REQUIRE_SCRIPT_PROMPT_TRANSLATIONS").is_none() {
+        return;
+    }
+    assert_eq!(tr(german, source), heading);
+    let mut h = harness();
+    h.state_mut().set_option("language", "de").unwrap();
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut().run_button_script(id, "hello", "app.response({cQuestion:'Test',bPassword:true});");
+    wait_for(&mut h, heading);
+    assert!(h.query_by_label("Dokument: form.pdf").is_some());
+    assert!(h.query_by_label("Diese Aufforderung stammt aus dem Dokument und wird von dessen Skript angezeigt. Gib ein Passwort nur ein, wenn du diesem Dokument vertraust.").is_some());
+}
+
+#[test]
+/// A real UI menu followed by input resumes once and does not leak the menu click into the next modal.
+fn native_button_popup_and_response_resume_without_replaying_the_script() {
+    for typed in [false, true] {
+        let mut h = harness();
+        let id = h.state().active_ids().unwrap().1;
+        h.state_mut().run_button_script(id,"hello","var calls=typeof calls==='number'?calls:0;calls++;var choice=app.popUpMenuEx({cName:'Morning',cReturn:'08:00'});var extra=app.response({cTitle:'Manual time',cQuestion:'Suffix',cDefault:'x'});getField('greeting').value=choice+'/'+extra+'/'+calls;");
+        wait_for(&mut h, "Morning");
+        h.get_by_label("Morning").click();
+        wait_for(&mut h, "Suffix");
+        if typed {
+            h.get_by(|n| n.role() == egui::accesskit::Role::TextInput && n.value().as_deref() == Some("x")).focus();
+            h.run_steps(2);
+            h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            h.run_steps(1);
+            h.get_by(|n| n.role() == egui::accesskit::Role::TextInput && n.is_focused()).type_text("typed answer");
+            h.run_steps(2);
+        }
+        if let Ok(path) = std::env::var("PDFCRAFT_COMPAT_SCREENSHOT") {
+            let image = h.render().unwrap();
+            let crop = image::imageops::crop_imm(&image, 400, 220, 600, 460).to_image();
+            crop.save(path).unwrap();
+        }
+        h.get_by_label("OK").click();
+        wait_value(&mut h, "greeting", if typed { "08:00/typed answer/1" } else { "08:00/x/1" });
+    }
+}
+#[test]
+/// Cancelling a native menu returns null to the same invocation without duplicating preceding work.
+fn native_popup_cancellation_returns_null_and_preserves_the_single_invocation() {
+    let mut h = harness();
+    let id = h.state().active_ids().unwrap().1;
+    let script = "var calls=typeof calls==='number'?calls:0;calls++;var choice=app.popUpMenuEx({cName:'Choose',cReturn:'yes'});getField('greeting').value=String(choice)+'/'+calls;";
+    h.state_mut().run_button_script(id, "hello", script);
+    wait_for(&mut h, "Choose");
+    h.get_by_label("Cancel").click();
+    wait_value(&mut h, "greeting", "null/1");
+    h.state_mut().run_button_script(id, "hello", script);
+    wait_for(&mut h, "Choose");
+    h.get_by_label("Cancel").click();
+    wait_value(&mut h, "greeting", "null/2");
+}
+
+/// A nested menu exposes only enabled leaves as valid replies to the waiting script.
+#[test]
+fn native_popup_submenu_keeps_disabled_items_unselectable() {
+    let mut h = harness();
+    let id = h.state().active_ids().unwrap().1;
+    let script = "var calls=typeof calls==='number'?calls:0; calls++; \
+                  var choice=app.popUpMenuEx({cName:'Group',oSubMenu:[{cName:'Disabled',bEnabled:false}, \
+                  {cName:'Enabled',cReturn:'chosen'}]}); getField('greeting').value=choice+'/'+calls;";
+    h.state_mut().run_button_script(id, "hello", script);
+    wait_for(&mut h, "Group");
+    h.get_by_label("Group").click();
+    wait_for(&mut h, "Enabled");
+    // The modal recentres while the submenu expands. Settle the layout before sending pointer input.
+    h.run_steps(30);
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Disabled") && node.is_disabled()).is_some());
+    h.get_by_label("Enabled").click();
+    wait_value(&mut h, "greeting", "chosen/1");
+}
+
+#[test]
+/// An intervening document edit prevents an older pending script result from replacing current values.
+fn native_popup_completion_is_discarded_after_the_document_is_edited() {
+    let mut h = harness();
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut().run_button_script(id, "hello", "app.popUpMenuEx({cName:'Wait',cReturn:'yes'});getField('greeting').value='stale';");
+    wait_for(&mut h, "Wait");
+    h.state_mut()
+        .session
+        .apply(id, pdfcraft_engine::Edit::SetFieldValue { name: "greeting".into(), value: pdfcraft_engine::FieldValue::Text("current".into()) })
+        .unwrap();
+    h.run_steps(5);
+    assert!(h.query_by_label("Wait").is_none(), "the stale prompt must be dismissed");
+    assert_eq!(value(&h, "greeting"), ["current"]);
+    // The document's worker remains reserved until the abandoned prompt exits.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let out = h.state_mut().session.run_javascript(id, "var afterEdit='kept';", None).unwrap();
+        let Some(error) = out.error else { break };
+        assert!(out.execution_refused && error.contains("another script is active"), "{error}");
+        assert!(std::time::Instant::now() < deadline, "the abandoned worker did not finish");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state_mut().session.run_javascript(id, "afterEdit", None).unwrap().result.as_deref(), Some("kept"));
+}
+
+/// Native Mouse Up must expose the same willCommit flag as the headless button path.
+#[test]
+fn native_button_events_match_headless_will_commit() {
+    let mut h = harness();
+    let id = h.state().active_ids().unwrap().1;
+    let headless = h.state_mut().session.run_javascript(id, "String(event.willCommit);", Some("hello")).unwrap();
+    assert_eq!(headless.result.as_deref(), Some("false"));
+    h.state_mut().run_button_script(id, "hello", "getField('greeting').value=String(event.willCommit);");
+    wait_value(&mut h, "greeting", "false");
+}
+
+/// A popup owns keyboard shortcuts; Undo must not edit the document below it.
+#[test]
+fn native_popup_keeps_undo_shortcuts_out_of_the_document() {
+    let mut h = harness();
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut()
+        .session
+        .apply(id, pdfcraft_engine::Edit::SetFieldValue { name: "greeting".into(), value: pdfcraft_engine::FieldValue::Text("current".into()) })
+        .unwrap();
+    h.state_mut().run_button_script(id, "hello", "app.popUpMenuEx({cName:'Wait',cReturn:'yes'});");
+    wait_for(&mut h, "Wait");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(3);
+    assert_eq!(value(&h, "greeting"), ["current"]);
+    assert!(h.query_by_label("Wait").is_some());
+    h.get_by_label("Cancel").click();
+    h.run_steps(5);
+}
+
+/// A script response stays clickable while another modal remains open underneath it.
+#[test]
+fn native_script_prompt_is_above_an_existing_dialog() {
+    let _gpu = crate::gpu();
+    for open_first in [true, false] {
+        let mut h = harness();
+        let id = h.state().active_ids().unwrap().1;
+        if open_first {
+            h.state_mut().dialog = Some(Dialog::JsConsole);
+            h.run_steps(3);
+        }
+        h.state_mut().run_button_script(
+            id,
+            "hello",
+            "getField('greeting').value=app.response({cTitle:'Top prompt',cQuestion:'Answer here',cDefault:'visible'});",
+        );
+        wait_for(&mut h, "Answer here");
+        if !open_first {
+            h.state_mut().dialog = Some(Dialog::JsConsole);
+        }
+        h.run_steps(4);
+        let expected = egui::Id::unique(("document-script-prompt", id.0, 1u32));
+        assert_eq!(h.ctx.memory(|m| m.top_modal_layer()).map(|l| l.id), Some(expected), "the prompt owns modal input, open_first={open_first}");
+        if let Ok(path) = std::env::var("PDFCRAFT_REVIEW4_MODAL_SCREENSHOT") {
+            h.render().unwrap().save(path).unwrap();
+        }
+        h.get_by_label("OK").click();
+        wait_value(&mut h, "greeting", "visible");
+        assert_eq!(h.state().dialog, Some(Dialog::JsConsole));
+        h.state_mut().run_button_script(id, "hello", "getField('greeting').value=String(app.response({cQuestion:'Cancel here'}));");
+        wait_for(&mut h, "Cancel here");
+        h.key_press(egui::Key::Escape);
+        wait_value(&mut h, "greeting", "null");
+        assert_eq!(h.state().dialog, Some(Dialog::JsConsole));
+    }
+}
+
+/// A real pointer click must retain the second same-named button through native completion.
+#[test]
+fn clicking_duplicate_named_buttons_targets_the_clicked_object() {
+    let _gpu = crate::gpu();
+    use pdfcraft_cos::{Dict, ObjRef, Object, PdfString};
+    use std::sync::Arc;
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(form())).unwrap();
+    let first = ObjRef::new(5, 0);
+    let action = |caption: &str| {
+        let mut a = Dict::new();
+        a.set(b"S".to_vec(), Object::name("JavaScript"));
+        a.set(b"JS".to_vec(), PdfString::text(&format!("event.target.buttonSetCaption('{caption}');")));
+        Object::Dict(a)
+    };
+    cos.update_dict(first, |d| {
+        d.set(b"A".to_vec(), action("first"));
+        let mut mk = Dict::new();
+        mk.set(b"CA".to_vec(), PdfString::text("idle"));
+        d.set(b"MK".to_vec(), Object::Dict(mk));
+    })
+    .unwrap();
+    let mut second = cos.get(first).as_dict().unwrap().clone();
+    second.set(b"Rect".to_vec(), Object::Array(vec![160.into(), 200.into(), 280.into(), 230.into()]));
+    second.set(b"A".to_vec(), action("second"));
+    let second = cos.add(Object::Dict(second));
+    let root = cos.root().unwrap();
+    cos.update_dict(root, |d| {
+        let mut af = d.get(b"AcroForm").unwrap().as_dict().unwrap().clone();
+        let mut refs = af.get(b"Fields").unwrap().as_array().unwrap().clone();
+        refs.push(second.into());
+        af.set(b"Fields".to_vec(), Object::Array(refs));
+        d.set(b"AcroForm".to_vec(), Object::Dict(af));
+    })
+    .unwrap();
+    cos.update_dict(ObjRef::new(3, 0), |d| {
+        let mut a = d.get(b"Annots").unwrap().as_array().unwrap().clone();
+        a.push(second.into());
+        d.set(b"Annots".to_vec(), Object::Array(a));
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&cos, &Default::default()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("duplicate-buttons.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(6);
+    let captions = |h: &Harness<'_, PdfCraftApp>| {
+        let id = h.state().active_ids().unwrap().1;
+        h.state()
+            .session
+            .get(id)
+            .unwrap()
+            .form
+            .iter()
+            .filter(|f| f.name == "hello")
+            .map(|f| f.widgets.first().and_then(|w| w.caption.clone()))
+            .collect::<Vec<_>>()
+    };
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    let at = r.min + egui::vec2(r.width() * 220.0 / 300.0, r.height() * 85.0 / 300.0);
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    while std::time::Instant::now() < deadline {
+        h.run_steps(2);
+        if captions(&h).iter().any(|s| s.as_deref() == Some("second")) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(captions(&h), [Some("idle".into()), Some("second".into())]);
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    assert_eq!(captions(&h), [Some("idle".into()), Some("idle".into())]);
+    assert!(h.state_mut().execute("edit.redo"));
+    h.run_steps(3);
+    assert_eq!(captions(&h), [Some("idle".into()), Some("second".into())]);
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    let at = r.min + egui::vec2(r.width() * 70.0 / 300.0, r.height() * 85.0 / 300.0);
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    while std::time::Instant::now() < deadline {
+        h.run_steps(2);
+        if captions(&h).first().and_then(|s| s.as_deref()) == Some("first") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(captions(&h), [Some("first".into()), Some("second".into())]);
+    let id = h.state().active_ids().unwrap().1;
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    let mut reopened = pdfcraft_engine::Session::new();
+    reopened.set_javascript(false);
+    let reopened_id = reopened.open("saved-buttons.pdf", None, bytes, None).unwrap();
+    assert_eq!(
+        reopened
+            .get(reopened_id)
+            .unwrap()
+            .form
+            .iter()
+            .filter(|f| f.name == "hello")
+            .map(|f| f.widgets.first().and_then(|w| w.caption.clone()))
+            .collect::<Vec<_>>(),
+        [Some("first".into()), Some("second".into())]
+    );
+    if let Ok(path) = std::env::var("PDFCRAFT_REVIEW12_BUTTON_SCREENSHOT") {
+        // Let the asynchronous page raster catch up with the final accepted script edit.
+        for _ in 0..60 {
+            h.run_steps(2);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h.render().unwrap().save(path).unwrap();
+    }
+}
+
+/// The real image-button click and picker callback must preserve the second duplicate's identity.
+#[test]
+fn clicking_duplicate_image_buttons_imports_only_into_the_clicked_field() {
+    let _gpu = crate::gpu();
+    let mut session = pdfcraft_engine::Session::new();
+    let bytes = session.create_blank(300.0, 300.0, 1).unwrap();
+    let id = session.open("images.pdf", None, bytes, None).unwrap();
+    for (name, x) in [("first", 20.0), ("second", 160.0)] {
+        session
+            .apply(
+                id,
+                pdfcraft_engine::Edit::AddField {
+                    page: 0,
+                    rect: [x, 200.0, x + 100.0, 230.0],
+                    kind: pdfcraft_engine::NewField::Image,
+                    name: Some(name.into()),
+                },
+            )
+            .unwrap();
+    }
+    let mut cos = pdfcraft_cos::Document::open(session.save_bytes(id).unwrap()).unwrap();
+    for field in session.get(id).unwrap().form.iter() {
+        cos.update_dict(field.obj, |d| d.set(b"T".to_vec(), pdfcraft_cos::PdfString::text("same"))).unwrap();
+    }
+    let bytes = pdfcraft_cos::write_full(&cos, &Default::default()).unwrap();
+    let dir = std::env::temp_dir().join(format!("pdfcraft-exact-image-click-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("synthetic.png");
+    let mut png = vec![];
+    {
+        let mut encoder = png::Encoder::new(&mut png, 2, 2);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header().unwrap().write_image_data(&[120u8; 12]).unwrap();
+    }
+    std::fs::write(&path, png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("images.pdf", None, bytes).unwrap();
+        app.save_override = Some(path.to_string_lossy().into_owned());
+        app
+    });
+    h.run_steps(6);
+    let rect = h.state().views[0].page_screen_rect(0).unwrap();
+    let at = rect.min + egui::vec2(rect.width() * 210.0 / 300.0, rect.height() * 85.0 / 300.0);
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(3);
+    let icons = |h: &mut Harness<'_, PdfCraftApp>| {
+        let id = h.state().active_ids().unwrap().1;
+        let cos = pdfcraft_cos::Document::open(h.state_mut().session.save_bytes(id).unwrap()).unwrap();
+        let root = cos.root().unwrap();
+        let form = cos.get(root).as_dict().unwrap().get(b"AcroForm").map(|v| cos.resolve(v)).unwrap();
+        form.as_dict()
+            .unwrap()
+            .get(b"Fields")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                cos.resolve(r)
+                    .as_dict()
+                    .and_then(|d| d.get(b"MK").map(|v| cos.resolve(v)))
+                    .is_some_and(|m| m.as_dict().is_some_and(|d| d.contains(b"I")))
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(icons(&mut h), [false, true]);
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    assert_eq!(icons(&mut h), [false, false]);
+    assert!(h.state_mut().execute("edit.redo"));
+    h.run_steps(2);
+    assert_eq!(icons(&mut h), [false, true]);
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_dir(dir).unwrap();
 }

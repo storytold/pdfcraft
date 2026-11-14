@@ -6,6 +6,63 @@ use super::model::{
 use super::navigation::text_string;
 use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
 
+/// Negative cache of failed script-stream decompressions during one structure inspection.
+/// Callers must supply stream addresses that stay stable for that inspection; these are
+/// opaque identities, never dereferenced here. Do not reuse the cache across documents,
+/// edits or inspections, where an address may identify a different stream.
+/// FIFO eviction bounds it to 4096 identities and allows an evicted failure to be retried;
+/// a cache hit does not refresh its position. This bounds retained failures; streams that
+/// decode are remembered in [`LinkScripts`] instead.
+#[derive(Default)]
+pub(super) struct RejectedJavaScript {
+    identities: HashSet<*const lopdf::Stream>,
+    order: std::collections::VecDeque<*const lopdf::Stream>,
+}
+
+impl RejectedJavaScript {
+    pub(super) const CAPACITY: usize = 4096;
+
+    pub(super) fn contains(&self, identity: *const lopdf::Stream) -> bool {
+        self.identities.contains(&identity)
+    }
+
+    pub(super) fn insert(&mut self, identity: *const lopdf::Stream) {
+        if self.identities.contains(&identity) {
+            return;
+        }
+        if self.order.len() >= Self::CAPACITY
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.identities.remove(&oldest);
+        }
+        self.identities.insert(identity);
+        self.order.push_back(identity);
+    }
+}
+
+/// What link JavaScript an inspection may still keep: 4 MiB of source across the document,
+/// the streams that failed to decode, and the source of those that did.
+pub(super) struct LinkScripts {
+    remaining: usize,
+    rejected: RejectedJavaScript,
+    /// Each stream's source once decoded, by its address (see [`RejectedJavaScript`]): many links
+    /// can share one stream, whose decoding costs its encoded length however short the source
+    /// (review on #7144). Every link keeping a source still spends its length from `remaining`,
+    /// so what is kept here stays within the budget, plus at most one source.
+    decoded: HashMap<*const lopdf::Stream, String>,
+    /// Whether the warning that the budget ran out has been given.
+    limit_reported: bool,
+}
+
+impl Default for LinkScripts {
+    fn default() -> Self {
+        Self { remaining: 4 << 20, rejected: RejectedJavaScript::default(), decoded: HashMap::new(), limit_reported: false }
+    }
+}
+
+/// Most bytes of one link's script string or decompressed stream.
+const MAX_LINK_SCRIPT: usize = 256 << 10;
+
 /// At most this many `/State` entries of a set-layer-visibility action are read.
 const MAX_LAYER_STATE: usize = 1024;
 
@@ -18,13 +75,13 @@ const MAX_REMOTE_DESTINATION_NAME_BYTES: usize = 1024;
 /// are not listed: real comments stay far below, many small ones sharing one long string do not.
 pub(super) const MAX_ANNOTATION_BYTES: usize = 64 << 20;
 
-/// Web-address and link JavaScript text and `/QuadPoints` geometry the bookmark and link listings, and name,
+/// Web-address text and `/QuadPoints` geometry the bookmark and link listings, and name,
 /// description and embedded-file key text the attachment listing, keep together. Many bookmarks,
 /// links or attachments can share one long string or array, which each would otherwise copy. Past
 /// it, a bookmark or link to a web address lists as a URI action without its address (or a link
 /// keeps a relative address unresolved against the document's base), a link is active over its
 /// whole `/Rect`, an attachment is listed under its generic name without a description, and an
-/// embedded file whose key does not fit is not listed. Omitted scripts report `budget_exceeded`.
+/// embedded file whose key does not fit is not listed.
 pub(super) const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
 
 /// A colour array as RGB, read as pdfcraft-annot's appearance builder reads it (`appearance::color`
@@ -66,12 +123,6 @@ pub(super) fn retained(a: &Annotation) -> usize {
         .fold(0, usize::saturating_add)
 }
 
-#[derive(Default)]
-struct LinkCaches {
-    unfit_quads: HashSet<ObjectId>,
-    failed_scripts: HashMap<ObjectId, &'static str>,
-}
-
 impl<'a> Inspector<'a> {
     /// Whether an annotation is a Fill & Sign mark. Keep in step with
     /// `pdfcraft_annot::is_fill_sign`, which the engine's comment list uses.
@@ -96,8 +147,9 @@ impl<'a> Inspector<'a> {
 
     /// `text_budget` is what is left of [`MAX_LINK_ATTACHMENT_TEXT_BYTES`].
     pub(super) fn annotations(&self, info: &mut DocInfo, text_budget: &mut usize) {
-        // Shared geometry and script streams that failed cannot fit a later, smaller budget.
-        let mut link_caches = LinkCaches::default();
+        // Indirect `/QuadPoints` arrays whose quadrilaterals did not fit what was left of the budget:
+        // the budget only shrinks, so they are not read again (review on #4474).
+        let mut unfit_quads: HashSet<ObjectId> = HashSet::new();
         let mut pages: Vec<(ObjectId, usize)> = self.page_index.iter().map(|(&id, &page)| (id, page)).collect();
         pages.sort_unstable_by_key(|&(_, page)| page);
         // An annotation, or a whole `/Annots` array, that several entries or pages list is on the
@@ -129,6 +181,8 @@ impl<'a> Inspector<'a> {
         // Once the comment budget is spent, comments are no longer built, but links and attachments
         // are still listed.
         let mut comments_full = false;
+        // Link JavaScript has its own source budget, apart from link text (#2081).
+        let mut scripts = LinkScripts::default();
         for (page, index, a) in entries {
             let Some(d) = self.dict(a) else { continue };
             // An annotation's `/Type`, when present, is `/Annot` (ISO 32000-2 §12.5.2, Table 166):
@@ -149,10 +203,7 @@ impl<'a> Inspector<'a> {
                 info.attachments.push(self.attachment(fs, AttachmentSource::Annotation { page, index }, text_budget, fallback));
             }
             if subtype == "Link" {
-                if let Some(link) = self.link(page, index, d, info.uri_base.as_deref(), text_budget, &mut link_caches) {
-                    info.has_javascript |= matches!(&link.target, LinkTarget::JavaScript(_) | LinkTarget::JavaScriptUnavailable(_));
-                    info.links.push(link);
-                }
+                self.collect_link(info, (page, index), d, text_budget, &mut unfit_quads, &mut scripts);
                 continue;
             }
             // Not comments: form widgets, pop-ups and non-markup annotations such as the
@@ -162,6 +213,20 @@ impl<'a> Inspector<'a> {
                 continue;
             }
             if comments_full {
+                continue;
+            }
+            // Text that trims to nothing is not kept, so `retained` never sees it: charge what is
+            // read, so many comments sharing one huge blank string stop being decoded over and over.
+            let raw: usize = [&b"T"[..], b"Contents", b"M", b"NM", b"State", b"DA"]
+                .iter()
+                .filter_map(|k| match d.get(k).map(|o| self.resolve(o)) {
+                    Ok(Object::String(b, _) | Object::Name(b)) => Some(b.len()),
+                    _ => None,
+                })
+                .fold(0, usize::saturating_add);
+            // (charged once: below, by the larger of these raw bytes and what the annotation keeps)
+            if kept.saturating_add(raw) > MAX_ANNOTATION_BYTES {
+                comments_full = true;
                 continue;
             }
             let rect = rect4(self.resolve(d.get(b"Rect").unwrap_or(&Object::Null)));
@@ -265,7 +330,7 @@ impl<'a> Inspector<'a> {
                 text_box,
                 popup,
             };
-            kept = kept.saturating_add(retained(&annotation));
+            kept = kept.saturating_add(retained(&annotation).max(raw));
             if kept > MAX_ANNOTATION_BYTES {
                 comments_full = true;
                 continue;
@@ -300,22 +365,29 @@ impl<'a> Inspector<'a> {
     /// The link annotation `d`, at position `index` of page `page`'s `/Annots`: where its `/Dest`
     /// goes, else what its action `/A` does ([`Self::action_target`]). `None` when it has no
     /// rectangle, or a destination or action that leads nowhere. `base` is the catalog's
-    /// `/URI /Base`, which a relative URI action is resolved against. `caches` remembers
-    /// shared quadrilaterals and scripts already found unreadable within the budget.
-    fn link(&self, page: usize, index: usize, d: &Dictionary, base: Option<&str>, text_budget: &mut usize, caches: &mut LinkCaches) -> Option<Link> {
-        let LinkCaches { unfit_quads, failed_scripts } = caches;
+    /// `/URI /Base`, which a relative URI action is resolved against. `unfit_quads` holds the
+    /// indirect `/QuadPoints` arrays already found too large for the budget. A JavaScript
+    /// action's source is kept as data, never run here, within `scripts` ([`Self::link_script`]).
+    #[allow(clippy::too_many_arguments)]
+    fn link(
+        &self,
+        page: usize,
+        index: usize,
+        d: &Dictionary,
+        base: Option<&str>,
+        text_budget: &mut usize,
+        unfit_quads: &mut HashSet<ObjectId>,
+        scripts: &mut LinkScripts,
+    ) -> Option<Link> {
         let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
+        let action = d.get(b"A").ok().and_then(|a| self.dict(a));
         let target = if let Ok(dest) = d.get(b"Dest") {
             let (page, view) = self.dest(dest, 0)?;
             LinkTarget::Page(page, view)
+        } else if let Some(a) = action.filter(|a| self.name(a, b"S").as_deref() == Some("JavaScript")) {
+            self.link_script(a, scripts).map_or_else(|| LinkTarget::Other("JavaScript".into()), LinkTarget::JavaScript)
         } else {
-            let a = d.get(b"A").ok().and_then(|a| self.dict(a))?;
-            let target = if self.name(a, b"S").as_deref() == Some("JavaScript") {
-                self.javascript_target(a, text_budget, failed_scripts)
-            } else {
-                self.action_target(a, text_budget)?
-            };
-            match target {
+            match self.action_target(action?, text_budget)? {
                 LinkTarget::Uri(uri) => match crate::resolve_uri(base, &uri) {
                     // The raw address is spent already. What the base adds is spent too, or the
                     // link keeps the raw address.
@@ -358,36 +430,79 @@ impl<'a> Inspector<'a> {
         Some(Link { page, index, rect, quads, target })
     }
 
-    pub(super) fn javascript_target(&self, action: &Dictionary, budget: &mut usize, failed: &mut HashMap<ObjectId, &'static str>) -> LinkTarget {
-        let Ok(js) = action.get(b"JS") else { return LinkTarget::JavaScriptUnavailable("missing") };
-        let id = self.resolved_id(js);
-        if let Some(reason) = id.and_then(|id| failed.get(&id)) {
-            return LinkTarget::JavaScriptUnavailable(reason);
+    /// Lists the link annotation `d`, and notes the JavaScript it runs. JavaScript is read from the
+    /// action, not the listed link: once the text budget is spent the action's name is not kept.
+    /// Warns once when the link scripts' budget has run out (#2081).
+    fn collect_link(
+        &self,
+        info: &mut DocInfo,
+        at: (usize, usize),
+        d: &Dictionary,
+        text_budget: &mut usize,
+        unfit_quads: &mut HashSet<ObjectId>,
+        scripts: &mut LinkScripts,
+    ) {
+        info.has_javascript |= self.runs_javascript(d);
+        let Some(link) = self.link(at.0, at.1, d, info.uri_base.as_deref(), text_budget, unfit_quads, scripts) else { return };
+        let refused = matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript");
+        if refused && scripts.remaining == 0 && !scripts.limit_reported {
+            info.warnings
+                .push("Link JavaScript sources reached the 4 MiB document inspection limit; remaining JavaScript actions are unavailable.".into());
+            scripts.limit_reported = true;
         }
-        let text = match self.resolve(js) {
-            Object::String(bytes, _) => spend(bytes, budget, text_string).ok_or("budget_exceeded"),
+        info.links.push(link);
+    }
+
+    /// Whether the link's own action is a JavaScript action.
+    fn runs_javascript(&self, d: &Dictionary) -> bool {
+        d.get(b"A").ok().and_then(|a| self.dict(a)).is_some_and(|a| self.name(a, b"S").as_deref() == Some("JavaScript"))
+    }
+
+    /// The source of a link's JavaScript action (`/JS`, a string or a stream), as data. A
+    /// string or decompressed stream over 256 KiB, a stream that fails to decode, or source
+    /// past what is left of the document's 4 MiB is `None` (the link stays
+    /// `Other("JavaScript")`); a stream is decoded once, its source or failure remembered for
+    /// links sharing it. An action's `/Next` chain is not followed.
+    fn link_script(&self, a: &Dictionary, scripts: &mut LinkScripts) -> Option<String> {
+        if scripts.remaining == 0 {
+            return None;
+        }
+        let source = match self.resolve(a.get(b"JS").ok()?) {
+            Object::String(bytes, _) if bytes.len() <= MAX_LINK_SCRIPT => pdfcraft_cos::PdfString::literal(bytes.clone()).to_text(),
             Object::Stream(stream) => {
-                let result = if *budget == 0 {
-                    Err("budget_exceeded")
-                } else {
-                    match stream.decompressed_content_with_limit(*budget) {
-                        Ok(bytes) => spend(&bytes, budget, text_string).ok_or("budget_exceeded"),
-                        Err(lopdf::Error::Decompress(lopdf::DecompressError::MemoryLimitExceeded { .. })) => Err("budget_exceeded"),
-                        Err(_) => Err("decode_failed"),
-                    }
-                };
-                if let (Some(id), Err(reason)) = (id, &result) {
-                    failed.insert(id, *reason);
+                // The structure's objects stay put for the whole inspection, so the resolved
+                // stream's address identifies it, aliases included.
+                let identity = std::ptr::from_ref(stream);
+                if scripts.rejected.contains(identity) {
+                    return None;
                 }
-                result
+                if let Some(source) = scripts.decoded.get(&identity) {
+                    source.clone()
+                } else {
+                    #[cfg(test)]
+                    JS_DECODE_COUNT.with(|n| n.set(n.get() + 1));
+                    // An empty `/Filter []` is no filter: the stream is the source.
+                    match stream.get_plain_content_with_limit(MAX_LINK_SCRIPT) {
+                        Ok(bytes) => {
+                            let source = pdfcraft_cos::PdfString::literal(bytes).to_text();
+                            scripts.decoded.insert(identity, source.clone());
+                            source
+                        }
+                        Err(_) => {
+                            scripts.rejected.insert(identity);
+                            return None;
+                        }
+                    }
+                }
             }
-            _ => Err("invalid"),
+            _ => return None,
         };
-        match text {
-            Ok(script) if !script.is_empty() => LinkTarget::JavaScript(script),
-            Ok(_) => LinkTarget::JavaScriptUnavailable("empty"),
-            Err(reason) => LinkTarget::JavaScriptUnavailable(reason),
-        }
+        let Some(remaining) = scripts.remaining.checked_sub(source.len()) else {
+            scripts.remaining = 0;
+            return None;
+        };
+        scripts.remaining = remaining;
+        Some(source)
     }
 
     /// What an action does when a link or a bookmark runs it. Only a go-to's `/D` is a place in
@@ -410,7 +525,7 @@ impl<'a> Inspector<'a> {
             "SetOCGState" => self.layer_state(a),
             "GoToR" => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
             "Launch" => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
-            other => LinkTarget::Other(other.to_string()),
+            other => LinkTarget::Other(spend(other.as_bytes(), text_budget, |b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default()),
         })
     }
 
@@ -526,6 +641,53 @@ impl<'a> Inspector<'a> {
 
     // ── form fields ─────────────────────────────────────────────────────────────────────────
 
+    /// Whether `o` or one of its descendants under `/Kids` carries an action (`/A` or `/AA`). It
+    /// walks the same tree `field` does, bounded the same way: a field left out of the listing for
+    /// want of text allowance can still have its action on a widget several levels down.
+    pub(super) fn has_action(&self, o: &Object, depth: u32) -> bool {
+        self.has_action_seen(o, depth, &mut HashMap::new())
+    }
+
+    /// The walk behind [`Self::has_action`]. Each indirect descendant is read again only from a
+    /// shallower depth than before (the depth limit may have cut its subtree): a field tree whose
+    /// `/Kids` repeat the same objects would otherwise be walked exponentially, and this reads each
+    /// object at most once per depth.
+    fn has_action_seen(&self, o: &Object, depth: u32, seen: &mut HashMap<ObjectId, u32>) -> bool {
+        if depth > 32 {
+            return false;
+        }
+        if let Object::Reference(id) = o {
+            if seen.get(id).is_some_and(|&first| first <= depth) {
+                return false;
+            }
+            seen.insert(*id, depth);
+        }
+        let Some(d) = self.dict(o) else { return false };
+        if self.carries_action(d) {
+            return true;
+        }
+        let kids = match d.get(b"Kids").map(|k| self.resolve(k)) {
+            Ok(Object::Array(k)) => k,
+            _ => return false,
+        };
+        kids.iter().any(|k| self.has_action_seen(k, depth + 1, seen))
+    }
+
+    /// Whether `/A` or `/AA` here holds an action. An editor can leave an empty dictionary (or
+    /// array) behind, and that is no action: a document with none must not report JavaScript. An
+    /// `/A` is an action when it carries `/S`; an `/AA` is one when an event maps to such an action.
+    fn carries_action(&self, d: &Dictionary) -> bool {
+        let action = |o: &Object| matches!(self.resolve(o), Object::Dictionary(a) if a.get(b"S").is_ok());
+        [&b"A"[..], &b"AA"[..]].iter().any(|k| match d.get(k) {
+            Ok(o) => match self.resolve(o) {
+                Object::Dictionary(x) => x.get(b"S").is_ok() || x.iter().any(|(_, v)| action(v)),
+                Object::Array(a) => a.iter().any(action),
+                _ => false,
+            },
+            Err(_) => false,
+        })
+    }
+
     pub(super) fn field(
         &self,
         o: &'a Object,
@@ -544,19 +706,35 @@ impl<'a> Inspector<'a> {
         }
         let Some(d) = self.dict(o) else { return };
         let (parent_name, parent_ft, parent_ff) = parent.unwrap_or(("", None, None));
-        let partial = self.text(d, b"T");
-        let full = match (&partial, parent_name.is_empty()) {
-            (Some(t), true) => t.clone(),
-            (Some(t), false) => format!("{parent_name}.{t}"),
-            (None, _) => parent_name.to_string(),
-        };
-        let ft = self.name(d, b"FT").or(parent_ft);
-        let ff = d.get(b"Ff").ok().and_then(|x| x.as_i64().ok()).or(parent_ff);
         // Non-terminal: has kids that are fields (they carry /T). Widgets-only kids are terminal.
         let mut kids: Vec<Object> = match d.get(b"Kids").map(|k| self.resolve(k)) {
             Ok(Object::Array(k)) => k.clone(),
             _ => Vec::new(),
         };
+        // A field left unlisted for want of text allowance still has its actions counted, through
+        // its whole subtree: an action can sit on a descendant widget, not only on the field.
+        let unlisted = || {
+            if self.has_action(o, 0) {
+                self.field_actions.set(true);
+            }
+        };
+        // A /T that does not fit the allowance lists no field (not one under its parent's name).
+        let Ok(partial) = self.field_text_within(d, b"T") else {
+            unlisted();
+            return;
+        };
+        let full = match (&partial, parent_name.is_empty()) {
+            (Some(t), true) => t.clone(),
+            (Some(t), false) => format!("{parent_name}.{t}"),
+            (None, _) => parent_name.to_string(),
+        };
+        // Every field copies its parent's full name: charge it, and list no more once it is spent.
+        if !self.field_charge(full.len()) {
+            unlisted();
+            return;
+        }
+        let ft = self.name(d, b"FT").or(parent_ft);
+        let ff = d.get(b"Ff").ok().and_then(|x| x.as_i64().ok()).or(parent_ff);
         let (field_kids, widget_kids): (Vec<Object>, Vec<Object>) =
             kids.iter().cloned().partition(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok()));
         let field_kids: Vec<_> = field_kids.iter().filter(|k| !self.not_a_child(walk, o, k)).collect();
@@ -604,17 +782,37 @@ impl<'a> Inspector<'a> {
             _ => FieldKind::Unknown,
         };
         let value = match d.get(b"V").map(|v| self.resolve(v)) {
-            Ok(Object::Name(n)) => Some(String::from_utf8_lossy(n).into_owned()),
-            Ok(Object::String(bytes, _)) => Some(text_string(bytes)),
-            Ok(Object::Array(a)) => Some(
-                a.iter()
-                    .filter_map(|x| match self.resolve(x) {
-                        Object::String(bytes, _) => Some(text_string(bytes)),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ),
+            Ok(Object::Name(n)) => self.field_spend(n, |n| String::from_utf8_lossy(n).into_owned()),
+            Ok(Object::String(bytes, _)) => self.field_spend(bytes, text_string),
+            Ok(Object::Array(a)) => {
+                let mut shown = Vec::new();
+                let mut dropped = false;
+                for x in a {
+                    let text = match self.resolve(x) {
+                        Object::String(bytes, _) => self.field_spend(bytes, text_string),
+                        // A name entry (`/V [/Opt1 (b)]`) is a selection too, as the forms reader
+                        // takes it; leaving it out reported a partial selection as complete.
+                        Object::Name(n) => self.field_spend(n, |n| String::from_utf8_lossy(n).into_owned()),
+                        _ => continue,
+                    };
+                    // The ", " between selections is charged to the allowance like the text.
+                    match text {
+                        Some(text) if shown.is_empty() || self.field_charge(2) => shown.push(text),
+                        _ => dropped = true,
+                    }
+                }
+                // A selected value the allowance could not hold shows as an omission rather than
+                // as part of a complete selection (its few bytes are charged, fit or not).
+                let mut value = shown.join(", ");
+                if dropped {
+                    self.field_charge(5);
+                    if !value.is_empty() {
+                        value.push_str(", ");
+                    }
+                    value.push('…');
+                }
+                Some(value)
+            }
             Ok(Object::Dictionary(_)) if kind == FieldKind::Signature => Some("signed".into()),
             _ => None,
         };
@@ -636,9 +834,11 @@ impl<'a> Inspector<'a> {
             .and_then(|p| self.page_of(p))
             .or_else(|| self.find_widget_page(o, &kids))
             .or_else(|| named.and_then(|id| self.annotation_pages.get_or_init(|| self.annotation_pages()).get(&id).copied()));
-        let has_actions = d.get(b"AA").is_ok() || widget.is_some_and(|w| w.get(b"AA").is_ok() || w.get(b"A").is_ok());
+        let has_actions = self.carries_action(d)
+            || widget.is_some_and(|w| self.carries_action(w))
+            || kids.iter().any(|k| self.dict(k).is_some_and(|w| self.carries_action(w)));
         let rect = widget.and_then(|w| w.get(b"Rect").ok()).map(|r| rect4(self.resolve(r)));
-        out.push(Field { name: full, kind, value, page, tooltip: self.text(d, b"TU"), has_actions, rect });
+        out.push(Field { name: full, kind, value, page, tooltip: self.field_text(d, b"TU"), has_actions, rect });
     }
 
     /// Whether `k`, listed in the `/Kids` of field `o`, is not a child of `o` after all: `o` itself
@@ -788,4 +988,119 @@ fn rect4(o: &Object) -> [f32; 4] {
 thread_local! {
     /// `/QuadPoints` arrays whose values were read.
     pub(super) static QUAD_ARRAYS_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! { static JS_DECODE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+#[cfg(test)]
+mod remediation_probes {
+    use super::*;
+    use crate::inspect::{Arc, inspect};
+    use lopdf::{Document, dictionary};
+    #[test]
+    fn remediation_rejected_stream_cache_has_a_fixed_bound() {
+        let streams: Vec<_> = (0..8192).map(|_| lopdf::Stream::new(dictionary! {}, vec![])).collect();
+        let mut cache = RejectedJavaScript::default();
+        for stream in &streams {
+            cache.insert(std::ptr::from_ref(stream));
+            assert!(cache.identities.len() <= 4096);
+            assert!(cache.order.len() <= 4096);
+        }
+        assert!(!cache.contains(std::ptr::from_ref(streams.first().unwrap())));
+        assert!(cache.contains(std::ptr::from_ref(streams.last().unwrap())));
+    }
+    fn shared_bad_stream(n: usize, repeated_annotation: bool) -> Vec<u8> {
+        let mut d = Document::with_version("1.7");
+        let pages = d.new_object_id();
+        let mut stream = lopdf::Stream::new(dictionary! {}, vec![b'x'; 300 << 10]);
+        stream.compress().unwrap();
+        let stream_id = d.add_object(stream);
+        let action = d.add_object(dictionary! {"S"=>"JavaScript","JS"=>stream_id});
+        let mut annots = Vec::new();
+        let mut first = None;
+        for _ in 0..n {
+            let annotation_action = if n == 33 {
+                let alias = d.add_object(Object::Reference(stream_id));
+                d.add_object(dictionary! {"S"=>"JavaScript","JS"=>alias})
+            } else {
+                action
+            };
+            let id = if let Some(id) = first.filter(|_| repeated_annotation) {
+                id
+            } else {
+                let id = d.add_object(
+                    dictionary! {"Type"=>"Annot","Subtype"=>"Link","Rect"=>vec![0.into(),0.into(),50.into(),50.into()],"A"=>annotation_action},
+                );
+                first = Some(id);
+                id
+            };
+            annots.push(Object::Reference(id));
+        }
+        let good=d.add_object(dictionary!{"Subtype"=>"Link","Rect"=>vec![0.into(),0.into(),50.into(),50.into()],"A"=>dictionary!{"S"=>"JavaScript","JS"=>Object::string_literal("console.println('valid');")}});
+        annots.push(good.into());
+        let page = d.add_object(dictionary! {"Type"=>"Page","Parent"=>pages,"Annots"=>annots});
+        d.objects.insert(
+            pages,
+            dictionary! {"Type"=>"Pages","Kids"=>vec![page.into()],"Count"=>1,"MediaBox"=>vec![0.into(),0.into(),200.into(),200.into()]}.into(),
+        );
+        let root = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>pages});
+        d.trailer.set("Root", root);
+        let mut bytes = Vec::new();
+        d.save_to(&mut bytes).unwrap();
+        bytes
+    }
+    #[test]
+    fn remediation_rejected_stream_decode_is_cached_and_preserves_budget() {
+        for (n, repeated) in [(1, false), (33, false), (256, false), (1024, false), (1024, true)] {
+            let bytes = shared_bad_stream(n, repeated);
+            let len = bytes.len();
+
+            let mut times = Vec::new();
+            let mut calls = 0;
+            for _ in 0..3 {
+                JS_DECODE_COUNT.with(|n| n.set(0));
+                let now = std::time::Instant::now();
+                let info = inspect(Arc::new(bytes.clone()), None).unwrap();
+                times.push(now.elapsed().as_micros());
+                calls = JS_DECODE_COUNT.with(|n| n.get());
+                assert_eq!(calls, 1);
+                assert_eq!(info.links.len(), if repeated { 2 } else { n + 1 });
+                assert!(matches!(&info.links.last().unwrap().target,LinkTarget::JavaScript(s) if s=="console.println('valid');"));
+                assert!(!info.warnings.iter().any(|w| w.contains("4 MiB")));
+            }
+            println!("REJECT n={n} repeated_annotation={repeated} bytes={len} decode_calls={calls} micros={times:?}");
+        }
+    }
+
+    /// Links sharing a stream that decodes decode it once, even when its source is empty and
+    /// spends none of the budget; a stream whose `/Filter` is an empty array is its own source
+    /// (review on #7144).
+    #[test]
+    fn a_shared_script_stream_is_decoded_once() {
+        let mut d = Document::with_version("1.7");
+        let pages = d.new_object_id();
+        // Whitespace decodes to nothing, at the cost of reading all of it.
+        let blank = d.add_object(lopdf::Stream::new(dictionary! {"Filter"=>"ASCIIHexDecode"}, [vec![b' '; 64 << 10], b">".to_vec()].concat()));
+        let raw = d.add_object(lopdf::Stream::new(dictionary! {"Filter"=>Vec::<Object>::new()}, b"app.alert(1);".to_vec()));
+        let rect = || vec![0.into(), 0.into(), 50.into(), 50.into()];
+        let annots: Vec<Object> = std::iter::repeat_n(blank, 100)
+            .chain([raw])
+            .map(|js| {
+                d.add_object(dictionary! {"Type"=>"Annot","Subtype"=>"Link","Rect"=>rect(),"A"=>dictionary! {"S"=>"JavaScript","JS"=>js}}).into()
+            })
+            .collect();
+        let page = d.add_object(dictionary! {"Type"=>"Page","Parent"=>pages,"Annots"=>annots});
+        d.objects.insert(pages, dictionary! {"Type"=>"Pages","Kids"=>vec![page.into()],"Count"=>1,"MediaBox"=>rect()}.into());
+        let root = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>pages});
+        d.trailer.set("Root", root);
+        let mut bytes = Vec::new();
+        d.save_to(&mut bytes).unwrap();
+        JS_DECODE_COUNT.with(|n| n.set(0));
+        let info = inspect(Arc::new(bytes), None).unwrap();
+        assert_eq!(JS_DECODE_COUNT.with(std::cell::Cell::get), 2, "one decode per stream");
+        assert_eq!(info.links.len(), 101);
+        assert!(info.links[..100].iter().all(|l| matches!(&l.target, LinkTarget::JavaScript(s) if s.is_empty())));
+        assert!(matches!(&info.links[100].target, LinkTarget::JavaScript(s) if s == "app.alert(1);"), "{:?}", info.links[100].target);
+    }
 }

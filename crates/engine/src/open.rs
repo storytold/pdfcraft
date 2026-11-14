@@ -18,6 +18,7 @@ pub struct OpenContext {
     now: Option<i64>,
     js_off: bool,
     trust: Arc<TrustStore>,
+    highlight: bool,
     captions: Arc<StatusCaptions>,
     xfa_time_scale: u32,
 }
@@ -39,6 +40,14 @@ struct DocumentOpenData<'a> {
 }
 
 impl OpenContext {
+    /// This context with Highlight fields `on`, which the document's scripts read as
+    /// `app.runtimeHighlight` while it opens. A new document opens with the remembered setting
+    /// while the session keeps the one of the document in front, which its scripts read.
+    pub fn with_highlight(mut self, on: bool) -> Self {
+        self.highlight = on;
+        self
+    }
+
     /// Prepare a document without mutating the session that supplied this context.
     pub fn prepare_open(
         &self,
@@ -60,6 +69,7 @@ impl Session {
             now: self.now(),
             js_off: self.js_off,
             trust: self.trust.clone(),
+            highlight: self.field_highlight,
             captions: self.captions.clone(),
             xfa_time_scale: self.xfa_time_scale.unwrap_or(1),
         }
@@ -91,6 +101,7 @@ impl Session {
             Self::draw_captions(&mut document, self.captions.clone());
         }
         self.docs.push(document);
+        self.run_open_scripts(id);
         id
     }
 
@@ -100,6 +111,8 @@ impl Session {
         Ok(self.commit_open(prepared))
     }
 
+    /// What [`OpenContext::prepare_open`] runs inside its panic guard: read, decrypt and lay out
+    /// the document, and run an XFA form's opening scripts.
     fn prepare_open_unguarded(
         context: &OpenContext,
         name: String,
@@ -210,6 +223,7 @@ impl Session {
                             out: &mut script_output,
                             datasets: None,
                             ran_away: false,
+                            highlight: context.highlight,
                             time_scale: context.xfa_time_scale,
                         };
                         let changes = xfa::on_open(&mut work, &tpl, &mut run);
@@ -368,9 +382,14 @@ impl Session {
             editor,
             config,
             js_output: Default::default(),
+            js_runtime: Default::default(),
+            js_zoom: 100.0,
+            js_page: 0,
+            live: Default::default(),
             xfa,
             xfa_template: None,
             xfa_scripts_off: false,
+            xfa_exited: Default::default(),
             fonts_stale: false,
             xfa_warnings: Vec::new(),
             edit_notices: Vec::new(),

@@ -7,10 +7,6 @@ Agent control for PdfCraft: a headless tool table over the engine, and an opt-in
 
 `fill_sign_add` text accepts line breaks, including blank lines. Its typewriter box grows to hold all wrapped rows, and saving/reopening preserves the contents and appearance.
 
-`doc_info` keeps the legacy `links[].target.other = "JavaScript"` marker and adds `javascript` (source or null) and `javascript_status`: `available`, `missing`, `empty`, `invalid`, `budget_exceeded` or `decode_failed`. Source is omitted whole rather than truncated. Existing clients can keep classifying the action through `other`; new clients should check `javascript_status` before reading the source. Scripts share the document-wide link/attachment text budget, and failed shared stream decodes are not retried during the same inspection.
-
-Run the source with `js_run` and `"event": "link"` to reproduce the viewer's `Link/Mouse Up` event headlessly. Omitting `event` preserves console behavior; `field` preserves button behavior and cannot be combined with `event`. `app.popUpMenu` and `app.popUpMenuEx` report `popup_menu` requests containing display labels; the viewer combines all such requests from one run into one informational popup. They return `null`; choosing menu actions and nested submenus are not supported.
-
 ## API
 
 ```rust
@@ -211,8 +207,9 @@ mutually exclusive with `hide_text_block`.
 
 When the renderer reports a warning for the page, `page_render` and `render_preview` return a
 JSON part after the PNG, `{ "page": 1, "warnings": [...] }`, with the sentences
-`pdfcraft-cli render` prints: "content past the page's safety budget was skipped" and "a colour
-that could not be computed was painted in a fallback colour". A page without warnings returns
+`pdfcraft-cli render` prints, such as "content past the page's safety budget, or a picture whose
+JBIG2 mask is past a decoder limit, was skipped" and "a colour that could not be computed was
+painted in a fallback colour". A page without warnings returns
 the PNG alone.
 
 
@@ -335,6 +332,14 @@ navigation-history tool; use the opt-in UI control channel to navigate the displ
 (`#RRGGBB`, default black) for `text` and `date`. The colour is saved in the
 FreeText appearance and survives reopening. Other mark/signature types reject
 `color`; their appearance controls are separate.
+
+## AcroForm script interactions
+
+`js_run` accepts optional `answers` (strings or null, at most 32), consumed in popup, response and alert order. Missing responses cancel menus/input; explicit viewer requests remain data in automation. See [the runtime contract](../../docs/acroform-script-workflows.md).
+
+For distinct PDF fields sharing a name, form_fields exposes a document-local integer field_id. Pass it with field to js_run to bind event.target to that exact field (including ordered answers); omit it for existing first-match behavior. Mismatched names/IDs, missing names and non-integer/out-of-range IDs are refused before execution.
+
+`form_set_image` accepts the optional document-local `field_id` from `form_fields` alongside the matching `field` name, selecting an exact duplicate-name image button. Omit it for the legacy first-name match. IDs are unsigned 48-bit integers and must be rediscovered after structural edits or reopening.
 
 ## Reviewing OCR headlessly
 
