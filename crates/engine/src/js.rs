@@ -190,6 +190,32 @@ impl JsOutput {
         }
     }
 
+    /// Notes on the console, and drops, what scripts that ran unasked as the document opened
+    /// asked for that a person should choose: opening a link, submitting the form, printing,
+    /// saving, opening an attached file or showing a panel (and a reset left here: the opening
+    /// applies the document scripts' own). Turning a page, zooming, moving the focus, a beep and
+    /// turning field highlighting on or off stay.
+    fn drop_unasked_requests(&mut self) {
+        let mut notes = Vec::new();
+        self.requests.retain(|r| {
+            let what = match r {
+                Request::GoToPage(_) | Request::Beep | Request::Highlight(_) | Request::Zoom(_) | Request::Focus(_) | Request::FocusField { .. } => {
+                    return true;
+                }
+                Request::LaunchUrl(u) => format!("open {u}"),
+                Request::Submit(u) => format!("submit the form to {u}"),
+                Request::Print => "print".into(),
+                Request::SaveAs => "save the document as a new file".into(),
+                Request::OpenAttachment { name, .. } => format!("open the attached file {name}"),
+                Request::ShowPanel(_) => "show a side panel".into(),
+                Request::Reset(_) => "reset fields".into(),
+            };
+            notes.push(format!("A document script asked to {what} as the document opened; only a button may do that"));
+            false
+        });
+        self.say(notes);
+    }
+
     /// Adds what other scripts produced, telling a document script's error once.
     pub fn append(&mut self, other: JsOutput) {
         self.alert(other.alerts);
@@ -456,6 +482,10 @@ pub struct JsRunner {
     pub(crate) callbacks_touched_realm: bool,
     #[cfg(not(target_arch = "wasm32"))]
     callback_started: Option<std::time::Instant>,
+    /// How long this runner's callbacks may run together, from the first one: 10 s for an edit,
+    /// [`OPENING_TIME`] as the document opens.
+    #[cfg(not(target_arch = "wasm32"))]
+    callback_budget: std::time::Duration,
     /// Source/order cache for this edit only; each callback still snapshots current field values.
     calculations: Option<Vec<(usize, String)>>,
     // Cache at most 4,096 field identities in the current edit. Entries only survive value-only
@@ -585,6 +615,8 @@ impl JsRunner {
             callbacks_touched_realm: false,
             #[cfg(not(target_arch = "wasm32"))]
             callback_started: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            callback_budget: EDIT_CALLBACK_TIME,
             runtime: Default::default(),
             calculations: None,
             snapshot_fields: Default::default(),
@@ -592,10 +624,183 @@ impl JsRunner {
         }
     }
 
+    /// Run `job` in the document's realm within the time this runner's callbacks have left.
+    fn dispatch(&mut self, job: pdfcraft_js::session::Job) -> Outcome {
+        #[cfg(not(target_arch = "wasm32"))]
+        let remaining = self.callback_time_left();
+        let o = match self.runtime.lock() {
+            #[cfg(not(target_arch = "wasm32"))]
+            Ok(mut runtime) if !remaining.is_zero() => runtime.run_with_limit(job, &[], remaining),
+            #[cfg(not(target_arch = "wasm32"))]
+            Ok(_) => Outcome {
+                execution_refused: true,
+                realm_untouched: true,
+                error: Some("form script callbacks exceeded their shared execution budget".into()),
+                ..Default::default()
+            },
+            #[cfg(target_arch = "wasm32")]
+            Ok(mut runtime) => runtime.run(job, &[]),
+            Err(_) => Outcome { execution_refused: true, error: Some("document script runtime is unavailable".into()), ..Default::default() },
+        };
+        self.callbacks_touched_realm |= !o.realm_untouched;
+        o
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn callback_time_left(&mut self) -> std::time::Duration {
-        std::time::Duration::from_secs(10).saturating_sub(self.callback_started.get_or_insert_with(std::time::Instant::now).elapsed())
+        self.callback_budget.saturating_sub(self.callback_started.get_or_insert_with(std::time::Instant::now).elapsed())
     }
+
+    /// Hold this runner's callbacks, from now, to `budget` together.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn limit_callbacks(&mut self, budget: std::time::Duration) {
+        self.callback_budget = budget;
+        self.callback_started = Some(std::time::Instant::now());
+    }
+}
+
+/// How long the field scripts one edit runs may take together.
+#[cfg(not(target_arch = "wasm32"))]
+const EDIT_CALLBACK_TIME: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Longest the document scripts, and the calculations a value they set starts, may run together
+/// as a document opens. Real forms' document scripts define functions and set a few fields, in
+/// milliseconds; a script past this is stopped and nothing it did applies.
+const OPENING_TIME: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Run the document-level scripts as the document opens (ISO 32000-2 §12.6.4.17: "When the
+/// document is opened, all of the actions in this name tree shall be executed") in `runtime`,
+/// the document's own realm, which keeps what they defined for the document's later scripts; and
+/// apply to `work` the field changes and resets they make: a form that hides its "your viewer may
+/// not be compatible" field from a document script shows without it. Returns the names of the
+/// fields changed, including fields a calculation the changes started rewrote; what the scripts
+/// printed or failed with goes to `out`.
+///
+/// The scripts run unasked, from a file that may be hostile: together with the calculations
+/// they start they get [`OPENING_TIME`] (past it, or past their work limits, they are stopped and
+/// nothing they did applies), and what they ask for that a person should choose (a link, a
+/// submission, printing, saving, an attached file) is noted on the console, not carried out.
+/// When they were stopped or could not be applied, `runtime` is replaced by a fresh realm, which
+/// the document's next script sets up again. `highlight`: whether the viewer highlights form
+/// fields (`app.runtimeHighlight`).
+pub(crate) fn on_open(
+    work: &mut pdfcraft_cos::Document,
+    file_name: &str,
+    highlight: bool,
+    runtime: &mut Runtime,
+    out: &mut JsOutput,
+) -> Result<Vec<String>, String> {
+    let mut runner = JsRunner::new(work, file_name, highlight);
+    if runner.doc_scripts.is_empty() {
+        return Ok(Vec::new());
+    }
+    runner.runtime = std::sync::Arc::clone(runtime);
+    #[cfg(not(target_arch = "wasm32"))]
+    runner.limit_callbacks(OPENING_TIME);
+    let mut opening = JsOutput::default();
+    let ran = run_on_open(work, &mut runner, &mut opening);
+    opening.drop_unasked_requests();
+    out.append(opening);
+    if (ran.is_err() || runner.refused.is_some()) && runner.callbacks_touched_realm {
+        replace_runtime(runtime);
+    }
+    ran
+}
+
+/// [`on_open`]'s work, with what the scripts produced going to `out`.
+fn run_on_open(work: &mut pdfcraft_cos::Document, runner: &mut JsRunner, out: &mut JsOutput) -> Result<Vec<String>, String> {
+    let fields = pdfcraft_forms::fields(work);
+    let states = runner.callback_fields(work, &fields);
+    let job = pdfcraft_js::session::Job {
+        script: String::new(),
+        event: pdfcraft_js::Event::doc("Open"),
+        doc: runner.doc.clone(),
+        fields: std::sync::Arc::clone(&states),
+        doc_scripts: runner.doc_scripts.clone(),
+        calculations: calculation_scripts(work, &fields),
+        timer: None,
+    };
+    let mut o = runner.dispatch(job);
+    // Not through `absorb`'s filter, which words what it drops as a field script's: the caller
+    // notes and drops what these document scripts ask for (`drop_unasked_requests`).
+    let requests = std::mem::take(&mut o.requests);
+    if o.execution_refused || o.reset_limit_exceeded || o.calculation_limit_exceeded {
+        let why = o.error.take().unwrap_or_else(|| "they exceeded their execution budget".into());
+        out.absorb(&o);
+        out.errors.push(format!(
+            "The document's scripts were stopped as the document opened (they have {:.0} s and bounded work), so nothing they did applies: {why}",
+            OPENING_TIME.as_secs_f64()
+        ));
+        runner.refused = Some(why);
+        return Ok(Vec::new());
+    }
+    // The calculations the changes start read the field highlight the scripts set.
+    if let Some(on) = last_highlight(&requests) {
+        runner.doc.runtime_highlight = on;
+    }
+    out.absorb(&o);
+    let applied = apply_opening(work, runner, (&fields, &states), &requests, &o);
+    out.requests.extend(requests.into_iter().filter(|r| !matches!(r, Request::Reset(_))));
+    // What a reset or a calculation the changes started printed or failed with.
+    out.append(std::mem::take(&mut runner.output));
+    let changes = applied?;
+    // A calculation the changes started ran out of the opening's time or work: none of it applies.
+    if let Some(why) = &runner.refused {
+        return Err(format!("the calculations they started were stopped ({why})"));
+    }
+    if changes.is_empty() && !work.is_modified() {
+        return Ok(Vec::new());
+    }
+    // A value the scripts set reruns the calculations, which can change other fields too: name
+    // every field that differs from before opening, and the ones the scripts changed in a way the
+    // field states don't compare (a button caption).
+    let after: Vec<_> = pdfcraft_forms::fields(work).iter().map(|f| field_state(work, f, &runner.doc)).collect();
+    let mut names: Vec<String> = changes.into_iter().map(|c| c.name).collect();
+    for c in self::changes(&states, &after, &std::collections::BTreeSet::new()) {
+        if !names.contains(&c.name) {
+            names.push(c.name);
+        }
+    }
+    Ok(names)
+}
+
+/// Apply to `work` the resets the opening scripts asked for, in order, then the field changes
+/// they made, as a button's are applied ([`Session::run_javascript`]); returns the changes.
+fn apply_opening(
+    work: &mut pdfcraft_cos::Document,
+    runner: &mut JsRunner,
+    (fields, states): (&[Field], &[pdfcraft_js::FieldState]),
+    requests: &[Request],
+    o: &Outcome,
+) -> Result<Vec<FieldChange>, String> {
+    let mut baseline = std::borrow::Cow::Borrowed(states);
+    if requests.iter().any(|r| matches!(r, Request::Reset(_))) {
+        validate_reset_work(fields, states, requests).map_err(|e| e.to_string())?;
+        for r in requests {
+            let Request::Reset(names) = r else { continue };
+            let names = (!names.is_empty())
+                .then(|| states.iter().filter(|field| reset_name_matches(&field.name, names)).map(|field| field.name.clone()).collect::<Vec<_>>());
+            runner.invalidate_field_snapshots();
+            pdfcraft_forms::reset_with_formatting(work, names.as_deref(), runner, true).map_err(|e| e.to_string())?;
+        }
+        // Compare the scripts' writes against the values after the resets, so a write restoring
+        // a value from before them is not taken for no change.
+        let mut values = std::collections::HashMap::new();
+        for field in pdfcraft_forms::fields(work) {
+            values.entry(field_object_id(field.obj)).or_insert(field.value);
+        }
+        for field in baseline.to_mut() {
+            if let Some(value) = field.object_id.and_then(|id| values.get(&id)) {
+                field.value.clone_from(value);
+            }
+        }
+    }
+    let changes = changes(&baseline, &o.changed, &o.formatted);
+    if !changes.is_empty() {
+        runner.invalidate_field_snapshots();
+        pdfcraft_forms::apply_script_changes(work, &changes, runner).map_err(|e| e.to_string())?;
+    }
+    Ok(changes)
 }
 
 /// Index calculation sources by PDF object identity, retaining their matching snapshot positions.
@@ -672,29 +877,10 @@ impl Scripts for JsRunner {
             calculations,
             timer: None,
         };
-        #[cfg(not(target_arch = "wasm32"))]
-        let remaining = self.callback_time_left();
-        let o = match self.runtime.lock() {
-            #[cfg(not(target_arch = "wasm32"))]
-            Ok(mut runtime) if !remaining.is_zero() => runtime.run_with_limit(job, &[], remaining),
-            #[cfg(not(target_arch = "wasm32"))]
-            Ok(_) => Outcome {
-                execution_refused: true,
-                realm_untouched: true,
-                error: Some("form script callbacks exceeded their shared execution budget".into()),
-                ..Default::default()
-            },
-            #[cfg(target_arch = "wasm32")]
-            Ok(mut runtime) => runtime.run(job, &[]),
-            Err(_) => Outcome { execution_refused: true, error: Some("document script runtime is unavailable".into()), ..Default::default() },
-        };
-        self.callbacks_touched_realm |= !o.realm_untouched;
+        let o = self.dispatch(job);
         self.output.absorb(&o);
         if o.execution_refused || o.reset_limit_exceeded || o.calculation_limit_exceeded {
             self.refused = Some(o.error.clone().unwrap_or_else(|| "form script exceeded its execution budget".into()));
-        }
-        if o.error.is_some() || o.reset_limit_exceeded || o.calculation_limit_exceeded {
-            // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
             return unchanged();
         }
         // The edit's later scripts read the field highlight this one set.
@@ -714,6 +900,11 @@ impl Scripts for JsRunner {
             *change != FieldChange { name: change.name.clone(), object: change.object, value: change.value.clone(), ..Default::default() }
         }) {
             self.invalidate_field_snapshots();
+        }
+        if o.error.is_some() {
+            // As in Acrobat, a failing script leaves the value alone (the error goes to the
+            // console); what it wrote to other fields before it failed stays written.
+            return ScriptResult { rc: true, value: value.to_string(), value_set: false, changes, message: None };
         }
         ScriptResult {
             rc: o.rc,
@@ -779,6 +970,11 @@ impl Scripts for JsRunner {
             return None;
         }
         Some(ScriptResult { rc: o.rc, value: o.value.clone(), value_set: o.value_set, changes: Vec::new(), message: None })
+    }
+
+    /// On the console, as a script error: the field kept its value.
+    fn refused(&mut self, why: &str) {
+        self.output.errors.push(format!("A script set a value the field does not take, so the field keeps its own: {why}"));
     }
 }
 

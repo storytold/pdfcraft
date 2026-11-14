@@ -7233,6 +7233,344 @@ fn a_document_script_at_the_vm_limit_does_not_block_field_edits() {
     }
 }
 
+/// A one-page form (200 × 100 pt) with a text field `banner` across its top 20 pt, whose
+/// appearance is a yellow bar, and `script` (PDF string syntax) as its document-level script.
+/// Like the warning bar of public forms that a document script hides once the viewer opens them.
+fn banner_form(script: &str) -> Vec<u8> {
+    banner_form_with(script, "", "")
+}
+
+/// [`banner_form`] with `catalog` added to its catalog and `acroform` to its AcroForm
+/// dictionary; object 7 is an XFA packet without a template.
+fn banner_form_with(script: &str, catalog: &str, acroform: &str) -> Vec<u8> {
+    let bar = "1 1 0 rg 0 0 200 20 re f";
+    let xdp = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"/>"#;
+    let objs = [
+        format!(
+            "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript << /Names [(init) 6 0 R] >> >> /AcroForm << /Fields [4 0 R] {acroform} >> {catalog} >>"
+        ),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 100] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Ff 1 /T (banner) /V (Warning) /Rect [0 80 200 100] /P 3 0 R /F 4 /AP << /N 5 0 R >> >>"
+            .to_string(),
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 200 20] /Length {} >>\nstream\n{bar}\nendstream", bar.len()),
+        format!("<< /S /JavaScript /JS ({script}) >>"),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()),
+    ];
+    pdf_of(&objs)
+}
+
+/// Whether the yellow bar is drawn in the middle of the top 20 pt of `bytes`' first page.
+fn shows_banner(bytes: &Arc<Vec<u8>>, config: &pdfcraft_render::RenderConfig) -> bool {
+    let mut r = pdfcraft_render::PageRenderer::new(bytes.clone(), config.clone());
+    let page = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    let at = ((10 * page.width + 100) * 4) as usize;
+    let px = page.rgba.get(at..at + 4).unwrap();
+    assert!(px == [255, 255, 0, 255] || px == [255, 255, 255, 255], "neither the bar nor the page: {px:?}");
+    px == [255, 255, 0, 255]
+}
+
+/// A document-level script runs when the document opens (ISO 32000-2 §12.6.4.17): a field it
+/// hides with `hidden = true` or `display = display.hidden` is not drawn on screen or on paper,
+/// and saving keeps it hidden (annotation flags Hidden, Table 167).
+#[test]
+fn a_field_a_document_script_hides_on_opening_is_not_drawn() {
+    for script in ["this.getField('banner').hidden = true;", "this.getField('banner').display = display.hidden;"] {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("form.pdf", None, Arc::new(banner_form(script)), None).unwrap();
+        let doc = s.get(id).unwrap();
+        assert!(!shows_banner(&doc.display, &doc.config), "{script}: drawn on screen");
+        assert!(!doc.dirty, "{script}: opening is not an edit");
+        let settings =
+            print::Settings { pages: vec![0], paper: (200.0, 100.0), layout: print::Layout::Size(print::SizeMode::Actual), ..Default::default() };
+        let printed = Arc::new(s.print_pdf(id, &settings).unwrap());
+        assert!(!shows_banner(&printed, &pdfcraft_render::RenderConfig::default()), "{script}: printed");
+        let saved = s.save_bytes(id).unwrap();
+        assert!(!shows_banner(&saved, &pdfcraft_render::RenderConfig::default()), "{script}: drawn from the saved file");
+    }
+    // A document script that hides nothing leaves the bar, and with JavaScript off none runs.
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(banner_form("var x = 1;")), None).unwrap();
+    assert!(shows_banner(&s.get(id).unwrap().display, &s.get(id).unwrap().config));
+    // Each open scripted document keeps a script worker: give this one's back.
+    s.close(id);
+    s.set_javascript(false);
+    let id = s.open("form.pdf", None, Arc::new(banner_form("this.getField('banner').hidden = true;")), None).unwrap();
+    assert!(shows_banner(&s.get(id).unwrap().display, &s.get(id).unwrap().config), "JavaScript off: no script runs");
+    // A signed document is left as signed: the change would be a revision its signatures don't cover.
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    let opts = SignOptions { page: 0, rect: Some([20.0, 20.0, 60.0, 40.0]), ..SignOptions::default() };
+    let signed = s.sign(id, &digital_id, opts).unwrap();
+    s.set_javascript(true);
+    let id = s.open("signed.pdf", None, signed.clone(), None).unwrap();
+    assert!(*s.get(id).unwrap().bytes == *signed, "no revision was added");
+    assert!(shows_banner(&s.get(id).unwrap().display, &s.get(id).unwrap().config), "signed: left as it was signed");
+}
+
+/// The document scripts run once: as the document opens, in the realm the document keeps. What
+/// they define is there for the next script, and the next script does not run them again; opening
+/// is no edit to undo.
+#[test]
+fn document_scripts_run_once_when_the_document_opens() {
+    let script = "var opened = (typeof opened == 'number' ? opened : 0) + 1; console.println('init'); this.getField('banner').hidden = true;";
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(banner_form(script)), None).unwrap();
+    assert!(s.get(id).unwrap().can_undo().is_none(), "opening is not an edit");
+    let out = s.take_js_output(id);
+    assert_eq!(out.console.iter().filter(|c| c.as_str() == "init").count(), 1, "{out:?}");
+    let o = s.run_javascript(id, "opened;", None).unwrap();
+    assert_eq!((o.error, o.result.as_deref()), (None, Some("1")), "the realm the scripts ran in on opening");
+    assert!(!o.console.iter().any(|c| c == "init"), "the document scripts ran again: {:?}", o.console);
+}
+
+/// What opening a form whose document script hides a field reports: the change, and that saving
+/// keeps it.
+#[test]
+fn opening_says_which_fields_the_document_scripts_changed() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(banner_form("this.getField('banner').hidden = true;")), None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(
+        doc.info.warnings.iter().any(|w| w == "This document's scripts changed 1 form field on opening (banner); saving keeps those changes"),
+        "{:?}",
+        doc.info.warnings
+    );
+    assert_eq!(doc.form.iter().find(|f| f.name == "banner").map(|f| f.value.clone()), Some(vec!["Warning".to_string()]), "the value stays");
+    s.close(id);
+    // A script that fails at opening is reported, and what it did before failing still applies.
+    let script = "this.getField('banner').hidden = true; this.getOCGs()[0].state = false;";
+    let id = s.open("form.pdf", None, Arc::new(banner_form(script)), None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(!shows_banner(&doc.display, &doc.config));
+    let out = s.take_js_output(id);
+    assert!(out.errors.iter().any(|e| e.starts_with("document script 1: TypeError")), "{out:?}");
+}
+
+/// A script that sets a field's colour and then fails keeps the colour written (as it keeps a
+/// value it wrote): the edit applies it, and its later scripts read the new colour, not the one in
+/// the file.
+#[test]
+fn a_colour_a_failing_script_wrote_is_what_later_scripts_read() {
+    use pdfcraft_forms::{FieldEvent, Scripts};
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(banner_form(""))).unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let banner = fields.iter().find(|f| f.name == "banner").unwrap().clone();
+    let mut runner = crate::js::JsRunner::new(&cos, "colour.pdf", false);
+    let failed = runner.run(FieldEvent::Calculate, "this.getField('banner').fillColor = color.red; throw 1;", &banner, "", &fields, &cos);
+    assert!(failed.changes.iter().any(|c| c.fill_color.is_some()), "{:?}", failed.changes);
+    assert_eq!(failed.value, "", "the failing script leaves its own value alone");
+    pdfcraft_forms::apply_script_changes(&mut cos, &failed.changes, &mut runner).unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let read = runner.run(FieldEvent::Calculate, "event.value = String(this.getField('banner').fillColor);", &banner, "", &fields, &cos);
+    assert_eq!(read.value, "RGB,1,0,0");
+}
+
+/// A button caption a document script sets on opening is named among the fields it changed,
+/// though the field states compared before and after do not differ by it.
+#[test]
+fn opening_names_a_button_whose_caption_a_document_script_set() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript << /Names [(init) 5 0 R] >> >> /AcroForm << /Fields [4 0 R] >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 100] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (go) /MK << /CA (Old) >> /Rect [0 60 100 80] /P 3 0 R /F 4 >>".to_string(),
+        "<< /S /JavaScript /JS (this.getField('go').buttonSetCaption('New');) >>".to_string(),
+    ];
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(pdf_of(&objs))).unwrap();
+    let mut out = js::JsOutput::default();
+    let changed = js::on_open(&mut cos, "button.pdf", false, &mut Default::default(), &mut out).unwrap();
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let go = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "go").unwrap();
+    assert_eq!(go.widgets.first().and_then(|w| w.caption.as_deref()), Some("New"));
+    assert_eq!(changed, ["go"]);
+}
+
+/// A value a document script sets on opening reruns the calculations: the opening warning names
+/// the calculated field they rewrote too, not only the field the script touched.
+#[test]
+fn opening_names_the_fields_the_calculations_changed_too() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript << /Names [(init) 6 0 R] >> >> /AcroForm << /Fields [4 0 R 5 0 R] /CO [5 0 R] >> >>"
+            .to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 100] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (price) /V (1) /Rect [0 60 100 80] /P 3 0 R /F 4 >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (total) /V (2) /Rect [0 20 100 40] /P 3 0 R /F 4 /AA << /C 7 0 R >> >>".to_string(),
+        r"<< /S /JavaScript /JS (this.getField\('price'\).value = 5;) >>".to_string(),
+        r"<< /S /JavaScript /JS (event.value = this.getField\('price'\).value * 2;) >>".to_string(),
+    ];
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(pdf_of(&objs)), None).unwrap();
+    let doc = s.get(id).unwrap();
+    let value = |name: &str| doc.form.iter().find(|f| f.name == name).map(|f| f.value.clone());
+    assert_eq!(value("total"), Some(vec!["10".to_string()]), "the calculation ran");
+    assert!(
+        doc.info.warnings.iter().any(|w| w == "This document's scripts changed 2 form fields on opening (price, total); saving keeps those changes"),
+        "{:?}",
+        doc.info.warnings
+    );
+}
+
+/// A calculation the opening rerun starts that writes another field and then fails keeps that
+/// write: the failure leaves its own field's value alone, not what it already set elsewhere.
+#[test]
+fn a_failing_calculation_keeps_what_it_wrote_before_failing() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript << /Names [(init) 7 0 R] >> >> /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] /CO [5 0 R] >> >>"
+            .to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 140] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (price) /V (1) /Rect [0 100 100 120] /P 3 0 R /F 4 >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (total) /V (2) /Rect [0 60 100 80] /P 3 0 R /F 4 /AA << /C 8 0 R >> >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /V (none) /Rect [0 20 100 40] /P 3 0 R /F 4 >>".to_string(),
+        r"<< /S /JavaScript /JS (this.getField\('price'\).value = 5;) >>".to_string(),
+        r"<< /S /JavaScript /JS (this.getField\('note'\).value = 'seen'; throw new Error\('boom'\);) >>".to_string(),
+    ];
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(pdf_of(&objs)), None).unwrap();
+    let doc = s.get(id).unwrap();
+    let value = |name: &str| doc.form.iter().find(|f| f.name == name).map(|f| f.value.clone());
+    assert_eq!(value("price"), Some(vec!["5".to_string()]));
+    assert_eq!(value("total"), Some(vec!["2".to_string()]), "the failing calculation leaves its own value");
+    assert_eq!(value("note"), Some(vec!["seen".to_string()]), "what it wrote before failing stays");
+}
+
+/// A value a script sets that is longer than the text field's `/MaxLen` (ISO 32000-2 §12.7.5.3,
+/// Table 232) is not stored, as typing it is refused: the field keeps its value and the console
+/// says why. The script's other changes still apply, from a document script on opening and from
+/// a calculation that fails after writing it, and the opening still commits them.
+#[test]
+fn a_script_value_over_max_len_is_refused_and_the_other_changes_apply() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript << /Names [(init) 9 0 R] >> >> /AcroForm << /Fields [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] /CO [5 0 R] >> >>"
+            .to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 220] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (price) /V (1) /Rect [0 180 100 200] /P 3 0 R /F 4 >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (total) /V (2) /Rect [0 140 100 160] /P 3 0 R /F 4 /AA << /C 10 0 R >> >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (code) /MaxLen 3 /V (abc) /Rect [0 100 100 120] /P 3 0 R /F 4 >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /MaxLen 3 /V (no) /Rect [0 60 100 80] /P 3 0 R /F 4 >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (flag) /V (off) /Rect [0 20 100 40] /P 3 0 R /F 4 >>".to_string(),
+        r"<< /S /JavaScript /JS (this.getField\('code'\).value = 'ABCDEF'; this.getField\('price'\).value = 5;) >>".to_string(),
+        r"<< /S /JavaScript /JS (this.getField\('note'\).value = 'too long'; this.getField\('flag'\).value = 'on'; throw new Error\('boom'\);) >>"
+            .to_string(),
+    ];
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(pdf_of(&objs)), None).unwrap();
+    let doc = s.get(id).unwrap();
+    let value = |name: &str| doc.form.iter().find(|f| f.name == name).map(|f| f.value.clone());
+    assert_eq!(value("price"), Some(vec!["5".to_string()]), "the document script's other change applies");
+    assert_eq!(value("flag"), Some(vec!["on".to_string()]), "the calculation's other write stays");
+    assert_eq!(value("code"), Some(vec!["abc".to_string()]), "the over-long value is not stored");
+    assert_eq!(value("note"), Some(vec!["no".to_string()]), "nor the failing calculation's");
+    assert_eq!(value("total"), Some(vec!["2".to_string()]), "the failing calculation leaves its own value");
+    let out = s.take_js_output(id);
+    for name in ["code", "note"] {
+        assert!(out.errors.iter().any(|e| e.contains(&format!("{name:?} takes at most 3 characters"))), "{name}: {out:?}");
+    }
+    assert!(!out.errors.iter().any(|e| e.contains("could not")), "the opening applied the changes: {out:?}");
+}
+
+/// When a document script changes a field on opening, the warnings earlier steps of opening gave
+/// stay: here, that the dynamic XFA form (it has no template) could not be laid out.
+#[test]
+fn opening_keeps_earlier_warnings_when_document_scripts_change_a_field() {
+    let bytes = banner_form_with("this.getField('banner').hidden = true;", "/NeedsRendering true", "/XFA 7 0 R");
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(bytes), None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(!shows_banner(&doc.display, &doc.config), "the document script ran");
+    let warnings = &doc.info.warnings;
+    assert!(warnings.iter().any(|w| w.contains("could not be laid out")), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.starts_with("This document's scripts changed 1 form field on opening (banner)")), "{warnings:?}");
+}
+
+/// A document script that loops forever (`while (1) {}`) stops at the loop limit. One that keeps
+/// calling a function with a long loop, which the loop limit (counted per call) does not stop
+/// (here for some ten seconds, so that its thread ends after the test), is stopped when the
+/// opening's time runs out. Either way the document opens as it was, and
+/// the console says why.
+#[test]
+fn a_document_script_that_never_ends_does_not_hang_the_opening() {
+    let scripts = [
+        ("while (1) {} this.getField('banner').hidden = true;", "iteration loops"),
+        (
+            "function spin() { for (var i = 0; i < 999999; i++) {} } for (var k = 0; k < 200; k++) spin(); this.getField('banner').hidden = true;",
+            "were stopped",
+        ),
+    ];
+    for (script, says) in scripts {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let started = std::time::Instant::now();
+        let id = s.open("form.pdf", None, Arc::new(banner_form(script)), None).unwrap();
+        assert!(started.elapsed().as_secs() < 20, "{script}: {:?}", started.elapsed());
+        let doc = s.get(id).unwrap();
+        assert!(shows_banner(&doc.display, &doc.config), "{script}");
+        assert!(!doc.dirty, "{script}");
+        let out = s.take_js_output(id);
+        assert!(out.errors.iter().any(|e| e.contains(says)), "{script}: {out:?}");
+    }
+}
+
+/// Document scripts run unasked as the document opens, so what they ask for that a person
+/// should choose (opening a link, submitting or e-mailing the form, printing, saving, exporting
+/// an attachment) is not carried out: each is noted on the console. The fields they change
+/// still change, the fields they reset are reset, and the focus they move is the viewer's to
+/// move.
+#[test]
+fn document_scripts_on_opening_open_no_link_and_submit_print_or_save_nothing() {
+    let script = "this.getField('banner').hidden = true; app.launchURL('https://example.com/'); \
+        this.submitForm('https://example.com/submit'); this.mailDoc(true); this.print(); app.execMenuItem('SaveAs'); \
+        this.getField('banner').setFocus(); this.resetForm(); this.exportDataObject({cName: 'a.txt', nLaunch: 2});";
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("form.pdf", None, Arc::new(banner_form(script)), None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(!shows_banner(&doc.display, &doc.config), "the field change applies");
+    let out = s.take_js_output(id);
+    // Moving the focus is the viewer's to do as the form opens, and the reset was applied.
+    assert!(out.requests.iter().all(|r| matches!(r, js::Request::Focus(_) | js::Request::FocusField { .. })), "{:?}", out.requests);
+    assert!(!out.requests.is_empty(), "the focus request stays");
+    assert!(!out.console.iter().any(|c| c.contains("reset")), "{:?}", out.console);
+    for what in
+        ["open https://example.com/", "submit the form to https://example.com/submit", "print", "save the document", "open the attached file a.txt"]
+    {
+        let asked = |c: &String| {
+            c.starts_with("A document script asked to ") && c.contains(what) && c.ends_with("as the document opened; only a button may do that")
+        };
+        assert!(out.console.iter().any(asked), "{what}: {:?}", out.console);
+    }
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+}
+
+/// A document script that calls `calculateNow()` as the document opens gets the form's
+/// calculations, as one run later does: it reads the recalculated total.
+#[test]
+fn calculate_now_in_a_document_script_on_opening_runs_the_calculations() {
+    let doc_script = "this.calculateNow(); if (this.getField('total').value == 4) this.getField('banner').hidden = true;";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript << /Names [(init) 6 0 R] >> >> /AcroForm << /Fields [4 0 R 7 0 R 8 0 R] /CO [8 0 R] >> >>"
+            .to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 100] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 7 0 R 8 0 R] >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (banner) /V (Warning) /Rect [0 80 200 100] /P 3 0 R /F 4 >>".to_string(),
+        "<< >>".to_string(),
+        format!("<< /S /JavaScript /JS ({doc_script}) >>"),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (a) /V (2) /Rect [0 0 50 20] /P 3 0 R /F 4 >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (total) /V () /Rect [60 0 110 20] /P 3 0 R /F 4 /AA << /C << /S /JavaScript /JS (event.value = this.getField('a').value * 2;) >> >> >>"
+            .to_string(),
+    ];
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(pdf_of(&objs))).unwrap();
+    let mut out = js::JsOutput::default();
+    let changed = js::on_open(&mut cos, "calculate.pdf", false, &mut Default::default(), &mut out).unwrap();
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    assert!(changed.iter().any(|n| n == "banner"), "{changed:?} {:?}", out.console);
+    let banner = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "banner").unwrap();
+    let flags = cos.get(banner.widgets[0].obj).as_dict().and_then(|d| d.int(b"F")).unwrap();
+    assert_eq!(flags & 2, 2, "hidden");
+}
+
 #[test]
 fn active_xfa_does_not_run_pdf_container_scripts_but_keeps_requested_alerts() {
     let template = pdfcraft_xfa::fixtures::scripted_template().replace(

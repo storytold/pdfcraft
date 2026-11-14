@@ -2676,6 +2676,45 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     assert_eq!(o.alerts, [Message::plain("old viewer")]);
 }
 
+/// The sandbox offers no way to the file system, the network, the clipboard or other
+/// documents: none of the browser's, Node's or Acrobat's own such objects and methods exist.
+/// (`exportDataObject` does: it touches no file, only asks the viewer to open or save an attached
+/// file, a request the caller carries out or drops, as [`Request::OpenAttachment`].)
+#[test]
+fn scripts_have_no_file_network_or_clipboard_access() {
+    let names = [
+        "fetch",
+        "XMLHttpRequest",
+        "WebSocket",
+        "require",
+        "process",
+        "Deno",
+        "navigator",
+        "window",
+        "document",
+        "SOAP",
+        "Net",
+        "app.openDoc",
+        "app.newDoc",
+        "app.browseForDoc",
+        "app.mailMsg",
+        "util.readFileIntoStream",
+        "this.importDataObject",
+        "this.saveAs",
+        "this.importTextData",
+        "this.importAnFDF",
+        "this.importXFAData",
+        "this.createDataObject",
+    ];
+    let probe: Vec<String> =
+        names.iter().map(|n| format!("(function () {{ try {{ return typeof {n}; }} catch (e) {{ return 'undefined'; }} }})()")).collect();
+    let script = format!("event.value = [{}].join(',');", probe.join(","));
+    let o = go(&script, &Event::field("Calculate", "total", ""));
+    assert_eq!(o.error, None);
+    let found: Vec<(&str, &str)> = names.iter().copied().zip(o.value.split(',')).filter(|(_, t)| *t != "undefined").collect();
+    assert!(found.is_empty(), "reachable from a script: {found:?}");
+}
+
 /// Arrays assigned to several fields are held to one run-wide budget, and replacing a field's
 /// array frees its charge.
 #[test]

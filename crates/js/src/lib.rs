@@ -20,9 +20,12 @@
 //! The native engine uses [`session::ScriptSession`] to preserve document globals across events.
 //! Stateless runners remain available for callers that need isolation per invocation.
 //!
-//! The engine is a sandbox: no file, network or timer access exists, and loops and recursion
-//! are bounded. Side effects (alerts, field changes, resets, printing, navigation) are returned
-//! in an [`Outcome`] for the caller to apply.
+//! The engine is a sandbox: no file, network, clipboard or timer access exists, and loops and
+//! recursion are bounded; on native targets a [`session::ScriptSession`] also holds each job to a
+//! wall-clock limit.
+//! Memory is not bounded apart from boa's own limits (a string of at most 2^32 units). Side
+//! effects (alerts, field changes, resets, printing, navigation) are returned in an [`Outcome`]
+//! for the caller to apply.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
