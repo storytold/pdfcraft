@@ -2167,13 +2167,14 @@ adobe_data = true
 usage = "Advance widths for the fourteen standard fonts, which a PDF may name without embedding. Non-visual data, not a typeface: the item AGENTS.md 1.1 permits, held first-party so generated appearance streams and the renderer agree."
 sha256 = "f225e0b044875b8fa6375b6b5ad935f0d99fcc1ad03ecf9f0baae2cedbfca4d2"
 
-[[asset]]
-path = "crates/prc/src/acof/table.rs"
+[[bundled]]
+crate = "craft-prc"
+version = "0.1.0"
+path = "src/acof/table.rs"
 title = "PRC Double prefix-code table (as a Rust table)"
 author = "Kristof Ralovich (prc-rs); the code table itself is defined by the PRC format (ISO 14739-1, working draft clause 11.17.2)"
-source = "Rows taken from prc-rs src/double.rs at commit 287b671bb5b31b05efb5ec1b98f7c359b9e4dd7d (https://github.com/ralovich/prc-rs), mechanically reformatted into (code length, code, entry) tuples; checked to be a complete prefix code by the tests in crates/prc/src/acof.rs. Data only: the code that reads the table lives in acof.rs. The MIT notice is kept in the file header."
+source = "Rows taken from prc-rs src/double.rs at commit 287b671bb5b31b05efb5ec1b98f7c359b9e4dd7d (https://github.com/ralovich/prc-rs), mechanically reformatted into (code length, code, entry) tuples; checked to be a complete prefix code by the tests in craft-prc src/acof.rs. Data only: the code that reads the table lives in acof.rs. The MIT notice is kept in the file header."
 licence = "MIT"
-licence_file = "licenses/prc-rs-LICENSE.txt"
 kind = "data"
 usage = "Decodes every PRC Double (coordinates, transforms, colours) in 3D annotations' PRC streams. Non-visual data."
 sha256 = "8e705c5cde6a3ef778e8aca69759e38845b228b3f7f12949e587b19855d2114c"

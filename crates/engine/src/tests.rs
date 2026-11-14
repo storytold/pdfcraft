@@ -14227,7 +14227,8 @@ fn reset_order_session(reset: &str) -> (Session, DocId) {
     })
     .unwrap();
     let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
-    let mut s = Session::new();
+    // Callers compare two saves byte for byte, and each save stamps `/ModDate`: pin the clock.
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
     s.set_javascript(false);
     let id = s.open("reset-order.pdf", None, bytes, None).unwrap();
     s.apply(
