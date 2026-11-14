@@ -3576,7 +3576,10 @@ fn replacing_a_mixed_font_line_again_replaces_its_sequence() {
         text::replace_line(&mut doc, 0, 0, "ab ab").unwrap();
         let doc = reopen(&doc);
         let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
-        assert_eq!((count(&content, "BMC"), count(&content, "BDC"), count(&content, "EMC")), (0, 0, 0), "{after}: {content}");
+        // The old sequence and the span inside it are gone; what is left is the new text's own
+        // `/ActualText` span for the space its subset lacks (#4514).
+        assert!(!content.contains("/PCEdLine") && !content.contains("/Span <<>>"), "{after}: {content}");
+        assert_eq!((count(&content, "BMC"), count(&content, "BDC"), count(&content, "EMC")), (0, 1, 1), "{after}: {content}");
         let lines = text::text_lines(&doc, 0).unwrap();
         let read: Vec<(&str, &str, f64)> = lines.iter().map(|l| (l.text.trim(), l.font.as_str(), l.size)).collect();
         assert_eq!(read, [("ab ab", "F2", 10.0), ("ba", font, size)], "{after}: {content}");
