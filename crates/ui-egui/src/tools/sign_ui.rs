@@ -31,7 +31,15 @@ pub use panel::{CertTab, CertViewer, PanelAction, certificate_pem};
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DigitalIdEntry {
     pub path: String,
+    /// The picker's label. For an OS key store ID it may carry the store's Friendly Name beside
+    /// the subject ("Jane Smith · Company A", issue #7232), so identities one issuer made for
+    /// several employers stay apart.
     pub name: String,
+    /// The name the saved signature shows: the certificate's display name (the common name,
+    /// else the organization), what `sign` stamps. Settings saved before the two were kept
+    /// apart have none; their label was the display name then.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sign_name: String,
     pub issuer: String,
     pub email: String,
     pub expires: String,
@@ -39,6 +47,14 @@ pub struct DigitalIdEntry {
     /// greyed with the reason, and never selectable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unusable: Option<String>,
+}
+
+impl DigitalIdEntry {
+    /// The name the saved signature shows: [`Self::sign_name`], or the picker's label for
+    /// settings saved before the two were kept apart (its label was the display name then).
+    pub(crate) fn signed_name(&self) -> &str {
+        if self.sign_name.is_empty() { &self.name } else { &self.sign_name }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -278,6 +294,7 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
     DigitalIdEntry {
         path: path.to_string(),
         name: c.display_name(),
+        sign_name: c.display_name(),
         issuer: c.issuer.common_name().map(str::to_string).unwrap_or_else(|| c.issuer.display()),
         email: c.subject.email().unwrap_or("").to_string(),
         expires: format!("{:04}.{:02}.{:02}", c.not_after.year, c.not_after.month, c.not_after.day),
@@ -305,6 +322,7 @@ fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
     DigitalIdEntry {
         path: format!("windows:{}", u.fingerprint.split(' ').collect::<String>().to_ascii_lowercase()),
         name: u.subject.clone(),
+        sign_name: u.subject.clone(),
         issuer: String::new(),
         email: String::new(),
         expires: String::new(),
@@ -946,7 +964,15 @@ mod tests {
     }
 
     fn listed(path: &str, name: &str) -> DigitalIdEntry {
-        DigitalIdEntry { path: path.into(), name: name.into(), issuer: String::new(), email: String::new(), expires: String::new(), unusable: None }
+        DigitalIdEntry {
+            path: path.into(),
+            name: name.into(),
+            sign_name: name.into(),
+            issuer: String::new(),
+            email: String::new(),
+            expires: String::new(),
+            unusable: None,
+        }
     }
 
     /// Issue #1396: an imported ID can be taken off the list (its file stays), the dialog's
@@ -1221,5 +1247,56 @@ mod tests {
         h.run_steps(4);
         let whole = format!("{long}\n");
         assert!(h.query_by_label_contains(whole.as_str()).is_some(), "the whole name in the tooltip");
+    }
+
+    /// Sign as shows the name the saved signature stamps — the certificate's display name —
+    /// not the picker's label with the store's Friendly Name beside it (PR review, #7245).
+    #[test]
+    fn a_store_identity_s_sign_as_shows_the_certificate_s_name_not_the_picker_s_label() {
+        let cert = one_cert("PostSignum", "PostSignum s.r.o.");
+        let mut entry = entry_for("windows:abc", &cert);
+        assert_eq!(entry.sign_name, "PostSignum", "what signing stamps");
+        entry.name = display_name_for(&cert, Some("Company A"));
+        assert_eq!(entry.signed_name(), "PostSignum", "not the combined picker label");
+
+        // Settings saved before the two names were kept apart: the label was the display name
+        // then, so the dialog falls back to it.
+        let old = DigitalIdEntry { sign_name: String::new(), ..entry.clone() };
+        assert_eq!(old.signed_name(), old.name);
+    }
+
+    #[test]
+    fn the_sign_as_preview_shows_the_name_the_saved_signature_stamps() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let cert = one_cert("PostSignum", "PostSignum s.r.o.");
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let mut entry = entry_for("windows:abc", &cert);
+        entry.name = display_name_for(&cert, Some("Company A"));
+        app.digital_ids.push(entry);
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_| {
+            let mut draft = SignDraft::new(0, Some([50.0, 50.0, 250.0, 150.0]), None, None, &app.digital_ids);
+            draft.step = SignStep::SignAs;
+            app.sign_draft = Some(draft);
+            app.dialog = Some(crate::Dialog::Sign);
+            app
+        });
+        h.run_steps(2);
+
+        // The title and the preview say the certificate's name; the picker's label, with the
+        // Friendly Name beside the subject, is nowhere in the dialog.
+        h.get_by_label("Sign as \"PostSignum\"");
+        let drawn: Vec<String> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(drawn.iter().any(|t| t.contains("PostSignum")), "the saved signature's name: {drawn:?}");
+        assert!(drawn.iter().all(|t| !t.contains("Company A")), "the picker's label stayed out: {drawn:?}");
     }
 }
