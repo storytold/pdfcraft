@@ -397,3 +397,89 @@ fn a_widget_rect_saved_back_as_integers_is_a_form_fill() {
     let moved = save(Some(20.5));
     assert_eq!(verdict(&moved, signed.open(), Some(2)), Modification::Disallowed(vec![super::kind::PAGE_CONTENT]));
 }
+
+/// A field's appearance stream signed in a damaged slot (header 5, row 0), so `6 0 R` and `6 5 R`
+/// both reach it. Rewritten in place under both generations, it is a form fill only while the
+/// field's widget is all that refers to it: a comment drawing it through the other generation
+/// shows the rewrite too (#3442).
+#[test]
+fn an_appearance_reached_through_another_generation_is_not_only_the_fields() {
+    let signed = |comment_ap: &str| {
+        File::new().revision(&[
+            (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>")),
+            (2, Row::Obj(0, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")),
+            (3, Row::Obj(0, 0, &page("/Annots [5 0 R 7 0 R]"))),
+            (4, Row::Obj(0, 0, "<< /Length 3 >>\nstream\nq Q\nendstream")),
+            (5, Row::Obj(0, 0, "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /Rect [20 20 120 40] /P 3 0 R /AP << /N 6 0 R >> >>")),
+            (6, Row::Obj(5, 0, "<< /Length 3 >>\nstream\nq Q\nendstream")),
+            (7, Row::Obj(0, 0, &format!("<< /Type /Annot /Subtype /Square /Rect [20 60 120 80] /AP << /N {comment_ap} >> >>"))),
+        ])
+    };
+    let redrawn = |file: &File| file.clone().revision(&[(6, Row::Obj(5, 0, "<< /Length 13 >>\nstream\n0 0 m 9 9 l S\nendstream"))]);
+    let only_the_fields = signed("4 0 R");
+    assert_eq!(verdict(&redrawn(&only_the_fields).open(), only_the_fields.open(), Some(2)), Modification::Allowed(vec![super::kind::FORM_FILL]));
+    let shared = signed("6 5 R");
+    assert_refused(&redrawn(&shared).open(), shared.open(), 2);
+}
+
+/// An ordinary field's appearance stream that the signed signature field's widget draws too.
+/// Rewritten in place, it changes how the signature looks, so it is no form fill however the
+/// text field refers to it; drawn by the text field alone, it is (#3442).
+#[test]
+fn an_appearance_the_signed_signature_widget_shares_is_not_a_form_fill() {
+    let signed = |signature_ap: &str| {
+        File::new().revision(&[
+            (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 7 0 R] /SigFlags 3 >> >>")),
+            (2, Row::Obj(0, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")),
+            (3, Row::Obj(0, 0, &page("/Annots [5 0 R 7 0 R]"))),
+            (4, Row::Obj(0, 0, "<< /Length 3 >>\nstream\nq Q\nendstream")),
+            (5, Row::Obj(0, 0, "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /Rect [20 20 120 40] /P 3 0 R /AP << /N 6 0 R >> >>")),
+            (6, Row::Obj(0, 0, "<< /Length 3 >>\nstream\nq Q\nendstream")),
+            (
+                7,
+                Row::Obj(
+                    0,
+                    0,
+                    &format!("<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /V 8 0 R /Rect [20 60 120 80] /P 3 0 R /F 4 /AP << /N {signature_ap} >> >>"),
+                ),
+            ),
+            (8, Row::Obj(0, 0, "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 0 0 0] /Contents <00> >>")),
+        ])
+    };
+    let redrawn = |file: &File| file.clone().revision(&[(6, Row::Obj(0, 0, "<< /Length 13 >>\nstream\n0 0 m 9 9 l S\nendstream"))]);
+    let own = signed("4 0 R");
+    assert_eq!(verdict(&redrawn(&own).open(), own.open(), Some(2)), Modification::Allowed(vec![super::kind::FORM_FILL]));
+    let shared = signed("6 0 R");
+    // Not a comment either: P=3 refuses it too.
+    for p in [2, 3] {
+        assert_eq!(verdict(&redrawn(&shared).open(), shared.open(), Some(p)), Modification::Disallowed(vec![super::kind::OTHER]), "P={p}");
+    }
+}
+
+/// The AcroForm's default resources, rewritten in place by a form fill that adds a font, keep
+/// every signed entry when a writer respells one of their numbers (a whole real saved as an
+/// integer) or strings (literal saved as hexadecimal): those are the same values (ISO 32000-2
+/// §7.3.3, §7.3.4.1), so the rewrite is still a form fill. An entry whose value did change is not
+/// (#3442).
+#[test]
+fn default_resources_respelled_while_gaining_a_font_are_a_form_fill() {
+    let helv = |first: &str, name: &str| format!("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar {first} /Name {name} >>");
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /DR 6 0 R /DA (/Helv 0 Tf 0 g) >> >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+        (4, Row::Obj(0, 0, &page("/Annots []"))),
+        (5, Row::Obj(0, 0, TEXT_FIELD)),
+        (6, Row::Obj(0, 0, &format!("<< /Font << /Helv {} >> >>", helv("32.0", "(Helv)")))),
+    ]);
+    let rewritten = |first: &str, name: &str| {
+        let dr = format!("<< /Font << /Helv {} /ZaDb << /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >> >> >>", helv(first, name));
+        signed.clone().revision(&[(6, Row::Obj(0, 0, &dr))]).open()
+    };
+    for (first, name) in [("32.0", "(Helv)"), ("32", "(Helv)"), ("32.0", "<48656C76>"), ("32", "<48656C76>")] {
+        assert_eq!(verdict(&rewritten(first, name), signed.open(), Some(2)), Modification::Allowed(vec![super::kind::FORM_FILL]), "{first} {name}");
+    }
+    for (first, name) in [("33", "(Helv)"), ("32", "(Helw)")] {
+        assert!(matches!(verdict(&rewritten(first, name), signed.open(), Some(2)), Modification::Disallowed(_)), "{first} {name}");
+    }
+}
