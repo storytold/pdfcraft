@@ -486,6 +486,28 @@ fn single_page_wheel_at_the_bottom_edge_turns_to_the_next_page_top_and_back() {
 }
 
 #[test]
+fn two_page_wheel_at_the_top_edge_turns_back_after_end() {
+    // #7087: End makes the right-hand page of the last spread current (with a cover page, spreads
+    // 1 and 2–3, it is page 3), and the edge the wheel turns at is recorded for the spread's
+    // first page, so the wheel panned up to the top and then never turned back.
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "two-page"), ("cover", "on"), ("zoom", "200")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(4);
+    h.key_press(Key::End);
+    h.run_steps(12);
+    assert_eq!(h.state().views[0].current, 2, "End: page 3, the right-hand page");
+    let mut notches = 0;
+    while h.state().views[0].current == 2 && notches < 80 {
+        h.event(wheel(MouseWheelUnit::Line, 1.0, TouchPhase::Move));
+        h.run_steps(12);
+        notches += 1;
+    }
+    assert!(notches > 2, "the spread panned up before it turned: {notches} notches");
+    assert_eq!(h.state().views[0].current, 0, "a notch at the top edge shows the cover page");
+}
+
+#[test]
 fn single_page_swipe_that_reaches_the_edge_does_not_turn_but_a_fresh_one_does() {
     // Momentum that carries a swipe to the bottom edge must not go on to turn the page.
     let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
