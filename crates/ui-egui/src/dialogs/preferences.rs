@@ -828,6 +828,31 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
     ctx.label_secondary(ui, tl!("Only web (http, https) and email addresses open, and PdfCraft asks first, as for other links."), t);
     ui.add_space(6.0);
 
+    // The right panel a newly opened PDF shows (#1495).
+    ui.horizontal(|ui| {
+        ctx.label_primary(ui, tl!("Default panel"), t);
+        ctx.pill_choice(
+            ui,
+            t,
+            &mut app.default_panel,
+            &[
+                (crate::DefaultPanel::Auto, tl!("Automatic")),
+                (crate::DefaultPanel::None, tl!("None")),
+                (crate::DefaultPanel::Pages, tl!("Pages")),
+                (crate::DefaultPanel::Bookmarks, tl!("Bookmarks")),
+                (crate::DefaultPanel::Comments, tl!("Comments")),
+            ],
+        );
+    });
+    ctx.label_secondary(
+        ui,
+        tl!(
+            "Shown when a PDF opens. Automatic keeps the panel that is open, or shows Comments when the PDF has comments, else its Bookmarks. A PDF that names a panel opens with that one, and a side panel you closed stays closed until you open it again."
+        ),
+        t,
+    );
+    ui.add_space(6.0);
+
     ui.horizontal(|ui| {
         ctx.label_primary(ui, tl!("Units"), t);
         ctx.pill_choice(
