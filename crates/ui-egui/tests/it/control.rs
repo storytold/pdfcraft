@@ -176,6 +176,31 @@ fn page_shadows_are_an_observable_app_wide_preference() {
 }
 
 #[test]
+fn console_is_controlled_independently_of_the_active_dialog() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({ "key": "js-console", "value": "open" }));
+    ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "preferences" }));
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(state["dialog"], "Preferences");
+    assert_eq!(state["js_console_open"], true);
+
+    ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "none" }));
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    assert!(state["dialog"].is_null());
+    assert_eq!(state["js_console_open"], true);
+
+    ok(&mut h, &c, "ui.set", json!({ "key": "js-console", "value": "closed" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["js_console_open"], false);
+    ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "preferences" }));
+    ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "js-console" }));
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(state["dialog"], "Preferences", "the legacy opener also preserves document dialogs");
+    assert_eq!(state["js_console_open"], true);
+    assert!(call(&mut h, &c, "ui.set", json!({ "key": "js-console", "value": "none" })).is_err());
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["js_console_open"], true, "invalid input leaves the console open");
+}
+
+#[test]
 fn control_resize_reports_observed_dimensions_and_rejects_invalid_sizes() {
     let (mut h, c) = harness();
     for params in [

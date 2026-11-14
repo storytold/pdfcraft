@@ -1204,7 +1204,7 @@ fn a_press_on_a_page_ends_select_all_of_the_document() {
 
     // A press while a dialog is up lands on the dialog, not the page: the selection stays.
     h.state_mut().views[0].select_all();
-    h.state_mut().dialog = Some(crate::Dialog::JsConsole);
+    h.state_mut().dialog = Some(crate::Dialog::Preferences);
     h.run_steps(2);
     h.event(egui::Event::PointerMoved(at));
     h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });

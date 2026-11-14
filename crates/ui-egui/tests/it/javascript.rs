@@ -57,7 +57,14 @@ fn console_runs_scripts_against_the_document() {
     let mut h = harness();
     assert!(h.state_mut().execute("tools.js_console"));
     h.run_steps(2);
-    h.get_by_label("JavaScript Console");
+    assert!(h.state().console_open());
+    assert_eq!(h.state().dialog, None, "the desktop console leaves the main window usable");
+    assert!(h.state_mut().execute("help.shortcuts"));
+    assert_eq!(h.state().dialog, Some(Dialog::Shortcuts));
+    assert!(h.state().console_open(), "another dialog does not close the console");
+    h.state_mut().set_option("dialog", "none").unwrap();
+    assert_eq!(h.state().dialog, None);
+    assert!(h.state().console_open(), "closing the dialog leaves the independent console open");
     h.state_mut().js_console.input = "getField('greeting').value = 'typed'; console.println(numFields); 6 * 7".into();
     h.get_by_label("Run").click();
     h.run_steps(2);
@@ -73,6 +80,60 @@ fn console_runs_scripts_against_the_document() {
     h.get_by_label("Clear").click();
     h.run_steps(2);
     assert!(h.state().js_console.log.is_empty(), "{:?} {:?}", h.state().js_console.log, h.state().dialog);
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    assert!(!h.state().console_open());
+    h.state_mut().set_option("js-console", "open").unwrap();
+    h.run_steps(2);
+    assert!(h.state().console_open());
+    h.state_mut().set_option("dialog", "none").unwrap();
+    assert!(h.state().console_open(), "dialog=none only closes the actual dialog");
+    h.state_mut().set_option("js-console", "closed").unwrap();
+    assert!(!h.state().console_open());
+    assert!(h.state_mut().set_option("js-console", "none").is_err());
+}
+
+#[test]
+fn console_command_preserves_an_existing_dialog() {
+    let mut h = harness();
+    h.state_mut().dialog = Some(Dialog::Preferences);
+    assert!(h.state_mut().execute("tools.js_console"));
+    assert_eq!(h.state().dialog, Some(Dialog::Preferences), "opening the console must not replace the document's dialog");
+    assert!(h.state().console_open());
+}
+
+#[test]
+fn console_run_waits_for_a_document_and_for_document_dialogs() {
+    let mut h = harness();
+    h.state_mut().open_console();
+    h.run_steps(2);
+    h.get_by(|node| node.label().as_deref() == Some("Run") && !node.is_disabled());
+    h.state_mut().dialog = Some(Dialog::Preferences);
+    h.run_steps(3);
+    h.get_by(|node| node.label().as_deref() == Some("Run") && node.is_disabled());
+    h.state_mut().set_option("dialog", "none").unwrap();
+    h.run_steps(3);
+    h.get_by(|node| node.label().as_deref() == Some("Run") && !node.is_disabled());
+    assert!(h.state_mut().execute("file.close"));
+    h.run_steps(3);
+    assert!(h.state().active_ids().is_none());
+    h.get_by_label("Open a document first");
+    h.get_by(|node| node.label().as_deref() == Some("Run") && node.is_disabled());
+    assert!(h.state().console_open());
+}
+
+#[test]
+fn console_alert_restores_and_focuses_the_document_window() {
+    let mut h = harness();
+    h.state_mut().open_console();
+    h.state_mut().js_console.input = "app.alert('Look at the document window')".into();
+    h.run_steps(2);
+    h.get_by_label("Run").click();
+    h.step();
+    let commands = &h.output().viewport_output[&egui::ViewportId::ROOT].commands;
+    let restored = commands.iter().position(|command| matches!(command, egui::ViewportCommand::Minimized(false)));
+    let focused = commands.iter().position(|command| matches!(command, egui::ViewportCommand::Focus));
+    assert!(restored.zip(focused).is_some_and(|(restore, focus)| restore < focus), "{commands:?}");
 }
 
 /// A button's script fills a field and its message takes the toast.
@@ -453,15 +514,15 @@ fn native_popup_keeps_undo_shortcuts_out_of_the_document() {
     h.run_steps(5);
 }
 
-/// A script response stays clickable while another modal remains open underneath it.
+/// A script response stays clickable while the independent console window is open.
 #[test]
-fn native_script_prompt_is_above_an_existing_dialog() {
+fn native_script_prompt_stays_usable_with_the_console_open() {
     let _gpu = crate::gpu();
     for open_first in [true, false] {
         let mut h = harness();
         let id = h.state().active_ids().unwrap().1;
         if open_first {
-            h.state_mut().dialog = Some(Dialog::JsConsole);
+            h.state_mut().open_console();
             h.run_steps(3);
         }
         h.state_mut().run_button_script(
@@ -471,7 +532,7 @@ fn native_script_prompt_is_above_an_existing_dialog() {
         );
         wait_for(&mut h, "Answer here");
         if !open_first {
-            h.state_mut().dialog = Some(Dialog::JsConsole);
+            h.state_mut().open_console();
         }
         h.run_steps(4);
         let expected = egui::Id::unique(("document-script-prompt", id.0, 1u32));
@@ -481,12 +542,12 @@ fn native_script_prompt_is_above_an_existing_dialog() {
         }
         h.get_by_label("OK").click();
         wait_value(&mut h, "greeting", "visible");
-        assert_eq!(h.state().dialog, Some(Dialog::JsConsole));
+        assert!(h.state().console_open());
         h.state_mut().run_button_script(id, "hello", "getField('greeting').value=String(app.response({cQuestion:'Cancel here'}));");
         wait_for(&mut h, "Cancel here");
         h.key_press(egui::Key::Escape);
         wait_value(&mut h, "greeting", "null");
-        assert_eq!(h.state().dialog, Some(Dialog::JsConsole));
+        assert!(h.state().console_open());
     }
 }
 

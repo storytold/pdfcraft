@@ -2627,7 +2627,7 @@ fn apply_notice(app: &mut PdfCraftApp, index: usize, notice: Option<Notice>) {
         }
         Some(Notice::Signatures) => app.right = Some(RightPanel::Signatures),
         Some(Notice::FieldHighlights(on)) => app.view_defaults.highlight_fields = on,
-        Some(Notice::Console) => app.dialog = Some(crate::Dialog::JsConsole),
+        Some(Notice::Console) => app.open_console(),
         // Back on in Preferences ▸ General.
         Some(Notice::HideSecured) => app.show_secured_notice = false,
         // Handled by the app with the other view actions (`ViewAction`).
