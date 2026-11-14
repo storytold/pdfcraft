@@ -145,13 +145,23 @@ fn decoded(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<Vec<u
 /// alpha, JPEG images included, so cut-out images keep their transparent background.
 fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'static str, Vec<u8>), String> {
     let f = filters(s);
-    let jpeg = matches!(f.last().map(Vec::as_slice), Some(b"DCTDecode" | b"DCT")) && f.len() == 1;
-    match f.last().map(Vec::as_slice) {
-        Some(b"JPXDecode") => return Err("JPEG 2000 images can't be exported yet".into()),
-        Some(b"DCTDecode" | b"DCT") if !jpeg => return Err("JPEG images inside other filters can't be exported yet".into()),
-        _ => {}
+    let jpeg = matches!(f.last().map(Vec::as_slice), Some(b"DCTDecode" | b"DCT"));
+    if matches!(f.last().map(Vec::as_slice), Some(b"JPXDecode")) {
+        return Err("JPEG 2000 images can't be exported yet".into());
     }
-    let as_is = || Ok(("jpg", s.raw.to_vec()));
+    // Decode only the stages before DCT, within the same work budget as other image filters.
+    // The JPEG decoder and as-is export below both need the unwrapped JPEG bytes.
+    let jpeg_data = if jpeg && f.len() > 1 {
+        let direct = doc.with_direct_parms(s);
+        let chain = direct.filters();
+        let Some(((pdfcraft_filters::Filter::Dct, _), prefix)) = chain.split_last() else {
+            return Err("invalid JPEG filter chain".into());
+        };
+        std::borrow::Cow::Owned(budget.decode_chain(prefix, &s.raw, MAX_DECODED).map_err(|e| e.to_string())?)
+    } else {
+        std::borrow::Cow::Borrowed(s.raw.as_ref())
+    };
+    let as_is = || Ok(("jpg", jpeg_data.to_vec()));
     let (w, h) = (s.dict.int(b"Width").unwrap_or(0), s.dict.int(b"Height").unwrap_or(0));
     let Some((w, h)) = size(w, h) else {
         return match () {
@@ -195,12 +205,12 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
         None => space(doc, s.dict.get(b"ColorSpace"), budget)?,
     };
     let (samples, bpc) = if jpeg {
-        if !budget.pay_jpeg((w as u64).saturating_mul(h as u64).saturating_mul(space.components() as u64), &s.raw) {
+        if !budget.pay_jpeg((w as u64).saturating_mul(h as u64).saturating_mul(space.components() as u64), &jpeg_data) {
             return Err(FilterError::Spent.to_string());
         }
         // Grey, RGB or CMYK samples (YCCK is converted); a JPEG that doesn't decode, or an
         // indexed one (not valid), is written as is, without its transparency.
-        let Some((samples, decoded)) = jpeg_samples(&s.raw, &space, w, h) else { return as_is() };
+        let Some((samples, decoded)) = jpeg_samples(&jpeg_data, &space, w, h) else { return as_is() };
         space = decoded;
         (samples, 8)
     } else {
