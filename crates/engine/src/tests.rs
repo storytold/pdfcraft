@@ -2285,6 +2285,64 @@ fn bookmark_edits_show_in_the_viewer_undo_and_save() {
     assert_eq!(outline_titles(&again.get(id2).unwrap().info.outline), ["Start→1", "Finish→3"]);
 }
 
+/// Two pages; page 1 has a link to the named destination `chapter`, which the file doesn't have.
+fn link_to_a_missing_destination() -> Vec<u8> {
+    pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Link /Rect [10 10 50 50] /Dest (chapter) >>".into(),
+    ])
+}
+
+#[test]
+fn destination_edits_reach_the_links_that_name_them_undo_and_save() {
+    let mut s = Session::new();
+    let id = s.open("links.pdf", None, Arc::new(link_to_a_missing_destination()), None).unwrap();
+    let link = |s: &Session| s.get(id).unwrap().info.links.first().map(|l| l.target.clone());
+    let names = |s: &Session| s.named_destinations(id).unwrap().into_iter().map(|d| (d.name, d.page, d.view)).collect::<Vec<_>>();
+    assert_eq!(link(&s), None, "a link to a name nothing has goes nowhere");
+
+    s.apply(id, Edit::AddDestination { name: "chapter".into(), page: 1, left: None, top: Some(250.0) }).unwrap();
+    let view = pdfcraft_render::DestView::Xyz { left: None, top: Some(250.0), zoom: None };
+    assert_eq!(names(&s), [("chapter".to_string(), Some(1), view)]);
+    // The viewer reads the document again: the link now goes there.
+    assert_eq!(link(&s), Some(pdfcraft_render::LinkTarget::Page(1, view)));
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("New destination"));
+
+    s.apply(id, Edit::SetDestination { name: "chapter".into(), page: 0, left: Some(20.0), top: Some(100.0) }).unwrap();
+    let moved = pdfcraft_render::DestView::Xyz { left: Some(20.0), top: Some(100.0), zoom: None };
+    assert_eq!(link(&s), Some(pdfcraft_render::LinkTarget::Page(0, moved)));
+    s.undo(id).unwrap();
+    assert_eq!(link(&s), Some(pdfcraft_render::LinkTarget::Page(1, view)));
+    s.redo(id).unwrap();
+    assert_eq!(link(&s), Some(pdfcraft_render::LinkTarget::Page(0, moved)));
+
+    // Renaming takes the document's link along to the new name.
+    s.apply(id, Edit::RenameDestination { name: "chapter".into(), new_name: "Kapitel".into() }).unwrap();
+    assert_eq!(names(&s), [("Kapitel".to_string(), Some(0), moved)]);
+    assert_eq!(link(&s), Some(pdfcraft_render::LinkTarget::Page(0, moved)));
+    assert!(matches!(
+        s.apply(id, Edit::AddDestination { name: "Kapitel".into(), page: 0, left: None, top: None }),
+        Err(EditError::Organize(pdfcraft_organize::OrganizeError::Invalid(_)))
+    ));
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Rename destination"), "a refused edit is not an undo step");
+
+    let saved = s.save_bytes(id).unwrap();
+    let mut again = Session::new();
+    let id2 = again.open("again.pdf", None, saved, None).unwrap();
+    assert_eq!(again.named_destinations(id2).unwrap().into_iter().map(|d| (d.name, d.page)).collect::<Vec<_>>(), [("Kapitel".to_string(), Some(0))]);
+
+    // Deleting it leaves the link going where it went.
+    s.apply(id, Edit::DeleteDestination { name: "Kapitel".into() }).unwrap();
+    assert!(names(&s).is_empty());
+    assert_eq!(link(&s), Some(pdfcraft_render::LinkTarget::Page(0, moved)));
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Delete destination"));
+    s.undo(id).unwrap();
+    assert_eq!(names(&s).len(), 1);
+}
+
 /// Two pages tagged with an H1 on the first and an H2 on the second.
 fn tagged_headings_fixture() -> Vec<u8> {
     let objs = [

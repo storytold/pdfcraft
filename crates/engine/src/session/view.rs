@@ -1,6 +1,6 @@
 use super::{
-    Arc, BookmarkPage, BookmarkRow, DocId, Document, EditError, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, Session, SummarySort,
-    apply_layer_state, comment_summary, display_config, local_utc_offset, outline_rows, parse_ymd, render_threads, use_layer_choices,
+    Arc, BookmarkPage, BookmarkRow, DestinationRow, DocId, Document, EditError, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, Session,
+    SummarySort, apply_layer_state, comment_summary, display_config, local_utc_offset, outline_rows, parse_ymd, render_threads, use_layer_choices,
 };
 
 impl Session {
@@ -210,12 +210,15 @@ impl Session {
             let rows = page
                 .bookmarks
                 .into_iter()
-                .map(|b| {
-                    let view = b.view.map_or_else(Default::default, |(kind, numbers)| {
-                        let numbers: Vec<Option<f32>> = numbers.iter().map(|n| n.map(|n| n as f32)).collect();
-                        pdfcraft_render::DestView::from_operands(Some(&kind), &numbers)
-                    });
-                    BookmarkRow { path: b.path, title: b.title, open: b.open, page: b.page, view, color: b.color, italic: b.italic, bold: b.bold }
+                .map(|b| BookmarkRow {
+                    path: b.path,
+                    title: b.title,
+                    open: b.open,
+                    page: b.page,
+                    view: dest_view(b.view),
+                    color: b.color,
+                    italic: b.italic,
+                    bold: b.bold,
                 })
                 .collect();
             return Some(BookmarkPage { rows, next: page.next, truncated: false });
@@ -224,6 +227,18 @@ impl Session {
         let end = offset.saturating_add(limit);
         let rows = all.iter().skip(offset).take(limit).cloned().collect();
         Some(BookmarkPage { rows, next: (end < all.len()).then_some(end), truncated: doc.info.outline_more })
+    }
+
+    /// The named destinations of document `id`, sorted by name (the Destinations panel; see
+    /// [`pdfcraft_organize::named_destinations`]). `None` when no document has `id`, or its
+    /// structure could not be read for editing.
+    pub fn named_destinations(&self, id: DocId) -> Option<Vec<DestinationRow>> {
+        let editor = self.get(id)?.editor.as_ref()?;
+        let rows = pdfcraft_organize::named_destinations(&editor.cos)
+            .into_iter()
+            .map(|d| DestinationRow { name: d.name, page: d.page, view: dest_view(d.view) })
+            .collect();
+        Some(rows)
     }
 
     /// The bookmark at `path` with everything under it, or the whole outline for `[]`, as a tree
@@ -383,6 +398,15 @@ fn line_user_rect(page: &pdfcraft_render::PageInfo, v: [f32; 4]) -> Option<[f64;
     }
     let r = page.view_rect_to_user(v).map(f64::from);
     r.iter().all(|x| x.is_finite()).then_some(r)
+}
+
+/// A destination's view as the organize crate reads it (its type and the numbers after it), as
+/// the viewer goes to it; [`pdfcraft_render::DestView::Top`] when there is none.
+fn dest_view(view: Option<(Vec<u8>, Vec<Option<f64>>)>) -> pdfcraft_render::DestView {
+    view.map_or_else(Default::default, |(kind, numbers)| {
+        let numbers: Vec<Option<f32>> = numbers.iter().map(|n| n.map(|n| n as f32)).collect();
+        pdfcraft_render::DestView::from_operands(Some(&kind), &numbers)
+    })
 }
 
 #[cfg(test)]

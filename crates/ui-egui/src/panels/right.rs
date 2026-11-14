@@ -1,4 +1,5 @@
 use super::bookmarks::{BmAction, OutlineCtx, outline_item, outline_matches};
+use super::destinations::{DestAction, DestinationsPanel};
 use super::pages::{page_tools, pages, thumbnail_size};
 use super::{
     Align, Align2, Color32, DocInfo, FieldKind, Layout, Nav, PdfCraftApp, Rect, RightPanel, Sense, Stroke, Tokens, human_size, icons, theme, vec2,
@@ -25,6 +26,9 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut bm_rename = app.bookmark_rename.clone();
     let bm_editable = app.session.get(id).is_some_and(|d| d.allows_assembly() && d.read_only_reason.is_none());
     let bm_can_paste = app.bookmark_clipboard.is_some();
+    let mut dest_action: Option<DestAction> = None;
+    let dest_editable = app.session.get(id).is_some_and(|d| d.allows_modification() && d.read_only_reason.is_none());
+    let dest_rows = if panel == RightPanel::Destinations { app.destinations.rows(&app.session, id) } else { Default::default() };
     // Prepare a form is open: the Fields panel orders tabs.
     let preparing = app.is_preparing();
     // The Pages panel's Escape and Delete act on the pages: not while something is over them.
@@ -38,6 +42,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         let a11y = &mut app.a11y;
         let tags_state = &mut app.tags_state;
         let compare = &app.compare;
+        let destinations = &mut app.destinations;
         let comment_allowed = doc.allows_annotation();
         // A dialog or the palette owns the keyboard: the panel leaves Escape to it.
         let modal = app.dialog.is_some() || app.palette_open;
@@ -55,6 +60,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         ("Layers", Some(info.layer_order.iter().filter(|r| matches!(r.item, pdfcraft_render::LayerItem::Layer(_))).count()))
                     }
                     RightPanel::Attachments => ("Attachments", Some(info.attachments.len())),
+                    RightPanel::Destinations => ("Destinations", Some(dest_rows.len())),
                     RightPanel::Signatures => ("Signatures", Some(doc.signatures.iter().filter(|s| s.signed).count())),
                     RightPanel::Accessibility => ("Accessibility Checker", None),
                     RightPanel::Tags => ("Tags", None),
@@ -133,6 +139,9 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     }
                                 }
                             });
+                        }
+                        if panel == RightPanel::Destinations && dest_editable {
+                            super::destinations::options(ui, &mut dest_action);
                         }
                         if panel == RightPanel::Layers && !info.layers.is_empty() {
                             let more = icons::button(ui, "ellipsis", 26.0, false, tl!("Layer options"));
@@ -306,6 +315,19 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                     RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
                     RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
+                    RightPanel::Destinations => super::destinations::panel(
+                        ui,
+                        DestinationsPanel {
+                            theme: &t,
+                            id,
+                            info,
+                            rows: &dest_rows,
+                            state: destinations,
+                            editable: dest_editable,
+                            nav: &mut nav,
+                            action: &mut dest_action,
+                        },
+                    ),
                     RightPanel::Attachments => {
                         let attachable = doc.allows_modification() && doc.read_only_reason.is_none();
                         if attachable {
@@ -469,6 +491,9 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if let Some(a) = bm_action {
         app.bookmark_action(a);
     }
+    if let Some(a) = dest_action {
+        app.destination_action(a);
+    }
     if let Some((ai, open)) = attachment_action {
         app.attachment_action(id, ai, open);
     }
@@ -504,7 +529,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 }
 
-fn empty(ui: &mut egui::Ui, t: &Tokens, icon: &str, text: &str) {
+pub(super) fn empty(ui: &mut egui::Ui, t: &Tokens, icon: &str, text: &str) {
     ui.add_space(40.0);
     ui.vertical_centered(|ui| {
         ui.add(icons::image(icon, 36.0, t.text_faint));

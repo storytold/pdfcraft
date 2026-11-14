@@ -207,13 +207,28 @@ impl Automation {
                 let parent = a.opt_path("parent")?.unwrap_or_default();
                 let index = a.opt_int("position")?.map_or(usize::MAX, |p| (p.max(1) - 1) as usize);
                 let title = a.str("title")?.to_string();
-                let (left, top) = (a.bookmark_coordinate("left")?, a.bookmark_coordinate("top")?);
-                let [left, top] = match self.doc(&a)?.info.pages.get(page) {
-                    Some(p) => p.xyz_for_view(left, top),
-                    None => [None, None],
-                };
-                let (left, top) = (left.map(f64::from), top.map(f64::from));
+                let (left, top) = self.view_point(&a, page)?;
                 self.apply(&a, Edit::AddBookmark { parent, index, title, page, left, top })?
+            }
+            "destination_list" => self.destination_listing(&a)?,
+            tool @ ("destination_add" | "destination_set") => {
+                let page = self.page(&a)?;
+                let name = a.str("name")?.to_string();
+                let (left, top) = self.view_point(&a, page)?;
+                let edit = if tool == "destination_add" {
+                    Edit::AddDestination { name, page, left, top }
+                } else {
+                    Edit::SetDestination { name, page, left, top }
+                };
+                self.apply(&a, edit)?
+            }
+            "destination_rename" => {
+                let (name, new_name) = (a.str("name")?.to_string(), a.str("new_name")?.to_string());
+                self.apply(&a, Edit::RenameDestination { name, new_name })?
+            }
+            "destination_delete" => {
+                let name = a.str("name")?.to_string();
+                self.apply(&a, Edit::DeleteDestination { name })?
             }
             "bookmark_rename" => {
                 let (path, title) = (a.path("path")?, a.str("title")?.to_string());

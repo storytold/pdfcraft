@@ -137,6 +137,35 @@ pub enum Edit {
     BookmarksFromTextStyles {
         levels: Vec<crate::text_style_bookmarks::TextStyle>,
     },
+    /// Destinations panel ▸ New Destination: a named destination `name` (ISO 32000-2 §12.3.2.4)
+    /// that goes to the user-space point (`left`, `top`) of `page` at the reader's zoom, either
+    /// of which may be `None` to keep the reader's position that way. Refused when the name is
+    /// taken.
+    AddDestination {
+        name: String,
+        page: usize,
+        left: Option<f64>,
+        top: Option<f64>,
+    },
+    /// Destinations panel ▸ Set Destination: send the named destination `name` to a new place,
+    /// given as for [`Edit::AddDestination`].
+    SetDestination {
+        name: String,
+        page: usize,
+        left: Option<f64>,
+        top: Option<f64>,
+    },
+    /// Destinations panel ▸ Rename: where it goes is kept, and the document's own links, bookmarks
+    /// and GoTo actions that named it take the new name. Refused when the new name is taken.
+    RenameDestination {
+        name: String,
+        new_name: String,
+    },
+    /// Destinations panel ▸ Delete. The document's own links, bookmarks and GoTo actions that named
+    /// it go to where it went instead.
+    DeleteDestination {
+        name: String,
+    },
     /// Label pages `from..=to` (0-based) as Acrobat's "Number pages" does; later pages keep their labels.
     NumberPages {
         from: usize,

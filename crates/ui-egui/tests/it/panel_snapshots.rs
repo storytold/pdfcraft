@@ -15,8 +15,8 @@ use pdfcraft_ui_egui::{PdfCraftApp, RightPanel};
 
 use crate::support;
 
-/// Two pages with something for every panel: bookmarks, a layer, an attachment, a text field, an
-/// unsigned signature field, a comment and a structure tree.
+/// Two pages with something for every panel: bookmarks, a layer, an attachment, a named
+/// destination, a text field, an unsigned signature field, a comment and a structure tree.
 fn fixture() -> Vec<u8> {
     let page1 = "/P << /MCID 0 >> BDC BT /F1 18 Tf 72 720 Td (Panel sample) Tj ET EMC\n\
                  /OC /L1 BDC BT /F1 10 Tf 72 690 Td (Draft notes) Tj ET EMC\n";
@@ -24,7 +24,7 @@ fn fixture() -> Vec<u8> {
     let objs: Vec<String> = vec![
         // 1 catalog
         "<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R /OCProperties << /OCGs [9 0 R] /D << /ON [9 0 R] /Order [9 0 R] >> >> \
-         /Names << /EmbeddedFiles << /Names [(notes.txt) 11 0 R] >> >> /AcroForm << /Fields [12 0 R 13 0 R] >> \
+         /Names << /EmbeddedFiles << /Names [(notes.txt) 11 0 R] >> /Dests << /Names [(Summary) [4 0 R /Fit]] >> >> /AcroForm << /Fields [12 0 R 13 0 R] >> \
          /MarkInfo << /Marked true >> /StructTreeRoot 15 0 R >>"
             .into(),
         // 2 page tree, 3 and 4 its pages
@@ -164,13 +164,14 @@ fn check(h: &Harness<'static, PdfCraftApp>, name: &str) -> Result<(), String> {
 }
 
 /// Every panel, in the order of the rail.
-const ALL: [RightPanel; 11] = [
+const ALL: [RightPanel; 12] = [
     RightPanel::Comments,
     RightPanel::Bookmarks,
     RightPanel::Pages,
     RightPanel::Fields,
     RightPanel::Layers,
     RightPanel::Attachments,
+    RightPanel::Destinations,
     RightPanel::Signatures,
     RightPanel::Accessibility,
     RightPanel::Tags,
@@ -188,6 +189,7 @@ fn open(p: RightPanel) -> (Harness<'static, PdfCraftApp>, &'static str) {
         RightPanel::Fields => "fields",
         RightPanel::Layers => "layers",
         RightPanel::Attachments => "attachments",
+        RightPanel::Destinations => "destinations",
         RightPanel::Signatures => "signatures",
         RightPanel::Tags => "tags",
         RightPanel::Accessibility => {

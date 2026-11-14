@@ -1,6 +1,6 @@
 # UI and interaction parity
 
-> **Last reviewed:** 2026-10-29 · **Last updated:** 2026-10-29 · **Change:** minor (full screen plays page transitions and display times, hides a still pointer, and a right-click or Shift+Enter goes back a page #379) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-29 · **Last updated:** 2026-11-09 · **Change:** minor (the Destinations panel; earlier: full screen plays page transitions and display times, hides a still pointer, and a right-click or Shift+Enter goes back a page #379) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft's tools, panels, shortcuts and feel compare with Acrobat Pro's current interface (the
 2023+ "new Acrobat": All tools pane on the left, quick-action toolbar, Home view). Behaviour is
@@ -36,7 +36,8 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Read mode, full screen | yes | yes; full screen is one fitted page or spread at a time on black, and background clicks and keys turn pages while clicks on links, comments, fields and other page objects do not (#1459), a right-click or Shift+Enter goes back, page transitions and display times play (#379), a still pointer hides | shipped; loop after the last page and the full-screen preferences planned |
 | Light, dark, system theme | yes | yes | shipped |
 | Side panels: thumbnails, bookmarks, attachments, layers, comments, fields, signatures | yes | yes; panels keep their width (#704); the Pages inspector has a 50–150% thumbnail size slider and buttons (#3808) | shipped |
-| Destinations, articles, model tree, Tags, Order, Content panels | yes | no | planned |
+| Destinations panel | yes | yes: sorted by name or page; go to, New destination at the view on screen, Set destination, Rename, Delete; the document's own links and bookmarks follow a rename and keep their place on a delete | shipped |
+| Articles, model tree, Tags, Order, Content panels | yes | no | planned |
 | Message bars (restricted, signed, PDF/A, forms) | yes | restricted and signed; no PDF/A view mode | partial |
 
 ## Tools, handles and precision
@@ -86,6 +87,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | minor | Side panels: the Destinations panel (View ▸ Side panels ▸ Destinations) lists the named destinations by name or page and goes to, adds, sets, renames and deletes them |
 | 2026-10-29 | minor | Full screen plays page transitions (/Trans) and display times (/Dur), hides a still pointer, and a right-click or Shift+Enter goes back a page (#379) |
 | 2026-10-24 | minor | → / ← scroll a page wider than the window sideways before turning it, by the current page's or spread's edges in continuous view; ⌘→ / ⌘← turn at once |
 | 2026-10-24 | minor | Comment Properties sets a text box's text, border and fill opacity and a shape's line and fill opacity each on its own (Acrobat: one per comment); Make Properties Default carries them into the tool |
