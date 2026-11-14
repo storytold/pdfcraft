@@ -935,6 +935,66 @@ mod xfa_model {
 
     /// A calculate script finds its siblings by name and yields its last expression, and a
     /// value it sets comes back as an effect.
+    /// The SOM shortcuts are variables a script may use (`$`, `$form`, `$record`, …, XFA 3.3 p. 91), a name no scope reaches
+    /// is the node of that name when the form holds just one, and what the host only stands in for takes the calls forms make
+    /// on it: the datasets, the layout's page content, deltas, item states and a draw's `<value>`.
+    #[test]
+    fn scripts_use_the_som_shortcuts_and_what_the_host_stands_in_for() {
+        let cases = [
+            (
+                "$.name + ',' + $form.name + ',' + ($record === $data) + ',' + typeof $host.numPages + typeof $layout.pageCount + typeof $event.name",
+                "total,form,true,numberfunctionstring",
+            ),
+            // `note` sits in another subform, `row` has two instances
+            ("note.rawValue = 'x'; note.somExpression + ',' + typeof row", "form1[0].page1[0].details[0].note[0],undefined"),
+            ("this.getDeltas().length + xfa.layout.pageContent(0, 'field', false).length + ',' + xfa.layout.pageArea(0)", "0,null"),
+            (
+                "xfa.datasets.createNode('dataGroup', 'LOV').loadXML('<a/>', 0, 1); String(xfa.datasets.resolveNode('LOV')) + xfa.datasets.resolveNodes('x').length",
+                "null0",
+            ),
+            (
+                "xfa.template.ui.resolveNode('#text').value + this.caption.value.resolveNode('#text').value.toString() + qty.getItemState(0); qty.setItemState(0, true); 1",
+                "1",
+            ),
+        ];
+        for (src, want) in cases {
+            let o = go(src, "form1[0].page1[0].total[0]", "calculate");
+            assert_eq!(o.result.as_deref(), Some(want), "{src}: {o:?}");
+        }
+        let mut f = form();
+        if let Some(page) = f.children.first_mut() {
+            page.children.push(XfaNode {
+                name: "box".into(),
+                som: "form1[0].page1[0].box[0]".into(),
+                kind: Some(XfaKind::Draw),
+                ..Default::default()
+            });
+        }
+        // nodes named like a shortcut or like a repeatable sibling's instance manager don't take them
+        if let Some(page) = f.children.first_mut() {
+            page.children.push(XfaNode {
+                name: "$host".into(),
+                som: "form1[0].page1[0].$host[0]".into(),
+                kind: Some(XfaKind::Subform),
+                ..Default::default()
+            });
+            if let Some(details) = page.children.iter_mut().find(|c| c.name == "details") {
+                details.children.push(XfaNode {
+                    name: "_row".into(),
+                    som: "form1[0].page1[0].details[0]._row[0]".into(),
+                    kind: Some(XfaKind::Subform),
+                    ..Default::default()
+                });
+            }
+        }
+        let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].qty[0]".into(), ..Default::default() };
+        let o = run_xfa("box.value.rectangle.fill.color.value = '255,0,0'; 1", &ev, &XfaDoc::default(), &f, Limits::default());
+        assert_eq!(o.result.as_deref(), Some("1"), "{o:?}");
+        let ev = XfaEvent { activity: "calculate".into(), target: "form1[0].page1[0].table[0].row[0].what[0]".into(), ..Default::default() };
+        let o = run_xfa("typeof $host.messageBox + ',' + typeof _row.addInstance", &ev, &XfaDoc::default(), &f, Limits::default());
+        assert_eq!(o.result.as_deref(), Some("function,function"), "{o:?}");
+    }
+
     #[test]
     fn calculate_scripts_see_siblings_by_name_and_yield_their_last_expression() {
         let o = go("qty.rawValue * price.rawValue", "form1[0].page1[0].total[0]", "calculate");
