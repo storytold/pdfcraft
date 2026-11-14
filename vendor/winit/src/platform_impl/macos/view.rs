@@ -142,6 +142,10 @@ pub struct ViewState {
     /// True if the key being handled by `keyDown:` committed IME text.
     committed_in_key_down: Cell<bool>,
 
+    /// PdfCraft patch: true if an IME callback (`insertText`, `setMarkedText`,
+    /// `doCommandBySelector`) ran for the key being handled by `keyDown:`.
+    ime_callback_fired: Cell<bool>,
+
     marked_text: RefCell<Retained<NSMutableAttributedString>>,
     accepts_first_mouse: bool,
     /// PdfCraft patch: answers `mouseDownCanMoveWindow` (see there).
@@ -288,6 +292,7 @@ declare_class!(
         ) {
             // TODO: Use _replacement_range, requires changing the event to report surrounding text.
             trace_scope!("setMarkedText:selectedRange:replacementRange:");
+            self.ivars().ime_callback_fired.set(true);
             self.ivars().ime_startup.borrow_mut().other_callback();
 
             // SAFETY: This method is guaranteed to get either a `NSString` or a `NSAttributedString`.
@@ -414,6 +419,7 @@ declare_class!(
         fn insert_text(&self, string: &NSObject, _replacement_range: NSRange) {
             // TODO: Use _replacement_range, requires changing the event to report surrounding text.
             trace_scope!("insertText:replacementRange:");
+            self.ivars().ime_callback_fired.set(true);
 
             // SAFETY: This method is guaranteed to get either a `NSString` or a `NSAttributedString`.
             let string = if string.is_kind_of::<NSAttributedString>() {
@@ -436,6 +442,29 @@ declare_class!(
             let has_marked = unsafe { self.hasMarkedText() };
             let pending_commit = self.ivars().pending_commit.get();
             let ime_enabled = self.is_ime_enabled();
+
+            // PdfCraft patch: nine-grid IMEs (e.g. Q9) never mark text: during `keyDown:` they
+            // commit the chosen character while the event's own characters are the IME code
+            // (digits). Treat that as an IME commit and swallow the key; otherwise the code is
+            // typed as text and the committed character is dropped
+            // (rust-windowing/winit#3617, rust-windowing/winit#4650).
+            let key_characters = if self.ivars().in_key_down.get() {
+                let mtm = MainThreadMarker::from(self);
+                NSApplication::sharedApplication(mtm)
+                    .currentEvent()
+                    .and_then(|event| unsafe { event.characters() })
+                    .map(|characters| characters.to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let unmarked_commit = self.ivars().in_key_down.get()
+                && self.ivars().ime_allowed.get()
+                && !pending_commit
+                && !has_marked
+                && !is_control
+                && !string.is_empty()
+                && key_characters != string;
 
             // Clear preedit if there is marked text.
             if has_marked {
@@ -461,6 +490,19 @@ declare_class!(
                     *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
                     self.ivars().ime_state.set(ImeState::Ground);
                 }
+            } else if unmarked_commit {
+                // PdfCraft patch: commit the text and swallow the key that committed it, like the
+                // `pending_commit` path above. Nine-grid IMEs never call `setMarkedText`, so the
+                // IME state can still be `Disabled` here: announce the IME first, like the
+                // commit-outside-keyDown path below.
+                *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
+                if self.ivars().ime_state.get() == ImeState::Disabled {
+                    *self.ivars().input_source.borrow_mut() = self.current_input_source();
+                    self.queue_event(WindowEvent::Ime(Ime::Enabled));
+                }
+                self.ivars().ime_state.set(ImeState::Committed);
+                self.ivars().committed_in_key_down.set(true);
+                self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
             } else if !self.ivars().in_key_down.get()
                 && self.ivars().ime_allowed.get()
                 && !string.is_empty()
@@ -484,6 +526,7 @@ declare_class!(
         #[method(doCommandBySelector:)]
         fn do_command_by_selector(&self, _command: Sel) {
             trace_scope!("doCommandBySelector:");
+            self.ivars().ime_callback_fired.set(true);
             self.ivars().ime_startup.borrow_mut().other_callback();
             // We shouldn't forward any character from just committed text, since we'll end up sending
             // it twice with some IMEs like Korean one. We'll also always send `Enter` in that case,
@@ -542,16 +585,28 @@ declare_class!(
             let serial =
                 self.ivars().ime_startup.borrow_mut().begin(&source, &characters, eligible);
 
-            // The `interpretKeyEvents` function might call
-            // `setMarkedText`, `insertText`, and `doCommandBySelector`.
+            // The input context might call `setMarkedText`, `insertText`, and
+            // `doCommandBySelector`.
             // It's important that we call this before queuing the KeyboardInput, because
             // we must send the `KeyboardInput` event during IME if it triggered
             // `doCommandBySelector`. (doCommandBySelector means that the keyboard input
             // is not handled by IME and should be handled by the application)
+            let mut ime_consumed_key = false;
             if self.ivars().ime_allowed.get() {
                 let events_for_nsview = NSArray::from_slice(&[&*event]);
                 self.ivars().in_key_down.set(true);
-                unsafe { self.interpretKeyEvents(&events_for_nsview) };
+                self.ivars().ime_callback_fired.set(false);
+                // PdfCraft patch: ask the input context directly, because `interpretKeyEvents`
+                // doesn't report whether the input method swallowed the key. Nine-grid IMEs
+                // (e.g. Q9) consume their code keys silently, without any callback; without
+                // knowing that, the code keys are sent to the app as text while the IME composes
+                // (rust-windowing/winit#3617, rust-windowing/winit#4650).
+                match self.inputContext() {
+                    Some(input_context) => {
+                        ime_consumed_key = unsafe { input_context.handleEvent(&event) }
+                    }
+                    None => unsafe { self.interpretKeyEvents(&events_for_nsview) },
+                }
 
                 let same_context = self.ivars().ime_allowed.get()
                     && self.ivars().ime_state.get() == ImeState::Disabled
@@ -591,7 +646,17 @@ declare_class!(
             // ground state, so the space arrived twice (rust-windowing/winit#4478).
             let had_ime_input = self.ivars().committed_in_key_down.replace(false) || had_ime_input;
 
-            if !had_ime_input || self.ivars().forward_key_to_app.get() {
+            // PdfCraft patch: a key the input method swallowed without any callback carries the
+            // IME code (digits for Q9), not application text, so don't send the `KeyboardInput`
+            // at all (IME-processed keys are not emitted on macOS). Clearing only `text` isn't
+            // enough: egui-winit falls back to `logical_key.to_text()`, which still types the digit.
+            let silently_consumed_by_ime = ime_consumed_key
+                && !self.ivars().ime_callback_fired.get()
+                && !self.ivars().forward_key_to_app.get();
+
+            if !silently_consumed_by_ime
+                && (!had_ime_input || self.ivars().forward_key_to_app.get())
+            {
                 let key_event = create_key_event(&event, true, unsafe { event.isARepeat() });
                 self.queue_event(WindowEvent::KeyboardInput {
                     device_id: DEVICE_ID,
@@ -923,6 +988,7 @@ impl WinitView {
             forward_key_to_app: Default::default(),
             in_key_down: Default::default(),
             committed_in_key_down: Default::default(),
+            ime_callback_fired: Default::default(),
             marked_text: Default::default(),
             accepts_first_mouse,
             movable_by_window_background,
