@@ -192,6 +192,7 @@ impl PdfCraftApp {
             app_frame_shown: None,
             password_prompt: None,
             document_copy: None,
+            print_requests: Vec::new(),
             unlock_prompt: None,
             full_screen: false,
             inbox: Default::default(),
@@ -837,6 +838,7 @@ impl PdfCraftApp {
                 view.pending_pick = None;
             }
         }
+        self.open_queued_print();
         panes::frame(self);
         // Forms' scripts read Highlight fields as `app.runtimeHighlight`.
         let highlight = self.active.and_then(|i| self.views.get(i)).map_or(self.view_defaults.highlight_fields, |v| v.highlight_fields);

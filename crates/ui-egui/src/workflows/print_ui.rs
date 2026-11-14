@@ -181,6 +181,41 @@ impl Drop for WakeOnExit {
 }
 
 impl PdfCraftApp {
+    /// The next file asked for with `--print-file` gets its Print dialog, once nothing else is
+    /// being asked: one dialog at a time, in the order asked, each for its own document. A file
+    /// still opening holds back the ones after it (opens can finish in any order, and one that
+    /// needed a password is opened again after the others); one no longer opening (it couldn't
+    /// be opened, or its password was cancelled) is passed over.
+    pub(crate) fn open_queued_print(&mut self) {
+        if self.dialog.is_some() || self.password_prompt.is_some() || self.print_requests.is_empty() {
+            return;
+        }
+        // Still opening: on the worker, or waiting for room in its queue (a launch with more
+        // files than the queue holds).
+        #[cfg(not(target_arch = "wasm32"))]
+        let opening = |app: &Self, path: &str| {
+            app.pending_opens.iter().any(|p| p.path.as_deref().is_some_and(|q| crate::same_file(q, path)))
+                || app.deferred_opens.iter().any(|d| crate::same_file(&d.path, path))
+        };
+        #[cfg(target_arch = "wasm32")]
+        let opening = |_: &Self, _: &str| false;
+        while let Some((path, open)) = self.print_requests.first().cloned() {
+            match open {
+                None if opening(self, &path) => return,
+                None => {}
+                Some(id) => {
+                    if let Some(i) = self.views.iter().position(|v| v.id == id) {
+                        self.print_requests.remove(0);
+                        self.active = Some(i);
+                        self.open_print();
+                        return;
+                    }
+                }
+            }
+            self.print_requests.remove(0);
+        }
+    }
+
     /// Open the Print dialog, preselecting the default printer and reading papers in the background.
     pub fn open_print(&mut self) {
         let Some((i, _)) = self.active_ids() else { return };
@@ -1129,5 +1164,19 @@ mod tests {
         later.sheet = 2;
         let rasters = preview_rasters(&later, &sizes, &labels, 2.0, 8192.0);
         assert!(rasters.iter().any(|(page, _)| *page == 2));
+    }
+
+    /// A file the Print verb left that is still waiting for room in the open queue keeps its
+    /// request: it is still opening, so its dialog comes once it opens.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_print_request_waits_for_a_file_still_waiting_to_open() {
+        let mut app = PdfCraftApp::new();
+        let path = "waiting-to-open.pdf".to_string();
+        app.deferred_opens.push_back(crate::DeferredOpen { path: path.clone(), after_open: None, then: None, display_override: None });
+        app.print_requests.push((path.clone(), None));
+        app.open_queued_print();
+        assert_eq!(app.print_requests, vec![(path, None)], "kept until the file opens");
+        assert_eq!(app.dialog, None);
     }
 }
