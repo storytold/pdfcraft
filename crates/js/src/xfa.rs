@@ -18,6 +18,7 @@ use boa_engine::{Context, JsObject, JsResult, JsString, JsValue, NativeFunction,
 use crate::globals::data_object;
 use crate::{Limits, Message, arg, as_number, error, function, platform, printd, printf, printx, refuse, s, scand, text};
 
+mod choice;
 mod globals;
 mod host;
 mod instances;
