@@ -431,7 +431,6 @@ fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     let opts = craft_image_codecs::DecodeOptions {
         keep_orientation: true,
         limits: craft_image_codecs::Limits { max_alloc: MAX_DECODED_BYTES as u64, ..Default::default() },
-        ..Default::default()
     };
     let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, bytes, &opts).map_err(|e| match e {
         craft_image_codecs::CodecError::LimitExceeded(m) => bad(format!("image too large: {m}")),
@@ -695,7 +694,6 @@ fn tiff_pages_within(name: &str, bytes: &[u8], wanted: usize, budget: usize) -> 
     let opts = craft_image_codecs::DecodeOptions {
         keep_orientation: true,
         limits: craft_image_codecs::Limits { max_alloc: MAX_DECODED_BYTES as u64, ..Default::default() },
-        ..Default::default()
     };
     let mut out = Vec::new();
     let mut kept = 0usize;
