@@ -1,5 +1,9 @@
 use super::ast::Expr;
-use super::dates::{MAX_DAYS, civil_from_days, days_from_civil, format_date, parse_date};
+use super::dates::{
+    MAX_DAYS, PicCat, civil_from_days, days_from_civil, format_date, format_datetime, format_num_pic, format_text_pic, format_time, format_time_iso,
+    format_zero_pic, parse_date, parse_date_exact, parse_datetime, parse_iso_time, parse_num_pic, parse_picture_clauses, parse_text_pic,
+    parse_time_ms, parse_time_parts, render_literal_clause,
+};
 use super::parser::parse;
 use super::value::{Val, fixed, is_numeric_text, parse_num};
 use super::words::{decode_entities, word_num};
@@ -120,7 +124,7 @@ impl Interp<'_> {
             // ── strings
             "at" => {
                 let (s, sub) = (self.arg_str(args, 0)?, self.arg_str(args, 1)?);
-                Val::Num(if sub.is_empty() { 0.0 } else { s.find(&sub).map_or(0.0, |b| s[..b].chars().count() as f64 + 1.0) })
+                Val::Num(if sub.is_empty() { 0.0 } else { s.find(&sub).and_then(|b| s.get(..b)).map_or(0.0, |p| p.chars().count() as f64 + 1.0) })
             }
             "concat" => {
                 let mut out = String::new();
@@ -171,7 +175,9 @@ impl Interp<'_> {
                 let chars: Vec<char> = s.chars().collect();
                 let a = start.saturating_sub(1).min(chars.len());
                 let b = a.saturating_add(del).min(chars.len());
-                let out: String = chars[..a].iter().chain(ins.chars().collect::<Vec<_>>().iter()).chain(chars[b..].iter()).collect();
+                let prefix = chars.get(..a).unwrap_or(&[]);
+                let suffix = chars.get(b..).unwrap_or(&[]);
+                let out: String = prefix.iter().copied().chain(ins.chars()).chain(suffix.iter().copied()).collect();
                 if out.len() > MAX_STRING {
                     return Err(STRING_TOO_LONG.into());
                 }
@@ -210,8 +216,8 @@ impl Interp<'_> {
                         let mut out = Vec::new();
                         let b = s.as_bytes();
                         let mut i = 0;
-                        while i < b.len() {
-                            if b[i] == b'%'
+                        while let Some(&byte) = b.get(i) {
+                            if byte == b'%'
                                 && let Some(h) = b
                                     .get(i + 1..i + 3)
                                     .filter(|h| h.iter().all(u8::is_ascii_hexdigit))
@@ -221,7 +227,7 @@ impl Interp<'_> {
                                 out.push(h);
                                 i += 3;
                             } else {
-                                out.push(b[i]);
+                                out.push(byte);
                                 i += 1;
                             }
                         }
@@ -230,56 +236,14 @@ impl Interp<'_> {
                 })
             }
             "format" => {
-                // Number pictures: `9` digit, `z` optional digit, `,` separator, `.` point, `$`.
                 let pic = self.arg_str(args, 0)?;
                 let v = self.arg(args, 1)?;
-                if pic.to_ascii_uppercase().contains("YY") || pic.to_ascii_uppercase().contains("DD") {
-                    let text = self.to_str(&v);
-                    let days = parse_num(&text).filter(|d| is_numeric_text(&text) && d.abs() < MAX_DAYS).map(|d| d as i64);
-                    return Ok(match days {
-                        Some(d) => {
-                            let (y, m, dd) = civil_from_days(d);
-                            Val::Str(format_date(y, m, dd, &pic))
-                        }
-                        None => parse_date(&text, "YYYY-MM-DD").map_or(Val::Str(text), |(y, m, d)| Val::Str(format_date(y, m, d, &pic))),
-                    });
-                }
-                let num = self.to_num(&v);
-                let decimals = pic.split_once('.').map_or(0, |(_, f)| f.chars().filter(|c| matches!(c, '9' | 'z' | 'Z')).count()).min(20);
-                // `9` in the integer part forces a digit; `z` does not.
-                let min_int = pic.split('.').next().map_or(0, |i| i.chars().filter(|c| *c == '9').count()).min(20);
-                let width = min_int + if decimals > 0 { decimals + 1 } else { 0 };
-                let grouped = pic.contains(',');
-                let mut text = format!("{:0>width$}", fixed(num.abs(), decimals));
-                if grouped {
-                    let (int, frac) = text.split_once('.').map_or((text.as_str(), ""), |(a, b)| (a, b));
-                    let mut g = String::new();
-                    for (k, c) in int.chars().enumerate() {
-                        if k > 0 && (int.len() - k) % 3 == 0 {
-                            g.push(',');
-                        }
-                        g.push(c);
-                    }
-                    text = if frac.is_empty() { g } else { format!("{g}.{frac}") };
-                }
-                let nonzero = text.chars().any(|c| ('1'..='9').contains(&c));
-                if pic.contains('$') {
-                    text = format!("${text}");
-                }
-                if num < 0.0 && nonzero {
-                    text = format!("-{text}");
-                }
-                Val::Str(text)
+                return self.format_with_picture(&pic, &v);
             }
             "parse" => {
                 let pic = self.arg_str(args, 0)?;
                 let s = self.arg_str(args, 1)?;
-                if pic.to_ascii_uppercase().contains("YY") {
-                    // The canonical form of a date is ISO.
-                    return Ok(parse_date(&s, &pic).map_or(Val::Null, |(y, m, d)| Val::Str(format_date(y, m, d, "YYYY-MM-DD"))));
-                }
-                let cleaned: String = s.chars().filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-').collect();
-                parse_num(&cleaned).map_or(Val::Null, Val::Num)
+                return self.parse_with_picture(&pic, &s);
             }
             "ref" => {
                 let Some(e) = args.first() else { return Ok(Val::Null) };
@@ -295,6 +259,109 @@ impl Interp<'_> {
             "get" | "post" | "put" => return Err(format!("{name}: network access is not available to form scripts")),
             _ => return Err(format!("unknown function {name}")),
         })
+    }
+
+    fn format_with_picture(&mut self, pic: &str, v: &Val) -> R<Val> {
+        let text = self.to_str(v);
+        self.charge(((pic.len().saturating_add(text.len())) / 64) as u64)?;
+        let clauses = parse_picture_clauses(pic);
+        let is_null = self.is_null(v);
+        let is_num = !is_null && (matches!(v, Val::Num(_)) || is_numeric_text(&text));
+        let is_zero = is_num && self.to_num(v) == 0.0;
+        for c in &clauses {
+            self.step()?;
+            let matched = match c.cat {
+                PicCat::Null => is_null.then(|| render_literal_clause(&c.pattern)),
+                PicCat::Zero => is_zero.then(|| format_zero_pic(&c.pattern)),
+                PicCat::Num => is_num.then(|| format_num_pic(self.to_num(v), &c.pattern)),
+                other => (!is_null).then(|| self.try_format_clause(other, &c.pattern, v, &text)).flatten(),
+            };
+            if let Some(out) = matched {
+                return Ok(Val::Str(out));
+            }
+        }
+        Ok(Val::Str(text))
+    }
+
+    fn try_format_clause(&self, cat: PicCat, pattern: &str, v: &Val, text: &str) -> Option<String> {
+        match cat {
+            PicCat::Date => {
+                let days = parse_num(text).filter(|d| is_numeric_text(text) && d.abs() < MAX_DAYS).map(|d| d as i64);
+                match days {
+                    Some(d) => {
+                        let (y, m, dd) = civil_from_days(d);
+                        Some(format_date(y, m, dd, pattern))
+                    }
+                    None => parse_date(text, "YYYY-MM-DD").or_else(|| parse_date(text, "YYYYMMDD")).map(|(y, m, d)| format_date(y, m, d, pattern)),
+                }
+            }
+            PicCat::Time => {
+                let ms = if matches!(v, Val::Num(n) if n.is_finite() && *n >= 0.0) {
+                    Some(self.to_num(v))
+                } else if is_numeric_text(text) {
+                    parse_num(text).filter(|n| n.is_finite() && *n >= 0.0)
+                } else {
+                    parse_iso_time(text).map(f64::from)
+                };
+                ms.map(|m| format_time(m, pattern))
+            }
+            PicCat::DateTime => {
+                let days = parse_num(text).filter(|d| is_numeric_text(text) && d.abs() < MAX_DAYS).map(|d| d as i64);
+                format_datetime(text, days, pattern)
+            }
+            PicCat::Text => format_text_pic(text, pattern),
+            PicCat::Num | PicCat::Zero | PicCat::Null => {
+                (matches!(v, Val::Num(_)) || is_numeric_text(text)).then(|| format_num_pic(self.to_num(v), pattern))
+            }
+        }
+    }
+
+    fn parse_with_picture(&mut self, pic: &str, s: &str) -> R<Val> {
+        self.charge(((pic.len().saturating_add(s.len())) / 64) as u64)?;
+        let clauses = parse_picture_clauses(pic);
+        for c in &clauses {
+            self.step()?;
+            match c.cat {
+                PicCat::Null => {
+                    let lit = render_literal_clause(&c.pattern);
+                    if s == lit || (!lit.is_empty() && s.trim() == lit.trim()) {
+                        return Ok(Val::Null);
+                    }
+                }
+                PicCat::Zero => {
+                    let lit = format_zero_pic(&c.pattern);
+                    if s == lit || (!lit.is_empty() && s.trim() == lit.trim()) {
+                        return Ok(Val::Num(0.0));
+                    }
+                }
+                PicCat::Date => {
+                    if let Some((y, m, d)) = parse_date_exact(s, &c.pattern) {
+                        return Ok(Val::Str(format_date(y, m, d, "YYYY-MM-DD")));
+                    }
+                }
+                PicCat::Time => {
+                    if let Some((h, m, sec, ms)) = parse_time_parts(s, &c.pattern, true) {
+                        return Ok(Val::Str(format_time_iso(h, m, sec, ms)));
+                    }
+                }
+                PicCat::DateTime => {
+                    if let Some(iso) = parse_datetime(s, &c.pattern) {
+                        return Ok(Val::Str(iso));
+                    }
+                }
+                PicCat::Text => {
+                    if let Some(extracted) = parse_text_pic(s, &c.pattern) {
+                        return Ok(Val::Str(extracted));
+                    }
+                }
+                PicCat::Num => {
+                    if let Some(val) = parse_num_pic(s, &c.pattern) {
+                        return Ok(val);
+                    }
+                }
+            }
+        }
+        Ok(Val::Null)
     }
 
     fn date_builtin(&mut self, lower: &str, args: &[Expr]) -> R<Option<Val>> {
@@ -324,12 +391,14 @@ impl Interp<'_> {
             "date2num" | "isodate2num" => {
                 let s = self.arg_str(args, 0)?;
                 let pic = if lower == "isodate2num" || args.len() < 2 { "YYYY-MM-DD".to_string() } else { self.arg_str(args, 1)? };
+                self.charge(((s.len().saturating_add(pic.len())) / 64) as u64)?;
                 let parsed = parse_date(&s, &pic).or_else(|| parse_date(&s, "YYYYMMDD")).or_else(|| parse_date(&s, "YYYY-MM-DD"));
                 parsed.map_or(Val::Num(0.0), |(y, m, d)| Val::Num(days_from_civil(y, m, d) as f64))
             }
             "num2date" => {
                 let days = self.arg_num(args, 0)?;
                 let pic = if args.len() > 1 { self.arg_str(args, 1)? } else { "MMM D, YYYY".into() };
+                self.charge((pic.len() / 64) as u64)?;
                 if !days.is_finite() || days.abs() >= MAX_DAYS {
                     return Ok(Some(Val::Null));
                 }
@@ -349,27 +418,38 @@ impl Interp<'_> {
                     .into(),
                 )
             }
-            "timefmt" | "localtimefmt" => Val::Str("HH:MM:SS".into()),
+            "timefmt" | "localtimefmt" => {
+                let style = if args.is_empty() { 0.0 } else { self.arg_num(args, 0)? };
+                Val::Str(
+                    match style as i32 {
+                        1 => "h:MM A",
+                        2 => "h:MM:SS A",
+                        3 | 4 => "h:MM:SS A Z",
+                        _ => "HH:MM:SS",
+                    }
+                    .into(),
+                )
+            }
             "num2time" | "num2gmtime" => {
                 let ms = self.arg_num(args, 0)?;
+                let pic = if args.len() > 1 { self.arg_str(args, 1)? } else { "HH:MM:SS".into() };
+                self.charge((pic.len() / 64) as u64)?;
                 if !ms.is_finite() || ms < 0.0 {
                     return Ok(Some(Val::Null));
                 }
-                let s = (ms / 1000.0) as u64;
-                Val::Str(format!("{:02}:{:02}:{:02}", (s / 3600) % 24, (s / 60) % 60, s % 60))
+                Val::Str(format_time(ms, &pic))
             }
             "time2num" | "isotime2num" => {
                 let s = self.arg_str(args, 0)?;
-                // ISO 8601 allows a leading "T", a trailing "Z" and fractional seconds.
-                let t = s.trim();
-                let t = t.strip_prefix(['T', 't']).unwrap_or(t);
-                let t = t.strip_suffix(['Z', 'z']).unwrap_or(t);
-                let mut parts = t.split(':');
-                let mut whole = || parts.next().and_then(|p| p.trim().parse::<u64>().ok()).unwrap_or(0).min(1_000_000);
-                let (h, m) = (whole(), whole());
-                let sec =
-                    parts.next().and_then(|p| p.trim().parse::<f64>().ok()).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0).min(1_000_000.0);
-                Val::Num(((h * 3600 + m * 60) * 1000) as f64 + (sec * 1000.0).round())
+                let parsed = if lower == "isotime2num" || args.len() < 2 {
+                    self.charge((s.len() / 64) as u64)?;
+                    parse_iso_time(&s).or_else(|| parse_time_ms(&s, "HH:MM:SS"))
+                } else {
+                    let pic = self.arg_str(args, 1)?;
+                    self.charge(((s.len().saturating_add(pic.len())) / 64) as u64)?;
+                    parse_time_ms(&s, &pic).or_else(|| parse_iso_time(&s))
+                };
+                Val::Num(parsed.map_or(0.0, |ms| f64::from(ms) + 1.0))
             }
             _ => return Ok(None),
         };
@@ -501,5 +581,232 @@ impl Interp<'_> {
             _ => return Ok(None),
         };
         Ok(Some(value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Limits;
+    use crate::formcalc::run_formcalc;
+    use crate::xfa::{XfaDoc, XfaEvent, XfaNode};
+
+    fn eval_fc(script: &str) -> String {
+        let root = XfaNode::default();
+        let out = run_formcalc(script, &XfaEvent::default(), &XfaDoc::default(), &root, Limits::default());
+        assert!(out.error.is_none(), "unexpected error in `{script}`: {:?}", out.error);
+        out.result.unwrap_or_default()
+    }
+
+    fn assert_cases(cases: &[(&str, &str)]) {
+        for &(script, expected) in cases {
+            assert_eq!(eval_fc(script), expected, "{script}");
+        }
+    }
+
+    #[test]
+    fn time_picture_clauses_format_and_parse_all_clock_symbols() {
+        assert_cases(&[
+            // 24-hour H / HH (0..=23) and K / KK (1..=24, where 24 = midnight 00:00)
+            (r#"Format("time{HH:MM:SS}", 0)"#, "00:00:00"),
+            (r#"Format("time{H:M:S}", 3661000)"#, "1:1:1"),
+            (r#"Format("time{KK:MM:SS}", 0)"#, "24:00:00"),
+            (r#"Format("time{KK:MM}", "00:05:00")"#, "24:05"),
+            (r#"Format("time{K:MM}", 3600000)"#, "1:00"),
+            (r#"Format("time{K:MM}", "01:05:00")"#, "1:05"),
+            (r#"Parse("time{KK:MM:SS}", "24:15:30")"#, "00:15:30"),
+            (r#"Parse("time{KK:MM}", "24:05")"#, "00:05:00"),
+            (r#"Parse("time{KK:MM:SS}", "00:15:30") == null"#, "1"),
+            (r#"Parse("time{KK:MM:SS}", "25:00:00") == null"#, "1"),
+            (r#"Parse("time{HH:MM:SS}", "24:00:00") == null"#, "1"),
+            // 12-hour h / hh (1..=12) vs k / kk (0..=11) with meridiem A and AA
+            (r#"Format("time{h:MM A}", 0)"#, "12:00 AM"),
+            (r#"Format("time{h:MM A}", "00:05:00")"#, "12:05 AM"),
+            (r#"Format("time{h:MM A}", "13:05:00")"#, "1:05 PM"),
+            (r#"Format("time{hh:MM AA}", 0)"#, "12:00 AM"),
+            (r#"Format("time{k:MM AA}", 0)"#, "0:00 AM"),
+            (r#"Format("time{kk:MM A}", "00:05:00")"#, "00:05 AM"),
+            (r#"Format("time{kk:MM A}", "12:05:00")"#, "00:05 PM"),
+            (r#"Format("time{kk:MM AA}", 43200000)"#, "00:00 PM"),
+            (r#"Format("time{h:MM:SS AA}", 43200000)"#, "12:00:00 PM"),
+            (r#"Format("time{h:MM:SS A}", 52205000)"#, "2:30:05 PM"),
+            (r#"Format("time{hh:MM:SS AA}", 52205000)"#, "02:30:05 PM"),
+            (r#"Parse("time{h:MM AA}", "12:30 AM")"#, "00:30:00"),
+            (r#"Parse("time{h:MM AA}", "12:30 PM")"#, "12:30:00"),
+            (r#"Parse("time{h:MM AA}", "0:30 AM") == null"#, "1"),
+            (r#"Parse("time{h:MM AA}", "13:30 PM") == null"#, "1"),
+            (r#"Parse("time{h:MM A}", "2:30 P")"#, "14:30:00"),
+            (r#"Parse("time{h:MM A}", "2:30 pm")"#, "14:30:00"),
+            (r#"Parse("time{kk:MM A}", "00:05 PM")"#, "12:05:00"),
+            (r#"Parse("time{k:MM AA}", "0:45 AM")"#, "00:45:00"),
+            (r#"Parse("time{k:MM AA}", "0:45 PM")"#, "12:45:00"),
+            (r#"Parse("time{k:MM AA}", "11:59 PM")"#, "23:59:00"),
+            (r#"Parse("time{k:MM AA}", "12:00 PM") == null"#, "1"),
+            // Sub-second F / FF / FFF tokens and quoted literals
+            (r#"Format("time{HH:MM:SS.F}", 52205250)"#, "14:30:05.2"),
+            (r#"Format("time{HH:MM:SS.FF}", 52205250)"#, "14:30:05.25"),
+            (r#"Format("time{HH:MM:SS.FFF}", 52205250)"#, "14:30:05.250"),
+            (r#"Parse("time{HH:MM:SS.F}", "14:30:05.2")"#, "14:30:05.200"),
+            (r#"Parse("time{HH:MM:SS.FF}", "14:30:05.25")"#, "14:30:05.250"),
+            (r#"Parse("time{HH:MM:SS.FFF}", "14:30:05.250")"#, "14:30:05.250"),
+            (r#"Parse("time{HH:MM:SS.FFF}", "14:30:05.000")"#, "14:30:05"),
+            (r#"Format("time{h:MM:SS.FFF AA}", "14:30:05.250")"#, "2:30:05.250 PM"),
+            (r#"Format("time{'At 'HH'h'MM'm'}", "09:05:00")"#, "At 09h05m"),
+            (r#"Parse("time{'At 'HH'h'MM'm'}", "At 09h05m")"#, "09:05:00"),
+        ]);
+    }
+
+    #[test]
+    fn time_builtins_and_timezones_convert_to_and_from_gmt() {
+        assert_cases(&[
+            ("TimeFmt()", "HH:MM:SS"),
+            ("TimeFmt(1)", "h:MM A"),
+            ("TimeFmt(2)", "h:MM:SS A"),
+            ("TimeFmt(3)", "h:MM:SS A Z"),
+            ("LocalTimeFmt()", "HH:MM:SS"),
+            ("LocalTimeFmt(4)", "h:MM:SS A Z"),
+            (r#"Num2Time(3661000)"#, "01:01:01"),
+            (r#"Num2Time(52205000, "time{h:MM:SS AA}")"#, "2:30:05 PM"),
+            (r#"Num2GMTime(65593001, "HH:MM:SS Z")"#, "18:13:13 GMT"),
+            (r#"Num2GMTime(52205000, "HH:MM:SS z")"#, "14:30:05 Z"),
+            (r#"Num2Time(-1) == null"#, "1"),
+            (r#"Num2GMTime(-100) == null"#, "1"),
+            (r#"Time2Num("00:00:00 GMT", "HH:MM:SS Z")"#, "1"),
+            (r#"IsoTime2Num("00:00:00Z")"#, "1"),
+            (r#"Time2Num("01:00:00")"#, "3600001"),
+            (r#"Time2Num("2:30:05 PM", "h:MM:SS A")"#, "52205001"),
+            (r#"Time2Num("14:30:00-05:00", "HH:MM:SS z")"#, "70200001"),
+            (r#"Time2Num("14:30:00+0200", "HH:MM:SS z")"#, "45000001"),
+            (r#"Time2Num("14:30:00-0500", "HH:MM:SS z")"#, "70200001"),
+            (r#"Time2Num("14:30:00 GMT-05:00", "HH:MM:SS Z")"#, "70200001"),
+            (r#"Time2Num("14:30:00 GMT+02:00", "HH:MM:SS Z")"#, "45000001"),
+            (r#"Parse("time{HH:MM:SS z}", "14:30:00-05:00")"#, "19:30:00"),
+            (r#"Parse("time{HH:MM:SS Z}", "14:30:00 GMT+02:00")"#, "12:30:00"),
+            (r#"Format("time{HH:MM:SS Z}", 52205000)"#, "14:30:05 GMT"),
+            (r#"Format("time{HH:MM:SS z}", "18:13:13")"#, "18:13:13 Z"),
+            (r#"Parse("time{HH:MM:SS Z}", "14:30:05 GMT")"#, "14:30:05"),
+            (r#"Parse("time{HH:MM:SS z}", "14:30:00Z")"#, "14:30:00"),
+            (r#"Time2Num("not-a-time", "HH:MM:SS")"#, "0"),
+            (r#"Time2Num("not-a-time")"#, "0"),
+        ]);
+    }
+
+    #[test]
+    fn text_picture_clauses_format_and_parse_placeholders_and_literals() {
+        assert_cases(&[
+            (r#"Format("text{(999) 999-9999}", "8005550199")"#, "(800) 555-0199"),
+            (r#"Parse("text{(999) 999-9999}", "(800) 555-0199")"#, "8005550199"),
+            (r#"Parse("text{(999) 999-9999}", "(800) ABC-0199") == null"#, "1"),
+            (r#"Format("(999) 999-9999", "8005550199")"#, "(800) 555-0199"),
+            (r#"Parse("(999) 999-9999", "(800) 555-0199")"#, "8005550199"),
+            (r#"Format("AAA-999", "ABC123")"#, "ABC-123"),
+            (r#"Parse("AAA-999", "ABC-123")"#, "ABC123"),
+            (r#"Format("text{AAA-999-OO-00-X+}", "Abc123A1B2?-")"#, "Abc-123-A1-B2-?-"),
+            (r#"Parse("text{AAA-999-OO-00-X+}", "Abc-123-A1-B2-?-")"#, "Abc123A1B2?-"),
+            (r#"Format("text{+99}", " 42")"#, " 42"),
+            (r#"Format("text{+99}", "+42")"#, "+42"),
+            (r#"Format("text{+99}", "A42")"#, "A42"),
+            (r#"Format("text{'It''s #'\9: AAA}", "XYZ")"#, "It's #9: XYZ"),
+            (r#"Parse("text{'It''s #'\9: AAA}", "It's #9: XYZ")"#, "XYZ"),
+            (r#"Format("text{AA-XX-OO}", "éß★☺Ω7")"#, "éß-★☺-Ω7"),
+            (r#"Parse("text{AA-XX-OO}", "éß-★☺-Ω7")"#, "éß★☺Ω7"),
+            (r#"Format("text{AAA-999}", "too-short")"#, "too-short"),
+            (r#"Format("text{AAA}", "123")"#, "123"),
+        ]);
+    }
+
+    #[test]
+    fn number_picture_clauses_support_wrappers_signs_parens_cr_db_and_percent() {
+        assert_cases(&[
+            (r#"Format("num(en_US){$z,zz9.99}", 1234.5)"#, "$1,234.50"),
+            (r#"Format("num{($z,zz9.99)}", -1234.5)"#, "($1,234.50)"),
+            (r#"Format("num{($z,zz9.99)}", 1234.5)"#, "$1,234.50"),
+            (r#"Format("$(z,zz9.99)", -1234.5)"#, "$(1,234.50)"),
+            (r#"Format("(z,zz9.99)", -1234.5)"#, "(1,234.50)"),
+            (r#"Format("z,zz9.99-", -1234.5)"#, "1,234.50-"),
+            (r#"Format("z,zz9.99-", 1234.5)"#, "1,234.50"),
+            (r#"Format("z,zz9.99 CR", -1234.5)"#, "1,234.50 CR"),
+            (r#"Format("z,zz9.99 CR", 1234.5)"#, "1,234.50"),
+            (r#"Format("z,zz9.99 DB", -1234.5)"#, "1,234.50 DB"),
+            (r#"Format("+z,zz9.99", 1234.5)"#, "+1,234.50"),
+            (r#"Format("+z,zz9.99", -1234.5)"#, "-1,234.50"),
+            (r#"Format("z,zz9.99+", 1234.5)"#, "1,234.50+"),
+            (r#"Format("z,zz9.99+", -1234.5)"#, "1,234.50-"),
+            (r#"Format("sz,zz9.99", -1234.5)"#, "-1,234.50"),
+            (r#"Format("Sz,zz9.99", 1234.5)"#, "1,234.50"),
+            (r#"Format("num{zz9.99%}", 0.1234)"#, "12.34%"),
+            (r#"Format("num{zz9.99'%' }", 0.1234)"#, "0.12% "),
+            (r#"Format("num{'Total: '$z,zz9.99' USD'}", 42.5)"#, "Total: $42.50 USD"),
+            (r#"Parse("num{($z,zz9.99)}", "($1,234.50)")"#, "-1234.5"),
+            (r#"Parse("(z,zz9.99)", "(1,234.50)")"#, "-1234.5"),
+            (r#"Parse("z,zz9.99-", "1,234.50-")"#, "-1234.5"),
+            (r#"Parse("z,zz9.99 CR", "1,234.50 CR")"#, "-1234.5"),
+            (r#"Parse("z,zz9.99 DB", "1,234.50 DB")"#, "-1234.5"),
+            (r#"Parse("+z,zz9.99", "+1,234.50")"#, "1234.5"),
+            (r#"Parse("num{zz9.99%}", "12.34%")"#, "0.1234"),
+            (r#"Parse("num{zzz,zz9.99}", "not-a-number") == null"#, "1"),
+            (r#"Parse("num{zzz,zz9.99}", "") == null"#, "1"),
+            (r#"Parse("num{z,zz9.99}", "--123") == null"#, "1"),
+            (r#"Parse("num{z,zz9.99}", "((123))") == null"#, "1"),
+        ]);
+    }
+
+    #[test]
+    fn compound_alternatives_zero_null_and_datetime_clauses_work() {
+        assert_cases(&[
+            (r#"Format("num{$z,zz9.99}|zero{'Free'}|null{'N/A'}", 25.5)"#, "$25.50"),
+            // Left-to-right clause evaluation (XFA 3.3 Examples 26.36 & 26.37):
+            (r#"Format("num{$z,zz9.99}|zero{'Free'}|null{'N/A'}", 0)"#, "$0.00"),
+            (r#"Format("num{z,zz9.9} | zero{9}", 0)"#, "0.0"),
+            (r#"Format("zero{'Free'}|num{$z,zz9.99}|null{'N/A'}", 0)"#, "Free"),
+            (r#"Format("num{$z,zz9.99}|zero{'Free'}|null{'N/A'}", null)"#, "N/A"),
+            // Empty string is not null, and a trailing num clause does not coerce "" to 0:
+            (r#"Format("null{'n/a'} | zero{9} | num{z,zz9.9}", "")"#, ""),
+            (r#"Format("null{'n/a'} | zero{9} | num{z,zz9.9}", null)"#, "n/a"),
+            (r#"Format("num{$z,zz9.99}|text{AAA-999}", "ABC123")"#, "ABC-123"),
+            (r#"Format("num{$z,zz9.99}|date{MM/DD/YYYY}", "2024-02-29")"#, "02/29/2024"),
+            (r#"Parse("num{$z,zz9.99}|zero{'Free'}|null{'N/A'}", "$25.50")"#, "25.5"),
+            (r#"Parse("num{$z,zz9.99}|zero{'Free'}|null{'N/A'}", "Free")"#, "0"),
+            (r#"Parse("num{$z,zz9.99}|zero{'Free'}|null{'N/A'}", "N/A") == null"#, "1"),
+            (r#"Format("zero{9.99}|num{$z,zz9.99}|null{}", 0)"#, "0.00"),
+            (r#"Format("num{$z,zz9.99}|zero{9.99}|null{}", null)"#, ""),
+            (r#"Parse("num{$z,zz9.99}|zero{9.99}|null{}", "0.00")"#, "0"),
+            (r#"Parse("num{$z,zz9.99}|zero{9.99}|null{}", "") == null"#, "1"),
+            (r#"Format("text{AAA'|'999}", "ABC123")"#, "ABC|123"),
+            (r#"Parse("text{AAA'|'999}", "ABC|123")"#, "ABC123"),
+            (r#"Format("datetime{YYYY-MM-DD'T'HH:MM:SS}", "2024-02-29T14:30:05")"#, "2024-02-29T14:30:05"),
+            (r#"Format("datetime{MMM D, YYYY h:MM AA}", "2024-02-29T14:30:00")"#, "Feb 29, 2024 2:30 PM"),
+            (r#"Parse("datetime{MMM D, YYYY h:MM AA}", "Feb 29, 2024 2:30 PM")"#, "2024-02-29T14:30:00"),
+            (r#"Format("datetime{HH:MM MM/DD/YYYY}", "2024-02-29T14:30:00")"#, "14:30 02/29/2024"),
+            (r#"Parse("datetime{HH:MM MM/DD/YYYY}", "14:30 02/29/2024")"#, "2024-02-29T14:30:00"),
+            (r#"Parse("datetime{YYYY-MM-DD'T'HH:MM:SS z}", "2024-02-29T14:30:00Z")"#, "2024-02-29T14:30:00"),
+            (r#"Parse("datetime{YYYY-MM-DD'T'HH:MM:SS z}", "2024-02-29T21:30:00-05:00")"#, "2024-03-01T02:30:00"),
+            (r#"Parse("date{YYYY-MM-DD}|date{MM/DD/YYYY}|time{h:MM AA}", "02/29/2024")"#, "2024-02-29"),
+            (r#"Parse("date{YYYY-MM-DD}|date{MM/DD/YYYY}|time{h:MM AA}", "2:30 PM")"#, "14:30:00"),
+            (r#"Parse(DateFmt(4), Num2Date(45350, DateFmt(4)))"#, "2024-02-29"),
+            (r#"Format("date{YYYY-JJJ}", "2024-02-29")"#, "2024-060"),
+            (r#"Parse("date{YYYY-JJJ}", "2024-060")"#, "2024-02-29"),
+        ]);
+    }
+
+    #[test]
+    fn hostile_and_boundary_picture_inputs_never_panic_or_exceed_limits() {
+        assert_cases(&[
+            (r#"Format("text{'unclosed", "abc")"#, "abc"),
+            (r#"Parse("text{'unclosed}", "unclosed}")"#, ""),
+            (r#"Format("num{999\}", 5)"#, "005"),
+            (r#"Parse("||||", "abc") == null"#, "1"),
+            (r#"Format("{{{999}}}", 7)"#, "{{{007}}}"),
+            (r#"Num2Date(1000000000) == null"#, "1"),
+            (r#"Num2Time(86400000, "HH:MM:SS")"#, "00:00:00"),
+            (r#"Len(Num2Time(1e30, "HH:MM:SS"))"#, "8"),
+        ]);
+        assert!(eval_fc(r#"Format("num{$z,zz9.99}", 1e20)"#).starts_with('$'));
+        // Linear-time classification on repeated 'S' before trailing '9' (no O(N^2) blowup).
+        assert_eq!(eval_fc(r#"Format(Concat(Replace(Space(50000), " ", "S"), "9"), 1)"#), "1");
+
+        let root = XfaNode::default();
+        let out =
+            run_formcalc(r#"Format(Replace(Space(300000), " ", "MMMM"), 1)"#, &XfaEvent::default(), &XfaDoc::default(), &root, Limits::default());
+        assert!(out.error.as_deref().unwrap_or_default().contains("too long"));
     }
 }

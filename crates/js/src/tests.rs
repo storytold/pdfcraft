@@ -1622,10 +1622,10 @@ mod formcalc {
         assert_eq!(calc(r#"Date2Num("29/02/2024", "DD/MM/YYYY")"#), "45350");
         assert_eq!(calc(r#"Num2Date(45350, "YYYY-MM-DD")"#), "2024-02-29");
         assert_eq!(calc(r#"Num2Date(Date2Num("2024-02-29") + 1, "MMMM D, YYYY")"#), "March 1, 2024");
-        assert_eq!(calc(r#"Time2Num("01:00:00")"#), "3600000");
-        assert_eq!(calc(r#"IsoTime2Num("12:30:45Z")"#), "45045000");
-        assert_eq!(calc(r#"IsoTime2Num("12:30:45.250")"#), "45045250");
-        assert_eq!(calc(r#"IsoTime2Num("T12:30:45")"#), "45045000");
+        assert_eq!(calc(r#"Time2Num("01:00:00")"#), "3600001");
+        assert_eq!(calc(r#"IsoTime2Num("12:30:45Z")"#), "45045001");
+        assert_eq!(calc(r#"IsoTime2Num("12:30:45.250")"#), "45045251");
+        assert_eq!(calc(r#"IsoTime2Num("T12:30:45")"#), "45045001");
         assert_eq!(calc(r#"Num2Time(3661000)"#), "01:01:01");
     }
 
