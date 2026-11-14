@@ -116,6 +116,7 @@ impl Automation {
         let bytes = read_input(&path)?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let id = self.session.open(name, Some(path.to_string_lossy().into_owned()), Arc::new(bytes), a.opt_str("password")?).map_err(failed)?;
+        let errors = self.session.take_js_errors(id);
         let doc = self.session.get(id).ok_or_else(|| failed("the document vanished"))?;
         let mut value = summary(doc);
         if let Some(destination) = destination {
@@ -123,6 +124,10 @@ impl Automation {
             value["destination_applied"] = json!(applied);
             value["destination"] = destination;
             value["warning"] = json!(warning);
+        }
+        // warnings lists the errors of the form's scripts that ran on open, including the messages that the scripts were stopped or turned off.
+        if !errors.is_empty() {
+            value["warnings"] = json!(errors);
         }
         Ok(value)
     }
@@ -550,11 +555,16 @@ impl Automation {
 
     /// The document's summary after an edit, with what it stored as typed but drew with `?`.
     fn applied(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let errors = self.session.take_js_errors(id);
         let doc = self.doc(a)?;
         let mut out = summary(doc);
         // Text the edit stored as typed but drew with `?` (its font can't draw it): said, not silent.
-        if !doc.edit_notices.is_empty() {
-            out["warnings"] = json!(doc.edit_notices.iter().map(ToString::to_string).collect::<Vec<_>>());
+        let mut warnings: Vec<String> = doc.edit_notices.iter().map(ToString::to_string).collect();
+        // The errors of the scripts the edit ran follow the notices, including the messages that a form's scripts were stopped or turned off.
+        warnings.extend(errors);
+        if !warnings.is_empty() {
+            out["warnings"] = json!(warnings);
         }
         Ok(out)
     }
