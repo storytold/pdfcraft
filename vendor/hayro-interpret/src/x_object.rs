@@ -1156,7 +1156,8 @@ fn decode_raster(
             }))
         }
     } else {
-        let components = get_components(
+        // PdfCraft patch (107): read as they are converted, never held whole (#7282).
+        let components = Samples::new(
             &ctx.decoded.data,
             ctx.width,
             height,
@@ -1166,7 +1167,7 @@ fn decode_raster(
 
         // PdfCraft patch (28): an image with few possible pixel values converts each of them once.
         let mut rgb_data = if let Some(rgb) = rgb_via_lookup(
-            &components,
+            components.clone(),
             ctx.width,
             height,
             ctx.scale_factors,
@@ -1178,23 +1179,16 @@ fn decode_raster(
             height = rgb.height;
             Some(rgb)
         } else {
-            let mut f32_data = apply_decode_array(
-                &components,
+            Some(rgb_in_bands(
+                components,
+                ctx.width,
+                &mut height,
+                ctx.scale_factors,
                 &ctx.color_space,
                 ctx.bits_per_component,
                 &ctx.decode_arr,
-            )?;
-
-            fix_image_length(&mut f32_data, ctx.width, &mut height, 0.0, &ctx.color_space)?;
-
-            get_rgb_data(
-                &f32_data,
-                ctx.width,
-                height,
-                ctx.scale_factors,
-                &ctx.color_space,
                 obj.interpolate,
-            )
+            )?)
         };
 
         if let Some(transfer_function) = &obj.transfer_function
@@ -1307,28 +1301,25 @@ fn decode_mask_bytes(
 
         decoded_data.into_owned()
     } else {
-        let components = get_components(
+        // PdfCraft patch (107): decoded as they are read, never held whole (#7282).
+        let components = Samples::new(
             &decoded_data,
             width,
             *height,
             color_space,
             bits_per_component,
         )?;
+        let n = usize::from(color_space.num_components());
+        let len = decoded_count(components.count_left(), n, decode_arr.len())?;
+        let f32_data = decoded_samples(components, n, bits_per_component, decode_arr)?;
 
-        let f32_data =
-            apply_decode_array(&components, color_space, bits_per_component, decode_arr)?;
-
+        let mut data = Vec::with_capacity(len);
         if invert {
-            f32_data
-                .iter()
-                .map(|alpha| ((1.0 - *alpha) * 255.0 + 0.5) as u8)
-                .collect()
+            data.extend(f32_data.map(|alpha| ((1.0 - alpha) * 255.0 + 0.5) as u8));
         } else {
-            f32_data
-                .iter()
-                .map(|alpha| (*alpha * 255.0 + 0.5) as u8)
-                .collect()
+            data.extend(f32_data.map(|alpha| (alpha * 255.0 + 0.5) as u8));
         }
+        data
     };
 
     fix_image_length(&mut data, width, height, 0, color_space)?;
@@ -1375,21 +1366,31 @@ fn resolve_alpha(
         // PdfCraft patch (82): averaged down when far larger than where it is drawn, and cached.
         obj.decoded_soft_mask(target_dimension, (width, *height)).map(|decoded| decoded.luma)
     } else if let Some(color_key_mask) = dict.get::<SmallVec<[u16; 4]>>(MASK) {
-        let mut mask_data = vec![];
-
         // TODO: Make this less ugly.
         let raw_data = match image_data {
             Some(ImageData::Luma(d)) => &d.data,
             _ => decoded.data.as_ref(),
         };
 
-        let components = get_components(raw_data, width, *height, color_space, bits_per_component)?;
+        // PdfCraft patch (107): keyed as they are read, never held whole (#7282).
+        let mut components = Samples::new(raw_data, width, *height, color_space, bits_per_component)?;
+        let n = usize::from(color_space.num_components());
+        if n == 0 {
+            return None;
+        }
+        let mut mask_data = Vec::with_capacity(components.count_left() / n);
 
-        for pixel in components.chunks_exact(color_space.num_components() as usize) {
+        // Whole pixels only: a last partial one is dropped.
+        'pixels: loop {
             let mut mask_val = 0;
 
-            for (component, min_max) in pixel.iter().zip(color_key_mask.chunks_exact(2)) {
-                if *component > min_max[1] || *component < min_max[0] {
+            for k in 0..n {
+                let Some(component) = components.next() else {
+                    break 'pixels;
+                };
+                if let Some([min, max]) = color_key_mask.get(2 * k..2 * k + 2)
+                    && (component > *max || component < *min)
+                {
                     mask_val = 255;
                 }
             }
@@ -1464,31 +1465,6 @@ fn unpremultiply(image: &mut ImageData, alpha: &[u8], matte_rgb: &[u8]) {
     }
 }
 
-fn get_rgb_data(
-    decoded: &[f32],
-    width: u32,
-    height: u32,
-    scale_factors: (f32, f32),
-    cs: &ColorSpace,
-    interpolate: bool,
-) -> Option<RgbData> {
-    // To prevent a panic when calling the `chunks` method.
-    if cs.num_components() == 0 {
-        return None;
-    }
-
-    let mut output = vec![0; width as usize * height as usize * 3];
-    cs.convert_f32(decoded, &mut output, false);
-
-    Some(RgbData {
-        data: output,
-        width,
-        height,
-        interpolate,
-        scale_factors,
-    })
-}
-
 impl CacheKey for ImageXObject<'_> {
     fn cache_key(&self) -> u128 {
         self.stream.cache_key()
@@ -1524,68 +1500,180 @@ fn fix_image_length<T: Copy>(
     }
 }
 
-fn get_components(
-    data: &[u8],
-    width: u32,
-    height: u32,
-    color_space: &ColorSpace,
-    bits_per_component: u8,
-) -> Option<Vec<u16>> {
-    let result = match bits_per_component {
-        1..8 | 9..16 => {
-            let mut buf = vec![];
-            let bpc = bits_per_component;
-            let mut reader = BitReader::new(data);
-
-            for _ in 0..height {
-                for _ in 0..width {
-                    for _ in 0..color_space.num_components() {
-                        // See `stream_ccit_not_enough_data`, some images seemingly don't have
-                        // enough data, so we just pad with zeroes in this case.
-                        let next = reader.read(bpc).unwrap_or(0) as u16;
-
-                        buf.push(next);
-                    }
-                }
-
-                reader.align();
-            }
-
-            buf
-        }
-        8 => data.iter().map(|v| *v as u16).collect(),
-        16 => data
-            .chunks(2)
-            .map(|v| u16::from_be_bytes([v[0], v[1]]))
-            .collect(),
-        _ => {
-            warn!("unsupported bits per component: {bits_per_component}");
-            return None;
-        }
-    };
-
-    Some(result)
+/// PdfCraft patch (107): an image's samples, read one at a time rather than collected (#7282).
+/// A depth other than 8 or 16 bits is padded to the declared size, so a few bytes of data can
+/// declare 2^30 samples: held whole as `u16`, then again as `f32`, they came to gigabytes.
+#[derive(Clone)]
+enum Samples<'d> {
+    /// Packed samples, each row starting on a byte; `left` samples to go, `in_row` read of the
+    /// current row of `row_len`. See `stream_ccit_not_enough_data`: some images seemingly don't
+    /// have enough data, so a sample past the end reads as zero.
+    Packed {
+        reader: BitReader<'d>,
+        bpc: u8,
+        row_len: usize,
+        in_row: usize,
+        left: usize,
+    },
+    /// One byte a sample, as many as there are bytes.
+    Bytes(core::slice::Iter<'d, u8>),
+    /// Two big-endian bytes a sample; a last odd byte is the high byte of a sample whose low
+    /// byte is zero.
+    Words(core::slice::Chunks<'d, u8>),
 }
 
-fn apply_decode_array(
-    components: &[u16],
-    color_space: &ColorSpace,
-    bits_per_component: u8,
-    decode: &[(f32, f32)],
-) -> Option<Vec<f32>> {
-    let mut decoded_arr = vec![];
-
-    for pixel in components.chunks(color_space.num_components() as usize) {
-        for (component, range) in pixel.iter().zip(decode) {
-            decoded_arr.push(decode_sample(*component, bits_per_component, *range));
-        }
+impl<'d> Samples<'d> {
+    fn new(
+        data: &'d [u8],
+        width: u32,
+        height: u32,
+        color_space: &ColorSpace,
+        bits_per_component: u8,
+    ) -> Option<Self> {
+        Some(match bits_per_component {
+            1..8 | 9..16 => {
+                let row_len = usize::try_from(width)
+                    .ok()?
+                    .checked_mul(usize::from(color_space.num_components()))?;
+                Self::Packed {
+                    reader: BitReader::new(data),
+                    bpc: bits_per_component,
+                    row_len,
+                    in_row: 0,
+                    left: row_len.checked_mul(usize::try_from(height).ok()?)?,
+                }
+            }
+            8 => Self::Bytes(data.iter()),
+            16 => Self::Words(data.chunks(2)),
+            _ => {
+                warn!("unsupported bits per component: {bits_per_component}");
+                return None;
+            }
+        })
     }
 
-    Some(decoded_arr)
+    /// How many samples are left.
+    fn count_left(&self) -> usize {
+        match self {
+            Self::Packed { left, .. } => *left,
+            Self::Bytes(bytes) => bytes.len(),
+            Self::Words(words) => words.len(),
+        }
+    }
+}
+
+impl Iterator for Samples<'_> {
+    type Item = u16;
+
+    fn next(&mut self) -> Option<u16> {
+        match self {
+            Self::Packed {
+                reader,
+                bpc,
+                row_len,
+                in_row,
+                left,
+            } => {
+                *left = left.checked_sub(1)?;
+                let sample = reader.read(*bpc).unwrap_or(0) as u16;
+                *in_row += 1;
+                if *in_row >= *row_len {
+                    reader.align();
+                    *in_row = 0;
+                }
+                Some(sample)
+            }
+            Self::Bytes(bytes) => bytes.next().map(|b| u16::from(*b)),
+            Self::Words(words) => words.next().map(|w| match w {
+                [high, low, ..] => u16::from_be_bytes([*high, *low]),
+                [high] => u16::from_be_bytes([*high, 0]),
+                [] => 0,
+            }),
+        }
+    }
+}
+
+/// PdfCraft patch (107): the samples, `n` a pixel, mapped through `decode` one at a time. Only
+/// the samples `decode` has a range for are kept: with a short array, a pixel gives fewer values
+/// than it has samples. `None` when a pixel has no samples.
+fn decoded_samples<'s>(
+    samples: Samples<'s>,
+    n: usize,
+    bits_per_component: u8,
+    decode: &'s [(f32, f32)],
+) -> Option<impl Iterator<Item = f32> + 's> {
+    if n == 0 {
+        return None;
+    }
+    let mut k = 0;
+    Some(samples.filter_map(move |sample| {
+        let range = decode.get(k).copied();
+        k = (k + 1) % n;
+        range.map(|range| decode_sample(sample, bits_per_component, range))
+    }))
+}
+
+/// PdfCraft patch (107): how many values [`decoded_samples`] gives for `count` samples.
+fn decoded_count(count: usize, n: usize, decode_len: usize) -> Option<usize> {
+    let per_pixel = decode_len.min(n);
+    let whole = count.checked_div(n)?.checked_mul(per_pixel)?;
+    whole.checked_add(decode_len.min(count % n))
+}
+
+/// PdfCraft patch (107): pixels converted to RGB at a time, so the decoded samples held at once
+/// are sized by this and not by the image.
+const BAND_PIXELS: usize = 1 << 16;
+
+/// PdfCraft patch (107): the RGB of an image, its samples decoded and converted a band of
+/// [`BAND_PIXELS`] at a time, at the height `fix_image_length` gives the decoded samples (extra
+/// ones are dropped; missing ones shorten the image to the rows begun, the last row padded with
+/// zeros). `None` where `fix_image_length` refuses the length, or a pixel has no samples.
+fn rgb_in_bands(
+    samples: Samples<'_>,
+    width: u32,
+    height: &mut u32,
+    scale_factors: (f32, f32),
+    cs: &ColorSpace,
+    bits_per_component: u8,
+    decode: &[(f32, f32)],
+    interpolate: bool,
+) -> Option<RgbData> {
+    let n = usize::from(cs.num_components());
+    let count = decoded_count(samples.count_left(), n, decode.len())?;
+    let row_len = usize::try_from(width).ok()?.checked_mul(n)?;
+    if count < row_len.checked_mul(usize::try_from(*height).ok()?)? {
+        *height = u32::try_from(count.div_ceil(row_len)).ok()?;
+    }
+    if width == 0 || *height == 0 {
+        return None;
+    }
+    let pixels = usize::try_from(width)
+        .ok()?
+        .checked_mul(usize::try_from(*height).ok()?)?;
+
+    let mut decoded = decoded_samples(samples, n, bits_per_component, decode)?;
+    let mut output = vec![0; pixels.checked_mul(3)?];
+    let mut band = Vec::with_capacity(BAND_PIXELS.min(pixels).checked_mul(n)?);
+    for rgb in output.chunks_mut(BAND_PIXELS * 3) {
+        let len = rgb.len() / 3 * n;
+        band.clear();
+        band.extend(decoded.by_ref().take(len));
+        band.resize(len, 0.0);
+        // A failed conversion leaves black, as it did for the whole image.
+        let _ = cs.convert_f32(&band, rgb, false);
+    }
+
+    Some(RgbData {
+        data: output,
+        width,
+        height: *height,
+        interpolate,
+        scale_factors,
+    })
 }
 
 /// One sample mapped through its `/Decode` range (ISO 32000-2 §8.9.5.2). PdfCraft patch (28):
-/// shared by [`apply_decode_array`] and [`rgb_via_lookup`], so both decode alike.
+/// shared by [`decoded_samples`] and [`rgb_via_lookup`], so both decode alike.
 fn decode_sample(sample: u16, bits_per_component: u8, (d_min, d_max): (f32, f32)) -> f32 {
     interpolate(
         sample as f32,
@@ -1615,7 +1703,7 @@ const MAX_LOOKUP_BITS: usize = 16;
 /// seconds and 430 MB to draw; looked up from 256 entries it takes milliseconds.
 #[allow(clippy::too_many_arguments)]
 fn rgb_via_lookup(
-    components: &[u16],
+    mut components: Samples<'_>,
     width: u32,
     height: u32,
     scale_factors: (f32, f32),
@@ -1627,7 +1715,7 @@ fn rgb_via_lookup(
     let n = cs.num_components() as usize;
     let bpc = usize::from(bits_per_component);
     let bits = bpc.checked_mul(n)?;
-    // `apply_decode_array` decodes only the samples `/Decode` has a range for: leave a short
+    // `decoded_samples` decodes only the samples `/Decode` has a range for: leave a short
     // array to it, and every sample size it doesn't read.
     if n == 0 || bits == 0 || bits > MAX_LOOKUP_BITS || bpc > 16 || decode.len() < n {
         return None;
@@ -1636,10 +1724,11 @@ fn rgb_via_lookup(
     // the image to the rows begun, the last row padded with decoded zeros.
     let row_len = usize::try_from(width).ok()?.checked_mul(n)?;
     let wanted = row_len.checked_mul(usize::try_from(height).ok()?)?;
-    let (height, used) = if wanted <= components.len() {
+    let available = components.count_left();
+    let (height, used) = if wanted <= available {
         (height, wanted)
     } else {
-        (u32::try_from(components.len().div_ceil(row_len)).ok()?, components.len())
+        (u32::try_from(available.div_ceil(row_len)).ok()?, available)
     };
     let pixels = usize::try_from(width).ok()?.checked_mul(usize::try_from(height).ok()?)?;
     let total = pixels.checked_mul(n)?;
@@ -1648,7 +1737,7 @@ fn rgb_via_lookup(
         return None;
     }
 
-    // Every possible pixel value, its samples in order, decoded as `apply_decode_array` would.
+    // Every possible pixel value, its samples in order, decoded as `decoded_samples` would.
     let mask = (1usize << bpc) - 1;
     let mut table_input = Vec::with_capacity(entries * n);
     for code in 0..entries {
@@ -1662,18 +1751,23 @@ fn rgb_via_lookup(
 
     let mut data = vec![0; pixels.checked_mul(3)?];
     let whole = used / n;
-    let samples = components.get(..whole * n)?;
-    for (pixel, rgb) in samples.chunks_exact(n).zip(data.chunks_exact_mut(3)) {
-        let code = pixel.iter().fold(0usize, |code, s| (code << bpc) | (usize::from(*s) & mask));
+    for rgb in data.chunks_exact_mut(3).take(whole) {
+        let code = components
+            .by_ref()
+            .take(n)
+            .fold(0usize, |code, s| (code << bpc) | (usize::from(s) & mask));
         if let Some(colour) = table.get(code * 3..code * 3 + 3) {
             rgb.copy_from_slice(colour);
         }
     }
     // The pixels past the samples present (at most a row): converted as before, padding and all.
+    // `components` is now at sample `whole * n`.
     if whole < pixels {
         let tail: Vec<f32> = (whole * n..total)
-            .map(|i| match (components.get(i), decode.get(i % n)) {
-                (Some(s), Some(range)) if i < used => decode_sample(*s, bits_per_component, *range),
+            .map(|i| match decode.get(i % n) {
+                Some(range) if i < used => components
+                    .next()
+                    .map_or(0.0, |s| decode_sample(s, bits_per_component, *range)),
                 _ => 0.0,
             })
             .collect();
@@ -1693,7 +1787,7 @@ fn rgb_via_lookup(
 /// pixel at a time. A Separation or DeviceN tint transform may give more or fewer components
 /// than its alternate space takes (a Type 4 program's count is only warned about): converted as
 /// one batch, such a result shifts every pixel after it; converted alone, it affects only its
-/// own. A failed conversion leaves black, as in `get_rgb_data`.
+/// own. A failed conversion leaves black, as in `rgb_in_bands`.
 fn convert_each(cs: &ColorSpace, input: &[f32], n: usize, output: &mut [u8]) {
     if n == 0 {
         return;
