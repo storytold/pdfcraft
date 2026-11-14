@@ -182,6 +182,15 @@ pub(crate) fn sync_xfa_state(doc: &mut Document) {
             }
             doc.xfa = Some(report);
         }
+        // A static form keeps its template's scripts while it keeps its XFA: it is never laid
+        // out, so it never has a layout to go by.
+        None if doc.info.xfa == Some(pdfcraft_render::Xfa::Static) && pdfcraft_xfa::xfa_shape(cos).is_some() => {
+            doc.xfa = None;
+            if doc.xfa_template.is_none() && !doc.xfa_scripts_off {
+                doc.xfa_template = xfa::template(cos);
+            }
+            doc.xfa_warnings.retain(|w| w.starts_with(XFA_REMOVED_PREFIX));
+        }
         None => {
             doc.xfa = None;
             doc.xfa_template = None;
@@ -261,7 +270,7 @@ pub(crate) fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut E
     }
     // Not laid out again (a static form, or scripts off): fields the data no longer holds are
     // emptied, so the data replaced is the data shown.
-    if cx.xfa.is_none() && calculate {
+    if (cx.xfa.is_none() || pdfcraft_xfa::existing_layout(doc).is_none()) && calculate {
         let data = xfa_field_data(doc);
         let present: std::collections::HashSet<String> = pdfcraft_xfa::read_values(doc, &data).into_iter().map(|(n, _)| n).collect();
         for f in pdfcraft_forms::fields(doc) {

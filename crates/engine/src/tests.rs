@@ -8387,6 +8387,78 @@ fn static_xfa_forms_take_their_values_from_the_datasets_and_write_them_back() {
     assert!(!d2.info.warnings.iter().any(|w| w.contains("taken from this form's XFA data")), "nothing was rewritten");
 }
 
+/// A static XFA form runs its template's scripts, as Acrobat does: calculations on opening and
+/// after each change, and a field's exit scripts when its value changes, matching each field to
+/// the template by its full AcroForm name (an unnamed subform's `#subform[0]` names no object).
+/// Its pages are the form, so a script that would need a new layout changes nothing and says so.
+#[test]
+fn static_xfa_forms_run_their_template_scripts() {
+    let original = Arc::new(pdfcraft_xfa::fixtures::static_scripted_shell("<a>2</a><b>3</b><total/><note/><seen/>"));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("static.pdf", None, original.clone(), None).expect("opens");
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == format!("form1[0].page1[0].{n}")).unwrap().value.clone();
+    let names = |s: &Session| s.get(id).unwrap().form.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.xfa, Some(pdfcraft_render::Xfa::Static));
+    assert!(doc.xfa.is_none(), "a static form is never laid out");
+    // The calculation ran on opening; what it wrote is an appended revision, nothing to save.
+    assert_eq!(value(&s, "total[0]"), vec!["5".to_string()], "{:?}", s.take_js_output(id));
+    // A field in an unnamed subform is found by its name without `#subform[0]`.
+    assert_eq!(value(&s, "#subform[0].seen[0]"), vec!["total 5".to_string()]);
+    let doc = s.get(id).unwrap();
+    assert!(!doc.dirty && doc.bytes.starts_with(&original[..]));
+    // Both are noted: the values taken from the data, and what the scripts then changed.
+    assert!(doc.info.warnings.iter().any(|w| w.contains("taken from this form's XFA data")), "{:?}", doc.info.warnings);
+    assert!(doc.info.warnings.iter().any(|w| w.contains("scripts changed it on opening")), "{:?}", doc.info.warnings);
+    let before = names(&s);
+    // A change runs the field's exit script and every calculation again.
+    s.apply(id, Edit::SetFieldValue { name: "form1[0].page1[0].a[0]".into(), value: FieldValue::Text("10".into()) }).unwrap();
+    assert_eq!(value(&s, "total[0]"), vec!["13".to_string()], "{:?}", s.take_js_output(id));
+    assert_eq!(value(&s, "note[0]"), vec!["left a".to_string()], "{:?}", s.take_js_output(id));
+    assert_eq!(value(&s, "#subform[0].seen[0]"), vec!["total 13".to_string()]);
+    // Hiding a field needs a new layout, which a static form never gets: the field stays, the
+    // calculation still runs, and the console says why nothing was hidden.
+    s.apply(id, Edit::SetFieldValue { name: "form1[0].page1[0].b[0]".into(), value: FieldValue::Text("4".into()) }).unwrap();
+    assert_eq!(value(&s, "total[0]"), vec!["14".to_string()]);
+    assert_eq!(names(&s), before, "the pages and fields are the form's own");
+    let out = s.take_js_output(id);
+    assert!(out.console.iter().any(|l| l.contains("static XFA form") && l.contains("total[0]")), "{out:?}");
+    assert!(out.errors.is_empty(), "{out:?}");
+    // Saved, the data holds what the scripts computed; reopened, nothing changes.
+    let saved = s.save_bytes(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).unwrap();
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form1[0].page1[0].total[0]")), Some("14"));
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form1[0].page1[0].note[0]")), Some("left a"));
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form1[0].page1[0].#subform[0].seen[0]")), Some("total 14"));
+    let id2 = s.open("again.pdf", None, saved.clone(), None).unwrap();
+    let d2 = s.get(id2).unwrap();
+    assert_eq!(d2.form.iter().find(|f| f.name == "form1[0].page1[0].total[0]").unwrap().value, vec!["14".to_string()]);
+    assert!(!d2.dirty && d2.bytes == saved, "nothing to recalculate");
+}
+
+/// A static XFA form's widget may carry a `/MaxLen` its template does not set (Designer writes
+/// `/MaxLen 1` on some calculated fields): it limits what is typed, not what a script computes,
+/// so a longer result is written, and the values written after it in the same run too.
+#[test]
+fn a_static_xfa_script_value_is_not_refused_by_the_widgets_max_len() {
+    let original = Arc::new(pdfcraft_xfa::fixtures::static_scripted_shell("<a>2</a><b>3</b>"));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("static.pdf", None, original, None).expect("opens");
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == format!("form1[0].page1[0].{n}")).unwrap().value.clone();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "form1[0].page1[0].total[0]").unwrap().max_len, Some(1));
+    s.take_js_output(id);
+    s.apply(id, Edit::SetFieldValue { name: "form1[0].page1[0].a[0]".into(), value: FieldValue::Text("10".into()) }).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.errors.is_empty(), "{out:?}");
+    assert_eq!(value(&s, "total[0]"), vec!["13".to_string()]);
+    assert_eq!(value(&s, "#subform[0].seen[0]"), vec!["total 13".to_string()]);
+    let saved = s.save_bytes(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(saved).unwrap();
+    let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).unwrap();
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form1[0].page1[0].total[0]")), Some("13"));
+}
+
 /// A static XFA exclusion group laid out as a radio group with `/Opt [(1) (2)]` and on states
 /// named by position (`/0`, `/1`; ISO 32000-2 Table 230): the data's item `1` is the first
 /// button, not the second one's state `/1`, and a click stores the clicked button's item.
