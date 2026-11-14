@@ -76,7 +76,6 @@ impl PdfCraftApp {
             next_group_id: 1,
             editing_group: None,
             group_title_draft: String::new(),
-            vertical_tabs: false,
             active: None,
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
@@ -910,9 +909,6 @@ impl PdfCraftApp {
             self.all_tools_full = false;
         }
         if !hidden.window_ui {
-            if self.vertical_tabs {
-                chrome::vertical_tab_strip(self, ui);
-            }
             side_panels::show(self, ui);
         }
         let t = theme::Tokens::get(&ctx);

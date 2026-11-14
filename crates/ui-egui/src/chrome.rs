@@ -72,10 +72,6 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     app.active = None;
                     app.combine_tab.focused = false;
                 }
-                let vert_tip = if app.vertical_tabs { tl!("Turn off vertical tabs") } else { tl!("Turn on vertical tabs") };
-                if icons::button(ui, "panels-top-left", button, app.vertical_tabs, vert_tip).clicked() {
-                    app.vertical_tabs = !app.vertical_tabs;
-                }
                 // Reserve the three icon buttons, Discord and their gaps outside the scrolling tabs.
                 let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x)
                     + 3.0 * button
@@ -149,10 +145,13 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             // Each document tab's index and rect, and the one being dragged
                             // (with whether it was just released).
                             let mut slots = Vec::with_capacity(app.views.len());
+                            let mut pill_slots = Vec::new();
                             let mut dragged = None;
                             let mut rendered_groups = std::collections::HashSet::new();
                             let mut on_edit_group = None;
                             let mut toggle_collapsed = None;
+                            let mut last_group = None;
+                            let mut last_tab_right = None;
                             for i in app.tabs_in(Place::Main) {
                                 let Some(view) = app.views.get(i) else { continue };
                                 let (view_id, view_group, view_pinned) = (view.id, view.group, view.pinned);
@@ -164,6 +163,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                         && let Some(g) = app.group(gid).cloned()
                                     {
                                         let pill_resp = crate::tab_group::group_pill(ui, &g, &t, tab_h, &mut on_edit_group);
+                                        pill_slots.push((gid, pill_resp.id, pill_resp.rect));
                                         if pill_resp.clicked() {
                                             toggle_collapsed = Some(gid);
                                         }
@@ -174,6 +174,12 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                         continue;
                                     }
                                 }
+
+                                let same_group_as_prev = match (last_group, view_group) {
+                                    (Some(prev), Some(curr)) => prev == curr,
+                                    _ => false,
+                                };
+                                let bridge_left = if same_group_as_prev { last_tab_right } else { None };
 
                                 let dirty = doc.dirty;
                                 // A tab showing the document's title names its file on hover.
@@ -195,9 +201,12 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                         draggable: true,
                                         pinned: view_pinned,
                                         group_color,
+                                        bridge_left,
                                     },
                                     &mut close,
                                 );
+                                last_group = view_group;
+                                last_tab_right = Some(response.rect.right());
                                 slots.push((i, response.rect));
                                 if response.dragged() || response.drag_stopped() {
                                     dragged = Some((i, response.drag_stopped()));
@@ -205,7 +214,14 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 if changed && app.active == Some(i) && !app.combine_showing() {
                                     response.scroll_to_me(Some(Align::Center));
                                 }
-                                response.context_menu(|ui| tab_menu(app, ui, i, &mut action));
+                                let popup = egui::Popup::menu(&response).open_memory(if response.secondary_clicked() {
+                                    Some(egui::SetOpenCommand::Bool(true))
+                                } else if response.clicked() {
+                                    Some(egui::SetOpenCommand::Bool(false))
+                                } else {
+                                    None
+                                });
+                                popup.show(|ui| tab_menu(app, ui, i, &mut action));
                                 if response.clicked() {
                                     app.active = Some(i);
                                 }
@@ -224,9 +240,18 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     app.group_title_draft = g.title.clone();
                                 }
                             }
-                            let new_tab_btn = widgets::ghost_button_sized(ui, "plus", "", tab_h);
-                            if new_tab_btn.on_hover_text(tl!("New tab (Ctrl+O)")).clicked() {
-                                app.open_dialog();
+                            if let Some(editing_gid) = app.editing_group
+                                && let Some(&(_, pill_id, pill_rect)) = pill_slots.iter().find(|(gid, _, _)| *gid == editing_gid)
+                            {
+                                let mut close_editor = false;
+                                egui::Popup::new(pill_id.with("group_editor_popup"), ui.ctx().clone(), pill_rect, ui.layer_id())
+                                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                                    .show(|ui| {
+                                        crate::tab_group::group_editor_popup(app, ui, editing_gid, &mut close_editor);
+                                    });
+                                if close_editor {
+                                    app.editing_group = None;
+                                }
                             }
                             drag_x = tab_drag(app, ui, &slots, dragged, Place::Main, close.is_some() || action.is_some());
                             if let Some(i) = close
@@ -256,6 +281,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                         draggable: false,
                                         pinned: false,
                                         group_color: None,
+                                        bridge_left: None,
                                     },
                                     &mut close,
                                 );
@@ -341,20 +367,6 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                 });
             });
-            if let Some(gid) = app.editing_group {
-                let mut close = false;
-                egui::Window::new(tl!("Edit Tab Group"))
-                    .id(ui.scope_id().with("edit_tab_group_popup"))
-                    .collapsible(false)
-                    .resizable(false)
-                    .order(egui::Order::Foreground)
-                    .show(ui.ctx(), |ui| {
-                        crate::tab_group::group_editor_popup(app, ui, gid, &mut close);
-                    });
-                if close {
-                    app.editing_group = None;
-                }
-            }
         });
 }
 
@@ -527,10 +539,17 @@ pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Re
     let mut action = None;
     let mut slots = Vec::with_capacity(tabs.len());
     let mut dragged = None;
+    let mut last_group = None;
+    let mut last_tab_right = None;
     for &i in &tabs {
         let Some(view) = app.views.get(i) else { continue };
         let Some(doc) = app.session.get(view.id) else { continue };
         let Some(name) = crate::canvas::tab_label(app, i) else { continue };
+        let same_group_as_prev = match (last_group, view.group) {
+            (Some(prev), Some(curr)) => prev == curr,
+            _ => false,
+        };
+        let bridge_left = if same_group_as_prev { last_tab_right } else { None };
         let dirty = doc.dirty;
         let file = (name != doc.name).then(|| doc.name.clone());
         let id = row.scope_id().with(("pane-tab", view.view_key()));
@@ -549,13 +568,23 @@ pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Re
             draggable: true,
             pinned: view.pinned,
             group_color,
+            bridge_left,
         };
         let response = tab(&mut row, spec, &mut close);
+        last_group = view.group;
+        last_tab_right = Some(response.rect.right());
         slots.push((i, response.rect));
         if response.dragged() || response.drag_stopped() {
             dragged = Some((i, response.drag_stopped()));
         }
-        response.context_menu(|ui| tab_menu(app, ui, i, &mut action));
+        let popup = egui::Popup::menu(&response).open_memory(if response.secondary_clicked() {
+            Some(egui::SetOpenCommand::Bool(true))
+        } else if response.clicked() {
+            Some(egui::SetOpenCommand::Bool(false))
+        } else {
+            None
+        });
+        popup.show(|ui| tab_menu(app, ui, i, &mut action));
         if response.clicked() {
             app.active = Some(i);
             app.combine_tab.focused = false;
@@ -668,10 +697,11 @@ struct TabSpec<'a> {
     draggable: bool,
     pinned: bool,
     group_color: Option<Color32>,
+    bridge_left: Option<f32>,
 }
 
 fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui::Response {
-    let TabSpec { id, theme: t, icon, name, file, dirty, active, index, cap, height, draggable, pinned, group_color } = spec;
+    let TabSpec { id, theme: t, icon, name, file, dirty, active, index, cap, height, draggable, pinned, group_color, bridge_left } = spec;
     let font = theme::regular(13.0);
     let height = ui.available_height().max(height);
 
@@ -729,7 +759,8 @@ fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui:
         }
         // Microsoft Edge standard group top accent line
         if let Some(gc) = group_color {
-            ui.painter().hline(rect.x_range(), rect.top() + 1.0, Stroke::new(2.5, gc));
+            let start_x = bridge_left.unwrap_or(rect.left());
+            ui.painter().hline(start_x..=rect.right(), rect.top() + 1.0, Stroke::new(2.5, gc));
         }
         // Hairline divider between passive adjacent tabs
         if !active && !resp.hovered() && group_color.is_none() {
@@ -1151,159 +1182,6 @@ mod page_position_tests {
         assert_eq!(page_position(0, 0, "i"), "0");
         assert_eq!(page_position(usize::MAX, 3, "x"), "3");
     }
-}
-
-/// Microsoft Edge-style vertical tabs panel on the left of the window.
-pub fn vertical_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    egui::Panel::left("vertical_tab_strip")
-        .default_size(210.0)
-        .min_size(160.0)
-        .max_size(320.0)
-        .resizable(true)
-        .frame(egui::Frame::NONE.fill(t.chrome).stroke(Stroke::new(1.0, t.divider)))
-        .show(ui, |ui| {
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.add_space(8.0);
-                let tip = tl!("Turn off vertical tabs");
-                if icons::button(ui, "panels-top-left", 26.0, true, tip).clicked() {
-                    app.vertical_tabs = false;
-                }
-                ui.label(egui::RichText::new(tl!("Tabs")).font(theme::medium(13.0)));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.add_space(8.0);
-                    if widgets::ghost_button_sized(ui, "plus", "", 24.0).on_hover_text(tl!("New tab (Ctrl+O)")).clicked() {
-                        app.open_dialog();
-                    }
-                });
-            });
-            ui.add_space(6.0);
-            ui.separator();
-
-            egui::ScrollArea::vertical().id_salt("vertical_tabs_scroll").show(ui, |ui| {
-                ui.add_space(4.0);
-                let tabs = app.tabs_in(Place::Main);
-                let mut close = None;
-                let mut action = None;
-                let mut on_edit_group = None;
-                let mut toggle_collapsed = None;
-                let mut rendered_groups = std::collections::HashSet::new();
-
-                for &i in &tabs {
-                    let Some(view) = app.views.get(i) else { continue };
-                    let (view_id, view_group, view_pinned) = (view.id, view.group, view.pinned);
-                    let Some(doc) = app.session.get(view_id) else { continue };
-                    let Some(name) = crate::canvas::tab_label(app, i) else { continue };
-
-                    // Group Header
-                    if let Some(gid) = view_group {
-                        if rendered_groups.insert(gid)
-                            && let Some(g) = app.group(gid).cloned()
-                        {
-                            ui.horizontal(|ui| {
-                                ui.add_space(6.0);
-                                let pill_resp = crate::tab_group::group_pill(ui, &g, &t, 22.0, &mut on_edit_group);
-                                if pill_resp.clicked() {
-                                    toggle_collapsed = Some(gid);
-                                }
-                            });
-                        }
-                        if let Some(g) = app.group(gid)
-                            && g.collapsed
-                        {
-                            continue;
-                        }
-                    }
-
-                    let active = app.active == Some(i);
-                    let dirty = doc.dirty;
-                    let (row_rect, row_resp) = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, 28.0), Sense::click());
-
-                    let bg = if active {
-                        t.hover
-                    } else if row_resp.hovered() {
-                        t.hover.linear_multiply(0.5)
-                    } else {
-                        Color32::TRANSPARENT
-                    };
-                    if bg.a() > 0 {
-                        ui.painter().rect_filled(row_rect, CornerRadius::same(5), bg);
-                    }
-
-                    // Group colored left bar
-                    let indent = if let Some(gid) = view_group {
-                        if let Some(g) = app.group(gid) {
-                            ui.painter().vline(row_rect.left() + 4.0, row_rect.y_range().shrink(3.0), Stroke::new(2.5, g.color.color32()));
-                        }
-                        16.0
-                    } else {
-                        8.0
-                    };
-
-                    // Icon
-                    icons::paint(
-                        ui,
-                        Rect::from_min_size(row_rect.min + vec2(indent, 6.0), vec2(16.0, 16.0)),
-                        "file-text",
-                        15.0,
-                        if active { t.accent } else { t.text_muted },
-                    );
-
-                    // Label
-                    let font = theme::regular(12.5);
-                    let label_color = if active { t.text } else { t.text_muted };
-                    let max_text_w = (row_rect.width() - indent - 48.0).max(20.0);
-                    let elided = crate::panels::ellipsized_prefix(&name, |s| {
-                        crate::bidi::layout_ltr(ui, s.to_owned(), font.clone(), label_color).size().x <= max_text_w
-                    });
-                    let galley = crate::bidi::layout_ltr(ui, elided, font, label_color);
-                    ui.painter().galley(row_rect.min + vec2(indent + 22.0, (row_rect.height() - galley.size().y) / 2.0), galley, label_color);
-
-                    // Dirty dot or close button
-                    let close_rect = Rect::from_center_size(row_rect.right_center() - vec2(14.0, 0.0), vec2(18.0, 18.0));
-                    if dirty && !row_resp.hovered() {
-                        ui.painter().circle_filled(close_rect.center(), 3.5, if active { t.text } else { t.text_muted });
-                    } else if (active || row_resp.hovered()) && !view_pinned {
-                        let x_resp = ui.interact(close_rect, ui.scope_id().with(("vert_close", view_id)), Sense::click());
-                        if x_resp.hovered() {
-                            ui.painter().rect_filled(close_rect, CornerRadius::same(3), t.hover);
-                        }
-                        icons::paint(ui, close_rect, "x", 12.0, t.text_muted);
-                        if x_resp.clicked() {
-                            close = Some(i);
-                        }
-                    }
-
-                    if row_resp.clicked() {
-                        app.active = Some(i);
-                    }
-                    if row_resp.middle_clicked() && !view_pinned {
-                        close = Some(i);
-                    }
-                    row_resp.context_menu(|ui| tab_menu(app, ui, i, &mut action));
-                }
-
-                if let Some(gid) = toggle_collapsed {
-                    app.toggle_group_collapsed(gid);
-                }
-
-                if let Some(gid) = on_edit_group {
-                    app.editing_group = Some(gid);
-                    if let Some(g) = app.group(gid) {
-                        app.group_title_draft = g.title.clone();
-                    }
-                }
-                if let Some(i) = close
-                    && let Some(view) = app.views.get(i)
-                {
-                    action.get_or_insert(Action::Close(view.view_key()));
-                }
-                if let Some(action) = action {
-                    app.tab_action(action);
-                }
-            });
-        });
 }
 
 #[cfg(test)]

@@ -322,7 +322,6 @@ pub struct PdfCraftApp {
     pub next_group_id: u64,
     pub editing_group: Option<tab_group::TabGroupId>,
     pub group_title_draft: String,
-    pub vertical_tabs: bool,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
     pub mode: Mode,
