@@ -810,6 +810,9 @@ pub struct DocView {
     /// in-flight ones cannot be cancelled mid-operator. Older tiles and the backdrop stay
     /// stretched meanwhile; fresh tiles go out once the pan settles.
     pub(crate) last_scroll: Vec2,
+    /// The page last pressed in continuous view and the scroll offset it was pressed at: it stays
+    /// current until the view scrolls, whichever page of a spread shows more of itself (#7249).
+    pub(crate) pressed_current: Option<(usize, Vec2)>,
     /// The way the view last moved vertically: 1 down, -1 up, 0 before any move and after the
     /// content's size changes (a zoom or a layout change). A jump to a page or a search result
     /// counts as a move. It stays set while the view is still, so the pages prefetched ahead stay
@@ -1141,6 +1144,7 @@ impl DocView {
             last_scale: 0.0,
             sharp_hold_until: 0.0,
             last_scroll: Vec2::ZERO,
+            pressed_current: None,
             scroll_dir: 0,
             scroll_content: Vec2::ZERO,
             sync_scroll: None,
@@ -1470,6 +1474,19 @@ impl PageFrame<'_> {
 /// fraction of a point differently once the scroll offset is applied.
 const PAGE_TIE: f32 = 0.5;
 
+/// How much of page rect `r` the viewport `visible` shows, as the visible height weighted by the
+/// share of the page's width that is visible (points). A page as wide as the view counts its
+/// visible height, as before; in a two-page spread wider than the window, a short page shown
+/// whole counts for more than the taller partner that runs off the side (#7249). Below zero when
+/// the page is out of view.
+fn visible_share(r: Rect, visible: Rect) -> f32 {
+    let seen = r.intersect(visible);
+    if seen.width() <= 0.0 || seen.height() <= 0.0 || r.width() <= 0.0 {
+        return seen.height().min(0.0);
+    }
+    seen.height() * (seen.width() / r.width()).min(1.0)
+}
+
 /// Draws page `i` of the visible pages: its raster, the tools' input and overlays.
 /// One visible page: its index, its rectangle on screen and the transform to and from the page.
 #[derive(Clone, Copy)]
@@ -1732,7 +1749,7 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         view.screen_rects.push((i, r));
         view.screen_xforms.push((i, PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) }));
     }
-    let overlap = r.intersect(visible).height();
+    let overlap = visible_share(r, visible);
     if i == view.current {
         frame.current_overlap = overlap;
         frame.current_height = r.height();
@@ -2041,8 +2058,18 @@ fn draw_pages(
     if current_overlap >= best_overlap - PAGE_TIE || current_overlap >= current_height - PAGE_TIE {
         current = view.current;
     }
+    // A page clicked stays current until the view scrolls, also when its partner in a spread
+    // shows more of itself: a tall page cut off at the side or a short one cut off below (#7249).
+    // Only while some of it is still in view: a window narrowed or a panel opened can take it out
+    // of view without a scroll, and then the page that is shown becomes current.
+    match view.pressed_current {
+        Some((p, at)) if p == view.current && current_overlap > 0.0 && (view.last_scroll - at).length() <= 2.0 => current = p,
+        Some(_) => view.pressed_current = None,
+        None => {}
+    }
     if let Some(p) = pressed_page {
         current = p;
+        view.pressed_current = Some((p, view.last_scroll));
     }
     if view.continuous {
         view.current = current;

@@ -3193,3 +3193,22 @@ fn only_pixel_snapping_passes_for_fitting_the_view() {
         assert!(!fits_height(Rect::from_min_size(pos2(0.0, 0.0), vec2(1.0, 600.5)), 600.0, ppp));
     }
 }
+
+/// #7249: in a two-page spread wider than the window, the short page shown whole counts for more
+/// than its taller partner, which shows more height but runs off the side; a page as wide as the
+/// view counts its visible height, as before.
+#[test]
+fn a_page_cut_off_at_the_side_counts_for_its_visible_share() {
+    let rect = |x0: f32, y0: f32, x1: f32, y1: f32| Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1, y1));
+    // The geometry reported in #7249: the viewport, page 1 (short) and page 2 (tall).
+    let viewport = rect(0.0, 86.0, 1391.0, 1000.0);
+    let (short, tall) = (rect(70.0, 100.0, 870.0, 1166.667), rect(884.0, -167.0, 1684.0, 1433.0));
+    assert!((visible_share(short, viewport) - 900.0).abs() < 0.01);
+    assert!((visible_share(tall, viewport) - 914.0 * 507.0 / 800.0).abs() < 0.01);
+    assert!(visible_share(short, viewport) > visible_share(tall, viewport) + PAGE_TIE);
+    // As wide as the view: the visible height.
+    assert!((visible_share(rect(0.0, 500.0, 1391.0, 2000.0), viewport) - 500.0).abs() < 0.01);
+    // Out of view: not above zero.
+    assert!(visible_share(rect(0.0, 1200.0, 800.0, 1800.0), viewport) <= 0.0);
+    assert!(visible_share(rect(1500.0, 100.0, 1800.0, 900.0), viewport) <= 0.0);
+}
