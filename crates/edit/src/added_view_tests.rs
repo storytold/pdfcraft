@@ -68,3 +68,23 @@ fn a_restyle_on_an_unchanged_page_is_as_before() {
     let (_, before, after) = restyled_after(|_| {});
     assert!(close(before, after), "drawn at {before:?}, then at {after:?}");
 }
+
+/// CodeRabbit on #7278: under a large /UserUnit a crop moved by a fraction of a user unit is a
+/// move of whole units on the page, so the item is listed where the page now shows it: a CropBox
+/// moved 0.0005 to the right under a /UserUnit of 10000 moves it 5 units to the left.
+#[test]
+fn a_tiny_crop_under_a_large_user_unit_moves_the_listed_box() {
+    let mut doc = fixture();
+    set_on_page(&mut doc, 2, b"UserUnit", Object::Real(10_000.0));
+    let text = AddedText { rect: [50.0, 700.0, 250.0, 750.0], text: "POSITION".into(), size: 24.0, ..AddedText::default() };
+    add_content(&mut doc, 2, &Content::Text(text)).unwrap();
+    let listed = |doc: &Document| list_added(doc).into_iter().find(|a| a.page == 2).unwrap().content.rect();
+    let doc = reopen(&doc);
+    let before = listed(&doc);
+    let mut doc = doc;
+    let media = pdfcraft_model::pages(&doc)[2].crop(&doc);
+    let crop = Object::Array([media[0] + 0.0005, media[1], media[2], media[3]].map(Object::Real).to_vec());
+    set_on_page(&mut doc, 2, b"CropBox", crop);
+    let after = listed(&reopen(&doc));
+    assert!((before[0] - after[0] - 5.0).abs() < 0.01 && (before[2] - after[2] - 5.0).abs() < 0.01, "listed at {before:?}, then at {after:?}");
+}

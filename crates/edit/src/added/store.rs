@@ -154,7 +154,7 @@ pub fn scan_markers(doc: &Document) -> MarkerScan {
                         // as the page shows it now.
                         if written == now
                             && let Some(basis) = basis(doc, obj, params)
-                            && let Some(to_now) = Matrix(basis).then_into(&page.view_matrix(doc))
+                            && let Some(to_now) = Matrix(basis).then_into(&page.view_matrix(doc), now)
                         {
                             content = content.with_rect(to_now.bbox(content.rect()));
                         }
@@ -192,14 +192,18 @@ fn basis(doc: &Document, obj: ObjRef, params: &Dict) -> Option<[f64; 6]> {
 /// Matrix helpers for moving a box between two views (display space to user space).
 trait Views {
     /// The matrix from this view's display space to `to`'s: through user space. `None` when the
-    /// views are the same (nothing to move) or `to` has no inverse.
-    fn then_into(&self, to: &[f64; 6]) -> Option<Matrix>;
+    /// views are the same (nothing to move) or `to` has no inverse. `unit` is the page's
+    /// /UserUnit, which both views share.
+    fn then_into(&self, to: &[f64; 6], unit: f64) -> Option<Matrix>;
 }
 
 impl Views for Matrix {
-    fn then_into(&self, to: &[f64; 6]) -> Option<Matrix> {
-        // The matrix is written with a few decimals: closer than that is the same view.
-        let same = self.0.iter().zip(to).all(|(a, b)| (a - b).abs() <= 1e-3);
+    fn then_into(&self, to: &[f64; 6], unit: f64) -> Option<Matrix> {
+        // The same view within a thousandth of a displayed unit. The difference is measured as
+        // the page shows it: a view matrix holds /UserUnit's inverse, and a shift of its origin
+        // in user space moves the item `unit` times as far on the page, so a crop moved by 0.0005
+        // under a /UserUnit of 10000 is a 5-unit move, not the same view.
+        let same = self.0.iter().zip(to).all(|(a, b)| (a - b).abs() * unit <= 1e-3);
         if same {
             return None;
         }
@@ -275,7 +279,7 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
         let written = params.get(b"UserUnit").and_then(Object::as_f64).filter(|u| u.is_finite() && *u >= 1.0).unwrap_or(1.0);
         (written == user_unit).then(|| basis(doc, r, &params)).flatten()
     });
-    let back = kept.and_then(|b| Matrix(now).then_into(&b));
+    let back = kept.and_then(|b| Matrix(now).then_into(&b, user_unit));
     let (view, moved);
     let c = match (kept, back) {
         (Some(b), Some(back)) => {
