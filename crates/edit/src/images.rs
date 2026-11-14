@@ -1012,19 +1012,24 @@ pub(crate) fn extract_scope_state(ops: &[Op], start: usize, target: usize, initi
 }
 
 /// The unit `order` puts the image's unit `target_idx` next to, and whether after it. An image that
-/// shares its unit with other paint at the limit moves within that unit, past or behind the paint.
+/// shares its unit with other paint at the limit moves within that unit, past or behind the paint,
+/// but only when that paint is on the side the move crosses: paint after it for a forward move,
+/// paint before it for a backward move. Otherwise the move would leave paint order unchanged and
+/// is refused, including when that is the only unit.
 fn target_destination_unit<'a>(
     units: &'a [std::ops::Range<usize>],
     target_idx: usize,
     target_unit: &'a std::ops::Range<usize>,
     order: ArrangeOrder,
-    has_other_paint: bool,
+    has_paint_before: bool,
+    has_paint_after: bool,
 ) -> Result<(&'a std::ops::Range<usize>, bool), EditError> {
     let forward = matches!(order, ArrangeOrder::BringToFront | ArrangeOrder::BringForward);
     let refused = || EditError::Invalid(if forward { "the image is already in front" } else { "the image is already at the back" }.into());
     let at_limit = if forward { target_idx.saturating_add(1) >= units.len() } else { target_idx == 0 };
     if at_limit {
-        return if has_other_paint { Ok((target_unit, forward)) } else { Err(refused()) };
+        let effective_in_unit = if forward { has_paint_after } else { has_paint_before };
+        return if effective_in_unit { Ok((target_unit, forward)) } else { Err(refused()) };
     }
     let dest = match order {
         ArrangeOrder::BringToFront => units.last(),
@@ -1204,6 +1209,32 @@ fn build_relocated_unit_ops(
     Ok(unit_ops)
 }
 
+/// Paint inside `target_unit` other than the image at `target`, as `(any, before, after)`: whether
+/// there is any, and whether some of it comes before the image or after it.
+fn arrange_paint_flags(ops: &[Op], target: usize, target_unit: &std::ops::Range<usize>) -> (bool, bool, bool) {
+    let mut has_other_paint = false;
+    let mut has_paint_before = false;
+    let mut has_paint_after = false;
+    for (i, op) in ops.iter().enumerate() {
+        if i < target_unit.start || i >= target_unit.end || i == target {
+            continue;
+        }
+        let is_paint = matches!(
+            op.op.as_slice(),
+            b"Do" | b"Tj" | b"TJ" | b"'" | b"\"" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*"
+        );
+        if is_paint {
+            has_other_paint = true;
+            if i < target {
+                has_paint_before = true;
+            } else {
+                has_paint_after = true;
+            }
+        }
+    }
+    (has_other_paint, has_paint_before, has_paint_after)
+}
+
 /// Change the stacking order of `img`, drawn on page `p` by its content streams `all`.
 fn arrange_image(doc: &mut Document, p: &pdfcraft_model::Page, all: &[ContentStream], img: &PageImage, order: ArrangeOrder) -> Result<(), EditError> {
     let pieces = joined(all);
@@ -1217,20 +1248,12 @@ fn arrange_image(doc: &mut Document, p: &pdfcraft_model::Page, all: &[ContentStr
     let Some((target_idx, target_unit)) = units.iter().enumerate().find(|(_, u)| u.contains(&target)) else {
         return Err(EditError::Invalid("the image content unit could not be located".into()));
     };
-    let has_other_paint = ops.iter().enumerate().any(|(i, op)| {
-        i >= target_unit.start
-            && i < target_unit.end
-            && i != target
-            && matches!(
-                op.op.as_slice(),
-                b"Do" | b"Tj" | b"TJ" | b"'" | b"\"" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*"
-            )
-    });
-    if units.len() <= 1 && !has_other_paint {
-        return Err(EditError::Invalid("the page has only one content unit to arrange".into()));
-    }
+    // Units are counted inside a page-wide q … Q wrapper, so separate balanced inner units are not
+    // mistaken for one shared unit. A sole shared unit is handled by the directional at-limit check
+    // in `target_destination_unit`: an effective move within it is allowed, an ineffective one is refused.
+    let (has_other_paint, has_paint_before, has_paint_after) = arrange_paint_flags(&ops, target, target_unit);
 
-    let (dest_unit, insert_after) = target_destination_unit(&units, target_idx, target_unit, order, has_other_paint)?;
+    let (dest_unit, insert_after) = target_destination_unit(&units, target_idx, target_unit, order, has_paint_before, has_paint_after)?;
     if !balanced_arrange_span(&ops, target_unit.clone()) || !balanced_arrange_span(&ops, dest_unit.clone()) {
         return Err(EditError::Invalid("cannot arrange an image across graphics or marked-content boundaries".into()));
     }

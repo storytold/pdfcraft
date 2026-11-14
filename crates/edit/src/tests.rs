@@ -10782,6 +10782,53 @@ fn noop_arrange_is_not_ok_without_change() {
     assert!(r.is_err() || before != after, "Ok with no change");
 }
 
+/// Bring to front on an at-limit image that shares its only content unit with paint
+/// already before it is a no-op, so it is refused instead of rebuilding the same placement.
+#[test]
+fn arrange_front_image_in_single_shared_unit_is_refused() {
+    let mut doc = image_page_with("q 0 0 10 10 re f 100 0 0 100 50 50 cm /Im0 Do Q");
+    let before = page_content_bytes(&doc, 0);
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+#[test]
+fn arrange_front_image_in_single_shared_unit_moves_past_following_paint() {
+    let mut doc = image_page_with("q 100 0 0 100 50 50 cm /Im0 Do 0 0 10 10 re f Q");
+    assert!(
+        arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_ok(),
+        "an image before following paint in one shared unit can be brought to front"
+    );
+    let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(s.find("re f").unwrap() < s.rfind("/Im0 Do").unwrap(), "{s}");
+    let mut doc = image_page_with("q q 100 0 0 100 50 50 cm /Im0 Do Q q 50 50 10 10 re f Q Q");
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_ok(), "separate inner units inside a page wrapper can be reordered");
+    let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(s.find("re f").unwrap() < s.rfind("/Im0 Do").unwrap(), "{s}");
+    let mut doc = image_page_with("q 0 0 10 10 re f 100 0 0 100 50 50 cm /Im0 Do Q");
+    let before = page_content_bytes(&doc, 0);
+    assert!(arrange(&mut doc, 0, 0, images::ArrangeOrder::BringForward).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+#[test]
+fn arrange_backward_in_single_shared_unit_moves_before_paint_and_refuses_without_it() {
+    for order in [images::ArrangeOrder::SendToBack, images::ArrangeOrder::SendBackward] {
+        let mut doc = image_page_with("q q 0 0 10 10 re f 100 0 0 100 50 50 cm /Im0 Do Q Q");
+        arrange(&mut doc, 0, 0, order).unwrap();
+        let doc = reopen(&doc);
+        let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        assert!(s.find("/Im0 Do").unwrap() < s.find("re f").unwrap(), "{order:?}: {s}");
+        assert_eq!(images::page_images(&doc, 0).unwrap()[0].rect, [50.0, 50.0, 150.0, 150.0]);
+    }
+    for order in [images::ArrangeOrder::SendToBack, images::ArrangeOrder::SendBackward] {
+        let mut doc = image_page_with("q q 100 0 0 100 50 50 cm /Im0 Do 0 0 10 10 re f Q Q");
+        let before = page_content_bytes(&doc, 0);
+        assert!(arrange(&mut doc, 0, 0, order).is_err(), "{order:?}");
+        assert_eq!(page_content_bytes(&doc, 0), before);
+    }
+}
+
 /// Cropping a turned image keeps the requested upright box in user space, rather than expanding
 /// to the bounding box of the turned image coordinates.
 #[test]
