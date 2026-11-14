@@ -68,7 +68,10 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   widget under a mark. On a selected page, a non-popup annotation with no readable `/Rect`
   (exactly four finite numbers, including referenced coordinates) refuses the entire operation
   with its page and annotation number. Repair or remove it before applying again; nothing changes
-  on refusal. An unreadable rectangle is not treated as evidence that it misses the marks;
+  on refusal. An unreadable rectangle is not treated as evidence that it misses the marks. An
+  entry of `/Annots` that says it is something else (a `/Type` other than `/Annot` and no
+  annotation `/Subtype`, such as a font a writer listed there) is not an annotation: it is kept
+  and does not block Apply;
 - the marks themselves, replaced by boxes in their fill colour (and overlay text) drawn into the
   page as a `/PCMark /Redaction` stream;
 - **metadata** that repeats the removed text (#2448): `/Info` entries containing it or wholly

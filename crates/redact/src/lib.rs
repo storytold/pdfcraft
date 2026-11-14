@@ -268,6 +268,47 @@ pub(crate) fn subtype(doc: &Document, d: &Dict) -> Option<Vec<u8>> {
     d.get(b"Subtype").and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec))
 }
 
+/// The annotation types (ISO 32000-2 Table 171).
+const ANNOTATION_SUBTYPES: [&[u8]; 28] = [
+    b"Text",
+    b"Link",
+    b"FreeText",
+    b"Line",
+    b"Square",
+    b"Circle",
+    b"Polygon",
+    b"PolyLine",
+    b"Highlight",
+    b"Underline",
+    b"Squiggly",
+    b"StrikeOut",
+    b"Caret",
+    b"Stamp",
+    b"Ink",
+    b"Popup",
+    b"FileAttachment",
+    b"Sound",
+    b"Movie",
+    b"Screen",
+    b"Widget",
+    b"PrinterMark",
+    b"TrapNet",
+    b"Watermark",
+    b"3D",
+    b"Redact",
+    b"Projection",
+    b"RichMedia",
+];
+
+/// Whether `d`, an entry of `/Annots` with `/Subtype` `kind`, says it is something other than an
+/// annotation: its `/Type` is a name that isn't `/Annot` (an annotation's, "if present, shall be
+/// Annot": ISO 32000-2 Table 166) and `kind` is no annotation type. A dictionary with an
+/// annotation type is an annotation whatever its `/Type` says, since a viewer may still show it.
+fn names_another_type(doc: &Document, d: &Dict, kind: &[u8]) -> bool {
+    let other = d.get(b"Type").is_some_and(|t| doc.resolve(t).as_name().is_some_and(|n| n != b"Annot".as_slice()));
+    other && !ANNOTATION_SUBTYPES.contains(&kind)
+}
+
 /// The pop-up `d` names (`/Popup`), when it is one: it goes with `d`. Anything else it might name
 /// (a mark on another page, say) is left alone.
 fn named_popup(doc: &Document, d: &Dict) -> Option<ObjRef> {
@@ -1005,6 +1046,11 @@ fn remove_page_annotations(
             continue;
         }
         if kind == b"Popup" {
+            continue;
+        }
+        // A graphics state or a font that a writer listed in `/Annots` is not an annotation:
+        // it has no `/Rect` to read and nothing a viewer shows, so it stays and Apply goes on.
+        if names_another_type(doc, d, &kind) {
             continue;
         }
         // Unknown geometry is not evidence that the annotation misses every mark. Refuse rather

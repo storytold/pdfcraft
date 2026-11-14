@@ -91,3 +91,35 @@ fn malformed_annotations_on_unselected_pages_do_not_block_apply() {
     apply(&mut doc, Some(&[0])).unwrap();
     assert_eq!(pdfcraft_model::pages(&doc)[1].dict, before);
 }
+
+/// A page whose `/Annots` is `annots`, with a mark over the lower left of the page.
+fn page_with_annots(annots: &str) -> Document {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Annots [{annots}] >>").into_bytes(),
+        stream("", b"BT ET"),
+    ]);
+    mark(&mut doc, 0, &[[0.0, 90.0, 100.0, 130.0]], "");
+    doc
+}
+
+/// A graphics state and a font listed in `/Annots` (PDFBOX-5775's `Export.pdf` has both) are not
+/// annotations: Apply goes on, removes the note under the mark and leaves them where they were.
+#[test]
+fn dictionaries_of_another_type_in_annots_do_not_block_apply() {
+    let others = "<< /Type /ExtGState /CA 1 >> << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+    let mut doc = page_with_annots(&format!("{others} << /Type /Annot /Subtype /Text /Rect [10 100 40 120] /Contents (PRIVATE-NOTE) >>"));
+    assert_eq!(apply(&mut doc, None).unwrap().annotations, 1);
+    let left = annots_of(&doc, &pdfcraft_model::pages(&doc)[0].dict);
+    let type_of = |a: &Object| doc.resolve(a).as_dict().and_then(|d| d.get(b"Type")?.as_name().map(<[u8]>::to_vec));
+    assert_eq!(left.iter().filter_map(type_of).collect::<Vec<_>>(), [b"ExtGState".to_vec(), b"Font".to_vec()]);
+}
+
+/// An annotation type under another `/Type` is still an annotation: without a `/Rect` it refuses.
+#[test]
+fn an_annotation_subtype_under_another_type_still_refuses_apply() {
+    let mut doc = page_with_annots("<< /Type /Font /Subtype /Text /Contents (PRIVATE-NOTE) >>");
+    let result = apply(&mut doc, None);
+    assert!(matches!(result, Err(RedactError::UnreadableAnnotation { page: 1, annotation: 1 })), "{result:?}");
+}
