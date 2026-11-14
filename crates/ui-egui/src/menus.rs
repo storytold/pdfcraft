@@ -259,7 +259,7 @@ fn english(labeled: Labeled<'_>) -> Option<String> {
     }
 }
 
-fn translate(english: &'static str) -> String {
+pub(crate) fn translate(english: &'static str) -> String {
     // craft_menu's bar writes "⋯" (U+22EF, MIDLINE HORIZONTAL ELLIPSIS) itself, for the menu of
     // titles that don't fit: a sentinel to translate, not an English phrase, and the only one of
     // its four reserved labels no font this app ships or falls back to has a glyph for.

@@ -93,6 +93,9 @@ pub struct Pickers {
     /// until the pick's closure starts.
     showing: Arc<AtomicBool>,
     done: Arc<Mutex<Vec<Picked>>>,
+    /// The Edit menu a showing panel's text boxes need for ⌘V and the like.
+    #[cfg(target_os = "macos")]
+    panel_menu: super::panel_menu::PanelMenu,
 }
 
 /// Clears `showing` if the worker ends without queueing a pick (it panicked).
@@ -124,6 +127,15 @@ impl Pickers {
     /// A picker is showing or its result is waiting for the frame.
     pub(crate) fn pending(&self) -> bool {
         self.showing.load(Ordering::SeqCst)
+    }
+
+    /// Keep the panel's menu bar in step with the picker (macOS).
+    pub(crate) fn sync_panel_menu(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            let showing = self.pending();
+            self.panel_menu.sync(showing, &crate::menus::translate);
+        }
     }
 
     /// Wait for `pick` on a worker thread and queue its result for the next frame. On macOS
@@ -211,6 +223,17 @@ impl PdfCraftApp {
 
     /// [`Self::ask`] once `showing` is claimed for it.
     fn show_picker(&mut self, ask: Ask, target: Option<PickTarget>, then: Then) -> bool {
+        let started = self.start_picker(ask, target, then);
+        if !started {
+            self.pickers.showing.store(false, Ordering::SeqCst);
+            self.notify_tr("Couldn't show the file picker. Please try again.");
+        }
+        self.pickers.sync_panel_menu();
+        started
+    }
+
+    /// Show the panel, or answer with `pick_override`. Returns false when the worker couldn't start.
+    fn start_picker(&mut self, ask: Ask, target: Option<PickTarget>, then: Then) -> bool {
         if let Some(paths) = self.pick_override.clone() {
             self.pickers.deliver(target, paths.into_iter().map(PathBuf::from).collect(), then);
             return true;
@@ -218,7 +241,7 @@ impl PdfCraftApp {
         // On macOS creating the future shows the panel; it must happen here, on the main thread.
         let ctx = self.ctx.clone();
         let one = |h: Option<rfd::FileHandle>| h.map(|h| h.path().to_path_buf()).into_iter().collect::<Vec<_>>();
-        let started = match ask {
+        match ask {
             Ask::File(d) => {
                 let pick = d.pick_file();
                 self.pickers.spawn(target, ctx, async move { one(pick.await) }, then)
@@ -240,12 +263,7 @@ impl PdfCraftApp {
                     then,
                 )
             }
-        };
-        if !started {
-            self.pickers.showing.store(false, Ordering::SeqCst);
-            self.notify_tr("Couldn't show the file picker. Please try again.");
         }
-        started
     }
 
     /// [`Self::ask`] for one path: `then` gets the first chosen path.
@@ -259,9 +277,11 @@ impl PdfCraftApp {
 
     /// Use the picks that finished since the last frame. Called every frame.
     pub(crate) fn process_picked(&mut self) {
+        self.pickers.sync_panel_menu();
         for Picked { target, paths, then } in self.pickers.take() {
             // The pick is in hand: the next picker may show, including one `then` asks for.
             self.pickers.showing.store(false, Ordering::SeqCst);
+            self.pickers.sync_panel_menu();
             // Opens were polled before this pick was consumed. Wake their retained replies
             // once, including after cancellation, without polling while a picker waits.
             if !self.pending_opens.is_empty()
@@ -637,6 +657,30 @@ mod tests {
             app.process_picked();
         }
         assert_eq!(*got.lock().unwrap(), vec!["chained", "other"], "the chained picker answers first");
+    }
+
+    /// The panel's menu bar (macOS) is asked for while a picker shows and given back before the
+    /// pick's closure runs, so a closure that asks again gets it again.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_panel_menu_bar_follows_the_picker() {
+        let mut app = PdfCraftApp::new();
+        app.pick_override = Some(vec!["a.pdf".into()]);
+        let during = Arc::new(Mutex::new(Vec::new()));
+        let seen = during.clone();
+        assert!(app.ask(Ask::File(rfd::AsyncFileDialog::new()), None, move |app, _| {
+            seen.lock().unwrap().push(app.pickers.panel_menu.wanted());
+            assert!(app.ask(Ask::Save(rfd::AsyncFileDialog::new()), None, |_, _| {}));
+            seen.lock().unwrap().push(app.pickers.panel_menu.wanted());
+        }));
+        assert!(app.pickers.panel_menu.wanted(), "asked for as the picker shows");
+        app.process_picked();
+        assert_eq!(*during.lock().unwrap(), vec![false, true], "given back before the closure, asked for by its picker");
+        app.process_picked();
+        assert!(!app.pickers.panel_menu.wanted(), "given back once the last pick is used");
+        app.pickers.showing.store(true, Ordering::SeqCst);
+        app.process_picked();
+        assert!(app.pickers.panel_menu.wanted(), "a picker still showing keeps it");
     }
 
     #[test]
