@@ -181,7 +181,11 @@ impl PdfCraftApp {
             let dialog = rfd::AsyncFileDialog::new()
                 .add_filter_any_case(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
                 .set_title(tl!("Choose images"));
-            self.ask(crate::pickers::Ask::Files(dialog), None, |app, files| {
+            self.ask(crate::pickers::Ask::Files(dialog), None, |app, mut files| {
+                // A picker hands back its selection in an order of its own, not the order the
+                // files were clicked in, and it had reversed the pages (#6327). The pages follow
+                // the file names, as Combine files lists a folder.
+                files.sort_by(|a, b| image_order(a, b));
                 let mut images = Vec::new();
                 for f in files {
                     match std::fs::read(&f) {
@@ -387,4 +391,12 @@ impl PdfCraftApp {
 /// The suggested name of an optimized copy of `document` ("notes (reduced).pdf").
 fn optimized_name(document: &str, kind: crate::optimize_ui::OptimizeKind) -> String {
     format!("{} ({}).pdf", stem(document), kind.suffix())
+}
+
+/// The order of picked images' pages: by file name in natural order ("scan2" before "scan10"),
+/// then by the whole path, so names equal but for case or leading zeros keep one order.
+#[cfg(not(target_arch = "wasm32"))]
+fn image_order(a: &std::path::Path, b: &std::path::Path) -> std::cmp::Ordering {
+    let name = |p: &std::path::Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    crate::combine_ui::natural(&name(a), &name(b)).then_with(|| a.cmp(b))
 }
