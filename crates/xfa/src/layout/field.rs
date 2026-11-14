@@ -21,7 +21,7 @@ impl Layouter<'_> {
             && f.ui != Ui::Button
         {
             let start = self.item_count();
-            self.draw_border(b, rect)?;
+            self.draw_border(b, rect, rect)?;
             self.field_border = Some((start, self.item_count()));
         }
         let fctx = ctx.child(&f.common);

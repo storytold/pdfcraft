@@ -96,7 +96,7 @@ impl Layouter<'_> {
         if let Some(b) = border {
             // The last piece first: a piece's place on its page stays where it was found.
             for (page, at, piece) in pieces.into_iter().rev() {
-                self.insert_border(b, piece, page, at)?;
+                self.insert_border(b, piece, piece, page, at)?;
             }
         }
         Ok(())

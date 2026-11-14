@@ -1,5 +1,5 @@
 use super::common::clean_name;
-use super::items::{Item, Rounded, Turned};
+use super::items::{Gradient, Item, Rounded, Turned};
 use super::{
     Arc, Border, Ctx, Draw, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Rect, SomIndices, Stroke,
     Subform, Value, XfaError, data_path, text,
@@ -28,7 +28,7 @@ impl Layouter<'_> {
     /// [`Self::draw_row`]'s border and cells, once where the row shows is set.
     pub(super) fn draw_row_cells(&mut self, row: &Subform, cols: &[f64], rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if let Some(b) = &row.common.border {
-            self.draw_border(b, rect)?;
+            self.draw_border(b, rect, rect)?;
         }
         let ctx = ctx.with_som(&row.common, sib);
         let inner = rect.inset(&row.common.margin);
@@ -125,7 +125,7 @@ impl Layouter<'_> {
                 self.measures.set(self.measures.get().saturating_add(1));
                 self.check_measures()?;
                 if let Some(b) = &s.common.border {
-                    self.draw_border(b, rect)?;
+                    self.draw_border(b, rect, rect)?;
                 }
                 let parent_ctx = ctx;
                 let ctx = ctx.with_som(&s.common, sib);
@@ -229,14 +229,16 @@ impl Layouter<'_> {
         }
     }
 
-    /// Draw border `b` around `rect`: its fill, then each shown edge as a line inside the box, or
-    /// the whole box as one rounded shape when its corners are rounded.
-    pub(super) fn draw_border(&mut self, b: &Border, rect: Rect) -> Result<(), XfaError> {
+    /// Draw border `b` around `rect`: its fill (a gradient across the whole box when it is one),
+    /// then each shown edge as a line inside the box, or the whole box as one rounded shape when
+    /// its corners are rounded.
+    pub(super) fn draw_border(&mut self, b: &Border, rect: Rect, area: Rect) -> Result<(), XfaError> {
         let vis = b.visible_edges();
         // Rounded corners: the box is one shape, filled and edged along its curves, when its
         // edges are all alike (all shown and the same, or all hidden). Edges that differ keep
         // square corners.
         let radii = b.radii(rect.w, rect.h);
+        let gradient = b.gradient().map(|(sweep, to)| Gradient { sweep, to: to.0, area });
         let alike = b.edges.iter().all(|e| *e == b.edges[0]);
         if radii.iter().any(|r| *r > 0.0) && (vis == [true; 4] && alike || vis == [false; 4]) {
             let e = b.edges[0];
@@ -249,6 +251,7 @@ impl Layouter<'_> {
                 radii,
                 inverted: b.corners.map(|c| c.inverted),
                 fill: b.fill().map(|f| f.0),
+                gradient,
                 edge,
                 open_top: false,
                 open_bottom: false,
@@ -256,7 +259,7 @@ impl Layouter<'_> {
             return self.push(Item::Rounded(Box::new(shape)));
         }
         if let Some(fill) = b.fill() {
-            self.push(Item::Fill { rect, color: fill.0 })?;
+            self.push(Item::Fill { rect, color: fill.0, gradient })?;
         }
         let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right(), rect.bottom());
         // Top, right, bottom, left; lines sit inside the box.
@@ -343,7 +346,7 @@ impl Layouter<'_> {
     /// inside its border and margin.
     fn draw_draw(&mut self, d: &Draw, rect: Rect, ctx: &Ctx) -> Result<(), XfaError> {
         if let Some(b) = &d.common.border {
-            self.draw_border(b, rect)?;
+            self.draw_border(b, rect, rect)?;
         }
         let ctx = ctx.child(&d.common);
         let inner = rect.inset(&d.common.margin);
@@ -361,7 +364,7 @@ impl Layouter<'_> {
                 };
                 self.push(Item::Line { from, to, width: edge.thickness.clamp(0.1, 20.0), color: edge.color.0, dashed: edge.stroke == Stroke::Dashed })
             }
-            Value::Rectangle(b) => self.draw_border(b, inner),
+            Value::Rectangle(b) => self.draw_border(b, inner, inner),
             Value::Empty => Ok(()),
         }
     }
@@ -372,7 +375,7 @@ impl Layouter<'_> {
     /// siblings, for its SOM path.
     fn draw_group(&mut self, g: &ExclGroup, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if let Some(b) = &g.common.border {
-            self.draw_border(b, rect)?;
+            self.draw_border(b, rect, rect)?;
         }
         let ctx = ctx.with_som(&g.common, sib);
         // The group's data node holds the selected button's on value.

@@ -1,4 +1,4 @@
-use super::{Dict, Document, Family, Object, PdfString, Rect, Rounded, Stream};
+use super::{Dict, Document, Family, Gradient, Object, PdfString, Rect, Rounded, Stream, Sweep, Toward};
 
 /// Width and height of a JPEG from its first frame header (SOF0–SOF15, not the DNL/JPG/DAC/DHT
 /// markers). `None` for anything else.
@@ -107,12 +107,71 @@ pub(super) fn all_faces() -> Vec<(&'static str, &'static str)> {
     out
 }
 
-/// The content that draws rounded box `r` on a page `page_h` tall: its fill along its curves,
-/// then its edge inside it. A side a page break cut has no edge.
-pub(crate) fn rounded(r: &Rounded, page_h: f64) -> String {
+/// The shading dictionary that paints gradient `g` from `from` on a page `page_h` tall, across
+/// its box in the space the box is drawn in: axial (type 2) for a linear gradient, from the
+/// middle of the side opposite the one it runs to, to the middle of that side; radial (type 3)
+/// for a radial one, centred in the box, out to half its diagonal, so the edge colour reaches the
+/// corners. `toEdge` starts at the centre in the fill's colour; `toCenter` swaps the colours, so
+/// the fill's colour is at the edge. One two-stop exponential function (type 2) between the
+/// colours, extended both ways. With it, what tells it apart from other shadings: its kind, its
+/// coordinates and colours as written.
+pub(super) fn shading(g: &Gradient, from: [f64; 3], page_h: f64) -> (String, Dict) {
+    let a = g.area;
+    let (x0, x1, xm) = (a.x, a.right(), a.x + a.w / 2.0);
+    let (top, bottom, ym) = (page_h - a.y, page_h - a.bottom(), page_h - (a.y + a.h / 2.0));
+    let (kind, coords, c0, c1) = match g.sweep {
+        Sweep::Linear(toward) => {
+            let coords = match toward {
+                Toward::Right => vec![x0, ym, x1, ym],
+                Toward::Left => vec![x1, ym, x0, ym],
+                Toward::Bottom => vec![xm, top, xm, bottom],
+                Toward::Top => vec![xm, bottom, xm, top],
+            };
+            (2, coords, from, g.to)
+        }
+        Sweep::Radial { to_center } => {
+            let r = (a.w.hypot(a.h) / 2.0).max(0.0);
+            let (c0, c1) = if to_center { (g.to, from) } else { (from, g.to) };
+            (3, vec![xm, ym, 0.0, xm, ym, r], c0, c1)
+        }
+    };
+    // Coordinates as content numbers are written, so boxes drawn alike share one shading.
+    let coords: Vec<f64> = coords.into_iter().map(|v| n(v).parse().unwrap_or(0.0)).collect();
+    let quantize = |c: [f64; 3]| c.map(|v| n(v.clamp(0.0, 1.0)).parse().unwrap_or(0.0));
+    let (c0, c1) = (quantize(c0), quantize(c1));
+    let key = format!("{kind} {} {} {}", coords.iter().map(|v| n(*v)).collect::<Vec<_>>().join(" "), rgb(c0), rgb(c1));
+    let mut f = Dict::new();
+    f.set(b"FunctionType".to_vec(), Object::Int(2));
+    f.set(b"Domain".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(1)]));
+    f.set(b"C0".to_vec(), rgb_array(c0));
+    f.set(b"C1".to_vec(), rgb_array(c1));
+    f.set(b"N".to_vec(), Object::Int(1));
+    let mut d = Dict::new();
+    d.set(b"ShadingType".to_vec(), Object::Int(kind));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    d.set(b"Coords".to_vec(), Object::Array(coords.into_iter().map(Object::Real).collect()));
+    d.set(b"Function".to_vec(), Object::Dict(f));
+    d.set(b"Extend".to_vec(), Object::Array(vec![Object::Bool(true), Object::Bool(true)]));
+    (key, d)
+}
+
+/// The content that paints the shading the page's resources name `name` inside `path` (ending
+/// in a space), in a graphics state of its own.
+pub(super) fn shaded(name: &str, path: &str) -> String {
+    format!("q {path}W n /{name} sh Q\n")
+}
+
+/// The content that draws rounded box `r` on a page `page_h` tall: its fill along its curves
+/// (its gradient there instead, the shading the page names `shading`), then its edge inside it.
+/// A side a page break cut has no edge.
+pub(crate) fn rounded(r: &Rounded, page_h: f64, shading: Option<&str>) -> String {
     let mut c = String::new();
     if let Some(color) = r.fill {
-        c.push_str(&format!("{} rg {}f\n", rgb(color), outline(r.rect, r.radii, r.inverted, (false, false), page_h)));
+        let path = outline(r.rect, r.radii, r.inverted, (false, false), page_h);
+        match shading.filter(|_| r.gradient.is_some()) {
+            Some(name) => c.push_str(&shaded(name, &path)),
+            None => c.push_str(&format!("{} rg {path}f\n", rgb(color))),
+        }
     }
     if let Some((w, color, dashed)) = r.edge {
         // The edge's centre line, half its width inside the box, so the edge stays in: a corner
