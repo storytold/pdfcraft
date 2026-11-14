@@ -1,4 +1,6 @@
-use super::{CLICK_KEY, DATE_KEY, Dict, Document, GROUPS, IMAGE_FIELD_KEY, LAYOUT_KEY, NODE_KEY, ObjRef, Object, RELEVANT_KEY, SOM_KEY, XfaError};
+use super::{
+    CLICK_KEY, DATE_KEY, Dict, Document, GROUPS, IMAGE_FIELD_KEY, LAYOUT_KEY, NO_TAB_KEY, NODE_KEY, ObjRef, Object, RELEVANT_KEY, SOM_KEY, XfaError,
+};
 
 /// What laying a form out says when it took the usage rights off (see [`drop_usage_rights`]).
 pub(crate) const USAGE_RIGHTS_REMOVED: &str =
@@ -190,7 +192,7 @@ pub fn strip(doc: &mut Document) -> Result<Stripped, XfaError> {
         if d.contains(IMAGE_FIELD_KEY) {
             out.image_fields += 1;
         }
-        let private: Vec<Vec<u8>> = [SOM_KEY, CLICK_KEY, IMAGE_FIELD_KEY, DATE_KEY, NODE_KEY, b"PCItems".as_slice()]
+        let private: Vec<Vec<u8>> = [SOM_KEY, CLICK_KEY, IMAGE_FIELD_KEY, DATE_KEY, NO_TAB_KEY, NODE_KEY, b"PCItems".as_slice()]
             .iter()
             .filter(|k| d.contains(k))
             .map(|k| k.to_vec())
