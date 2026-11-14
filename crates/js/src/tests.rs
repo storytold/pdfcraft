@@ -2750,6 +2750,77 @@ fn af_simple_calculate_bounds_selector_work_before_expansion() {
     assert!(out.error.as_deref().is_some_and(|e| e.contains("calculation field lookup exceeds")));
 }
 
+/// A link action's `event.target` is the document (#2081, ported), and the event can still be
+/// serialized: the target isn't enumerable, so `JSON.stringify` doesn't walk back into it.
+#[test]
+fn a_link_events_target_is_the_document() {
+    let link = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    let o = go("JSON.stringify(event); JSON.stringify(this); (event.target === this) + ':' + event.type + ':' + event.name", &link);
+    assert_eq!(o.error, None);
+    assert_eq!(o.result.as_deref(), Some("true:Link:Mouse Up"));
+    assert_eq!(go("event.target === null", &Event::doc("Console")).result.as_deref(), Some("true"), "other document events keep none");
+}
+
+/// `app.openDoc` only queues a request (the viewer asks before opening a file) and answers null;
+/// another document as the base, another file system or extra options are refused (#2081).
+#[test]
+fn open_doc_queues_a_request_for_the_current_documents_folder_only() {
+    let link = Event { kind: "Link".into(), ..Event::doc("Mouse Up") };
+    for call in [
+        "app.openDoc({cPath:'other.pdf',oDoc:this})",
+        "app.openDoc('other.pdf',this)",
+        "app.openDoc('other.pdf',event.target)",
+        "app.openDoc({cPath:'other.pdf',oDoc:this,cFS:''})",
+        "app.openDoc('other.pdf',null)",
+        "app.openDoc({cPath:'other.pdf'},null,undefined)",
+    ] {
+        let o = go(&format!("getField('price').value='17'; {call} === null"), &link);
+        assert_eq!(o.error, None, "{call}");
+        assert_eq!(o.result.as_deref(), Some("true"), "{call}");
+        assert_eq!(o.requests, [Request::OpenDoc("other.pdf".into())], "{call}");
+    }
+    for call in [
+        "app.openDoc({cPath:'other.pdf',oDoc:{}})",
+        "app.openDoc('other.pdf',{})",
+        "app.openDoc('other.pdf',Object.create(this))",
+        "app.openDoc('other.pdf',new Proxy(this,{}))",
+        "app.openDoc('other.pdf',getField('price'))",
+        "app.openDoc('other.pdf',this,true)",
+        "app.openDoc({cPath:'other.pdf',oDoc:this,cFS:'CHTTP'})",
+        "app.openDoc({cPath:'other.pdf'},this)",
+        "app.openDoc('')",
+    ] {
+        let o = go(call, &link);
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("openDoc")), "{call}: {:?}", o.error);
+        assert!(o.requests.is_empty(), "{call}");
+    }
+}
+
+/// A popup menu with no items answers null without asking, so the next menu still gets its own
+/// answer, and empty menus count toward the prompt limit (#2081).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_empty_popup_menu_answers_null_without_asking() {
+    let job = |script: &str| crate::session::Job {
+        script: script.into(),
+        event: Event { kind: "Link".into(), ..Event::doc("Mouse Up") },
+        doc: doc(),
+        fields: Arc::new(Vec::new()),
+        doc_scripts: Vec::new(),
+        calculations: Vec::new(),
+        timer: None,
+    };
+    let mut s = crate::session::ScriptSession::default();
+    let o = s.run(
+        job("var a = app.popUpMenuEx(); var b = app.popUpMenuEx({cName:'B', cReturn:'b'}); app.popUpMenuEx.apply(app, []); String(a) + ':' + b"),
+        &[Some("b".into())],
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.result.as_deref(), Some("null:b"));
+    let o = s.run(job("for (var i = 0; i < 33; i++) app.popUpMenuEx();"), &[]);
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("too many interactive prompts")), "{:?}", o.error);
+}
+
 /// `getOCGs` lists the document's layers; setting `state` turns one, which the run reports, and
 /// a document without layers gives `null` (#169, from #4751).
 #[test]

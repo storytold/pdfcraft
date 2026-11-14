@@ -100,7 +100,7 @@ fn a_placement_naming_a_missing_tessellation_is_malformed() {
     for (fs, tess) in [(1, 0), (0, 7)] {
         let (mut budget, mut out) = (Budget::default(), Vec::new());
         let r = place_items(&tessellations, [item(fs, tess, 0.0, None)], &mut budget, &mut out);
-        assert!(matches!(r, Err(RenderError::Model(pdfcraft_prc::PrcError::Malformed(_)))), "{fs}/{tess}: {r:?}");
+        assert!(matches!(r, Err(RenderError::Model(craft_prc::PrcError::Malformed(_)))), "{fs}/{tess}: {r:?}");
     }
 }
 
