@@ -240,8 +240,8 @@ fn advances(face: &CffFontRef<'_>, mapped: &Mapped, glyphs: u32, upem: f64) -> V
                 }
                 measured += 1;
                 let index = face.subfont_index(GlyphId::new(glyph))?;
-                if !subfonts.contains_key(&index) {
-                    subfonts.insert(index, face.subfont(index, &[]).ok()?);
+                if let std::collections::hash_map::Entry::Vacant(slot) = subfonts.entry(index) {
+                    slot.insert(face.subfont(index, &[]).ok()?);
                 }
                 let width = face.evaluate_charstring(subfonts.get(&index)?, GlyphId::new(glyph), &[], &mut NoOutline).ok()??;
                 Some(f64::from(width.to_f32()))
