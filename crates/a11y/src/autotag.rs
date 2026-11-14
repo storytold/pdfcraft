@@ -214,7 +214,9 @@ fn plan_page(
     }
     let pieces = content_pieces(doc, page, index)?;
     totals.0 = totals.0.saturating_add(pieces.data().len());
-    let parsed = pieces.parse();
+    // Its inline images decoded, within an allowance for the page, to tell where other readers
+    // end them: a page counted ambiguous is refused.
+    let parsed = pieces.parse_within(&mut pdfcraft_content::ImageDecoding::default());
     if parsed.skipped > 0 || parsed.ambiguous_images > 0 || parsed.ops.len() > MAX_OPERATORS {
         return Err(unsupported(index, "content has malformed or too many operators"));
     }

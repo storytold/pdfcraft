@@ -1921,3 +1921,29 @@ fn checker_reports_each_untagged_annotation_without_copying_shared_dictionaries(
     let found = content::page_rule(&doc, Rule::TaggedAnnotations, &pages, &[0], &Default::default(), false);
     assert_eq!(found.len(), 2, "the popup is skipped, each listed text annotation reported");
 }
+
+/// Autotagging tells where other readers end a page's inline images, decoding them where that
+/// tells it, as redaction does: behind ASCII85 and Flate, an `EI` among the samples a reader takes
+/// in (a stored block's) is no end, and the page is tagged; the same `EI` after the Flate data,
+/// where such a reader ends the image, makes the page refused.
+#[test]
+fn autotag_text_tells_where_readers_end_an_inline_image_behind_two_filters() {
+    let page = |text: &str| {
+        pdf(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>".into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+                stream(&format!(
+                    "BT /F1 12 Tf 20 100 Td (Hello) Tj ET q 20 0 0 20 80 80 cm BI /W 5 /H 1 /CS /G /BPC 8 /F [/A85 /Fl] ID {text}~> EI Q"
+                )),
+                FONT.into(),
+            ],
+            "",
+        )
+    };
+    // zlib of one stored block of the samples `01 71 79 7d ec`, whose last four are `EI!!!`.
+    let samples = "GQ@gK!;c]rEI!!!\"WmeG";
+    assert_eq!(autotag_text(&mut page(samples)).unwrap(), AutoTagResult { pages: 1, paragraphs: 1 });
+    assert!(autotag_text(&mut page(&format!("{samples}EI!!!"))).is_err(), "an EI after the Flate data");
+}

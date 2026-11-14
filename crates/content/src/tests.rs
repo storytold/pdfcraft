@@ -6,8 +6,317 @@ thread_local! {
 }
 
 thread_local! {
+    /// Bytes the searches for an `EI` or an end-of-data marker, and the count of a decoder's
+    /// characters, read on this thread.
+    pub(crate) static EOD_SEARCHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+thread_local! {
     /// Pieces [`Pieces::splice`] looked at while copying, on this thread.
     pub(crate) static PIECE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The renderer's tokenizer passes over the first `EI` (too few operators follow it, and none shows
+/// text) and ends the image inside `/GSEI`. A reader that decodes the data ends it after the
+/// ASCIIHex end-of-data marker `>`, at the first `EI`, and draws the form after it, which the
+/// renderer reads as data: where the operators resume is a guess.
+#[test]
+fn an_inline_image_holding_an_earlier_end_is_ambiguous() {
+    let p = parse(b"q 10 0 0 10 0 0 cm BI /W 2 /H 1 /CS /G /BPC 8 /F /AHx ID 00FF> EI Q /Fm Do q /GSEI gs Q");
+    assert!(!p.ops.iter().any(|op| op.is("Do")), "the renderer reads the form's draw as image data");
+    assert_eq!(p.ambiguous_images, 1);
+    // Without a later `EI`, the renderer ends the image at the first, as other readers do.
+    let p = parse(b"q 10 0 0 10 0 0 cm BI /W 2 /H 1 /CS /G /BPC 8 /F /AHx ID 00FF> EI Q /Fm Do q /GS1 gs Q");
+    assert!(p.ops.iter().any(|op| op.is("Do")));
+    assert_eq!(p.ambiguous_images, 0);
+}
+
+/// A reader that decodes the data reads it until it has the samples: past the renderer's `EI`
+/// here, which ends the first image inside it (`!! EI`), where a second one then reads
+/// `Q /Fm Do q /GS` as data. That reader ends after `~> EI` and draws the form.
+#[test]
+fn an_image_a_decoding_reader_reads_past_the_renderers_end_is_ambiguous() {
+    let p = parse(b"q 10 0 0 10 0 0 cm BI /W 20 /H 1 /CS /G /BPC 8 /F /A85 ID !! EI BI /W 1 /H 1 /CS /G /BPC 8 ID s~> EI Q /Fm Do q /GSEI gs Q");
+    assert!(!p.ops.iter().any(|op| op.is("Do")));
+    assert!(p.ambiguous_images > 0);
+}
+
+/// A decoding reader stops once it has the samples the image needs, not at the end-of-data marker,
+/// and ends the image at the first `EI` after: here at the first, where the renderer goes on to
+/// `/GSEI`.
+#[test]
+fn a_decoding_reader_ends_the_image_once_it_has_its_samples() {
+    for data in [
+        &b"q 10 0 0 10 0 0 cm BI /W 1 /H 1 /CS /G /BPC 8 /F /A85 ID z EI Q /Fm Do q /GSEI gs Q zz~> EI"[..],
+        b"q 10 0 0 10 0 0 cm BI /W 2 /H 1 /CS /G /BPC 8 /F /AHx ID 00FF EI Q /Fm Do q /GSEI gs Q",
+    ] {
+        let p = parse(data);
+        assert!(!p.ops.iter().any(|op| op.is("Do")), "{}", String::from_utf8_lossy(data));
+        assert_eq!(p.ambiguous_images, 1, "{}", String::from_utf8_lossy(data));
+    }
+}
+
+/// A declared length (`/L`) doesn't hide where the data ends: readers go by the samples and the
+/// end-of-data marker, not by it.
+#[test]
+fn a_declared_length_does_not_hide_where_the_data_ends() {
+    for length in ["/L 23", "/Length 23"] {
+        let data = format!("q 10 0 0 10 0 0 cm BI /W 2 /H 1 /CS /G /BPC 8 /F /AHx {length} ID 00FF> EI Q /Fm Do q /GSEI gs Q");
+        assert_eq!(parse(data.as_bytes()).ambiguous_images, 1, "{length}");
+    }
+}
+
+/// A decoding reader ends the image at the first `EI` after the data, whatever the bytes around it:
+/// `EIQ`, or an `EI` right after other bytes.
+#[test]
+fn a_decoding_reader_ends_at_an_ei_whatever_surrounds_it() {
+    for data in [&b"BI /W 2 /H 1 /CS /G /BPC 8 /F /AHx ID 00FF> EIQ EI Q"[..], b"BI /W 2 /H 1 /CS /G /BPC 8 /F /AHx ID 00FF>xEI EI Q"] {
+        assert_eq!(parse(data).ambiguous_images, 1, "{}", String::from_utf8_lossy(data));
+    }
+}
+
+/// An image that names its filters twice, `/Filter` and `/F` saying different things: a reader
+/// that takes `/F` ends the image after the ASCIIHex marker and draws the form, which the renderer
+/// reads as data; one that takes `/Filter` reads Flate. Where it ends can't be told, and no more
+/// when the filters' parameters or a key of its layout are given twice, differently, in both
+/// spellings or in one (Ghostscript keeps the first of a key given twice). Given alike, the image
+/// is as with one.
+#[test]
+fn an_image_whose_spellings_disagree_is_ambiguous() {
+    for (filters, ambiguous) in [
+        ("/Filter /Fl /F /AHx", 1),
+        ("/F /Fl /Filter /AHx", 1),
+        ("/Filter /Fl /F /Fl", 0),
+        // Read by its last value or with one spelling, each of these is Flate's, whose end stands.
+        ("/F /AHx /F /Fl", 1),
+        ("/Filter /AHx /Filter /Fl", 1),
+        ("/F /Fl /DecodeParms null /DecodeParms << /Predictor 2 >>", 1),
+        ("/F /Fl /DecodeParms null /DP << /Predictor 2 >>", 1),
+        ("/F /Fl /DP null /DP << /Predictor 2 >>", 1),
+        ("/F /Fl /DP null /DecodeParms null /DP null", 0),
+    ] {
+        let src = format!("q BI /W 2 /H 1 /CS /G /BPC 8 {filters} ID 00FF> EI Q /Fm Do q /GSEI gs Q");
+        assert_eq!(parse(src.as_bytes()).ambiguous_images, ambiguous, "{filters}");
+    }
+    for (layout, ambiguous) in [
+        ("/Width 6 /W 2 /H 1", 1),
+        ("/W 6 /Width 2 /H 1", 1),
+        ("/W 2 /H 1 /Height 3", 1),
+        ("/W 2 /H 1 /ColorSpace /RGB", 1),
+        ("/W 2 /H 1 /BitsPerComponent 4", 1),
+        ("/W 2 /H 1 /ImageMask false /IM 1", 1),
+        ("/Width 2 /W 2 /H 1", 0),
+        ("/W 6 /W 2 /H 1", 1),
+        ("/W 2 /H 1 /H 1 /W 2", 0),
+        // `/Interpolate` doesn't decide where the image ends.
+        ("/W 2 /H 1 /I true /I false", 0),
+    ] {
+        let src = format!("q BI {layout} /CS /G /BPC 8 ID ab EI Q");
+        assert_eq!(parse(src.as_bytes()).ambiguous_images, ambiguous, "{layout}");
+    }
+}
+
+/// An image behind a filter no reader decodes (an unknown name, `/Crypt`, a number, or such a name
+/// after a known one): a reader that decodes ends it at the first `EI` after `ID`, here before the
+/// renderer's, and draws the form the renderer reads as data. Without an `EI` before the renderer's,
+/// the end is the renderer's.
+#[test]
+fn an_image_behind_a_filter_no_reader_decodes_ends_at_its_first_ei() {
+    for filters in ["/F /Foo", "/Filter /FooDecode", "/F /Crypt", "/F 5", "/F [/Fl /Foo]"] {
+        let src = format!("q BI /W 2 /H 1 /CS /G /BPC 8 {filters} ID 00FF> EI Q /Fm Do q /GSEI gs Q");
+        assert_eq!(parse(src.as_bytes()).ambiguous_images, 1, "{filters}");
+    }
+    assert_eq!(parse(b"q BI /W 2 /H 1 /CS /G /BPC 8 /F /Foo ID 00FF> EI Q").ambiguous_images, 0);
+}
+
+/// An unfiltered image whose colour space is named as a resource has a layout only the page's
+/// resources tell: an `EI` in its data before the renderer's may be where a reader ends it.
+/// Without one, a reader that can't look the name up ends it at the renderer's `EI`.
+#[test]
+fn an_image_of_a_named_colour_space_with_an_earlier_ei_is_ambiguous() {
+    let p = parse(b"q 10 0 0 10 0 0 cm BI /W 2 /H 1 /CS /Cs1 /BPC 8 ID \x00\xff EI Q /Fm Do q /GSEI gs Q");
+    assert!(!p.ops.iter().any(|op| op.is("Do")));
+    assert_eq!(p.ambiguous_images, 1);
+    let p = parse(b"q 10 0 0 10 0 0 cm BI /W 2 /H 1 /CS /Cs1 /BPC 8 ID \x00\xff EI Q");
+    assert_eq!(p.ambiguous_images, 0);
+}
+
+/// [`parse_within`] with an allowance of its own: what a caller that reads the count gets, its
+/// inline images decoded where that tells where a reader stops.
+fn told(data: &[u8]) -> Parsed {
+    parse_within(data, &mut ImageDecoding::default())
+}
+
+/// ASCII85 of `bytes`, without the end-of-data marker: `z` for a group of zeros.
+fn a85(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    for chunk in bytes.chunks(4) {
+        let mut group = [0u8; 4];
+        group[..chunk.len()].copy_from_slice(chunk);
+        let mut value = u32::from_be_bytes(group);
+        if chunk.len() == 4 && value == 0 {
+            out.push('z');
+            continue;
+        }
+        let mut digits = [0u8; 5];
+        for digit in digits.iter_mut().rev() {
+            *digit = (value % 85) as u8 + b'!';
+            value /= 85;
+        }
+        out.push_str(std::str::from_utf8(&digits[..chunk.len() + 1]).unwrap());
+    }
+    out
+}
+
+/// `payload` as zlib data in one stored deflate block.
+fn stored_zlib(payload: &[u8]) -> Vec<u8> {
+    let n = u16::try_from(payload.len()).unwrap();
+    let mut out = vec![0x78, 0x01, 0x01];
+    out.extend(n.to_le_bytes());
+    out.extend((!n).to_le_bytes());
+    out.extend(payload);
+    let (mut a, mut b) = (1u32, 0u32);
+    for &x in payload {
+        a = (a + u32::from(x)) % 65521;
+        b = (b + a) % 65521;
+    }
+    out.extend((b << 16 | a).to_be_bytes());
+    out
+}
+
+/// Behind ASCII85 and Flate or RunLength, a reader decoding both reads the text until the inner filter
+/// has the samples the image needs, or reaches its own end, a group at a time, and ends the image
+/// at the first `EI` after that. An `EI` in the text before then is not where it ends; one after
+/// it, before the renderer's, is. Here the four bytes `71 79 7d ec`, the group `EI!!!`, are placed
+/// in what the inner filter takes in (no count), or after it (counts):
+/// - **Flate:** in a stored block's five samples, or after the stream's end, or in the header of
+///   the block after the samples, which a reader with its samples doesn't read.
+/// - **RunLength:** in a literal run of seven samples, or after its end-of-data byte; its samples
+///   may be in before that byte, or the byte before them.
+///
+/// An `E` that ends the last group the reader takes in is no `EI` it sees. Decode parameters that
+/// say nothing (`null`, an empty dictionary, an array of those) are none. Damaged Flate, deflate
+/// without a zlib header (a reader may refuse it outright), DCT (a JPEG decoder may stop before
+/// its end, which its markers don't tell), other inner filters, decode parameters and a colour
+/// space named as a resource leave the stop untold, and an `EI` before the renderer's counts as
+/// before.
+#[test]
+fn where_a_decoding_reader_stops_behind_a_second_filter_is_told_by_decoding() {
+    const EI: [u8; 4] = [0x71, 0x79, 0x7d, 0xec];
+    let at = |params: &str, filters: &str, decoded: &[u8], placed: usize| {
+        let text = a85(decoded);
+        assert_eq!(text.matches("EI").count(), placed, "the `EI`s placed in the text, and no other: {text}");
+        let src = format!("BI /W {params} /F [/A85 {filters}] ID {text}~> EI Q");
+        told(src.as_bytes()).ambiguous_images
+    };
+    let flate = stored_zlib(&[1, EI[0], EI[1], EI[2], EI[3]]);
+    let rl = [&[6, 9, 9, 9][..], &EI, &[128]].concat();
+    let jpeg = [&[0xff, 0xd8, 0xff, 0xda, 0x00, 0x02, 0x01, 0x02][..], &EI, &[0xff, 0xd9]].concat();
+    // Five samples in a stored block that isn't the last, then the next block's header, read as
+    // `EI!!!`: a reader with its samples stops before it, so it is where that reader ends the image.
+    let next_block = [&[0x78, 0x01, 0x00, 5, 0, 0xfa, 0xff, 1, 2, 3, 4, 5][..], &EI, &[0x82]].concat();
+    // Each: the image's parameters, its inner filter, the data before ASCII85, how many `EI`s its
+    // text holds, and whether the image counts.
+    let cases: [(&str, &str, Vec<u8>, usize, usize); 19] = [
+        ("5 /H 1 /CS /G /BPC 8", "/Fl", flate.clone(), 1, 0),
+        ("5 /H 1 /CS /G /BPC 8", "/Fl", [&flate[..], &EI].concat(), 2, 1),
+        ("5 /H 1 /CS /G /BPC 8", "/Fl", next_block, 1, 1),
+        ("5 /H 1 /CS /G /BPC 8", "/Fl", [&[0x78, 0x01, 0x01, 5, 0, 0, 0, 1][..], &EI, &[0; 4]].concat(), 1, 1),
+        // The same stored block without its zlib header.
+        ("5 /H 1 /CS /G /BPC 8", "/Fl", [&[0x01, 5, 0, 0xfa, 0xff, 1, 2, 3][..], &EI, &[0; 4]].concat(), 1, 1),
+        ("5 /H 1 /CS /G /BPC 8 /DP [null << /Predictor 1 >>]", "/Fl", flate.clone(), 1, 1),
+        ("5 /H 1 /CS /G /BPC 8 /DP [null null]", "/Fl", flate.clone(), 1, 0),
+        ("5 /H 1 /CS /G /BPC 8 /DP [null << >>]", "/Fl", flate.clone(), 1, 0),
+        ("5 /H 1 /CS /G /BPC 8 /DecodeParms << >>", "/Fl", flate.clone(), 1, 0),
+        // Parameters that say nothing in one spelling, or given first, and a predictor in the
+        // other: a reader may take the predictor, which it can't set up.
+        ("5 /H 1 /CS /G /BPC 8 /DecodeParms null /DP [null << /Predictor 99 >>]", "/Fl", flate.clone(), 1, 1),
+        ("5 /H 1 /CS /G /BPC 8 /DP [null << /Predictor 99 >>] /DP [null null]", "/Fl", flate.clone(), 1, 1),
+        ("5 /H 1 /CS /Cs1 /BPC 8", "/Fl", flate.clone(), 1, 1),
+        ("7 /H 1 /CS /G /BPC 8", "/RL", rl.clone(), 1, 0),
+        ("7 /H 1 /CS /G /BPC 8", "/RL", [&rl[..], &[0, 0, 0], &EI].concat(), 2, 1),
+        // The samples are all in, the first `EI` among them, before a second run holding another,
+        // and its end-of-data byte.
+        ("7 /H 1 /CS /G /BPC 8", "/RL", [&rl[..8], &[6, 9, 9, 9], &EI, &[128]].concat(), 2, 1),
+        // The end-of-data byte before the samples are all in.
+        ("7 /H 1 /CS /G /BPC 8", "/RL", [&[0, 9, 128, 6][..], &EI, &[1, 1, 1]].concat(), 1, 1),
+        // The `E` of `!!!!E` ends the last group the reader takes in; `I!!!!` follows.
+        ("7 /H 1 /CS /G /BPC 8", "/RL", vec![6, 9, 9, 9, 0, 0, 0, 0x24, 0x7c, 0x74, 0xbb, 0xa8], 1, 0),
+        ("1 /H 1 /CS /G /BPC 8", "/DCT", jpeg.clone(), 1, 1),
+        ("1 /H 1 /CS /G /BPC 8", "/LZW", jpeg, 1, 1),
+    ];
+    for (params, filters, decoded, placed, expected) in cases {
+        assert_eq!(at(params, filters, &decoded, placed), expected, "/W {params} /F [/A85 {filters}]: {:02x?}", decoded);
+    }
+}
+
+/// Where a decoding reader stops, in each way it can be told, against images it ends where the
+/// renderer does (0) and ones it ends elsewhere (1).
+#[test]
+fn where_a_decoding_reader_stops_is_told_from_the_filter_and_the_layout() {
+    let at = |params: &str, data: &[u8]| {
+        let src = [format!("BI /W {params} ID ").as_bytes(), data].concat();
+        parse(&src).ambiguous_images
+    };
+    let cases: [(&str, &[u8], usize); 18] = [
+        // No filter: two samples `EI`, then the image's own `EI`.
+        ("2 /H 1 /CS /G /BPC 8", b"EI EI Q", 0),
+        // The samples `xE` start after the one byte of white space after `ID`: the `EI` their last
+        // byte starts is not where a reader ends the image.
+        ("2 /H 1 /CS /G /BPC 8", b"xEI EI Q", 0),
+        // ASCIIHex and ASCII85, alone: the marker before the samples are all read stops the reader.
+        ("4 /H 1 /CS /G /BPC 8 /F /AHx", b"00> EI Q", 0),
+        ("4 /H 1 /CS /G /BPC 8 /F /A85", b"!!~> EI Q", 0),
+        // A reader that needs more than the data before the renderer's `EI` reads past it.
+        ("20 /H 1 /CS /G /BPC 8 /F /A85", b"!! EI Q", 1),
+        // ASCII85: one group gives the four bytes; an `EI` in the data after it is where the reader ends.
+        ("4 /H 1 /CS /G /BPC 8 /F /A85", b"!!EI!~> EI Q", 0),
+        ("4 /H 1 /CS /G /BPC 8 /F /A85", b"!!!!!EI~> EI Q", 1),
+        // `z` stands for a group at its start, and for nothing a reader agrees on inside one.
+        ("8 /H 1 /CS /G /BPC 8 /F /A85", b"zz~> EI Q", 0),
+        ("8 /H 1 /CS /G /BPC 8 /F /A85", b"zzEI~> EI Q", 1),
+        ("4 /H 1 /CS /G /BPC 8 /F /A85", b"!z~> EI Q", 1),
+        // One filter in an array is that filter alone.
+        ("4 /H 1 /CS /G /BPC 8 /F [/A85]", b"!!EI!~> EI Q", 0),
+        // Behind another filter, an `EI` before the renderer's counts where a reader decoding both
+        // may stop before it (`where_a_decoding_reader_stops_behind_a_second_filter_is_told_by_decoding`),
+        // and a marker after it counts. Here the four bytes are no zlib data, which a reader may
+        // refuse at once: where it stops isn't told.
+        ("4 /H 1 /CS /G /BPC 8 /F [/A85 /Fl]", b"!!EI!~> EI Q", 1),
+        ("4 /H 1 /CS /G /BPC 8 /F [/A85 /Fl]", b"!!!!!~> EI Q", 0),
+        ("4 /H 1 /CS /G /BPC 8 /F [/A85 /Fl]", b"!!!!! EI Q", 1),
+        ("4 /H 1 /CS /G /BPC 8 /F [/AHx /Fl]", b"0011> EI Q", 0),
+        ("4 /H 1 /CS /G /BPC 8 /F [/AHx /Fl]", b"0011 EI Q", 1),
+        // An empty filter array is no filter: a named colour space with an `EI` in its data counts.
+        ("2 /H 1 /CS /Cs1 /BPC 8 /F []", b"EI EI Q", 1),
+        ("2 /H 1 /CS /G /BPC 8 /F []", b"EI EI Q", 0),
+    ];
+    for (params, data, expected) in cases {
+        assert_eq!(at(params, data), expected, "/W {params} ID {}", String::from_utf8_lossy(data));
+    }
+}
+
+/// Many inline images: whether each is counted, by its decoder's characters or by the end-of-data
+/// marker and the `EI`s before it, reads the stream about once in all, not once for each image.
+#[test]
+fn inline_images_are_read_about_once_however_many_a_stream_holds() {
+    // The last stream has its only end-of-data marker at the very end: each image's search finds
+    // it far ahead, and the next uses that answer.
+    let far = [b"BI /W 1 /H 1 /CS /G /BPC 8 /F [/AHx /Fl] ID 7F EI ".repeat(2_000), b">".to_vec()].concat();
+    // Images that need far more samples than they hold: each one's count stops at its own `EI`.
+    let short = b"BI /W 1000000 /H 1 /CS /G /BPC 8 /F /AHx ID 7F EI ".repeat(2_000);
+    for data in [
+        b"BI /W 1 /H 1 /CS /G /BPC 8 /F /AHx ID 7F EI ".repeat(2_000),
+        b"BI /W 1 /H 1 /CS /G /BPC 8 /F [/AHx /Fl] ID 7F EI ".repeat(2_000),
+        far,
+        short,
+    ] {
+        EOD_SEARCHED.with(|c| c.set(0));
+        let p = parse(&data);
+        assert!(p.ops.len() >= 2_000);
+        let searched = EOD_SEARCHED.with(std::cell::Cell::get);
+        assert!(searched <= 2 * data.len(), "searched {searched} bytes of {}", data.len());
+    }
 }
 
 #[test]
@@ -206,7 +515,10 @@ fn filtered_unknown_and_damaged_inline_images_end_where_the_renderer_ends_them()
         let label = String::from_utf8_lossy(parameters);
         assert_eq!(parsed.ops[1].inline.as_ref().unwrap().1, b"! EI !!~>", "{label}");
         assert_eq!(parsed.ops.iter().map(|op| op.op.as_slice()).collect::<Vec<_>>(), [b"q".as_slice(), b"BI", b"Q"], "{label}");
-        assert_eq!(parsed.ambiguous_images, 0, "{label}");
+        // Only the ASCII85 image has a layout a decoding reader takes the same end from; the others,
+        // damaged or of a colour space named as a resource it can't look up, it can't read, and it
+        // ends them at the first `EI` after `ID`, here the one inside the data.
+        assert_eq!(parsed.ambiguous_images, usize::from(!parameters.ends_with(b"/F /A85")), "{label}");
     }
     // A short payload is read whole; without an `EI`, the renderer reads no image and this
     // parser's end is a guess.
@@ -586,4 +898,75 @@ fn invert_accepts_small_scale_and_rejects_singular() {
     assert!(Matrix([f64::NAN, 0., 0., 1., 0., 0.]).invert().is_none());
     // A subnormal scale passes the relative check but its inverse overflows (CodeRabbit on #5703).
     assert!(Matrix([1e-310, 0., 0., 1., 0., 0.]).invert().is_none());
+}
+
+/// What inflating a stream's inline images may give is 64 MiB in all. Past it, where a reader
+/// stops behind ASCII85 and Flate isn't told, and an `EI` before the renderer's counts: a first
+/// image whose samples take all of it leaves the second image's `EI`, which a reader would pass
+/// over, counted. Alone, the second image doesn't count.
+#[test]
+fn inflating_a_streams_inline_images_stops_at_its_allowance() {
+    const EI: [u8; 4] = [0x71, 0x79, 0x7d, 0xec];
+    // The `EI` after the large image's Flate data, on a group of its own.
+    let mut large = pdfcraft_filters::encode_flate(&vec![0u8; 64 << 20]);
+    large.resize(large.len().next_multiple_of(4), 1);
+    large.extend(EI);
+    let small = stored_zlib(&[1, EI[0], EI[1], EI[2], EI[3]]);
+    let image = |params: &str, decoded: &[u8]| format!("BI /W {params} /CS /G /BPC 8 /F [/A85 /Fl] ID {}~> EI ", a85(decoded));
+    let second = image("5 /H 1", &small);
+    assert_eq!(told(format!("{second}Q").as_bytes()).ambiguous_images, 0, "the second image alone");
+    let both = format!("{}{second}Q", image("8192 /H 8192", &large));
+    assert_eq!(told(both.as_bytes()).ambiguous_images, 2, "after an image that spends the allowance");
+}
+
+/// What decoding a stream's inline images may give counts their decoded text too, not only what
+/// inflating gives: an image whose ASCII85 text decodes past 64 MiB (`z` gives four zero bytes a
+/// character, here after its RunLength data's end) isn't decoded to tell where a reader stops, and
+/// its earlier `EI` counts; one whose text decodes to exactly 64 MiB is decoded, and doesn't count.
+/// The allowance is the stream's, spent by each image in turn.
+#[test]
+fn decoding_a_streams_inline_images_counts_their_text_too() {
+    const EI: [u8; 4] = [0x71, 0x79, 0x7d, 0xec];
+    // A literal run of seven samples holding `EI!!!`, the end-of-data byte, and three bytes after
+    // it: 12 bytes, then `zs` groups of zeros.
+    let data = [&[6, 9, 9, 9][..], &EI, &[128, 0, 0, 0]].concat();
+    let image = |zs: usize| format!("BI /W 7 /H 1 /CS /G /BPC 8 /F [/A85 /RL] ID {}{}~> EI Q", a85(&data), "z".repeat(zs));
+    let exactly = ((64 << 20) - data.len()) / 4;
+    assert_eq!(told(image(4).as_bytes()).ambiguous_images, 0, "well within the allowance");
+    assert_eq!(told(image(exactly).as_bytes()).ambiguous_images, 0, "exactly the allowance");
+    assert_eq!(told(image(exactly + 1).as_bytes()).ambiguous_images, 1, "past it");
+    // 60 MiB of the first image's text leave the second too little for its 8 MiB.
+    let two = format!("{} {}", image((60 << 20) / 4), image((8 << 20) / 4));
+    assert_eq!(told(two.as_bytes()).ambiguous_images, 1, "the second image, past what the first left");
+    // A decode that fails is charged what it decoded: 60 MiB of text before a character outside
+    // ASCII85, which counts, leave the second too little too.
+    let failed = image((60 << 20) / 4).replace("~> EI Q", "{~> EI Q");
+    assert_eq!(told(format!("{failed} {}", image((8 << 20) / 4)).as_bytes()).ambiguous_images, 2, "after a decode that failed");
+    // Behind ASCII85 and DCT, which isn't told, the text isn't decoded, and the second is.
+    let dct = image((60 << 20) / 4).replace("/F [/A85 /RL]", "/F [/A85 /DCT]");
+    assert_eq!(told(format!("{dct} {}", image((8 << 20) / 4)).as_bytes()).ambiguous_images, 1, "after an image behind DCT");
+}
+
+/// Parses given one allowance share it ([`parse_within`]), as redaction's walk of a page does for
+/// a form drawn again: after one whose image inflates all of it, another image's stop isn't told,
+/// and its earlier `EI` counts, which in a parse with an allowance of its own it doesn't. [`parse`]
+/// and [`ops`] decode nothing, and count it.
+#[test]
+fn parses_sharing_an_allowance_share_it() {
+    const EI: [u8; 4] = [0x71, 0x79, 0x7d, 0xec];
+    // The `EI` after the large image's Flate data, on a group of its own.
+    let mut large = pdfcraft_filters::encode_flate(&vec![0u8; 64 << 20]);
+    large.resize(large.len().next_multiple_of(4), 1);
+    large.extend(EI);
+    let first = format!("BI /W 8192 /H 8192 /CS /G /BPC 8 /F [/A85 /Fl] ID {}~> EI Q", a85(&large));
+    let second = format!("BI /W 5 /H 1 /CS /G /BPC 8 /F [/A85 /Fl] ID {}~> EI Q", a85(&stored_zlib(&[1, EI[0], EI[1], EI[2], EI[3]])));
+    assert_eq!(told(second.as_bytes()).ambiguous_images, 0, "alone, with an allowance of its own");
+    assert_eq!(parse(second.as_bytes()).ambiguous_images, 1, "alone, parsed without decoding");
+    let mut read = ops(second.as_bytes());
+    read.by_ref().for_each(drop);
+    assert_eq!(read.ambiguous_images(), 1, "alone, read one operator at a time, likewise");
+    let mut decoding = ImageDecoding::default();
+    parse_within(first.as_bytes(), &mut decoding);
+    assert_eq!(parse_within(second.as_bytes(), &mut decoding).ambiguous_images, 1, "after the first, sharing its allowance");
+    assert_eq!(Pieces::join(&[second.as_bytes()]).parse_within(&mut decoding).ambiguous_images, 1, "in pieces, likewise");
 }

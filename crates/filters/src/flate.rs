@@ -100,6 +100,58 @@ fn inflate(input: &[u8], max: usize) -> Step {
     }
 }
 
+/// The least of zlib `data` a reader inflating it takes in to give `output` bytes, or the whole
+/// deflate stream where that gives fewer; and, told or not, how many bytes it inflated. Not told
+/// for data without a zlib header or with a preset dictionary (a reader may refuse it outright),
+/// where the data is damaged first, or where it inflates `max` bytes before either. Data that ends
+/// before either is all taken in.
+pub fn input_for(data: &[u8], output: usize, max: usize) -> (Option<usize>, usize) {
+    match zlib_header(data) {
+        Some((_, flg)) if flg & 0x20 == 0 => {
+            let (taken, made) = least_input(data.get(2..).unwrap_or_default(), output, max);
+            (taken.map(|taken| taken + 2), made)
+        }
+        _ => (None, 0),
+    }
+}
+
+/// [`input_for`] of raw deflate. The input is fed as many bytes at a time as can't give the bytes still wanted
+/// (a byte of deflate gives at most 258 bytes for each of its bits, and the bits held from bytes
+/// already fed a few matches more), then a byte at a time, so what is taken in when the output is
+/// reached is the least that reaches it.
+fn least_input(input: &[u8], output: usize, max: usize) -> (Option<usize>, usize) {
+    const MOST_PER_BYTE: usize = 258 * 8;
+    const HELD: usize = 16 << 10;
+    let mut d = Decompress::new(false);
+    let mut scratch = vec![0u8; 64 << 10];
+    let counts = |d: &Decompress| (usize::try_from(d.total_in()).unwrap_or(usize::MAX), usize::try_from(d.total_out()).unwrap_or(usize::MAX));
+    loop {
+        let (taken, made) = counts(&d);
+        if made >= output {
+            return (Some(taken), made);
+        }
+        if made >= max {
+            return (None, made);
+        }
+        let left = output - made;
+        let feed = (left.saturating_sub(HELD) / MOST_PER_BYTE).max(1);
+        let room = left.min(max - made).min(scratch.len());
+        let Some(rest) = input.get(taken..) else { return (None, made) };
+        if rest.is_empty() {
+            return (Some(input.len()), made);
+        }
+        let (Some(fed), Some(out)) = (rest.get(..feed.min(rest.len())), scratch.get_mut(..room)) else { return (None, made) };
+        let Ok(status) = d.decompress(fed, out, FlushDecompress::None) else { return (None, counts(&d).1) };
+        let (now_taken, now_made) = counts(&d);
+        match status {
+            Status::StreamEnd => return (Some(now_taken), now_made),
+            // A step that takes and gives nothing would be repeated forever.
+            _ if now_taken == taken && now_made == made => return (None, made),
+            _ => {}
+        }
+    }
+}
+
 /// zlib at level 6.
 // The documented never-crash exception: writing into a `Vec` cannot fail.
 #[allow(clippy::expect_used)]
@@ -116,6 +168,73 @@ mod tests {
 
     fn dec(d: &[u8]) -> Result<Vec<u8>, FilterError> {
         decode(d, 1 << 24, Some(1 << 24)).0.map_err(|f| f.error)
+    }
+
+    /// The least of `data` whose prefix inflates to `output` bytes or ends the deflate stream (its
+    /// checksum unread), or `data.len()`: what [`input_for`] tells, found the slow way, a prefix
+    /// at a time.
+    fn least_prefix(data: &[u8], output: usize) -> usize {
+        (2..=data.len())
+            .find(|&n| {
+                let mut d = Decompress::new(false);
+                let mut out = vec![0u8; output];
+                let status = d.decompress(&data[2..n], &mut out, FlushDecompress::Finish);
+                d.total_out() as usize >= output || matches!(status, Ok(Status::StreamEnd))
+            })
+            .unwrap_or(data.len())
+    }
+
+    /// A reader inflating zlib data takes in the least that gives the output asked for, checked
+    /// against a prefix search over streams of each kind: stored, fixed and dynamic blocks, with
+    /// sync flushes and an empty final block, for outputs short of, at and past each stream's;
+    /// and long runs, where a byte gives so much that the input is fed many bytes at a time
+    /// until the output is near.
+    /// Not told past what may be inflated, without a zlib header, with a preset dictionary, or
+    /// for damaged data; data that ends first is all taken in.
+    #[test]
+    fn the_input_for_an_output_is_the_least_that_gives_it() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut streams = Vec::new();
+        for level in [0, 1, 6, 9] {
+            for flushes in [0, 2] {
+                let len = 200 + (next() % 600) as usize;
+                let data: Vec<u8> = (0..len).map(|i| if next() % 3 == 0 { (next() % 256) as u8 } else { (i % 7) as u8 }).collect();
+                let mut e = flate2::write::ZlibEncoder::new(Vec::new(), Compression::new(level));
+                for (i, chunk) in data.chunks(len / (flushes + 1) + 1).enumerate() {
+                    e.write_all(chunk).unwrap();
+                    if i < flushes {
+                        e.flush().unwrap();
+                    }
+                }
+                streams.push((e.finish().unwrap(), len));
+            }
+        }
+        for level in [1, 9] {
+            let len = 300_000;
+            let data: Vec<u8> = (0..len).map(|i| (i / 40_000 % 3) as u8).collect();
+            let mut e = flate2::write::ZlibEncoder::new(Vec::new(), Compression::new(level));
+            e.write_all(&data).unwrap();
+            streams.push((e.finish().unwrap(), len));
+        }
+        for (stream, len) in &streams {
+            for output in [1, len / 3, len / 2, len - 1, *len, len + 10] {
+                let (taken, made) = input_for(stream, output, 1 << 20);
+                assert_eq!(taken, Some(least_prefix(stream, output)), "output {output} of a stream of {len}");
+                assert!(made >= output.min(*len), "{made}");
+            }
+        }
+        let (data, _) = &streams[2];
+        assert_eq!(input_for(data, 1 << 20, 100), (None, 100), "past what may be inflated");
+        assert_eq!(input_for(&data[2..], 10, 1000).0, None, "no zlib header");
+        assert_eq!(input_for(&[0x78, 0xbb, 0, 0], 10, 1000).0, None, "a preset dictionary");
+        assert_eq!(input_for(&[0x78, 0x9c, 0xff, 0xff, 0xff], 10, 1000).0, None, "damaged");
+        assert_eq!(input_for(&data[..20], 1 << 20, 1 << 20).0, Some(20), "ends before either: all taken in");
     }
 
     #[test]

@@ -10,6 +10,9 @@ workspace = true
 
 [dependencies]
 pdfcraft-cos = { workspace = true }
+# Inflating an inline image's data behind ASCIIHex or ASCII85, to tell where a reader that
+# decodes it stops reading.
+pdfcraft-filters = { workspace = true }
 # The renderer's content tokenizer, already in the tree through pdfcraft-cos: inline images end
 # where the renderer ends them.
 hayro-syntax = { workspace = true }
