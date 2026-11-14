@@ -1,6 +1,5 @@
-//! Annotation appearances and the resources the redaction cleanups prune: an appearance a kept
-//! annotation still shows keeps the fonts, glyphs and images it draws, and one a removed
-//! annotation showed keeps nothing in the file.
+//! Annotation appearances and the Type 3 cleanup: an appearance a kept annotation still shows
+//! keeps the glyphs it draws, and one a removed annotation showed keeps nothing in the file.
 
 use super::surviving_references::{full_save_holds, refused_for, saved_first_page_lists_font, type3_abc};
 use super::*;
@@ -28,33 +27,6 @@ fn a_type3_font_only_appearances_list_loses_the_removed_annotations_glyph() {
     assert_eq!(apply(&mut doc, None).unwrap().annotations, 1);
     assert!(!full_save_holds(&doc, b"REMOVED_ANNOTATION_GLYPH_A"), "the removed annotation's glyph program survived");
     assert!(full_save_holds(&doc, b"KEPT_ANNOTATION_GLYPH_B"), "the glyph the kept annotation shows was unlinked");
-}
-
-/// (b) An appearance whose `/Resources` hold only `/ProcSet` selects the page's Type 3 font `/T4`:
-/// the renderer looks a name the appearance's resources lack up in the page's. The rewritten page's
-/// content selects only `/T3`, so the page's cleanup must keep `/T4` too, and drops `/T5`, which
-/// nothing selects. (Whether `/T4`'s glyphs stay is the glyph scan's to decide.)
-#[test]
-fn a_page_font_an_appearance_with_partial_resources_selects_stays_on_the_page() {
-    let doc = pdf(vec![
-        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R /Annots [9 0 R] >>".to_vec(),
-        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET"),
-        b"<< /Font << /T3 6 0 R /T4 7 0 R /T5 8 0 R >> >>".to_vec(),
-        type3_abc(11),
-        type3_abc(14),
-        type3_abc(17),
-        b"<< /Type /Annot /Subtype /FreeText /Rect [150 200 250 220] /DA (/T4 10 Tf 0 g) /AP << /N 10 0 R >> >>".to_vec(),
-        stream("/Type /XObject /Subtype /Form /BBox [0 0 100 20] /Resources << /ProcSet [/PDF /Text] >>", b"BT /T4 10 Tf 2 5 Td (B) Tj ET"),
-    ]);
-    let page = pdfcraft_model::pages(&doc).swap_remove(0);
-    let mut res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
-    let content = vec![b"BT /T3 10 Tf 10 100 Td (C) Tj ET".to_vec()];
-    crate::type3::prune_type3_from_resources(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &mut res, &content, Some(&page.dict)).unwrap();
-    let fonts = doc.resolve(res.get(b"Font").unwrap()).as_dict().unwrap().clone();
-    assert!(fonts.contains(b"T4"), "the page no longer lists the font the appearance selects");
-    assert!(fonts.contains(b"T3") && !fonts.contains(b"T5"), "the cleanup didn't run as expected: {fonts:?}");
 }
 
 /// (c) `/AP /N` names an object that is itself only a reference to the appearance stream, which

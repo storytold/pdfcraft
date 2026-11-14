@@ -445,53 +445,6 @@ fn scan_appearances(ctx: &mut ScanContext<'_>, page: &Dict, page_ref: ObjRef, pa
     Ok(())
 }
 
-/// The resource categories the Type 3 cleanup looks names up in.
-const LOOKED_UP: [&[u8]; 4] = [b"Font", b"ExtGState", b"XObject", b"Pattern"];
-
-/// Whether `value`, the entry of a content's own resources under `name` in `category`, is what
-/// the renderer takes that name for: a font or graphics state is a dictionary, an XObject a stream,
-/// and a pattern anything the file defines. Where it isn't, the renderer looks the name up in the
-/// page's resources instead.
-fn gives(doc: &Document, category: &[u8], value: &Object) -> bool {
-    match &*doc.resolve(value) {
-        Object::Null => false,
-        Object::Dict(_) => category != b"XObject",
-        Object::Stream(_) => matches!(category, b"XObject" | b"Pattern"),
-        _ => category == b"Pattern",
-    }
-}
-
-/// Whether an appearance's own resources `own` give `name` in `category` ([`gives`]).
-fn own_gives(doc: &Document, own: &Dict, category: &[u8], name: &[u8]) -> bool {
-    res_dict(doc, own, category).get(name).is_some_and(|v| gives(doc, category, v))
-}
-
-/// The names an annotation appearance with resources of its own (`own`) draws with. The
-/// renderer draws an appearance as a form whose caller is the page (ISO 32000-2 §12.5.5), and
-/// looks a name the form's resources don't give up in its caller's: so `own`, with each name of
-/// `page_res` it doesn't give added, in the categories the cleanup reads. A `/Resources` holding
-/// only `/ProcSet`, say, draws with the page's fonts. `None` when the page adds nothing: `own`
-/// alone is then what the appearance draws with.
-fn appearance_names(doc: &Document, own: &Dict, page_res: &Dict) -> Option<Dict> {
-    let mut names = own.clone();
-    let mut added = false;
-    for category in LOOKED_UP {
-        let page = res_dict(doc, page_res, category);
-        let mine = res_dict(doc, own, category);
-        let mut merged = mine.clone();
-        let mut grew = false;
-        for (name, value) in page.iter().filter(|(name, _)| !mine.get(name).is_some_and(|v| gives(doc, category, v))) {
-            merged.set(name.to_vec(), value.clone());
-            grew = true;
-        }
-        if grew {
-            names.set(category.to_vec(), Object::Dict(merged));
-            added = true;
-        }
-    }
-    added.then_some(names)
-}
-
 /// The object at the end of the chain of references `r` starts, where an object holds nothing but
 /// a reference to another: the one the renderer reads, as [`Document::resolve`] reads it (which
 /// follows 32 such links).
@@ -521,10 +474,9 @@ fn appearance_streams(doc: &Document, annot: &Object) -> Vec<ObjRef> {
     streams.into_iter().map(|r| chain_end(doc, r)).collect()
 }
 
-/// The appearance streams of a page's annotations, each once, with their own resources where they
-/// have them (a dictionary): one without draws through the page's, as [`scan_stream_object`]
-/// reads it, and one with them through the names [`appearance_names`] gives.
-fn page_appearances(doc: &Document, page: &Dict) -> Vec<(ObjRef, Option<Dict>)> {
+/// The appearance streams of a page's annotations that have no resources of their own: they draw
+/// through the page's, as [`scan_stream_object`] reads them.
+fn resourceless_appearances(doc: &Document, page: &Dict) -> Vec<ObjRef> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for annot in crate::annots_of(doc, page) {
@@ -532,22 +484,14 @@ fn page_appearances(doc: &Document, page: &Dict) -> Vec<(ObjRef, Option<Dict>)> 
             if !seen.insert(r) {
                 continue;
             }
-            if let Object::Stream(s) = &*doc.get(r) {
-                out.push((r, s.dict.get(b"Resources").and_then(|ro| doc.resolve(ro).as_dict().cloned())));
+            if let Object::Stream(s) = &*doc.get(r)
+                && s.dict.get(b"Resources").is_none_or(|ro| doc.resolve(ro).as_dict().is_none())
+            {
+                out.push(r);
             }
         }
     }
     out
-}
-
-/// Whether an appearance with resources of its own (`own`) can select a Type 3 font of the page's
-/// resources `res`: the page lists one under a font or graphics-state name `own` doesn't give.
-/// Otherwise nothing it draws keeps a page font, and it isn't read for them.
-fn reaches_page_type3(doc: &Document, own: &Dict, res: &Dict) -> bool {
-    res_dict(doc, res, b"Font").iter().any(|(name, f)| is_type3(doc, f) && !own_gives(doc, own, b"Font", name))
-        || res_dict(doc, res, b"ExtGState")
-            .iter()
-            .any(|(name, gs)| gs_font_object(doc, gs).is_some_and(|f| is_type3(doc, &f)) && !own_gives(doc, own, b"ExtGState", name))
 }
 
 /// Add to `ops` those of the soft mask groups without resources of their own that `ops` set
@@ -662,40 +606,19 @@ pub(crate) fn prune_type3_from_resources(
     let type3 = fonts.iter().any(|(_, f)| is_type3(doc, f));
     let mut own = pdfcraft_cos::DecodeBudget::page();
     let mut ops = crate::interp::resource_ops(doc, if type3 { &mut *budget } else { &mut own }, res, content)?;
-    // So do those of a page's annotation appearances without resources of their own, and those of
-    // the others that select a page font through a name their own resources don't give, and of soft
-    // mask groups without resources of their own. They are read only when there is a Type 3 font to
-    // keep, so other files are not refused over them.
+    // So do those of a page's annotation appearances, and of soft mask groups, without resources of
+    // their own. They are read only when there is a Type 3 font to keep, so other files are not
+    // refused over them.
     if type3 {
         if let Some(page) = page {
             // One total for all of them, as for the content: each appearance under the cap could
             // still add up to far more than it. Their decoded bytes, and their forms', are charged to
             // the page's allowance, which the content and its forms spend too, and each is decoded
             // only in its turn, so they are never all held at once.
-            for (r, appearance_res) in page_appearances(doc, page) {
-                // One with resources of its own keeps a page font only through a name they don't
-                // give ([`appearance_names`]); only those of its operators count.
-                let names = match &appearance_res {
-                    None => None,
-                    Some(mine) if !reaches_page_type3(doc, mine, res) => continue,
-                    Some(mine) => match appearance_names(doc, mine, res) {
-                        Some(names) => Some((mine, names)),
-                        None => continue,
-                    },
-                };
+            for r in resourceless_appearances(doc, page) {
                 let Object::Stream(s) = &*doc.get(r) else { continue };
                 let data = budget.decode(&doc.with_direct_parms(s))?;
-                let mut more = crate::interp::resource_ops(doc, budget, names.as_ref().map_or(&*res, |(_, n)| n), std::slice::from_ref(&data))?;
-                if let Some((mine, names)) = &names {
-                    // Its soft masks' groups draw through the same names.
-                    let known = more.len();
-                    add_soft_mask_ops(doc, names, &mut more, known)?;
-                    more.retain(|op| match op.op.as_slice() {
-                        b"Tf" => op.name_back(1).is_some_and(|n| !own_gives(doc, mine, b"Font", n)),
-                        b"gs" => op.last_name().is_some_and(|n| !own_gives(doc, mine, b"ExtGState", n)),
-                        _ => false,
-                    });
-                }
+                let more = crate::interp::resource_ops(doc, budget, res, std::slice::from_ref(&data))?;
                 if ops.len().saturating_add(more.len()) > 2_000_000 {
                     return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect annotation appearances".into() });
                 }
