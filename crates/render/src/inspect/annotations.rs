@@ -977,7 +977,13 @@ fn draw_flags(o: &Object) -> u32 {
 fn rect4(o: &Object) -> [f32; 4] {
     match o {
         Object::Array(a) if a.len() == 4 => {
-            let v: Vec<f32> = a.iter().map(|x| x.as_float().unwrap_or(0.0)).collect();
+            let v: Vec<f32> = a
+                .iter()
+                .map(|x| {
+                    let v = x.as_float().unwrap_or(0.0);
+                    if v.is_nan() { 0.0 } else { v.clamp(f32::MIN, f32::MAX) }
+                })
+                .collect();
             [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])]
         }
         _ => [0.0; 4],

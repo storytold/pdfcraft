@@ -24,12 +24,20 @@ const MIN_BOX_SIDE: f64 = 1.0 / 4096.0;
 
 fn rect(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
     let o = doc.resolve(o?);
-    // Four entries, or not a rectangle: a longer array (one shared by many pages, say) is not
-    // resolved entry by entry only to be discarded.
-    let [a, b, c, d] = o.as_array()?.as_slice() else { return None };
-    let v = [a, b, c, d].map(|x| doc.resolve(x).as_f64());
-    let [Some(x0), Some(y0), Some(x1), Some(y1)] = v else { return None };
-    [x0, y0, x1, y1].iter().all(|x| x.is_finite()).then(|| [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])
+    let [a, b, c, d, ..] = o.as_array()?.as_slice() else { return None };
+    let mut coords = [doc.resolve(a).as_f64()?, doc.resolve(b).as_f64()?, doc.resolve(c).as_f64()?, doc.resolve(d).as_f64()?];
+    if coords.iter().any(|x| x.is_nan()) {
+        return None;
+    }
+    for x in &mut coords {
+        *x = x.clamp(f64::MIN, f64::MAX);
+    }
+    let r = [coords[0].min(coords[2]), coords[1].min(coords[3]), coords[0].max(coords[2]), coords[1].max(coords[3])];
+    // ±∞ clamps to ±f64::MAX. Each edge is finite, but `f64::MAX - f64::MIN` is +∞,
+    // and a later `0.0 * ∞` is NaN. A box with that span is missing; a finite span,
+    // including one edge at f64::MAX, is kept.
+    let (w, h) = (r[2] - r[0], r[3] - r[1]);
+    (w > 0.0 && h > 0.0 && w.is_finite() && h.is_finite()).then_some(r)
 }
 
 impl Page {
@@ -62,19 +70,31 @@ impl Page {
         self.dict.get(b"UserUnit").and_then(|o| doc.resolve(o).as_f64()).filter(|u| *u >= 1.0).map_or(1.0, |u| u.min(MAX_USER_UNIT))
     }
 
+    fn effective_user_unit(&self, doc: &Document, crop: [f64; 4]) -> f64 {
+        let raw_w = (crop[2] - crop[0]).min(f64::MAX);
+        let raw_h = (crop[3] - crop[1]).min(f64::MAX);
+        let max_raw = raw_w.max(raw_h);
+        let u = self.user_unit(doc);
+        let limit = f64::from(f32::MAX);
+        if max_raw > 0.0 && max_raw * u > limit { limit / max_raw } else { u }
+    }
+
     /// The displayed size (width, height) in points, after `/UserUnit` and `/Rotate`.
     pub fn display_size(&self, doc: &Document) -> (f64, f64) {
         let c = self.crop(doc);
-        let u = self.user_unit(doc);
-        let (w, h) = ((c[2] - c[0]) * u, (c[3] - c[1]) * u);
+        let raw_w = (c[2] - c[0]).min(f64::MAX);
+        let raw_h = (c[3] - c[1]).min(f64::MAX);
+        let u = self.effective_user_unit(doc, c);
+        let (w, h) = (raw_w * u, raw_h * u);
         if self.rotation(doc) % 180 == 0 { (w, h) } else { (h, w) }
     }
 
     /// The matrix `[a b c d e f]` from display space (points, origin at the bottom-left of the
     /// page as shown, y up, after `/UserUnit` and `/Rotate`) to user space.
     pub fn view_matrix(&self, doc: &Document) -> [f64; 6] {
-        let m = view_matrix_for(self.rotation(doc), self.crop(doc));
-        let u = self.user_unit(doc);
+        let crop = self.crop(doc);
+        let m = view_matrix_for(self.rotation(doc), crop);
+        let u = self.effective_user_unit(doc, crop);
         if u == 1.0 { m } else { [m[0] / u, m[1] / u, m[2] / u, m[3] / u, m[4], m[5]] }
     }
 }
@@ -479,6 +499,54 @@ mod tests {
         assert_eq!(pages(&d)[0].rotation(&d), 270);
     }
 
+    #[test]
+    fn overflowing_page_box_is_preserved_and_matches_renderer_scale() {
+        use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
+        for bounds in ["0 0 1e400 1e400", "-1e400 -1e400 0 0"] {
+            let d = doc_with(0, "", &format!("/MediaBox [{bounds}] /CropBox [{bounds}]"));
+            let source = d.bytes().clone();
+            let before = pages(&d)[0].display_size(&d);
+            assert_eq!(before, (f64::from(f32::MAX), f64::from(f32::MAX)));
+            // Unmodified page objects stay byte-for-byte in the original revision.
+            let bytes = write_incremental(&d, &Default::default()).unwrap();
+            assert!(bytes.starts_with(&source));
+            let reopened = Document::open(Arc::new(bytes)).unwrap();
+            assert_eq!(pages(&reopened)[0].display_size(&reopened), before);
+        }
+        // ±∞ clamps to ±f64::MAX. Each edge is finite, but the span is +∞, and a later
+        // `0.0 * ∞` is NaN. Edit, print and redact subtract these edges, so the box is
+        // unusable and falls back instead of being handed out.
+        let d = doc_with(0, "", "/MediaBox [-1e400 -1e400 1e400 1e400] /CropBox [-1e400 -1e400 1e400 1e400]");
+        let p = &pages(&d)[0];
+        let c = p.crop(&d);
+        assert!((c[2] - c[0]).is_finite() && (c[3] - c[1]).is_finite(), "{c:?}");
+        let m = p.view_matrix(&d);
+        assert!(m.iter().all(|v| v.is_finite() && (0.0 * v).is_finite()), "{m:?}");
+        let (w, h) = p.display_size(&d);
+        assert!(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0, "({w}, {h})");
+        // First four entries are read by position; a bad entry in the first four rejects the box,
+        // whereas trailing entries past the fourth are ignored.
+        let shifted = doc_with(0, "", "/CropBox [0 0 /X 300 400]");
+        assert_eq!(pages(&shifted)[0].crop(&shifted), [0.0, 0.0, 600.0, 800.0]);
+        let trailing = doc_with(0, "", "/CropBox [0 0 300 400 /Extra]");
+        assert_eq!(pages(&trailing)[0].crop(&trailing), [0.0, 0.0, 300.0, 400.0]);
+        // When `max_raw * user_unit > f32::MAX` (e.g. 1e35 with /UserUnit 75000), effective_user_unit
+        // reduces the unit to `f32::MAX / max_raw` (~3,402.82), matching the renderer's `scaled_page_space`.
+        let d = doc_with(0, "", "/MediaBox [0 0 1e35 1e35] /CropBox [0 0 1e35 1e35] /UserUnit 75000");
+        let p = &pages(&d)[0];
+        let (w, h) = p.display_size(&d);
+        assert_eq!((w, h), (f64::from(f32::MAX), f64::from(f32::MAX)));
+        let m = p.view_matrix(&d);
+        assert!((m[0] - 1e35 / f64::from(f32::MAX)).abs() < 1e-18, "{m:?}");
+        // Representable huge boxes still round-trip through both full-save formats.
+        let d = doc_with(0, "", "/MediaBox [0 0 1e30 2e30] /CropBox [0 0 1e30 2e30] /UserUnit 75000");
+        for object_streams in [false, true] {
+            let bytes = write_full(&d, &SaveOptions { object_streams, ..Default::default() }).unwrap();
+            let reopened = Document::open(Arc::new(bytes)).unwrap();
+            assert_eq!(pages(&reopened)[0].display_size(&reopened), pages(&d)[0].display_size(&d));
+        }
+    }
+
     /// Display space is in points: `/UserUnit 2` doubles it. As in Acrobat, the value isn't
     /// inherited, values below 1 or not numbers count as 1, and values over 75,000 as 75,000.
     #[test]
@@ -502,9 +570,22 @@ mod tests {
             ("", "/UserUnit -2", 1.0),
             ("", "/UserUnit /Two", 1.0),
             ("", "/UserUnit 100000", MAX_USER_UNIT),
+            ("", "/UserUnit 1e20", MAX_USER_UNIT),
+            ("", "/UserUnit 1e400", MAX_USER_UNIT),
         ] {
             let d = doc_with(0, pages_attrs, page_attrs);
             assert_eq!(pages(&d)[0].user_unit(&d), unit, "{pages_attrs} {page_attrs}");
         }
+        for page_attrs in
+            ["/MediaBox [0 0 1e30 1e30] /CropBox [0 0 1e30 1e30]", "/MediaBox [0 0 1e400 1e400] /CropBox [0 0 1e400 1e400] /UserUnit 1e20"]
+        {
+            let d = doc_with(0, "", page_attrs);
+            let p = &pages(&d)[0];
+            let (w, h) = p.display_size(&d);
+            assert!(w.is_finite() && w >= 1e30 && h.is_finite() && h >= 1e30, "{page_attrs}: ({w}, {h})");
+        }
+        let d = doc_with(0, "", "/MediaBox [0 0 1e305 2e305] /CropBox [0 0 1e305 2e305] /UserUnit 75000");
+        let (w, h) = pages(&d)[0].display_size(&d);
+        assert!(w.is_finite() && h.is_finite() && (h / w - 2.0).abs() < 1e-12, "({w}, {h})");
     }
 }
