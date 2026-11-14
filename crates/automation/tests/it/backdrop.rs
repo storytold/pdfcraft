@@ -314,4 +314,18 @@ fn an_image_behind_the_text_shows_on_a_page_that_paints_its_own_white_backdrop()
     ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 2, "text": "Note", "rect": [20, 20, 120, 40] }));
     let refused = a.call("content_update", &json!({ "doc": doc, "page": 2, "index": 2, "behind": true }));
     assert!(matches!(refused, Err(pdfcraft_automation::ToolError::InvalidArgs(_))), "{refused:?}");
+    // A copy of the image behind goes behind too, before the text: its index says so.
+    let r = ok(&mut a, "content_copy", json!({ "doc": doc, "page": 2, "index": 1 }));
+    assert_eq!(r["index"].as_u64(), Some(2), "{r}");
+    let on_page_2 = |a: &mut Automation| -> Vec<Value> {
+        let list = ok(a, "content_list", json!({ "doc": doc }));
+        list["items"].as_array().unwrap().iter().filter(|i| i["page"] == 2).cloned().collect()
+    };
+    let items = on_page_2(&mut a);
+    assert_eq!(items[1]["rect"], r["rect"], "the copy is item 2: {items:?}");
+    assert_eq!(items[2]["type"], "text");
+    // A new picture and a change of layer at once: the result gives the index the item ends at.
+    let r = ok(&mut a, "content_update", json!({ "doc": doc, "page": 2, "index": 1, "image": "blue.png", "behind": false }));
+    assert_eq!(r["index"].as_u64(), Some(3), "{r}");
+    assert_eq!(on_page_2(&mut a)[2]["behind"].as_bool(), Some(false));
 }
