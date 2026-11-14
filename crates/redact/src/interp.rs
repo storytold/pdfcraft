@@ -145,6 +145,9 @@ pub(crate) struct Output {
     /// Apply mode met vertical-writing text (which it cannot remove) while a redaction region was
     /// in force: the operation must fail closed rather than leave that text under the mark.
     pub vertical: bool,
+    /// Apply mode met text in a font whose CMap dropped codespace ranges while a redaction region
+    /// was in force: which text its strings hold is a guess, so the operation must fail closed.
+    pub dropped_codes: bool,
     /// The content holds an inline image the renderer reads no image for
     /// ([`pdfcraft_content::Parsed::ambiguous_images`]): what this scope placed after it may not
     /// be what the page shows, so a redaction must not trust it.
@@ -845,6 +848,14 @@ impl Walk {
         {
             self.out.vertical = true;
         }
+        if self.gs.font.codespaces_dropped
+            && scope.mode == Mode::Apply
+            && scope.hidden_text.is_none()
+            && !scope.rects.is_empty()
+            && items.iter().any(|o| matches!(o, Object::String(s) if !s.bytes.is_empty()))
+        {
+            self.out.dropped_codes = true;
+        }
         let (new_items, removed) = show(scope, &self.gs, &mut self.tm, &items);
         if removed == 0 {
             return Some(op);
@@ -1256,6 +1267,7 @@ fn xobject(
             scope.fonts = saved_fonts;
             out.residue += inner.residue;
             out.vertical |= inner.vertical;
+            out.dropped_codes |= inner.dropped_codes;
             out.ambiguous |= inner.ambiguous;
             out.unparsed |= inner.unparsed;
             out.doomed.extend_from_slice(&inner.doomed);

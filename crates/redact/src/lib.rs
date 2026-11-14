@@ -82,6 +82,10 @@ pub enum RedactError {
     )]
     VerticalText(usize),
     #[error(
+        "page {0} shows text in a font whose CMap has codespace ranges PdfCraft could not read, so it cannot tell which text a string holds while a redaction mark is pending; nothing was changed"
+    )]
+    DroppedCodespace(usize),
+    #[error(
         "redaction appearance has invalid geometry or exceeds the 8 MiB budget; reduce the marked area, turn off repeated text or apply fewer pages at once (nothing was redacted)"
     )]
     OverlayLimit,
@@ -854,6 +858,9 @@ fn redact_page_content(
     }
     if out.vertical {
         return Err(RedactError::VerticalText(pi + 1));
+    }
+    if out.dropped_codes {
+        return Err(RedactError::DroppedCodespace(pi + 1));
     }
     // An inline image the renderer reads no image for (no `EI` it accepts, or parameters it
     // can't read): where the page's operators resume after it is a guess, so neither removal
