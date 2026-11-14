@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use pdfcraft_content::{Matrix, parse};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
-use super::util::{Ctx, latin1, resolve_strict, squash};
+use super::util::{Ctx, latin1, resolve_strict, squash, subtype};
 use crate::annots_of;
 use crate::verify::limits::{MAX_CMAP, MAX_CMAP_ENTRIES, MAX_CMAP_WORK, MAX_DEPTH};
 
@@ -54,7 +54,7 @@ impl Decoder {
 
     /// `Err` when the font's own data can't be read in full (a damaged or oversized CMap).
     fn new(doc: &Document, font: &Dict, ctx: &Ctx) -> Result<Self, ()> {
-        let composite = font.name(b"Subtype") == Some(b"Type0");
+        let composite = subtype(doc, font).as_deref() == Some(b"Type0");
         let mut d = Decoder { map: HashMap::new(), width: if composite { 2 } else { 1 }, opaque: false };
         let tu = font.get(b"ToUnicode").map(|t| doc.resolve(t));
         if let Some(Object::Stream(s)) = tu.as_deref() {
@@ -142,11 +142,14 @@ impl Font {
         Font { dec: Decoder::latin1(), widths: HashMap::new(), default_width: FLAT_WIDTH, vertical: false }
     }
 
+    /// Read `font`'s decoder, widths and writing direction: a Type0 font's from its descendant
+    /// (`/DW`, `/W`, a `-V` encoding), a simple font's from `/Widths` in its own glyph space.
+    /// `Err` when its data can't be read in full.
     fn new(doc: &Document, font: &Dict, ctx: &Ctx) -> Result<Self, ()> {
         let dec = Decoder::new(doc, font, ctx)?;
         let mut f = Font { dec, widths: HashMap::new(), default_width: FLAT_WIDTH, vertical: false };
         let num = |o: &Object| doc.resolve(o).as_f64();
-        if font.name(b"Subtype") == Some(b"Type0") {
+        if subtype(doc, font).as_deref() == Some(b"Type0") {
             f.vertical = font.get(b"Encoding").map(|e| doc.resolve(e)).and_then(|e| e.as_name().map(|n| n.ends_with(b"-V"))).unwrap_or(false);
             let desc = font.get(b"DescendantFonts").map(|d| doc.resolve(d)).and_then(|d| d.as_array().and_then(|a| a.first().cloned()));
             let desc = desc.and_then(|d| doc.resolve(&d).as_dict().cloned());
@@ -207,7 +210,7 @@ impl Font {
             }
         } else {
             // Glyph space units per em: 1000, or what a Type3 font's matrix says.
-            let scale = if font.name(b"Subtype") == Some(b"Type3") {
+            let scale = if subtype(doc, font).as_deref() == Some(b"Type3") {
                 font.get(b"FontMatrix").map(|m| doc.resolve(m)).and_then(|m| m.as_array().and_then(|a| a.first().and_then(num))).unwrap_or(0.001)
             } else {
                 0.001
@@ -624,6 +627,9 @@ impl Extractor<'_> {
         }
     }
 
+    /// Extract the text one content stream (`data`, with resources `res`, drawn at `ctm`) shows,
+    /// entering the forms it draws. `placed` is false where the text can't be put on the page.
+    /// `Err` past [`MAX_DEPTH`] nested forms or when the stream can't be read in full.
     fn scope(&mut self, data: &[u8], res: &Dict, ctm: Matrix, depth: usize, placed: bool) -> Result<(), ()> {
         if depth > MAX_DEPTH {
             return Err(());
@@ -711,7 +717,7 @@ impl Extractor<'_> {
                     let Some(name) = op.last_name() else { continue };
                     let Some(entry) = xobjects.get(name) else { continue };
                     if let Object::Stream(s) = &*doc.resolve(entry)
-                        && s.dict.name(b"Subtype") == Some(b"Form")
+                        && subtype(doc, &s.dict).as_deref() == Some(b"Form")
                     {
                         let m = matrix_of(doc, &s.dict)?;
                         bbox_of(doc, &s.dict)?;
