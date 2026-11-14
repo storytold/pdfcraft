@@ -37,6 +37,14 @@ craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.
 craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3", features = ["cos", "crypt", "filters"] }
 craft-rtf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-csv = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
+craft-xml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
+craft-image-codecs = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
+craft-tiff = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
+craft-jpeg = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
+craft-docx = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
+craft-pptx = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
+craft-drawingml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
+craft-opc = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 # internal
 pdfcraft-geom = { path = "crates/geom", version = "0.21.0" }
 pdfcraft-filters = { path = "crates/filters", version = "0.21.0" }

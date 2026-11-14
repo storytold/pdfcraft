@@ -43,15 +43,22 @@ fn the_identification_of_a_removed_packet_is_written_back() {
     assert_eq!(r.metadata, 1, "{r:?}");
     let text = text.expect("a packet is written back");
     assert!(!text.to_lowercase().contains("bluefin") && !text.contains("Lovelace"), "{text}");
-    let xml = roxmltree::Document::parse(&text).expect("well-formed");
-    let value = |ns: &str, local: &str| {
-        xml.descendants().find(|n| n.tag_name().namespace() == Some(ns) && n.tag_name().name() == local).and_then(|n| n.text()).map(str::to_string)
+    const CANON: craft_xml::Canonical<'_> = craft_xml::Canonical::new(&[
+        ("pdfaid", "http://www.aiim.org/pdfa/ns/id/"),
+        ("pdfuaid", "http://www.aiim.org/pdfua/ns/id/"),
+        ("pdfaSchema", "http://www.aiim.org/pdfa/ns/schema#"),
+    ]);
+    let xml = craft_xml::Options::canonical(&CANON).strict().parse(text.as_bytes()).expect("well-formed");
+    let value = |prefix: &str, local: &str| {
+        let qname = format!("{prefix}:{local}");
+        std::iter::once(&xml).chain(xml.descendants()).find(|n| n.name == qname).map(|n| n.text().into_owned())
     };
-    let a = "http://www.aiim.org/pdfa/ns/id/";
-    let ua = "http://www.aiim.org/pdfua/ns/id/";
-    assert_eq!((value(a, "part").as_deref(), value(a, "conformance").as_deref(), value(ua, "part").as_deref()), (Some("2"), Some("B"), Some("1")));
+    assert_eq!(
+        (value("pdfaid", "part").as_deref(), value("pdfaid", "conformance").as_deref(), value("pdfuaid", "part").as_deref()),
+        (Some("2"), Some("B"), Some("1"))
+    );
     // PDF/A-2 accepts pdfuaid only through an extension schema describing it.
-    assert_eq!(value("http://www.aiim.org/pdfa/ns/schema#", "prefix").as_deref(), Some("pdfuaid"), "{text}");
+    assert_eq!(value("pdfaSchema", "prefix").as_deref(), Some("pdfuaid"), "{text}");
 }
 
 /// A packet without identification is removed as before, and nothing is said about it.
@@ -74,7 +81,7 @@ fn an_identification_that_cannot_be_kept_is_reported_lost() {
 
     let latin1 = [
         DOC_XMP_HEAD.as_bytes(),
-        br#"<rdf:Description rdf:about="" xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/" pdfuaid:part="1" dc:title="Bluefin caf\xE9"/>"#,
+        b"<rdf:Description rdf:about=\"\" xmlns:pdfuaid=\"http://www.aiim.org/pdfua/ns/id/\" pdfuaid:part=\"1\" dc:title=\"Bluefin caf\xE9\"/>",
         DOC_XMP_TAIL.as_bytes(),
     ]
     .concat();
