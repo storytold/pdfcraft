@@ -11,8 +11,10 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-flate2.workspace = true
+craft-rtf.workspace = true
+craft-zip.workspace = true
 
 [dev-dependencies]
+flate2.workspace = true
 # Reads the Excel export back in tests, as another program would.
 calamine = { version = "0.38.0", default-features = false }
