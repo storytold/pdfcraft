@@ -1086,6 +1086,7 @@ fn check_one_object(
     if draws && (ty == Some(b"Font") || dict.get(b"BaseFont").is_some() && subtype.is_some()) {
         check_font(doc, dict, issue);
     }
+    check_direct_resource_fonts(doc, dict, issue);
     if let Object::Stream(stream) = object {
         check_stream(doc, stream, subtype, issue);
     }
@@ -1203,13 +1204,26 @@ fn check_embedded_file(level: Level, dict: &Dict, issue: &mut impl FnMut(&'stati
     }
 }
 
+fn check_direct_resource_fonts(doc: &Document, dict: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    let Some(resources) = dict.get(b"Resources").map(|r| doc.resolve(r)) else { return };
+    let Some(fonts) = resources.as_dict().and_then(|r| r.get(b"Font")).map(|f| doc.resolve(f)) else { return };
+    let Some(fonts) = fonts.as_dict() else { return };
+    for (_, f) in fonts.iter() {
+        if let Object::Dict(fd) = f
+            && (fd.name(b"Type") == Some(b"Font") || fd.get(b"Subtype").is_some() || fd.get(b"BaseFont").is_some())
+        {
+            check_font(doc, fd, issue);
+        }
+    }
+}
+
 fn check_font(doc: &Document, d: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
-    let sub = d.name(b"Subtype");
-    if sub == Some(b"Type3") {
+    let sub = d.get(b"Subtype").and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec));
+    if sub.as_deref() == Some(b"Type3") {
         return;
     }
-    let name = d.name(b"BaseFont").map(|n| String::from_utf8_lossy(n).into_owned());
-    let descriptor = if sub == Some(b"Type0") {
+    let name = d.get(b"BaseFont").and_then(|n| doc.resolve(n).as_name().map(|n| String::from_utf8_lossy(n).into_owned()));
+    let descriptor = if sub.as_deref() == Some(b"Type0") {
         d.get(b"DescendantFonts")
             .map(|x| doc.resolve(x))
             .and_then(|a| a.as_array().and_then(|a| a.first().cloned()))
