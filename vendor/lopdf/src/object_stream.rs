@@ -1,4 +1,5 @@
 use crate::parser;
+use crate::reader::ObjectLoadLog;
 use crate::{Document, Error, Object, ObjectId, Result, Stream};
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -132,7 +133,10 @@ impl ObjectStream {
     pub fn new_within(
         stream: &Stream, max_decompressed_size: Option<usize>, budget: &NodeBudget,
     ) -> Result<ObjectStream> {
-        Self::new_members_within(stream, max_decompressed_size, budget, |_| true)
+        let load_log = ObjectLoadLog::default();
+        let parsed = Self::new_members_within(stream, max_decompressed_size, budget, &load_log, |_| true);
+        load_log.finish();
+        parsed
     }
 
     /// PdfCraft patch: [`ObjectStream::new_within`], parsing only the members whose object
@@ -140,7 +144,7 @@ impl ObjectStream {
     /// a loader passes the members it would add (not placed in another stream by the
     /// cross-reference table, and not already loaded), and a lookup the one member it wants.
     pub(crate) fn new_members_within(
-        stream: &Stream, max_decompressed_size: Option<usize>, budget: &NodeBudget, keep: impl Fn(u32) -> bool,
+        stream: &Stream, max_decompressed_size: Option<usize>, budget: &NodeBudget, load_log: &ObjectLoadLog, keep: impl Fn(u32) -> bool,
     ) -> Result<ObjectStream> {
         let content = match max_decompressed_size {
             // Object streams are decoded while the document is loaded, so
@@ -175,10 +179,10 @@ impl ObjectStream {
         let len = numbers.len() / 2 * 2; // Ensure only pairs.
 
         let n = stream.dict.get(b"N").and_then(Object::as_i64)?;
-        if numbers.len().try_into().ok() != n.checked_mul(2) {
+        if numbers.len().try_into().ok() != n.checked_mul(2) && load_log.warning() {
             warn!("object stream: the object stream dictionary specifies a wrong number of objects")
         }
-        if usize::try_from(n).is_ok_and(|n| n > MAX_OBJECT_STREAM_MEMBERS) {
+        if usize::try_from(n).is_ok_and(|n| n > MAX_OBJECT_STREAM_MEMBERS) && load_log.warning() {
             warn!("object stream: /N {n} exceeds {MAX_OBJECT_STREAM_MEMBERS}; later members are ignored")
         }
 
@@ -207,14 +211,18 @@ impl ObjectStream {
             let offset = first_offset.saturating_add(offset as usize);
 
             if offset >= content.len() {
-                warn!("out-of-bounds offset in object stream");
+                if load_log.warning() {
+                    warn!("out-of-bounds offset in object stream");
+                }
                 continue;
             }
             let Some(&(first_index, extent_end)) = extents.get(&offset) else {
                 continue;
             };
             if index != first_index {
-                warn!("duplicate offset in object stream");
+                if load_log.warning() {
+                    warn!("duplicate offset in object stream");
+                }
                 continue;
             }
             if !keep(id) {
@@ -226,7 +234,9 @@ impl ObjectStream {
                 start += 1;
             }
             if start >= extent_end {
-                warn!("only whitespace after offset in object stream");
+                if load_log.warning() {
+                    warn!("only whitespace after offset in object stream");
+                }
                 continue;
             }
             members.push((id, start, extent_end));
@@ -249,7 +259,7 @@ impl ObjectStream {
                 .get(start..end)
                 .and_then(|bytes| parser::direct_object_within(bytes, &nodes));
             from.refund(nodes.get());
-            if object.is_none() && nodes.get() == 0 {
+            if object.is_none() && nodes.get() == 0 && load_log.warning() {
                 warn!("object stream: member {id} exceeds the object budget and was skipped");
             }
             Some(((id, 0), object?))
@@ -279,7 +289,7 @@ impl ObjectStream {
                 .filter_map(|member| parse_member(budget, member))
                 .collect()
         };
-        if skipped.load(Ordering::Relaxed) {
+        if skipped.load(Ordering::Relaxed) && load_log.warning() {
             warn!("object stream: the object budget is spent; remaining members were skipped");
         }
 
