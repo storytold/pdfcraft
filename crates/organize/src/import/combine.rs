@@ -1,4 +1,5 @@
 use super::carry::{Mark, add_outline, collect_attachments, kept_bookmarks, set_attachments, source_outline, write_outline_level};
+use super::tags::Tags;
 use super::{Dict, Document, FieldConflicts, HashMap, HashSet, ObjRef, Object, OrganizeError, import_pages_mapped, rebuild};
 
 /// A new document containing copies of `pages` from `src` (Extract Pages / Split).
@@ -33,7 +34,7 @@ pub fn extract_pages(src: &Document, pages: &[usize]) -> Result<Document, Organi
         }
     }
     // After the title: the XMP packet repeats it.
-    crate::pdfx::carry(&mut out, Some(src), &crate::pdfx::PrintStandard::of(src), imported.objects)?;
+    crate::pdfx::carry(&mut out, Some(src), &crate::pdfx::PrintStandard::of(src), imported.objects, None)?;
     // The pages share their source's resource dictionary, so the part would otherwise carry every
     // XObject the source lists — images and all (#204). Keep only what these pages draw.
     crate::prune::prune_unused_xobjects(&mut out)?;
@@ -133,6 +134,8 @@ pub struct Combiner {
     field_conflicts: FieldConflicts,
     /// What adding sources renamed (old → new fully-qualified field name), in order.
     renamed_fields: Vec<(String, String)>,
+    /// The sources' structure trees, carried as each source is added (#7025).
+    tags: Tags,
 }
 
 /// The first source's print standard (see [`Combiner`]).
@@ -168,6 +171,7 @@ impl Combiner {
             agreed: true,
             field_conflicts,
             renamed_fields: Vec::new(),
+            tags: Tags::default(),
         }
     }
 
@@ -197,13 +201,15 @@ impl Combiner {
         self.labels = labels;
         self.has_labels = has_labels;
         self.renamed_fields.extend(imported.renamed_fields);
+        let whole = pages.iter().collect::<HashSet<_>>().len() == n;
+        self.tags.add(&mut self.out, src, &imported.page_map, &imported.objects, whole)?;
         if let Some(first) = imported.pages.first() {
             let outline = source_outline(src, imported.page_map);
             self.marks.push(Mark { title: title.to_string(), page: *first, outline });
         }
         // Attachments belong to the whole file: they come along with all of its pages, not with a
         // selection of them.
-        if pages.iter().collect::<HashSet<_>>().len() == n {
+        if whole {
             collect_attachments(&mut self.out, src, &mut self.attachments)?;
         }
         let declared = crate::pdfx::PrintStandard::of(src);
@@ -225,9 +231,11 @@ impl Combiner {
 
     /// [`Combiner::finish`] reporting what the combine renamed.
     pub fn finish_with_renames(self) -> Result<CombineOutcome, OrganizeError> {
-        let Combiner { mut out, marks, attachments, labels, has_labels, standard, agreed, renamed_fields, .. } = self;
-        if let Some(first) = standard.filter(|_| agreed) {
-            crate::pdfx::carry(&mut out, first.source.as_ref(), &first.declared, first.objects)?;
+        let Combiner { mut out, marks, attachments, labels, has_labels, standard, agreed, renamed_fields, tags, .. } = self;
+        let ua = tags.finish(&mut out)?;
+        match standard.filter(|_| agreed) {
+            Some(first) => crate::pdfx::carry(&mut out, first.source.as_ref(), &first.declared, first.objects, ua.as_deref())?,
+            None => identify_ua(&mut out, ua.as_deref())?,
         }
         // Sources often share fonts, images and profiles (or are the same file): store them once.
         let all: Vec<ObjRef> = out.object_numbers().into_iter().map(|n| ObjRef::new(n, out.generation(n))).collect();
@@ -236,6 +244,15 @@ impl Combiner {
         add_outline(&mut out, &marks)?;
         set_attachments(&mut out, attachments)?;
         Ok(CombineOutcome { doc: out, renamed_fields })
+    }
+}
+
+/// Without a print standard the sources agree on, the PDF/UA part `ua` the combined tags still
+/// meet (see `tags`), declared in XMP metadata of its own.
+fn identify_ua(out: &mut Document, ua: Option<&str>) -> Result<(), OrganizeError> {
+    match ua {
+        Some(_) => crate::pdfx::carry(out, None, &crate::pdfx::PrintStandard::default(), HashMap::new(), ua),
+        None => Ok(()),
     }
 }
 
@@ -292,16 +309,19 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
     let mut renamed_fields = Vec::new();
     let mut standard: Option<(crate::pdfx::PrintStandard, &Document, HashMap<ObjRef, ObjRef>)> = None;
     let mut agreed = true;
+    let mut tags = Tags::default();
     for (_, file) in &files {
         let at = crate::page_count(&out)?;
         let imported = import_pages_mapped(&mut out, file.src, &file.pages, at, conflicts)?;
         copies.push(imported.pages.clone());
         renamed_fields.extend(imported.renamed_fields);
+        let whole = file.pages.iter().collect::<HashSet<_>>().len() == crate::page_count(file.src)?;
+        tags.add(&mut out, file.src, &imported.page_map, &imported.objects, whole)?;
         if let Some(first) = imported.pages.first() {
             marks.push(Mark { title: file.title.to_string(), page: *first, outline: source_outline(file.src, imported.page_map) });
         }
         // Attachments come along with all of a file's pages, not with a selection of them.
-        if file.pages.iter().collect::<HashSet<_>>().len() == crate::page_count(file.src)? {
+        if whole {
             collect_attachments(&mut out, file.src, &mut attachments)?;
         }
         let declared = crate::pdfx::PrintStandard::of(file.src);
@@ -327,8 +347,10 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
         }
     }
     rebuild(&mut out, &order)?;
-    if let Some((declared, src, objects)) = standard.filter(|_| agreed) {
-        crate::pdfx::carry(&mut out, Some(src), &declared, objects)?;
+    let ua = tags.finish(&mut out)?;
+    match standard.filter(|_| agreed) {
+        Some((declared, src, objects)) => crate::pdfx::carry(&mut out, Some(src), &declared, objects, ua.as_deref())?,
+        None => identify_ua(&mut out, ua.as_deref())?,
     }
     let all: Vec<ObjRef> = out.object_numbers().into_iter().map(|n| ObjRef::new(n, out.generation(n))).collect();
     crate::dedupe::dedupe_resources(&mut out, &all, false);
