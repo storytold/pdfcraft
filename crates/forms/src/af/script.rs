@@ -67,23 +67,64 @@ pub(super) struct Parser<'a> {
 
 impl Parser<'_> {
     fn ws(&mut self) {
-        while self.i < self.s.len() && (self.s[self.i].is_ascii_whitespace()) {
-            self.i += 1;
+        while let Some(&c) = self.s.get(self.i) {
+            if c.is_ascii_whitespace() {
+                self.i += 1;
+            } else if matches!(self.s.get(self.i..), Some([0xE2, 0x80, 0xA8 | 0xA9, ..])) {
+                self.i += 3;
+            } else if self.s.get(self.i..self.i + 2) == Some(b"//") {
+                self.i += 2;
+                while let Some(&b) = self.s.get(self.i) {
+                    if b == b'\n' || b == b'\r' || matches!(self.s.get(self.i..), Some([0xE2, 0x80, 0xA8 | 0xA9, ..])) {
+                        break;
+                    }
+                    self.i += 1;
+                }
+            } else if self.s.get(self.i..self.i + 2) == Some(b"/*") {
+                let Some(end) = self.s.get(self.i + 2..).and_then(|rest| rest.windows(2).position(|w| w == b"*/")) else {
+                    self.i = self.s.len();
+                    break;
+                };
+                self.i += 2 + end + 2;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn ident(&mut self, word: &[u8]) -> bool {
+        let is_word = |j: usize| {
+            self.s.get(j).is_some_and(|&b| b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || !b.is_ascii())
+                && !matches!(self.s.get(j..), Some([0xE2, 0x80, 0xA8 | 0xA9, ..]))
+        };
+        if self.s.get(self.i..).is_some_and(|rest| rest.starts_with(word)) && !is_word(self.i + word.len()) {
+            self.i += word.len();
+            true
+        } else {
+            false
         }
     }
 
     pub(super) fn string(&mut self) -> Option<String> {
-        let q = self.s[self.i];
+        let q = *self.s.get(self.i)?;
         self.i += 1;
         let mut out = Vec::new();
-        while self.i < self.s.len() {
-            let c = self.s[self.i];
+        while let Some(&c) = self.s.get(self.i) {
             self.i += 1;
             match c {
                 b'\\' if self.i < self.s.len() => {
                     let e = self.s[self.i];
                     self.i += 1;
                     match e {
+                        b'\n' => {}
+                        b'\r' => {
+                            if self.s.get(self.i) == Some(&b'\n') {
+                                self.i += 1;
+                            }
+                        }
+                        0xE2 if matches!(self.s.get(self.i..), Some([0x80, 0xA8 | 0xA9, ..])) => {
+                            self.i += 2;
+                        }
                         b'n' => out.push(b'\n'),
                         b'r' => out.push(b'\r'),
                         b't' => out.push(b'\t'),
@@ -155,8 +196,11 @@ impl Parser<'_> {
                 self.i += 1;
                 self.nested(b']').map(Arg::List)
             }
-            _ if self.s[self.i..].starts_with(b"new Array") => {
-                self.i += b"new Array".len();
+            _ if self.ident(b"new") => {
+                self.ws();
+                if !self.ident(b"Array") {
+                    return None;
+                }
                 self.ws();
                 if self.s.get(self.i) != Some(&b'(') {
                     return None;
@@ -164,14 +208,8 @@ impl Parser<'_> {
                 self.i += 1;
                 self.nested(b')').map(Arg::List)
             }
-            _ if self.s[self.i..].starts_with(b"true") => {
-                self.i += 4;
-                Some(Arg::Bool(true))
-            }
-            _ if self.s[self.i..].starts_with(b"false") => {
-                self.i += 5;
-                Some(Arg::Bool(false))
-            }
+            _ if self.ident(b"true") => Some(Arg::Bool(true)),
+            _ if self.ident(b"false") => Some(Arg::Bool(false)),
             _ => {
                 let start = self.i;
                 while self.i < self.s.len() && (self.s[self.i].is_ascii_digit() || matches!(self.s[self.i], b'.' | b'-' | b'+' | b'e' | b'E')) {
@@ -215,10 +253,10 @@ impl Parser<'_> {
     }
 }
 
-/// The first genuine call to `name(` in `js` and its arguments.
+/// The first genuine call to one of `names` in `js` and its arguments.
 /// An unsupported first call returns `None`, preserving the custom-script fallback; later calls
 /// must not substitute a different native rule. Comments, strings and unrelated identifiers are skipped.
-pub(super) fn call(js: &str, name: &str) -> Option<Vec<Arg>> {
+fn first_call<'a>(js: &str, names: &[&'a str]) -> Option<(&'a str, Vec<Arg>)> {
     let (tokens, _) = js_tokens(js);
     for (k, (range, tok)) in tokens.iter().enumerate() {
         if *tok != super::calc::Js::Ident {
@@ -227,53 +265,56 @@ pub(super) fn call(js: &str, name: &str) -> Option<Vec<Arg>> {
         if k > 0 && matches!(tokens.get(k - 1), Some((_, super::calc::Js::Punct('.')))) {
             continue;
         }
-        let Some(target_end) = range.start.checked_add(name.len()) else { continue };
-        if js.get(range.start..target_end) != Some(name) {
-            continue;
+        for &name in names {
+            let Some(target_end) = range.start.checked_add(name.len()) else { continue };
+            if js.get(range.start..target_end) != Some(name) {
+                continue;
+            }
+            let Some(end_k) = (k..tokens.len()).take_while(|&m| tokens[m].0.end <= target_end).find(|&m| tokens[m].0.end == target_end) else {
+                continue;
+            };
+            let Some((open, super::calc::Js::Punct('('))) = tokens.get(end_k + 1) else { continue };
+            let mut p = Parser { s: js.as_bytes(), i: open.end, depth: 0 };
+            return p.list(b')').map(|args| (name, args));
         }
-        let Some(end_k) = (k..tokens.len()).take_while(|&m| tokens[m].0.end <= target_end).find(|&m| tokens[m].0.end == target_end) else {
-            continue;
-        };
-        let Some((open, super::calc::Js::Punct('('))) = tokens.get(end_k + 1) else { continue };
-        let mut p = Parser { s: js.as_bytes(), i: open.end, depth: 0 };
-        return p.list(b')');
     }
     None
 }
 
+pub(super) fn call(js: &str, name: &str) -> Option<Vec<Arg>> {
+    first_call(js, &[name]).map(|(_, args)| args)
+}
+
 pub fn parse_format(js: &str) -> Option<Format> {
-    let a = |args: &[Arg], i: usize| args.get(i).and_then(Arg::num).unwrap_or(0.0).clamp(0.0, 255.0) as u8;
-    if let Some(args) = call(js, "AFNumber_Format") {
-        return Some(Format::Number {
-            decimals: a(&args, 0),
-            sep: a(&args, 1),
-            neg: a(&args, 2),
+    const NAMES: [&str; 8] = [
+        "AFNumber_Format",
+        "AFPercent_Format",
+        "AFDate_FormatEx",
+        "AFDate_Format",
+        "AFTime_FormatEx",
+        "AFTime_Format",
+        "AFSpecial_Format",
+        "AFSpecial_KeystrokeEx",
+    ];
+    let (name, args) = first_call(js, &NAMES)?;
+    let a = |i: usize| args.get(i).and_then(Arg::num).unwrap_or(0.0).clamp(0.0, 255.0) as u8;
+    match name {
+        "AFNumber_Format" => Some(Format::Number {
+            decimals: a(0),
+            sep: a(1),
+            neg: a(2),
             currency: args.get(4).and_then(Arg::string).unwrap_or_default(),
             prepend: args.get(5).is_none_or(Arg::truthy),
-        });
+        }),
+        "AFPercent_Format" => Some(Format::Percent { decimals: a(0), sep: a(1) }),
+        "AFDate_FormatEx" => Some(Format::Date(args.first().and_then(Arg::string)?)),
+        "AFDate_Format" => Some(Format::Date(DATE_PRESETS.get(a(0) as usize)?.to_string())),
+        "AFTime_FormatEx" => Some(Format::Time(args.first().and_then(Arg::string)?)),
+        "AFTime_Format" => Some(Format::Time(TIME_PRESETS.get(a(0) as usize)?.to_string())),
+        "AFSpecial_Format" => Some(Format::Special(a(0).min(3))),
+        "AFSpecial_KeystrokeEx" => Some(Format::Mask(args.first().and_then(Arg::string)?)),
+        _ => None,
     }
-    if let Some(args) = call(js, "AFPercent_Format") {
-        return Some(Format::Percent { decimals: a(&args, 0), sep: a(&args, 1) });
-    }
-    if let Some(args) = call(js, "AFDate_FormatEx") {
-        return Some(Format::Date(args.first().and_then(Arg::string)?));
-    }
-    if let Some(args) = call(js, "AFDate_Format") {
-        return Some(Format::Date(DATE_PRESETS.get(a(&args, 0) as usize)?.to_string()));
-    }
-    if let Some(args) = call(js, "AFTime_FormatEx") {
-        return Some(Format::Time(args.first().and_then(Arg::string)?));
-    }
-    if let Some(args) = call(js, "AFTime_Format") {
-        return Some(Format::Time(TIME_PRESETS.get(a(&args, 0) as usize)?.to_string()));
-    }
-    if let Some(args) = call(js, "AFSpecial_Format") {
-        return Some(Format::Special(a(&args, 0).min(3)));
-    }
-    if let Some(args) = call(js, "AFSpecial_KeystrokeEx") {
-        return Some(Format::Mask(args.first().and_then(Arg::string)?));
-    }
-    None
 }
 
 pub fn parse_validate(js: &str) -> Option<Validate> {
@@ -293,7 +334,13 @@ pub fn parse_calculate(js: &str) -> Option<Calculate> {
         return Some(Calculate::Notation(notation_text(js.get(range)?).to_string()));
     }
     let args = call(js, "AFSimple_Calculate")?;
-    let op = match args.first().and_then(Arg::string)?.as_str() {
+    if args.len() != 2 {
+        return None;
+    }
+    let op = match args.first().and_then(|a| match a {
+        Arg::Str(s) => Some(s.as_str()),
+        _ => None,
+    })? {
         "SUM" => CalcOp::Sum,
         "PRD" => CalcOp::Product,
         "AVG" => CalcOp::Average,
@@ -302,7 +349,13 @@ pub fn parse_calculate(js: &str) -> Option<Calculate> {
         _ => return None,
     };
     let fields = match args.get(1)? {
-        Arg::List(l) => l.iter().filter_map(Arg::string).collect(),
+        Arg::List(l) => l
+            .iter()
+            .map(|a| match a {
+                Arg::Str(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()?,
         Arg::Str(s) => s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(),
         _ => return None,
     };
@@ -483,5 +536,22 @@ mod tests {
             assert_eq!(executable, format!("{}{operators}{};", field("a"), field("b")));
             assert_eq!(super::super::calc::calculate(&Calculate::Notation(expr.to_owned()), &|_| vec!["2".to_owned()]), Some("4".to_owned()));
         }
+    }
+
+    #[test]
+    fn format_and_calculate_respect_first_call_order_line_continuations_and_comments() {
+        let js = "if (event.value < 0) AFNumber_Format(customDecimals, 0, 0, 0, \"\", true); else AFPercent_Format(2, 1);";
+        assert_eq!(parse_format(js), None);
+        assert_eq!(
+            parse_format("AFPercent_Format(2, /* sep */ 1); AFNumber_Format(0, 0, 0, 0, \"\", true);"),
+            Some(Format::Percent { decimals: 2, sep: 1 })
+        );
+        assert_eq!(parse_format("AFDate_FormatEx(\"dd-\\\nmmm-\\\r\nyyyy\");"), Some(Format::Date("dd-mmm-yyyy".to_owned())));
+        assert_eq!(
+            parse_calculate("AFSimple_Calculate(\"SUM\", new\t/* gap */ Array(\"a\", \"b\"));"),
+            Some(Calculate::Simple { op: CalcOp::Sum, fields: vec!["a".to_owned(), "b".to_owned()] })
+        );
+        assert_eq!(parse_calculate("AFSimple_Calculate(\"SUM\", [\"a\", 123]);"), None);
+        assert_eq!(parse_calculate("AFSimple_Calculate(\"SUM\", \"a, b\", extra);"), None);
     }
 }
