@@ -7672,6 +7672,36 @@ fn a_right_click_on_text_over_a_picture_selects_the_picture() {
     assert_eq!(selected, Some((0, 0)), "the picture under the text is selected for its menu");
 }
 
+/// The arrows move the newer of a page's objects selected together and a picture: with the first
+/// page's objects selected and then the second page's picture right-clicked, an arrow moves the
+/// picture and the objects stay. The objects moved, and the picture didn't.
+#[test]
+fn an_arrow_moves_a_picture_selected_after_the_objects() {
+    let mut h = picture_pages(false);
+    h.state_mut().views[0].image_selection = None;
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    let objects = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().editable_objects(0).unwrap();
+    let picture = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().page_images(1)[0].rect;
+    let (objects_before, picture_before) = (objects(&h), picture(&h));
+    let on_it = page_at(&h, 1, 120.0, 190.0);
+    right_click_at(&mut h, on_it);
+    // Its menu closes; the selections stay.
+    h.key_press(Key::Escape);
+    h.run_steps(4);
+    let selected = h.state().views[0].image_selection.as_ref().map(|s| (s.page, s.index));
+    assert_eq!(selected, Some((1, 0)), "the second page's picture is selected");
+    assert!(h.query_all_by_label_contains("objects selected").next().is_some(), "and the first page's objects still are");
+    h.key_press(Key::ArrowRight);
+    h.run_steps(4);
+    let moved = picture(&h);
+    assert!((moved[0] - picture_before[0] - 1.0).abs() < 0.01, "the picture, selected last, moves: {picture_before:?} -> {moved:?}");
+    let rects = |o: Vec<pdfcraft_engine::EditableObject>| o.into_iter().map(|o| o.rect).collect::<Vec<_>>();
+    assert_eq!(rects(objects(&h)), rects(objects_before), "the objects stay");
+}
+
 /// With Edit text, a right-click on added text over a picture is the picture's, which is selected
 /// for its menu: added text has no menu of its own.
 #[test]
@@ -11697,4 +11727,36 @@ fn a_modified_click_away_from_a_cropped_picture_applies_its_crop() {
         let visible = h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect.unwrap();
         assert!(keep.iter().zip(visible).all(|(a, b)| (a - b).abs() < 0.5), "{mods:?}: the crop is applied: {visible:?}");
     }
+}
+
+/// Escape in a picture's crop mode with Find open leaves crop mode, keeps the picture selected and
+/// leaves Find open for the next one. One Escape did both.
+#[test]
+fn escape_leaves_crop_mode_before_it_closes_find() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(60, 40, image::Rgb([100, 150, 200])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::ImageSelection {
+        page: 0,
+        index: 0,
+        drag: None,
+        crop: Some(pdfcraft_ui_egui::CropMode::new([10.0, 10.0, 50.0, 30.0])),
+        turning: false,
+        settled: None,
+    });
+    h.state_mut().views[0].open_find();
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    let v = &h.state().views[0];
+    assert!(v.image_selection.as_ref().is_some_and(|s| s.crop.is_none()), "Escape leaves crop mode, the picture still selected");
+    assert!(v.find.is_some(), "and leaves Find open");
 }

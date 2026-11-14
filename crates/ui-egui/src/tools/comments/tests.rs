@@ -722,22 +722,9 @@ fn stale_comment_state_is_cleared_and_delete_never_hits_non_comment_slots() {
     assert_eq!(view.comments.gesture, None);
 
     // Pressing Delete when `selected` holds a widget index (0, 0) or stale index (0, 2) emits no edit.
-    let ctx = egui::Context::default();
     for bad_index in [0, 2] {
         view.comments.selected = Some((0, bad_index));
-        let mut input = egui::RawInput::default();
-        input.events.push(egui::Event::Key {
-            key: egui::Key::Delete,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        });
-        let mut out = ctx.run_ui(input, |ui| {
-            let mut tool = QuickTool::Select;
-            keys(ui.ctx(), crate::page_keys::PageKeys::new(false), &mut view, &shifted, &mut tool, true);
-        });
-        out.textures_delta.clear();
+        assert!(delete_key(&mut view, &shifted, true), "the selection takes the key");
         assert_eq!(view.comments.selected, None);
         assert_eq!(view.pending_edit, None, "index {bad_index} must not emit DeleteAnnotation");
     }

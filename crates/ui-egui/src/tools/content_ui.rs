@@ -111,8 +111,6 @@ pub struct ContentView {
     grab: Option<(usize, Grab, Pos2)>,
     /// Where the press nobody holds began, on which page: Add text's click starts its new box there.
     pressed_at: Option<(usize, Pos2)>,
-    /// A button is down on the pages this frame (for [`keys`], which runs after them).
-    held: bool,
     undrawable: UndrawableMemo,
     layout: Option<(AddedText, f32, f64, [f64; 4])>,
 }
@@ -413,7 +411,6 @@ pub(crate) struct ContentCx<'a> {
 pub(crate) fn page_input(cx: PageToolContext<'_>, ccx: ContentCx<'_>, view: &mut DocView) -> bool {
     let PageToolContext { resp, xf, ptr, page, info, .. } = cx;
     let ContentCx { added, press, gate, picks_up, adding_text, edit_on_click, style } = ccx;
-    view.content.held = ptr.any_down;
     if !gate {
         return false;
     }
@@ -633,28 +630,22 @@ pub(crate) fn release_image_selection(view: &mut DocView, added: &[Added]) {
     }
 }
 
-/// Delete removes the selected item; Escape clears the selection. Not while something is over the
-/// pages.
-pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, image_controller_active: bool) {
+/// Delete or Backspace, from the key pass (`canvas::key_order`): the selected item goes, but not
+/// while a button is down (`held`, as it is now: the press held would then name another item).
+/// Whether an item was selected to take the key; a picture the image controller has is the
+/// picture's.
+pub(crate) fn delete_key(view: &mut DocView, image_controller_active: bool, held: bool) -> bool {
     if image_controller_active && view.image_selection.is_some()
         || matches!(view.pending_edit.as_ref(), Some(Edit::EditPageImage { .. }))
         || view.content.selected.is_none()
         || view.content.draft.is_some()
-        || ctx.egui_wants_keyboard_input()
     {
-        return;
+        return false;
     }
-    let del = keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace);
-    let esc = keys.pressed(ctx, egui::Key::Escape);
-    // Not while a button is down: the press held would then name another item.
-    if del
-        && !view.content.held
-        && let Some((page, index)) = view.content.selected.take()
-    {
+    if !held && let Some((page, index)) = view.content.selected.take() {
         view.pending_edit = Some(Edit::DeleteContent { page, index });
-    } else if esc {
-        view.content.selected = None;
     }
+    true
 }
 
 /// After an add: select the new item.

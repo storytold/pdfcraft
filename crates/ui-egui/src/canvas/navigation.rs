@@ -1,5 +1,5 @@
 use super::zoom::GRID_ZOOM_STEP;
-use super::{DestView, DocInfo, DocView, Fit, PT, PageLayout, SIDE, ViewAction, pos2, vec2};
+use super::{DestView, DocInfo, DocView, Fit, PT, PageLayout, SIDE, pos2, vec2};
 
 impl DocView {
     /// Where a bookmark made now should go: the page and the `/XYZ` position `[left, top]` in user
@@ -379,27 +379,43 @@ fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) 
     }
 }
 
-/// The view's keys: its chords, then its plain keys. `chords`: no menu of the menu bar has the
-/// keyboard and nothing covers the pages, so chords may run (they wait for a menu, as the
-/// registered commands' do). An open form field keeps the paging and scrolling keys for itself.
-pub(crate) fn shortcuts(
-    view: &mut DocView,
-    ctx: &egui::Context,
-    keys: crate::page_keys::PageKeys,
-    chords: bool,
-    speed: crate::scroll_speed::ScrollSpeed,
-) {
-    if let Some((arrows, field_open)) = view_chords(view, ctx, chords) {
+/// The view's chords: Find and its steps, rotation, zoom and the view history. `chords`: no menu of
+/// the menu bar has the keyboard and nothing covers the pages, so chords may run (they wait for a
+/// menu, as the registered commands' do). Its plain keys are the key pass's (`view_plain_keys`).
+pub(crate) fn shortcuts(view: &mut DocView, ctx: &egui::Context, chords: bool) {
+    view_chords(view, ctx, chords);
+}
+
+/// Who has the view's plain keys: `None` while a text field has the keyboard, and then it has them;
+/// else whether the arrows are the view's (a focused radio button keeps them), and whether an open
+/// form field (a drop-down's or a list box's items) keeps the plain keys.
+fn view_key_scope(view: &DocView, ctx: &egui::Context) -> Option<(bool, bool)> {
+    // A focused check box or radio button holds egui's keyboard focus only for Space, and a
+    // radio button for the arrows that move within its group: the other page keys still work.
+    let form_box = view.forms.keys.filter(|(id, _)| ctx.memory(|m| m.focused()) == Some(*id));
+    if ctx.egui_wants_keyboard_input() && form_box.is_none() {
+        return None;
+    }
+    let arrows = !form_box.is_some_and(|(_, radio)| radio);
+    // An open form field (a drop-down's or a list box's items) takes the arrows, Page Up / Page
+    // Down, Home, End and Escape. A focused check box or radio button uses none of them, so the
+    // page keys still work there.
+    let field_open = view.forms.focus.is_some() && form_box.is_none();
+    Some((arrows, field_open))
+}
+
+/// The view's plain keys, the last holder in the key pass: Home and End, full screen's keys, the
+/// arrows and Page Up / Page Down. Not while a text field has the keyboard.
+pub(crate) fn view_plain_keys(view: &mut DocView, ctx: &egui::Context, keys: crate::page_keys::PageKeys, speed: crate::scroll_speed::ScrollSpeed) {
+    if let Some((arrows, field_open)) = view_key_scope(view, ctx) {
         view_keys(view, ctx, keys, speed, arrows, field_open);
     }
 }
 
 /// The view's chords: Find and its steps, rotation, zoom and the view history, unless a menu of the
-/// menu bar has the keyboard or something covers the pages (`chords`). `None` while a text field
-/// has the keyboard, and then it has the plain keys too; else whether the arrows are the view's (a
-/// focused radio button keeps them), and whether an open form field (a drop-down's or a list box's
-/// items) keeps the plain keys.
-fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool) -> Option<(bool, bool)> {
+/// menu bar has the keyboard or something covers the pages (`chords`), or a text field has the
+/// keyboard (but ⌘G).
+fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool) {
     use egui::{Key, KeyboardShortcut, Modifiers};
     let pressed = |s: KeyboardShortcut| chords && ctx.input_mut(|i| i.consume_shortcut(&s));
     if pressed(KeyboardShortcut::new(Modifiers::COMMAND, Key::F)) {
@@ -415,13 +431,9 @@ fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool) -> Option<
             view.find_step(true);
         }
     }
-    // A focused check box or radio button holds egui's keyboard focus only for Space, and a
-    // radio button for the arrows that move within its group: the other page keys still work.
-    let form_box = view.forms.keys.filter(|(id, _)| ctx.memory(|m| m.focused()) == Some(*id));
-    if ctx.egui_wants_keyboard_input() && form_box.is_none() {
-        return None;
+    if view_key_scope(view, ctx).is_none() {
+        return;
     }
-    let arrows = !form_box.is_some_and(|(_, radio)| radio);
     // Rotation first: egui matches ⌘+ loosely with respect to Shift.
     rotation_shortcuts(view, &pressed);
     zoom_shortcuts(view, &pressed);
@@ -435,16 +447,10 @@ fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool) -> Option<
     if pressed(cmd(Key::CloseBracket)) || pressed(alt(Key::ArrowRight)) {
         view.view_history(true);
     }
-    // An open form field (a drop-down's or a list box's items) takes the arrows, Page Up / Page
-    // Down, Home, End and Escape. A focused check box or radio button uses none of them, so the
-    // page keys still work there.
-    let field_open = view.forms.focus.is_some() && form_box.is_none();
-    Some((arrows, field_open))
 }
 
-/// The view's plain keys: Escape, Home and End, full screen's keys, the arrows and Page Up / Page
-/// Down. Not while something is over the pages or a form field is open (`field_open`), which keeps
-/// them.
+/// The view's plain keys: Home and End, full screen's keys, the arrows and Page Up / Page Down. Not
+/// while something is over the pages or a form field is open (`field_open`), which keeps them.
 fn view_keys(
     view: &mut DocView,
     ctx: &egui::Context,
@@ -455,18 +461,7 @@ fn view_keys(
 ) {
     use egui::Key;
     let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && keys.pressed(ctx, k);
-    // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
-    // So does an open field, whose list closes.
-    if key(Key::Escape) && !egui::Popup::is_any_open(ctx) && !field_open {
-        if view.camera.is_some() || view.camera_done.is_some() {
-            view.pending_action = Some(ViewAction::CancelCamera);
-        } else if view.selection.is_some() || view.all_text {
-            view.selection = None;
-            view.all_text = false;
-        } else {
-            view.find = None;
-        }
-    }
+    // (Escape is the key pass's: the camera, the text selection and Find are in its order.)
     // The open field's keys leave the page under it where it is.
     if field_open {
         return;

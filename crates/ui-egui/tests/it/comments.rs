@@ -5848,3 +5848,226 @@ fn properties_dialog_makes_the_text_box_font_size_default() {
         assert_eq!(font_size_of_last(&fresh).font_size, Some(size), "{quick}: the default font size persisted");
     }
 }
+
+/// One Escape does one thing: with Find open and a comment selected, the first lets go of the
+/// comment and the second closes Find. One Escape did both.
+#[test]
+fn one_escape_lets_go_of_the_comment_and_the_next_closes_find() {
+    let mut h = selected_square();
+    h.state_mut().views[0].open_find();
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.selected, None, "the first Escape lets go of the comment");
+    assert!(h.state().views[0].find.is_some(), "and leaves Find open");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().views[0].find.is_none(), "the second closes Find");
+}
+
+/// Between two kinds of selection, Escape lets go of the newer first: text selected after the
+/// comment goes first, and a comment selected after the text does. One Escape let go of both.
+#[test]
+fn escape_lets_go_of_the_newer_selection_first() {
+    // The comment, then the text.
+    let mut h = selected_square();
+    h.state_mut().views[0].select_all();
+    h.run_steps(2);
+    assert!(h.state().views[0].selected_text().is_some());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().views[0].selected_text().is_none(), "the text, selected last, goes first");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment stays");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.selected, None, "then the comment");
+    // The text, then the comment.
+    let mut h = selected_square();
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(2);
+    h.state_mut().views[0].select_all();
+    h.run_steps(2);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.selected, None, "the comment, selected last, goes first");
+    assert!(h.state().views[0].selected_text().is_some(), "the text stays");
+}
+
+/// Everything at once, one Escape each: the text, the comment, the comment tool, then Find.
+#[test]
+fn each_escape_undoes_one_thing_with_everything_held_at_once() {
+    let mut h = selected_square();
+    h.state_mut().set_option("quick", "square").unwrap();
+    h.state_mut().views[0].open_find();
+    h.run_steps(2);
+    h.state_mut().views[0].select_all();
+    h.run_steps(2);
+    let held = |h: &Harness<'static, PdfCraftApp>| {
+        let v = &h.state().views[0];
+        (v.selected_text().is_some(), v.comments.selected.is_some(), h.state().quick_tool != QuickTool::Select, v.find.is_some())
+    };
+    assert_eq!(held(&h), (true, true, true, true));
+    for after in [(false, true, true, true), (false, false, true, true), (false, false, false, true), (false, false, false, false)] {
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert_eq!(held(&h), after, "(text, comment, tool, Find)");
+    }
+}
+
+/// With a comment tool and Find open, Escape goes back to Select and leaves Find open; the next
+/// closes it. One Escape did both.
+#[test]
+fn escape_drops_a_comment_tool_before_it_closes_find() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    h.state_mut().views[0].open_find();
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    assert!(h.state().views[0].find.is_some(), "Find stays for the next Escape");
+}
+
+/// A comment being drawn takes Escape: it is abandoned, and Find stays open. Both went.
+#[test]
+fn escape_abandons_a_drawing_and_leaves_find_open() {
+    let mut h = harness(|app| app.set_option("quick", "polyline").unwrap());
+    h.state_mut().views[0].open_find();
+    h.run_steps(3);
+    click_pt(&mut h, (40.0, 40.0));
+    click_pt(&mut h, (120.0, 60.0));
+    assert!(h.state().views[0].comments.gesture.is_some(), "a line is being drawn");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().views[0].comments.gesture.is_none(), "Escape abandons it");
+    assert!(h.state().views[0].find.is_some(), "and nothing else");
+}
+
+/// Delete reaches the selected comment while only a button has the keyboard, as after a click on
+/// the toolbar (#5012). The button kept it, and the comment stayed.
+#[test]
+fn delete_with_a_button_focused_deletes_the_selected_comment() {
+    let mut h = selected_square();
+    h.get_by_label("Select (V)").focus();
+    h.run_steps(1);
+    assert!(h.ctx.egui_wants_keyboard_input() && !h.ctx.text_edit_focused(), "a button has the keyboard");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert!(comments(&h).is_empty(), "Delete deletes the comment");
+}
+
+/// The number of form fields in the document.
+fn fields(h: &Harness<'static, PdfCraftApp>) -> usize {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().form.len()
+}
+
+/// One Delete deletes one selection, the newer: with a comment and a Prepare field selected, the
+/// field selected last goes, and the next Delete takes the comment. One Delete deleted both.
+#[test]
+fn one_delete_deletes_the_newer_selection_only() {
+    let mut h = selected_square();
+    assert!(h.state_mut().execute("form.add.text"));
+    h.run_steps(2);
+    drag_pt(&mut h, (160.0, 180.0), (280.0, 150.0));
+    h.run_steps(2);
+    // The comment again, after the field.
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(2);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.run_steps(2);
+    assert!(h.state().views[0].prepare.selected.is_some(), "a field is selected");
+    let before = fields(&h);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert!(comments(&h).is_empty(), "the comment, selected last, goes");
+    assert_eq!(fields(&h), before, "the field stays");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(fields(&h), before - 1, "the next Delete takes the field");
+}
+
+/// In full screen, Backspace deletes a selected comment and leaves the page shown; with nothing
+/// selected it steps back a page. It did both at once.
+#[test]
+fn full_screen_backspace_deletes_a_selected_comment_before_it_steps_back() {
+    let mut h = selected_square();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::L);
+    h.run_steps(6);
+    assert!(h.state().full_screen);
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 1);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is still selected");
+    h.key_press(egui::Key::Backspace);
+    h.run_steps(4);
+    assert!(comments(&h).is_empty(), "Backspace deletes the comment");
+    assert_eq!(h.state().views[0].current, 1, "and stays on the page");
+    h.key_press(egui::Key::Backspace);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 0, "the next steps back");
+}
+
+/// A Backspace with Ctrl is one press too: in full screen it deletes a selected comment and the
+/// page stays. It also stepped back a page.
+#[test]
+fn full_screen_ctrl_backspace_deletes_a_selected_comment_and_stays() {
+    let mut h = selected_square();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::L);
+    h.run_steps(6);
+    assert!(h.state().full_screen);
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is still selected");
+    h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::Backspace);
+    h.run_steps(4);
+    assert!(comments(&h).is_empty(), "Ctrl+Backspace deletes the comment");
+    assert_eq!(h.state().views[0].current, 1, "and stays on the page");
+}
+
+/// The arrows move one selection, the newer: with a comment and then a Prepare field selected, the
+/// field moves and the comment stays. The comment moved, and the field didn't.
+#[test]
+fn an_arrow_moves_the_newer_selection_only() {
+    let mut h = selected_square();
+    let comment = comments(&h)[0].rect;
+    assert!(h.state_mut().execute("form.add.text"));
+    h.run_steps(2);
+    drag_pt(&mut h, (160.0, 180.0), (280.0, 150.0));
+    h.run_steps(2);
+    let field = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.last().and_then(|f| f.widgets.first().map(|w| w.rect))
+    };
+    let before = field(&h);
+    assert!(before.is_some() && h.state().views[0].prepare.selected.is_some(), "the field is selected");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "and the comment still is");
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(4);
+    assert_ne!(field(&h), before, "the field, selected last, moves");
+    assert_eq!(comments(&h)[0].rect, comment, "the comment stays");
+}
+
+/// With the comment's right-click menu open on the page, Delete is the menu's, as with the menu
+/// bar: the comment stays. Escape then closes the menu alone, and the comment stays selected.
+#[test]
+fn delete_with_the_comments_own_menu_open_leaves_it() {
+    let mut h = selected_square();
+    let p = at(&h, 90.0, 70.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the comment's menu is open");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1, "Delete leaves the comment");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!egui::Popup::is_any_open(&h.ctx), "Escape closes the menu");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "and the comment stays selected");
+}

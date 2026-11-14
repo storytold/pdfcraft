@@ -887,6 +887,71 @@ fn key_files() -> Vec<String> {
     files
 }
 
+/// Reading a page key through `PageKeys`: who gets the key is the key pass's to decide.
+const PAGE_KEY_READS: [&str; 3] = ["keys.pressed(", "keys.take(", "keys.take_presses("];
+
+/// Functions in the files the key guard scans ([`key_files`]) that read the pages' keys through
+/// `PageKeys` themselves rather than being told by the key pass (`canvas/key_order.rs`): an editor
+/// open on the page, which the pass leaves its keys to; what the pass leaves a key to later in the
+/// frame, by its state; what the pass calls in its order; and the keys of other places (the page
+/// grid, the Pages panel, the tool letters): (file, function, why).
+const OWN_PAGE_KEYS: [(&str, &str, &str); 18] = [
+    ("app/keys.rs", "shortcuts", "full screen's Escape, read before the pages until #5325 gives it its place in the pass"),
+    ("app/keys.rs", "tool_keys", "the tool letters and the Space that holds the Hand tool, which no page holder contests"),
+    ("canvas/navigation.rs", "view_keys", "the view's plain keys, which the key pass calls last, with what is left"),
+    ("canvas/organize.rs", "organize_toolbar", "the page grid's Delete and Escape: in Organize the key pass leaves them to it"),
+    ("panels/pages.rs", "pages", "the Pages panel's Delete and Escape, while its thumbnails have the keyboard"),
+    ("tools/comments/composer.rs", "composer", "the comment composer's Escape: the key pass leaves an open editor its keys"),
+    (
+        "tools/comments/input.rs",
+        "click_points",
+        "a comment drawn point by point: Enter finishes it and Backspace takes its last point back, which the key pass leaves to it",
+    ),
+    ("tools/comments/input.rs", "nudge_keys", "the selected comment's arrows, which the key pass asks for in its order"),
+    ("tools/content_ui.rs", "editor", "the added-text editor's Escape: the key pass leaves an open editor its keys"),
+    ("tools/edit_text_ui.rs", "overlay", "the paragraph editor's Escape and ⌘Enter: the key pass leaves an open editor its keys"),
+    ("tools/fill_sign.rs", "type_box", "the Fill & Sign text box's Escape: the key pass leaves an open editor its keys"),
+    ("tools/forms_ui.rs", "arrow_step", "a radio group's arrows, while one of its buttons has the keyboard"),
+    ("tools/forms_ui.rs", "choice_list", "an open drop-down list's keys"),
+    ("tools/forms_ui.rs", "list_overlay_keys", "an open list box's keys"),
+    ("tools/forms_ui.rs", "overlay", "the form field being filled: its Enter, Escape, Tab and Space"),
+    (
+        "tools/measure_ui.rs",
+        "page_input",
+        "the Measure tool's points: Escape, Enter and Backspace, which the key pass leaves to it while it has points",
+    ),
+    ("tools/object_ui.rs", "nudge_keys", "Edit text's arrows, which the key pass asks for in its order"),
+    ("tools/prepare.rs", "nudge_keys", "the selected field's arrows, which the key pass asks for in its order"),
+];
+
+/// Page modules don't decide among themselves who gets a page key: the key pass does, in one
+/// order, so that one press does one thing. Each read the key for itself, and one Escape closed Find
+/// and let go of the selected comment together.
+#[test]
+fn the_key_pass_gives_out_the_page_keys() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let files = key_files();
+    let mut found = Vec::new();
+    for file in files.iter().filter(|f| *f != "canvas/key_order.rs") {
+        let source = std::fs::read_to_string(src.join(file)).expect("source file").replace("\r\n", "\n");
+        for (n, function, text) in code_lines(&source) {
+            for name in PAGE_KEY_READS.iter().filter(|name| text.contains(*name)) {
+                found.push((file.as_str(), function.map(str::to_owned), n, (*name).to_owned()));
+            }
+        }
+    }
+    let problems = misuses_in(
+        found,
+        &OWN_PAGE_KEYS,
+        "decides for itself who gets a page key. Give the key its place in the key pass's order \
+         (src/canvas/key_order.rs) and have the pass call the module, as it does the selections. An editor's own \
+         key, or one the pass leaves to it by its state? Add the function to OWN_PAGE_KEYS in \
+         src/canvas/page_pointer/tests.rs, with why.",
+        "reads no page keys of its own any more: remove it from OWN_PAGE_KEYS.",
+    );
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
 /// Page code reads keys only through `PageKeys`. The pages are drawn before the dialogs and the
 /// palette and read egui's keys first, so a raw read acts on what is selected or typed behind
 /// whatever is over them: Delete under a dialog deleted the comment selected behind it, and the
