@@ -221,6 +221,9 @@ impl PdfCraftApp {
             "protect.unlock" => self.request_unlock(None),
             "protect.password" => {
                 self.protect_draft = Default::default();
+                // A document that already has security asks before changing it.
+                self.protect_draft.ask_change =
+                    self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.security_summary().is_some());
                 self.dialog = Some(Dialog::Protect);
             }
             "prepress.convert_colors" => self.dialog = Some(Dialog::ConvertColours),

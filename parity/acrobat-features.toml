@@ -5619,8 +5619,8 @@ milestone = "M8"
 status = "shipped"
 commands = ["protect.password"]
 tools = ["doc_protect"]
-evidence = ["crates/ui-egui/tests/it/protect.rs::editing_restrictions_via_advanced_options", "crates/engine/src/tests.rs::permissions_password_restricts_others_but_not_this_session", "crates/automation/tests/it/automation.rs::protecting_through_tools"]
-notes = "Protect Using Password (Editing); the author keeps full rights after saving"
+evidence = ["crates/ui-egui/tests/it/protect.rs::editing_restrictions_via_advanced_options", "crates/engine/src/tests.rs::permissions_password_restricts_others_but_not_this_session", "crates/automation/tests/it/automation.rs::protecting_through_tools", "crates/ui-egui/tests/it/protect.rs::an_open_password_and_a_permissions_password_together", "crates/ui-egui/tests/it/protect.rs::changing_existing_security_asks_first"]
+notes = "Protect Using Password (Editing), or with an open password from Advanced Options (both together); the author keeps full rights after saving. A document that already has security asks before its security is changed"
 
 [[feature]]
 id = "protect.permissions-matrix"
@@ -5631,8 +5631,8 @@ milestone = "M8"
 status = "shipped"
 commands = ["protect.password"]
 tools = ["doc_protect"]
-evidence = ["crates/ui-egui/tests/it/protect.rs::editing_restrictions_via_advanced_options", "crates/engine/src/tests.rs::permissions_password_restricts_others_but_not_this_session"]
-notes = "Advanced Options: printing (none/low/high), changes (5 levels), copying, screen readers"
+evidence = ["crates/ui-egui/tests/it/protect.rs::editing_restrictions_via_advanced_options", "crates/engine/src/tests.rs::permissions_password_restricts_others_but_not_this_session", "crates/ui-egui/tests/it/protect.rs::forty_bit_rc4_offers_only_what_it_can_keep"]
+notes = "Advanced Options: printing (none/low/high), changes (5 levels), copying, screen readers. With 40-bit RC4, low-resolution printing, page changes, form filling and screen readers are disabled (revision 2 has no bits for them) and fall back to None; screen readers follow copying"
 
 [[feature]]
 id = "protect.encryption-level"
