@@ -1877,6 +1877,33 @@ fn rasters_on_screen_size_the_allowance_for_arriving_pages() {
 }
 
 #[test]
+fn prefetched_pages_arriving_before_the_page_on_screen_fit_the_allowance_that_queued_them() {
+    let ctx = egui::Context::default();
+    ctx.begin_pass(egui::RawInput { max_texture_side: Some(4096), ..Default::default() });
+    let info = fit_width_pages(8, 1.0);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.frame_visible = HashSet::from([3]);
+    // Page 3 is on screen at the earlier zoom, with a small raster.
+    let before = RenderRequest { page: 3, scale: 0.1, tag: 500, ..Default::default() };
+    v.last_queue = vec![before];
+    assert!(v.receive_result(&ctx, solid_result(before, 298, 385)) > 0);
+    // After the zoom, page 3 asks for a 43.8 MiB raster and the pages around it are prefetched.
+    v.frame_queue = [3, 2, 4, 1, 5, 0, 6].map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }).to_vec();
+    let queue = v.prepare_render_queue(&info, 1.0);
+    let ahead: Vec<RenderRequest> = queue.iter().copied().filter(|r| r.page != 3).collect();
+    assert_eq!(ahead.len(), 6, "six pages prefetched beside the one on screen");
+    v.last_queue = queue;
+    // Their rasters arrive before page 3's new one.
+    for req in &ahead {
+        assert!(v.receive_result(&ctx, solid_result(*req, 2980, 3850)) > 0, "page {} uploaded", req.page);
+    }
+    for req in &ahead {
+        assert!(v.pages.contains_key(&req.page), "prefetched page {} is still cached", req.page);
+    }
+    ctx.end_pass().textures_delta.clear();
+}
+
+#[test]
 fn a_raster_held_on_screen_without_a_request_sizes_the_allowance() {
     let ctx = egui::Context::default();
     ctx.begin_pass(egui::RawInput { max_texture_side: Some(4096), ..Default::default() });

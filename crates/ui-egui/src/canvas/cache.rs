@@ -433,6 +433,7 @@ impl DocView {
                 Some(rgba_bytes(device_pixels(p.width, r.scale) as usize, device_pixels(p.height, r.scale) as usize))
             })
             .fold(0, usize::max);
+        self.frame_page_demand = demand;
         let page_limit = self.on_screen_page_budget(demand, None);
         for req in requests.iter().filter(|r| r.kind == RequestKind::Pixels) {
             let Some(p) = info.pages.get(req.page) else { continue };
@@ -779,7 +780,7 @@ impl DocView {
             visible || bytes <= TILE_BYTES.saturating_sub(retained)
         } else {
             let thumb = req.tag & THUMB_TAG != 0;
-            let page_limit = self.on_screen_page_budget(if visible { bytes } else { 0 }, Some(req.page));
+            let page_limit = self.on_screen_page_budget((if visible { bytes } else { 0 }).max(self.frame_page_demand), Some(req.page));
             let (cache, limit) = if thumb { (&mut self.thumbs, THUMB_BYTES) } else { (&mut self.pages, page_limit) };
             cache.remove(&req.page);
             let mut retained = cache.values().fold(0usize, |n, p| n.saturating_add(texture_bytes(&p.tex)));
