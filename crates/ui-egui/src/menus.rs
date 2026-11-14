@@ -184,6 +184,7 @@ const PAGES: &[&str] = &[
     "page.extract",
     "page.split",
     "page.duplicate",
+    "page.duplicate_renaming_fields",
     "page.delete",
     SEP,
     "page.rotate",

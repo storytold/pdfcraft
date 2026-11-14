@@ -130,6 +130,9 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 if ui.button(tl!("Duplicate pages")).clicked() {
                     act = Some(Act::Command("page.duplicate"));
                 }
+                if ui.button(tl!("Duplicate pages with new field names")).clicked() {
+                    act = Some(Act::Command("page.duplicate_renaming_fields"));
+                }
             });
             if row(ui, t, "replace", tl!("Replace"), Availability::Ready, false).clicked() {
                 act = Some(Act::View(ViewAction::ReplacePages));
