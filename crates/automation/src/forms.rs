@@ -889,7 +889,7 @@ impl Automation {
             w => return Err(bad(format!("unknown what {w:?} (all, comments, fields)"))),
         };
         if comments && !matches!(format, pdfcraft_engine::DataFormat::Xfdf | pdfcraft_engine::DataFormat::Fdf) {
-            return Err(bad("comments travel as .xfdf or .fdf; .xml, .csv and .txt hold form data (use what: fields)"));
+            return Err(bad("comments travel as .xfdf or .fdf; .xml, .xdp, .csv and .txt hold form data (use what: fields)"));
         }
         let bytes = self.session.export_data(id, format, comments, fields).map_err(failed)?;
         crate::write_atomic(&path, &bytes)?;
