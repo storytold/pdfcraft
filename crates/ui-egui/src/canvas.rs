@@ -1412,6 +1412,8 @@ struct PageOut {
     clicked_link: Option<LinkTarget>,
     /// A click a page's render-warning note took (its close button or the note itself).
     note_clicked: bool,
+    /// The JavaScript link clicked, by page and annotation index (0-based), to run its action.
+    javascript_link: Option<(usize, usize)>,
     comment_notice: Option<&'static str>,
     copy_comments: bool,
     copy_selected: bool,
@@ -1458,6 +1460,8 @@ struct PageFrame<'a> {
     current_height: f32,
     pressed_page: Option<usize>,
     calc_hover: Option<crate::calc_order_ui::Focus>,
+    /// The form field widget under the pointer on any page, for its Mouse Enter and Exit scripts.
+    field_hover: Option<crate::forms_ui::WidgetRef>,
     /// A page took this frame's right-click.
     right_clicked: bool,
 }
@@ -1947,6 +1951,7 @@ fn draw_pages(
         current_height: f32::INFINITY,
         pressed_page: None,
         calc_hover: None,
+        field_hover: None,
         right_clicked: false,
     };
     for &i in visible_pages {
@@ -1961,10 +1966,12 @@ fn draw_pages(
         current_height,
         pressed_page,
         calc_hover,
+        field_hover,
         out: page_out,
         right_clicked,
         ..
     } = frame;
+    crate::forms_ui::hover_moved(view, field_hover);
     // A right-click no page took deselects the comment, so the page's menu opens, not the comment's,
     // and with Edit text the picture (one on a page went to that page, `page_input`).
     if resp.secondary_clicked() && !right_clicked {
@@ -1977,6 +1984,7 @@ fn draw_pages(
         mut canvas_action,
         clicked_link,
         note_clicked,
+        javascript_link,
         copy_selected,
         mut field_menu,
         field_placed,
@@ -2228,6 +2236,7 @@ fn draw_pages(
         canvas_action,
         clicked_link,
         note_clicked,
+        javascript_link,
         comment_notice,
         copy_comments,
         copy_selected,
@@ -2922,6 +2931,8 @@ pub(crate) fn follow_link(
         LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),
         LinkTarget::SetLayers { changes, preserve_rb } => set_layers(app, index, &changes, preserve_rb),
         LinkTarget::RemoteGoTo { file, destination, .. } => return Some((view_id, file, destination)),
+        // Run by `PdfCraftApp::run_link_script`, which needs the link's page and index.
+        LinkTarget::JavaScript(_) => {}
         LinkTarget::Other(s) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
     }
     None
@@ -3467,6 +3478,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         canvas_action,
         clicked_link,
         note_clicked,
+        javascript_link,
         comment_notice,
         copy_comments,
         mut copy_selected,
@@ -3573,6 +3585,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     schedule_presentation_turn(ui, view, present, clicked_link.is_some() || on_object && present.is_some() || note_clicked);
     let remote_open = follow_link(app, index, clicked_link);
+    if let Some((page, link)) = javascript_link {
+        let id = app.views[index].id;
+        app.run_link_script(id, page, link);
+    }
     if tool == QuickTool::Crop && cropped {
         tool = QuickTool::Select;
     }
@@ -3844,8 +3860,8 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
             crate::forms_ui::FormNotice::NoAction(name) => app.notify_fmt("{name} has no action", &[("name", &name)]),
         }
     }
-    if let Some((name, action)) = app.views[index].forms.button.take() {
-        run_button(app, index, &name, action);
+    if let Some((name, identity, action)) = app.views[index].forms.button.take() {
+        run_button(app, index, &name, identity, action);
     }
     if copy_selected {
         app.execute("edit.copy");
