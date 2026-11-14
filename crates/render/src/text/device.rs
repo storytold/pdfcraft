@@ -1,8 +1,8 @@
 use super::layout::{Flow, LayoutDeadline, along_baseline, arrange_flow, compatible, continues, from_upright, to_upright, union, unrolled};
 use super::{
-    Affine, BezPath, BlendMode, ClipPath, Context, Device, Glyph, GlyphDrawMode, GlyphStyle, HashMap, Image, InterpreterCache, InterpreterSettings,
-    InterpreterWarning, PageText, Paint, PathDrawMode, Pdf, RecoveredText, Recovery, Rect, Shape, SoftMask, TextFilter, TextGlyph, TransformExt,
-    interpret_page,
+    Affine, BezPath, BlendMode, ClipPath, Context, Device, FillOperands, Glyph, GlyphDrawMode, GlyphStyle, HashMap, Image, InterpreterCache,
+    InterpreterSettings, InterpreterWarning, PageText, Paint, PathDrawMode, Pdf, RecoveredText, Recovery, Rect, Shape, SoftMask, TextFilter,
+    TextGlyph, TransformExt, interpret_page,
 };
 
 /// Largest sine of the angle between a glyph's writing direction and a flow's for the glyph to be
@@ -827,15 +827,20 @@ impl<'a> Device<'a> for TextDevice {
                 // font size in view space, whichever way the text runs (in vertical writing the
                 // box's other side is the advance).
                 let size = (t * kurbo::Point::new(0.0, em.y1)).distance(t * kurbo::Point::new(0.0, em.y0)) as f32;
-                let color = match paint {
+                let (color, fill) = match paint {
                     Paint::Color(c) => {
                         let [r, g, b, _] = c.to_rgba().to_rgba8();
-                        [r, g, b]
+                        let operands = c.components();
+                        let mut values = [0.0; 4];
+                        for (v, o) in values.iter_mut().zip(operands) {
+                            *v = *o;
+                        }
+                        ([r, g, b], Some(FillOperands { values, count: operands.len() }))
                     }
-                    Paint::Pattern(_) => [0, 0, 0],
+                    Paint::Pattern(_) => ([0, 0, 0], None),
                 };
                 let size = if size.is_finite() { size } else { 0.0 };
-                let style = GlyphStyle { font: font_style.name, size, color, bold: font_style.bold, italic: font_style.italic };
+                let style = GlyphStyle { font: font_style.name, size, color, bold: font_style.bold, italic: font_style.italic, fill };
                 let r = (r, style);
                 if glyph.text.chars().all(char::is_control) {
                     // No strict text: only Copy with formatting's layer has the glyph.

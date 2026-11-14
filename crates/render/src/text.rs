@@ -154,6 +154,25 @@ pub struct GlyphStyle {
     pub color: [u8; 3],
     pub bold: bool,
     pub italic: bool,
+    /// The fill colour's operands as the content set them, before the colour space reads them
+    /// (`None` for a pattern): Copy with formatting reads them as a reading block reads its
+    /// colour, to tell whether the glyph is painted as a block beside it is.
+    pub fill: Option<FillOperands>,
+}
+
+/// A fill colour's operands ([`GlyphStyle::fill`]): the first four, and how many there are.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FillOperands {
+    pub values: [f32; 4],
+    pub count: usize,
+}
+
+impl FillOperands {
+    /// The operands, or none when there are more than four (no reading block reads such a
+    /// colour's operands: it is black there).
+    pub fn operands(&self) -> &[f32] {
+        if self.count > self.values.len() { &[] } else { self.values.get(..self.count).unwrap_or_default() }
+    }
 }
 
 impl PageText {
