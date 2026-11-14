@@ -865,6 +865,67 @@ fn source_font(doc: &Document, fonts_res: &Dict, font_name: &str, first: &TextLi
     SourceFont { metrics, reuse, space }
 }
 
+/// `draft` with each tab the paragraph's font can't write as the spaces that span the gap it stood
+/// for. InDesign and Word draw a tab as a glyph of no width and move the text after it, so a
+/// bulleted item reads `•\t text`; no font "has" that tab again, and any edit to such a paragraph
+/// was refused ("the source font cannot show the replacement text"). The gap is what its source
+/// row is wider than its other characters by, in spaces, at least one; a tab the font does write,
+/// and a turned row's, stay as they are.
+fn tabs_as_spaces(doc: &Document, page: usize, lines: &[TextLine], block: &TextBlock, draft: &str) -> String {
+    let fonts = page_dict(doc, page)
+        .ok()
+        .and_then(|p| p.dict.get(b"Resources").and_then(|r| doc.dict(r)))
+        .and_then(|r| r.get(b"Font").and_then(|f| doc.dict(f)))
+        .unwrap_or_default();
+    let metrics_of = |line: &TextLine| fonts.get(line.font.as_bytes()).and_then(|f| doc.dict(f)).map(|f| Metrics::from_dict(doc, &f));
+    // Each source tab in order: the spaces it becomes, or `None` where the font writes it itself.
+    let mut gaps: Vec<Option<usize>> = Vec::new();
+    let mut writes_tabs = false;
+    for (n, line) in block.lines.iter().filter_map(|i| lines.get(*i)).enumerate() {
+        let metrics = metrics_of(line);
+        let writes = metrics.as_ref().is_some_and(|m| m.encode("\t").is_some());
+        if n == 0 {
+            writes_tabs = writes;
+        }
+        let tabs = line.text.matches('\t').count();
+        if tabs == 0 {
+            continue;
+        }
+        let spaces = match &metrics {
+            _ if writes => None,
+            Some(m) if line.upright() => {
+                let state = &line.origin.state;
+                let size = state.font.as_ref().map_or(1.0, |(_, size)| *size);
+                let space = source_space(doc, &fonts, m);
+                let along = Matrix(line.origin.tm).then(&Matrix(line.origin.ctm)).0;
+                let along = along[0].hypot(along[1]);
+                let across = if along.is_finite() && along > 1e-9 { along } else { line.origin.k } * state.scale;
+                let rest = source_width(m, &line.text.replace('\t', ""), size, space, state.char_spacing, state.word_spacing) * across;
+                let one = (space * size + state.char_spacing + state.word_spacing) * across;
+                let gap = (line.rect[2] - line.rect[0] - rest) / tabs as f64;
+                Some(if one > 1e-6 && gap.is_finite() { (gap / one).round().clamp(1.0, 64.0) as usize } else { 1 })
+            }
+            _ => Some(1),
+        };
+        gaps.extend(std::iter::repeat_n(spaces, tabs));
+    }
+    let mut gaps = gaps.into_iter();
+    let mut out = String::with_capacity(draft.len());
+    for ch in draft.chars() {
+        if ch != '\t' {
+            out.push(ch);
+            continue;
+        }
+        match gaps.next() {
+            Some(Some(spaces)) => out.extend(std::iter::repeat_n(' ', spaces)),
+            Some(None) => out.push('\t'),
+            // A tab typed beyond the source's: the font's own where it writes one, else a space.
+            None => out.push(if writes_tabs { '\t' } else { ' ' }),
+        }
+    }
+    out
+}
+
 /// [`rewrite_block_with_limit`] with the page's [`text_lines`], read from `doc` as it is now.
 pub(crate) fn rewrite_block_from(
     doc: &mut Document,
@@ -877,6 +938,14 @@ pub(crate) fn rewrite_block_from(
 ) -> Result<LineEdit, EditError> {
     let blocks = group_blocks(&lines);
     let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
+    let spaced;
+    let text = match text {
+        Some(draft) if draft.contains('\t') => {
+            spaced = tabs_as_spaces(doc, page, &lines, &b, draft);
+            Some(spaced.as_str())
+        }
+        other => other,
+    };
     // Existing PDF paragraphs do not yet persist selected-row alignment intent. Refuse
     // that operation before writing anything; whole-paragraph `align` remains supported.
     if style.aligns.iter().any(Option::is_some) {

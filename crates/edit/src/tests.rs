@@ -9481,6 +9481,42 @@ fn a_named_font_takes_a_new_letter_once_its_advance_is_known() {
     assert_eq!(write_full(&doc, &Default::default()).unwrap(), before);
 }
 
+/// A bulleted item reads `•\t text`: InDesign and Word draw the tab as a glyph of no width and move
+/// the text after it. No font has that tab to write again, and any edit to such a paragraph was
+/// refused. The tab becomes the spaces that span its gap, so the text after it stays where it was.
+#[test]
+fn a_paragraph_with_a_tab_its_font_cannot_write_is_edited_with_the_gap_kept() {
+    let widths: Vec<String> = (9..=122).map(|code| if code == 9 { "0".to_owned() } else { "500".to_owned() }).collect();
+    let font = format!(
+        "<< /Type /Font /Subtype /Type1 /BaseFont /HouseSans /FirstChar 9 /LastChar 122 /Widths [{}] /Encoding /WinAnsiEncoding /ToUnicode 6 0 R >>",
+        widths.join(" ")
+    );
+    // The tab is code 9, of no width; a move of one em stands for it.
+    let content = stream("", "BT /F1 12 Tf 72 700 Td [(a\\011) -1000 (bcd efg)] TJ ET");
+    let to_unicode = stream("", "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <09> <0009> endbfchar");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        &content,
+        &font,
+        &to_unicode,
+    ]);
+    let before = text::text_lines(&doc, 0).unwrap();
+    // The move reads as a space after the tab, as a bulleted item's does (`•\t text`).
+    assert_eq!(before.iter().map(|l| l.text.as_str()).collect::<String>(), "a\t bcd efg");
+    let right = before.iter().map(|l| l.rect[2]).fold(f64::MIN, f64::max);
+    text::replace_block(&mut doc, 0, 0, "a\t bcd efgh").expect("an edit after the tab is not refused");
+    let doc = reopen(&doc);
+    let after = text::text_lines(&doc, 0).unwrap();
+    let shown: String = after.iter().map(|l| l.text.as_str()).collect();
+    assert!(shown.starts_with('a') && shown.ends_with("bcd efgh") && !shown.contains('\t'), "{shown:?}");
+    // The gap is one em, two of this font's spaces: the one read after the tab and one for the
+    // tab. `bcd` has not moved, so the row ends `h`'s half an em further right.
+    let end = after.iter().map(|l| l.rect[2]).fold(f64::MIN, f64::max);
+    assert!((end - right - 6.0).abs() < 0.5, "{right} -> {end}");
+}
+
 /// A variation selector after a character the source font shows is the only thing missing: it gets
 /// its empty glyph instead of the edit failing as "empty".
 #[test]

@@ -895,7 +895,9 @@ pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, 
             out.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(adjustment)])]));
         }
         if !word.is_empty() {
-            let bytes = metrics.encode(word).ok_or_else(|| EditError::Invalid("the source font cannot show the replacement text".into()))?;
+            let bytes = metrics
+                .encode(word)
+                .ok_or_else(|| EditError::Invalid(format!("the source font cannot show the replacement text (\"{}\")", word.escape_debug())))?;
             out.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))]));
         }
     }

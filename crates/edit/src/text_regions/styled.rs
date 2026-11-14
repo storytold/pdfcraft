@@ -1822,7 +1822,15 @@ pub(crate) fn rewrite_styled_block(
         // The row's own alignment, or the paragraph's.
         let asked = row_lines.get(row_index).and_then(|l| style.aligns.get(*l)).copied().flatten().or(style.align);
         let align = asked.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
-        let original_rect = block.rows.get(row_index).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect);
+        // A row the edit added takes the last source row's edges, not the paragraph's box: a
+        // hanging indent (a bulleted item, whose first row starts at its bullet) carries on at
+        // the indent instead of running back out to the bullet.
+        let original_rect = block
+            .rows
+            .get(row_index)
+            .and_then(|row| row_rect(row, lines))
+            .or_else(|| block.rows.last().and_then(|row| row_rect(row, lines)))
+            .unwrap_or(block.rect);
         let left = if style.width.is_none() && asked.is_none() { original_rect[0] } else { block.rect[0] };
         let available = if style.width.is_none() && asked.is_none() { original_rect[2] - original_rect[0] } else { width };
         let mut x = left
