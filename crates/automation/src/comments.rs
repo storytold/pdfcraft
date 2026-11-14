@@ -82,6 +82,15 @@ pub(crate) fn rect_to_user(p: &PageInfo, r: [f64; 4]) -> [f64; 4] {
     [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
 }
 
+/// A length in displayed points (a font size) → user units on `p`'s page: `/UserUnit` sets how
+/// many points a user unit is (ISO 32000-2 §7.7.3.3), as it does for [`rect_to_user`].
+fn len_to_user(p: &PageInfo, points: f64) -> f64 {
+    let user = f64::from(if p.rotation.is_multiple_of(180) { p.crop[2] - p.crop[0] } else { p.crop[3] - p.crop[1] });
+    let shown = f64::from(p.width);
+    // A page with no usable size is drawn at one point a unit.
+    if user > 0.0 && user.is_finite() && shown > 0.0 && shown.is_finite() { points * user / shown } else { points }
+}
+
 /// The engine's `at` for a note or attachment icon whose top-left corner *as displayed* is the
 /// view point (x, y): the upper-left corner (`[x0, y1]`) of its `/Rect`. Notes and attachments
 /// are NoRotate, so on a turned page the icon is drawn upright with its top-left at that corner
@@ -372,7 +381,7 @@ impl Automation {
                 "rectangle" => Shape::Rectangle { rect: rect_to_user(&info, a.need::<4>("rect", "a rectangle")?) },
                 "oval" => Shape::Oval { rect: rect_to_user(&info, a.need::<4>("rect", "an oval")?) },
                 "textbox" => {
-                    let font_size = a.opt_num("font_size")?.unwrap_or(12.0);
+                    let font_size = len_to_user(&info, a.opt_num("font_size")?.unwrap_or(12.0));
                     Shape::TextBox { rect: rect_to_user(&info, a.need::<4>("rect", "a text box")?), font_size }
                 }
                 "line" | "arrow" => {
@@ -437,7 +446,7 @@ impl Automation {
                         rect,
                         knee,
                         point,
-                        font_size: a.opt_num("font_size")?.unwrap_or(10.0),
+                        font_size: len_to_user(&info, a.opt_num("font_size")?.unwrap_or(10.0)),
                         ending: match endings.as_deref() {
                             None => LineEnding::OpenArrow,
                             Some([ending]) => *ending,
@@ -784,7 +793,7 @@ impl Automation {
             if !(1.0..=400.0).contains(&size) {
                 return Err(ToolError::InvalidArgs("font_size must be 1–400 pt".into()));
             }
-            edits.push(Edit::FontSizeAnnotation { page, index, size });
+            edits.push(Edit::FontSizeAnnotation { page, index, size: len_to_user(&info, size) });
         }
         if let Some(r) = a.nums::<4>("rect")? {
             // The rectangle as comment_list reports it: where the comment is drawn.

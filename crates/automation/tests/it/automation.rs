@@ -2573,6 +2573,82 @@ fn text_borders_take_an_oval_or_a_circle_through_the_tools() {
     ));
 }
 
+/// A comment's `font_size` is in displayed points, like its rectangle: on a `/UserUnit` page the
+/// text is written in user units, so it stays the requested physical size (#7277).
+#[test]
+fn comment_font_sizes_are_points_on_a_user_unit_page() {
+    use pdfcraft_cos::Object;
+    /// One blank page shown as 400×400 pt, `400 / unit` user units a side.
+    fn page(unit: f64) -> Vec<u8> {
+        let side = 400.0 / unit;
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {side} {side}] /UserUnit {unit} >>"),
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+    /// The `Tf` size in the `/DA` of each FreeText comment on the first page of the saved `name`.
+    fn sizes(dir: &Path, name: &str) -> Vec<f64> {
+        let d = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(name)).unwrap())).unwrap();
+        let pages = d.get(d.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+        let kids = d.get(pages).as_dict().unwrap().get(b"Kids").unwrap().clone();
+        let kid = d.resolve(&kids).as_array().unwrap()[0].clone();
+        let annots = d.resolve(&kid).as_dict().unwrap().get(b"Annots").unwrap().clone();
+        let annots = d.resolve(&annots).as_array().unwrap().to_vec();
+        annots
+            .iter()
+            .filter_map(|r| {
+                let annot = d.resolve(r);
+                let annot = annot.as_dict()?;
+                (annot.name(b"Subtype") == Some(&b"FreeText"[..])).then_some(())?;
+                let Object::String(da) = &*d.resolve(annot.get(b"DA")?) else { return None };
+                let da = String::from_utf8_lossy(&da.bytes).into_owned();
+                let words: Vec<&str> = da.split_whitespace().collect();
+                let tf = words.iter().position(|w| *w == "Tf")?;
+                words.get(tf.checked_sub(1)?)?.parse().ok()
+            })
+            .collect()
+    }
+    let close = |got: &[f64], want: &[f64]| got.len() == want.len() && got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01);
+    for unit in [1.0, 2.0, 2.5] {
+        let dir = workdir("comment-font-user-unit");
+        std::fs::write(dir.join("u.pdf"), page(unit)).unwrap();
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({ "path": "u.pdf" }))["doc"].as_u64().unwrap();
+        let text_box = ok(
+            &mut a,
+            "comment_add",
+            json!({ "doc": doc, "page": 1, "type": "textbox", "rect": [40, 50, 300, 100], "font_size": 12, "contents": "UNITS TEST" }),
+        );
+        ok(
+            &mut a,
+            "comment_add",
+            json!({ "doc": doc, "page": 1, "type": "callout", "rect": [40, 200, 300, 250], "to": [20, 350], "font_size": 14, "contents": "Look" }),
+        );
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": "added.pdf" }));
+        let got = sizes(&dir, "added.pdf");
+        assert!(close(&got, &[12.0 / unit, 14.0 / unit]), "UserUnit {unit}: added at {got:?}");
+        ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 1, "index": text_box["comment"]["index"], "font_size": 16 }));
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": "edited.pdf" }));
+        let got = sizes(&dir, "edited.pdf");
+        assert!(close(&got, &[16.0 / unit, 14.0 / unit]), "UserUnit {unit}: edited to {got:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// A rectangle's fill and a text box's text each take an opacity of their own through the tools
 /// (the line or border keeps the comment's `opacity`); `opacity` sets the whole comment's again.
 #[test]
