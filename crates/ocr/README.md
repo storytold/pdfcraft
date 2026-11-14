@@ -11,7 +11,7 @@ let placed: Vec<PlacedWord> = …;                         // PlacedWord::place 
 // The editable output draws real glyphs: plan the words, register the display faces into the
 // plan (`pdfcraft_edit::add_type3_fonts`), then generate the layer. An unregistered plan falls
 // back to WinAnsi, and characters no registered face has become '?'.
-let plan = TextPlan::for_words(placed.iter().map(|w| w.text.as_str()));
+let mut plan = TextPlan::for_words(placed.iter().map(|w| w.text.as_str()));
 add_type3_fonts(&mut doc, page, &mut plan)?;             // names the plan's fonts on the page
 let layer = visible_text_layer(&placed, &plan);          // visible text: the editable output
 // The searchable layer needs no display fonts: the engine's own layer (engine::ocr::layer)
