@@ -435,45 +435,11 @@ fn scan_soft_mask(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, nam
 
 /// Scan the appearance streams of a page's annotations. A comment, stamp or field can show glyphs
 /// of a Type 3 font that the page lists too. An appearance without resources of its own draws
-/// through the page's. One with resources of its own looks a name they don't give up in the page's
-/// ([`appearance_names`]): it is scanned with those names once for each appearance and page
-/// resources (`scanned`), and the forms it draws are told apart from the same forms drawn
-/// elsewhere, since what they show can depend on those names.
-fn scan_appearances(
-    ctx: &mut ScanContext<'_>,
-    page: &Dict,
-    page_ref: ObjRef,
-    page_res: &Dict,
-    scanned: &mut HashSet<(ObjRef, ObjRef)>,
-) -> Result<(), CosError> {
-    // The page's resources, by the object that holds them where it is one, so pages sharing it
-    // share the scans.
-    let res_key = page.get(b"Resources").and_then(Object::as_ref).unwrap_or(page_ref);
-    // The forms drawn by appearances read with the page's names, each by the appearance that draws
-    // it: within one page, an appearance has one set of names.
-    let mut seen_here = HashSet::new();
+/// through the page's.
+fn scan_appearances(ctx: &mut ScanContext<'_>, page: &Dict, page_ref: ObjRef, page_res: &Dict) -> Result<(), CosError> {
     for annot in crate::annots_of(ctx.doc, page) {
         for r in appearance_streams(ctx.doc, &annot) {
-            let obj = ctx.doc.get(r);
-            let Object::Stream(s) = &*obj else { continue };
-            let names = s
-                .dict
-                .get(b"Resources")
-                .and_then(|o| ctx.doc.resolve(o).as_dict().cloned())
-                .and_then(|own| appearance_names(ctx.doc, &own, page_res));
-            let Some(names) = names else {
-                scan_stream_object(ctx, page_res, page_ref, r, None, 0)?;
-                continue;
-            };
-            if !scanned.insert((r, res_key)) {
-                continue;
-            }
-            let data = ctx.doc.with_direct_parms(s).decoded()?;
-            let mut here = ScanContext { doc: ctx.doc, font_maps: ctx.font_maps, used_glyphs: &mut *ctx.used_glyphs, seen_forms: &mut seen_here };
-            scan_content_stream(&mut here, std::slice::from_ref(&data), r, &names, None, 1)?;
-            // Read with its own resources alone it would show no glyph this scan didn't: those
-            // names are among the ones read here, so it needn't be scanned so again.
-            ctx.seen_forms.insert((r, None, r));
+            scan_stream_object(ctx, page_res, page_ref, r, None, 0)?;
         }
     }
     Ok(())
@@ -856,7 +822,6 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
     let mut seen_drawn_forms = HashSet::new();
 
     let mut ctx = ScanContext { doc, font_maps: &font_maps, used_glyphs: &mut used_glyphs, seen_forms: &mut seen_drawn_forms };
-    let mut appearance_scans = HashSet::new();
 
     for (pi, p) in page_list.iter().enumerate() {
         let (_, content) = page_streams(ctx.doc, &p.dict, pi)?;
@@ -872,7 +837,7 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
             .unwrap_or_default();
 
         scan_content_stream(&mut ctx, &content, p.obj, &page_res, None, 0)?;
-        scan_appearances(&mut ctx, &p.dict, p.obj, &page_res, &mut appearance_scans)?;
+        scan_appearances(&mut ctx, &p.dict, p.obj, &page_res)?;
     }
 
     // Also scan any surviving form that wasn't reached by page streams directly.

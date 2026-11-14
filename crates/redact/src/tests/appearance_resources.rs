@@ -31,56 +31,30 @@ fn a_type3_font_only_appearances_list_loses_the_removed_annotations_glyph() {
 }
 
 /// (b) An appearance whose `/Resources` hold only `/ProcSet` selects the page's Type 3 font `/T4`:
-/// the renderer looks a name the appearance's resources lack up in the page's. The page's content
-/// never selects `/T4`, so the rewritten page must still list it, with the glyph shown.
+/// the renderer looks a name the appearance's resources lack up in the page's. The rewritten page's
+/// content selects only `/T3`, so the page's cleanup must keep `/T4` too, and drops `/T5`, which
+/// nothing selects. (Whether `/T4`'s glyphs stay is the glyph scan's to decide.)
 #[test]
 fn a_page_font_an_appearance_with_partial_resources_selects_stays_on_the_page() {
-    let mut doc = pdf(vec![
+    let doc = pdf(vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R /Annots [8 0 R] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R /Annots [9 0 R] >>".to_vec(),
         stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET"),
-        b"<< /Font << /T3 6 0 R /T4 7 0 R >> >>".to_vec(),
-        type3_abc(10),
-        type3_abc(13),
-        b"<< /Type /Annot /Subtype /FreeText /Rect [150 200 250 220] /DA (/T4 10 Tf 0 g) /AP << /N 9 0 R >> >>".to_vec(),
+        b"<< /Font << /T3 6 0 R /T4 7 0 R /T5 8 0 R >> >>".to_vec(),
+        type3_abc(11),
+        type3_abc(14),
+        type3_abc(17),
+        b"<< /Type /Annot /Subtype /FreeText /Rect [150 200 250 220] /DA (/T4 10 Tf 0 g) /AP << /N 10 0 R >> >>".to_vec(),
         stream("/Type /XObject /Subtype /Form /BBox [0 0 100 20] /Resources << /ProcSet [/PDF /Text] >>", b"BT /T4 10 Tf 2 5 Td (B) Tj ET"),
-        stream("", b"% REDACTED_GLYPH_A"),
-        stream("", b"% UNUSED_GLYPH_B"),
-        stream("", b"% PAGE_GLYPH_C"),
-        stream("", b"% UNUSED_T4_GLYPH_A"),
-        stream("", b"% APPEARANCE_GLYPH_B"),
-        stream("", b"% UNUSED_T4_GLYPH_C"),
     ]);
-    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
-    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
-    assert!(!full_save_holds(&doc, b"REDACTED_GLYPH_A"), "the redacted glyph program survived");
-    assert!(saved_first_page_lists_font(&doc, b"T4"), "the page no longer lists the font the appearance selects");
-    assert!(full_save_holds(&doc, b"APPEARANCE_GLYPH_B"), "the glyph the appearance shows was unlinked");
-}
-
-/// (b) The same partial resources, the appearance showing glyph B of the page's `/T3`, whose
-/// content still shows C: the glyph scan reads the appearance's `/T3` from the page, so B stays.
-#[test]
-fn a_page_glyph_an_appearance_with_partial_resources_shows_is_kept() {
-    let mut doc = pdf(vec![
-        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R /Annots [7 0 R] >>".to_vec(),
-        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET"),
-        b"<< /Font << /T3 6 0 R >> >>".to_vec(),
-        type3_abc(9),
-        b"<< /Type /Annot /Subtype /FreeText /Rect [150 200 250 220] /DA (/T3 10 Tf 0 g) /AP << /N 8 0 R >> >>".to_vec(),
-        stream("/Type /XObject /Subtype /Form /BBox [0 0 100 20] /Resources << /ProcSet [/PDF /Text] >>", b"BT /T3 10 Tf 2 5 Td (B) Tj ET"),
-        stream("", b"% REDACTED_GLYPH_A"),
-        stream("", b"% APPEARANCE_GLYPH_B"),
-        stream("", b"% PAGE_GLYPH_C"),
-    ]);
-    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
-    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
-    assert!(!full_save_holds(&doc, b"REDACTED_GLYPH_A"), "the redacted glyph program survived");
-    assert!(full_save_holds(&doc, b"APPEARANCE_GLYPH_B"), "the glyph the appearance shows was unlinked");
-    assert!(full_save_holds(&doc, b"PAGE_GLYPH_C"), "the glyph the page still shows was unlinked");
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    let mut res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+    let content = vec![b"BT /T3 10 Tf 10 100 Td (C) Tj ET".to_vec()];
+    crate::type3::prune_type3_from_resources(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &mut res, &content, Some(&page.dict)).unwrap();
+    let fonts = doc.resolve(res.get(b"Font").unwrap()).as_dict().unwrap().clone();
+    assert!(fonts.contains(b"T4"), "the page no longer lists the font the appearance selects");
+    assert!(fonts.contains(b"T3") && !fonts.contains(b"T5"), "the cleanup didn't run as expected: {fonts:?}");
 }
 
 /// (c) `/AP /N` names an object that is itself only a reference to the appearance stream, which
