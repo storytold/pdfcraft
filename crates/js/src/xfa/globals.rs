@@ -278,6 +278,8 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
     ctx.register_global_property(js_string!("__xfa_this"), this_node, rw)?;
     let highlight_get = function(ctx, NativeFunction::from_fn_ptr(runtime_highlight));
     let highlight_set = function(ctx, NativeFunction::from_fn_ptr(set_runtime_highlight));
+    // `app.plugIns`: no Acrobat plug-ins here (forms test `app.plugIns.toString().indexOf("ADBE")`)
+    let plug_ins: JsValue = boa_engine::object::builtins::JsArray::new(ctx)?.into();
     let app = ObjectInitializer::new(ctx)
         .accessor(js_string!("runtimeHighlight"), Some(highlight_get), Some(highlight_set), rw)
         .function(NativeFunction::from_fn_ptr(app_alert), js_string!("alert"), 4)
@@ -289,6 +291,7 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
         .function(NativeFunction::from_fn_ptr(noop), js_string!("setInterval"), 2)
         .function(NativeFunction::from_fn_ptr(noop), js_string!("clearTimeOut"), 1)
         .function(NativeFunction::from_fn_ptr(noop), js_string!("clearInterval"), 1)
+        .property(js_string!("plugIns"), plug_ins, Attribute::READONLY)
         .property(js_string!("viewerType"), s("Exchange-Pro"), Attribute::READONLY)
         .property(js_string!("viewerVariation"), s("Full"), Attribute::READONLY)
         .property(js_string!("viewerVersion"), JsValue::from(24.0), Attribute::READONLY)
@@ -403,8 +406,50 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
             defined.insert(name);
         }
     }
+    // The script's node is in scope too, as in Acrobat: a member read without `this.` (`parent.parent.x`, `caption.value`,
+    // `rawValue`) is the node's, unless a name above has it. A read that comes back to the same name while it is answered (a
+    // member the node does not have falling back to the global) reads as nothing.
+    let members: Vec<String> = SCOPE_MEMBERS.iter().filter(|m| !defined.contains(**m)).map(|m| format!("{m:?}")).collect();
+    let code = format!(
+        "(function (busy) {{ [{}].forEach(function (n) {{ Object.defineProperty(globalThis, n, {{ configurable: true, \
+           get: function () {{ if (busy[n]) return undefined; busy[n] = true; \
+             try {{ var v = __xfa_this[n]; return typeof v === 'function' && /^(resolveNodes?|exec[A-Z])/.test(n) ? v.bind(__xfa_this) : v; }} \
+             finally {{ busy[n] = false; }} }}, \
+           set: function (v) {{ __xfa_this[n] = v; }} }}); }}); }})({{}});",
+        members.join(", ")
+    );
+    ctx.eval(boa_engine::Source::from_bytes(code.as_bytes()))?;
     Ok(())
 }
+
+/// Members of the script's node a script reads without `this.`: names a script would not use for a variable of its own (`name`,
+/// `index`, `value`, `x` stay the script's).
+const SCOPE_MEMBERS: &[&str] = &[
+    "parent",
+    "caption",
+    "rawValue",
+    "formattedValue",
+    "presence",
+    "access",
+    "instanceIndex",
+    "instanceManager",
+    "somExpression",
+    "isNull",
+    "mandatory",
+    "border",
+    "font",
+    "ui",
+    "assist",
+    "occur",
+    "para",
+    "margin",
+    "resolveNode",
+    "resolveNodes",
+    "execEvent",
+    "execCalculate",
+    "execValidate",
+    "execInitialize",
+];
 
 fn is_identifier(name: &str) -> bool {
     let mut chars = name.chars();
