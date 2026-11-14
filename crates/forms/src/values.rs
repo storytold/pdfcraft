@@ -682,6 +682,12 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
             }
             None => appearance::field_appearance_drawn(doc, f, w, values, true),
         };
+        if let Some(Object::Dict(resources)) = stream.dict.get_mut(b"Resources")
+            && let Some(Object::Dict(fonts)) = resources.get(b"Font")
+        {
+            let fonts = pdfcraft_fonts::appearance_text::materialize_fonts(doc, fonts);
+            resources.set(b"Font".to_vec(), Object::Dict(fonts));
+        }
         undrawn |= missing.is_some();
         // Thai glyphs are streams of their own.
         pdfcraft_fonts::shaped_text::store_streams(doc, &mut stream.dict);

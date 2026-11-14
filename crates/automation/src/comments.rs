@@ -631,10 +631,10 @@ impl Automation {
         // A circle goes around the text, so its box is no wider than the text needs.
         let min_width = if border_shape == Some(BorderShape::Circle) { 0.0 } else { 20.0 };
         let text_at = |t: &str| {
+            // Each line measured with the appearance's shaped widths; the height wraps the same way.
             let longest = t.lines().map(|line| pdfcraft_engine::annot_text::text_width(line, size)).fold(0.0, f64::max);
             let w = (longest + 8.0).clamp(min_width, 600.0);
-            let rows = pdfcraft_engine::annot_text::wrap(t, size, w - 4.0).len().max(1);
-            let h = rows as f64 * size * 1.2 + 6.0;
+            let h = pdfcraft_engine::annot_text::text_height(t, size, (w - 4.0).max(1.0)) + 6.0;
             let [x0, y0, x1, y1] = pdfcraft_engine::text_box_at(i64::from(info.rotation), at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]]);
             // A border goes around the box, so the text sits where it would without one.
             Shape::Typewriter { rect: [x0 - border, y0 - border, x1 + border, y1 + border], font_size: size }

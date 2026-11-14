@@ -3664,6 +3664,54 @@ fn growing_into_a_blank_line_keeps_the_neighbour_after_save() {
 
 /// No `TL`: `Td` does not set the leading (`TD` does). Three rows at one repeated step are one
 /// paragraph. A single large gap, with no third row at that step, stays a break.
+/// Word sets each row with its own `Tm` and no TL: a 20 pt heading, a two-row 12 pt paragraph and
+/// another after its "space after". The heading is a paragraph of its own (#1756), and so is the
+/// last one, so a size or bold change to one paragraph restyles only it. A heading over body rows
+/// set at its own step still joins them, as a mixed region does.
+#[test]
+fn a_word_heading_and_its_spaced_paragraphs_stay_apart() {
+    let rows = |heading: f64, body: [f64; 3], bold: &str| {
+        format!(
+            "BT /{bold} 20.04 Tf 1 0 0 1 72 {heading} Tm (Quarterly Storage Report) Tj ET \
+             BT /F1 12 Tf 1 0 0 1 72 {} Tm (This report covers the storage usage of all departments) Tj ET \
+             BT /F1 12 Tf 1 0 0 1 72 {} Tm (usage grew by twelve percent compared with last quarter.) Tj ET \
+             BT /F1 12 Tf 1 0 0 1 72 {} Tm (Recommendation: archive old project files.) Tj ET",
+            body[0], body[1], body[2]
+        )
+    };
+    let texts = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.editor_text).collect::<Vec<_>>();
+    // The English and the Arabic Word files' baselines: their leading and spacing differ a little.
+    for (heading, body) in [(750.82, [722.26, 705.22, 680.26]), (751.06, [723.94, 707.98, 683.98])] {
+        for bold in ["F1", "F2"] {
+            let doc = text_page(&rows(heading, body, bold));
+            assert_eq!(
+                texts(&doc),
+                [
+                    "Quarterly Storage Report",
+                    "This report covers the storage usage of all departments\nusage grew by twelve percent compared with last quarter.",
+                    "Recommendation: archive old project files."
+                ],
+                "heading at {heading}, {bold}"
+            );
+        }
+    }
+    // A title set at the body's own step is part of the region.
+    let doc = text_page(&rows(746.0, [722.0, 698.0, 674.0], "F1"));
+    assert_eq!(texts(&doc).len(), 1, "{:?}", texts(&doc));
+    // Right to left, as the Arabic Word file sets it: rows of different widths share a right edge.
+    // Synthetic codes: A س, B م, Y lam-alef (see `arabic_ligature_page`).
+    let rtl = |x: f64, y: f64, size: f64, codes: &str| format!("BT /F1 {size} Tf 1 0 0 1 {x} {y} Tm ({codes}) Tj ET ");
+    let width = |codes: &str, size: f64| codes.len() as f64 * 0.5 * size;
+    let right = 500.0;
+    let page = [(751.06, 20.04, "BYA"), (723.94, 12.0, "BYABYABYABYA"), (707.98, 12.0, "BYABYA"), (683.98, 12.0, "BYABYABYA")]
+        .iter()
+        .map(|(y, size, codes)| rtl(right - width(codes, *size), *y, *size, codes))
+        .collect::<String>();
+    let doc = arabic_ligature_page(&page, false);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.iter().map(|b| b.lines.len()).collect::<Vec<_>>(), [1, 2, 1], "{:?}", texts(&doc));
+}
+
 #[test]
 fn a_repeated_step_without_tl_is_the_paragraph_leading() {
     let step = 27.6_f64;
@@ -6872,9 +6920,11 @@ fn thai_headers_footers_and_watermarks_are_drawn_from_the_thai_face() {
 fn page_text_the_standard_fonts_cant_draw_is_refused() {
     let mut doc = fixture();
     let before: Vec<Vec<String>> = (0..3).map(|p| streams(&reopen(&doc), p)).collect();
-    let text = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "日本語のテキスト".into(), ..AddedText::default() };
+    // Ethiopic: no face PdfCraft bundles draws it (Chinese, Japanese, Korean, Cyrillic, Greek
+    // and Devanagari added text are drawn with their bundled faces).
+    let text = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "ሰላም ዓለም".into(), ..AddedText::default() };
     let err = add_content(&mut doc, 0, &Content::Text(text)).unwrap_err().to_string();
-    assert!(err.contains("\"日\" (U+65E5)"), "{err}");
+    assert!(err.contains("\"ሰ\" (U+1230)"), "{err}");
     let hf = HeaderFooter {
         text: ["Ελληνικά".into(), String::new(), String::new(), String::new(), String::new(), String::new()],
         ..HeaderFooter::default()
@@ -6889,8 +6939,8 @@ fn page_text_the_standard_fonts_cant_draw_is_refused() {
     add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
     // Retyping existing text is refused the same way, and the whole document is left as it was.
     let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
-    let retyped = AddedText { text: "Café 中".into(), ..text.clone() };
-    assert!(update_content(&mut doc, 0, 0, &Content::Text(retyped)).unwrap_err().to_string().contains("U+4E2D"));
+    let retyped = AddedText { text: "Café ሰ".into(), ..text.clone() };
+    assert!(update_content(&mut doc, 0, 0, &Content::Text(retyped)).unwrap_err().to_string().contains("U+1230"));
     assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), saved, "a refused update changes nothing");
     // A carriage return is checked where it would be drawn: added text splits on LF only, so
     // CRLF would leave a `?`; headers and watermarks split CRLF into lines, but not a lone CR.
@@ -6907,13 +6957,13 @@ fn page_text_the_standard_fonts_cant_draw_is_refused() {
     let arabic = |text: &str| AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: text.into(), ..AddedText::default() };
     // U+061C is in the Arabic block but is a direction mark that's dropped, not shaped: it never
     // makes text drawable, nor (with the face) undrawable.
-    assert!(add_content(&mut doc, 0, &Content::Text(arabic("\u{061C}中"))).is_err());
+    assert!(add_content(&mut doc, 0, &Content::Text(arabic("\u{061C}ሰ"))).is_err());
     if pdfcraft_fonts::arabic_has('م') {
         add_content(&mut doc, 0, &Content::Text(arabic("مرحبا Hello"))).unwrap();
         add_content(&mut doc, 0, &Content::Text(arabic("\u{061C}Hello"))).unwrap();
-        for text in ["مرحبا 中", "\u{061C}中"] {
+        for text in ["مرحبا ሰ", "\u{061C}ሰ"] {
             let err = add_content(&mut doc, 0, &Content::Text(arabic(text))).unwrap_err().to_string();
-            assert!(err.contains("U+4E2D"), "{text:?}: {err}");
+            assert!(err.contains("U+1230"), "{text:?}: {err}");
         }
     } else {
         // #403's own refusal says what's missing; the Add-text editor still keeps the draft.
@@ -6924,8 +6974,8 @@ fn page_text_the_standard_fonts_cant_draw_is_refused() {
         // the standard font would write as `?`.
         let n = list_added(&doc).iter().filter(|a| a.page == 0).count();
         add_content(&mut doc, 0, &Content::Text(arabic("x"))).unwrap();
-        let err = update_content(&mut doc, 0, n, &Content::Text(arabic("ب中"))).unwrap_err().to_string();
-        assert!(err.contains("U+4E2D"), "{err}");
+        let err = update_content(&mut doc, 0, n, &Content::Text(arabic("بሰ"))).unwrap_err().to_string();
+        assert!(err.contains("U+1230"), "{err}");
         update_content(&mut doc, 0, n, &Content::Text(arabic("ب"))).unwrap();
     }
 }
@@ -7417,7 +7467,7 @@ fn added_thai_text_wraps_clusters_and_survives_reopen() {
     assert_eq!(super::added::lines(&narrow), ["กิ่", "กิ่", "กิ่"]);
     update_content(&mut doc, 0, 0, &Content::Text(AddedText { text: "แก้ไข น้ำ".into(), ..t.clone() })).unwrap();
     assert!(!own(&doc, 0).is_empty());
-    let bad = Content::Text(AddedText { text: "ไทย 日".into(), ..t });
+    let bad = Content::Text(AddedText { text: "ไทย ሰ".into(), ..t });
     let before = list_added(&doc);
     assert!(update_content(&mut doc, 0, 0, &bad).is_err());
     assert_eq!(list_added(&doc), before);
@@ -8128,20 +8178,23 @@ fn actual_text_and_visual_rtl_glyphs_keep_their_own_reading_order() {
     }
 }
 
-/// Synthetic codes A س, B م and X a lam-alef glyph, drawn from left to right.
+/// Synthetic codes A س, B م and X a lam-alef glyph (its presentation form), drawn from left to
+/// right; Y and Z are lam-alef and lam-alef-hamza-below glyphs whose ToUnicode gives the two
+/// letters they join, as Word maps them.
 fn arabic_ligature_page(content: &str, composite: bool) -> Document {
     let prefix = if composite { "00" } else { "" };
     let cmap = format!(
         "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def \
-         1 begincodespacerange <{prefix}00> <{prefix}FF> endcodespacerange 4 beginbfchar \
+         1 begincodespacerange <{prefix}00> <{prefix}FF> endcodespacerange 6 beginbfchar \
          <{prefix}20> <0020> <{prefix}41> <0633> <{prefix}42> <0645> <{prefix}58> <FEFB> \
+         <{prefix}59> <06440627> <{prefix}5A> <06440625> \
          endbfchar endcmap CMapName currentdict /CMap defineresource pop end end"
     );
-    let widths: Vec<_> = (32..=88).map(|c| if c == 32 { "250" } else { "500" }).collect();
+    let widths: Vec<_> = (32..=90).map(|c| if c == 32 { "250" } else { "500" }).collect();
     let font = if composite {
         "<< /Type /Font /Subtype /Type0 /BaseFont /FakeArabic /Encoding /Identity-H /DescendantFonts [7 0 R] /ToUnicode 6 0 R >>".into()
     } else {
-        format!("<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 88 /Widths [{}] /ToUnicode 6 0 R >>", widths.join(" "))
+        format!("<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 90 /Widths [{}] /ToUnicode 6 0 R >>", widths.join(" "))
     };
     build(&[
         "<< /Type /Catalog /Pages 2 0 R >>",
@@ -8169,6 +8222,350 @@ fn arabic_ligature_actual_text_stays_on_its_line() {
             assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), [expected.as_str()]);
             assert_eq!(text::text_blocks(doc, 0).unwrap()[0].editor_text, expected);
         }
+    }
+}
+
+/// Word draws لا and لإ as one glyph whose ToUnicode gives both letters in typing order. The
+/// line is read in drawing order and then turned into typing order as a whole, which must not
+/// turn the glyph's own letters around: سلام read as سالم, and an edit then saved that way.
+#[test]
+fn a_lam_alef_glyph_mapped_to_two_letters_keeps_them_in_typing_order() {
+    for composite in [false, true] {
+        let code = |c: char| if composite { format!("<00{:02X}>", u32::from(c)) } else { format!("({c})") };
+        for (glyph, ligature) in [('Y', "لا"), ('Z', "لإ")] {
+            // Drawn left to right: م, the ligature, س.
+            let content = format!("BT /F1 12 Tf 72 700 Td {} Tj {} Tj {} Tj ET", code('B'), code(glyph), code('A'));
+            let doc = arabic_ligature_page(&content, composite);
+            let expected = format!("س{ligature}م");
+            for doc in [&doc, &reopen(&doc)] {
+                let lines = text::text_lines(doc, 0).unwrap();
+                assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), [expected.as_str()], "composite {composite}");
+                assert_eq!(text::text_blocks(doc, 0).unwrap()[0].editor_text, expected, "composite {composite}");
+            }
+        }
+    }
+}
+
+/// Synthetic codes A س, B م, D a damma (no advance) and space, for lines drawn the way Word
+/// draws Arabic: one show per glyph or per run, each placed with its own text matrix.
+fn arabic_marks_page(content: &str) -> Document {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def \
+         1 begincodespacerange <00> <FF> endcodespacerange 4 beginbfchar \
+         <20> <0020> <41> <0633> <42> <0645> <44> <064F> \
+         endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=68)
+        .map(|c| match c {
+            32 => "250",
+            68 => "0",
+            _ => "500",
+        })
+        .collect();
+    build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        &stream("", content),
+        &format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 68 /Widths [{}] /ToUnicode 6 0 R >>",
+            widths.join(" ")
+        ),
+        &stream("", cmap),
+    ])
+}
+
+/// Word draws a haraka just before the letter it sits on (drawn left to right, the mark comes
+/// first and is placed over the letter after it). Read as following the glyph before it, every
+/// mark moved one letter on (تُعَدُّ read as تعُدَ ُّ), and an edit wrote it there.
+#[test]
+fn a_mark_drawn_before_the_letter_it_sits_on_stays_on_that_letter() {
+    // Drawn left to right: م at 72, the damma at 78.6 (over س), then س at 78.
+    let word = "BT /F1 12 Tf 1 0 0 1 72 700 Tm (B) Tj 6.6 -0.48 Td (D) Tj -0.6 0.48 Td (A) Tj ET";
+    // Drawn after its letter instead, and placed back over it: the order the editor writes.
+    let after = "BT /F1 12 Tf 72 700 Td [(B) (A) 250 (D)] TJ ET";
+    // Placed just left of its letter's start, and at its start (Word, Arial).
+    let left = "BT /F1 12 Tf 1 0 0 1 72 700 Tm (B) Tj 5.52 0.72 Td (D) Tj 0.48 -0.72 Td (A) Tj ET";
+    let at = "BT /F1 12 Tf 1 0 0 1 72 700 Tm (B) Tj 6 -1.8 Td (D) Tj 0 1.8 Td (A) Tj ET";
+    // Drawn after the letter it sits on, near that letter's start, with a letter after it.
+    let between = "BT /F1 12 Tf 1 0 0 1 72 700 Tm (A) Tj 1.2 0 Td (D) Tj 4.8 0 Td (B) Tj ET";
+    // Inside one TJ, as Word draws Hebrew points: the mark, then a kerning step back onto its letter.
+    let kerned = "BT /F1 12 Tf 72 700 Td [(B) -50 (D) 50 (A)] TJ ET";
+    // A step wide enough to read as a word space, there only to put the mark over a wide letter.
+    let wide = "BT /F1 12 Tf 72 700 Td [(B) -400 (D) 400 (A)] TJ ET";
+    for (content, expected) in [(word, "سُم"), (left, "سُم"), (at, "سُم"), (after, "سُم"), (between, "مسُ"), (kerned, "سُم"), (wide, "سُم")]
+    {
+        let doc = arabic_marks_page(content);
+        for doc in [&doc, &reopen(&doc)] {
+            let lines = text::text_lines(doc, 0).unwrap();
+            assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), [expected], "{content}");
+            assert_eq!(text::text_blocks(doc, 0).unwrap()[0].editor_text, expected, "{content}");
+        }
+    }
+}
+
+/// Marks are moved onto the letter after them only where the writer placed them there (Word): a
+/// zero-advance mark written straight after its letter, with no step, ends where the next letter
+/// starts but stays on its own letter (TCPDF, ReportLab). And a `TJ` gap before a mark is a word
+/// space when the letter after the mark doesn't step back over it (writers that draw a cluster's
+/// mark first and write no space glyphs): it was dropped, joining two words.
+#[test]
+fn marks_move_onto_the_next_letter_only_where_placed_there() {
+    let straight = "BT /F1 12 Tf 72 700 Td (ADB) Tj ET";
+    let spaced = "BT /F1 12 Tf 72 700 Td [(B) -400 (DA)] TJ ET";
+    for (content, expected) in [(straight, "مسُ"), (spaced, "سُ م")] {
+        let doc = arabic_marks_page(content);
+        for doc in [&doc, &reopen(&doc)] {
+            let lines = text::text_lines(doc, 0).unwrap();
+            assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), [expected], "{content}");
+            assert_eq!(text::text_blocks(doc, 0).unwrap()[0].editor_text, expected, "{content}");
+        }
+    }
+}
+
+/// Word writes a right-to-left line that it splits into runs (a word in another language, a
+/// justified space) run by run in typing order, so each run starts left of the one before. They
+/// are one line: read apart, a paragraph fell into pieces, cut inside words.
+#[test]
+fn runs_of_a_right_to_left_line_written_in_typing_order_make_one_line() {
+    // Typed "سمم سس": the run سمم is drawn at the right (as م م س, glyph by glyph), then the
+    // space, narrowed with its own Tc, then سس. Word justifies runs with Tc of a few thousandths
+    // of an em: -0.036 on the first, 0.048 on the last (as at 12 pt in a Word file).
+    let content = "BT /F1 12 Tf -0.036 Tc 1 0 0 1 87 700 Tm (B) Tj 6 0 Td (B) Tj 6 0 Td (A) Tj ET \
+                   BT /F1 12 Tf -2.5 Tc 1 0 0 1 84 700 Tm ( ) Tj ET \
+                   BT /F1 12 Tf 0.048 Tc 1 0 0 1 72 700 Tm (AA) Tj ET";
+    let doc = arabic_marks_page(content);
+    for doc in [&doc, &reopen(&doc)] {
+        let lines = text::text_lines(doc, 0).unwrap();
+        assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["سمم سس"]);
+        let blocks = text::text_blocks(doc, 0).unwrap();
+        assert_eq!(blocks.iter().map(|b| b.editor_text.as_str()).collect::<Vec<_>>(), ["سمم سس"]);
+    }
+}
+
+/// With a large font (Traditional Arabic) Word draws a haraka as a run of its own between the
+/// runs of letters, half an em below or above the row, over the letter it sits on. Each such
+/// mark read as a paragraph of its own and split the row at every vowelled letter.
+#[test]
+fn a_mark_drawn_as_its_own_run_off_the_row_stays_on_its_letter() {
+    // Typed "سمُسس": the run سم (drawn م س), the damma 6 pt low over م, then the run سس.
+    let content = "BT /F1 12 Tf 1 0 0 1 78 700 Tm (BA) Tj ET BT /F1 12 Tf 1 0 0 1 78.5 694 Tm (D) Tj ET \
+                   BT /F1 12 Tf 1 0 0 1 66 700 Tm (AA) Tj ET";
+    // Typed "سمُ سس", as Word draws a vowelled word after a space: the damma over م, then the
+    // word space 5 pt below the row, then the letters م س, all in one text object; سس before it.
+    let space = "BT /F1 12 Tf 1 0 0 1 81.6 702 Tm (D) Tj 1 0 0 1 81.2 695 Tm ( ) Tj 1 0 0 1 81 700 Tm (BA) Tj ET                  BT /F1 12 Tf 1 0 0 1 66 700 Tm (AA) Tj ET";
+    for (content, expected) in [(content, "سمُسس"), (space, "سمُ سس")] {
+        let doc = arabic_marks_page(content);
+        for doc in [&doc, &reopen(&doc)] {
+            let lines = text::text_lines(doc, 0).unwrap();
+            assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), [expected]);
+            let blocks = text::text_blocks(doc, 0).unwrap();
+            assert_eq!(blocks.iter().map(|b| b.editor_text.as_str()).collect::<Vec<_>>(), [expected]);
+        }
+    }
+}
+
+/// A space beside a raised superscript (a browser prints "2^30" in an Arabic row that way) is on
+/// the body's row: read with the looser tolerance of a space Word draws after a mark, it joined
+/// the superscript and split the row into two paragraphs.
+#[test]
+fn a_space_beside_a_superscript_stays_on_the_body_row() {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def          1 begincodespacerange <00> <FF> endcodespacerange 3 beginbfchar <20> <0020> <41> <0633> <42> <0645>          endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=68).map(|c| if c == 32 { "250" } else { "500" }).collect();
+    // Drawn left to right: سس, the superscript 30 raised 3 pt, a space on the row, then سم.
+    let content = "BT /F1 12 Tf 1 0 0 1 66 700 Tm (AA) Tj ET BT /F2 8 Tf 1 0 0 1 78 703 Tm (30) Tj ET                    BT /F1 12 Tf 1 0 0 1 87 700 Tm ( ) Tj ET BT /F1 12 Tf 1 0 0 1 90 700 Tm (BA) Tj ET";
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+        &stream("", content),
+        &format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 68 /Widths [{}] /ToUnicode 7 0 R >>",
+            widths.join(" ")
+        ),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        &stream("", cmap),
+    ]);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let texts: Vec<_> = lines.iter().map(|l| l.text.as_str()).collect();
+    assert!(texts.contains(&"30"), "the superscript is a line of its own, without the space: {texts:?}");
+}
+
+/// Word tags every paragraph as a `P` of the logical structure and marks each run as a `/Span`
+/// with an `/MCID`; with only 6 pt after each paragraph, closer than the spacing that otherwise
+/// breaks paragraphs, a heading, its body and the next paragraph read as one, and after the
+/// right-to-left runs were read whole a Word page could be a single paragraph.
+#[test]
+fn paragraphs_tagged_apart_in_the_structure_stay_apart() {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def          1 begincodespacerange <00> <FF> endcodespacerange 2 beginbfchar <41> <0633> <42> <0645>          endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=68).map(|c| if c == 32 { "250" } else { "500" }).collect();
+    // A 16 pt heading, two 12 pt rows 14 pt apart, then another paragraph 19 pt below.
+    let content = "/Span <</MCID 0>> BDC BT /F1 16 Tf 1 0 0 1 300 700 Tm (BA) Tj ET EMC                    /Span <</MCID 1>> BDC BT /F1 12 Tf 1 0 0 1 308 681 Tm (AB) Tj ET EMC                    /Span <</MCID 2>> BDC BT /F1 12 Tf 1 0 0 1 308 667 Tm (AB) Tj ET EMC                    /Span <</MCID 3>> BDC BT /F1 12 Tf 1 0 0 1 308 648 Tm (BB) Tj ET EMC";
+    let tagged = |tags: bool| {
+        build(&[
+            if tags { "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R >>" } else { "<< /Type /Catalog /Pages 2 0 R >>" },
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /StructParents 0 /Resources << /Font << /F1 5 0 R >> >> >>",
+            &stream("", content),
+            &format!(
+                "<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 68 /Widths [{}] /ToUnicode 6 0 R >>",
+                widths.join(" ")
+            ),
+            &stream("", cmap),
+            "<< /Type /StructTreeRoot /K [9 0 R 10 0 R 11 0 R] /ParentTree 8 0 R >>",
+            "<< /Nums [0 [9 0 R 10 0 R 12 0 R 11 0 R]] >>",
+            "<< /Type /StructElem /S /P /P 7 0 R /Pg 3 0 R /K 0 >>",
+            "<< /Type /StructElem /S /P /P 7 0 R /Pg 3 0 R /K [1 12 0 R] >>",
+            "<< /Type /StructElem /S /P /P 7 0 R /Pg 3 0 R /K 3 >>",
+            "<< /Type /StructElem /S /Span /P 10 0 R /Pg 3 0 R /K 2 >>",
+        ])
+    };
+    let doc = tagged(true);
+    for doc in [&doc, &reopen(&doc)] {
+        let blocks = text::text_blocks(doc, 0).unwrap();
+        assert_eq!(
+            blocks.iter().map(|b| b.editor_text.as_str()).collect::<Vec<_>>(),
+            [
+                "سم",
+                "مس
+مس",
+                "مم"
+            ]
+        );
+    }
+    // Untagged, the same page keeps the spacing rules' reading (one paragraph here).
+    let untagged = text::text_blocks(&tagged(false), 0).unwrap();
+    assert!(untagged.len() < 3, "{:?}", untagged.iter().map(|b| &b.editor_text).collect::<Vec<_>>());
+}
+
+/// Structure elements that don't say they hold the page's marked content (another page's, as when
+/// two merged pages share a `/StructParents` key) are not trusted to split its paragraphs: the
+/// page reads as it does untagged.
+#[test]
+fn structure_elements_of_another_page_do_not_split_paragraphs() {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def \
+         1 begincodespacerange <00> <FF> endcodespacerange 2 beginbfchar <41> <0633> <42> <0645> \
+         endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=68).map(|c| if c == 32 { "250" } else { "500" }).collect();
+    let content = "/Span <</MCID 0>> BDC BT /F1 12 Tf 1 0 0 1 308 681 Tm (AB) Tj ET EMC \
+                   /Span <</MCID 1>> BDC BT /F1 12 Tf 1 0 0 1 308 667 Tm (AB) Tj ET EMC";
+    let read = |elements: [&str; 2]| {
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 11 0 R] /Count 2 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /StructParents 0 /Resources << /Font << /F1 5 0 R >> >> >>",
+            &stream("", content),
+            &format!(
+                "<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 68 /Widths [{}] /ToUnicode 6 0 R >>",
+                widths.join(" ")
+            ),
+            &stream("", cmap),
+            "<< /Type /StructTreeRoot /K [9 0 R 10 0 R] /ParentTree 8 0 R >>",
+            "<< /Nums [0 [9 0 R 10 0 R]] >>",
+            elements[0],
+            elements[1],
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /StructParents 0 >>",
+        ]);
+        text::text_blocks(&doc, 0).unwrap().len()
+    };
+    // This page's elements: two paragraphs.
+    assert_eq!(read(["<< /Type /StructElem /S /P /P 7 0 R /Pg 3 0 R /K 0 >>", "<< /Type /StructElem /S /P /P 7 0 R /Pg 3 0 R /K 1 >>"]), 2);
+    // The other page's (its ids 5 and 6): untrusted, the rows are one paragraph as untagged.
+    assert_eq!(read(["<< /Type /StructElem /S /P /P 7 0 R /Pg 11 0 R /K 5 >>", "<< /Type /StructElem /S /P /P 7 0 R /Pg 11 0 R /K 6 >>"]), 1);
+}
+
+/// A structure parent tree whose nodes list the same kid over and over (a hostile or broken file:
+/// eight levels of sixteen references each, billions of paths) is read in bounded time: the page's
+/// text reads as it would untagged.
+#[test]
+fn a_parent_tree_that_repeats_its_kids_is_read_in_bounded_time() {
+    let content = "/Span <</MCID 0>> BDC BT /F1 12 Tf 72 700 Td (Heading) Tj ET EMC /Span <</MCID 1>> BDC BT /F1 12 Tf 72 686 Td (Body) Tj ET EMC";
+    // Objects 8.. are the number tree's levels: each lists the next level's node sixteen times,
+    // without /Limits, and the last has /Nums without the page's key.
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /StructParents 0 /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+        stream("", content),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< >>".into(),
+        "<< /Type /StructTreeRoot /ParentTree 8 0 R >>".into(),
+    ];
+    for level in 0..8 {
+        let next = 9 + level;
+        objs.push(format!("<< /Kids [{}] >>", vec![format!("{next} 0 R"); 16].join(" ")));
+    }
+    objs.push("<< /Nums [5 []] >>".into());
+    let refs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let doc = build(&refs);
+    let start = std::time::Instant::now();
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+    assert_eq!(blocks.iter().map(|b| b.text.as_str()).collect::<String>().replace(['\n', ' '], ""), "HeadingBody");
+}
+
+/// Word sets a word in another language (한국어, हिन्दी) as a run of its own, in another subset of
+/// the font, touching the rest of the row. Touching runs of separate text objects are kept apart as
+/// labels (#594), so the word was split from its paragraph; tagged as one paragraph, they join.
+#[test]
+fn touching_runs_tagged_as_one_paragraph_are_one_row() {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def          1 begincodespacerange <00> <FF> endcodespacerange 2 beginbfchar <41> <0633> <42> <0645>          endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=68).map(|c| if c == 32 { "250" } else { "500" }).collect();
+    let font = |name: &str| {
+        format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name} /FirstChar 32 /LastChar 68 /Widths [{}] /ToUnicode 7 0 R >>", widths.join(" "))
+    };
+    // The second run is set with its own letter spacing, as Word sets a run in another language.
+    let content = "/Span <</MCID 0>> BDC BT /F1 12 Tf 1 0 0 1 300 700 Tm (BA) Tj ET EMC                    /Span <</MCID 1>> BDC BT /F1 12 Tf 0.5 Tc 1 0 0 1 312 700 Tm (AB) Tj ET EMC";
+    let page = |tags: bool| {
+        build(&[
+            if tags { "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 8 0 R >>" } else { "<< /Type /Catalog /Pages 2 0 R >>" },
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /StructParents 0 /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+            &stream("", content),
+            &font("BCDEEE+FakeArabic"),
+            &font("BCDFEE+FakeArabic"),
+            &stream("", cmap),
+            "<< /Type /StructTreeRoot /K [10 0 R] /ParentTree 9 0 R >>",
+            "<< /Nums [0 [11 0 R 10 0 R]] >>",
+            "<< /Type /StructElem /S /P /P 8 0 R /Pg 3 0 R /K [11 0 R 1] >>",
+            "<< /Type /StructElem /S /Span /P 10 0 R /Pg 3 0 R /K 0 >>",
+        ])
+    };
+    assert_eq!(text::text_blocks(&page(true), 0).unwrap().len(), 1);
+    // Untagged, two labels that touch stay apart (#594).
+    assert_eq!(text::text_blocks(&page(false), 0).unwrap().len(), 2);
+}
+
+/// Editing a paragraph into Hindi or Korean that its font can't draw was refused ("the BIZ
+/// UDPGothic fallback font has no glyph for न") though PdfCraft bundles a face for each:
+/// Devanagari now takes the shaped fallback (a glyph per character can't draw its conjuncts), as
+/// Arabic does, and Hangul the Korean face after the Japanese and Latin ones. Thai takes the
+/// bundled Thai face when it is chosen, and the refusal without it now says so.
+#[test]
+fn text_edited_into_thai_hindi_or_korean_is_drawn_with_their_bundled_faces() {
+    if let Some(thai) = pdfcraft_fonts::document_thai_font() {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        let error = text::replace_block(&mut doc, 0, 0, "ภาษาไทย").unwrap_err().to_string();
+        assert!(error.contains(thai.family) && !error.contains("BIZ UDPGothic"), "{error}");
+        let style = text::BlockStyle { resource: Some("builtin:thai".into()), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some("ภาษาไทย ใหม่"), &style).unwrap();
+        assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, "ภาษาไทย ใหม่");
+    }
+    let samples = [
+        ("त्रैमासिक रिपोर्ट", pdfcraft_fonts::document_devanagari_font()),
+        ("새 텍스트", pdfcraft_fonts::ShapedScript::Korean.font()),
+        // Hebrew with points (niqqud) was refused ("can't be written into a PDF yet"): the shaped
+        // fallback places them on their letters.
+        ("הַדּוֹחַ הַשְּׁנָתִי", pdfcraft_fonts::document_hebrew_font(false)),
+    ];
+    for (text, face) in samples {
+        let Some(face) = face else {
+            eprintln!("skipping {text}: built without its craft-fonts face (set CRAFT_FONTS_DIR)");
+            continue;
+        };
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+        text::replace_block(&mut doc, 0, 0, text).unwrap_or_else(|e| panic!("{text}: {e}"));
+        let doc = reopen(&doc);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.first().map(|b| b.editor_text.as_str()), Some(text), "{} ({})", text, face.family);
     }
 }
 
@@ -8216,6 +8613,206 @@ fn replacing_arabic_actual_text_removes_the_whole_original_drawing() {
     let bytes = page_content_bytes(&doc, 0);
     let content = String::from_utf8_lossy(&bytes);
     assert!(!content.contains("ActualText") && !content.contains("(abcd)") && !content.contains("(efgh)"));
+}
+
+#[test]
+fn arabic_source_subsets_can_be_retyped_with_a_reported_shaped_fallback() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = arabic_ligature_page("BT /F1 12 Tf 72 700 Td (BXA) Tj ET BT /F1 12 Tf 72 500 Td (AB) Tj ET", false);
+    let neighbor = text::text_blocks(&doc, 0).unwrap()[1].clone();
+    for replacement in ["سَلَام بالعالم 123 (PDF)", "تعديل جديد ٤٥٦", "  نص  عربي  "] {
+        let outcome = text::replace_block(&mut doc, 0, 0, replacement).unwrap();
+        assert!(outcome.substituted.as_ref().is_some_and(|name| name.contains("Noto Sans Arabic")), "{outcome:?}");
+        doc = reopen(&doc);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks[0].editor_text.replace('\n', ""), replacement);
+        assert_eq!(blocks.last().unwrap().editor_text, neighbor.editor_text);
+        assert_eq!(blocks.last().unwrap().rect, neighbor.rect);
+        assert!(page_content_bytes(&doc, 0).windows(11).any(|bytes| bytes == b"/ActualText"));
+    }
+}
+
+#[test]
+fn arabic_fallback_replaces_only_its_run_inside_a_shared_text_object() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = text_page("BT /F1 12 Tf 72 730 Td (Keep above) Tj 0 -80 Td (Target) Tj 0 -80 Td (Keep below) Tj ET");
+    let before = text::text_blocks(&doc, 0).unwrap();
+    let target = before.iter().position(|block| block.editor_text == "Target").unwrap();
+    text::replace_block(&mut doc, 0, target, "مرحبا بالعربية 123").unwrap();
+    let doc = reopen(&doc);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(
+        blocks.iter().map(|block| block.editor_text.replace('\n', "")).collect::<Vec<_>>(),
+        ["Keep above", "مرحبا بالعربية 123", "Keep below"]
+    );
+    assert_eq!(blocks[0].rect, before[0].rect);
+    assert_eq!(blocks[2].rect, before[2].rect);
+}
+
+#[test]
+fn arabic_fallback_keeps_the_right_anchor_and_resets_inherited_text_state() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    // Invisible OCR text is deliberately revealed; stroked source text is refused separately.
+    for state in ["", "2 Tc 4 Tw 80 Tz 5 Ts 3 Tr", "2 0 0 2 0 0 cm"] {
+        let mut doc = text_page(&format!("BT {state} /F1 12 Tf 50 300 Td (Target) Tj ET"));
+        let original = text::text_blocks(&doc, 0).unwrap()[0].clone();
+        text::replace_block(&mut doc, 0, 0, "نص عربي طويل للتأكد من التفاف الكلمات داخل حدود الصفحة").unwrap();
+        let doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        for line in lines {
+            assert!(line.rect[0] >= 35.0, "fallback outside the left page margin: {:?}", line.rect);
+            assert!(line.rect[2] <= original.rect[2] + 1.0, "right anchor moved: {:?}", line.rect);
+        }
+    }
+}
+
+/// A page as Word writes Arabic: one font whose glyphs are letter forms (no layout tables, no
+/// font program), a row shown left to right. `A` is initial seen, `B` medial lam, `C` final meem,
+/// `D` initial meem, `E` medial seen. The row reads «سلم مسلم.».
+fn arabic_forms_page() -> Document {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def \
+         1 begincodespacerange <00> <FF> endcodespacerange 7 beginbfchar \
+         <20> <0020> <2E> <002E> <41> <0633> <42> <0644> <43> <0645> <44> <0645> <45> <0633> \
+         endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=69).map(|c| if c == 32 { "250" } else { "500" }).collect();
+    build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        &stream("", "BT /F1 12 Tf 300 700 Td [(.CBED) 20 ( ) -20 (CBA)] TJ ET"),
+        &format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 69 /Widths [{}] /ToUnicode 6 0 R >>",
+            widths.join(" ")
+        ),
+        &stream("", cmap),
+    ])
+}
+
+/// A subset such as Word's keeps the glyphs of the letter forms the document uses and nothing
+/// that says which glyph is which form, so every Arabic edit, a deleted word included, was
+/// redrawn in the fallback face: wider, so rows wrapped over the next paragraph, where a Latin
+/// paragraph kept its font. A word whose every form the page already draws keeps the page's
+/// font; only a word needing a form the page lacks takes the fallback.
+#[test]
+fn arabic_words_whose_letter_forms_the_page_draws_keep_the_pages_font() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let shown = |doc: &Document| {
+        let (content, _) = joined_ops(doc);
+        (content.matches("/F1 ").count(), content.contains("PCShaped"), content)
+    };
+    let doc = arabic_forms_page();
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "سلم مسلم.");
+
+    // A word deleted, and a word made of forms the page has (initial seen, final meem).
+    for (draft, bytes) in [("مسلم.", vec!["2E43424544"]), ("سم مسلم.", vec!["2E43424544", "4341"])] {
+        let mut doc = arabic_forms_page();
+        let edit = text::replace_block(&mut doc, 0, 0, draft).unwrap();
+        assert_eq!(edit.substituted, None, "{draft}: nothing was substituted");
+        let doc = reopen(&doc);
+        let (in_source, fallback, content) = shown(&doc);
+        assert!(!fallback && in_source >= 1, "{draft} is drawn in the page's font: {content}");
+        for hex in bytes {
+            assert!(content.contains(&format!("<{hex}> Tj")), "{draft} shows the page's own glyphs {hex}: {content}");
+        }
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, draft);
+    }
+
+    // Initial lam is a form the page never draws: that word alone takes the fallback face.
+    let mut doc = arabic_forms_page();
+    let edit = text::replace_block(&mut doc, 0, 0, "لم مسلم.").unwrap();
+    assert!(edit.substituted.is_some(), "the fallback is reported");
+    let doc = reopen(&doc);
+    let (_, fallback, content) = shown(&doc);
+    assert!(fallback && content.contains("<2E43424544> Tj"), "one word in the fallback, the other in the page's font: {content}");
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "لم مسلم.");
+}
+
+/// [`arabic_forms_page`] with a damma on the first word's seen, drawn as Word draws it: in a show
+/// of its own before its letter, 0.6 pt right of the letter's start and 0.48 pt below the
+/// baseline (`F`, a glyph that advances nothing). The row reads «سُلم مسلم.».
+fn arabic_marks_forms_page() -> Document {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def \
+         1 begincodespacerange <00> <FF> endcodespacerange 8 beginbfchar \
+         <20> <0020> <2E> <002E> <41> <0633> <42> <0644> <43> <0645> <44> <0645> <45> <0633> <46> <064F> \
+         endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=70)
+        .map(|c| match c {
+            32 => "250",
+            70 => "0",
+            _ => "500",
+        })
+        .collect();
+    build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        // «.مسلم» from 300, a space, then «لم» of the first word from 333, the damma, and its seen at 345.
+        &stream("", "BT /F1 12 Tf 1 0 0 1 300 700 Tm (.CBED CB) Tj 45.6 -0.48 Td (F) Tj -0.6 0.48 Td (A) Tj ET"),
+        &format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 70 /Widths [{}] /ToUnicode 6 0 R >>",
+            widths.join(" ")
+        ),
+        &stream("", cmap),
+    ])
+}
+
+/// The marks of a subset font have no rule for where they go: Word wrote each one where the
+/// complete font put it, and the subset keeps only the glyph. So a word with harakat was drawn in
+/// the fallback face even when every letter kept the page's font, and a vowelled row came out in
+/// two faces. A mark is now drawn where the page itself draws that mark on that form of that
+/// letter; a mark on a form the page never draws it on still takes the fallback, with its word.
+#[test]
+fn arabic_marks_are_drawn_where_the_page_draws_them_on_the_same_letter_form() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let doc = arabic_marks_forms_page();
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "سُلم مسلم.");
+
+    // The marked word moved, and another word with the same letter form and mark («سُم»).
+    for draft in ["مسلم سُلم.", "سُم مسلم."] {
+        let mut doc = arabic_marks_forms_page();
+        let edit = text::replace_block(&mut doc, 0, 0, draft).unwrap();
+        assert_eq!(edit.substituted, None, "{draft}: nothing was substituted");
+        let doc = reopen(&doc);
+        let (content, ops) = joined_ops(&doc);
+        assert!(!content.contains("PCShaped"), "{draft} is drawn in the page's font: {content}");
+        // The damma is shown on its own, 0.6 pt right of and 0.48 pt below where its seen starts.
+        let shows: Vec<(f64, f64, Vec<u8>)> = ops
+            .windows(2)
+            .filter_map(|pair| match pair {
+                [tm, tj] if tm.op == b"Tm" && tj.op == b"Tj" => {
+                    Some((tm.operands.get(4)?.as_f64()?, tm.operands.get(5)?.as_f64()?, tj.operands.first()?.as_string()?.bytes.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        let mark = shows.iter().find(|(_, _, bytes)| bytes == b"F").unwrap_or_else(|| panic!("{draft}: the damma is shown: {content}"));
+        let word = shows.iter().find(|(_, _, bytes)| bytes.ends_with(b"A")).unwrap_or_else(|| panic!("{draft}: the word is shown: {content}"));
+        let seen = word.0 + 6.0 * (word.2.len() - 1) as f64;
+        assert!(
+            (mark.0 - seen - 0.6).abs() < 0.01 && (mark.1 - word.1 + 0.48).abs() < 0.01,
+            "{draft}: damma at {mark:?}, its seen at {seen}: {content}"
+        );
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, draft);
+    }
+
+    // A damma on initial meem is something the page never draws: that word takes the fallback.
+    let mut doc = arabic_marks_forms_page();
+    let edit = text::replace_block(&mut doc, 0, 0, "مُسلم سُلم.").unwrap();
+    assert!(edit.substituted.is_some(), "the fallback is reported");
+    let doc = reopen(&doc);
+    let (content, _) = joined_ops(&doc);
+    assert!(content.contains("PCShaped") && content.contains("<46> Tj"), "one word in the fallback, the other with its own damma: {content}");
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "مُسلم سُلم.");
 }
 
 fn mixed_region_page() -> Document {
@@ -10378,6 +10975,20 @@ fn a_cyclic_cmap_falls_back_to_horizontal_and_only_refuses_its_own_lines() {
     text::replace_line(&mut doc, 0, 1, "Changed").unwrap();
     let texts: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
     assert_eq!(texts, ["AB", "Changed"]);
+}
+
+/// The Arabic fallback keeps the source path's refusal of a font whose writing mode can't be
+/// read, rather than rewriting the paragraph as horizontal text.
+#[test]
+fn the_arabic_fallback_refuses_text_whose_writing_mode_cannot_be_read() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = vertical_page("BT /V1 20 Tf 100 700 Td <00410042> Tj ET\nBT /F1 12 Tf 100 600 Td (Plain) Tj ET");
+    make_cmap_cyclic(&mut doc);
+    let block = text::text_blocks(&doc, 0).unwrap().iter().position(|b| b.text == "AB").unwrap();
+    let error = text::replace_block(&mut doc, 0, block, "مرحبا").unwrap_err();
+    assert!(error.to_string().contains("cyclic"), "{error}");
 }
 
 #[test]
@@ -15411,5 +16022,943 @@ fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
         text::rewrite_block(&mut doc, 0, 0, Some(&draft), &BlockStyle::default())
             .unwrap_or_else(|e| panic!("matching U+{:04X}: {e}", u32::from(separator)));
         assert_eq!(rows(&doc), ["กข", "ค"], "matching U+{:04X}", u32::from(separator));
+    }
+}
+
+#[test]
+fn arabic_fallback_preserves_relative_text_siblings_and_quote_state() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    for target in ["(Target) Tj", "[(Tar) -30 (get)] TJ", "(Target) '", "1 2 (Target) \""] {
+        let content = format!(
+            "BT /F1 12 Tf 15 TL 72 730 Td /P BMC (Lead) Tj EMC [-12000] TJ \
+             /P BMC {target} EMC [-20000] TJ /P BMC (Keep) Tj EMC T* /P BMC (Below) Tj EMC ET"
+        );
+        let mut doc = text_page(&content);
+        let before = text::text_blocks(&doc, 0).unwrap();
+        let selected = before.iter().position(|block| block.editor_text == "Target").expect("separate target paragraph");
+        let neighbors: Vec<_> = before.iter().filter(|block| block.editor_text != "Target").cloned().collect();
+        for replacement in ["سَلَام 123", "تعديل جديد ٤٥٦", "Latin replacement 789"] {
+            text::replace_block(&mut doc, 0, selected, replacement).unwrap();
+            doc = reopen(&doc);
+            let after = text::text_blocks(&doc, 0).unwrap();
+            assert_eq!(after[selected].editor_text.replace('\n', ""), replacement, "{target}");
+            for neighbor in &neighbors {
+                let kept = after
+                    .iter()
+                    .find(|block| block.editor_text == neighbor.editor_text)
+                    .unwrap_or_else(|| panic!("source sibling {} lost after {target} -> {replacement}: {after:?}", neighbor.editor_text));
+                assert!(
+                    kept.rect.iter().zip(neighbor.rect).all(|(a, b)| (a - b).abs() < 1e-8),
+                    "{} moved after {target}: {:?} -> {:?}",
+                    neighbor.editor_text,
+                    neighbor.rect,
+                    kept.rect
+                );
+                assert_eq!(kept.color, neighbor.color);
+                assert_eq!(kept.size, neighbor.size);
+            }
+        }
+    }
+}
+
+#[test]
+fn arabic_fallback_keeps_the_selected_row_alignment_refusal() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = text_page("BT /F1 12 Tf 300 700 Td (Target) Tj ET");
+    let before = page_content_bytes(&doc, 0);
+    let style = text::BlockStyle { aligns: vec![Some(added::Align::Right)], ..Default::default() };
+    let error = text::rewrite_block(&mut doc, 0, 0, Some("نص عربي"), &style).unwrap_err();
+    assert!(error.to_string().contains("selected-row alignment"), "{error}");
+    assert_eq!(page_content_bytes(&doc, 0), before);
+    assert_eq!(page_content_bytes(&reopen(&doc), 0), before);
+}
+
+/// Bold source text takes the Arabic face's bold instance (its weight axis at 700) and the bold
+/// Latin face; oblique source text keeps its Latin slant while Arabic, which has no italic,
+/// stays upright. Both survive a save and another edit. Without a bold instance, bold is refused
+/// and the PDF is left as it was.
+#[test]
+fn arabic_fallback_keeps_the_source_weight_and_latin_slant() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    for (face, bold, italic) in [("Helvetica-Bold", true, false), ("Helvetica-Oblique", false, true), ("Helvetica-BoldOblique", true, true)] {
+        // Room to the left: a right-to-left line grows towards the left margin.
+        let mut doc = text_page("BT /F1 12 Tf 300 700 Td (Target) Tj ET");
+        doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |font| font.set(b"BaseFont".to_vec(), Object::name(face))).unwrap();
+        if bold && !pdfcraft_fonts::arabic_bold_available() {
+            let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+            assert!(text::replace_block(&mut doc, 0, 0, "نص عربي").is_err(), "{face} must retain its weight or refuse");
+            assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before, "refused {face} changed the PDF");
+            continue;
+        }
+        for draft in ["نص عربي PDF", "نص عربي مُعدَّل PDF 2"] {
+            text::replace_block(&mut doc, 0, 0, draft).unwrap_or_else(|e| panic!("{face}: {e}"));
+            doc = reopen(&doc);
+            let blocks = text::text_blocks(&doc, 0).unwrap();
+            assert_eq!(blocks[0].editor_text.replace('\n', ""), draft, "{face}");
+            // The Latin word keeps its face; Arabic takes the bold instance only for bold text.
+            let faces = shown_faces(&doc, 0);
+            let (arabic, other) = if bold { ("NotoSansArabic-Bold", "NotoSansArabic") } else { ("NotoSansArabic", "NotoSansArabic-Bold") };
+            assert!(faces.contains(face) && faces.contains(arabic) && !faces.contains(other), "{face} (italic {italic}): {faces:?}");
+        }
+    }
+}
+
+/// Arabic typed into a Latin paragraph whose font can't draw it (a subset, as Word embeds Calibri)
+/// takes the Arabic fallback for the Arabic only: the Latin stays in the paragraph's own font,
+/// with its widths, instead of being redrawn in Helvetica, which is wider and pushed the
+/// paragraph's last words onto another row over the next paragraph. Latin the font has no
+/// glyph for still falls back to Helvetica, and the edit survives a save and another edit.
+#[test]
+fn arabic_added_to_a_latin_subset_paragraph_keeps_the_latin_in_its_own_font() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Total usage grew by twelve percent) Tj ET");
+    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |font| {
+        font.set(b"BaseFont".to_vec(), Object::name("BCDGEE+Calibri"));
+        font.set(b"FirstChar".to_vec(), Object::Int(32));
+        font.set(b"LastChar".to_vec(), Object::Int(126));
+        font.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(400); 95]));
+        font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    })
+    .unwrap();
+    for draft in ["Total usage grew by twelve percent تم", "Total usage grew by twelve percent تم تحديثه"] {
+        text::replace_block(&mut doc, 0, 0, draft).unwrap_or_else(|e| panic!("{draft}: {e}"));
+        doc = reopen(&doc);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks[0].editor_text.replace('\n', ""), draft);
+        let faces = shown_faces(&doc, 0);
+        assert!(faces.contains("BCDGEE+Calibri") && faces.contains("NotoSansArabic"), "{draft}: {faces:?}");
+        assert!(!faces.iter().any(|f| f.starts_with("Helvetica")), "the Latin was redrawn in Helvetica: {draft}: {faces:?}");
+        // The Latin keeps its own widths: 400/1000 em a character at 12 pt.
+        let latin = text::text_lines(&doc, 0).unwrap().into_iter().find(|l| l.text.starts_with("Total")).expect("the Latin run");
+        assert!((latin.rect[0] - 72.0).abs() < 0.5, "{latin:?}");
+        assert_eq!(latin.base_font, "BCDGEE+Calibri", "{latin:?}");
+    }
+    // A Latin letter outside the subset (é, past its /LastChar) is drawn in Helvetica; the rest
+    // keeps its font.
+    let draft = "Total usage grew by twelve percent تم caf\u{e9}";
+    text::replace_block(&mut doc, 0, 0, draft).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text.replace('\n', ""), draft);
+    let faces = shown_faces(&doc, 0);
+    assert!(faces.contains("BCDGEE+Calibri") && faces.contains("Helvetica"), "{faces:?}");
+}
+
+/// Word tightens its rows with `TJ` kerning, which the Arabic fallback doesn't repeat: laid out
+/// again, the widest source row came out a little wider than the paragraph and its last word
+/// wrapped onto a row of its own, over the next paragraph. A row as wide as its own source row
+/// still fits.
+#[test]
+fn the_arabic_fallback_does_not_wrap_a_row_that_kerning_had_tightened() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = text_page(
+        "BT /F1 12 Tf 72 700 Td [(This report covers the storage)80( usage in the quarter. Total)] TJ ET BT /F1 12 Tf 72 686 Td (usage grew by twelve) Tj ET",
+    );
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    let draft = format!("{} تم", blocks[0].editor_text);
+    assert_eq!(draft.matches('\n').count(), 1, "{draft:?}");
+    text::replace_block(&mut doc, 0, 0, &draft).unwrap();
+    let doc = reopen(&doc);
+    let mut rows: Vec<f64> = text::text_lines(&doc, 0).unwrap().iter().map(|l| l.rect[1]).collect();
+    rows.sort_by(|a, b| b.total_cmp(a));
+    rows.dedup_by(|a, b| (*a - *b).abs() < 0.5);
+    assert_eq!(rows.len(), 2, "the paragraph keeps its two rows: {rows:?}");
+}
+
+/// A title, a heading and a body grouped as one paragraph keep their rows when a body row wraps
+/// in the Arabic fallback (bold made it wider, or words were added): the rows above stay on
+/// their baselines and the rows below move down by the added line. They were laid out again
+/// from the top at the title's size, which drew the body's first words on the heading's line.
+#[test]
+fn a_row_that_wraps_in_the_arabic_fallback_keeps_the_rows_above_it_in_place() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = text_page(
+        "BT /F1 24 Tf 300 700 Td (Title row) Tj ET BT /F1 24 Tf 300 668 Td (Heading row) Tj ET BT /F1 12 Tf 300 638 Td (first body row) Tj ET BT /F1 12 Tf 300 622 Td (second body row) Tj ET",
+    );
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let Some(index) = blocks.iter().position(|b| b.editor_text.contains("Heading row") && b.editor_text.contains("first body row")) else {
+        return; // The rows group otherwise; nothing to keep in place.
+    };
+    let bottom = |lines: &[text::TextLine], needle: &str| {
+        lines.iter().find(|l| l.text.contains(needle)).map(|l| l.rect[1]).unwrap_or_else(|| panic!("{needle}: {lines:?}"))
+    };
+    let before = text::text_lines(&doc, 0).unwrap();
+    let draft = blocks[index].editor_text.replace("first body row", "first body row تمت إضافة كلمات عربية كثيرة حتى يلتف هذا السطر");
+    text::replace_block(&mut doc, 0, index, &draft).unwrap();
+    let doc = reopen(&doc);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    for needle in ["Title", "Heading", "first body"] {
+        assert!((bottom(&lines, needle) - bottom(&before, needle)).abs() < 1.0, "{needle} moved: {lines:?}");
+    }
+    // Nothing else is drawn on the heading's line, and the last row moved down below the wrap.
+    let heading = bottom(&before, "Heading");
+    assert!(lines.iter().filter(|l| (l.rect[1] - heading).abs() < 3.0).all(|l| l.text.contains("Heading")), "{lines:?}");
+    assert!(bottom(&lines, "second body") < bottom(&before, "second body") - 10.0, "{lines:?}");
+}
+
+/// The rows of a paragraph an edit in the Arabic fallback leaves as they were (the same text and
+/// look, not moved by a row above that wrapped) keep their own drawing: a heading over the edited
+/// row keeps its font, and laid out again in the fallback's faces it can no longer wrap.
+#[test]
+fn rows_an_arabic_fallback_edit_leaves_alone_keep_their_own_font() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    // The heading is set tighter than its widths (TJ), so laid out again it wouldn't fit its row.
+    let mut doc =
+        text_page("BT /F1 18 Tf 300 700 Td [(A)300( heading)300( row)300( set)300( tight)] TJ ET BT /F1 12 Tf 300 676 Td (SECA Heritage) Tj ET");
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    let draft = format!("{} تم", blocks[0].editor_text);
+    let before = text::text_lines(&doc, 0).unwrap();
+    text::replace_block(&mut doc, 0, 0, &draft).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, draft);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let heading: Vec<_> = lines.iter().filter(|l| l.text.contains("heading")).collect();
+    assert_eq!(heading.len(), 1, "{lines:?}");
+    assert_eq!(heading[0].font, "F1", "the heading keeps its own drawing: {lines:?}");
+    assert_eq!(heading[0].rect, before[0].rect, "{lines:?}");
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("[(A)300( heading)300( row)300( set)300( tight)] TJ"), "the heading's own show is kept: {content}");
+    assert!(shown_faces(&doc, 0).contains("NotoSansArabic"), "the edited row takes the fallback");
+}
+
+/// An Arabic row shaped in its complete face that the source set tighter than shaping it again
+/// here does (a browser's own shaping, or `TJ` moving the pen back) is left as it was when only
+/// the row below it is edited: it wrapped, was drawn again and moved the rows below.
+#[test]
+fn a_tightened_full_face_arabic_row_is_kept_when_another_row_is_edited() {
+    let Some((mut doc, _)) = arabic_full_face_probe("عنوان التقرير الربعي للإدارة العامة\nنص", 400.0) else {
+        return;
+    };
+    // Pull the first row's glyphs 10/1000 em closer together (about 3%): every glyph of its text object.
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let start = content.find("BT").expect("the first row");
+    let end = start + content[start..].find("ET").expect("its end");
+    // Moved right as far, so the row still ends at the paragraph's right edge.
+    let glyphs = content[start..end].matches('>').count() as f64;
+    let tm = content[start..end].find(" Tm").expect("its position");
+    let x_end = content[start..start + tm].rfind(' ').expect("its y");
+    let x_start = content[start..start + x_end].rfind(' ').expect("its x") + 1;
+    let x: f64 = content[start + x_start..start + x_end].parse().unwrap();
+    let moved = format!("{}{}{}", &content[start..start + x_start], x + glyphs * 0.12, &content[start + x_end..end]);
+    let row = moved.replace('>', "> 10");
+    let tightened = format!("{}{row}{}", &content[..start], &content[end..]);
+    let stream = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), tightened.into_bytes()))));
+    set_page_contents(&mut doc, stream, None);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let index = blocks.iter().position(|b| b.editor_text.starts_with("عنوان")).expect("the paragraph");
+    assert_eq!(blocks[index].rows.len(), 2, "{blocks:?}");
+    let draft = blocks[index].editor_text.replace("نص", "نص جديد");
+    text::rewrite_block(&mut doc, 0, index, Some(&draft), &text::BlockStyle::default()).unwrap();
+    let doc = reopen(&doc);
+    let first = row.find("] TJ").map(|at| &row[..at]).expect("a TJ");
+    let first = &first[first.rfind('[').expect("its array")..];
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains(first), "the tightened row keeps its own show {first}: {content}");
+}
+
+/// The editor asks for bold as the paragraph's own family with the weight changed (Format text's
+/// B button), not as a bare weight: on an Arabic paragraph that too takes the fallback's bold
+/// instance. It failed with "the BIZ UDPGothic fallback font has no glyph", so Bold never worked on
+/// Arabic in the app though it did from the automation tools.
+#[test]
+fn bold_asked_for_as_the_paragraphs_own_family_takes_the_arabic_fallback_too() {
+    if pdfcraft_fonts::document_arabic_font().is_none() || !pdfcraft_fonts::arabic_bold_available() {
+        return;
+    }
+    let mut doc = arabic_ligature_page("BT /F1 12 Tf 300 700 Td (BYA) Tj ET BT /F1 12 Tf 300 500 Td (AB) Tj ET", false);
+    let block = text::text_blocks(&doc, 0).unwrap()[0].clone();
+    // The fixture's font (FakeArabic) reads as a sans face: Helvetica's family.
+    let bold = text::BlockStyle { family: Some((added::Family::Helvetica, true, block.italic)), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, None, &bold).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text.replace('\n', ""), "سلام");
+    let faces = shown_faces(&doc, 0);
+    assert!(faces.contains("NotoSansArabic-Bold"), "{faces:?}");
+}
+
+/// Bold asked for on an Arabic paragraph whose subset can't draw it (a Word or browser PDF) takes
+/// the Arabic fallback's bold instance, alone or with a size; it was refused through the Japanese
+/// fallback instead ("BIZ UDPGothic has no glyph for ا"). Regular asked for on it again draws the
+/// regular instance. Without a bold instance it is refused and the PDF is left as it was.
+#[test]
+fn bold_asked_for_on_an_arabic_paragraph_takes_the_fallbacks_bold_instance() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    for size in [None, Some(14.0)] {
+        let mut doc = arabic_ligature_page("BT /F1 12 Tf 300 700 Td (BYA) Tj ET BT /F1 12 Tf 300 500 Td (AB) Tj ET", false);
+        let bold = text::BlockStyle { bold: Some(true), size, ..Default::default() };
+        if !pdfcraft_fonts::arabic_bold_available() {
+            let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+            assert!(text::rewrite_block(&mut doc, 0, 0, None, &bold).is_err(), "bold Arabic must be drawn bold or refused");
+            assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before, "a refused bold edit changed the PDF");
+            continue;
+        }
+        let edit = text::rewrite_block(&mut doc, 0, 0, None, &bold).unwrap_or_else(|e| panic!("size {size:?}: {e}"));
+        assert!(edit.substituted.as_deref().is_some_and(|s| s.contains("Noto Sans Arabic")), "the fallback is reported: {:?}", edit.substituted);
+        doc = reopen(&doc);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks[0].editor_text.replace('\n', ""), "سلام", "size {size:?}");
+        assert_eq!(blocks[1].editor_text, "مس", "the other paragraph is untouched");
+        let faces = shown_faces(&doc, 0);
+        assert!(faces.contains("NotoSansArabic-Bold") && !faces.contains("NotoSansArabic"), "size {size:?}: {faces:?}");
+        if let Some(size) = size {
+            assert!((blocks[0].size - size).abs() < 0.01, "the size asked for: {}", blocks[0].size);
+        }
+        // And back to regular.
+        text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { bold: Some(false), ..Default::default() }).unwrap();
+        let doc = reopen(&doc);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text.replace('\n', ""), "سلام");
+        // The bold run's emptied text object may still select its font; what draws is regular.
+        let drawn: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().filter(|l| l.text == "سلام").map(|l| l.base_font).collect();
+        assert!(!drawn.is_empty() && drawn.iter().all(|f| f.contains("NotoSansArabic") && !f.contains("Bold")), "regular again: {drawn:?}");
+    }
+}
+
+/// A right-to-left row drawn as two runs, the Arabic first and a Latin word to its left (as
+/// browsers print "مصادر SharePoint"), is one row: it is not split at the Latin word, and the
+/// gap between them still reads as a space.
+#[test]
+fn a_right_to_left_row_of_separate_runs_is_one_row() {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def \
+                1 begincodespacerange <00> <FF> endcodespacerange 2 beginbfchar <41> <0633> <42> <0645> \
+                endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=88).map(|c| if c == 32 { "250" } else { "500" }).collect();
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 7 0 R >> >> >>",
+        &stream("", "BT /F1 12 Tf 300 700 Td (BA) Tj ET BT /F2 12 Tf 272 700 Td (PDF) Tj ET BT /F2 12 Tf 72 500 Td (Left to right) Tj ET"),
+        &format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 88 /Widths [{}] /ToUnicode 6 0 R >>",
+            widths.join(" ")
+        ),
+        &stream("", cmap),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let row = blocks.iter().find(|b| b.editor_text.contains("PDF")).unwrap_or_else(|| panic!("{blocks:?}"));
+    assert_eq!(row.rows.len(), 1, "{row:?}");
+    assert!(row.editor_text.contains(' ') && row.editor_text.chars().any(|c| ('\u{0600}'..='\u{06ff}').contains(&c)), "{row:?}");
+    // Left-to-right rows are unchanged.
+    assert!(blocks.iter().any(|b| b.editor_text == "Left to right" && b.rows.len() == 1), "{blocks:?}");
+}
+
+/// A section number in its own small box beside a right-to-left heading (as a report prints
+/// "01" right of "الملخص التنفيذي") stays its own paragraph. Read from the right, the wider
+/// tolerance for a superscript beside larger text (#3252) joined the two, and a rewrite of the
+/// heading then closed the gap to the box and took the next paragraph in on the next read.
+#[test]
+fn a_section_number_beside_a_right_to_left_heading_stays_apart() {
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def \
+                1 begincodespacerange <00> <FF> endcodespacerange 2 beginbfchar <41> <0633> <42> <0645> \
+                endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=88).map(|c| if c == 32 { "250" } else { "500" }).collect();
+    // "01" at 9 pt, 2.5 pt above the 16 pt heading's baseline and 16 pt right of it.
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 7 0 R >> >> >>",
+        &stream("", "BT /F2 9 Tf 332 702.5 Td (01) Tj ET BT /F1 16 Tf 300 700 Td (BA) Tj ET"),
+        &format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 88 /Widths [{}] /ToUnicode 6 0 R >>",
+            widths.join(" ")
+        ),
+        &stream("", cmap),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let texts: Vec<_> = blocks.iter().map(|b| b.editor_text.as_str()).collect();
+    assert_eq!(blocks.len(), 2, "the number and the heading are separate paragraphs: {texts:?}");
+    assert!(texts.contains(&"01"), "{texts:?}");
+}
+
+/// A right-to-left row as browsers print it: the runs drawn from left to right, each letter
+/// with tanween in its own `/ActualText` cluster whose mark is drawn first and raised, and a
+/// bold Latin word between Arabic runs. It reads back as one row in typing order: the
+/// clusters stay in their words ("خصوصًا", not "صً" on its own), the runs read right to left
+/// with the Latin word kept left to right, and the space Chrome draws at the end of the bold
+/// run stays between the words it separates.
+#[test]
+fn a_browser_printed_right_to_left_row_reads_as_one_row_in_typing_order() {
+    // Codes: A ا, B ب, C ص, D و, E خ, F ،, G س, H م, M fathatan (no advance), space.
+    let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def \
+                1 begincodespacerange <00> <FF> endcodespacerange 10 beginbfchar <20> <0020> \
+                <41> <0627> <42> <0628> <43> <0635> <44> <0648> <45> <062E> <46> <060C> <47> <0633> \
+                <48> <0645> <4D> <064B> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let widths: Vec<_> = (32..=77)
+        .map(|c| {
+            if c == 32 {
+                "250"
+            } else if c == 77 {
+                "0"
+            } else {
+                "500"
+            }
+        })
+        .collect();
+    // Left to right: "با ا", the cluster ص + fathatan, "وصخ ،", bold "SECA ", "مس".
+    let content = "BT /F1 12 Tf 100 700 Td (BA A) Tj ET \
+                   /Span <</ActualText <FEFF0635064B>>> BDC BT /F1 12 Tf 1 0 0 1 121 704 Tm (M) Tj 1 0 0 1 121 700 Tm (C) Tj ET EMC \
+                   BT /F1 12 Tf 127 700 Td (DCE F) Tj ET \
+                   BT /F2 12 Tf 154 700 Td (SECA ) Tj ET \
+                   BT /F1 12 Tf 190.672 700 Td (HG) Tj ET";
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 7 0 R >> >> >>",
+        &stream("", content),
+        &format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 77 /Widths [{}] /ToUnicode 6 0 R >>",
+            widths.join(" ")
+        ),
+        &stream("", cmap),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
+    ]);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    assert_eq!(blocks[0].rows.len(), 1, "{blocks:?}");
+    assert_eq!(blocks[0].editor_text, "سم SECA، خصوصًا اب", "{blocks:?}");
+    // The Arabic runs either side of the cluster are one line with it; the bold word is its own run.
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(lines.iter().any(|l| l.text == "، خصوصًا اب"), "{lines:?}");
+}
+
+/// A paragraph that wraps to more rows than it had keeps its own line pitch in the Arabic
+/// fallback (the report's body is set at about twice its size), not the tightest ink-safe one.
+#[test]
+fn arabic_fallback_keeps_the_paragraphs_line_pitch_when_it_wraps_to_more_rows() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = text_page("BT /F1 12 Tf 300 700 Td (The first row of a paragraph) Tj ET BT /F1 12 Tf 300 676 Td (and the second row of it) Tj ET");
+    let before = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(before.len(), 1, "{before:?}");
+    let draft = "فقرة عربية طويلة تلتف على أكثر من سطرين داخل عرض الفقرة نفسه حتى نرى المسافة بين الأسطر بعد التعديل والحفظ";
+    text::replace_block(&mut doc, 0, 0, draft).unwrap();
+    let doc = reopen(&doc);
+    let mut rows: Vec<f64> = text::text_lines(&doc, 0).unwrap().iter().map(|l| l.rect[1]).collect();
+    rows.sort_by(|a, b| b.total_cmp(a));
+    rows.dedup_by(|a, b| (*a - *b).abs() < 0.5);
+    assert!(rows.len() >= 3, "{rows:?}");
+    for pair in rows.windows(2) {
+        assert!((pair[0] - pair[1] - 24.0).abs() < 0.5, "rows {rows:?} keep the source pitch of 24 pt");
+    }
+}
+
+/// A soft hyphen in an edit of plain Latin text doesn't make it "complex text": the paragraph
+/// is still written with its own standard font (WinAnsi has the soft hyphen), as before the
+/// Arabic work, instead of being refused for want of a complete source face.
+#[test]
+fn latin_edits_with_invisible_formatting_characters_keep_the_source_font_path() {
+    for draft in ["A co\u{00ad}operative sentence", "A cooperative sentence"] {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (A cooperative paragraph) Tj ET");
+        let edit = text::replace_block(&mut doc, 0, 0, draft);
+        assert!(edit.is_ok(), "{draft:?}: {edit:?}");
+        let doc = reopen(&doc);
+        let text = text::text_blocks(&doc, 0).unwrap()[0].text.clone();
+        assert!(text.contains("operative sentence"), "{draft:?} read back as {text:?}");
+    }
+}
+
+/// The faces page `page` shows text in: each `Tf` font's `/BaseFont`, or a Type 3 font's
+/// descriptor `/FontName`.
+fn shown_faces(doc: &Document, page: usize) -> std::collections::BTreeSet<String> {
+    let content = String::from_utf8_lossy(&page_content_bytes(doc, page)).into_owned();
+    let p = &pdfcraft_model::pages(doc)[page];
+    let fonts = p.dict.get(b"Resources").and_then(|r| doc.dict(r)).and_then(|r| r.get(b"Font").and_then(|f| doc.dict(f))).unwrap_or_default();
+    let name = |d: &Dict, key: &[u8]| match d.get(key) {
+        Some(Object::Name(n)) => Some(String::from_utf8_lossy(n).into_owned()),
+        _ => None,
+    };
+    let words: Vec<&str> = content.split_whitespace().collect();
+    words
+        .windows(3)
+        .filter(|w| w[2] == "Tf" && w[0].starts_with('/'))
+        .filter_map(|w| {
+            let font = doc.dict(fonts.get(w[0].trim_start_matches('/').as_bytes())?)?;
+            name(&font, b"BaseFont").or_else(|| font.get(b"FontDescriptor").and_then(|d| doc.dict(d)).and_then(|d| name(&d, b"FontName")))
+        })
+        .collect()
+}
+
+/// A heading over its subtitle is one paragraph whose rows differ in size, colour and weight.
+/// The source faces cannot draw Arabic, so the paragraph takes the shaped Arabic fallback, and
+/// every row keeps its own look and its baseline (not one size for all, nor a face without
+/// Arabic, as the SECA report's title did).
+#[test]
+fn arabic_fallback_keeps_each_rows_size_colour_weight_and_baseline_in_a_mixed_paragraph() {
+    if pdfcraft_fonts::document_arabic_font().is_none() || !pdfcraft_fonts::arabic_bold_available() {
+        return;
+    }
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+        &stream(
+            "",
+            "BT 0.1 0.2 0.3 rg /F1 24 Tf 100 700 Td (Storage consumption report) Tj ET BT 0.5 0.5 0.5 rg /F2 14 Tf 100 675 Td (Analysis of the space and its sources) Tj ET BT 0 0 0 rg /F2 12 Tf 72 400 Td (Neighbour) Tj ET",
+        ),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]);
+    let before = text::text_blocks(&doc, 0).unwrap();
+    let target = before
+        .iter()
+        .position(|b| b.editor_text == "Storage consumption report\nAnalysis of the space and its sources")
+        .unwrap_or_else(|| panic!("one paragraph of two rows: {before:?}"));
+    let neighbour = before.iter().find(|b| b.editor_text == "Neighbour").unwrap().clone();
+    let draft = "عنوان عريض\nسطر فرعي أصغر 2026";
+    let outcome = text::replace_block(&mut doc, 0, target, draft).unwrap();
+    assert!(outcome.substituted.as_ref().is_some_and(|name| name.contains("Noto Sans Arabic")), "{outcome:?}");
+    let doc = reopen(&doc);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert!(blocks.iter().any(|b| b.editor_text == draft), "{blocks:?}");
+    let kept = blocks.iter().find(|b| b.editor_text == "Neighbour").unwrap();
+    assert_eq!(kept.rect, neighbour.rect);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let faces = shown_faces(&doc, 0);
+    assert!(faces.contains("NotoSansArabic-Bold") && faces.contains("NotoSansArabic") && faces.contains("Helvetica"), "{faces:?}");
+    let heading = lines.iter().find(|l| l.text.contains("عنوان")).unwrap_or_else(|| panic!("{lines:?}"));
+    let subtitle = lines.iter().find(|l| l.text.contains("سطر")).unwrap_or_else(|| panic!("{lines:?}"));
+    let year = lines.iter().find(|l| l.text.contains("2026")).unwrap_or_else(|| panic!("{lines:?}"));
+    assert!((heading.size - 24.0).abs() < 0.01 && heading.bold && heading.color == [0.1, 0.2, 0.3], "{heading:?}");
+    assert!((subtitle.size - 14.0).abs() < 0.01 && !subtitle.bold && subtitle.color == [0.5, 0.5, 0.5], "{subtitle:?}");
+    assert!((year.size - 14.0).abs() < 0.01 && !year.bold && year.color == [0.5, 0.5, 0.5], "{year:?}");
+    // On their source baselines: each box spans its own baseline, a little below its top.
+    let spans =
+        |line: &text::TextLine, baseline: f64, size: f64| line.rect[1] < baseline && baseline < line.rect[3] && line.rect[3] - baseline < size;
+    assert!(spans(heading, 700.0, 24.0) && spans(subtitle, 675.0, 14.0), "{heading:?} {subtitle:?}");
+    // The source rows share their left edge, and so do the rewritten ones.
+    assert!((heading.rect[0] - 100.0).abs() < 1.0 && (year.rect[0] - 100.0).abs() < 1.0, "{heading:?} {year:?}");
+}
+
+#[test]
+fn arabic_fallback_refuses_source_text_clipping_without_mutation() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    for mode in 4..=7 {
+        for content in [
+            format!("BT /F1 12 Tf {mode} Tr 72 700 Td (Target) Tj ET 0 0 600 800 re f"),
+            format!(
+                "BT /F1 12 Tf {mode} Tr 72 700 Td /P BMC (Clip) Tj EMC 0 Tr [-20000] TJ \
+                 /P BMC (Target) Tj EMC ET 0 0 600 800 re f"
+            ),
+        ] {
+            let mut doc = text_page(&content);
+            let target = text::text_blocks(&doc, 0).unwrap().iter().position(|block| block.editor_text == "Target").unwrap();
+            let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+            assert!(text::replace_block(&mut doc, 0, target, "نص عربي").is_err(), "text clipping mode {mode}");
+            assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before, "refused text clip changed the PDF");
+        }
+    }
+}
+
+fn approved_static_arabic_probe_font() -> Option<Vec<u8>> {
+    let bytes = match std::env::var_os("PDFCRAFT_TEST_ARABIC_STATIC_FONT") {
+        Some(path) => std::fs::read(path).expect("read approved static Noto Sans Arabic probe font"),
+        None => default_static_test_face(pdfcraft_fonts::document_arabic_font()?.bytes),
+    };
+    pdfcraft_fonts::embedding::validate_document_input(&bytes).expect("approved complete document face");
+    Some(bytes)
+}
+
+/// Test fixture only: a TrueType variable font's glyf/hmtx tables are its default instance.
+/// Retain the full outlines, cmap, shaping, naming and licence tables, discard variation-only
+/// tables and rebuild SFNT checksums. This does not add variable-font import to the product.
+fn default_static_test_face(bytes: &[u8]) -> Vec<u8> {
+    let u16_at = |at: usize| u16::from_be_bytes(bytes[at..at + 2].try_into().unwrap());
+    let u32_at = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    let omitted = [*b"fvar", *b"gvar", *b"avar", *b"HVAR", *b"MVAR", *b"VVAR", *b"cvar", *b"STAT", *b"DSIG"];
+    let mut tables = Vec::new();
+    for index in 0..usize::from(u16_at(4)) {
+        let at = 12 + index * 16;
+        let tag: [u8; 4] = bytes[at..at + 4].try_into().unwrap();
+        if omitted.contains(&tag) {
+            continue;
+        }
+        let begin = u32_at(at + 8);
+        let mut data = bytes[begin..begin + u32_at(at + 12)].to_vec();
+        if tag == *b"head" {
+            data[8..12].fill(0);
+        }
+        tables.push((tag, data));
+    }
+    tables.sort_unstable_by_key(|table| table.0);
+    let count = u16::try_from(tables.len()).unwrap();
+    let power = 1u16 << count.ilog2();
+    let mut out = bytes[..4].to_vec();
+    for value in [count, power * 16, count.ilog2() as u16, count * 16 - power * 16] {
+        out.extend(value.to_be_bytes());
+    }
+    out.resize(12 + tables.len() * 16, 0);
+    let checksum = |data: &[u8]| {
+        data.chunks(4).fold(0u32, |sum, chunk| {
+            let mut word = [0u8; 4];
+            word[..chunk.len()].copy_from_slice(chunk);
+            sum.wrapping_add(u32::from_be_bytes(word))
+        })
+    };
+    let mut head = None;
+    for (index, (tag, data)) in tables.iter().enumerate() {
+        while !out.len().is_multiple_of(4) {
+            out.push(0);
+        }
+        let offset = out.len();
+        if tag == b"head" {
+            head = Some(offset);
+        }
+        let mut entry = tag.to_vec();
+        for value in [checksum(data), u32::try_from(offset).unwrap(), u32::try_from(data.len()).unwrap()] {
+            entry.extend(value.to_be_bytes());
+        }
+        out[12 + index * 16..12 + (index + 1) * 16].copy_from_slice(&entry);
+        out.extend(data);
+    }
+    let adjustment = 0xb1b0_afbau32.wrapping_sub(checksum(&out));
+    let head = head.unwrap();
+    out[head + 8..head + 12].copy_from_slice(&adjustment.to_be_bytes());
+    out
+}
+
+#[test]
+fn full_arabic_source_test_face_matches_the_approved_fonts_default_shape() {
+    let Some(font) = pdfcraft_fonts::document_arabic_font() else { return };
+    let derived = default_static_test_face(font.bytes);
+    pdfcraft_fonts::embedding::validate_document_input(&derived).unwrap();
+    for text in ["سَلَام 123 (PDF)", "بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ", "\u{202e}ABC DEF\u{202c}", "\u{2067}عربي 123 - 456\u{2069}"]
+    {
+        let expected = pdfcraft_fonts::source_shaping::shape(font.bytes, text).unwrap();
+        let actual = pdfcraft_fonts::source_shaping::shape(&derived, text).unwrap();
+        assert_eq!(actual.advance, expected.advance);
+        assert_eq!(actual.glyphs.len(), expected.glyphs.len());
+        for (a, b) in actual.glyphs.iter().zip(expected.glyphs) {
+            assert_eq!((a.id, a.position, a.text.as_str()), (b.id, b.position, b.text.as_str()));
+        }
+        if let Some(path) = std::env::var_os("PDFCRAFT_TEST_ARABIC_STATIC_FONT") {
+            let oracle = pdfcraft_fonts::source_shaping::shape(&std::fs::read(path).unwrap(), text).unwrap();
+            assert_eq!(actual.advance, oracle.advance);
+            for (a, b) in actual.glyphs.iter().zip(oracle.glyphs) {
+                assert_eq!((a.id, a.position, a.text.as_str()), (b.id, b.position, b.text.as_str()));
+            }
+        }
+    }
+}
+
+fn arabic_full_face_probe(text: &str, width: f64) -> Option<(Document, String)> {
+    let bytes = approved_static_arabic_probe_font()?;
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td /P BMC (Target) Tj EMC ET BT /F1 12 Tf 72 500 Td /P BMC (Keep) Tj EMC ET");
+    let resource = text::register_text_font(&mut doc, 0, &bytes).expect("register approved full Arabic source program");
+    let style = text::BlockStyle { resource: Some(resource.clone()), width: Some(width), align: Some(added::Align::Right), ..Default::default() };
+    let result = text::rewrite_block(&mut doc, 0, 0, Some(text), &style).expect("resource path supports a full approved Arabic font");
+    assert_eq!(result.substituted, None, "the complete supplied font is used");
+    Some((reopen(&doc), resource))
+}
+
+#[test]
+fn full_arabic_source_resource_keeps_mixed_text_and_complete_program_after_reopen() {
+    let logical = "سَلَام 123 (PDF) رقم ٤٥٦";
+    let Some((doc, _)) = arabic_full_face_probe(logical, 400.0) else { return };
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks[0].editor_text, logical);
+    assert_eq!(blocks[1].editor_text, "Keep");
+    let bytes = approved_static_arabic_probe_font().unwrap();
+    let fonts = page_font_programs(&doc);
+    assert!(fonts.iter().all(|(subtype, _)| subtype != b"Type3"), "the supplied full-face route must be tested");
+    assert!(fonts.iter().any(|(_, program)| program.as_deref() == Some(bytes.as_slice())), "exact approved program retained");
+}
+
+/// A full-face Arabic paragraph breaks its rows at `\r\n` and at a lone `\r` as at `\n`, and no
+/// carriage return is shaped or reaches the page.
+#[test]
+fn full_arabic_source_resource_breaks_rows_at_every_carriage_return() {
+    let Some((doc, _)) = arabic_full_face_probe("سلام\r\nعالم\rنص", 400.0) else { return };
+    let lines: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(lines, ["سلام", "عالم", "نص", "Keep"]);
+    let content = page_content_bytes(&doc, 0);
+    assert!(!content.contains(&b'\r') && !content.windows(2).any(|w| w == b"\\r"), "{}", String::from_utf8_lossy(&content));
+}
+
+#[test]
+fn full_arabic_source_resource_retains_leading_repeated_and_trailing_spaces() {
+    let logical = "  سَلَام  123 (PDF)  ";
+    let Some((doc, _)) = arabic_full_face_probe(logical, 400.0) else { return };
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, logical);
+}
+
+#[test]
+fn full_arabic_source_resource_wraps_an_overwide_word_at_graphemes() {
+    let logical = "بَ".repeat(50);
+    let Some((doc, _)) = arabic_full_face_probe(&logical, 40.0) else { return };
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks[0].editor_text.replace('\n', ""), logical);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    for row in &blocks[0].rows {
+        let row = &lines[row[0]];
+        assert!(row.rect[2] - row.rect[0] <= 40.01, "overwide row {:?}: {}", row.rect, row.text);
+        assert!(!row.text.starts_with('\u{064e}'), "haraka detached from its letter");
+    }
+    assert_eq!(blocks[1].editor_text, "Keep");
+}
+
+#[test]
+fn full_arabic_source_resource_preserves_spaces_across_wrapped_rows() {
+    let logical = "  نص  عربي  طويل  123 PDF  ".repeat(3);
+    let Some((doc, _)) = arabic_full_face_probe(&logical, 80.0) else { return };
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text.replace('\n', ""), logical);
+}
+
+#[test]
+fn full_arabic_source_face_reedit_keeps_right_anchor_and_relative_sibling() {
+    let Some(bytes) = approved_static_arabic_probe_font() else { return };
+    let mut doc = text_page(
+        "BT /F1 12 Tf 72 700 Td /P BMC (Lead) Tj EMC [-12000] TJ \
+         /P BMC (Target) Tj EMC [-20000] TJ /P BMC (Keep) Tj EMC ET",
+    );
+    let before = text::text_blocks(&doc, 0).unwrap();
+    let target = before.iter().position(|block| block.editor_text == "Target").unwrap();
+    let kept = before.iter().find(|block| block.editor_text == "Keep").unwrap().rect;
+    let resource = text::register_text_font(&mut doc, 0, &bytes).unwrap();
+    let style = text::BlockStyle { resource: Some(resource), width: Some(230.0), align: Some(added::Align::Right), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, target, Some("نص عربي 123"), &style).unwrap();
+    doc = reopen(&doc);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let actual = blocks.iter().find(|block| block.editor_text == "Keep").unwrap().rect;
+    assert!(actual.iter().zip(kept).all(|(a, b)| (a - b).abs() < 1e-6), "relative sibling moved: {kept:?} -> {actual:?}");
+    let right = blocks[target].rect[2];
+    text::replace_block(&mut doc, 0, target, "تعديل عربي جديد 456").unwrap();
+    let reopened = reopen(&doc);
+    let blocks = text::text_blocks(&reopened, 0).unwrap();
+    assert_eq!(blocks[target].editor_text.replace('\n', ""), "تعديل عربي جديد 456");
+    assert!((blocks[target].rect[2] - right).abs() < 0.01, "right anchor moved: {right} -> {:?}", blocks[target].rect);
+    let actual = blocks.iter().find(|block| block.editor_text == "Keep").unwrap().rect;
+    assert!(actual.iter().zip(kept).all(|(a, b)| (a - b).abs() < 1e-6));
+}
+
+#[test]
+fn full_arabic_source_face_default_reedit_preserves_its_right_anchor() {
+    let Some((mut doc, _)) = arabic_full_face_probe("نص عربي 123", 230.0) else { return };
+    let before = text::text_blocks(&doc, 0).unwrap()[0].clone();
+    text::replace_block(&mut doc, 0, 0, "تعديل عربي جديد 456").unwrap();
+    let reopened = reopen(&doc);
+    let after = text::text_blocks(&reopened, 0).unwrap()[0].clone();
+    assert_eq!(after.editor_text.replace('\n', ""), "تعديل عربي جديد 456");
+    assert!((after.rect[2] - before.rect[2]).abs() < 0.01, "right anchor moved: {:?} -> {:?}", before.rect, after.rect);
+}
+
+fn full_face_painted_rows(doc: &Document) -> Vec<String> {
+    let page = pdfcraft_model::pages(doc)[0].clone();
+    let resources = doc.dict(page.dict.get(b"Resources").unwrap()).unwrap();
+    let fonts = doc.dict(resources.get(b"Font").unwrap()).unwrap();
+    let mut font = None;
+    let mut size = 0.0;
+    let mut position = [0.0f64; 2];
+    // Along the row from `position`, in thousandths of the font size: a shaped run is one TJ
+    // whose numbers move the pen between glyphs (ISO 32000-1 §9.4.3).
+    let mut pen = 0.0;
+    let mut glyphs = Vec::new();
+    for op in pdfcraft_content::parse(&page_content_bytes(doc, 0)).ops {
+        if op.is("Tf") {
+            font = op.name(0).filter(|name| name.starts_with(b"PCFull")).and_then(|name| fonts.get(name)).and_then(|f| doc.dict(f));
+            size = op.num(1).unwrap_or(0.0);
+        } else if op.is("Tm") {
+            position = [op.num(4).unwrap(), op.num(5).unwrap()];
+            pen = 0.0;
+        } else if (op.is("Tj") || op.is("TJ"))
+            && let Some(font) = &font
+        {
+            let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(doc, font);
+            let pieces = match op.operands.first() {
+                Some(Object::Array(items)) => items.clone(),
+                Some(other) => vec![other.clone()],
+                None => Vec::new(),
+            };
+            for piece in pieces {
+                if let Some(adjust) = piece.as_f64() {
+                    pen -= adjust;
+                } else if let Object::String(s) = piece {
+                    for code in s.bytes.chunks(2) {
+                        let text: String = metrics.decode(code).chars().filter(|c| !pdfcraft_fonts::embedding::default_ignorable(*c)).collect();
+                        if !text.is_empty() {
+                            glyphs.push(([position[0] + pen * size / 1000.0, position[1]], text));
+                        }
+                        let value = code.iter().fold(0u32, |v, b| v << 8 | u32::from(*b));
+                        pen += metrics.width(value) * 1000.0;
+                    }
+                }
+            }
+        }
+    }
+    glyphs.sort_by(|a, b| b.0[1].total_cmp(&a.0[1]).then(a.0[0].total_cmp(&b.0[0])));
+    let mut rows: Vec<(f64, String)> = Vec::new();
+    for (position, text) in glyphs {
+        if let Some((_, row)) = rows.last_mut().filter(|(y, _)| (position[1] - *y).abs() < 0.01) {
+            row.push_str(&text);
+        } else {
+            rows.push((position[1], text));
+        }
+    }
+    rows.into_iter().map(|(_, row)| row).collect()
+}
+
+#[test]
+fn full_arabic_source_wrapped_overrides_and_isolates_keep_paragraph_context() {
+    let Some(bytes) = approved_static_arabic_probe_font() else { return };
+    let prefix = "للعربيةالعربيةالعربيةالعربية";
+    let width = pdfcraft_fonts::source_shaping::shape(&bytes, prefix).unwrap().advance * 12.0 + 0.01;
+    for (logical, width, expected) in
+        [("\u{202e}ABC DEF GHI JKL\u{202c}".to_owned(), 30.0, "FED"), (format!("\u{2067}{prefix} 123 - 456\u{2069}"), width, "456 - 123")]
+    {
+        let Some((doc, _)) = arabic_full_face_probe(&logical, width) else { return };
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks[0].editor_text.replace('\n', ""), logical);
+        let rows = full_face_painted_rows(&doc);
+        assert!(rows.iter().any(|row| row.contains(expected)), "paragraph context lost: {rows:?}");
+    }
+}
+
+#[test]
+fn full_arabic_source_narrow_paragraph_reuses_cid_fonts_with_bounded_work() {
+    let logical = "عربي 123 ".repeat(300);
+    let started = std::time::Instant::now();
+    let Some((doc, _)) = arabic_full_face_probe(&logical, 38.0) else { return };
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text.replace('\n', ""), logical);
+    assert!(
+        page_font_programs(&doc).iter().filter(|(_, program)| program.is_some()).count() <= 2,
+        "wrapped rows must share their CID mapping and full program"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(15), "long narrow source text exceeded its layout budget");
+}
+
+#[test]
+fn full_source_latin_resource_preserves_relative_siblings_and_quote_state() {
+    let Some(bytes) = approved_static_arabic_probe_font() else { return };
+    for target in ["(Target) Tj", "[(Tar) -30 (get)] TJ", "(Target) '", "1 2 (Target) \""] {
+        let mut doc = text_page(&format!(
+            "BT /F1 12 Tf 15 TL 72 730 Td /P BMC (Lead) Tj EMC [-12000] TJ \
+             /P BMC {target} EMC [-20000] TJ /P BMC (Keep) Tj EMC T* /P BMC (Below) Tj EMC ET"
+        ));
+        let before = text::text_blocks(&doc, 0).unwrap();
+        let selected = before.iter().position(|block| block.editor_text == "Target").unwrap();
+        let resource = text::register_text_font(&mut doc, 0, &bytes).unwrap();
+        text::rewrite_block(&mut doc, 0, selected, Some("Revised Latin"), &text::BlockStyle { resource: Some(resource), ..Default::default() })
+            .unwrap();
+        let after = text::text_blocks(&reopen(&doc), 0).unwrap();
+        for neighbor in before.iter().filter(|block| block.editor_text != "Target") {
+            let kept = after.iter().find(|block| block.editor_text == neighbor.editor_text).unwrap();
+            assert!(kept.rect.iter().zip(neighbor.rect).all(|(a, b)| (a - b).abs() < 1e-8), "{} moved after {target}", neighbor.editor_text);
+        }
+    }
+}
+
+#[test]
+fn full_arabic_source_hangs_only_overflowing_separators_with_document_spacing() {
+    let Some(bytes) = approved_static_arabic_probe_font() else { return };
+    for (spacing, word_spacing, scale) in [(0.0, 0.0, 1.0), (0.5, 1.0, 1.25)] {
+        let width = (pdfcraft_fonts::source_shaping::shape(&bytes, "ABC").unwrap().advance * 12.0 + spacing * 3.0) * scale;
+        let mut doc = text_page(&format!("BT /F1 12 Tf {spacing} Tc {word_spacing} Tw {} Tz 72 700 Td /P BMC (Target) Tj EMC ET", scale * 100.0));
+        let resource = text::register_text_font(&mut doc, 0, &bytes).unwrap();
+        let style = text::BlockStyle { resource: Some(resource), width: Some(width), ..Default::default() };
+        text::rewrite_block(&mut doc, 0, 0, Some("ABC ا"), &style).unwrap();
+        let doc = reopen(&doc);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks[0].editor_text, "ABC \nا", "a soft separator must not create a blank row");
+        let lines = text::text_lines(&doc, 0).unwrap();
+        for row in &blocks[0].rows {
+            let line = &lines[row[0]];
+            assert!(line.rect[2] - line.rect[0] <= width + 0.01, "spacing overflowed {width}: {:?}", line.rect);
+        }
+        for logical in ["ا ", "ا   "] {
+            let paragraph = pdfcraft_fonts::source_shaping::Paragraph::new(logical).unwrap();
+            let bare = pdfcraft_fonts::source_shaping::shape(&bytes, "ا").unwrap().spaced_advance(spacing / 12.0, word_spacing / 12.0);
+            let full = paragraph.shape(&bytes, 0..logical.len()).unwrap().spaced_advance(spacing / 12.0, word_spacing / 12.0);
+            assert!(full > bare, "wide final spaces retain their advances");
+            for (available, expected) in [(bare, bare), (full + 1.0, full)] {
+                let shaped = paragraph.shape_fitted(&bytes, 0..logical.len(), available, spacing / 12.0, word_spacing / 12.0).unwrap();
+                assert!((shaped.spaced_advance(spacing / 12.0, word_spacing / 12.0) - expected).abs() < 1e-10);
+                let mut doc =
+                    text_page(&format!("BT /F1 12 Tf {spacing} Tc {word_spacing} Tw {} Tz 72 700 Td /P BMC (Target) Tj EMC ET", scale * 100.0));
+                let resource = text::register_text_font(&mut doc, 0, &bytes).unwrap();
+                text::rewrite_block(
+                    &mut doc,
+                    0,
+                    0,
+                    Some(logical),
+                    &text::BlockStyle { resource: Some(resource), width: Some(available * 12.0 * scale), ..Default::default() },
+                )
+                .unwrap();
+                let blocks = text::text_blocks(&reopen(&doc), 0).unwrap();
+                assert_eq!(blocks[0].editor_text, logical);
+                assert_eq!(blocks[0].rows.len(), 1, "a final separator must not create a blank row");
+            }
+        }
+    }
+}
+
+#[test]
+fn full_arabic_source_refuses_coincident_text_clips_without_mutation() {
+    let Some(bytes) = approved_static_arabic_probe_font() else { return };
+    for mode in 4..=7 {
+        let mut doc = text_page(&format!("BT /F1 12 Tf 72 700 Td (Target) Tj ET BT /F1 12 Tf {mode} Tr 72 700 Td (Target) Tj ET 0 0 600 800 re f"));
+        let resource = text::register_text_font(&mut doc, 0, &bytes).unwrap();
+        let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        assert!(text::rewrite_block(&mut doc, 0, 0, Some("نص عربي"), &text::BlockStyle { resource: Some(resource), ..Default::default() }).is_err());
+        assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before, "coincident clip mode {mode} changed the PDF");
+    }
+}
+
+/// Arabic the source font cannot draw is retried with the Arabic fallback when the source path
+/// refuses, so that path must refuse clipping-path text too (#3429): the mask stays, the PDF is
+/// unchanged, and the reason is the clipping path, for every mode and the two shapes of #3447.
+#[test]
+fn arabic_fallback_refuses_clipping_path_text_without_mutation() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut contents: Vec<String> =
+        [4, 5, 6, 7].iter().map(|mode| format!("q\nBT {mode} Tr /F1 48 Tf 40 60 Td (MASK) Tj ET\n1 0 0 rg 0 0 300 150 re f\nQ\n")).collect();
+    contents.push("q\nBT /F1 48 Tf 40 60 Td 0 Tr (TITLE) Tj 7 Tr (MASK) Tj ET\n1 0 0 rg 0 0 300 150 re f\nQ\n".into());
+    contents.push("q\nBT 0 Tr /F1 48 Tf 40 60 Td (MASK) Tj ET\nBT 7 Tr /F1 48 Tf 40 60 Td (MASK) Tj ET\n1 0 0 rg 0 0 300 150 re f\nQ\n".into());
+    for content in contents {
+        let mut doc = text_page(&content);
+        let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        let block = text::replace_block(&mut doc, 0, 0, "نص عربي");
+        assert!(matches!(&block, Err(EditError::Invalid(m)) if m.contains("clipping path")), "{content:?}: {block:?}");
+        assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before, "refused clipping text changed the PDF: {content:?}");
+    }
+}
+
+#[test]
+fn arabic_fallback_refuses_stroked_source_and_coincident_copies_without_mutation() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    for mode in [1, 2] {
+        for content in [
+            format!("1 0 0 RG 2 w BT /F1 12 Tf {mode} Tr 72 700 Td (Target) Tj ET"),
+            format!("1 0 0 RG 2 w BT /F1 12 Tf 72 700 Td (Target) Tj ET BT /F1 12 Tf {mode} Tr 72 700 Td (Target) Tj ET"),
+        ] {
+            let mut doc = text_page(&content);
+            let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+            assert!(text::replace_block(&mut doc, 0, 0, "نص عربي").is_err(), "stroked text mode {mode} must retain its style or refuse");
+            assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before, "refused text mode {mode} changed the PDF");
+        }
     }
 }

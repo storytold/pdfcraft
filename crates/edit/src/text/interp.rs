@@ -466,6 +466,9 @@ pub(super) struct Shown {
     pub(super) ink: Vec<[f64; 4]>,
     pub(super) baseline: f64,
     pub(super) start_x: f64,
+    /// Where its last right-to-left letter starts along the baseline (see [`Shown::span`]), when
+    /// it has one: a combining mark drawn after the run is placed from that letter's start.
+    pub(super) last_letter: Option<f64>,
     end_x: f64,
     end_y: f64,
     pub(super) bt: usize,
@@ -478,6 +481,8 @@ pub(super) struct Shown {
     pub(super) visual_order: bool,
     pub(super) decodable: bool,
     pub(super) scope: Option<usize>,
+    /// The paragraph element of the logical structure it is in (see [`Carry::paragraphs`]).
+    pub(super) structure: Option<u32>,
     pub(super) paint: Paint,
     pub(super) logical_order: bool,
     pub(super) actual_text: bool,
@@ -496,7 +501,7 @@ impl Shown {
     /// offset across it (for upright text: the user-space x, x and y). A vertical run goes along
     /// its column instead, the way the pen moves: for upright text down, with the column's x
     /// across.
-    fn span(&self) -> ((f64, f64), f64, f64, f64) {
+    pub(super) fn span(&self) -> ((f64, f64), f64, f64, f64) {
         let m = self.tm.then(&self.state.ctm);
         let dir = match self.state.vertical {
             Some(w1) => direction(&Matrix([m.0[2] * w1.signum(), m.0[3] * w1.signum(), 0.0, 0.0, 0.0, 0.0])),
@@ -513,7 +518,7 @@ impl Shown {
 pub(super) struct Pen {
     pub(super) bt: usize,
     dir: (f64, f64),
-    across: f64,
+    pub(super) across: f64,
     end: f64,
     pub(super) size: f64,
     vertical: bool,
@@ -525,15 +530,22 @@ impl Pen {
         Pen { bt: s.bt, dir, across, end, size: s.size.max(1.0), vertical: s.state.vertical.is_some() }
     }
 
-    /// Whether `s` could continue the same line on geometry alone: on the same baseline, starting
-    /// at most a word gap (`reach` sizes) after it. Also the gap along the baseline.
-    pub(super) fn continues(&self, s: &Shown, reach: f64) -> (bool, f64) {
+    /// A combining mark drawn back over the letter before it doesn't take the pen back: the next
+    /// letter continues the word from where that letter ended, not from the mark.
+    pub(super) fn after_mark(self, before: &Pen) -> Self {
+        Pen { end: self.end.max(before.end), ..self }
+    }
+
+    /// Whether `s` could continue the same line on geometry alone: on the same baseline (within
+    /// `drift` sizes), starting at most a word gap (`reach` sizes) after it. Also the gap along
+    /// the baseline.
+    pub(super) fn continues(&self, s: &Shown, reach: f64, drift: f64) -> (bool, f64) {
         let (dir, start, _, across) = s.span();
         let gap = start - self.end;
         let same_dir = (dir.0 - self.dir.0).abs() < 1e-3 && (dir.1 - self.dir.1).abs() < 1e-3;
         // A column continues a column (along which the pen moves), a baseline a baseline.
         let same_dir = same_dir && self.vertical == s.state.vertical.is_some();
-        (same_dir && (across - self.across).abs() < self.size * 0.3 && gap > -self.size && gap < self.size * reach, gap)
+        (same_dir && (across - self.across).abs() < self.size * drift && gap > -self.size && gap < self.size * reach, gap)
     }
 }
 
@@ -549,6 +561,113 @@ fn typical_tracking(gaps: &mut [f64], limit: f64) -> f64 {
     let at = gaps.len() / 3;
     gaps.select_nth_unstable_by(at, f64::total_cmp);
     gaps.get(at).copied().filter(|n| n.is_finite() && *n <= limit).unwrap_or(0.0).max(0.0)
+}
+
+/// Combining marks drawn before the glyph after them, inside one run: Word draws a Hebrew point or
+/// an Arabic haraka that way, the mark first and the letter it sits on after it (in a `TJ`, the
+/// mark, then a kerning step back onto the letter). Positions are along the run, in text space.
+struct MarksFirst {
+    text: String,
+    /// Where the first mark is drawn, and where the letter drawn before it starts.
+    at: f64,
+    before: Option<f64>,
+    /// Whether the marks were placed on purpose: a `TJ` step after them (Word kerns a mark back
+    /// over its letter), or a gap before them. Marks written straight after their letter, with no
+    /// step (a zero-advance mark that ends where the next letter starts), stay with that letter.
+    positioned: bool,
+    /// Whether they came after a `TJ` gap that may still read as a word space: they then belong
+    /// to the word after it.
+    after_gap: bool,
+}
+
+/// Adds one glyph's text to a run read in drawing order. A mark goes after the letter it is
+/// placed from: a mark is drawn from its letter's origin, so of the letters on either side it
+/// belongs to the one whose start it is nearer, when it was placed there on purpose (see
+/// [`MarksFirst::positioned`]). Marks with no letter after them stay where they are (the run's
+/// last letter, or a later run, takes them). `gap` is whether a `TJ` gap comes before the glyph.
+fn place_glyph(
+    text: &mut String,
+    held: &mut Option<MarksFirst>,
+    last_letter: &mut Option<f64>,
+    glyph: &str,
+    (x, width): (f64, f64),
+    em: f64,
+    gap: bool,
+) {
+    let marks = !glyph.is_empty() && glyph.chars().all(crate::bidi::is_mark);
+    let letter = glyph.chars().next().is_some_and(|c| crate::bidi::is_rtl(c) && !crate::bidi::is_mark(c));
+    if marks {
+        match held {
+            Some(h) => h.text.push_str(glyph),
+            None => {
+                *held =
+                    Some(MarksFirst { text: glyph.to_owned(), at: x, before: if gap { None } else { *last_letter }, positioned: gap, after_gap: gap })
+            }
+        }
+        return;
+    }
+    let (lo, hi) = (x.min(x + width), x.max(x + width));
+    let sits_here = |h: &MarksFirst| {
+        h.positioned
+            && h.at > lo - em * 0.3
+            && h.at < hi.max(lo + em * 0.05)
+            && h.before.is_none_or(|before| (h.at - lo).abs() < (h.at - before).abs())
+    };
+    match held.take() {
+        Some(h) if letter && sits_here(&h) => {
+            text.push_str(glyph);
+            text.push_str(&h.text);
+        }
+        Some(h) => {
+            text.push_str(&h.text);
+            text.push_str(glyph);
+        }
+        None => text.push_str(glyph),
+    }
+    if letter {
+        *last_letter = Some(x);
+    }
+}
+
+/// Whether a glyph's text is combining marks alone.
+fn only_marks(text: Option<&str>) -> bool {
+    text.is_some_and(|t| !t.is_empty() && t.chars().all(crate::bidi::is_mark))
+}
+
+/// The end of a run: marks still waiting for a letter stay where they are, and a `TJ` gap after
+/// them is a word space.
+fn finish_run(gap: &mut Option<f64>, held: &mut Option<MarksFirst>, text: &mut String, gap_space: &mut bool) {
+    if let Some(marks) = held.take() {
+        text.push_str(&marks.text);
+    }
+    if gap.take().is_some() {
+        if !text.ends_with(' ') {
+            text.push(' ');
+        }
+        *gap_space = true;
+    }
+}
+
+/// A `TJ` gap that may read as a word space, from `start` (where the pen was before it) along the
+/// run, settled at the next glyph that isn't a mark, `at`: Word steps over a gap to place a mark
+/// over a wide letter, then steps back onto the letter, which is no word space. A gap that the pen
+/// is still past by more than a fifth of an em (`step`) is one: the marks drawn after it then
+/// belong to the word after it.
+fn settle_gap(gap: &mut Option<f64>, at: f64, step: f64, text: &mut String, held: &mut Option<MarksFirst>, gap_space: &mut bool) {
+    let Some(start) = gap.take() else { return };
+    if at - start <= step {
+        return;
+    }
+    // Marks from before the gap stay with the word before it.
+    if held.as_ref().is_some_and(|h| !h.after_gap)
+        && let Some(marks) = held.take()
+    {
+        text.push_str(&marks.text);
+    }
+    if !text.ends_with(' ') {
+        text.push(' ');
+    }
+    *gap_space = true;
 }
 
 fn tj_tracking(pieces: &[Object], metrics: &Metrics, size: f64, scale: f64) -> f64 {
@@ -584,7 +703,7 @@ fn positioned_tracking(shown: &mut [Shown]) {
                 || (prev.size - next.size).abs() > 0.01
                 || prev.state.char_spacing != next.state.char_spacing
                 || prev.state.scale != next.state.scale
-                || !Pen::after(prev).continues(next, 1.5).0
+                || !Pen::after(prev).continues(next, 1.5, 0.3).0
             {
                 break;
             }
@@ -595,7 +714,7 @@ fn positioned_tracking(shown: &mut [Shown]) {
                 .windows(2)
                 .filter_map(|pair| {
                     let [prev, next] = pair else { return None };
-                    (!prev.text.trim().is_empty() && !next.text.trim().is_empty()).then(|| Pen::after(prev).continues(next, 0.0).1)
+                    (!prev.text.trim().is_empty() && !next.text.trim().is_empty()).then(|| Pen::after(prev).continues(next, 0.0, 0.3).1)
                 })
                 .collect();
             let limit = run.first().map_or(0.0, |s| s.size * s.state.scale.abs() * 0.5);
@@ -625,6 +744,10 @@ pub(super) struct Carry {
     /// Whether the last run ended in a space read from a gap, with the next operator a `Tj` or
     /// `TJ` that may start with the space glyph that gap widened.
     pub(super) gap_space: bool,
+    /// The paragraph element of the page's logical structure that each marked-content id belongs
+    /// to (see [`super::structure`]), and for each open marked-content sequence, the one it is in.
+    pub(super) paragraphs: std::rc::Rc<HashMap<i64, u32>>,
+    pub(super) structure: Vec<Option<u32>>,
 }
 
 /// The most glyph text one page's extraction produces, in bytes. A ToUnicode destination is
@@ -656,7 +779,16 @@ impl Carry {
             dash: (Vec::new(), 0.0),
             line_cap: 0,
         };
-        Carry { ts, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: MAX_PAGE_TEXT, gap_space: false }
+        Carry {
+            ts,
+            stack: Vec::new(),
+            marked: Vec::new(),
+            layers: Vec::new(),
+            text_left: MAX_PAGE_TEXT,
+            gap_space: false,
+            paragraphs: std::rc::Rc::default(),
+            structure: Vec::new(),
+        }
     }
 }
 
@@ -679,6 +811,9 @@ struct MarkedContent {
     regions: Vec<Option<usize>>,
     layers: Vec<Option<Vec<u8>>>,
     actual_text: Vec<Option<(usize, usize, String)>>,
+    /// For each open sequence, the structure paragraph it is in (see [`Carry::paragraphs`]).
+    structure: Vec<Option<u32>>,
+    paragraphs: std::rc::Rc<HashMap<i64, u32>>,
 }
 
 impl MarkedContent {
@@ -687,6 +822,15 @@ impl MarkedContent {
         // inner spans, which inherit their enclosing region.
         let region = matches!(op.name(0), Some(b"P" | b"H" | b"H1" | b"H2" | b"H3" | b"H4" | b"H5" | b"H6" | b"LI" | b"TD" | b"TH"));
         self.regions.push(if region { Some(index) } else { self.regions.last().copied().flatten() });
+        // A sequence with an `/MCID` is a leaf of the logical structure: it belongs to the
+        // paragraph element above it (Word marks each run as a `/Span` of its `P`).
+        let mcid = match op.operands.get(1) {
+            Some(Object::Name(name)) => logical_text.and_then(|properties| properties.get(name)).and_then(|object| doc.dict(object)),
+            other => other.and_then(Object::as_dict).cloned(),
+        }
+        .and_then(|list| list.get(b"MCID").and_then(Object::as_int));
+        let paragraph = mcid.and_then(|mcid| self.paragraphs.get(&mcid).copied());
+        self.structure.push(paragraph.or_else(|| self.structure.last().copied().flatten()));
         // A layer named in the resources is told apart by its name, an inline one by where it opens.
         let layer = op.is("BDC") && op.name(0) == Some(b"OC".as_slice());
         self.layers
@@ -705,6 +849,7 @@ impl MarkedContent {
 
     fn end(&mut self, index: usize, shown: &mut Vec<Shown>) {
         self.regions.pop();
+        self.structure.pop();
         self.layers.pop();
         if let Some(Some((start, open, logical))) = self.actual_text.pop() {
             let tail = shown.split_off(start.min(shown.len()));
@@ -731,6 +876,7 @@ impl MarkedContent {
                     first.actual_text = true;
                     first.text = logical;
                     first.start_x = first.rect[0];
+                    first.last_letter = None;
                     first.end_x = first.rect[2];
                     first.end_y = first.baseline;
                     first.advance = (first.end_x - first.start_x) / first.tm.then(&first.state.ctm).0[0].abs().max(1e-6);
@@ -801,6 +947,12 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     // before may have ended in one: a justified line can be split over `TJ` and `Tj`.
     let mut gap_space = std::mem::take(&mut carry.gap_space);
     let mut glyph_count = 0_usize;
+    // Combining marks waiting for the glyph after them (see `MarksFirst`), and where the last
+    // right-to-left letter started (text space).
+    let mut held: Option<MarksFirst> = None;
+    let mut last_letter: Option<f64> = None;
+    // A gap in a `TJ` wide enough to read as a space, from where the pen was (see `settle_gap`).
+    let mut gap: Option<f64> = None;
     for p in &pieces {
         match p {
             Object::String(s) => {
@@ -810,6 +962,13 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                     let blank = m.is_space(code, len) || shown.as_deref().is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
                     // A space glyph right after a gap that read as a space is that space:
                     // LibreOffice stretches a justified line on both sides of each space glyph.
+                    // A gap before a combining mark may only position the mark over its letter
+                    // (Word's Hebrew points): it is settled at the next glyph that isn't a mark.
+                    let em = (ts.size * ts.scale).abs().max(1e-6);
+                    let mark = only_marks(shown.as_deref());
+                    if !mark {
+                        settle_gap(&mut gap, x_text, tracking + em * 0.2, &mut text, &mut held, &mut gap_space);
+                    }
                     let after_gap = std::mem::take(&mut gap_space);
                     match shown {
                         Some(shown) => {
@@ -818,7 +977,9 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                                 .text_left
                                 .checked_sub(t.len())
                                 .ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
-                            text.push_str(t);
+                            let t = crate::bidi::glyph_in_drawing_order(t);
+                            let width = m.width(code) * ts.size * ts.scale;
+                            place_glyph(&mut text, &mut held, &mut last_letter, &t, (x_text, width), em, mark && gap.is_some());
                         }
                         None => decodable = false,
                     }
@@ -868,10 +1029,13 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                         continue;
                     }
                     let dx = -n / 1000.0 * ts.size * ts.scale;
-                    // A large gap inside TJ reads as a space.
-                    if dx - tracking > (ts.size * ts.scale).abs() * 0.2 && !text.ends_with(' ') {
-                        text.push(' ');
-                        gap_space = true;
+                    // A large gap inside TJ reads as a space (once the next letter shows it is one).
+                    if dx - tracking > (ts.size * ts.scale).abs() * 0.2 && !text.ends_with(' ') && gap.is_none() {
+                        gap = Some(x_text);
+                    }
+                    // A step after held marks places them on purpose (see `MarksFirst`).
+                    if let Some(h) = held.as_mut() {
+                        h.positioned = true;
                     }
                     // Tracking and kerning keep a word together; a larger jump
                     // ends it (whatever the sign of the size or `Tz`).
@@ -883,6 +1047,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
             }
         }
     }
+    finish_run(&mut gap, &mut held, &mut text, &mut gap_space);
     *tm = Matrix([1.0, 0.0, 0.0, 1.0, x_text, y_text]).then(tm);
     let end = tm.then(&ts.ctm).apply(0.0, ts.rise);
     // The box from `a` to `b` along the run: from descent to ascent across it, or for
@@ -946,6 +1111,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         ink,
         baseline: start.1,
         start_x: start.0,
+        last_letter: last_letter.filter(|_| vertical.is_none()).map(|x| to_frame(direction(&trm0), trm0.apply(x, ts.rise)).0),
         end_x: end.0,
         end_y: end.1,
         bt,
@@ -958,6 +1124,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         visual_order: m.visual_order,
         decodable,
         scope: marked.regions.last().copied().flatten(),
+        structure: marked.structure.last().copied().flatten(),
         paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
         logical_order: false,
         actual_text: false,
@@ -989,8 +1156,13 @@ pub(super) fn interpret(
     let mut stack: Vec<(Ts, Matrix, Matrix)> = std::mem::take(&mut carry.stack);
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let mut bt = 0usize;
-    let mut marked =
-        MarkedContent { regions: std::mem::take(&mut carry.marked), layers: std::mem::take(&mut carry.layers), ..MarkedContent::default() };
+    let mut marked = MarkedContent {
+        regions: std::mem::take(&mut carry.marked),
+        layers: std::mem::take(&mut carry.layers),
+        structure: std::mem::take(&mut carry.structure),
+        paragraphs: carry.paragraphs.clone(),
+        ..MarkedContent::default()
+    };
     // A rewrite names a wrap (`/PCSoft`) or a break it kept (`/PCHard`) in an empty marker
     // before the next line. Neither name is a paragraph region, so it does not change scope.
     let mut soft_break = false;
@@ -1225,6 +1397,7 @@ pub(super) fn interpret(
     carry.stack = stack;
     carry.marked = marked.regions;
     carry.layers = marked.layers;
+    carry.structure = marked.structure;
     out.retain(|s| s.glyph_count > 0 || s.actual_text);
     positioned_tracking(&mut out);
     Ok(out)
