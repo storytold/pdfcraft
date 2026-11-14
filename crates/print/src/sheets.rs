@@ -216,7 +216,11 @@ fn selected_area(sizes: &[(f64, f64)], pages: &[usize], settings: &Settings) -> 
 fn layout_size(sizes: &[(f64, f64)], pages: &[usize], settings: &Settings, mode: SizeMode, area: Option<[f64; 4]>) -> Result<Vec<Sheet>, PrintError> {
     let mut sheets = Vec::new();
     for &p in pages {
-        let d = area.map_or(sizes[p], |a| (a[2] - a[0], a[3] - a[1]));
+        let page_size = sizes[p];
+        if !(page_size.0.is_finite() && page_size.1.is_finite() && page_size.0 > 0.0 && page_size.1 > 0.0) {
+            return Err(PrintError::Invalid("invalid page size".into()));
+        }
+        let d = area.map_or(page_size, |a| (a[2] - a[0], a[3] - a[1]));
         let size = oriented(settings.paper, settings.orientation, d.0 > d.1);
         let fit = fit_scale(d, (size.0 - 2.0 * MARGIN, size.1 - 2.0 * MARGIN));
         let s = match mode {
