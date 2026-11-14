@@ -1,7 +1,7 @@
 use super::globals::{recalculate, relayout};
 use super::host::{HNode, XHost, host};
 use super::instances::{instance_manager, list_object};
-use super::model::{MAX_DEPTH, XfaEffect};
+use super::model::{MAX_DEPTH, XfaEffect, XfaKind};
 use super::props;
 use super::{
     Attribute, Context, JsObject, JsProxy, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, arg, as_number, clip, error, function,
@@ -376,6 +376,43 @@ pub(super) fn noop(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsVa
     Ok(JsValue::undefined())
 }
 
+/// `resolveNode("table._row")`: the instance manager of the subform the last step names after `_` (the SOM instance manager shortcut), when the
+/// rest of the expression reaches a node holding instances of it (with no rest, the nearest container that does); `null`
+/// otherwise.
+fn manager_by_som(ctx: &mut Context, from: usize, expr: &str) -> JsResult<JsValue> {
+    let (parent, last) = match expr.trim().rsplit_once('.') {
+        Some((p, l)) => (Some(p), l),
+        None => (None, expr.trim()),
+    };
+    let Some(name) = last.strip_prefix('_').filter(|n| !n.is_empty()) else { return Ok(JsValue::null()) };
+    let at = {
+        let h = host(ctx)?.borrow();
+        // The first node the rest of the expression reaches that holds instances of `name` (`row[*]._item`); with no
+        // rest, the node itself or the nearest container of it, as a bare name is looked up.
+        let candidates: Vec<usize> = match parent {
+            Some(p) => resolve_som(&h, from, p),
+            None => {
+                let mut up = vec![from];
+                let mut at = h.nodes.get(from).and_then(|n| n.parent);
+                while let Some(p) = at
+                    && up.len() <= MAX_DEPTH
+                {
+                    up.push(p);
+                    at = h.nodes.get(p).and_then(|n| n.parent);
+                }
+                up
+            }
+        };
+        // only subforms have instance managers
+        let managed = |p: usize| instances(&h, p, name).first().is_some_and(|&i| h.nodes.get(i).is_some_and(|n| n.kind == XfaKind::Subform));
+        candidates.into_iter().find(|&p| managed(p))
+    };
+    match at {
+        Some(p) => instance_manager(ctx, p, name),
+        None => Ok(JsValue::null()),
+    }
+}
+
 /// `resolveNode(som)` / `resolveNodes(som)` bound to node `from`.
 pub(super) fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<JsValue> {
     let key = ObjectInitializer::new(ctx)
@@ -409,7 +446,7 @@ pub(super) fn resolver(ctx: &mut Context, from: usize, many: bool) -> JsResult<J
         }
         match found.first() {
             Some(i) => node_object(ctx, *i),
-            None => Ok(JsValue::null()),
+            None => manager_by_som(ctx, from, &expr),
         }
     }
     Ok(function(ctx, NativeFunction::from_copy_closure_with_captures(resolve, key)).into())
