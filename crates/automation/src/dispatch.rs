@@ -315,6 +315,7 @@ impl Automation {
                 let at = self.opt_position(&a, "at")?;
                 self.apply(&a, Edit::DuplicatePages { pages, at })?
             }
+            "page_split_parts" => self.page_split_parts(&a)?,
             "page_set_box" => self.page_set_box(&a)?,
             "page_transition_set" => self.page_transition_set(&a)?,
             "doc_create" => self.doc_create(&a)?,
@@ -1012,5 +1013,54 @@ impl Automation {
         out["not_scanned"] = json!(numbered(&report.not_scanned));
         out["skipped"] = json!(skipped);
         Ok(out)
+    }
+
+    fn page_split_parts(&mut self, a: &Args<'_>) -> Result<Value> {
+        let pages = if a.get("pages").is_some() {
+            self.pages(a, "pages")?
+        } else {
+            let n = self.doc(a)?.info.pages.len();
+            (0..n).collect()
+        };
+        let direction = a.opt_str("direction")?.unwrap_or("vertical");
+        let split = match direction {
+            "vertical" => {
+                if let Some(ratio) = a.opt_num("ratio")? {
+                    pdfcraft_engine::PageSplit::VerticalRatio(ratio)
+                } else {
+                    let parts = usize::try_from(a.opt_int("parts")?.unwrap_or(2))
+                        .map_err(|_| ToolError::InvalidArgs("parts must be a positive integer".into()))?;
+                    if !(2..=100).contains(&parts) {
+                        return Err(ToolError::InvalidArgs("parts must be between 2 and 100".into()));
+                    }
+                    pdfcraft_engine::PageSplit::Vertical { parts }
+                }
+            }
+            "horizontal" => {
+                if let Some(ratio) = a.opt_num("ratio")? {
+                    pdfcraft_engine::PageSplit::HorizontalRatio(ratio)
+                } else {
+                    let parts = usize::try_from(a.opt_int("parts")?.unwrap_or(2))
+                        .map_err(|_| ToolError::InvalidArgs("parts must be a positive integer".into()))?;
+                    if !(2..=100).contains(&parts) {
+                        return Err(ToolError::InvalidArgs("parts must be between 2 and 100".into()));
+                    }
+                    pdfcraft_engine::PageSplit::Horizontal { parts }
+                }
+            }
+            "grid" => {
+                let rows =
+                    usize::try_from(a.opt_int("rows")?.unwrap_or(2)).map_err(|_| ToolError::InvalidArgs("rows must be a positive integer".into()))?;
+                let columns = usize::try_from(a.opt_int("columns")?.unwrap_or(2))
+                    .map_err(|_| ToolError::InvalidArgs("columns must be a positive integer".into()))?;
+                let total = rows.checked_mul(columns).ok_or_else(|| ToolError::InvalidArgs("grid dimensions overflow".into()))?;
+                if rows < 1 || columns < 1 || rows > 50 || columns > 50 || total < 2 {
+                    return Err(ToolError::InvalidArgs("rows and columns must be between 1 and 50, with at least 2 total cells".into()));
+                }
+                pdfcraft_engine::PageSplit::Grid { rows, columns }
+            }
+            other => return Err(ToolError::InvalidArgs(format!("unsupported split direction: {other}"))),
+        };
+        self.apply(a, Edit::SplitPages { pages, split })
     }
 }

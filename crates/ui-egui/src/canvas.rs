@@ -839,6 +839,8 @@ pub enum ViewAction {
     Save,
     Extract,
     Split,
+    /// Split page into parts (de-imposition, vertical/horizontal/grid).
+    SplitPages,
     /// Split before each selected page: opens Split on that mode.
     SplitBeforeSelected,
     /// Copy the selected pages (Cut also deletes them).

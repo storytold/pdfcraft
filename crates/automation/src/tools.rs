@@ -1184,6 +1184,20 @@ pub fn tools() -> Vec<ToolDef> {
         t("page_duplicate", "Duplicate pages", "Insert copies of pages so the first copy becomes page `at`, or after the last of them when `at` is left out (fonts and images are shared, not copied). Undoable.")
             .cmd("page.duplicate")
             .with(schema(json!({ "doc": doc(), "pages": pages("to duplicate"), "at": { "type": "integer", "minimum": 1 } }), &["doc", "pages"])),
+        t("page_split_parts", "Split pages into parts", "Split physical pages into multiple sub-pages (e.g. 50% vertical split for 2-up spreads, horizontal split, or grid). Undoable.")
+            .cmd("page.split_parts")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "pages": pages("to split (default: all)"),
+                    "direction": { "type": "string", "enum": ["vertical", "horizontal", "grid"] },
+                    "parts": { "type": "integer", "minimum": 2, "maximum": 100, "description": "Number of parts (default 2 for 50/50 split)" },
+                    "rows": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Number of rows (for grid mode)" },
+                    "columns": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Number of columns (for grid mode)" },
+                    "ratio": { "type": "number", "minimum": 0.0, "maximum": 1.0, "description": "Custom cut ratio (0.0..1.0)" }
+                }),
+                &["doc"],
+            )),
         t(
             "page_transition_set",
             "Set page transitions",

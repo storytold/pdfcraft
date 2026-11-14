@@ -137,6 +137,9 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             if row(ui, t, "scissors", tl!("Split"), Availability::Ready, false).clicked() {
                 act = Some(Act::View(ViewAction::Split));
             }
+            if row(ui, t, "columns-2", tl!("Split pages"), Availability::Ready, false).clicked() {
+                act = Some(Act::Command("page.split_parts"));
+            }
         });
         if row(ui, t, "hash", tl!("Bates numbering"), Availability::Ready, false).clicked() {
             act = Some(Act::Command("edit.bates"));

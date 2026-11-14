@@ -107,6 +107,8 @@ pub enum Dialog {
     About,
     Shortcuts,
     Split,
+    /// Organize pages ▸ Split page into parts.
+    SplitPages,
     /// Pages ▸ Number pages… (page labels).
     NumberPages,
     /// Print production ▸ Add printer marks.

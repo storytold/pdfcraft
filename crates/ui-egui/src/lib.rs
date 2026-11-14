@@ -82,7 +82,7 @@ pub use editing::download_mime_type;
 /// bar, tab strip and notice bars adapt below the old 820 minimum (#1913).
 pub const MIN_WINDOW_SIZE: [f32; 2] = [480.0, 520.0];
 pub use editing::{CloseRequest, SaveTarget};
-pub use files::{ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPlan};
+pub use files::{ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPagesDraft, SplitPagesLayout, SplitPlan};
 pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore, default_dictionary_dir};
 use theme::{ThemeKind, ThemePreference};
 pub use workflows::ocr_verify::{OcrVerify, Phase};
@@ -605,6 +605,7 @@ pub struct PdfCraftApp {
     pub export_dir_override: Option<String>,
     /// Split dialog settings.
     pub split_draft: SplitDraft,
+    pub split_pages_draft: SplitPagesDraft,
     pub extract_draft: ExtractDraft,
     pub rotate_draft: RotateDraft,
     /// Summarize Comments: sort order.

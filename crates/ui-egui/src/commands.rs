@@ -467,6 +467,7 @@ impl PdfCraftApp {
                 self.dialog = Some(Dialog::RotatePages);
             }
             "page.split" => self.dialog = Some(Dialog::Split),
+            "page.split_parts" => self.dialog = Some(Dialog::SplitPages),
             _ => return None,
         }
         Some(true)

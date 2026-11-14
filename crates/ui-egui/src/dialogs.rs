@@ -192,6 +192,11 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
                 return false;
             }
         }
+        Dialog::SplitPages => {
+            if !dialog_split_pages(ui, app, req) {
+                return false;
+            }
+        }
         Dialog::ReplacePages => {
             if !dialog_replace_pages(ui, app, req) {
                 return false;
@@ -966,6 +971,48 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
             PropsTab::SpaceAudit => {}
         });
     });
+    true
+}
+
+/// `Dialog::SplitPages` content.
+fn dialog_split_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, _req: &mut Pending) -> bool {
+    ui.label(egui::RichText::new(tl!("Split page into parts")).font(theme::semibold(18.0)));
+    ui.add_space(4.0);
+    ui.label(tl!("Divide pages into separate sub-pages (e.g. 2-up spreads into single pages)."));
+    ui.add_space(8.0);
+
+    let Some((vi, id)) = app.active_ids() else { return false };
+    let n = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
+    let selected_count = app.views[vi].selected.len();
+    let draft = &mut app.split_pages_draft;
+
+    use crate::SplitPagesLayout as L;
+    widgets::radio_value(ui, &mut draft.layout, L::Vertical2, tl!("Vertical split: 50% left & right (2 parts)"));
+    widgets::radio_value(ui, &mut draft.layout, L::Horizontal2, tl!("Horizontal split: 50% top & bottom (2 parts)"));
+    widgets::radio_value(ui, &mut draft.layout, L::Grid4, tl!("4 parts: 2×2 grid (top-left, top-right, bottom-left, bottom-right)"));
+    widgets::radio_value(ui, &mut draft.layout, L::CustomRatio, tl!("Custom vertical split ratio"));
+
+    if draft.layout == L::CustomRatio {
+        ui.horizontal(|ui| {
+            ui.add_space(24.0);
+            ui.label(tl!("Left width:"));
+            ui.add(egui::Slider::new(&mut draft.ratio_percent, 10.0..=90.0).suffix("%"));
+        });
+    }
+
+    ui.add_space(10.0);
+    ui.separator();
+    ui.add_space(6.0);
+
+    ui.label(egui::RichText::new(tl!("Apply to:")).font(theme::semibold(13.0)));
+    let sel_text = if selected_count > 0 {
+        crate::i18n::fmt(tl!("Selected pages ({count} pages)"), &[("count", &selected_count.to_string())])
+    } else {
+        tl!("Current page").to_string()
+    };
+    widgets::radio_value(ui, &mut draft.all_pages, false, sel_text);
+    widgets::radio_value(ui, &mut draft.all_pages, true, crate::i18n::fmt(tl!("All pages ({n} pages)"), &[("n", &n.to_string())]));
+
     true
 }
 
@@ -1817,6 +1864,31 @@ fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: 
             } else if dialog == Dialog::Split {
                 if ui.add_enabled_ui(req.split_ready.is_some(), |ui| widgets::pill_button(ui, tl!("Split"), true)).inner.clicked() {
                     req.split_now = req.split_ready.clone();
+                    req.close = true;
+                }
+                if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                    req.close = true;
+                }
+            } else if dialog == Dialog::SplitPages {
+                if widgets::pill_button(ui, tl!("Split Pages"), true).clicked() {
+                    let draft = &app.split_pages_draft;
+                    if let Some((vi, _)) = app.active_ids() {
+                        let n = app.views[vi].page_count();
+                        let targets = if draft.all_pages {
+                            (0..n).collect()
+                        } else {
+                            app.views[vi].target_pages()
+                        };
+                        let split = match draft.layout {
+                            crate::SplitPagesLayout::Vertical2 => pdfcraft_engine::PageSplit::Vertical { parts: 2 },
+                            crate::SplitPagesLayout::Horizontal2 => pdfcraft_engine::PageSplit::Horizontal { parts: 2 },
+                            crate::SplitPagesLayout::Grid4 => pdfcraft_engine::PageSplit::Grid { rows: 2, columns: 2 },
+                            crate::SplitPagesLayout::CustomRatio => {
+                                pdfcraft_engine::PageSplit::VerticalRatio(draft.ratio_percent / 100.0)
+                            }
+                        };
+                        app.apply_edit(pdfcraft_engine::Edit::SplitPages { pages: targets, split });
+                    }
                     req.close = true;
                 }
                 if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {

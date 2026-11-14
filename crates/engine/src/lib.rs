@@ -84,7 +84,7 @@ pub use stamp_preview::{CommentLayer, StampPreview};
 pub use text_preview::{TextEditPreview, UnmarkedPages};
 
 pub use pdfcraft_organize::{
-    BoxSpec, FieldConflicts, MAX_IMPORT_BOOKMARKS, OutlineNode, OutlineTree, PageBox, SplitBy, Transition, TransitionSpec, mime_for_name,
+    BoxSpec, FieldConflicts, MAX_IMPORT_BOOKMARKS, OutlineNode, OutlineTree, PageBox, PageSplit, SplitBy, Transition, TransitionSpec, mime_for_name,
     split_ranges, unmapped as outline_unmapped, view_arity as outline_view_arity,
 };
 
