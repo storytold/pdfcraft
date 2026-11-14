@@ -238,6 +238,7 @@ impl PdfCraftApp {
             "app.preferences" => self.dialog = Some(Dialog::Preferences),
             "protect.remove_hidden" => self.open_remove_hidden(),
             "print.dialog" => self.open_print(),
+            "print.batch" => self.open_batch_print(),
             "optimize.advanced" => self.dialog = Some(Dialog::Optimize),
             "doc.compare" => self.dialog = Some(Dialog::CompareFiles),
             "standards.pdfa" => {

@@ -431,6 +431,7 @@ pub struct PdfCraftApp {
     /// Current Properties Default last took from typed text (none at first).
     pub fill_text_default: fill_sign::TextBorder,
     pub dialog: Option<Dialog>,
+    pub batch_print: dialogs::batch_print::BatchPrintDraft,
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
     pub(crate) updates: updates::Updates,
     /// Lists the Print dialog's printers in the background (the desktop app sets it; see

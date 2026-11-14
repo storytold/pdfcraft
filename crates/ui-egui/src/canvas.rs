@@ -3218,7 +3218,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         return;
     }
     // The print dialog queues its own rasters later in the frame. Closing it drops them.
-    if app.dialog != Some(crate::Dialog::Print) {
+    if app.dialog != Some(crate::Dialog::Print) && app.dialog != Some(crate::Dialog::BatchPrint) {
         app.views[index].print_pages.clear();
     }
     // The Prepare a form panel is open (or a field tool is picked): fields are edited, not filled.
