@@ -10793,16 +10793,15 @@ fn a_complete_update_reads_as_before() {
 
 /// A file with data after `%%EOF` that holds no object header (a web page glued to a served file)
 /// is read through its table by the renderer, as before: the file has a stale copy of its page that
-/// only a rebuild would show. The model, finding no `startxref` in its footer window, rebuilds from
-/// object headers and takes that stale 999 x 999 copy, so here the two still differ, as they did
-/// before this change.
+/// only a rebuild would show. The model reads the same table, finding the footer before its
+/// footer window, so the two agree on the page and neither shows the stale 999 x 999 copy.
 #[test]
 fn trailing_data_without_objects_reads_as_before() {
     let mut junk = one_page_file_with(true);
     junk.extend_from_slice(b"<html><p>1 0 objection: 12 0 endobj, 3 0obj, 4 0 obj_name, 4294967296 0 obj</p>");
     junk.extend(std::iter::repeat_n(b' ', 5000));
     junk.extend_from_slice(b"</html>\n");
-    assert_eq!(model_first_media_box(&junk), [0.0, 0.0, 999.0, 999.0], "the model's rebuilt page");
+    assert_eq!(model_first_media_box(&junk), [0.0, 0.0, 200.0, 100.0], "the model reads the table too");
     let ((count, size), model) = renderer_and_model_pages(junk);
     assert_eq!((count, size, model), (1, (200, 100), 1));
 }

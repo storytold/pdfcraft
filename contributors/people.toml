@@ -194,3 +194,8 @@ sync_github_name = false
 
 [people.enriquemelzer-bit]
 sync_github_name = true
+
+[people.tsw2k]
+real_name = "Ilya Balashov"
+display_name = "Ilya Balashov"
+sync_github_name = false
