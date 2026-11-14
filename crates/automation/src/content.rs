@@ -297,7 +297,14 @@ impl Automation {
         let mut out = self.apply(a, Edit::UpdateContent { page, index, content })?;
         if let Some((name, bytes)) = replace {
             let index = now(self)?.unwrap_or(index);
+            // What the first edit warned about still holds after the second.
+            let earlier = out.get("warnings").and_then(Value::as_array).cloned().unwrap_or_default();
             out = self.apply(a, Edit::ReplaceImage { page, index, name, bytes: std::sync::Arc::new(bytes) })?;
+            if !earlier.is_empty() {
+                let mut warnings = earlier;
+                warnings.extend(out.get("warnings").and_then(Value::as_array).cloned().unwrap_or_default());
+                out["warnings"] = Value::Array(warnings);
+            }
         }
         let doc = self.doc(a)?;
         if let Some(now) = now(self)? {

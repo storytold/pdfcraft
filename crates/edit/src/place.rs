@@ -354,9 +354,14 @@ pub(crate) fn place_object(
     mark: impl FnOnce(&mut Document) -> ObjRef,
 ) -> Result<ObjRef, EditError> {
     let mut list = contents(doc, page)?;
-    // The behind-marks at the start: backgrounds in the order added, then watermarks.
+    // The behind-marks at the start: backgrounds in the order added, then watermarks, and the
+    // added images put behind the content. A wrapper starts after them, so an image put behind
+    // later still goes over the earlier ones.
     let behind_kinds = [MarkKind::Background.tag(), MarkKind::Watermark.tag()];
-    let behind_marks = list.iter().take_while(|o| stream_tag(doc, o).is_some_and(|t| behind_kinds.contains(&t.as_str()))).count();
+    let behind_marks = list
+        .iter()
+        .take_while(|o| stream_tag(doc, o).is_some_and(|t| behind_kinds.contains(&t.as_str())) || crate::added::behind_item(doc, o))
+        .count();
     let wrap = if behind {
         None
     } else {

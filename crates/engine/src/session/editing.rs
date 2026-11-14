@@ -744,6 +744,31 @@ fn take_xfa_output(doc: &mut Document, out: js::JsOutput, ran_away: bool) {
     }
 }
 
+/// How deep [`backdrop_edits`] looks into batches within batches.
+const BACKDROP_BATCH_DEPTH: usize = 16;
+
+/// Whether `edit` (or a batch in it) removes backgrounds, and the pages (ascending, each once)
+/// where it may take an image behind the content away.
+fn backdrop_edits(edit: &Edit, depth: usize, removes_background: &mut bool, pages: &mut Vec<usize>) {
+    match edit {
+        Edit::RemoveMarks { kind: MarkKind::Background } => *removes_background = true,
+        Edit::DeleteContent { page, .. }
+        | Edit::UpdateContent { page, .. }
+        | Edit::EditPageImage { page, change: crate::ImageEdit::Delete, .. }
+        | Edit::DeleteObjects { page, .. } => {
+            if let Err(at) = pages.binary_search(page) {
+                pages.insert(at, *page);
+            }
+        }
+        Edit::Batch { edits, .. } if depth < BACKDROP_BATCH_DEPTH => {
+            for e in edits {
+                backdrop_edits(e, depth.saturating_add(1), removes_background, pages);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// What `edit`, taking `prev` to `next`, wants said: never silent (AGENTS.md §4).
 fn edit_notices(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfcraft_cos::Document) -> Vec<EditNotice> {
     // What it drew with `?` (a value or comment text its font can't draw, stored as typed).
@@ -752,26 +777,30 @@ fn edit_notices(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfcraft_cos:
     } else {
         Vec::new()
     };
-    // Pages whose own white backdrop Remove background couldn't turn back on.
-    if matches!(edit, Edit::RemoveMarks { kind: MarkKind::Background }) {
+    // Pages whose own white backdrop Remove background couldn't turn back on, also when a batch
+    // removed it.
+    let mut removes_background = false;
+    let mut image_pages = Vec::new();
+    backdrop_edits(edit, 0, &mut removes_background, &mut image_pages);
+    if removes_background {
         let pages = guard(|| pdfcraft_edit::backdrops_left_off(next)).unwrap_or_default();
         if !pages.is_empty() {
             notices.push(EditNotice::BackdropsLeftOff { pages });
         }
     }
-    // The page whose backdrop an image behind the content turned off, when deleting the image
-    // (here, with the image tools or among other objects) or bringing it to the top couldn't turn
-    // it back on. Cropping or arranging it with the image tools makes it page content drawn
-    // before the backdrop, which then stays off on purpose. Only when this edit left it off: a page
-    // left off before is not news.
-    if let Edit::DeleteContent { page, .. }
-    | Edit::UpdateContent { page, .. }
-    | Edit::EditPageImage { page, change: crate::ImageEdit::Delete, .. }
-    | Edit::DeleteObjects { page, .. } = edit
-    {
-        let left = guard(|| !pdfcraft_edit::backdrop_left_off(prev, *page) && pdfcraft_edit::backdrop_left_off(next, *page)).unwrap_or(false);
-        if left {
-            notices.push(EditNotice::ImageBackdropsLeftOff { pages: vec![*page] });
+    // The pages whose backdrop an image behind the content turned off, when deleting the image
+    // (with Add content, the image tools or among other objects) or bringing it to the top
+    // couldn't turn it back on. Cropping or arranging it with the image tools makes it page
+    // content drawn before the backdrop, which then stays off on purpose. Only the pages this edit
+    // left off: a page left off before is not news.
+    // A batch that also removed backgrounds has named every page left off already.
+    if !removes_background && !image_pages.is_empty() {
+        let pages: Vec<usize> = guard(|| {
+            image_pages.iter().copied().filter(|&p| !pdfcraft_edit::backdrop_left_off(prev, p) && pdfcraft_edit::backdrop_left_off(next, p)).collect()
+        })
+        .unwrap_or_default();
+        if !pages.is_empty() {
+            notices.push(EditNotice::ImageBackdropsLeftOff { pages });
         }
     }
     notices

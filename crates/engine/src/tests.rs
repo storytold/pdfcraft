@@ -4356,6 +4356,22 @@ fn deleting_an_image_behind_the_text_names_the_pages_whose_backdrop_stays_off() 
     assert!(s.get(id).unwrap().edit_notices.is_empty());
 }
 
+/// The same notices when the edit comes inside a batch: deleting an image behind the text, and
+/// removing backgrounds.
+#[test]
+fn backdrop_notices_come_from_edits_inside_a_batch_too() {
+    let mut s = Session::new();
+    let tag = format!("<< /Index 6 /Op (f) /Before <{}> >>", "00".repeat(32));
+    let id = s.open("a.pdf", None, Arc::new(white_page_pdf(Some(&tag))), None).unwrap();
+    let batch = |e: Edit| Edit::Batch { label: "Batch".into(), edits: vec![Edit::Batch { label: "Inner".into(), edits: vec![e] }] };
+    s.apply(id, batch(Edit::DeleteContent { page: 0, index: 0 })).unwrap();
+    assert_eq!(s.get(id).unwrap().edit_notices, [EditNotice::ImageBackdropsLeftOff { pages: vec![0] }]);
+    let tag = format!("<< /Index 2 /Op (f) /Before <{}> >>", "00".repeat(32));
+    let id = s.open("b.pdf", None, Arc::new(backdrop_pdf(Some(&tag))), None).unwrap();
+    s.apply(id, batch(Edit::RemoveMarks { kind: MarkKind::Background })).unwrap();
+    assert_eq!(s.get(id).unwrap().edit_notices, [EditNotice::BackdropsLeftOff { pages: vec![0] }]);
+}
+
 /// Update previews its marks on the page without the ones it replaces: a yellow background
 /// updated to blue isn't previewed as blue over yellow, nor a new watermark over the old one.
 /// The other kinds of mark and the page's own content stay, every page is prepared at once (the

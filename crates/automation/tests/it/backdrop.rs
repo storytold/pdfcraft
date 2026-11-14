@@ -329,3 +329,49 @@ fn an_image_behind_the_text_shows_on_a_page_that_paints_its_own_white_backdrop()
     assert_eq!(r["index"].as_u64(), Some(3), "{r}");
     assert_eq!(on_page_2(&mut a)[2]["behind"].as_bool(), Some(false));
 }
+
+/// One 200 × 100 page whose white backdrop an image behind the text (object 5) turned off, and
+/// whose content changed since (object 6's tag no longer matches what comes before the fill), so
+/// the backdrop can't be turned back on.
+fn behind_left_off_pdf() -> Vec<u8> {
+    let tag = format!("<< /Index 2 /Op (f) /Before <{}> >>", "00".repeat(32));
+    let content = "1 g 0 0 200 100 re n 0 g BT /F1 12 Tf 10 50 Td (Hi) Tj ET";
+    let draw = "q 200 0 0 100 0 0 cm /PCIm0 Do Q";
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 100] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents [5 0 R 6 0 R] /Resources << /Font << /F1 4 0 R >> /XObject << /PCIm0 7 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        format!(
+            "<< /PCMark /Added /PCAdded << /Kind /Image /Image 7 0 R /Rect [0 0 200 100] /Behind true >> /Length {} >>\nstream\n{draw}\nendstream",
+            draw.len()
+        ),
+        format!("<< /PCBackdrop {tag} /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length 7 >>\nstream\n0000FF>\nendstream".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn bringing_an_image_to_the_top_and_replacing_it_still_warns_about_the_backdrop() {
+    let dir = named_workdir("behind-left-off");
+    std::fs::write(dir.join("left.pdf"), behind_left_off_pdf()).unwrap();
+    std::fs::write(dir.join("blue.png"), blue_png()).unwrap();
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "left.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "behind": false, "image": "blue.png" }));
+    let warnings = r["warnings"].as_array().cloned().unwrap_or_default();
+    assert!(warnings.iter().any(|w| w.as_str().is_some_and(|w| w.contains("after an image was put behind the text"))), "{r}");
+}

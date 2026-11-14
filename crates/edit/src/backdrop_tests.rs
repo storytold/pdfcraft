@@ -697,3 +697,23 @@ fn a_scanned_page_keeps_its_picture_over_an_image_behind_the_text() {
     assert_eq!(kinds(&doc), ["Added", "page"], "the picture can't be turned off");
     assert_eq!(page_backdrop(&doc, 0).unwrap(), Some(Backdrop::Image), "so it still hides the image");
 }
+
+#[test]
+fn images_behind_the_text_keep_their_order_when_an_item_on_top_wraps_the_page() {
+    // The page leaves a `q` open, so an item on top wraps the content after the behind-marks.
+    let mut doc = page(&["q 0 g 10 10 50 50 re f"]);
+    let a = crate::add_content(&mut doc, 0, &image(true)).unwrap();
+    crate::add_content(&mut doc, 0, &image(false)).unwrap();
+    crate::add_content(&mut doc, 0, &image(true)).unwrap();
+    assert_eq!(a, 0);
+    assert_eq!(all_kinds(&doc), ["Added", "Added", "Wrap", "page", "Wrap", "Added"], "the wrapper starts after both images behind");
+    let behind: Vec<bool> = crate::list_added(&doc).iter().map(|x| matches!(&x.content, crate::Content::Image(i) if i.behind)).collect();
+    assert_eq!(behind, [true, true, false]);
+    // The later image behind is the second: it paints over the first.
+    let objs: Vec<ObjRef> = crate::list_added(&doc).iter().map(|x| x.obj).collect();
+    let list = match pdfcraft_model::pages(&doc)[0].dict.get(b"Contents").map(|c| doc.resolve(c)).as_deref() {
+        Some(Object::Array(l)) => l.clone(),
+        _ => vec![],
+    };
+    assert_eq!(list.first().and_then(Object::as_ref), Some(objs[0]), "the first image behind still comes first");
+}
