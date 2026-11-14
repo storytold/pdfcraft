@@ -12104,6 +12104,81 @@ fn exporting_office_keeps_dotted_leader_entries_as_paragraphs() {
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "reading order: {html}");
 }
 
+#[test]
+fn docx_converts_combines_and_inserts_without_changing_the_source() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("source.pdf", None, Arc::new(fixture(2)), None).unwrap();
+    let source = Arc::new(s.get(id).unwrap().export_office(compare::OfficeFormat::Docx));
+    let original = source.to_vec();
+    // The frame thread's conversion is always the native one, LibreOffice or not.
+    let (kind, pdf) = s.convert_to_pdf_inline("Report.DOCX", &source).unwrap();
+    assert_eq!(kind, SourceKind::Office);
+    assert_eq!(source.as_slice(), original);
+    let (native, report) =
+        crate::sources::office_pdf_with(false, Some(1_700_000_000), "Report.DOCX", &source, crate::sources::OfficeRoute::Any).unwrap();
+    assert_eq!(report.map(|r| r.pages), Some(2), "without LibreOffice the native converter reports what it did");
+    assert_eq!(native, pdf, "the same conversion on and off the frame thread");
+    let converted = s.open_new("Report.pdf", pdf.clone()).unwrap();
+    let d = s.get(converted).unwrap();
+    assert!(d.dirty && d.path.is_none());
+    let text = page_texts(&s, converted);
+    assert!(text[0].contains("Page 1") && text[1].contains("Page 2"), "{text:?}");
+    let (pages, inserted) = s.insert_source_inline(id, "Report.docx", &source).unwrap();
+    assert_eq!(pages, 2);
+    s.apply(
+        id,
+        Edit::InsertPagesFrom { name: "Report.docx".into(), bytes: inserted, pages: Some(vec![1]), at: 1, field_conflicts: FieldConflicts::Rename },
+    )
+    .unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 3);
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+    s.redo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 3);
+    let converted = s.as_pdf_inline("Report.docx", &source).unwrap();
+    let combined = s.combine_ranges(&[("Word".into(), converted, None), ("PDF".into(), Arc::new(fixture(1)), None)]).unwrap();
+    let combined = s.open_new("combined.pdf", combined).unwrap();
+    assert_eq!(s.get(combined).unwrap().info.pages.len(), 3);
+    assert_eq!(source.as_slice(), original);
+    assert!(s.convert_to_pdf_inline("broken.docx", &Arc::new(b"PK\x03\x04".to_vec())).unwrap_err().to_string().contains("broken.docx"));
+}
+
+/// Which converter an Office document gets: LibreOffice where it is installed and the caller may
+/// wait for it, the native converter for Word, PowerPoint and Excel files otherwise, and for any
+/// other Office format a reason that says what to do.
+#[test]
+fn office_documents_go_to_libreoffice_or_the_native_converter() {
+    use crate::sources::{OfficeRoute, office_pdf_with};
+    let s = Session::new();
+    let text = s.create_from_text("t", "Quarterly report").unwrap();
+    let mut s = Session::new();
+    let id = s.open("t.pdf", None, text, None).unwrap();
+    let docx = Arc::new(s.get(id).unwrap().export_office(compare::OfficeFormat::Docx));
+    let ole = Arc::new(vec![0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0, 0]);
+    // Without LibreOffice, a Word file converts natively, with its report.
+    let (pdf, report) = office_pdf_with(false, None, "Report.docx", &docx, OfficeRoute::Any).unwrap();
+    assert!(pdf.starts_with(b"%PDF-") && report.is_some());
+    // On the frame thread too, whether LibreOffice is installed or not.
+    assert!(office_pdf_with(true, None, "Report.docx", &docx, OfficeRoute::Native).unwrap().1.is_some());
+    // An older binary Word file needs LibreOffice: on the frame thread it is refused, pointing to
+    // File ▸ Open; elsewhere, without LibreOffice, the error says LibreOffice is missing.
+    for libreoffice in [false, true] {
+        let err = office_pdf_with(libreoffice, None, "Old.doc", &ole, OfficeRoute::Native).unwrap_err().to_string();
+        assert!(
+            err.contains("only Word, PowerPoint and Excel files (.docx, .pptx, .xlsx) can be added here") && err.contains("File ▸ Open"),
+            "{err}"
+        );
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if pdfcraft_create::libreoffice().is_none() {
+        let err = office_pdf_with(false, None, "Old.doc", &ole, OfficeRoute::Any).unwrap_err().to_string();
+        assert!(err.contains("LibreOffice, which isn't installed"), "{err}");
+    }
+    // A password-protected Word file (stored as an OLE compound file) says so natively.
+    let err = office_pdf_with(false, None, "Locked.docx", &ole, OfficeRoute::Any).unwrap_err().to_string();
+    assert!(err.contains("password-protected"), "{err}");
+}
+
 /// `run_javascript` runs an XFA click script only for a push button, as the app does: a text
 /// field with a click event of its own, named as the target, asks to open no attached file.
 #[test]
@@ -15491,8 +15566,8 @@ fn calculate_now_simple_calculation_reads_formatted_values_and_groups_as_the_nat
     assert_eq!(total(&s), ["3244.75"]);
 }
 
-/// A Word document converts through LibreOffice when it is installed; without it, the error
-/// says what is missing rather than calling the file a broken PDF.
+/// A Word document converts through LibreOffice when it is installed, and natively without it;
+/// a conversion that fails says why rather than calling the file a broken PDF.
 #[test]
 fn office_documents_convert_through_libreoffice_or_explain_why_not() {
     let mut s = Session::new();
@@ -15516,22 +15591,25 @@ fn office_documents_convert_through_libreoffice_or_explain_why_not() {
     );
 }
 
-/// The frame thread never waits for LibreOffice: Insert, Combine and Create Multiple refuse an
-/// Office document and point to File ▸ Open, while images and text still convert there.
+/// The frame thread never waits for LibreOffice: Insert, Combine and Create Multiple convert a
+/// Word, PowerPoint or Excel file natively, refuse other Office formats pointing to File ▸ Open,
+/// and still convert images and text there.
 #[test]
-fn inline_conversions_refuse_office_documents_without_running_libreoffice() {
+fn inline_conversions_never_run_libreoffice() {
     let s = Session::new();
-    let docx = Arc::new(b"PK\x03\x04\x14\x00".to_vec());
-    for err in
-        [s.convert_to_pdf_inline("Report.docx", &docx).map(|_| ()).unwrap_err(), s.as_pdf_inline("Report.docx", &docx).map(|_| ()).unwrap_err()]
-    {
+    let odt = Arc::new(b"PK\x03\x04\x14\x00".to_vec());
+    for err in [s.convert_to_pdf_inline("Notes.odt", &odt).map(|_| ()).unwrap_err(), s.as_pdf_inline("Notes.odt", &odt).map(|_| ()).unwrap_err()] {
         assert_eq!(
             err,
             EditError::Source(
-                "Report.docx: Word, Excel and PowerPoint files can't be added here yet; open it with File ▸ Open, which converts it to a PDF".into()
+                "Notes.odt: only Word, PowerPoint and Excel files (.docx, .pptx, .xlsx) can be added here; open this one with File ▸ Open, which converts it with LibreOffice".into()
             )
         );
     }
+    // A broken Word package fails natively, naming what is wrong, rather than waiting for
+    // LibreOffice to fail on it.
+    let err = s.as_pdf_inline("Report.docx", &odt).unwrap_err().to_string();
+    assert!(err.contains("Report.docx") && err.contains("truncated"), "{err}");
     assert_eq!(s.convert_to_pdf_inline("notes.txt", &Arc::new(b"hello".to_vec())).unwrap().0, SourceKind::Text);
     assert!(s.as_pdf_inline("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
 }

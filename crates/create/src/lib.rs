@@ -1,4 +1,4 @@
-//! pdfcraft-create — create PDFs from nothing, images, text or (through LibreOffice) Office documents (L4). See the README.
+//! pdfcraft-create — create PDFs from nothing, images, text or Office documents (through LibreOffice, or natively for Office Open XML) (L4). See the README.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -9,9 +9,11 @@ mod text_font;
 mod upright_image;
 pub use extract::{ExtractedImage, ImageExport, extract_images, image_file, image_file_within};
 mod office;
+mod ooxml;
 #[cfg(not(target_arch = "wasm32"))]
 pub use office::libreoffice;
 pub use office::{OFFICE_EXTENSIONS, is_office, office_to_pdf};
+pub use ooxml::{OOXML_EXTENSIONS, OfficeKind, OfficeReport, from_office, is_ooxml};
 use pdfcraft_fonts::wrap_with;
 use text_font::TextFont;
 
@@ -758,13 +760,14 @@ fn tiff_pages_within(name: &str, bytes: &[u8], wanted: usize, budget: usize) -> 
     Ok(out)
 }
 
-/// What a file picked for Create is, by its bytes (and, for text, its name).
+/// What a file picked for Create is, by its bytes (and, for text and Office files, its name).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceKind {
     Pdf,
     Image,
     Text,
-    /// A Word, Excel, PowerPoint or OpenDocument file, converted through LibreOffice.
+    /// A Word, Excel, PowerPoint or OpenDocument file: converted through LibreOffice when it is
+    /// installed, and otherwise, for Office Open XML ([`is_ooxml`]), by [`from_office`].
     Office,
 }
 
@@ -775,7 +778,7 @@ pub const IMAGE_EXTENSIONS: [&str; 11] = ["png", "jpg", "jpeg", "tif", "tiff", "
 pub const TEXT_EXTENSIONS: [&str; 2] = ["txt", "text"];
 
 /// File extensions Create converts to PDF itself: [`IMAGE_EXTENSIONS`] and [`TEXT_EXTENSIONS`]
-/// (Office documents go through LibreOffice, [`OFFICE_EXTENSIONS`]).
+/// (Office documents go through LibreOffice or [`from_office`], [`OFFICE_EXTENSIONS`]).
 pub const CONVERTIBLE: [&str; 13] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "pcx", "txt", "text"];
 
 /// A PCX file: its manufacturer byte, a version (1 was never used), run-length coding and 1 or 8

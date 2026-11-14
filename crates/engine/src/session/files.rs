@@ -1,15 +1,24 @@
 use super::{
     Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hairlines, HairlinesFixed, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI,
-    OptimizeReport, SaveOptions, Session, SourceKind, SplitPart, decode_text, guard, office_to_pdf, open_source, open_source_with, optimize, print,
+    OptimizeReport, SaveOptions, Session, SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print,
     print_layer_states, print_raster, set_default_layer_state, source_kind, writable, write_full,
 };
 
 /// Whether a conversion may run LibreOffice for an Office document (seconds, in another
-/// process) or must refuse it because the caller is on the frame thread.
+/// process) or must convert it natively, or refuse it, because the caller is on the frame thread.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Office {
     Convert,
-    Refuse,
+    Inline,
+}
+
+impl Office {
+    fn route(self) -> crate::sources::OfficeRoute {
+        match self {
+            Office::Convert => crate::sources::OfficeRoute::Any,
+            Office::Inline => crate::sources::OfficeRoute::Native,
+        }
+    }
 }
 
 impl Session {
@@ -51,40 +60,49 @@ impl Session {
 
     /// Convert a file Create understands (an image, plain text or an Office document) to PDF
     /// bytes; a PDF is checked (it must open and allow copying pages) and returned as it is.
-    /// An Office document runs LibreOffice ([`office_to_pdf`]), which takes seconds: keep it off
-    /// the frame thread ([`Self::convert_to_pdf_inline`] there).
+    /// An Office document runs LibreOffice when it is installed ([`crate::office_to_pdf`]), which takes
+    /// seconds: keep it off the frame thread ([`Self::convert_to_pdf_inline`] there). Without
+    /// LibreOffice, a Word, PowerPoint or Excel file is converted natively.
     pub fn convert_to_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
+        self.convert(name, bytes, Office::Convert).map(|(kind, pdf, _)| (kind, pdf))
+    }
+
+    /// [`Self::convert_to_pdf`], with the report of a native Word, PowerPoint or Excel conversion
+    /// (what was approximated), for the caller to show.
+    pub fn convert_to_pdf_reported(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<crate::Converted, EditError> {
         self.convert(name, bytes, Office::Convert)
     }
 
     /// [`Self::convert_to_pdf`] for a caller on the frame thread, which must not wait seconds for
-    /// LibreOffice: an Office document is refused, pointing to File ▸ Open, which converts it in
-    /// the background.
+    /// LibreOffice: a Word, PowerPoint or Excel file is converted natively, and other Office
+    /// formats are refused, pointing to File ▸ Open, which converts them in the background.
     pub fn convert_to_pdf_inline(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
-        self.convert(name, bytes, Office::Refuse)
+        self.convert(name, bytes, Office::Inline).map(|(kind, pdf, _)| (kind, pdf))
     }
 
-    fn convert(&self, name: &str, bytes: &Arc<Vec<u8>>, office: Office) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
+    /// [`Self::convert_to_pdf_inline`], with the report of a Word, PowerPoint or Excel conversion
+    /// (what was approximated), for the caller to show.
+    pub fn convert_to_pdf_inline_reported(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<crate::Converted, EditError> {
+        self.convert(name, bytes, Office::Inline)
+    }
+
+    fn convert(&self, name: &str, bytes: &Arc<Vec<u8>>, office: Office) -> Result<crate::Converted, EditError> {
         let Some(kind) = source_kind(name, bytes) else {
             return Err(EditError::Source(format!(
                 "{name}: this file type can't be converted; use a PDF, an image, a .txt file or a Word, Excel or PowerPoint file"
             )));
         };
-        if kind == SourceKind::Office && office == Office::Refuse {
-            return Err(EditError::Source(format!(
-                "{name}: Word, Excel and PowerPoint files can't be added here yet; open it with File ▸ Open, which converts it to a PDF"
-            )));
-        }
         let title = name.rsplit_once('.').map_or(name, |(s, _)| s);
         // Image decoders read untrusted bytes: a panic in one must not take the app down.
         let created = guard(|| match kind {
-            SourceKind::Pdf => open_source(name, bytes).map(|_| bytes.clone()),
-            SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]),
-            SourceKind::Text => self.create_from_text(title, &decode_text(bytes)),
-            SourceKind::Office => office_to_pdf(name, bytes),
+            SourceKind::Pdf => open_source(name, bytes).map(|_| (bytes.clone(), None)),
+            SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]).map(|pdf| (pdf, None)),
+            SourceKind::Text => self.create_from_text(title, &decode_text(bytes)).map(|pdf| (pdf, None)),
+            SourceKind::Office => crate::sources::office_pdf(self.now(), name, bytes, office.route(), self.no_libreoffice),
         })
         .map_err(|_| EditError::Source(format!("{name}: the file could not be read")))?;
-        Ok((kind, created?))
+        let (pdf, report) = created?;
+        Ok((kind, pdf, report))
     }
 
     /// A file for Insert Pages into `dest`, as PDF bytes and its page count: an image, text or
@@ -96,16 +114,16 @@ impl Session {
         self.insert_source_with(dest, name, bytes, Office::Convert)
     }
 
-    /// [`Self::insert_source`] on the frame thread: Office documents are refused, as
-    /// [`Self::convert_to_pdf_inline`] refuses them. PDFs are still checked as the insert itself
+    /// [`Self::insert_source`] on the frame thread: Office documents are converted natively or
+    /// refused, as [`Self::convert_to_pdf_inline`] does. PDFs are still checked as the insert itself
     /// checks them (#5081).
     pub fn insert_source_inline(&self, dest: DocId, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(usize, Arc<Vec<u8>>), EditError> {
-        self.insert_source_with(dest, name, bytes, Office::Refuse)
+        self.insert_source_with(dest, name, bytes, Office::Inline)
     }
 
     fn insert_source_with(&self, dest: DocId, name: &str, bytes: &Arc<Vec<u8>>, office: Office) -> Result<(usize, Arc<Vec<u8>>), EditError> {
         if !matches!(source_kind(name, bytes), Some(SourceKind::Pdf)) {
-            let (_, pdf) = self.convert(name, bytes, office)?;
+            let (_, pdf, _) = self.convert(name, bytes, office)?;
             return Ok((self.page_count_of(name, &pdf)?, pdf));
         }
         let src = crate::sources::open_source_into(name, bytes, self.cos(dest)?)?;
@@ -126,10 +144,10 @@ impl Session {
         self.as_pdf_with(name, bytes, Office::Convert)
     }
 
-    /// [`Self::as_pdf`] on the frame thread: Office documents are refused, as
-    /// [`Self::convert_to_pdf_inline`] refuses them.
+    /// [`Self::as_pdf`] on the frame thread: Office documents are converted natively or refused,
+    /// as [`Self::convert_to_pdf_inline`] does.
     pub fn as_pdf_inline(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
-        self.as_pdf_with(name, bytes, Office::Refuse)
+        self.as_pdf_with(name, bytes, Office::Inline)
     }
 
     fn as_pdf_with(&self, name: &str, bytes: &Arc<Vec<u8>>, office: Office) -> Result<Arc<Vec<u8>>, EditError> {
@@ -138,7 +156,7 @@ impl Session {
             Some(SourceKind::Image | SourceKind::Text | SourceKind::Office) => false,
             None => name.to_ascii_lowercase().ends_with(".pdf"),
         };
-        if pdf { Ok(bytes.clone()) } else { self.convert(name, bytes, office).map(|(_, pdf)| pdf) }
+        if pdf { Ok(bytes.clone()) } else { self.convert(name, bytes, office).map(|(_, pdf, _)| pdf) }
     }
 
     /// Reduce File Size: Acrobat's defaults (colour and grey images above 225 ppi to 150 ppi,

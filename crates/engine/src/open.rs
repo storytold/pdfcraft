@@ -21,6 +21,7 @@ pub struct OpenContext {
     highlight: bool,
     captions: Arc<StatusCaptions>,
     xfa_time_scale: u32,
+    no_libreoffice: bool,
 }
 
 /// A fully prepared document that has not yet been registered in a session.
@@ -40,6 +41,14 @@ struct DocumentOpenData<'a> {
 }
 
 impl OpenContext {
+    /// Convert an Office document to new PDF bytes off the frame thread, as
+    /// [`Session::convert_to_pdf_reported`] does: through LibreOffice when it is installed, and
+    /// otherwise natively for Word, PowerPoint and Excel (Office Open XML) files, with the report
+    /// of what the native conversion approximated.
+    pub fn convert_office(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(Arc<Vec<u8>>, Option<crate::OfficeReport>), crate::EditError> {
+        crate::sources::office_pdf(self.now, name, bytes, crate::sources::OfficeRoute::Any, self.no_libreoffice)
+    }
+
     /// This context with Highlight fields `on`, which the document's scripts read as
     /// `app.runtimeHighlight` while it opens. A new document opens with the remembered setting
     /// while the session keeps the one of the document in front, which its scripts read.
@@ -72,6 +81,7 @@ impl Session {
             highlight: self.field_highlight,
             captions: self.captions.clone(),
             xfa_time_scale: self.xfa_time_scale.unwrap_or(1),
+            no_libreoffice: self.no_libreoffice,
         }
     }
 

@@ -256,7 +256,10 @@ impl PdfCraftApp {
         let (taken, refused): (Vec<_>, Vec<_>) = files.into_iter().partition(|f| takes(&f.name, &f.bytes));
         if !refused.is_empty() {
             let names: Vec<&str> = refused.iter().map(|f| f.name.as_str()).collect();
-            self.notify_fmt("Not added: {names}. Combine takes PDFs, images and text files.", &[("names", &names.join(", "))]);
+            self.notify_fmt(
+                "Not added: {names}. Combine takes PDFs, images, text files and Word, PowerPoint and Excel files.",
+                &[("names", &names.join(", "))],
+            );
         }
         if !taken.is_empty() {
             self.stage_combine_with(taken);
@@ -279,7 +282,21 @@ impl PdfCraftApp {
                 notes: Vec::new(),
             };
             let source = bytes.clone();
-            let (bytes, assessed) = match self.session.as_pdf_inline(&name, &bytes) {
+            let mut note = note;
+            let converted = if pdfcraft_engine::source_kind(&name, &bytes) == Some(pdfcraft_engine::SourceKind::Office) {
+                self.session.convert_to_pdf_inline_reported(&name, &bytes).map(|(_, pdf, report)| {
+                    if let Some(converted) = report.as_ref().and_then(|report| crate::office_note(&name, report)) {
+                        note = Some(match note.take() {
+                            Some(prior) => format!("{prior}; {converted}"),
+                            None => converted,
+                        });
+                    }
+                    pdf
+                })
+            } else {
+                self.session.as_pdf_inline(&name, &bytes)
+            };
+            let (bytes, assessed) = match converted {
                 Ok(pdf) => {
                     let assessed = assess(&pdf, None);
                     (pdf, assessed)

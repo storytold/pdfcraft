@@ -25,11 +25,28 @@ Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
 - `from_text_escaped(text, …)`: the same for reports PdfCraft generates from documents
   (comment summaries, compare reports): text Inter draws is set in it; otherwise the characters
   Helvetica can't draw are written as `[U+XXXX]` and the first line says so (`ESCAPED_NOTE`).
+- `from_office(name, bytes)`: a Word (`.docx`), PowerPoint (`.pptx`) or Excel (`.xlsx`) file, read
+  natively from its Office Open XML package (`ooxml/`): Word flows onto its sections' pages with
+  styles, lists, tables, images, headers and footers; PowerPoint gives one page per visible slide
+  with master and layout inheritance; Excel prints each visible sheet's used range with its number
+  formats. Text is set in the standard-14 faces chosen from each run's font family, with Turkish,
+  Central European, Baltic and Romanian letters drawn through a second encoding of the same face
+  (`ooxml/latin.rs`); characters they can't draw are written as `[U+XXXX]`. Returns the document and an `OfficeReport` counting
+  what was approximated (Word and PowerPoint charts and vector images become outlined boxes; Excel
+  charts and sheet pictures are left out). See
+  [Word, PowerPoint and Excel to PDF](../../docs/office-import.md).
 
-Every function returns a `pdfcraft_cos::Document`; the caller writes it.
+Every function returns a `pdfcraft_cos::Document`; the caller writes it. `from_office` also returns its
+`OfficeReport`, which the caller shows: it is the only record of what the conversion approximated.
+`is_ooxml(name, bytes)` says whether a file is one for `from_office` (an `OOXML_EXTENSIONS` name and
+a ZIP package, or an OLE compound file, as an encrypted package is stored, which `from_office`
+refuses with that reason).
 
-Office documents (`office.rs`) are the exception: PdfCraft doesn't read Word, Excel, PowerPoint,
-OpenDocument or RTF itself. `is_office(name, bytes)` recognises them (an `OFFICE_EXTENSIONS`
+Office documents also convert through LibreOffice (`office.rs`), which reads every Office format,
+including the older binary ones (`.doc`, `.xls`, `.ppt`), OpenDocument and RTF. The engine prefers it when it is installed and falls back to `from_office`
+for Office Open XML files where it isn't (the web build, a machine without LibreOffice), and on the
+frame thread, where waiting seconds for LibreOffice isn't allowed (Insert pages, Combine, Create
+from multiple files). `is_office(name, bytes)` recognises them (an `OFFICE_EXTENSIONS`
 name and an OLE, ZIP or RTF signature; `source_kind` reports `SourceKind::Office`), and
 `office_to_pdf(name, bytes)` returns PDF bytes made by an installed LibreOffice, run headless as
 a separate process: a private temporary folder (owner-only on Unix; the document is always

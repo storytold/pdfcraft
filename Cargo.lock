@@ -4415,7 +4415,9 @@ dependencies = [
 name = "pdfcraft-create"
 version = "0.21.1"
 dependencies = [
+ "chrono",
  "encoding_rs",
+ "flate2",
  "hayro-ccitt",
  "hayro-syntax",
  "image",
@@ -4425,6 +4427,7 @@ dependencies = [
  "pdfcraft-model",
  "pdfcraft-xfa",
  "png 0.18.1",
+ "roxmltree 0.21.2",
  "rustix 1.1.6",
  "thiserror 2.0.21",
  "tiff",

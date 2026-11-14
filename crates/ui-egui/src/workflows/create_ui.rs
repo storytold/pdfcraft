@@ -111,8 +111,15 @@ impl PdfCraftApp {
         if !matches!(pdfcraft_engine::source_kind(name, bytes), Some(SourceKind::Image | SourceKind::Text | SourceKind::Office)) {
             return None;
         }
-        let created = self.session.convert_to_pdf(name, &Arc::new(bytes.to_vec())).map(|(_, pdf)| pdf);
-        Some(self.open_converted_pdf(name, created.map_err(|e| e.to_string())))
+        let (created, report) = match self.session.convert_to_pdf_reported(name, &Arc::new(bytes.to_vec())) {
+            Ok((_, pdf, report)) => (Ok(pdf), report),
+            Err(e) => (Err(e.to_string()), None),
+        };
+        let opened = self.open_converted_pdf(name, created);
+        if let Some(note) = report.filter(|_| opened.is_ok()).and_then(|report| crate::office_note(name, &report)) {
+            self.notify(note);
+        }
+        Some(opened)
     }
 
     /// Open `created`, the PDF converted from the file `name`, as a new, unsaved tab named after
@@ -121,7 +128,7 @@ impl PdfCraftApp {
         self.open_created_bytes(&format!("{}.pdf", stem(name)), created)
     }
 
-    fn open_created_bytes(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>) -> Result<(), String> {
+    pub(crate) fn open_created_bytes(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>) -> Result<(), String> {
         let bytes = created?;
         let id = self.session.open_new(name, bytes).map_err(|e| e.to_string())?;
         // The reading-colours preference is app-wide: the newly created document starts with it.
