@@ -69,7 +69,6 @@ impl<'a> BitReader<'a> {
     }
 
     /// Array elements this reader may still decode.
-    #[cfg(test)]
     pub(crate) fn elements_left(&self) -> usize {
         self.budget.elements
     }
