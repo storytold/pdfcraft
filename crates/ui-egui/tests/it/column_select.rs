@@ -340,10 +340,10 @@ fn a_drag_down_text_beside_a_barcode_selects_only_the_text() {
 
 /// A drag after a double-click on "Qty", left and down into "Apple", takes both words whole, as
 /// rows: reading order has "Apple" first, but the rows start at the upper word. So does the drag
-/// the other way, from "Apple" up into "Qty".
+/// the other way, from "Apple" up into "Qty", and along one row, from "Name" into "Qty" and back.
 #[test]
 fn a_double_click_drag_back_across_the_columns_keeps_whole_words() {
-    for (from, to) in [(14, 6), (6, 14)] {
+    for (from, to, copied) in [(14, 6, "Qty\nApple"), (6, 14, "Qty\nApple"), (1, 14, "Name\tQty"), (14, 1, "Name\tQty")] {
         let mut h = harness(|_| {});
         let (from, to) = (glyph(&h, from), glyph(&h, to));
         for pressed in [true, false] {
@@ -352,6 +352,6 @@ fn a_double_click_drag_back_across_the_columns_keeps_whole_words() {
             h.run_steps(1);
         }
         drag(&mut h, from, to, Modifiers::NONE);
-        assert_eq!(text(&h).as_deref(), Some("Qty\nApple"));
+        assert_eq!(text(&h).as_deref(), Some(copied));
     }
 }
