@@ -403,7 +403,7 @@ fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool) -> Option<
     use egui::{Key, KeyboardShortcut, Modifiers};
     let pressed = |s: KeyboardShortcut| chords && ctx.input_mut(|i| i.consume_shortcut(&s));
     if pressed(KeyboardShortcut::new(Modifiers::COMMAND, Key::F)) {
-        view.open_find();
+        view.open_find_for_selection();
     }
     let cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND, k);
     // ⌘G / ⇧⌘G step through the matches from the find field too, as in Acrobat and Preview
