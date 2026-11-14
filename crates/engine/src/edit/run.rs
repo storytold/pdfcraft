@@ -230,6 +230,10 @@ pub(crate) struct EditCtx {
     pub(crate) xfa_datasets: Option<pdfcraft_cos::ObjRef>,
     /// A form script ran too long and was abandoned: the document's scripts go off.
     pub(crate) xfa_ran_away: bool,
+    /// What the form's calculations read: the document's record, copied when an edit first runs
+    /// the form's scripts, so an edit that runs none copies nothing and a failed edit leaves
+    /// the document's record as it was.
+    pub(crate) xfa_deps: Arc<xfa::CalcDeps>,
     /// An XFA enter or exit event whose scripts changed nothing: no edit to keep.
     pub(crate) xfa_unchanged: bool,
     /// What the XFA scripts' time limits are multiplied by ([`Session::with_xfa_time_scale`]).
@@ -303,6 +307,7 @@ impl EditCtx {
             xfa_out: Default::default(),
             xfa_datasets: None,
             xfa_ran_away: false,
+            xfa_deps: Arc::default(),
             xfa_unchanged: false,
             xfa_time_scale: 1,
             xfa_removed: Vec::new(),
@@ -758,11 +763,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::XfaEvent { som, activity } => {
             let tpl = cx.xfa.clone().ok_or_else(|| EditError::Invalid("this is not a laid-out XFA form, or JavaScript is off".into()))?;
             let highlight = cx.highlight();
+            let deps = Arc::make_mut(&mut cx.xfa_deps);
             let mut run = xfa::XfaRun {
                 page_count: cx.pages,
                 out: &mut cx.xfa_out,
                 datasets: cx.xfa_datasets,
                 ran_away: false,
+                deps,
                 highlight,
                 time_scale: cx.xfa_time_scale,
             };

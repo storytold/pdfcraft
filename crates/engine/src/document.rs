@@ -9,7 +9,7 @@ use crate::history::Editor;
 use crate::{
     CalculationOrder, CheckStyle, DocId, Edit, EditError, EditableObject, FormFieldKind, Hidden, InitialView, Label, MarkKind, SecuritySummary,
     SignatureInfo, StatusCaptions, TabOrder, TrustStore, XfaLayout, a11y, form_appearance, guard, js, measure, optimize, renderer_password,
-    signatures_of, unrestricted,
+    signatures_of, unrestricted, xfa,
 };
 #[cfg(test)]
 use crate::{record_link_scan, record_marker_scan};
@@ -62,6 +62,9 @@ pub struct Document {
     pub xfa: Option<XfaLayout>,
     /// The parsed template of a laid-out XFA form, for its scripts.
     pub(crate) xfa_template: Option<Arc<pdfcraft_xfa::model::Template>>,
+    /// What each of the form's calculations read when it last ran, so a change reruns only
+    /// the ones it concerns.
+    pub(crate) xfa_calc_deps: Arc<xfa::CalcDeps>,
     /// A script of the XFA form ran away, so its scripts are off (see [`Document::xfa_scripts_off`]).
     pub(crate) xfa_scripts_off: bool,
     /// SOM paths of the XFA fields whose exit scripts ran with a value change ([`xfa::on_changes`])
