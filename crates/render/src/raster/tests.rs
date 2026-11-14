@@ -10601,6 +10601,10 @@ mod tiff_predicted_images;
 // patch 27).
 mod isolated_cmyk_groups;
 
+// #7251: a soft mask's /Matte is removed in the image's own colour space, before conversion
+// (vendored hayro-interpret patch 107).
+mod matte_source_space;
+
 /// The generation-0 stand-in a rebuilt table files an object under must not make the object a
 /// second object: enumeration yielded it once per key, so a document recovered without a readable
 /// page tree reported the page twice (noted in review of #5580).
