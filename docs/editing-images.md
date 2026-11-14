@@ -2,7 +2,8 @@
 
 In **Edit a PDF → Edit text and images**, click a figure to select it. Drag the selected
 figure to move it, drag a corner to resize it proportionally, or press Delete to remove
-that placement. The context menu also rotates or flips it. Changes support undo and
+that placement. Hold Shift while dragging a corner to resize freely, or drag an edge handle
+to change one dimension. The context menu also rotates or flips it. Changes support undo and
 survive saving/reopening. For single-figure transforms, a clipping path exclusive to one image moves and resizes
 together with its pixels, including nested graphics states, intervening state operators
 and paths split across content streams. A clip shared with other content stays where it is.
