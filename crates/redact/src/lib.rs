@@ -566,6 +566,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         removed_appearances: HashSet::new(),
         appearance_scan_limit: false,
         pruned_patterns: Vec::new(),
+        pattern_spaces: interp::PatternSpaces::default(),
     };
     for &(pi, page_marks) in &groups {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
@@ -819,6 +820,8 @@ struct Applying {
     appearance_scan_limit: bool,
     /// Pattern objects pruned from a page's resources, which page-tree nodes may still name.
     pruned_patterns: Vec<ObjRef>,
+    /// What `cs` and `CS` have read of the run's colour spaces.
+    pattern_spaces: interp::PatternSpaces,
 }
 
 /// Step 1 for one page: rewrites its content so nothing readable stays under a mark, and cleans the tags it no longer shows.
@@ -829,14 +832,26 @@ fn redact_page_content(
     page: &pdfcraft_model::Page,
     rects: &[[f64; 4]],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_xobjects, retired_properties, removed_text, removed_cut, removed_room, images, pruned_patterns, .. } = applying;
+    let Applying {
+        report,
+        doomed_xobjects,
+        retired_properties,
+        removed_text,
+        removed_cut,
+        removed_room,
+        images,
+        pruned_patterns,
+        pattern_spaces,
+        ..
+    } = applying;
     // 1. Content.
     let mut budget = pdfcraft_cos::DecodeBudget::page();
     let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
     let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
+    pattern_spaces.next_page();
     // What the walk leaves of the page's allowance, the cleanups below spend.
     let (out, mut budget) = {
-        let mut scope = Scope::new(rects, Mode::Apply, report, budget, images).with_removed_room(*removed_room);
+        let mut scope = Scope::new(rects, Mode::Apply, report, budget, images).with_removed_room(*removed_room).with_pattern_spaces(pattern_spaces);
         let out = process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY);
         scope.flush();
         removed_text.append(&mut scope.removed_text);
