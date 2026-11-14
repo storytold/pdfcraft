@@ -8,7 +8,8 @@
 //! document:
 //! - an annotation's `/P` points at its new page;
 //! - link and GoTo destinations that target a copied page point at the copy. Links to pages that
-//!   were not copied are dropped, so they don't dangle;
+//!   were not copied are dropped, so they don't dangle, except when a document duplicates its own
+//!   pages: those pages are still there, and the links keep leading to them;
 //! - form-field widgets keep their field hierarchy, and the top-level fields are registered in the
 //!   destination `/AcroForm`. When only some of a document's pages are copied, a field brings only
 //!   the kids that lead to a widget on those pages: the rest of the form stays behind with its
@@ -75,8 +76,28 @@ pub fn import_pages_with(
     at: usize,
     conflicts: FieldConflicts,
 ) -> Result<ImportOutcome, OrganizeError> {
+    import_pages_checked(dst, src, src_pages, at, conflicts, false)
+}
+
+/// Duplicate Pages: copy `pages` (0-based, in order) of `doc` into `doc` itself at `at`. As
+/// [`import_pages`], except that a link to a page left uncopied still leads to it, since that
+/// page is still in the document (#7276). Returns the new page references in order.
+pub(crate) fn duplicate_own_pages(doc: &mut Document, pages: &[usize], at: usize) -> Result<Vec<ObjRef>, OrganizeError> {
+    let src = doc.clone();
+    import_pages_checked(doc, &src, pages, at, FieldConflicts::Merge, true).map(|o| o.pages)
+}
+
+/// [`import_pages_with`]; `into_itself` says `src` is a copy of `dst` as it was before.
+fn import_pages_checked(
+    dst: &mut Document,
+    src: &Document,
+    src_pages: &[usize],
+    at: usize,
+    conflicts: FieldConflicts,
+    into_itself: bool,
+) -> Result<ImportOutcome, OrganizeError> {
     let before: HashSet<u32> = dst.object_numbers().into_iter().collect();
-    let imported = match import_pages_mapped(dst, src, src_pages, at, conflicts) {
+    let imported = match import_pages_into(dst, src, src_pages, at, conflicts, into_itself) {
         Ok(imported) => imported,
         Err(e) => {
             // A refusal while copying (a source too deep to follow) has only added objects:
@@ -203,6 +224,19 @@ fn import_pages_mapped(
     at: usize,
     conflicts: FieldConflicts,
 ) -> Result<Imported, OrganizeError> {
+    import_pages_into(dst, src, src_pages, at, conflicts, false)
+}
+
+/// `import_pages_mapped`. With `into_itself` (`src` is a copy of `dst` as it was before), a link
+/// to a page left uncopied keeps leading to it: that page is still in `dst`, under the same number.
+fn import_pages_into(
+    dst: &mut Document,
+    src: &Document,
+    src_pages: &[usize],
+    at: usize,
+    conflicts: FieldConflicts,
+    into_itself: bool,
+) -> Result<Imported, OrganizeError> {
     let source = walk(src)?;
     if let Some(bad) = src_pages.iter().find(|i| **i >= source.len()) {
         return Err(OrganizeError::NoSuchPage(*bad));
@@ -210,6 +244,9 @@ fn import_pages_mapped(
     let mut existing = walk(dst)?;
     let root = pages_root(dst)?;
     let mut copier = Copier::new(src, HashMap::new(), HashMap::new());
+    if into_itself {
+        copier.staying = existing.iter().map(|(r, _)| *r).collect();
+    }
     // Allocate every destination page first, so destinations between copied pages resolve.
     let targets: Vec<(ObjRef, ObjRef, Dict)> = src_pages
         .iter()

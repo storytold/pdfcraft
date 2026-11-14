@@ -2818,6 +2818,63 @@ fn duplicate_pages_at_inserts_the_copies_there() {
     assert_eq!(labels(&doc), ["Page 1", "Page 2", "Page 3", "Page 1"]);
 }
 
+/// A duplicated page's links to pages left uncopied still lead there: those pages stay in the
+/// same document (#7276). A link to a page copied with it leads to that copy, as before.
+#[test]
+fn duplicate_pages_keeps_links_to_pages_not_copied() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Names << /Dests 10 0 R >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R 9 0 R] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Link /Rect [20 300 150 330] /Dest [4 0 R /Fit] >>".into(),
+        "<< /Type /Annot /Subtype /Link /Rect [20 250 150 280] /A << /S /GoTo /D (target) >> >>".into(),
+        "<< /Type /Annot /Subtype /Link /Rect [20 200 150 230] /Dest [3 0 R /Fit] >>".into(),
+        "<< /Type /Annot /Subtype /Link /Rect [20 150 150 180] /A << /S /URI /URI (https://example.com/) >> >>".into(),
+        "<< /Names [(target) [4 0 R /Fit]] >>".into(),
+    ];
+    let link_targets = |doc: &Document, page: usize| -> Vec<Option<usize>> {
+        let pages: Vec<ObjRef> = walk(doc).unwrap().into_iter().map(|(r, _)| r).collect();
+        let annots = doc.get(pages[page]).as_dict().and_then(|d| d.get(b"Annots").cloned()).unwrap();
+        let annots = doc.resolve(&annots).as_array().cloned().unwrap();
+        annots
+            .iter()
+            .map(|a| {
+                let a = doc.resolve(a).as_dict().cloned().unwrap();
+                let action = a.get(b"A").map(|x| doc.resolve(x).as_dict().cloned().unwrap());
+                let mut dest = a.get(b"Dest").cloned().or_else(|| action.and_then(|ad| ad.get(b"D").cloned()))?;
+                if let Some(name) = dest.as_string().map(|s| s.bytes.clone()) {
+                    // The fixture's flat `/Names /Dests` tree.
+                    let catalog = doc.get(doc.root()?).as_dict().cloned()?;
+                    let names = doc.resolve(catalog.get(b"Names")?).as_dict().cloned()?;
+                    let tree = doc.resolve(names.get(b"Dests")?).as_dict().cloned()?;
+                    let pairs = doc.resolve(tree.get(b"Names")?).as_array().cloned()?;
+                    let at = pairs.iter().position(|k| k.as_string().is_some_and(|s| s.bytes == name))?;
+                    dest = pairs.get(at + 1)?.clone();
+                }
+                let target = doc.resolve(&dest).as_array()?.first()?.as_ref()?;
+                pages.iter().position(|p| *p == target)
+            })
+            .collect()
+    };
+    // Page 1 alone, at the end and at the default place after it.
+    for (at, copy, target) in [(Some(3), 3, 1), (None, 1, 2)] {
+        let mut doc = open(build(&b, "/Root 1 0 R"));
+        duplicate_pages(&mut doc, &[0], at).unwrap();
+        let doc = open(write_full(&doc, &SaveOptions::default()).unwrap());
+        assert_eq!(link_targets(&doc, copy), [Some(target), Some(target), Some(copy), None], "copy at {at:?}");
+        assert_eq!(link_targets(&doc, 0), [Some(target), Some(target), Some(0), None], "the original's links");
+        let uri =
+            doc.resolve(&doc.get(walk(&doc).unwrap()[copy].0).as_dict().unwrap().get(b"Annots").cloned().unwrap()).as_array().unwrap()[3].clone();
+        assert!(doc.resolve(&uri).as_dict().unwrap().contains(b"A"), "the URI link keeps its action");
+    }
+    // Every page: the copy's links lead to the copies.
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    duplicate_pages(&mut doc, &[0, 1, 2], Some(3)).unwrap();
+    assert_eq!(link_targets(&doc, 3), [Some(4), Some(4), Some(3), None]);
+}
+
 #[test]
 fn replace_pages_swaps_content_but_keeps_annotations() {
     // Page 2 of the target gets an annotation; replacing its content keeps it.
