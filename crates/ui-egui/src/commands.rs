@@ -422,7 +422,9 @@ impl PdfCraftApp {
                 self.apply_edit(Edit::RotatePages { pages: targets, degrees: -90 });
             }
             "page.delete" => {
-                self.apply_edit(Edit::DeletePages { pages: targets });
+                if let Some(i) = active {
+                    self.request_delete_pages(i, targets);
+                }
             }
             "page.insert_blank" => {
                 if let (Some(i), Some(&last)) = (active, targets.last())

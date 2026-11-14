@@ -92,6 +92,7 @@ pub(super) fn pages(
     ui: &mut egui::Ui,
     t: &Tokens,
     info: &DocInfo,
+    generation: u64,
     view: &mut crate::DocView,
     modal: bool,
     keys: crate::page_keys::PageKeys,
@@ -119,7 +120,7 @@ pub(super) fn pages(
         && (owns_keyboard || ui.rect_contains_pointer(ui.clip_rect()))
         && (keys.take(ui.ctx(), egui::Key::Delete) || keys.take(ui.ctx(), egui::Key::Backspace))
     {
-        delete_pages(view, info.pages.len());
+        delete_pages(view, info.pages.len(), generation);
     }
     // A new current page scrolls its thumbnail into view, as little as it takes (Acrobat), but
     // not while thumbnails are dragged: then the change counts as seen. A wheel turned or a
@@ -230,7 +231,7 @@ pub(super) fn pages(
                 let some_left = view.target_pages().len() < count;
                 // Never every page: a document keeps at least one.
                 if ui.add_enabled(editable && some_left, egui::Button::new(tl!("Delete pages"))).clicked() {
-                    delete_pages(view, count);
+                    delete_pages(view, count, generation);
                     ui.close();
                 }
             });
@@ -262,22 +263,18 @@ fn file_drop(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::DocView, rows: &[R
     }
 }
 
-/// Queue deleting the selection (or the current page) of a document of `n` pages, unless that
-/// would leave no page. The selection goes; the current page stays on the page it showed, or on
-/// the page that follows the deleted ones.
-fn delete_pages(view: &mut crate::DocView, n: usize) {
+/// Ask before deleting the selection (or the current page) of a document of `n` pages whose
+/// edits are at `generation`, unless that would leave no page. The pages and the generation are
+/// captured now; the current page and the selection change only when the confirmation deletes
+/// them, and an edit that ran since drops the ask.
+fn delete_pages(view: &mut crate::DocView, n: usize, generation: u64) {
     let mut pages = view.target_pages();
     pages.sort_unstable();
     pages.dedup();
     if pages.is_empty() || pages.len() >= n {
         return;
     }
-    // Deleted pages before it shift it up; if it was deleted itself, the page after the deleted
-    // run lands where it was (or the last page, when the deletion ran to the end).
-    let before = pages.iter().filter(|p| **p < view.current).count();
-    view.current = view.current.saturating_sub(before).min(n.saturating_sub(pages.len() + 1));
-    view.clear_page_selection(None);
-    view.pending_edit = Some(pdfcraft_engine::Edit::DeletePages { pages });
+    view.pending_action = Some(crate::canvas::ViewAction::ConfirmDeletePages { pages, generation });
 }
 
 /// The gap (0 = before the first page, n = after the last) the pointer points at in the Pages

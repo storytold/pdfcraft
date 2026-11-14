@@ -6211,6 +6211,9 @@ fn pages_panel_escape_clears_and_deleted_pages_leave_the_selection() {
     h.state_mut().views[0].select_pages(&[3, 4]);
     assert!(h.state_mut().execute("page.delete"));
     h.run_steps(3);
+    // The command's ask opens the dialog; Delete confirms the deletion.
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
     assert_eq!(page_texts(h.state()).len(), 3);
     assert!(picked(&h).iter().all(|p| *p < 3), "{:?}", picked(&h));
 }
@@ -6310,6 +6313,9 @@ fn deleting_pages_from_the_pages_panel_menu() {
     let at = panel_thumb(&h, "Page 2");
     right_click_at(&mut h, at);
     h.get_by_label("Delete pages").click();
+    h.run_steps(3);
+    // The ask opens the dialog; Delete confirms the deletion.
+    h.get_by_label("Delete").click();
     h.run_steps(4);
     assert_eq!(page_texts(h.state()), ["Page 1", "Page 3", "Page 4"]);
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Delete page"));
@@ -6345,6 +6351,9 @@ fn the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page()
     h.run_steps(1);
     h.key_press(Key::Delete);
     h.run_steps(4);
+    // The ask opens the dialog; Delete confirms the deletion of pages 2 and 3.
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
     assert_eq!(page_texts(h.state()), ["Page 1"]);
     assert_eq!(h.state().views[0].current, 0);
 }
@@ -8083,7 +8092,27 @@ fn delete_with_the_pointer_on_the_pages_panel_deletes_a_page() {
     h.run_steps(2);
     h.key_press(egui::Key::Delete);
     h.run_steps(4);
+    // The ask opens the dialog; Delete confirms the page goes.
+    h.get_by_label("Delete").click();
+    h.run_steps(4);
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), pages - 1, "a page goes");
+}
+
+/// An edit that runs between the Pages panel capturing the pages and the ask being processed
+/// makes those indices stale: the ask is dropped, so it never names the newer document.
+#[test]
+fn an_edit_before_the_pages_delete_ask_is_processed_drops_the_ask() {
+    let mut h = pages_panel(5);
+    let id = h.state().views[0].id;
+    let generation = h.state().session.get(id).unwrap().edit_generation();
+    // A queued move runs before the ask is processed, and the move succeeds: the captured pages
+    // no longer name the moved-to document.
+    h.state_mut().views[0].pending_edit = Some(pdfcraft_engine::Edit::MovePages { pages: vec![0], to: 5 });
+    h.state_mut().views[0].pending_action = Some(pdfcraft_ui_egui::canvas::ViewAction::ConfirmDeletePages { pages: vec![0], generation });
+    h.run_steps(4);
+    assert_eq!(page_texts(h.state()), ["Page 2", "Page 3", "Page 4", "Page 5", "Page 1"], "the move ran");
+    assert!(h.state().dialog.is_none(), "the stale ask is dropped");
+    assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 5);
 }
 
 /// In crop mode, a right-click on another picture selects it for its menu, as without crop mode. It

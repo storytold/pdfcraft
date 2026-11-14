@@ -296,6 +296,7 @@ impl PdfCraftApp {
             attach_override: None,
             duplicate_draft: None,
             page_props_draft: None,
+            delete_pages_draft: None,
             field_table_draft: None,
             form_preview: false,
             window_title: String::new(),

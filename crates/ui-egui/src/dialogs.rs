@@ -69,6 +69,7 @@ struct Pending {
     import_words: bool,
     print_go: bool,
     revert_now: bool,
+    delete_pages_now: bool,
     overwrite_now: bool,
     overwrite_elsewhere: bool,
     lock_answer: Option<bool>,
@@ -313,6 +314,11 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
         }
         Dialog::Revert => {
             if !dialog_revert(ui, app, req) {
+                return false;
+            }
+        }
+        Dialog::DeletePages => {
+            if !dialog_delete_pages(ui, app, req) {
                 return false;
             }
         }
@@ -1375,6 +1381,34 @@ fn dialog_revert(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) ->
     false
 }
 
+/// `Dialog::DeletePages` content. Returns `false` when it has its own buttons and no footer is wanted.
+fn dialog_delete_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
+    let Some(d) = app.delete_pages_draft.as_ref() else {
+        req.close = true;
+        return false;
+    };
+    let name = app.session.get(d.doc).map(|doc| doc.name.clone()).unwrap_or_default();
+    ui.label(egui::RichText::new(tl!("Delete page?")).font(theme::semibold(18.0)));
+    ui.add_space(8.0);
+    let n = d.pages.len();
+    let line = if n == 1 {
+        crate::i18n::fmt(tl!("Delete this page from “{name}”?"), &[("name", &name)])
+    } else {
+        crate::i18n::fmt(tl!("Delete these {n} pages from “{name}”?"), &[("name", &name), ("n", &n.to_string())])
+    };
+    ui.label(line);
+    ui.add_space(12.0);
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        if widgets::pill_button(ui, tl!("Delete"), true).clicked() {
+            req.delete_pages_now = true;
+            req.close = true;
+        }
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+            req.close = true;
+        }
+    });
+    false
+}
 /// `Dialog::OverwriteChanged` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_overwrite_changed(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
@@ -1900,6 +1934,12 @@ fn finish_requests(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, re
     }
     if req.revert_now {
         app.revert_active();
+    }
+    if req.delete_pages_now {
+        app.confirm_delete_pages();
+    } else if dialog == Dialog::DeletePages && (modal_closed || req.close) {
+        // Cancelled or dismissed: nothing is deleted.
+        app.delete_pages_draft = None;
     }
     #[cfg(not(target_arch = "wasm32"))]
     {

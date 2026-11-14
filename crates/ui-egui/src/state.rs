@@ -158,6 +158,8 @@ pub enum Dialog {
     /// Organize ▸ Extract (options), Rotate Pages.
     Extract,
     RotatePages,
+    /// Ask before deleting pages via a page's right-click menu.
+    DeletePages,
     /// Remove Hidden Information and Sanitize Document.
     RemoveHidden,
     Sanitize,
@@ -230,6 +232,15 @@ pub struct DuplicateDraft {
     pub all: bool,
     pub from: usize,
     pub to: usize,
+}
+
+/// Delete pages: the document and pages (0-based) the confirmation would delete, and the
+/// document's edit generation when the dialog opened.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeletePagesDraft {
+    pub doc: DocId,
+    pub generation: u64,
+    pub pages: Vec<usize>,
 }
 
 /// Page Properties: the document and pages it applies to (0-based), the document's edit
