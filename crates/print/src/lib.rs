@@ -47,7 +47,7 @@ use sheets::text_direction;
 pub use sheets::{
     LABEL_MARGIN, MARGIN, MAX_CREEP, Placement, Sheet, add_cups_orientation, cups_orientation, layout, matching_paper, text_reads_up, texts_read_up,
 };
-pub use spool::{open_printer_preferences, printer_default_paper, printer_paper_info, printer_papers, show_printer_properties};
+pub use spool::{missing_print_dll, open_printer_preferences, printer_default_paper, printer_paper_info, printer_papers, show_printer_properties};
 
 /// The names of the Print dialog's choices, shared by the `doc_print` tool and the settings
 /// file, so a saved preference reads like a tool argument and there is one vocabulary to keep.

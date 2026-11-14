@@ -213,7 +213,7 @@ pub(crate) fn body(
                 if !d.printers_loading && d.printers.is_empty() {
                     ui.label("");
                     ui.label(
-                        egui::RichText::new(tl!("No printers were found. Check that the printer is installed and the print spooler is running, then open Print again."))
+                        egui::RichText::new(super::no_printers_message(spool::missing_print_dll()))
                             .small()
                             .color(t.text_muted),
                     );
