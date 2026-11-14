@@ -69,11 +69,13 @@ pub struct TabGroup {
     pub title: String,
     pub color: TabGroupColor,
     pub collapsed: bool,
+    /// Smooth expansion animation progress (0.0 = fully collapsed, 1.0 = fully open).
+    pub open_progress: f32,
 }
 
 impl TabGroup {
     pub fn new(id: TabGroupId, title: String, color: TabGroupColor) -> Self {
-        Self { id, title, color, collapsed: false }
+        Self { id, title, color, collapsed: false, open_progress: 1.0 }
     }
 }
 
@@ -288,10 +290,11 @@ pub fn group_pill(ui: &mut egui::Ui, group: &TabGroup, _t: &Tokens, height: f32,
         ui.painter().galley(text_pos, galley, text_color);
     }
 
-    // Collapse indicator badge when collapsed
-    if group.collapsed {
+    // Collapse indicator badge when collapsed or collapsing
+    if group.collapsed || group.open_progress < 0.99 {
+        let alpha = (1.0 - group.open_progress).clamp(0.0, 1.0);
         let icon_rect = Rect::from_center_size(pill_rect.right_center() - vec2(4.0, 0.0), vec2(8.0, 8.0));
-        ui.painter().circle_filled(icon_rect.center(), 2.0, text_color);
+        ui.painter().circle_filled(icon_rect.center(), (2.0 * alpha).max(0.5), text_color.linear_multiply(alpha));
     }
 
     if response.secondary_clicked() {
