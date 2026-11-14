@@ -363,10 +363,7 @@ fn modifiers(v: Option<&Value>) -> Result<egui::Modifiers, String> {
 
 fn rect_param(v: &Value) -> Result<egui::Rect, String> {
     // Every entry is part of the rectangle; malformed entries must not be silently removed.
-    let a: Vec<f32> = v
-        .as_array()
-        .and_then(|a| a.iter().map(|v| v.as_f64().map(|f| f as f32)).collect::<Option<Vec<_>>>())
-        .unwrap_or_default();
+    let a: Vec<f32> = v.as_array().and_then(|a| a.iter().map(|v| v.as_f64().map(|f| f as f32)).collect::<Option<Vec<_>>>()).unwrap_or_default();
     match a.as_slice() {
         [x0, y0, x1, y1] if a.iter().all(|n| n.is_finite()) && x1 > x0 && y1 > y0 => {
             Ok(egui::Rect::from_min_max(egui::pos2(*x0, *y0), egui::pos2(*x1, *y1)))
