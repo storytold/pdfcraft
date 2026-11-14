@@ -333,9 +333,15 @@ impl Focus {
     }
 }
 
-/// The field `focus` is on: the twin with its field object, or else the first field with its name.
+/// The field `focus` is on: the twin with its field object, and without one the first field with
+/// its name. `None` once the form no longer has that object, though another field may have the
+/// name: a duplicated page's field keeps its name, and when Undo took the copy away, what was
+/// typed in it went on in the original, where it was committed.
 pub(crate) fn focused_field<'a>(focus: &Focus, form: &'a [FormField]) -> Option<&'a FormField> {
-    focus.obj.and_then(|o| form.iter().find(|f| f.obj == o && f.name == focus.name)).or_else(|| form.iter().find(|f| f.name == focus.name))
+    match focus.obj {
+        Some(o) => form.iter().find(|f| f.obj == o && f.name == focus.name),
+        None => form.iter().find(|f| f.name == focus.name),
+    }
 }
 
 /// The edit picking the options at `picked` (positions in `f`'s options) in the list box `f`.
@@ -372,6 +378,18 @@ pub(crate) fn open_focus(f: &FormField, widget: usize) -> Focus {
         list: ChoiceList::default(),
         had_focus: false,
     }
+}
+
+/// [`open_focus`] right after [`commit`]. Another widget of the field committed, or another field
+/// of its name, opens with the text committed: that is its value once the commit's edit runs, and
+/// its editor is drawn before then. Opened with the value from before the typing, a click away put
+/// that back.
+fn open_after_commit(view: &DocView, f: &FormField, widget: usize) -> Focus {
+    let mut focus = open_focus(f, widget);
+    if let Some(draft) = view.forms.committed.as_ref().filter(|d| d.name == f.name) {
+        focus.text = draft.text.clone();
+    }
+    focus
 }
 
 /// After a script changed the field being edited from `before` to `after`, each given as its
@@ -555,7 +573,7 @@ pub(crate) fn page_input(
         && view.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi))
     {
         commit(view, form);
-        view.forms.focus = Some(Focus { press: Some(at), ..open_focus(f, wi) });
+        view.forms.focus = Some(Focus { press: Some(at), ..open_after_commit(view, f, wi) });
         view.forms.pressed = true;
     }
     // A click counts released over the widget its press was on, as a button's does: one that slips
@@ -607,7 +625,7 @@ pub(crate) fn page_input(
         FormFieldKind::Text | FormFieldKind::Combo => {
             if view.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi)) {
                 commit(view, form);
-                view.forms.focus = Some(open_focus(f, wi));
+                view.forms.focus = Some(open_after_commit(view, f, wi));
             }
             // A combo box's click runs its Mouse Up JavaScript (#269).
             if f.kind == FormFieldKind::Combo {
@@ -730,7 +748,7 @@ fn combo_editor(ctx: &egui::Context, view: &mut DocView, editor: ComboEditor<'_>
                 .background_color(FIELD_FILL)
                 .text_color(Color32::BLACK)
                 .margin(egui::Margin::symmetric(3, 1))
-                .id(egui::Id::unique(("form-field", view_key, &f.name, widget)));
+                .id(egui::Id::unique(("form-field", view_key, &f.name, f.obj, widget)));
             if turned {
                 te = te.layouter(&mut layouter);
             }
@@ -1062,9 +1080,9 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, frame: TextFram
 /// its editor then takes no more than fits ([`overlay`]).
 pub(crate) fn text_box(doc: &pdfcraft_engine::Document, view: &DocView, form: &[FormField]) -> Option<form_appearance::TextBox> {
     let fx = view.forms.focus.as_ref()?;
-    let f = form.iter().find(|f| f.name == fx.name)?;
+    let f = focused_field(fx, form)?;
     let no_scroll = f.kind == FormFieldKind::Text && f.has(field_flags::DO_NOT_SCROLL);
-    no_scroll.then(|| doc.field_text_box(&fx.name, fx.widget)).flatten()
+    no_scroll.then(|| doc.field_text_box(f.obj, fx.widget)).flatten()
 }
 
 /// After the text editor is drawn: keeps a field that doesn't scroll within what fits, puts the
@@ -1330,7 +1348,8 @@ pub(crate) fn overlay(
                         .text_color(Color32::BLACK)
                         .margin(egui::Margin::symmetric(3, 1))
                         .password(password)
-                        .id(egui::Id::unique(("form-field", view.pane.key, &f.name, focus.widget)));
+                        // By its dictionary too: fields that share a name each keep their own caret and Undo.
+                        .id(egui::Id::unique(("form-field", view.pane.key, &f.name, f.obj, focus.widget)));
                     if let Some(max) = f.max_len {
                         te = te.char_limit(max);
                     }
@@ -1416,7 +1435,7 @@ pub(crate) fn overlay(
         kind if read_only || matches!(kind, FormFieldKind::CheckBox | FormFieldKind::Radio) => {
             // Nothing is drawn over the field, but a widget there holds egui's keyboard focus, so
             // Space, Tab and the arrows come here instead of turning or scrolling the page.
-            let id = egui::Id::unique(("form-field", view.pane.key, &f.name, focus.widget));
+            let id = egui::Id::unique(("form-field", view.pane.key, &f.name, f.obj, focus.widget));
             let mut has_focus = false;
             // Not interactable, so clicks still reach the page under it.
             let area = egui::Area::new(egui::Id::unique(("form-toggle", view.view_key()))).order(egui::Order::Foreground).interactable(false);
