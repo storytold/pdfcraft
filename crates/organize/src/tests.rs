@@ -3696,6 +3696,69 @@ fn import_renames_a_colliding_field_name() {
     assert_eq!(form_field_names(&dst), ["Text1", "Text1-1"]);
 }
 
+/// A document whose form holds one text field named `name` with default appearance `/DA`
+/// (`/F1 18 Tf 0 g`) and AcroForm `/DR /Font /F1` naming `face`.
+fn doc_with_da_field(name: &str, face: &str, alias: &str) -> Document {
+    let b = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /DR << /Font << /{alias} 4 0 R >> >> >> >>"),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),
+        format!("<< /Type /Font /Subtype /Type1 /BaseFont /{face} >>"),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /V (x) /DA (/{alias} 18 Tf 0 g) /Rect [60 60 200 80] /P 3 0 R >>"),
+        "<< /Title (form) >>".into(),
+    ];
+    open(build(&b, "/Root 1 0 R /Info 6 0 R"))
+}
+
+/// The `/BaseFont` of the AcroForm `/DR /Font` entry the field named `field`'s `/DA` selects.
+fn dr_base_font_for_da(doc: &Document, field: &str) -> Option<Vec<u8>> {
+    let form = catalog(doc).get(b"AcroForm").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned())?;
+    let dr = form.get(b"DR").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned())?;
+    let fonts = dr.get(b"Font").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned())?;
+    let fields = form.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
+    let field = fields
+        .iter()
+        .filter_map(|f| doc.resolve(f).as_dict().cloned())
+        .find(|d| {
+            let name = d.get(b"T").map(|t| doc.resolve(t).clone());
+            name.and_then(|n| n.as_string().cloned()).is_some_and(|s| s.text_eq(field))
+        })?;
+    let da_obj = field.get(b"DA").map(|d| doc.resolve(d).clone());
+    let da = da_obj.and_then(|o| o.as_string().cloned()).map(|s| s.to_text())?;
+    let alias = da.split_whitespace().next()?;
+    let alias = alias.trim_start_matches('/');
+    let font = fonts.get(alias.as_bytes()).map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned())?;
+    font.name(b"BaseFont").map(|b| b.to_vec())
+}
+
+/// An imported field keeps its source form's default-appearance font: the source `/DR` font
+/// comes along (renamed where the destination uses the name for another face) and the copied
+/// `/DA` is rewritten to the destination name, so a value-only edit does not change the face.
+#[test]
+fn import_keeps_the_source_default_appearance_font() {
+    let mut dst = doc_with_da_field("destination", "Helvetica", "F1");
+    let src = doc_with_da_field("imported", "Courier", "F1");
+    import_pages_with(&mut dst, &src, &[0], 1, FieldConflicts::Rename).unwrap();
+    // The destination's own /F1 stays Helvetica, and the imported field now resolves to Courier.
+    let form = catalog(&dst).get(b"AcroForm").map(|f| dst.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap();
+    let dr = form.get(b"DR").map(|d| dst.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap();
+    let fonts = dr.get(b"Font").map(|d| dst.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap();
+    let helv = fonts.get(b"F1").map(|f| dst.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap();
+    assert_eq!(helv.name(b"BaseFont"), Some(b"Helvetica".as_slice()));
+    assert_eq!(dr_base_font_for_da(&dst, "destination").as_deref(), Some(b"Helvetica".as_slice()));
+    assert_eq!(dr_base_font_for_da(&dst, "imported").as_deref(), Some(b"Courier".as_slice()));
+}
+
+/// A source alias the destination form does not use at all is kept (not renamed) and added to
+/// the destination `/DR`, so the field no longer falls back to `/Helv`.
+#[test]
+fn import_keeps_a_unique_default_appearance_alias() {
+    let mut dst = doc_with_da_field("destination", "Helvetica", "F1");
+    let src = doc_with_da_field("imported", "Courier", "F2");
+    import_pages_with(&mut dst, &src, &[0], 1, FieldConflicts::Rename).unwrap();
+    assert_eq!(dr_base_font_for_da(&dst, "imported").as_deref(), Some(b"Courier".as_slice()));
+}
+
 /// The rename takes the first free variant: with Text1 and Text1-1 already in the form, a
 /// colliding Text1 becomes Text1-2 (not Text1-1, which would collide again).
 #[test]
