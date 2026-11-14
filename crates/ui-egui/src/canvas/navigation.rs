@@ -203,6 +203,21 @@ impl DocView {
         }
     }
 
+    /// Whether Esc has something on the page to close: the camera, a form field being filled (its
+    /// editor closes it), a selection or the find bar ([`shortcuts`] closes the others in that
+    /// order). Esc closes one thing at a time, so full screen leaves only on an Esc that finds none
+    /// of them (#5302): from a field, "Esc (press twice)" leaves (*Adobe Acrobat Help*, 2019,
+    /// p. 248). A search shown in the Search panel isn't on the page: full screen hides the panel,
+    /// and keeps its search.
+    pub fn escape_closes_something(&self) -> bool {
+        self.camera.is_some()
+            || self.camera_done.is_some()
+            || self.forms.focus.is_some()
+            || self.selection.is_some()
+            || self.all_text
+            || self.find.as_ref().is_some_and(|f| !f.in_panel)
+    }
+
     /// Next page (`true`) or previous page. In two-page view this moves a whole spread: the other
     /// page of the spread is already on screen, so stepping to it wouldn't move the view (#70).
     pub fn step_page(&mut self, forward: bool) {
@@ -379,6 +394,23 @@ fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) 
     }
 }
 
+/// Esc on the page closes one thing: the camera, then a form field being filled, then a
+/// selection, then the find bar ([`DocView::escape_closes_something`] says whether there is one).
+fn escape_closes_one(view: &mut DocView) {
+    if view.camera.is_some() || view.camera_done.is_some() {
+        view.pending_action = Some(ViewAction::CancelCamera);
+    } else if view.forms.focus.is_some() {
+        // A form field being filled takes this Esc: its editor closes it, and nothing else on
+        // the page closes with it (a selection stays for the next Esc).
+    } else if view.selection.is_some() || view.all_text {
+        view.selection = None;
+        view.all_text = false;
+    } else if view.presentation.is_none() || view.find.as_ref().is_some_and(|f| !f.in_panel) {
+        // Full screen hides the Search panel: its search stays for when the panel is back.
+        view.find = None;
+    }
+}
+
 /// The view's keys: its chords, then its plain keys. `chords`: no menu of the menu bar has the
 /// keyboard and nothing covers the pages, so chords may run (they wait for a menu, as the
 /// registered commands' do). An open form field keeps the paging and scrolling keys for itself.
@@ -458,14 +490,7 @@ fn view_keys(
     // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
     // So does an open field, whose list closes.
     if key(Key::Escape) && !egui::Popup::is_any_open(ctx) && !field_open {
-        if view.camera.is_some() || view.camera_done.is_some() {
-            view.pending_action = Some(ViewAction::CancelCamera);
-        } else if view.selection.is_some() || view.all_text {
-            view.selection = None;
-            view.all_text = false;
-        } else {
-            view.find = None;
-        }
+        escape_closes_one(view);
     }
     // The open field's keys leave the page under it where it is.
     if field_open {

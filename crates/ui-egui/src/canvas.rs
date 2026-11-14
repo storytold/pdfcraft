@@ -343,12 +343,23 @@ pub struct ViewDefaults {
     /// Highlight existing fields: a preference in Acrobat, so it carries over to the next
     /// document and the next session. On for new settings; a stored choice wins.
     pub highlight_fields: bool,
+    /// Full screen fills the screen with one page (or spread) at a time, edge to edge; off, it
+    /// keeps the page display it is entered from (continuous scrolling, say: #4273).
+    pub full_screen_fill: bool,
 }
 
 impl Default for ViewDefaults {
     fn default() -> Self {
         // Single page, scrolling continuously at fit width: the earlier "continuous" default.
-        Self { layout: PageLayout::Single, continuous: true, show_page_gaps: true, fit: Fit::Width, zoom: 1.0, highlight_fields: true }
+        Self {
+            layout: PageLayout::Single,
+            continuous: true,
+            show_page_gaps: true,
+            fit: Fit::Width,
+            zoom: 1.0,
+            highlight_fields: true,
+            full_screen_fill: true,
+        }
     }
 }
 
@@ -549,6 +560,10 @@ pub struct DocView {
     /// Full screen (Acrobat's Full Screen Mode): the display saved on entering it, while the view
     /// shows one page or spread at a time, fitted to the screen. `None` outside full screen.
     presentation: Option<SavedDisplay>,
+    /// Full screen fills the screen with one page (or spread) at a time, edge to edge (the
+    /// default); off, it keeps the page display it was entered from. Set from the app's
+    /// preference before full screen is entered.
+    pub full_screen_fill: bool,
     /// Full screen's transitions, display times and pointer (see [`presenter`]).
     pub(crate) presenter: presenter::Presenter,
     pages: HashMap<usize, PageTex>,
@@ -1055,6 +1070,7 @@ impl DocView {
             compare_marks: Vec::new(),
             interface: Default::default(),
             presentation: None,
+            full_screen_fill: defaults.full_screen_fill,
             presenter: Default::default(),
             pages: HashMap::new(),
             errors: HashMap::new(),
@@ -1245,6 +1261,7 @@ impl DocView {
         fresh.interface = self.interface;
         // Still presenting, with the display to go back to on leaving.
         fresh.presentation = self.presentation.take();
+        fresh.full_screen_fill = self.full_screen_fill;
         // A new document: none of the old one's transition, page or timer carries over.
         fresh.presenter = Default::default();
         fresh.back = std::mem::take(&mut self.back);
@@ -1287,6 +1304,7 @@ impl DocView {
         v.highlight_fields = self.highlight_fields;
         v.notice_dismissed = self.notice_dismissed;
         v.scripts_off_noted = self.scripts_off_noted;
+        v.full_screen_fill = self.full_screen_fill;
         v.goto = Some((self.current, 0.0));
         v
     }
@@ -1551,8 +1569,9 @@ fn paint_page_surface(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFra
     let visible = frame.visible;
     let info = frame.env.info;
     let painter = ui.painter();
-    // Shadows would darken the preceding page when pages touch.
-    if view.show_page_gaps && frame.env.show_page_edge_shadows {
+    // Shadows would darken the preceding page when pages touch; full screen filling the screen
+    // shows the page alone on black (#576).
+    if view.show_page_gaps && frame.env.show_page_edge_shadows && !view.fills_screen() {
         painter.add(egui::epaint::Shadow { offset: [0, 3], blur: 14, spread: 0, color: t.page_shadow }.as_shape(r, CornerRadius::ZERO));
     }
     painter.rect_filled(r, CornerRadius::ZERO, paper);
@@ -2264,7 +2283,7 @@ fn anchor_zoom_change(view: &mut DocView, avail: Vec2, old_zoom: f32) {
         } else if let Some((page, fy, rel_y)) = anchor {
             view.zoom_anchor = Some((page, 0.5, fy, vec2(avail_width / 2.0, rel_y)));
         } else {
-            view.zoom_anchor = Some((view.current, 0.5, 0.0, vec2(avail_width / 2.0, MARGIN)));
+            view.zoom_anchor = Some((view.current, 0.5, 0.0, vec2(avail_width / 2.0, view.margin())));
         }
     }
 }
@@ -2739,11 +2758,12 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
         // The page counts with its side gutters, which keep its edge clear of the floating
         // quick-action bar as the layout does.
         let (x, w) = (view.last_scroll.x, avail.width());
-        let (left, right) = (r.left() - SIDE, r.right() + SIDE);
+        let gutter = view.side();
+        let (left, right) = (r.left() - gutter, r.right() + gutter);
         // Turned by → / ← at an edge (`goto_side`): a page or spread wider than the window starts at
         // the edge the reader comes from.
         let row = shown_row(view, rects).iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union).unwrap_or(r);
-        let (row_left, row_right) = (row.left() - SIDE, row.right() + SIDE);
+        let (row_left, row_right) = (row.left() - gutter, row.right() + gutter);
         let target = match side {
             Some(from_right) if row_right - row_left > w => {
                 if from_right {
@@ -3156,16 +3176,17 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
 
 /// Where the `shown` pages sit in the scroll content, as how far the content starts into the
 /// layout and how tall it is. Scrolling continuously every page scrolls; otherwise only the
-/// current row does, the content being its bounding box plus margins. Pages that fit a view
+/// current row does, the content being its bounding box plus `margin` (none while full screen
+/// fills the screen). Pages that fit a view
 /// `view_height` tall sit in its middle, the spare height shared above and below (#5708): the
 /// content fills the view, so there is nothing to scroll, and starts on a whole physical pixel
 /// as the layout's pages do, or their edges would blur and the seams between them open.
-fn vertical_placement(continuous: bool, rects: &[Rect], shown: &[usize], view_height: f32, pixels_per_point: f32) -> (f32, f32) {
+fn vertical_placement(continuous: bool, rects: &[Rect], shown: &[usize], view_height: f32, margin: f32, pixels_per_point: f32) -> (f32, f32) {
     let Some(r) = shown.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union) else { return (0.0, 0.0) };
     if fits_height(r, view_height, pixels_per_point) {
         return (((r.center().y - view_height / 2.0) * pixels_per_point).round() / pixels_per_point, view_height);
     }
-    if continuous { (0.0, r.bottom() + MARGIN) } else { (r.top() - MARGIN, r.height() + 2.0 * MARGIN) }
+    if continuous { (0.0, r.bottom() + margin) } else { (r.top() - margin, r.height() + 2.0 * margin) }
 }
 
 /// Whether the pages in `r` show whole in a view `view_height` tall, without their margins.
@@ -3309,7 +3330,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // row, the jump to the new page scrolled both out of view, a blank frame on every turn forward.
     let row = shown_row(view, &rects);
     let visible_pages: Vec<usize> = if view.continuous { (0..rects.len()).collect() } else { row.clone() };
-    let (y_shift, content_h) = vertical_placement(view.continuous, &rects, &visible_pages, avail.height(), ui.ctx().pixels_per_point());
+    let (y_shift, content_h) =
+        vertical_placement(view.continuous, &rects, &visible_pages, avail.height(), view.margin(), ui.ctx().pixels_per_point());
 
     let mut scroll = page_scroll_area(
         ui,
@@ -3484,7 +3506,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         // below the window's top). Within a point, as for wheel paging, so layout rounding
         // can't hide an edge.
         let max_y = (out.content_size.y - out.inner_rect.height()).max(0.0);
-        (page, out.state.clamped_offset().y <= MARGIN - view.page_gap() + 1.0, out.state.clamped_offset().y >= max_y - 1.0)
+        // Going to a page clamps at 0, which is where a page sits with no margin (full screen).
+        (page, out.state.clamped_offset().y <= (view.margin() - view.page_gap()).max(0.0) + 1.0, out.state.clamped_offset().y >= max_y - 1.0)
     });
     // Within a point, as above: at an edge of the scrolled content, or of the current page or
     // spread shown whole that way (in continuous view the content is as wide as the widest page,

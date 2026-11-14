@@ -63,7 +63,7 @@ pub(super) enum Notice {
 /// The notice bar above the pages: a file changed on disk first, then what a historical
 /// snapshot is, then pages cut at the renderer's limits, then the offer to lock a signature just
 /// placed, then the signature status bar, a form's scripts having been turned off, security,
-/// forms and warnings.
+/// forms and warnings. None in full screen.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn notices(
     view: &mut DocView,
@@ -75,6 +75,11 @@ pub(super) fn notices(
     ui: &mut egui::Ui,
     t: &Tokens,
 ) -> Option<Notice> {
+    // Full screen shows the page and nothing else (#1459), so the notice bar above the pages waits
+    // until it is left; filling the screen, a bar would push the page past its bottom (#576).
+    if view.presentation.is_some() {
+        return None;
+    }
     let info = &doc.info;
     let xfa = doc.xfa.as_ref();
     // The file changed on disk while this document has unsaved changes (#431): ask before
