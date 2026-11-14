@@ -264,6 +264,12 @@ pub mod test_hooks {
         super::survey::GLYPH_CAP.with(|c| c.set(cap));
     }
 
+    /// Caps the decoded content bytes the document surveys run on this thread may read
+    /// (`None`: the usual cap), so a test can pass it with a small document.
+    pub fn set_survey_byte_cap(cap: Option<u64>) {
+        super::survey::BYTE_CAP.with(|c| c.set(cap));
+    }
+
     /// The candidate policy's choice among `candidates`.
     pub fn choose(candidates: &[char]) -> Option<char> {
         super::candidate::choose(candidates.iter().copied())

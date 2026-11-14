@@ -177,6 +177,45 @@ fn surveyed(doc: &Doc) -> Arc<RecoveryDocument> {
     document
 }
 
+/// Review finding: a content stream cut at what is left of the survey's byte cap is not
+/// surveyed from its prefix: whatever the cap, the survey counts everything or gives up. Pages
+/// and forms, Flate-compressed (a decoder stops at the limit it is given) or not, and a page's
+/// content in one stream or several (a stream after the cap is reached is not left out).
+#[test]
+fn a_survey_never_counts_a_stream_cut_at_its_byte_cap() {
+    use super::cjk_fixture::Streams;
+    use hayro::hayro_interpret::font::test_hooks::set_survey_byte_cap;
+    let doc = Doc {
+        fonts: vec![Font::truetype("ABCDEF+Kai", 20)],
+        pages: vec![vec![Show::Text(0, vec![1, 2]), Show::Text(0, vec![3]), Show::Form(vec![Show::Text(0, vec![4, 5])], 1), Show::Text(0, vec![6])]],
+    };
+    for flate in [false, true] {
+        for split in [false, true] {
+            let pdf = parse(doc.build_as(Streams { flate, split }));
+            let survey = |cap: Option<u64>| {
+                set_survey_byte_cap(cap);
+                let document = Arc::new(RecoveryDocument::needing_usage_for_tests());
+                let read = extract_page_recovering(&pdf, 0, &settings(Some(document.clone())));
+                set_survey_byte_cap(None);
+                assert!(read.is_some());
+                document
+            };
+            let full = survey(None).surveyed_fonts();
+            assert_eq!(full, vec![(vec![(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1)], None)]);
+            let mut counted = 0;
+            for cap in 0..400 {
+                let document = survey(Some(cap));
+                if document.survey_over_cap() {
+                    continue;
+                }
+                counted += 1;
+                assert_eq!(document.surveyed_fonts(), full, "flate {flate}, split {split}, cap {cap}");
+            }
+            assert!(counted > 0, "the document fits some cap below 400");
+        }
+    }
+}
+
 /// The survey counts every code a page or a form it draws shows (a form drawn twice counts
 /// twice), in a Type 0 font through `Identity-H` with an embedded program and no `/ToUnicode`
 /// stream; by the glyph id the `/CIDToGIDMap` gives a TrueType program, by CID in a CFF one.

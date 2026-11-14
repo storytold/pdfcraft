@@ -96,6 +96,21 @@ fn glyph_cap() -> u64 {
     MAX_SURVEY_GLYPHS
 }
 
+#[cfg(feature = "test-counters")]
+thread_local! {
+    /// A smaller [`MAX_SURVEY_BYTES`] for the surveys run on this thread (tests).
+    pub(crate) static BYTE_CAP: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// [`MAX_SURVEY_BYTES`], or a test's smaller cap.
+fn byte_cap() -> u64 {
+    #[cfg(feature = "test-counters")]
+    if let Some(cap) = BYTE_CAP.with(std::cell::Cell::get) {
+        return cap;
+    }
+    MAX_SURVEY_BYTES
+}
+
 /// How the program of a surveyed font is embedded, for grouping fonts (`/FontFile2`,
 /// `/FontFile3` of subtype `OpenType`, or of subtype `CIDFontType0C`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -216,10 +231,27 @@ fn untagged_name(dict: &Dict<'_>) -> Vec<u8> {
     }
 }
 
-/// The decoded content of a page (its streams joined by a space), within what is left of
-/// [`MAX_SURVEY_BYTES`].
-fn page_content(page: &Dict<'_>, left: u64) -> Vec<u8> {
+/// The decoded data of `stream` when it fits in `left` bytes ([`MAX_SURVEY_BYTES`] less what
+/// the survey has read): `Ok(None)` when it can't be decoded, and [`Stop::OverCap`] when it
+/// decodes to more. One byte past `left` is asked for, since a decoder stopped at its limit
+/// returns what it has without saying it stopped.
+fn decoded_within_budget<'a>(
+    stream: &Stream<'a>,
+    left: u64,
+) -> Result<Option<std::borrow::Cow<'a, [u8]>>, Stop> {
     let left = usize::try_from(left).unwrap_or(usize::MAX);
+    let Ok(data) = stream.decoded_within(left.saturating_add(1)) else {
+        return Ok(None);
+    };
+    if data.len() > left {
+        return Err(Stop::OverCap);
+    }
+    Ok(Some(data))
+}
+
+/// The decoded content of a page (its streams joined by a space), or [`Stop::OverCap`] when
+/// it is more than what is left of [`MAX_SURVEY_BYTES`].
+fn page_content(page: &Dict<'_>, left: u64) -> Result<Vec<u8>, Stop> {
     let streams: Vec<Stream<'_>> = if let Some(stream) = page.get::<Stream<'_>>(CONTENTS) {
         vec![stream]
     } else if let Some(array) = page.get::<Array<'_>>(CONTENTS) {
@@ -229,16 +261,13 @@ fn page_content(page: &Dict<'_>, left: u64) -> Vec<u8> {
     };
     let mut out = Vec::new();
     for stream in streams {
-        let room = left.saturating_sub(out.len());
-        if room == 0 {
-            break;
-        }
-        if let Ok(data) = stream.decoded_within(room) {
+        let room = left.saturating_sub(u64::try_from(out.len()).unwrap_or(u64::MAX));
+        if let Some(data) = decoded_within_budget(&stream, room)? {
             out.extend_from_slice(&data);
             out.push(b' ');
         }
     }
-    out
+    Ok(out)
 }
 
 impl Survey<'_> {
@@ -394,9 +423,8 @@ impl Survey<'_> {
                     if self.forms > MAX_SURVEY_FORMS {
                         return Err(Stop::OverCap);
                     }
-                    let left = MAX_SURVEY_BYTES.saturating_sub(self.bytes);
-                    let Ok(data) = form.decoded_within(usize::try_from(left).unwrap_or(usize::MAX))
-                    else {
+                    let left = byte_cap().saturating_sub(self.bytes);
+                    let Some(data) = decoded_within_budget(&form, left)? else {
                         continue;
                     };
                     self.read_bytes(data.len())?;
@@ -419,7 +447,7 @@ impl Survey<'_> {
         self.bytes = self
             .bytes
             .saturating_add(u64::try_from(n).unwrap_or(u64::MAX));
-        if self.bytes > MAX_SURVEY_BYTES {
+        if self.bytes > byte_cap() {
             return Err(Stop::OverCap);
         }
         Ok(())
@@ -431,7 +459,7 @@ impl Survey<'_> {
                 return Err(Stop::Cancelled);
             }
             count(Counter::SurveyPage);
-            let data = page_content(page.raw(), MAX_SURVEY_BYTES.saturating_sub(self.bytes));
+            let data = page_content(page.raw(), byte_cap().saturating_sub(self.bytes))?;
             self.read_bytes(data.len())?;
             self.content(&data, page.resources(), 0, &mut Vec::new(), None)?;
         }

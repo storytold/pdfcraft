@@ -76,8 +76,33 @@ pub(super) struct Doc {
     pub(super) pages: Vec<Vec<Show>>,
 }
 
+/// How [`Doc::build_as`] writes the content streams.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Streams {
+    /// Pages' and forms' content Flate-compressed (`/Filter /FlateDecode`).
+    pub(super) flate: bool,
+    /// Each [`Show`] of a page in a stream of its own (`/Contents` an array).
+    pub(super) split: bool,
+}
+
+/// `content` as a stream's dictionary entries (after `dict`) and data, compressed with `flate`.
+fn content_stream(dict: String, content: String, flate: bool) -> (String, Option<Vec<u8>>) {
+    if !flate {
+        return (dict, Some(content.into_bytes()));
+    }
+    use std::io::Write as _;
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    z.write_all(content.as_bytes()).expect("compress in memory");
+    (format!("{dict} /Filter /FlateDecode"), Some(z.finish().expect("compress in memory")))
+}
+
 impl Doc {
     pub(super) fn build(&self) -> Vec<u8> {
+        self.build_as(Streams::default())
+    }
+
+    /// The document with its content streams written as `streams` says.
+    pub(super) fn build_as(&self, streams: Streams) -> Vec<u8> {
         let mut objects: Vec<(String, Option<Vec<u8>>)> = Vec::new();
         // 1 catalog, 2 pages; fonts from 3 (five objects each), then forms and pages.
         objects.push(("<< /Type /Catalog /Pages 2 0 R >>".into(), None));
@@ -149,16 +174,21 @@ impl Doc {
         let mut kids = Vec::new();
         for page in &self.pages {
             let mut xobjects = String::new();
-            let content = self.content(page, &mut objects, &font_refs, &mut xobjects);
+            let contents: Vec<String> = if streams.split {
+                page.iter().map(|show| self.content(std::slice::from_ref(show), &mut objects, &font_refs, &mut xobjects, streams)).collect()
+            } else {
+                vec![self.content(page, &mut objects, &font_refs, &mut xobjects, streams)]
+            };
             let page_at = objects.len() + 1;
+            let refs: Vec<String> = (0..contents.len()).map(|k| format!("{} 0 R", page_at + 1 + k)).collect();
+            let refs = if streams.split { format!("[{}]", refs.join(" ")) } else { refs.join(" ") };
             objects.push((
-                format!(
-                    "<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font <<{font_refs} >> /XObject <<{xobjects} >> >> >>",
-                    page_at + 1
-                ),
+                format!("<< /Type /Page /Parent 2 0 R /Contents {refs} /Resources << /Font <<{font_refs} >> /XObject <<{xobjects} >> >> >>"),
                 None,
             ));
-            objects.push((String::new(), Some(content.into_bytes())));
+            for content in contents {
+                objects.push(content_stream(String::new(), content, streams.flate));
+            }
             kids.push(format!("{page_at} 0 R"));
         }
         if let Some(pages) = objects.get_mut(1) {
@@ -195,7 +225,14 @@ impl Doc {
     }
 
     /// A content stream showing `shows`, forms added to `objects` and named in `xobjects`.
-    fn content(&self, shows: &[Show], objects: &mut Vec<(String, Option<Vec<u8>>)>, font_refs: &str, xobjects: &mut String) -> String {
+    fn content(
+        &self,
+        shows: &[Show],
+        objects: &mut Vec<(String, Option<Vec<u8>>)>,
+        font_refs: &str,
+        xobjects: &mut String,
+        streams: Streams,
+    ) -> String {
         let mut content = String::new();
         let mut y = 760;
         for show in shows {
@@ -210,13 +247,14 @@ impl Doc {
                 }
                 Show::Form(inner, times) => {
                     let mut inner_xobjects = String::new();
-                    let inner_content = self.content(inner, objects, font_refs, &mut inner_xobjects);
+                    let inner_content = self.content(inner, objects, font_refs, &mut inner_xobjects, streams);
                     let at = objects.len() + 1;
-                    objects.push((
+                    objects.push(content_stream(
                         format!(
                             "/Type /XObject /Subtype /Form /BBox [0 0 600 800] /Resources << /Font <<{font_refs} >> /XObject <<{inner_xobjects} >> >>"
                         ),
-                        Some(inner_content.into_bytes()),
+                        inner_content,
+                        streams.flate,
                     ));
                     let _ = write!(xobjects, " /X{at} {at} 0 R");
                     for _ in 0..*times {
