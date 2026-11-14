@@ -277,7 +277,22 @@ fn undoing_delivered_redactions_asks_where() {
     h.get_by_label("Apply").click();
     h.run_steps(4);
     assert!(h.state().views[0].saved_redactions_cut_off);
+    // Delivering the new version ends the cut-off: Save writes in place again.
+    h.state_mut().views[0].redactions_delivered();
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "Save writes in place after the new version is delivered");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An Apply redactions run through `apply_edit` counts the step, as the Apply dialog's does.
+#[test]
+fn apply_edit_counts_an_apply_redactions_step() {
+    let mut h = harness();
+    h.state_mut().execute("redact.pages");
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::ApplyRedactions { pages: None }));
+    assert_eq!(h.state().views[0].redactions_applied, 1);
 }
 
 /// Once every Apply redactions step is delivered, Save writes in place again even though the web

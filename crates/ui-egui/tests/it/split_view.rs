@@ -183,6 +183,26 @@ fn the_same_document_in_both_panes_is_one_document_with_one_undo() {
     wait(&mut h, "both panes drawn again", |s| portrait(s, first) && portrait(s, second));
 }
 
+/// Save reads a view's Apply redactions count, so both panes of a document share it: Save from
+/// either pane asks where, across the frames that bring the other pane up to date.
+#[test]
+fn both_panes_of_a_document_share_the_apply_redactions_count() {
+    let mut h = harness(&["a.pdf"]);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Backslash);
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 2);
+    assert!(h.state_mut().execute("redact.pages"));
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::ApplyRedactions { pages: None }));
+    h.run_steps(4);
+    assert!(h.state().views.iter().all(|v| v.redactions_applied == 1), "both panes count the step");
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(4);
+    assert!(h.state().views.iter().all(|v| v.redactions_applied == 0), "both panes count the Undo");
+}
+
 #[test]
 fn split_again_or_closing_a_panes_last_tab_ends_split_view() {
     let mut h = harness(&["a.pdf", "b.pdf"]);

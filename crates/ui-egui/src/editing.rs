@@ -260,15 +260,9 @@ impl PdfCraftApp {
                 // own backdrop stays off, or places applied redactions left holding the removed text
                 // (the Apply redactions dialog then says it after its count): said, not silent.
                 // Before the scripts' output, so an alert they raise still shows.
-                if let Some(n) = self.session.get(id).and_then(|d| d.edit_notices.first()).cloned() {
-                    self.notify(match &n {
-                        pdfcraft_engine::EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
-                        pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
-                        pdfcraft_engine::EditNotice::RedactionElsewhere(e) => crate::dialogs::still_holding_note(e).unwrap_or_else(|| n.to_string()),
-                        pdfcraft_engine::EditNotice::RedactionIdentification(id) => {
-                            crate::dialogs::identification_note(id).unwrap_or_else(|| n.to_string())
-                        }
-                    });
+                self.notify_first_edit_notice(id);
+                if matches!(edit, Edit::ApplyRedactions { .. }) {
+                    self.count_applied_redactions(i);
                 }
                 let out = self.session.take_js_output(id);
                 self.handle_js(id, out);
@@ -295,6 +289,39 @@ impl PdfCraftApp {
                 self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
                 false
             }
+        }
+    }
+
+    /// Shows the first notice the last edit left on document `id`, if any.
+    fn notify_first_edit_notice(&mut self, id: pdfcraft_engine::DocId) {
+        if let Some(n) = self.session.get(id).and_then(|d| d.edit_notices.first()).cloned() {
+            self.notify(match &n {
+                pdfcraft_engine::EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
+                pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
+                pdfcraft_engine::EditNotice::RedactionElsewhere(e) => crate::dialogs::still_holding_note(e).unwrap_or_else(|| n.to_string()),
+                pdfcraft_engine::EditNotice::RedactionIdentification(id) => crate::dialogs::identification_note(id).unwrap_or_else(|| n.to_string()),
+            });
+        }
+    }
+
+    /// Counts an Apply redactions step that succeeded in view `i` and the document's other views.
+    fn count_applied_redactions(&mut self, i: usize) {
+        let Some(view) = self.views.get_mut(i) else { return };
+        let delivered_undone = view.redactions_applied < view.redactions_downloaded;
+        view.redactions_applied = view.redactions_applied.saturating_add(1);
+        // A new step clears the redo history, so the undone saved steps can't come back.
+        if view.redactions_undone_after_save > 0 || delivered_undone {
+            view.redactions_undone_after_save = 0;
+            view.saved_redactions_cut_off = true;
+        }
+        self.share_redaction_state(i);
+    }
+
+    /// Copies view `i`'s Apply redactions fields to the document's other views (split view).
+    pub(crate) fn share_redaction_state(&mut self, i: usize) {
+        let Some((id, state)) = self.views.get(i).map(|v| (v.id, v.redaction_state())) else { return };
+        for view in self.views.iter_mut().filter(|v| v.id == id) {
+            view.set_redaction_state(state);
         }
     }
 
@@ -419,6 +446,7 @@ impl PdfCraftApp {
                         (false, _, 0) => view.redactions_applied = applied.saturating_add(1),
                         (false, _, _) => view.redactions_undone_after_save = undone.saturating_sub(1),
                     }
+                    self.share_redaction_state(i);
                 }
                 let label = crate::i18n::edit_label(&label);
                 if undo {
