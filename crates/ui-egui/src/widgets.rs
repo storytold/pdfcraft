@@ -90,6 +90,69 @@ pub fn block(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::multiline(text).margin(egui::Margin::symmetric(10, 6))
 }
 
+/// A [`block`] for JavaScript: in the code font, with Tab indenting, and the script coloured by
+/// [`script_layout`]. Every box that edits a script is one of these.
+pub fn script(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
+    // The box borrows its layouter for as long as it lives. `script_layout` is a plain function,
+    // with no data, so boxing it allocates nothing and leaking that box costs nothing.
+    block(text).code_editor().layouter(Box::leak(Box::new(script_layout)))
+}
+
+/// Scripts longer than this are laid out uncoloured. egui's highlighter rescans the rest of a
+/// script for each line that opens a string and doesn't close it, so on a script crafted that way
+/// its time grows with the square of the length: seconds for 64 KiB, half a minute for 256 KiB, and
+/// again after every key typed in it. At 16 KiB that worst case is about a tenth of a second, while
+/// ordinary code of 256 KiB takes milliseconds.
+const MAX_COLOURED_SCRIPT: usize = 16 * 1024;
+
+/// Lays out a [`script`] box's JavaScript coloured by egui's highlighter.
+fn script_layout(ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32) -> std::sync::Arc<egui::Galley> {
+    let t = Tokens::get(ui.ctx());
+    let style = ui.style();
+    let source = text.as_str();
+    let mut job = if source.len() <= MAX_COLOURED_SCRIPT {
+        egui_extras::syntax_highlighting::highlight(ui.ctx(), style, &code_theme(style, &t), source, "js")
+    } else {
+        egui::text::LayoutJob::simple(source.to_owned(), egui::TextStyle::Monospace.resolve(style), t.text, wrap_width)
+    };
+    job.wrap.max_width = wrap_width;
+    // As egui's own layout of a text box: spaces typed at a line's end stay, and rows break as
+    // the interface language does.
+    job.keep_trailing_whitespace = true;
+    job.language = ui.language();
+    ui.fonts_mut(|f| f.layout_job(job))
+}
+
+/// egui's highlighter in colours of our own: its light theme leaves names and strings under 3:1 on
+/// a white field. Names, numbers and punctuation are plain text.
+fn code_theme(style: &egui::Style, t: &Tokens) -> egui_extras::syntax_highlighting::CodeTheme {
+    let mut theme = egui_extras::syntax_highlighting::CodeTheme::from_style(style);
+    for (token, colour) in script_colours(t) {
+        theme.format_mut(token).color = colour;
+    }
+    theme
+}
+
+/// The colour of each kind of token egui's highlighter tells apart, but white space. Each keeps at
+/// least 4.5:1 on the theme's field.
+fn script_colours(t: &Tokens) -> [(egui_extras::syntax_highlighting::TokenType, Color32); 6] {
+    use egui_extras::syntax_highlighting::TokenType;
+    let rgb = Color32::from_rgb;
+    let [keyword, string, comment, function] = if t.dark() {
+        [rgb(0xC7, 0x92, 0xEA), rgb(0x9C, 0xCC, 0x65), rgb(0x9A, 0xA1, 0xAD), rgb(0x82, 0xAA, 0xFF)]
+    } else {
+        [rgb(0x7A, 0x3E, 0x9D), rgb(0x2E, 0x7D, 0x32), rgb(0x6B, 0x70, 0x7A), rgb(0x1F, 0x5F, 0xBF)]
+    };
+    [
+        (TokenType::Keyword, keyword),
+        (TokenType::StringLiteral, string),
+        (TokenType::Comment, comment),
+        (TokenType::Function, function),
+        (TokenType::Literal, t.text),
+        (TokenType::Punctuation, t.text),
+    ]
+}
+
 /// One line that stays within `max_width`, cut on a character boundary with an ellipsis.
 /// Only the first 160 characters are measured, so a huge name cannot lay out thousands of candidates.
 pub(crate) fn fit_line(text: &str, max_width: f32, mut width_of: impl FnMut(&str) -> f32) -> String {
@@ -725,6 +788,73 @@ pub fn icon_pill(ui: &mut egui::Ui, icon: &str, label: &str, primary: bool) -> R
 mod tests {
     use super::*;
     use egui::Pos2;
+
+    /// The colour of each token [`script_layout`] lays `script` out in, in the light theme.
+    fn script_tokens(script: &str) -> Vec<(String, Color32)> {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(theme::font_definitions());
+        theme::apply(&ctx, theme::ThemeKind::Light);
+        let mut tokens = Vec::new();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let galley = script_layout(ui, &script, f32::INFINITY);
+            let range = |s: &egui::text::LayoutSection| s.byte_range.start.0..s.byte_range.end.0;
+            tokens = galley.job.sections.iter().map(|s| (script[range(s)].to_owned(), s.format.color)).collect();
+        });
+        output.drop_without_applying_deltas();
+        tokens
+    }
+
+    /// The colour of `token` among `tokens`, or `None` when it isn't a piece of its own.
+    fn colour_of(tokens: &[(String, Color32)], token: &str) -> Option<Color32> {
+        tokens.iter().find(|(text, _)| text == token).map(|(_, colour)| *colour)
+    }
+
+    /// egui's highlighter colours a keyword, a string, a comment and a call, each its own way; a
+    /// name and punctuation are plain text.
+    #[test]
+    fn script_layout_colours_javascript() {
+        let tokens = script_tokens("var total = getField(\"a\").value; // sum");
+        let t = Tokens::for_kind(theme::ThemeKind::Light);
+        use egui_extras::syntax_highlighting::TokenType;
+        let colours = script_colours(&t);
+        let colour = |kind: TokenType| colours.iter().find(|(k, _)| *k == kind).map(|(_, c)| *c);
+        for (token, kind) in [
+            ("var", TokenType::Keyword),
+            ("\"a\"", TokenType::StringLiteral),
+            ("// sum", TokenType::Comment),
+            ("getField", TokenType::Function),
+            ("total", TokenType::Literal),
+            ("=", TokenType::Punctuation),
+        ] {
+            assert_eq!(colour_of(&tokens, token), colour(kind), "{token}: {tokens:?}");
+        }
+        assert_eq!(colour_of(&tokens, "total"), Some(t.text));
+        assert_ne!(colour_of(&tokens, "var"), Some(t.text));
+    }
+
+    /// A script up to the limit is coloured; one byte more is laid out in one piece of plain text,
+    /// so a script crafted to be slow to colour is not coloured at all.
+    #[test]
+    fn a_script_past_the_limit_is_not_coloured() {
+        let at_limit = format!("var {}", "x".repeat(MAX_COLOURED_SCRIPT - 4));
+        assert_eq!(at_limit.len(), MAX_COLOURED_SCRIPT);
+        assert_ne!(colour_of(&script_tokens(&at_limit), "var"), None, "coloured at the limit");
+        let past = format!("{at_limit}x");
+        let tokens = script_tokens(&past);
+        assert_eq!(tokens, [(past, Tokens::for_kind(theme::ThemeKind::Light).text)]);
+    }
+
+    /// Each colour of a script's tokens reads on the theme's field, at the 4.5:1 of body text.
+    #[test]
+    fn script_colours_read_on_the_field() {
+        for kind in [theme::ThemeKind::Light, theme::ThemeKind::Dark] {
+            let t = Tokens::for_kind(kind);
+            for (token, colour) in script_colours(&t) {
+                let contrast = theme::contrast(colour, t.field);
+                assert!(contrast >= 4.5, "{kind:?} {token:?}: {contrast:.2}:1");
+            }
+        }
+    }
 
     #[test]
     fn search_placeholder_never_overlaps_the_shortcut() {

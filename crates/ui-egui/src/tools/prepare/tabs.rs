@@ -211,6 +211,8 @@ pub(super) fn validate_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
     }
 }
 
+/// Draw the Actions tab: a form to add an action for a trigger (or change the script of the one
+/// being edited), then the field's actions, each with Delete, and Edit for a script.
 pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
     use pdfcraft_engine::FieldTrigger as T;
     let editing = d.editing.is_some();
@@ -247,7 +249,7 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
         };
         ui.label(if a.kind == 0 { tl!("Script:") } else { tl!("Value:") });
         if a.kind == 0 {
-            ui.add(crate::widgets::block(&mut a.text).code_editor().desired_rows(3).desired_width(340.0).hint_text(hint).id_salt("action-text"));
+            ui.add(crate::widgets::script(&mut a.text).desired_rows(3).desired_width(340.0).hint_text(hint).id_salt("action-text"));
         } else {
             ui.add(crate::widgets::line(&mut a.text).desired_width(340.0).hint_text(hint).id_salt("action-text"));
         }
@@ -331,6 +333,8 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
 /// unless another calculation is chosen. The JavaScript engine runs no script past 256 KiB either.
 const MAX_EDITED_SCRIPT: usize = 256 * 1024;
 
+/// Draw the Calculate tab: no calculation, an operation over chosen fields, simplified field
+/// notation, or a custom calculation script (shown read-only past [`MAX_EDITED_SCRIPT`]).
 pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
     #[derive(PartialEq, Clone, Copy)]
     enum Mode {
@@ -412,7 +416,7 @@ pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::th
         // The box is named by its radio, and a note about it is its description too, so a screen
         // reader on the box hears it.
         let script_box = |ui: &mut egui::Ui, text: &mut dyn egui::TextBuffer| {
-            let edit = crate::widgets::block(text).code_editor().hint_text("event.value = …;").desired_rows(6).desired_width(420.0);
+            let edit = crate::widgets::script(text).hint_text("event.value = …;").desired_rows(6).desired_width(420.0);
             let scroll = egui::ScrollArea::vertical().id_salt("calc-script").max_height(180.0);
             scroll.show(ui, |ui| ui.add(edit.char_limit(MAX_EDITED_SCRIPT + 1)).labelled_by(radio.id).id).inner
         };
