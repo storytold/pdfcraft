@@ -11543,6 +11543,81 @@ fn a_justified_paragraph_from_the_editor_fills_its_rows() {
     assert!(row("end")[2] < right - 20.0, "the last row isn't");
 }
 
+/// A justified paragraph with a hanging indent — a spec clause "A." over rows set in from it — is
+/// one block: an edit inside it re-lays the row it reaches justified back to the measure, at the
+/// indent, and leaves the rows it doesn't reach with their own operators (#7213).
+#[test]
+fn an_edit_in_a_justified_hanging_indent_paragraph_keeps_its_justify_and_indent() {
+    let content = "BT /F1 10 Tf 12 TL 1 0 0 1 72 700 Tm (A. two three four five six) Tj 14 -12 Td (two three four five six) Tj 0 -12 Td (two three four five six) Tj 0 -12 Td (end) Tj ET";
+    let rows_of =
+        |doc: &Document| -> Vec<(String, [f64; 4])> { text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text.clone(), l.rect)).collect() };
+    let mut doc = text_page(content);
+    let index = text::text_blocks(&doc, 0).unwrap().iter().position(|b| b.text.contains("A.")).unwrap();
+    let block = text::text_blocks(&doc, 0).unwrap()[index].clone();
+    assert_eq!(block.rows.len(), 4, "the clause is one paragraph, not one box per line: {:?}", block.editor_text);
+    let before = rows_of(&doc);
+    let interior = before.iter().find(|(t, r)| t.starts_with("two") && (r[0] - 86.0).abs() < 0.5).map(|(_, r)| r[2]).unwrap_or_else(|| {
+        panic!(
+            "before: {before:?}; blocks {:?}",
+            text::text_blocks(&doc, 0).unwrap().iter().map(|b| (b.text.clone(), b.rows.len())).collect::<Vec<_>>()
+        )
+    });
+
+    // Deleting a word from an interior row: the row is re-laid at the indent and stretched back to
+    // the measure; the rows the edit doesn't reach keep their own operators.
+    let mut draft_rows: Vec<String> = block.editor_text.split('\n').map(str::to_string).collect();
+    draft_rows[1] = draft_rows[1].replacen("three ", "", 1);
+    text::rewrite_block(&mut doc, 0, index, Some(&draft_rows.join("\n")), &text::BlockStyle::default()).unwrap();
+    let after = rows_of(&reopen(&doc));
+    let edited = after.iter().find(|(t, _)| t == "two four five six").unwrap_or_else(|| panic!("{:?}", after));
+    assert!((edited.1[0] - 86.0).abs() < 0.5, "the edited row keeps the indent: {:?}", edited.1);
+    assert!((edited.1[2] - interior).abs() < 1.0, "the edited row is justified again: {:?} vs {interior}", edited.1);
+    let bytes = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert_eq!(bytes.matches("(two three four five six) Tj").count(), 1, "the untouched row keeps its operators:\n{bytes}");
+    assert!(bytes.contains("(end) Tj"), "the last row keeps its operators:\n{bytes}");
+    assert_eq!(bytes.matches("(two four five six)").count(), 1, "{bytes}");
+}
+
+/// Adding words to the first row of that paragraph wraps the overflow at the indent — not under
+/// the "A." label — and pushes the rows after it down by a leading instead of drawing over them
+/// (#7213).
+#[test]
+fn words_added_to_a_justified_hanging_indent_paragraph_wrap_at_the_indent() {
+    let content = "BT /F1 10 Tf 12 TL 1 0 0 1 72 700 Tm (A. two three four five six) Tj 14 -12 Td (two three four five six) Tj 0 -12 Td (two three four five six) Tj 0 -12 Td (end) Tj ET";
+    let rows_of =
+        |doc: &Document| -> Vec<(String, [f64; 4])> { text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text.clone(), l.rect)).collect() };
+    let mut doc = text_page(content);
+    let index = text::text_blocks(&doc, 0).unwrap().iter().position(|b| b.text.contains("A.")).unwrap();
+    let block = text::text_blocks(&doc, 0).unwrap()[index].clone();
+    let before = rows_of(&doc);
+    let at = |text: &str, n: usize| {
+        let mut rows: Vec<[f64; 4]> = before.iter().filter(|(t, _)| t.starts_with(text)).map(|(_, r)| *r).collect();
+        rows.sort_by(|a, b| b[1].total_cmp(&a[1]));
+        rows.get(n).copied().unwrap_or_else(|| panic!("{text}: {before:?}"))
+    };
+
+    let mut draft_rows: Vec<String> = block.editor_text.split('\n').map(str::to_string).collect();
+    draft_rows[0].push_str(" seven");
+    text::rewrite_block(&mut doc, 0, index, Some(&draft_rows.join("\n")), &text::BlockStyle::default()).unwrap();
+    let after = rows_of(&reopen(&doc));
+    assert_eq!(after.len(), 5, "the overflow is its own row: {after:?}");
+    let seven = after.iter().find(|(t, _)| t.starts_with("seven")).unwrap_or_else(|| panic!("{after:?}")).1;
+    assert!((seven[0] - 86.0).abs() < 0.5, "the overflow wraps at the indent, not under the label: {seven:?}");
+    assert!((seven[1] - at("two", 0)[1]).abs() < 0.5, "the overflow takes the row below the first: {seven:?}");
+    // The rows after the wrap move down a leading each; none of them stays where the overflow now
+    // sits, and the label stays on the margin.
+    let first = after.iter().find(|(t, _)| t.starts_with("A.")).unwrap_or_else(|| panic!("{after:?}")).1;
+    assert!((first[0] - 72.0).abs() < 0.5 && (first[1] - at("A.", 0)[1]).abs() < 0.5, "the label keeps its place: {first:?}");
+    let mut moved: Vec<f64> = after.iter().filter(|(t, _)| t.starts_with("two")).map(|(_, r)| r[1]).collect();
+    assert_eq!(moved.len(), 2, "{after:?}");
+    moved.sort_by(|a, b| b.total_cmp(a));
+    for (n, was) in [0usize, 1].into_iter().enumerate() {
+        assert!((moved[n] - (at("two", was)[1] - 12.0)).abs() < 0.5, "row {n} moves down a leading: {:?} vs {:?}", moved, at("two", was));
+    }
+    let end = after.iter().find(|(t, _)| t.starts_with("end")).unwrap_or_else(|| panic!("{after:?}")).1;
+    assert!((end[1] - (at("end", 0)[1] - 12.0)).abs() < 0.5, "the last row moves down too: {end:?}");
+}
+
 /// An alignment for a row the draft doesn't have names no row: a one-row title given one for a
 /// second row only stays where it is, not moved to its column's edge. Nor does a row of the draft
 /// with no alignment of its own move because another row has one (CodeRabbit on 648dd428).
