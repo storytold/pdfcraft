@@ -12219,6 +12219,10 @@ fn a_static_xfa_forms_template_scripts_run_on_its_own_fields() {
     let out = s.run_javascript(id, "", Some("form1[0].page1[0].hide[0]")).expect("clicks");
     assert_eq!(out.error, None, "{out:?}");
     assert_eq!(hidden(&s), [false, true], "only the large button");
+    // a targeted reset reaches every copy of a page master's field
+    for copy in ["form1[0].#pageSet[0].front[0].stamp[0]", "form1[0].#pageSet[0].front[1].stamp[0]"] {
+        assert!(field(&s, copy).value.iter().all(|v| v.is_empty()), "{copy}: {:?}", field(&s, copy).value);
+    }
     s.run_javascript(id, "", Some("form1[0].page1[0].hide[0]")).expect("clicks again");
     assert_eq!(hidden(&s), [true, true], "the group hides the button set visible in it");
 }

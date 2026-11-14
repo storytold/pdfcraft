@@ -214,7 +214,7 @@ pub fn static_scripted_shell_max_len(data: &str, name: Option<&str>, max_len: Op
 
 /// The template of [`static_scripted_shell`]. Its page master `front` has the text field `stamp`, whose change script
 /// writes `total`; the push button `hide` hides the radio button `large`, then, clicked again, the group `size` while
-/// setting `small` itself visible. `form1.page1` holds the text fields `name` (whose exit script writes
+/// setting `small` itself visible, and resets `stamp` each time. `form1.page1` holds the text fields `name` (whose exit script writes
 /// `total`), `total` (whose initialize script fills it) and, in an unnamed subform, `inner` (whose initialize script fills
 /// it and whose calculate script reads `name`); the push button `go`, whose click script sets `total`, hides `name`, makes `inner` read-only and shows a message;
 /// the check box `agree` and the radio group `size` (buttons `small` and `large`), whose click scripts write `total`.
@@ -256,7 +256,7 @@ pub fn static_scripted_template() -> String {
         radio("large", 2),
         js(
             "click",
-            "if (size.large.presence != &quot;hidden&quot;) { size.large.presence = &quot;hidden&quot;; } else { size.presence = &quot;hidden&quot;; size.small.presence = &quot;visible&quot;; }"
+            "if (size.large.presence != &quot;hidden&quot;) { size.large.presence = &quot;hidden&quot;; } else { size.presence = &quot;hidden&quot;; size.small.presence = &quot;visible&quot;; } xfa.host.resetData(&quot;stamp&quot;);"
         ),
     )
 }
@@ -328,6 +328,38 @@ pub fn static_shell_many(n: usize) -> Vec<u8> {
                 "<< /Type /Annot /Subtype /Widget /FT /Tx /T (f{i}[0]){flags} /Parent 7 0 R /Rect [{x} {y} {} {}] /P 3 0 R /DA (/Helv 9 Tf 0 g) >>",
                 x + 100,
                 y + 12
+            )
+            .into_bytes(),
+        );
+    }
+    assemble(objs)
+}
+
+/// A static XFA form whose subform `row` occurs twice, each holding the text field `x`, laid out as an AcroForm whose
+/// fields `form1[0].page1[0].row[i].x[0]` come in the order `rows` gives (each `i` 0 or 1, once).
+pub fn static_rows_shell(rows: &[usize]) -> Vec<u8> {
+    let xdp = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\" layout=\"tb\"><subform name=\"page1\" layout=\"tb\"><subform name=\"row\" layout=\"tb\"><occur min=\"2\" max=\"2\" initial=\"2\"/><field name=\"x\" w=\"2in\" h=\"0.3in\"><ui><textEdit/></ui></field></subform></subform></subform></template></xdp:xdp>";
+    // Objects 1-7, then for each row its field (8 + 2k) and that field's widget (9 + 2k).
+    let fields: Vec<String> = (0..rows.len()).map(|k| format!("{} 0 R", 8 + 2 * k)).collect();
+    let widgets: Vec<String> = (0..rows.len()).map(|k| format!("{} 0 R", 9 + 2 * k)).collect();
+    let (fields, widgets) = (fields.join(" "), widgets.join(" "));
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA 5 0 R /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Annots [{widgets}] >>").into_bytes(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        b"<< /T (form1[0]) /Kids [7 0 R] >>".to_vec(),
+        format!("<< /T (page1[0]) /Parent 6 0 R /Kids [{fields}] >>").into_bytes(),
+    ];
+    for (k, i) in rows.iter().enumerate() {
+        let y = 700 - k * 40;
+        objs.push(format!("<< /T (row[{i}]) /Parent 7 0 R /Kids [{} 0 R] >>", 9 + 2 * k).into_bytes());
+        objs.push(
+            format!(
+                "<< /Type /Annot /Subtype /Widget /FT /Tx /T (x[0]) /Parent {} 0 R /Rect [72 {y} 300 {}] /P 3 0 R /DA (/Helv 10 Tf 0 g) >>",
+                8 + 2 * k,
+                y + 20
             )
             .into_bytes(),
         );

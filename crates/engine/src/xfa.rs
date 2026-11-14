@@ -930,7 +930,16 @@ impl<'a, 'b> Runner<'a, 'b> {
         let by_som = self.by_som().clone();
         let targets = (!names.is_empty()).then(|| ResetTargets::new(names));
         let wanted = |som: &str| targets.as_ref().is_none_or(|t| t.matches(som));
-        let listed: Option<Vec<String>> = targets.as_ref().map(|_| by_som.iter().filter(|(som, _)| wanted(som)).map(|(_, f)| f.clone()).collect());
+        // every field bound to a wanted path: a static form's page-master copies share their master's
+        let listed: Option<Vec<String>> = targets.as_ref().map(|_| {
+            if self.static_form {
+                let mut names: Vec<String> = self.static_entries.iter().filter(|(som, _, _)| wanted(som)).map(|(_, f, _)| f.clone()).collect();
+                names.dedup();
+                names
+            } else {
+                by_som.iter().filter(|(som, _)| wanted(som)).map(|(_, f)| f.clone()).collect()
+            }
+        });
         // Fields and exclusion groups of the live form with no widget yet (a row an opening
         // script added, before the form is laid out again): their data goes back to the
         // template's default too, or the value would stay and be laid out and saved.
@@ -1646,15 +1655,27 @@ fn static_fields(doc: &pdfcraft_cos::Document, tpl: &Template, live: &LiveForm) 
     gather(&live.root, &mut by_key, 0);
     let areas: HashSet<&str> = tpl.root.page_set.iter().flat_map(|ps| ps.areas.iter().filter_map(|a| a.name.as_deref())).collect();
     let mut taken: HashMap<Vec<String>, usize> = HashMap::new();
+    let mut assigned: HashSet<String> = HashSet::new();
     let mut out = Vec::new();
     for f in pdfcraft_forms::fields(doc) {
         let key = som_key(&f.name);
         if let Some(soms) = by_key.get(&key) {
-            let n = taken.entry(key).or_insert(0);
-            if let Some(som) = soms.get(*n) {
+            // A name with no unnamed step carries the live indices: it is that object, wherever it comes in the list.
+            // Otherwise the next one not yet taken (Designer numbers inside each unnamed subform, SOM across them).
+            let exact = (!f.name.contains('#')).then(|| soms.iter().find(|s| **s == f.name && !assigned.contains(*s))).flatten();
+            let som = exact.or_else(|| {
+                let n = taken.entry(key).or_insert(0);
+                while soms.get(*n).is_some_and(|s| assigned.contains(s)) {
+                    *n += 1;
+                }
+                let next = soms.get(*n);
+                *n += 1;
+                next
+            });
+            if let Some(som) = som {
+                assigned.insert(som.clone());
                 out.push((som.clone(), f.name.clone(), f.obj));
             }
-            *n += 1;
             continue;
         }
         // Page-master content: its steps from the page area on, every copy the master's own.
@@ -1748,6 +1769,19 @@ pub(crate) fn mark_script_buttons(doc: &pdfcraft_cos::Document, fields: &mut [pd
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A static form's field whose name has no unnamed step is the live object of its indices, whatever order the
+    /// AcroForm lists the fields in, and when only a later instance has a field.
+    #[test]
+    fn a_static_fields_indices_pick_its_instance() {
+        for rows in [&[0, 1][..], &[1, 0], &[1]] {
+            let doc = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::static_rows_shell(rows))).expect("opens");
+            let tpl = pdfcraft_xfa::template_of(&doc).expect("a template");
+            for f in pdfcraft_forms::fields(&doc) {
+                assert_eq!(static_som(&doc, &tpl, &f).as_deref(), Some(f.name.as_str()), "{rows:?}");
+            }
+        }
+    }
 
     /// A run of resets keeps each name once, in the order first given, and a reset of the whole
     /// form takes in the rest, before or after it.
