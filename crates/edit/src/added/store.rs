@@ -187,8 +187,9 @@ fn validate(c: &Content) -> Result<(), EditError> {
             // Everything else in it is drawn in the standard font, so it still has to fit.
             let undrawable = if t.text.chars().any(shaped_arabic) && pdfcraft_fonts::document_arabic_font().is_none() {
                 t.text.split('\n').find_map(|line| {
-                    line.chars()
-                        .find(|c| !(shaped_arabic(*c) || is_thai(*c) && pdfcraft_fonts::thai_has(*c) || pdfcraft_fonts::win_ansi_encodable(*c)))
+                    line.chars().find(|c| {
+                        !(shaped_arabic(*c) || is_thai(*c) && pdfcraft_fonts::thai_has_styled(*c, t.bold) || pdfcraft_fonts::win_ansi_encodable(*c))
+                    })
                 })
             } else {
                 first_undrawable(t)

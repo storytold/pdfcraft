@@ -5,6 +5,7 @@
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-10-27 · **Last updated:** 2026-10-27 · **Change:** minor (M7, refs #1384: Thai Add Text uses craft-fonts' opt-in Thai document face, Sarabun, when the checkout has `fonts/thai-manifest.txt`; Noto Sans Thai otherwise and in the interface; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: vector printing preserves annotation optional-content membership; estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M10 #5029: Text appearances have implicit NoRotate during vector printing even when the flag is clear; estimates unchanged)
 >
