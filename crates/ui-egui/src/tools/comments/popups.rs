@@ -207,33 +207,64 @@ struct Parts<'v> {
 fn text_box(ui: &mut egui::Ui, parts: &mut Parts<'_>, a: &Annotation, name: &str) {
     let key = (a.page, a.index);
     if parts.allowed && !a.locked {
-        let typed = parts.cv.popup_text.as_ref().filter(|(p, i, _)| (*p, *i) == key).map(|(_, _, s)| s.clone());
-        let mut text = typed.unwrap_or_else(|| a.contents.clone().unwrap_or_default());
-        let field = ui
-            .add(
-                egui::TextEdit::multiline(&mut text)
-                    .desired_rows(1)
-                    .desired_width(f32::INFINITY)
-                    .font(theme::regular(12.5))
-                    .text_color(parts.pal.ink)
-                    .background_color(Color32::WHITE)
-                    .margin(egui::Margin::symmetric(4, 2))
-                    .id_salt(("popup-text", a.page, a.index)),
-            )
-            .accessible_name(name);
-        if field.changed() {
-            parts.cv.popup_text = Some((a.page, a.index, text.clone()));
-        }
-        if field.lost_focus()
-            && let Some((_, _, s)) = parts.cv.popup_text.take_if(|(p, i, _)| (*p, *i) == key)
-            && s.trim_end() != a.contents.as_deref().unwrap_or_default()
-        {
-            parts.edits.push(Edit::SetAnnotationContents { page: a.page, index: a.index, text: s.trim_end().to_string() });
+        let contents = a.contents.as_deref().unwrap_or_default();
+        let has_math = crate::math::parse_math_segments(contents)
+            .iter()
+            .any(|segment| matches!(segment, crate::math::MathSegment::InlineMath(_) | crate::math::MathSegment::BlockMath(_)));
+        let is_editing = !has_math || parts.cv.popup_editing == Some(key) || parts.cv.popup_text.as_ref().is_some_and(|(p, i, _)| (*p, *i) == key);
+        if is_editing {
+            let typed = parts.cv.popup_text.as_ref().filter(|(p, i, _)| (*p, *i) == key).map(|(_, _, s)| s.clone());
+            let mut text = typed.unwrap_or_else(|| a.contents.clone().unwrap_or_default());
+            let field = ui
+                .add(
+                    egui::TextEdit::multiline(&mut text)
+                        .desired_rows(1)
+                        .desired_width(f32::INFINITY)
+                        .font(theme::regular(12.5))
+                        .text_color(parts.pal.ink)
+                        .background_color(Color32::WHITE)
+                        .margin(egui::Margin::symmetric(4, 2))
+                        .id_salt(("popup-text", a.page, a.index)),
+                )
+                .accessible_name(name);
+            if parts.cv.popup_focus_target == Some(key) {
+                field.request_focus();
+                parts.cv.popup_focus_target = None;
+            }
+            if field.changed() {
+                parts.cv.popup_text = Some((a.page, a.index, text.clone()));
+            }
+            if field.lost_focus() {
+                if let Some((_, _, s)) = parts.cv.popup_text.take_if(|(p, i, _)| (*p, *i) == key)
+                    && s.trim_end() != a.contents.as_deref().unwrap_or_default()
+                {
+                    parts.edits.push(Edit::SetAnnotationContents { page: a.page, index: a.index, text: s.trim_end().to_string() });
+                }
+                parts.cv.popup_editing = None;
+            }
+        } else {
+            let frame = egui::Frame::NONE.fill(Color32::WHITE).inner_margin(egui::Margin::symmetric(4, 2));
+            let resp = frame
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    if contents.trim().is_empty() {
+                        ui.label(egui::RichText::new(tl!("Add a comment")).font(theme::regular(12.5)).color(parts.pal.faint));
+                    } else {
+                        crate::math::render_math_text(ui, contents, theme::regular(12.5), parts.pal.ink);
+                    }
+                })
+                .response;
+            let click_resp = ui.interact(resp.rect, egui::Id::unique(("popup-view", a.page, a.index)), egui::Sense::click());
+            if click_resp.clicked() {
+                parts.cv.popup_editing = Some(key);
+                parts.cv.popup_focus_target = Some(key);
+                ui.ctx().request_repaint();
+            }
         }
     } else {
         egui::Frame::NONE.fill(Color32::WHITE).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new(a.contents.as_deref().unwrap_or_default()).font(theme::regular(12.5)).color(parts.pal.ink));
+            crate::math::render_math_text(ui, a.contents.as_deref().unwrap_or_default(), theme::regular(12.5), parts.pal.ink);
         });
     }
 }

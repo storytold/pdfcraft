@@ -898,3 +898,36 @@ fn comment_marker_wins_over_an_overlapping_body_for_pick_and_hover() {
     super::input::describe(&hidden, &mut view);
     assert!(view.cursor.resolve(&ctx, QuickTool::Select).is_none());
 }
+
+#[test]
+fn comment_with_latex_math_in_hover_tooltip() {
+    let a = Annotation {
+        subtype: "Text".into(),
+        author: Some("Davide".into()),
+        contents: Some("($KB \\models \\alpha$)".into()),
+        ..annotation("Text", Some("Davide"), false)
+    };
+    let prefs = CommentPrefs::default();
+    let tip = super::input::hover_tip(&a, &prefs).unwrap();
+    assert_eq!(tip, "Davide\n($KB \\models \\alpha$)");
+    let formatted = crate::math::format_text_with_math(&tip);
+    assert_eq!(formatted, "Davide\n(KB ⊨ α)");
+}
+
+#[test]
+fn comment_view_popup_editing_lifecycle() {
+    let mut cv = CommentView::default();
+    assert_eq!(cv.popup_editing, None);
+
+    // Enter edit mode
+    cv.popup_editing = Some((0, 2));
+    cv.popup_focus_target = Some((0, 2));
+    cv.popup_text = Some((0, 2, "($KB \\models \\alpha$)".into()));
+    assert_eq!(cv.popup_keys(), vec![(0, 2), (0, 2)]);
+
+    // After history step (undo/redo), editing mode resets
+    cv.history_stepped();
+    assert_eq!(cv.popup_editing, None);
+    assert_eq!(cv.popup_focus_target, None);
+    assert_eq!(cv.popup_text, None);
+}
