@@ -1,3 +1,5 @@
+use pdfcraft_content::Matrix;
+
 use super::draw::{draw, params};
 use super::layout::{first_undrawable, is_thai, nums, shaped_arabic, thai_error};
 use super::types::{Added, AddedImage, AddedText, CHAR_SPACING_LIMIT, Family, Ink, MarkerScan, TAG};
@@ -146,13 +148,63 @@ pub fn scan_markers(doc: &Document) -> MarkerScan {
                             .and_then(Object::as_f64)
                             .filter(|u| u.is_finite() && *u >= 1.0)
                             .map_or(1.0, |u| u.min(pdfcraft_model::MAX_USER_UNIT));
-                        scan.added.push(Added { page: pi, obj, content: content.scaled(page.user_unit(doc) / written) });
+                        let now = page.user_unit(doc);
+                        let mut content = content.scaled(now / written);
+                        // Drawn for a view the page has since left (rotated, cropped, #7248): its box
+                        // as the page shows it now.
+                        if written == now
+                            && let Some(basis) = basis(doc, obj, params)
+                            && let Some(to_now) = Matrix(basis).then_into(&page.view_matrix(doc))
+                        {
+                            content = content.with_rect(to_now.bbox(content.rect()));
+                        }
+                        scan.added.push(Added { page: pi, obj, content });
                     }
                 });
             });
         });
     }
     scan
+}
+
+/// The view an existing item was drawn for: the matrix its stream starts with (`q … cm`, as
+/// `draw` writes it), or the one a later move kept (`/MoveOrigin`). `None` when neither reads as
+/// six finite numbers, or the stream can't be decoded.
+fn basis(doc: &Document, obj: ObjRef, params: &Dict) -> Option<[f64; 6]> {
+    let finite = |m: [f64; 6]| m.iter().all(|v| v.is_finite() && v.abs() <= 1e12).then_some(m);
+    if let Some(o) = params.get(b"MoveOrigin") {
+        return doc.resolve(o).as_array().and_then(|a| Matrix::from_operands(a)).and_then(|m| finite(m.0));
+    }
+    let Object::Stream(s) = &*doc.get(obj) else { return None };
+    let limit = pdfcraft_cos::MAX_PAGE_DECODED.max(s.raw.len().saturating_mul(16));
+    let data = s.decoded_within(limit).ok()?;
+    let mut words = data.split(u8::is_ascii_whitespace).filter(|w| !w.is_empty());
+    if words.next()? != b"q" {
+        return None;
+    }
+    let mut m = [0.0; 6];
+    for v in &mut m {
+        *v = std::str::from_utf8(words.next()?).ok()?.parse().ok()?;
+    }
+    (words.next()? == b"cm").then_some(m).and_then(finite)
+}
+
+/// Matrix helpers for moving a box between two views (display space to user space).
+trait Views {
+    /// The matrix from this view's display space to `to`'s: through user space. `None` when the
+    /// views are the same (nothing to move) or `to` has no inverse.
+    fn then_into(&self, to: &[f64; 6]) -> Option<Matrix>;
+}
+
+impl Views for Matrix {
+    fn then_into(&self, to: &[f64; 6]) -> Option<Matrix> {
+        // The matrix is written with a few decimals: closer than that is the same view.
+        let same = self.0.iter().zip(to).all(|(a, b)| (a - b).abs() <= 1e-3);
+        if same {
+            return None;
+        }
+        Some(self.then(&Matrix(*to).invert()?))
+    }
 }
 
 fn validate(c: &Content) -> Result<(), EditError> {
@@ -212,8 +264,30 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
     let all = page_list(doc);
     check(&[page], all.len())?;
     let p = &all[page];
-    let view = p.view_matrix(doc);
     let user_unit = p.user_unit(doc);
+    // An item drawn for a view the page has since left (rotated or cropped after it was added) is
+    // drawn again for that view, its box (given as the page shows it now) taken back to it, so a
+    // restyle doesn't move it (#7248). A new item, and one whose /UserUnit changed, are drawn for
+    // the page's view.
+    let now = p.view_matrix(doc);
+    let kept = obj.and_then(|r| {
+        let params = doc.get(r).as_dict().and_then(|d| d.get(b"PCAdded")).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned())?;
+        let written = params.get(b"UserUnit").and_then(Object::as_f64).filter(|u| u.is_finite() && *u >= 1.0).unwrap_or(1.0);
+        (written == user_unit).then(|| basis(doc, r, &params)).flatten()
+    });
+    let back = kept.and_then(|b| Matrix(now).then_into(&b));
+    let (view, moved);
+    let c = match (kept, back) {
+        (Some(b), Some(back)) => {
+            view = b;
+            moved = c.with_rect(back.bbox(c.rect()));
+            &moved
+        }
+        _ => {
+            view = now;
+            c
+        }
+    };
     // The page gets its own copy of its resources with the item's fonts and images added, and
     // without the Arabic fonts of the version it replaces.
     let mut pres = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
