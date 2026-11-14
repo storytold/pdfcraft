@@ -154,7 +154,7 @@ impl JsOutput {
     /// Adds what a field's own script produced: its alerts, console lines, errors and requests,
     /// except a request to print, show a side panel, open Save As, or open or save an attached
     /// file, which is noted on the console and dropped.
-    fn absorb(&mut self, o: &Outcome) {
+    pub(crate) fn absorb(&mut self, o: &Outcome) {
         self.alert(o.alerts.iter().cloned());
         self.say(o.console.iter().cloned());
         // A field's own scripts (keystroke, format, validate, calculate) run unasked: only a
@@ -187,7 +187,8 @@ impl JsOutput {
         }
     }
 
-    pub(crate) fn append(&mut self, other: JsOutput) {
+    /// Adds what other scripts produced, telling a document script's error once.
+    pub fn append(&mut self, other: JsOutput) {
         self.alert(other.alerts);
         self.say(other.console);
         self.requests.extend(other.requests);
@@ -408,6 +409,8 @@ fn changes(
                 text_color: a.text_color.as_deref().filter(|_| a.text_color != b.text_color).map(<[_]>::to_vec),
                 fill_color: a.fill_color.as_deref().filter(|_| a.fill_color != b.fill_color).map(<[_]>::to_vec),
                 caption: (a.caption != b.caption || (a.caption_written && b.caption_mixed)).then(|| a.caption.clone()).flatten(),
+                options: (a.options != b.options).then(|| a.options.clone()),
+                actions: a.actions.clone(),
             };
             (c.value.is_some()
                 || c.read_only.is_some()
@@ -422,7 +425,9 @@ fn changes(
                 || c.line_width.is_some()
                 || c.border_style.is_some()
                 || c.user_name.is_some()
-                || c.icon.is_some())
+                || c.icon.is_some()
+                || c.options.is_some()
+                || !c.actions.is_empty())
             .then_some(c)
         })
         .collect()
@@ -531,6 +536,7 @@ impl JsRunner {
         let mut current = Self::new(cos, &self.doc.file_name, self.doc.runtime_highlight);
         current.doc.zoom = self.doc.zoom;
         current.doc.page = self.doc.page;
+        current.doc.layers = std::mem::take(&mut self.doc.layers);
         self.doc = current.doc;
         self.doc_scripts = current.doc_scripts;
         self.calculations = None;
@@ -560,6 +566,7 @@ impl JsRunner {
             runtime_highlight: highlight,
             icon_epoch: 0,
             icon_versions: Default::default(),
+            layers: Vec::new(),
         };
         // Once XFA owns the form, the PDF container's scripts belong to its fallback view.
         // Keep them in the file and in Document JavaScripts, but do not initialize an
@@ -589,7 +596,7 @@ impl JsRunner {
 }
 
 /// Index calculation sources by PDF object identity, retaining their matching snapshot positions.
-fn calculation_scripts(cos: &pdfcraft_cos::Document, fields: &[Field]) -> Vec<(usize, String)> {
+pub(crate) fn calculation_scripts(cos: &pdfcraft_cos::Document, fields: &[Field]) -> Vec<(usize, String)> {
     #[cfg(test)]
     SNAPSHOT_WORK.with(|c| {
         let (g, p) = c.get();
@@ -660,6 +667,7 @@ impl Scripts for JsRunner {
             fields: states,
             doc_scripts: self.doc_scripts.clone(),
             calculations,
+            timer: None,
         };
         #[cfg(not(target_arch = "wasm32"))]
         let remaining = self.callback_time_left();
@@ -748,6 +756,7 @@ impl Scripts for JsRunner {
                 fields: states,
                 doc_scripts: self.doc_scripts.clone(),
                 calculations: calculations.clone(),
+                timer: None,
             };
             let remaining = self.callback_time_left();
             let outcome = if remaining.is_zero() {
@@ -827,6 +836,23 @@ impl DocumentScriptEvent {
             Self::WillPrint => "WillPrint",
         }
     }
+
+    /// Where the catalog keeps this event's actions.
+    fn trigger(self) -> pdfcraft_forms::DocumentTrigger {
+        match self {
+            Self::CatalogOpen => pdfcraft_forms::DocumentTrigger::Open,
+            Self::WillSave => pdfcraft_forms::DocumentTrigger::WillSave,
+            Self::WillPrint => pdfcraft_forms::DocumentTrigger::WillPrint,
+        }
+    }
+}
+
+/// Keep only what a script that ran unasked (on opening, before saving or printing) may ask
+/// the viewer for: highlighting, zoom, focus and the page shown. Opening a URL, a file, mail or
+/// a dialog needs a click.
+fn unasked_requests(requests: &mut Vec<Request>) {
+    requests
+        .retain(|r| matches!(r, Request::Highlight(_) | Request::Zoom(_) | Request::Focus(_) | Request::FocusField { .. } | Request::GoToPage(_)));
 }
 
 impl Session {
@@ -878,13 +904,33 @@ impl Session {
     /// change runs it) isn't run a second time. Returns whether the document changed; what the
     /// scripts showed or asked for is in [`Session::take_js_output`].
     pub fn field_focus(&mut self, id: DocId, name: &str, widget: usize, focus: FieldFocus) -> Result<bool, EditError> {
+        self.field_focus_target(id, name, None, widget, focus)
+    }
+
+    /// [`Session::field_focus`] for the field object `target` ([`field_object_id`]) when given:
+    /// of fields sharing `name`, the one that gained or lost focus runs its own script.
+    pub fn field_focus_target(&mut self, id: DocId, name: &str, target: Option<u64>, widget: usize, focus: FieldFocus) -> Result<bool, EditError> {
         if self.js_off {
             return Ok(false);
         }
         let doc = self.doc_mut(id)?;
-        let Some(tpl) = doc.xfa_template.clone().filter(|t| pdfcraft_xfa::has_focus_scripts(t)) else { return Ok(false) };
+        let Some(tpl) = doc.xfa_template.clone().filter(|t| pdfcraft_xfa::has_focus_scripts(t)) else {
+            // An AcroForm widget's own On Focus / On Blur JavaScript (#269).
+            let trigger = match focus {
+                FieldFocus::Enter => pdfcraft_forms::Trigger::OnFocus,
+                FieldFocus::Exit => pdfcraft_forms::Trigger::OnBlur,
+            };
+            return self.field_trigger_target(id, name, target, widget, trigger);
+        };
         let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return Ok(false) };
-        let Some(som) = doc.form.iter().find(|f| f.name == name).and_then(|f| crate::xfa::widget_som(cos, f, widget)) else { return Ok(false) };
+        let Some(som) = doc
+            .form
+            .iter()
+            .find(|f| f.name == name && target.is_none_or(|t| field_object_id(f.obj) == t))
+            .and_then(|f| crate::xfa::widget_som(cos, f, widget))
+        else {
+            return Ok(false);
+        };
         let activity = match focus {
             FieldFocus::Enter => "enter",
             FieldFocus::Exit => "exit",
@@ -900,6 +946,85 @@ impl Session {
         let before = doc.generation;
         self.apply(id, Edit::XfaEvent { som, activity: activity.into() })?;
         Ok(self.get(id).is_some_and(|d| d.generation != before))
+    }
+
+    /// Widget `widget` (0-based) of AcroForm field `name` in document `id` saw `trigger`: the
+    /// pointer entered, left, pressed or released it, or it gained or lost the focus. Run that
+    /// widget's JavaScript action for the trigger, if it has one, in the document's realm, with
+    /// `event.type` "Field" and `event.name` "Mouse Enter", "Mouse Exit", "Mouse Down", "Mouse
+    /// Up", "Focus" or "Blur" (#269, ported from #344), then those of the actions chained after
+    /// it (`/Next`). What each action changes is one undoable edit.
+    /// Returns whether the document changed; what the script showed or asked for is in
+    /// [`Session::take_js_output`]. Pointer and focus scripts run unasked, so they may not
+    /// print, open Save As or show a panel; Mouse Down and Mouse Up come from a click and may.
+    /// Nothing runs on an XFA form (its own events run instead), with JavaScript off, or for a
+    /// widget with no JavaScript for the trigger.
+    pub fn field_trigger(&mut self, id: DocId, name: &str, widget: usize, trigger: pdfcraft_forms::Trigger) -> Result<bool, EditError> {
+        self.field_trigger_target(id, name, None, widget, trigger)
+    }
+
+    /// [`Session::field_trigger`] for the field object `target` ([`field_object_id`]) when given:
+    /// of fields sharing `name`, the one the pointer is on runs its own script.
+    pub fn field_trigger_target(
+        &mut self,
+        id: DocId,
+        name: &str,
+        target: Option<u64>,
+        widget: usize,
+        trigger: pdfcraft_forms::Trigger,
+    ) -> Result<bool, EditError> {
+        use pdfcraft_forms::Trigger;
+        if self.js_off {
+            return Ok(false);
+        }
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        if doc.info.xfa.is_some() {
+            return Ok(false);
+        }
+        let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return Ok(false) };
+        let field = doc
+            .form
+            .iter()
+            .find(|f| f.name == name && target.is_none_or(|t| field_object_id(f.obj) == t))
+            .ok_or_else(|| EditError::Invalid(format!("there is no field named {name:?}")))?;
+        let Some(w) = field.widgets.get(widget) else { return Ok(false) };
+        let scripts = pdfcraft_forms::widget_scripts(cos, w.obj, trigger);
+        if scripts.is_empty() {
+            return Ok(false);
+        }
+        let target_id = Some(field_object_id(field.obj));
+        let event = match trigger {
+            Trigger::OnFocus => "Focus",
+            Trigger::OnBlur => "Blur",
+            other => other.label(),
+        };
+        let before = doc.generation;
+        let mut out = JsOutput::default();
+        // Each action of a /Next chain runs on its own, as Acrobat runs them: one that fails
+        // doesn't stop the next.
+        for script in scripts {
+            let o = match self.run_javascript_job(id, &script, (Some(name), target_id), &[], Some(event), false) {
+                Ok(o) => o,
+                Err(e) => {
+                    out.errors.push(e.to_string());
+                    continue;
+                }
+            };
+            if matches!(trigger, Trigger::MouseUp | Trigger::MouseDown) {
+                out.append(JsOutput {
+                    alerts: o.alerts,
+                    console: o.console,
+                    requests: o.requests,
+                    errors: o.error.into_iter().chain(o.doc_errors.iter().cloned()).collect(),
+                    doc_errors: o.doc_errors,
+                });
+            } else {
+                out.absorb(&o);
+            }
+        }
+        let doc = self.doc_mut(id)?;
+        doc.js_output.append(out);
+        Ok(doc.generation != before)
     }
 
     /// Run signature field `field`'s XFA signing scripts for `event` in document `id`: `preSign`
@@ -970,9 +1095,66 @@ impl Session {
         self.run_javascript_job(id, "", (None, None), &[], None, true)
     }
 
+    /// Opening document `id`: its document-level scripts run once, then the catalog
+    /// `/OpenAction`'s JavaScript, in the document's retained realm (#269). Not on an XFA form
+    /// (its own opening scripts run instead) or with JavaScript off. What they showed or asked
+    /// for waits in [`Session::take_js_output`].
+    pub(crate) fn run_open_scripts(&mut self, id: DocId) {
+        if self.js_off {
+            return;
+        }
+        let Some(doc) = self.get(id).filter(|d| d.info.xfa.is_none()) else { return };
+        let has_document_scripts = !doc.document_scripts().is_empty();
+        let opens =
+            doc.editor.as_ref().map(|e| pdfcraft_forms::document_action_scripts(&e.cos, pdfcraft_forms::DocumentTrigger::Open)).unwrap_or_default();
+        if !has_document_scripts && opens.is_empty() {
+            return;
+        }
+        let mut out = JsOutput::default();
+        if has_document_scripts && opens.is_empty() {
+            match self.run_opening_javascript(id) {
+                Ok(o) => out.absorb(&o),
+                Err(e) => out.errors.push(e.to_string()),
+            }
+        }
+        // The first open action initializes the realm with the document scripts too.
+        out.append(self.run_actions(id, DocumentScriptEvent::CatalogOpen, &opens));
+        unasked_requests(&mut out.requests);
+        if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) {
+            doc.js_output.append(out);
+        }
+    }
+
+    /// Run the catalog's JavaScript actions for document event `event` (`/AA /WS` before a save,
+    /// `/AA /WP` before printing, `/OpenAction` on opening) in document `id`'s retained realm.
+    /// Each action's field changes are one undoable edit. A failing action is reported in the
+    /// output and the next one still runs; it never stops the save or print, which must not
+    /// lose the user's work. Requests are limited to what an unasked script may make. With
+    /// JavaScript off, on an XFA form, or with no such action, nothing runs.
+    pub fn run_document_actions(&mut self, id: DocId, event: DocumentScriptEvent) -> JsOutput {
+        if self.js_off {
+            return JsOutput::default();
+        }
+        let Some(doc) = self.get(id).filter(|d| d.info.xfa.is_none()) else { return JsOutput::default() };
+        let scripts = doc.editor.as_ref().map(|e| pdfcraft_forms::document_action_scripts(&e.cos, event.trigger())).unwrap_or_default();
+        self.run_actions(id, event, &scripts)
+    }
+
+    fn run_actions(&mut self, id: DocId, event: DocumentScriptEvent, scripts: &[String]) -> JsOutput {
+        let mut out = JsOutput::default();
+        for script in scripts {
+            match self.run_javascript_job(id, script, (None, None), &[], Some(event.name()), event == DocumentScriptEvent::CatalogOpen) {
+                Ok(o) => out.absorb(&o),
+                Err(e) => out.errors.push(format!("{} script: {e}", event.name())),
+            }
+        }
+        unasked_requests(&mut out.requests);
+        out
+    }
+
     /// Run an explicitly dispatched PDF document action in the document's retained runtime.
     pub fn run_document_script_event(&mut self, id: DocId, event: DocumentScriptEvent, script: &str) -> Result<Outcome, EditError> {
-        self.run_javascript_job(id, script, (None, None), &[], Some(event), false)
+        self.run_javascript_job(id, script, (None, None), &[], Some(event.name()), false)
     }
 
     /// Route generated XFA clicks to the XFA engine, or run a synchronous AcroForm job and apply its outcome.
@@ -982,7 +1164,7 @@ impl Session {
         script: &str,
         (target, target_id): (Option<&str>, Option<u64>),
         answers: &[Option<String>],
-        document_event: Option<DocumentScriptEvent>,
+        event_name: Option<&'static str>,
         opening: bool,
     ) -> Result<Outcome, EditError> {
         if self.js_off {
@@ -993,6 +1175,7 @@ impl Session {
         validate_script_target(target, target_id, &doc.form)?;
         // A button PdfCraft generated from an XFA template runs its XFA click script.
         if let Some(t) = target
+            && event_name.is_none_or(|n| n == "Mouse Up")
             && let Some(tpl) = doc.xfa_template.clone()
             && let Some(field) = doc.form.iter().find(|f| f.name == t && target_id.is_none_or(|id| field_object_id(f.obj) == id))
             && field.kind == crate::FormFieldKind::PushButton
@@ -1012,11 +1195,12 @@ impl Session {
         let mut runner = JsRunner::new(&cos, &doc.name, self.field_highlight);
         runner.doc.zoom = doc.js_zoom;
         runner.doc.page = doc.js_page;
+        runner.doc.layers = crate::live_scripts::js_layers(&doc.info);
         let fields = pdfcraft_forms::fields(&cos);
-        let states = std::sync::Arc::new(fields.iter().map(|f| field_state(&cos, f, &runner.doc)).collect::<Vec<_>>());
+        let states = std::sync::Arc::new(fields.iter().map(|f| crate::live_scripts::live_state(doc, &cos, f, &runner.doc)).collect::<Vec<_>>());
         let event = match target {
-            Some(t) => pdfcraft_js::Event { will_commit: false, target_id, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
-            None => pdfcraft_js::Event::doc(document_event.map_or("Console", DocumentScriptEvent::name)),
+            Some(t) => pdfcraft_js::Event { will_commit: false, target_id, ..pdfcraft_js::Event::field(event_name.unwrap_or("Mouse Up"), t, "") },
+            None => pdfcraft_js::Event::doc(event_name.unwrap_or("Console")),
         };
         let calculations = calculation_scripts(&cos, &fields);
         let runtime = doc.js_runtime.clone();
@@ -1028,6 +1212,7 @@ impl Session {
                 fields: states.clone(),
                 doc_scripts: runner.doc_scripts,
                 calculations,
+                timer: None,
             },
             answers,
         );
@@ -1040,7 +1225,13 @@ impl Session {
     }
 
     /// Convert the worker snapshot delta and reset requests into permission-checked atomic document edits.
-    fn apply_script_outcome(&mut self, id: DocId, states: &[pdfcraft_js::FieldState], mut o: Outcome, opening: bool) -> Result<Outcome, EditError> {
+    pub(crate) fn apply_script_outcome(
+        &mut self,
+        id: DocId,
+        states: &[pdfcraft_js::FieldState],
+        mut o: Outcome,
+        opening: bool,
+    ) -> Result<Outcome, EditError> {
         if o.execution_refused {
             o.changed.clear();
             o.requests.clear();
@@ -1103,12 +1294,15 @@ impl Session {
             }
         }
         let changes = changes(&baseline, &o.changed, &o.formatted);
+        let written: Vec<String> = changes.iter().filter(|c| c.display.is_some() || c.icon.is_some()).map(|c| c.name.clone()).collect();
         if !changes.is_empty() {
             edits.push(Edit::ApplyScriptChanges { changes });
         }
         if !edits.is_empty() {
             self.apply(id, Edit::Batch { label: "Run JavaScript".into(), edits })?;
         }
+        // The timers the script left, the layers it turned, and how fields show (#169).
+        self.after_script(id, &o, &written);
         Ok(o)
     }
 }
@@ -1482,9 +1676,10 @@ impl Session {
         let mut runner = JsRunner::new(cos, &doc.name, self.field_highlight);
         runner.doc.zoom = doc.js_zoom;
         runner.doc.page = doc.js_page;
+        runner.doc.layers = crate::live_scripts::js_layers(&doc.info);
         let fields = pdfcraft_forms::fields(cos);
         validate_script_target(target, target_id, &fields)?;
-        let states = std::sync::Arc::new(fields.iter().map(|f| field_state(cos, f, &runner.doc)).collect::<Vec<_>>());
+        let states = std::sync::Arc::new(fields.iter().map(|f| crate::live_scripts::live_state(doc, cos, f, &runner.doc)).collect::<Vec<_>>());
         let job = pdfcraft_js::session::Job {
             script: script.into(),
             event: target.map_or_else(
@@ -1495,6 +1690,7 @@ impl Session {
             fields: states.clone(),
             doc_scripts: runner.doc_scripts,
             calculations: calculation_scripts(cos, &fields),
+            timer: None,
         };
         let receiver =
             doc.js_runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.start(job).map_err(EditError::Invalid)?;
@@ -1830,6 +2026,7 @@ mod widget_budget_review_tests {
             rotation: 0,
             caption: None,
             mouse_up_script: None,
+            mouse_down: false,
             list: None,
             round: false,
         };

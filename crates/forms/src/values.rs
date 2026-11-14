@@ -356,6 +356,9 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             let Some(state) = f.widgets.get(*i).and_then(|w| w.on_state.clone()) else {
                 return invalid(format!("{:?} has no button {} with an on state", f.name, i.saturating_add(1)));
             };
+            if f.kind == FieldKind::Radio && radio_change_blocked(f, Some(&state), Some(*i)) {
+                return Err(FormError::ReadOnly(f.name.clone()));
+            }
             set_states(doc, f, Some(&state), Some(*i))
         }
         (FieldKind::CheckBox, v) => {
@@ -405,6 +408,9 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             }
             if choice.is_none() && f.has(flags::NO_TOGGLE_TO_OFF) && !f.value.is_empty() {
                 return invalid(format!("{:?} must keep one option selected", f.name));
+            }
+            if radio_change_blocked(f, choice.as_deref(), None) {
+                return Err(FormError::ReadOnly(f.name.clone()));
             }
             set_states(doc, f, choice.as_deref(), None)
         }
@@ -541,17 +547,49 @@ pub(crate) fn scroll_widgets(doc: &mut Document, f: &Field, picked: &[usize], co
     Ok(())
 }
 
+/// The one widget of an exclusive radio group that turns on when `on` is chosen (`pick` when it has
+/// that state, else the one already on, else the first); `None` when `on` is `None` or the group
+/// turns every widget with that state on together.
+fn chosen_widget(f: &Field, on: Option<&str>, pick: Option<usize>) -> Option<usize> {
+    let exclusive = f.kind == FieldKind::Radio && !f.has(flags::RADIOS_IN_UNISON);
+    on.filter(|_| exclusive).and_then(|c| {
+        let has = |i: &usize| f.widgets.get(*i).is_some_and(|w| w.on_state.as_deref() == Some(c));
+        let n = f.widgets.len();
+        pick.filter(has).or_else(|| (0..n).filter(has).find(|&i| f.widget_on(i))).or_else(|| (0..n).find(has))
+    })
+}
+
+/// Whether setting a radio group to `on` (through widget `pick`, when the caller chose a widget)
+/// would turn a read-only button on or off: such a button can't be picked, and a selected one can't
+/// be switched off by picking another. Judged per widget, by the state `set_states` would give it,
+/// so buttons sharing an on-state name are told apart by their `/AS`; the group's `/V` stands for
+/// the selection only when no button's `/AS` says which is on.
+fn radio_change_blocked(f: &Field, on: Option<&str>, pick: Option<usize>) -> bool {
+    let chosen = chosen_widget(f, on, pick);
+    let before = |i: usize, w: &Widget| {
+        let Some(s) = w.on_state.as_deref() else { return false };
+        if f.widget_on(i) {
+            return true;
+        }
+        // No button sharing this on state is on by its `/AS` and the group's `/V` names it: the
+        // first of them holds the selection, whatever its own `/AS` says (an `Off` among them).
+        let sharing = |x: &Widget| x.on_state.as_deref() == Some(s);
+        f.value.first().map(String::as_str) == Some(s)
+            && !f.widgets.iter().any(|x| sharing(x) && x.state.as_deref() == Some(s))
+            && f.widgets.iter().position(sharing) == Some(i)
+    };
+    f.widgets.iter().enumerate().any(|(i, w)| {
+        let after = on.is_some() && w.on_state.as_deref() == on && chosen.is_none_or(|k| k == i);
+        w.read_only && before(i, w) != after
+    })
+}
+
 /// Check boxes and radio buttons: `/V` on the field, `/AS` on each widget. The widgets whose on
 /// state is `on` turn on together in a check box (ISO 32000-2 §12.7.5.2.3, EXAMPLE 2) and in a
 /// radio group with RadiosInUnison. Without it, at most one radio button is on (Table 229,
 /// §12.7.5.2.3): widget `pick` when it has that state, else the one already on, else the first.
 fn set_states(doc: &mut Document, f: &Field, on: Option<&str>, pick: Option<usize>) -> Result<(), FormError> {
-    let exclusive = f.kind == FieldKind::Radio && !f.has(flags::RADIOS_IN_UNISON);
-    let chosen = on.filter(|_| exclusive).and_then(|c| {
-        let has = |i: &usize| f.widgets.get(*i).is_some_and(|w| w.on_state.as_deref() == Some(c));
-        let n = f.widgets.len();
-        pick.filter(has).or_else(|| (0..n).filter(has).find(|&i| f.widget_on(i))).or_else(|| (0..n).find(has))
-    });
+    let chosen = chosen_widget(f, on, pick);
     // `/V` names the on state, the same for every widget that has it: which of them is on is
     // their `/AS` alone (§12.7.5.2.4).
     let v = on.unwrap_or("Off");
@@ -720,29 +758,69 @@ fn password_fields(doc: &Document) -> Vec<Field> {
 /// again only makes the answer cautious. It reads only `/Ff`, `/Kids` and `/Parent`, so a save
 /// or recovery snapshot of a form without such a field doesn't build every [`Field`]. Like
 /// [`fields`], it looks at the form's field tree and at the widgets on the pages, which may be
-/// missing from `/Fields`. Each dictionary is visited once and at most 64 levels deep.
+/// missing from `/Fields`, together with the whole tree above and below them that [`fields`]
+/// adopts. Each dictionary is visited once.
+///
+/// It must never answer `false` for a form whose [`fields`] include a password field, or a typed
+/// password would be saved. So where it can't look as far as [`fields`] may (a branch deeper than
+/// the field walk's limit, which depends on the order the tree is visited in, or a `/Parent`
+/// chain too long to follow), it answers `true` and the caller reads every field.
 pub(crate) fn has_password_flag(doc: &Document) -> bool {
+    const MAX_FIELD_DEPTH: usize = 64;
     let sets_it = |r: ObjRef| doc.get(r).as_dict().and_then(|d| field_flags(doc, d)).is_some_and(|ff| ff & flags::PASSWORD != 0);
-    let top = acroform(doc).and_then(|af| af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())).unwrap_or_default();
-    let mut stack: Vec<(Object, usize)> = top.into_iter().map(|o| (o, 0)).collect();
+    let kids_of =
+        |r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned())).unwrap_or_default();
     let mut seen = std::collections::HashSet::new();
-    while let Some((o, depth)) = stack.pop() {
-        let Object::Ref(r) = o else { continue };
-        if depth > 64 || !seen.insert(r) {
-            continue;
+    // Whether a dictionary below `start` sets the flag, or the walk was cut short.
+    let subtree = |start: Vec<Object>, seen: &mut std::collections::HashSet<ObjRef>| {
+        let mut stack: Vec<(Object, usize)> = start.into_iter().map(|o| (o, 0)).collect();
+        while let Some((o, depth)) = stack.pop() {
+            let Object::Ref(r) = o else { continue };
+            if !seen.insert(r) {
+                continue;
+            }
+            if depth > MAX_FIELD_DEPTH || sets_it(r) {
+                return true;
+            }
+            stack.extend(kids_of(r).into_iter().map(|k| (k, depth + 1)));
         }
-        if sets_it(r) {
+        false
+    };
+    let top = acroform(doc).and_then(|af| af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())).unwrap_or_default();
+    let top_refs: Vec<ObjRef> = top.iter().filter_map(Object::as_ref).collect();
+    if subtree(top, &mut seen) {
+        return true;
+    }
+    // A `/Fields` entry may itself name a field above it through `/Parent` (one `fields` adopts when
+    // the entry has no name of its own), whether or not a page lists it.
+    for r in top_refs {
+        let chain = field_chain(doc, r);
+        if chain.len() >= MAX_FIELD_DEPTH || chain.iter().copied().any(sets_it) {
             return true;
         }
-        let kids = doc.get(r).as_dict().and_then(|d| d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned())).unwrap_or_default();
-        stack.extend(kids.into_iter().map(|k| (k, depth + 1)));
+        if subtree(vec![Object::Ref(field_root(doc, &chain, r))], &mut seen) {
+            return true;
+        }
     }
-    // Widgets on the pages, and the fields above them.
-    page_refs(doc).into_iter().any(|p| {
+    // Widgets on the pages, the fields above them, and the fields below the topmost one.
+    for p in page_refs(doc) {
         let annots =
             doc.get(p).as_dict().and_then(|d| d.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned())).unwrap_or_default();
-        annots.iter().filter_map(Object::as_ref).filter(|r| !seen.contains(r)).any(|r| field_chain(doc, r).into_iter().any(sets_it))
-    })
+        // Every widget's `/Parent` chain is read, even one already reached from `/Fields`: the
+        // field walk can adopt it under a different parent there. Each chain is at most
+        // MAX_FIELD_DEPTH long, and `subtree` returns at once for a root it has seen.
+        for r in annots.iter().filter_map(Object::as_ref) {
+            let chain = field_chain(doc, r);
+            if chain.len() >= MAX_FIELD_DEPTH || chain.iter().copied().any(sets_it) {
+                return true;
+            }
+            let root = field_root(doc, &chain, r);
+            if subtree(vec![Object::Ref(root)], &mut seen) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Whether any text field with the Password flag holds a value in `doc`.
@@ -766,6 +844,12 @@ pub fn restore_password_values(doc: &mut Document, values: &[(String, String)]) 
         }
     }
     Ok(())
+}
+
+/// The topmost dictionary of `chain` (from [`field_chain`]): a `/Parent` that is not a dictionary
+/// ends the field tree, so the walk below it starts at the last one that is.
+fn field_root(doc: &Document, chain: &[ObjRef], r: ObjRef) -> ObjRef {
+    chain.iter().rev().copied().find(|c| doc.get(*c).as_dict().is_some()).unwrap_or(r)
 }
 
 /// `r` and its field ancestors (`/Parent`), nearest first, at most 64 deep and without repeats.
@@ -919,10 +1003,17 @@ pub fn reset_with_formatting(
         // A reset is not blocked by NoToggleToOff: go through the writer directly.
         let mut tmp = f.clone();
         tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
-        write_value_impl(doc, &tmp, &v, scripts, true)?;
-        changed += 1;
-        if matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) {
-            redraw_fields.insert(f.obj);
+        match write_value_impl(doc, &tmp, &v, scripts, true) {
+            Ok(()) => {
+                changed += 1;
+                if matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) {
+                    redraw_fields.insert(f.obj);
+                }
+            }
+            // a read-only button of the group holds the value: this field is left as it is, and the
+            // rest of the form is still cleared
+            Err(FormError::ReadOnly(_)) => {}
+            Err(e) => return Err(e),
         }
     }
     let calculation_runner: &mut dyn Scripts = if calculate_with_scripts { scripts } else { &mut NoScripts };
