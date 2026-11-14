@@ -3193,3 +3193,89 @@ fn only_pixel_snapping_passes_for_fitting_the_view() {
         assert!(!fits_height(Rect::from_min_size(pos2(0.0, 0.0), vec2(1.0, 600.5)), 600.0, ppp));
     }
 }
+
+/// #6848: Previous view and Next view restore the exact vertical scroll fraction on a page
+/// where a hyperlink was clicked, rather than always resetting to the top of the page.
+#[test]
+fn previous_and_next_view_restore_scroll_fraction_on_origin_page() -> Result<(), Box<dyn std::error::Error>> {
+    let mut v = view(5, PageLayout::Single, true);
+    v.viewport_screen = Rect::from_min_size(pos2(0.0, 40.0), vec2(800.0, 600.0));
+    // Page 0 (height 1000) is scrolled halfway down: its top sits at y = 40 + page_gap - 500.
+    let gap = v.page_gap();
+    v.screen_rects = vec![(0, Rect::from_min_size(pos2(100.0, 40.0 + gap - 500.0), vec2(600.0, 1000.0)))];
+
+    // Jump to page 3 via a hyperlink or page navigation.
+    v.go_to_page(3);
+    assert_eq!(v.current, 3);
+    assert_eq!(v.back, vec![0]);
+
+    // Simulate scrolling 25% down page 3 before returning via Previous view.
+    v.goto = None;
+    v.screen_rects = vec![(3, Rect::from_min_size(pos2(100.0, 40.0 + gap - 250.0), vec2(600.0, 1000.0)))];
+    assert!(v.view_history(false));
+    assert_eq!(v.current, 0);
+    let (page, frac) = v.goto.ok_or("expected goto on Previous view")?;
+    assert_eq!(page, 0);
+    assert!((frac - 0.5).abs() < 1e-5, "expected 0.5 scroll fraction on page 0, got {frac}");
+
+    // Next view returns to page 3 at its 25% scroll fraction; even if `screen_rects` still
+    // holds a stale entry for page 0 before the next frame draws, the pending `goto` fraction
+    // (0.5) on page 0 is preserved in `back_scroll`.
+    v.screen_rects = vec![(0, Rect::from_min_size(pos2(100.0, 40.0 + gap - 900.0), vec2(600.0, 1000.0)))];
+    assert!(v.view_history(true));
+    assert_eq!(v.current, 3);
+    let (page, frac) = v.goto.ok_or("expected goto on Next view")?;
+    assert_eq!(page, 3);
+    assert!((frac - 0.25).abs() < 1e-5, "expected 0.25 scroll fraction on page 3, got {frac}");
+    assert!(v.view_history(false));
+    let (page, frac) = v.goto.ok_or("expected goto on second Previous view")?;
+    assert_eq!(page, 0);
+    assert!((frac - 0.5).abs() < 1e-5, "pending goto fraction beats stale screen_rects: {frac}");
+
+    // When `go_to_dest` sets a positioned destination (`goto_point`) on an offscreen page and
+    // Previous view + Next view run before the next frame draws, the destination's vertical
+    // fraction (including the `page_gap` offset and any `/FitR` centring at the new zoom) is
+    // preserved from the pending page height rather than stale `screen_rects`.
+    let info = pdfcraft_render::DocInfo {
+        pages: (0..5)
+            .map(|_| pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 })
+            .collect(),
+        ..Default::default()
+    };
+    v.go_to_dest(2, DestView::Xyz { left: None, top: Some(300.0), zoom: None }, &info);
+    let expected_xyz = 0.25 + gap / v.pending_page_height(2, &info);
+    assert!(v.view_history(false));
+    assert_eq!(v.current, 0);
+    assert!(v.view_history(true));
+    assert_eq!(v.current, 2);
+    let (page, frac) = v.goto.ok_or("expected goto on Next view after go_to_dest")?;
+    assert_eq!(page, 2);
+    assert!((frac - expected_xyz).abs() < 1e-5, "expected {expected_xyz} destination fraction on page 2, got {frac}");
+
+    v.go_to_dest(3, DestView::FitR { rect: [0.0, 200.0, 100.0, 300.0] }, &info);
+    let expected_fitr = (0.375 + (gap - v.viewport_h / 2.0) / v.pending_page_height(3, &info)).clamp(-1.0, 1.0);
+    assert!(v.view_history(false));
+    assert_eq!(v.current, 2);
+    assert!(v.view_history(true));
+    assert_eq!(v.current, 3);
+    let (page, frac) = v.goto.ok_or("expected goto on Next view after FitR go_to_dest")?;
+    assert_eq!(page, 3);
+    assert!((frac - expected_fitr).abs() < 1e-5, "expected {expected_fitr} FitR fraction on page 3, got {frac}");
+
+    // In continuous view with two partially visible pages where `current` (page 1) starts below
+    // the viewport top (`y = 40 + gap + 200`), jumping away and returning preserves its signed
+    // offset (`-0.2`) rather than snapping page 1 to the top (`0.0`).
+    v.goto = None;
+    v.goto_point = None;
+    v.current = 1;
+    v.screen_rects = vec![
+        (0, Rect::from_min_size(pos2(100.0, 40.0 + gap - 814.0), vec2(600.0, 1000.0))),
+        (1, Rect::from_min_size(pos2(100.0, 40.0 + gap + 200.0), vec2(600.0, 1000.0))),
+    ];
+    v.go_to_page(4);
+    assert!(v.view_history(false));
+    let (page, frac) = v.goto.ok_or("expected goto when returning to partially visible page 1")?;
+    assert_eq!(page, 1);
+    assert!((frac - (-0.2)).abs() < 1e-5, "expected -0.2 signed offset on page 1, got {frac}");
+    Ok(())
+}

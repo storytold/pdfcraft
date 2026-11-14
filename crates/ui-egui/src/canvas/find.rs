@@ -177,6 +177,7 @@ impl DocView {
         f.stop_following();
         self.go_to_page(p);
         self.goto_point = None;
+        self.goto_point_h = 0.0;
         self.flash_match(p);
     }
 
@@ -195,6 +196,7 @@ impl DocView {
         // Only explicit search navigation joins history; background refresh uses flash_match alone.
         self.go_to_page(p);
         self.goto_point = None;
+        self.goto_point_h = 0.0;
         self.flash_match(p);
     }
 
@@ -232,6 +234,10 @@ impl DocView {
         // leaves it off to one side or near an edge.
         // Finite only: a hostile page's glyphs can span -inf..inf, and NaN survives `clamp`.
         if let Some([fx, fy]) = self.match_centre().filter(|c| c.iter().all(|v| v.is_finite())) {
+            self.goto_point_h = self.page_sizes.get(page).map_or(0.0, |&(w, h)| {
+                let dh = if self.rotation.is_multiple_of(180) { h } else { w };
+                self.scaled_page_height(dh, self.zoom)
+            });
             self.goto_point = Some((page, Some(fx), Some(fy), vec2(self.viewport_w, self.viewport_h) / 2.0));
             // The point alone, both axes in one frame. A pending zoom anchor would hold the old
             // place for that frame and put `goto` off to the next, where its page-top offset

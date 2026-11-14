@@ -89,23 +89,65 @@ impl DocView {
         Some(p.xyz_for_view(keep_x.then_some(x), keep_y.then_some(y)))
     }
 
+    /// How far down `self.current` the viewport top sits (-1..=1), as `goto` takes it (#6848).
+    fn current_scroll_fraction(&self) -> f32 {
+        if let Some((p, _, Some(fy), rel)) = self.goto_point
+            && p == self.current
+            && fy.is_finite()
+        {
+            let h = if self.goto_point_h > 0.0 {
+                self.goto_point_h
+            } else if let Some(&(w, h)) = self.page_sizes.get(p) {
+                let dh = if self.rotation.is_multiple_of(180) { h } else { w };
+                self.scaled_page_height(dh, self.zoom)
+            } else {
+                self.screen_rects.iter().find(|(pg, _)| *pg == p).map_or(0.0, |(_, r)| r.height())
+            };
+            let shift = if h > 0.0 && rel.y.is_finite() { (self.page_gap() - rel.y) / h } else { 0.0 };
+            return (fy + shift).clamp(-1.0, 1.0);
+        }
+        if let Some((p, frac)) = self.goto
+            && p == self.current
+            && frac.is_finite()
+        {
+            return frac.clamp(-1.0, 1.0);
+        }
+        if self.viewport_screen.is_positive()
+            && let Some((_, r)) = self.screen_rects.iter().find(|(p, _)| *p == self.current)
+            && r.height() > 0.0
+        {
+            return ((self.viewport_screen.top() + self.page_gap() - r.top()) / r.height()).clamp(-1.0, 1.0);
+        }
+        0.0
+    }
+
     pub fn go_to_page(&mut self, page: usize) {
         let page = page.min(self.page_count.saturating_sub(1));
         self.end_find_following();
         if page != self.current {
+            let frac = self.current_scroll_fraction();
             // The view history (Previous view / Next view).
             if self.back.last() != Some(&self.current) {
                 self.back.push(self.current);
+                self.back_scroll.resize(self.back.len().saturating_sub(1), (0, 0.0));
+                self.back_scroll.push((self.current, frac));
                 if self.back.len() > 200 {
                     self.back.remove(0);
+                    if !self.back_scroll.is_empty() {
+                        self.back_scroll.remove(0);
+                    }
                 }
+            } else if let Some(last) = self.back_scroll.last_mut().filter(|(p, _)| *p == self.current) {
+                last.1 = frac;
             }
             self.forward.clear();
+            self.forward_scroll.clear();
         }
         // Partial wheel motion belongs to the old place, and so does a find step's match.
         self.reset_coarse_state();
         self.find_hold = None;
         self.goto_point = None;
+        self.goto_point_h = 0.0;
         self.goto = Some((page, 0.0));
         self.current = page;
     }
@@ -124,6 +166,7 @@ impl DocView {
     pub(crate) fn reveal_rect(&mut self, page: usize, rect: [f32; 4], info: &DocInfo) {
         self.go_to_page(page);
         self.goto_point = None;
+        self.goto_point_h = 0.0;
         let Some(p) = info.pages.get(self.current) else { return };
         if !rect.iter().all(|v| v.is_finite()) {
             return;
@@ -132,6 +175,7 @@ impl DocView {
         let x = rect[0] * 0.5 + rect[2] * 0.5;
         let y = rect[1] * 0.5 + rect[3] * 0.5;
         let [fx, fy] = p.dest_fraction(Some(x), Some(y), self.rotation);
+        self.goto_point_h = self.pending_page_height(self.current, info);
         self.goto_point = Some((self.current, fx, fy, vec2(self.viewport_w, self.viewport_h) / 2.0));
     }
 
@@ -152,6 +196,7 @@ impl DocView {
         self.go_to_page(page);
         let page = self.current;
         self.goto_point = None;
+        self.goto_point_h = 0.0;
         let Some(p) = info.pages.get(page) else { return };
         let point = |x: Option<f32>, y: Option<f32>| p.dest_fraction(x, y, self.rotation);
         // The window's top-left as far as pages go: its left edge is the gutter that keeps them
@@ -199,6 +244,7 @@ impl DocView {
             }
         };
         if fx.is_some() || fy.is_some() {
+            self.goto_point_h = self.pending_page_height(page, info);
             self.goto_point = Some((page, fx, fy, rel));
         }
     }
@@ -271,11 +317,21 @@ impl DocView {
             return false;
         }
         self.end_find_following();
-        let (from, to) = if forward { (&mut self.forward, &mut self.back) } else { (&mut self.back, &mut self.forward) };
+        let current_frac = self.current_scroll_fraction();
+        let (from, to, from_scroll, to_scroll) = if forward {
+            (&mut self.forward, &mut self.back, &mut self.forward_scroll, &mut self.back_scroll)
+        } else {
+            (&mut self.back, &mut self.forward, &mut self.back_scroll, &mut self.forward_scroll)
+        };
         let Some(page) = from.pop() else { return false };
+        let frac = from_scroll.pop().filter(|(p, _)| *p == page && from_scroll.len() == from.len()).map_or(0.0, |(_, f)| f);
         to.push(self.current);
+        to_scroll.resize(to.len().saturating_sub(1), (0, 0.0));
+        to_scroll.push((self.current, current_frac));
         let page = page.min(self.page_count.saturating_sub(1));
-        self.goto = Some((page, 0.0));
+        self.goto_point = None;
+        self.goto_point_h = 0.0;
+        self.goto = Some((page, frac));
         self.current = page;
         self.reset_coarse_state();
         // A find step's match belongs to the place left, as for any other jump.
