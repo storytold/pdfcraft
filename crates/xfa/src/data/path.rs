@@ -17,7 +17,7 @@ pub fn parse_datasets(xdp: &str) -> Option<DataNode> {
     if crate::xml_nesting_depth(xdp) > crate::MAX_XML_DEPTH {
         return None;
     }
-    let opts = crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
+    let opts = crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
     let doc = crate::xml::Document::parse_with_options(xdp, opts).ok()?;
     let datasets = doc.descendants().find(|n| n.is_element() && n.tag_name().name() == "datasets")?;
     let data = datasets.children().find(|n| n.is_element() && n.tag_name().name() == "data")?;
@@ -33,7 +33,7 @@ pub(super) fn parse_datasets_packet(text: &str) -> Option<DataNode> {
     if crate::xml_nesting_depth(text) > crate::MAX_XML_DEPTH {
         return None;
     }
-    let opts = || crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
+    let opts = || crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
     let wrapped;
     let doc = match crate::xml::Document::parse_with_options(text, opts()) {
         Ok(d) => d,

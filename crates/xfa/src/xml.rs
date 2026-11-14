@@ -165,9 +165,11 @@ impl Document {
     }
 
     pub(crate) fn parse_with_options(text: &str, options: ParsingOptions) -> Result<Self, String> {
-        let mut opts = craft_xml::Options::default();
-        opts.strict = true;
-        opts.doctype = if options.allow_dtd { craft_xml::Doctype::Ignore } else { craft_xml::Doctype::Reject };
+        let mut opts = craft_xml::Options {
+            strict: true,
+            doctype: if options.allow_dtd { craft_xml::Doctype::Ignore } else { craft_xml::Doctype::Reject },
+            ..Default::default()
+        };
         opts.limits.max_nodes = options.nodes_limit as usize;
         opts.limits.max_depth = crate::MAX_XML_DEPTH;
 

@@ -368,7 +368,7 @@ xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" type=\"blank\"
         pkg.rels(&path, s_rels);
     }
     for (name, im) in &global_media {
-        pkg.binary(&format!("ppt/media/{name}"), image_mime(&im.ext), im.bytes.to_vec());
+        pkg.binary(&format!("ppt/media/{name}"), image_mime(im.ext), im.bytes.to_vec());
     }
     pkg.finish().unwrap_or_default()
 }
