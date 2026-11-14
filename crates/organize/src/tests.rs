@@ -3716,13 +3716,10 @@ fn dr_base_font_for_da(doc: &Document, field: &str) -> Option<Vec<u8>> {
     let dr = form.get(b"DR").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned())?;
     let fonts = dr.get(b"Font").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned())?;
     let fields = form.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
-    let field = fields
-        .iter()
-        .filter_map(|f| doc.resolve(f).as_dict().cloned())
-        .find(|d| {
-            let name = d.get(b"T").map(|t| doc.resolve(t).clone());
-            name.and_then(|n| n.as_string().cloned()).is_some_and(|s| s.text_eq(field))
-        })?;
+    let field = fields.iter().filter_map(|f| doc.resolve(f).as_dict().cloned()).find(|d| {
+        let name = d.get(b"T").map(|t| doc.resolve(t).clone());
+        name.and_then(|n| n.as_string().cloned()).is_some_and(|s| s.text_eq(field))
+    })?;
     let da_obj = field.get(b"DA").map(|d| doc.resolve(d).clone());
     let da = da_obj.and_then(|o| o.as_string().cloned()).map(|s| s.to_text())?;
     let alias = da.split_whitespace().next()?;
@@ -3755,6 +3752,85 @@ fn import_keeps_the_source_default_appearance_font() {
 fn import_keeps_a_unique_default_appearance_alias() {
     let mut dst = doc_with_da_field("destination", "Helvetica", "F1");
     let src = doc_with_da_field("imported", "Courier", "F2");
+    import_pages_with(&mut dst, &src, &[0], 1, FieldConflicts::Rename).unwrap();
+    assert_eq!(dr_base_font_for_da(&dst, "imported").as_deref(), Some(b"Courier".as_slice()));
+}
+
+/// A flexible one-page form document: `/Alias BaseFont` pairs in `/DR /Font`, an optional
+/// AcroForm-level `/DA`, one field per `(name, /DA value inserted verbatim)` (no `/DA` when
+/// `None`), and extra object bodies after the fields (for indirect `/DA` strings).
+fn doc_form(dr: &[(&str, &str)], acro_da: Option<&str>, fields: &[(&str, Option<&str>)], extra: &[&str]) -> Document {
+    let first_font = 4;
+    let first_field = first_font + dr.len();
+    let font_refs: Vec<String> = dr.iter().enumerate().map(|(i, _)| format!("{} 0 R", first_font + i)).collect();
+    let dr_entry: Vec<String> = dr.iter().zip(&font_refs).map(|((a, _), r)| format!("/{a} {r}")).collect();
+    let field_refs: Vec<String> = fields.iter().enumerate().map(|(i, _)| format!("{} 0 R", first_field + i)).collect();
+    let da_part = acro_da.map(|d| format!(" /DA ({d})")).unwrap_or_default();
+    let mut b = vec![
+        format!(
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [{}] /DR << /Font << {} >> >>{} >> >>",
+            field_refs.join(" "),
+            dr_entry.join(" "),
+            da_part
+        ),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [{}] >>", field_refs.join(" ")),
+    ];
+    for (_, face) in dr {
+        b.push(format!("<< /Type /Font /Subtype /Type1 /BaseFont /{face} >>"));
+    }
+    for (i, (name, da)) in fields.iter().enumerate() {
+        let da_part = da.map(|d| format!(" /DA {d}")).unwrap_or_default();
+        b.push(format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /V (x){da_part} /Rect [60 {} 200 {}] /P 3 0 R >>",
+            60 + 30 * i as i64,
+            80 + 30 * i as i64
+        ));
+    }
+    for body in extra {
+        b.push((*body).into());
+    }
+    b.push("<< /Title (form) >>".into());
+    open(build(&b, &format!("/Root 1 0 R /Info {} 0 R", b.len())))
+}
+
+/// A field with no `/DA` of its own keeps the source AcroForm's default appearance: it is
+/// materialized on the imported field (the destination AcroForm's default must not apply) and
+/// its font comes along, renamed where the destination uses the alias for another face.
+#[test]
+fn import_materializes_the_source_forms_default_appearance() {
+    let mut dst = doc_with_da_field("destination", "Helvetica", "F1");
+    let src = doc_form(&[("F1", "Courier")], Some("/F1 18 Tf 0 g"), &[("imported", None)], &[]);
+    import_pages_with(&mut dst, &src, &[0], 1, FieldConflicts::Rename).unwrap();
+    assert_eq!(dr_base_font_for_da(&dst, "imported").as_deref(), Some(b"Courier".as_slice()));
+    // The destination's own document-wide default is untouched.
+    assert_eq!(dr_base_font_for_da(&dst, "destination").as_deref(), Some(b"Helvetica".as_slice()));
+}
+
+/// Two imported fields selecting distinct source fonts keep distinct faces even when their
+/// aliases collide with each other through the first-free-variant rule (`F1` collides with the
+/// destination and is renamed; the variant must not steal the incoming `F1-1`).
+#[test]
+fn imported_aliases_never_collide_with_each_other() {
+    let mut dst = doc_with_da_field("destination", "Helvetica", "F1");
+    let src = doc_form(
+        &[("F1", "Courier"), ("F1-1", "Times-Roman")],
+        None,
+        &[("imported", Some("(/F1 18 Tf 0 g)")), ("imported2", Some("(/F1-1 18 Tf 0 g)"))],
+        &[],
+    );
+    import_pages_with(&mut dst, &src, &[0], 1, FieldConflicts::Rename).unwrap();
+    assert_eq!(dr_base_font_for_da(&dst, "imported").as_deref(), Some(b"Courier".as_slice()));
+    assert_eq!(dr_base_font_for_da(&dst, "imported2").as_deref(), Some(b"Times-Roman".as_slice()));
+}
+
+/// An indirect `/DA` string object is resolved like a direct one: its font is imported (and the
+/// rewritten appearance written onto the field, not onto the shared string object).
+#[test]
+fn an_indirect_default_appearance_string_is_resolved() {
+    let mut dst = doc_with_da_field("destination", "Helvetica", "F1");
+    // Objects: 1 catalog, 2 pages, 3 page, 4 font, 5 field, 6 the /DA string.
+    let src = doc_form(&[("F1", "Courier")], None, &[("imported", Some("6 0 R"))], &["(/F1 18 Tf 0 g)"]);
     import_pages_with(&mut dst, &src, &[0], 1, FieldConflicts::Rename).unwrap();
     assert_eq!(dr_base_font_for_da(&dst, "imported").as_deref(), Some(b"Courier".as_slice()));
 }

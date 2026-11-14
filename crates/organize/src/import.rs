@@ -344,11 +344,13 @@ fn import_pages_mapped(
         FieldConflicts::Rename => resolve_field_conflicts(dst, &copier.fields)?,
         FieldConflicts::Merge => Vec::new(),
     };
-    register_fields(dst, &copier.fields)?;
     // The imported fields' `/DA` names fonts of the source form: bring them along (renamed where
     // the destination uses the name for another face) so an edit does not change the typeface.
+    // This runs before `register_fields` so a refusal here (a source too deep to follow) leaves
+    // the destination's `/Fields` — an existing object, not one the rollback can free — alone.
     let fields = copier.fields.clone();
     import_dr_fonts(dst, src, &mut copier, &fields)?;
+    register_fields(dst, &copier.fields)?;
     register_layers(dst, src, &copier.ocgs)?;
     let at = at.min(existing.len());
     let inserted: Vec<(ObjRef, Dict)> = new_pages.iter().map(|r| (*r, Dict::new())).collect();

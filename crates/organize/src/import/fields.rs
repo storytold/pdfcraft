@@ -311,12 +311,10 @@ pub(super) fn register_fields(dst: &mut Document, fields: &[ObjRef]) -> Result<(
 /// match, so a value-only edit of an imported field keeps the font its source form gave it.
 /// Without this, an imported field whose `/DA` names a font the destination form does not have
 /// (or has under a different face) regenerates its appearance in the fallback Helvetica.
-pub(super) fn import_dr_fonts(
-    dst: &mut Document,
-    src: &Document,
-    copier: &mut Copier,
-    fields: &[ObjRef],
-) -> Result<(), OrganizeError> {
+pub(super) fn import_dr_fonts(dst: &mut Document, src: &Document, copier: &mut Copier, fields: &[ObjRef]) -> Result<(), OrganizeError> {
+    // A field without its own `/DA` would otherwise fall back to the destination AcroForm's
+    // default (which selects another face): give it the source form's default first.
+    materialize_default_da(dst, src, fields)?;
     let wanted = da_fonts(dst, fields);
     if wanted.is_empty() {
         return Ok(());
@@ -327,7 +325,10 @@ pub(super) fn import_dr_fonts(
         Some(Object::Dict(d)) => (None, d.clone()),
         _ => (None, Dict::new()),
     };
+    // Every name the `/DA`s select is reserved up front, so a replacement handed to one alias
+    // can never collide with another alias's kept name, whichever field comes first.
     let mut taken: Vec<Vec<u8>> = fonts.iter().map(|(k, _)| k.clone()).collect();
+    taken.extend(wanted.iter().map(|n| n.as_bytes().to_vec()));
     let mut map: HashMap<String, String> = HashMap::new();
     let mut pending: Vec<(String, Object)> = Vec::new();
     for name in wanted {
@@ -354,7 +355,8 @@ pub(super) fn import_dr_fonts(
                 map.insert(name.clone(), new.clone());
                 pending.push((new, entry.clone()));
             }
-            // The name is free: keep it and copy the font under it.
+            // The name is free in the destination (and reserved above, so no replacement can
+            // steal it): keep it and copy the font under it.
             None => {
                 map.insert(name.clone(), name.clone());
                 pending.push((name.clone(), entry.clone()));
@@ -375,9 +377,33 @@ pub(super) fn import_dr_fonts(
 /// A document's AcroForm `/DR /Font` dictionary, resolved and cloned.
 fn dr_fonts(doc: &Document) -> Option<Dict> {
     let catalog = doc.get(doc.root()?).as_dict().cloned()?;
-    let form = doc.resolve(catalog.get(b"AcroForm")?).as_dict()?.clone();
-    let dr = doc.resolve(form.get(b"DR")?).as_dict()?.clone();
+    let form_ref = catalog.get(b"AcroForm")?;
+    let form = doc.resolve(form_ref).as_dict()?.clone();
+    let dr_ref = form.get(b"DR")?;
+    let dr = doc.resolve(dr_ref).as_dict()?.clone();
     doc.resolve(dr.get(b"Font")?).as_dict().cloned()
+}
+
+/// A document's AcroForm-level default appearance string, resolved and cloned.
+fn acroform_da(doc: &Document) -> Option<PdfString> {
+    let catalog = doc.get(doc.root()?).as_dict().cloned()?;
+    let form_ref = catalog.get(b"AcroForm")?;
+    let form = doc.resolve(form_ref).as_dict()?.clone();
+    let da = form.get(b"DA")?;
+    doc.resolve(da).as_string().cloned()
+}
+
+/// Give every imported field root that lacks its own `/DA` the source AcroForm's default
+/// appearance: readers fall back to the *destination* AcroForm's default, which selects another
+/// face. The destination's own document-wide default is left alone.
+fn materialize_default_da(dst: &mut Document, src: &Document, fields: &[ObjRef]) -> Result<(), OrganizeError> {
+    let Some(da) = acroform_da(src) else { return Ok(()) };
+    for f in fields {
+        if dst.get(*f).as_dict().is_some_and(|d| !d.contains(b"DA")) {
+            dst.update_dict(*f, |d| d.set(b"DA".to_vec(), Object::String(da.clone())))?;
+        }
+    }
+    Ok(())
 }
 
 /// The `/DR /Font` object of the destination, in whatever form it is stored.
@@ -438,13 +464,15 @@ fn face_key(d: &Dict) -> Vec<Vec<u8>> {
 }
 
 /// The font names every `/DA` of the copied field trees selects, in order, deduplicated.
+/// Indirect `/DA` strings are resolved.
 fn da_fonts(dst: &Document, fields: &[ObjRef]) -> Vec<String> {
     let mut dicts = Vec::new();
     let mut seen = HashSet::new();
     collect_field_dicts(dst, fields, 0, &mut seen, &mut dicts);
     let mut out: Vec<String> = Vec::new();
     for (_, d) in dicts {
-        if let Some(Object::String(s)) = d.get(b"DA") {
+        let da = d.get(b"DA").map(|o| dst.resolve(o).as_ref().clone());
+        if let Some(Object::String(s)) = da {
             for name in da_font_names(&s.bytes) {
                 if !out.contains(&name) {
                     out.push(name);
@@ -514,12 +542,15 @@ fn da_tokens(bytes: &[u8]) -> Vec<(usize, usize)> {
 }
 
 /// Rewrite the copied `/DA` strings so every selected font name is the destination one.
+/// Indirect `/DA` strings are resolved; a rewritten one is written back as a direct string on
+/// the field rather than onto the shared object, so other fields referencing it keep theirs.
 fn rewrite_da(dst: &mut Document, fields: &[ObjRef], map: &HashMap<String, String>) -> Result<(), OrganizeError> {
     let mut dicts = Vec::new();
     let mut seen = HashSet::new();
     collect_field_dicts(dst, fields, 0, &mut seen, &mut dicts);
     for (r, d) in dicts {
-        let Some(Object::String(s)) = d.get(b"DA") else { continue };
+        let da = d.get(b"DA").map(|o| dst.resolve(o).as_ref().clone());
+        let Some(Object::String(s)) = da else { continue };
         let Some(new) = rewrite_da_bytes(&s.bytes, map) else { continue };
         dst.update_dict(r, |f| f.set(b"DA".to_vec(), Object::String(PdfString { bytes: new, hex: s.hex })))?;
     }
