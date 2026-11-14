@@ -695,7 +695,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/it/editing.rs::the_last_session_reopens_its_files_pages_and_active_tab", "crates/ui-egui/tests/it/editing.rs::quitting_with_unsaved_changes_still_remembers_every_file", "crates/ui-egui/tests/it/editing.rs::the_last_session_is_off_by_default_and_skips_missing_and_duplicate_files", "crates/ui-egui/src/persist/last_session.rs::malformed_sessions_are_skipped_and_capped"]
-notes = "Desktop, off by default (Preferences ▸ Documents and view, #442): the files open when PdfCraft last closed reopen at the page each showed, with the same tab in front; files named on the command line open after them, in front; files that are gone, and documents the Recovery dialog offers, are skipped. Quitting with unsaved changes still remembers every tab. Zoom and page display come back through core.restore-last-view (#1767); not yet the scroll position within the page (#418); only the first encrypted file asks for its password (later ones stay closed), and a file opened after it dismisses that prompt; a save that fails partway through a quit can leave the remembered list from that quit; never-saved documents and the web build have no paths to reopen."
+notes = "Desktop, off by default (Preferences ▸ Documents and view, #442): the files open when PdfCraft last closed reopen at the page each showed, with the same tab in front; files named on the command line open after them, in front; files that are gone, and documents the Recovery dialog offers, are skipped. Quitting with unsaved changes still remembers every tab. Zoom, page display and the scroll position within the page come back through core.restore-last-view (#1767, #418); only the first encrypted file asks for its password (later ones stay closed), and a file opened after it dismisses that prompt; a save that fails partway through a quit can leave the remembered list from that quit; never-saved documents and the web build have no paths to reopen."
 
 [[feature]]
 id = "core.restore-last-view"
@@ -706,8 +706,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/ui.rs::a_file_opened_again_shows_its_last_view"]
-notes = "Desktop, on by default (Preferences ▸ Documents and view, #1767): a file opened again shows the page, zoom and page display it was last shown with, remembered by path when its tab closes or when settings are saved with it open (the last 100 files), and applied over the file's own initial view. Not remembered: the view rotation (display only) and the scroll position within the page; Fit height comes back as Fit width (the settings name only two fits)."
+evidence = ["crates/ui-egui/tests/it/ui.rs::a_file_opened_again_shows_its_last_view", "crates/ui-egui/tests/it/ui.rs::a_file_opened_again_comes_back_to_its_scroll_position", "crates/ui-egui/tests/it/ui.rs::an_unusable_scroll_position_in_settings_is_dropped"]
+notes = "Desktop, on by default (Preferences ▸ Documents and view, #1767): a file opened again shows the page, zoom and page display it was last shown with, and the place in the page the reader had scrolled to, as the /XYZ position at the window's top-left (ISO 32000-2 §12.3.2.2; #418), remembered by path when its tab closes or when settings are saved with it open (the last 100 files), and applied over the file's own initial view. A coordinate is dropped along an axis the page fits across, which keeps the layout's own placement, and both at a page top, which the settings may leave out; the page grid and full screen remember the page alone. Not remembered: the view rotation (display only), so a place read on a turned page comes back on the page's own axes; Fit height comes back as Fit width (the settings name only two fits)."
 
 [[feature]]
 id = "core.usage-rights-preserve"
