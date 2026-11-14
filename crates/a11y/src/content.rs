@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object};
 use pdfcraft_model::Page;
 
 use crate::{Finding, Rule};
@@ -20,6 +20,8 @@ pub(crate) struct Scan {
     pub untagged: BTreeMap<usize, usize>,
     /// Page → fonts used.
     pub fonts: BTreeMap<usize, BTreeSet<ObjRef>>,
+    /// Pages read only in part: content or forms past the page's decode budget are missing.
+    pub incomplete: BTreeSet<usize>,
 }
 
 const MAX_FORM_DEPTH: usize = 12;
@@ -30,30 +32,15 @@ impl Scan {
         for &p in list {
             let Some(page) = pages.get(p) else { continue };
             let res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
-            let data = page_content(doc, &page.dict);
-            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new() };
+            let mut budget = DecodeBudget::page();
+            let data = crate::alt::page_content_within(doc, &page.dict, &mut budget);
+            if budget.remaining() == 0 {
+                s.incomplete.insert(p);
+            }
+            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget };
             w.content(&data, &res, false, 0);
         }
         s
-    }
-}
-
-fn page_content(doc: &Document, page: &Dict) -> Vec<u8> {
-    let Some(c) = page.get(b"Contents") else { return Vec::new() };
-    match &*doc.resolve(c) {
-        Object::Stream(s) => s.decoded().unwrap_or_default(),
-        Object::Array(a) => a
-            .iter()
-            .flat_map(|x| match &*doc.resolve(x) {
-                Object::Stream(s) => {
-                    let mut v = s.decoded().unwrap_or_default();
-                    v.push(b' ');
-                    v
-                }
-                _ => Vec::new(),
-            })
-            .collect(),
-        _ => Vec::new(),
     }
 }
 
@@ -62,6 +49,17 @@ struct Walk<'a> {
     scan: &'a mut Scan,
     page: usize,
     forms: HashSet<ObjRef>,
+    /// Decoded bytes and form entries left for this page.
+    budget: DecodeBudget,
+}
+
+fn bdc_marks(doc: &Document, op: &pdfcraft_content::Op, props: &Dict) -> bool {
+    op.name(0) == Some(b"Artifact")
+        || match op.operands.get(1) {
+            Some(Object::Dict(d)) => d.contains(b"MCID"),
+            Some(Object::Name(n)) => props.get(n).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().map(|d| d.contains(b"MCID"))).unwrap_or(false),
+            _ => false,
+        }
 }
 
 impl Walk<'_> {
@@ -75,21 +73,12 @@ impl Walk<'_> {
         // Marked-content stack: whether each level is tagged or an artifact.
         let mut stack: Vec<bool> = Vec::new();
         let mut untagged = 0;
-        for op in pdfcraft_content::parse(data).ops {
+        // One operator at a time: the walk keeps counts, never the stream's operators.
+        for op in pdfcraft_content::ops(data) {
             let inside = covered || stack.last().copied().unwrap_or(false);
             match op.op.as_slice() {
                 b"BMC" => stack.push(inside || op.name(0) == Some(b"Artifact")),
-                b"BDC" => {
-                    let marks = op.name(0) == Some(b"Artifact")
-                        || match op.operands.get(1) {
-                            Some(Object::Dict(d)) => d.contains(b"MCID"),
-                            Some(Object::Name(n)) => {
-                                props.get(n).map(|x| self.doc.resolve(x)).and_then(|x| x.as_dict().map(|d| d.contains(b"MCID"))).unwrap_or(false)
-                            }
-                            _ => false,
-                        };
-                    stack.push(inside || marks);
-                }
+                b"BDC" => stack.push(inside || bdc_marks(self.doc, &op, &props)),
                 b"EMC" => {
                     stack.pop();
                 }
@@ -116,14 +105,27 @@ impl Walk<'_> {
                             self.scan.has_images = true;
                             untagged += usize::from(!inside);
                         }
-                        Some(b"Form") if depth < MAX_FORM_DEPTH && self.forms.insert(r) => {
+                        Some(b"Form") if depth < MAX_FORM_DEPTH && !self.forms.contains(&r) => {
+                            if !self.budget.enter_form() {
+                                self.scan.incomplete.insert(self.page);
+                                continue;
+                            }
+                            let data = match self.budget.decode(x) {
+                                Ok(data) => data,
+                                Err(_) => {
+                                    if self.budget.exhausted() {
+                                        self.scan.incomplete.insert(self.page);
+                                    }
+                                    continue;
+                                }
+                            };
+                            self.forms.insert(r);
                             let inner = x
                                 .dict
                                 .get(b"Resources")
                                 .map(|o| self.doc.resolve(o))
                                 .and_then(|o| o.as_dict().cloned())
                                 .unwrap_or_else(|| res.clone());
-                            let data = x.decoded().unwrap_or_default();
                             self.content(&data, &inner, inside, depth + 1);
                             self.forms.remove(&r);
                         }
@@ -260,11 +262,13 @@ fn annotation_rect(doc: &Document, annot: &Dict) -> Option<[f64; 4]> {
 
 pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usize], scan: &Scan, tagged: bool) -> Vec<Finding> {
     let mut out = Vec::new();
-    let annots = |p: &Page| -> Vec<(ObjRef, Dict)> {
+    // The annotation objects are shared, never deep-copied: a reference repeated across a page's
+    // Annots array (or its pages) must not copy the dictionary each time.
+    let annots = |p: &Page| -> Vec<(ObjRef, std::sync::Arc<Object>)> {
         let a = p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
         a.iter()
-            .filter_map(|x| x.as_ref().and_then(|r| doc.get(r).as_dict().cloned().map(|d| (r, d))))
-            .filter(|(_, d)| d.name(b"Subtype") != Some(b"Popup"))
+            .filter_map(|x| x.as_ref().map(|r| (r, doc.get(r))))
+            .filter(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"Subtype") != Some(b"Popup")))
             .collect()
     };
     match rule {
@@ -282,7 +286,8 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
         Rule::TaggedAnnotations | Rule::TaggedMultimedia | Rule::TaggedFormFields => {
             for &p in list {
                 let Some(page) = pages.get(p) else { continue };
-                for (_, a) in annots(page) {
+                for (_, obj) in annots(page) {
+                    let Some(a) = obj.as_dict() else { continue };
                     let st = a.name(b"Subtype").unwrap_or(b"");
                     let applies = match rule {
                         Rule::TaggedFormFields => st == b"Widget",
@@ -297,11 +302,11 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
                         let pattern = if st == b"Widget" {
                             "Form field on page {p} isn't tagged"
                         } else {
-                            values.push(("{}", subtype_name(&a)));
+                            values.push(("{}", subtype_name(a)));
                             "{} annotation on page {p} isn't tagged"
                         };
                         let mut finding = Finding::worded(Some(p), pattern, values);
-                        finding.bbox = annotation_rect(doc, &a);
+                        finding.bbox = annotation_rect(doc, a);
                         out.push(finding);
                     }
                 }
@@ -343,7 +348,8 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
             let mut seen = HashSet::new();
             for &p in list {
                 let Some(page) = pages.get(p) else { continue };
-                for (r, a) in annots(page) {
+                for (r, obj) in annots(page) {
+                    let Some(a) = obj.as_dict() else { continue };
                     if a.name(b"Subtype") != Some(b"Widget") {
                         continue;
                     }
@@ -360,7 +366,7 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
                             "Field \"{}\" on page {p} has no description (tooltip)",
                             vec![("{}", full_name(doc, field)), ("{p}", (p + 1).to_string())],
                         );
-                        finding.bbox = annotation_rect(doc, &a);
+                        finding.bbox = annotation_rect(doc, a);
                         out.push(finding);
                     }
                 }

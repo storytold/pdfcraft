@@ -69,12 +69,31 @@ impl StripStorage {
         self.strips.is_empty() && self.alphas.is_empty()
     }
 
+    /// PdfCraft patch (2): whether these strips have room for the coverage of one more path on a
+    /// `width` x `height` surface, which covers at most the whole surface (twice, to be safe). A
+    /// strip packs its index into the alphas in 31 bits and [`Strip::new`] asserts that it fits:
+    /// a scene that painted past it (a form drawn 2^22 times over) panicked.
+    pub fn room_for_path(&self, width: u16, height: u16) -> bool {
+        self.room_for_path_within(width, height, MAX_ALPHAS)
+    }
+
+    /// [`room_for_path`](Self::room_for_path) with a scene kept to `max_alphas` coverage values
+    /// (never more than a strip's index can reach).
+    pub fn room_for_path_within(&self, width: u16, height: u16, max_alphas: usize) -> bool {
+        let surface = usize::from(width) * usize::from(height);
+        self.alphas.len().saturating_add(surface.saturating_mul(2)) < max_alphas.min(MAX_ALPHAS)
+    }
+
     /// Extend the current strip storage with the data from another storage.
     pub fn extend(&mut self, other: &Self) {
         self.strips.extend(&other.strips);
         self.alphas.extend(&other.alphas);
     }
 }
+
+/// PdfCraft patch (2): the most coverage (alpha) values a strip index can reach (31 bits; the
+/// top bit of [`Strip`]'s packed index is its fill-gap flag).
+const MAX_ALPHAS: usize = 1 << 31;
 
 /// An object for easily generating strips for a filled/stroked path.
 #[derive(Debug)]
@@ -144,7 +163,8 @@ impl StripGenerator {
     /// Generate the strips for a stroked path.
     pub fn generate_stroked_path(
         &mut self,
-        path: impl IntoIterator<Item = PathEl>,
+        // PdfCraft patch: `Clone` for `flatten::stroke`.
+        path: impl IntoIterator<Item = PathEl> + Clone,
         stroke: &Stroke,
         transform: Affine,
         aliasing_threshold: Option<u8>,
@@ -436,5 +456,41 @@ mod tests {
     #[test]
     fn rect_inverted_both_axes() {
         assert_rect_fast_eq_path(Rect::new(18.0, 18.0, 2.0, 2.0), "inverted_both_axes");
+    }
+}
+
+#[cfg(test)]
+mod pdfcraft_tests {
+    use super::*;
+
+    /// PdfCraft patch (2): room runs out a whole surface's coverage before the limit, so the path
+    /// that would cross it is never generated; at the real limit, an index of `MAX_ALPHAS` would
+    /// not fit a strip.
+    #[test]
+    fn strips_have_room_until_a_surface_short_of_the_limit() {
+        let mut storage = StripStorage::default();
+        assert!(storage.room_for_path_within(10, 10, 1_000));
+        storage.alphas.resize(799, 0);
+        assert!(
+            storage.room_for_path_within(10, 10, 1_000),
+            "799 + 200 < 1000"
+        );
+        storage.alphas.push(0);
+        assert!(
+            !storage.room_for_path_within(10, 10, 1_000),
+            "800 + 200 reaches the limit"
+        );
+        assert!(
+            storage.room_for_path_within(8192, 8192, usize::MAX),
+            "a large page's surface fits, a larger limit held to a strip's index"
+        );
+        assert!(
+            !storage.room_for_path_within(u16::MAX, u16::MAX, usize::MAX),
+            "the largest surface is counted without overflow, and cannot be promised room"
+        );
+        assert!(
+            Strip::new(0, 0, (MAX_ALPHAS - 1) as u32, true).fill_gap(),
+            "the last index below the limit fits"
+        );
     }
 }

@@ -15,8 +15,10 @@ use pdfcraft_cos::Document;
 mod alt;
 mod autotag;
 mod autotag_fields;
+mod autotag_roles;
 mod content;
 mod headings;
+mod layout_table;
 mod report;
 mod structure;
 mod tags;
@@ -41,6 +43,7 @@ pub use alt::{AltError, ArtifactError, Figure, figures, mark_decorative, mark_ta
 pub use autotag::{AutoTagError, AutoTagResult, autotag_text};
 pub use autotag_fields::tag_form_fields;
 pub use headings::{Heading, headings};
+pub use layout_table::{LayoutTableError, layout_table_to_blocks};
 pub use report::{REPORT_WORDS, report_html};
 pub use tags::{TagContentItem, TagError, TagInfo, TagPlacement, TagProperty, move_tag, set_tag_property, tag_content, tags};
 
@@ -680,6 +683,18 @@ pub fn check(doc: &Document, options: &Options) -> Report {
                     finding.bbox = Some(*bbox);
                 }
             }
+        }
+        // A page read only in part may hold what the scan didn't find: text that makes the
+        // document more than images, untagged content, or a font without Unicode mappings.
+        let unsure = !scan.incomplete.is_empty()
+            && match rule {
+                Rule::ImageOnly => !scan.has_text,
+                Rule::TaggedContent | Rule::CharacterEncoding => findings.is_empty(),
+                _ => false,
+            };
+        if unsure {
+            results.push(RuleResult { rule, status: Status::Manual, findings: Vec::new() });
+            continue;
         }
         if total > MAX_FINDINGS {
             let more = total - MAX_FINDINGS;

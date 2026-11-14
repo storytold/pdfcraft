@@ -12,11 +12,14 @@ cargo build --profile low-disk -p pdfcraft-cli
 cargo test --profile low-disk -p pdfcraft-cos --lib
 ```
 
-The profile inherits the normal development settings, including debug assertions and overflow
-checks. It uses line-table-only debug information for workspace code, which keeps file and line
-numbers in backtraces but omits local-variable and parameter details, and it disables incremental
-compilation for this profile only. Ordinary `cargo build`, `cargo test`, and release builds keep
-their existing profiles.
+The profile inherits the normal development settings, including debug assertions, overflow
+checks and line-table-only debug information, and disables incremental compilation for this
+profile only. Ordinary `cargo build` and `cargo test` keep incremental compilation.
+
+The development profile itself keeps only line tables for workspace code and no debug information
+for dependencies. Backtraces show file and line numbers but no local variables or parameters; for
+full debug information in workspace code (for a debugger), build with
+`CARGO_PROFILE_DEV_DEBUG=true`.
 
 Cargo stores custom-profile artifacts separately under `target/low-disk`. Switching between the
 normal and low-disk profiles can therefore leave both sets of artifacts on disk. To remove only
@@ -24,6 +27,24 @@ the low-disk artifacts, run `cargo clean --profile low-disk`.
 
 Building PdfCraft requires Rust 1.95 or later: the UI crate and its `egui` and `craft-ui`
 dependencies need it, and the workspace `rust-version` states the same minimum.
+
+## Annotation tool pin
+
+The annotation quick bar's **Keep tool selected** pin is a shared preference, stored as the
+boolean `comment_tool_pinned`. It survives application restarts, including when switched off.
+Startup uses Select; the remembered pin applies when an annotation tool is picked. Older settings
+without the key keep the default one-shot behavior. Non-boolean values are ignored, preserving
+the current choice and the other valid settings.
+
+The existing opt-in UI control channel uses the same preference:
+
+```sh
+pdfcraft-cli ui --control /path/to/control.json set key=comment-tool-pinned value=true
+pdfcraft-cli ui --control /path/to/control.json state
+```
+
+`ui.state.comment_tool_pinned` reports the boolean. `ui.set` accepts `true` or `false` and refuses
+other values before changing the preference. This changes interface settings only.
 
 ## Interface appearance
 
@@ -133,7 +154,7 @@ copies retain their current preferences locations.
 | `PDFCRAFT_TITLEBAR` | Linux: `app` draws PdfCraft's own title bar (window buttons in the tab strip, in the order of GNOME's `button-layout`, and resize edges); `system` keeps the frame winit or the desktop draws; unset, PdfCraft draws its own when the Wayland compositor draws no frames (GNOME), and leaves it to the desktop otherwise (KDE, Sway, Hyprland, X11). Where PdfCraft draws it, Preferences ▸ Use system title bar switches back to winit's frame without a restart; `system` also hides that option |
 | `PDFCRAFT_BUILD_LABEL` | Build time: a label for a local or patched build (letters, digits, inner dots), shown after the version in `--version`, About and the log (`0.7.1 (titlebar)`). `packaging/linux/package.sh` also puts it in the file names and the .rpm/.deb release (`1.titlebar`), which upgrades over the release of the same version |
 | `CRAFT_FONTS_DIR` | Build time: a [craft-fonts](https://github.com/storytold/craft-fonts) checkout to embed (Japanese fonts) |
-| `PDFCRAFT_SYSTEM_FONTS` | `0` stops the desktop app from using an installed font for characters its embedded fonts lack (`cargo xtask screenshots` sets it) |
+| `PDFCRAFT_SYSTEM_FONTS` | `0` disables installed-font fallback for both interface text and non-embedded CJK page text in the desktop viewer, Combine thumbnails and accessibility figure previews (`cargo xtask screenshots` sets it). Document fallback is display-only: exports, printing, OCR and automation retain the bundled-font path. |
 | `FONTCONFIG_FILE` | On Linux/Unix, the Fontconfig configuration file used to discover installed UI fallback fonts (default: `/etc/fonts/fonts.conf`); relative filenames are resolved under `FONTCONFIG_PATH` |
 | `FONTCONFIG_PATH` | Directory for a relative `FONTCONFIG_FILE` (default: `/etc/fonts`; the first entry of a search path is used) |
 

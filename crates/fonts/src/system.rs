@@ -219,9 +219,11 @@ fn faces_in(path: &Path) -> Vec<InstalledFont> {
         if charmap.map('\u{0627}').is_none() || charmap.map('\u{0628}').is_none() {
             continue;
         }
-        // Restricted licence (bit 1) or bitmap-only embedding (bit 9): its outlines may not go into a PDF.
+        // Restricted licence (bit 1), no subsetting (bit 8: only the whole font may be embedded,
+        // and its glyphs go in one by one) or bitmap-only embedding (bit 9): its outlines may not
+        // go into a PDF this way.
         let fs_type = font.os2().map_or(0, |os2| os2.fs_type());
-        if fs_type & 0x0002 != 0 || fs_type & 0x0200 != 0 {
+        if fs_type & (0x0002 | 0x0100 | 0x0200) != 0 {
             continue;
         }
         let name = |ids: [skrifa::string::StringId; 2]| {

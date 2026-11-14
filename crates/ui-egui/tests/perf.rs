@@ -18,7 +18,7 @@ fn load_average() -> Option<f64> {
 /// Frame budgets only mean something on a machine that isn't overcommitted: with the load
 /// average above twice the core count (other builds running), skip and say so.
 fn overloaded() -> bool {
-    let cores = std::thread::available_parallelism().map_or(4, |n| n.get()) as f64;
+    let cores = std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get) as f64;
     match load_average() {
         Some(l) if l > 2.0 * cores => {
             eprintln!("PERF skipped: load average {l:.0} on {cores} cores; frame budgets need a quiet machine");
@@ -94,7 +94,7 @@ fn pdf(objs: Vec<String>) -> Vec<u8> {
     out
 }
 
-/// Named roots exercise thread lookups even when none of the comments has replies.
+/// Named roots, none with replies: the panel still looks up every root's thread.
 fn named_comments(n: usize) -> Vec<u8> {
     let annots: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 4)).collect();
     let mut objs = vec![
@@ -166,6 +166,43 @@ fn scrolling_a_500_page_document_stays_within_the_frame_budget() {
         h.step();
     });
     assert!(avg < BUDGET, "average frame {avg:?}");
+}
+
+/// Measures real wheel events and their idle frames, separately from page-jump scheduling.
+#[test]
+fn regular_wheel_input_on_500_pages_stays_within_the_frame_budget() {
+    if overloaded() {
+        return;
+    }
+    let _turn = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let bytes = big(500);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("wheel-budget.pdf", None, bytes).expect("opens");
+        for (key, value) in [("left", "closed"), ("panel", "none"), ("layout", "continuous"), ("zoom", "200"), ("animation_effects", "on")] {
+            app.set_option(key, value).unwrap();
+        }
+        app
+    });
+    h.run_steps(8);
+    h.hover_at(h.state().views[0].viewport_rect().center());
+    h.run_steps(2);
+    let start = h.state().views[0].current;
+    let average = best_average("wheel input", 200, |frame| {
+        if frame % 3 == 0 {
+            h.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, -1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Unknown,
+            });
+        }
+        h.step();
+    });
+    assert!(h.state().views[0].current > start, "wheel events must actually move through the document");
+    assert!(average < BUDGET, "wheel input: average frame {average:?}");
 }
 
 #[test]

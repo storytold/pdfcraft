@@ -3,6 +3,7 @@
 //! bundled here).
 
 use crate::model::{Font, HAlign, Para, Rect, RichText, Run};
+use pdfcraft_fonts::Std14;
 
 /// The standard-14 family a typeface maps to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -29,22 +30,27 @@ impl Family {
         }
     }
 
+    /// The standard-14 font this family draws in, as `bold` and `italic` ask.
+    pub fn std14(self, bold: bool, italic: bool) -> Std14 {
+        match (self, bold, italic) {
+            (Family::Helvetica, false, false) => Std14::Helvetica,
+            (Family::Helvetica, true, false) => Std14::HelveticaBold,
+            (Family::Helvetica, false, true) => Std14::HelveticaOblique,
+            (Family::Helvetica, true, true) => Std14::HelveticaBoldOblique,
+            (Family::Courier, false, false) => Std14::Courier,
+            (Family::Courier, true, false) => Std14::CourierBold,
+            (Family::Courier, false, true) => Std14::CourierOblique,
+            (Family::Courier, true, true) => Std14::CourierBoldOblique,
+            (Family::Times, false, false) => Std14::TimesRoman,
+            (Family::Times, true, false) => Std14::TimesBold,
+            (Family::Times, false, true) => Std14::TimesItalic,
+            (Family::Times, true, true) => Std14::TimesBoldItalic,
+        }
+    }
+
     /// The PDF base font name for a face.
     pub fn base_font(self, bold: bool, italic: bool) -> &'static str {
-        match (self, bold, italic) {
-            (Family::Helvetica, false, false) => "Helvetica",
-            (Family::Helvetica, true, false) => "Helvetica-Bold",
-            (Family::Helvetica, false, true) => "Helvetica-Oblique",
-            (Family::Helvetica, true, true) => "Helvetica-BoldOblique",
-            (Family::Courier, false, false) => "Courier",
-            (Family::Courier, true, false) => "Courier-Bold",
-            (Family::Courier, false, true) => "Courier-Oblique",
-            (Family::Courier, true, true) => "Courier-BoldOblique",
-            (Family::Times, false, false) => "Times-Roman",
-            (Family::Times, true, false) => "Times-Bold",
-            (Family::Times, false, true) => "Times-Italic",
-            (Family::Times, true, true) => "Times-BoldItalic",
-        }
+        self.std14(bold, italic).base_font()
     }
 
     /// The resource name used in content streams and `/DA` strings (Acrobat's conventions).
@@ -121,15 +127,19 @@ impl Face {
         self.family.resource_name(self.bold, self.italic)
     }
 
-    /// Advance of `s` at this face's size.
+    /// Advance of `s` at this face's size: the standard-14 font it is drawn in, at that font's
+    /// own widths (ISO 32000-2 Annex D) and encoded as it is written, then the horizontal scale.
     pub fn width(&self, s: &str) -> f64 {
-        let designed = match self.family {
-            Family::Courier => s.chars().count() as f64 * 0.6 * self.size,
-            Family::Helvetica => pdfcraft_fonts::helvetica_width(s, self.size) * if self.bold { 1.04 } else { 1.0 },
-            Family::Times => pdfcraft_fonts::helvetica_width(s, self.size) * if self.bold { 0.96 } else { 0.92 },
-        };
-        designed * self.h_scale
+        #[cfg(test)]
+        MEASURED.with(|m| m.set(m.get().saturating_add(s.len() as u64)));
+        self.family.std14(self.bold, self.italic).text_width(s, self.size) * self.h_scale
     }
+}
+
+// Bytes of text measured on this thread, for tests that bound layout work.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static MEASURED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Default line height: XFA's font leading for the standard faces.
@@ -145,6 +155,9 @@ pub struct Span {
     pub baseline: f64,
     pub text: String,
     pub face: Face,
+    /// Where the text links to (its run's `<a href>`), as the template writes it, shared with the
+    /// link's other spans.
+    pub link: Option<std::sync::Arc<str>>,
 }
 
 /// A laid-out block of text.
@@ -160,6 +173,9 @@ struct Word {
     text: String,
     face: Face,
     width: f64,
+    /// The link of the run the word came from, shared, not copied, so a long link over many
+    /// words costs one address.
+    link: Option<std::sync::Arc<str>>,
 }
 
 /// The width of `w` without the spaces it ends with: what it takes at the end of a line, where
@@ -169,20 +185,43 @@ fn ink_width(w: &Word) -> f64 {
     if ink.len() == w.text.len() { w.width } else { w.face.width(ink) }
 }
 
+/// Most bytes of embedded field values one text block shows, as much as a text of its own
+/// holds: a value embedded over and over is expanded only so far.
+pub(crate) const MAX_EMBEDDED: usize = 1 << 20;
+
+/// The longest prefix of `s` at most `max` bytes long that ends on a character boundary.
+pub fn prefix(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let end = s.char_indices().map(|(i, _)| i).take_while(|i| *i <= max).last().unwrap_or(0);
+    s.get(..end).unwrap_or_default()
+}
+
 /// Break the runs of a paragraph into words (spaces stay attached to the word before them).
-fn words(runs: &[Run], base: &Face, embed: &dyn Fn(&str) -> String) -> Vec<Word> {
+/// Embedded values take from `embed_left` bytes and are cut when it runs out; `embed` is asked
+/// for at most that many bytes of each.
+fn words(runs: &[Run], base: &Face, embed: &dyn Fn(&str, usize) -> String, embed_left: &mut usize) -> Vec<Word> {
     let mut out = Vec::new();
     for run in runs {
         let face = base.with_run(run);
         let text: String = match &run.embed {
-            Some(id) => embed(id),
+            Some(_) if *embed_left == 0 => String::new(),
+            Some(id) => {
+                let mut v = embed(id, *embed_left);
+                if v.len() > *embed_left {
+                    v = prefix(&v, *embed_left).to_string();
+                }
+                *embed_left = embed_left.saturating_sub(v.len());
+                v
+            }
             None => run
                 .text
                 .chars()
                 .filter_map(|c| match c {
                     '\r' | '\n' | '\t' | '\u{2028}' | '\u{2029}' | '\u{2009}' | '\u{202F}' | '\u{3000}' => Some(' '),
                     '\u{00AD}' | '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' => None,
-                    '\u{2011}' | '\u{2010}' | '\u{2012}' | '\u{2013}' => Some('-'),
+                    '\u{2010}'..='\u{2013}' => Some('-'),
                     '\u{2018}' | '\u{2019}' => Some('\''),
                     _ => Some(c),
                 })
@@ -193,12 +232,12 @@ fn words(runs: &[Run], base: &Face, embed: &dyn Fn(&str) -> String) -> Vec<Word>
             cur.push(ch);
             if ch == ' ' {
                 let width = face.width(&cur);
-                out.push(Word { text: std::mem::take(&mut cur), face: face.clone(), width });
+                out.push(Word { text: std::mem::take(&mut cur), face: face.clone(), width, link: run.link.clone() });
             }
         }
         if !cur.is_empty() {
             let width = face.width(&cur);
-            out.push(Word { text: cur, face, width });
+            out.push(Word { text: cur, face, width, link: run.link.clone() });
         }
     }
     out
@@ -206,7 +245,7 @@ fn words(runs: &[Run], base: &Face, embed: &dyn Fn(&str) -> String) -> Vec<Word>
 
 /// Lay `rich` out inside `rect` with `para` and `base` face. `embed` resolves embedded fields to
 /// their text. Returns the spans (absolute coordinates) and the height the text takes.
-pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn Fn(&str) -> String) -> Block {
+pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn Fn(&str, usize) -> String) -> Block {
     struct Line {
         words: Vec<Word>,
         width: f64,
@@ -216,8 +255,9 @@ pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn
     let avail = (rect.w - para.margin_left - para.margin_right).max(1.0);
     let mut lines: Vec<(Line, Option<HAlign>)> = Vec::new();
     let mut total = 0.0;
+    let mut embed_left = MAX_EMBEDDED;
     for (pi, p) in rich.paragraphs.iter().enumerate() {
-        let ws = words(&p.runs, base, embed);
+        let ws = words(&p.runs, base, embed, &mut embed_left);
         let mut line = Line { words: Vec::new(), width: 0.0, size: base.size, first: true };
         let mut first_in_para = true;
         let indent = |first: bool| if first { para.text_indent.max(0.0) } else { 0.0 };
@@ -233,26 +273,32 @@ pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn
                 lines.push((done, p.h_align));
             }
             if ink > avail - indent(line.first) && line.words.is_empty() {
-                // A word longer than a line: break it by character.
+                // A word longer than a line: break it by character. The piece's advance grows by
+                // each character's (widths add up), so no prefix is measured again.
                 let mut piece = String::new();
+                let mut advance = 0.0;
+                let mut buf = [0u8; 4];
                 for ch in w.text.chars() {
+                    let ch_width = w.face.width(ch.encode_utf8(&mut buf));
                     piece.push(ch);
-                    if w.face.width(&piece) > avail - indent(line.first) && piece.chars().count() > 1 {
+                    advance += ch_width;
+                    if advance > avail - indent(line.first) && piece.len() > ch.len_utf8() {
                         piece.pop();
                         let width = w.face.width(&piece);
-                        line.words.push(Word { text: std::mem::take(&mut piece), face: w.face.clone(), width });
+                        line.words.push(Word { text: std::mem::take(&mut piece), face: w.face.clone(), width, link: w.link.clone() });
                         line.width += width;
                         line.size = line.size.max(w.face.size);
                         let done = std::mem::replace(&mut line, Line { words: Vec::new(), width: 0.0, size: base.size, first: false });
                         lines.push((done, p.h_align));
                         piece.push(ch);
+                        advance = ch_width;
                     }
                 }
                 if !piece.is_empty() {
                     let width = w.face.width(&piece);
                     line.size = line.size.max(w.face.size);
                     line.width += width;
-                    line.words.push(Word { text: piece, face: w.face.clone(), width });
+                    line.words.push(Word { text: piece, face: w.face.clone(), width, link: w.link.clone() });
                 }
                 first_in_para = false;
                 continue;
@@ -297,16 +343,17 @@ pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn
         };
         // Baseline: ascent sits about 0.8 of the size below the line top for these faces.
         let baseline = y + lh - (lh - line.size * 0.8).max(0.0) / 2.0 - line.size * 0.08;
+        // Words of one face and one link make one span, so a link's text is a span of its own.
         let mut run: Option<Span> = None;
         for w in line.words {
             match &mut run {
-                Some(s) if s.face == w.face => s.text.push_str(&w.text),
+                Some(s) if s.face == w.face && s.link == w.link => s.text.push_str(&w.text),
                 _ => {
                     if let Some(s) = run.take() {
                         x += s.face.width(&s.text);
                         spans.push(s);
                     }
-                    run = Some(Span { x, baseline, text: w.text, face: w.face });
+                    run = Some(Span { x, baseline, text: w.text, face: w.face, link: w.link });
                 }
             }
         }
@@ -320,14 +367,16 @@ pub fn layout(rich: &RichText, rect: Rect, para: &Para, base: &Face, embed: &dyn
 
 /// The width `rich` takes with no line wrapped (its longest paragraph, with the paragraph's
 /// margins and first-line indent): how wide a box without an explicit width grows.
-pub fn natural_width(rich: &RichText, para: &Para, base: &Face, embed: &dyn Fn(&str) -> String) -> f64 {
+pub fn natural_width(rich: &RichText, para: &Para, base: &Face, embed: &dyn Fn(&str, usize) -> String) -> f64 {
     let indent = para.text_indent.max(0.0);
-    let widest = rich.paragraphs.iter().map(|p| words(&p.runs, base, embed).iter().map(|w| w.width).sum::<f64>()).fold(0.0, f64::max);
+    let mut embed_left = MAX_EMBEDDED;
+    let widest =
+        rich.paragraphs.iter().map(|p| words(&p.runs, base, embed, &mut embed_left).iter().map(|w| w.width).sum::<f64>()).fold(0.0, f64::max);
     (para.margin_left + indent + widest + para.margin_right).max(0.0)
 }
 
 /// Height `rich` needs at `width` (for boxes without an explicit height).
-pub fn measure_height(rich: &RichText, width: f64, para: &Para, base: &Face, embed: &dyn Fn(&str) -> String) -> f64 {
+pub fn measure_height(rich: &RichText, width: f64, para: &Para, base: &Face, embed: &dyn Fn(&str, usize) -> String) -> f64 {
     let p = Para { v_align: crate::model::VAlign::Top, ..para.clone() };
     layout(rich, Rect::new(0.0, 0.0, width.max(1.0), 0.0), &p, base, embed).height
 }

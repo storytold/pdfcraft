@@ -78,6 +78,7 @@ fn count_inner(source: ExportSource, pages: &[usize], options: Options, mut prog
             tables: options.exclude_tables,
             code: options.exclude_code,
             images: options.exclude_images,
+            painted: false,
             mcids: excluded.remove(&page).unwrap_or_default(),
         };
         let text = renderer.filtered_text(page, filter).map_err(|e| format!("page {}: {e}", page.saturating_add(1)))?.plain_text();
@@ -108,6 +109,16 @@ fn standard_role(doc: &pdfcraft_cos::Document, map: &Dict, role: &[u8]) -> Vec<u
         role = next;
     }
     role
+}
+
+/// Whether the page's resources hold a Form XObject, whose MCIDs are a separate namespace.
+fn page_has_form_xobject(doc: &pdfcraft_cos::Document, page: &pdfcraft_cos::Dict) -> bool {
+    let resources = page.get(b"Resources").map(|o| doc.resolve(o));
+    let objects = resources.as_ref().and_then(|o| o.as_dict()).and_then(|d| d.get(b"XObject")).map(|o| doc.resolve(o));
+    objects
+        .as_ref()
+        .and_then(|o| o.as_dict())
+        .is_some_and(|d| d.iter().any(|(_, value)| matches!(&*doc.resolve(value), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form"))))
 }
 
 type Exclusions = HashMap<usize, HashSet<i32>>;
@@ -179,11 +190,7 @@ fn exclusions(source: &ExportSource, options: Options) -> Result<(Exclusions, bo
         if !out.contains_key(&index) {
             continue;
         }
-        let resources = page.dict.get(b"Resources").map(|o| doc.resolve(o));
-        let objects = resources.as_ref().and_then(|o| o.as_dict()).and_then(|d| d.get(b"XObject")).map(|o| doc.resolve(o));
-        let has_form = objects.as_ref().and_then(|o| o.as_dict()).is_some_and(|d| {
-            d.iter().any(|(_, value)| matches!(&*doc.resolve(value), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form")))
-        });
+        let has_form = page_has_form_xobject(&doc, &page.dict);
         if has_form {
             out.remove(&index);
             unclassified = true;

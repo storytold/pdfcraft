@@ -7,7 +7,7 @@ use super::RegionBitmap;
 use super::pattern::PatternDictionary;
 use super::{CombinationOperator, RegionSegmentInfo, Template, parse_region_segment_info};
 use crate::ScratchBuffers;
-use crate::bitmap::{Bitmap, MAX_DIMENSION, WORD_BITS};
+use crate::bitmap::{Bitmap, MAX_DIMENSION, WORD_BITS, copy_work, decode_work};
 use crate::error::{OverflowError, ParseError, RegionError, Result, bail};
 use crate::gray_scale::{GrayScaleParams, decode_gray_scale_image};
 use crate::reader::Reader;
@@ -48,11 +48,7 @@ pub(crate) fn decode_into(
         None
     };
 
-    // "3) Set HBPP to ⌈log₂(HNUMPATS)⌉." (6.6.5)
-    let bits_per_pixel = (pattern_dict.patterns.len() as u32)
-        .saturating_sub(1)
-        .checked_ilog2()
-        .map_or(1, |n| n + 1);
+    let bits_per_pixel = bits_per_pixel(pattern_dict);
 
     // "4) Decode an image GI of size HGW by HGH with HBPP bits per pixel using
     // the gray-scale image decoding procedure as described in Annex C." (6.6.5)
@@ -71,6 +67,28 @@ pub(crate) fn decode_into(
     render_patterns(htreg, &gi, header, pattern_dict)?;
 
     Ok(())
+}
+
+/// PdfCraft patch: the work of a halftone region (see `bitmap::MAX_WORK`): a bit plane of the grid
+/// for each bit of a pattern's index, a pattern copied for each cell, and the region itself. One
+/// such segment in a 795-byte PDF took 265 s.
+pub(crate) fn work(header: &HalftoneRegionHeader<'_>, patterns: &PatternDictionary) -> u64 {
+    let grid = &header.grid_position_and_size;
+    let cells = u64::from(grid.width) * u64::from(grid.height);
+    let planes = u64::from(bits_per_pixel(patterns));
+    let copied = copy_work(patterns.pattern_width, patterns.pattern_height);
+    planes
+        .saturating_mul(decode_work(grid.width, grid.height))
+        .saturating_add(cells.saturating_mul(copied))
+        .saturating_add(copy_work(header.region_info.width, header.region_info.height))
+}
+
+/// "3) Set HBPP to ⌈log₂(HNUMPATS)⌉." (6.6.5)
+fn bits_per_pixel(patterns: &PatternDictionary) -> u32 {
+    (patterns.patterns.len() as u32)
+        .saturating_sub(1)
+        .checked_ilog2()
+        .map_or(1, |n| n + 1)
 }
 
 /// Parse a halftone region segment header (7.4.5.1).
@@ -97,8 +115,8 @@ pub(crate) fn parse<'a>(reader: &mut Reader<'a>) -> Result<HalftoneRegionHeader<
     if grid_width > MAX_DIMENSION || grid_height > MAX_DIMENSION {
         bail!(OverflowError::GridDimension);
     }
-    // PdfCraft patch: the product is bounded too (see `bitmap::MAX_PIXELS`).
-    if u64::from(grid_width) * u64::from(grid_height) > crate::bitmap::MAX_PIXELS {
+    // PdfCraft patch: the product is bounded too (see `bitmap::MAX_GRID_CELLS`).
+    if u64::from(grid_width) * u64::from(grid_height) > crate::bitmap::MAX_GRID_CELLS {
         bail!(OverflowError::GridDimension);
     }
 
