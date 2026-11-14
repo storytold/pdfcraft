@@ -31,9 +31,9 @@ pub(crate) fn has_host() -> bool {
 pub(crate) fn set_host(host: Option<Sender<InteractiveEvent>>) {
     HOST.with(|h| *h.borrow_mut() = host.map(|h| (h, 0)));
 }
-/// Send a bounded prompt and await its reply, treating disconnect/timeout as cancellation.
-pub(crate) fn ask(prompt: Prompt) -> JsResult<Option<String>> {
-    let sender = HOST.with(|h| {
+/// Charge one prompt to the invocation's budget: the channel to send it on, if the worker has one.
+fn reserve() -> JsResult<Option<Sender<InteractiveEvent>>> {
+    HOST.with(|h| {
         let mut h = h.borrow_mut();
         let Some((tx, n)) = h.as_mut() else { return Ok(None) };
         if *n >= 32 {
@@ -41,8 +41,11 @@ pub(crate) fn ask(prompt: Prompt) -> JsResult<Option<String>> {
         }
         *n += 1;
         Ok(Some(tx.clone()))
-    })?;
-    let Some(sender) = sender else { return Ok(None) };
+    })
+}
+/// Send a bounded prompt and await its reply, treating disconnect/timeout as cancellation.
+pub(crate) fn ask(prompt: Prompt) -> JsResult<Option<String>> {
+    let Some(sender) = reserve()? else { return Ok(None) };
     let (tx, rx) = mpsc::channel();
     sender.send(InteractiveEvent::Prompt(prompt, tx)).map_err(|_| error("interactive host closed"))?;
     let answer = rx.recv_timeout(std::time::Duration::from_secs(300)).ok().flatten();
@@ -101,6 +104,12 @@ pub(crate) fn popup_menu(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
     let mut items = Vec::new();
     for a in args {
         items.push(read_menu(a, ctx, 0, &mut remaining)?);
+    }
+    // A menu with no items has nothing to pick: it answers null at once, without showing an empty
+    // menu or using up a later menu's answer, but still counts toward the prompt limit (#2081).
+    if items.is_empty() {
+        reserve()?;
+        return Ok(JsValue::null());
     }
     match ask(Prompt::Menu(items.clone()))? {
         Some(answer) if allowed(&items, &answer) => Ok(s(&answer)),

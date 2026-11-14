@@ -886,6 +886,11 @@ pub(super) fn veiled(view: &DocView) -> bool {
     view.presentation.is_some() && !view.presenter.settled_on(view.current)
 }
 
+/// The page and index of `l` when clicking it runs a JavaScript action (#2081).
+fn javascript_link(l: &pdfcraft_render::Link) -> Option<(usize, usize)> {
+    matches!(l.target, LinkTarget::JavaScript(_)).then_some((l.page, l.index))
+}
+
 /// Everything drawn over the page after its text: pictures, comments, content, links, fields, marks
 /// and badges.
 pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot, input: &PageInput) {
@@ -993,6 +998,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         && let Some(l) = info.links.iter().find(|l| l.page == i && l.index == index)
     {
         frame.out.clicked_link = Some(l.target.clone());
+        frame.out.javascript_link = javascript_link(l);
     }
     // A web or email address written as plain text (#4207): the same click as a link annotation,
     // and the same check and confirmation on opening.
