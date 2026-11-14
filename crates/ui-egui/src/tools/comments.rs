@@ -201,7 +201,7 @@ impl CommentTool {
             Self::Underline => "underline",
             Self::StrikeOut => "strikethrough",
             Self::Squiggly => "spline",
-            Self::FreehandHighlight => "highlighter",
+            Self::FreehandHighlight => "freehand-highlighter",
             Self::Ink => "pencil",
             Self::Line => "minus",
             Self::Arrow => "move-right",

@@ -979,6 +979,17 @@ usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
 sha256 = "c7468ec5c64330662b57e71c10a4c8538a501038f4c44ed0469dfb1e04ed7d3a"
 
 [[asset]]
+path = "assets/icons/freehand-highlighter.svg"
+title = "Freehand highlighter"
+author = "Combiler01"
+source = "this repository"
+licence = "CC0-1.0"
+licence_file = "vendor/hayro-interpret/assets/CGATS_LICENSE.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+sha256 = "38938729b9406a63ece80355a807f09bc7efc83dc20b1d7c735c645b463ec86c"
+
+[[asset]]
 path = "assets/icons/house.svg"
 title = "Lucide icon \"house\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"

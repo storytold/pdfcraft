@@ -82,6 +82,7 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("folder", include_bytes!("../../../../assets/icons/folder.svg")),
     ("folder-open", include_bytes!("../../../../assets/icons/folder-open.svg")),
     ("folder-plus", include_bytes!("../../../../assets/icons/folder-plus.svg")),
+    ("freehand-highlighter", include_bytes!("../../../../assets/icons/freehand-highlighter.svg")),
     ("gauge", include_bytes!("../../../../assets/icons/gauge.svg")),
     ("git-compare", include_bytes!("../../../../assets/icons/git-compare.svg")),
     ("globe", include_bytes!("../../../../assets/icons/globe.svg")),
