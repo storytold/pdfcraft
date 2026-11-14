@@ -44,6 +44,10 @@ pub fn names(bytes: &[u8]) -> Result<(String, String), String> {
     Ok((family, postscript))
 }
 
+/// The GUST Font License (LPPL-1.3c with a non-binding request to rename modified fonts), the
+/// licence of the TeX Gyre and Latin Modern families.
+const GUST_FONT_LICENSE: &str = "GUST Font License";
+
 /// A selected external font is document input. Require its own open-licence declaration;
 /// never turn a proprietary system-interface fallback into an exported PDF font.
 pub fn validate_document_input(bytes: &[u8]) -> Result<(), String> {
@@ -60,13 +64,18 @@ pub fn validate_document_input(bytes: &[u8]) -> Result<(), String> {
         return Err("Adobe-authored font assets are excluded by the project's asset policy".into());
     }
     let license: String = f.localized_strings(StringId::LICENSE_DESCRIPTION).map(|s| s.to_string()).collect();
-    if !["SIL OPEN FONT", "SIL Open Font", "Apache License", "Ubuntu Font Licence", "Bitstream Vera", "MIT License"]
+    if ["SIL OPEN FONT", "SIL Open Font", "Apache License", "Ubuntu Font Licence", "Bitstream Vera", "MIT License", GUST_FONT_LICENSE]
         .iter()
         .any(|l| license.contains(l))
     {
-        return Err("select an openly licensed font whose name table declares its licence (OFL, Apache, Ubuntu, Bitstream Vera or MIT)".into());
+        return Ok(());
     }
-    Ok(())
+    // The TeX Gyre and Latin Modern faces declare their licence in the copyright notice
+    // ("This work is released under the GUST Font License -- see …") and have no licence record.
+    if f.localized_strings(StringId::COPYRIGHT_NOTICE).any(|s| s.to_string().contains(GUST_FONT_LICENSE)) {
+        return Ok(());
+    }
+    Err("select an openly licensed font whose name table declares its licence (OFL, Apache, Ubuntu, Bitstream Vera, MIT or GUST)".into())
 }
 
 /// Validate before allocating any PDF objects, so an invalid font cannot partly mutate a doc.
@@ -341,6 +350,51 @@ fn same_resource(doc: &Document, fonts: &Dict, name: &str, programs: &mut Progra
 mod tests {
     use super::*;
     use crate::pdf::Metrics;
+
+    /// Offset of a table in an sfnt, from its table directory.
+    fn table(bytes: &[u8], tag: &[u8; 4]) -> usize {
+        let count = usize::from(u16::from_be_bytes([bytes[4], bytes[5]]));
+        (0..count)
+            .map(|i| 12 + 16 * i)
+            .find(|&r| &bytes[r..r + 4] == tag)
+            .map(|r| u32::from_be_bytes(bytes[r + 8..r + 12].try_into().unwrap()) as usize)
+            .unwrap()
+    }
+
+    /// The bundled Inter with name record `id` (Windows platform) set to `text` and its licence
+    /// record hidden, unless `id` is that record. The text goes into the licence record's storage,
+    /// the longest in the table, so nothing moves.
+    fn inter_with_name(id: u16, text: &str) -> Vec<u8> {
+        let mut bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+        let name = table(&bytes, b"name");
+        let u16_at = |b: &[u8], at: usize| usize::from(u16::from_be_bytes([b[at], b[at + 1]]));
+        let (count, storage) = (u16_at(&bytes, name + 2), name + u16_at(&bytes, name + 4));
+        let records: Vec<usize> = (0..count).map(|i| name + 6 + 12 * i).filter(|&r| u16_at(&bytes, r) == 3).collect();
+        let record = |id: u16| records.iter().copied().find(|&r| u16_at(&bytes, r + 6) == usize::from(id)).unwrap();
+        let (licence, target) = (record(13), record(id));
+        let encoded: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        assert!(encoded.len() <= u16_at(&bytes, licence + 8), "the text fits the licence record");
+        let slot = u16_at(&bytes, licence + 10);
+        bytes[storage + slot..storage + slot + encoded.len()].copy_from_slice(&encoded);
+        if target != licence {
+            bytes[licence + 8..licence + 10].copy_from_slice(&0u16.to_be_bytes());
+        }
+        bytes[target + 8..target + 10].copy_from_slice(&(encoded.len() as u16).to_be_bytes());
+        bytes[target + 10..target + 12].copy_from_slice(&(slot as u16).to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn the_gust_font_license_is_accepted_from_the_licence_record_or_the_copyright_notice() {
+        let tex_gyre =
+            "Copyright 2006, 2009 B. Jackowski and J.M. Nowacki. This work is released under the GUST Font License --  see tug.org/fonts/licenses";
+        assert_eq!(validate_document_input(&inter_with_name(0, tex_gyre)), Ok(()));
+        assert_eq!(validate_document_input(&inter_with_name(13, "This work is released under the GUST Font License.")), Ok(()));
+        // Without a declaration the font is still refused.
+        assert!(validate_document_input(&inter_with_name(0, "Copyright 2006 B. Jackowski and J.M. Nowacki")).is_err());
+        // A GUST mention in another record is no declaration.
+        assert!(validate_document_input(&inter_with_name(8, "GUST Font License")).is_err());
+    }
 
     #[test]
     fn full_unicode_embedding_keeps_outlines_advances_and_roundtrip_codes() {
