@@ -49,7 +49,7 @@ pub(crate) use area::signature_badges;
 use area::{drawing_edge_pointer, glide_interrupted, page_scroll, presentation_click, run_button, set_layers, zoom_anchor};
 #[cfg(test)]
 use bars::in_size_hint_zone;
-use bars::{Notice, notices, page_size_hint, quick_bar};
+use bars::{Notice, notices, page_size_hint, paint_render_warnings, quick_bar};
 pub use cache::RasterMemory;
 pub(crate) use cache::{BASE_SIDE, TILE_THRESHOLD, texture_image, thumbnail_rows};
 #[cfg(test)]
@@ -554,6 +554,12 @@ pub struct DocView {
     pages: HashMap<usize, PageTex>,
     /// Pages the renderer could not draw, with the reason (never re-requested).
     errors: HashMap<usize, String>,
+    /// Pages the renderer drew only in part or approximately, with what it reported for them
+    /// (#4340). Shown on the page until the page changes.
+    warnings: HashMap<usize, Vec<pdfcraft_render::RenderWarning>>,
+    /// Pages whose warning note the reader closed. The page is still reported as incomplete
+    /// (`page_warnings`); the note comes back once the page is drawn again after a change.
+    warnings_dismissed: HashSet<usize>,
     /// Pages whose content was cut at the renderer's limits (#623): drawn and searched in part.
     cut_pages: std::collections::BTreeSet<usize>,
     /// Cut pages whose notice the reader dismissed: a page cut later shows it again.
@@ -1058,6 +1064,8 @@ impl DocView {
             presenter: Default::default(),
             pages: HashMap::new(),
             errors: HashMap::new(),
+            warnings: HashMap::new(),
+            warnings_dismissed: HashSet::new(),
             cut_pages: Default::default(),
             cut_notice_dismissed: Default::default(),
             waiting_since: HashMap::new(),
@@ -1402,6 +1410,8 @@ struct PageEnv<'a> {
 struct PageOut {
     canvas_action: Option<comments::CanvasAction>,
     clicked_link: Option<LinkTarget>,
+    /// A click a page's render-warning note took (its close button or the note itself).
+    note_clicked: bool,
     /// The JavaScript link clicked, by page and annotation index (0-based), to run its action.
     javascript_link: Option<(usize, usize)>,
     comment_notice: Option<&'static str>,
@@ -1753,6 +1763,13 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     if view.show_page_gaps {
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
     }
+    if let Some(warnings) = view.render_warning_note(i) {
+        let note = paint_render_warnings(ui, painter, r.intersect(visible), i, &warnings, t);
+        frame.out.note_clicked |= note.clicked;
+        if note.closed {
+            view.dismiss_render_warning_note(i);
+        }
+    }
 
     let slot = PageSlot { i, r, xf };
     // Addresses written as plain text are found once per text layer, before the tools hit-test them.
@@ -1966,6 +1983,7 @@ fn draw_pages(
     let PageOut {
         mut canvas_action,
         clicked_link,
+        note_clicked,
         javascript_link,
         copy_selected,
         mut field_menu,
@@ -2217,6 +2235,7 @@ fn draw_pages(
     *out = PageOut {
         canvas_action,
         clicked_link,
+        note_clicked,
         javascript_link,
         comment_notice,
         copy_comments,
@@ -2868,9 +2887,9 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
 /// Full screen: the click turns the page unless it did something else first. It waits out the
 /// double-click time: turning on the first click's release sent a double-click's second click,
 /// meant to select a word, to the next page (review on #2070). A selection cancels it, and so do a
-/// click on a link, field or comment (`clicked_object`) and leaving full screen: the pointer stays
-/// active "so that you can click links and open notes" (*Adobe Acrobat Help*, 2019, p. 65), and
-/// fields to fill. A double-click elsewhere still turns once.
+/// click on a link, field, comment or render-warning note (`clicked_object`) and leaving full
+/// screen: the pointer stays active "so that you can click links and open notes" (*Adobe Acrobat
+/// Help*, 2019, p. 65), and fields to fill. A double-click elsewhere still turns once.
 /// `click` is `Some(back)` on the frame of a click, `back` when it was a shift-click.
 fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<bool>, clicked_object: bool) {
     let now = ui.input(|i| i.time);
@@ -3458,6 +3477,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let PageOut {
         canvas_action,
         clicked_link,
+        note_clicked,
         javascript_link,
         comment_notice,
         copy_comments,
@@ -3563,7 +3583,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(p, i)),
         None => {}
     }
-    schedule_presentation_turn(ui, view, present, clicked_link.is_some() || on_object && present.is_some());
+    schedule_presentation_turn(ui, view, present, clicked_link.is_some() || on_object && present.is_some() || note_clicked);
     let remote_open = follow_link(app, index, clicked_link);
     if let Some((page, link)) = javascript_link {
         let id = app.views[index].id;

@@ -100,6 +100,9 @@ impl Host for crate::PdfCraftApp {
                 "viewport": [v.viewport_rect().min.x, v.viewport_rect().min.y, v.viewport_rect().max.x, v.viewport_rect().max.y],
                 "find_open": v.find.is_some(),
                 "page_errors": v.page_errors().iter().map(|(p, e)| json!({ "page": p + 1, "error": e })).collect::<Vec<_>>(),
+                // Pages drawn only in part or approximately: the renderer's warning names, as
+                // `ContentTruncated` and `ColourFallback`.
+                "page_warnings": v.page_warnings().iter().map(|(p, w)| json!({ "page": p + 1, "warnings": w.iter().map(|w| format!("{w:?}")).collect::<Vec<_>>() })).collect::<Vec<_>>(),
                 // Pages cut at the renderer's limits (#623), 1-based.
                 "cut_pages": v.cut_pages().iter().map(|p| p + 1).collect::<Vec<_>>(),
                 // Where pages are on screen (points), to aim ui.click / ui.drag at page content.
