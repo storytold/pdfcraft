@@ -189,3 +189,9 @@ crate = "icu_segmenter_data"
 path = "data/segmenter_dictionary_extended_v1.rs.data"
 licence = "Unicode-3.0"
 documents = ["licenses/ICU4X-LICENSE.txt"]
+
+[[bundled]]
+crate = "craft-prc"
+path = "src/acof/table.rs"
+licence = "MIT"
+documents = ["licenses/prc-rs-LICENSE.txt"]
