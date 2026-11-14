@@ -63,7 +63,7 @@ const CKB_DAYS: [&str; 7] = ["یەکشەممە", "دووشەممە", "سێشەم
 
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
 /// the interface languages, in the same order and with the same names.
-pub static DATE_LANGUAGES: [DateLanguage; 35] = [
+pub static DATE_LANGUAGES: [DateLanguage; 38] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -575,6 +575,39 @@ pub static DATE_LANGUAGES: [DateLanguage; 35] = [
         days: ["søndag", "mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag"],
         days_short: ["søn.", "man.", "tir.", "ons.", "tor.", "fre.", "lør."],
     },
+    // Dutch. Month names are lowercase in a date (`13 januari 2026`) and the same with and after
+    // a day number, so `months_with_day` is `None`.
+    DateLanguage {
+        code: "nl",
+        name: "Nederlands",
+        months: ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"],
+        months_with_day: None,
+        months_short: ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"],
+        days: ["zondag", "maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag"],
+        days_short: ["zo", "ma", "di", "wo", "do", "vr", "za"],
+    },
+    // Danish. Month names are the same with and after a day number (`13. januar 2026`), so
+    // `months_with_day` is `None`.
+    DateLanguage {
+        code: "da",
+        name: "Dansk",
+        months: ["januar", "februar", "marts", "april", "maj", "juni", "juli", "august", "september", "oktober", "november", "december"],
+        months_with_day: None,
+        months_short: ["jan", "feb", "mar", "apr", "maj", "jun", "jul", "aug", "sep", "okt", "nov", "dec"],
+        days: ["søndag", "mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag"],
+        days_short: ["sø", "ma", "ti", "on", "to", "fr", "lø"],
+    },
+    // Swedish. Month names are the same with and after a day number (`13 januari 2026`), so
+    // `months_with_day` is `None`.
+    DateLanguage {
+        code: "sv",
+        name: "Svenska",
+        months: ["januari", "februari", "mars", "april", "maj", "juni", "juli", "augusti", "september", "oktober", "november", "december"],
+        months_with_day: None,
+        months_short: ["jan", "feb", "mars", "apr", "maj", "juni", "juli", "aug", "sep", "okt", "nov", "dec"],
+        days: ["söndag", "måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag"],
+        days_short: ["sö", "må", "ti", "on", "to", "fr", "lö"],
+    },
 ];
 
 /// The date language for `code` (any case), or `None` when there's none.
@@ -974,6 +1007,16 @@ mod tests {
         assert_eq!(s.today_text_for_pdf(None, None).as_deref(), Ok("martedì 14 novembre"), "Italian names and accents can be written into a PDF");
         s.set_date_language(None).unwrap();
         assert_eq!(s.date_language(), None);
+    }
+
+    #[test]
+    fn dutch_danish_and_swedish_month_and_weekday_names() {
+        assert_eq!(in_lang("d mmmm yyyy", "nl"), "7 maart 2026");
+        assert_eq!(in_lang("dddd", "nl"), "zaterdag");
+        assert_eq!(in_lang("d. mmmm yyyy", "da"), "7. marts 2026");
+        assert_eq!(in_lang("dddd", "da"), "lørdag");
+        assert_eq!(in_lang("d mmmm yyyy", "sv"), "7 mars 2026");
+        assert_eq!(in_lang("dddd", "sv"), "lördag");
     }
 
     #[test]

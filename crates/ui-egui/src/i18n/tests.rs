@@ -976,6 +976,29 @@ fn finnish_is_registered_and_persists() {
 }
 
 #[test]
+fn dutch_danish_and_swedish_are_registered_and_persist() {
+    needs_catalogs!();
+    for (code, name, tags) in [
+        ("nl", "Nederlands", ["nl", "nl-NL", "nl-BE", "nl_NL.UTF-8"]),
+        ("da", "Dansk", ["da", "da-DK", "DA-dk", "da_DK.UTF-8"]),
+        ("sv", "Svenska", ["sv", "sv-SE", "sv-FI", "sv_SE.UTF-8"]),
+    ] {
+        let lang = Lang::from_code(code).expect("registered");
+        assert_eq!(lang.name(), name);
+        assert_eq!(normalize_pref(&code.to_uppercase()), Some(code));
+        for tag in tags {
+            assert_eq!(lang_from_tag(tag), Some(lang), "{tag}");
+        }
+        let mut app = crate::PdfCraftApp::default();
+        app.set_option("language", &code.to_uppercase()).unwrap();
+        assert_eq!(app.language, code);
+        let mut restored = crate::PdfCraftApp::default();
+        restored.restore(&app.persist());
+        assert_eq!(restored.language, code);
+    }
+}
+
+#[test]
 fn lithuanian_is_registered_and_persists() {
     needs_catalogs!();
     let lt = Lang::from_code("lt").expect("lt registered");
