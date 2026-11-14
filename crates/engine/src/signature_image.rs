@@ -1,9 +1,9 @@
 //! Local image signatures, shared by Fill & Sign and its automation tool.
 
-use std::io::{Cursor, Read};
+use std::io::Read;
 use std::sync::Arc;
 
-use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
+use image::DynamicImage;
 use pdfcraft_render::PageInfo;
 
 use crate::{Document, Edit, MarkFile, guard};
@@ -113,7 +113,7 @@ pub enum SignatureImageError {
     #[error("Couldn't read the signature image: {0}")]
     Read(#[from] std::io::Error),
     #[error("Couldn't decode the signature image: {0}")]
-    Decode(#[from] image::ImageError),
+    Decode(String),
 }
 
 /// A validated image, normalized to PNG without source paths or metadata. Alpha is preserved.
@@ -131,26 +131,30 @@ pub(crate) fn decode_source(bytes: &[u8]) -> Result<DynamicImage, SignatureImage
     if bytes.len() > MAX_SIGNATURE_IMAGE_BYTES {
         return Err(SignatureImageError::Size);
     }
-    let format = image::guess_format(bytes).map_err(|_| SignatureImageError::Format)?;
-    if !matches!(format, ImageFormat::Png | ImageFormat::Jpeg) {
+    let format = craft_image_codecs::detect(bytes).ok_or(SignatureImageError::Format)?;
+    if !matches!(format, craft_image_codecs::Format::Png | craft_image_codecs::Format::Jpeg) {
         return Err(SignatureImageError::Format);
     }
-    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
-    let mut limits = Limits::default();
-    limits.max_image_width = Some(MAX_SOURCE_SIDE);
-    limits.max_image_height = Some(MAX_SOURCE_SIDE);
-    // 8-bit RGBA at the pixel cap; 16-bit sources that large hit this and report Size.
-    limits.max_alloc = Some(MAX_SOURCE_PIXELS * 4);
-    reader.limits(limits);
-    let too_big = |e: image::ImageError| if matches!(e, image::ImageError::Limits(_)) { SignatureImageError::Size } else { e.into() };
-    let mut decoder = reader.into_decoder().map_err(too_big)?;
-    let (w, h) = decoder.dimensions();
-    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_SOURCE_PIXELS {
+    let opts = craft_image_codecs::DecodeOptions {
+        keep_orientation: false,
+        limits: craft_image_codecs::Limits {
+            max_width: MAX_SOURCE_SIDE,
+            max_height: MAX_SOURCE_SIDE,
+            max_pixels: MAX_SOURCE_PIXELS,
+            max_alloc: MAX_SOURCE_PIXELS * 4,
+        },
+        ..Default::default()
+    };
+    let decoded = craft_image_codecs::decode_as_with(format, bytes, &opts).map_err(|e| match e {
+        craft_image_codecs::CodecError::LimitExceeded(_) => SignatureImageError::Size,
+        other => SignatureImageError::Decode(other.to_string()),
+    })?;
+    let (dw, dh) = (decoded.width(), decoded.height());
+    if dw == 0 || dh == 0 || u64::from(dw) * u64::from(dh) > MAX_SOURCE_PIXELS {
         return Err(SignatureImageError::Size);
     }
-    let orientation = decoder.orientation()?;
-    let mut image = DynamicImage::from_decoder(decoder).map_err(too_big)?;
-    image.apply_orientation(orientation);
+    let raw = decoded.to_rgba8();
+    let mut image = DynamicImage::ImageRgba8(image::RgbaImage::from_raw(dw, dh, raw).ok_or(SignatureImageError::Size)?);
     let (w, h) = (f64::from(image.width()), f64::from(image.height()));
     let scale = (f64::from(MAX_SIDE) / w.max(h)).min((MAX_PIXELS as f64 / (w * h)).sqrt());
     if scale < 1.0 {
@@ -159,6 +163,17 @@ pub(crate) fn decode_source(bytes: &[u8]) -> Result<DynamicImage, SignatureImage
         image = image.thumbnail(nw, nh);
     }
     Ok(image)
+}
+
+fn encode_png(w: u32, h: u32, raw: Vec<u8>) -> Result<(Vec<u8>, Vec<u8>), SignatureImageError> {
+    let img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgba, raw.clone())
+        .map_err(|e| SignatureImageError::Decode(e.to_string()))?;
+    let bytes = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default())
+        .map_err(|e| SignatureImageError::Decode(e.to_string()))?;
+    if bytes.len() > MAX_SIGNATURE_IMAGE_BYTES {
+        return Err(SignatureImageError::Size);
+    }
+    Ok((bytes, raw))
 }
 
 impl SignatureImage {
@@ -173,13 +188,8 @@ impl SignatureImage {
         let image = decode_source(bytes)?;
         let rgba = image.into_rgba8();
         let size = [rgba.width() as usize, rgba.height() as usize];
-        let mut png = Cursor::new(Vec::new());
-        DynamicImage::ImageRgba8(rgba.clone()).write_to(&mut png, ImageFormat::Png)?;
-        let bytes = png.into_inner();
-        if bytes.len() > MAX_SIGNATURE_IMAGE_BYTES {
-            return Err(SignatureImageError::Size);
-        }
-        Ok(Self { bytes: Arc::new(bytes), rgba: Arc::new(rgba.into_raw()), size })
+        let (bytes, raw) = encode_png(rgba.width(), rgba.height(), rgba.into_raw())?;
+        Ok(Self { bytes: Arc::new(bytes), rgba: Arc::new(raw), size })
     }
 
     pub fn bytes(&self) -> &Arc<Vec<u8>> {
@@ -204,18 +214,17 @@ impl SignatureImage {
     /// Make near-white paper transparent, keeping darker ink.
     pub fn remove_white_background(&self, cutoff: u8, feather: u8) -> Result<Self, SignatureImageError> {
         let [w, h] = self.size;
-        let mut rgba = image::RgbaImage::from_raw(w as u32, h as u32, self.rgba.as_ref().clone()).ok_or(SignatureImageError::Size)?;
+        let (w32, h32) = (u32::try_from(w).map_err(|_| SignatureImageError::Size)?, u32::try_from(h).map_err(|_| SignatureImageError::Size)?);
+        let mut raw = self.rgba.as_ref().clone();
         let high = f32::from(cutoff);
         let span = f32::from(feather.max(1));
-        for pixel in rgba.pixels_mut() {
-            let [r, g, b, a] = pixel.0;
-            let whiteness = f32::from(r.min(g).min(b));
+        for px in raw.chunks_exact_mut(4) {
+            let whiteness = f32::from(px[0].min(px[1]).min(px[2]));
             let keep = ((high - whiteness) / span).clamp(0.0, 1.0);
-            pixel.0[3] = (f32::from(a) * keep).round() as u8;
+            px[3] = (f32::from(px[3]) * keep).round() as u8;
         }
-        let mut png = Cursor::new(Vec::new());
-        DynamicImage::ImageRgba8(rgba).write_to(&mut png, ImageFormat::Png)?;
-        Self::from_bytes(&png.into_inner())
+        let (bytes, raw) = encode_png(w32, h32, raw)?;
+        Ok(Self { bytes: Arc::new(bytes), rgba: Arc::new(raw), size: [w, h] })
     }
 
     /// The user-space box for the image with its left edge at `at` (a user-space point on `page`),
@@ -258,10 +267,9 @@ mod tests {
     }
 
     fn png(w: u32, h: u32) -> Vec<u8> {
-        let image = image::RgbaImage::from_pixel(w, h, image::Rgba([40, 60, 80, 128]));
-        let mut out = Cursor::new(Vec::new());
-        image.write_to(&mut out, ImageFormat::Png).unwrap();
-        out.into_inner()
+        let img =
+            craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgba, [40u8, 60, 80, 128].repeat((w * h) as usize)).unwrap();
+        craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()
     }
 
     #[test]
@@ -300,9 +308,9 @@ mod tests {
 
     #[test]
     fn jpeg_signatures_are_normalized_to_png() {
-        let mut jpeg = Cursor::new(Vec::new());
-        image::RgbImage::from_pixel(60, 20, image::Rgb([20, 20, 20])).write_to(&mut jpeg, ImageFormat::Jpeg).unwrap();
-        let image = SignatureImage::from_bytes(&jpeg.into_inner()).unwrap();
+        let img = craft_image_codecs::Image::from_u8(60, 20, craft_image_codecs::ChannelLayout::Rgb, [20u8; 3].repeat(1200)).unwrap();
+        let jpeg = craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &craft_image_codecs::EncodeOptions::default()).unwrap();
+        let image = SignatureImage::from_bytes(&jpeg).unwrap();
         assert_eq!(image.size(), [60, 20]);
         assert!(image.bytes().starts_with(b"\x89PNG\r\n\x1a\n"));
         assert!(image.rgba().as_chunks::<4>().0.iter().all(|p| p[3] == 255));
@@ -310,9 +318,8 @@ mod tests {
 
     #[test]
     fn jpeg_signature_orientation_is_applied_before_preview_and_embedding() {
-        let mut jpeg = Cursor::new(Vec::new());
-        image::RgbImage::from_pixel(60, 20, image::Rgb([20, 20, 20])).write_to(&mut jpeg, ImageFormat::Jpeg).unwrap();
-        let jpeg = jpeg.into_inner();
+        let img = craft_image_codecs::Image::from_u8(60, 20, craft_image_codecs::ChannelLayout::Rgb, [20u8; 3].repeat(1200)).unwrap();
+        let jpeg = craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &craft_image_codecs::EncodeOptions::default()).unwrap();
         // Synthetic EXIF IFD with Orientation=6 (90 degrees clockwise).
         let exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x06\0\0\0\0\0\0\0";
         let mut rotated = jpeg[..2].to_vec();
@@ -393,15 +400,16 @@ mod tests {
 
     #[test]
     fn white_background_becomes_transparent_and_ink_is_kept() {
-        let mut source = image::RgbaImage::new(4, 1);
-        source.put_pixel(0, 0, image::Rgba([255, 255, 255, 255]));
-        source.put_pixel(1, 0, image::Rgba([20, 20, 20, 255]));
-        source.put_pixel(2, 0, image::Rgba([227, 227, 227, 255]));
-        source.put_pixel(3, 0, image::Rgba([10, 10, 10, 100]));
-        let mut encoded = Cursor::new(Vec::new());
-        source.write_to(&mut encoded, ImageFormat::Png).unwrap();
+        let img = craft_image_codecs::Image::from_u8(
+            4,
+            1,
+            craft_image_codecs::ChannelLayout::Rgba,
+            vec![255, 255, 255, 255, 20, 20, 20, 255, 227, 227, 227, 255, 10, 10, 10, 100],
+        )
+        .unwrap();
+        let encoded = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
 
-        let image = SignatureImage::from_bytes(&encoded.into_inner()).unwrap();
+        let image = SignatureImage::from_bytes(&encoded).unwrap();
         let cleaned = image.remove_white_background(245, 35).unwrap();
         let pixels = cleaned.rgba().as_chunks::<4>().0;
 
