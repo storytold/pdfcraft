@@ -11,7 +11,7 @@ impl Automation {
             (pdfcraft_engine::compare::OfficeFormat::Html, "rich") => pdfcraft_engine::compare::OfficeFormat::Html,
             (pdfcraft_engine::compare::OfficeFormat::Html, "simple") => pdfcraft_engine::compare::OfficeFormat::HtmlSimple,
             (_, "rich") => format,
-            (_, _) => return Err(ToolError::InvalidArgs("html_mode is only available for HTML exports (rich or simple)".into())),
+            (_, _) => return Err(ToolError::InvalidArgs("html_mode must be rich, or simple for an HTML export".into())),
         };
         let export = self.doc_to_copy(a)?.export_office_checked(format);
         write_atomic(&path, &export.bytes)?;
