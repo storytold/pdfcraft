@@ -17,6 +17,9 @@ pub(crate) fn decode(
         return None;
     }
 
+    // PdfCraft patch (47): the data is read from its start-of-image marker.
+    let data = from_start_of_image(data);
+
     // Some PDFs have weird JPEGs where the JPEG metadata is completely wrong
     // (for example indicating that one of the dimensions is u16::MAX), but the
     // metadata in the PDF image dictionary is correct. Therefore, we first
@@ -96,6 +99,25 @@ pub(crate) fn decode(
         data: Cow::Owned(decoded),
         image_data: Some(image_data),
     })
+}
+
+/// PdfCraft patch (47): `data` from its first start-of-image marker (`FF D8` and the next
+/// marker's `FF`), or all of it when it has none.
+///
+/// DCTDecode data is a JPEG interchange-format stream (ISO 32000-2 §7.4.8), which begins with
+/// that marker. Bytes before it were refused, so the image was not drawn: an inline image with
+/// one end-of-line too many after `ID` (§8.9.7 allows a single white-space character there), as
+/// in the files of PDFBOX-5992, or an image XObject whose stream data starts with a newline.
+/// PDFium, MuPDF and Poppler draw both, and also skip other bytes before the marker, in image
+/// XObjects as in inline images. The search is one pass over data already in memory.
+fn from_start_of_image(data: &[u8]) -> &[u8] {
+    if data.starts_with(&[0xFF, 0xD8]) {
+        return data;
+    }
+    data.windows(3)
+        .position(|w| w == [0xFF, 0xD8, 0xFF])
+        .and_then(|start| data.get(start..))
+        .unwrap_or(data)
 }
 
 fn maybe_patch_jpeg_dimensions<'a>(
