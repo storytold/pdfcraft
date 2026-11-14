@@ -1064,6 +1064,18 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     match pdfcraft_xfdf::import(&mut data, bytes) {
                         Ok(report) => {
                             note_skipped(&mut data, &report);
+                            // Imported values change fields, so the calculated ones run again in
+                            // the calculation order (ISO 32000-2 Table 199 /C, Table 224 /CO), their
+                            // custom Calculate scripts included, as after a value typed in. The
+                            // import itself ran the built-in calculations; with JavaScript off
+                            // there is nothing more to run.
+                            if report.fields > 0
+                                && let Some(js) = cx.js.as_mut()
+                            {
+                                js.invalidate_calculations();
+                                js.invalidate_field_snapshots();
+                                pdfcraft_forms::recalculate_with(&mut data, js)?;
+                            }
                             *doc = data;
                         }
                         Err(e) if bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => match comment_source(bytes) {

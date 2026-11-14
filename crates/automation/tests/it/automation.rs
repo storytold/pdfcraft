@@ -7127,6 +7127,38 @@ fn comments_and_form_data_travel_as_xfdf_fdf_and_text() {
     assert_eq!(r["undo"], "Import all.xfdf");
 }
 
+/// Field values imported from an XFDF or FDF file run the form's calculations, a custom
+/// Calculate script included, as values typed in do.
+#[test]
+fn imported_form_data_runs_the_calculations_through_tools() {
+    let dir = workdir("import-calc");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (name, y) in [("a", 20), ("b", 60), ("total", 100)] {
+        ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, y, 180, y + 22], "name": name }));
+    }
+    let script = "event.value = Number(getField('a').value) + Number(getField('b').value);";
+    ok(&mut a, "form_set_script", json!({ "doc": doc, "field": "total", "event": "calculate", "script": script }));
+    let total = |a: &mut Automation| {
+        let r = ok(a, "form_fields", json!({ "doc": doc }));
+        r["fields"].as_array().unwrap().iter().find(|f| f["name"] == "total").unwrap()["value"].clone()
+    };
+    std::fs::write(
+        dir.join("in.xfdf"),
+        r#"<?xml version="1.0" encoding="UTF-8"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><fields><field name="a"><value>2</value></field><field name="b"><value>3</value></field></fields></xfdf>"#,
+    )
+    .unwrap();
+    ok(&mut a, "doc_import_data", json!({ "doc": doc, "path": "in.xfdf" }));
+    assert_eq!(total(&mut a), "5");
+    std::fs::write(
+        dir.join("in.fdf"),
+        b"%FDF-1.2\n1 0 obj\n<< /FDF << /Fields [<< /T (a) /V (40) >>] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n",
+    )
+    .unwrap();
+    ok(&mut a, "doc_import_data", json!({ "doc": doc, "path": "in.fdf" }));
+    assert_eq!(total(&mut a), "43");
+}
+
 #[test]
 fn natural_image_stamps_through_tools_on_rotated_pages() {
     for degrees in [0, 90, 180, 270] {
