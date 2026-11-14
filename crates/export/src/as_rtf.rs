@@ -4,24 +4,8 @@ use super::layout::{Block, Item, Page, count_lookup_steps, items};
 use std::collections::HashMap;
 
 fn rtf_text(s: &str) -> String {
-    let mut o = String::new();
-    for c in s.chars().filter(|c| allowed(*c)) {
-        match c {
-            '\\' | '{' | '}' => {
-                o.push('\\');
-                o.push(c);
-            }
-            c if (c as u32) < 128 => o.push(c),
-            c => {
-                // \uN with a ? fallback; UTF-16 units as signed 16-bit numbers.
-                let mut buf = [0u16; 2];
-                for u in c.encode_utf16(&mut buf) {
-                    o.push_str(&format!("\\u{}?", *u as i16));
-                }
-            }
-        }
-    }
-    o
+    let cleaned: String = s.chars().filter(|c| allowed(*c)).collect();
+    craft_rtf::esc(&cleaned)
 }
 
 /// Rich Text Format: paragraphs with their sizes and bold/italic, real table rows, page breaks
