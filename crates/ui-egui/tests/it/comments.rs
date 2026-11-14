@@ -1127,6 +1127,58 @@ fn arrow_keys_nudge_the_selected_comment() {
     assert_eq!(h.state().views[0].current, 1, "and the view goes to the next page");
 }
 
+#[test]
+fn arrow_keys_nudge_all_selected_comments_as_one_undo_step() {
+    use egui::Key;
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (30.0, 110.0), (80.0, 70.0));
+    drag_pt(&mut h, (130.0, 110.0), (180.0, 70.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    let before: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    assert_eq!(before.len(), 2);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().views[0].comments.also = vec![(0, 1)];
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    let moved: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    for (old, new) in before.iter().zip(&moved) {
+        assert!(new[0] > old[0], "each selected comment moves: {before:?} -> {moved:?}");
+    }
+    h.state_mut().undo();
+    h.run_steps(2);
+    let undone: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    assert_eq!(undone, before, "one undo restores the whole selection");
+}
+
+#[test]
+fn arrow_nudge_skips_locked_comments_and_duplicate_selection_entries() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0)), ((180.0, 20.0), (220.0, 60.0))] {
+        drag_pt(&mut h, a, b);
+    }
+    h.state_mut().set_option("quick", "select").unwrap();
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 1, locked: true }));
+    h.run_steps(2);
+    let before = comments(&h);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().views[0].comments.also = vec![(0, 1), (0, 2), (0, 2), (0, 0)];
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    let after = comments(&h);
+    let left = |list: &[Annotation], i: usize| list.iter().find(|a| a.index == i).expect("comment still exists").rect[0];
+    let primary_delta = left(&after, 0) - left(&before, 0);
+    let secondary_delta = left(&after, 2) - left(&before, 2);
+    assert!(primary_delta > 0.0, "primary comment moves");
+    assert!((secondary_delta - primary_delta).abs() < 0.01, "duplicate entries must not move the second comment twice");
+    assert_eq!(left(&after, 1), left(&before, 1), "locked comment stays in place");
+    h.state_mut().undo();
+    h.run_steps(2);
+    let undone = comments(&h);
+    for i in 0..3 {
+        assert_eq!(left(&undone, i), left(&before, i), "one undo restores comment {i}");
+    }
+}
+
 /// #3632: with a comment selected, Alt+← / Alt+→ still go back and forward through the view
 /// history instead of nudging it (egui's key patterns let an extra Alt through).
 #[test]
@@ -5847,4 +5899,29 @@ fn properties_dialog_makes_the_text_box_font_size_default() {
         post_text(&mut fresh, "Third");
         assert_eq!(font_size_of_last(&fresh).font_size, Some(size), "{quick}: the default font size persisted");
     }
+}
+
+#[test]
+fn ctrl_selected_lines_nudge_together_and_undo() {
+    let mut h = harness(|app| app.set_option("quick", "line").unwrap());
+    for y in [40.0, 80.0, 120.0] {
+        drag_pt(&mut h, (40.0, y), (160.0, y));
+    }
+    assert_eq!(comments(&h).len(), 3);
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    click_pt(&mut h, (100.0, 40.0));
+    click_pt_with(&mut h, (100.0, 80.0), egui::Modifiers::COMMAND);
+    click_pt_with(&mut h, (100.0, 120.0), egui::Modifiers::COMMAND);
+    assert_eq!(h.state().views[0].comments.selection().len(), 3);
+    let before: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    let moved: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    for (old, new) in before.iter().zip(&moved) {
+        assert!(new[0] > old[0], "each selected line moves: {before:?} -> {moved:?}");
+    }
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(comments(&h).iter().map(|a| a.rect).collect::<Vec<_>>(), before);
 }
