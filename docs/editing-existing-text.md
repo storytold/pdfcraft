@@ -128,7 +128,7 @@ two characters. A row never begins with closing punctuation, a closing bracket o
 kana or the prolonged sound mark, and never ends with an opening bracket or quote or a currency
 sign before an amount: the line-start and line-end rules of JIS X 4051, as in Unicode line
 breaking (UAX #14). Latin words inside such text are not split. Thai can also wrap between
-dictionary words; Korean still breaks only at spaces.
+dictionary words.
 
 Text pasted from a browser or a word processor often carries an invisible break instead of a
 newline. Every Unicode row break starts a new row: U+2028 LINE SEPARATOR, U+2029 PARAGRAPH
