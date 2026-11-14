@@ -375,3 +375,20 @@ fn bringing_an_image_to_the_top_and_replacing_it_still_warns_about_the_backdrop(
     let warnings = r["warnings"].as_array().cloned().unwrap_or_default();
     assert!(warnings.iter().any(|w| w.as_str().is_some_and(|w| w.contains("after an image was put behind the text"))), "{r}");
 }
+
+#[test]
+fn a_new_picture_that_cant_be_used_leaves_the_image_as_it_was() {
+    let dir = named_workdir("behind-bad-picture");
+    std::fs::write(dir.join("left.pdf"), behind_left_off_pdf()).unwrap();
+    std::fs::write(dir.join("junk.png"), b"not a picture").unwrap();
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "left.pdf" }))["doc"].as_u64().unwrap();
+    let item = |a: &mut Automation| ok(a, "content_list", json!({ "doc": doc }))["items"][0].clone();
+    let before = item(&mut a);
+    // The layer, box and picture change together, or not at all.
+    let refused =
+        a.call("content_update", &json!({ "doc": doc, "page": 1, "index": 1, "behind": false, "rect": [10, 10, 50, 50], "image": "junk.png" }));
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(item(&mut a), before);
+    assert_eq!(item(&mut a)["behind"].as_bool(), Some(true));
+}

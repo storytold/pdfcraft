@@ -293,6 +293,10 @@ impl Automation {
         // A change of layer moves the item in the page's list: follow it by its object.
         let obj = self.doc(a)?.added().iter().filter(|x| x.page == page).nth(index).map(|x| x.obj);
         let now = |s: &Self| -> Result<Option<usize>> { Ok(s.doc(a)?.added().iter().filter(|x| x.page == page).position(|x| Some(x.obj) == obj)) };
+        // A picture the replacement would refuse fails here, before the other changes apply.
+        if let Some((name, bytes)) = &replace {
+            pdfcraft_engine::check_picture(name, bytes)?;
+        }
         // Box and transforms first, then the new picture, at the place the item has now.
         let mut out = self.apply(a, Edit::UpdateContent { page, index, content })?;
         if let Some((name, bytes)) = replace {
