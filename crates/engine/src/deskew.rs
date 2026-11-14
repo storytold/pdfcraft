@@ -333,22 +333,6 @@ fn prepare_page(input: &PageInputs, min_angle: f64) -> Prepared {
             return Prepared { page: input.page, outcome: Deskewed::Unmeasured, error: Some(format!("the page could not be read as a picture: {e}")), raster: None };
         }
     };
-    {
-        let px = shot.rgba.as_ref();
-        let mut lo = 255u8;
-        let mut hi = 0u8;
-        let mut sum: u64 = 0;
-        let mut n: u64 = 0;
-        for c in px.chunks_exact(4) {
-            let g = c[0];
-            lo = lo.min(g);
-            hi = hi.max(g);
-            sum += u64::from(g);
-            n += 1;
-        }
-        eprintln!("[dbg] page={} px={}x{} gray lo={} hi={} mean={:.1}", input.page, shot.width, shot.height, lo, hi, sum as f64 / n.max(1) as f64);
-    }
-    eprintln!("[dbg] page={} measure={:?}", input.page, measure(&image));
     let angle = match measure(&image) {
         Some(angle) if angle.abs() >= min_angle && angle.abs() <= MAX_ANGLE => angle,
         other => {
