@@ -3544,13 +3544,21 @@ fn replacing_a_mixed_font_line_again_replaces_its_sequence() {
     let mut doc = text_page("/Span BMC BT /F2 10 Tf 72 600 Td (ab) Tj ET EMC BT /F2 10 Tf 72 500 Td (ba) Tj ET");
     let count = |content: &str, op: &str| content.split_whitespace().filter(|w| *w == op).count();
     let mut sizes = Vec::new();
-    for text in ["ab ba cab ba", "cab ab", "ab cab", "ab cab", "ab ba", "ba ab"] {
+    // Since #4514 a source-font run whose spaces the subset lacks is wrapped in a
+    // `/Span <</ActualText …>> BDC … EMC` of its own, so the spaces read back. `spans` is how
+    // many each edit writes: every `EMC` is a sequence's or one of those spans'.
+    for (text, spans) in [("ab ba cab ba", 2), ("cab ab", 1), ("ab cab", 0), ("ab cab", 0), ("ab ba", 1), ("ba ab", 1)] {
         text::replace_line(&mut doc, 0, 0, text).unwrap();
         doc = reopen(&doc);
         let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
         let mixed = text.contains('c');
         assert_eq!(content.matches("/PCEdLine").count(), usize::from(mixed), "after {text:?}: {content}");
-        assert_eq!((count(&content, "BMC"), count(&content, "EMC")), (1 + usize::from(mixed), 1 + usize::from(mixed)), "after {text:?}: {content}");
+        assert_eq!(content.matches("/ActualText").count(), spans, "after {text:?}: {content}");
+        assert_eq!(
+            (count(&content, "BMC"), count(&content, "EMC")),
+            (1 + usize::from(mixed), 1 + usize::from(mixed) + spans),
+            "after {text:?}: {content}"
+        );
         assert_eq!(count(&content, "Tf"), 2 + if mixed { 4 } else { 1 }, "after {text:?}: {content}");
         let lines = text::text_lines(&doc, 0).unwrap();
         let read: Vec<&str> = lines.iter().map(|l| l.text.trim()).collect();
@@ -3598,7 +3606,7 @@ fn a_leading_space_does_not_make_a_source_font_run() {
     // The spaces the subset has no glyph for are moves, each one kept: the leading one before
     // the first word, two between words as two.
     let flat = |doc: &Document| String::from_utf8_lossy(&page_content_bytes(doc, 0)).split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(flat(&doc).contains("/F2 10 Tf [-330] TJ (ab) Tj"), "{}", flat(&doc));
+    assert!(flat(&doc).contains("/F2 10 Tf /Span <</ActualText ( ab)>> BDC [-330] TJ (ab) Tj EMC"), "{}", flat(&doc));
     let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
     text::replace_line(&mut doc, 0, 0, "ab  ba cab").unwrap();
     let doc = reopen(&doc);
@@ -3641,7 +3649,9 @@ fn a_row_replaced_inside_a_shared_sequence_starts_in_its_own_font() {
     let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
     assert!(content.contains("/PCEdLine") && content.contains("(  cab) Tj"), "{content}");
     let mut doc = doc;
-    let shared = content.replacen("EMC", "0 -20 Td (ba) Tj EMC", 1);
+    // The last `EMC` closes `/PCEdLine`; an earlier one closes a run's `/ActualText` span (#4514).
+    let close = content.rfind("EMC").unwrap();
+    let shared = format!("{}0 -20 Td (ba) Tj {}", &content[..close], &content[close..]);
     let stream = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), shared.into_bytes()))));
     set_page_contents(&mut doc, stream, None);
     let rows = text::text_lines(&doc, 0).unwrap();
