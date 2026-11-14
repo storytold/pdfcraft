@@ -787,3 +787,32 @@ fn alt_tap_followed_by_down_arrow_opens_menu_popup() {
         "Alt-tap then Down opened the Menu popup"
     );
 }
+
+#[test]
+fn alt_f_opens_the_file_submenu_directly_on_a_fresh_popup() {
+    let mut h = harness();
+    h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::F);
+    h.run_steps(3);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref().is_some_and(|l| l.contains("Exit") || l.contains("Quit")))
+            .is_some(),
+        "Alt+F opened the File submenu on the fresh popup, without a prior click"
+    );
+}
+
+#[test]
+fn a_command_shortcut_leaves_the_menu_bar_so_arrow_keys_do_not_reopen_the_popup() {
+    let mut h = harness();
+    h.key_press(egui::Key::F10);
+    h.run_steps(1);
+    // Ctrl+S is a command shortcut: it takes the keyboard off the bar (in the same press), like
+    // a native menu bar, so a following ArrowDown must not open the popup.
+    h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::S);
+    h.run_steps(1);
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(3);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("File")).is_none(),
+        "the bar was left, so ArrowDown did not open the Menu popup"
+    );
+}

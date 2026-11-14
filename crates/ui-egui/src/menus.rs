@@ -564,6 +564,10 @@ impl PdfCraftApp {
             let next_id = ui.next_auto_id();
             let submenu_id = egui::containers::menu::SubMenu::id_from_widget_id(next_id);
             if is_target {
+                // A fresh popup has no child MenuState yet, and egui's MenuState::from_id clears
+                // open_item when the open submenu was never shown (its state is missing). Mark
+                // the child shown to create its state, so Alt+F (the menu target) opens it.
+                egui::containers::menu::MenuState::mark_shown(ui.ctx(), submenu_id);
                 egui::containers::menu::MenuState::from_ui(ui, |state, _| {
                     state.open_item = Some(submenu_id);
                 });
@@ -572,7 +576,11 @@ impl PdfCraftApp {
                 ui.set_min_width(200.0);
                 ui.set_max_width(280.0);
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                render_nodes(ui, &menu.children, &gate, &mut chosen);
+                let max_h = (ui.ctx().content_rect().height() - 40.0).max(200.0);
+                ui.spacing_mut().scroll.floating = false;
+                egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
+                    render_nodes(ui, &menu.children, &gate, &mut chosen);
+                });
             });
             if is_target {
                 resp.response.request_focus();
@@ -643,6 +651,21 @@ fn any_enabled(nodes: &[craft_menu::Node], gate: &craft_menu::Gate) -> bool {
     })
 }
 
+/// The platform whose key names the shortcut column shows: the build's platform, but on the web
+/// the one the browser runs on (`ctx.os()`), as craft-menu's bar does for its own shortcut column.
+fn shortcut_platform(ctx: &egui::Context) -> Platform {
+    use egui::os::OperatingSystem;
+    if cfg!(target_arch = "wasm32") {
+        match ctx.os() {
+            OperatingSystem::Mac | OperatingSystem::IOS => Platform::Mac,
+            OperatingSystem::Windows => Platform::Windows,
+            _ => Platform::Linux,
+        }
+    } else {
+        Platform::current()
+    }
+}
+
 /// Render a slice of menu `Node`s into `ui` for the "Menu" button popup, collecting clicked
 /// commands. `Standard` items (AppKit-only) are skipped.
 fn render_nodes(ui: &mut egui::Ui, nodes: &[craft_menu::Node], gate: &craft_menu::Gate, chosen: &mut Vec<CommandRef>) {
@@ -666,7 +689,7 @@ fn render_nodes(ui: &mut egui::Ui, nodes: &[craft_menu::Node], gate: &craft_menu
                     craft_menu::ItemKind::Plain => "",
                 };
                 let mut button = egui::Button::new(format!("{mark}{}", item.label));
-                let shortcut_str = item.shortcut.as_ref().map(|c| c.display(Platform::current()));
+                let shortcut_str = item.shortcut.as_ref().map(|c| c.display(shortcut_platform(&ctx)));
                 if let Some(ref s) = shortcut_str {
                     button = button.shortcut_text(s.clone());
                 }

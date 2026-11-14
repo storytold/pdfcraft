@@ -685,6 +685,16 @@ fn handle_menu_button_keys(app: &mut PdfCraftApp, ctx: &egui::Context, popup_id:
     let focus_id = egui::Id::unique("mode_bar_menu_focused");
     let mut menu_focused: bool = ctx.data(|d| d.get_temp(focus_id)).unwrap_or(false);
 
+    // A command shortcut (Ctrl+S, F7…) pressed while the keyboard is on the button left the bar
+    // (craft_menu::bar::leave_for_shortcut, app.rs): the shortcut runs in that press and the
+    // keyboard goes back to the pages. Consume the handoff here, before the local focus state
+    // below can put the keyboard back on the bar every frame.
+    if ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("craft-menu-bar-leave"))).unwrap_or(false) {
+        ctx.data_mut(|d| d.remove::<bool>(egui::Id::unique("craft-menu-bar-leave")));
+        menu_focused = false;
+        btn.surrender_focus();
+    }
+
     if btn.clicked() {
         menu_focused = false;
     }
