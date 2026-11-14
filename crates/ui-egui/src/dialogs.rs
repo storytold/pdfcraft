@@ -68,6 +68,8 @@ struct Pending {
     redact_now: Option<Dialog>,
     import_words: bool,
     print_go: bool,
+    /// Manual two-sided: the stack is turned over, print the backs.
+    second_side_now: bool,
     revert_now: bool,
     overwrite_now: bool,
     overwrite_elsewhere: bool,
@@ -118,6 +120,10 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     if app.dialog != Some(Dialog::FieldTable) {
         app.field_table_draft = None;
+    }
+    // Cancelled, dismissed or replaced: the backs of a manual two-sided print are dropped.
+    if app.dialog != Some(Dialog::ManualDuplex) {
+        app.forget_second_side();
     }
     if !matches!(app.dialog, Some(Dialog::Properties(_))) {
         app.discard_properties();
@@ -325,6 +331,12 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             if !dialog_print(ui, app, req) {
                 return false;
             }
+        }
+        Dialog::ManualDuplex => {
+            let (go, cancel) = crate::print_ui::second_side_body(ui, app.second_side_ready());
+            req.second_side_now = go;
+            req.close = go || cancel;
+            return false;
         }
         Dialog::RemoveHidden => {
             let (ok, cancel) = crate::redact_ui::hidden_body(ui, &mut app.hidden_draft, &t);
@@ -1897,6 +1909,9 @@ fn finish_requests(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, re
     // A print or save that fails keeps the dialog open, with the reason in a notice.
     if req.print_go && !app.print_now() {
         req.close = false;
+    }
+    if req.second_side_now {
+        app.print_second_side();
     }
     if req.revert_now {
         app.revert_active();

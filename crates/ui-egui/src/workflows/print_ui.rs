@@ -100,6 +100,8 @@ pub(crate) struct PrintTasks {
     /// Cached papers and default paper per printer so switching printers avoids re-querying.
     #[cfg(not(target_arch = "wasm32"))]
     papers_cache: std::collections::HashMap<String, PaperInfo>,
+    /// The backs of a manual two-sided print, waiting for the stack to be turned over (#2860).
+    second_side: Option<SecondSide>,
     /// The browser print being drawn, a sheet a frame (`web_print`).
     #[cfg(target_arch = "wasm32")]
     web_job: Option<crate::web_print::WebPrintJob>,
@@ -143,6 +145,27 @@ struct PrintJob {
     printer: String,
     sheets: Option<(usize, usize)>,
     news: std::sync::mpsc::Receiver<JobNews>,
+    /// The pass the saved [`SecondSide`] waits on: its answer decides what happens to the backs.
+    second_side: bool,
+}
+
+/// The backs of a manual two-sided print: the printer, the pass's print-ready PDF and its job,
+/// and which pass is still on its way to the spooler.
+struct SecondSide {
+    printer: String,
+    bytes: Vec<u8>,
+    job: spool::Job,
+    waiting: Waiting,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Waiting {
+    /// The fronts: Continue waits for them, and their failing drops the backs.
+    Fronts,
+    /// Nothing: Continue sends the backs.
+    Ready,
+    /// The backs: kept until they reach the spooler, so a failure can send them again.
+    Backs,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -518,20 +541,35 @@ impl PdfCraftApp {
                     match job.news.try_recv() {
                         Ok(JobNews::Sent(sent, sheets)) => job.sheets = Some((sent, sheets)),
                         Ok(JobNews::Done(r)) => {
-                            finished.push((job.printer.clone(), r));
+                            finished.push((job.printer.clone(), r, job.second_side, job.sheets.is_some_and(|s| s.0 > 0)));
                             break false;
                         }
                         Err(std::sync::mpsc::TryRecvError::Empty) => break true,
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            finished.push((job.printer.clone(), Err("the print job stopped unexpectedly".into())));
+                            finished.push((
+                                job.printer.clone(),
+                                Err("the print job stopped unexpectedly".into()),
+                                job.second_side,
+                                job.sheets.is_some_and(|s| s.0 > 0),
+                            ));
                             break false;
                         }
                     }
                 }
             });
             self.show_print_progress();
-            for (printer, result) in finished {
-                self.report_print_job(&printer, result);
+            // Each notice replaces the one before, so failures go last, and a second side's
+            // failure (with its check-the-stack warning) after any other.
+            finished.sort_by_key(|f| (f.1.is_err(), f.2));
+            for (printer, result, second_side, partly) in finished {
+                let dropped = second_side && self.second_side_answered(result.is_ok(), partly);
+                match result {
+                    Err(e) if dropped => self.notify(crate::i18n::fmt(
+                        tl!("The second side stopped partway: {error}. Part of it may have printed, so check the stack and print the rest again."),
+                        &[("error", &e)],
+                    )),
+                    result => self.report_print_job(&printer, result),
+                }
             }
         }
     }
@@ -678,10 +716,14 @@ impl PdfCraftApp {
                 // CUPS is told which way the sheets run (#2713), unless a driver choice already
                 // says; Windows' print ticket already is.
                 let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
-                if let Ok(sheets) = print::layout(&sizes, &settings) {
-                    print::add_cups_orientation(&mut job.options, &sheets);
+                let sheets = print::layout(&sizes, &settings).unwrap_or_default();
+                match self.print_draft.manual() {
+                    Some(manual) => self.print_first_side(printer, &bytes, job, &sheets, manual),
+                    None => {
+                        print::add_cups_orientation(&mut job.options, &sheets);
+                        self.send_to_printer(printer, bytes, job)
+                    }
                 }
-                self.send_to_printer(printer, bytes, job)
             }
             None => self.save_print_pdf(&name, bytes),
         };
@@ -690,6 +732,122 @@ impl PdfCraftApp {
             self.print_draft.remember_setup();
         }
         sent
+    }
+
+    /// Manual two-sided (#2860): send the fronts of the `sheets` (the sides of the print-ready
+    /// `bytes`), and keep the backs for [`Dialog::ManualDuplex`](crate::Dialog::ManualDuplex),
+    /// which asks for the stack to be turned over first. One side has no back to wait for.
+    fn print_first_side(
+        &mut self,
+        printer: String,
+        bytes: &[u8],
+        job: spool::Job,
+        sheets: &[print::Sheet],
+        (flip, reverse): (print::manual_duplex::Flip, bool),
+    ) -> bool {
+        // One saved second side at a time: a new one would take the place of backs still on
+        // their way, which a failure then could not offer again.
+        if self.print_tasks.second_side.as_ref().is_some_and(|s| s.waiting == Waiting::Backs) {
+            self.notify(tl!("Wait until the second side of the last two-sided print has reached the printer, then print again."));
+            return false;
+        }
+        // Each pass tells CUPS which way its own sheets run: in a job laid out both ways, one
+        // pass can run all one way.
+        let pass_job = |sides: &[print::manual_duplex::Side]| {
+            let mut job = job.clone();
+            print::add_cups_orientation(&mut job.options, &print::manual_duplex::pass_sheets(sheets, sides));
+            job
+        };
+        let passes = print::manual_duplex::plan(sheets.len(), flip, reverse).and_then(|p| {
+            let backs = if p.backs.is_empty() { None } else { Some((print::manual_duplex::pass_pdf(bytes, &p.backs)?, pass_job(&p.backs))) };
+            Ok((print::manual_duplex::pass_pdf(bytes, &p.fronts)?, pass_job(&p.fronts), backs))
+        });
+        let (fronts, front_job, backs) = match passes {
+            Ok(passes) => passes,
+            Err(e) => {
+                self.notify_error(e);
+                return false;
+            }
+        };
+        if !self.send_to_printer(printer.clone(), fronts, front_job) {
+            return false;
+        }
+        if let Some((bytes, job)) = backs {
+            let waiting = if self.wait_on_last_job() { Waiting::Fronts } else { Waiting::Ready };
+            self.print_tasks.second_side = Some(SecondSide { printer, bytes, job, waiting });
+            self.dialog = Some(crate::Dialog::ManualDuplex);
+        }
+        true
+    }
+
+    /// The Continue of [`Dialog::ManualDuplex`](crate::Dialog::ManualDuplex): send the backs
+    /// kept by [`PdfCraftApp::print_first_side`], and keep them until the spooler has them.
+    pub(crate) fn print_second_side(&mut self) {
+        let Some(side) = self.print_tasks.second_side.as_ref().filter(|s| s.waiting == Waiting::Ready) else { return };
+        let (printer, bytes, job) = (side.printer.clone(), side.bytes.clone(), side.job.clone());
+        if self.send_to_printer(printer, bytes, job) && self.wait_on_last_job() {
+            if let Some(side) = &mut self.print_tasks.second_side {
+                side.waiting = Waiting::Backs;
+            }
+        } else {
+            // Answered already: a browser has no spooler to wait for.
+            self.print_tasks.second_side = None;
+        }
+    }
+
+    /// Whether [`Dialog::ManualDuplex`](crate::Dialog::ManualDuplex) can send the backs: the
+    /// fronts have reached the spooler.
+    pub(crate) fn second_side_ready(&self) -> bool {
+        self.print_tasks.second_side.as_ref().is_some_and(|s| s.waiting == Waiting::Ready)
+    }
+
+    /// The backs of a manual two-sided print, once the window asking for them has closed. Backs
+    /// on their way to the spooler stay until it answers.
+    pub(crate) fn forget_second_side(&mut self) {
+        if self.print_tasks.second_side.as_ref().is_some_and(|s| s.waiting != Waiting::Backs) {
+            self.print_tasks.second_side = None;
+        }
+    }
+
+    /// Mark the job just sent as the pass the saved backs wait on, and no other. `false` when
+    /// there is no job to wait on: a browser answers at once.
+    fn wait_on_last_job(&mut self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let jobs = &mut self.print_tasks.jobs;
+            jobs.iter_mut().for_each(|j| j.second_side = false);
+            jobs.last_mut().map(|j| j.second_side = true).is_some()
+        }
+        #[cfg(target_arch = "wasm32")]
+        false
+    }
+
+    /// The spooler's answer to the pass the saved backs wait on. Fronts that failed take the
+    /// backs and their window with them (the error notice says why). Backs that failed go back
+    /// to the window, so only they are sent again, unless another window has opened since or
+    /// some of their sheets reached the spooler: sending them all again would print those twice.
+    /// The Print dialog gives way: it can't print until the backs are answered.
+    /// `partly`: some sheets were sent. `true` when backs that failed partway were dropped.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn second_side_answered(&mut self, ok: bool, partly: bool) -> bool {
+        let free = matches!(self.dialog, None | Some(crate::Dialog::ManualDuplex | crate::Dialog::Print));
+        let Some(side) = &mut self.print_tasks.second_side else { return false };
+        let dropped_partway = side.waiting == Waiting::Backs && !ok && partly;
+        match (side.waiting, ok) {
+            (Waiting::Fronts, true) => side.waiting = Waiting::Ready,
+            (Waiting::Backs, false) if free && !partly => {
+                side.waiting = Waiting::Ready;
+                self.dialog = Some(crate::Dialog::ManualDuplex);
+            }
+            (Waiting::Fronts | Waiting::Backs, _) => {
+                self.print_tasks.second_side = None;
+                if self.dialog == Some(crate::Dialog::ManualDuplex) {
+                    self.dialog = None;
+                }
+            }
+            (Waiting::Ready, _) => {}
+        }
+        dropped_partway
     }
 
     /// Spool a job off the UI thread: on Windows every sheet is rendered at the printer's
@@ -725,7 +883,7 @@ impl PdfCraftApp {
             let _ = tx.send(JobNews::Done(result));
             repaint();
         });
-        self.print_tasks.jobs.push(PrintJob { printer, sheets: None, news: rx });
+        self.print_tasks.jobs.push(PrintJob { printer, sheets: None, news: rx, second_side: false });
         self.show_print_progress();
         true
     }
@@ -852,6 +1010,28 @@ impl PdfCraftApp {
             }
         }
     }
+}
+
+/// [`Dialog::ManualDuplex`](crate::Dialog::ManualDuplex): how to turn the printed stack over
+/// and put it back, with Continue (print the backs) and Cancel. Returns (continue, cancel).
+pub(crate) fn second_side_body(ui: &mut egui::Ui, ready: bool) -> (bool, bool) {
+    ui.label(egui::RichText::new(tl!("Print the second side")).font(theme::semibold(18.0)));
+    ui.add_space(8.0);
+    ui.label(tl!(
+        "When the first side has finished printing, take the printed sheets out without changing their order. Put them back in the paper tray so the printer prints on the blank side, with the top of the pages going in first. On most printers with a front tray, that means printed side up. Then choose Continue. If the backs land on the wrong sheets, change \"Second side in reverse order\" and print again."
+    ));
+    ui.add_space(12.0);
+    let (mut go, mut cancel) = (false, false);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        // Not before the fronts have reached the spooler: they may yet fail.
+        go = ui
+            .add_enabled_ui(ready, |ui| widgets::pill_button(ui, tl!("Continue"), true))
+            .inner
+            .on_disabled_hover_text(tl!("Waiting for the first side to reach the printer…"))
+            .clicked();
+        cancel = widgets::pill_button(ui, tl!("Cancel"), false).clicked();
+    });
+    (go, cancel)
 }
 
 /// The longest side, in pixels, of one page's print-preview raster (also kept within the GPU's
@@ -1043,7 +1223,7 @@ mod tests {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
-        app.print_tasks.jobs.push(PrintJob { printer: "Office".into(), sheets: None, news: rx });
+        app.print_tasks.jobs.push(PrintJob { printer: "Office".into(), sheets: None, news: rx, second_side: false });
         app.poll_print();
         assert_eq!(app.progress_notice.as_ref().map(|p| p.label.as_str()), Some("Sending to Office…"));
 
@@ -1064,7 +1244,7 @@ mod tests {
         let other = crate::widgets::ProgressNotice { label: "Optimizing…".into(), fraction: 0.5, cancellable: true };
         app.progress_notice = Some(other.clone());
         let (tx, rx) = std::sync::mpsc::channel();
-        app.print_tasks.jobs.push(PrintJob { printer: "Office".into(), sheets: None, news: rx });
+        app.print_tasks.jobs.push(PrintJob { printer: "Office".into(), sheets: None, news: rx, second_side: false });
         tx.send(JobNews::Sent(1, 2)).unwrap();
         app.poll_print();
         assert_eq!(app.progress_notice, Some(other));
@@ -1072,6 +1252,52 @@ mod tests {
         app.poll_print();
         assert!(app.print_tasks.jobs.is_empty() && app.progress_notice.is_some());
         assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("the print job stopped unexpectedly"));
+    }
+
+    /// #2860: backs that fail before any of their sheets reaches the spooler come back to the
+    /// window; backs that fail partway are dropped with a notice to check the stack, as sending
+    /// them all again would print some twice.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn backs_that_fail_partway_are_not_offered_again() {
+        for (sent, offered) in [(0, true), (1, false)] {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            let job = PrintDraft::default().job("a.pdf");
+            app.print_tasks.second_side = Some(SecondSide { printer: "Office".into(), bytes: Vec::new(), job, waiting: Waiting::Backs });
+            let (tx, rx) = std::sync::mpsc::channel();
+            app.print_tasks.jobs.push(PrintJob { printer: "Office".into(), sheets: None, news: rx, second_side: true });
+            tx.send(JobNews::Sent(0, 2)).unwrap();
+            tx.send(JobNews::Sent(sent, 2)).unwrap();
+            tx.send(JobNews::Done(Err("the printer is offline".into()))).unwrap();
+            app.poll_print();
+            let toast = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+            assert_eq!(app.second_side_ready(), offered, "{sent} sent");
+            assert_eq!(app.dialog == Some(crate::Dialog::ManualDuplex), offered, "{sent} sent");
+            assert!(toast.contains("the printer is offline"), "{toast}");
+            assert_eq!(toast.contains("check the stack"), !offered, "{toast}");
+        }
+    }
+
+    /// The check-the-stack warning is the notice left showing when another job finishes in the
+    /// same poll after it.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_partway_second_side_warning_outlasts_other_results() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let job = PrintDraft::default().job("a.pdf");
+        app.print_tasks.second_side = Some(SecondSide { printer: "Office".into(), bytes: Vec::new(), job, waiting: Waiting::Backs });
+        let (backs, rx) = std::sync::mpsc::channel();
+        app.print_tasks.jobs.push(PrintJob { printer: "Office".into(), sheets: None, news: rx, second_side: true });
+        let (other, rx) = std::sync::mpsc::channel();
+        app.print_tasks.jobs.push(PrintJob { printer: "Den".into(), sheets: None, news: rx, second_side: false });
+        backs.send(JobNews::Sent(1, 2)).unwrap();
+        backs.send(JobNews::Done(Err("the printer is offline".into()))).unwrap();
+        other.send(JobNews::Done(Ok(String::new()))).unwrap();
+        app.poll_print();
+        let toast = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(toast.contains("check the stack"), "{toast}");
     }
 
     /// Issue #1308: Current page is the page on screen, even when a later page is labelled with

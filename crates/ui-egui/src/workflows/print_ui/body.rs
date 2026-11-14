@@ -232,22 +232,51 @@ pub(crate) fn body(
                 // in Acrobat's Print dialog; it is kept for the other layouts.
                 if d.handling != Handling::Booklet {
                     ui.label(tl!("Two-sided:"));
-                    ui.add_enabled_ui(!browser, |ui| {
-                        combo(
-                            ui,
-                            "duplex",
-                            tl!("Two-sided:"),
-                            &mut d.duplex,
-                            &[
-                                (None, tl!("Printer default")),
-                                (Some(spool::Duplex::Off), tl!("Off")),
-                                (Some(spool::Duplex::LongEdge), tl!("Flip on long edge")),
-                                (Some(spool::Duplex::ShortEdge), tl!("Flip on short edge")),
-                            ],
-                            160.0,
-                        );
+                    // Manual two-sided sends each pass one-sided, so this choice waits meanwhile.
+                    ui.horizontal(|ui| {
+                        ui.add_enabled_ui(!browser && !d.manual_duplex, |ui| {
+                            combo(
+                                ui,
+                                "duplex",
+                                tl!("Two-sided:"),
+                                &mut d.duplex,
+                                &[
+                                    (None, tl!("Printer default")),
+                                    (Some(spool::Duplex::Off), tl!("Off")),
+                                    (Some(spool::Duplex::LongEdge), tl!("Flip on long edge")),
+                                    (Some(spool::Duplex::ShortEdge), tl!("Flip on short edge")),
+                                ],
+                                160.0,
+                            );
+                        });
+                        // #2860: for a printer that prints one side, the fronts first, then the
+                        // backs once the stack is turned over. Only to a printer.
+                        ui.add_enabled_ui(!browser && d.printer.is_some(), |ui| {
+                            ui.add(widgets::checkbox(&mut d.manual_duplex, tl!("Manual two-sided")));
+                        });
                     });
                     ui.end_row();
+                    // Its choices take a row of their own only while it is on.
+                    if d.manual_duplex && !browser && d.printer.is_some() {
+                        ui.label("");
+                        ui.horizontal(|ui| {
+                            combo(
+                                ui,
+                                "manual_flip",
+                                tl!("Manual two-sided"),
+                                &mut d.manual_flip,
+                                &[
+                                    (print::manual_duplex::Flip::LongEdge, tl!("Flip on long edge")),
+                                    (print::manual_duplex::Flip::ShortEdge, tl!("Flip on short edge")),
+                                ],
+                                140.0,
+                            );
+                            ui.add(widgets::checkbox(&mut d.manual_reverse, tl!("Second side in reverse order"))).on_hover_text(tl!(
+                                "Usually needed when the printed sheets go back in printed side up without being turned over, as on most printers with a front tray. Leave it off if you turn the stack over."
+                            ));
+                        });
+                        ui.end_row();
+                    }
                 }
                 let paper_label = ui.label(tl!("Paper:"));
                 d.paper = d.paper.min(d.paper_count().saturating_sub(1));

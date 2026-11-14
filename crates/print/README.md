@@ -29,6 +29,14 @@ spool::submit(&pdf, &spool::Job { printer: None, copies: 2, ..Default::default()
   only; left or right binding; creep compensation, which moves each sheet's pages toward the
   fold by its place from the outside times the creep (points per sheet, up to `MAX_CREEP`),
   clipped at the fold. Headless: `doc_print` with `layout: "booklet"` and `creep`.
+- **Manual two-sided** (#2860), for printers that print one side: `manual_duplex::plan`
+  splits the laid-out sheets into the fronts and the backs, with a blank back for an odd
+  count. Short edge turns each back 180°, and `reverse` sends the backs last sheet first.
+  Each pass prints one-sided. The backs need `reverse` when the second pass feeds the last
+  sheet first: usually so when the sheets come out printed side up and go back without being
+  turned over (most front-tray printers). Not for Booklet or Cut and stack.
+  Headless: `doc_print` with `manual_duplex: "front"` then `"back"`, `duplex` for the edge,
+  and `reverse_backs`.
 - **Poster**: tile scale, overlap shared by neighbouring tiles, cut marks.
 - **Comments & forms**: document, + markups, + stamps, or form fields only; annotations print
   only with their Print flag, drawn from their appearance streams (Algorithm 8.1).

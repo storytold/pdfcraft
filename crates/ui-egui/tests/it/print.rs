@@ -2071,3 +2071,167 @@ fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
     open(&mut gone);
     assert_eq!(setup(&gone), office);
 }
+
+/// Each manual two-sided job: its sides and two-sided setting.
+type ManualJobs = std::sync::Arc<std::sync::Mutex<Vec<(usize, Option<pdfcraft_engine::print::spool::Duplex>)>>>;
+
+/// A three-page document whose spooler records each job, and fails it while `fail` is set.
+fn manual_two_sided_harness(fail: std::sync::Arc<std::sync::atomic::AtomicBool>) -> (Harness<'static, PdfCraftApp>, ManualJobs) {
+    use pdfcraft_engine::print::spool;
+    use std::sync::Arc;
+    let s = pdfcraft_engine::Session::new();
+    let bytes = s.create_blank(612.0, 792.0, 3).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("three.pdf", None, bytes.to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    let jobs = ManualJobs::default();
+    let sent = Arc::clone(&jobs);
+    h.state_mut().spooler = Some(Arc::new(move |pdf: &[u8], job: &spool::Job| {
+        let doc = pdfcraft_cos::Document::open(Arc::new(pdf.to_vec())).map_err(|e| e.to_string())?;
+        sent.lock().unwrap().push((pdfcraft_model::pages(&doc).len(), job.duplex));
+        if fail.load(std::sync::atomic::Ordering::SeqCst) { Err("the printer is offline".into()) } else { Ok(String::new()) }
+    }));
+    (h, jobs)
+}
+
+/// Run frames until `jobs` holds `n` jobs (or a while passes); the jobs so far.
+fn wait_for_jobs(h: &mut Harness<'static, PdfCraftApp>, jobs: &ManualJobs, n: usize) -> Vec<(usize, Option<pdfcraft_engine::print::spool::Duplex>)> {
+    for _ in 0..400 {
+        h.run_steps(1);
+        if jobs.lock().unwrap().len() >= n {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    jobs.lock().unwrap().clone()
+}
+
+/// Run frames until `done` holds (or a while passes); whether it does.
+fn wait_until(h: &mut Harness<'static, PdfCraftApp>, done: impl Fn(&mut Harness<'static, PdfCraftApp>) -> bool) -> bool {
+    for _ in 0..400 {
+        h.run_steps(1);
+        if done(h) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    false
+}
+
+/// Print with Manual two-sided on: the fronts go and the window asking for the stack opens.
+fn print_fronts(h: &mut Harness<'static, PdfCraftApp>) {
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.state_mut().print_draft.printer = Some("Test_Queue".into());
+    h.run_steps(2);
+    if !h.state().print_draft.manual_duplex {
+        h.get_by_label("Manual two-sided").click();
+        h.run_steps(2);
+    }
+    h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
+    h.run_steps(1);
+}
+
+/// Click Continue once the fronts have reached the spooler; the modal takes its own size over
+/// the frames after Print's, and a click before then misses.
+fn click_continue(h: &mut Harness<'static, PdfCraftApp>) {
+    assert!(wait_until(h, |h| !h.get_by_label("Continue").accesskit_node().is_disabled()), "Continue waits for the fronts");
+    h.run_steps(3);
+    h.get_by_label("Continue").click();
+}
+
+/// #2860: Manual two-sided sends the fronts one-sided, then asks for the stack to be turned over;
+/// Continue sends the backs (page 2 and a blank for three pages), Cancel sends nothing more.
+#[test]
+fn manual_two_sided_prints_the_fronts_then_the_backs_on_continue() {
+    use pdfcraft_engine::print::spool;
+    let (mut h, jobs) = manual_two_sided_harness(Default::default());
+    print_fronts(&mut h);
+    assert!(h.state().print_draft.manual_reverse, "the backs go reversed, as the stack put back printed side up needs");
+    assert_eq!(wait_for_jobs(&mut h, &jobs, 1), [(2, Some(spool::Duplex::Off))], "the fronts, one-sided");
+    assert_eq!(h.state().dialog, Some(Dialog::ManualDuplex));
+    click_continue(&mut h);
+    assert_eq!(wait_for_jobs(&mut h, &jobs, 2).get(1), Some(&(2, Some(spool::Duplex::Off))), "page 2 and the last sheet's blank back");
+    assert_eq!(h.state().dialog, None);
+
+    print_fronts(&mut h);
+    assert_eq!(wait_for_jobs(&mut h, &jobs, 3).len(), 3);
+    assert_eq!(h.state().dialog, Some(Dialog::ManualDuplex));
+    h.run_steps(3);
+    h.get_by_label("Cancel").click();
+    assert_eq!(wait_for_jobs(&mut h, &jobs, 4).len(), 3, "cancelled: the backs are not sent");
+    assert_eq!(h.state().dialog, None);
+}
+
+/// #2860: fronts the spooler refuses take their backs with them: the window asking for the
+/// stack closes and the error notice says why.
+#[test]
+fn manual_two_sided_drops_the_backs_when_the_fronts_fail() {
+    let fail = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let (mut h, jobs) = manual_two_sided_harness(fail);
+    print_fronts(&mut h);
+    assert_eq!(wait_for_jobs(&mut h, &jobs, 1).len(), 1);
+    assert!(wait_until(&mut h, |h| h.state().dialog.is_none()), "the fronts failed: nothing to turn over");
+    h.run_steps(3);
+    assert_eq!(jobs.lock().unwrap().len(), 1, "the backs are not sent");
+}
+
+/// #2860: backs the spooler refuses stay saved, and the window comes back so Continue sends
+/// only them again, on the sheets whose fronts are printed.
+#[test]
+fn manual_two_sided_offers_the_backs_again_when_they_fail() {
+    use std::sync::atomic::Ordering;
+    let fail = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (mut h, jobs) = manual_two_sided_harness(fail.clone());
+    print_fronts(&mut h);
+    assert_eq!(wait_for_jobs(&mut h, &jobs, 1).len(), 1);
+    // The fronts' answer first: they read `fail` after they are counted.
+    assert!(wait_until(&mut h, |h| !h.get_by_label("Continue").accesskit_node().is_disabled()));
+    fail.store(true, Ordering::SeqCst);
+    click_continue(&mut h);
+    assert_eq!(wait_for_jobs(&mut h, &jobs, 2).len(), 2);
+    assert!(wait_until(&mut h, |h| h.state().dialog == Some(Dialog::ManualDuplex)), "the backs failed: the window asks again");
+    fail.store(false, Ordering::SeqCst);
+    click_continue(&mut h);
+    let sent = wait_for_jobs(&mut h, &jobs, 3);
+    assert_eq!(sent.iter().map(|j| j.0).collect::<Vec<_>>(), [2, 2, 2], "the fronts once, the backs twice");
+    assert!(wait_until(&mut h, |h| h.state().dialog.is_none()));
+}
+
+/// #2860: a second manual two-sided print while the first one's backs are still on their way to
+/// the spooler is refused, with the Print dialog kept open: it would take the place of those
+/// backs, which a failure then could not offer again. They stay saved.
+#[test]
+fn manual_two_sided_waits_for_the_backs_before_another() {
+    use std::sync::{Arc, Mutex};
+    let (mut h, jobs) = manual_two_sided_harness(Default::default());
+    print_fronts(&mut h);
+    assert_eq!(wait_for_jobs(&mut h, &jobs, 1).len(), 1);
+    assert!(wait_until(&mut h, |h| !h.get_by_label("Continue").accesskit_node().is_disabled()));
+    // From here the spooler holds each job until `gate` is let go, then refuses it.
+    let gate = Arc::new(Mutex::new(()));
+    let held = gate.lock().unwrap();
+    let (g, sent) = (Arc::clone(&gate), Arc::clone(&jobs));
+    h.state_mut().spooler = Some(Arc::new(move |_pdf: &[u8], job: &pdfcraft_engine::print::spool::Job| {
+        let _open = g.lock();
+        sent.lock().unwrap().push((0, job.duplex));
+        Err("the printer is offline".into())
+    }));
+    click_continue(&mut h);
+    assert!(wait_until(&mut h, |h| h.state().dialog.is_none()), "the backs are on their way");
+
+    print_fronts(&mut h);
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Print), "refused: the dialog stays open, with its settings");
+    let toast = h.state().toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert!(toast.contains("Wait until the second side"), "the user is told why: {toast:?}");
+
+    drop(held);
+    assert_eq!(wait_for_jobs(&mut h, &jobs, 2).len(), 2, "only the backs reached the spooler");
+    assert!(wait_until(&mut h, |h| h.state().dialog == Some(Dialog::ManualDuplex)), "the saved backs are offered again, in place of Print");
+    assert_eq!(jobs.lock().unwrap().len(), 2);
+}
