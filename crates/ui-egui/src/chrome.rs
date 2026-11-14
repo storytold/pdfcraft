@@ -596,19 +596,27 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                // The menus, unless the native macOS menu bar has them or the document hides them.
+                // The menus, unless the native macOS menu bar has them or the document hides them:
+                // collapsed into a single "Menu" button that opens them as a popup.
                 if app.native_menu.is_none() && !hidden.menubar {
-                    app.menu_bar_ui(ui);
-                    ui.add_space(6.0);
+                    let btn = widgets::ghost_button_sized(ui, "panel-left", tl!("Menu"), 48.0);
+                    let popup_id = egui::Popup::default_response_id(&btn);
+                    ui.ctx().accesskit_node_builder(btn.id, |n| {
+                        n.set_role(egui::accesskit::Role::Button);
+                        n.set_label(tl!("Menu"));
+                        n.set_has_popup(egui::accesskit::HasPopup::Menu);
+                    });
+                    handle_menu_button_keys(app, ui.ctx(), popup_id, &btn);
+                    egui::Popup::menu(&btn).show(|ui| app.menu_popup_ui(ui));
+                    ui.add_space(4.0);
                     ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
-                    ui.add_space(10.0);
+                    ui.add_space(8.0);
                 }
                 if hidden.toolbar {
                     return;
                 }
-                // Acrobat's mode bar has no Read tab: reading is what the viewer does with no tool
-                // in use. Read mode (the panes hidden) stays a View command and a default workspace.
-                let modes = [(Mode::AllTools, "All tools"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")];
+                let modes =
+                    [(Mode::AllTools, "All tools"), (Mode::Read, "Read"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")];
                 // What the right side needs (three 32 px buttons, gaps) and the least search box worth showing.
                 let avail = ui.available_width();
                 let tabs_w: f32 = modes.iter().map(|(_, l)| widgets::mode_tab_width(ui, tl!(*l))).sum::<f32>() + 2.0 * (modes.len() as f32 - 1.0);
@@ -621,12 +629,7 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                 } else {
                     // Narrow window: the modes fold into one menu named after the current one.
-                    // Read is not one of the four choices but can be active (View command): name it too.
-                    let current = if app.mode == Mode::Read {
-                        tl!("Read")
-                    } else {
-                        tl!(modes.iter().find(|(m, _)| *m == app.mode).map_or("All tools", |(_, l)| *l))
-                    };
+                    let current = tl!(modes.iter().find(|(m, _)| *m == app.mode).map_or("All tools", |(_, l)| *l));
                     let resp = widgets::ghost_button(ui, "chevron-down", current);
                     egui::Popup::menu(&resp).show(|ui| {
                         ui.set_min_width(160.0);
@@ -675,6 +678,157 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 });
             });
         });
+}
+
+/// Handle Alt-tap, F10, and Alt+letter mnemonics (e.g. Alt+F for File) for the mode bar Menu button.
+fn handle_menu_button_keys(app: &mut PdfCraftApp, ctx: &egui::Context, popup_id: egui::Id, btn: &egui::Response) {
+    let focus_id = egui::Id::unique("mode_bar_menu_focused");
+    let mut menu_focused: bool = ctx.data(|d| d.get_temp(focus_id)).unwrap_or(false);
+
+    // A command shortcut (Ctrl+S, F7…) pressed while the keyboard is on the button left the bar
+    // (craft_menu::bar::leave_for_shortcut, app.rs): the shortcut runs in that press and the
+    // keyboard goes back to the pages. Consume the handoff here, before the local focus state
+    // below can put the keyboard back on the bar every frame.
+    if ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("craft-menu-bar-leave"))).unwrap_or(false) {
+        ctx.data_mut(|d| d.remove::<bool>(egui::Id::unique("craft-menu-bar-leave")));
+        menu_focused = false;
+        btn.surrender_focus();
+    }
+
+    if btn.clicked() {
+        menu_focused = false;
+    }
+    if ctx.input(|i| i.pointer.any_click()) && !btn.hovered() {
+        menu_focused = false;
+    }
+
+    let f10 = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F10));
+
+    // Track Alt-tap (pressing and releasing Alt with no intervening keys or clicks).
+    let alt_state_id = egui::Id::unique("mode_bar_menu_alt_state");
+    #[derive(Clone, Copy, Default)]
+    struct AltState {
+        alt_down: bool,
+        alt_tap: bool,
+        buttons_held: u8,
+    }
+    let mut alt_state: AltState = ctx.data(|d| d.get_temp(alt_state_id)).unwrap_or_default();
+    let mut alt_tapped = false;
+    let raw = ctx.input(|i| i.raw.events.clone());
+    for e in &raw {
+        match e {
+            egui::Event::Key { key: egui::Key::AltLeft | egui::Key::AltRight, pressed: true, .. } => {
+                alt_state.alt_down = true;
+                alt_state.alt_tap = alt_state.buttons_held == 0;
+            }
+            egui::Event::Key { key: egui::Key::AltLeft | egui::Key::AltRight, pressed: false, .. } => {
+                alt_state.alt_down = false;
+                alt_tapped |= std::mem::take(&mut alt_state.alt_tap);
+            }
+            egui::Event::PointerButton { button, pressed, .. } => {
+                let bit = 1u8 << (*button as u8);
+                if *pressed {
+                    alt_state.buttons_held |= bit;
+                } else {
+                    alt_state.buttons_held &= !bit;
+                }
+                alt_state.alt_tap = false;
+                alt_tapped = false;
+            }
+            egui::Event::WindowFocused(false) => {
+                alt_state.alt_tap = false;
+                alt_state.buttons_held = 0;
+            }
+            egui::Event::Key { pressed: true, .. } | egui::Event::Text(_) | egui::Event::MouseWheel { .. } => {
+                alt_state.alt_tap = false;
+            }
+            _ => {}
+        }
+    }
+    ctx.data_mut(|d| d.insert_temp(alt_state_id, alt_state));
+
+    let is_open = egui::Popup::is_id_open(ctx, popup_id);
+
+    if f10 || alt_tapped {
+        if is_open {
+            egui::Popup::close_all(ctx);
+            menu_focused = false;
+        } else {
+            menu_focused = !menu_focused;
+            if menu_focused {
+                btn.request_focus();
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    if menu_focused {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            menu_focused = false;
+            ctx.request_repaint();
+        } else if ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
+                || i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                || i.consume_key(egui::Modifiers::NONE, egui::Key::Space)
+        }) {
+            menu_focused = false;
+            egui::Popup::open_id(ctx, popup_id);
+            ctx.request_repaint();
+        } else {
+            let plain_letter = ctx.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Key { key, pressed: true, modifiers, .. }
+                        if !modifiers.alt && !modifiers.command && !modifiers.ctrl && !modifiers.mac_cmd =>
+                    {
+                        crate::menus::key_letter(*key).map(|c| (c, *key))
+                    }
+                    _ => None,
+                })
+            });
+            if let Some((c, key)) = plain_letter {
+                ctx.input_mut(|i| {
+                    i.consume_key(egui::Modifiers::NONE, key);
+                    i.events
+                        .retain(|e| !matches!(e, egui::Event::Text(t) if t.chars().count() == 1 && t.chars().all(|ch| ch.to_ascii_uppercase() == c)));
+                });
+                menu_focused = false;
+                egui::Popup::open_id(ctx, popup_id);
+                app.menu_target = Some(c);
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    // Alt+letter (e.g. Alt+F) opens the Menu popup and selects that submenu.
+    let alt_letter = ctx.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::Key { key, pressed: true, modifiers, .. }
+                if modifiers.alt && !modifiers.command && !modifiers.ctrl && !modifiers.mac_cmd =>
+            {
+                crate::menus::key_letter(*key).map(|c| (c, *key))
+            }
+            _ => None,
+        })
+    });
+    if let Some((c, key)) = alt_letter {
+        ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::ALT, key);
+            i.events.retain(|e| !matches!(e, egui::Event::Text(t) if t.chars().count() == 1 && t.chars().all(|ch| ch.to_ascii_uppercase() == c)));
+        });
+        menu_focused = false;
+        egui::Popup::open_id(ctx, popup_id);
+        app.menu_target = Some(c);
+        ctx.request_repaint();
+    }
+
+    ctx.data_mut(|d| d.insert_temp(focus_id, menu_focused));
+    let pass = ctx.cumulative_pass_nr();
+    if is_open {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("craft-menu-bar-open"), pass));
+    }
+    if menu_focused {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("craft-menu-bar-focus"), pass));
+    }
 }
 
 /// The size of the rail's page and zoom fields: wide enough for "6400%", the largest zoom, in the

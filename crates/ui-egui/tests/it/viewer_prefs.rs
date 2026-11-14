@@ -59,12 +59,13 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>) {
     h.run_steps(2);
 }
 
-/// Which of the toolbar (the command search), the menu (the menu bar's File menu) and the window
+/// Which of the toolbar (the command search), the menu (the Menu button or File menu) and the window
 /// controls (the rail's fit button) are on screen.
 fn shown(h: &Harness<'static, PdfCraftApp>) -> (bool, bool, bool) {
     (
         h.query_by_label("Find tools and commands").is_some(),
-        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("File")).is_some(),
+        h.query_by(|n| (n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("File")) || n.label().as_deref() == Some("Menu"))
+            .is_some(),
         h.query_by_label("Toggle fit page / fit width").is_some(),
     )
 }

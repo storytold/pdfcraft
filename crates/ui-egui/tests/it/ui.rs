@@ -402,17 +402,15 @@ fn read_mode_rail_buttons_open_their_panels() {
     h.get_by_label("Alpha section");
 }
 
-/// The mode bar matches Acrobat's: All tools, Edit, Convert and E-Sign, with no Read tab. Read
-/// mode is still a View command.
+/// The mode bar contains the Read tab alongside All tools, Edit, Convert and E-Sign.
 #[test]
-fn the_mode_bar_has_no_read_tab() {
+fn the_mode_bar_has_a_read_tab() {
     use pdfcraft_ui_egui::Mode;
     let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
-    for label in ["All tools", "Edit", "Convert", "E-Sign"] {
+    for label in ["All tools", "Read", "Edit", "Convert", "E-Sign"] {
         assert!(h.query_all_by_label(label).next().is_some(), "the {label} tab is there");
     }
-    assert!(h.query_all_by_label("Read").next().is_none(), "no Read tab");
-    h.state_mut().run_command("view.read_mode");
+    h.get_by_label("Read").click();
     h.run_steps(2);
     assert_eq!(h.state().mode, Mode::Read);
 }
@@ -471,9 +469,9 @@ fn read_mode_closes_the_panes_and_leaving_it_brings_them_back() {
     assert_eq!(h.state().right, Some(RightPanel::Pages));
 }
 
-/// Read mode hides the quick toolbar too, and puts down the tool that was in use (#2646).
+/// Full screen mode hides the quick toolbar (#1459). In Read mode, the hover toolbar stays visible.
 #[test]
-fn read_mode_hides_the_quick_toolbar() {
+fn full_screen_hides_the_quick_toolbar() {
     use pdfcraft_ui_egui::{Mode, QuickTool};
     let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     h.get_by_label("Hand (H)").click();
@@ -481,11 +479,13 @@ fn read_mode_hides_the_quick_toolbar() {
     assert_eq!(h.state().quick_tool, QuickTool::Hand);
     h.state_mut().run_command("view.read_mode");
     h.run_steps(3);
-    assert!(h.query_by_label("Select (V)").is_none(), "no quick toolbar in Read mode");
-    assert_eq!(h.state().quick_tool, QuickTool::Select);
-    h.state_mut().run_command("view.read_mode");
+    assert!(h.query_by_label("Select (V)").is_some(), "quick toolbar stays visible in Read mode");
+    h.state_mut().run_command("view.full_screen");
     h.run_steps(3);
-    assert_eq!(h.state().mode, Mode::AllTools);
+    assert!(h.query_by_label("Select (V)").is_none(), "no quick toolbar in Full Screen mode");
+    h.state_mut().run_command("view.full_screen");
+    h.run_steps(3);
+    assert_eq!(h.state().mode, Mode::Read);
     h.get_by_label("Select (V)");
 }
 
@@ -512,7 +512,7 @@ fn edit_a_pdf_from_all_tools_turns_on_editing() {
     h.state_mut().set_option("tool", "organize").unwrap();
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::EditText);
-    // Read mode hides the quick toolbar and keeps the tools down, so the control channel's
+    // Read mode keeps the quick toolbar on Select and keeps the tools down, so the control channel's
     // `tool edit` there leaves editing off (review on #4605).
     h.state_mut().run_command("view.read_mode");
     h.run_steps(2);
@@ -523,7 +523,7 @@ fn edit_a_pdf_from_all_tools_turns_on_editing() {
 }
 
 /// Opening a document with Read as the default mode puts down the tool in use, as entering Read
-/// mode from the mode bar does: the hidden toolbar would leave no way to see or change it.
+/// mode from the mode bar does: resetting to Select keeps reading distraction-free.
 #[test]
 fn opening_into_read_mode_puts_the_tool_down() {
     use pdfcraft_ui_egui::{Mode, QuickTool};
@@ -534,7 +534,7 @@ fn opening_into_read_mode_puts_the_tool_down() {
     h.state_mut().open_bytes("again.pdf", None, FIXTURE.to_vec()).unwrap();
     h.run_steps(3);
     assert_eq!(h.state().mode, Mode::Read, "the new document opens in the default mode");
-    assert_eq!(h.state().quick_tool, QuickTool::Select, "no tool stays active behind the hidden toolbar");
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "tool resets to Select when entering Read mode");
 }
 
 /// A pane closed in Read mode stays closed on the way out: leaving Read mode doesn't bring back the
@@ -2166,6 +2166,11 @@ fn home_recent_context_menu_reveals_the_target_without_opening_or_removing_it() 
     assert_eq!(h.state().active, None);
     assert_eq!(h.state().recent.len(), 2, "reveal must not remove missing recent files");
     assert_eq!(h.state().recent[1].path, expected);
+    // The existence check runs on the reveal worker thread, so the notice can land a few frames
+    // after the steps above, on a loaded runner; wait for it instead of failing on timing.
+    support::wait_until(&mut h, "the reveal notice for the missing file", |app| {
+        app.toast.as_ref().is_some_and(|(text, _)| text.contains("The file no longer exists"))
+    });
     assert!(
         h.state().toast.as_ref().is_some_and(|(text, _)| text.contains("The file no longer exists")),
         "the selected path is checked and the existing reveal error is shown"

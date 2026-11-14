@@ -3855,8 +3855,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     if let Some(notice) = comment_notice {
         app.notify_tr(notice);
     }
-    // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
-    // the quick tools come back with the window.
+    // Full screen is the page and nothing else (#1459). The unified toolbar stays visible in Read mode.
     // A document that hides the toolbars (`HideToolbar`) hides this one too.
     if !app.hotbar_hidden() && !app.views.get(index).is_some_and(|v| v.interface.hidden.toolbar) {
         // The page nearest the left edge, whose margin the bar sits in.

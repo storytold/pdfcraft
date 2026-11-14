@@ -1106,8 +1106,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.read_mode"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/control.rs::inspect_and_click_by_label_and_id", "crates/ui-egui/tests/it/commands.rs::every_registered_command_is_implemented", "crates/ui-egui/tests/it/ui.rs::the_mode_bar_has_no_read_tab", "crates/ui-egui/tests/it/view.rs::switching_modes_keeps_the_current_page_at_fixed_zoom"]
-notes = "View ▸ Read mode (and the Read mode workspace) hides the panes and tool chrome. The mode bar has no Read tab, as in Acrobat, where reading is the viewer with no tool in use: its tabs are All tools, Edit, Convert and E-Sign. Switching between Read and the docking workspace preserves the document’s current scroll position at fixed zoom; each tab keeps its own position"
+evidence = ["crates/ui-egui/tests/it/control.rs::inspect_and_click_by_label_and_id", "crates/ui-egui/tests/it/commands.rs::every_registered_command_is_implemented", "crates/ui-egui/tests/it/ui.rs::the_mode_bar_has_a_read_tab", "crates/ui-egui/tests/it/view.rs::switching_modes_keeps_the_current_page_at_fixed_zoom"]
+notes = "View ▸ Read mode (and the Read mode workspace) hides the panes. The mode bar contains the Read tab alongside All tools, Edit, Convert and E-Sign. Switching between Read and the docking workspace preserves the document’s current scroll position at fixed zoom; each tab keeps its own position"
 
 [[feature]]
 id = "view.full-screen"
@@ -3238,8 +3238,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.crop"]
 tools = ["page_set_box"]
-evidence = ["crates/ui-egui/tests/it/pageboxes.rs::the_crop_tool_crops_to_the_dragged_rectangle_then_returns_to_select", "crates/ui-egui/tests/it/pageboxes.rs::quick_toolbar_crop_crops_the_page_and_undo_restores_it", "crates/ui-egui/tests/it/pageboxes.rs::quick_toolbar_crop_is_disabled_when_page_assembly_is_forbidden", "crates/ui-egui/tests/it/pageboxes.rs::quick_toolbar_crop_is_hidden_on_home_and_in_read_mode"]
-notes = "drag to crop; double-click opens Set Page Boxes; Crop pages is also directly available in the document quick toolbar (#5330), using the existing command availability and assembly permission check. The quick toolbar is hidden on Home and in Read/full-screen modes; arbitrary toolbar customization remains outside this feature."
+evidence = ["crates/ui-egui/tests/it/pageboxes.rs::the_crop_tool_crops_to_the_dragged_rectangle_then_returns_to_select", "crates/ui-egui/tests/it/pageboxes.rs::quick_toolbar_crop_crops_the_page_and_undo_restores_it", "crates/ui-egui/tests/it/pageboxes.rs::quick_toolbar_crop_is_disabled_when_page_assembly_is_forbidden", "crates/ui-egui/tests/it/pageboxes.rs::quick_toolbar_crop_is_hidden_on_home_and_in_full_screen_mode"]
+notes = "drag to crop; double-click opens Set Page Boxes; Crop pages is also directly available in the document quick toolbar (#5330), using the existing command availability and assembly permission check. The quick toolbar is hidden on Home and in full-screen mode; arbitrary toolbar customization remains outside this feature."
 
 [[feature]]
 id = "organize.remove-white-margins"

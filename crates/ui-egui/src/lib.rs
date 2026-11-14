@@ -763,6 +763,8 @@ pub struct PdfCraftApp {
     deferred_commands: Vec<(&'static str, Option<DocId>)>,
     /// The native menu bar (macOS), while it is installed; the in-window bar shows otherwise.
     pub(crate) native_menu: Option<craft_menu::NativeMenu>,
+    /// A top-level menu mnemonic target opened by Alt+letter (e.g. 'F' for File).
+    pub(crate) menu_target: Option<char>,
     /// Input a menu click stands for (⌘C, Delete…), waiting to join a pass's input (see
     /// `release_menu_input`).
     pub(crate) menu_input: Vec<egui::Event>,

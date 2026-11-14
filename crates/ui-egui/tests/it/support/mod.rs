@@ -52,10 +52,30 @@ pub fn wait_until(h: &mut Harness<'static, PdfCraftApp>, what: &str, ready: impl
     );
 }
 
-/// Open the in-window menu bar's `title` menu (File, Edit, View…).
+/// Open a top-level menu (File, Edit, View…) via the modebar's Menu popup.
 pub fn open_menu(h: &mut Harness<'static, PdfCraftApp>, title: &str) {
     use egui_kittest::kittest::Queryable;
-    h.get_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some(title)).click();
+    let menu_title_matches = |l: &str| l == title || l.starts_with(title);
+    if h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| menu_title_matches(&l))).is_none() {
+        let lang = pdfcraft_ui_egui::i18n::Lang::from_pref(&h.state().language);
+        let tr_menu = pdfcraft_ui_egui::i18n::tr(lang, "Menu");
+        let menu_label = pdfcraft_ui_egui::i18n::t("Menu");
+        let menu_btn = h
+            .query_by(|n| {
+                (n.role() == egui::accesskit::Role::Button || n.role() == egui::accesskit::Role::MenuItem)
+                    && (n.has_popup() == Some(egui::accesskit::HasPopup::Menu)
+                        || n.label().as_deref() == Some("Menu")
+                        || n.label().as_deref() == Some(tr_menu)
+                        || n.label().as_deref() == Some(menu_label))
+            })
+            .or_else(|| h.query_by(|n| n.has_popup() == Some(egui::accesskit::HasPopup::Menu)))
+            .or_else(|| h.query_by(|n| n.label().as_deref() == Some("Menu")));
+        if let Some(menu) = menu_btn {
+            menu.click();
+            h.run_steps(2);
+        }
+    }
+    h.get_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| menu_title_matches(&l))).click();
     h.run_steps(2);
 }
 
