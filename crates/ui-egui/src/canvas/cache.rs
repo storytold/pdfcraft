@@ -830,11 +830,21 @@ impl DocView {
         }
     }
 
-    /// Queue sharp rasters for the print preview. Pages that leave the nearby sheets are dropped.
+    /// Queue sharp rasters for the print preview. Up to 32 preview rasters are cached so
+    /// navigating sheets is smooth; excess pages furthest from the current sheet are dropped.
     /// Previews render with reading colours off (the request's tag tells the renderer): they must
     /// match the printout, which is imposed from the uncoloured document.
     pub(crate) fn queue_print_previews(&mut self, pages: &[(usize, f32)]) {
-        self.print_pages.retain(|page, _| pages.iter().any(|(p, _)| p == page));
+        const MAX_CACHED_PRINT_PAGES: usize = 32;
+        if self.print_pages.len() > MAX_CACHED_PRINT_PAGES {
+            let target = pages.first().map(|(p, _)| *p).unwrap_or(0);
+            let mut excess: Vec<usize> = self.print_pages.keys().filter(|p| !pages.iter().any(|(dp, _)| dp == *p)).copied().collect();
+            excess.sort_by_key(|&p| std::cmp::Reverse(p.abs_diff(target)));
+            let to_remove = self.print_pages.len().saturating_sub(MAX_CACHED_PRINT_PAGES);
+            for p in excess.into_iter().take(to_remove) {
+                self.print_pages.remove(&p);
+            }
+        }
         for &(page, scale) in pages {
             if self.errors.contains_key(&page) || !scale.is_finite() || scale <= 0.0 {
                 continue;

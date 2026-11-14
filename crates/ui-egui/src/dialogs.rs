@@ -1413,6 +1413,8 @@ fn dialog_print(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> 
     };
     if app.print_draft.handling == crate::print_ui::Handling::Label {
         app.read_label_crops(id);
+    } else {
+        app.cancel_label_crops();
     }
     let Some(doc) = app.session.get(id) else { return false };
     let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
@@ -1916,6 +1918,9 @@ fn finish_requests(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, re
     #[cfg(not(target_arch = "wasm32"))]
     if dialog == Dialog::OverwriteChanged && (modal_closed || req.close) {
         app.pending_overwrite = None;
+    }
+    if dialog == Dialog::Print && (modal_closed || req.close) {
+        app.cancel_label_crops();
     }
     if let Some(lock) = req.lock_answer {
         let remember = std::mem::take(&mut app.lock_remember);

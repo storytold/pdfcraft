@@ -561,7 +561,7 @@ pub(crate) fn body(
                 });
 
                 // Card 3: Page Sizing & Handling
-                print_card(ui, t, tl!("Page Sizing & Handling"), Some("sliders-horizontal"), 452.0, Some(136.0), |ui| {
+                print_card(ui, t, tl!("Page Sizing & Handling"), Some("sliders-horizontal"), 452.0, Some(154.0), |ui| {
                     ui.horizontal_wrapped(|ui| {
                         for (h, label) in [
                             (Handling::Size, tl!("Size")),
@@ -578,7 +578,7 @@ pub(crate) fn body(
                     });
                     ui.add_space(3.0);
                     ui.scope(|ui| {
-                        ui.set_min_height(44.0);
+                        ui.set_min_height(52.0);
                         match d.handling {
                         Handling::Size => {
                             ui.horizontal(|ui| {
