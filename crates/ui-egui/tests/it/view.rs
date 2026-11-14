@@ -2660,6 +2660,14 @@ fn a_clicked_short_page_in_a_wide_spread_stays_current() {
     h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(6);
     assert_eq!(h.state().views[0].current, 1, "page 2, clicked, stays current");
+    // CodeRabbit on #7273: a window narrowed until the clicked page is out of view, without a
+    // scroll, lets it go; the page shown becomes current.
+    h.set_size(egui::vec2(700.0, 1000.0));
+    h.run_steps(6);
+    let view = &h.state().views[0];
+    let (tall, viewport) = (view.page_screen_rect(1), view.viewport_rect());
+    assert!(tall.is_none_or(|r| r.intersect(viewport).width() <= 0.0), "page 2 is out of view: {tall:?} {viewport:?}");
+    assert_eq!(view.current, 0, "the page in view is current");
 }
 
 #[test]

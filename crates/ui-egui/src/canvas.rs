@@ -2060,8 +2060,10 @@ fn draw_pages(
     }
     // A page clicked stays current until the view scrolls, also when its partner in a spread
     // shows more of itself: a tall page cut off at the side or a short one cut off below (#7249).
+    // Only while some of it is still in view: a window narrowed or a panel opened can take it out
+    // of view without a scroll, and then the page that is shown becomes current.
     match view.pressed_current {
-        Some((p, at)) if p == view.current && (view.last_scroll - at).length() <= 2.0 => current = p,
+        Some((p, at)) if p == view.current && current_overlap > 0.0 && (view.last_scroll - at).length() <= 2.0 => current = p,
         Some(_) => view.pressed_current = None,
         None => {}
     }
