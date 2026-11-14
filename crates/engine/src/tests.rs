@@ -12239,6 +12239,22 @@ fn a_static_xfa_forms_scripts_read_values_only_its_fields_hold() {
     assert_eq!(inner(&s), Some(vec!["calc:Ada".to_string()]), "{:?}", s.take_js_output(id));
 }
 
+/// A value a static form's script sets reaches a field however long its `/MaxLen` (which limits what a user types), and the
+/// event ends without an error.
+#[test]
+fn a_static_xfa_forms_script_values_are_not_held_to_max_len() {
+    let mut s = Session::new();
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::static_scripted_shell_max_len("", None, Some(1)));
+    let id = s.open("static.pdf", None, bytes, None).expect("opens");
+    let out = s.take_js_output(id);
+    let total = s.get(id).unwrap().form.iter().find(|f| f.name == "form1[0].page1[0].total[0]").map(|f| (f.value.clone(), f.max_len));
+    assert_eq!(total, Some((vec!["init".to_string()], Some(1))), "{out:?}");
+    assert!(out.errors.is_empty(), "{out:?}");
+    let cos = pdfcraft_cos::Document::open(s.save_bytes(id).expect("saves")).expect("reopens");
+    let data = pdfcraft_xfa::data_of(&cos).expect("the data");
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form1[0].page1[0].total[0]")), Some("init"));
+}
+
 /// Flattening a static form's fields removes its XFA, and its scripts go with it; an undo brings both back.
 #[test]
 fn a_static_xfa_forms_scripts_go_with_its_xfa() {

@@ -411,6 +411,7 @@ fn changes(
                 caption: (a.caption != b.caption || (a.caption_written && b.caption_mixed)).then(|| a.caption.clone()).flatten(),
                 options: (a.options != b.options).then(|| a.options.clone()),
                 actions: a.actions.clone(),
+                beyond_max_len: false,
             };
             (c.value.is_some()
                 || c.read_only.is_some()
