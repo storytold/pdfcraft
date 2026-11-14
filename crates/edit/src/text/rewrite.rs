@@ -1,17 +1,18 @@
 use super::blocks::{BlockStyle, TextBlock, paragraph_separator, row_break, wrap};
 use super::fallback::{
-    Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, Type3Run, drop_unused_fallback_fonts, is_variation_selector, needs_type3, no_japanese_font,
-    source_character_advance, source_encodes, source_fallback_runs, source_family, source_program_completes, source_show, source_space, source_width,
-    type3_encode, type3_font,
+    Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, Type3Run, drop_unused_fallback_fonts, is_variation_selector, mark_source_text, needs_type3,
+    no_japanese_font, source_character_advance, source_encodes, source_fallback_runs, source_family, source_program_completes, source_show,
+    source_show_parts, source_space, source_width, type3_encode, type3_font,
 };
 use super::interp::{Carry, Origin, TextState, interpret};
 use super::lines::{
-    content_streams, dropped_advances, dropped_side_effects, joined, page_dict, reopen_text_object, rewritten_contents, show_side_effects, splice,
-    text_lines,
+    content_streams, dropped_advances, dropped_side_effects, joined, page_dict, refuse_unmapped_gap_advances, reopen_text_object, rewritten_contents,
+    show_side_effects, splice, text_lines,
 };
 use super::{
-    Dict, Document, EditError, HashMap, HashSet, Matrix, Metrics, Object, Op, PdfString, TextLine, TextSession, alignment_frame, group_blocks,
-    is_centred, parse, rewrite_changed_words, rewrite_styled_block,
+    Dict, Document, EditError, HashMap, HashSet, Matrix, Metrics, Object, Op, PdfString, SpacingExpansion, TextLine, TextPositioning, TextSession,
+    alignment_frame, expand_spacing_runs, group_blocks, is_centred, parse, refuse_dependent_following_text, rewrite_changed_words,
+    rewrite_styled_block, single_line_block, spacing_ops, text_lines_with_runs,
 };
 
 /// What replacing a line did.
@@ -19,6 +20,83 @@ use super::{
 pub struct LineEdit {
     /// `Some(font)` when the line's font couldn't show the new text and Helvetica was used.
     pub substituted: Option<String>,
+}
+
+/// Emit the same retained page-space gaps measured by the paragraph layout. A gap executes
+/// under the output segment's state, which need not be the state of its original numeric TJ.
+pub(super) fn positioned_show(
+    metrics: &Metrics,
+    text: &str,
+    byte: usize,
+    state: &TextState,
+    across: f64,
+    space: f64,
+    positioning: &TextPositioning,
+) -> Result<Vec<Op>, EditError> {
+    let size = state.font.as_ref().map_or(0.0, |(_, size)| *size);
+    if positioning.is_empty() {
+        return source_show(metrics, text, size, space, state.char_spacing, state.word_spacing);
+    }
+    let denominator = size * state.scale * across;
+    if !denominator.is_finite() || denominator <= 0.0 {
+        return Err(EditError::Invalid("the output TJ transform is invalid".into()));
+    }
+    let mut out = Vec::new();
+    let mut synthetic_spaces = false;
+    let mut start = 0;
+    for (at, ch) in text.char_indices() {
+        for (edge, gaps) in [
+            (at, positioning.before.get(&byte.saturating_add(at))),
+            (at.saturating_add(ch.len_utf8()), positioning.after.get(&byte.saturating_add(at).saturating_add(ch.len_utf8()))),
+        ] {
+            if let Some(gaps) = gaps {
+                let chunk = text.get(start..edge).ok_or_else(|| EditError::Invalid("the positioned text range changed".into()))?;
+                if !chunk.is_empty() {
+                    let (shows, gaps) = source_show_parts(metrics, chunk, size, space, state.char_spacing, state.word_spacing)?;
+                    synthetic_spaces |= gaps;
+                    out.extend(shows);
+                }
+                let numbers = gaps
+                    .iter()
+                    .map(|gap| {
+                        let number = -gap / denominator * 1000.0;
+                        if number.is_finite() {
+                            Ok(Object::Real(number))
+                        } else {
+                            Err(EditError::Invalid("the output TJ adjustment is invalid".into()))
+                        }
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                out.push(Op::new("TJ", vec![Object::Array(numbers)]));
+                start = edge;
+            }
+        }
+    }
+    if let Some(tail) = text.get(start..).filter(|tail| !tail.is_empty()) {
+        let (shows, gaps) = source_show_parts(metrics, tail, size, space, state.char_spacing, state.word_spacing)?;
+        synthetic_spaces |= gaps;
+        out.extend(shows);
+    }
+    // Keep kerning inside one show. Splitting at every gap changes word inference under
+    // anisotropic transforms and loses the original in-array tracking semantics.
+    let mut pieces = Vec::new();
+    for op in out {
+        for operand in op.operands {
+            match operand {
+                Object::Array(items) => pieces.extend(items),
+                Object::String(string) => pieces.push(Object::String(string)),
+                _ => return Err(EditError::Invalid("the positioned output is not a text show".into())),
+            }
+        }
+    }
+    let has_glyphs = pieces.iter().any(|piece| matches!(piece, Object::String(string) if !string.bytes.is_empty()));
+    let mut shows = vec![Op::new("TJ", vec![Object::Array(pieces)])];
+    // Per-chunk ActualText would split the retained kerning show. One logical span also keeps
+    // repeated/leading spaces when a retained boundary isolates a glyph-less space chunk.
+    if synthetic_spaces && has_glyphs {
+        mark_source_text(metrics, text, &mut shows);
+    }
+    Ok(shows)
 }
 
 /// Replace the text of line `line` (an index into [`text_lines`]) on `page` with `text`.
@@ -47,7 +125,7 @@ fn refuse_clipping_text(lines: &[TextLine], dropped: &std::collections::HashSet<
 /// [`replace_line`] with the most unique characters one generated font may hold (tests lower it).
 pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usize, text: &str, max_glyphs: usize) -> Result<LineEdit, EditError> {
     let text = text.replace(row_break, " ");
-    let lines = text_lines(doc, page)?;
+    let (lines, runs) = text_lines_with_runs(doc, page, true)?;
     let target = lines.get(line).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no line {}", page + 1, line + 1)))?;
     target.ensure_editable()?;
     // Copies of the line drawn on the same baseline go with it, so the replacement is all that
@@ -62,6 +140,8 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     let streams = content_streams(doc, &p.dict)?;
     let pieces = joined(&streams);
     let ops = pieces.parse().ops;
+    let copies = drops.iter().copied().filter(|i| !target.ops.contains(i)).collect();
+    refuse_unmapped_gap_advances(doc, page, &copies)?;
     let first = target.ops.first().copied().filter(|i| *i < ops.len()).ok_or_else(|| EditError::Invalid("the page's content changed".into()))?;
     // The line's own font, when it can show every character.
     let font = fonts_res.get(target.font.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned()).map(|d| Metrics::from_dict(doc, &d));
@@ -70,19 +150,43 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     // Typed in logical order; drawn left to right (right-to-left runs reversed).
     let shown = crate::bidi::to_visual(&indic_text);
     let reused = font.as_ref().filter(|m| source_encodes(m, &shown));
+    let spaced = expand_spacing_runs(doc, page, &lines, &runs, &single_line_block(&target, line), &text, false)?;
+    if spaced.is_some() && reused.is_none() {
+        return Err(EditError::Invalid("mixed text spacing requires a source font that can encode the replacement".into()));
+    }
     let mut substituted = None;
     let mut replacement: Vec<Op> = Vec::new();
     // ' and " also move to the next line (and " sets the spacing); keep that.
     replacement.extend(ops.get(first).map(show_side_effects).unwrap_or_default());
     match reused {
-        Some(metrics) => replacement.extend(source_show(
-            metrics,
-            &shown,
-            target.origin.state.font.as_ref().map_or(target.size, |(_, size)| *size),
-            source_space(doc, &fonts_res, metrics),
-            target.origin.state.char_spacing,
-            target.origin.state.word_spacing,
-        )?),
+        Some(metrics) => {
+            let size = target.origin.state.font.as_ref().map_or(target.size, |(_, size)| *size);
+            let space = source_space(doc, &fonts_res, metrics);
+            if let Some(SpacingExpansion { lines: private_lines, block, positioning }) = spaced {
+                drops.extend(positioning.drops.iter().copied());
+                for (range, index) in block.edited_spans(&text) {
+                    let source = private_lines.get(index).ok_or_else(|| EditError::Invalid("the text spacing source changed".into()))?;
+                    let byte = range.start;
+                    let chunk = text.get(range).ok_or_else(|| EditError::Invalid("the text spacing range is invalid".into()))?;
+                    replacement.extend(spacing_ops(&source.origin.state));
+                    let matrix = Matrix(source.origin.tm).then(&Matrix(source.origin.ctm));
+                    replacement.extend(positioned_show(
+                        metrics,
+                        chunk,
+                        byte,
+                        &source.origin.state,
+                        matrix.0[0].hypot(matrix.0[1]),
+                        space,
+                        &positioning,
+                    )?);
+                }
+                // A show does not change text state. Let the remaining original state operators
+                // run from the first show's state, while retaining the replacement's advance.
+                replacement.extend(spacing_ops(&target.origin.state));
+            } else {
+                replacement.extend(source_show(metrics, &shown, size, space, target.origin.state.char_spacing, target.origin.state.word_spacing)?);
+            }
+        }
         None => {
             let fallback_shown = crate::bidi::to_visual(&text);
             if needs_type3(&text) {
@@ -852,12 +956,13 @@ fn source_font(doc: &Document, fonts_res: &Dict, font_name: &str, first: &TextLi
 pub(crate) fn rewrite_block_from(
     doc: &mut Document,
     page: usize,
-    lines: Vec<TextLine>,
+    source: (Vec<TextLine>, Vec<Vec<TextLine>>),
     block: usize,
     text: Option<&str>,
     style: &BlockStyle,
     max_glyphs: usize,
 ) -> Result<LineEdit, EditError> {
+    let (lines, runs) = source;
     let blocks = group_blocks(&lines);
     let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
     // Existing PDF paragraphs do not yet persist selected-row alignment intent. Refuse
@@ -878,21 +983,52 @@ pub(crate) fn rewrite_block_from(
         None => style,
     };
     let members: Vec<&TextLine> = b.lines.iter().map(|i| &lines[*i]).collect();
+    members.iter().try_for_each(|line| line.ensure_editable())?;
     // One clipping run is enough: rewriting the paragraph would drop its mask with the rest.
     let mut dropped = coincident_ops(&lines, &members);
     dropped.extend(members.iter().flat_map(|l| l.ops.iter().copied()));
     refuse_clipping_text(&lines, &dropped)?;
-    let first = members.first().copied().ok_or_else(|| EditError::Invalid("the paragraph has no source runs".into()))?;
-    members.iter().try_for_each(|line| line.ensure_editable())?;
     let p = page_dict(doc, page)?;
     // Revealed OCR text may go on top of the page (see `revealed_under_paint`): a page that can't
     // take that is refused here, before either rewrite path changes anything.
     if b.invisible {
         crate::check_on_top(doc, &p)?;
     }
-    if let Some(edit) = text.and_then(|draft| rewrite_changed_words(doc, page, &b, &lines, draft, style, max_glyphs)) {
+    // A word-only OCR edit keeps unchanged shows and the scan beneath them, including
+    // their exact spacing. Try it before a mixed-state whole-phrase rewrite. A failed
+    // cloned trial falls through to the same exact-spacing checks as any full rewrite.
+    if let Some(edit) = text.and_then(|draft| rewrite_changed_words(doc, page, (&b, &lines, &runs), draft, style, max_glyphs)) {
         return Ok(edit);
     }
+    refuse_unmapped_gap_advances(doc, page, &dropped)?;
+    if let Some(SpacingExpansion { lines: private_lines, block: private_block, positioning }) =
+        expand_spacing_runs(doc, page, &lines, &runs, &b, text.unwrap_or(&b.editor_text), true)?
+    {
+        // Public source-run IDs cannot name the private fragments introduced above. Even an
+        // apparently valid ID can select a different Tc/Tz run. Keep explicit provenance and
+        // retained glyph identity separate until that overlap can be mapped deliberately.
+        if !style.sources.is_empty() {
+            return Err(EditError::Invalid("explicit source runs with mixed text spacing are not supported; the document was not changed".into()));
+        }
+        // Exact spacing also uses the styled writer, whose mixed-run output cannot justify.
+        // Keep the upstream refusal before this earlier dispatch rather than silently left-aligning.
+        if style.align == Some(crate::added::Align::Justify) {
+            return Err(EditError::Invalid("justification of mixed-style existing paragraphs is not supported".into()));
+        }
+        if positioning.source && *style != BlockStyle::default() {
+            return Err(EditError::Invalid("formatting positioned mixed-state text is not supported; the document was not changed".into()));
+        }
+        dropped.extend(positioning.drops.iter().copied());
+        refuse_dependent_following_text(doc, page, &dropped)?;
+        // Font fallback can allocate objects before a later glyph fails. The new exact path
+        // commits only a complete rewrite, so every refusal leaves the original untouched.
+        let mut draft = doc.clone();
+        let result =
+            rewrite_styled_block(&mut draft, page, (&private_block, &private_lines), text, style, Some((&dropped, &positioning)), max_glyphs)?;
+        *doc = draft;
+        return Ok(result);
+    }
+    let first = members.first().copied().ok_or_else(|| EditError::Invalid("the paragraph has no source runs".into()))?;
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let dispatch = choose_rewrite_path(doc, &fonts_res, &b, &members, first, text, style)?;
@@ -900,7 +1036,7 @@ pub(crate) fn rewrite_block_from(
         return Err(EditError::Invalid("justification of mixed-style existing paragraphs is not supported".into()));
     }
     if dispatch.use_styled_path {
-        return rewrite_styled_block(doc, page, &b, &lines, text, style, max_glyphs);
+        return rewrite_styled_block(doc, page, (&b, &lines), text, style, None, max_glyphs);
     }
     let upright = dispatch.upright;
     let streams = content_streams(doc, &p.dict)?;
@@ -1330,4 +1466,57 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     let contents = rewritten_contents(doc, &streams, data)?;
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod positioned_tests {
+    use super::*;
+
+    fn subset_metrics() -> Metrics {
+        let font = Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Font")),
+            (b"Subtype".to_vec(), Object::name("TrueType")),
+            (b"BaseFont".to_vec(), Object::name("ABCDEF+Arial")),
+            (b"FirstChar".to_vec(), Object::Int(97)),
+            (b"LastChar".to_vec(), Object::Int(98)),
+            (b"Widths".to_vec(), Object::Array(vec![Object::Int(500), Object::Int(520)])),
+            (b"Encoding".to_vec(), Object::name("WinAnsiEncoding")),
+        ]);
+        Metrics::from_dict(&Document::new_empty(), &font)
+    }
+
+    #[test]
+    fn retained_tj_wraps_isolated_subset_spaces_in_one_logical_span() {
+        let metrics = subset_metrics();
+        let mut state = TextState::initial();
+        state.font = Some(("F1".into(), 12.0));
+        state.scale = 0.9;
+        for text in ["a  b", "  a b  "] {
+            let mut positioning = TextPositioning::default();
+            for end in 1..=text.len() {
+                positioning.after.insert(end, vec![0.0108]);
+            }
+            let ops = positioned_show(&metrics, text, 0, &state, 1.0, 0.33, &positioning).unwrap();
+            assert_eq!(ops.iter().map(|op| op.op.as_slice()).collect::<Vec<_>>(), [b"BDC".as_slice(), b"TJ", b"EMC"]);
+            let properties = ops[0].operands[1].as_dict().unwrap();
+            assert_eq!(properties.get(b"ActualText"), Some(&Object::String(PdfString::text(text))));
+            let pieces = ops[1].operands[0].as_array().unwrap();
+            let numbers: Vec<_> = pieces.iter().filter_map(Object::as_f64).collect();
+            assert_eq!(numbers.iter().filter(|n| (**n + 1.0).abs() < 1e-9).count(), text.len(), "each retained gap survives: {numbers:?}");
+            assert_eq!(numbers.iter().filter(|n| (**n + 330.0).abs() < 1e-9).count(), text.matches(' ').count());
+        }
+    }
+
+    #[test]
+    fn retained_tj_does_not_mark_numeric_only_subset_spaces() {
+        let metrics = subset_metrics();
+        let mut state = TextState::initial();
+        state.font = Some(("F1".into(), 12.0));
+        let mut positioning = TextPositioning::default();
+        positioning.after.insert(1, vec![0.012]);
+        let ops = positioned_show(&metrics, "  ", 0, &state, 1.0, 0.33, &positioning).unwrap();
+        assert_eq!(ops.len(), 1);
+        assert!(ops[0].is("TJ"));
+        assert!(ops[0].operands[0].as_array().unwrap().iter().all(|piece| piece.as_f64().is_some()));
+    }
 }

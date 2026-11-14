@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use super::grouping::row_rect;
 use super::styled::rewrite_styled_block;
-use super::{BlockStyle, Document, EditError, LineEdit, TextBlock, TextLine, kept_words, word_lines};
+use super::{BlockStyle, Document, EditError, LineEdit, TextBlock, TextLine, coincident_ops, kept_words, word_lines};
 
 /// How many times a replacement may be refitted to the room it has before the whole phrase is
 /// redrawn instead. Each try rewrites a copy of the document.
@@ -188,18 +188,29 @@ fn drawn_right(before: &[TextLine], indices: &[usize], after: &[TextLine]) -> Re
 fn apply(
     doc: &mut Document,
     page: usize,
-    phrase: &TextBlock,
+    source: (&TextBlock, &BTreeSet<usize>),
     members: &[usize],
     plan: &[Change],
     style: &BlockStyle,
     max_glyphs: usize,
 ) -> Result<(Vec<Option<f64>>, Option<String>), EditError> {
+    let (phrase, protected) = source;
+    // Recheck every plan, including words a wider replacement takes over on a later try.
+    // The ordinary writer cannot preserve exact TJ gaps and fine Tc/Tz inside changed
+    // mixed-spacing runs. Leave those to the caller's exact rewrite or atomic refusal.
+    let original = word_lines(doc, page)?;
+    if plan.iter().any(|change| {
+        let targets: Vec<&TextLine> = members.get(change.runs.clone()).unwrap_or_default().iter().filter_map(|index| original.get(*index)).collect();
+        targets.iter().flat_map(|line| &line.ops).any(|op| protected.contains(op))
+            || coincident_ops(&original, &targets).iter().any(|op| protected.contains(op))
+    }) {
+        return Err(EditError::Invalid("these OCR words require the exact-spacing rewrite".into()));
+    }
     // The stretch starts where its words did. Its own box would centre a word that happens to
     // sit in the middle of the page.
     let mut style = BlockStyle { align: Some(crate::added::Align::Left), changed_words_only: false, ..style.clone() };
     let mut rights = vec![None; plan.len()];
     let mut substituted = None;
-    let original = word_lines(doc, page)?;
     for (at, change) in plan.iter().enumerate().rev() {
         let indices = members.get(change.runs.clone()).ok_or_else(|| EditError::Invalid("the phrase has no such words".into()))?;
         let before = word_lines(doc, page)?;
@@ -220,7 +231,7 @@ fn apply(
             edge(change.runs.start.checked_sub(1)).map_or(f64::NEG_INFINITY, |rect| rect[2]),
             edge(Some(change.runs.end)).map_or(f64::INFINITY, |rect| rect[0]),
         ]);
-        let edit = rewrite_styled_block(doc, page, &part, &before, Some(&change.text), &style, max_glyphs)?;
+        let edit = rewrite_styled_block(doc, page, (&part, &before), Some(&change.text), &style, None, max_glyphs)?;
         substituted = substituted.or(edit.substituted);
         let right = drawn_right(&before, indices, &word_lines(doc, page)?)?;
         if right.is_none() && !change.text.is_empty() {
@@ -264,12 +275,12 @@ fn make_room(change: &Change, right: f64, boxes: &[[f64; 4]], squeezes: &mut BTr
 pub(crate) fn rewrite_changed_words(
     doc: &mut Document,
     page: usize,
-    phrase: &TextBlock,
-    joined: &[TextLine],
+    source: (&TextBlock, &[TextLine], &[Vec<TextLine>]),
     draft: &str,
     style: &BlockStyle,
     max_glyphs: usize,
 ) -> Option<LineEdit> {
+    let (phrase, joined, runs) = source;
     let right_to_left = |text: &str| text.chars().any(crate::bidi::is_rtl);
     if !style.changed_words_only
         || !phrase.invisible
@@ -281,6 +292,14 @@ pub(crate) fn rewrite_changed_words(
         return None;
     }
     let lines = word_lines(doc, page).ok()?;
+    // Include other page lines: rewriting a word can also remove an overlapping copy.
+    let protected: BTreeSet<usize> = runs
+        .iter()
+        .enumerate()
+        .filter(|(_, parts)| parts.len() > 1)
+        .filter_map(|(index, _)| joined.get(index))
+        .flat_map(|line| line.ops.iter().copied())
+        .collect();
     let phrase_ops: BTreeSet<usize> = phrase.lines.iter().filter_map(|i| joined.get(*i)).flat_map(|line| line.ops.iter().copied()).collect();
     let members: Vec<usize> =
         lines.iter().enumerate().filter(|(_, line)| line.ops.first().is_some_and(|op| phrase_ops.contains(op))).map(|(index, _)| index).collect();
@@ -312,7 +331,7 @@ pub(crate) fn rewrite_changed_words(
             change.squeeze = squeezes.get(&change.runs.start).copied();
         }
         let mut trial = doc.clone();
-        let (rights, substituted) = apply(&mut trial, page, phrase, &members, &plan, style, max_glyphs).ok()?;
+        let (rights, substituted) = apply(&mut trial, page, (phrase, &protected), &members, &plan, style, max_glyphs).ok()?;
         let mut again = false;
         for (change, right) in plan.iter().zip(&rights) {
             if let Some(right) = right {
@@ -432,5 +451,65 @@ mod tests {
         let mut redrawn = BTreeSet::from([1]);
         let planned = changes(&counts, &kept_words(&old, &new).unwrap(), &new, &mut redrawn);
         assert_eq!(planned, [Change { runs: 0..2, words: 0..2, text: "x b".to_owned(), squeeze: None }]);
+    }
+
+    #[test]
+    fn a_coincident_protected_copy_refuses_before_any_word_rewrite() {
+        use pdfcraft_cos::{Dict, Object, SaveOptions, Stream, write_full};
+
+        let mut doc = Document::new_empty();
+        let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+        let mut font = Dict::new();
+        font.set(b"Type".to_vec(), Object::name("Font"));
+        font.set(b"Subtype".to_vec(), Object::name("Type1"));
+        font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+        font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+        let mut fonts = Dict::new();
+        fonts.set(b"F1".to_vec(), Object::Ref(doc.add(font)));
+        let mut resources = Dict::new();
+        resources.set(b"Font".to_vec(), Object::Dict(fonts));
+        // The invisible target has ordinary spacing. Its visible overlapping copy has
+        // two private spacing runs and a numeric TJ gap, outside the target phrase.
+        let content = b"BT /F1 12 Tf 3 Tr 1 0 0 1 72 700 Tm (tail) Tj 1 0 0 1 110 700 Tm (end) Tj ET BT /F1 12 Tf 0 Tr 1 0 0 rg 1 0 0 1 72 700 Tm (ta) Tj 0.0001 Tc 95 Tz [(i) 3 (l)] TJ ET";
+        let stream = doc.add(Object::Stream(Stream::from_raw(Dict::new(), content.to_vec())));
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(pages));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]));
+        page.set(b"Contents".to_vec(), Object::Ref(stream));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+        let page = doc.add(page);
+        doc.update_dict(pages, |dict| {
+            dict.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+            dict.set(b"Count".to_vec(), Object::Int(1));
+        })
+        .unwrap();
+
+        let (joined, runs) = crate::text::text_lines_with_runs(&doc, 0, true).unwrap();
+        let protected: BTreeSet<usize> =
+            runs.iter().enumerate().filter(|(_, parts)| parts.len() > 1).flat_map(|(index, _)| joined[index].ops.iter().copied()).collect();
+        assert!(!protected.is_empty(), "the visible duplicate must have mixed private spacing runs");
+        let words = word_lines(&doc, 0).unwrap();
+        let target = words.iter().position(|line| line.text == "tail" && line.origin.state.render_mode == 3).unwrap();
+        let end = words.iter().position(|line| line.text == "end" && line.origin.state.render_mode == 3).unwrap();
+        let members = [target, end];
+        assert!(words[target].ops.iter().all(|op| !protected.contains(op)), "the selected target itself is unprotected");
+        assert!(
+            coincident_ops(&words, &[&words[target]]).iter().any(|op| protected.contains(op)),
+            "only the coincident drop reaches protected shows"
+        );
+        let phrase = crate::text::text_blocks(&doc, 0).unwrap().into_iter().find(|block| block.invisible).unwrap();
+        assert!(phrase.lines.iter().flat_map(|index| &joined[*index].ops).all(|op| !protected.contains(op)));
+        let phrase = stretch(&phrase, &words, &members).unwrap();
+        let plan = [Change { runs: 0..1, words: 0..1, text: "tall".to_owned(), squeeze: None }];
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let numbers = doc.object_numbers();
+        let modified = doc.modified_objects();
+        let error = apply(&mut doc, 0, (&phrase, &protected), &members, &plan, &BlockStyle::default(), 4096).unwrap_err();
+        let EditError::Invalid(message) = error else { panic!("expected exact-spacing refusal") };
+        assert_eq!(message, "these OCR words require the exact-spacing rewrite");
+        assert_eq!(doc.object_numbers(), numbers);
+        assert_eq!(doc.modified_objects(), modified);
+        assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), bytes);
     }
 }

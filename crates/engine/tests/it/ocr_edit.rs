@@ -818,3 +818,23 @@ fn a_soft_mask_selected_before_a_cm_stays_put_when_the_edit_is_lifted() {
         assert_eq!(ink(&s, id), ink(&plain, plain_id), "{edit:?}: the mask does not hide the new text");
     }
 }
+
+/// An unprotected word may change without redrawing the neighbouring mixed Tc/Tz/TJ runs.
+/// The exact-spacing runs remain the original invisible shows, and their scan pixels survive.
+#[test]
+fn an_ocr_word_edit_keeps_neighbouring_mixed_spacing_scan_pixels() {
+    let bytes = under_scan(
+        "BT /F1 12 Tf 3 Tr 1 0 0 1 42 44 Tm (A) Tj 1 0 0 rg 0.0001 Tc 95 Tz 1 0 0 1 54 44 Tm [(ta) 3 (il)] TJ 0.001 Tc 90 Tz 1 0 0 1 72 44 Tm (end) Tj ET",
+    );
+    let mut s = Session::new();
+    let id = s.open("mixed-spacing.pdf", None, bytes, None).unwrap();
+    assert_eq!(texts(&s, id), ["A tail end"]);
+    assert!(paper_between(&s, id, 56, 86) < 0.02);
+    edit_block(&mut s, id, 0, "B tail end");
+    assert_eq!(scan_and_drawn(&s, id), (vec!["tail end".to_owned()], vec!["B".to_owned()]));
+    assert!(paper_between(&s, id, 56, 86) < 0.02, "the exact-spacing words still show the original scan");
+    let saved = s.get(id).unwrap().bytes.clone();
+    let reopened = s.open("mixed-spacing-saved.pdf", None, saved, None).unwrap();
+    assert_eq!(scan_and_drawn(&s, reopened), scan_and_drawn(&s, id));
+    assert!(paper_between(&s, reopened, 56, 86) < 0.02, "the scan pixels also survive reopening");
+}

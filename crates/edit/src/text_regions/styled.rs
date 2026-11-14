@@ -1,10 +1,9 @@
-use super::super::interp::TextState;
 use super::grouping::{across, is_centred, row_rect};
 use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
-    RangeStyle, TextBlock, TextLine, Type3Glyph, builtin_thai_choice, coincident_ops, content_streams, fallback_face, japanese_glyph_from,
-    needs_type3, no_fallback_font, no_glyph_for, page_dict, reveal_ops, rewritten_contents, row_break, source_encodes, source_family, source_program,
-    source_show, source_space, source_width, splice, type3_faces, type3_glyph, write_type3_glyphs,
+    RangeStyle, TextBlock, TextLine, TextPositioning, TextState, Type3Glyph, builtin_thai_choice, coincident_ops, content_streams, fallback_face,
+    japanese_glyph_from, needs_type3, no_fallback_font, no_glyph_for, page_dict, positioned_show, reveal_ops, rewritten_contents, row_break,
+    source_encodes, source_family, source_program, source_space, source_width, spacing_ops, splice, type3_faces, type3_glyph, write_type3_glyphs,
 };
 
 // The draft is capped at 4 MiB; also bound the outline data prepared across all fallback faces.
@@ -254,6 +253,7 @@ impl CharacterPreparation<'_> {
             };
             let start = range.start;
             for (offset, ch) in draft.get(range).unwrap_or_default().char_indices() {
+                let byte = start.saturating_add(offset);
                 // A row break moves to the next row instead of asking a font for a glyph. The CR
                 // of a CRLF stays a `\r` the rows skip, so the pair is one break; every other break
                 // is written as `\n`. Either way it keeps its place among the draft's characters,
@@ -261,7 +261,7 @@ impl CharacterPreparation<'_> {
                 if row_break(ch) {
                     let crlf = ch == '\r'
                         && start.checked_add(offset).and_then(|at| draft.get(at.saturating_add(1)..)).is_some_and(|rest| rest.starts_with('\n'));
-                    chars.push((if crlf { '\r' } else { '\n' }, index, source.font.clone()));
+                    chars.push((if crlf { '\r' } else { '\n' }, index, source.font.clone(), byte));
                     continue;
                 }
                 let text = ch.to_string();
@@ -279,7 +279,7 @@ impl CharacterPreparation<'_> {
                     substituted = Some(source_family(&source.base_font).base_font(source.bold, source.italic).to_owned());
                     name
                 };
-                chars.push((ch, index, name));
+                chars.push((ch, index, name, byte));
             }
         }
         drop(resolver);
@@ -356,7 +356,7 @@ struct StyledLines<'a> {
     overrides: HashMap<usize, &'a RangeStyle>,
 }
 
-type StyledChar = (char, usize, String);
+type StyledChar = (char, usize, String, usize);
 
 /// End of a contiguous run sharing both its style and font resource.
 fn styled_run_end(items: &[StyledChar], start: usize) -> usize {
@@ -727,6 +727,7 @@ fn wrap_styled_rows(
     chars: &[StyledChar],
     width: f64,
     measure: impl Fn(&[StyledChar]) -> Result<f64, EditError>,
+    positioning: &TextPositioning,
 ) -> Result<WrappedStyledRows, EditError> {
     let break_before = styled_break_before(chars);
     let mut rows: Vec<Vec<StyledChar>> = Vec::new();
@@ -775,7 +776,8 @@ fn wrap_styled_rows(
         }
         let word = chars.get(at..end).unwrap_or_default();
         let word_width = measure(word)?;
-        if !row.is_empty() && !item.0.is_whitespace() && row_width + word_width > width + 0.5 {
+        let mut bridge = row.last().map_or(0.0, |last: &StyledChar| positioning.internal_after(last.3, last.0));
+        if !row.is_empty() && !item.0.is_whitespace() && row_width + bridge + word_width > width + 0.5 {
             let mut trimmed = 0usize;
             while row.last().is_some_and(|c: &StyledChar| c.0.is_whitespace()) {
                 row.pop();
@@ -790,9 +792,10 @@ fn wrap_styled_rows(
             rows.push(std::mem::take(&mut row));
             row_width = 0.0;
             row_start = at;
+            bridge = 0.0;
         }
         row.extend_from_slice(word);
-        row_width += word_width;
+        row_width += bridge + word_width;
         at = end;
     }
     if !row.is_empty() {
@@ -1322,6 +1325,24 @@ fn untouched_rows(block: &TextBlock, draft: &str, rows: &[std::ops::Range<usize>
         .collect()
 }
 
+fn styled_underline_runs(
+    widths: &[f64],
+    segment_width: f64,
+    x: f64,
+    default_style: usize,
+    row_styles: Option<&[Option<usize>]>,
+    pos: usize,
+    exact_spacing: bool,
+) -> Vec<(usize, f64, f64)> {
+    if exact_spacing {
+        // Exact rows cannot reassign a space's grouping key, so there is just one style.
+        // Keep the signed advance even when Tc/TJ makes it tiny, zero or negative.
+        vec![(default_style, x, x + segment_width)]
+    } else {
+        segment_underline_runs(widths, segment_width, x, default_style, row_styles, pos)
+    }
+}
+
 fn segment_underline_runs(
     widths: &[f64],
     segment_width: f64,
@@ -1352,7 +1373,11 @@ fn segment_underline_runs(
 /// The returned slot is the space's style index from before that reassignment, where the
 /// grouping key changed. Underlines stay with that style; the row itself keeps the neighbour's
 /// key so the space is not a group of its own.
-fn assign_subset_space_fonts(row: &mut [(char, usize, String)], metrics: &std::collections::BTreeMap<String, Metrics>) -> Vec<Option<usize>> {
+fn assign_subset_space_fonts(
+    row: &mut [StyledChar],
+    metrics: &std::collections::BTreeMap<String, Metrics>,
+    exact_spacing: bool,
+) -> Result<Vec<Option<usize>>, EditError> {
     let mut right_any = vec![None; row.len()];
     let mut next_any: Option<(usize, String)> = None;
     for (i, item) in row.iter().enumerate().rev() {
@@ -1373,6 +1398,14 @@ fn assign_subset_space_fonts(row: &mut [(char, usize, String)], metrics: &std::c
             continue;
         }
         if let Some((style, font)) = prev_any.as_ref().or_else(|| right_any.get(i).and_then(Option::as_ref)) {
+            // Exact spacing uses each source style's Tc/Tz and UTF-8 offsets for retained TJ
+            // gaps. Joining a neighbour could change that state or the measured font width.
+            // Refuse only a changed grouping key; unchanged keys still keep /ActualText spans.
+            if exact_spacing && (item.1 != *style || item.2 != *font) {
+                return Err(EditError::Invalid(
+                    "mixed text spacing with subset-space font or style reassignment is not supported; the document was not changed".into(),
+                ));
+            }
             let original = item.1;
             item.1 = *style;
             item.2 = font.clone();
@@ -1383,7 +1416,7 @@ fn assign_subset_space_fonts(row: &mut [(char, usize, String)], metrics: &std::c
             }
         }
     }
-    underline_style
+    Ok(underline_style)
 }
 
 /// Operator index of the paragraph's first text object, and of the next line's text object
@@ -1486,6 +1519,7 @@ fn rewrite_anchor<'a>(
     ops: &[Op],
     kept_lines: &std::collections::HashSet<usize>,
     kept: &mut [bool],
+    semantic_drops: Option<&std::collections::HashSet<usize>>,
 ) -> RewriteAnchor<'a> {
     let rewritten: Vec<&TextLine> = block.lines.iter().filter(|index| !kept_lines.contains(index)).filter_map(|index| lines.get(*index)).collect();
     let lead = rewritten
@@ -1502,8 +1536,14 @@ fn rewrite_anchor<'a>(
         }
     };
     let origin = &lead.origin;
-    let mut drop = coincident_ops(lines, &members);
-    drop.extend(members.iter().flat_map(|line| line.ops.iter().copied()));
+    // Public selection remains authoritative when private spacing fragments are rewritten.
+    let drop = if let Some(drop) = semantic_drops {
+        drop.clone()
+    } else {
+        let mut drop = coincident_ops(lines, &members);
+        drop.extend(members.iter().flat_map(|line| line.ops.iter().copied()));
+        drop
+    };
     let start = lead.ops.first().copied().unwrap_or(origin.bt_op);
     let split = ops
         .get(origin.bt_op..start)
@@ -1512,6 +1552,63 @@ fn rewrite_anchor<'a>(
         .enumerate()
         .any(|(index, op)| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"") && !drop.contains(&(origin.bt_op + index)));
     RewriteAnchor { lead, drop, start, split }
+}
+
+fn clear_wrapped_gaps(rows: &[Vec<StyledChar>], positioning: &mut TextPositioning) {
+    // A retained pair separated by wrapping is no longer adjacent on the page. Drop its
+    // internal gap from both final measurement and emission, not just from the next row.
+    for row in rows {
+        if let Some(last) = row.last() {
+            let end = last.3.saturating_add(last.0.len_utf8());
+            if !positioning.ends.contains(&end) {
+                positioning.after.remove(&end);
+            }
+        }
+    }
+}
+
+fn aligned_row_x(
+    block: &TextBlock,
+    lines: &[TextLine],
+    style: &BlockStyle,
+    row_index: usize,
+    width: f64,
+    measured: f64,
+    alignment: (bool, Option<crate::added::Align>),
+) -> f64 {
+    let (centered, asked) = alignment;
+    let align = asked.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
+    let original_rect = block.rows.get(row_index).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect);
+    let left = if style.width.is_none() && asked.is_none() { original_rect[0] } else { block.rect[0] };
+    let available = if style.width.is_none() && asked.is_none() { original_rect[2] - original_rect[0] } else { width };
+    left + match align {
+        crate::added::Align::Center => (available - measured) / 2.0,
+        crate::added::Align::Right => available - measured,
+        _ => 0.0,
+    }
+}
+
+fn styled_state_ops(state: &TextState, exact_spacing: bool) -> Vec<Op> {
+    let mut ops = state.ops();
+    if exact_spacing {
+        ops.retain(|op| !matches!(op.op.as_slice(), b"Tc" | b"Tw" | b"Tz"));
+        ops.extend(spacing_ops(state));
+        for op in &mut ops {
+            match op.op.as_slice() {
+                b"Tf" => {
+                    if let Some((_, size)) = &state.font
+                        && let Some(value) = op.operands.get_mut(1)
+                    {
+                        *value = Object::Real(*size);
+                    }
+                }
+                b"TL" => op.operands = vec![Object::Real(state.leading)],
+                b"Ts" => op.operands = vec![Object::Real(state.rise)],
+                _ => {}
+            }
+        }
+    }
+    ops
 }
 
 /// Open (`op` is `"BMC"`) or close (`"EMC"`) the `/P` marker that wraps the whole rewrite when
@@ -1590,6 +1687,18 @@ fn splice_with_marker(
     data
 }
 
+/// Reopen from the same source pen on both paths, with a refusal rather than a lossy fallback
+/// when the exact-spacing transaction cannot express that pen.
+fn styled_reopen_ops(line: &TextLine, state: &TextState, exact_spacing: bool) -> Result<Vec<Op>, EditError> {
+    let origin = &line.origin;
+    let size = state.font.as_ref().map(|(_, size)| *size);
+    if exact_spacing {
+        crate::text::reopen_exact_text_object(origin.tlm, origin.tm, size, state.scale)
+    } else {
+        Ok(crate::text::reopen_text_object(origin.tlm, origin.tm, size, state.scale))
+    }
+}
+
 /// The source run each part of the draft is styled from: the ones given, which must cover the draft
 /// in order, on character boundaries, from the block's runs, or else the edit's own.
 fn draft_sources(block: &TextBlock, draft: &str, style: &BlockStyle) -> Result<Vec<(std::ops::Range<usize>, usize)>, EditError> {
@@ -1614,12 +1723,16 @@ fn draft_sources(block: &TextBlock, draft: &str, style: &BlockStyle) -> Result<V
 pub(crate) fn rewrite_styled_block(
     doc: &mut Document,
     page: usize,
-    block: &TextBlock,
-    lines: &[TextLine],
+    source: (&TextBlock, &[TextLine]),
     text: Option<&str>,
     style: &BlockStyle,
+    exact: Option<(&std::collections::HashSet<usize>, &TextPositioning)>,
     max_glyphs: usize,
 ) -> Result<LineEdit, EditError> {
+    let (block, lines) = source;
+    let semantic_drops = exact.map(|(drops, _)| drops);
+    let mut positioning = exact.map(|(_, positioning)| positioning.clone()).unwrap_or_default();
+    let exact_spacing = semantic_drops.is_some();
     let first = block.lines.first().and_then(|i| lines.get(*i)).ok_or_else(|| EditError::Invalid("the paragraph has no source runs".into()))?;
     let draft = replacement_text(block, text)?;
     if has_no_effective_style_change(block, draft, style) {
@@ -1633,6 +1746,18 @@ pub(crate) fn rewrite_styled_block(
     let styled_spans = styled.spans;
     let underlines = styled.underlines;
     let overrides = styled.overrides;
+    // A multi-size OCR phrase needs a new shared height, but the exact-spacing path keeps
+    // each source Tf/Tc/Tz and transform. Refuse their unsupported overlap rather than
+    // silently dropping either source spacing or the phrase-size normalization.
+    if exact_spacing
+        && let Some(phrase) = block.phrase_size()
+        && styled_spans.iter().any(|(_, index)| {
+            overrides.get(index).and_then(|range| range.size).or(style.size).is_none()
+                && lines.get(*index).is_some_and(|source| (source.size - phrase).abs() > phrase * 1e-6)
+        })
+    {
+        return Err(EditError::Invalid("mixed text spacing in a multi-size OCR phrase is not supported; the document was not changed".into()));
+    }
     let p = page_dict(doc, page)?;
     let mut res = p.dict.get(b"Resources").and_then(|resource| doc.resolve(resource).as_dict().cloned()).unwrap_or_default();
     let (mut fonts, mut metrics) = page_font_metrics(doc, &res, block, lines);
@@ -1655,7 +1780,20 @@ pub(crate) fn rewrite_styled_block(
     let substituted = prepared.substituted;
     let phrase_size = block.phrase_size();
     let size_of = |source: &TextLine, index: usize| {
-        overrides.get(&index).and_then(|r| r.size).or(style.size).or(phrase_size).unwrap_or(source.size).max(0.1) / source.origin.k.max(1e-6)
+        let size = overrides.get(&index).and_then(|r| r.size).or(style.size);
+        if exact_spacing && size.is_none() {
+            source.origin.state.font.as_ref().map_or(source.size, |(_, size)| *size)
+        } else {
+            size.or(phrase_size).unwrap_or(source.size).max(0.1) / source.origin.k.max(1e-6)
+        }
+    };
+    let across_of = |source: &TextLine| {
+        if exact_spacing {
+            let matrix = Matrix(source.origin.tm).then(&Matrix(source.origin.ctm));
+            matrix.0[0].hypot(matrix.0[1])
+        } else {
+            across(source)
+        }
     };
     // A source run may carry TJ kerning/justification that is absent from its text state.
     // Keep its measured advance when rebuilding the run instead of making it wrap on entry.
@@ -1673,9 +1811,14 @@ pub(crate) fn rewrite_styled_block(
         spaces.borrow_mut().insert(name.to_owned(), w);
         w
     };
-    let mut calibration = calibration_factors(lines, &metrics, style, &overrides, space_of);
-    fit_to_phrase(&mut calibration, lines, phrase_size);
-    let advance = |item: &(char, usize, String)| -> f64 {
+    let calibration = if exact_spacing {
+        HashMap::new()
+    } else {
+        let mut calibration = calibration_factors(lines, &metrics, style, &overrides, space_of);
+        fit_to_phrase(&mut calibration, lines, phrase_size);
+        calibration
+    };
+    let advance = |item: &StyledChar, positioning: &TextPositioning| -> f64 {
         let source = lines.get(item.1).unwrap_or(first);
         let Some(m) = metrics.get(&item.2) else { return 0.0 };
         source_width(
@@ -1690,10 +1833,11 @@ pub(crate) fn rewrite_styled_block(
                 .map_or(source.origin.state.char_spacing, |c| c / source.origin.k.max(1e-6)),
             source.origin.state.word_spacing,
         ) * overrides.get(&item.1).and_then(|r| r.scale).or(style.scale).map_or(source.origin.state.scale, |s| (s / 100.0).clamp(0.1, 10.0))
-            * across(source)
+            * across_of(source)
             * calibration.get(&item.1).copied().unwrap_or(1.0)
+            + positioning.advance(item.3, item.0)
     };
-    let measure = |items: &[(char, usize, String)]| -> Result<f64, EditError> {
+    let measure = |items: &[(char, usize, String, usize)], positioning: &TextPositioning| -> Result<f64, EditError> {
         let mut width = 0.0;
         let mut at = 0;
         while let Some(item) = items.get(at) {
@@ -1716,14 +1860,18 @@ pub(crate) fn rewrite_styled_block(
                     * scale
                     * source.origin.k;
             } else {
-                width += segment.iter().map(&advance).sum::<f64>();
+                width += segment.iter().map(|item| advance(item, positioning)).sum::<f64>();
             }
             at = end;
         }
+        if let Some(last) = items.last() {
+            width -= positioning.internal_after(last.3, last.0);
+        }
         Ok(width)
     };
-    let (mut rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
-    let space_styles: Vec<_> = rows.iter_mut().map(|row| assign_subset_space_fonts(row, &metrics)).collect();
+    let (mut rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, |row| measure(row, &positioning), &positioning)?;
+    clear_wrapped_gaps(&rows, &mut positioning);
+    let space_styles: Vec<_> = rows.iter_mut().map(|row| assign_subset_space_fonts(row, &metrics, exact_spacing)).collect::<Result<_, _>>()?;
     let streams = content_streams(doc, &p.dict)?;
     let pieces = crate::text::joined(&streams);
     let ops = pieces.parse().ops;
@@ -1731,7 +1879,7 @@ pub(crate) fn rewrite_styled_block(
     // glyph widths stay exactly as they were instead of being rebuilt from the text state. A row
     // aligned on its own is reached; the rows around it are not.
     let plain = BlockStyle { ranges: Vec::new(), sources: Vec::new(), aligns: Vec::new(), ..style.clone() } == BlockStyle::default();
-    let mut kept = if plain {
+    let mut kept = if plain && !exact_spacing {
         untouched_rows(block, draft, &row_ranges)
             .into_iter()
             .zip(&rows)
@@ -1745,15 +1893,21 @@ pub(crate) fn rewrite_styled_block(
         kept.iter().enumerate().filter(|(_, k)| **k).filter_map(|(r, _)| block.rows.get(r)).flatten().copied().collect();
     // The rewrite is placed after the last rewritten row unless a text-show operator there
     // would make a kept following row depend on that position.
-    let anchor = rewrite_anchor(block, lines, first, &ops, &kept_lines, &mut kept);
+    let anchor = rewrite_anchor(block, lines, first, &ops, &kept_lines, &mut kept, semantic_drops);
     let RewriteAnchor { lead, drop, start, split } = anchor;
     let o = &lead.origin;
     // What is in force where the rewrite is drawn, and what the text after it expects.
     let after = if split { &o.state } else { &o.bt_state };
     let at = if split { start } else { o.bt_op };
     validate_contextual_rows(&rows, &kept)?;
-    let measured: Vec<_> = rows.iter().map(|row| measure(row)).collect::<Result<_, _>>()?;
-    let shaped = prepare_shaped_rows(doc, &fonts, &thai, &rows, &kept, advance)?;
+    let measured: Vec<_> = rows.iter().map(|row| measure(row, &positioning)).collect::<Result<_, _>>()?;
+    let shaped = prepare_shaped_rows(doc, &fonts, &thai, &rows, &kept, |item| advance(item, &positioning))?;
+    // ShapedRunDrawing opens its own BT/ET, while exact-spacing rows keep one text
+    // object for the sequential pen. Explicit Thai choices can shape Latin-only drafts
+    // too, so the earlier contextual-script check cannot exclude this overlap.
+    if exact_spacing && !shaped.runs.is_empty() {
+        return Err(EditError::Invalid("mixed text spacing with shaped text is not supported; the document was not changed".into()));
+    }
     let ShapedRows { runs: shaped_runs, advances: segment_advances, char_advances } = shaped;
     let glyph_resources = embed_shaped_resources(doc, &mut fonts, &shaped_runs)?;
     let n = pdfcraft_content::num;
@@ -1815,18 +1969,30 @@ pub(crate) fn rewrite_styled_block(
             push_row_break_marker(&mut block_ops, &row_soft, &row_gap, row_index);
         }
         let w = measured.get(row_index).copied().unwrap_or(0.0);
-        // The row's own alignment, or the paragraph's.
-        let asked = row_lines.get(row_index).and_then(|l| style.aligns.get(*l)).copied().flatten().or(style.align);
-        let align = asked.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
-        let original_rect = block.rows.get(row_index).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect);
-        let left = if style.width.is_none() && asked.is_none() { original_rect[0] } else { block.rect[0] };
-        let available = if style.width.is_none() && asked.is_none() { original_rect[2] - original_rect[0] } else { width };
-        let mut x = left
-            + match align {
-                crate::added::Align::Center => (available - w) / 2.0,
-                crate::added::Align::Right => available - w,
-                _ => 0.0,
-            };
+        let asked = row_lines.get(row_index).and_then(|line| style.aligns.get(*line)).copied().flatten().or(style.align);
+        let mut x = aligned_row_x(block, lines, style, row_index, width, w, (centered, asked));
+        // Exact spacing refinements remain one text object per semantic row, so public
+        // line grouping does not fragment again after a paragraph is saved and reopened.
+        let mut row_underlines = Vec::new();
+        if exact_spacing {
+            // A shared text object preserves the sequential pen. Its graphics stack must
+            // stay outside BT/ET (PDF 1.x); PDF 2.0 q/Q also restore the text matrices.
+            // Share only an identical paint program from the same baseline; otherwise a
+            // gs has no inverse and one segment could silently repaint its neighbour.
+            let source = row.first().and_then(|item| lines.get(item.1)).unwrap_or(first);
+            let paint = source.origin.state.paint_ops(drawn_from, run_ctm);
+            if row.iter().any(|item| {
+                let other = lines.get(item.1).unwrap_or(first);
+                other.origin.state.render_mode != source.origin.state.render_mode || other.origin.state.paint_ops(drawn_from, run_ctm) != paint
+            }) {
+                return Err(EditError::Invalid(
+                    "mixed text spacing with incompatible row paint is not supported; the document was not changed".into(),
+                ));
+            }
+            block_ops.push(Op::new("q", vec![]));
+            block_ops.extend(paint);
+            block_ops.push(Op::new("BT", vec![]));
+        }
         let mut pos = 0;
         while pos < row.len() {
             let Some(item) = row.get(pos) else { break };
@@ -1858,8 +2024,10 @@ pub(crate) fn rewrite_styled_block(
             // Each run in its own graphics state, restating what its source set inside its text
             // object (`gs`, stroke, line width, `Tr`; #3508/#3509) from the state the rewrite is
             // drawn in: a `gs` has no inverse, so one run's ExtGState would stay for the next.
-            block_ops.push(Op::new("q", vec![]));
-            block_ops.extend(state.paint_ops(drawn_from, run_ctm));
+            if !exact_spacing {
+                block_ops.push(Op::new("q", vec![]));
+                block_ops.extend(state.paint_ops(drawn_from, run_ctm));
+            }
             if let Some(shaped) = shaped_runs.get(&(row_index, pos)) {
                 let resources = glyph_resources.get(&(row_index, pos)).ok_or_else(|| EditError::Invalid("shaped font is missing".into()))?;
                 let drawing = ShapedRunDrawing {
@@ -1874,52 +2042,75 @@ pub(crate) fn rewrite_styled_block(
                 };
                 segment_width = drawing.draw(&mut block_ops, &mut state)? * state.scale * source.origin.k;
             } else {
-                block_ops.push(Op::new("BT", vec![]));
-                block_ops.extend(state.ops());
-                block_ops.push(Op::new("Tm", tm.iter().map(|v| n(*v)).collect()));
-                block_ops.extend(source_show(
+                if !exact_spacing {
+                    block_ops.push(Op::new("BT", vec![]));
+                }
+                block_ops.extend(styled_state_ops(&state, exact_spacing));
+                if !exact_spacing || pos == 0 {
+                    block_ops.push(Op::new("Tm", tm.iter().map(|v| if exact_spacing { Object::Real(*v) } else { n(*v) }).collect()));
+                }
+                block_ops.extend(positioned_show(
                     m,
                     &string,
-                    size_of(source, item.1),
+                    item.3,
+                    &state,
+                    across_of(source),
                     spaces.borrow().get(&item.2).copied().unwrap_or_else(|| source_space(doc, &fonts, m)),
-                    state.char_spacing,
-                    state.word_spacing,
+                    &positioning,
                 )?);
-                block_ops.push(Op::new("ET", vec![]));
+                if !exact_spacing {
+                    block_ops.push(Op::new("ET", vec![]));
+                }
             }
             // A space reassigned onto a neighbour keeps that neighbour's grouping key, and its
             // own style for the underline. Stroke each run of one underline style separately.
             let widths = char_advances.get(&(row_index, pos)).map(Vec::as_slice).unwrap_or(&[]);
-            for (style_index, from, to) in
-                segment_underline_runs(widths, segment_width, x, item.1, space_styles.get(row_index).map(Vec::as_slice), pos)
-            {
+            let underline_runs =
+                styled_underline_runs(widths, segment_width, x, item.1, space_styles.get(row_index).map(Vec::as_slice), pos, exact_spacing);
+            for (style_index, from, to) in underline_runs {
                 let source = lines.get(style_index).unwrap_or(first);
-                if underlines.get(&style_index).copied().or(style.underline) != Some(true) || to <= from {
+                if underlines.get(&style_index).copied().or(style.underline) != Some(true) || (!exact_spacing && to <= from) {
                     continue;
+                }
+                let out = if exact_spacing { &mut row_underlines } else { &mut block_ops };
+                if exact_spacing {
+                    // Deferred path operators run after the text run's Q; restore its paint too.
+                    out.push(Op::new("q", vec![]));
+                    out.extend(state.paint_ops(drawn_from, run_ctm));
                 }
                 let [r, g, b] = overrides.get(&style_index).and_then(|r| r.color).or(style.color).unwrap_or(source.color);
                 let underline_size = size_of(source, style_index) * source.origin.k;
                 let (x0, y0) = back.apply(from - o.ctm[4], baseline - o.ctm[5] - underline_size * 0.12);
                 let (x1, y1) = back.apply(to - o.ctm[4], baseline - o.ctm[5] - underline_size * 0.12);
-                block_ops.push(Op::new("RG", vec![n(r), n(g), n(b)]));
-                block_ops.push(Op::new("w", vec![n(underline_size * 0.06 / o.ctm[2].hypot(o.ctm[3]).max(1e-6))]));
-                block_ops.push(Op::new("m", vec![n(x0), n(y0)]));
-                block_ops.push(Op::new("l", vec![n(x1), n(y1)]));
-                block_ops.push(Op::new("S", vec![]));
+                out.push(Op::new("RG", vec![n(r), n(g), n(b)]));
+                out.push(Op::new("w", vec![n(underline_size * 0.06 / o.ctm[2].hypot(o.ctm[3]).max(1e-6))]));
+                out.push(Op::new("m", vec![n(x0), n(y0)]));
+                out.push(Op::new("l", vec![n(x1), n(y1)]));
+                out.push(Op::new("S", vec![]));
+                if exact_spacing {
+                    out.push(Op::new("Q", vec![]));
+                }
             }
-            block_ops.push(Op::new("Q", vec![]));
+            if !exact_spacing {
+                block_ops.push(Op::new("Q", vec![]));
+            }
             x += segment_width;
             pos = end;
+        }
+        if exact_spacing {
+            block_ops.push(Op::new("ET", vec![]));
+            block_ops.push(Op::new("Q", vec![]));
+            block_ops.extend(row_underlines);
         }
         baseline -= row_step(style, anchor.size, source_leading);
     }
     push_whole_paragraph_marker(&mut block_ops, marked, "EMC");
     block_ops.push(Op::new("Q", vec![]));
     let on_top = crate::lift_on_top(over, &mut block_ops);
-    block_ops.extend(after.ops());
+    block_ops.extend(styled_state_ops(after, exact_spacing));
     if split {
         block_ops.insert(0, Op::new("ET", vec![]));
-        block_ops.extend(crate::text::reopen_text_object(o.tlm, o.tm, after.font.as_ref().map(|(_, size)| *size), after.scale));
+        block_ops.extend(styled_reopen_ops(lead, after, exact_spacing)?);
     }
     // A kept source row sits outside `block_ops`. Bound the whole paragraph when a marker is
     // safe. The close is not part of `block_ops`: that vector can end inside a text object
@@ -1946,16 +2137,74 @@ pub(crate) fn rewrite_styled_block(
 
 #[cfg(test)]
 mod tests {
-    use super::styled_run_end;
+    use super::{Dict, Document, Metrics, Object, assign_subset_space_fonts, segment_underline_runs, styled_run_end};
 
     #[test]
     fn styled_runs_stop_at_style_or_font_changes() {
-        let items = vec![('a', 0, "F1".into()), (' ', 0, "F1".into()), ('b', 1, "F1".into()), ('c', 1, "F2".into())];
+        let items = vec![('é', 0, "F1".into(), 0), (' ', 0, "F1".into(), 2), ('b', 1, "F1".into(), 3), ('c', 1, "F2".into(), 4)];
         assert_eq!(styled_run_end(&items, 0), 2);
         assert_eq!(styled_run_end(&items, 1), 2);
         assert_eq!(styled_run_end(&items, 2), 3);
         assert_eq!(styled_run_end(&items, 3), 4);
         assert_eq!(styled_run_end(&items, 4), 4);
         assert_eq!(styled_run_end(&[], 0), 0);
+    }
+
+    fn subset_space_metrics() -> std::collections::BTreeMap<String, Metrics> {
+        let mut font = Dict::new();
+        font.set(b"Subtype".to_vec(), Object::name("TrueType"));
+        font.set(b"BaseFont".to_vec(), Object::name("ABCDEF+Arial"));
+        font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+        font.set(b"FirstChar".to_vec(), Object::Int(97));
+        font.set(b"LastChar".to_vec(), Object::Int(98));
+        font.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(500), Object::Int(520)]));
+        let metrics = Metrics::from_dict(&Document::new_empty(), &font);
+        assert!(metrics.encode("ab").is_some());
+        assert!(metrics.encode(" ").is_none());
+        [("F1".into(), metrics.clone()), ("F2".into(), metrics), ("Full".into(), Metrics::fallback())].into_iter().collect()
+    }
+
+    #[test]
+    fn subset_spaces_keep_utf8_offsets_and_original_underline_styles() {
+        let mut row =
+            vec![(' ', 0, "F1".into(), 0), ('é', 1, "F2".into(), 1), (' ', 2, "F1".into(), 3), (' ', 3, "F1".into(), 4), ('b', 4, "F1".into(), 5)];
+        let styles = assign_subset_space_fonts(&mut row, &subset_space_metrics(), false).unwrap();
+        assert_eq!(styles, [Some(0), None, Some(2), Some(3), None]);
+        assert_eq!(row.iter().map(|item| item.3).collect::<Vec<_>>(), [0, 1, 3, 4, 5]);
+        assert_eq!(styled_run_end(&row, 0), 4);
+        assert_eq!(row[0], (' ', 1, "F2".into(), 0));
+        assert_eq!(row[2], (' ', 1, "F2".into(), 3));
+        assert_eq!(row[3], (' ', 1, "F2".into(), 4));
+        assert_eq!(row[4], ('b', 4, "F1".into(), 5));
+    }
+
+    #[test]
+    fn exact_subset_spaces_refuse_changed_style_or_font_keys_without_mutation() {
+        for (style, font) in [(1, "F1"), (0, "F2"), (1, "F2")] {
+            let mut row = vec![('a', 0, "F1".into(), 0), (' ', style, font.into(), 1)];
+            let original = row.clone();
+            let error = assign_subset_space_fonts(&mut row, &subset_space_metrics(), true).unwrap_err();
+            assert!(error.to_string().contains("subset-space font or style reassignment"), "{error}");
+            assert_eq!(row, original);
+        }
+    }
+
+    #[test]
+    fn exact_subset_spaces_allow_unchanged_keys_and_encodable_spaces() {
+        let mut row = vec![(' ', 0, "F1".into(), 0), ('é', 0, "F1".into(), 1), (' ', 0, "F1".into(), 3), (' ', 1, "Full".into(), 4)];
+        let original = row.clone();
+        assert_eq!(assign_subset_space_fonts(&mut row, &subset_space_metrics(), true).unwrap(), [None, None, None, None]);
+        assert_eq!(row, original);
+    }
+
+    #[test]
+    fn segmented_underlines_keep_reassigned_space_styles_and_scaled_advances() {
+        let styles = [None, None, Some(7), Some(7), None];
+        assert_eq!(
+            segment_underline_runs(&[2.0, 1.0, 1.0, 2.0], 12.0, 10.0, 4, Some(&styles), 1),
+            [(4, 10.0, 14.0), (7, 14.0, 18.0), (4, 18.0, 22.0)]
+        );
+        assert_eq!(segment_underline_runs(&[2.0, 1.0], 6.0, 10.0, 4, None, 0), [(4, 10.0, 16.0)]);
+        assert!(segment_underline_runs(&[], 0.0, 10.0, 4, None, 0).is_empty());
     }
 }

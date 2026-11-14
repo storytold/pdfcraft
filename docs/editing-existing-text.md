@@ -40,6 +40,18 @@ before wrapping, and the saved item uses that width. A single visual source row 
 multi-row paragraphs retain their existing wrap width. Retyping uses a preview with only
 that added item's old drawing removed, so deleted draft characters do not show underneath.
 
+A source subset may draw spaces as positioning gaps because it has no space glyph. When
+an exact-spacing edit retains numeric `TJ` kerning and inserts such spaces, one `ActualText`
+span keeps the complete text readable after saving, including repeated spaces. A later edit
+that cannot map that marked text back to the source glyphs is refused without changes.
+Combining exact spacing with a space reassigned to another font or style is also refused,
+rather than silently changing the source character spacing or horizontal scale.
+Find and replace supplies explicit source-run choices. A paragraph that also needs private
+exact-spacing runs is refused until those two kinds of provenance can be mapped together;
+other paragraphs in Replace all still proceed. A dropped numeric-only gap whose advance
+unselected text depends on is also refused, including gaps inside `ActualText`. Independent
+following lines and ordinary source-font replacements remain supported.
+
 A subset font contains only some of the original face's glyphs. A new character cannot be
 reconstructed from a glyph the PDF does not contain. **Load font…** imports an openly licensed,
 embeddable standalone `.ttf` or `.otf` face. **Installed fonts…** discovers eligible user-installed
@@ -173,6 +185,12 @@ A text edit covers and redraws only the words it changes: the rest of the line s
 a deleted word leaves its gap, because the words after it are pixels. A replacement a little too
 wide is squeezed across to fit its place (by up to a quarter); wider than that it takes over the
 word it would run into, and new words with nothing to replace take a neighbour.
+A word rewrite cannot change or remove a show from a line with mixed character spacing or
+horizontal scale: those shows need the exact-spacing writer, including copies that overlap a
+changed word. Unchanged shows can stay as the scan. If a replacement or a later fitting attempt
+would take over a protected show, the edit falls back to the existing whole-phrase rewrite,
+using the exact-spacing path when the selected phrase requires it. Unsupported exact-spacing
+positioning or shaping combinations are refused without changing the document.
 The whole phrase is redrawn for a change of formatting or a new line, and for a layer whose words
 would move without the ones before them. While the phrase is open, the editor still shows all of
 it in the layer's Helvetica. The cover is one flat colour, and the text uses the layer's Helvetica, not the scanned typeface.

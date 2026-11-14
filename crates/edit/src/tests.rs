@@ -14075,6 +14075,37 @@ fn font_aliases_share_one_set_of_metrics() {
     assert!(built < 10, "metrics built {built} times for one font");
 }
 
+/// Sharing immutable metrics must not erase the source aliases used by exact-spacing guards.
+#[test]
+fn font_aliases_share_metrics_without_bypassing_spacing_refusals() {
+    for paragraph in [false, true] {
+        let mut doc = text_page("BT /F1 24 Tf 72 700 Td (A) Tj /F4 24 Tf 3 Tc 60 Tz [(C) -120 (D)] TJ ET");
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| {
+            if let Some(Object::Dict(resources)) = d.get_mut(b"Resources")
+                && let Some(Object::Dict(fonts)) = resources.get_mut(b"Font")
+            {
+                fonts.set(b"F4".to_vec(), Object::Ref(pdfcraft_cos::ObjRef::new(5, 0)));
+            }
+        })
+        .unwrap();
+        text::METRICS_BUILT.with(|n| n.set(0));
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(text::METRICS_BUILT.with(std::cell::Cell::get), 1, "the two names share one font's metrics");
+        let original = write_full(&doc, &SaveOptions::default()).unwrap();
+        // Private TJ sources under different aliases still refuse an ambiguous mapping;
+        // sharing metrics must not bypass that atomic refusal for either edit API.
+        let error = if paragraph {
+            let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+            text::replace_block(&mut doc, 0, 0, &block.editor_text.replacen('A', "B", 1)).unwrap_err()
+        } else {
+            text::replace_line(&mut doc, 0, 0, &lines[0].text.replacen('A', "B", 1)).unwrap_err()
+        };
+        assert!(error.to_string().contains("source TJ positioning cannot be mapped safely"));
+        assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), original);
+    }
+}
+
 /// Each `Tj`/`TJ` moves the text matrix by the width of its text. A run shown later in the same
 /// text object without a `Td` or `Tm` of its own (a raised run in another colour, a column after
 /// a `TJ` gap) is placed by those advances. Rewriting the paragraph before it must keep them, as

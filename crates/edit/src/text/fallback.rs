@@ -738,8 +738,25 @@ pub(super) fn source_character_advance(metrics: &Metrics, ch: char, size: f64, c
 }
 
 pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, char_spacing: f64, word_spacing: f64) -> Result<Vec<Op>, EditError> {
+    let (mut out, synthetic_spaces) = source_show_parts(metrics, text, size, space, char_spacing, word_spacing)?;
+    if synthetic_spaces && out.iter().any(|op| op.is("Tj")) {
+        mark_source_text(metrics, text, &mut out);
+    }
+    Ok(out)
+}
+
+/// Raw text shows and whether spaces needed positioning instead of glyphs. A caller combining
+/// chunks must wrap the complete logical text once, including spaces isolated in their own chunk.
+pub(crate) fn source_show_parts(
+    metrics: &Metrics,
+    text: &str,
+    size: f64,
+    space: f64,
+    char_spacing: f64,
+    word_spacing: f64,
+) -> Result<(Vec<Op>, bool), EditError> {
     if let Some(bytes) = metrics.encode(text) {
-        return Ok(vec![Op::new("Tj", vec![Object::String(PdfString::literal(bytes))])]);
+        return Ok((vec![Op::new("Tj", vec![Object::String(PdfString::literal(bytes))])], false));
     }
     let adjustment = -1000.0 * (space + (char_spacing + word_spacing) / size);
     if !adjustment.is_finite() {
@@ -755,14 +772,15 @@ pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, 
             out.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))]));
         }
     }
-    if out.iter().any(|op| op.is("Tj")) {
-        let logical = crate::bidi::to_logical(&if metrics.visual_order { crate::indic::to_logical(text) } else { text.to_owned() });
-        let mut properties = Dict::new();
-        properties.set(b"ActualText".to_vec(), Object::String(PdfString::text(&logical)));
-        out.insert(0, Op::new("BDC", vec![Object::name("Span"), Object::Dict(properties)]));
-        out.push(Op::new("EMC", Vec::new()));
-    }
-    Ok(out)
+    Ok((out, true))
+}
+
+pub(crate) fn mark_source_text(metrics: &Metrics, text: &str, out: &mut Vec<Op>) {
+    let logical = crate::bidi::to_logical(&if metrics.visual_order { crate::indic::to_logical(text) } else { text.to_owned() });
+    let mut properties = Dict::new();
+    properties.set(b"ActualText".to_vec(), Object::String(PdfString::text(&logical)));
+    out.insert(0, Op::new("BDC", vec![Object::name("Span"), Object::Dict(properties)]));
+    out.push(Op::new("EMC", Vec::new()));
 }
 
 #[cfg(test)]

@@ -339,3 +339,27 @@ fn nothing_to_find_is_refused() {
     let (s, id) = open(crate::tests::fixture(1));
     assert!(matches!(s.get(id).unwrap().plan_replace(&[0], &query("  ", "x"), Which::All, None), Err(EditError::Invalid(_))));
 }
+
+#[test]
+fn replace_all_skips_private_spacing_sources_and_keeps_other_paragraphs_undoable() {
+    for tail in ["(tail) Tj", "[(ta) 3 (il)] TJ"] {
+        let content = format!(
+            "BT /F1 12 Tf 72 700 Td (caf\\351 ) Tj 0.001 Tc 80 Tz {tail} ET BT /F1 12 Tf 0 Tc 100 Tz 72 500 Td (caf\\351 and caf\\351) Tj ET"
+        );
+        let (mut s, id) = open(pdf(&content));
+        let before = texts(&s, id, 0);
+        let private = s.get(id).unwrap().text_lines(0)[0].clone();
+        let bytes = s.get(id).unwrap().bytes.clone();
+        let plan = s.get(id).unwrap().plan_replace(&[0], &query("café", "déjà"), Which::All, None).unwrap();
+        assert_eq!((plan.replaced, plan.skipped_total()), (2, 1), "{plan:?}");
+        assert!(plan.refusals.iter().any(|r| r.contains("explicit source runs with mixed text spacing")), "{plan:?}");
+        assert_eq!(s.get(id).unwrap().bytes, bytes, "planning must not mutate the document");
+        assert_eq!(texts(&s, id, 0), before);
+        s.apply(id, plan.edit.unwrap()).unwrap();
+        assert_eq!(texts(&s, id, 0), ["café tail", "déjà and déjà"]);
+        let after = s.get(id).unwrap().text_lines(0)[0].clone();
+        assert_eq!((after.text, after.rect, after.ink), (private.text, private.rect, private.ink));
+        s.undo(id).unwrap();
+        assert_eq!(texts(&s, id, 0), before);
+    }
+}
