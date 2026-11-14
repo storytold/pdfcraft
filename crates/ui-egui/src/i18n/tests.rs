@@ -1014,6 +1014,62 @@ fn norwegian_bokmal_is_registered_and_persists() {
     assert_eq!(restored.language, "nb");
 }
 
+/// Swedish is registered in the UI and engine registries, normalizes case-insensitively,
+/// detects locale tags, round-trips through preferences, and resolves translations,
+/// plurals, and Swedish diacritics (å, ä, ö).
+#[test]
+fn swedish_is_registered_and_persists() {
+    // Catalog-independent assertions: Swedish is registered in LANGUAGES and DATE_LANGUAGES.
+    assert!(LANGUAGES.iter().any(|l| l.code == "sv" && !l.rtl), "sv must be registered in LANGUAGES as LTR");
+    let date_lang = pdfcraft_engine::dates::DATE_LANGUAGES.iter().find(|l| l.code == "sv").expect("sv in DATE_LANGUAGES");
+    assert_eq!(date_lang.name, "Svenska");
+    let lang_info = LANGUAGES.iter().find(|l| l.code == "sv").expect("sv in LANGUAGES");
+    assert_eq!(lang_info.code, date_lang.code, "DATE_LANGUAGES matches LANGUAGES for sv");
+
+    let fixture = fixture_lang("sv", "");
+    assert_eq!(fixture.english_name(), "Swedish");
+
+    // Catalog-independent plural rule for Swedish: one (1) vs other (0, 2, ...)
+    let form = plural_fixture("sv", 2);
+    assert_eq!(form(1), 0, "1 is singular (one)");
+    assert_eq!(form(0), 1, "0 is plural (other)");
+    assert_eq!(form(2), 1, "2 is plural (other)");
+    assert_eq!(form(5), 1, "5 is plural (other)");
+
+    needs_catalogs!();
+    let sv = Lang::from_code("sv").expect("sv registered");
+    assert_eq!(sv.name(), "Svenska");
+    assert_eq!(sv.english_name(), "Swedish");
+    assert_eq!(normalize_pref("SV"), Some("sv"));
+    for tag in ["sv", "sv-SE", "sv_SE.UTF-8", "SV-se", "sv-FI", "sv_FI.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(sv), "{tag}");
+    }
+    assert_eq!(first_supported("(\n    \"sv-SE\",\n    \"en-US\"\n)\n"), Some(sv));
+    assert_eq!(first_supported("sv-SE\r\nen-US\r\n"), Some(sv));
+    let mut app = crate::PdfCraftApp::default();
+    app.set_option("language", "SV").unwrap();
+    assert_eq!(app.language, "sv");
+    let mut restored = crate::PdfCraftApp::default();
+    restored.restore(&app.persist());
+    assert_eq!(restored.language, "sv");
+
+    // Swedish catalog verification: commands and common labels resolve to Swedish strings
+    assert_eq!(tr(sv, "Save"), "Spara");
+    assert_eq!(tr(sv, "Cancel"), "Avbryt");
+    assert_eq!(tr(sv, "File"), "Arkiv");
+
+    // Plural coverage: 1 is singular ("1 sida"), 0 and 2 are plural ("0 sidor", "2 sidor")
+    assert_eq!(trn(sv, 1, "{n} page", "{n} pages"), "1 sida");
+    assert_eq!(trn(sv, 2, "{n} page", "{n} pages"), "2 sidor");
+    assert_eq!(trn(sv, 0, "{n} page", "{n} pages"), "0 sidor");
+
+    // Glyph coverage: verify å, ä, ö are present in Swedish translations
+    let all_text = translations("sv");
+    assert!(all_text.contains('å'), "Swedish catalog must contain 'å'");
+    assert!(all_text.contains('ä'), "Swedish catalog must contain 'ä'");
+    assert!(all_text.contains('ö'), "Swedish catalog must contain 'ö'");
+}
+
 #[test]
 fn vietnamese_is_registered_and_persists() {
     needs_catalogs!();
