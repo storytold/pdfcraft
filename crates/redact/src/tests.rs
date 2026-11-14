@@ -6284,6 +6284,7 @@ mod limits;
 mod metadata_fail_closed;
 mod metadata_matching;
 mod operands_from_the_end;
+mod painted_paths;
 mod property_retirement;
 mod surviving_references;
 mod text_state;
@@ -6700,12 +6701,18 @@ fn a_hairline_under_a_shrinking_ctm_is_padded_by_half_a_unit() {
     assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
 }
 
-/// One `re` has four mitred corners: it is padded by the miter limit like any joined path.
+/// A mitred join reaches past half the line width at its corner, `1/sin(φ/2)` half-widths at a
+/// corner of angle φ while that is within the miter limit (ISO 32000-2 §8.4.3.5), and nowhere
+/// else: beside an edge a stroke paints half its width.
 #[test]
 fn a_rectangle_stroke_is_padded_for_its_mitred_corners() {
+    // Beside a rectangle's edge, 5 units out: the 2-unit line paints 1 unit out, so it stays.
     let mut doc = one_page(b"2 w 100 100 50 50 re S", "", vec![]);
-    // Past half the line width from the rectangle, inside the miter reach.
     mark(&mut doc, 0, &[[155.0, 120.0, 160.0, 130.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 0);
+    // A sharp corner at (150, 110), about 22.6°: its miter tip reaches 5.1 units out, to x 155.1.
+    let mut doc = one_page(b"2 w 100 100 m 150 110 l 100 120 l S", "", vec![]);
+    mark(&mut doc, 0, &[[154.0, 109.0, 156.0, 111.0]], "");
     assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
 }
 
