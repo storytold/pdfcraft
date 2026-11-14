@@ -75,6 +75,7 @@ mod print_late_printer_list;
 mod properties_session;
 mod protect;
 mod reading_colors;
+mod recent_colours;
 mod recent_files;
 mod recovery;
 mod redact;
