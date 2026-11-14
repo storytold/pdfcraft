@@ -179,8 +179,9 @@ fn surveyed(doc: &Doc) -> Arc<RecoveryDocument> {
 
 /// Review finding: a content stream cut at what is left of the survey's byte cap is not
 /// surveyed from its prefix: whatever the cap, the survey counts everything or gives up. Pages
-/// and forms, Flate-compressed (a decoder stops at the limit it is given) or not, and a page's
-/// content in one stream or several (a stream after the cap is reached is not left out).
+/// and forms, Flate-compressed (a decoder stops at the limit it is given) or not, with a PNG
+/// predictor (undone after inflating stops, it leaves fewer bytes than the limit) or not, and a
+/// page's content in one stream or several (a stream after the cap is reached is not left out).
 #[test]
 fn a_survey_never_counts_a_stream_cut_at_its_byte_cap() {
     use super::cjk_fixture::Streams;
@@ -189,9 +190,10 @@ fn a_survey_never_counts_a_stream_cut_at_its_byte_cap() {
         fonts: vec![Font::truetype("ABCDEF+Kai", 20)],
         pages: vec![vec![Show::Text(0, vec![1, 2]), Show::Text(0, vec![3]), Show::Form(vec![Show::Text(0, vec![4, 5])], 1), Show::Text(0, vec![6])]],
     };
-    for flate in [false, true] {
+    let variants = [(false, None), (true, None), (true, Some(16))];
+    for (flate, png_columns) in variants {
         for split in [false, true] {
-            let pdf = parse(doc.build_as(Streams { flate, split, ..Streams::default() }));
+            let pdf = parse(doc.build_as(Streams { flate, split, png_columns, ..Streams::default() }));
             let survey = |cap: Option<u64>| {
                 set_survey_byte_cap(cap);
                 let document = Arc::new(RecoveryDocument::needing_usage_for_tests());
@@ -209,7 +211,7 @@ fn a_survey_never_counts_a_stream_cut_at_its_byte_cap() {
                     continue;
                 }
                 counted += 1;
-                assert_eq!(document.surveyed_fonts(), full, "flate {flate}, split {split}, cap {cap}");
+                assert_eq!(document.surveyed_fonts(), full, "flate {flate}, png {png_columns:?}, split {split}, cap {cap}");
             }
             assert!(counted > 0, "the document fits some cap below 400");
         }

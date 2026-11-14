@@ -92,7 +92,8 @@ impl Filter {
 
     /// PdfCraft patch: `limit` is the most bytes the filter may produce (see `decode_limit`), and
     /// `rows` the `/Height` of the image whose samples it produces, when it is an image's last
-    /// filter.
+    /// filter. Also returns whether Flate or LZW stopped at `limit` before their predictor was
+    /// undone (patch 47); the caller tells a cut from the output's length for the others.
     pub(crate) fn apply(
         &self,
         data: &[u8],
@@ -100,44 +101,52 @@ impl Filter {
         #[cfg_attr(not(feature = "images"), allow(unused))] image_params: &ImageDecodeParams,
         limit: usize,
         rows: Option<usize>,
-    ) -> Result<FilterResult<'static>, DecodeFailure> {
+    ) -> Result<(FilterResult<'static>, bool), DecodeFailure> {
+        // Flate and LZW say whether they stopped at the limit; the other filters don't.
+        let reported = |(data, cut): (Vec<u8>, bool)| (FilterResult::from_data(data), cut);
+        let plain = |r: FilterResult<'static>| (r, false);
         let res = match self {
             Self::AsciiHexDecode => ascii_hex::decode(data)
                 .map(FilterResult::from_data)
+                .map(plain)
                 .ok_or(DecodeFailure::StreamDecode),
             Self::Ascii85Decode => ascii_85::decode(data, limit)
                 .map(FilterResult::from_data)
+                .map(plain)
                 .ok_or(DecodeFailure::StreamDecode),
             Self::RunLengthDecode => run_length::decode(data, limit)
                 .map(FilterResult::from_data)
+                .map(plain)
                 .ok_or(DecodeFailure::StreamDecode),
             Self::LzwDecode => lzw_flate::lzw::decode(data, params, limit)
-                .map(FilterResult::from_data)
+                .map(reported)
                 .ok_or(DecodeFailure::StreamDecode),
             Self::FlateDecode => lzw_flate::flate::decode(data, params, limit, rows)
-                .map(FilterResult::from_data)
+                .map(reported)
                 .ok_or(DecodeFailure::StreamDecode),
             #[cfg(feature = "images")]
-            Self::DctDecode => {
-                dct::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode)
-            }
+            Self::DctDecode => dct::decode(data, params, image_params)
+                .map(plain)
+                .ok_or(DecodeFailure::ImageDecode),
             #[cfg(feature = "images")]
-            Self::CcittFaxDecode => {
-                ccitt::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode)
-            }
+            Self::CcittFaxDecode => ccitt::decode(data, params, image_params)
+                .map(plain)
+                .ok_or(DecodeFailure::ImageDecode),
             #[cfg(feature = "images")]
-            Self::Jbig2Decode => {
-                jbig2::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode)
-            }
+            Self::Jbig2Decode => jbig2::decode(data, params, image_params)
+                .map(plain)
+                .ok_or(DecodeFailure::ImageDecode),
             #[cfg(feature = "images")]
-            Self::JpxDecode => jpx::decode(data, image_params).ok_or(DecodeFailure::ImageDecode),
+            Self::JpxDecode => jpx::decode(data, image_params)
+                .map(plain)
+                .ok_or(DecodeFailure::ImageDecode),
             #[cfg(not(feature = "images"))]
             Self::DctDecode | Self::CcittFaxDecode | Self::Jbig2Decode | Self::JpxDecode => {
                 warn!("image decoding is not supported (enable the `images` feature)");
                 Err(DecodeFailure::ImageDecode)
             }
             // PdfCraft patch (30): `Stream::raw_data` decrypted the data with the filter this names.
-            Self::Crypt => Ok(FilterResult::from_data(data.to_vec())),
+            Self::Crypt => Ok(plain(FilterResult::from_data(data.to_vec()))),
         };
 
         if res.is_err() {
