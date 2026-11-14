@@ -1,4 +1,4 @@
-use super::{Dict, Document, Family, Object, PdfString, Rect, Rounded, Stream};
+use super::{CornerShape, Cornered, Dict, Document, Family, Object, PdfString, Pen, Rect, Stream};
 
 /// Width and height of a JPEG from its first frame header (SOF0–SOF15, not the DNL/JPG/DAC/DHT
 /// markers). `None` for anything else.
@@ -107,75 +107,124 @@ pub(super) fn all_faces() -> Vec<(&'static str, &'static str)> {
     out
 }
 
-/// The content that draws rounded box `r` on a page `page_h` tall: its fill along its curves,
-/// then its edge inside it. A side a page break cut has no edge.
-pub(crate) fn rounded(r: &Rounded, page_h: f64) -> String {
+/// The content that draws box `r` (see [`Cornered`]) on a page `page_h` tall: its fill along its
+/// corners, then each shown edge between its corners, then each shown corner with its own line,
+/// the lines half their width inside the box.
+pub(crate) fn cornered(r: &Cornered, page_h: f64) -> String {
+    let pt = |q: (f64, f64)| format!("{} {}", n(q.0), n(page_h - q.1));
+    let step = |s: &Step| match s {
+        Step::Line(p) => format!("{} l ", pt(*p)),
+        Step::Curve(a, b, p) => format!("{} {} {} c ", pt(*a), pt(*b), pt(*p)),
+    };
+    let stroke = |p: &Pen, path: &str| format!("q {} RG {} w {}{path}S Q\n", rgb(p.color), n(p.width), if p.dashed { "[2 2] 0 d " } else { "" });
     let mut c = String::new();
     if let Some(color) = r.fill {
-        c.push_str(&format!("{} rg {}f\n", rgb(color), outline(r.rect, r.radii, r.inverted, (false, false), page_h)));
+        // Clockwise from the top left: the top and bottom right corners go from their side edge,
+        // the others to it.
+        let mut path = String::new();
+        for (i, corner) in r.corners.iter().enumerate() {
+            let (start, steps) = placed(r.rect, i, corner, 0.0, i % 2 == 1);
+            path.push_str(&format!("{} {} ", pt(start), if i == 0 { "m" } else { "l" }));
+            path.extend(steps.iter().map(step));
+        }
+        c.push_str(&format!("{} rg {path}h f\n", rgb(color)));
     }
-    if let Some((w, color, dashed)) = r.edge {
-        // The edge's centre line, half its width inside the box, so the edge stays in: a corner
-        // curving around the box tightens by as much, and one curving into it widens.
-        let inset = Rect::new(r.rect.x + w / 2.0, r.rect.y + w / 2.0, (r.rect.w - w).max(0.0), (r.rect.h - w).max(0.0));
-        let most = inset.w.min(inset.h) / 2.0;
-        let radii: [f64; 4] = std::array::from_fn(|i| match (r.radii[i], r.inverted[i]) {
-            (v, _) if v <= 0.0 => 0.0,
-            (v, true) => (v + w / 2.0).min(most),
-            (v, false) => (v - w / 2.0).clamp(0.0, most),
-        });
-        let path = outline(inset, radii, r.inverted, (r.open_top, r.open_bottom), page_h);
-        c.push_str(&format!("q {} RG {} w {}{path}S Q\n", rgb(color), n(w), if dashed { "[2 2] 0 d " } else { "" }));
+    let (x0, y0, x1, y1) = (r.rect.x, r.rect.y, r.rect.right(), r.rect.bottom());
+    let [tl, tr, br, bl] = r.corners.map(|k| k.radius);
+    for (i, edge) in r.edges.iter().enumerate() {
+        let Some(p) = edge else { continue };
+        let h = p.width / 2.0;
+        // Top, right, bottom, left, each between the corners at its ends.
+        let (from, to) = match i {
+            0 => ((x0 + tl, y0 + h), (x1 - tr, y0 + h)),
+            1 => ((x1 - h, y0 + tr), (x1 - h, y1 - br)),
+            2 => ((x0 + bl, y1 - h), (x1 - br, y1 - h)),
+            _ => ((x0 + h, y0 + tl), (x0 + h, y1 - bl)),
+        };
+        if to.0 - from.0 + to.1 - from.1 > 0.0 {
+            c.push_str(&stroke(p, &format!("{} m {} l ", pt(from), pt(to))));
+        }
+    }
+    for (i, corner) in r.corners.iter().enumerate() {
+        let Some(p) = corner.line.filter(|_| corner.radius > 0.0) else { continue };
+        let (start, steps) = placed(r.rect, i, corner, p.width / 2.0, false);
+        let path: String = steps.iter().map(step).collect();
+        c.push_str(&stroke(&p, &format!("{} m {path}", pt(start))));
     }
     c
 }
 
-/// The path around `rect` (top-left based, on a page `page_h` tall) with the corners `radii`
-/// (top-left, top-right, bottom-right, bottom-left), each curving around the box or, when
-/// `inverted`, into it. `open` leaves out the top or bottom side (and doesn't close the path):
-/// those are where a page break cut the box. Ends with a space, for the paint operator.
-fn outline(rect: Rect, radii: [f64; 4], inverted: [bool; 4], open: (bool, bool), page_h: f64) -> String {
-    let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right(), rect.bottom());
-    let pt = |q: (f64, f64)| format!("{} {}", n(q.0), n(page_h - q.1));
-    // Corner `i`: its point, then where its curve starts and ends, going clockwise.
-    let corner = |i: usize| {
-        let r = radii.get(i).copied().unwrap_or(0.0);
-        match i {
-            0 => ((x0, y0), (x0, y0 + r), (x0 + r, y0)),
-            1 => ((x1, y0), (x1 - r, y0), (x1, y0 + r)),
-            2 => ((x1, y1), (x1, y1 - r), (x1 - r, y1)),
-            _ => ((x0, y1), (x0 + r, y1), (x0, y1 - r)),
-        }
-    };
-    // Corner `i`'s curve, from its start: a quarter circle as one Bézier curve.
-    let curve = |i: usize| {
-        if radii.get(i).copied().unwrap_or(0.0) <= 0.0 {
-            return String::new();
-        }
-        let (p, a, b) = corner(i);
-        const K: f64 = 0.5523;
-        let (c1, c2) = if inverted.get(i).copied().unwrap_or(false) {
-            // Centred on the corner itself.
-            ((a.0 + (b.0 - p.0) * K, a.1 + (b.1 - p.1) * K), (b.0 + (a.0 - p.0) * K, b.1 + (a.1 - p.1) * K))
-        } else {
-            ((a.0 + (p.0 - a.0) * K, a.1 + (p.1 - a.1) * K), (b.0 + (p.0 - b.0) * K, b.1 + (p.1 - b.1) * K))
-        };
-        format!("{} {} {} c ", pt(c1), pt(c2), pt(b))
-    };
-    // Along corners `from`, joining them with straight sides.
-    let along = |from: &[usize]| {
-        let mut s = String::new();
-        for &i in from {
-            s.push_str(&format!("{} l {}", pt(corner(i).1), curve(i)));
-        }
-        s
-    };
-    match open {
-        (false, false) => format!("{} m {}{}{}{}h ", pt(corner(0).1), curve(0), along(&[1]), along(&[2]), along(&[3])),
-        (true, false) => format!("{} m {}{} l ", pt((x1, y0)), along(&[2, 3]), pt((x0, y0))),
-        (false, true) => format!("{} m {}{} l ", pt((x0, y1)), along(&[0, 1]), pt((x1, y1))),
-        (true, true) => format!("{} m {} l {} m {} l ", pt((x0, y0)), pt((x0, y1)), pt((x1, y0)), pt((x1, y1))),
+/// One step of a path: a line, or a cubic Bézier curve (its two control points), to a point.
+#[derive(Clone, Copy, Debug)]
+enum Step {
+    Line((f64, f64)),
+    Curve((f64, f64), (f64, f64), (f64, f64)),
+}
+
+/// The path of corner `c` in its own frame, where the box's corner is (0, 0), `u` runs along the
+/// top or bottom edge into the box and `v` along the side edge: from its point on the side edge
+/// to its point on the other. A right angle, a square notch `radius` deep, or a quarter circle,
+/// around the box or (inverted) centred on its corner. `h` moves a corner around the box that far
+/// into it, for a line twice as wide drawn inside, as the edges are; an inverted corner's line is
+/// centred on its outline, as another viewer draws it.
+fn corner_path(c: &CornerShape, h: f64) -> ((f64, f64), Vec<Step>) {
+    // A quarter circle's control points lie this fraction of the radius from its ends.
+    const K: f64 = 0.5523;
+    let r = c.radius;
+    if r <= 0.0 {
+        return ((h, h), Vec::new());
     }
+    match (c.round, c.inverted) {
+        (false, false) => ((h, r), vec![Step::Line((h, h)), Step::Line((r, h))]),
+        (false, true) => ((0.0, r), vec![Step::Line((r, r)), Step::Line((r, 0.0))]),
+        (true, false) => {
+            // Centred `r` in from both edges; a line inside it curves `h` tighter.
+            let k = (r - h).max(0.0) * K;
+            ((h, r), vec![Step::Curve((h, r - k), (r - k, h), (r, h))])
+        }
+        (true, true) => ((0.0, r), vec![Step::Curve((r * K, r), (r, r * K), (r, 0.0))]),
+    }
+}
+
+/// Corner `i` (top-left, top-right, bottom-right, bottom-left) of `rect` as [`corner_path`]
+/// draws it, on the page (top-left based): its start and steps, walked backwards when `back`.
+fn placed(rect: Rect, i: usize, c: &CornerShape, h: f64, back: bool) -> ((f64, f64), Vec<Step>) {
+    let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right(), rect.bottom());
+    let ((px, py), (sx, sy)) = match i {
+        0 => ((x0, y0), (1.0, 1.0)),
+        1 => ((x1, y0), (-1.0, 1.0)),
+        2 => ((x1, y1), (-1.0, -1.0)),
+        _ => ((x0, y1), (1.0, -1.0)),
+    };
+    let at = |(u, v): (f64, f64)| (px + sx * u, py + sy * v);
+    let (start, steps) = corner_path(c, h);
+    let start = at(start);
+    let steps: Vec<Step> = steps
+        .into_iter()
+        .map(|s| match s {
+            Step::Line(p) => Step::Line(at(p)),
+            Step::Curve(a, b, p) => Step::Curve(at(a), at(b), at(p)),
+        })
+        .collect();
+    if !back {
+        return (start, steps);
+    }
+    // Backwards, each step ends where it began, its control points swapped.
+    let mut begins = vec![start];
+    begins.extend(steps.iter().map(|s| match s {
+        Step::Line(p) | Step::Curve(_, _, p) => *p,
+    }));
+    let end = begins.pop().unwrap_or(start);
+    let back = steps
+        .iter()
+        .rev()
+        .zip(begins.iter().rev())
+        .map(|(s, b)| match s {
+            Step::Line(_) => Step::Line(*b),
+            Step::Curve(c1, c2, _) => Step::Curve(*c2, *c1, *b),
+        })
+        .collect();
+    (end, back)
 }
 
 /// A PDF appearance-state name for a check button's on value.
