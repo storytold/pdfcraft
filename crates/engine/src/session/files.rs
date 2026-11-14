@@ -33,6 +33,12 @@ impl Session {
         self.write_new(&pdfcraft_create::from_images_with_resolution(images, resolution)?)
     }
 
+    /// Create image pages centred on a page of `size` points, without resampling (used to keep a
+    /// straightened sheet on the page it came from).
+    pub fn create_from_images_centred(&self, images: &[(String, Vec<u8>)], resolution: ImageResolution, size: (f64, f64)) -> Result<Arc<Vec<u8>>, EditError> {
+        self.write_new(&pdfcraft_create::from_images_centred(images, resolution, size)?)
+    }
+
     /// A new document from plain text (US Letter, 11 pt Helvetica, or the bundled Inter face for
     /// text with Latin, Greek or Cyrillic letters Helvetica can't draw). Text neither can draw is
     /// refused, naming the line and the character (never set as `?`).

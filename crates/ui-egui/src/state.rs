@@ -102,6 +102,8 @@ pub(crate) type GridFile = (String, Result<Vec<u8>, std::path::PathBuf>);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dialog {
     WordCount,
+    /// Scan & OCR ▸ Straighten all pages: what it straightened, and the pages it could not judge.
+    DeskewReport,
     CreateImages,
     Properties(PropsTab),
     About,

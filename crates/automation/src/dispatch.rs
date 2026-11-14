@@ -130,12 +130,56 @@ impl Automation {
                     Some(m) => pdfcraft_engine::camera_clean::Look::from_name(m)
                         .ok_or_else(|| ToolError::InvalidArgs(format!("unknown mode {m:?} (original, colour, greyscale, bw)")))?,
                 };
-                self.session.enhance_camera_page_at(id, page, corners, look, level).map_err(failed)?;
+                let keep_page = a.opt_bool("keep_page")?.unwrap_or(true);
+                self.session.enhance_camera_page_at_keep(id, page, corners, look, level, keep_page).map_err(failed)?;
                 let r = |v: f32| (v * 100.0).round() / 100.0;
                 let used: Vec<f32> = corners.iter().flat_map(|&[x, y]| info.user_to_view(x as f32, y as f32)).map(r).collect();
                 let mut out = summary(self.doc(&a)?);
                 out["corners"] = json!(used);
                 out["detected"] = json!(given.is_none());
+                out
+            }
+            "page_deskew" => {
+                let min_angle = a.opt_num("min_angle")?.unwrap_or(0.15);
+                if !(min_angle.is_finite() && (0.0..=10.0).contains(&min_angle)) {
+                    return Err(ToolError::InvalidArgs(format!("min_angle must be between 0 and 10, not {min_angle}")));
+                }
+                let (id, n) = {
+                    let doc = self.doc(&a)?;
+                    (doc.id, doc.info.pages.len())
+                };
+                let pages: Vec<usize> = match a.opt_ints("pages")? {
+                    Some(v) => v.into_iter().filter(|&p| p >= 1).map(|p| (p as usize) - 1).filter(|&p| p < n).collect(),
+                    None => (0..n).collect(),
+                };
+                // Measure every page on the document as it was, in parallel, then put them back:
+                // judging page 20 after 19 rewrites measured a re-encoded picture, not the scan.
+                let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(8);
+                let done = self.session.deskew_pages(id, &pages, min_angle, threads).map_err(failed)?;
+                let mut fixed = Vec::new();
+                let mut angles = Vec::new();
+                let mut unmeasured = Vec::new();
+                let mut straight = 0usize;
+                let mut failed_pages = Vec::new();
+                for (p, outcome, error) in done {
+                    match outcome {
+                        pdfcraft_engine::deskew::Deskewed::Straightened(angle) => {
+                            fixed.push(p + 1);
+                            angles.push((angle * 100.0).round() / 100.0);
+                        }
+                        pdfcraft_engine::deskew::Deskewed::AlreadyStraight => straight += 1,
+                        pdfcraft_engine::deskew::Deskewed::Unmeasured => match error {
+                            Some(why) => failed_pages.push(serde_json::json!({ "page": p + 1, "reason": why })),
+                            None => unmeasured.push(p + 1),
+                        },
+                    }
+                }
+                let mut out = summary(self.doc(&a)?);
+                out["straightened"] = json!(fixed);
+                out["angles"] = json!(angles);
+                out["already_straight"] = json!(straight);
+                out["unmeasured"] = json!(unmeasured);
+                out["skipped"] = json!(failed_pages);
                 out
             }
             "page_enhance_scan" => self.page_enhance_scan(&a)?,

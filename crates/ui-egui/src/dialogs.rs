@@ -113,6 +113,9 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     remote_link_prompt(app, ctx);
     full_screen_prompt(app, ctx);
     crate::updates::dialog(app, ctx);
+    if app.dialog != Some(Dialog::DeskewReport) {
+        app.deskew_job = None;
+    }
     if app.dialog != Some(Dialog::WordCount) {
         app.word_count_draft.cancel();
     }
@@ -175,6 +178,31 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
     match dialog {
         Dialog::WordCount => {
             req.close = crate::word_count_ui::body(ui, app);
+        }
+        Dialog::DeskewReport => {
+            // Advance one page per frame: the dialog shows "page 7 of 51…" instead of the window
+            // going quiet until the whole document is done.
+            let mut job = app.deskew_job.take();
+            if let Some(j) = job.as_mut() {
+                j.step(&mut app.session);
+                if let Some(i) = app.active
+                    && let Some(view) = app.views.get_mut(i)
+                {
+                    view.invalidate_content();
+                }
+                app.deskew_report = Some(j.text());
+                if j.done() {
+                    job = None;
+                }
+            }
+            app.deskew_job = job;
+            if app.deskew_job.is_some() {
+                ui.ctx().request_repaint();
+            }
+            let text = app.deskew_report.clone().unwrap_or_default();
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(text).monospace()).wrap());
+            });
         }
         Dialog::CreateImages => {
             let (go, cancel) = crate::create_ui::image_import_body(ui, app);
