@@ -324,14 +324,16 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
                     }
                     None => Matrix::IDENTITY,
                 };
-                (matrix.then(&ctm), bounds)
+                let unit = Matrix([bounds[2] - bounds[0], 0.0, 0.0, bounds[3] - bounds[1], bounds[0], bounds[1]]);
+                let placement = unit.then(&matrix).then(&ctm);
+                (if placement.0.iter().all(|v| v.is_finite()) { placement } else { matrix.then(&ctm) }, bounds)
             } else if s.dict.name(b"Subtype") == Some(b"Image") {
                 (ctm, [0.0, 0.0, 1.0, 1.0])
             } else {
                 continue;
             };
 
-            let rect = matrix.bbox(bounds);
+            let rect = matrix.bbox([0.0, 0.0, 1.0, 1.0]);
             if !bounds.iter().chain(matrix.0.iter()).chain(rect.iter()).all(|v| v.is_finite())
                 || bounds[2] <= bounds[0]
                 || bounds[3] <= bounds[1]

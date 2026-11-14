@@ -4435,6 +4435,28 @@ fn moving_an_image_moves_its_own_clip_too() {
     assert!(close(first_rect_in_user_space(&doc), [100.0, 100.0, 300.0, 200.0]));
 }
 
+/// #6931: the editing matrix maps the image unit square onto the Form's complete `BBox`,
+/// including its non-unit origin and size, its own Matrix, and the page's `cm`.
+#[test]
+fn a_rotated_form_matrix_maps_its_non_unit_bbox_to_the_unit_square() {
+    let mut doc = form_page_with("q 2 0 0 3 40 50 cm /Fm0 Do Q");
+    doc.update_dict(ObjRef::new(6, 0), |d| {
+        d.set(b"BBox".to_vec(), Object::Array([10.0, 20.0, 30.0, 60.0].map(Object::Real).to_vec()));
+        d.set(b"Matrix".to_vec(), Object::Array([0.0, 1.0, -1.0, 0.0, 100.0, 20.0].map(Object::Real).to_vec()));
+    })
+    .unwrap();
+
+    let form = &images::page_images(&doc, 0).unwrap()[0];
+    let matrix = pdfcraft_content::Matrix(form.matrix);
+    let form_matrix = pdfcraft_content::Matrix([0.0, 1.0, -1.0, 0.0, 100.0, 20.0]).then(&pdfcraft_content::Matrix([2.0, 0.0, 0.0, 3.0, 40.0, 50.0]));
+    for (point, expected) in [((0.0, 0.0), (10.0, 20.0)), ((1.0, 0.0), (30.0, 20.0)), ((0.0, 1.0), (10.0, 60.0)), ((1.0, 1.0), (30.0, 60.0))] {
+        let actual = matrix.apply(point.0, point.1);
+        let expected = form_matrix.apply(expected.0, expected.1);
+        assert!((actual.0 - expected.0).abs() < 1e-9 && (actual.1 - expected.1).abs() < 1e-9, "point {point:?}: {actual:?} != {expected:?}");
+    }
+    assert!(close(form.rect, [120.0, 140.0, 200.0, 200.0]));
+}
+
 fn close(a: [f64; 4], b: [f64; 4]) -> bool {
     a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6)
 }

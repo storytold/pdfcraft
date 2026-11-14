@@ -11098,6 +11098,44 @@ fn ungroup_in_the_artwork_menu_makes_a_forms_text_editable() {
     assert_eq!(blocks(&h), 0, "undo puts the form back");
 }
 
+/// #6931: the canvas' oriented frame follows the complete Form BBox, not a unit-sized
+/// image frame, when a Form has both its own Matrix and a page transform.
+#[test]
+fn form_image_obb_maps_the_complete_non_unit_bbox() {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 4 0 R /Resources << /XObject << /Fm0 5 0 R >> >> >>".to_vec(),
+        pdf_stream("<<", b"q 2 0 0 3 40 50 cm /Fm0 Do Q"),
+        pdf_stream("<< /Type /XObject /Subtype /Form /BBox [10 20 30 60] /Matrix [0 1 -1 0 100 20] /Resources << >>", b"0 0 1 rg 10 20 20 40 re f"),
+    ];
+    let pdf = pdf_of_objects(&objs);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("rotated-form.pdf", None, pdf.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let view = &h.state().views[0];
+    let doc = h.state().session.get(view.id).unwrap();
+    let image = &doc.page_images(0)[0];
+    let obb = pdfcraft_ui_egui::canvas::ImageObb::from_image(image, &view.page_xform(0).unwrap(), &doc.info, 0);
+    let xform = view.page_xform(0).unwrap();
+    let expected = |x: f64, y: f64| {
+        let p = &doc.info.pages[0];
+        let v = p.user_to_view(x as f32, y as f32);
+        xform.norm_to_screen(v[0] / xform.pw, v[1] / xform.ph)
+    };
+    for (actual, expected) in
+        obb.corners().into_iter().zip([expected(200.0, 140.0), expected(200.0, 200.0), expected(120.0, 200.0), expected(120.0, 140.0)])
+    {
+        assert!((actual - expected).length() < 1e-4, "{actual:?} != {expected:?}");
+    }
+}
+
 /// A stream object `dict` (its opening `<<` and entries, without `/Length` or `>>`) holding `data`.
 fn pdf_stream(dict: &str, data: &[u8]) -> Vec<u8> {
     [format!("{dict} /Length {} >>\nstream\n", data.len()).as_bytes(), data, b"\nendstream"].concat()
