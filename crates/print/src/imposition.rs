@@ -16,6 +16,23 @@ fn n(v: f64) -> String {
     if s == "-0" { "0".into() } else { s.into() }
 }
 
+/// `text` as the body of a PDF literal string: printable ASCII kept with `(`, `)` and `\`
+/// escaped, anything else `?` (sheet text is drawn in a standard 14 font).
+pub(crate) fn literal(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '(' | ')' | '\\' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            ' '..='~' => out.push(ch),
+            _ => out.push('?'),
+        }
+    }
+    out
+}
+
 /// The page's content streams decoded against `budget` and joined with a space as the renderer
 /// joins them; streams that don't decode are left out. `None` when the budget ran out, so part of
 /// the content is missing.
@@ -459,9 +476,26 @@ pub fn impose(src: &Document, settings: &Settings) -> Result<Vec<u8>, PrintError
             }
             c.push_str("Q\n");
         }
+        if !sheet.texts.is_empty() {
+            c.push_str("q 0 g\n");
+            for t in &sheet.texts {
+                c.push_str(&format!("BT /F0 {} Tf {} {} Td ({}) Tj ET\n", n(t.size), n(t.at.0), n(t.at.1), literal(&t.text)));
+            }
+            c.push_str("Q\n");
+        }
         let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), c.as_bytes())));
         let mut res = Dict::new();
         res.set(b"XObject".to_vec(), Object::Dict(xo));
+        if !sheet.texts.is_empty() {
+            let mut font = Dict::new();
+            font.set(b"Type".to_vec(), Object::name("Font"));
+            font.set(b"Subtype".to_vec(), Object::name("Type1"));
+            font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+            font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+            let mut fonts = Dict::new();
+            fonts.set(b"F0".to_vec(), Object::Dict(font));
+            res.set(b"Font".to_vec(), Object::Dict(fonts));
+        }
         let mut p = Dict::new();
         p.set(b"Type".to_vec(), Object::name("Page"));
         p.set(b"Parent".to_vec(), Object::Ref(pages_root));

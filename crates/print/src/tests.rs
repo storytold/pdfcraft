@@ -349,13 +349,14 @@ fn booklet_creep_is_refused_when_it_is_not_a_small_positive_amount() {
 #[test]
 fn posters_tile_with_overlap() {
     // A 200×300 page at 400% = 800×1200 on Letter with 18 pt margins (576×756 tiles), overlap 36.
-    let sheets = layout(&[(200.0, 300.0)], &settings(vec![0], Layout::Poster { scale: 400.0, overlap: 36.0, cut_marks: true })).unwrap();
+    let sheets =
+        layout(&[(200.0, 300.0)], &settings(vec![0], Layout::Poster { scale: 400.0, overlap: 36.0, cut_marks: true, labels: false })).unwrap();
     assert_eq!(sheets.len(), 4, "2 × 2 tiles");
     assert_eq!(sheets[0].lines.len(), 8, "cut marks");
     let c0 = sheets[0].placed[0].clip;
     let c1 = sheets[1].placed[0].clip;
     assert!(close(c0[2] - c1[0], 36.0 / 4.0), "neighbouring tiles share the overlap");
-    assert!(layout(&[(200.0, 300.0)], &settings(vec![0], Layout::Poster { scale: 400.0, overlap: 400.0, cut_marks: false })).is_err());
+    assert!(layout(&[(200.0, 300.0)], &settings(vec![0], Layout::Poster { scale: 400.0, overlap: 400.0, cut_marks: false, labels: false })).is_err());
 }
 
 /// Issue #1335: a scale so large that the tile counts saturate is refused with the sheet-limit
@@ -364,7 +365,7 @@ fn posters_tile_with_overlap() {
 fn huge_posters_are_refused_at_the_sheet_limit() {
     let refused = Err(PrintError::Invalid("the poster would need more than 1024 sheets".into()));
     for scale in [100_000.0, 1e22, f64::MAX] {
-        let poster = settings(vec![0], Layout::Poster { scale, overlap: 18.0, cut_marks: true });
+        let poster = settings(vec![0], Layout::Poster { scale, overlap: 18.0, cut_marks: true, labels: true });
         assert_eq!(layout(&[(200.0, 300.0)], &poster), refused, "scale {scale}");
     }
 }
@@ -1514,7 +1515,7 @@ fn a_selected_area_prints_alone_fitted_or_at_actual_size() {
             Layout::Multiple { cols: 2, rows: 1, per_sheet: 2, order: PageOrder::Horizontal, border: false, auto_rotate: true, custom: false },
         ),
         (vec![0], area, Layout::Booklet { subset: BookletSubset::BothSides, binding: Binding::Left, creep: 0.0 }),
-        (vec![0], area, Layout::Poster { scale: 200.0, overlap: 18.0, cut_marks: true }),
+        (vec![0], area, Layout::Poster { scale: 200.0, overlap: 18.0, cut_marks: true, labels: true }),
         (vec![0], area, Layout::Label { flip: false }),
     ] {
         assert!(matches!(
@@ -1625,6 +1626,7 @@ fn driver_options_take_the_ppds_own_names_in_the_ui_language() {
 mod appearances;
 mod font_names;
 mod optional_content;
+mod poster_labels;
 
 #[test]
 fn repeated_content_references_share_one_decode_budget() {

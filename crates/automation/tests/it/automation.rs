@@ -10662,6 +10662,37 @@ fn cut_stack_printing_through_tools() {
 }
 
 #[test]
+fn poster_labels_print_each_tiles_place_through_tools() {
+    let dir = workdir("poster-labels");
+    std::fs::write(dir.join("poster.pdf"), fixture(2)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "poster.pdf"}))["doc"].as_u64().unwrap();
+    let before = page_text(&mut a, doc);
+    let r = ok(&mut a, "doc_print", json!({"doc": doc, "pages": "2", "layout": "poster", "scale": 400, "labels": true, "path": "tiles.pdf"}));
+    assert_eq!(r["sheets"], 4);
+    let printed = ok(&mut a, "doc_open", json!({"path": "tiles.pdf"}))["doc"].as_u64().unwrap();
+    let sheets = page_text(&mut a, printed);
+    for (sheet, place) in
+        sheets.iter().zip(["row 1 of 2, column 1 of 2", "row 1 of 2, column 2 of 2", "row 2 of 2, column 1 of 2", "row 2 of 2, column 2 of 2"])
+    {
+        assert!(sheet.contains(&format!("Page 2: {place}")), "{sheet}");
+    }
+    ok(&mut a, "doc_close", json!({"doc": printed}));
+    // Off unless asked for.
+    ok(&mut a, "doc_print", json!({"doc": doc, "pages": "2", "layout": "poster", "scale": 400, "path": "plain.pdf"}));
+    let plain = ok(&mut a, "doc_open", json!({"path": "plain.pdf"}))["doc"].as_u64().unwrap();
+    assert!(page_text(&mut a, plain).iter().all(|t| !t.contains("row 1 of 2")));
+    assert!(matches!(
+        a.call("doc_print", &json!({"doc": doc, "layout": "poster", "labels": "yes", "path": "x.pdf"})),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    // The document itself is untouched.
+    assert_eq!(page_text(&mut a, doc), before);
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc": doc}))["document"]["dirty"], false);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn custom_pages_per_sheet_prints_the_grid_as_given() {
     // Two narrow pages side by side on portrait A4: 2 columns by 1 row (#6551).
     let dir = workdir("custom-grid");

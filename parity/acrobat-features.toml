@@ -8335,8 +8335,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::posters_tile_with_overlap", "crates/automation/tests/it/automation.rs::printing_through_tools"]
-notes = "tile scale, overlap, cut marks (labels pending)"
+evidence = ["crates/print/src/tests.rs::posters_tile_with_overlap", "crates/automation/tests/it/automation.rs::printing_through_tools", "crates/print/src/tests/poster_labels.rs::printed_labels_read_back_above_each_tile", "crates/print/src/tests/poster_labels.rs::printed_labels_on_a_narrow_sheet_stay_between_the_cut_marks", "crates/automation/tests/it/automation.rs::poster_labels_print_each_tiles_place_through_tools"]
+notes = "Tile scale, overlap, cut marks, and labels (doc_print labels; the Print dialog's Tile labels box): each sheet's page, row and column (\"Page 2: row 1 of 2, column 2 of 2\") in Helvetica in the margin above the tile, between the corners' cut marks, shrunk to fit a narrow sheet and left off one too narrow for 3 pt. The label is English and names no file or date."
 
 [[feature]]
 id = "print.orientation"

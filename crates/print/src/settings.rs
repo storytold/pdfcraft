@@ -97,11 +97,13 @@ pub enum Layout {
         binding: Binding,
         creep: f64,
     },
-    /// Tile scale (percent), overlap (points), cut marks.
+    /// Tile scale (percent), overlap (points), cut marks, and `labels`: each tile's page, row and
+    /// column printed in the margin above it, so the sheets can be put back together.
     Poster {
         scale: f64,
         overlap: f64,
         cut_marks: bool,
+        labels: bool,
     },
     /// Shipping label: each page cut to its [`Settings::crops`] box, turned so its text reads
     /// upright on the sheet and fitted with [`LABEL_MARGIN`]; `flip` turns it a further 180°.

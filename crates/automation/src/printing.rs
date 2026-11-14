@@ -298,6 +298,7 @@ impl Automation {
                 scale: a.opt_num("scale")?.unwrap_or(200.0),
                 overlap: a.opt_num("overlap")?.unwrap_or(18.0),
                 cut_marks: a.opt_bool("cut_marks")?.unwrap_or(true),
+                labels: a.opt_bool("labels")?.unwrap_or(false),
             },
             l => Layout::Size(print::names::parse_size_mode(l, 100.0).ok_or_else(|| bad(format!("unknown layout {l:?}")))?),
         };
