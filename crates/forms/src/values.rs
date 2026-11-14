@@ -312,14 +312,41 @@ pub fn calculations_changed(before: &[Field], after: &[Field]) -> Vec<String> {
 }
 
 pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    write_value_impl(doc, f, value, scripts, false)
+    write_value_impl(doc, f, value, scripts, WriteMode::Typed)
+}
+
+/// [`write_value`] for a value a script computed. With `past_max_len` (a static XFA form's
+/// result), text longer than the field's `/MaxLen` is kept: the limit is for typing. The field
+/// is still drawn through its `/MaxLen`, so a comb field keeps its cells.
+pub(crate) fn write_script_value(
+    doc: &mut Document,
+    f: &Field,
+    value: &FieldValue,
+    scripts: &mut dyn Scripts,
+    past_max_len: bool,
+) -> Result<(), FormError> {
+    let mode = if past_max_len { WriteMode::Computed } else { WriteMode::Typed };
+    write_value_impl(doc, f, value, scripts, mode)
+}
+
+/// How [`write_value_impl`] takes a value.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WriteMode {
+    /// As typed or set: every check applies.
+    Typed,
+    /// A reset to the default: no custom validation, appearances drawn later.
+    Reset,
+    /// A static XFA form's script result: not refused for its length.
+    Computed,
 }
 
 /// Persist a value according to the field kind. A reset bypasses custom input validation and defers text and choice appearances.
-fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut dyn Scripts, resetting: bool) -> Result<(), FormError> {
+fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut dyn Scripts, mode: WriteMode) -> Result<(), FormError> {
+    let resetting = mode == WriteMode::Reset;
     match (f.kind, value) {
         (FieldKind::Text, FieldValue::Text(t)) => {
             if let Some(max) = f.max_len
+                && mode != WriteMode::Computed
                 && t.chars().count() > max
             {
                 return invalid(format!("{:?} takes at most {max} characters", f.name));
@@ -1003,7 +1030,7 @@ pub fn reset_with_formatting(
         // A reset is not blocked by NoToggleToOff: go through the writer directly.
         let mut tmp = f.clone();
         tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
-        match write_value_impl(doc, &tmp, &v, scripts, true) {
+        match write_value_impl(doc, &tmp, &v, scripts, WriteMode::Reset) {
             Ok(()) => {
                 changed += 1;
                 if matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) {

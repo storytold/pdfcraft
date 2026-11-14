@@ -314,8 +314,7 @@ pub(crate) fn apply_changes(
                 let mut tmp = f.clone();
                 tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
                 tmp.actions = Default::default();
-                tmp.max_len = tmp.max_len.filter(|_| !c.ignore_max_len);
-                crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
+                crate::write_script_value(doc, &tmp, &value, &mut NoScripts, c.ignore_max_len)?;
                 if c.formatted {
                     crate::redraw_calculated_value(doc, f, v, scripts)?;
                 }
