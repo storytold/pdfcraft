@@ -15,3 +15,5 @@ craft-zip.workspace = true
 
 [dev-dependencies]
 flate2.workspace = true
+pdfcraft-fonts.workspace = true
+pdfcraft-forms.workspace = true

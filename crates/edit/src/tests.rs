@@ -3295,6 +3295,24 @@ fn one_line_continues_across_two_resources_of_the_same_font() {
     }
 }
 
+/// Many tab-separated pieces must not each retain a full copy of the source line's editing
+/// text. Only each piece's own text and style are needed by the positioned Word exporter.
+#[test]
+fn positioned_line_pieces_retain_only_their_own_text() {
+    let count = 256;
+    let content = format!("BT /F1 12 Tf 72 700 Td [{}] TJ ET", "(x) -2000 ".repeat(count));
+    let doc = text_page(&content);
+    let (reading, pieces) = text::reading_blocks_and_lines_checked(&doc, 0).unwrap();
+    assert_eq!(pieces.len(), count);
+    assert!(pieces.iter().all(|piece| piece.text == "x" && piece.editor_text == "x"));
+    assert!(pieces.windows(2).all(|pair| pair[0].rect[2] < pair[1].rect[0]), "the wide gaps still split the line");
+    let retained: usize = pieces.iter().map(|piece| piece.text.len() + piece.editor_text.len() + piece.reflow_text.len()).sum();
+    let source: usize = reading.blocks.iter().map(|block| block.text.len()).sum();
+    assert!(retained <= 3 * source, "{retained} retained text bytes for {source} source bytes");
+    assert!(pieces.iter().all(|piece| piece.spans.is_empty() && piece.lines.is_empty() && piece.rows.is_empty()));
+    assert!(pieces.iter().all(|piece| piece.base_font == reading.blocks[0].base_font && piece.size == reading.blocks[0].size));
+}
+
 /// Two genuinely different fonts still start a new line: the subset tag is all that may differ.
 #[test]
 fn different_fonts_start_a_new_line() {
@@ -9865,18 +9883,20 @@ fn hairlines_are_widened_in_page_content_and_forms() {
     assert_eq!(fixed, crate::hairlines::Fixed { lines: 3, pages: 1, elsewhere: 0 });
     let flat = |b: &[u8]| String::from_utf8_lossy(b).split_whitespace().collect::<Vec<_>>().join(" ");
     let text = flat(&page_content_bytes(&doc, 0));
-    assert!(text.contains("0.72 w 10 10 m 100 10 l S"), "zero width → 0.72 pt: {text}");
+    let widths = |doc: &Document| reading_shapes(doc, 0).unwrap().shapes.into_iter().map(|s| s.stroke.unwrap().width).collect::<Vec<_>>();
+    let actual = widths(&doc);
+    assert_eq!(actual.len(), 6);
+    assert!(actual.iter().zip([0.72, 2.0, 0.72, 0.72, 2.0, 0.5]).all(|(a, b)| (*a - b).abs() < 0.0001), "{actual:?}");
     assert!(text.contains("2 w 10 20 m 100 20 l S") && text.contains("0.5 w 10 30 m 100 30 l S"), "wider lines untouched: {text}");
-    assert!(text.contains("1.44 w 0 0 m 10 10 l S"), "under a half-scale CTM the width is doubled: {text}");
     let Object::Stream(fs) = &*doc.get(form) else { panic!() };
     let ft = flat(&fs.decoded().unwrap());
-    assert!(ft.contains("1.44 w 0 0 m 50 50 l S") && ft.contains("4 w 0 50 m 50 0 l S"), "{ft}");
+    assert!(ft.contains("4 w 0 50 m 50 0 l S"), "wider Form stroke is unchanged: {ft}");
     // Nothing left to fix: a second run changes nothing.
     assert_eq!(fix_hairlines(&mut doc, &[0], &Hairlines::default()).unwrap().lines, 0);
     // A stricter threshold catches the 0.5 pt line too, with a custom width.
     let fixed = fix_hairlines(&mut doc, &[0], &Hairlines { narrower_than: 0.6, width: 1.0, ..Hairlines::default() }).unwrap();
     assert_eq!(fixed.lines, 1);
-    assert!(flat(&page_content_bytes(&doc, 0)).contains("1 w 10 30 m 100 30 l S"));
+    assert!((widths(&doc).last().unwrap() - 1.0).abs() < 0.0001);
     assert!(fix_hairlines(&mut doc, &[0], &Hairlines { width: 0.0, ..Hairlines::default() }).is_err());
 }
 
@@ -14194,6 +14214,38 @@ fn image_editing_frame_keeps_page_edge_outside_explicit_clips() {
 }
 
 #[test]
+fn office_regression_positioned_words_follow_quarter_turned_baselines() {
+    for matrix in ["0 1 -1 0", "-1 0 0 -1", "0 -1 1 0"] {
+        let doc = text_page(&format!("BT /F1 12 Tf {matrix} 300 400 Tm [(Left) -6000 (Right)] TJ ET"));
+        let (_, pieces) = text::reading_blocks_and_lines_checked(&doc, 0).unwrap();
+        assert_eq!(pieces.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["Left", "Right"], "{matrix}");
+        let a = pieces[0].rect;
+        let b = pieces[1].rect;
+        assert!(a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1], "{matrix}: {a:?} {b:?}");
+    }
+}
+
+#[test]
+fn office_regression_actual_text_is_not_assigned_to_unrelated_word_boxes() {
+    let doc = text_page("/Span <</ActualText (Right Left)>> BDC BT /F1 12 Tf 72 700 Td [(Left) -6000 (Right)] TJ ET EMC");
+    let (_, pieces) = text::reading_blocks_and_lines_checked(&doc, 0).unwrap();
+    assert_eq!(pieces.len(), 1);
+    assert_eq!(pieces[0].text, "Right Left");
+}
+
+#[test]
+fn office_regression_split_lines_bound_each_font_name() {
+    let mut doc = text_page(&format!("BT /F1 12 Tf 72 700 Td [{}] TJ ET", "(x) -2000 ".repeat(128)));
+    let r = pdfcraft_cos::ObjRef::new(5, 0);
+    let mut font = doc.get(r).as_dict().unwrap().clone();
+    font.set(b"BaseFont".to_vec(), pdfcraft_cos::Object::Name(vec![b'x'; 65_536]));
+    doc.set(r, pdfcraft_cos::Object::Dict(font));
+    let (_, pieces) = text::reading_blocks_and_lines_checked(&doc, 0).unwrap();
+    assert_eq!(pieces.len(), 128);
+    assert!(pieces.iter().all(|p| p.base_font.len() <= 127));
+}
+
+#[test]
 fn explicit_builtin_thai_replaces_an_unavailable_source_without_installing_a_font() {
     let mut doc = text_page("BT /F1 16 Tf 50 700 Td (A) Tj ET BT /F2 12 Tf 50 600 Td (ab) Tj ET");
     let cmap =
@@ -15411,5 +15463,32 @@ fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
         text::rewrite_block(&mut doc, 0, 0, Some(&draft), &BlockStyle::default())
             .unwrap_or_else(|e| panic!("matching U+{:04X}: {e}", u32::from(separator)));
         assert_eq!(rows(&doc), ["กข", "ค"], "matching U+{:04X}", u32::from(separator));
+    }
+}
+
+#[test]
+fn review_followup_hairline_width_survives_intervening_changes() {
+    use crate::hairlines::{Hairlines, fix_hairlines};
+    for (change, after) in [("0.1 w", ""), ("/Thin gs", ""), ("q 2 w Q", ""), ("q", "Q")] {
+        let mut doc = fixture();
+        let page = page_list(&doc)[0].clone();
+        let data = format!("0 w 10 10 m 100 10 l {change} 10 20 m 100 20 l S {after} 10 30 m 100 30 l S");
+        let stream = doc.add(Object::Stream(Stream::flate(Dict::new(), data.as_bytes())));
+        doc.update_dict(page.obj, |d| {
+            d.set(b"Contents".to_vec(), Object::Ref(stream));
+            d.set(
+                b"Resources".to_vec(),
+                Object::Dict(Dict::from_iter([(
+                    b"ExtGState".to_vec(),
+                    Object::Dict(Dict::from_iter([(b"Thin".to_vec(), Object::Dict(Dict::from_iter([(b"LW".to_vec(), Object::Real(0.1))])))])),
+                )])),
+            );
+        })
+        .unwrap();
+        assert_eq!(fix_hairlines(&mut doc, &[0], &Hairlines::default()).unwrap().lines, 2, "{change}");
+        let read = reading_shapes(&doc, 0).unwrap();
+        assert_eq!(read.shapes.len(), 2);
+        assert!(read.shapes.iter().all(|s| (s.stroke.unwrap().width - 0.72).abs() < 0.0001), "{change}: {:?}", read.shapes);
+        assert_eq!(fix_hairlines(&mut doc, &[0], &Hairlines::default()).unwrap().lines, 0, "repair is idempotent: {change}");
     }
 }

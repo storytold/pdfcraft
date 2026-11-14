@@ -4514,6 +4514,8 @@ version = "0.21.1"
 dependencies = [
  "craft-zip",
  "flate2",
+ "pdfcraft-fonts",
+ "pdfcraft-forms",
 ]
 
 [[package]]

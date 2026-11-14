@@ -2,11 +2,14 @@
 //!
 //! The engine reduces each page to [`Page`]: paragraphs (text, box, size, bold/italic) and
 //! images (encoded bytes and box), in reading order. The writers turn that into a flowing
-//! document: headings are the paragraphs set larger than the body text; a block that
-//! continues another on its line (an italic word, a link) is a run of that block's paragraph, and
-//! a paragraph that wraps onto the next line runs on there. Word keeps pages with
-//! rotated text, or text overlapped by artwork or watermark-sized text, as positioned, editable
-//! shapes to avoid reflowing overlays; other pages flow with images inline.
+//! document: headings are the paragraphs set larger than the body text, and a block that
+//! continues another on its line (an italic word, a link) is a run of that block's paragraph;
+//! a paragraph that wraps onto the next line runs on there.
+//! Word keeps pages with
+//! rotated text, text overlapped by artwork or watermark-sized text, form fields or text framed by
+//! rules (and every page of a document most of whose pages are such) as positioned, editable
+//! shapes: the page's vector paths behind the text, its text line by line, its fields as Word
+//! content controls. Other pages flow with images inline.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -26,8 +29,8 @@ mod layout;
 
 pub(crate) use as_docx::hex;
 #[cfg(test)]
-use as_docx::{MAX_MEDIA, docx_table};
-pub use as_docx::{docx, docx_with_language};
+use as_docx::{FRAMING_SHAPES, MAX_DOCX_LIST_ITEMS, MAX_FIELD_NAME_CHARS, MAX_MEDIA, docx_table, word_font};
+pub use as_docx::{MAX_DOCX_PAGE_POINTS, MAX_DOCX_PAGE_SHAPES, docx, docx_checked, docx_checked_with_language, docx_with_language};
 pub(crate) use as_html::esc;
 #[cfg(test)]
 use as_html::{allowed, base64};
@@ -36,10 +39,13 @@ pub use as_markdown::markdown;
 #[cfg(test)]
 use as_markdown::{emphasis, paragraph};
 pub use as_rtf::rtf;
-pub use clip::{ClipBuilder, ClipSpan, ClipStyle, ClipText, MAX_CLIP_HTML_BYTES, MAX_CLIP_SPANS, MAX_CLIP_TEXT_BYTES, clip_html, font_family};
+pub use clip::{
+    ClipBuilder, ClipSpan, ClipStyle, ClipText, MAX_CLIP_HTML_BYTES, MAX_CLIP_SPANS, MAX_CLIP_TEXT_BYTES, clip_html, font_family,
+    font_weight_and_slant,
+};
 #[cfg(test)]
 use flow::list_item;
-pub use layout::{Block, Cell, Image, Page, Table};
+pub use layout::{Block, Cell, Field, FieldKind, Image, Page, Paint, Shape, Stroke, Table};
 #[cfg(test)]
 use layout::{LOOKUP_STEPS, MAX_COLS, body_size};
 pub(crate) use layout::{Run, flowing_paragraphs, reading_order, tables};

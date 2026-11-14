@@ -42,7 +42,9 @@ pub mod backdrop;
 pub use backdrop::{Backdrop, backdrops_left_off, page_backdrop, page_backdrops};
 pub use text::strip_subset_tag;
 mod background;
+mod optional_content;
 pub use background::page_background;
+pub use optional_content::ArtworkReader;
 mod rules;
 pub use rules::page_rules;
 pub mod objects;
@@ -53,8 +55,10 @@ pub use objects::{
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};
 pub mod images;
+pub mod shapes;
 mod ungroup;
 pub use images::{ArrangeOrder, ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
+pub use shapes::{MAX_PAGE_SHAPES, PageShape, ReadingShapes, Stroke, Subpath, reading_shape_ops, reading_shapes};
 pub mod bidi;
 pub mod indic;
 mod linebreak;
@@ -62,8 +66,8 @@ pub mod paragraph_align;
 pub mod text;
 pub use text::{
     BlockKey, BlockStyle, LineEdit, MAX_FORM_DEPTH, MAX_FORM_VISITS, RangeStyle, ReadingBlocks, RunSources, TextBlock, TextLine, TextSession,
-    block_overlapping, clear_block, glyph_text_lines, reading_blocks, reading_blocks_checked, replace_block, replace_line, rewrite_block,
-    text_blocks, text_lines,
+    block_overlapping, clear_block, glyph_text_lines, reading_blocks, reading_blocks_and_lines_checked, reading_blocks_checked, replace_block,
+    replace_line, rewrite_block, text_blocks, text_lines,
 };
 pub mod printer_marks;
 pub use printer_marks::{PrinterMarks, add_printer_marks};

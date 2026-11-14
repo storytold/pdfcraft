@@ -1,6 +1,6 @@
 # File format parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-22 · **Change:** minor (Word, Excel, PowerPoint, OpenDocument and RTF open through an installed LibreOffice; `.p7b`/`.p7c` bundles read for trust import) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-11 · **Change:** minor (Word form-layout export; Office import through an installed LibreOffice; `.p7b`/`.p7c` trust import) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Every format Acrobat Pro reads or writes, and PdfCraft's support for it. Acrobat's list comes from
 its bundle's `Info.plist` `CFBundleDocumentTypes` (what it opens) and its public documentation
@@ -80,7 +80,7 @@ features total).
 
 | Target | Acrobat | PdfCraft | Fidelity | Tests and evidence |
 |---|---|---|---|---|
-| Word (`.docx`) | yes, layout-preserving | flowing paragraphs and inferred tables (bordered only along the grid lines the page draws); positioned text/artwork only for pages with rotated text or text overlapping an image/watermark, with per-page sizes | **basic** (#773 synthetic invoice regression covered; exact fonts, vector rules and general layout fidelity remain incomplete) | `create.export-docx` partial |
+| Word (`.docx`) | yes, layout-preserving | flowing paragraphs and inferred tables (bordered only along the grid lines the page draws); positioned pages (rotated or overlapping text, form fields, text framed by rules, or most of a document's pages) keep vector rules and boxes, place text line by line and turn AcroForm text, check box, radio, combo and list fields into content controls (password fields, multi-select lists and text/choice widgets whose displayed text is rotated are omitted and reported in `truncated_pages`; push buttons and signature fields are also left out), editable except for radio groups, which retain their displayed selection as locked controls and report lost editability in `truncated_pages` (a text field's title names its `/MaxLen`, which Word doesn't enforce for a control); runs carry the PDF font's family; per-page sizes | **basic** (form and #773 invoice regressions covered; holes in fills, clipping, shadings, transparency, editable radio groups (displayed state locked and reported) and multi-select lists and rotated text/choice widgets (omitted and reported) remain) | `create.export-docx` partial |
 | Word 97–2003 (`.doc`) | yes | no | none | |
 | Excel (`.xlsx`), XML Spreadsheet 2003 | yes | no | none | `create.export-xlsx` planned |
 | PowerPoint (`.pptx`) | yes | slides per page: title from largest text, body text, images, tables (no slide overflow reflow / normAutofit; first page sets presentation dimensions) | basic | `create.export-pptx` partial |
@@ -110,6 +110,7 @@ features total).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Word: a form keeps its layout on the pages recognized as one (fields, or text framed by rules or boxes). Vector rules and boxes as shapes behind the text, text placed line by line, PDF font families, AcroForm text, check box, radio, combo and list fields as content controls (radio controls are locked; password fields, multi-select lists and text/choice widgets whose displayed text is rotated are omitted and reported in `truncated_pages`; push buttons and signature fields are also omitted); a document most of whose pages keep their layout keeps it on every page. |
 | 2026-10-22 | minor | Office documents (Word, Excel, PowerPoint, OpenDocument, RTF) open from File ▸ Open as new PDFs, converted by an installed LibreOffice; `create.from-office` partial. |
 | 2026-10-19 | patch | Certificates row: `.p7b`/`.p7c` bundles (DER or PEM `PKCS7`/`CMS`) are read for trust import. |
 | 2026-10-12 | minor | XDP split into data (read and write for XFA forms, already shipped under `form.xfa-data`) and opening `.xdp` as a document (none). Create PDF reads BigTIFF; malformed GIF headers are no longer detected as images. |

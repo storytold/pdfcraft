@@ -15,6 +15,6 @@ mod ocr_words;
 #[path = "text_regions/styled.rs"]
 mod styled;
 
-pub(super) use grouping::{alignment_frame, group_blocks, group_reading_blocks, is_centred};
+pub(super) use grouping::{alignment_frame, group_blocks, group_reading_blocks, is_centred, line_blocks};
 pub(super) use ocr_words::rewrite_changed_words;
 pub(super) use styled::rewrite_styled_block;

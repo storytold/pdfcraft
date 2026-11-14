@@ -10038,6 +10038,28 @@ fn exporting_to_word_html_and_rtf() {
     assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "a.xyz" })).is_err());
 }
 
+#[test]
+fn word_export_reports_locked_radio_groups() {
+    let dir = workdir("office-radio");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (x, value) in [(20, "S"), (50, "M")] {
+        ok(
+            &mut a,
+            "form_add_field",
+            json!({
+                "doc": doc, "page": 1, "type": "radio", "rect": [x, 100, x + 14, 114],
+                "group": "size", "export": value
+            }),
+        );
+    }
+    let result = ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "radio.docx" }));
+    assert_eq!(result["truncated_pages"], json!([1]), "{result}");
+    assert_eq!(result["truncated"], true);
+    assert!(result["warnings"][0].as_str().unwrap().contains("locked controls"), "{result}");
+    assert!(std::fs::read(dir.join("radio.docx")).unwrap().starts_with(b"PK"));
+}
+
 /// #3120: a PDF whose pages draw "Head", then a chain of `depths[page]` nested forms whose
 /// innermost writes "TAIL".
 fn nested_forms_pdf(depths: &[usize]) -> Vec<u8> {
