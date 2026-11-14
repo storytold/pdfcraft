@@ -331,7 +331,7 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             }
             // Keystroke (on commit) and Validate, as Acrobat runs them before accepting a value.
             let t = &f.actions.keystroke(&f.name, t).map_err(FormError::Format)?;
-            af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
+            af::validate(&f.actions.validate, t).map_err(FormError::Rejected)?;
             let (t, refresh_field) = if resetting { (t.clone(), false) } else { scripting::accept(doc, f, t, scripts)? };
             let shadow = t.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
             doc.update_dict(f.obj, |d| {
