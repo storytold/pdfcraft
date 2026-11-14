@@ -1,4 +1,4 @@
-//! Copy with formatting's document-wide recovery state (hayro-interpret patch 104,
+//! Copy with formatting's document-wide recovery state (hayro-interpret patch 107,
 //! `RecoveryDocument`): each font's rule decisions are made once for the document, whichever
 //! page asks first and on whichever thread, and read every page as a decision made on that page
 //! would.

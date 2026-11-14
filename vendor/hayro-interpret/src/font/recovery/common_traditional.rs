@@ -1,4 +1,4 @@
-//! PdfCraft patch (104): the 750 characters used most often in Taiwan's laws and regulations,
+//! PdfCraft patch (107): the 750 characters used most often in Taiwan's laws and regulations,
 //! for [`super::cjk_order`]'s scoring (data, not code: see `ATTRIBUTION.toml`).
 //!
 //! Source: the Ministry of Justice (Taiwan) national laws and regulations database, Chinese

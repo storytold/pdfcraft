@@ -1,4 +1,4 @@
-//! Copy with formatting's standard CJK order rule (hayro-interpret patch 104,
+//! Copy with formatting's standard CJK order rule (hayro-interpret patch 107,
 //! `StandardCjkGlyphOrder`): Traditional Chinese read from the glyph ids of Type 0 subsets that
 //! keep their original font's order, found from the document's text. Every document here is
 //! synthetic ([`super::cjk_fixture`]).

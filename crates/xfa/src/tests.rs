@@ -7114,6 +7114,99 @@ fn a_container_is_as_wide_as_a_turned_draw_stands() {
     }
 }
 
+/// The static fixture with its text field (`form1[0].page1[0].name[0]`) flagged Password and
+/// `levels` unnamed fields between `form1[0]` and `page1[0]`, which add no SOM segment.
+fn static_password_doc(levels: usize, data: &str) -> Document {
+    let mut doc = Document::open(Arc::new(static_shell(data))).unwrap();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(8, 0), |d| d.set(b"Ff".to_vec(), Object::Int(1 << 13))).unwrap();
+    let mut next = pdfcraft_cos::ObjRef::new(7, 0);
+    for _ in 0..levels {
+        let mut d = Dict::new();
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(next)]));
+        next = doc.add(Object::Dict(d));
+    }
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(next)]))).unwrap();
+    doc
+}
+
+/// #3944: a Password-flagged AcroForm field of a static XFA form nested deeper than 32 levels (as
+/// deep as the form's own field walk reaches) has its typed value cleared from the datasets.
+#[test]
+fn a_deeply_nested_acroform_password_field_is_cleared_from_the_datasets() {
+    let data = "<form1><page1><name>hunter2</name></page1></form1>";
+    let mut doc = static_password_doc(40, data);
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+    assert!(!String::from_utf8_lossy(&xfa_bytes(&doc)).contains("hunter2"));
+}
+
+/// A field tree deeper than the walk reaches can't be shown to hold no password field: clearing
+/// refuses (so the save does) rather than leave a typed password in the datasets.
+#[test]
+fn a_field_tree_too_deep_to_check_for_passwords_refuses_to_clear() {
+    let mut doc = static_password_doc(80, "<form1><page1><name>hunter2</name></page1></form1>");
+    assert!(has_password_values(&doc));
+    assert!(clear_password_values(&mut doc).is_err());
+    // A shallow form without a typed value has nothing to clear.
+    let mut doc = static_password_doc(0, "<form1><page1><name></name></page1></form1>");
+    assert!(!has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 0);
+}
+
+/// A datasets packet of an XFA array may use the `xfa` prefix its preamble declares: the typed
+/// password in it is still found and cleared, as the datasets writer reads that packet too.
+#[test]
+fn a_password_in_a_datasets_packet_using_the_preamble_prefix_is_cleared() {
+    let mut doc = static_password_doc(0, "");
+    let pre = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">"#;
+    let tpl = r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form1"/></template>"#;
+    let ds = "<xfa:datasets><xfa:data><form1><page1><name>hunter2</name></page1></form1></xfa:data></xfa:datasets>";
+    let parts: Vec<Object> = [("preamble", pre), ("template", tpl), ("datasets", ds), ("postamble", "</xdp:xdp>")]
+        .into_iter()
+        .flat_map(|(name, text)| {
+            let r = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), text.as_bytes())));
+            [Object::String(pdfcraft_cos::PdfString::literal(name.as_bytes().to_vec())), Object::Ref(r)]
+        })
+        .collect();
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| {
+        let mut acro = c.get(b"AcroForm").and_then(Object::as_dict).cloned().unwrap();
+        acro.set(b"XFA".to_vec(), Object::Array(parts));
+        c.set(b"AcroForm".to_vec(), Object::Dict(acro));
+    })
+    .unwrap();
+    assert!(crate::data::parse_datasets(ds).is_none(), "the packet doesn't parse alone");
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+}
+
+/// Every sibling a SOM index skips owns a copy of the element name: the in-memory builder refuses
+/// a path whose copies would pass the name-byte bound the writer holds itself to, and creates
+/// nothing for it.
+#[test]
+fn the_in_memory_data_builder_bounds_copied_name_bytes() {
+    let mut root = DataNode::default();
+    // 1 KiB x 9,999 skipped siblings is about 10 MB, over the 4 MiB bound.
+    let long = "n".repeat(1 << 10);
+    root.apply(&DataOp::Value { path: vec![(long.clone(), 9_999)], text: "x".into() });
+    assert!(root.children.is_empty());
+    // Within the bound, the same shape still builds (and keeps indexes).
+    root.apply(&DataOp::Value { path: vec![(long, 100)], text: "x".into() });
+    assert_eq!(root.children.len(), 101);
+}
+
+/// Each queued instance owns a copy of its parent path: a long ancestor stops the queue at the
+/// byte allowance, reported as capped, instead of being multiplied by the instance count.
+#[test]
+fn queued_instances_are_bounded_by_the_path_bytes_they_copy() {
+    let mut doc = Document::new_empty();
+    let parent: DataPath = vec![("a".repeat(16 << 20), 0), ("b".repeat(16 << 20), 0)];
+    let written = crate::data::write_data_ops(&mut doc, &[DataOp::Instances { parent, name: "row".into(), count: 100 }], None).unwrap();
+    assert!(written.warnings.iter().any(|w| w.contains("not written past")), "{:?}", written.warnings);
+}
+
 /// A page break splits an empty multi-line field that grows with its text (XFA 3.3 pp. 291–292:
 /// text splits between lines, and a field's `keep intact` is `none`): it starts where it is, its
 /// widget runs to the bottom of the content area, and the rest of its box, closed on every side,

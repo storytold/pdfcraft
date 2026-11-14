@@ -1,4 +1,4 @@
-//! PdfCraft patch (104): [`StandardCjkGlyphOrder`], Traditional Chinese read from glyph ids that
+//! PdfCraft patch (107): [`StandardCjkGlyphOrder`], Traditional Chinese read from glyph ids that
 //! follow a public character order.
 //!
 //! A Type 0 font shown through `Identity-H` or `Identity-V` with no `/ToUnicode` and no Adobe

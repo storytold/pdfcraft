@@ -54,9 +54,9 @@ pub(crate) struct Type3<'a> {
     /// PdfCraft patch: whether the font's numbered glyph names all name their own codes
     /// (`numbered_names_name_their_codes`), worked out on first use.
     own_code_names: OnceLock<bool>,
-    /// PdfCraft patch (104): what the recovery rules need, and their decisions.
+    /// PdfCraft patch (107): what the recovery rules need, and their decisions.
     recovery: FontRecovery,
-    /// PdfCraft patch (104): the font's cache key, its dictionary's hash, worked out once: the
+    /// PdfCraft patch (107): the font's cache key, its dictionary's hash, worked out once: the
     /// recovered layer asks for it with every glyph (its budget of fonts per page), and hashing
     /// the dictionary each time cost a page of Type 3 glyphs a quarter of its text extraction.
     key: u128,
@@ -250,7 +250,7 @@ impl<'a> Type3<'a> {
             })
     }
 
-    /// PdfCraft patch (104): the recovery rules' reading of `code` (see `font::recovery`), given
+    /// PdfCraft patch (107): the recovery rules' reading of `code` (see `font::recovery`), given
     /// its strict text when that is more than control characters. The ids a standard order
     /// reads are the codes with a glyph procedure; their widths are the font's `/Widths`.
     pub(crate) fn recovery(&self, code: u32, strict: Option<&BfString>) -> Option<Recovery> {
@@ -287,12 +287,12 @@ impl<'a> Type3<'a> {
         self.recovery.cache.recover(FontKind::Type3, facts, glyph)
     }
 
-    /// PdfCraft patch (104): what the font keeps for the recovery rules.
+    /// PdfCraft patch (107): what the font keeps for the recovery rules.
     pub(crate) fn recovery_info(&self) -> &FontRecovery {
         &self.recovery
     }
 
-    /// PdfCraft patch (104): the font's style for text the recovery rules read, from its
+    /// PdfCraft patch (107): the font's style for text the recovery rules read, from its
     /// dictionary and descriptor (`/BaseFont` or `/Name`, `/Flags`, `/FontWeight`,
     /// `/ItalicAngle`); a Type 3 font has no program to add to them.
     pub(crate) fn recovery_style(&self) -> crate::font::RecoveredFontStyle {
@@ -394,7 +394,7 @@ impl CacheKey for Type3<'_> {
     }
 }
 
-/// PdfCraft patch (104): a Type 3 font's cache key, its dictionary's hash (counted for tests).
+/// PdfCraft patch (107): a Type 3 font's cache key, its dictionary's hash (counted for tests).
 fn dict_key(dict: &Dict<'_>) -> u128 {
     crate::font::recovery::count(crate::font::recovery::Counter::Type3KeyHash);
     dict.cache_key()

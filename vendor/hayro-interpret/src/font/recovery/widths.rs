@@ -1,4 +1,4 @@
-//! PdfCraft patch (104): width evidence, shared by the rules that read glyphs in a standard
+//! PdfCraft patch (107): width evidence, shared by the rules that read glyphs in a standard
 //! order without the font naming them.
 //!
 //! A reading of a font's glyphs as characters can be checked against the glyphs' own widths: an

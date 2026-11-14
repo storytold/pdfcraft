@@ -1,4 +1,4 @@
-//! Copy with formatting's recovered layer (hayro-interpret patch 104): one interpretation reads
+//! Copy with formatting's recovered layer (hayro-interpret patch 107): one interpretation reads
 //! the strict text layer, unchanged, and what the recovery rules read; rules fill glyphs without
 //! strict text, or override strict text they judge untrustworthy.
 
