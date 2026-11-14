@@ -323,6 +323,8 @@ fn an_edit_on_another_page_that_changes_the_verdict_redraws_the_signature() {
     settle(&mut h);
     let (green, red) = ([0x2D, 0x9D, 0x78], [0xD7, 0x37, 0x3F]);
     let doc_id = h.state().views[0].id;
+    // The first change to a signed document asks first (#2168); this one is confirmed.
+    h.state_mut().signed_edits_confirmed.insert(doc_id);
     assert_eq!(h.state().session.get(doc_id).unwrap().signatures[0].status, SignatureStatus::Valid);
     let valid = in_n1_square(&mut h, green);
     assert!(valid > 100, "page 1 draws the valid state: {valid} green pixels");
@@ -378,6 +380,8 @@ fn a_value_typed_against_a_certification_shows_while_every_page_redraws() {
     h.state_mut().apply_trusted_certificates(vec![anchor]);
     settle(&mut h);
     let doc_id = h.state().views[0].id;
+    // The first change to a signed document asks first (#2168); this one is confirmed.
+    h.state_mut().signed_edits_confirmed.insert(doc_id);
     assert_eq!(h.state().session.get(doc_id).unwrap().signatures[0].status, SignatureStatus::Valid);
 
     let value = pdfcraft_engine::FieldValue::Text("Ada".into());
@@ -408,6 +412,8 @@ fn values_still_waiting_on_their_page_stay_pending_when_a_later_edit_redraws_eve
         h.state_mut().apply_trusted_certificates(vec![anchor.clone()]);
         settle(&mut h);
         let doc_id = h.state().views[0].id;
+        // The first change to a signed document asks first (#2168); this one is confirmed.
+        h.state_mut().signed_edits_confirmed.insert(doc_id);
         let states = |h: &Harness<'static, PdfCraftApp>| {
             h.state().session.get(doc_id).unwrap().signatures.iter().map(|s| (s.field.clone(), s.status, s.verdict_shown)).collect::<Vec<_>>()
         };

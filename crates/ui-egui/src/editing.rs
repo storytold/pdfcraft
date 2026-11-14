@@ -156,6 +156,21 @@ impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
+        // The first change to a signed document asks first (#2168): the signatures stay valid
+        // for the version they signed, but viewers show that the document was changed after
+        // signing, and a certified document may allow only some changes. Once confirmed, the
+        // document's later changes are not asked about again. The edit waits for the answer.
+        if self.asks_before_changing(id) {
+            self.pending_signed_edit = Some((id, edit));
+            self.dialog = Some(crate::Dialog::SignedEdit);
+            return false;
+        }
+        self.apply_edit_now(i, id, edit)
+    }
+
+    /// [`Self::apply_edit`] once the signed-document question is out of the way: tab `i` shows
+    /// document `id`.
+    fn apply_edit_now(&mut self, i: usize, id: pdfcraft_engine::DocId, edit: Edit) -> bool {
         let label = edit.label();
         let target_arrange_image = match &edit {
             Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
@@ -260,16 +275,7 @@ impl PdfCraftApp {
                 // own backdrop stays off, or places applied redactions left holding the removed text
                 // (the Apply redactions dialog then says it after its count): said, not silent.
                 // Before the scripts' output, so an alert they raise still shows.
-                if let Some(n) = self.session.get(id).and_then(|d| d.edit_notices.first()).cloned() {
-                    self.notify(match &n {
-                        pdfcraft_engine::EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
-                        pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
-                        pdfcraft_engine::EditNotice::RedactionElsewhere(e) => crate::dialogs::still_holding_note(e).unwrap_or_else(|| n.to_string()),
-                        pdfcraft_engine::EditNotice::RedactionIdentification(id) => {
-                            crate::dialogs::identification_note(id).unwrap_or_else(|| n.to_string())
-                        }
-                    });
-                }
+                self.notify_edit_notice(id);
                 let out = self.session.take_js_output(id);
                 self.handle_js(id, out);
                 true
@@ -295,6 +301,18 @@ impl PdfCraftApp {
                 self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);
                 false
             }
+        }
+    }
+
+    /// Say the first notice document `id`'s last edit left ([`pdfcraft_engine::EditNotice`]).
+    fn notify_edit_notice(&mut self, id: pdfcraft_engine::DocId) {
+        if let Some(n) = self.session.get(id).and_then(|d| d.edit_notices.first()).cloned() {
+            self.notify(match &n {
+                pdfcraft_engine::EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
+                pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
+                pdfcraft_engine::EditNotice::RedactionElsewhere(e) => crate::dialogs::still_holding_note(e).unwrap_or_else(|| n.to_string()),
+                pdfcraft_engine::EditNotice::RedactionIdentification(id) => crate::dialogs::identification_note(id).unwrap_or_else(|| n.to_string()),
+            });
         }
     }
 
@@ -813,12 +831,26 @@ impl PdfCraftApp {
             self.run_focus_scripts(i);
             return true;
         }
-        if let Some(view) = self.views.get_mut(i) {
+        // Waiting on the signed-document question isn't a refusal: the edit holds the typing.
+        if !self.signed_edit_waits(id)
+            && let Some(view) = self.views.get_mut(i)
+        {
             let mut draft = draft;
             draft.request_focus = true;
             view.forms.focus = Some(draft);
         }
         false
+    }
+
+    /// Whether a change to document `id` asks first (#2168): it is signed, and no change to it has
+    /// been confirmed yet.
+    fn asks_before_changing(&self, id: pdfcraft_engine::DocId) -> bool {
+        !self.signed_edits_confirmed.contains(&id) && self.session.get(id).is_some_and(|d| d.signatures.iter().any(|s| s.signed))
+    }
+
+    /// Whether document `id`'s change waits on the signed-document question (`Dialog::SignedEdit`).
+    pub(crate) fn signed_edit_waits(&self, id: pdfcraft_engine::DocId) -> bool {
+        self.dialog == Some(crate::Dialog::SignedEdit) && self.pending_signed_edit.as_ref().is_some_and(|(p, _)| *p == id)
     }
 
     /// XFA enter and exit scripts for where the focus went on tab `i` since it was last looked at,
@@ -903,9 +935,10 @@ impl PdfCraftApp {
         }
     }
 
-    /// Apply the edit queued on tab `i` (the active one). Returns false only when it was a
-    /// field's typing and the field refused it (#166): the editor reopens with the text, and the
-    /// user has been told why, so the typing isn't lost and the caller can stop.
+    /// Apply the edit queued on tab `i` (the active one). Returns false when it was a field's
+    /// typing and the field refused it (#166): the editor reopens with the text, and the user has
+    /// been told why, so the typing isn't lost and the caller can stop. Also false while the edit
+    /// waits on the signed-document question, so a save doesn't go on without it.
     fn apply_queued_edit(&mut self, i: usize) -> bool {
         let Some(edit) = self.views.get_mut(i).and_then(|v| v.pending_edit.take()) else { return true };
         let signature_page = self.views.get_mut(i).and_then(|v| v.fill_signature_page.take());
@@ -952,6 +985,9 @@ impl PdfCraftApp {
                 self.quick_tool = crate::QuickTool::Select;
             }
             return true;
+        }
+        if self.views.get(i).is_some_and(|v| self.signed_edit_waits(v.id)) {
+            return false;
         }
         if !typed {
             return true;
@@ -1030,12 +1066,23 @@ impl PdfCraftApp {
         let added = view.content.finish_draft(doc.added());
         let paragraph = view.line_editor.take_if(|ed| ed.has_changes()).and_then(crate::edit_text_ui::finished_edit);
         let added_ok = added.is_none_or(|edit| self.apply_edit(edit));
+        // The first change to a signed document waits on its question (#2168), which holds the
+        // edit: that isn't a refusal, so nothing is put back to be committed a second time. Stop
+        // there, as a second edit would take the first one's place in the question; the paragraph
+        // editor stays open for the save that resumes after the answer.
+        if !added_ok && self.signed_edit_waits(id) {
+            if let Some(view) = self.views.get_mut(i) {
+                view.line_editor = editor;
+            }
+            return false;
+        }
         let paragraph_ok = paragraph.is_none_or(|edit| self.apply_edit(edit));
+        let waits = self.signed_edit_waits(id);
         if let Some(view) = self.views.get_mut(i) {
             if !added_ok {
                 (view.content.draft, view.content.select_added) = (draft, select_added);
             }
-            if !paragraph_ok {
+            if !paragraph_ok && !waits {
                 view.line_editor = editor;
             }
         }
@@ -1057,14 +1104,15 @@ impl PdfCraftApp {
         let rotation = self.session.get(id).map_or(0, |doc| crate::comments::page_rotation(&doc.info, tb.page));
         let look = crate::fill_sign::TypedLook { color: tb.color, border: tb.border };
         let edit = crate::fill_sign::typed_with(tb.page, tb.at, &text, tb.size, rotation, &author, look);
-        if self.apply_edit(edit) {
-            if let Some(view) = self.views.get_mut(i) {
-                view.fill_text = None;
-            }
-            true
-        } else {
-            false
+        let applied = self.apply_edit(edit);
+        // Waiting on the signed-document question (#2168), the question holds the text: the box
+        // goes, or the save that resumes after the answer would add it again.
+        if (applied || self.signed_edit_waits(id))
+            && let Some(view) = self.views.get_mut(i)
+        {
+            view.fill_text = None;
         }
+        applied
     }
 
     /// When the preference is on, bake Fill & Sign marks before the bytes are written.
