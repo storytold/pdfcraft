@@ -367,6 +367,7 @@ fn rect_param(v: &Value) -> Result<egui::Rect, String> {
         _ => Err("region must be [x0, y0, x1, y1] in points".into()),
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
