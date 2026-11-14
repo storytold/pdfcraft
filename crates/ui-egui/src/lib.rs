@@ -212,6 +212,7 @@ use workflows::optimize_ui;
 use workflows::print_paper;
 use workflows::print_ui;
 use workflows::scan_clean_ui;
+use workflows::send_email_ui;
 use workflows::web_print;
 
 /// Files dropped on a document's page grid or its Pages panel.
@@ -635,6 +636,8 @@ pub struct PdfCraftApp {
     pub ocr_verify: ocr_verify::OcrVerify,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
+    /// File ▸ Attach to email: the request under way and the file that couldn't be attached.
+    pub send_email: send_email_ui::SendEmailState,
     /// Frames in a row whose logic or drawing panicked, and whether this frame's did
     /// (`frame_guard`, #3914).
     panicking_frames: u32,

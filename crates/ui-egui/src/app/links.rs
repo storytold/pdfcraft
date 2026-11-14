@@ -175,7 +175,12 @@ impl PdfCraftApp {
         if let Some(p) = self.pending_link.take()
             && open
         {
-            self.open_url(&p.url);
+            // An email address opens in the email app the person set, not through the browser.
+            if p.url.get(.."mailto:".len()).is_some_and(|head| head.eq_ignore_ascii_case("mailto:")) {
+                self.open_email_address(&p.url);
+            } else {
+                self.open_url(&p.url);
+            }
         }
     }
 }

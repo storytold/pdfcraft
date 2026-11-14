@@ -238,6 +238,7 @@ impl PdfCraftApp {
             ocr_web_waiting: None,
             ocr_verify: ocr_verify::OcrVerify::default(),
             run_inline: false,
+            send_email: Default::default(),
             panicking_frames: 0,
             frame_panicked: false,
             logic_without_ui: false,
@@ -802,6 +803,7 @@ impl PdfCraftApp {
         if self.ocr_verify.reread.is_some() {
             workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_reread);
         }
+        self.poll_send_email();
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
