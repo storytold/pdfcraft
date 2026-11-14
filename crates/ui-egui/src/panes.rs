@@ -185,7 +185,7 @@ impl PdfCraftApp {
         self.views.iter().position(|v| v.pane.key == key)
     }
 
-    fn active_key(&self) -> Option<u64> {
+    pub(crate) fn active_key(&self) -> Option<u64> {
         self.active.and_then(|i| self.views.get(i)).map(|v| v.pane.key)
     }
 
@@ -288,13 +288,21 @@ impl PdfCraftApp {
         self.active = active.and_then(|k| self.tab_with_key(k));
 
         let new_idx = at.min(self.views.len().saturating_sub(1));
-        let left_group = if new_idx > 0 { self.views.get(new_idx - 1).and_then(|v| v.group) } else { None };
-        let right_group = self.views.get(new_idx + 1).and_then(|v| v.group);
-
-        if left_group.is_some() && left_group == right_group {
-            self.views[new_idx].group = left_group;
-        } else if left_group.is_none() && right_group.is_none() {
+        if self.views[new_idx].pinned {
             self.views[new_idx].group = None;
+        } else {
+            let left_neighbor = to.checked_sub(1).and_then(|idx| others.get(idx)).copied();
+            let right_neighbor = others.get(to).copied();
+            let left_group = left_neighbor.and_then(|idx| self.views.get(idx)).and_then(|v| v.group);
+            let right_group = right_neighbor.and_then(|idx| self.views.get(idx)).and_then(|v| v.group);
+
+            if left_group.is_some() && left_group == right_group {
+                self.views[new_idx].group = left_group;
+            } else if old_group.is_some() && (left_group == old_group || right_group == old_group) {
+                self.views[new_idx].group = old_group;
+            } else {
+                self.views[new_idx].group = None;
+            }
         }
 
         if let Some(og) = old_group {

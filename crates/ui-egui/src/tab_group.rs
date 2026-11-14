@@ -134,9 +134,21 @@ impl PdfCraftApp {
 
     /// Remove tab at `tab_index` from its current group.
     pub fn remove_tab_from_group(&mut self, tab_index: usize) {
-        let Some(view) = self.views.get_mut(tab_index) else { return };
-        let prev_group = view.group.take();
+        if tab_index >= self.views.len() {
+            return;
+        }
+        let prev_group = self.views[tab_index].group.take();
         if let Some(gid) = prev_group {
+            let active_key = self.active_key();
+            // Move after the remaining members of the group so the group stays contiguous.
+            let last_member = self.views.iter().rposition(|v| v.group == Some(gid));
+            if let Some(target) = last_member
+                && target > tab_index
+            {
+                let view = self.views.remove(tab_index);
+                self.views.insert(target, view);
+                self.active = active_key.and_then(|k| self.tab_with_key(k));
+            }
             self.cleanup_empty_group(gid);
         }
     }
@@ -160,10 +172,7 @@ impl PdfCraftApp {
         for &idx in member_indices.iter().rev() {
             self.request_close_tab(idx);
         }
-        self.tab_groups.retain(|g| g.id != group_id);
-        if self.editing_group == Some(group_id) {
-            self.editing_group = None;
-        }
+        self.cleanup_empty_group(group_id);
     }
 
     /// Toggle collapsed state of a group.
@@ -208,11 +217,17 @@ impl PdfCraftApp {
         let Some(view) = self.views.get(tab_index) else { return };
         let id = view.id;
         let group = view.group;
+        let is_pinned = view.pinned;
         let Some(doc) = self.session.get(id) else { return };
         let mut twin = view.twin(&doc.info);
         twin.group = group;
         twin.pinned = false;
-        let at = (tab_index + 1).min(self.views.len());
+        let at = if is_pinned {
+            // Unpinned duplicate sits at the start of the unpinned section, preserving the pinned section
+            self.views.iter().filter(|v| v.pinned).count()
+        } else {
+            (tab_index + 1).min(self.views.len())
+        };
         self.views.insert(at, twin);
         self.active = Some(at);
     }

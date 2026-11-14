@@ -1269,6 +1269,8 @@ impl DocView {
         fresh.viewport_w = self.viewport_w;
         fresh.viewport_h = self.viewport_h;
         fresh.viewport_screen = self.viewport_screen;
+        fresh.group = self.group;
+        fresh.pinned = self.pinned;
         fresh.pane = self.pane.clone();
         *self = fresh;
         // Marks the kept images out of date and clamps the page to the new page count.

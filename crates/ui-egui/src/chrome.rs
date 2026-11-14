@@ -88,13 +88,15 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
                 // Tabs shrink to share the strip (names end in "…") and scroll only once they reach
                 // their narrowest; then arrows either side say so and step through them.
-                let natural = calculate_tabs_natural_widths(app, ui, &t, animated);
+                let (natural, pills_width) = calculate_tabs_natural_widths(app, ui, &t, animated);
                 let gap = ui.spacing().item_spacing.x;
-                let overflow = tabs_overflow(&natural, tabs_width, gap, TAB_MIN_WIDTH);
+                let doc_budget = (tabs_width - pills_width).max(0.0);
+                let overflow = tabs_overflow(&natural, doc_budget, gap, TAB_MIN_WIDTH);
                 if overflow {
                     tabs_width = (tabs_width - 2.0 * (TAB_ARROW + gap)).max(0.0);
                 }
-                let cap = tab_cap(&natural, tabs_width, gap, TAB_MIN_WIDTH);
+                let remaining_doc_budget = (tabs_width - pills_width).max(0.0);
+                let cap = tab_cap(&natural, remaining_doc_budget, gap, TAB_MIN_WIDTH);
                 // Where the tabs were scrolled to last frame, and how far they can go.
                 let scroll_id = ui.scope_id().with("tab_scroll");
                 let (offset, max_offset) = ui.data(|d| d.get_temp::<(f32, f32)>(scroll_id)).unwrap_or((0.0, 0.0));
@@ -203,12 +205,18 @@ fn step_tab_animations(app: &mut PdfCraftApp, ui: &egui::Ui, animated: bool, dt:
         }
     }
     for idx in to_close.into_iter().rev() {
-        app.close_tab(idx);
+        if let Some(v) = app.views.get_mut(idx) {
+            v.closing = false;
+            v.close_progress = 1.0;
+        }
+        app.request_close_tab(idx);
     }
 }
 
-fn calculate_tabs_natural_widths(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, animated: bool) -> Vec<f32> {
+fn calculate_tabs_natural_widths(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, animated: bool) -> (Vec<f32>, f32) {
     let mut natural: Vec<f32> = Vec::with_capacity(app.views.len() + 1);
+    let mut pills_width = 0.0;
+    let gap = ui.spacing().item_spacing.x;
     let mut seen_groups = std::collections::HashSet::new();
     for i in app.tabs_in(Place::Main) {
         let Some(view) = app.views.get(i) else { continue };
@@ -216,7 +224,7 @@ fn calculate_tabs_natural_widths(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Token
             if seen_groups.insert(gid)
                 && let Some(g) = app.group(gid)
             {
-                natural.push(crate::tab_group::group_pill_natural_width(ui, &g.title));
+                pills_width += crate::tab_group::group_pill_natural_width(ui, &g.title) + gap;
             }
             if let Some(g) = app.group(gid) {
                 if animated {
@@ -246,7 +254,7 @@ fn calculate_tabs_natural_widths(app: &PdfCraftApp, ui: &mut egui::Ui, t: &Token
     if app.combine_tab.open {
         natural.push(tab_natural_width(ui, t, tl!("Combine files")));
     }
-    natural
+    (natural, pills_width)
 }
 
 struct TabsStripConfig<'a> {
@@ -314,28 +322,29 @@ struct TabDragState {
 }
 
 fn compute_tab_shift(
-    app: &PdfCraftApp,
     ui: &egui::Ui,
     active_drag: Option<TabDragState>,
-    i: usize,
-    view_id: pdfcraft_engine::DocId,
-    cfg: &TabsStripConfig<'_>,
+    from_slot: Option<usize>,
+    i_slot: Option<usize>,
+    from_w: f32,
+    view_key: u64,
+    animated: bool,
 ) -> f32 {
     let Some(drag) = active_drag else { return 0.0 };
-    let (from, to) = (drag.from, drag.to);
-    if i == from {
+    let (Some(from_s), Some(i_s)) = (from_slot, i_slot) else { return 0.0 };
+    if from_s == i_s {
         0.0
     } else {
-        let from_w = app.views.get(from).map_or(TAB_MIN_WIDTH, |v| if v.pinned { 36.0 } else { TAB_MIN_WIDTH }) + cfg.gap;
-        let target_shift = if from < to && i > from && i <= to {
+        let to = drag.to;
+        let target_shift = if from_s < to && i_s > from_s && i_s <= to {
             -from_w
-        } else if to < from && i >= to && i < from {
+        } else if to < from_s && i_s >= to && i_s < from_s {
             from_w
         } else {
             0.0
         };
-        let shift_anim_id = ui.scope_id().with(("tab_shift_x", view_id));
-        let shift_duration = if cfg.animated { 0.16 } else { 0.0 };
+        let shift_anim_id = ui.scope_id().with(("tab_shift_x", view_key));
+        let shift_duration = if animated { 0.16 } else { 0.0 };
         ui.ctx().animate_value_with_time(shift_anim_id, target_shift, shift_duration)
     }
 }
@@ -344,13 +353,15 @@ fn show_group_editor_if_active(app: &mut PdfCraftApp, ui: &mut egui::Ui, pill_sl
     if let Some(editing_gid) = app.editing_group
         && let Some(&(_, pill_id, pill_rect)) = pill_slots.iter().find(|(gid, _, _)| *gid == editing_gid)
     {
+        let mut is_open = true;
         let mut close_editor = false;
         egui::Popup::new(pill_id.with("group_editor_popup"), ui.ctx().clone(), pill_rect, ui.layer_id())
+            .open_bool(&mut is_open)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
                 crate::tab_group::group_editor_popup(app, ui, editing_gid, &mut close_editor);
             });
-        if close_editor {
+        if close_editor || !is_open {
             app.editing_group = None;
         }
     }
@@ -389,10 +400,28 @@ fn show_main_tabs_content(app: &mut PdfCraftApp, ui: &mut egui::Ui, cfg: &TabsSt
     let mut close = None;
 
     let active_drag: Option<TabDragState> = ui.data(|d| d.get_temp(ui.scope_id().with("drag_reorder")));
+    let visible_indices: Vec<usize> = app
+        .tabs_in(Place::Main)
+        .into_iter()
+        .filter(|&idx| app.views.get(idx).is_some_and(|v| compute_tab_scale(app, v, cfg.animated) > 0.001))
+        .collect();
+    let from_slot = active_drag.and_then(|drag| visible_indices.iter().position(|&idx| idx == drag.from));
+    let from_w = active_drag.map_or(TAB_MIN_WIDTH + cfg.gap, |drag| {
+        let w = app.views.get(drag.from).map_or(TAB_MIN_WIDTH, |v| {
+            if v.pinned {
+                36.0 * compute_tab_scale(app, v, cfg.animated)
+            } else if let Some(name) = crate::canvas::tab_label(app, drag.from) {
+                tab_natural_width(ui, cfg.t, &name) * compute_tab_scale(app, v, cfg.animated)
+            } else {
+                TAB_MIN_WIDTH
+            }
+        });
+        if let Some(cap) = cfg.cap { w.min(cap) + cfg.gap } else { w + cfg.gap }
+    });
 
     for i in app.tabs_in(Place::Main) {
         let Some(view) = app.views.get(i) else { continue };
-        let (view_id, view_group, view_pinned) = (view.id, view.group, view.pinned);
+        let (view_id, view_key, view_group, view_pinned) = (view.id, view.view_key(), view.group, view.pinned);
         let Some(doc) = app.session.get(view_id) else { continue };
         let Some(name) = crate::canvas::tab_label(app, i) else { continue };
 
@@ -409,7 +438,8 @@ fn show_main_tabs_content(app: &mut PdfCraftApp, ui: &mut egui::Ui, cfg: &TabsSt
             continue;
         }
 
-        let current_shift = compute_tab_shift(app, ui, active_drag, i, view_id, cfg);
+        let i_slot = visible_indices.iter().position(|&idx| idx == i);
+        let current_shift = compute_tab_shift(ui, active_drag, from_slot, i_slot, from_w, view_key, cfg.animated);
 
         let same_group_as_prev = match (last_group, view_group) {
             (Some(prev), Some(curr)) => prev == curr,
@@ -423,7 +453,7 @@ fn show_main_tabs_content(app: &mut PdfCraftApp, ui: &mut egui::Ui, cfg: &TabsSt
         let response = tab(
             ui,
             TabSpec {
-                id: ui.scope_id().with(("document-tab", view_id)),
+                id: ui.scope_id().with(("document-tab", view_key)),
                 theme: cfg.t,
                 icon: "file-text",
                 name: &name,
@@ -782,6 +812,7 @@ pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Re
         let file = (name != doc.name).then(|| doc.name.clone());
         let id = row.scope_id().with(("pane-tab", view.view_key()));
         let group_color = view.group.and_then(|gid| app.group(gid)).map(|g| g.color.color32());
+        let view_pinned = view.pinned;
         let spec = TabSpec {
             id,
             theme: &t,
@@ -794,7 +825,7 @@ pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Re
             cap,
             height: inner.height(),
             draggable: true,
-            pinned: view.pinned,
+            pinned: view_pinned,
             group_color,
             bridge_left,
             scale: 1.0,
@@ -821,7 +852,7 @@ pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Re
             app.combine_tab.focused = false;
         }
         // A middle click closes the tab, as in the main strip (#1853).
-        if response.middle_clicked() {
+        if response.middle_clicked() && !view_pinned {
             close = Some(i);
         }
     }
@@ -1076,18 +1107,24 @@ fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui:
             p.galley(draw_rect.min + vec2(28.0, (draw_rect.height() - label_galley.size().y) / 2.0), label_galley.clone(), label_color);
         }
     });
-    let x_rect = Rect::from_center_size(draw_rect.right_center() - vec2(16.0, 0.0), vec2(20.0, 20.0));
-    let x = ui.interact(x_rect, id.with("close"), Sense::click());
-    let x_press = theme::Press::track(ui, &x);
-    x_press.wash(ui, x_rect, 4, false);
-    // Unsaved changes: a dot where the close button sits, until the tab is hovered.
-    if dirty && !resp.hovered() && !x.hovered() {
-        ui.painter().circle_filled(x_rect.center(), 4.0, if active { t.text.linear_multiply(scale) } else { t.text_muted.linear_multiply(scale) });
-    } else if active || resp.hovered() || x.hovered() {
-        icons::paint(ui, x_rect.translate(x_press.offset()), "x", 13.0, t.text_muted.linear_multiply(scale));
-    }
-    if theme::hand(x).clicked() {
-        *close = Some(index);
+    if draw_rect.width() >= 36.0 {
+        let x_rect = Rect::from_center_size(draw_rect.right_center() - vec2(16.0, 0.0), vec2(20.0, 20.0));
+        let x = ui.interact(x_rect, id.with("close"), Sense::click());
+        let x_press = theme::Press::track(ui, &x);
+        x_press.wash(ui, x_rect, 4, false);
+        // Unsaved changes: a dot where the close button sits, until the tab is hovered.
+        if dirty && !resp.hovered() && !x.hovered() {
+            ui.painter().circle_filled(
+                x_rect.center(),
+                4.0,
+                if active { t.text.linear_multiply(scale) } else { t.text_muted.linear_multiply(scale) },
+            );
+        } else if active || resp.hovered() || x.hovered() {
+            icons::paint(ui, x_rect.translate(x_press.offset()), "x", 13.0, t.text_muted.linear_multiply(scale));
+        }
+        if theme::hand(x).clicked() {
+            *close = Some(index);
+        }
     }
     let shown = match file {
         Some(file) => format!("{name}\n{file}"),
