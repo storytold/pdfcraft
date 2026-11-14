@@ -393,6 +393,7 @@ impl Session {
             fonts_stale: false,
             xfa_warnings: Vec::new(),
             edit_notices: Vec::new(),
+            alpha: Default::default(),
         }
     }
 }
