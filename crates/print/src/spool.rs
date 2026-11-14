@@ -442,12 +442,21 @@ pub fn submit(pdf: &[u8], job: &Job) -> Result<String, crate::PrintError> {
     let resolved = windows_duplex::job(job);
     #[cfg(windows)]
     let job = resolved.as_ref();
+    #[cfg(windows)]
+    if let Some(printer) = crate::label::label_printer(job) {
+        return crate::label::submit(pdf, job, &printer, &mut |_, _| {}).map_err(crate::PrintError::Spool);
+    }
     let pdf = spooled_pdf(pdf, crate::font_names::RENAME_FOR_SPOOLER);
     craft_print::submit(&pdf, &spooled(job)).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
 /// [`submit`], told `(sent, sheets)` as each sheet reaches the spooler (Windows; CUPS takes the
 /// whole PDF at once and reports nothing).
+///
+/// On Windows a thermal label printer (`craft_print::is_label_printer`) is sent the sheets as
+/// black-and-white pictures at its resolution through GDI with the user's own driver settings,
+/// as Acrobat does: its driver dithers any grey, which turned barcodes and seals into dot
+/// patterns.
 pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, crate::PrintError> {
     if let Some(dll) = missing_print_dll() {
         return Err(unavailable(dll));
@@ -458,6 +467,10 @@ pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usiz
     let resolved = windows_duplex::job(job);
     #[cfg(windows)]
     let job = resolved.as_ref();
+    #[cfg(windows)]
+    if let Some(printer) = crate::label::label_printer(job) {
+        return crate::label::submit(pdf, job, &printer, progress).map_err(crate::PrintError::Spool);
+    }
     let pdf = spooled_pdf(pdf, crate::font_names::RENAME_FOR_SPOOLER);
     craft_print::submit_with_progress(&pdf, &spooled(job), progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }

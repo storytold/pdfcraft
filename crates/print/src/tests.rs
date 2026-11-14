@@ -1992,3 +1992,47 @@ fn texts_read_up_answers_many_pages_from_one_walk() {
     assert!(up.iter().all(|u| !u), "upright text, and no page 3000");
     assert_eq!(up[1], text_reads_up(&doc, 1));
 }
+
+/// Label printers are sent black-and-white pixels: anti-aliased greys fall to ink or paper, and
+/// transparency is paper.
+#[test]
+fn label_sheets_are_made_black_and_white() {
+    // Premultiplied RGBA, one row: black, 40% grey, 60% grey, white, transparent, black at 40% coverage.
+    let rgba = [0, 0, 0, 255, 102, 102, 102, 255, 153, 153, 153, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 102];
+    assert_eq!(crate::label::black_and_white(&rgba, 6), [0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]);
+    assert!(crate::label::black_and_white(&[1, 2, 3], 1).is_empty(), "a partial pixel is left out");
+}
+
+/// A flat grey area keeps its shade as a dot pattern (#7018's 50% grey square vanished when every
+/// pixel was thresholded), while a grey pixel at an edge still falls to one side.
+#[test]
+fn label_grey_areas_are_dithered_and_edges_stay_sharp() {
+    let square = |side: usize, grey: u8| -> Vec<u8> { (0..side * side).flat_map(|_| [grey, grey, grey, 255]).collect() };
+    let ink = |rgb: &[u8]| rgb.as_chunks::<3>().0.iter().filter(|px| px[0] == 0).count();
+    let side = 32;
+    for (grey, share) in [(128u8, 0.5), (64, 0.75), (192, 0.25)] {
+        let out = crate::label::black_and_white(&square(side, grey), side);
+        assert!(out.iter().all(|v| *v == 0 || *v == 255));
+        // The square's border has no four grey neighbours, so it is thresholded; count the inside.
+        let inside: Vec<u8> = out.chunks(side * 3).skip(1).take(side - 2).flat_map(|row| row[3..(side - 1) * 3].to_vec()).collect();
+        let dots = ink(&inside) as f64 / ((side - 2) * (side - 2)) as f64;
+        assert!((dots - share).abs() < 0.05, "{grey}: {dots} ink, not about {share}");
+    }
+    // A one-pixel grey line between black and white (an anti-aliased edge) is thresholded.
+    let edge: Vec<u8> = [0u8, 0, 100, 255, 255].iter().cycle().take(25).flat_map(|v| [*v, *v, *v, 255]).collect();
+    let out = crate::label::black_and_white(&edge, 5);
+    assert_eq!(out.as_chunks::<3>().0.iter().map(|px| px[0]).collect::<Vec<_>>(), [0, 0, 0, 255, 255].repeat(5));
+}
+
+/// A label job whose sheets aren't the stock in the user's settings is refused before anything is
+/// sent (#7018: a 4 × 6 in print on a driver left at 104 × 76.2 mm was cut off).
+#[test]
+fn label_sheets_must_be_the_users_stock() {
+    let four_by_six = (288.0, 432.0);
+    assert_eq!(crate::label::sheet_fits_stock("Zebra", four_by_six, four_by_six), Ok(()));
+    assert_eq!(crate::label::sheet_fits_stock("Zebra", four_by_six, (289.13, 430.87)), Ok(()), "102 × 152 mm stock");
+    let refused = crate::label::sheet_fits_stock("Zebra", four_by_six, (294.8, 216.0)).unwrap_err();
+    assert!(refused.contains("4.09 × 3.00 in labels") && refused.contains("4.00 × 6.00 in") && refused.contains("nothing was sent"), "{refused}");
+    assert!(crate::label::sheet_fits_stock("Zebra", (432.0, 288.0), four_by_six).is_err(), "a sheet the other way round");
+    assert!(crate::label::sheet_fits_stock("Zebra", (162.0, 90.0), four_by_six).is_err(), "a smaller sheet");
+}
