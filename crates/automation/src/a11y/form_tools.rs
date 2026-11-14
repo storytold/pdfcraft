@@ -16,8 +16,25 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
         R::Beep => json!({ "beep": true }),
         R::Highlight(on) => json!({ "highlight": on }),
         R::SaveAs => json!({ "save_as": true }),
+        R::OpenDoc(path) => json!({ "open_doc": path }),
         R::OpenAttachment { name, open } => json!({ "attachment": name, "open": open }),
         R::ShowPanel(p) => json!({ "panel": p.id() }),
+    }
+}
+
+/// The optional `answers` argument: the prompts' answers in order (null cancels one).
+fn answers(a: &Args) -> Result<Vec<Option<String>>> {
+    match a.0.get("answers") {
+        None => Ok(Vec::new()),
+        Some(Value::Array(values)) if values.len() <= 32 => values
+            .iter()
+            .map(|v| match v {
+                Value::Null => Ok(None),
+                Value::String(s) if s.len() <= 4096 => Ok(Some(s.clone())),
+                _ => Err(ToolError::InvalidArgs("answers must contain strings or null".into())),
+            })
+            .collect(),
+        _ => Err(ToolError::InvalidArgs("answers must be an array of at most 32 strings or null".into())),
     }
 }
 
@@ -55,18 +72,7 @@ impl Automation {
     /// messages, console lines, requests, error, the failing document scripts' errors and result.
     pub(crate) fn js_run(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
-        let answers = match a.0.get("answers") {
-            None => Vec::new(),
-            Some(Value::Array(values)) if values.len() <= 32 => values
-                .iter()
-                .map(|v| match v {
-                    Value::Null => Ok(None),
-                    Value::String(s) if s.len() <= 4096 => Ok(Some(s.clone())),
-                    _ => Err(ToolError::InvalidArgs("answers must contain strings or null".into())),
-                })
-                .collect::<Result<Vec<_>>>()?,
-            _ => return Err(ToolError::InvalidArgs("answers must be an array of at most 32 strings or null".into())),
-        };
+        let answers = answers(a)?;
         let identity = field_id(a)?;
         let (script, field) = (a.str("script")?, a.opt_str("field")?);
         let (mut o, edit) =
@@ -80,6 +86,82 @@ impl Automation {
             json!({ "alerts": alerts, "console": o.console, "requests": reqs, "error": o.error, "document_errors": o.doc_errors, "result": o.result }),
             edit.errors,
         ))
+    }
+
+    /// `link_run_javascript`: run the JavaScript action of link `index` on page `page` (both
+    /// 1-based, as link_list gives them), answering its prompts from `answers`, and report what
+    /// it showed and asked for. A failed script commits nothing (#2081).
+    pub(crate) fn link_run_javascript(&mut self, a: &Args) -> Result<Value> {
+        let answers = answers(a)?;
+        let one_based = |key: &str| -> Result<usize> {
+            let n = a.int(key)?;
+            usize::try_from(n).ok().and_then(|n| n.checked_sub(1)).ok_or_else(|| ToolError::InvalidArgs(format!("{key} must be 1 or more")))
+        };
+        let (page, index) = (one_based("page")?, one_based("index")?);
+        let doc = self.doc(a)?;
+        let id = doc.id;
+        if !doc.info.links.iter().any(|l| l.page == page && l.index == index && matches!(l.target, pdfcraft_render::LinkTarget::JavaScript(_))) {
+            return Err(failed(format!("page {} has no JavaScript link {} (see link_list)", page + 1, index + 1)));
+        }
+        let (o, edit) = self.session.with_own_js_output(id, |s| s.run_link_javascript(id, page, index, &answers)).map_err(failed)?;
+        let reqs: Vec<Value> = o.requests.iter().chain(&edit.requests).map(request_json).collect();
+        let alerts: Vec<Value> = o.alerts.iter().chain(&edit.alerts).map(alert_json).collect();
+        let console: Vec<&String> = o.console.iter().chain(&edit.console).collect();
+        Ok(with_warnings(json!({ "alerts": alerts, "console": console, "requests": reqs, "error": o.error, "result": o.result }), edit.errors))
+    }
+
+    /// `js_page`: read the document at a page, running page actions as the viewer does (#169).
+    pub(crate) fn js_page(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let page = self.page(a)?;
+        let clock = self.session.script_clock(id).unwrap_or(0.0);
+        let run = self.session.show_page(id, page, clock);
+        // What the actions showed or hid is in the document's view settings.
+        self.renderers.remove(&id);
+        Ok(self.script_run_json(id, &run))
+    }
+
+    /// `js_advance`: move the script clock on, running the timers that fall due on the way, in
+    /// the order they do.
+    pub(crate) fn js_advance(&mut self, a: &Args) -> Result<Value> {
+        /// Most timer runs one call makes (a 10 ms interval for a minute).
+        const MAX_RUNS: usize = 6000;
+        let id = self.doc(a)?.id;
+        let ms = a.opt_num("ms")?.ok_or_else(|| ToolError::InvalidArgs("ms is required".into()))?;
+        if !(0.0..=3_600_000.0).contains(&ms) {
+            return Err(ToolError::InvalidArgs("ms must be between 0 and 3600000".into()));
+        }
+        let start = self.session.script_clock(id).unwrap_or(0.0);
+        let end = start + ms;
+        let mut total = pdfcraft_engine::ScriptRun::default();
+        while total.ran < MAX_RUNS {
+            let Some(at) = self.session.next_timer(id).filter(|at| *at <= end) else { break };
+            let run = self.session.run_timers_at_most(id, at.max(start), MAX_RUNS - total.ran);
+            if run.ran == 0 {
+                break;
+            }
+            merge_runs(&mut total, run);
+        }
+        let behind = self.session.next_timer(id).is_some_and(|at| at <= end);
+        // The clock ends where it was sent; a timer the run cap left behind counts on from there,
+        // and runs at the next call, not past the cap.
+        let last = self.session.run_timers_at_most(id, end, MAX_RUNS - total.ran);
+        merge_runs(&mut total, last);
+        self.renderers.remove(&id);
+        let mut out = self.script_run_json(id, &total);
+        out["ran"] = json!(total.ran);
+        out["stopped_early"] = json!(behind);
+        Ok(out)
+    }
+
+    fn script_run_json(&mut self, id: pdfcraft_engine::DocId, run: &pdfcraft_engine::ScriptRun) -> Value {
+        let reqs: Vec<Value> = run.output.requests.iter().map(request_json).collect();
+        let alerts: Vec<Value> = run.output.alerts.iter().map(alert_json).collect();
+        let pages: Vec<usize> = run.pages.iter().map(|p| p + 1).collect();
+        let clock = self.session.script_clock(id).unwrap_or(0.0);
+        let next = self.session.next_timer(id).map(|at| (at - clock).max(0.0));
+        json!({ "alerts": alerts, "console": run.output.console, "requests": reqs, "errors": run.output.errors,
+            "pages": pages, "edited": run.edited, "layers": run.layers, "clock_ms": clock, "next_timer_in_ms": next })
     }
 
     pub(crate) fn js_document_scripts(&self, a: &Args) -> Result<Value> {
@@ -283,5 +365,18 @@ impl Automation {
             self.session.set_javascript(on);
         }
         Ok(json!({ "enabled": self.session.javascript() }))
+    }
+}
+
+/// Adds what `run` did to `total`.
+fn merge_runs(total: &mut pdfcraft_engine::ScriptRun, run: pdfcraft_engine::ScriptRun) {
+    total.ran += run.ran;
+    total.edited |= run.edited;
+    total.layers |= run.layers;
+    total.output.append(run.output);
+    for p in run.pages {
+        if !total.pages.contains(&p) {
+            total.pages.push(p);
+        }
     }
 }

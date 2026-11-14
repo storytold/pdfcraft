@@ -181,6 +181,7 @@ impl Session {
             runner.runtime = doc.js_runtime.clone();
             runner.doc.zoom = doc.js_zoom;
             runner.doc.page = doc.js_page;
+            runner.doc.layers = crate::live_scripts::js_layers(&doc.info);
             cx.js = Some(runner);
         }
         cx.renamed_fields.clear();
@@ -204,13 +205,16 @@ impl Session {
             // Fail closed.
             let before: std::collections::HashSet<_> = pdfcraft_model::pages(&editor.cos).iter().map(|p| p.obj).collect();
             let after: std::collections::HashSet<_> = pdfcraft_model::pages(&next).iter().map(|p| p.obj).collect();
+            // Either refusal also discards what the batch's field scripts left in the realm.
             if cx.redaction_marks.iter().any(|(o, _)| !after.contains(o)) && after.iter().any(|o| !before.contains(o)) {
+                discard_edit_callbacks(&cx);
                 return Err(EditError::Invalid(
                     "a batch that deletes a page with a redaction mark and adds pages can't be verified; the document was not changed".into(),
                 ));
             }
             guard(|| shown_under_redactions(&next, &cx.redaction_marks, &cx.redaction_overlays, doc.password.as_deref()))
-                .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
+                .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))
+                .inspect_err(|_| discard_edit_callbacks(&cx))?;
         }
         // Renamed fields are said, not slipped in: a repair-log note (with the caveat that
         // scripts were left alone) and a count in the undo step's label.
