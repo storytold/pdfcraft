@@ -687,7 +687,9 @@ mod tests {
         assert!(matches!(poll().as_slice(), [OsEvent::Open(p)] if p == &["C:\\a.pdf"]));
     }
 
-    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    // Unix only: removing a directory as a file gives IsADirectory there, but
+    // PermissionDenied on Windows, which the code retries as "busy".
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn a_socket_that_cant_be_cleared_falls_back_to_the_next_candidate() {
         let stuck = socket("stuck");
