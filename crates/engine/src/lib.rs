@@ -161,14 +161,14 @@ use document::{carry_verdict_marks, display_bytes, info_fields, recovered_render
 pub use edit::{BATCH_LABELS, EDIT_LABELS, Edit};
 pub use error::{EditError, SourceProblem};
 pub use fill_sign::{displayed_offset, text_box_at, typed_signature_graphic, typed_signature_shape};
-pub use history::Label;
+pub use history::{CertificateKey, Label};
 use layers::{apply_layer_state, print_layer_states, print_preview_layers, set_default_layer_state, use_layer_choices};
 pub use open::{OpenContext, PreparedDocument};
 pub use page_filter::{PageOrientation, PageParity, filter_pages};
 pub use pictures::{MarkFile, image_dimensions};
 use pictures::{embed_image, fit_picture, mark_source, model_poster};
-use protection::unrestricted;
-pub use protection::{Changes, Printing, Protection, SecuritySummary};
+pub use protection::{CertificateProtection, CertificateRecipient, Changes, Printing, Protection, SecuritySummary};
+use protection::{certificate_secured, plain_copy, unlock_with_identities, unrestricted, working_file};
 pub use session::Session;
 pub use sources::{CombineSource, Combined, combine_source_check, office_to_pdf, source_page_count};
 use sources::{open_source, open_source_with};

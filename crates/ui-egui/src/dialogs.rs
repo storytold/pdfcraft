@@ -9,6 +9,7 @@ use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, wid
 
 pub(super) mod appearance;
 pub mod bookmark_styles_ui;
+pub(super) mod certificate_ui;
 pub(super) mod comment_props;
 pub(super) mod convert_colours_ui;
 pub(super) mod credits;
@@ -56,6 +57,7 @@ struct Pending {
     apply_number: bool,
     link_command: Option<&'static str>,
     protect_now: bool,
+    certificate_now: bool,
     boxes_now: bool,
     printer_marks_now: bool,
     colours_now: bool,
@@ -486,6 +488,12 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.close = req.apply || cancel;
             return false;
         }
+        Dialog::EncryptCertificate => {
+            let (go, cancel) = crate::certificate_ui::body(ui, app, &t);
+            req.certificate_now = go;
+            req.close = go || cancel;
+            return false;
+        }
         Dialog::PrinterMarks => {
             let (go, cancel) = crate::printer_marks_ui::body(ui, app, &t);
             req.printer_marks_now = go;
@@ -749,23 +757,29 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                     }
                 }
                 Some(sec) => {
-                    row(ui, "Security method", tl!("Password security").to_string());
+                    // Certificate security opens with a digital ID, not a password.
+                    row(ui, "Security method", if sec.certificate { tl!("Certificate security") } else { tl!("Password security") }.to_string());
                     row(ui, "Encryption", sec.method.clone());
                     row(
                         ui,
                         "Opened with",
                         if sec.pending {
                             tl!("— (protection is applied when you save)").to_string()
+                        } else if sec.certificate && sec.owner {
+                            tl!("Your digital ID (no restrictions apply)").to_string()
+                        } else if sec.certificate {
+                            tl!("Your digital ID").to_string()
                         } else if sec.owner {
                             tl!("Owner password (no restrictions apply)").to_string()
                         } else {
                             tl!("User password").to_string()
                         },
                     );
-                    // A restricted document asks for its permissions password first.
-                    if doc.allows_security_change() || doc.can_unlock() {
+                    // A restricted document asks for its permissions password first; a certificate's
+                    // document has none (a recipient with all permissions changes it).
+                    if doc.allows_security_change() || (doc.can_unlock() && !sec.certificate) {
                         ui.horizontal(|ui| {
-                            if doc.can_unlock() && ui.button(tl!("Unlock…")).clicked() {
+                            if doc.can_unlock() && !sec.certificate && ui.button(tl!("Unlock…")).clicked() {
                                 req.link_command = Some("protect.unlock");
                             }
                             if ui.button(tl!("Change settings…")).clicked() {
@@ -2173,6 +2187,9 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     if req.protect_now && app.apply_edit(app.protect_draft.edit()) {
         app.protect_draft = Default::default();
         app.notify_tr("Password protection will be applied when you save");
+    }
+    if req.certificate_now {
+        app.apply_certificate_draft();
     }
     if req.printer_marks_now {
         app.add_printer_marks();

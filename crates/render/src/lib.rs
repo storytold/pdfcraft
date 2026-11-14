@@ -41,6 +41,11 @@ pub enum OpenError {
     NeedsPassword,
     #[error("the password is incorrect")]
     WrongPassword,
+    /// Certificate security: none of the identities at hand opens it. The message says why:
+    /// no digital ID at all, none of them among the recipients (which are named), or an
+    /// envelope for one of them that could not be opened.
+    #[error("{0}")]
+    NeedsCertificate(String),
     #[error("{0}")]
     Unsupported(String),
 }

@@ -1,6 +1,10 @@
 //! Password protection to apply, and the security a document has.
 
-use crate::EditError;
+use std::sync::Arc;
+
+use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
+
+use crate::{CertificateKey, EditError};
 
 /// Document Properties ▸ Security.
 #[derive(Clone, Debug, PartialEq)]
@@ -13,6 +17,8 @@ pub struct SecuritySummary {
     pub permissions: pdfcraft_cos::Permissions,
     /// Set in this session; written by the next save.
     pub pending: bool,
+    /// Certificate security (§7.6.5): the document opens with a digital ID, not a password.
+    pub certificate: bool,
 }
 
 /// What printing a protected document allows (Acrobat: Printing allowed).
@@ -148,6 +154,108 @@ impl Protection {
         }
         Ok(())
     }
+}
+
+/// Certificate security to apply (§7.6.5): the file encrypted for `recipients`, each with the
+/// permissions their envelope carries (`-1`: everything, what the author gives themself).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CertificateProtection {
+    pub recipients: Vec<CertificateRecipient>,
+    /// AES-256 (Acrobat X and later) or AES-128 (Acrobat 7 and later).
+    pub algorithm: pdfcraft_cos::Algorithm,
+    pub encrypt_metadata: bool,
+    /// The file key's seed, fresh from [`Session::new_seed`](crate::Session::new_seed).
+    pub seed: [u8; 20],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CertificateRecipient {
+    /// The certificate, DER.
+    pub certificate: Vec<u8>,
+    /// Permission bits as `/P` (§7.6.4.2, Table 22); `-1` for everything.
+    pub permissions: i32,
+}
+
+/// Whether the document's next save is certificate security (`/Adobe.PubSec`): its working
+/// bytes cannot be read by the renderer, which gets a decrypted copy instead.
+pub(crate) fn certificate_secured(cos: &pdfcraft_cos::Document) -> bool {
+    cos.output_handler().is_some_and(|h| h.dict().filter == pdfcraft_cos::PUBSEC_FILTER)
+}
+
+/// `error` as it reads for `cos`: a refusal by a certificate-protected file's permissions does not
+/// point to an owner password, which that file has none of.
+pub(crate) fn note_certificate(error: EditError, cos: &pdfcraft_cos::Document) -> EditError {
+    match error {
+        EditError::NotPermitted(what) if certificate_secured(cos) => EditError::NotPermittedCertificate(what),
+        other => other,
+    }
+}
+
+/// The document as it is now, with no encryption: what the renderer and inspector read when
+/// the file itself is certificate-protected.
+pub(crate) fn plain_copy(cos: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
+    let mut plain = cos.clone();
+    plain.remove_encryption();
+    write_full(&plain, &SaveOptions::default()).map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
+}
+
+/// The working file: the file as opened or last saved, plus one appended update with the unsaved
+/// edits. A certificate-protected document's working file stays encrypted; its
+/// [`Document::bytes`](crate::Document::bytes) are a decrypted copy that must not leave memory.
+pub(crate) fn working_file(cos: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
+    if cos.is_modified() {
+        write_incremental(cos, &SaveOptions::default()).map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
+    } else {
+        Ok(cos.bytes().clone())
+    }
+}
+
+/// What one of `identities` makes of the envelopes: the seed and permissions of the first
+/// envelope addressed to it, or the message that says why none opens: no digital ID at all, an
+/// envelope for one of them that could not be opened (with the real reason), or none of them
+/// among the recipients, who are named.
+pub(crate) fn unlock_with_identities(identities: &[Arc<pdfcraft_sign::DigitalId>], envelopes: &[Vec<u8>]) -> Result<CertificateKey, String> {
+    let mut failure: Option<String> = None;
+    for id in identities {
+        for env in envelopes {
+            match pdfcraft_sign::envelope::open(env, id) {
+                Ok(Some(content)) => {
+                    if let Some((seed, permissions)) = pdfcraft_cos::permissions_from_envelope(&content) {
+                        return Ok(CertificateKey { seed, permissions });
+                    }
+                    failure.get_or_insert_with(|| {
+                        format!("{} is a recipient, but what its envelope holds is not readable", id.certificate.display_name())
+                    });
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    failure
+                        .get_or_insert_with(|| format!("an envelope is addressed to {}, but it can't be opened: {e}", id.certificate.display_name()));
+                }
+            }
+        }
+    }
+    let names = recipient_names(envelopes);
+    let what = format!("This document is encrypted with certificates, for specific people ({names})");
+    Err(match (identities.is_empty(), failure) {
+        (true, _) => format!("{what}. You have no digital ID to open it with: add the digital ID (.p12 or .pfx) of one of them."),
+        (false, Some(why)) => format!("{what}, and {why}."),
+        (false, None) => format!("{what}, and none of your digital IDs is among them."),
+    })
+}
+
+/// The recipients of the envelopes, a few of them named (issuer and serial number).
+fn recipient_names(envelopes: &[Vec<u8>]) -> String {
+    const SHOWN: usize = 4;
+    let all: Vec<String> = envelopes.iter().flat_map(|e| pdfcraft_sign::envelope::recipients(e)).collect();
+    if all.is_empty() {
+        return "recipients not readable".into();
+    }
+    let mut text = all.iter().take(SHOWN).map(|n| n.as_str()).collect::<Vec<_>>().join("; ");
+    if all.len() > SHOWN {
+        text.push_str(&format!("; and {} more", all.len() - SHOWN));
+    }
+    text
 }
 
 /// Opened as owner, or nothing is restricted (no permissions password was set): security may

@@ -23,6 +23,12 @@ pub enum EditError {
     ReadOnly(String),
     #[error("the document's security settings don't allow {0}; open it with the owner password to make this change")]
     NotPermitted(&'static str),
+    /// [`Self::NotPermitted`] for a document protected with certificates, whose restrictions no
+    /// owner password lifts: its recipients have them, or all permissions.
+    #[error(
+        "the document's security settings don't allow {0}; open it with the digital ID of a recipient who has all permissions to make this change"
+    )]
+    NotPermittedCertificate(&'static str),
     #[error("{0}")]
     Organize(#[from] pdfcraft_organize::OrganizeError),
     #[error("{0}")]

@@ -47,6 +47,7 @@ mod properties_session;
 pub mod marks {
     pub use crate::marks_ui::{MarksDraft, PageRange, Subset};
 }
+pub use certificate_ui::{CertificateDraft, Recipient};
 pub use content_ui::TextDraft;
 pub use create_ui::Clip;
 pub use link_ui::LinkDraft;
@@ -119,6 +120,7 @@ use canvas::wheel_pager;
 use canvas::zoom_snap;
 use dialogs::appearance;
 pub use dialogs::bookmark_styles_ui;
+use dialogs::certificate_ui;
 use dialogs::comment_props;
 use dialogs::convert_colours_ui;
 use dialogs::credits;
@@ -803,6 +805,7 @@ pub struct PdfCraftApp {
     pub hairlines_draft: hairlines_ui::HairlinesDraft,
     /// Protect Using Password dialog state.
     pub protect_draft: protect::ProtectDraft,
+    pub certificate_draft: certificate_ui::CertificateDraft,
     /// New bookmarks from text styles dialog state (#1693).
     pub text_style_draft: bookmark_styles_ui::TextStyleDraft,
     /// Set Page Boxes dialog state.

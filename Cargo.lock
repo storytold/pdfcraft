@@ -1265,7 +1265,7 @@ dependencies = [
 [[package]]
 name = "craft-pdf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/storytold/craft-libs?rev=3334d2cec36adc1e112e0ba57a20d4b98ffcb9cd#3334d2cec36adc1e112e0ba57a20d4b98ffcb9cd"
 dependencies = [
  "aes",
  "chrono",
@@ -1273,6 +1273,7 @@ dependencies = [
  "flate2",
  "js-sys",
  "md-5 0.11.0",
+ "sha1 0.11.0",
  "sha2 0.11.1",
  "stringprep",
  "thiserror 2.0.21",
@@ -1326,7 +1327,7 @@ dependencies = [
 [[package]]
 name = "craft-stream-codecs"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/storytold/craft-libs?rev=3334d2cec36adc1e112e0ba57a20d4b98ffcb9cd#3334d2cec36adc1e112e0ba57a20d4b98ffcb9cd"
 dependencies = [
  "fax",
  "hayro-ccitt",
@@ -4822,6 +4823,7 @@ dependencies = [
  "pdfcraft-fonts",
  "pdfcraft-model",
  "pdfcraft-testkit",
+ "rand_core 0.10.1",
  "rc2",
  "ripemd",
  "rsa",

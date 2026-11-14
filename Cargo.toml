@@ -34,7 +34,8 @@ craft-zip = { git = "https://github.com/storytold/craft-libs", version = "0.1.0"
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "e2dc681a3", features = ["egui"] }
-craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3", features = ["cos", "crypt", "filters"] }
+# Public-key security (storytold/craft-libs#1309); back to the shared rev once that merges.
+craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "3334d2cec36adc1e112e0ba57a20d4b98ffcb9cd", features = ["cos", "crypt", "filters"] }
 craft-rtf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-csv = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 # internal

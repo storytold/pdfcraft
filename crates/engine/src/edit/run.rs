@@ -85,7 +85,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Err(EditError::NotPermitted("filling in form fields"))
             }
         }
-        Edit::Protect(_) | Edit::RemoveProtection => {
+        Edit::Protect(_) | Edit::ProtectWithCertificates(_) | Edit::RemoveProtection => {
             if unrestricted(p) {
                 Ok(())
             } else {
@@ -1127,6 +1127,20 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             };
             doc.set_encryption(&params).map_err(|e| EditError::Protection(e.to_string()))?;
         }
+        Edit::ProtectWithCertificates(p) => {
+            if p.recipients.is_empty() {
+                return Err(EditError::Protection("choose at least one recipient".into()));
+            }
+            let envelopes = certificate_envelopes(p)?;
+            let params = pdfcraft_cos::PublicKeyEncryption {
+                algorithm: p.algorithm,
+                recipients: envelopes,
+                seed: p.seed,
+                permissions: -1,
+                encrypt_metadata: p.encrypt_metadata,
+            };
+            doc.set_public_key_encryption(&params).map_err(|e| EditError::Protection(e.to_string()))?;
+        }
         Edit::RemoveProtection => {
             if doc.output_handler().is_none() {
                 return Err(EditError::Protection("the document isn't protected".into()));
@@ -1136,6 +1150,29 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::Batch { edits, .. } => run_batch(doc, edits, cx)?,
     }
     Ok(())
+}
+
+/// The CMS envelopes of certificate security: one object per unique set of access permissions
+/// (ISO 32000-2, Tables 23 and 27), so recipients with equal permissions share one and the owners
+/// (every permission) are never in an envelope with the restricted ones. First appearance keeps
+/// the order.
+fn certificate_envelopes(p: &crate::CertificateProtection) -> Result<Vec<Vec<u8>>, EditError> {
+    let mut groups: Vec<(i32, Vec<pdfcraft_sign::Certificate>)> = Vec::new();
+    for r in &p.recipients {
+        let cert = pdfcraft_sign::Certificate::parse(&r.certificate)
+            .map_err(|e| EditError::Protection(format!("a recipient's certificate could not be read: {e}")))?;
+        match groups.iter_mut().find(|(permissions, _)| *permissions == r.permissions) {
+            Some((_, certs)) => certs.push(cert),
+            None => groups.push((r.permissions, vec![cert])),
+        }
+    }
+    let mut envelopes = Vec::with_capacity(groups.len());
+    for (permissions, certs) in &groups {
+        let content = [&p.seed[..], &pdfcraft_cos::permission_bytes(*permissions)].concat();
+        let certs: Vec<&pdfcraft_sign::Certificate> = certs.iter().collect();
+        envelopes.push(pdfcraft_sign::envelope::envelope_for(&certs, &content, p.algorithm).map_err(|e| EditError::Protection(e.to_string()))?);
+    }
+    Ok(envelopes)
 }
 
 /// Apply an edit batch while keeping reset deferral scoped to adjacent script writeback.

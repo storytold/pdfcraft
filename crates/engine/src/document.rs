@@ -2,14 +2,14 @@
 
 use std::sync::{Arc, OnceLock};
 
-use pdfcraft_cos::{SaveOptions, write_incremental};
+use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
 use pdfcraft_render::{DocInfo, RenderConfig, RenderPool};
 
 use crate::history::Editor;
 use crate::{
     CalculationOrder, CheckStyle, DocId, Edit, EditError, EditableObject, FormFieldKind, Hidden, InitialView, Label, MarkKind, SecuritySummary,
-    SignatureInfo, StatusCaptions, TabOrder, TrustStore, XfaLayout, a11y, form_appearance, guard, js, measure, optimize, renderer_password,
-    signatures_of, unrestricted,
+    SignatureInfo, StatusCaptions, TabOrder, TrustStore, XfaLayout, a11y, certificate_secured, form_appearance, guard, js, measure, optimize,
+    renderer_password, signatures_of, unrestricted, working_file,
 };
 #[cfg(test)]
 use crate::{record_link_scan, record_marker_scan};
@@ -18,7 +18,9 @@ pub struct Document {
     pub id: DocId,
     pub name: String,
     pub path: Option<String>,
-    /// The working file: what Save writes.
+    /// What the renderer and inspector read: the working file, or for a certificate-protected
+    /// document (which they cannot open) a decrypted copy of it, never to be written anywhere.
+    /// Save writes from the editor, never from these.
     pub bytes: Arc<Vec<u8>>,
     /// What is displayed (the page view, `page_render`, page images): `bytes`, plus what is drawn
     /// for display only ([`display_bytes`]): appearances for comments that have none, and the
@@ -553,7 +555,11 @@ impl Document {
 
     /// [`Self::allows_copying`], as the error to report when it isn't.
     pub fn check_copying(&self) -> Result<(), EditError> {
-        if self.allows_copying() { Ok(()) } else { Err(EditError::NotPermitted("copying text and images")) }
+        if self.allows_copying() {
+            return Ok(());
+        }
+        let denied = || EditError::NotPermitted("copying text and images");
+        Err(self.editor.as_ref().map_or_else(denied, |e| crate::protection::note_certificate(denied(), &e.cos)))
     }
 
     /// Page changes (insert, delete, rotate, move) are allowed.
@@ -674,7 +680,15 @@ impl Document {
         };
         let pending = editor.cos.encryption_changed();
         let permissions = if pending { pdfcraft_cos::Permissions { owner: false, ..h.permissions() } } else { h.permissions() };
-        Some(SecuritySummary { method: method.into(), owner: h.auth() == pdfcraft_cos::Auth::Owner && !pending, permissions, pending })
+        let certificate = d.filter == pdfcraft_cos::PUBSEC_FILTER;
+        let method = if certificate {
+            // People, not CMS objects: one envelope can name several.
+            let n: usize = d.recipients.iter().map(|r| pdfcraft_sign::envelope::recipient_count(r)).sum();
+            format!("{method} · certificates ({n} recipient{})", if n == 1 { "" } else { "s" })
+        } else {
+            method.to_string()
+        };
+        Some(SecuritySummary { method, owner: h.auth() == pdfcraft_cos::Auth::Owner && !pending, permissions, pending, certificate })
     }
 
     /// Comment properties of the comment at `(page, index)` (Comment Properties dialog).
@@ -767,6 +781,23 @@ impl Document {
         self.editor.as_ref().map_or_else(|| self.bytes.clone(), |e| e.saved.clone())
     }
 
+    /// The working file itself: [`Self::bytes`], except for a certificate-protected document,
+    /// whose `bytes` are a decrypted copy; its working file, written here when it has unsaved
+    /// edits, stays encrypted.
+    pub fn file_bytes(&self) -> Result<Arc<Vec<u8>>, EditError> {
+        match self.editor.as_ref().filter(|e| certificate_secured(&e.cos)) {
+            Some(e) => working_file(&e.cos),
+            None => Ok(self.bytes.clone()),
+        }
+    }
+
+    /// The first `len` bytes of [`Self::file_bytes`] (all of them when it is shorter): a saved
+    /// revision ([`Self::revision_ends`]) or the version a signature covers, as a file of its own.
+    pub fn file_prefix(&self, len: usize) -> Result<Arc<Vec<u8>>, EditError> {
+        let file = self.file_bytes()?;
+        Ok(Arc::new(file[..len.min(file.len())].to_vec()))
+    }
+
     /// Notes about damage repaired while opening (Document Properties ▸ Advanced, notices).
     pub fn repair_log(&self) -> Vec<String> {
         self.editor.as_ref().map(|e| e.cos.repair_log().to_vec()).unwrap_or_default()
@@ -838,7 +869,16 @@ pub(crate) fn write_display_copy(
     display: &pdfcraft_cos::Document,
     signatures: &mut [SignatureInfo],
 ) -> Arc<Vec<u8>> {
-    match write_incremental(display, &SaveOptions::default()) {
+    // A certificate-protected file is shown from a decrypted copy (`bytes`): so is its display
+    // copy, or the renderer could not open it. It stays in memory, like `bytes`.
+    let written = if certificate_secured(display) {
+        let mut plain = display.clone();
+        plain.remove_encryption();
+        write_full(&plain, &SaveOptions::default())
+    } else {
+        write_incremental(display, &SaveOptions::default())
+    };
+    match written {
         Ok(written) => Arc::new(written),
         Err(err) => {
             for sig in signatures.iter_mut() {
@@ -996,7 +1036,17 @@ pub(crate) fn shown_under_redactions(
         let kept: Vec<Object> = list.into_iter().filter(|o| !o.as_ref().is_some_and(|r| overlays.contains(&r))).collect();
         shown.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(kept))).map_err(|e| EditError::Write(e.to_string()))?;
     }
-    let bytes = Arc::new(write_incremental(&shown, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?);
+    let bytes = Arc::new(
+        // The renderer cannot open certificate security: it reads a decrypted copy, in memory only,
+        // as the page view does.
+        if certificate_secured(&shown) {
+            shown.remove_encryption();
+            write_full(&shown, &SaveOptions::default())
+        } else {
+            write_incremental(&shown, &SaveOptions::default())
+        }
+        .map_err(|e| EditError::Write(e.to_string()))?,
+    );
     // Page geometry comes from the document as it is now written: a page moved earlier in the batch
     // brings its own size and rotation with it.
     let pages = pdfcraft_render::inspect(bytes.clone(), password).map_err(|e| EditError::Write(e.to_string()))?.pages;
