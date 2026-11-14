@@ -85,8 +85,23 @@ pub(crate) fn check_form_xml_depth(text: &str) -> Result<(), DataError> {
     Ok(())
 }
 
-pub(crate) fn parse_form_xml(text: &str) -> Result<roxmltree::Document<'_>, roxmltree::Error> {
-    roxmltree::Document::parse_with_options(text, roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() })
+pub(crate) fn parse_form_xml(text: &str) -> Result<craft_xml::El, craft_xml::Error> {
+    let mut opts = craft_xml::Options::default();
+    opts.strict = true;
+    opts.doctype = craft_xml::Doctype::Reject;
+    opts.limits.max_nodes = MAX_NODES as usize;
+    opts.limits.max_depth = MAX_XML_DEPTH.max(1024);
+    opts.parse(text.as_bytes())
+}
+
+pub(crate) fn el_text(el: &craft_xml::El) -> String {
+    el.children
+        .iter()
+        .filter_map(|n| match n {
+            craft_xml::Node::Text(t) => Some(t.as_str()),
+            _ => None,
+        })
+        .collect()
 }
 
 pub(crate) const SUBTYPES: [(&str, &str); 17] = [
@@ -240,23 +255,22 @@ pub(crate) fn xml_name(name: &str) -> String {
     s
 }
 
-pub(crate) fn walk_xfdf(node: roxmltree::Node, prefix: &str, out: &mut Vec<(String, Vec<String>)>, depth: usize) -> Result<(), DataError> {
+pub(crate) fn walk_xfdf(node: &craft_xml::El, prefix: &str, out: &mut Vec<(String, Vec<String>)>, depth: usize) -> Result<(), DataError> {
     if depth > MAX_DEPTH {
         return Err(DataError::Malformed(format!("XFDF fields nest more than {MAX_DEPTH} deep")));
     }
-    for f in node.children().filter(|c| c.has_tag_name("field")) {
-        let Some(name) = f.attribute("name") else { continue };
+    for f in node.children(craft_xml::Local("field")) {
+        let Some(name) = f.attr("name") else { continue };
         let full = if prefix.is_empty() { name.to_string() } else { format!("{prefix}.{name}") };
         let vals: Vec<String> = f
-            .children()
-            .filter(|c| c.has_tag_name("value"))
+            .children(craft_xml::Local("value"))
             // Comments and processing instructions can split a value into several text nodes.
-            .map(|v| v.children().filter(|n| n.is_text()).filter_map(|n| n.text()).collect())
+            .map(el_text)
             .collect();
         // A leaf with no `<value>` is an empty field (the export writes one that way), so it
         // clears the field like FDF's `/V ()`; a field with kids only names their parent. A
         // leaf holding only `<value-richtext>` is not read yet, so it leaves the field alone.
-        let names_kids_or_rich = f.children().any(|c| c.has_tag_name("field") || c.has_tag_name("value-richtext"));
+        let names_kids_or_rich = f.elements().any(|c| matches!(c.local(), "field" | "value-richtext"));
         if !vals.is_empty() || !names_kids_or_rich {
             out.push((full.clone(), vals));
         }

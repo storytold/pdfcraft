@@ -1,6 +1,29 @@
-use super::Zip;
-use super::as_html::{esc, language_tag};
+use super::as_html::language_tag;
 use super::layout::{Image, Item, Page, Table, body_size, items, reading_order};
+use craft_opc::{PackageOut, RT_BASE, RelOut, RelsOut};
+use craft_xml::{Writer, esc};
+
+pub(crate) fn core_properties_xml(title: &str) -> Vec<u8> {
+    let mut w = Writer::document();
+    w.open(
+        "cp:coreProperties",
+        &[("xmlns:cp", "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"), ("xmlns:dc", "http://purl.org/dc/elements/1.1/")],
+    );
+    w.leaf("dc:title", &[], title);
+    w.into_bytes()
+}
+
+pub(crate) fn image_mime(ext: &str) -> &'static str {
+    match ext.to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" | "jpe" => "image/jpeg",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "tif" | "tiff" => "image/tiff",
+        "webp" => "image/webp",
+        _ => "application/octet-stream",
+    }
+}
 
 /// A colour's 8-bit sRGB components (NaN and out-of-range values clamp; NaN reads as 0).
 pub(crate) fn rgb8(c: [f64; 3]) -> [u8; 3] {
@@ -349,37 +372,27 @@ pub fn docx_with_language(pages: &[Page], title: &str, language: Option<&str>) -
 xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:w10=\"urn:schemas-microsoft-com:office:word\">{background}<w:body>{body}\
 </w:body></w:document>"
     );
-    let mut types = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
-<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/>\
-<Default Extension=\"png\" ContentType=\"image/png\"/><Default Extension=\"jpg\" ContentType=\"image/jpeg\"/>\
-<Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>\
-<Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/>\
-<Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>",
-    );
-    if page_colour.is_some() {
-        types.push_str(
-            "<Override PartName=\"/word/settings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml\"/>",
-        );
-    }
-    types.push_str("</Types>");
-    let rels = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
-<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>\
-<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties\" Target=\"docProps/core.xml\"/></Relationships>";
-    let mut doc_rels = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
-<Relationship Id=\"rIdStyles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>",
-    );
-    for (i, (name, _)) in media.iter().enumerate() {
-        doc_rels.push_str(&format!(
-            "<Relationship Id=\"rIdImg{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/{name}\"/>",
-            i + 1
-        ));
+    let mut pkg = PackageOut::default();
+    let mut root_rels = RelsOut::default();
+    root_rels.add("officeDocument", "word/document.xml", false);
+    root_rels.add("metadata/core-properties", "docProps/core.xml", false);
+    pkg.rels("", &root_rels);
+
+    let mut doc_rels = RelsOut::default();
+    doc_rels.items.push(RelOut { id: "rIdStyles".into(), ty: format!("{RT_BASE}styles"), target: "styles.xml".into(), external: false });
+    for (i, (name, im)) in media.iter().enumerate() {
+        doc_rels.items.push(RelOut {
+            id: format!("rIdImg{}", i + 1),
+            ty: format!("{RT_BASE}image"),
+            target: format!("media/{name}"),
+            external: false,
+        });
+        pkg.binary(&format!("word/media/{name}"), image_mime(&im.ext), im.bytes.to_vec());
     }
     if page_colour.is_some() {
-        doc_rels.push_str("<Relationship Id=\"rIdSettings\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings\" Target=\"settings.xml\"/>");
+        doc_rels.items.push(RelOut { id: "rIdSettings".into(), ty: format!("{RT_BASE}settings"), target: "settings.xml".into(), external: false });
     }
-    doc_rels.push_str("</Relationships>");
+    pkg.rels("word/document.xml", &doc_rels);
     let defaults = language_tag(language)
         .map(|tag| format!("<w:docDefaults><w:rPrDefault><w:rPr>{}</w:rPr></w:rPrDefault></w:docDefaults>", word_lang(tag)))
         .unwrap_or_default();
@@ -390,22 +403,14 @@ xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawin
 <w:style w:type=\"paragraph\" w:styleId=\"Heading2\"><w:name w:val=\"heading 2\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/><w:pPr><w:keepNext/><w:spacing w:before=\"200\"/><w:outlineLvl w:val=\"1\"/></w:pPr><w:rPr><w:b/></w:rPr></w:style>\
 </w:styles>"
     );
-    let core = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title>{}</dc:title></cp:coreProperties>",
-        esc(title)
-    );
-    let mut z = Zip::default();
-    z.add("[Content_Types].xml", types.as_bytes(), true);
-    z.add("_rels/.rels", rels.as_bytes(), true);
-    z.add("docProps/core.xml", core.as_bytes(), true);
-    z.add("word/document.xml", doc.as_bytes(), true);
-    z.add("word/styles.xml", styles.as_bytes(), true);
-    z.add("word/_rels/document.xml.rels", doc_rels.as_bytes(), true);
+    pkg.xml_part("docProps/core.xml", "application/vnd.openxmlformats-package.core-properties+xml", core_properties_xml(title));
+    pkg.xml_part("word/document.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml", doc.into_bytes());
+    pkg.xml_part("word/styles.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml", styles.into_bytes());
     if page_colour.is_some() {
-        z.add("word/settings.xml", b"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:displayBackgroundShape/></w:settings>", true);
+        let mut settings = Writer::document();
+        settings.open("w:settings", &[("xmlns:w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main")]);
+        settings.empty("w:displayBackgroundShape", &[]);
+        pkg.xml_part("word/settings.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml", settings.into_bytes());
     }
-    for (name, im) in &media {
-        z.add(&format!("word/media/{name}"), &im.bytes, false);
-    }
-    z.finish()
+    pkg.finish().unwrap_or_default()
 }

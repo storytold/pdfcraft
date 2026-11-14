@@ -11,9 +11,12 @@ fn ok(auto: &mut Automation, tool: &str, args: Value) -> Value {
     }
 }
 
-fn pixels(auto: &mut Automation, doc: u64) -> image::RgbaImage {
+fn pixels(auto: &mut Automation, doc: u64) -> (u32, u32, Vec<u8>) {
     match auto.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap().remove(0) {
-        Content::Png { data, .. } => image::load_from_memory_with_format(&data, image::ImageFormat::Png).unwrap().to_rgba8(),
+        Content::Png { data, .. } => {
+            let image = craft_image_codecs::decode_as(craft_image_codecs::Format::Png, &data).unwrap();
+            (image.width(), image.height(), image.to_rgba8())
+        }
         _ => panic!("expected a page image"),
     }
 }
