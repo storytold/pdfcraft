@@ -364,6 +364,8 @@ pub struct Annotation {
     pub quads: Vec<[f32; 8]>,
     /// The Locked flag (`/F` bit 8): the comment can't be moved, resized, restyled or deleted.
     pub locked: bool,
+    /// The LockedContents flag (`/F` bit 10): the comment's text and appearance cannot be modified.
+    pub locked_contents: bool,
     /// `/IT`, the intent: `FreeTextCallout`, `PolygonCloud`, `FreeTextTypeWriter`…
     pub intent: Option<String>,
     /// A Fill & Sign mark: typed text, a check, cross, dot or line, or a typed, drawn or picture
@@ -902,6 +904,7 @@ mod review_state_tests {
                 state: state.map(Into::into),
                 quads: Vec::new(),
                 locked: false,
+                locked_contents: false,
                 intent: None,
                 fill_sign: false,
                 no_rotate: false,

@@ -7,8 +7,8 @@ use super::info::{is_comment_subtype, is_group_subordinate, line_endings_of, own
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, change_annots, is_fill_sign, page_ref, set_annots};
 use super::text_style::{self, TextStyle};
 use super::types::{
-    BorderShape, FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb,
-    Shape, Style, StyleChange, TextReplacement,
+    BorderShape, FLAG_HIDDEN, FLAG_LOCKED, FLAG_LOCKED_CONTENTS, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation,
+    ReviewState, Rgb, Shape, Style, StyleChange, TextReplacement,
 };
 use super::{AnnotError, Dict, Document, HashMap, HashSet, ObjRef, Object, PdfString, appearance};
 use pdfcraft_fonts::Std14;
@@ -295,13 +295,16 @@ pub fn with_replies_and_popups(doc: &Document, list: &[Object], doomed: impl Int
 }
 
 /// Change a comment's text. Text boxes are redrawn to show it, and their rectangle follows the
-/// new text: the wrap width and top edge stay, the height fits the wrapped lines. A circle snug
-/// around its text stays snug around the new text, centred where it was.
+/// new text unless Locked (ISO 32000-2 Table 167 forbids changing position and size): the wrap
+/// width and top edge stay, the height fits the wrapped lines. A circle snug around its text
+/// stays snug around the new text, centred where it was.
 pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
+    unlocked_contents(doc, r)?;
     let before = annot_dict(doc, r);
     let free_text = before.name(b"Subtype") == Some(b"FreeText");
     refuse_undrawable_thai(free_text, text)?;
+    let locked = annotation_flags(doc, &before) & FLAG_LOCKED != 0;
     let snug = free_text && is_snug(&before);
     // The text keeps the look it is drawn with (`/DA`, or `/DS` where it sets one).
     let style = text_style::text_style(&before, text_style::dr_face(doc, &before));
@@ -316,21 +319,23 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
         touch(d, meta);
     })?;
     if free_text {
-        // The box grows and shrinks with the text instead of clipping it. A locked box keeps its
-        // text editable (as in Acrobat), so the re-fit ignores the lock. New text is drawn even
-        // where the standard fonts can't draw some of it (marked and reported, see
-        // `draw_appearance`). A circle snug around its text stays snug around the new text; one
-        // made larger by hand keeps its size, only growing for more lines.
-        let fit = if snug {
-            snug_refit(doc, r)
+        if locked {
+            if let Err(e) = draw_appearance(doc, r) {
+                doc.set(r, Object::Dict(before));
+                return Err(e);
+            }
         } else {
-            let d = annot_dict(doc, r);
-            let circle = text_box_of(&d).filter(|_| BorderShape::of(&d) == BorderShape::Circle);
-            fitted_box(doc, r, text).map(|fit| circle.map_or(fit, |old| [fit[0], fit[1].min(old[1]), fit[2], fit[3]]))
-        };
-        match fit {
-            Some(rect) => apply_text_box(doc, r, rect, meta, true)?,
-            None => draw_appearance(doc, r)?,
+            let fit = if snug {
+                snug_refit(doc, r)
+            } else {
+                let d = annot_dict(doc, r);
+                let circle = text_box_of(&d).filter(|_| BorderShape::of(&d) == BorderShape::Circle);
+                fitted_box(doc, r, text).map(|fit| circle.map_or(fit, |old| [fit[0], fit[1].min(old[1]), fit[2], fit[3]]))
+            };
+            match fit {
+                Some(rect) => apply_text_box(doc, r, rect, meta, true)?,
+                None => draw_appearance(doc, r)?,
+            }
         }
     }
     Ok(())
@@ -445,6 +450,11 @@ pub(crate) fn unlocked(doc: &Document, r: ObjRef) -> Result<(), AnnotError> {
     if flags(doc, r) & FLAG_LOCKED != 0 { Err(AnnotError::Invalid("the comment is locked".into())) } else { Ok(()) }
 }
 
+/// Refuse to change contents of an annotation whose contents are locked (ISO 32000-2 Table 167 bit 10).
+pub(crate) fn unlocked_contents(doc: &Document, r: ObjRef) -> Result<(), AnnotError> {
+    if flags(doc, r) & FLAG_LOCKED_CONTENTS != 0 { Err(AnnotError::Invalid("the comment's contents are locked".into())) } else { Ok(()) }
+}
+
 /// Open, close or move a comment's pop-up window (Acrobat: double-click a comment to open it,
 /// drag its title bar to move it). `rect` is the pop-up's new `/Rect` in user space; `open` its
 /// `/Open`. A comment without a `/Popup` gets one, placed to the right of the comment as new
@@ -527,6 +537,14 @@ pub fn set_popup(doc: &mut Document, page: usize, index: usize, rect: Option<[f6
 pub fn set_locked(doc: &mut Document, page: usize, index: usize, locked: bool) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     let f = if locked { flags(doc, r) | FLAG_LOCKED } else { flags(doc, r) & !FLAG_LOCKED };
+    doc.update_dict(r, |d| d.set(b"F".to_vec(), Object::Int(f)))?;
+    Ok(())
+}
+
+/// Lock or unlock a comment's contents (the LockedContents flag, ISO 32000-2 Table 167 bit 10).
+pub fn set_locked_contents(doc: &mut Document, page: usize, index: usize, locked: bool) -> Result<(), AnnotError> {
+    let (_, r) = annot_ref(doc, page, index)?;
+    let f = if locked { flags(doc, r) | FLAG_LOCKED_CONTENTS } else { flags(doc, r) & !FLAG_LOCKED_CONTENTS };
     doc.update_dict(r, |d| d.set(b"F".to_vec(), Object::Int(f)))?;
     Ok(())
 }
@@ -1146,6 +1164,7 @@ fn replace_text_partners(doc: &Document, page: usize, r: ObjRef) -> Result<Vec<O
 fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
     let StyleChange { color, opacity, width, endings } = change;
     unlocked(doc, r)?;
+    unlocked_contents(doc, r)?;
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     // Check before changing anything: a stale appearance would contradict the new style.
@@ -1262,6 +1281,7 @@ pub fn set_border_color(doc: &mut Document, page: usize, index: usize, color: Op
 pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
+    unlocked_contents(doc, r)?;
     let d = annot_dict(doc, r);
     if d.name(b"Subtype") != Some(b"FreeText") {
         return Err(AnnotError::Invalid("only text boxes, typewriter text and callouts have a font size".into()));
@@ -1308,6 +1328,7 @@ pub fn fillable(subtype: &str) -> bool {
 pub fn set_fill(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
+    unlocked_contents(doc, r)?;
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     if !fillable(&subtype) {
@@ -1486,7 +1507,7 @@ pub fn add_text_replacement(doc: &mut Document, replacement: TextReplacement<'_>
 /// Returns whether anything was erased.
 pub fn erase_ink(doc: &mut Document, page: usize, index: usize, path: &[[f64; 2]], radius: f64, meta: &Meta) -> Result<bool, AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
-    unlocked(doc, r)?;
+    unlocked_contents(doc, r)?;
     let d = annot_dict(doc, r);
     if d.name(b"Subtype") != Some(b"Ink") {
         return Err(AnnotError::Invalid("only drawings can be erased".into()));
@@ -1564,9 +1585,12 @@ pub fn erase_ink(doc: &mut Document, page: usize, index: usize, path: &[[f64; 2]
     }
     let width = d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0);
     let rect = grow(bounds(kept.iter().flatten().copied()).unwrap_or_default(), width / 2.0 + 1.0);
+    let is_locked = flags(doc, r) & FLAG_LOCKED != 0;
     doc.update_dict(r, |d| {
         d.set(b"InkList".to_vec(), Object::Array(kept.iter().map(|s| num_array(&s.concat())).collect()));
-        d.set(b"Rect".to_vec(), num_array(&rect));
+        if !is_locked {
+            d.set(b"Rect".to_vec(), num_array(&rect));
+        }
         touch(d, meta);
     })?;
     set_appearance(doc, r)?;
