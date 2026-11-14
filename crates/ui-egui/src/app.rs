@@ -72,6 +72,8 @@ impl PdfCraftApp {
             status_captions_lang: None,
             views: Vec::new(),
             closed_tabs: Vec::new(),
+            rename_draft: None,
+            rename_returned: rename_ui::Returned::default(),
             active: None,
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
@@ -805,6 +807,7 @@ impl PdfCraftApp {
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
+        self.reopen_returned_rename();
         self.settle_presign();
         // Last, after everything that can open or answer the "save changes?" question.
         self.attend_save_prompt(ctx);
