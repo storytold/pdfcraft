@@ -160,6 +160,7 @@ impl Session {
         }
         cx.xfa_time_scale = xfa_time_scale;
         cx.pages = doc.info.pages.len();
+        cx.signatures = Arc::new(crate::js::signature_states(&doc.signatures));
         cx.highlight = highlight;
         cx.today = today;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
@@ -177,7 +178,7 @@ impl Session {
         }
         let mut next = editor.cos.clone();
         if !js_off && uses_scripts(&edit) {
-            let mut runner = js::JsRunner::new(&next, &name, highlight);
+            let mut runner = js::JsRunner::new(&next, &name, highlight).with_signatures(Arc::clone(&cx.signatures));
             runner.runtime = doc.js_runtime.clone();
             runner.doc.zoom = doc.js_zoom;
             runner.doc.page = doc.js_page;
@@ -278,6 +279,7 @@ impl Session {
                     ran_away: false,
                     highlight,
                     time_scale: cx.xfa_time_scale,
+                    signatures: Arc::clone(&cx.signatures),
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
                 // only those).

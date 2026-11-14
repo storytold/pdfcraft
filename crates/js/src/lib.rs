@@ -12,7 +12,8 @@
 //! - Field objects: `name`, `type`, `value`, `valueAsString`, `defaultValue`, `readonly`,
 //!   `required`, `display`, `hidden`, `numItems`, `getItemAt`, `currentValueIndices`,
 //!   `isBoxChecked`, `checkThisBox`, `exportValues`, `charLimit`, `textColor`, `fillColor`,
-//!   `setFocus`, `rect`, appearance properties, and normal button caption/icon methods.
+//!   `setFocus`, `rect`, appearance properties, normal button caption/icon methods,
+//!   `signatureInfo` and `signatureValidate`.
 //! - `app` (`alert`, `beep`, `response`, `launchURL`, `execMenuItem`, `viewerType`, `viewerVersion`,
 //!   `platform`, `setTimeOut`), `util` (`printf`, `printd`, `printx`, `scand`), `console` (`println`,
 //!   `show`, `clear`), `display` and `color`.
@@ -55,7 +56,7 @@ use globals::platform;
 use host::{arg, as_number, error, function, s, text};
 pub use model::{
     DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, DocInfo, Event, FieldState, FieldType, Limits, Message, MessageButtons,
-    MessageIcon, Outcome, Panel, Request,
+    MessageIcon, NOT_A_SIGNATURE_FIELD, Outcome, Panel, Request, SignatureState,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use run::SCRIPT_STACK;

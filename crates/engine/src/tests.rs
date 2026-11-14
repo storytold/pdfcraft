@@ -7233,6 +7233,130 @@ fn a_document_script_at_the_vm_limit_does_not_block_field_edits() {
     }
 }
 
+/// A dynamic form whose scripts reach the document through `event.target`: `out`'s initialize
+/// script looks the signature box `sig` up through `getField` (not found while initializing)
+/// and sets `t` through it; the button `check` reads `sig` through it; the button `clear` sets
+/// `t`, then resets it with `resetForm`.
+const EVENT_TARGET_TEMPLATE: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form1" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="body" layout="tb" w="7.5in">
+  <field name="t" w="3in" h="0.3in"><ui><textEdit/></ui><value><text>default</text></value></field>
+  <field name="out" w="7in" h="0.3in"><ui><textEdit/></ui>
+   <event activity="initialize"><script contentType="application/x-javascript">
+    var d = event.target;
+    d.getField("form1[0].body[0].t[0]").value = "set through getField";
+    this.rawValue = [d.getField("form1[0].foot[0].sig[0]") == null, d.getField("form1[0].foot[0].nothing[0]") == null].join("|");
+   </script></event></field>
+  <field name="check" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">
+    var sig = event.target.getField("form1[0].foot[0].sig[0]");
+    out.rawValue = [sig.name, sig.signatureInfo().status, sig.signatureValidate()].join("|");
+   </script></event></field>
+  <field name="clear" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">
+    t.rawValue = "changed"; event.target.resetForm("form1[0].body[0].t[0]"); out.rawValue = t.rawValue;
+   </script></event></field>
+ </subform>
+ <subform name="foot" layout="tb" w="7.5in">
+  <field name="sig" w="3in" h="0.6in"><ui><signature/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+
+/// In a dynamic XFA form's scripts, `event.target.getField` gives the document's field for its
+/// SOM expression (null for one the form doesn't have, and for a signature box while the form
+/// initializes), a value set through it reaches the field, a click finds the signature box and
+/// its `signatureInfo()` and `signatureValidate()` say it is unsigned (0), and `resetForm`
+/// resets the field it names at once.
+#[test]
+fn xfa_scripts_reach_the_document_fields_through_the_event_target() {
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(EVENT_TARGET_TEMPLATE)), None).unwrap();
+    let out = s.take_js_output(id);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let value = |s: &Session, name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).map(|f| f.value.clone()).unwrap_or_default();
+    assert_eq!(value(&s, "out"), ["true|true"]);
+    assert_eq!(value(&s, "t"), ["set through getField"]);
+    let o = s.run_javascript(id, "", Some("check")).unwrap();
+    assert!(o.error.is_none(), "{o:?}");
+    assert_eq!(value(&s, "out"), ["form1[0].foot[0].sig[0]|0|0"]);
+    let o = s.run_javascript(id, "", Some("clear")).unwrap();
+    assert!(o.error.is_none(), "{o:?}");
+    assert_eq!((value(&s, "t"), value(&s, "out")), (vec!["default".to_string()], vec!["default".to_string()]));
+}
+
+/// A signed signature box reads as signed, with its signature's state: the stand-in signature
+/// [`pdfcraft_xfa::fixtures::signed_shell`] holds has no byte range, so it checks as invalid (2);
+/// the other box is unsigned (0).
+#[test]
+fn xfa_scripts_see_a_signed_box_through_the_event_target() {
+    let script = r#"<field name="out" w="7in" h="0.3in"><ui><textEdit/></ui></field>
+        <field name="check" w="2in" h="0.3in"><ui><button/></ui><event activity="click"><script contentType="application/x-javascript">
+        var d = event.target; out.rawValue = d.getField("form[0].body[0].sign[0]").signatureInfo().status + "|" + d.getField("form[0].body[0].other[0]").signatureValidate();
+        </script></event></field>"#;
+    let mut s = Session::new();
+    let id = s.open("signed.pdf", None, Arc::new(pdfcraft_xfa::fixtures::signed_shell_with(script)), None).unwrap();
+    let o = s.run_javascript(id, "", Some("check")).unwrap();
+    assert!(o.error.is_none(), "{o:?}");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.form.iter().find(|f| f.name == "out").map(|f| f.value.clone()), Some(vec!["2|0".to_string()]));
+}
+
+/// Form scripts outside XFA (here the console) see a signature field's state too, as the
+/// document's signatures were checked: the signed box's stand-in signature checks as invalid (2).
+#[test]
+fn form_scripts_see_a_signature_fields_state() {
+    let mut s = Session::new();
+    let id = s.open("signed.pdf", None, Arc::new(pdfcraft_xfa::fixtures::signed_shell()), None).unwrap();
+    let script = "getField('form[0].body[0].sign[0]').signatureInfo().status + '|' + getField('form[0].body[0].sign[0]').signatureValidate()";
+    let o = s.run_javascript(id, script, None).unwrap();
+    assert_eq!((o.error.as_deref(), o.result.as_deref()), (None, Some("2|2")));
+}
+
+/// An AcroForm (no XFA) with a signed signature field `sig`, whose stand-in signature has no
+/// byte range, a text field `qty`, and a field `total` whose calculation reads `sig`'s state.
+fn signed_acroform_with_calculation() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] /CO [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 8 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig) /V 7 0 R /Rect [20 250 180 270] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (qty) /Rect [20 220 180 240] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (total) /Rect [20 190 180 210] /P 3 0 R /F 4 /AA << /C << /S /JavaScript /JS (event.value = getField\\('sig'\\).signatureValidate\\(\\) + '/' + getField\\('sig'\\).signatureInfo\\(\\).status;) >> >> >>",
+        "<< /Type /Sig /Name (A Signer) >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// A field's calculation run by an edit sees a signature field's state as the document's
+/// signatures were checked (invalid, 2), not only that the field is signed (1).
+#[test]
+fn calculations_see_a_signature_fields_checked_state() {
+    let mut s = Session::new();
+    let id = s.open("signed.pdf", None, Arc::new(signed_acroform_with_calculation()), None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) }).unwrap();
+    let total = s.get(id).unwrap().form.iter().find(|f| f.name == "total").map(|f| f.value.clone());
+    assert_eq!(total, Some(vec!["2/2".to_string()]), "{:?}", s.take_js_output(id));
+}
+
 #[test]
 fn active_xfa_does_not_run_pdf_container_scripts_but_keeps_requested_alerts() {
     let template = pdfcraft_xfa::fixtures::scripted_template().replace(
@@ -8065,11 +8189,27 @@ fn on_changes_notes_only_the_exits_that_ran() {
     let names = vec!["probe".to_string()];
     let mut exited = Vec::new();
     let mut out = crate::js::JsOutput::default();
-    let mut stopped = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: true, highlight: false, time_scale: 1 };
+    let mut stopped = crate::xfa::XfaRun {
+        page_count: 1,
+        out: &mut out,
+        datasets: None,
+        ran_away: true,
+        highlight: false,
+        time_scale: 1,
+        signatures: Default::default(),
+    };
     crate::xfa::on_changes(&mut cos, &tpl, &names, &mut stopped, &mut exited).unwrap();
     assert!(exited.is_empty(), "no exit ran: {exited:?}");
     let mut out = crate::js::JsOutput::default();
-    let mut running = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, highlight: false, time_scale: 1 };
+    let mut running = crate::xfa::XfaRun {
+        page_count: 1,
+        out: &mut out,
+        datasets: None,
+        ran_away: false,
+        highlight: false,
+        time_scale: 1,
+        signatures: Default::default(),
+    };
     crate::xfa::on_changes(&mut cos, &tpl, &names, &mut running, &mut exited).unwrap();
     assert_eq!(exited.len(), 1, "the exit ran: {exited:?}");
 }
@@ -12500,6 +12640,43 @@ fn a_reset_clears_a_floating_field_in_every_row() {
 ",
     );
     assert_eq!(text.matches("Amount: none").count(), 2, "both rows reset: {text}");
+}
+
+/// A reset naming one row's hidden floating field (`row[1].amount`) gives that row's field its
+/// default and leaves the other rows' alone; `row[0]` names the first row only, not every row.
+#[test]
+fn a_reset_naming_a_row_clears_that_rows_floating_field_only() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="row" layout="tb"><occur min="1" max="-1"/>
+  <field name="amount" id="floatAmount" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui><value><text>none</text></value></field>
+  <draw w="5in" h="0.4in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Amount: <span xfa:embed="#floatAmount"/></p></body></exData></value></draw>
+ </subform>
+ <field name="second" w="2in" h="0.3in"><ui><button/></ui>
+  <event activity="click"><script contentType="application/x-javascript">xfa.host.resetData("form[0].row[1].amount[0]");</script></event></field>
+ <field name="first" w="2in" h="0.3in"><ui><button/></ui>
+  <event activity="click"><script contentType="application/x-javascript">event.target.resetForm("row[0].amount");</script></event></field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><row><amount>10</amount></row><row><amount>20</amount></row><row><amount>30</amount></row></form></xfa:data></xfa:datasets>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let amounts = |s: &Session| {
+        let text = page_texts(s, id).join(" ");
+        ["Amount: 10", "Amount: 20", "Amount: 30", "Amount: none"].map(|a| text.matches(a).count())
+    };
+    assert_eq!(amounts(&s), [1, 1, 1, 0]);
+    let o = s.run_javascript(id, "", Some("second")).expect("clicks");
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(amounts(&s), [1, 0, 1, 1], "only the second row is reset");
+    let o = s.run_javascript(id, "", Some("first")).expect("clicks");
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(amounts(&s), [0, 0, 1, 2], "then the first row only");
 }
 
 /// An XFA button's click script may show the attachments panel; a text field's exit script

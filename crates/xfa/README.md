@@ -145,7 +145,10 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   The object model covers what forms commonly use (`xfa.form`
   navigation and SOM resolution, `rawValue`, `presence`, `access`, instance managers,
   `xfa.host` messages, reset, print, focus and URLs, `xfa.layout` page and sheet numbers,
-  `xfa.event`);
+  `xfa.event`, and the bare `event`'s target, the document, with `getField` (by full SOM
+  expression, giving the form object model's field object, whose value writes through to the
+  XFA field and whose `signatureInfo().status` and `signatureValidate()` give a signature
+  field's state as read on opening), `resetForm` and `exportDataObject`);
   property objects (`border`, `font`, `para`, `margin`, `ui` and its `oneOfChild`, `validate`,
   `calculate`, `occur`, `break`, `breakBefore`, `breakAfter`, `assist`, `format`, `bind`,
   `desc`, `extras`, `keep`, `caption` and a field's `items`), read as the template writes them

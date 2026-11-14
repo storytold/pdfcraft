@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::globals::install;
 use super::host::{Shared, XHost};
-use super::model::{XfaDoc, XfaEvent, XfaNode, XfaOutcome, clip_result};
+use super::model::{XfaDoc, XfaEffect, XfaEvent, XfaNode, XfaOutcome, clip_result};
 use super::{Attribute, Context, JsResult, Limits, RefCell, Source, js_string, refuse, s, text};
 
 /// Run `script` for `event` on the form `root` (the root subform), from node `event.target`.
@@ -143,9 +143,63 @@ pub(crate) fn run_here(
     };
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
-    let host_state = XHost::new(root, reuse, &event.target, doc);
+    let mut host_state = XHost::new(root, reuse, &event.target, doc);
+    host_state.activity = event.activity.clone();
     let current = host_state.current;
     ctx.insert_data(RefCell::new(host_state));
+    // The document's fields, for `event.target.getField(…)`: the form object model's own field
+    // objects, writing through to the XFA form.
+    ctx.insert_data(RefCell::new(crate::host::Host {
+        // The XFA activity (`initialize`, `click`, …): never AcroForm's "Format", so field
+        // objects reached through `event.target` keep `buttonSetCaption`.
+        event_name: event.activity.clone(),
+        fields: std::sync::Arc::clone(&doc.fields),
+        // No document icons (`getIcon`) and no field objects cached from an earlier run: each
+        // XFA script run makes its own field objects. `field_keys` stays empty so none is kept.
+        icons: Vec::new(),
+        objects: Default::default(),
+        field_keys: Default::default(),
+        changed: Default::default(),
+        formatted: Default::default(),
+        alerts: Vec::new(),
+        console: Vec::new(),
+        requests: Vec::new(),
+        doc: crate::DocInfo {
+            file_name: doc.file_name.clone(),
+            num_pages: doc.page_count,
+            page: doc.page,
+            info: Vec::new(),
+            // The XFA event target has no `getPageBox`, so its field objects need no boxes.
+            page_boxes: Vec::new(),
+            page_rotations: Vec::new(),
+            xfa: true,
+            // Zoom is not an XFA event target member; the AcroForm default.
+            zoom: 100.0,
+            runtime_highlight: doc.highlight,
+            // No icons in an XFA script run (`icons` below is empty).
+            icon_epoch: 0,
+            icon_versions: Default::default(),
+            // `getOCGs` is not an XFA event target member: no layers.
+            layers: Vec::new(),
+        },
+        // `calculateNow()` belongs to the AcroForm document; an XFA form recalculates itself.
+        // `resetForm` through the event target is the XFA reset (`reset_form` in xfa/globals),
+        // not the AcroForm one, so the AcroForm reset budget starts unused.
+        calculations: Default::default(),
+        calculate_depth: 0,
+        calculation_evaluations: 0,
+        calculation_limit_exceeded: false,
+        calculation_work: 0,
+        current_event: boa_engine::JsValue::undefined(),
+        reset_calls: 0,
+        reset_limit_exceeded: false,
+        kept: 0,
+        // Each XFA script run starts with no field text charged, as an AcroForm run does.
+        retained: 0,
+        dropped: 0,
+        xfa: true,
+        layers_changed: Default::default(),
+    }));
     let mut out = XfaOutcome::default();
     let result = (|| -> JsResult<()> {
         install(&mut ctx, event, doc, current)?;
@@ -168,6 +222,17 @@ pub(crate) fn run_here(
     })();
     if let Err(e) = result {
         out.error = Some(e.to_string());
+    }
+    // `field.setFocus()` on a field from `getField` asks to focus its XFA field.
+    if let Some(fields) = ctx.remove_data::<crate::host::Shared>()
+        && let Ok(h) = super::host::host(&ctx)
+    {
+        let mut h = h.borrow_mut();
+        for r in fields.into_inner().requests {
+            if let crate::Request::Focus(som) = r {
+                h.push(XfaEffect::SetFocus(som));
+            }
+        }
     }
     if let Some(h) = ctx.remove_data::<Shared>() {
         let h = h.into_inner();

@@ -277,6 +277,7 @@ pub(crate) fn run_in_context(
         kept: 0,
         retained: 0,
         dropped: 0,
+        xfa: false,
         layers_changed: BTreeSet::new(),
     }));
     let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };

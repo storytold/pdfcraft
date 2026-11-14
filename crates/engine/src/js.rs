@@ -296,6 +296,35 @@ fn validate_script_target(target: Option<&str>, identity: Option<u64>, fields: &
     Ok(())
 }
 
+/// A signature field's state as its value shows it, without checking the signature: signed
+/// (its validity unknown) when the value is a signature dictionary, else unsigned (ISO 32000-2
+/// 12.7.5.5). The state the document's signatures were checked with, where there is one, is
+/// [`signature_states`]'.
+pub(crate) fn signature_in_value(doc: &pdfcraft_cos::Document, f: &Field) -> pdfcraft_js::SignatureState {
+    let signed = f.kind == FieldKind::Signature
+        && doc.get(f.obj).as_dict().and_then(|d| d.get(b"V").map(|v| doc.resolve(v))).is_some_and(|v| v.as_dict().is_some());
+    if signed { pdfcraft_js::SignatureState::Unknown } else { pdfcraft_js::SignatureState::Unsigned }
+}
+
+/// The signature state of each signature field in `list` (the document's signatures as
+/// [`pdfcraft_sign::pdf::list`] checked them), by field name. Document timestamps are no
+/// field's signature and are left out.
+pub(crate) fn signature_states(list: &[pdfcraft_sign::SignatureInfo]) -> std::collections::HashMap<String, pdfcraft_js::SignatureState> {
+    use pdfcraft_js::SignatureState as S;
+    list.iter()
+        .filter(|s| !s.doc_timestamp)
+        .map(|s| {
+            let state = match (s.signed, s.status) {
+                (false, _) => S::Unsigned,
+                (true, pdfcraft_sign::Status::Valid) => S::Valid,
+                (true, pdfcraft_sign::Status::Unknown) => S::Unknown,
+                (true, pdfcraft_sign::Status::Invalid) => S::Invalid,
+            };
+            (s.field.clone(), state)
+        })
+        .collect()
+}
+
 /// Snapshot a current form field using page geometry already read once for this runner.
 /// Values/appearances come from `doc` and `f`, never from the cached calculation plan.
 pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field, geometry: &pdfcraft_js::DocInfo) -> pdfcraft_js::FieldState {
@@ -365,6 +394,7 @@ pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field, geometry: &pdfcraft_
             .map(field_object_id);
         icon != s.icon
     });
+    s.signature = signature_in_value(doc, f);
     s
 }
 
@@ -464,6 +494,10 @@ pub struct JsRunner {
     // The last callback's snapshot. A calculation chain changes one or two values per callback,
     // so the next callback patches those entries instead of rebuilding every field.
     last_snapshot: Option<std::sync::Arc<Vec<pdfcraft_js::FieldState>>>,
+    /// How each signature field's signature checked when the document's signatures were read
+    /// ([`signature_states`]), by field name; a field not among them is as its value shows it
+    /// ([`signature_in_value`]).
+    signatures: std::sync::Arc<std::collections::HashMap<String, pdfcraft_js::SignatureState>>,
 }
 
 impl JsRunner {
@@ -501,11 +535,19 @@ impl JsRunner {
         let states = fields
             .iter()
             .map(|field| {
+                // A signature field reads as the document's signatures were checked, where they
+                // were ([`signature_states`]); otherwise as its value shows it.
+                let checked = |mut state: pdfcraft_js::FieldState| {
+                    if let Some(signature) = self.signatures.get(&field.name) {
+                        state.signature = *signature;
+                    }
+                    state
+                };
                 if self.snapshot_fields.len() >= 4096 && !self.snapshot_fields.contains_key(&field.obj) {
-                    return field_state(doc, field, &self.doc);
+                    return checked(field_state(doc, field, &self.doc));
                 }
                 let template = self.snapshot_fields.entry(field.obj).or_insert_with(|| {
-                    let mut state = field_state(doc, field, &self.doc);
+                    let mut state = checked(field_state(doc, field, &self.doc));
                     state.value.clear();
                     state
                 });
@@ -586,10 +628,17 @@ impl JsRunner {
             #[cfg(not(target_arch = "wasm32"))]
             callback_started: None,
             runtime: Default::default(),
+            signatures: Default::default(),
             calculations: None,
             snapshot_fields: Default::default(),
             last_snapshot: None,
         }
+    }
+
+    /// This runner, with the signature states the document's signatures were checked with
+    /// ([`signature_states`]) for `signatureInfo()` and `signatureValidate()`.
+    pub(crate) fn with_signatures(self, signatures: std::sync::Arc<std::collections::HashMap<String, pdfcraft_js::SignatureState>>) -> JsRunner {
+        JsRunner { signatures, ..self }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1200,7 +1249,19 @@ impl Session {
         runner.doc.page = doc.js_page;
         runner.doc.layers = crate::live_scripts::js_layers(&doc.info);
         let fields = pdfcraft_forms::fields(&cos);
-        let states = std::sync::Arc::new(fields.iter().map(|f| crate::live_scripts::live_state(doc, &cos, f, &runner.doc)).collect::<Vec<_>>());
+        // Signature fields as the document's signatures were checked.
+        let checked = signature_states(&doc.signatures);
+        let states: Vec<_> = fields
+            .iter()
+            .map(|f| {
+                let mut s = crate::live_scripts::live_state(doc, &cos, f, &runner.doc);
+                if let Some(state) = checked.get(&f.name) {
+                    s.signature = *state;
+                }
+                s
+            })
+            .collect();
+        let states = std::sync::Arc::new(states);
         let event = match target {
             Some(t) => pdfcraft_js::Event { will_commit: false, target_id, ..pdfcraft_js::Event::field(event_name.unwrap_or("Mouse Up"), t, "") },
             None => pdfcraft_js::Event::doc(event_name.unwrap_or("Console")),

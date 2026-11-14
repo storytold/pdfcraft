@@ -238,6 +238,8 @@ pub(crate) struct EditCtx {
     pub(crate) xfa_removed: Vec<String>,
     /// Pages in the document, for `xfa.layout.pageCount()`.
     pub(crate) pages: usize,
+    /// The document's signature fields and how each signature checks, for the XFA scripts.
+    pub(crate) signatures: Arc<std::collections::HashMap<String, pdfcraft_js::SignatureState>>,
     /// Whether the viewer highlights form fields, for `app.runtimeHighlight`.
     pub(crate) highlight: bool,
     pub(crate) date: Option<String>,
@@ -307,6 +309,7 @@ impl EditCtx {
             xfa_time_scale: 1,
             xfa_removed: Vec::new(),
             pages: 0,
+            signatures: Default::default(),
             highlight: false,
             date: now.map(pdfcraft_cos::pdf_date),
             today: (1970, 1, 1),
@@ -765,6 +768,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 ran_away: false,
                 highlight,
                 time_scale: cx.xfa_time_scale,
+                signatures: Arc::clone(&cx.signatures),
             };
             let ran = if matches!(activity.as_str(), "enter" | "exit") {
                 xfa::on_focus(doc, &tpl, som, activity, &mut run).map(|changes| changes.is_empty())

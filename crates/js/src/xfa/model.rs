@@ -73,6 +73,9 @@ pub struct XfaDoc {
     /// The current page, 0-based.
     pub page: usize,
     pub page_count: usize,
+    /// The document's form fields, each named by the SOM expression of the XFA field it shows
+    /// (`form1[0].page1[0].total[0]`), as `event.target.getField(…)` finds them.
+    pub fields: std::sync::Arc<Vec<crate::FieldState>>,
     /// Whether the viewer highlights form fields (`app.runtimeHighlight`).
     pub highlight: bool,
 }

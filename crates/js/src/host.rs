@@ -33,6 +33,9 @@ pub(crate) struct Host {
     pub(crate) retained: usize,
     /// Alerts, console lines and requests the limits left out.
     pub(crate) dropped: usize,
+    /// The fields belong to an XFA form, named by their SOM expressions: what a script changes
+    /// through them is changed in the form too ([`xfa::field_written`]).
+    pub(crate) xfa: bool,
     /// Layers a script turned on or off (`ocg.state`), by their places in [`DocInfo::layers`].
     pub(crate) layers_changed: BTreeSet<usize>,
 }
@@ -241,13 +244,35 @@ fn field_index(ctx: &Context, name: &FieldKey) -> JsResult<usize> {
         .ok_or_else(|| error(format!("no field named {n}")))
 }
 
+/// Field `name` as the script reads it now. In an XFA form's script, with the value its XFA
+/// field holds ([`xfa::field_now`]).
 pub(crate) fn read(ctx: &Context, name: &FieldKey) -> JsResult<FieldState> {
     let i = field_index(ctx, name)?;
-    Ok(host(ctx)?.borrow().fields[i].clone())
+    let (mut field, in_xfa) = {
+        let h = host(ctx)?.borrow();
+        (h.fields.get(i).cloned().ok_or_else(|| error("the field is no longer available"))?, h.xfa)
+    };
+    if in_xfa {
+        xfa::field_now(ctx, &mut field)?;
+    }
+    Ok(field)
 }
 
-pub(crate) fn write(ctx: &Context, name: &FieldKey, change: impl FnOnce(&mut FieldState)) -> JsResult<()> {
+/// Apply `change` to field `name`. In an XFA form's script the change goes to the XFA field,
+/// and the field keeps what the form took of it ([`xfa::field_written`]).
+pub(crate) fn write(ctx: &mut Context, name: &FieldKey, change: impl FnOnce(&mut FieldState)) -> JsResult<()> {
     let i = field_index(ctx, name)?;
+    if host(ctx)?.borrow().xfa {
+        let before = read(ctx, name)?;
+        let mut after = before.clone();
+        change(&mut after);
+        let now = xfa::field_written(ctx, &before, &after)?;
+        let mut h = host(ctx)?.borrow_mut();
+        let field = Arc::make_mut(&mut h.fields).get_mut(i).ok_or_else(|| error("the field is no longer available"))?;
+        *field = now;
+        h.changed.insert(i);
+        return Ok(());
+    }
     let mut h = host(ctx)?.borrow_mut();
     let field = Arc::make_mut(&mut h.fields).get_mut(i).ok_or_else(|| error("the field is no longer available"))?;
     change(field);

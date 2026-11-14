@@ -1,7 +1,7 @@
 use super::host::{
     FieldKey, arg, charge, colour, error, function, host, kind_of, read, s, strings, text, text_bytes, text_line, value_for, value_of, write,
 };
-use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldType, Request};
+use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldState, FieldType, NOT_A_SIGNATURE_FIELD, Request};
 use super::{Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, js_string};
 
 macro_rules! getter {
@@ -283,6 +283,14 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         host(c)?.borrow_mut().request(request);
         Ok(JsValue::undefined())
     }
+    fn signature_info(_: &JsValue, _: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
+        let f = read(c, name)?;
+        Ok(ObjectInitializer::new(c).property(js_string!("status"), JsValue::from(signature_status(&f)), Attribute::all()).build().into())
+    }
+    fn signature_validate(_: &JsValue, _: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
+        let f = read(c, name)?;
+        Ok(JsValue::from(signature_status(&f)))
+    }
 
     /// `setAction(cTrigger, cScript)`: install `cScript` as the field's JavaScript for
     /// `cTrigger`, replacing what it ran before; saved with the document (#269).
@@ -357,7 +365,16 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     let button_set_caption = NativeFunction::from_copy_closure_with_captures(button_set_caption, n.clone());
     let button_get_icon = NativeFunction::from_copy_closure_with_captures(crate::icons::get, n.clone());
     let button_set_icon = NativeFunction::from_copy_closure_with_captures(crate::icons::set, n.clone());
-    ObjectInitializer::new(ctx)
+    let signature_info = NativeFunction::from_copy_closure_with_captures(signature_info, n.clone());
+    let signature_validate = NativeFunction::from_copy_closure_with_captures(signature_validate, n.clone());
+    // In an XFA form's scripts only signature fields have the signature methods; elsewhere every
+    // field has them, giving -1 for a field that isn't one.
+    let signature_methods = host(ctx).map_or(true, |h| {
+        let h = h.borrow();
+        !h.xfa || h.fields.iter().any(|f| f.name == name && f.kind == FieldType::Signature)
+    });
+    let mut object = ObjectInitializer::new(ctx);
+    object
         .accessor(js_string!("value"), Some(value_get), Some(value_set), rw)
         .accessor(js_string!("valueAsString"), Some(as_string), None, rw)
         .accessor(js_string!("defaultValue"), Some(default), None, rw)
@@ -388,8 +405,18 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         .function(button_get_icon, js_string!("buttonGetIcon"), 1)
         .function(button_set_icon, js_string!("buttonSetIcon"), 2)
         .function(button_get_caption, js_string!("buttonGetCaption"), 1)
-        .function(button_set_caption, js_string!("buttonSetCaption"), 2)
-        .build()
+        .function(button_set_caption, js_string!("buttonSetCaption"), 2);
+    if signature_methods {
+        object.function(signature_info, js_string!("signatureInfo"), 1).function(signature_validate, js_string!("signatureValidate"), 2);
+    }
+    object.build()
+}
+
+/// What `signatureInfo().status` and `signatureValidate()` say of `f`: its
+/// [`SignatureState::status`](crate::SignatureState::status), or [`NOT_A_SIGNATURE_FIELD`]. Nothing is checked again (no
+/// network, no new validation): the state is what PdfCraft found when it read the signatures.
+fn signature_status(f: &FieldState) -> i32 {
+    if f.kind == FieldType::Signature { f.signature.status() } else { NOT_A_SIGNATURE_FIELD }
 }
 
 /// The triggers `field.setAction` takes (Acrobat JavaScript reference, Field.setAction).
