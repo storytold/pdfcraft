@@ -53,6 +53,10 @@ pub struct RecoveryDocument {
     /// Tests: survey as if a rule needed the usage of every kind of font the survey counts.
     #[cfg(feature = "test-counters")]
     usage_for_tests: bool,
+    /// Tests: every [`Self::prepare`] panics, as a survey that fails on the document's content
+    /// would each time it is run.
+    #[cfg(feature = "test-counters")]
+    panic_for_tests: std::sync::atomic::AtomicBool,
 }
 
 /// What the survey found in a document.
@@ -157,6 +161,14 @@ impl RecoveryDocument {
         }
     }
 
+    /// Test hook: from now on every [`Self::prepare`] of this document panics before reading
+    /// anything, as a survey that fails on the document's content would every time.
+    #[cfg(feature = "test-counters")]
+    pub fn panic_in_survey_for_tests(&self) {
+        self.panic_for_tests
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
     /// The kinds of font the survey is to count: those it can count that some rule reads
     /// usage evidence for (`Rule::NEEDS_DOCUMENT_USAGE`).
     fn usage_kinds(&self) -> Vec<FontKind> {
@@ -181,6 +193,13 @@ impl RecoveryDocument {
     pub fn prepare(&self, pdf: &Pdf, settings: &InterpreterSettings) {
         if self.evidence.get().is_some() {
             return;
+        }
+        #[cfg(feature = "test-counters")]
+        if self
+            .panic_for_tests
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            panic!("injected survey panic");
         }
         let kinds = self.usage_kinds();
         if kinds.is_empty() {
