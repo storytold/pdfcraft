@@ -3437,6 +3437,60 @@ fn setting_the_calculation_order_recalculates_and_undoes() {
     assert!(matches!(s.apply(id, Edit::SetCalculationOrder { names: vec!["qty".into()] }), Err(EditError::Form(_))));
 }
 
+/// Form data imported from XFDF or FDF changes field values, so the calculated fields run again
+/// in the calculation order, a custom Calculate script included (ISO 32000-2 Table 199 /C,
+/// Table 224 /CO), and each import is one undo step with its results.
+#[test]
+fn importing_xfdf_or_fdf_data_recalculates_in_calculation_order() {
+    use form_scripts::{CalcOp, Calculate};
+    let (mut s, id) = session_with(1);
+    for (i, name) in ["a", "b", "sum", "scaled"].into_iter().enumerate() {
+        let y = 250.0 - 40.0 * i as f64;
+        let kind = NewField::Text { multiline: false };
+        s.apply(id, Edit::AddField { page: 0, rect: [20.0, y, 180.0, y + 22.0], kind, name: Some(name.into()) }).unwrap();
+    }
+    let props =
+        Box::new(FieldProps { calculate: Some(Calculate::Simple { op: CalcOp::Sum, fields: vec!["a".into(), "b".into()] }), ..Default::default() });
+    s.apply(id, Edit::SetFieldProps { name: "sum".into(), props }).unwrap();
+    let script = Some("event.value = Number(this.getField(\"sum\").value) * 10;".to_string());
+    s.apply(id, Edit::SetFieldScript { name: "scaled".into(), event: "calculate".into(), script }).unwrap();
+    let values = |s: &Session| {
+        ["sum", "scaled"].map(|n| s.get(id).unwrap().form.iter().find(|f| f.name == n).and_then(|f| f.value.first().cloned()).unwrap_or_default())
+    };
+    assert_eq!(values(&s), ["0", "0"]);
+
+    let xfdf = br#"<?xml version="1.0" encoding="UTF-8"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><fields><field name="a"><value>2</value></field><field name="b"><value>3</value></field></fields></xfdf>"#;
+    s.apply(id, Edit::ImportData { name: "data.xfdf".into(), bytes: Arc::new(xfdf.to_vec()) }).unwrap();
+    assert_eq!(values(&s), ["5", "50"], "the script total runs after the built-in sum: {:?}", s.take_js_output(id));
+
+    let fdf = b"%FDF-1.2\n1 0 obj\n<< /FDF << /Fields [<< /T (a) /V (4) >> << /T (b) /V (6) >>] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    s.apply(id, Edit::ImportData { name: "data.fdf".into(), bytes: Arc::new(fdf.to_vec()) }).unwrap();
+    assert_eq!(values(&s), ["10", "100"]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Import data.fdf"));
+
+    // One undo takes the import and its calculated values back together.
+    s.undo(id).unwrap();
+    assert_eq!(values(&s), ["5", "50"]);
+    // Saved and reopened, the calculated values are the file's.
+    let reopened = s.open("again.pdf", None, s.save_bytes(id).unwrap(), None).unwrap();
+    let value = |n: &str| s.get(reopened).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_default();
+    assert_eq!(value("scaled"), vec!["50".to_string()]);
+}
+
+/// A Calculate script that never ends, run by imported data, is stopped by the script limits:
+/// the import is refused and the document stays as it was, as when the value is typed in.
+#[test]
+fn imported_data_whose_calculation_runs_away_is_refused_and_changes_nothing() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form_with("function times\\(a, b\\) { while \\(true\\) {} }")), None).unwrap();
+    let before = s.save_bytes(id).unwrap();
+    let xfdf = br#"<?xml version="1.0" encoding="UTF-8"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><fields><field name="qty"><value>4</value></field></fields></xfdf>"#;
+    let refused = s.apply(id, Edit::ImportData { name: "data.xfdf".into(), bytes: Arc::new(xfdf.to_vec()) });
+    assert!(matches!(&refused, Err(EditError::Invalid(why)) if why.contains("RuntimeLimitError")), "{refused:?}");
+    assert_eq!(s.save_bytes(id).unwrap(), before);
+    assert!(s.get(id).unwrap().form.iter().find(|f| f.name == "qty").unwrap().value.is_empty());
+}
+
 /// A Calculate script that sets its own field through the field object, not `event.value`,
 /// gives the field that value, text included; when it sets `event.value` as well, that wins.
 #[test]
