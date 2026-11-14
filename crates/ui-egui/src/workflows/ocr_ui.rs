@@ -441,6 +441,12 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
 /// The recognition settings both Recognize Text dialogs show: the document language, the output,/// the engines behind it, the resolution pages are read at and which pages and files are left
 /// alone.
 pub(crate) fn settings_fields(ui: &mut egui::Ui, d: &mut OcrDraft) {
+    settings_fields_with(ui, d, true);
+}
+
+/// [`settings_fields`], with or without the Output choice: a flow that can only write a searchable
+/// image (the folder batch) leaves it out rather than offer what it would not produce.
+pub(crate) fn settings_fields_with(ui: &mut egui::Ui, d: &mut OcrDraft, output_choice: bool) {
     egui::Grid::new("ocr-settings").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
         ui.label(tl!("Document language"));
         let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
@@ -481,26 +487,28 @@ pub(crate) fn settings_fields(ui: &mut egui::Ui, d: &mut OcrDraft) {
             }
         });
         ui.end_row();
-        ui.label(tl!("Output"));
-        let mode_name = match d.output_mode {
-            OutputMode::Searchable => tl!("Searchable Image (Exact)"),
-            OutputMode::EditableText => tl!("Editable text"),
-        };
-        craft_ui::ComboBox::from_id_salt("ocr-output").selected_text(mode_name).width(220.0).show_ui(ui, |ui| {
-            let s = ui
-                .selectable_label(d.output_mode == OutputMode::Searchable, tl!("Searchable Image (Exact)"))
-                .on_hover_text(tl!("Adds invisible text over each word; the page image is not changed"));
-            if s.clicked() {
-                d.output_mode = OutputMode::Searchable;
-            }
-            let e = ui
-                .selectable_label(d.output_mode == OutputMode::EditableText, tl!("Editable text"))
-                .on_hover_text(tl!("Writes a new document of visible text; the scan is not changed"));
-            if e.clicked() {
-                d.output_mode = OutputMode::EditableText;
-            }
-        });
-        ui.end_row();
+        if output_choice {
+            ui.label(tl!("Output"));
+            let mode_name = match d.output_mode {
+                OutputMode::Searchable => tl!("Searchable Image (Exact)"),
+                OutputMode::EditableText => tl!("Editable text"),
+            };
+            craft_ui::ComboBox::from_id_salt("ocr-output").selected_text(mode_name).width(220.0).show_ui(ui, |ui| {
+                let s = ui
+                    .selectable_label(d.output_mode == OutputMode::Searchable, tl!("Searchable Image (Exact)"))
+                    .on_hover_text(tl!("Adds invisible text over each word; the page image is not changed"));
+                if s.clicked() {
+                    d.output_mode = OutputMode::Searchable;
+                }
+                let e = ui
+                    .selectable_label(d.output_mode == OutputMode::EditableText, tl!("Editable text"))
+                    .on_hover_text(tl!("Writes a new document of visible text; the scan is not changed"));
+                if e.clicked() {
+                    d.output_mode = OutputMode::EditableText;
+                }
+            });
+            ui.end_row();
+        }
         ui.label(tl!("Downsample to"));
         craft_ui::ComboBox::from_id_salt("ocr-dpi").selected_text(format!("{} dpi", d.dpi)).width(220.0).show_ui(ui, |ui| {
             for v in [600, 300, 150, 72] {

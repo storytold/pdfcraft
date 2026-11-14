@@ -56,7 +56,7 @@ fn recipe(auto: &Automation, args: &Args) -> Result<Recipe> {
 
 fn step_json(log: &StepLog) -> Value {
     match log {
-        StepLog::Ocr { words, skipped_pages } => json!({"step":"ocr","words":words,"skipped_pages":skipped_pages}),
+        StepLog::Ocr { words, skipped_pages, .. } => json!({"step":"ocr","words":words,"skipped_pages":skipped_pages}),
         StepLog::Size { step, before, after } => json!({"step":step.name(),"bytes_before":before,"bytes_after":after}),
     }
 }
@@ -137,6 +137,8 @@ impl Automation {
                 if batch::linked(&path.symlink_metadata().map_err(failed)?) || batch::absolute(&current).map_err(failed)? != path {
                     return Err(failed("input path changed after discovery"));
                 }
+                // Not a FIFO or device that would block the read.
+                batch::unchanged(&path).map_err(failed)?;
                 let (bytes, log) = recipe.process(&current, |_, _| true).map_err(failed)?;
                 let target = batch::output_path(&out, &relative);
                 let target = self.resolve(target.to_str().ok_or_else(|| failed("output path is not UTF-8"))?, true)?;

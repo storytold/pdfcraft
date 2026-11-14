@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout, RichText};
 use pdfcraft_engine::batch::{self, Discovery, Recipe, StepLog};
-use pdfcraft_engine::ocr::OcrSettings;
+use pdfcraft_engine::ocr::{OcrSettings, OutputMode};
 
 use crate::ocr_ui::{BatchProgress, unstarted};
 use crate::theme::{self, Tokens};
@@ -117,18 +117,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     ui.label(RichText::new(title.trim_end_matches('…').trim_end_matches("...")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     app.ocr_batch_draft.refresh();
-    let available = pdfcraft_engine::ocr::available();
+    // The non-blocking status: drawing must not wait for an external probe. The worker checks again.
+    let unavailable = pdfcraft_engine::ocr::engine_unavailable_reason(app.ocr_draft.engine);
+    let available = unavailable.is_none();
     card(ui, t, None, |ui| inputs(ui, app, t));
     card(ui, t, Some(tl!("Output folder")), |ui| output(ui, app, t));
-    card(ui, t, Some(tl!("Settings")), |ui| crate::ocr_ui::settings_fields(ui, &mut app.ocr_draft));
-    if !available {
-        hint(
-            ui,
-            t,
-            tl!(
-                "Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them."
-            ),
-        );
+    card(ui, t, Some(tl!("Settings")), |ui| crate::ocr_ui::settings_fields_with(ui, &mut app.ocr_draft, false));
+    if let Some(reason) = &unavailable {
+        hint(ui, t, reason);
         ui.add_space(6.0);
     }
     let ready = available && app.ocr_batch_draft.shown_ready() && app.ocr_batch.is_none();
@@ -286,7 +282,8 @@ impl PdfCraftApp {
         }
         let draft = self.ocr_batch_draft.clone();
         let Some(out) = draft.out_dir.clone().filter(|_| draft.ready()) else { return };
-        let settings = self.ocr_draft.settings();
+        // The folder batch writes a searchable image, whatever the single-file dialog last chose.
+        let settings = OcrSettings { output_mode: OutputMode::Searchable, ..self.ocr_draft.settings() };
         let javascript = self.session.javascript();
         let progress = Arc::new(Mutex::new(BatchProgress::default()));
         let p = progress.clone();
@@ -335,7 +332,7 @@ fn run_with(
 ) -> String {
     let found = (|| {
         let out = batch::absolute(out)?;
-        let roots = inputs.iter().map(|path| batch::absolute(path)).collect::<Result<Vec<_>, _>>()?;
+        let roots = inputs.iter().map(|path| batch::input_root(path)).collect::<Result<Vec<_>, _>>()?;
         Discovery::find(&roots, &out, recursive).map(|found| (out, found))
     })();
     let (out, found) = match found {
@@ -377,8 +374,16 @@ fn run_with(
         let result = pdfcraft_engine::guard(|| {
             batch::unchanged(&path)?;
             let (bytes, log) = process(&path)?;
+            // Cancel can arrive while the last page finishes: nothing more is written then.
+            if p.lock().is_ok_and(|s| s.cancel) {
+                return Err(batch::CANCELLED.into());
+            }
+            // Recognition alone on a file it left alone: nothing is written, and it counts as skipped.
+            if recipe.left_alone(&log).is_some() {
+                return Ok(None);
+            }
             batch::publish(&batch::confined_output(&out, &relative)?, &bytes)?;
-            Ok(log.iter().map(|l| if let StepLog::Ocr { words, .. } = l { *words } else { 0 }).sum::<usize>())
+            Ok(Some(log.iter().map(|l| if let StepLog::Ocr { words, .. } = l { *words } else { 0 }).sum::<usize>()))
         })
         .unwrap_or_else(Err);
         match result {
@@ -387,7 +392,8 @@ fn run_with(
                 cancelled = true;
                 break;
             }
-            Ok(n) => {
+            Ok(None) => skipped += 1,
+            Ok(Some(n)) => {
                 ok += 1;
                 words = words.saturating_add(n);
             }
@@ -525,6 +531,26 @@ mod tests {
         assert!(!out.join("a.pdf").exists());
     }
 
+    /// Cancel arriving while the last page of a file finishes: that file is not published, and the
+    /// run does not report a normal completion.
+    #[test]
+    fn a_cancel_while_the_last_file_finishes_publishes_nothing() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let dir = tempfile::tempdir().unwrap();
+        let scans = dir.path().join("scans");
+        std::fs::create_dir_all(&scans).unwrap();
+        std::fs::write(scans.join("a.pdf"), b"%PDF").unwrap();
+        let out = dir.path().join("out");
+        let p = Mutex::new(BatchProgress::default());
+        let recipe = Recipe::ocr(OcrSettings::default(), false);
+        let summary = run_with(&[scans], &out, false, &recipe, Ok(()), &p, |_| {
+            p.lock().unwrap().cancel = true;
+            Ok((Arc::new(b"%PDF result".to_vec()), vec![StepLog::Ocr { words: 2, skipped_pages: 0, file_skipped: None }]))
+        });
+        assert!(summary.starts_with("Text recognition cancelled."), "{summary}");
+        assert!(!out.join("a.pdf").exists());
+    }
+
     /// A file that panics fails alone: the files after it are still read, and the summary
     /// counts them and names the one that failed.
     #[test]
@@ -543,10 +569,60 @@ mod tests {
             if path.ends_with("b.pdf") {
                 panic!("broken scan");
             }
-            Ok((Arc::new(b"%PDF result".to_vec()), vec![StepLog::Ocr { words: 2, skipped_pages: 0 }]))
+            Ok((Arc::new(b"%PDF result".to_vec()), vec![StepLog::Ocr { words: 2, skipped_pages: 0, file_skipped: None }]))
         });
         assert_eq!(summary, "Recognized 4 words in 2 files; failed: b.pdf: broken scan");
         assert!(out.join("a.pdf").exists() && out.join("c.pdf").exists() && !out.join("b.pdf").exists());
+    }
+
+    /// A file recognition left alone whole (`skip_text_files`) comes back as the bytes it was given:
+    /// recognition alone writes nothing for it and counts it as skipped, not as recognized. With
+    /// another step in the recipe the other step's output is still wanted.
+    #[test]
+    fn a_file_recognition_left_alone_is_skipped_not_published() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let dir = tempfile::tempdir().unwrap();
+        let scans = dir.path().join("scans");
+        std::fs::create_dir_all(&scans).unwrap();
+        std::fs::write(scans.join("a.pdf"), b"%PDF").unwrap();
+        let log = || vec![StepLog::Ocr { words: 0, skipped_pages: 0, file_skipped: Some("the file already contains text".into()) }];
+        let p = Mutex::new(BatchProgress::default());
+
+        let out = dir.path().join("out");
+        let recipe = Recipe::ocr(OcrSettings::default(), false);
+        let summary = run_with(std::slice::from_ref(&scans), &out, false, &recipe, Ok(()), &p, |_| Ok((Arc::new(b"%PDF same".to_vec()), log())));
+        assert_eq!(summary, "Recognized 0 words in 0 files; skipped: 1");
+        assert!(!out.join("a.pdf").exists(), "an unchanged copy is not published");
+
+        let out = dir.path().join("out-mixed");
+        let mixed = Recipe { steps: vec![pdfcraft_engine::batch::Step::Ocr, pdfcraft_engine::batch::Step::Optimize], ..recipe };
+        let summary = run_with(std::slice::from_ref(&scans), &out, false, &mixed, Ok(()), &p, |_| Ok((Arc::new(b"%PDF smaller".to_vec()), log())));
+        assert_eq!(summary, "Recognized 0 words in 1 file");
+        assert!(out.join("a.pdf").exists(), "the optimized copy is still wanted");
+    }
+
+    /// An input that is a link is refused, not followed: discovery would otherwise be handed the
+    /// target as if it had been named, which is what `doc_batch` already refuses.
+    #[cfg(unix)]
+    #[test]
+    fn an_input_that_is_a_link_is_refused() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let (real, linked, out) = (base.join("real"), base.join("linked"), base.join("out"));
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("a.pdf"), b"%PDF").unwrap();
+        std::os::unix::fs::symlink(&real, &linked).unwrap();
+        let p = Mutex::new(BatchProgress::default());
+        let recipe = Recipe::ocr(OcrSettings::default(), false);
+        let mut read = Vec::new();
+        let summary = run_with(&[linked], &out, false, &recipe, Ok(()), &p, |path| {
+            read.push(path.to_path_buf());
+            Ok((Arc::new(b"%PDF result".to_vec()), Vec::new()))
+        });
+        assert!(summary.contains("not links"), "{summary}");
+        assert!(read.is_empty(), "the linked folder is not read: {read:?}");
+        assert!(!out.exists());
     }
 
     /// Links that turn up while the batch runs are not followed: an output subfolder that links

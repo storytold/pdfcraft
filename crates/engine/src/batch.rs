@@ -51,8 +51,17 @@ impl Step {
 /// What a step did to one file.
 #[derive(Clone, Debug, PartialEq)]
 pub enum StepLog {
-    Ocr { words: usize, skipped_pages: usize },
-    Size { step: Step, before: usize, after: usize },
+    /// `file_skipped`: why recognition left the whole file alone (`skip_text_files`), when it did.
+    Ocr {
+        words: usize,
+        skipped_pages: usize,
+        file_skipped: Option<String>,
+    },
+    Size {
+        step: Step,
+        before: usize,
+        after: usize,
+    },
 }
 
 /// The steps and their settings.
@@ -70,6 +79,20 @@ impl Recipe {
     /// Recognize text only, with `settings` and the caller's JavaScript preference.
     pub fn ocr(settings: ocr::OcrSettings, javascript: bool) -> Self {
         Self { steps: vec![Step::Ocr], images: optimize::ImageSettings::REDUCE, mono: optimize::MonoSettings::REDUCE, ocr: settings, javascript }
+    }
+
+    /// Why `log` says the whole file was left alone, when that means there is nothing to publish:
+    /// a recipe of recognition alone on a file it skipped (`skip_text_files`) returns the bytes it
+    /// was given, and publishing them would be an unchanged copy counted as recognized. With other
+    /// steps in the recipe their output is still wanted, so this is `None`.
+    pub fn left_alone(&self, log: &[StepLog]) -> Option<String> {
+        if self.steps != [Step::Ocr] {
+            return None;
+        }
+        log.iter().find_map(|l| match l {
+            StepLog::Ocr { file_skipped: Some(why), .. } => Some(why.clone()),
+            _ => None,
+        })
     }
 
     /// Whether the steps can read `path`: a PDF, or with Convert any convertible file.
@@ -108,7 +131,11 @@ impl Recipe {
                         go
                     });
                     let result = stopped_first(stopped, result)?;
-                    log.push(StepLog::Ocr { words: result.words(), skipped_pages: result.pages.iter().filter(|p| p.skipped.is_some()).count() });
+                    log.push(StepLog::Ocr {
+                        words: result.words(),
+                        skipped_pages: result.pages.iter().filter(|p| p.skipped.is_some()).count(),
+                        file_skipped: result.file_skipped.clone(),
+                    });
                     bytes = result.bytes;
                     continue;
                 }
@@ -139,6 +166,16 @@ fn stopped_first<T>(stopped: bool, result: Result<T, String>) -> Result<T, Strin
 /// the placeholders of files kept in the cloud (OneDrive), are ordinary files.
 pub fn linked(metadata: &std::fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
+}
+
+/// An input root made absolute. A link is refused first: [`absolute`] follows it, so discovery
+/// would be handed the target as if it had been named, and the checks that refuse links later
+/// would see an ordinary path.
+pub fn input_root(path: &Path) -> Result<PathBuf, String> {
+    if path.symlink_metadata().is_ok_and(|metadata| linked(&metadata)) {
+        return Err("input roots must be regular files or folders, not links".into());
+    }
+    absolute(path)
 }
 
 /// Check a found file again just before it is read: still a file, not a link, and still at the
@@ -304,6 +341,33 @@ pub fn publish(target: &Path, bytes: &[u8]) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Recognition alone on a file it left alone has nothing to publish; with another step in the
+    /// recipe, or when the file was read, there is.
+    #[test]
+    fn a_recipe_of_recognition_alone_leaves_a_skipped_file_unpublished() {
+        let skipped = [StepLog::Ocr { words: 0, skipped_pages: 0, file_skipped: Some("the file already contains text".into()) }];
+        let read = [StepLog::Ocr { words: 3, skipped_pages: 0, file_skipped: None }];
+        let ocr = Recipe::ocr(ocr::OcrSettings::default(), false);
+        assert_eq!(ocr.left_alone(&skipped).as_deref(), Some("the file already contains text"));
+        assert_eq!(ocr.left_alone(&read), None);
+        let mixed = Recipe { steps: vec![Step::Ocr, Step::Optimize], ..ocr };
+        assert_eq!(mixed.left_alone(&skipped), None, "the other step's output is still wanted");
+    }
+
+    /// A link is refused as an input root before it is followed; a regular folder is made
+    /// absolute as before.
+    #[cfg(unix)]
+    #[test]
+    fn an_input_root_that_is_a_link_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let (real, linked) = (base.join("real"), base.join("linked"));
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &linked).unwrap();
+        assert!(input_root(&linked).unwrap_err().contains("not links"));
+        assert_eq!(input_root(&real).unwrap(), real);
+    }
 
     #[test]
     fn discovery_limits_fail_before_reading_another_entry() {
