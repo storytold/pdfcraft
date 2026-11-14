@@ -55,7 +55,8 @@ fn a_four_bit_rgb_image_of_odd_width_with_up_predicted_rows_is_not_sheared() {
     pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
 
     let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    let page =
+        renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
     assert!(page.error.is_none(), "{:?}", page.error);
     assert_eq!((page.width, page.height), (WIDTH as u32, HEIGHT as u32));
 
@@ -133,7 +134,8 @@ fn image_pdf(images: &[(&str, &str, &[u8])]) -> Vec<u8> {
 
 fn render(pdf: Vec<u8>) -> crate::RenderedPage {
     let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
-    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    let page =
+        renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
     assert!(page.error.is_none(), "{:?}", page.error);
     assert_eq!((page.width, page.height), (WIDTH as u32, HEIGHT as u32));
     page

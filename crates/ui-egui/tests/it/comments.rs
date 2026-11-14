@@ -817,8 +817,10 @@ fn a_sticky_note_on_a_turned_page_is_picked_where_it_is_drawn() {
     // Where the note's /Rect lies as displayed, left of where it was placed: nothing.
     click(&mut h, placed + egui::vec2(-10.0 * k, 10.0 * k));
     assert_eq!(h.state().views[0].comments.selected, None);
-    // On the icon, drawn right and down from where it was placed.
-    click(&mut h, placed + egui::vec2(10.0 * k, 10.0 * k));
+    // On the icon, drawn right and down from where it was placed. A note keeps its size on the
+    // screen (NoZoom, ISO 32000-2 §12.5.6.4): its icon has `k / zoom` pixels per point.
+    let icon = k / h.state().views[0].zoom;
+    click(&mut h, placed + egui::vec2(10.0 * icon, 10.0 * icon));
     assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
 }
 
@@ -3661,6 +3663,139 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     h.run_steps(3);
 }
 
+/// A 300 × 200 page with two 40 × 40 rectangles whose upper-left corners sit on y = 180: one with
+/// the NoZoom flag (`/F 12`) at x = 40, one without (`/F 4`) at x = 100.
+const NO_ZOOM_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R 5 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Square /F 12 /Rect [40 140 80 180] /C [1 0 0] >> endobj
+5 0 obj << /Type /Annot /Subtype /Square /F 4 /Rect [100 140 140 180] /C [0 0 1] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// ISO 32000-2 §12.5.3: a NoZoom comment keeps its size on the screen, pinned at the upper-left
+/// corner of its `/Rect`. At 400% it is drawn a quarter of its `/Rect` a side, and the Select tool
+/// picks it, and resizes it by its handles, where it is drawn; the comment without the flag still
+/// fills its `/Rect`. At 100% the two agree.
+#[test]
+fn no_zoom_comments_are_picked_and_resized_where_they_are_drawn() {
+    let mut h = harness_with_bytes(NO_ZOOM_FIXTURE.to_vec(), |app| {
+        app.set_option("zoom", "400").unwrap();
+        app.set_option("quick", "select").unwrap();
+    });
+    let select = |h: &mut Harness<'static, PdfCraftApp>, p: (f32, f32)| {
+        h.state_mut().views[0].comments.selected = None;
+        click_pt(h, p);
+        h.state().views[0].comments.selected
+    };
+    // Inside its /Rect but outside the 10 × 10 box it is drawn in at 400%.
+    assert_eq!(select(&mut h, (70.0, 150.0)), None, "nothing is drawn there at 400%");
+    assert_eq!(select(&mut h, (45.0, 175.0)), Some((0, 0)), "picked where it is drawn");
+    assert_eq!(select(&mut h, (130.0, 150.0)), Some((0, 1)), "the comment without NoZoom fills its /Rect");
+    // The drawn box's lower-right handle, dragged 10 pt right and down as drawn, makes it 20 × 20
+    // on screen at 400%: a /Rect of 80 × 80 from the same upper-left corner.
+    select(&mut h, (45.0, 175.0));
+    drag_pt(&mut h, (50.0, 170.0), (60.0, 160.0));
+    let r = comments(&h).into_iter().find(|a| a.index == 0).expect("the NoZoom comment").rect;
+    assert!(r.iter().zip([40.0, 100.0, 120.0, 180.0]).all(|(g, w)| (g - w).abs() < 1.0), "resized as drawn: {r:?}");
+    // At 100% it is drawn in its /Rect again (now 80 × 80).
+    h.state_mut().set_option("zoom", "100").unwrap();
+    crate::support::settle(&mut h);
+    assert_eq!(select(&mut h, (110.0, 110.0)), Some((0, 0)), "at 100% the whole /Rect is the comment");
+}
+
+/// A 300 × 200 page with a highlight with the NoZoom flag (`/F 12`) and no appearance, whose one
+/// quadrilateral fills its 40 × 40 `/Rect`, the upper-left corner at (40, 180).
+const NO_ZOOM_HIGHLIGHT: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Highlight /F 12 /Rect [40 140 80 180] /QuadPoints [40 180 80 180 40 140 80 140] /C [1 1 0] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+/// ISO 32000-2 §12.5.3: a NoZoom highlight's marked lines are drawn scaled about the upper-left
+/// corner of its `/Rect` like the rest of it, so at 400% it is picked in that quarter-size box,
+/// not across its whole `/QuadPoints`.
+#[test]
+fn no_zoom_highlights_are_picked_where_their_quads_are_drawn() {
+    let mut h = harness_with_bytes(NO_ZOOM_HIGHLIGHT.to_vec(), |app| {
+        app.set_option("zoom", "400").unwrap();
+        app.set_option("quick", "select").unwrap();
+    });
+    let select = |h: &mut Harness<'static, PdfCraftApp>, p: (f32, f32)| {
+        h.state_mut().views[0].comments.selected = None;
+        click_pt(h, p);
+        h.state().views[0].comments.selected
+    };
+    assert_eq!(select(&mut h, (70.0, 150.0)), None, "inside the quad, outside where it is drawn at 400%");
+    assert_eq!(select(&mut h, (45.0, 175.0)), Some((0, 0)), "picked where it is drawn");
+}
+
+/// ISO 32000-2 §12.5.3: a NoZoom line or polygon is drawn scaled about the upper-left corner of its
+/// `/Rect` like any NoZoom comment, so its end and corner handles are where its points are drawn.
+/// At 400% the point stored at (80, 140), with the corner at (40, 180), is drawn at (50, 170);
+/// dragged from there to (60, 160) as drawn, it is stored at (120, 100), four times as far from
+/// the corner, and the other points stay where they are.
+#[test]
+fn no_zoom_lines_and_polygons_are_reshaped_where_their_points_are_drawn() {
+    for (subtype, points, moved) in [("Line", "/L [40 180 80 140]", 1), ("Polygon", "/Vertices [40 180 80 180 80 140]", 2)] {
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /{subtype} /F 12 /Rect [40 140 80 180] {points} /C [1 0 0] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        );
+        let mut h = harness_with_bytes(pdf.into_bytes(), |app| {
+            app.set_option("zoom", "400").unwrap();
+            app.set_option("quick", "select").unwrap();
+        });
+        let before: Vec<[f32; 2]> = comments(&h)[0].points.clone();
+        click_pt(&mut h, (45.0, 175.0));
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "{subtype}: picked where it is drawn");
+        drag_pt(&mut h, (50.0, 170.0), (60.0, 160.0));
+        let after: Vec<[f32; 2]> = comments(&h)[0].points.clone();
+        assert_eq!(after.len(), before.len(), "{subtype}");
+        for (i, (b, a)) in before.iter().zip(&after).enumerate() {
+            let want = if i == moved { [120.0, 100.0] } else { *b };
+            assert!((a[0] - want[0]).abs() < 1.0 && (a[1] - want[1]).abs() < 1.0, "{subtype}: point {i} is {a:?}, want {want:?} (all: {after:?})");
+        }
+    }
+}
+
+/// A snapshot copies the area as the page view shows it: at 400% a NoZoom comment covers a
+/// sixteenth of its `/Rect`, not all of it (ISO 32000-2 §12.5.3).
+#[test]
+fn a_snapshot_keeps_no_zoom_comments_at_their_on_screen_size() {
+    // A NoZoom square whose red appearance fills its /Rect, [40 140 80 180].
+    let ap = "1 0 0 rg 0 0 40 40 re f";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Square /F 12 /Rect [40 140 80 180] /AP << /N 5 0 R >> >> endobj
+5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 40 40] /Length {} >> stream\n{ap}\nendstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        ap.len()
+    );
+    let mut h = harness_with_bytes(pdf.into_bytes(), |app| {
+        app.set_option("zoom", "400").unwrap();
+        app.system_clipboard = false;
+    });
+    // The /Rect in page view points (y down from the top of the 200 pt page).
+    let (w, hgt) = h.state_mut().snapshot(0, 0, [40.0, 20.0, 80.0, 60.0]).expect("a snapshot");
+    let (_, _, px) = h.state().last_snapshot.clone().expect("kept");
+    let red = px.as_chunks::<4>().0.iter().filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60).count();
+    let share = red as f64 / (f64::from(w) * f64::from(hgt));
+    assert!((share - 1.0 / 16.0).abs() < 0.03, "{w} × {hgt}: red covers {share:.3} of the area");
+}
+
 // Contributor-original PDF: a Square, a Circle grouped with it (`/RT /Group`) that keeps its own
 // author, text and colour, an ordinary reply and a reply to the Circle.
 const GROUP_FIXTURE: &[u8] = b"%PDF-1.7
@@ -4047,8 +4182,10 @@ fn a_double_click_opens_a_notes_pop_up_which_drags_and_closes() {
     // Well after the Post click, so egui does not count the next clicks with it.
     h.run_steps(45);
 
-    // Double-click the icon.
-    let icon = at(&h, (note.rect[0] + note.rect[2]) / 2.0, (note.rect[1] + note.rect[3]) / 2.0);
+    // Double-click the icon. A note keeps its size on the screen (NoZoom, ISO 32000-2
+    // §12.5.6.4): it is drawn scaled by 1 / zoom about the upper-left corner of its /Rect.
+    let s = 1.0 / h.state().views[0].zoom;
+    let icon = at(&h, note.rect[0] + (note.rect[2] - note.rect[0]) * s / 2.0, note.rect[3] - (note.rect[3] - note.rect[1]) * s / 2.0);
     h.hover_at(icon);
     h.run_steps(1);
     for _ in 0..2 {
@@ -4163,7 +4300,10 @@ fn a_connector_line_joins_a_comment_to_its_open_pop_up_while_the_pointer_is_on_e
     let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |_| {});
     let blue = egui::Color32::from_rgb(0, 0, 255);
     let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is open");
-    let mark = egui::Rect::from_two_pos(at(&h, 20.0, 180.0), at(&h, 40.0, 160.0));
+    // Where the note is drawn: it keeps its size on the screen (NoZoom, ISO 32000-2 §12.5.6.4),
+    // scaled by 1 / zoom about the upper-left corner of its /Rect.
+    let corner = at(&h, 20.0, 180.0);
+    let mark = egui::Rect::from_min_size(corner, (at(&h, 40.0, 160.0) - corner) / h.state().views[0].zoom);
     let on_edge = |r: egui::Rect, p: Pos2| {
         r.expand(1.0).contains(p) && [p.x - r.left(), r.right() - p.x, p.y - r.top(), r.bottom() - p.y].iter().any(|d| d.abs() < 1.0)
     };

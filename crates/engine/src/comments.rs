@@ -24,6 +24,7 @@ pub(crate) fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render:
             fill_sign: s.fill_sign,
             no_rotate: s.no_rotate,
             points: s.points,
+            no_zoom: s.no_zoom,
             text_box: s.text_box,
             popup: s.popup.map(|p| pdfcraft_render::Popup { rect: p.rect, open: p.open }),
         })

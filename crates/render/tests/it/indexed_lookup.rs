@@ -87,6 +87,7 @@ fn render(bytes: Vec<u8>) -> RenderedPage {
         scale: 1.0,
         tag: 0,
         preview: false,
+        magnification: None,
     });
     assert!(page.error.is_none(), "{:?}", page.error);
     assert_eq!((page.width, page.height), (200, 200));

@@ -3,7 +3,7 @@ use super::draw::set_appearance;
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, drawn_upright, is_fill_sign, page_ref, page_refs};
 use super::modify::{callout_line, callout_text_box, fillable, touch, unlocked};
 use super::text_style;
-use super::types::{BorderShape, FLAG_LOCKED, LineEnding, Meta, NoteIcon, Rgb};
+use super::types::{BorderShape, FLAG_LOCKED, FLAG_NO_ZOOM, LineEnding, Meta, NoteIcon, Rgb};
 use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, appearance};
 
 // ── reading ─────────────────────────────────────────────────────────────────────────────────
@@ -41,6 +41,9 @@ pub struct Summary {
     /// (`/Vertices`), or a callout's arrow point and knee (`/CL` without its end, which follows
     /// the text box), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
+    /// Keeps its size on the screen whatever the zoom: the NoZoom flag or a note, as
+    /// `pdfcraft_render::Annotation::no_zoom` decides it.
+    pub no_zoom: bool,
     /// A callout's text box (`/Rect` inset by `/RD`), in user space; `None` for other comments.
     pub text_box: Option<[f32; 4]>,
     /// The comment's pop-up window (`/Popup`), when it has one.
@@ -133,6 +136,20 @@ pub(crate) fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
     r
 }
 
+/// Whether the renderer keeps an annotation of `subtype` the same size on the screen whatever
+/// the zoom (ISO 32000-2 §12.5.3, hayro-interpret patch 54): the NoZoom flag, with `/F` read as
+/// the renderer reads it (a real truncated, a value that isn't a `u32` no flags), or a note
+/// (`/Text`), which behaves as if it had the flag (§12.5.6.4). Never a form field or a link.
+fn keeps_screen_size(doc: &Document, d: &Dict, subtype: &str) -> bool {
+    let f = match d.get(b"F").map(|f| doc.resolve(f)).as_deref() {
+        Some(Object::Int(i)) => *i,
+        Some(Object::Real(r)) => *r as i64,
+        _ => 0,
+    };
+    let no_zoom = u32::try_from(f).is_ok_and(|f| i64::from(f) & FLAG_NO_ZOOM != 0);
+    (no_zoom || subtype == "Text") && !matches!(subtype, "Widget" | "Link")
+}
+
 /// Whether an annotation is a subordinate of a group rather than a reply: `/RT /Group` with an
 /// `/IRT` reference (ISO 32000-2 §12.5.6.2, Table 172). The group's primary is the `/IRT`
 /// annotation, and the subordinate's own text, author, colour, dates and pop-up are ignored.
@@ -215,6 +232,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
             let irt = d.get(b"IRT").map(|o| o.as_ref().map_or_else(|| doc.resolve(o), |r| doc.get(final_ref(doc, r))));
             let in_reply_to = irt.and_then(|o| o.as_dict().cloned()).and_then(|p| text_value(doc, &p, b"NM"));
             let parent = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| slots.get(&final_ref(doc, r)).copied());
+            let no_zoom = keeps_screen_size(doc, d, &subtype);
             // A group is one page's, as Acrobat reads it: a subordinate whose primary is on
             // another page is a comment of its own (keep in step with
             // `pdfcraft_render::link_replies`).
@@ -249,6 +267,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 fill_sign: is_fill_sign(doc, d),
                 no_rotate: drawn_upright(doc, d),
                 points,
+                no_zoom,
                 text_box,
                 popup: popup_info(doc, entry.as_ref().map(|r| final_ref(doc, r)), d),
             });

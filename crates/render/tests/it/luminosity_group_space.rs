@@ -31,7 +31,8 @@ fn stream(dict: &str, content: &str) -> String {
 
 fn render(bytes: Vec<u8>) -> (Vec<u8>, u32) {
     let mut renderer = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
-    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    let page =
+        renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
     assert!(page.error.is_none(), "{:?}", page.error);
     (page.rgba.to_vec(), page.width)
 }

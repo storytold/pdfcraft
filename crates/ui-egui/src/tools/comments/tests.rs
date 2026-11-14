@@ -31,21 +31,21 @@ fn a_moved_or_reshaped_line_is_drawn_at_its_new_points() {
     let to_user = |p: Pos2| [f64::from(p.x), f64::from(p.y)];
     let moving = Gesture::Move { page: 0, index: 3, from: pos2(20.0, 10.0) };
     let at = Some(pos2(25.0, 30.0));
-    assert_eq!(changing_points(Some(&moving), None, (0, 3), &line, to_user, at, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
-    assert_eq!(changing_points(Some(&moving), None, (0, 4), &line, to_user, at, straight), None, "another comment's move");
+    assert_eq!(changing_points(Some(&moving), None, (0, 3), &line, (to_user, |q| q), at, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(Some(&moving), None, (0, 4), &line, (to_user, |q| q), at, straight), None, "another comment's move");
     let released = Edit::MoveAnnotation { page: 0, index: 3, dx: 5.0, dy: 20.0 };
-    assert_eq!(changing_points(None, Some(&released), (0, 3), &line, to_user, None, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(None, Some(&released), (0, 3), &line, (to_user, |q| q), None, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
     let dragging = Gesture::Reshape { page: 0, index: 3, point: 1, points: line.to_vec() };
     let to = Some(pos2(60.0, 10.0));
-    assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, to_user, to, straight), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
-    assert_eq!(changing_points(None, None, (0, 3), &line, to_user, to, straight), None, "not changing");
+    assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, (to_user, |q| q), to, straight), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
+    assert_eq!(changing_points(None, None, (0, 3), &line, (to_user, |q| q), to, straight), None, "not changing");
     // Released with the rest of the selection: its own move in the batch.
     let together = Edit::Batch {
         label: "Move comments".into(),
         edits: vec![Edit::MoveAnnotation { page: 0, index: 1, dx: 1.0, dy: 1.0 }, Edit::MoveAnnotation { page: 0, index: 3, dx: 5.0, dy: 20.0 }],
     };
-    assert_eq!(changing_points(None, Some(&together), (0, 3), &line, to_user, None, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
-    assert_eq!(changing_points(None, Some(&together), (0, 2), &line, to_user, None, straight), None, "not in the batch");
+    assert_eq!(changing_points(None, Some(&together), (0, 3), &line, (to_user, |q| q), None, straight), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(None, Some(&together), (0, 2), &line, (to_user, |q| q), None, straight), None, "not in the batch");
 }
 
 /// Review on #4094: a callout's text box being resized, and the resize just released, draw its
@@ -56,10 +56,10 @@ fn a_callout_being_resized_draws_its_leader_line() {
     let to_user = |p: Pos2| [f64::from(p.x), f64::from(p.y)];
     let resizing = Gesture::Resize { page: 0, index: 3, handle: (1, 1), from: pos2(80.0, 60.0), aspect_ratio: None };
     let at = Some(pos2(95.0, 70.0));
-    assert_eq!(changing_points(Some(&resizing), None, (0, 3), &lead, to_user, at, straight), Some(lead.to_vec()));
-    assert_eq!(changing_points(Some(&resizing), None, (0, 4), &lead, to_user, at, straight), None, "another comment's resize");
+    assert_eq!(changing_points(Some(&resizing), None, (0, 3), &lead, (to_user, |q| q), at, straight), Some(lead.to_vec()));
+    assert_eq!(changing_points(Some(&resizing), None, (0, 4), &lead, (to_user, |q| q), at, straight), None, "another comment's resize");
     let released = Edit::ResizeAnnotation { page: 0, index: 3, rect: [50.0, 20.0, 110.0, 70.0] };
-    assert_eq!(changing_points(None, Some(&released), (0, 3), &lead, to_user, None, straight), Some(lead.to_vec()));
+    assert_eq!(changing_points(None, Some(&released), (0, 3), &lead, (to_user, |q| q), None, straight), Some(lead.to_vec()));
 }
 
 /// A sticky note on a page turned a quarter is drawn upright beside its `/Rect`: an edit
@@ -86,6 +86,7 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
         fill_sign: false,
         no_rotate,
         points: Vec::new(),
+        no_zoom: false,
         text_box: None,
         popup: None,
     };
@@ -112,6 +113,73 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
     }
 }
 
+/// A redaction mark a file flags NoZoom shows, under the pointer, the areas applying it removes
+/// (its `/QuadPoints`, or its `/Rect` without them, ISO 32000-2 Table 195) at any zoom, not its
+/// appearance scaled to keep its size on the screen. At 50% that scale would double the fill
+/// over content the mark leaves in place. A mark also flagged NoRotate on a turned page shows its
+/// `/Rect` as stored too, not the upright box its appearance is turned into: that is what goes.
+#[test]
+fn a_no_zoom_redaction_mark_shows_the_areas_it_removes() {
+    let mark = |quads: Vec<[f32; 8]>, no_rotate: bool| Annotation {
+        page: 0,
+        subtype: "Redact".into(),
+        author: None,
+        contents: None,
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent: None,
+        grouped: false,
+        rect: [40.0, 100.0, 80.0, 120.0],
+        color: None,
+        index: 0,
+        state: None,
+        quads,
+        locked: false,
+        intent: None,
+        fill_sign: false,
+        no_rotate,
+        points: Vec::new(),
+        no_zoom: true,
+        text_box: None,
+        popup: None,
+    };
+    let prefs = CommentPrefs::default();
+    let quad = [40.0, 120.0, 80.0, 120.0, 40.0, 100.0, 80.0, 100.0];
+    for ((magnification, scaled), (rotation, no_rotate)) in
+        [(0.5, true), (1.0, false), (2.0, true)].into_iter().flat_map(|m| [(m, (0, false)), (m, (90, true))])
+    {
+        let page = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation };
+        let side = 200.0 * magnification * crate::canvas::PT;
+        let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(side, side)), rot: 0, pw: 200.0, ph: 200.0 };
+        for quads in [vec![quad], Vec::new()] {
+            let info = DocInfo { pages: vec![page.clone()], annotations: vec![mark(quads.clone(), no_rotate)], ..Default::default() };
+            let cx = PageCx {
+                page: 0,
+                xf: &xf,
+                ptr: &PagePointer::default(),
+                info: &info,
+                tool: QuickTool::Select,
+                prefs: &prefs,
+                allowed: true,
+                hidden: false,
+                redact_mark: ([0.0; 3], 1.0),
+                keys: crate::page_keys::PageKeys::new(false),
+            };
+            let a = &info.annotations[0];
+            let removed = xf.user_rect(&info, 0, [40.0, 100.0, 80.0, 120.0]);
+            assert_eq!(cx.redact_rects(a), vec![removed], "{magnification}, /Rotate {rotation}, quads: {}", quads.len());
+            if no_rotate {
+                let upright = xf.user_rect(&info, 0, a.shown_rect(rotation));
+                assert_ne!(upright, removed, "{magnification}: the NoRotate mark is drawn turned upright");
+            }
+            if scaled {
+                assert_ne!(cx.screen_rect(a), removed, "{magnification}: the mark is drawn NoZoom");
+            }
+        }
+    }
+}
+
 /// A listed comment or reply at `index` on `page`, replying to `parent`.
 fn listed(page: usize, index: usize, contents: &str, parent: Option<(usize, usize)>) -> Annotation {
     Annotation {
@@ -134,6 +202,7 @@ fn listed(page: usize, index: usize, contents: &str, parent: Option<(usize, usiz
         fill_sign: false,
         no_rotate: false,
         points: Vec::new(),
+        no_zoom: false,
         text_box: None,
         popup: None,
     }
@@ -231,6 +300,7 @@ fn annotation(subtype: &str, contents: Option<&str>, fill_sign: bool) -> Annotat
         fill_sign,
         no_rotate: false,
         points: Vec::new(),
+        no_zoom: false,
         text_box: None,
         popup: None,
     }
@@ -440,6 +510,7 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
             text_box: None,
             popup: None,
             no_rotate: false,
+            no_zoom: false,
         }],
         ..Default::default()
     };
@@ -638,6 +709,7 @@ fn markup_comment_markers_stay_inside_turned_and_zoomed_pages() {
                     intent: None,
                     fill_sign: false,
                     no_rotate: false,
+                    no_zoom: false,
                     points: Vec::new(),
                     text_box: None,
                     popup: None,
@@ -662,6 +734,47 @@ fn markup_comment_markers_stay_inside_turned_and_zoomed_pages() {
     }
 }
 
+/// A commented NoZoom highlight keeps its size on the screen (ISO 32000-2 §12.5.3, Table 167):
+/// its marker sits beside the highlight as drawn, scaled about the `/Rect`'s upper-left corner,
+/// not beside where the highlight would be at full page scale.
+#[test]
+fn a_no_zoom_markup_comment_marker_follows_the_drawn_highlight() {
+    let prefs = CommentPrefs::default();
+    let a = Annotation {
+        rect: [100.0, 280.0, 200.0, 300.0],
+        contents: Some("Review".into()),
+        quads: vec![[100.0, 300.0, 200.0, 300.0, 100.0, 280.0, 200.0, 280.0]],
+        no_zoom: true,
+        ..annotation("Highlight", None, false)
+    };
+    let info = DocInfo {
+        pages: vec![PageInfo { width: 400.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 400.0, 400.0], rotation: 0 }],
+        annotations: vec![a.clone()],
+        ..Default::default()
+    };
+    let magnification = 2.0;
+    let side = 400.0 * magnification * crate::canvas::PT;
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(side, side)), rot: 0, pw: 400.0, ph: 400.0 };
+    let cx = PageCx {
+        page: 0,
+        xf: &xf,
+        ptr: &PagePointer::default(),
+        info: &info,
+        tool: QuickTool::Select,
+        prefs: &prefs,
+        allowed: true,
+        hidden: false,
+        redact_mark: ([0.0; 3], 1.0),
+        keys: crate::page_keys::PageKeys::new(false),
+    };
+    // At 200% the highlight is drawn at half its page size: [100, 290, 150, 300].
+    let drawn = xf.user_rect(&info, 0, [100.0, 290.0, 150.0, 300.0]);
+    let marker = cx.comment_marker_rect(&a).expect("commented markup has a marker");
+    assert!((marker.left() - (drawn.right() + 3.0)).abs() < 0.01, "{marker:?} beside {drawn:?}");
+    assert!((marker.top() - (drawn.top() - 14.0)).abs() < 0.01, "{marker:?} beside {drawn:?}");
+    assert_eq!(cx.comment_at(marker.center()).map(|c| c.index), Some(a.index));
+}
+
 #[test]
 fn stale_comment_state_is_cleared_and_delete_never_hits_non_comment_slots() {
     let annot = |index: usize, name: &str| Annotation {
@@ -683,6 +796,7 @@ fn stale_comment_state_is_cleared_and_delete_never_hits_non_comment_slots() {
         intent: None,
         fill_sign: false,
         no_rotate: false,
+        no_zoom: false,
         points: Vec::new(),
         text_box: None,
         popup: None,
@@ -767,6 +881,7 @@ fn an_unnamed_shift_clears_state_for_the_old_index() {
         intent: None,
         fill_sign: false,
         no_rotate: false,
+        no_zoom: false,
         points: Vec::new(),
         text_box: None,
         popup: None,
@@ -820,6 +935,7 @@ fn a_replace_text_group_makes_replace_text_defaults() {
         points: Vec::new(),
         text_box: None,
         popup: None,
+        no_zoom: false,
     };
     let all =
         vec![annot(0, "Caret", Some("Replace"), None), annot(1, "StrikeOut", Some("StrikeOutTextEdit"), Some((0, 0))), annot(2, "Caret", None, None)];

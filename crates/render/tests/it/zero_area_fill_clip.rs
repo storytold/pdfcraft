@@ -62,7 +62,8 @@ fn build_pdf(content: &str) -> Vec<u8> {
 fn render(content: &str) -> Vec<u8> {
     let pdf = Arc::new(build_pdf(content));
     let mut renderer = PageRenderer::new(pdf, RenderConfig::default());
-    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    let page =
+        renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
     assert!(page.error.is_none(), "render error: {:?}", page.error);
     assert_eq!((page.width, page.height), (SIZE, SIZE));
     page.rgba.to_vec()
