@@ -12232,6 +12232,11 @@ fn a_static_xfa_forms_scripts_read_values_only_its_fields_hold() {
     let id = s.open("static.pdf", None, bytes, None).expect("opens");
     let total = s.get(id).unwrap().form.iter().find(|f| f.name == "form1[0].page1[0].total[0]").map(|f| f.value.clone());
     assert_eq!(total, Some(vec!["init:Ada".to_string()]), "{:?}", s.take_js_output(id));
+    // and still do after a script's changes are written mid-event (a click that hides a field lays the form out again)
+    let inner = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name.ends_with("inner[0]")).map(|f| f.value.clone());
+    assert_eq!(inner(&s), Some(vec!["calc:Ada".to_string()]));
+    s.run_javascript(id, "", Some("form1[0].page1[0].go[0]")).expect("clicks");
+    assert_eq!(inner(&s), Some(vec!["calc:Ada".to_string()]), "{:?}", s.take_js_output(id));
 }
 
 /// Flattening a static form's fields removes its XFA, and its scripts go with it; an undo brings both back.

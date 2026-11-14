@@ -204,7 +204,7 @@ pub fn static_scripted_shell_with(data: &str, name: Option<&str>) -> Vec<u8> {
 /// writes `total`; the push button `hide` hides the radio button `large`, then, clicked again, the group `size` while
 /// setting `small` itself visible. `form1.page1` holds the text fields `name` (whose exit script writes
 /// `total`), `total` (whose initialize script fills it) and, in an unnamed subform, `inner` (whose initialize script fills
-/// it); the push button `go`, whose click script sets `total`, hides `name`, makes `inner` read-only and shows a message;
+/// it and whose calculate script reads `name`); the push button `go`, whose click script sets `total`, hides `name`, makes `inner` read-only and shows a message;
 /// the check box `agree` and the radio group `size` (buttons `small` and `large`), whose click scripts write `total`.
 /// See [`static_scripted_shell`] for `stamp` and `hide`.
 pub fn static_scripted_template() -> String {
@@ -237,7 +237,8 @@ pub fn static_scripted_template() -> String {
             "click",
             "total.rawValue = &quot;clicked&quot;; name.presence = &quot;hidden&quot;; this.parent.nodes.item(3).nodes.item(0).access = &quot;readOnly&quot;; xfa.host.messageBox(&quot;done&quot;);"
         ),
-        js("initialize", "this.rawValue = &quot;inner&quot;;"),
+        js("initialize", "this.rawValue = &quot;inner&quot;;")
+            + &js("calculate", "name.rawValue ? &quot;calc:&quot; + name.rawValue : &quot;inner&quot;"),
         js("click", "total.rawValue = &quot;agree:&quot; + this.rawValue;"),
         radio("small", 1),
         radio("large", 2),

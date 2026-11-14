@@ -802,6 +802,10 @@ impl<'a, 'b> Runner<'a, 'b> {
             // What the packet now holds (a value it could not take is reported above).
             self.data = pdfcraft_xfa::data_of(self.doc);
             self.invalidate();
+            // the reload drops what only a static form's fields hold: the later scripts still read it
+            if self.static_form {
+                self.fill_from_fields();
+            }
         }
         Ok(())
     }
