@@ -301,6 +301,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
             if let Some(cmd) = crate::fill_sign::signature_entries(ui, app, t) {
                 run = Some(cmd);
             }
+            crate::fill_sign::repeat_entry(ui, app);
             // Where the signing happens, not only in Preferences, and once: not also in the Sign
             // menu over the page, where it was easy to miss (#2149).
             ui.add(widgets::checkbox(&mut app.flatten_fill_sign_on_save, tl!("Lock into the page when saving")));

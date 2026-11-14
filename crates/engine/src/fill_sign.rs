@@ -26,6 +26,23 @@ pub fn typed_signature_shape(at: [f64; 2], text: &str, height: f64, rotation: i6
     Some(Shape::TypedSignature { rect, contours })
 }
 
+/// `p` on page `from` moved to the same place on page `to`, relative to their crop boxes.
+pub fn same_place(from: &pdfcraft_render::PageInfo, to: &pdfcraft_render::PageInfo, p: [f64; 2]) -> [f64; 2] {
+    [0, 1].map(|i| {
+        // Constant indices into the fixed-size crop boxes: always in bounds.
+        let (f0, f1, t0, t1) = (f64::from(from.crop[i]), f64::from(from.crop[i + 2]), f64::from(to.crop[i]), f64::from(to.crop[i + 2]));
+        let w = f1 - f0;
+        if w.abs() < 1e-3 || !p[i].is_finite() { t0 } else { t0 + (p[i] - f0) / w * (t1 - t0) }
+    })
+}
+
+/// `r` on page `from` moved, same size, so its centre is in the same place on page `to`.
+pub fn same_rect(from: &pdfcraft_render::PageInfo, to: &pdfcraft_render::PageInfo, r: [f64; 4]) -> [f64; 4] {
+    let c = same_place(from, to, [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0]);
+    let (hw, hh) = ((r[2] - r[0]) / 2.0, (r[3] - r[1]) / 2.0);
+    [c[0] - hw, c[1] - hh, c[0] + hw, c[1] + hh]
+}
+
 /// `at` moved `right` and `up` points as displayed on a page turned by `rotation` (its `/Rotate`).
 pub fn displayed_offset(rotation: i64, at: [f64; 2], right: f64, up: f64) -> [f64; 2] {
     let [a, b, c, d, ..] = pdfcraft_model::view_matrix_for(rotation, [0.0; 4]);

@@ -750,6 +750,9 @@ pub struct DocView {
     pub fill_text: Option<crate::fill_sign::TypeBox>,
     /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
     pub(crate) fill_signature_page: Option<usize>,
+    /// The last Fill & Sign signature or initials placed: (page, where, initials, the graphic),
+    /// to repeat. Page-list edits and undo/redo clear it (`editing.rs`).
+    pub(crate) last_fill_sig: Option<(usize, [f64; 2], bool, crate::fill_sign::SavedSig)>,
     /// The "Signature added … Lock now" notice was dismissed; placing another signature shows it
     /// again (#2149).
     pub(crate) lock_offer_dismissed: bool,
@@ -1173,6 +1176,7 @@ impl DocView {
             area_choice: None,
             fill_text: None,
             fill_signature_page: None,
+            last_fill_sig: None,
             lock_offer_dismissed: false,
             signature_drag: Default::default(),
             cursor: Default::default(),
