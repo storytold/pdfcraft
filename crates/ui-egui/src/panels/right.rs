@@ -441,7 +441,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     match sig_action {
         Some(crate::sign_ui::PanelAction::Validate) => app.run_command("sign.validate"),
         Some(crate::sign_ui::PanelAction::GoTo(p)) => app.views[index].go_to_page(p),
-        Some(crate::sign_ui::PanelAction::Trust(c)) => app.trust_certificate(*c),
+        Some(crate::sign_ui::PanelAction::Trust(c)) => app.trust_signer(*c),
         Some(crate::sign_ui::PanelAction::ViewCertificate(chain)) => {
             app.cert_viewer = Some(crate::sign_ui::CertViewer { chain, selected: 0, tab: crate::sign_ui::CertTab::Summary });
             app.dialog = Some(crate::Dialog::CertificateViewer);

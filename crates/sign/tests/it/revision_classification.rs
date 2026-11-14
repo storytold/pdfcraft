@@ -78,7 +78,7 @@ fn opts(certify: u8) -> SignOptions {
 /// The certification signature of `bytes`, which must be refused.
 fn assert_refused(bytes: &[u8]) {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
-    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let trust = TrustStore { certs: vec![id.certificate.clone()], ..TrustStore::default() };
     let s = signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
     assert!(matches!(s.modification, Modification::Disallowed(_)) && s.status != Status::Valid, "main returns {:?}, {:?}", s.status, s.modification);
 }
