@@ -319,12 +319,20 @@ impl<'a> Type3<'a> {
             resources = Resources::from_parent(procs_resources, resources);
         }
 
+        // PdfCraft patch (107): a glyph procedure already being drawn is not drawn inside
+        // itself. One that shows its own glyph three times recursed down to the nesting limit,
+        // spending the page's whole nested-paint budget (30 s for a 2.6 KB fuzzed file).
+        let proc_id = program.obj_id();
+        if !crate::context::enter_glyph_proc(proc_id) {
+            return None;
+        }
         if is_shape_glyph {
             let mut device = Type3ShapeGlyphDevice::new(device, paint.clone());
             interpret(iter, &resources, &mut context, &mut device);
         } else {
             interpret(iter, &resources, &mut context, device);
         }
+        crate::context::leave_glyph_proc(proc_id);
 
         Some(())
     }

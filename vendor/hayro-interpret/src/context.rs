@@ -43,6 +43,49 @@ std::thread_local! {
     // nesting limits: every form on it is nested in the ones before it.
     static FORMS_DRAWING: RefCell<Vec<hayro_syntax::object::ObjectIdentifier>> =
         const { RefCell::new(Vec::new()) };
+    // PdfCraft patch (107): the Type 3 glyph procedures being drawn on this page, outermost
+    // first, across every context painting inside them, as (89) keeps the forms. A procedure
+    // already on it shows itself and is skipped. Its length is bounded by `MAX_PAINT_NESTING`.
+    static GLYPH_PROCS_DRAWING: RefCell<Vec<hayro_syntax::object::ObjectIdentifier>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// PdfCraft patch (107): begins drawing the Type 3 glyph procedure `id`; `false` when that
+/// procedure is already being drawn. A procedure that shows its own glyph describes nothing
+/// finite, and each level showing it more than once multiplies the work: three times per level
+/// made a 2.6 KB file take 30 s to draw before the nested-paint budget stopped it. The skip is
+/// reported as `InterpreterWarning::ContentTruncated`. A glyph built from other glyphs of the
+/// same font still draws: only the procedure itself is refused.
+pub(crate) fn enter_glyph_proc(id: hayro_syntax::object::ObjectIdentifier) -> bool {
+    // The stack is never borrowed across a call; if the borrow failed, the glyph draws,
+    // bounded by the nesting limits as before this patch.
+    let entered = GLYPH_PROCS_DRAWING.with(|procs| {
+        let Ok(mut procs) = procs.try_borrow_mut() else {
+            return None;
+        };
+        if procs.contains(&id) {
+            return Some(false);
+        }
+        procs.push(id);
+        Some(true)
+    });
+    if entered == Some(false) {
+        warn!("Type 3 glyph procedure shows itself; the inner drawing is skipped");
+        CONTENT_TRUNCATED.with(|truncated| truncated.set(true));
+        return false;
+    }
+    true
+}
+
+/// PdfCraft patch (107): ends drawing a glyph procedure begun with `enter_glyph_proc`.
+pub(crate) fn leave_glyph_proc(id: hayro_syntax::object::ObjectIdentifier) {
+    GLYPH_PROCS_DRAWING.with(|procs| {
+        if let Ok(mut procs) = procs.try_borrow_mut()
+            && procs.last() == Some(&id)
+        {
+            procs.pop();
+        }
+    });
 }
 
 /// PdfCraft patch: decoded content-stream bytes one page may hold at once: its contents, and
@@ -294,6 +337,8 @@ impl<'a> Context<'a> {
         CONTENT_TRUNCATED.with(|truncated| truncated.set(false));
         // PdfCraft patch (89): no form of another page is being drawn.
         FORMS_DRAWING.with(|forms| forms.borrow_mut().clear());
+        // PdfCraft patch (107): nor any glyph procedure.
+        GLYPH_PROCS_DRAWING.with(|procs| procs.borrow_mut().clear());
         // PdfCraft patch (73): and fresh JBIG2 decoding, which every image of it shares.
         hayro_syntax::set_page_jbig2_work(settings.jbig2_work);
         // PdfCraft patch (55): a fallback left over from another page is not this page's.
