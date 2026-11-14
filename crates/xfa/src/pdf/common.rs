@@ -1,4 +1,4 @@
-use super::{Dict, Document, Family, Object, PdfString, Rect, Rounded, Stream};
+use super::{Dict, Document, EllipseArc, Family, Object, PdfString, Rect, Rounded, Stream};
 
 /// Width and height of a JPEG from its first frame header (SOF0–SOF15, not the DNL/JPG/DAC/DHT
 /// markers). `None` for anything else.
@@ -128,6 +128,52 @@ pub(crate) fn rounded(r: &Rounded, page_h: f64) -> String {
         c.push_str(&format!("q {} RG {} w {}{path}S Q\n", rgb(color), n(w), if dashed { "[2 2] 0 d " } else { "" }));
     }
     c
+}
+
+/// The content that draws arc `a` on a page `page_h` tall: the area between it and the straight
+/// line joining its ends filled (as Acrobat's rendering of #5160 shows), then the arc itself, its
+/// edge inside the ellipse.
+pub(crate) fn arc(a: &EllipseArc, page_h: f64) -> String {
+    let mut c = String::new();
+    let whole = a.sweep.abs() >= 360.0 - 1e-9;
+    if let Some(color) = a.fill {
+        let path = ellipse_path(a.rect, a.start, a.sweep, page_h);
+        c.push_str(&format!("{} rg {path}h f\n", rgb(color)));
+    }
+    if let Some((w, color, dashed)) = a.edge {
+        let inset = Rect::new(a.rect.x + w / 2.0, a.rect.y + w / 2.0, (a.rect.w - w).max(0.0), (a.rect.h - w).max(0.0));
+        let path = ellipse_path(inset, a.start, a.sweep, page_h);
+        c.push_str(&format!("q {} RG {} w {}{path}{}S Q\n", rgb(color), n(w), if dashed { "[2 2] 0 d " } else { "" }, if whole { "h " } else { "" }));
+    }
+    c
+}
+
+/// The path along the ellipse inscribed in `rect` (top-left based, on a page `page_h` tall) from
+/// `start` degrees (0 at three o'clock, counter-clockwise) through `sweep`, as Bézier curves of at
+/// most a quarter turn each. Ends with a space, for what follows.
+fn ellipse_path(rect: Rect, start: f64, sweep: f64, page_h: f64) -> String {
+    let (cx, cy) = (rect.x + rect.w / 2.0, page_h - (rect.y + rect.h / 2.0));
+    let (rx, ry) = (rect.w / 2.0, rect.h / 2.0);
+    let sweep = if sweep.is_finite() { sweep.clamp(-360.0, 360.0) } else { 0.0 };
+    let start = if start.is_finite() { start } else { 0.0 };
+    // 1 to 4 pieces: the sweep is at most a whole turn.
+    let pieces = (sweep.abs() / 90.0).ceil().clamp(1.0, 4.0);
+    let step = (sweep / pieces).to_radians();
+    // How far a piece's control points lie along its ends' tangents, for a unit circle.
+    let k = 4.0 / 3.0 * (step / 4.0).tan();
+    let at = |t: f64| (cx + rx * t.cos(), cy + ry * t.sin());
+    let pt = |q: (f64, f64)| format!("{} {}", n(q.0), n(q.1));
+    let mut t = start.to_radians();
+    let mut s = format!("{} m ", pt(at(t)));
+    for _ in 0..pieces as usize {
+        let u = t + step;
+        let (p0, p3) = (at(t), at(u));
+        let c1 = (p0.0 - k * rx * t.sin(), p0.1 + k * ry * t.cos());
+        let c2 = (p3.0 + k * rx * u.sin(), p3.1 - k * ry * u.cos());
+        s.push_str(&format!("{} {} {} c ", pt(c1), pt(c2), pt(p3)));
+        t = u;
+    }
+    s
 }
 
 /// The path around `rect` (top-left based, on a page `page_h` tall) with the corners `radii`
