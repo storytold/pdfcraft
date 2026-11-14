@@ -339,6 +339,30 @@ impl PageText {
         out.into_iter().map(|(_, _, r)| r).collect()
     }
 
+    /// The anchor and head for [`Self::visual_between`] that take two units (words or lines, each
+    /// as its first and last glyph in reading order) whole, from `unit` to `to`: the earlier
+    /// unit's left end and the later one's right end, earlier meaning on a higher row, or on the
+    /// same row and to the left. Reading order may have them the other way round (a drag from a
+    /// right-hand cell down into a left-hand one), and a right-to-left word reads from its right
+    /// end, so the ends are taken by position.
+    pub fn row_ends(&self, unit: (usize, usize), to: (usize, usize)) -> (usize, usize) {
+        // A unit's outer glyphs: its leftmost and rightmost, whatever its reading order.
+        let outer = |(i, j): (usize, usize)| match (self.glyphs.get(i), self.glyphs.get(j)) {
+            (Some(g), Some(h)) if h.rect[0] < g.rect[0] => (j, i),
+            _ => (i, j),
+        };
+        let ((unit_left, unit_right), (to_left, to_right)) = (outer(unit), outer(to));
+        let later = match (self.glyphs.get(unit_left), self.glyphs.get(to_left)) {
+            (Some(a), Some(b)) => {
+                let dy = (b.rect[1] + b.rect[3] - a.rect[1] - a.rect[3]) / 2.0;
+                let h = (a.rect[3] - a.rect[1]).min(b.rect[3] - b.rect[1]);
+                if dy.abs() > h / 2.0 { dy > 0.0 } else { b.rect[0] > a.rect[0] }
+            }
+            _ => to.0 > unit.0,
+        };
+        if later { (unit_left, to_right) } else { (unit_right, to_left) }
+    }
+
     /// What a drag from glyph `anchor` to glyph `head` selects by visual rows, as Preview selects
     /// it, where reading order between them would not follow the rows: on one row, the row's
     /// glyphs from one end to the other, as [`Self::glyphs_in`] takes them; over several, the rest

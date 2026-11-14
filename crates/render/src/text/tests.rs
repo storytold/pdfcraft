@@ -3063,6 +3063,38 @@ fn prose_left_of_a_table_does_not_hide_its_rows() {
     assert_eq!(t.column_text(&picked), "Name\tQty\nApple\t12");
 }
 
+/// A double-click drag between two words of one table row, or of two rows, takes both whole
+/// in either direction. A right-to-left word reads from its right end, so its first glyph in
+/// reading order is not its left end.
+#[test]
+fn row_ends_take_both_words_whole() {
+    let t = table();
+    let rows = |t: &PageText, from: usize, to: usize| {
+        let (unit, other) = (t.word_at(from).expect("a word"), t.word_at(to).expect("a word"));
+        let (anchor, head) = t.row_ends(unit, other);
+        t.visual_between(anchor, head, Some(t.glyphs[to].rect[2])).map(|p| t.column_text(&p))
+    };
+    // "Name" 0..=3, "Apple" 4..=8, "Qty" 13..=15.
+    for (from, to, copied) in [(1, 14, "Name\tQty"), (14, 1, "Name\tQty"), (14, 6, "Qty\nApple"), (6, 14, "Qty\nApple")] {
+        assert_eq!(rows(&t, from, to).as_deref(), Some(copied), "{from} to {to}");
+    }
+
+    // Two columns of Hebrew words, drawn visually (each word's letters left to right reversed).
+    let mut v = Vec::new();
+    for (row, (a, b)) in [("םש", "תומכ"), ("חופת", "רשע"), ("סגא", "עבש")].into_iter().enumerate() {
+        let y = 10.0 + row as f32 * 14.0;
+        word(&mut v, a, 10.0, y, 6.0);
+        word(&mut v, b, 100.0, y, 6.0);
+    }
+    let t = layout(v);
+    let at = |x: f32| t.glyphs.iter().position(|g| (g.rect[0] - x).abs() < 0.5 && (g.rect[1] - 10.0).abs() < 0.5).expect("a glyph");
+    let (left, right) = (at(10.0), at(100.0));
+    for (from, to) in [(left, right), (right, left)] {
+        let picked = rows(&t, from, to).expect("rows");
+        assert!(picked.contains("שם") && picked.contains("כמות"), "{picked:?}");
+    }
+}
+
 /// A rectangle that misses every glyph, or is not a number, selects nothing.
 #[test]
 fn an_empty_or_degenerate_column_selection_is_empty() {

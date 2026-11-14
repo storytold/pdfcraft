@@ -829,19 +829,8 @@ fn update_dragged_selection(view: &mut DocView, text: &PageText, gesture: &TextG
                     // The page unit (four clicks) is the page's text in reading order.
                     *head_x = Some(gesture.vx).filter(|x| x.is_finite() && clicks < 4);
                     let in_order = if to_first < first { (last, to_first) } else { (first, to_last.max(last)) };
-                    // Rows run from the earlier unit's start to the later one's end, earlier meaning
-                    // on a higher row, or on the same row and to the left. Reading order may have
-                    // them the other way round (a drag from a right-hand cell down into a left-hand
-                    // one).
-                    let later = match (text.glyphs.get(first), text.glyphs.get(to_first)) {
-                        (Some(a), Some(b)) => {
-                            let dy = (b.rect[1] + b.rect[3] - a.rect[1] - a.rect[3]) / 2.0;
-                            let h = (a.rect[3] - a.rect[1]).min(b.rect[3] - b.rect[1]);
-                            if dy.abs() > h / 2.0 { dy > 0.0 } else { b.rect[0] > a.rect[0] }
-                        }
-                        _ => to_first > first,
-                    };
-                    let by_rows = if later { (first, to_last) } else { (last, to_first) };
+                    // Rows take both units whole, from the earlier one's start to the later one's end.
+                    let by_rows = text.row_ends((first, last), (to_first, to_last));
                     let rows = head_x.is_some() && text.visual_between(by_rows.0, by_rows.1, *head_x).is_some();
                     (*anchor, *head) = if rows { by_rows } else { in_order };
                 }
