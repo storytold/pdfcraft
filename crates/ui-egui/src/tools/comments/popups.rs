@@ -240,7 +240,7 @@ fn text_box(ui: &mut egui::Ui, parts: &mut Parts<'_>, a: &Annotation, name: &str
                 {
                     parts.edits.push(Edit::SetAnnotationContents { page: a.page, index: a.index, text: s.trim_end().to_string() });
                 }
-                parts.cv.popup_editing = None;
+                parts.cv.popup_editor_lost_focus(key);
             }
         } else {
             let frame = egui::Frame::NONE.fill(Color32::WHITE).inner_margin(egui::Margin::symmetric(4, 2));

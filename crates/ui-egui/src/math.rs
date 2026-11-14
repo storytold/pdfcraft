@@ -49,6 +49,28 @@ pub fn parse_math_segments(input: &str) -> Vec<MathSegment<'_>> {
     let mut i = 0;
     let bytes = input.as_bytes();
     let len = bytes.len();
+    let mut inline_closers = Vec::new();
+    let mut block_closers = Vec::new();
+    let mut paragraph_breaks = Vec::new();
+    let mut scan = 0;
+    while scan < len {
+        if bytes.get(scan) == Some(&b'\\') {
+            scan = scan.saturating_add(2);
+            continue;
+        }
+        if bytes.get(scan) == Some(&b'$') {
+            if input.get(..scan).and_then(|s| s.chars().next_back()).is_some_and(|c| !c.is_whitespace()) {
+                inline_closers.push(scan);
+            }
+            if bytes.get(scan.saturating_add(1)) == Some(&b'$') {
+                block_closers.push(scan);
+            }
+        }
+        if bytes.get(scan) == Some(&b'\n') && bytes.get(scan.saturating_add(1)) == Some(&b'\n') {
+            paragraph_breaks.push(scan);
+        }
+        scan = scan.saturating_add(1);
+    }
 
     while i < len {
         if bytes.get(i) == Some(&b'\\') {
@@ -62,20 +84,7 @@ pub fn parse_math_segments(input: &str) -> Vec<MathSegment<'_>> {
             if bytes.get(i.saturating_add(1)) == Some(&b'$') {
                 let open_start = i;
                 let math_start = i.saturating_add(2);
-                let mut close_idx = None;
-                let mut j = math_start;
-
-                while j < len {
-                    if bytes.get(j) == Some(&b'\\') {
-                        j = j.saturating_add(2);
-                        continue;
-                    }
-                    if bytes.get(j) == Some(&b'$') && bytes.get(j.saturating_add(1)) == Some(&b'$') {
-                        close_idx = Some(j);
-                        break;
-                    }
-                    j = j.saturating_add(1);
-                }
+                let close_idx = block_closers.get(block_closers.partition_point(|&close| close < math_start)).copied();
 
                 if let Some(close) = close_idx {
                     if open_start > current_start
@@ -104,28 +113,10 @@ pub fn parse_math_segments(input: &str) -> Vec<MathSegment<'_>> {
                 let valid_open = next_char.is_some_and(|c| !c.is_whitespace() && c != '$');
 
                 if valid_open {
-                    let mut close_idx = None;
-                    let mut j = math_start;
-
-                    while j < len {
-                        if bytes.get(j) == Some(&b'\\') {
-                            j = j.saturating_add(2);
-                            continue;
-                        }
-                        // Inline math does not span across paragraph breaks (double newlines)
-                        if bytes.get(j) == Some(&b'\n') && bytes.get(j.saturating_add(1)) == Some(&b'\n') {
-                            break;
-                        }
-                        if bytes.get(j) == Some(&b'$') {
-                            // Closing '$' must not be preceded by whitespace
-                            let prev_char = input.get(..j).and_then(|s| s.chars().next_back());
-                            if prev_char.is_some_and(|c| !c.is_whitespace()) {
-                                close_idx = Some(j);
-                                break;
-                            }
-                        }
-                        j = j.saturating_add(1);
-                    }
+                    let first_close = inline_closers.partition_point(|&close| close < math_start);
+                    let paragraph_end =
+                        paragraph_breaks.get(paragraph_breaks.partition_point(|&break_start| break_start < math_start)).copied().unwrap_or(len);
+                    let close_idx = inline_closers.get(first_close).copied().filter(|&close| close < paragraph_end);
 
                     if let Some(close) = close_idx {
                         if open_start > current_start
@@ -503,6 +494,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_command(&mut self, cmd: &str) -> Result<MathNode, &'static str> {
+        if self.depth > MAX_DEPTH {
+            return Err("recursion limit exceeded");
+        }
+        self.depth = self.depth.saturating_add(1);
+        let result = self.parse_command_inner(cmd);
+        self.depth = self.depth.saturating_sub(1);
+        result
+    }
+
+    fn parse_command_inner(&mut self, cmd: &str) -> Result<MathNode, &'static str> {
         match cmd {
             "frac" | "dfrac" | "tfrac" => {
                 let num = self.parse_group()?;
@@ -732,7 +733,11 @@ fn node_to_text(node: &MathNode) -> String {
             let n = node_to_text(num);
             let d = node_to_text(den);
             let wrap = |s: &str| {
-                if s.len() > 1 && (s.contains(' ') || s.contains('+') || s.contains('-')) { format!("({s})") } else { s.to_string() }
+                if s.len() > 1 && (s.contains(' ') || s.contains('+') || s.contains('-') || s.contains('/')) {
+                    format!("({s})")
+                } else {
+                    s.to_string()
+                }
             };
             format!("{}/{}", wrap(&n), wrap(&d))
         }
@@ -1008,7 +1013,7 @@ const FRAC_GAP: f32 = 2.0;
 const FRAC_BAR: f32 = 1.0;
 /// Extra padding around fraction content.
 const FRAC_PAD: f32 = 1.5;
-/// Padding inside binomial parentheses.
+/// Padding inside binomial parentheses at a 15-point font size.
 const BINOM_SIDE: f32 = 14.0;
 /// Radical sign width factor.
 const RADICAL_WIDTH: f32 = 0.7;
@@ -1016,6 +1021,12 @@ const RADICAL_WIDTH: f32 = 0.7;
 const RADICAL_GAP: f32 = 2.0;
 /// Script size factor relative to base.
 const SCRIPT_FACTOR: f32 = 0.78;
+/// Natural downward shift of a subscript as a fraction of the base ascent.
+const SUBSCRIPT_BASELINE_FRACTION: f32 = 0.25;
+/// Upward shift of a superscript as a fraction of the base ascent.
+const SUPERSCRIPT_BASELINE_FRACTION: f32 = 0.45;
+/// Minimum gap between superscript and subscript bounds.
+const SCRIPT_CLEARANCE: f32 = 1.0;
 /// Space around relation symbols.
 const RELATION_SPACE: f32 = 3.0;
 /// Space around binary operators.
@@ -1070,7 +1081,7 @@ fn measure_node(ui: &Ui, node: &MathNode, font: &FontId) -> MathBox {
             let n_box = measure_node(ui, n, font);
             let k_box = measure_node(ui, k, font);
             let inner_width = n_box.width.max(k_box.width) + FRAC_PAD * 2.0;
-            let width = inner_width + BINOM_SIDE * 2.0;
+            let width = inner_width + binom_side(font) * 2.0;
             let ascent = n_box.height() + FRAC_GAP;
             let descent = k_box.height() + FRAC_GAP;
             MathBox { width, ascent, descent, baseline_shift: row_height(ui, font) * 0.25 }
@@ -1104,11 +1115,14 @@ fn measure_node(ui: &Ui, node: &MathNode, font: &FontId) -> MathBox {
             let script_font = scaled_font(font, SCRIPT_FACTOR);
             let sup_box = sup.as_ref().map(|s| measure_node(ui, s, &script_font));
             let sub_box = sub.as_ref().map(|s| measure_node(ui, s, &script_font));
+            let (sup_offset, sub_offset) = script_baseline_offsets(base_box, sup_box, sub_box);
             let script_w = sup_box.map_or(0.0, |b| b.width).max(sub_box.map_or(0.0, |b| b.width));
             let width = base_box.width + script_w;
-            let ascent = sup_box.map(|sb| base_box.ascent.max(base_box.ascent * 0.45 + sb.above_baseline())).unwrap_or(base_box.ascent);
-            let descent =
-                sub_box.map(|sb| base_box.descent.max(base_box.descent * 0.3 + sb.ascent + sb.below_baseline())).unwrap_or(base_box.descent);
+            let sup_ascent = sup_box.zip(sup_offset).map(|(sb, offset)| offset + sb.above_baseline()).unwrap_or(0.0);
+            let sub_ascent = sub_box.zip(sub_offset).map(|(sb, offset)| (sb.above_baseline() - offset).max(0.0)).unwrap_or(0.0);
+            let ascent = base_box.ascent.max(sup_ascent).max(sub_ascent);
+            let sub_descent = sub_box.zip(sub_offset).map(|(sb, offset)| offset + sb.below_baseline()).unwrap_or(0.0);
+            let descent = base_box.descent.max(sub_descent);
             MathBox { width, ascent, descent, baseline_shift: base_box.baseline_shift }
         }
         MathNode::Row(nodes) => {
@@ -1161,6 +1175,23 @@ fn atom_space(node: &MathNode) -> f32 {
     }
 }
 
+fn script_baseline_offsets(base: MathBox, sup: Option<MathBox>, sub: Option<MathBox>) -> (Option<f32>, Option<f32>) {
+    let sup_offset = sup.map(|_| base.ascent * SUPERSCRIPT_BASELINE_FRACTION);
+    let sub_offset = sub.map(|sub| {
+        let natural_offset = base.ascent * SUBSCRIPT_BASELINE_FRACTION;
+        let clearance_offset = match (sup, sup_offset) {
+            (Some(sup), Some(sup_offset)) => -sup_offset + sup.below_baseline() + SCRIPT_CLEARANCE + sub.above_baseline(),
+            _ => natural_offset,
+        };
+        natural_offset.max(clearance_offset)
+    });
+    (sup_offset, sub_offset)
+}
+
+fn binom_side(font: &FontId) -> f32 {
+    BINOM_SIDE * font.size / 15.0
+}
+
 /// Draw a `MathNode` at position `pos` (top-left of its bounding box), with `baseline_y`.
 fn draw_node(ui: &Ui, node: &MathNode, pos: Pos2, baseline_y: f32, font: &FontId, color: Color32) {
     let painter = ui.painter();
@@ -1185,40 +1216,41 @@ fn draw_node(ui: &Ui, node: &MathNode, pos: Pos2, baseline_y: f32, font: &FontId
 
             // Numerator: centered above the bar
             let num_x = pos.x + (total_w - num_box.width) * 0.5;
-            let num_baseline = bar_y - FRAC_GAP - num_box.below_baseline();
+            let num_baseline = bar_y - FRAC_GAP - num_box.descent;
             let num_top_y = num_baseline - num_box.ascent;
             draw_node(ui, num, Pos2::new(num_x, num_top_y), num_baseline, font, color);
 
             // Denominator: centered below the bar
             let den_x = pos.x + (total_w - den_box.width) * 0.5;
-            let den_baseline = bar_y + FRAC_GAP + FRAC_BAR + den_box.above_baseline();
+            let den_baseline = bar_y + FRAC_GAP + FRAC_BAR + den_box.ascent;
             let den_top_y = den_baseline - den_box.ascent;
             draw_node(ui, den, Pos2::new(den_x, den_top_y), den_baseline, font, color);
         }
         MathNode::Binom { n, k } => {
             let n_box = measure_node(ui, n, font);
             let k_box = measure_node(ui, k, font);
+            let side = binom_side(font);
             let inner_w = n_box.width.max(k_box.width) + FRAC_PAD * 2.0;
             // Draw scaled parentheses
             let paren_stroke = egui::Stroke::new(1.5, color);
-            let left_x = pos.x + BINOM_SIDE;
-            let right_x = pos.x + BINOM_SIDE + inner_w;
+            let left_x = pos.x + side;
+            let right_x = pos.x + side + inner_w;
             let top_y = baseline_y - n_box.height() - FRAC_GAP;
             let bottom_y = baseline_y + k_box.height() + FRAC_GAP;
 
             // Left parenthesis as a Bezier-like set of line segments
-            draw_paren(painter, left_x, top_y, bottom_y, true, paren_stroke);
+            draw_paren(painter, left_x, top_y, bottom_y, side, true, paren_stroke);
             // Right parenthesis
-            draw_paren(painter, right_x, top_y, bottom_y, false, paren_stroke);
+            draw_paren(painter, right_x, top_y, bottom_y, side, false, paren_stroke);
 
             // N (top, centered)
-            let n_x = pos.x + BINOM_SIDE + (inner_w - n_box.width) * 0.5;
-            let n_baseline = baseline_y - FRAC_GAP - n_box.below_baseline();
+            let n_x = pos.x + side + (inner_w - n_box.width) * 0.5;
+            let n_baseline = baseline_y - FRAC_GAP - n_box.descent;
             draw_node(ui, n, Pos2::new(n_x, n_baseline - n_box.ascent), n_baseline, font, color);
 
             // K (bottom, centered)
-            let k_x = pos.x + BINOM_SIDE + (inner_w - k_box.width) * 0.5;
-            let k_baseline = baseline_y + FRAC_GAP + k_box.above_baseline();
+            let k_x = pos.x + side + (inner_w - k_box.width) * 0.5;
+            let k_baseline = baseline_y + FRAC_GAP + k_box.ascent;
             draw_node(ui, k, Pos2::new(k_x, k_baseline - k_box.ascent), k_baseline, font, color);
         }
         MathNode::Sqrt { degree, arg } => {
@@ -1296,6 +1328,9 @@ fn draw_node(ui: &Ui, node: &MathNode, pos: Pos2, baseline_y: f32, font: &FontId
         MathNode::Scripts { base, sup, sub } => {
             let base_box = measure_node(ui, base, font);
             let script_font = scaled_font(font, SCRIPT_FACTOR);
+            let sup_box = sup.as_ref().map(|s| measure_node(ui, s, &script_font));
+            let sub_box = sub.as_ref().map(|s| measure_node(ui, s, &script_font));
+            let (sup_offset, sub_offset) = script_baseline_offsets(base_box, sup_box, sub_box);
 
             // Draw base
             draw_node(ui, base, pos, baseline_y, font, color);
@@ -1303,17 +1338,15 @@ fn draw_node(ui: &Ui, node: &MathNode, pos: Pos2, baseline_y: f32, font: &FontId
             let script_x = pos.x + base_box.width;
 
             // Draw superscript
-            if let Some(s) = sup {
-                let s_box = measure_node(ui, s, &script_font);
-                let sup_baseline = baseline_y - base_box.ascent * 0.45 - s_box.baseline_shift;
+            if let (Some(s), Some(s_box), Some(offset)) = (sup.as_ref(), sup_box, sup_offset) {
+                let sup_baseline = baseline_y - offset - s_box.baseline_shift;
                 let sup_top = sup_baseline - s_box.ascent;
                 draw_node(ui, s, Pos2::new(script_x, sup_top), sup_baseline, &script_font, color);
             }
 
             // Draw subscript
-            if let Some(s) = sub {
-                let s_box = measure_node(ui, s, &script_font);
-                let sub_baseline = baseline_y + base_box.descent * 0.3 - s_box.baseline_shift;
+            if let (Some(s), Some(s_box), Some(offset)) = (sub.as_ref(), sub_box, sub_offset) {
+                let sub_baseline = baseline_y + offset - s_box.baseline_shift;
                 let sub_top = sub_baseline - s_box.ascent;
                 draw_node(ui, s, Pos2::new(script_x, sub_top), sub_baseline, &script_font, color);
             }
@@ -1340,9 +1373,9 @@ fn draw_node(ui: &Ui, node: &MathNode, pos: Pos2, baseline_y: f32, font: &FontId
 }
 
 /// Draw a parenthesis from `top_y` to `bottom_y` at `x`. `left` = true for `(`, false for `)`.
-fn draw_paren(painter: &egui::Painter, x: f32, top_y: f32, bottom_y: f32, left: bool, stroke: egui::Stroke) {
+fn draw_paren(painter: &egui::Painter, x: f32, top_y: f32, bottom_y: f32, max_bulge: f32, left: bool, stroke: egui::Stroke) {
     let height = bottom_y - top_y;
-    let bulge = (height * 0.15).clamp(2.0, 12.0);
+    let bulge = (height * 0.15).clamp(0.0, max_bulge);
     let sign: f32 = if left { -1.0 } else { 1.0 };
 
     // Simple 3-segment approximation of a parenthesis curve
@@ -1846,6 +1879,12 @@ mod tests {
     }
 
     #[test]
+    fn many_unclosed_inline_candidates_are_scanned_once() {
+        let input = "$x ".repeat(10_000);
+        assert_eq!(parse_math_segments(&input), vec![MathSegment::PlainText(&input)]);
+    }
+
+    #[test]
     fn unclosed_delimiter_is_plain_text() {
         let input = "This is $x + y with no end";
         let segments = parse_math_segments(input);
@@ -1937,6 +1976,18 @@ mod tests {
         let ast = parse_math_ast("\\frac{a + b}{c}").unwrap();
         let text = node_to_text(&ast);
         assert_eq!(text, "(a + b)/c");
+    }
+
+    #[test]
+    fn ast_nested_denominators_are_parenthesized() {
+        assert_eq!(format_latex_math("\\frac{a}{\\frac{b}{c}}"), Ok("a/(b/c)".into()));
+        assert_eq!(format_latex_math("\\frac{a}{bc}"), Ok("a/bc".into()));
+    }
+
+    #[test]
+    fn unbraced_nested_commands_obey_the_recursion_limit() {
+        let input = format!("{}x", "\\sqrt".repeat(MAX_DEPTH * 2));
+        assert_eq!(parse_math_ast(&input), Err("recursion limit exceeded"));
     }
 
     #[test]
@@ -2308,6 +2359,126 @@ mod tests {
     }
 
     #[test]
+    fn subscript_paint_overlaps_the_base_baseline_within_measured_bounds() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let baseline = 100.0;
+        let mut measured = None;
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let font = FontId::new(15.0, egui::FontFamily::Name("math".into()));
+            let node = parse_math_ast("X_i").unwrap();
+            measured = Some(measure_node(ui, &node, &font));
+            draw_node(ui, &node, Pos2::ZERO, baseline, &font, Color32::BLACK);
+        });
+        let bounds = |label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => Some(text.visual_bounding_rect()),
+                    _ => None,
+                })
+                .expect("script text")
+        };
+        let subscript = bounds("i");
+        let measured = measured.expect("measured script");
+        let painted_bounds = bounds("X").union(subscript);
+        assert!(subscript.top() < baseline && subscript.bottom() > baseline, "subscript straddles the base baseline: {subscript:?}");
+        assert!(painted_bounds.top() >= baseline - measured.ascent, "painted top exceeds measured ascent: {painted_bounds:?}, {measured:?}");
+        assert!(painted_bounds.bottom() <= baseline + measured.descent, "painted bottom exceeds measured descent: {painted_bounds:?}, {measured:?}");
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn paired_scripts_keep_clearance_and_preserve_the_superscript_position() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let font = FontId::new(15.0, egui::FontFamily::Name("math".into()));
+            let node = parse_math_ast("X^2_i").unwrap();
+            draw_node(ui, &node, Pos2::ZERO, 100.0, &font, Color32::BLACK);
+        });
+        let bounds = |label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => Some(text.visual_bounding_rect()),
+                    _ => None,
+                })
+                .expect("script text")
+        };
+        let superscript = bounds("2");
+        let subscript = bounds("i");
+        assert!(superscript.bottom() < subscript.top(), "scripts have clear separation: {superscript:?}, {subscript:?}");
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn compound_subscript_baseline_shift_stays_within_measured_bounds() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let baseline = 100.0;
+        let mut measured = None;
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let font = FontId::new(15.0, egui::FontFamily::Name("math".into()));
+            let node = parse_math_ast("X_{\\frac{a}{b}}").unwrap();
+            measured = Some(measure_node(ui, &node, &font));
+            draw_node(ui, &node, Pos2::ZERO, baseline, &font, Color32::BLACK);
+        });
+        let painted_bounds = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.visual_bounding_rect()),
+                egui::Shape::LineSegment { points, .. } => Some(egui::Rect::from_two_pos(points[0], points[1])),
+                _ => None,
+            })
+            .reduce(egui::Rect::union)
+            .expect("compound script paint");
+        let measured = measured.expect("measured compound script");
+        assert!(painted_bounds.top() >= baseline - measured.ascent, "painted top exceeds measured ascent: {painted_bounds:?}, {measured:?}");
+        assert!(painted_bounds.bottom() <= baseline + measured.descent, "painted bottom exceeds measured descent: {painted_bounds:?}, {measured:?}");
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn nested_fraction_children_stay_on_their_side_of_the_outer_bar() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let font = FontId::new(15.0, egui::FontFamily::Name("math".into()));
+            let node = parse_math_ast("\\frac{\\frac{a}{b}}{\\frac{c}{d}}").unwrap();
+            draw_node(ui, &node, Pos2::ZERO, 100.0, &font, Color32::BLACK);
+        });
+        let outer_bar_y = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { points, .. } if (points[0].y - points[1].y).abs() < 0.01 => {
+                    Some((points[0].y, (points[1].x - points[0].x).abs()))
+                }
+                _ => None,
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(y, _)| y)
+            .expect("outer fraction bar");
+        let text_bounds = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some((text.galley.text().to_owned(), text.visual_bounding_rect())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let b = text_bounds.iter().find(|(text, _)| text == "b").map(|(_, rect)| *rect).expect("numerator denominator");
+        let c = text_bounds.iter().find(|(text, _)| text == "c").map(|(_, rect)| *rect).expect("denominator numerator");
+        assert!(b.bottom() < outer_bar_y, "nested numerator stays above the outer bar: {b:?}, bar {outer_bar_y}");
+        assert!(c.top() > outer_bar_y, "nested denominator stays below the outer bar: {c:?}, bar {outer_bar_y}");
+        output.textures_delta.clear();
+    }
+
+    #[test]
     fn display_math_stays_within_the_tooltip_width() {
         let ctx = egui::Context::default();
         ctx.set_fonts(crate::theme::font_definitions());
@@ -2321,6 +2492,32 @@ mod tests {
         );
         output.textures_delta.clear();
         assert!(rendered_width.is_some_and(|width| width <= MAX_TOOLTIP_WIDTH), "tooltip width: {rendered_width:?}");
+    }
+
+    #[test]
+    fn display_binomial_paint_stays_within_the_tooltip_width() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let formula = format!("$$\\binom{{{}}}{{k}}$$", "n + ".repeat(120));
+        let mut response_rect = None;
+        let mut output = ctx
+            .run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 500.0))), ..Default::default() }, |ui| {
+                response_rect = Some(render_math_text(ui, &formula, crate::theme::regular(12.5), Color32::BLACK).rect)
+            });
+        let painted_bounds = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.visual_bounding_rect()),
+                egui::Shape::LineSegment { points, .. } => Some(egui::Rect::from_two_pos(points[0], points[1])),
+                _ => None,
+            })
+            .reduce(egui::Rect::union)
+            .expect("painted formula");
+        output.textures_delta.clear();
+        let rect = response_rect.expect("rendered formula");
+        assert!(rect.width() <= MAX_TOOLTIP_WIDTH, "response width: {}", rect.width());
+        assert!(painted_bounds.width() <= MAX_TOOLTIP_WIDTH + 1.0, "painted bounds {painted_bounds:?} exceed tooltip width from {rect:?}");
     }
 
     #[test]

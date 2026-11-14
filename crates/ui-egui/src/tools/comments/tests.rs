@@ -931,3 +931,12 @@ fn comment_view_popup_editing_lifecycle() {
     assert_eq!(cv.popup_focus_target, None);
     assert_eq!(cv.popup_text, None);
 }
+
+#[test]
+fn losing_popup_editor_focus_does_not_clear_a_newer_target() {
+    let mut cv = CommentView { popup_editing: Some((0, 2)), ..Default::default() };
+    cv.popup_editor_lost_focus((0, 1));
+    assert_eq!(cv.popup_editing, Some((0, 2)));
+    cv.popup_editor_lost_focus((0, 2));
+    assert_eq!(cv.popup_editing, None);
+}

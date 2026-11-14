@@ -484,6 +484,12 @@ impl CommentView {
         [text, editing, reply, drag, resize].into_iter().flatten().collect()
     }
 
+    pub(crate) fn popup_editor_lost_focus(&mut self, key: (usize, usize)) {
+        if self.popup_editing == Some(key) {
+            self.popup_editing = None;
+        }
+    }
+
     /// An edit other than a deletion just ran: `before` are the comments at [`Self::popup_keys`]
     /// until then, `after` the document's annotations now. When pages moved, came or went, a pop-up's (page, index)
     /// may now name another comment: what was typed in that pop-up and not saved, and a window
