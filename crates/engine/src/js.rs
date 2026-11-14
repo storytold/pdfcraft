@@ -414,6 +414,7 @@ fn changes(
                 caption: (a.caption != b.caption || (a.caption_written && b.caption_mixed)).then(|| a.caption.clone()).flatten(),
                 options: (a.options != b.options).then(|| a.options.clone()),
                 actions: a.actions.clone(),
+                beyond_max_len: false,
             };
             (c.value.is_some()
                 || c.read_only.is_some()
@@ -930,7 +931,7 @@ impl Session {
             .form
             .iter()
             .find(|f| f.name == name && target.is_none_or(|t| field_object_id(f.obj) == t))
-            .and_then(|f| crate::xfa::widget_som(cos, f, widget))
+            .and_then(|f| crate::xfa::widget_som(cos, f, widget).or_else(|| crate::xfa::static_widget_som(cos, &tpl, f)))
         else {
             return Ok(false);
         };

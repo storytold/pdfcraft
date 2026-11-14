@@ -12179,6 +12179,113 @@ fn a_field_that_only_reads_the_page_count_keeps_its_scripts_value() {
     assert_eq!(value, vec!["pages: 1".to_string()]);
 }
 
+/// A static XFA form's template scripts run on its own fields, which are named by the template's SOM steps (an unnamed
+/// subform as `#subform[0]`): initialize scripts on opening; a button's click script, whose value, presence and access
+/// changes reach the fields' values, hidden and read-only flags, and whose message shows; a field's exit script when it
+/// takes a value. What they write is in the XFA data a save keeps.
+#[test]
+fn a_static_xfa_forms_template_scripts_run_on_its_own_fields() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::static_scripted_shell(""));
+    let mut s = Session::new();
+    let id = s.open("static.pdf", None, bytes, None).expect("opens");
+    let field = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).cloned().expect("the field");
+    let (total, name, inner) = ("form1[0].page1[0].total[0]", "form1[0].page1[0].name[0]", "form1[0].page1[0].#subform[0].inner[0]");
+    assert_eq!(field(&s, total).value, vec!["init".to_string()], "{:?}", s.take_js_output(id));
+    assert_eq!(field(&s, inner).value, vec!["inner".to_string()], "a field in an unnamed subform is the template's too");
+    let out = s.run_javascript(id, "", Some("form1[0].page1[0].go[0]")).expect("clicks");
+    assert_eq!(out.error, None, "{out:?}");
+    assert_eq!(out.alerts.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["done"]);
+    assert_eq!(field(&s, total).value, vec!["clicked".to_string()]);
+    assert!(field(&s, name).widgets.iter().all(|w| w.hidden), "presence hidden hides the widget");
+    assert!(field(&s, inner).read_only(), "access readOnly makes the field read-only");
+    s.apply(id, Edit::SetFieldValue { name: name.into(), value: FieldValue::Text("Ada".into()) }).expect("fills it");
+    assert_eq!(field(&s, total).value, vec!["exit:Ada".to_string()], "{:?}", s.take_js_output(id));
+    let saved = s.save_bytes(id).expect("saves");
+    let cos = pdfcraft_cos::Document::open(saved).expect("reopens");
+    let data = pdfcraft_xfa::data_of(&cos).expect("the data");
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form1[0].page1[0].total[0]")), Some("exit:Ada"));
+    // A check box and a radio button the user sets were clicked: their click scripts run, reading the new value.
+    s.apply(id, Edit::SetFieldValue { name: "form1[0].page1[0].agree[0]".into(), value: FieldValue::Check(true) }).expect("checks it");
+    assert_eq!(field(&s, total).value, vec!["agree:1".to_string()], "{:?}", s.take_js_output(id));
+    let large = field(&s, "form1[0].page1[0].size[0]").widgets[1].on_state.clone();
+    s.apply(id, Edit::SetFieldValue { name: "form1[0].page1[0].size[0]".into(), value: FieldValue::Radio(large) }).expect("picks it");
+    assert_eq!(field(&s, total).value, vec!["size:large".to_string()], "the chosen button's click script runs");
+    // Every copy of a page master's field runs its scripts, though the copies share the master's SOM path.
+    s.apply(id, Edit::SetFieldValue { name: "form1[0].#pageSet[0].front[1].stamp[0]".into(), value: FieldValue::Text("B".into()) })
+        .expect("fills it");
+    assert_eq!(field(&s, total).value, vec!["stamp:B".to_string()], "{:?}", s.take_js_output(id));
+    // A radio button hides on its own widget; a hidden container hides what it holds, whatever their own presence.
+    let hidden = |s: &Session| field(s, "form1[0].page1[0].size[0]").widgets.iter().map(|w| w.hidden).collect::<Vec<_>>();
+    let out = s.run_javascript(id, "", Some("form1[0].page1[0].hide[0]")).expect("clicks");
+    assert_eq!(out.error, None, "{out:?}");
+    assert_eq!(hidden(&s), [false, true], "only the large button");
+    s.run_javascript(id, "", Some("form1[0].page1[0].hide[0]")).expect("clicks again");
+    assert_eq!(hidden(&s), [true, true], "the group hides the button set visible in it");
+}
+
+/// A static form's opening scripts read a value its AcroForm field holds without its data having it (filled in a viewer
+/// that writes only the fields).
+#[test]
+fn a_static_xfa_forms_scripts_read_values_only_its_fields_hold() {
+    let mut s = Session::new();
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::static_scripted_shell_with("", Some("Ada")));
+    let id = s.open("static.pdf", None, bytes, None).expect("opens");
+    let total = s.get(id).unwrap().form.iter().find(|f| f.name == "form1[0].page1[0].total[0]").map(|f| f.value.clone());
+    assert_eq!(total, Some(vec!["init:Ada".to_string()]), "{:?}", s.take_js_output(id));
+    // and still do after a script's changes are written mid-event (a click that hides a field lays the form out again)
+    let inner = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name.ends_with("inner[0]")).map(|f| f.value.clone());
+    assert_eq!(inner(&s), Some(vec!["calc:Ada".to_string()]));
+    s.run_javascript(id, "", Some("form1[0].page1[0].go[0]")).expect("clicks");
+    assert_eq!(inner(&s), Some(vec!["calc:Ada".to_string()]), "{:?}", s.take_js_output(id));
+}
+
+/// A value a static form's script sets reaches a field however long its `/MaxLen` (which limits what a user types), and the
+/// event ends without an error.
+#[test]
+fn a_static_xfa_forms_script_values_are_not_held_to_max_len() {
+    let mut s = Session::new();
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::static_scripted_shell_max_len("", None, Some(1)));
+    let id = s.open("static.pdf", None, bytes, None).expect("opens");
+    let out = s.take_js_output(id);
+    let total = s.get(id).unwrap().form.iter().find(|f| f.name == "form1[0].page1[0].total[0]").map(|f| (f.value.clone(), f.max_len));
+    assert_eq!(total, Some((vec!["init".to_string()], Some(1))), "{out:?}");
+    assert!(out.errors.is_empty(), "{out:?}");
+    let cos = pdfcraft_cos::Document::open(s.save_bytes(id).expect("saves")).expect("reopens");
+    let data = pdfcraft_xfa::data_of(&cos).expect("the data");
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form1[0].page1[0].total[0]")), Some("init"));
+}
+
+/// Flattening a static form's fields removes its XFA, and its scripts go with it; an undo brings both back.
+#[test]
+fn a_static_xfa_forms_scripts_go_with_its_xfa() {
+    let mut s = Session::new();
+    let id = s.open("static.pdf", None, Arc::new(pdfcraft_xfa::fixtures::static_scripted_shell("")), None).expect("opens");
+    assert!(s.get(id).unwrap().xfa_template.is_some());
+    s.apply(id, Edit::Flatten { comments: false, fields: true }).expect("flattens");
+    assert!(s.get(id).unwrap().xfa_template.is_none(), "no XFA, no scripts");
+    s.undo(id).expect("undoes");
+    assert!(s.get(id).unwrap().xfa_template.is_some(), "the XFA is back, and its scripts");
+}
+
+/// On a dynamic XFA form too, a check box or radio button the user sets runs its click script after its change scripts,
+/// the chosen radio button's own.
+#[test]
+fn xfa_check_boxes_and_radio_buttons_run_their_click_scripts() {
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::static_scripted_template()));
+    let mut s = Session::new();
+    let id = s.open("dynamic.pdf", None, bytes, None).expect("opens");
+    let named = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name.ends_with(n)).cloned().expect("the field");
+    let total = |s: &Session| named(s, "total").value;
+    let agree = named(&s, "agree");
+    let on = agree.widgets[0].on_state.clone().expect("an on state");
+    s.apply(id, Edit::SetFieldValue { name: agree.name.clone(), value: FieldValue::Check(true) }).expect("checks it");
+    assert_eq!(total(&s), vec!["agree:1".to_string()], "{on}: {:?}", s.take_js_output(id));
+    let size = named(&s, "size");
+    let large = size.widgets.get(1).and_then(|w| w.on_state.clone());
+    s.apply(id, Edit::SetFieldValue { name: size.name.clone(), value: FieldValue::Radio(large) }).expect("picks it");
+    assert_eq!(total(&s), vec!["size:large".to_string()], "{:?}", s.take_js_output(id));
+}
+
 /// layout:ready scripts run once on opening: the root's turns field highlighting on (only when it
 /// is off), a field's sets a value and a later script reads the new highlight, while page
 /// numbering is left to the layout and form:ready is another event.

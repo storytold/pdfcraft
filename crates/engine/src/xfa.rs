@@ -495,6 +495,11 @@ struct Runner<'a, 'b> {
     /// A field embedded in rich text (a floating field) took a new value since the form was
     /// last laid out: the text that shows it is laid out again when the event ends.
     embedded_changed: bool,
+    /// A static form: its own AcroForm fields stand for the template's ([`static_fields`]), and what scripts change in
+    /// its structure is shown on those fields rather than by laying it out again.
+    static_form: bool,
+    /// [`static_fields`], made with `by_som`.
+    static_entries: Vec<(String, String, pdfcraft_cos::ObjRef)>,
 }
 
 impl<'a, 'b> Runner<'a, 'b> {
@@ -502,8 +507,9 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn new(doc: &'a mut pdfcraft_cos::Document, tpl: &'a Template, run: &'a mut XfaRun<'b>, budget_ms: u64) -> Self {
         let data = pdfcraft_xfa::data_of(doc);
         let ov = pdfcraft_xfa::overrides(doc);
+        let static_form = is_static(doc);
         let budget_ms = budget_ms.saturating_mul(u64::from(run.time_scale));
-        Runner {
+        let mut r = Runner {
             doc,
             tpl,
             run,
@@ -532,6 +538,39 @@ impl<'a, 'b> Runner<'a, 'b> {
             changes: Changes::default(),
             numbered: HashSet::new(),
             embedded_changed: false,
+            static_form,
+            static_entries: Vec::new(),
+        };
+        if static_form {
+            r.fill_from_fields();
+        }
+        r
+    }
+
+    /// A static form's fields may hold values its data doesn't (filled in a viewer that writes only the fields): the
+    /// scripts read them too, in this run's copy of the data, written to the file only with what a script changes. A
+    /// radio group is left out: its state is a button's position, not the item it saves.
+    fn fill_from_fields(&mut self) {
+        use pdfcraft_forms::FieldKind as K;
+        self.by_som();
+        let infos = self.fields().clone();
+        let mut filled = false;
+        for (som, name, _) in &self.static_entries {
+            let Some(info) = infos.get(name) else { continue };
+            if matches!(info.kind, K::PushButton | K::Signature | K::Radio) {
+                continue;
+            }
+            let text = data_text(info);
+            let path = pdfcraft_xfa::data_path(self.tpl, som);
+            let data = self.data.get_or_insert_with(Default::default);
+            if text.is_empty() || data.text_at(&path).is_some_and(|t| !t.is_empty()) {
+                continue;
+            }
+            data.apply(&pdfcraft_xfa::DataOp::Value { path, text });
+            filled = true;
+        }
+        if filled {
+            self.invalidate();
         }
     }
 
@@ -587,12 +626,30 @@ impl<'a, 'b> Runner<'a, 'b> {
         if self.by_som.is_none() {
             let mut by_som = HashMap::new();
             self.objects_by_som.clear();
-            for (som, (name, object)) in pdfcraft_xfa::field_objects_by_som(self.doc) {
-                self.objects_by_som.insert(som.clone(), object);
-                by_som.insert(som, name);
+            // Every field bound to each SOM path: a static form's page-master copies share their master's.
+            let mut all: Vec<(String, String)> = Vec::new();
+            if self.static_form {
+                let tpl = self.tpl;
+                let entries = {
+                    let live = self.live();
+                    let live = live.clone();
+                    static_fields(self.doc, tpl, &live)
+                };
+                for (som, name, object) in &entries {
+                    self.objects_by_som.entry(som.clone()).or_insert(*object);
+                    by_som.entry(som.clone()).or_insert_with(|| name.clone());
+                    all.push((som.clone(), name.clone()));
+                }
+                self.static_entries = entries;
+            } else {
+                for (som, (name, object)) in pdfcraft_xfa::field_objects_by_som(self.doc) {
+                    self.objects_by_som.insert(som.clone(), object);
+                    all.push((som.clone(), name.clone()));
+                    by_som.insert(som, name);
+                }
             }
             let mut by_path: HashMap<pdfcraft_xfa::DataPath, Vec<String>> = HashMap::new();
-            for (som, name) in &by_som {
+            for (som, name) in &all {
                 by_path.entry(pdfcraft_xfa::data_path(self.tpl, som)).or_default().push(name.clone());
             }
             for names in by_path.values_mut() {
@@ -732,7 +789,7 @@ impl<'a, 'b> Runner<'a, 'b> {
         if !self.field_changes.is_empty() {
             let changes: Vec<pdfcraft_forms::FieldChange> = std::mem::take(&mut self.field_changes)
                 .into_iter()
-                .map(|(name, value)| pdfcraft_forms::FieldChange { name, value: Some(value), ..Default::default() })
+                .map(|(name, value)| pdfcraft_forms::FieldChange { name, value: Some(value), beyond_max_len: true, ..Default::default() })
                 .collect();
             pdfcraft_forms::apply_script_changes(self.doc, &changes, &mut pdfcraft_forms::NoScripts).map_err(|e| e.to_string())?;
             self.fields = None;
@@ -745,6 +802,10 @@ impl<'a, 'b> Runner<'a, 'b> {
             // What the packet now holds (a value it could not take is reported above).
             self.data = pdfcraft_xfa::data_of(self.doc);
             self.invalidate();
+            // the reload drops what only a static form's fields hold: the later scripts still read it
+            if self.static_form {
+                self.fill_from_fields();
+            }
         }
         Ok(())
     }
@@ -762,6 +823,9 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
         self.relayouts += 1;
         self.flush()?;
+        if self.static_form {
+            return self.show_static_overrides();
+        }
         self.embedded_changed = false;
         let report = pdfcraft_xfa::rerender(self.doc, self.tpl).map_err(|e| e.to_string())?;
         self.console(report.warnings);
@@ -769,6 +833,92 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.console(crate::undrawn_field_warnings(self.doc));
         self.by_som = None;
         self.by_path = None;
+        self.fields = None;
+        self.invalidate();
+        Ok(())
+    }
+
+    /// What scripts set on a static form's objects, shown on its own fields: presence as the widget's hidden flag, access
+    /// as the field's read-only flag. A subform's setting reaches every field inside it: hidden anywhere up the chain
+    /// hides, and the nearest access wins. A radio group's buttons each take their own presence, on their own widget.
+    fn show_static_overrides(&mut self) -> Result<(), String> {
+        self.by_som();
+        // `Some(true)` when `som` or a container of it is hidden or invisible, `Some(false)` when only shown ones are set,
+        // `None` when nothing up the chain is set.
+        let hidden = |map: &std::collections::BTreeMap<String, String>, som: &str| -> Option<bool> {
+            let mut at = som;
+            let mut set = false;
+            loop {
+                if let Some(p) = map.get(at) {
+                    if p == "hidden" || p == "invisible" {
+                        return Some(true);
+                    }
+                    set = true;
+                }
+                match at.rsplit_once('.') {
+                    Some((up, _)) => at = up,
+                    None => return set.then_some(false),
+                }
+            }
+        };
+        let nearest = |map: &std::collections::BTreeMap<String, String>, som: &str| -> Option<String> {
+            let mut at = som;
+            loop {
+                if let Some(v) = map.get(at) {
+                    return Some(v.clone());
+                }
+                at = at.rsplit_once('.')?.0;
+            }
+        };
+        // A radio group's buttons, in widget order.
+        let buttons: HashMap<String, Vec<String>> = {
+            let entries: Vec<String> = self.static_entries.iter().map(|(som, _, _)| som.clone()).collect();
+            let live = self.live();
+            entries
+                .into_iter()
+                .filter_map(|som| {
+                    let n = find_node(&live.root, &som, 0).filter(|n| n.kind == Some(NodeKind::ExclGroup))?;
+                    Some((som, n.children.iter().filter(|c| c.kind == Some(NodeKind::Field)).map(|c| c.som.clone()).collect()))
+                })
+                .collect()
+        };
+        let widgets: HashMap<String, Vec<pdfcraft_cos::ObjRef>> = if buttons.is_empty() {
+            HashMap::new()
+        } else {
+            pdfcraft_forms::fields(self.doc).into_iter().map(|f| (f.name, f.widgets.iter().map(|w| w.obj).collect())).collect()
+        };
+        let mut changes = Vec::new();
+        let mut widget_flags: Vec<(pdfcraft_cos::ObjRef, bool)> = Vec::new();
+        for (som, name, object) in &self.static_entries {
+            let read_only = nearest(&self.ov.access, som).map(|a| a != "open");
+            let display = match buttons.get(som) {
+                Some(items) => {
+                    let objs = widgets.get(name).map(Vec::as_slice).unwrap_or_default();
+                    for (item, obj) in items.iter().zip(objs) {
+                        if let Some(h) = hidden(&self.ov.presence, item) {
+                            widget_flags.push((*obj, h));
+                        }
+                    }
+                    None
+                }
+                None => hidden(&self.ov.presence, som).map(i32::from),
+            };
+            if display.is_none() && read_only.is_none() {
+                continue;
+            }
+            changes.push(pdfcraft_forms::FieldChange { name: name.clone(), object: Some(*object), display, read_only, ..Default::default() });
+        }
+        if !changes.is_empty() {
+            pdfcraft_forms::apply_script_changes(self.doc, &changes, &mut pdfcraft_forms::NoScripts).map_err(|e| e.to_string())?;
+        }
+        for (obj, h) in widget_flags {
+            // the annotation's Hidden flag (ISO 32000-2 Table 167, bit 2)
+            let flags = self.doc.get(obj).as_dict().and_then(|d| d.get(b"F").and_then(|v| self.doc.resolve(v).as_int())).unwrap_or(0);
+            let next = if h { flags | 2 } else { flags & !2 };
+            if next != flags {
+                self.doc.update_dict(obj, |d| d.set(b"F".to_vec(), pdfcraft_cos::Object::Int(next))).map_err(|e| e.to_string())?;
+            }
+        }
         self.fields = None;
         self.invalidate();
         Ok(())
@@ -911,6 +1061,10 @@ impl<'a, 'b> Runner<'a, 'b> {
                         relayout = true;
                     }
                 }
+                XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } if self.static_form => {
+                    // A static form has a fixed layout: no field to add or take out.
+                    self.console([format!("{} ({}): a static form can't add or remove {som}; ignored", ev.som, ev.activity)]);
+                }
                 XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } => {
                     let Some((parent, parent_som, name, index)) = split_instance(self.tpl, som) else { continue };
                     let key = (parent_som, name.clone());
@@ -1047,6 +1201,44 @@ impl<'a, 'b> Runner<'a, 'b> {
         Ok(())
     }
 
+    /// What a user's setting field `name` (at `som`) clicked, with the activities each runs: a check box, its own click;
+    /// a radio group, the group's click and the chosen button's change and click (the button is the group's field
+    /// child at the chosen widget's position). Nothing for other fields.
+    fn clicked(&mut self, name: &str, som: &str) -> Vec<(String, Vec<&'static str>)> {
+        use pdfcraft_forms::FieldKind as K;
+        match self.fields().get(name).map(|f| f.kind) {
+            Some(K::CheckBox) => vec![(som.to_string(), vec!["click"])],
+            Some(K::Radio) => {
+                // The group: `som` itself, or the group a button's own path belongs to.
+                let group = {
+                    let live = self.live();
+                    match find_node(&live.root, som, 0) {
+                        Some(n) if n.kind == Some(NodeKind::ExclGroup) => Some(n.clone()),
+                        _ => som
+                            .rsplit_once('.')
+                            .and_then(|(parent, _)| find_node(&live.root, parent, 0))
+                            .filter(|n| n.kind == Some(NodeKind::ExclGroup))
+                            .cloned(),
+                    }
+                };
+                let Some(group) = group else { return vec![(som.to_string(), vec!["click"])] };
+                let chosen = pdfcraft_forms::fields(self.doc)
+                    .into_iter()
+                    .find(|f| f.name == name)
+                    .and_then(|f| f.widgets.iter().position(|w| w.state.is_some() && w.state == w.on_state));
+                let item = chosen.and_then(|i| group.children.iter().filter(|c| c.kind == Some(NodeKind::Field)).nth(i)).map(|c| c.som.clone());
+                let mut out = vec![(group.som.clone(), vec!["click"])];
+                if let Some(item) = item.filter(|i| *i != som) {
+                    out.push((item, vec!["change", "click"]));
+                } else if group.som != som {
+                    out.push((som.to_string(), vec!["click"]));
+                }
+                out
+            }
+            _ => Vec::new(),
+        }
+    }
+
     fn events_of(&mut self, som: &str, activity: &str) -> Vec<ScriptEvent> {
         self.live().events.iter().filter(|e| e.som == som && e.activity == activity).cloned().collect()
     }
@@ -1112,6 +1304,17 @@ impl Runner<'_, '_> {
             std::process::abort();
         }
     }
+}
+
+/// The node at SOM path `som` under `n`, searched at most 64 levels deep.
+fn find_node<'a>(n: &'a FormNode, som: &str, depth: usize) -> Option<&'a FormNode> {
+    if depth > 64 {
+        return None;
+    }
+    if n.som == som {
+        return Some(n);
+    }
+    n.children.iter().find_map(|c| find_node(c, som, depth + 1))
 }
 
 /// Every field's (SOM, value, presence, access), in document order.
@@ -1280,11 +1483,26 @@ pub(crate) fn on_changes(
 ) -> Result<(), String> {
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
     for name in names {
-        let som = r.by_som().iter().find(|(_, f)| *f == name).map(|(s, _)| s.clone());
+        // A static form's page-master copies share their master's SOM path under names of their own.
+        let som = if r.static_form {
+            r.by_som();
+            r.static_entries.iter().find(|(_, f, _)| f == name).map(|(s, _, _)| s.clone())
+        } else {
+            r.by_som().iter().find(|(_, f)| *f == name).map(|(s, _)| s.clone())
+        };
         let Some(som) = som else { continue };
         let value = r.fields().get(name).map(|f| f.value.join("\n")).unwrap_or_default();
         for ev in r.events_of(&som, "change") {
             r.run(&ev, &value)?;
+        }
+        // A check box or a radio button the user set was clicked (XFA 3.3 p. 703): its click scripts run after its change
+        // scripts, reading its new value; a radio group's chosen button runs its own change and click scripts too.
+        for (item_som, activities) in r.clicked(name, &som) {
+            for activity in activities {
+                for ev in r.events_of(&item_som, activity) {
+                    r.run(&ev, &value)?;
+                }
+            }
         }
         // Noted only when an exit script ran, whether it succeeded or failed: it has run for this
         // focus loss, and a failed script keeps what it changed before its error, so running it
@@ -1380,6 +1598,91 @@ pub(crate) fn on_focus(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &s
     r.finish()
 }
 
+// ── static forms ─────────────────────────────────────────────────────────────────────────
+
+/// A static XFA form keeps its own AcroForm fields, named by the template's SOM steps; PdfCraft did not lay it out.
+fn is_static(doc: &pdfcraft_cos::Document) -> bool {
+    pdfcraft_xfa::existing_layout(doc).is_none()
+}
+
+/// The named steps of a SOM path or a static form's field name, without their indexes: `form1[0].#subform[1].a\.b[2]`
+/// gives `["form1", "a.b"]`. Unnamed containers (`#subform[1]`) are left out, as SOM leaves them out, and so are indexes,
+/// which Designer counts across them.
+fn som_key(name: &str) -> Vec<String> {
+    let mut steps = Vec::new();
+    let mut cur = String::new();
+    let mut escaped = false;
+    for c in name.chars() {
+        if escaped {
+            cur.push(c);
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            '.' => steps.push(std::mem::take(&mut cur)),
+            _ => cur.push(c),
+        }
+    }
+    steps.push(cur);
+    steps.into_iter().filter(|s| !s.starts_with('#')).map(|s| s.split('[').next().unwrap_or_default().to_string()).collect()
+}
+
+/// The fields of the live form a static form's AcroForm fields stand for: `(SOM path, field name, field object)`, in
+/// the fields' order. A field takes the next live field or exclusion group whose named steps are its own; one on a page
+/// master (named from the page set, `form1[0].#pageSet[0].Page1[1].Print[0]`) the master's, which every page's copy
+/// shares. Fields with no match are left out.
+fn static_fields(doc: &pdfcraft_cos::Document, tpl: &Template, live: &LiveForm) -> Vec<(String, String, pdfcraft_cos::ObjRef)> {
+    fn gather(n: &FormNode, out: &mut HashMap<Vec<String>, Vec<String>>, depth: usize) {
+        if depth > 64 {
+            return;
+        }
+        match n.kind {
+            Some(NodeKind::Field | NodeKind::ExclGroup) => out.entry(som_key(&n.som)).or_default().push(n.som.clone()),
+            _ => n.children.iter().for_each(|c| gather(c, out, depth + 1)),
+        }
+    }
+    let mut by_key: HashMap<Vec<String>, Vec<String>> = HashMap::new();
+    gather(&live.root, &mut by_key, 0);
+    let areas: HashSet<&str> = tpl.root.page_set.iter().flat_map(|ps| ps.areas.iter().filter_map(|a| a.name.as_deref())).collect();
+    let mut taken: HashMap<Vec<String>, usize> = HashMap::new();
+    let mut out = Vec::new();
+    for f in pdfcraft_forms::fields(doc) {
+        let key = som_key(&f.name);
+        if let Some(soms) = by_key.get(&key) {
+            let n = taken.entry(key).or_insert(0);
+            if let Some(som) = soms.get(*n) {
+                out.push((som.clone(), f.name.clone(), f.obj));
+            }
+            *n += 1;
+            continue;
+        }
+        // Page-master content: its steps from the page area on, every copy the master's own.
+        let master = (1..key.len()).find(|i| key.get(*i).is_some_and(|s| areas.contains(s.as_str())));
+        if let Some(som) = master.and_then(|i| by_key.get(&key[i..])).and_then(|soms| soms.first()) {
+            out.push((som.clone(), f.name.clone(), f.obj));
+        }
+    }
+    out
+}
+
+/// The SOM path of a static form's field `field` for its widgets' focus scripts: a radio group's buttons share the
+/// group's (see [`static_fields`]).
+pub(crate) fn static_widget_som(doc: &pdfcraft_cos::Document, tpl: &Template, field: &pdfcraft_forms::Field) -> Option<String> {
+    static_som(doc, tpl, field)
+}
+
+/// The SOM path a static form's field `field` stands for (see [`static_fields`]).
+fn static_som(doc: &pdfcraft_cos::Document, tpl: &Template, field: &pdfcraft_forms::Field) -> Option<String> {
+    if !is_static(doc) {
+        return None;
+    }
+    // built as the runner builds it, so the paths are the ones its scripts run under
+    let uses = pdfcraft_xfa::page_area_uses(doc, tpl);
+    let live = pdfcraft_xfa::form_tree_paged(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc), &uses);
+    static_fields(doc, tpl, &live).into_iter().find(|(_, _, obj)| *obj == field.obj).map(|(som, _, _)| som)
+}
+
 /// The SOM path of widget `widget` of field `field`: each radio button of a group has its own,
 /// and a field's copies on several pages share one. `None` when the field has no widget
 /// `widget`: the field's own path is only for a widget that records none, so a widget index
@@ -1408,9 +1711,14 @@ pub(crate) fn clickable_som(doc: &pdfcraft_cos::Document, tpl: &Template, field:
 
 /// The SOM path of a generated field whose template has an `activity` script.
 pub(crate) fn scripted_som(doc: &pdfcraft_cos::Document, tpl: &Template, field: &pdfcraft_forms::Field, activity: &str) -> Option<String> {
-    // The field's own SOM path: each page-master copy has one of its own (`master[1]…`).
+    // The field's own SOM path: each page-master copy has one of its own (`master[1]…`); a static form's field is named
+    // by its template's.
     let object = doc.get(field.obj);
-    let som = object.as_dict()?.get(pdfcraft_xfa::SOM_KEY).map(|s| doc.resolve(s))?.as_string()?.to_text();
+    let marked = object.as_dict().and_then(|d| d.get(pdfcraft_xfa::SOM_KEY)).map(|s| doc.resolve(s)).and_then(|s| s.as_string().map(|s| s.to_text()));
+    let som = match marked {
+        Some(som) => som,
+        None => static_som(doc, tpl, field)?,
+    };
     let uses = pdfcraft_xfa::page_area_uses(doc, tpl);
     let live = pdfcraft_xfa::form_tree_paged(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc), &uses);
     live.events.iter().any(|e| e.som == som && e.activity == activity).then_some(som)

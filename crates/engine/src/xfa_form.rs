@@ -169,6 +169,14 @@ pub(crate) fn strip_xfa(doc: &mut pdfcraft_cos::Document, cx: &mut EditCtx) -> R
 /// Keep the document's XFA state in step with its file after an edit: a script may have laid
 /// the form out again (rows added, subforms shown), an edit may have taken the XFA out
 /// (flattened, or made static), or an undo put it back.
+/// Whether the document's form still has XFA packets (`/AcroForm /XFA`), without reading them.
+fn has_xfa_entry(cos: &pdfcraft_cos::Document) -> bool {
+    let Some(root) = cos.root() else { return false };
+    let catalog = cos.get(root);
+    let acro = catalog.as_dict().and_then(|c| c.get(b"AcroForm")).map(|a| cos.resolve(a));
+    acro.as_deref().and_then(|a| a.as_dict()).is_some_and(|a| a.contains(b"XFA"))
+}
+
 pub(crate) fn sync_xfa_state(doc: &mut Document) {
     let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return };
     match pdfcraft_xfa::existing_layout(cos) {
@@ -181,6 +189,16 @@ pub(crate) fn sync_xfa_state(doc: &mut Document) {
                 }
             }
             doc.xfa = Some(report);
+        }
+        // A static form was never laid out: its template stays for its scripts while it keeps its XFA, goes when the XFA is
+        // removed, and comes back when an undo brings the XFA back.
+        None if doc.xfa_static => {
+            doc.xfa = None;
+            if !has_xfa_entry(cos) {
+                doc.xfa_template = None;
+            } else if doc.xfa_template.is_none() && !doc.xfa_scripts_off {
+                doc.xfa_template = xfa::template(cos);
+            }
         }
         None => {
             doc.xfa = None;

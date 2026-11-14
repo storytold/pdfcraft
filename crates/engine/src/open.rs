@@ -206,14 +206,16 @@ impl Session {
         };
         // A laid-out XFA form: its initialize and calculate scripts run now, as on opening in
         // Acrobat; what they change is one more revision, still nothing to save.
+        // A static XFA form's template scripts run too, on its own fields.
         let mut script_output = js::JsOutput::default();
         let mut ran_away = false;
-        let xfa_template = match (&xfa, &cos) {
-            (Some(_), Ok(Ok(c))) => xfa::template(c),
+        let is_static = info.xfa == Some(pdfcraft_render::Xfa::Static) && xfa.is_none();
+        let xfa_template = match (xfa.is_some() || is_static, &cos) {
+            (true, Ok(Ok(c))) => xfa::template(c),
             _ => None,
         };
-        let (bytes, info, cos) = match (&xfa, cos) {
-            (Some(_), Ok(Ok(cos))) if !context.js_off => match xfa_template.clone() {
+        let (bytes, info, cos) = match (xfa.is_some() || is_static, cos) {
+            (true, Ok(Ok(cos))) if !context.js_off => match xfa_template.clone() {
                 Some(tpl) => {
                     let mut work = cos.clone();
                     let pages = info.pages.len();
@@ -288,6 +290,7 @@ impl Session {
         let mut document =
             Self::build_document(context, DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa });
         // A script that ran away on open turns the form's scripts off for this document.
+        document.xfa_static = is_static && xfa_template.is_some();
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
         if ran_away {
@@ -388,6 +391,7 @@ impl Session {
             live: Default::default(),
             xfa,
             xfa_template: None,
+            xfa_static: false,
             xfa_scripts_off: false,
             xfa_exited: Default::default(),
             fonts_stale: false,

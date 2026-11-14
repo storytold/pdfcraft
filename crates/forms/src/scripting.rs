@@ -62,6 +62,9 @@ pub struct FieldChange {
     /// JavaScript actions the script installed with `setAction`, by trigger name (`MouseUp`,
     /// `OnFocus`, `Keystroke`, …), each replacing what the field ran for that trigger.
     pub actions: Vec<(String, String)>,
+    /// The value is an XFA form script's: `/MaxLen`, which limits what a user types, doesn't refuse it (the field is
+    /// still drawn through it).
+    pub beyond_max_len: bool,
 }
 
 /// What a script did.
@@ -311,7 +314,7 @@ pub(crate) fn apply_changes(
                 let mut tmp = f.clone();
                 tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
                 tmp.actions = Default::default();
-                crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
+                crate::values::write_value_checked(doc, &tmp, &value, &mut NoScripts, !c.beyond_max_len)?;
                 if c.formatted {
                     crate::redraw_calculated_value(doc, f, v, scripts)?;
                 }
