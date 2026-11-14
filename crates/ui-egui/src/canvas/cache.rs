@@ -830,11 +830,27 @@ impl DocView {
         }
     }
 
-    /// Queue sharp rasters for the print preview. Pages that leave the nearby sheets are dropped.
+    /// Queue sharp rasters for the print preview. Up to 32 preview rasters and within PREVIEW_BYTES
+    /// are cached so navigating sheets is smooth; excess pages furthest from the current sheet are dropped.
     /// Previews render with reading colours off (the request's tag tells the renderer): they must
     /// match the printout, which is imposed from the uncoloured document.
     pub(crate) fn queue_print_previews(&mut self, pages: &[(usize, f32)]) {
-        self.print_pages.retain(|page, _| pages.iter().any(|(p, _)| p == page));
+        const MAX_CACHED_PRINT_PAGES: usize = 32;
+        let preview_byte_limit = crate::print_ui::PREVIEW_BYTES as usize;
+        let mut total_bytes: usize = self.print_pages.values().map(|(_, tex)| texture_bytes(tex)).sum();
+        if self.print_pages.len() > MAX_CACHED_PRINT_PAGES || total_bytes > preview_byte_limit {
+            let target = pages.first().map(|(p, _)| *p).unwrap_or(0);
+            let mut excess: Vec<usize> = self.print_pages.keys().filter(|p| !pages.iter().any(|(dp, _)| dp == *p)).copied().collect();
+            excess.sort_by_key(|&p| std::cmp::Reverse(p.abs_diff(target)));
+            for p in excess {
+                if self.print_pages.len() <= MAX_CACHED_PRINT_PAGES && total_bytes <= preview_byte_limit {
+                    break;
+                }
+                if let Some((_, tex)) = self.print_pages.remove(&p) {
+                    total_bytes = total_bytes.saturating_sub(texture_bytes(&tex));
+                }
+            }
+        }
         for &(page, scale) in pages {
             if self.errors.contains_key(&page) || !scale.is_finite() || scale <= 0.0 {
                 continue;
