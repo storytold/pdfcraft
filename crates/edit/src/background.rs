@@ -44,7 +44,20 @@ struct State {
 /// an opaque fill, in a gray, RGB or CMYK colour, of a path with a rectangle that covers the
 /// whole visible page (and no clip keeps it from doing so). `None` for a page that paints anything else
 /// first, or nothing. Forms and later content are not looked at.
+/// A shared [`crate::ArtworkReader`] avoids resolving layers again for each page.
 pub fn page_background(doc: &Document, page: usize) -> Result<Option<Rgb>, EditError> {
+    crate::ArtworkReader::new(doc).page_background(page)
+}
+
+impl crate::ArtworkReader<'_> {
+    /// Read a page background using the shared configuration and fresh evaluation limits.
+    pub fn page_background(&self, page: usize) -> Result<Option<Rgb>, EditError> {
+        page_background_with(self, page)
+    }
+}
+
+fn page_background_with(reader: &crate::ArtworkReader<'_>, page: usize) -> Result<Option<Rgb>, EditError> {
+    let doc = reader.doc;
     let pages = pdfcraft_model::pages(doc);
     let p = pages.get(page).ok_or(EditError::NoSuchPage(page))?;
     let crop = p.crop(doc);
@@ -63,7 +76,13 @@ pub fn page_background(doc: &Document, page: usize) -> Result<Option<Rgb>, EditE
     let mut rects: Vec<(Quad, bool)> = Vec::new();
     let mut curved = false;
     let mut clip_pending = false;
+    let mut visibility = reader.visibility();
+    let mut marked = crate::optional_content::Marked::default();
+    let properties = resources.get(b"Properties").and_then(|p| doc.dict(p)).unwrap_or_default();
     for op in &ops {
+        if marked.update(op, &properties, &mut visibility) {
+            continue;
+        }
         match op.op.as_slice() {
             b"q" => {
                 if saved.len() < MAX_SAVES {
@@ -129,6 +148,13 @@ pub fn page_background(doc: &Document, page: usize) -> Result<Option<Rgb>, EditE
                 (rects, curved, clip_pending) = (Vec::new(), false, false);
             }
             b"f" | b"F" | b"f*" | b"B" | b"B*" => {
+                if !marked.visible() {
+                    if clip_pending {
+                        st.clip = None;
+                    }
+                    (rects, curved, clip_pending) = (Vec::new(), false, false);
+                    continue;
+                }
                 let opaque = st.plain && st.alpha >= 0.999;
                 // A second rectangle can cut a hole in the one that covers the page: under the
                 // even-odd rule any second one, under nonzero one wound the other way (a
@@ -146,7 +172,13 @@ pub fn page_background(doc: &Document, page: usize) -> Result<Option<Rgb>, EditE
                 return Ok(st.fill.filter(|_| opaque && covers && !clip_pending).map(|c| c.map(|v| v.clamp(0.0, 1.0))));
             }
             // Anything else painted first: no page background.
-            b"S" | b"s" | b"b" | b"b*" | b"Tj" | b"TJ" | b"'" | b"\"" | b"Do" | b"sh" | b"BI" => return Ok(None),
+            b"S" | b"s" | b"b" | b"b*" | b"Tj" | b"TJ" | b"'" | b"\"" | b"Do" | b"sh" | b"BI" if marked.visible() => return Ok(None),
+            b"S" | b"s" | b"b" | b"b*" => {
+                if clip_pending {
+                    st.clip = None;
+                }
+                (rects, curved, clip_pending) = (Vec::new(), false, false);
+            }
             _ => {}
         }
     }

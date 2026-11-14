@@ -29,6 +29,8 @@ impl PartialEq for MaskIdentity {
 /// An image drawn on a page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PageImage {
+    /// Operator indexes from the page through Form calls, for ordering against vector paths.
+    pub paint_order: Vec<usize>,
     /// Its box in user space.
     pub rect: [f64; 4],
     /// Visible frame after page and analytic path bounds. Hit testing also respects curve
@@ -243,11 +245,9 @@ impl ImageState {
                     self.path.curve_to(p1, end, end);
                 }
             }
-            b"h" => {
-                // ClosePath with no subpath panics by the same contract (#3581).
-                if self.has_current_point() {
-                    self.path.close_path();
-                }
+            // ClosePath with no subpath panics by the same contract (#3581).
+            b"h" if self.has_current_point() => {
+                self.path.close_path();
             }
             b"re" => {
                 if let Some([x, y, w, h]) = op.nums::<4>()
@@ -344,6 +344,7 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
                 return Err(too_many_images());
             }
             out.push(PageImage {
+                paint_order: vec![i],
                 rect,
                 visible_rect: intersection(rect, state.placement.clip),
                 clip_rect: Some(state.placement.clip),
@@ -372,6 +373,7 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
     /// The forms being read (cycle guard) and how many were entered (the page's budget).
     struct Forms {
         path: Vec<ObjRef>,
+        order: Vec<usize>,
         budget: crate::text::FormBudget,
     }
     fn walk(
@@ -404,7 +406,9 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
                     let clip = bounds.map_or(st.placement.clip, |b| intersection(st.placement.clip, b).unwrap_or([0.0; 4]));
                     let mut inner = ImageState::new(form.ctm, clip, st.placement.clips.clone());
                     let piece = stream(op);
+                    forms.order.push(i);
                     walk(doc, &parse(&form.data).ops, form.resources(resources), &mut inner, &|_| piece, forms, out)?;
+                    forms.order.pop();
                     if form.obj.is_some() {
                         forms.path.pop();
                     }
@@ -419,7 +423,10 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
                 if out.len() >= MAX_PAGE_IMAGES {
                     return Err(too_many_images());
                 }
+                let mut paint_order = forms.order.clone();
+                paint_order.push(i);
                 out.push(PageImage {
+                    paint_order,
                     rect: ctm.bbox([0.0, 0.0, 1.0, 1.0]),
                     visible_rect: intersection(ctm.bbox([0.0, 0.0, 1.0, 1.0]), st.placement.clip),
                     clip_rect: Some(st.placement.clip),
@@ -444,7 +451,7 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
     let mut st = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
     let mut decode = pdfcraft_cos::DecodeBudget::page();
     let pieces = joined(&crate::text::content_streams_within(doc, &p.dict, &mut decode)?);
-    let mut forms = Forms { path: Vec::new(), budget: crate::text::FormBudget::new(decode) };
+    let mut forms = Forms { path: Vec::new(), order: Vec::new(), budget: crate::text::FormBudget::new(decode) };
     walk(doc, &pieces.parse().ops, &res, &mut st, &|op| pieces.piece_of(op.span.start), &mut forms, &mut out)?;
     Ok(out)
 }

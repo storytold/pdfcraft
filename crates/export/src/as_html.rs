@@ -77,6 +77,11 @@ pub fn html(pages: &[Page], title: &str) -> String {
 }
 
 /// A simple HTML export with no CSS; page layout and colours are omitted.
+///
+/// Image bytes must already have the displayed orientation: this low-level writer does not
+/// decode images or apply [`super::Image::upright_flips`]. Callers preparing [`Page`] values
+/// must bake mirrors and half turns into the pixels and clear their orientation flags.
+/// The engine's `OfficeFormat::HtmlSimple` export performs this bounded preprocessing.
 pub fn html_simple(pages: &[Page], title: &str) -> String {
     html_simple_with_language(pages, title, None)
 }
@@ -89,7 +94,8 @@ pub fn html_with_language(pages: &[Page], title: &str, language: Option<&str>) -
 }
 
 /// [`html_simple`] for a document in `language`, named as [`html_with_language`] names it: a
-/// language is not styling, so the simple export keeps it.
+/// language is not styling, so the simple export keeps it. Images have the same normalized-pixel
+/// precondition as [`html_simple`].
 pub fn html_simple_with_language(pages: &[Page], title: &str, language: Option<&str>) -> String {
     html_with_mode(pages, title, true, language)
 }
@@ -173,7 +179,17 @@ fn html_with_mode(pages: &[Page], title: &str, simple: bool, language: Option<&s
             Item::Table(t) => s.push_str(&table_html(&t, simple)),
             Item::Img(im) => {
                 let mime = if im.ext == "jpg" { "image/jpeg" } else { "image/png" };
-                s.push_str(&format!("<p><img alt=\"\" src=\"data:{mime};base64,{}\"></p>\n", base64(&im.bytes)));
+                // Pictures flow upright: a picture the PDF mirrors or turns half round is flipped
+                // to match (a bottom-up bitmap vertically, a left-right mirror horizontally). The
+                // Simple HTML has no styles: the engine supplies pixels already flipped.
+                let flip = match im.upright_flips() {
+                    _ if simple => "",
+                    (false, false) => "",
+                    (false, true) => " style=\"transform:scale(1,-1)\"",
+                    (true, false) => " style=\"transform:scale(-1,1)\"",
+                    (true, true) => " style=\"transform:scale(-1,-1)\"",
+                };
+                s.push_str(&format!("<p><img alt=\"\"{flip} src=\"data:{mime};base64,{}\"></p>\n", base64(&im.bytes)));
             }
             Item::PageBreak => s.push_str("<hr>\n"),
         }
@@ -192,6 +208,7 @@ mod tests {
             text: text.into(),
             rect: [x0, y0, x1, y1],
             size: 12.0,
+            font: String::new(),
             bold: false,
             italic: false,
             color: [0.0; 3],
@@ -213,6 +230,7 @@ mod tests {
             images: Vec::new(),
             background: None,
             rules: Vec::new(),
+            ..Default::default()
         };
         let out = html(&[page], "Clean");
         assert!(out.contains("<p style=\"color:#008000\">Hello</p>"), "{out}");
@@ -241,8 +259,8 @@ mod tests {
             rect: [0.0, 0.0, 100.0, 20.0],
             cols: vec![0.0, 50.0],
             rows: vec![vec![
-                Cell { text: "\u{1}".into(), size: 11.0, bold: true, italic: true, color: [0.0; 3], span: 1 },
-                Cell { text: "Val".into(), size: 11.0, bold: true, italic: false, color: [0.0; 3], span: 1 },
+                Cell { text: "\u{1}".into(), size: 11.0, font: String::new(), bold: true, italic: true, color: [0.0; 3], span: 1 },
+                Cell { text: "Val".into(), size: 11.0, font: String::new(), bold: true, italic: false, color: [0.0; 3], span: 1 },
             ]],
             ruled: None,
         };

@@ -4577,6 +4577,8 @@ dependencies = [
  "craft-rtf",
  "craft-zip",
  "flate2",
+ "pdfcraft-fonts",
+ "pdfcraft-forms",
 ]
 
 [[package]]
