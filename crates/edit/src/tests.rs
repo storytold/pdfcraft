@@ -9563,6 +9563,37 @@ fn a_row_grown_too_long_flows_into_the_rows_after_it() {
     assert_eq!(rows, ["abcd efgh abcd efgh abcd efgh a", "efgh abcd efgh abcd efgh abcd ef", "abcd efgh.", "efgh abcd efgh abcd efgh abcd gh"]);
 }
 
+/// A no-break space the font has no code for (Word draws one by moving) is written as a gap of
+/// the space's advance, not refused: a row holding one could be shown but not written again.
+#[test]
+fn a_space_character_the_font_cannot_write_is_a_gap() {
+    // The subset has a, b and the space; its ToUnicode reads code 1, of no width, as U+00A0.
+    let font = "<< /Type /Font /Subtype /Type1 /BaseFont /HouseSans /FirstChar 1 /LastChar 98 /Widths [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 300 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 500 500] /Encoding /WinAnsiEncoding /ToUnicode 6 0 R >>";
+    let content = stream("", "BT /F1 12 Tf 72 700 Td [(ab\\001) -300 (ba ab)] TJ ET");
+    let to_unicode = stream("", "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <01> <00A0> endbfchar");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        &content,
+        font,
+        &to_unicode,
+    ]);
+    let source = text::text_blocks(&doc, 0).unwrap().remove(0).editor_text;
+    assert!(source.contains('\u{a0}'), "{source:?}");
+    for paragraph in [true, false] {
+        let mut edited = doc.clone();
+        let draft = format!("{}b", source.trim_end());
+        if paragraph { text::replace_block(&mut edited, 0, 0, &draft) } else { text::replace_line(&mut edited, 0, 0, &draft) }
+            .expect("the no-break space is no reason to refuse the edit");
+        let lines = text::text_lines(&reopen(&edited), 0).unwrap();
+        assert!(lines.iter().all(|l| l.base_font == "HouseSans"), "{lines:?}");
+        let shown: String = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(shown.split_whitespace().collect::<Vec<_>>(), ["ab", "ba", "abb"], "{shown:?}");
+    }
+    let _ = &mut doc;
+}
+
 /// A variation selector after a character the source font shows is the only thing missing: it gets
 /// its empty glyph instead of the edit failing as "empty".
 #[test]

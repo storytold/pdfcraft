@@ -815,7 +815,15 @@ pub(crate) fn complete_named_font_widths(doc: &mut Document, page: usize, resour
 /// A subset may contain all the letters but no space glyph: producers use another subset
 /// or a positioning operator for spaces. Do the same instead of substituting the whole font.
 pub(crate) fn source_encodes(metrics: &Metrics, text: &str) -> bool {
-    text.split(' ').all(|word| metrics.encode(word).is_some())
+    text.split(|ch| is_gap(metrics, ch)).all(|word| metrics.encode(word).is_some())
+}
+
+/// Whether `ch` is written as a gap rather than a glyph: a space, or another space character
+/// (a no-break space, a tab, an em space) the font has no code for. Word draws a no-break space
+/// by moving, and a row holding one could be shown but not written again, so an edit that reached
+/// it was refused; it takes the space's advance instead. One the font does have is written as itself.
+fn is_gap(metrics: &Metrics, ch: char) -> bool {
+    ch == ' ' || (ch.is_whitespace() && metrics.encode(ch.encode_utf8(&mut [0; 4])).is_none())
 }
 
 #[cfg(test)]
@@ -855,11 +863,11 @@ pub(crate) fn source_width(metrics: &Metrics, text: &str, size: f64, space: f64,
             .sum();
     }
     let words: f64 = text
-        .split(' ')
+        .split(|ch| is_gap(metrics, ch))
         .filter_map(|w| metrics.encode(w))
         .map(|b| metrics.codes(&b).iter().map(|(c, _)| metrics.width(*c) * size + char_spacing).sum::<f64>())
         .sum();
-    words + text.matches(' ').count() as f64 * (space * size + char_spacing + word_spacing)
+    words + text.chars().filter(|ch| is_gap(metrics, *ch)).count() as f64 * (space * size + char_spacing + word_spacing)
 }
 
 #[cfg(test)]
@@ -890,7 +898,7 @@ pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, 
         return Err(EditError::Invalid("the source font's space advance is invalid".into()));
     }
     let mut out = Vec::new();
-    for (i, word) in text.split(' ').enumerate() {
+    for (i, word) in text.split(|ch| is_gap(metrics, ch)).enumerate() {
         if i > 0 {
             out.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(adjustment)])]));
         }
