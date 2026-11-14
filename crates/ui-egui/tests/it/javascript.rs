@@ -332,7 +332,10 @@ fn native_script_prompt_uses_the_german_catalog_when_available() {
     h.state_mut().run_button_script(id, "hello", "app.response({cQuestion:'Test',bPassword:true});");
     wait_for(&mut h, heading);
     assert!(h.query_by_label("Dokument: form.pdf").is_some());
-    assert!(h.query_by_label("Diese Aufforderung stammt aus dem Dokument und wird von dessen Skript angezeigt. Gib ein Passwort nur ein, wenn du diesem Dokument vertraust.").is_some());
+    // The warning in the catalog's words, which translators may reword, and never the English.
+    let warning = "This request comes from the document, not PdfCraft. Only enter a password if you trust this document.";
+    assert_ne!(tr(german, warning), warning, "the German catalog translates the password warning");
+    assert!(h.query_by_label(tr(german, warning)).is_some());
 }
 
 #[test]

@@ -4641,14 +4641,18 @@ fn hotbar_picker_searches_translated_tool_labels() {
     if crate::support::skip_without_catalogs("hotbar_picker_searches_translated_tool_labels") {
         return;
     }
+    use pdfcraft_ui_egui::i18n::{Lang, tr};
+    let french = Lang::from_code("fr").unwrap();
     let mut h = harness(|app| {
         app.set_option("language", "fr").unwrap();
     });
-    h.get_by_label("Hotbar settings").click();
+    // The button and the search field are in French too, in the catalog's words.
+    h.get_by_label(tr(french, "Hotbar settings")).click();
     h.run_steps(3);
-    field(&h, "Search all tools…").click();
+    let search = tr(french, "Search all tools…");
+    field(&h, search).click();
     h.run_steps(2);
-    field(&h, "Search all tools…").type_text("Dessiner");
+    field(&h, search).type_text("Dessiner");
     h.run_steps(3);
     h.get_by_role_and_label(Role::CheckBox, "Dessiner à main levée").click();
     h.run_steps(3);
