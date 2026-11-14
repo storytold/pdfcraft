@@ -68,7 +68,8 @@ pdfcraft-engine = { path = "crates/engine", version = "0.21.0" }
 pdfcraft-platform = { path = "crates/platform", version = "0.21.0" }
 pdfcraft-ui-egui = { path = "crates/ui-egui", version = "0.21.0" }
 pdfcraft-automation = { path = "crates/automation", version = "0.21.0", default-features = false }
-pdfcraft-prc = { path = "crates/prc", version = "0.21.0" }
+pdfcraft-prc = { package = "craft-prc", git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
+craft-prc = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 pdfcraft-prc-render = { path = "crates/prc-render", version = "0.21.0" }
 
 # pdf
