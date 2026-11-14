@@ -56,7 +56,7 @@ fn one_click_trust_stores_the_displayed_signer_not_the_embedded_root() {
         let d = h.state_mut().sign_draft.as_mut().unwrap();
         d.selected = Some(entry);
         d.step = SignStep::SignAs;
-        d.password = "test".into();
+        d.password = zeroize::Zeroizing::new("test".into());
     }
     h.run_steps(2);
     support::outside_menus(&h, "Sign").click();
