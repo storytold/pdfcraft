@@ -118,7 +118,7 @@ fn print_card<R>(
         .fill(card_fill)
         .stroke(Stroke::new(1.0, t.border))
         .corner_radius(egui::CornerRadius::same(8))
-        .inner_margin(egui::Margin { left: 14, right: 14, top: 10, bottom: 12 })
+        .inner_margin(egui::Margin { left: 14, right: 14, top: 8, bottom: 8 })
         .show(ui, |ui| {
             ui.set_width(width);
             ui.set_max_width(width);
@@ -173,7 +173,7 @@ fn segmented_pills<T: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, current: 
         .inner_margin(egui::Margin::symmetric(2, 2))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            ui.horizontal_wrapped(|ui| {
+            ui.horizontal(|ui| {
                 for &(value, label) in options {
                     let is_active = *current == value;
                     let font = theme::medium(12.0);
@@ -236,7 +236,7 @@ pub(crate) fn body(
 
     // Cap the settings+preview area to the screen's available height (#4252, #5317).
     let screen_h = ui.ctx().input(|i| i.viewport_rect().height());
-    let max_h = (screen_h - 130.0).clamp(240.0, 520.0);
+    let max_h = (screen_h - 240.0).max(240.0);
 
     egui::ScrollArea::vertical()
         .id_salt("print-dialog-scroll")
@@ -252,8 +252,8 @@ pub(crate) fn body(
                     ui.spacing_mut().item_spacing.y = 3.0;
 
                     // Card 1: Printer & Paper Setup
-                    print_card(ui, t, tl!("Printer & Paper Setup"), Some("printer"), 452.0, Some(204.0), |ui| {
-                        egui::Grid::new("print-top").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                    print_card(ui, t, tl!("Printer & Paper Setup"), Some("printer"), 452.0, None, |ui| {
+                        egui::Grid::new("print-top").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
                         let printer_caption = ui.label(tl!("Printer:"));
                         let before = d.printer.clone();
                         let browser = d.printer.as_deref() == Some(crate::web_print::BROWSER_PRINTER);
@@ -492,8 +492,8 @@ pub(crate) fn body(
                 });
 
                 // Card 2: Pages to Print
-                print_card(ui, t, tl!("Pages to Print"), Some("files"), 452.0, Some(68.0), |ui| {
-                    ui.horizontal_wrapped(|ui| {
+                print_card(ui, t, tl!("Pages to Print"), Some("files"), 452.0, None, |ui| {
+                    ui.horizontal(|ui| {
                         ui.label(tl!("Range:"));
                         let area_label = d.area.as_ref().map(|(page, a)| {
                             crate::i18n::fmt(
@@ -549,7 +549,7 @@ pub(crate) fn body(
                 });
 
                 // Card 3: Page Sizing & Handling
-                print_card(ui, t, tl!("Page Sizing & Handling"), Some("sliders-horizontal"), 452.0, Some(172.0), |ui| {
+                print_card(ui, t, tl!("Page Sizing & Handling"), Some("sliders-horizontal"), 452.0, None, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         for (h, label) in [
                             (Handling::Size, tl!("Size")),
@@ -566,7 +566,7 @@ pub(crate) fn body(
                     });
                     ui.add_space(3.0);
                     ui.scope(|ui| {
-                        ui.set_min_height(78.0);
+                        ui.set_min_height(48.0);
                         match d.handling {
                         Handling::Size => {
                             ui.horizontal(|ui| {
@@ -725,7 +725,7 @@ pub(crate) fn body(
                 });
 
                 // Card 4: Comments & Forms
-                print_card(ui, t, tl!("Comments & Forms"), Some("message-square"), 452.0, Some(84.0), |ui| {
+                print_card(ui, t, tl!("Comments & Forms"), Some("message-square"), 452.0, None, |ui| {
                     ui.horizontal(|ui| {
                         combo(
                             ui,
@@ -764,7 +764,7 @@ pub(crate) fn body(
             // Right Column: Preview Card.
             ui.vertical(|ui| {
                 ui.set_width(358.0);
-                print_card(ui, t, tl!("Preview"), Some("eye"), 358.0, Some(454.0), |ui| {
+                print_card(ui, t, tl!("Preview"), Some("eye"), 358.0, None, |ui| {
                     let (area, _) = ui.allocate_exact_size(vec2(PREVIEW_W, PREVIEW_H), egui::Sense::hover());
                     ui.painter().rect_filled(area, 6.0, t.hover);
                     match (&settings, sheets.get(d.sheet)) {
