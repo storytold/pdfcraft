@@ -4982,3 +4982,202 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
     assert_eq!(source_bookmarks(&all), [("Chapter one".to_string(), vec!["Section".to_string()])]);
     assert!(attachments(&all));
 }
+
+/// A part whose pages draw no image keeps none of the shared ones.
+#[test]
+fn a_part_that_draws_no_image_keeps_none_of_them() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] /Resources 7 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>".into(),
+        raw("0 0 10 10 re f"),
+        raw("/ImA Do /ImB Do"),
+        "<< /XObject << /ImA 8 0 R /ImB 9 0 R >> >>".into(),
+        image(1, 1, 1),
+        image(1, 1, 2000),
+    ];
+    let part = full_roundtrip(&extract_pages(&open(build(&b, "/Root 1 0 R")), &[0]).unwrap());
+    assert_eq!(xobject_names(&part, 0), Vec::<Vec<u8>>::new());
+}
+
+/// A part that draws no image through its content, but has an annotation appearance or a
+/// tiling pattern that may draw one through the page's resources, keeps them all.
+#[test]
+fn a_part_whose_appearance_or_pattern_may_draw_an_image_keeps_them() {
+    let part_of = |page: &str, resources: &str, extra: Vec<String>| {
+        let mut b: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            format!("<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] /Resources {resources} >>"),
+            page.into(),
+            "<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>".into(),
+            raw("0 0 10 10 re f"),
+            raw("/ImA Do /ImB Do"),
+            image(1, 1, 1),
+            image(1, 1, 2000),
+        ];
+        b.extend(extra);
+        full_roundtrip(&extract_pages(&open(build(&b, "/Root 1 0 R")), &[0]).unwrap())
+    };
+    let xobjects = "/XObject << /ImA 7 0 R /ImB 8 0 R >>";
+    let appearance = part_of(
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Annots [<< /Type /Annot /Subtype /Square /Rect [0 0 50 50] /AP << /N 9 0 R >> >>] >>",
+        &format!("<< {xobjects} >>"),
+        vec!["<< /Type /XObject /Subtype /Form /BBox [0 0 50 50] /Length 7 >>\nstream\n/ImA Do\nendstream".into()],
+    );
+    assert!(xobject_names(&appearance, 0).iter().any(|n| n.as_slice() == b"ImA"), "the appearance's image must stay");
+    let pattern = part_of(
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R >>",
+        &format!("<< {xobjects} /Pattern << /P 9 0 R >> >>"),
+        vec!["<< /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Length 7 >>\nstream\n/ImA Do\nendstream".into()],
+    );
+    assert!(xobject_names(&pattern, 0).iter().any(|n| n.as_slice() == b"ImA"), "the pattern's image must stay");
+    // An appearance's own resources, shared with a form the page draws that draws nothing from
+    // them, keep the appearance's image.
+    let form =
+        |content: &str| format!("<< /Subtype /Form /BBox [0 0 50 50] /Resources 12 0 R /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let shared = part_of(
+        "<< /Type /Page /Parent 2 0 R /Contents 9 0 R /Annots [<< /Type /Annot /Subtype /Square /Rect [0 0 50 50] /AP << /N 11 0 R >> >>] >>",
+        "<< /XObject << /Fm 10 0 R >> >>",
+        vec![raw("/Fm Do"), form("0 0 m"), form("/ImA Do"), "<< /XObject << /ImA 7 0 R >> >>".into()],
+    );
+    let ap = shared.resolve(annots(&shared, 0)[0].get(b"AP").unwrap()).as_dict().cloned().unwrap();
+    let own = shared.resolve(shared.resolve(ap.get(b"N").unwrap()).as_dict().unwrap().get(b"Resources").unwrap());
+    let own = shared.resolve(own.as_dict().unwrap().get(b"XObject").unwrap());
+    assert!(own.as_dict().unwrap().contains(b"ImA"), "the image an appearance draws from its own resources must stay");
+    // A stream's own `/Resources`, and a resource dictionary's `/XObject`.
+    let res = |doc: &Document, o: &Object| doc.resolve(doc.resolve(o).as_dict().unwrap().get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = |doc: &Document, d: &Dict| doc.resolve(d.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    // So does the image of a form inside the appearance, drawn from resources that form shares
+    // with one the page draws.
+    let nested = part_of(
+        "<< /Type /Page /Parent 2 0 R /Contents 9 0 R /Annots [<< /Type /Annot /Subtype /Square /Rect [0 0 50 50] /AP << /N 11 0 R >> >>] >>",
+        "<< /XObject << /Fm 10 0 R >> >>",
+        vec![
+            raw("/Fm Do"),
+            form("0 0 m"),
+            "<< /Subtype /Form /BBox [0 0 50 50] /Resources 13 0 R /Length 9 >>\nstream\n/Inner Do\nendstream".into(),
+            "<< /XObject << /ImA 7 0 R >> >>".into(),
+            "<< /XObject << /Inner 14 0 R >> >>".into(),
+            form("/ImA Do"),
+        ],
+    );
+    let ap = nested.resolve(annots(&nested, 0)[0].get(b"AP").unwrap()).as_dict().cloned().unwrap();
+    let inner = xo(&nested, &res(&nested, ap.get(b"N").unwrap()));
+    assert!(xo(&nested, &res(&nested, inner.get(b"Inner").unwrap())).contains(b"ImA"), "the image of a form inside the appearance must stay");
+    // Content that can't be read still lends a pattern's own resources.
+    let unread = part_of(
+        "<< /Type /Page /Parent 2 0 R /Contents 9 0 R >>",
+        "<< /XObject << /Fm 10 0 R >> /Pattern << /P 11 0 R >> >>",
+        vec![
+            "<< /Filter /FlateDecode /Length 5 >>\nstream\nabcde\nendstream".into(),
+            form("0 0 m"),
+            "<< /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources 12 0 R /Length 7 >>\nstream\n/ImA Do\nendstream".into(),
+            "<< /XObject << /ImA 7 0 R >> >>".into(),
+        ],
+    );
+    let page = unread.resolve(page_dict(&unread, 0).get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let pattern = unread.resolve(page.get(b"Pattern").unwrap()).as_dict().cloned().unwrap();
+    assert!(xo(&unread, &res(&unread, pattern.get(b"P").unwrap())).contains(b"ImA"), "the pattern's image must stay");
+    // And a page without resources still lends its appearance's own.
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [<< /Type /Annot /Subtype /Square /Rect [0 0 50 50] /AP << /N 5 0 R >> >>] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /XObject << /Fm 7 0 R >> >> >>".into(),
+        "<< /Subtype /Form /BBox [0 0 50 50] /Resources 8 0 R /Length 7 >>\nstream\n/ImA Do\nendstream".into(),
+        raw("/Fm Do"),
+        "<< /Subtype /Form /BBox [0 0 50 50] /Resources 8 0 R /Length 5 >>\nstream\n0 0 m\nendstream".into(),
+        "<< /XObject << /ImA 9 0 R >> >>".into(),
+        image(1, 1, 1),
+    ];
+    let bare = full_roundtrip(&extract_pages(&open(build(&b, "/Root 1 0 R")), &[0, 1]).unwrap());
+    assert!(page_dict(&bare, 0).get(b"Resources").is_none(), "the case needs a page without resources");
+    let ap = bare.resolve(annots(&bare, 0)[0].get(b"AP").unwrap()).as_dict().cloned().unwrap();
+    assert!(xo(&bare, &res(&bare, ap.get(b"N").unwrap())).contains(b"ImA"), "the image of an appearance on a page without resources must stay");
+    // And Type 3 glyphs an appearance shows keep the image they draw from their own resources.
+    let glyphs = part_of(
+        "<< /Type /Page /Parent 2 0 R /Contents 9 0 R /Annots [<< /Type /Annot /Subtype /Square /Rect [0 0 50 50] /AP << /N 11 0 R >> >>] >>",
+        "<< /XObject << /Fm 10 0 R >> >>",
+        vec![
+            raw("/Fm Do"),
+            form("0 0 m"),
+            "<< /Subtype /Form /BBox [0 0 50 50] /Resources << /Font << /T3 13 0 R >> >> /Length 21 >>\nstream\nBT /T3 1 Tf (a) Tj ET\nendstream"
+                .into(),
+            "<< /XObject << /ImA 7 0 R >> >>".into(),
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 14 0 R >> \
+             /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] /Resources 12 0 R >>"
+                .into(),
+            raw("/ImA Do"),
+        ],
+    );
+    let ap = glyphs.resolve(annots(&glyphs, 0)[0].get(b"AP").unwrap()).as_dict().cloned().unwrap();
+    let fonts = glyphs.resolve(res(&glyphs, ap.get(b"N").unwrap()).get(b"Font").unwrap()).as_dict().cloned().unwrap();
+    assert!(xo(&glyphs, &res(&glyphs, fonts.get(b"T3").unwrap())).contains(b"ImA"), "the image a Type 3 glyph draws must stay");
+}
+
+/// Font catalogs the lending walk scans for Type 3 fonts count toward its work: past the limit
+/// (100,000 entries) the file is not pruned, so a page that draws nothing keeps its image.
+#[test]
+fn lending_counts_the_font_catalogs_it_scans() {
+    let (forms, fonts) = (20, 6_000);
+    let list = |n: usize, f: &dyn Fn(usize) -> String| (0..n).map(f).collect::<Vec<_>>().join(" ");
+    let mut b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 9 0 R /Resources << /XObject << /ImA 7 0 R >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Resources << >> /Annots [<< /Type /Annot /Subtype /Square /Rect [0 0 50 50] /AP << /N 5 0 R >> >>] >>".into(),
+        format!(
+            "<< /Subtype /Form /BBox [0 0 50 50] /Resources << /XObject << {} >> >> /Length 5 >>\nstream\n0 0 m\nendstream",
+            list(forms, &|i| format!("/F{i} {} 0 R", 10 + i))
+        ),
+        format!("<< {} >>", list(fonts, &|i| format!("/T{i} 8 0 R"))),
+        image(1, 1, 1),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        raw("0 0 m"),
+    ];
+    b.extend((0..forms).map(|_| "<< /Subtype /Form /BBox [0 0 1 1] /Resources << /Font 6 0 R >> /Length 5 >>\nstream\n0 0 m\nendstream".to_string()));
+    let part = full_roundtrip(&extract_pages(&open(build(&b, "/Root 1 0 R")), &[0, 1]).unwrap());
+    assert_eq!(xobject_names(&part, 0), vec![b"ImA".to_vec()], "20 scans of 6,000 fonts pass the limit, so nothing is pruned");
+}
+
+/// Forms an appearance lists that share one resource dictionary walk it once, so lending stays
+/// linear in the file.
+#[test]
+fn lending_walks_shared_resources_once() {
+    let n = 300;
+    let names = |f: &dyn Fn(usize) -> String| (0..n).map(f).collect::<Vec<_>>().join(" ");
+    let mut b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << >> /Annots [<< /Type /Annot /Subtype /Square /Rect [0 0 50 50] /AP << /N 5 0 R >> >>] >>"
+            .into(),
+        raw("0 0 m"),
+        format!("<< /Subtype /Form /BBox [0 0 50 50] /Resources << /XObject << {} >> >> /Length 5 >>\nstream\n0 0 m\nendstream", names(&|i| format!("/F{i} {} 0 R", 8 + i))),
+        format!("<< /XObject << {} >> >>", names(&|i| format!("/I{i} 7 0 R"))),
+        image(1, 1, 1),
+    ];
+    b.extend((0..n).map(|_| "<< /Subtype /Form /BBox [0 0 1 1] /Resources 6 0 R /Length 5 >>\nstream\n0 0 m\nendstream".to_string()));
+    let src = open(build(&b, "/Root 1 0 R"));
+    take_work();
+    extract_pages(&src, &[0]).unwrap();
+    let worked = take_work();
+    assert!(worked < 3 * n, "lending queued {worked} entries for {n} forms sharing {n} images");
+}
+
+/// A page without `/Contents` draws nothing either.
+#[test]
+fn a_part_of_a_page_without_contents_keeps_no_image() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] /Resources 6 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R >>".into(),
+        raw("/ImA Do /ImB Do"),
+        "<< /XObject << /ImA 7 0 R /ImB 8 0 R >> >>".into(),
+        image(1, 1, 1),
+        image(1, 1, 2000),
+    ];
+    let part = full_roundtrip(&extract_pages(&open(build(&b, "/Root 1 0 R")), &[0]).unwrap());
+    assert_eq!(xobject_names(&part, 0), Vec::<Vec<u8>>::new());
+}

@@ -3,8 +3,8 @@
 //! In a real book all pages share one `/Resources` dictionary, so every split part carried all
 //! ~2,900 image XObjects while its 1,500 pages drew ~300 of them, and the part saved out at the
 //! source's size. This pass follows each part's content streams (`Do`, form XObjects included)
-//! and drops the `/XObject` entries no page names; the garbage-collecting rewrite on save then
-//! drops the objects themselves.
+//! and drops the `/XObject` entries no page names, all of them when the part's pages draw no
+//! XObject at all; the garbage-collecting rewrite on save then drops the objects themselves.
 
 use std::collections::{HashMap, HashSet};
 
@@ -16,6 +16,9 @@ use crate::OrganizeError;
 const MAX_FORM_DEPTH: u8 = 8;
 /// Count every resource object and direct child; a graph beyond this is left unpruned.
 const MAX_GLYPH_RESOURCE_WORK: usize = 10_000;
+/// Resource and font entries [`Pruner::lend_own`] may go through in one run; a file that needs
+/// more is not pruned.
+const MAX_LEND_WORK: usize = 100_000;
 
 /// The dictionary a set of drawn names belongs to.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -59,6 +62,15 @@ struct Pruner<'a> {
     /// Owners of resources that content not read whole drew against, whose every form was read
     /// as drawn ([`Pruner::unread`]): once is enough.
     partly_read: HashSet<Owner>,
+    /// Dictionaries something this walk doesn't read may draw from: a tiling pattern, a soft
+    /// mask's group or an annotation's appearance draws from its own /Resources, and from the
+    /// page's for a name its own don't list. One the content draws nothing from is left as it
+    /// is, not emptied.
+    lent: HashSet<XKey>,
+    /// Streams, and shared resource dictionaries, lent from already ([`Pruner::lend_own`]).
+    lent_from: HashSet<ObjRef>,
+    /// What is left of [`MAX_LEND_WORK`]; none left means the file is not pruned.
+    lend_work_left: usize,
 }
 
 impl Pruner<'_> {
@@ -184,12 +196,77 @@ impl Pruner<'_> {
         Some((self.doc.resolve(x).as_dict()?.clone(), key))
     }
 
+    /// Lend the `/XObject` dictionaries of `streams`' own `/Resources`, owned as a form's are, and
+    /// those of the forms, patterns and soft-mask groups they list, nested up to [`MAX_FORM_DEPTH`]:
+    /// what they draw isn't read here, so these stay whole even where a form drawing nothing shares
+    /// them. Nesting past the limit stops the pruning, as it does for content.
+    fn lend_own(&mut self, streams: &[Object]) {
+        let mut todo: Vec<(ObjRef, u8)> = streams.iter().filter_map(Object::as_ref).map(|r| (r, 0)).collect();
+        while let Some((r, depth)) = todo.pop() {
+            if !self.lent_from.insert(r) {
+                continue;
+            }
+            let Object::Stream(s) = &*self.doc.get(r) else { continue };
+            let Some(res) = s.dict.get(b"Resources") else { continue };
+            // Resources many streams share are lent from once.
+            if res.as_ref().is_some_and(|rr| !self.lent_from.insert(rr)) {
+                continue;
+            }
+            let Some(dict) = self.doc.resolve(res).as_dict().cloned() else { continue };
+            if depth > MAX_FORM_DEPTH {
+                self.too_deep = true;
+                return;
+            }
+            let owner = Owner::Resources(res.as_ref().unwrap_or(r));
+            // Type 3 glyphs draw from resources of their own, which nothing here reads either.
+            // Scanning the font catalog for them counts toward the walk's work.
+            let fonts = dict.get(b"Font").map(|f| self.doc.resolve(f)).and_then(|f| f.as_dict().map(Dict::len)).unwrap_or(0);
+            if !self.charge(fonts) {
+                return;
+            }
+            self.protect_type3_resources(&dict, owner);
+            let mut inner: Vec<Object> = lenders(self.doc, &dict);
+            if let Some((xobjects, key)) = self.xobjects(&dict, owner) {
+                self.lent.insert(key);
+                inner.extend(xobjects.iter().map(|(_, x)| x.clone()));
+            }
+            if !self.charge(inner.len()) {
+                return;
+            }
+            todo.extend(inner.iter().filter_map(Object::as_ref).map(|x| (x, depth + 1)));
+        }
+    }
+
+    /// Count `n` entries against [`MAX_LEND_WORK`]: `false` once it is spent.
+    fn charge(&mut self, n: usize) -> bool {
+        #[cfg(test)]
+        crate::work(n);
+        match self.lend_work_left.checked_sub(n) {
+            Some(left) => {
+                self.lend_work_left = left;
+                true
+            }
+            None => {
+                self.lend_work_left = 0;
+                false
+            }
+        }
+    }
+
     /// Record every XObject name `data` draws with `Do`, descending into form XObjects.
     fn content(&mut self, data: &[u8], resources: &Dict, owner: Owner, depth: u8) {
         self.protect_type3_resources(resources, owner);
+        let lenders = lenders(self.doc, resources);
+        self.lend_own(&lenders);
         let Some((xobjects, key)) = self.xobjects(resources, owner) else {
             return;
         };
+        // Seen, whether or not anything is drawn from it: a dictionary nothing draws from loses
+        // every entry, unless something unread may draw from it.
+        self.used.entry(key).or_default();
+        if !lenders.is_empty() {
+            self.lent.insert(key);
+        }
         if depth > MAX_FORM_DEPTH {
             self.too_deep = true;
             return;
@@ -210,6 +287,8 @@ impl Pruner<'_> {
     /// resources are shared keeps what it draws from them too.
     fn unread(&mut self, resources: &Dict, owner: Owner, depth: u8) {
         self.protect_type3_resources(resources, owner);
+        let lenders = lenders(self.doc, resources);
+        self.lend_own(&lenders);
         let Some((xobjects, key)) = self.xobjects(resources, owner) else { return };
         self.unsure.insert(key);
         if depth > MAX_FORM_DEPTH {
@@ -260,6 +339,33 @@ impl Pruner<'_> {
             Ok((_, true)) | Err(_) => self.unread(&inner, inner_owner, depth + 1),
         }
     }
+}
+
+/// The tiling patterns and soft-mask groups `resources` lists: content this walk doesn't read,
+/// which draws through its own resources, and through these when its own lack a name.
+fn lenders(doc: &Document, resources: &Dict) -> Vec<Object> {
+    let entries = |key: &[u8]| resources.get(key).map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap_or_default();
+    let tiling = |p: &Object| matches!(&*doc.resolve(p), Object::Stream(s) if s.dict.int(b"PatternType") == Some(1));
+    let group = |g: &Object| doc.resolve(g).as_dict()?.get(b"SMask").map(|m| doc.resolve(m))?.as_dict()?.get(b"G").cloned();
+    let mut out: Vec<Object> = entries(b"Pattern").iter().filter(|&(_, p)| tiling(p)).map(|(_, p)| p.clone()).collect();
+    out.extend(entries(b"ExtGState").iter().filter_map(|(_, g)| group(g)));
+    out
+}
+
+/// The appearance streams of `page`'s annotations, each state of each.
+fn appearance_streams(doc: &Document, page: &Dict) -> Vec<Object> {
+    let annots = page.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+    let mut out = Vec::new();
+    for a in &annots {
+        let Some(ap) = doc.resolve(a).as_dict().and_then(|a| a.get(b"AP")).map(|ap| doc.resolve(ap)) else { continue };
+        for (_, entry) in ap.as_dict().into_iter().flat_map(|d| d.iter()) {
+            match &*doc.resolve(entry) {
+                Object::Dict(states) => out.extend(states.iter().map(|(_, s)| s.clone())),
+                _ => out.push(entry.clone()),
+            }
+        }
+    }
+    out
 }
 
 /// The page's content, concatenated (`/Contents` may be one stream or an array) with a space
@@ -354,25 +460,36 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
         glyph_fonts: HashSet::new(),
         forms_seen: HashSet::new(),
         partly_read: HashSet::new(),
+        lent: HashSet::new(),
+        lent_from: HashSet::new(),
+        lend_work_left: MAX_LEND_WORK,
     };
     for (page, attrs) in &pages {
+        let Some(pd) = pruner.doc.get(*page).as_dict().cloned() else { continue };
+        // A page's appearances keep what they draw from their own resources, with page resources or not.
+        let appearances = appearance_streams(pruner.doc, &pd);
+        pruner.lend_own(&appearances);
         let Some(res) = attrs.get(b"Resources") else { continue };
         let Some((res_dict, owner)) = resolve_resources(pruner.doc, res, *page) else { continue };
-        let Some(pd) = pruner.doc.get(*page).as_dict().cloned() else { continue };
-        let Some(contents) = pd.get(b"Contents").cloned() else { continue };
-        match content_bytes(pruner.doc, &contents) {
-            Ok((data, false)) if data.is_empty() => {}
+        if !appearances.is_empty()
+            && let Some((_, key)) = pruner.xobjects(&res_dict, owner)
+        {
+            pruner.lent.insert(key);
+        }
+        // A page without `/Contents` draws nothing, like an empty one.
+        let data = pd.get(b"Contents").map_or_else(|| Ok((Vec::new(), false)), |c| content_bytes(pruner.doc, c));
+        match data {
             Ok((data, false)) => pruner.content(&data, &res_dict, owner, 0),
             Ok((_, true)) | Err(_) => pruner.unread(&res_dict, owner, 0),
         }
     }
-    let Pruner { used, unsure, glyph_budget_exhausted, too_deep, .. } = pruner;
-    if glyph_budget_exhausted || too_deep {
+    let Pruner { used, unsure, glyph_budget_exhausted, too_deep, lent, lend_work_left, .. } = pruner;
+    if glyph_budget_exhausted || too_deep || lend_work_left == 0 {
         return Ok(0);
     }
     let mut removed = 0;
     for (key, names) in used {
-        if !unsure.contains(&key) {
+        if !unsure.contains(&key) && !(names.is_empty() && lent.contains(&key)) {
             removed += filter_at(doc, key, &names)?;
         }
     }
