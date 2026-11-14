@@ -17,6 +17,7 @@ mod autotag;
 mod autotag_fields;
 mod autotag_roles;
 mod content;
+mod heading_levels;
 mod headings;
 mod layout_table;
 mod report;
@@ -42,6 +43,7 @@ fn count_mark_reads(_n: usize) {
 pub use alt::{AltError, ArtifactError, Figure, figures, mark_decorative, mark_tag_artifact, set_alt};
 pub use autotag::{AutoTagError, AutoTagResult, autotag_text};
 pub use autotag_fields::tag_form_fields;
+pub use heading_levels::{HeadingLevels, heading_levels};
 pub use headings::{Heading, headings};
 pub use layout_table::{LayoutTableError, layout_table_to_blocks};
 pub use report::{REPORT_WORDS, report_html};

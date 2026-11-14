@@ -245,6 +245,8 @@ impl crate::Document {
     ) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
         let Some(cos) = self.editor.as_ref().map(|e| &e.cos) else { return (Vec::new(), Vec::new()) };
         let mut truncated = Vec::new();
+        let heading_levels = pdfcraft_a11y::heading_levels(cos);
+        let source_pages = pdfcraft_model::pages(cos);
         // Each image object is encoded once and shared by every place that draws it.
         let mut encoded: HashMap<ObjRef, PreparedImage> = HashMap::new();
         let mut image_bytes = image_budget;
@@ -262,7 +264,8 @@ impl crate::Document {
                     [a[0].min(b[0]) as f64, (info.height - a[1].max(b[1])) as f64, a[0].max(b[0]) as f64, (info.height - a[1].min(b[1])) as f64]
                 };
                 let unit = display_unit(info);
-                let reading = pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_default();
+                let levels = |stream, mcid| source_pages.get(i).and_then(|page| heading_levels.get_with_scope(page.obj, stream, mcid));
+                let reading = pdfcraft_edit::reading_blocks_with_heading_levels(cos, i, &levels).unwrap_or_default();
                 let forms_unread = reading.truncated;
                 let blocks = reading
                     .blocks
@@ -281,6 +284,7 @@ impl crate::Document {
                             italic,
                             color: b.color,
                             rotation: b.rotation - f64::from(info.rotation),
+                            heading_level: b.heading_level,
                         }
                     })
                     .collect();

@@ -4,6 +4,7 @@ use super::*;
 fn varied_page(n: usize) -> Page {
     let blocks = (0..n)
         .map(|i| Block {
+            heading_level: None,
             text: "word".into(),
             rect: [72.0, i as f64, 100.0, i as f64 + 1.0],
             size: 4.0 + i as f64 * 0.5,
@@ -41,6 +42,7 @@ fn many_distinct_colours_take_constant_steps_each() {
     assert!(out.contains("\\cf3000 ") || out.contains("\\cf3000\\"), "the last colour has the last slot");
 }
 
+/// Build a synthetic export page for package and layout regressions.
 fn page() -> Page {
     let b = |t: &str, y: f64, size: f64, bold: bool| Block {
         text: t.into(),
@@ -50,6 +52,7 @@ fn page() -> Page {
         italic: false,
         color: [0.0; 3],
         rotation: 0.0,
+        heading_level: None,
         space_around: [false; 2],
     };
     Page {
@@ -163,6 +166,7 @@ fn word_keeps_a_page_with_a_clear_image_and_big_title_in_flow() {
     assert!(xml.contains("position:absolute"), "an image over text floats: {xml}");
 }
 
+/// Keep overlapping positioned artwork from pushing invoice body content to another page.
 #[test]
 fn word_overlap_does_not_consume_invoice_body_space() {
     let mut p = table_page();
@@ -174,6 +178,7 @@ fn word_overlap_does_not_consume_invoice_body_space() {
         italic: false,
         color: [0.8; 3],
         rotation: 0.0,
+        heading_level: None,
         space_around: [false; 2],
     });
     p.images = page().images;
@@ -204,6 +209,18 @@ fn word_rotated_pages_keep_separate_page_sizes_and_unique_shapes() {
     assert!(xml.contains("<w:pgSz w:w=\"8000\" w:h=\"10000\"/>"));
     assert_eq!(xml.matches("id=\"Text1\"").count(), 1);
     assert_eq!(xml.matches(">Meter</w:t>").count(), 2);
+}
+
+/// Keep explicit heading paragraph styles in positioned Word text boxes.
+#[test]
+fn positioned_word_text_keeps_explicit_heading_levels() {
+    let mut heading = block("Small heading", 72.0, 650.0, 180.0, 662.0);
+    heading.rotation = 45.0;
+    heading.heading_level = Some(5);
+    let page = Page { width: 612.0, height: 792.0, blocks: vec![heading], images: Vec::new(), background: None, rules: Vec::new() };
+    let xml = part(&docx(&[page], "Tagged"), "word/document.xml");
+    assert!(xml.contains("<w:txbxContent>"), "{xml}");
+    assert!(xml.contains("<w:pStyle w:val=\"Heading5\"/>"), "{xml}");
 }
 
 /// #2992: pages that share a background colour get it as the Word document's page colour
@@ -302,6 +319,7 @@ fn word_and_html_take_the_documents_language() {
     assert!(html_simple_with_language(&pages, "Report", Some("bg-BG")).starts_with("<!DOCTYPE html>\n<html lang=\"bg-BG\">\n"));
 }
 
+/// Produce well-formed Word output for control characters and long page content.
 #[test]
 fn word_opens_text_with_control_characters_and_long_pages() {
     // #72: text extracted without a usable /ToUnicode holds C0 controls, which XML forbids;
@@ -316,6 +334,7 @@ fn word_opens_text_with_control_characters_and_long_pages() {
         italic: false,
         color: [0.0; 3],
         rotation: 0.0,
+        heading_level: None,
         space_around: [false; 2],
     });
     let xml = part(&docx(&[p.clone()], "Receipt\u{1}"), "word/document.xml");
@@ -359,6 +378,7 @@ fn text_colour_survives_every_format() {
     assert!(html(&[t], "Grid").contains("style=\"color:#FF0000\""));
 }
 
+/// Check RTF character escaping and font-size output.
 #[test]
 fn rtf_escapes_and_sizes() {
     let mut p = page();
@@ -370,6 +390,7 @@ fn rtf_escapes_and_sizes() {
         italic: true,
         color: [0.0; 3],
         rotation: 0.0,
+        heading_level: None,
         space_around: [false; 2],
     });
     let r = rtf(&[p]);
@@ -388,6 +409,7 @@ fn table_page() -> Page {
         italic: false,
         color: [0.0; 3],
         rotation: 0.0,
+        heading_level: None,
         space_around: [false; 2],
     };
     Page {
@@ -412,6 +434,7 @@ fn table_page() -> Page {
                 italic: false,
                 color: [0.0; 3],
                 rotation: 0.0,
+                heading_level: None,
                 space_around: [false; 2],
             },
         ],
@@ -457,6 +480,7 @@ fn grid_text_becomes_a_real_table_in_every_format() {
     assert_eq!(slide_xml.matches("<a:tr ").count(), 4);
 }
 
+/// Avoid treating staggered text blocks as one oversized table.
 #[test]
 fn a_staircase_of_blocks_is_not_a_huge_table() {
     // Row k holds blocks in columns k and k + 1: every column has two members and every row
@@ -474,6 +498,7 @@ fn a_staircase_of_blocks_is_not_a_huge_table() {
                 italic: false,
                 color: [0.0; 3],
                 rotation: 0.0,
+                heading_level: None,
                 space_around: [false; 2],
             }
         })
@@ -484,6 +509,7 @@ fn a_staircase_of_blocks_is_not_a_huge_table() {
     assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
 }
 
+/// Keep Word tables within their supported column limit.
 #[test]
 fn word_opens_tables_up_to_its_column_limit() {
     // Rows of short numbers on a regular grid, n columns wide.
@@ -502,6 +528,7 @@ fn word_opens_tables_up_to_its_column_limit() {
                         italic: false,
                         color: [0.0; 3],
                         rotation: 0.0,
+                        heading_level: None,
                         space_around: [false; 2],
                     }
                 })
@@ -517,8 +544,19 @@ fn word_opens_tables_up_to_its_column_limit() {
     assert_eq!(grid_cols(&grid(64)), 0);
 }
 
+/// Build a synthetic styled block for table and reading-order tests.
 fn block(t: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> Block {
-    Block { text: t.into(), rect: [x0, y0, x1, y1], size: 12.0, bold: false, italic: false, color: [0.0; 3], rotation: 0.0, space_around: [false; 2] }
+    Block {
+        text: t.into(),
+        rect: [x0, y0, x1, y1],
+        size: 12.0,
+        bold: false,
+        italic: false,
+        color: [0.0; 3],
+        rotation: 0.0,
+        heading_level: None,
+        space_around: [false; 2],
+    }
 }
 
 /// #2806: a sentence whose link is set in another colour or font runs on as separate blocks
@@ -628,6 +666,7 @@ fn a_superscript_beside_a_number_keeps_its_table() {
     assert!(["st", "nd", "rd", "th"].iter().all(|suffix| cells.contains(suffix)));
 }
 
+/// Keep ordinary two-column prose out of table inference.
 #[test]
 fn two_column_body_text_is_not_mistaken_for_a_table() {
     let para = |t: &str, x: f64, y: f64| Block {
@@ -638,6 +677,7 @@ fn two_column_body_text_is_not_mistaken_for_a_table() {
         italic: false,
         color: [0.0; 3],
         rotation: 0.0,
+        heading_level: None,
         space_around: [false; 2],
     };
     let p = Page {
@@ -790,6 +830,26 @@ fn runs_keep_the_spaces_the_source_had_between_them() {
         "{xml}"
     );
 }
+
+/// Tagged headings retain both their outline level and differently styled source runs.
+#[test]
+fn tagged_heading_keeps_italic_runs_source_spaces_and_word_outline_style() {
+    let blocks = vec![
+        Block { heading_level: Some(4), space_around: [false, true], ..block("Before", 72.0, 700.0, 113.0, 712.0) },
+        Block { heading_level: Some(4), italic: true, ..block("Chevron", 113.0, 700.0, 158.0, 712.0) },
+        Block { heading_level: Some(4), space_around: [true, false], ..block("after.", 158.0, 700.0, 190.0, 712.0) },
+    ];
+    let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new(), background: None, rules: Vec::new() };
+    let pages = std::slice::from_ref(&p);
+    assert!(html(pages, "Tagged").contains("<h4>Before <em>Chevron </em>after.</h4>"));
+    let zip = docx(pages, "Tagged");
+    let xml = part(&zip, "word/document.xml");
+    assert_eq!(xml.matches("<w:pStyle w:val=\"Heading4\"/>").count(), 1, "{xml}");
+    assert_eq!(word_paragraphs(&xml), vec![runs(&[("Before ", false), ("Chevron ", true), ("after.", false)])], "{xml}");
+    let styles = part(&zip, "word/styles.xml");
+    let heading = styles.split("w:styleId=\"Heading4\"").nth(1).unwrap().split("</w:style>").next().unwrap();
+    assert!(heading.contains("<w:outlineLvl w:val=\"3\"/>"), "{heading}");
+}
 /// Text turned another way (a label up the margin) is not a run of the line it touches.
 #[test]
 fn turned_text_is_not_a_run_of_the_line_beside_it() {
@@ -870,6 +930,7 @@ fn markdown_has_headings_paragraphs_and_page_rules_in_order() {
 #[test]
 fn markdown_escapes_markup_and_keeps_emphasis_and_tables() {
     let b = |t: &str, y: f64, bold: bool, italic: bool| Block {
+        heading_level: None,
         text: t.into(),
         rect: [72.0, y, 500.0, y + 11.0],
         size: 11.0,
@@ -928,6 +989,7 @@ fn markdown_escapes_markup_and_keeps_emphasis_and_tables() {
 #[test]
 fn two_column_and_turned_text_export_in_reading_order() {
     let para = |t: &str, x: f64, y0: f64, y1: f64, size: f64| Block {
+        heading_level: None,
         text: t.into(),
         rect: [x, y0, x + 130.0, y1],
         size,
@@ -966,6 +1028,7 @@ fn two_column_and_turned_text_export_in_reading_order() {
     // Text turned 90 degrees clockwise (rotation = -90°): lines run top to bottom (y = 540
     // down to 468) and follow each other right to left (x = 676, 654.4, 632.8, 611.2).
     let turned_line = |t: &str, x: f64, size: f64| Block {
+        heading_level: None,
         text: t.into(),
         rect: [x - size, 468.0, x, 540.0],
         size,
@@ -1356,4 +1419,21 @@ fn a_long_bulleted_list_keeps_every_bullet_with_its_item() {
     let paragraphs = word_texts(blocks);
     assert_eq!(paragraphs.len(), 150, "{paragraphs:?}");
     assert!(paragraphs.iter().enumerate().all(|(n, p)| *p == format!("\u{F0B7} item {n};")), "{paragraphs:?}");
+}
+
+/// Language defaults and explicit heading styles coexist in one Word/HTML export.
+#[test]
+fn document_language_and_tagged_headings_share_export_styles() {
+    let mut heading = block("Tagged detail", 72.0, 650.0, 180.0, 662.0);
+    heading.heading_level = Some(4);
+    let pages = [Page { width: 612.0, height: 792.0, blocks: vec![heading], images: Vec::new(), background: None, rules: Vec::new() }];
+    let zip = docx_with_language(&pages, "Tagged", Some("bg-BG"));
+    assert!(part(&zip, "word/document.xml").contains("<w:pStyle w:val=\"Heading4\"/>"));
+    let styles = part(&zip, "word/styles.xml");
+    assert!(styles.contains("<w:lang w:val=\"bg-BG\"/>"), "document language survives heading styles");
+    assert!(styles.contains("w:styleId=\"Heading4\""));
+    assert!(styles.contains("<w:outlineLvl w:val=\"3\"/>"));
+    let html = html_with_language(&pages, "Tagged", Some("bg-BG"));
+    assert!(html.contains("<html lang=\"bg-BG\">"));
+    assert!(html.contains("<h4") && html.contains("Tagged detail</h4>"), "{html}");
 }
