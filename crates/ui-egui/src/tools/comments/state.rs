@@ -151,9 +151,9 @@ pub struct CommentView {
     pub notice: Option<&'static str>,
     /// Finish the connected lines, polygon or cloud being drawn (the context menu's Complete).
     pub finish_request: bool,
-    /// The group subordinate a click on the page picked, with the selection (its group's primary)
-    /// it was picked under: Delete acts on it while that group stays selected, as Acrobat deletes
-    /// the member clicked ([`Self::target`]).
+    /// The group subordinate a press on the page picked, with the selection (its group's primary)
+    /// it was picked under: Delete and the arrow keys act on it while that group stays selected,
+    /// as Acrobat deletes and nudges the member clicked ([`Self::target`]).
     pub(crate) member: Option<((usize, usize), (usize, usize))>,
     pub gesture: Option<Gesture>,
     /// Drawings just released: shown from their points until the page raster that includes the
@@ -361,8 +361,8 @@ impl CommentView {
         self.member = None;
     }
 
-    /// What Delete acts on: the group member clicked, while its group is still the selection,
-    /// else the selected comment.
+    /// What Delete and the arrow keys act on: the group member picked, while its group is still
+    /// the selection, else the selected comment.
     pub(crate) fn target(&self) -> Option<(usize, usize)> {
         match self.member {
             Some((member, group)) if Some(group) == self.selected => Some(member),
@@ -370,9 +370,9 @@ impl CommentView {
         }
     }
 
-    /// Select `key` alone, or nothing, from anywhere but a press on the page ([`Self::pick`]): the
-    /// group member a press picked goes, so Delete and the arrow keys act on what is selected now,
-    /// not on a member remembered from before (after the Comments panel, a deletion or undo).
+    /// Select `key`, or nothing, from anywhere but a press on the page ([`Self::pick`]): the group
+    /// member a press picked goes, so Delete and the arrow keys act on what is selected now, not
+    /// on a member remembered from before (after the Comments panel, a deletion or undo).
     pub(crate) fn select(&mut self, key: Option<(usize, usize)>) {
         match key {
             Some(key) => self.select_only(key),
@@ -380,12 +380,12 @@ impl CommentView {
         }
     }
 
-    /// Select `a`, the comment a press at `p` on this page selects ([`PageCx::click_target`]),
-    /// remembering the group subordinate under `p` when `a` is its group's primary
-    /// ([`PageCx::picked`]). The only place that sets [`Self::member`].
-    pub(crate) fn pick(&mut self, cx: &PageCx<'_>, p: Pos2, a: &Annotation) {
-        self.select_only((cx.page, a.index));
-        self.member = cx.picked(p, self.selected);
+    /// Select what a press on this page's `a` selects ([`PageCx::selects`]), remembering `a` when
+    /// it is a group subordinate.
+    pub(crate) fn pick(&mut self, cx: &PageCx<'_>, a: &Annotation) {
+        let selected = cx.selects(a);
+        self.select_only(selected);
+        self.member = (selected != (cx.page, a.index)).then_some(((cx.page, a.index), selected));
     }
 
     /// Takes back the last point of a polygon, cloud or connected lines being drawn; the first
@@ -597,7 +597,7 @@ impl PageCx<'_> {
     }
 
     /// Where a comment is drawn on screen (a sticky note stays upright on a turned page).
-    pub(super) fn screen_rect(&self, a: &Annotation) -> Rect {
+    pub(crate) fn screen_rect(&self, a: &Annotation) -> Rect {
         self.xf.user_rect(self.info, self.page, a.shown_rect(self.rotation()))
     }
 
@@ -697,13 +697,16 @@ impl PageCx<'_> {
             .map(|(_, _, a)| a)
     }
 
+    /// This page's comment or group subordinate `index`, by its place in `/Annots`: a subordinate
+    /// is moved and resized on its own ([`Self::selected_here`]).
     pub(crate) fn get(&self, index: usize) -> Option<&Annotation> {
-        self.comments().find(|a| a.index == index)
+        self.comments().find(|a| a.index == index).or_else(|| self.group_members().into_iter().map(|(m, _)| m).find(|m| m.index == index))
     }
 
     /// The group subordinates (`/RT /Group`, ISO 32000-2 §12.5.6.2) on this page, each with the
-    /// comment on this page that is its group's primary.
-    pub(super) fn group_members(&self) -> Vec<(&Annotation, &Annotation)> {
+    /// comment on this page that is its group's primary. A group is one page's: a subordinate whose
+    /// primary is on another page is a comment of its own (`pdfcraft_render::link_replies`).
+    pub(crate) fn group_members(&self) -> Vec<(&Annotation, &Annotation)> {
         let all = &self.info.annotations;
         // Painted every frame a comment is selected: most documents have no group to look up.
         if self.hidden || !all.iter().any(|a| a.is_group_member() && a.page == self.page) {
@@ -717,23 +720,41 @@ impl PageCx<'_> {
             .collect()
     }
 
-    /// The comment a click at `p` selects: the topmost one under it or, on a group subordinate,
-    /// the group's primary, which stands for the group.
+    /// The comment or group subordinate a press at `p` lands on: the topmost under it, in
+    /// `/Annots` (paint) order as [`Self::hit`] reads it, a commented markup's marker
+    /// ([`Self::comment_marker_rect`]) before any body. A click there selects [`Self::selects`];
+    /// a drag moves just it.
     pub(super) fn click_target(&self, p: Pos2) -> Option<&Annotation> {
-        self.comment_at(p).or_else(|| self.member_at(p).map(|(_, p)| p))
+        self.click_target_where(p, |_| true)
     }
 
-    /// The group subordinate under `p`, where no comment is, with its group's primary.
-    fn member_at(&self, p: Pos2) -> Option<(&Annotation, &Annotation)> {
-        self.group_members().into_iter().rev().find(|(m, _)| self.screen_rects(m).any(|r| r.expand(3.0).contains(p)))
+    /// [`Self::click_target`] among the annotations `takes` accepts: a tool that picks up only some
+    /// (Fill & Sign's marks) reaches one under an annotation it ignores.
+    pub(super) fn click_target_where(&self, p: Pos2, takes: impl Fn(&Annotation) -> bool) -> Option<&Annotation> {
+        // Markers are painted for top-level comments only, so a subordinate has none.
+        let marked = self.comments().map(|a| (self.comment_marker_rect(a).is_some_and(|r| r.expand(3.0).contains(p)), a));
+        marked
+            .chain(self.group_members().into_iter().map(|(m, _)| (false, m)))
+            .filter(|(marker, a)| takes(a) && (*marker || self.screen_rects(a).any(|r| r.expand(3.0).contains(p))))
+            .max_by_key(|(marker, a)| (*marker, a.index))
+            .map(|(_, a)| a)
     }
 
-    /// The group member a click at `p` picked when it selects `selected`, its group's primary
-    /// ([`CommentView::member`]): the subordinate under the pointer.
-    pub(super) fn picked(&self, p: Pos2, selected: Option<(usize, usize)>) -> Option<((usize, usize), (usize, usize))> {
-        let (m, primary) = self.comment_at(p).is_none().then(|| self.member_at(p)).flatten()?;
-        let group = (primary.page, primary.index);
-        (Some(group) == selected).then_some(((self.page, m.index), group))
+    /// What a selection of `selected` frames on this page, each with its own handles as Acrobat
+    /// shows them: the selected comment and, for a group's primary, its subordinates here.
+    pub(crate) fn selected_here(&self, selected: Option<(usize, usize)>) -> Vec<&Annotation> {
+        let Some((_, index)) = selected.filter(|(page, _)| *page == self.page) else { return Vec::new() };
+        let Some(a) = self.comments().find(|a| a.index == index) else { return Vec::new() };
+        let mut out = vec![a];
+        out.extend(self.group_members().into_iter().filter(|(_, p)| p.index == index).map(|(m, _)| m));
+        out
+    }
+
+    /// What selecting this page's `a` selects: its group's primary for a group subordinate (its
+    /// card in the Comments panel), else `a`.
+    pub(super) fn selects(&self, a: &Annotation) -> (usize, usize) {
+        let primary = if a.is_group_member() { self.group_members().into_iter().find(|(m, _)| m.index == a.index).map(|(_, p)| p) } else { None };
+        primary.map_or((self.page, a.index), |p| (p.page, p.index))
     }
 
     pub(crate) fn rect_to_user(&self, r: Rect) -> [f64; 4] {

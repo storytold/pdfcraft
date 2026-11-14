@@ -3,6 +3,7 @@ use super::create::{
     ink_bounds, normalize, num_array, on_side, polygon_rect, rect_for, rgb,
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
+use super::group::group_members;
 use super::info::{is_comment_subtype, is_group_subordinate, line_endings_of, own_popup, popup_info, text_value};
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, change_annots, is_fill_sign, page_ref, set_annots};
 use super::text_style::{self, TextStyle};
@@ -606,7 +607,28 @@ fn last_state_reply(doc: &Document, p: ObjRef, target: ObjRef, author: &str, mod
     mine.iter().rev().copied().find(|r| !answered.contains(r))
 }
 
-/// Move a comment (and its pop-up) by `(dx, dy)` points. The appearance moves with `/Rect`.
+/// Refuse a change to a group while one of its `members` (from [`group_members`]) is locked:
+/// `this`, the one asked for, as any comment is refused, and another as part of its group.
+fn group_unlocked(doc: &Document, members: &[(usize, usize)], this: (usize, usize)) -> Result<(), AnnotError> {
+    let mut lists: HashMap<usize, Vec<Object>> = HashMap::new();
+    for &(p, i) in members {
+        let list = match lists.entry(p) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => e.insert(annots(doc, page_ref(doc, p)?)),
+        };
+        let Some(entry) = list.get(i) else { continue };
+        let obj = doc.resolve(entry);
+        if obj.as_dict().is_some_and(|d| annotation_flags(doc, d) & FLAG_LOCKED != 0) {
+            let what = if (p, i) == this { "the comment is locked" } else { "a comment in its group is locked" };
+            return Err(AnnotError::Invalid(what.into()));
+        }
+    }
+    Ok(())
+}
+
+/// Move a comment (and its pop-up) by `(dx, dy)` points. The appearance moves with `/Rect`. A
+/// comment in a group (`/RT /Group`) moves alone: Acrobat moves the member dragged and leaves the
+/// rest of its group in place, although ISO 32000-2 §12.5.6.2 has a group move as one.
 pub fn move_annotation(doc: &mut Document, page: usize, index: usize, dx: f64, dy: f64, meta: &Meta) -> Result<(), AnnotError> {
     if !finite(&[dx, dy]) {
         return Err(AnnotError::Invalid("invalid offset".into()));
@@ -1089,63 +1111,42 @@ fn ink_rect_for_width(d: &Dict, old_w: f64, w: f64) -> Option<[f64; 4]> {
 }
 
 /// Change a comment's colour, opacity (of the whole comment), line width and/or line endings, and
-/// redraw it.
-///
-/// A Replace Text proposal is one look: colour and opacity are the group's (`/C` is read from
-/// the primary, ISO 32000-2 §12.5.6.2), so restyling either the caret or its strikeout restyles
-/// and redraws the other too, in the same edit. The strikeout takes no line width (a text markup
-/// annotation has no border) and neither part has line endings. All or nothing: if one member
-/// can't be restyled, none is.
+/// redraw it. A comment in a group restyles the whole group (ISO 32000-2 §12.5.6.2), refused while
+/// any member is locked: the other members take what applies to them (see [`member_change`]), and
+/// one that can't be redrawn keeps its look.
 pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
-    let (_, r) = annot_ref(doc, page, index)?;
-    let others = replace_text_partners(doc, page, r)?;
-    // Check every partner before changing anything.
-    for &o in &others {
-        unlocked(doc, o)?;
-    }
-    let before: Vec<(ObjRef, Dict)> = others.iter().map(|&o| (o, annot_dict(doc, o))).collect();
-    let mut done: Vec<(ObjRef, Dict)> = vec![(r, annot_dict(doc, r))];
-    style_one(doc, r, change.clone(), meta)?;
-    for (o, d) in before {
-        let caret = d.name(b"Subtype") == Some(b"Caret");
-        let part = StyleChange { color: change.color, opacity: change.opacity, width: change.width.filter(|_| caret), endings: None };
-        let unchanged = part.color.is_none() && part.opacity.is_none() && part.width.is_none();
-        if unchanged {
-            continue;
+    let members = group_members(doc, page, index)?;
+    group_unlocked(doc, &members, (page, index))?;
+    style_one(doc, page, index, change.clone(), meta)?;
+    for (p, i) in members.into_iter().filter(|m| *m != (page, index)) {
+        let Some(c) = member_change(doc, p, i, &change)? else { continue };
+        match style_one(doc, p, i, c, meta) {
+            Err(AnnotError::Unsupported(_) | AnnotError::Invalid(_) | AnnotError::Undrawable(_)) | Ok(()) => {}
+            Err(e) => return Err(e),
         }
-        if let Err(e) = style_one(doc, o, part, meta) {
-            // Put the members already restyled back, the target included.
-            for (o, d) in done.into_iter().rev() {
-                doc.set(o, Object::Dict(d));
-            }
-            return Err(e);
-        }
-        done.push((o, d));
     }
     Ok(())
 }
 
-/// The other members of the Replace Text proposal `r` belongs to, on `page`: for its caret, the
-/// strikeouts grouped under it; for a strikeout, its caret and any other strikeout under it.
-/// Empty for anything else.
-fn replace_text_partners(doc: &Document, page: usize, r: ObjRef) -> Result<Vec<ObjRef>, AnnotError> {
-    let own = Object::Ref(r);
-    let caret = match replaced_by(doc, &own) {
-        Some(c) => c,
-        None if annot_dict(doc, r).name(b"Subtype") == Some(b"Caret") => r,
-        None => return Ok(Vec::new()),
-    };
+/// What of a group's `change` applies to its member at `(page, index)`: line endings only to a
+/// member that has as many (a callout one, a line or polyline two), a line width only to one drawn
+/// with a border, colour and opacity to all. `None` when nothing does.
+fn member_change(doc: &Document, page: usize, index: usize, change: &StyleChange) -> Result<Option<StyleChange>, AnnotError> {
     let list = annots(doc, page_ref(doc, page)?);
-    let strikes = list.iter().filter(|e| replaced_by(doc, e) == Some(caret)).filter_map(Object::as_ref);
-    // `/Annots` may list one annotation twice: restyle each once.
-    let mut seen: HashSet<ObjRef> = HashSet::from([r]);
-    Ok(std::iter::once(caret).chain(strikes).filter(|&o| seen.insert(o)).collect())
+    let Some(d) = list.get(index).map(|e| doc.resolve(e)).and_then(|o| o.as_dict().cloned()) else { return Ok(None) };
+    let subtype = d.name(b"Subtype").unwrap_or_default();
+    let callout = subtype == b"FreeText" && d.contains(b"CL");
+    let pair = matches!(subtype, b"Line" | b"PolyLine");
+    let endings = change.endings.clone().filter(|e| (callout && e.len() == 1) || (pair && e.len() == 2));
+    let bordered = matches!(subtype, b"Square" | b"Circle" | b"Line" | b"PolyLine" | b"Polygon" | b"Ink" | b"FreeText" | b"Caret");
+    let c = StyleChange { color: change.color, opacity: change.opacity, width: change.width.filter(|_| bordered), endings };
+    Ok((c != StyleChange::default()).then_some(c))
 }
 
-/// [`set_style`] on one annotation.
-fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
+/// [`set_style`] for one annotation, its group already checked.
+fn style_one(doc: &mut Document, page: usize, index: usize, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
     let StyleChange { color, opacity, width, endings } = change;
-    unlocked(doc, r)?;
+    let (_, r) = annot_ref(doc, page, index)?;
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     // Check before changing anything: a stale appearance would contradict the new style.
@@ -1304,10 +1305,25 @@ pub fn fillable(subtype: &str) -> bool {
 }
 
 /// Fill a shape or FreeText comment with `fill`, or remove its fill (`None`), and
-/// redraw its appearance (Acrobat: Properties ▸ Fill Color).
+/// redraw its appearance (Acrobat: Properties ▸ Fill Color). A comment in a group fills every
+/// member that can be filled (ISO 32000-2 §12.5.6.2), refused while any member is locked; one
+/// that can't be redrawn keeps its look.
 pub fn set_fill(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>, meta: &Meta) -> Result<(), AnnotError> {
+    let members = group_members(doc, page, index)?;
+    group_unlocked(doc, &members, (page, index))?;
+    fill_one(doc, page, index, fill, meta)?;
+    for (p, i) in members.into_iter().filter(|m| *m != (page, index)) {
+        match fill_one(doc, p, i, fill, meta) {
+            Err(AnnotError::Unsupported(_) | AnnotError::Invalid(_) | AnnotError::Undrawable(_)) | Ok(()) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+/// [`set_fill`] for one annotation, its group already checked.
+fn fill_one(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
-    unlocked(doc, r)?;
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     if !fillable(&subtype) {
