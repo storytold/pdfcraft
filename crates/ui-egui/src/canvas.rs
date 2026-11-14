@@ -2848,7 +2848,7 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
             None => e,
         });
     }
-    if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), keys, view, info) {
+    if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), keys, view, doc, info) {
         view.pending_edit = Some(e);
     }
     let text_box = crate::forms_ui::text_box(doc, view, form);

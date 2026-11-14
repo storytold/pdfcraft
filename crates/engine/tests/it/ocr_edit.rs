@@ -568,6 +568,111 @@ fn a_squeeze_is_relative_to_the_words_own_scale() {
     assert!(smithy.rect[2] <= jones.rect[0], "{:?} runs into {:?}", smithy.rect, jones.rect);
 }
 
+/// The preview tells an editor what Apply will do, from the same fit: it covers what Apply covers
+/// and draws the new word where Apply draws it, without touching the document.
+#[test]
+fn the_word_preview_is_what_apply_does() {
+    let (mut s, id) = uneven_phrase();
+    let draft = "John Smyth Example";
+    let (before, generation) = (s.get(id).unwrap().bytes.clone(), s.get(id).unwrap().edit_generation());
+    let boxes: Vec<[f64; 4]> = s.get(id).unwrap().text_lines(0).iter().map(|l| l.rect).collect();
+    let preview = s.get(id).unwrap().ocr_word_preview(0, 0, draft).expect("a text-only edit of a phrase");
+    assert_eq!(s.get(id).unwrap().bytes, before, "nothing is written");
+    assert_eq!(s.get(id).unwrap().edit_generation(), generation);
+
+    assert_eq!(preview.covers.len(), 1, "only Smith is covered: {:?}", preview.covers);
+    assert!(preview.covers[0][0] < boxes[1][0] && preview.covers[0][2] > boxes[1][2], "a little past its box: {:?}", preview.covers);
+    assert!(preview.covers[0][2] < boxes[2][0], "and short of Example: {:?}", preview.covers);
+    let spans: Vec<&str> = preview.placed.iter().map(|(span, _)| &draft[span.clone()]).collect();
+    assert_eq!(spans, ["John", "Smyth", "Example"], "every word of the draft is placed, in order");
+    assert_eq!(preview.placed[0].1, boxes[0], "kept words stay on their boxes");
+    assert_eq!(preview.placed[2].1, boxes[2]);
+    assert_eq!(preview.drawn.len(), 1);
+    assert_eq!(preview.drawn[0].text, "Smyth");
+
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: draft.into(), style: Default::default() }).unwrap();
+    let lines = s.get(id).unwrap().text_lines(0);
+    let smyth = lines.iter().find(|l| l.text == "Smyth").unwrap();
+    assert!((preview.drawn[0].rect[0] - smyth.rect[0]).abs() < 0.01, "{:?} against {:?}", preview.drawn[0].rect, smyth.rect);
+    assert!((preview.drawn[0].rect[2] - smyth.rect[2]).abs() < 0.01, "{:?} against {:?}", preview.drawn[0].rect, smyth.rect);
+    assert!((preview.drawn[0].baseline - smyth.baseline()[1]).abs() < 0.01);
+}
+
+/// A deleted word is covered and nothing is drawn. The words around it stay placed.
+#[test]
+fn the_word_preview_of_a_deletion_only_covers() {
+    let (s, id) = uneven_phrase();
+    let draft = "John Example";
+    let preview = s.get(id).unwrap().ocr_word_preview(0, 0, draft).unwrap();
+    assert_eq!(preview.covers.len(), 1);
+    assert!(preview.drawn.is_empty());
+    let spans: Vec<&str> = preview.placed.iter().map(|(span, _)| &draft[span.clone()]).collect();
+    assert_eq!(spans, ["John", "Example"]);
+}
+
+/// Backspacing over a word leaves a space either side of it: the preview still keeps its neighbours.
+#[test]
+fn the_word_preview_keeps_the_scan_after_a_backspaced_word() {
+    let (s, id) = uneven_phrase();
+    let draft = "John  Example";
+    let preview = s.get(id).unwrap().ocr_word_preview(0, 0, draft).expect("the spaces are nothing to draw");
+    assert_eq!(preview.covers.len(), 1, "only Smith");
+    assert!(preview.drawn.is_empty());
+    let spans: Vec<&str> = preview.placed.iter().map(|(span, _)| &draft[span.clone()]).collect();
+    assert_eq!(spans, ["John", "Example"]);
+}
+
+/// A squeezed or taken-over word previews as it will be applied.
+#[test]
+fn the_word_preview_shows_a_squeeze_and_a_takeover() {
+    let (s, id) = uneven_phrase();
+    let preview = s.get(id).unwrap().ocr_word_preview(0, 0, "John Smithy Example").unwrap();
+    assert_eq!(preview.drawn[0].text, "Smithy");
+    assert!(preview.drawn[0].rect[2] <= 80.5, "squeezed into its place: {:?}", preview.drawn[0].rect);
+    let preview = s.get(id).unwrap().ocr_word_preview(0, 0, "John Smithsonianish Example").unwrap();
+    assert_eq!(preview.drawn[0].text, "Smithsonianish Example", "too wide to squeeze: it takes the next word");
+    assert_eq!(preview.covers.len(), 2);
+}
+
+/// A space typed after the last word changes nothing, in the preview too: every word stays, placed
+/// on its box, so typing a space doesn't flash the line into a stand-in font.
+#[test]
+fn the_word_preview_of_the_same_words_changes_nothing() {
+    let (s, id) = uneven_phrase();
+    let draft = "John Smith Example ";
+    let preview = s.get(id).unwrap().ocr_word_preview(0, 0, draft).expect("nothing to redraw");
+    assert!(preview.covers.is_empty() && preview.drawn.is_empty(), "{preview:?}");
+    let spans: Vec<&str> = preview.placed.iter().map(|(span, _)| &draft[span.clone()]).collect();
+    assert_eq!(spans, ["John", "Smith", "Example"]);
+}
+
+/// The preview's covers stop where Apply's do, at the word beside them.
+#[test]
+fn the_word_previews_cover_stops_at_the_word_beside_it() {
+    let (s, id) = scanned_with(vec![scanned_word("John", 42.0, 66.0, 42.0, 30.0), scanned_word("Smith", 67.2, 98.0, 42.0, 8.0)]);
+    let preview = s.get(id).unwrap().ocr_word_preview(0, 0, "Smith").unwrap();
+    assert!(preview.covers[0][2] <= 67.2 + 0.01, "it stops at Smith: {:?}", preview.covers);
+    assert!(preview.covers[0][0] < 42.0, "and reaches past the side with no word: {:?}", preview.covers);
+}
+
+/// An edit that redraws the whole phrase has no word preview: nothing to keep.
+#[test]
+fn there_is_no_word_preview_when_the_whole_phrase_is_redrawn() {
+    let (s, id) = uneven_phrase();
+    let doc = s.get(id).unwrap();
+    assert!(doc.ocr_word_preview(0, 0, "John Smith\nExample").is_none(), "a typed line break");
+    for draft in ["Jon  Smyth Example", "John\u{3000}Smyth Example", "John  Smith Example"] {
+        assert!(doc.ocr_word_preview(0, 0, draft).is_none(), "{draft:?}: spacing only the whole rewrite keeps");
+    }
+    assert!(doc.ocr_word_preview(0, 9, "x").is_none(), "no such paragraph");
+    let (s, id) = scanned();
+    assert!(s.get(id).unwrap().ocr_word_preview(0, 0, "Jane").is_none(), "one word: nothing to keep");
+    let bytes = s.create_from_text("t", "Visible words here").unwrap();
+    let mut s = Session::new();
+    let id = s.open("t.pdf", None, bytes, None).unwrap();
+    assert!(s.get(id).unwrap().ocr_word_preview(0, 0, "Visible words").is_none(), "visible text");
+}
+
 /// Visible text set with a horizontally stretched text matrix (3 × 1), as some generators write.
 fn stretched_visible() -> std::sync::Arc<Vec<u8>> {
     use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream};

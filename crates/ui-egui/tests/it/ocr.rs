@@ -165,6 +165,248 @@ fn an_ocr_word_opens_for_editing_and_stays_open() {
     assert_eq!(opened(&h).as_deref(), Some("Recognize"), "moving the pointer away keeps the word open");
 }
 
+/// A scan of "Recognize these scanned words" with its OCR layer, open in Edit text at 100%, and the
+/// words' boxes on the screen.
+fn phrase_on_a_scan() -> (Harness<'static, PdfCraftApp>, Vec<egui::Rect>) {
+    use pdfcraft_engine::ocr::PlacedWord;
+    let mut s = Session::new();
+    let text = s.create_from_text("t", "Recognize these scanned words").unwrap();
+    let id = s.open("text.pdf", None, text, None).unwrap();
+    let (source_width, source_height, ink) = {
+        let d = s.get(id).unwrap();
+        let line = d.text_lines(0).remove(0);
+        (d.info.pages[0].width as f64, d.info.pages[0].height as f64, line.ink)
+    };
+    assert_eq!(ink.len(), 4, "a box per word");
+    let png = export::Exporter::new(s.get(id).unwrap()).png(0, 150.0).unwrap();
+    let scan = s.create_from_images(&[("scan.png".into(), png)]).unwrap().to_vec();
+    let boxes = std::sync::Arc::new(ink);
+    let placed = boxes.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("scan.pdf", None, scan.clone()).unwrap();
+        let id = app.views[0].id;
+        let (w, h) = (app.session.get(id).unwrap().info.pages[0].width as f64, app.session.get(id).unwrap().info.pages[0].height as f64);
+        let (kx, ky) = (w / source_width, h / source_height);
+        let words = ["Recognize", "these", "scanned", "words"]
+            .iter()
+            .zip(placed.iter())
+            .map(|(word, b)| PlacedWord {
+                text: (*word).into(),
+                origin: [b[0] * kx, b[1] * ky],
+                across: [(b[2] - b[0]) * kx, 0.0],
+                // Tight around the ink, as a recognised box is: the run's box has room for
+                // ascenders and descenders any word may not have.
+                up: [0.0, (b[3] - b[1]) * ky * 0.7],
+                confidence: None,
+                source: "ocrs".into(),
+            })
+            .collect();
+        app.session.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+        app.set_option("zoom", "100").unwrap();
+        assert!(app.execute("edit.edit_text"));
+        app
+    });
+    crate::support::settle(&mut h);
+    let screen = {
+        let app = h.state();
+        let d = app.session.get(app.views[0].id).unwrap();
+        let block = d.text_blocks(0).remove(0);
+        assert!(block.invisible);
+        let r = app.views[0].page_screen_rect(0).unwrap();
+        let page = &d.info.pages[0];
+        let k = r.width() / page.width;
+        d.text_lines(0)
+            .iter()
+            .flat_map(|line| line.ink.clone())
+            .map(|b| {
+                let top = r.min + egui::vec2(b[0] as f32, page.height - b[3] as f32) * k;
+                let bottom = r.min + egui::vec2(b[2] as f32, page.height - b[1] as f32) * k;
+                egui::Rect::from_min_max(top, bottom)
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(screen.len(), 4);
+    (h, screen)
+}
+
+/// Click into the phrase and let the editor open.
+fn open_phrase(h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2) {
+    h.hover_at(at);
+    h.run_steps(2);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+    }
+    h.run_steps(4);
+    assert!(h.state().views[0].line_editor.is_some(), "the phrase opened");
+}
+
+/// The share of `area`'s pixels that differ visibly between two frames of the window.
+fn changed(a: &image::RgbaImage, b: &image::RgbaImage, area: egui::Rect, ppp: f32) -> f64 {
+    let (mut differ, mut all) = (0usize, 0usize);
+    for y in (area.top() * ppp) as u32..(area.bottom() * ppp) as u32 {
+        for x in (area.left() * ppp) as u32..(area.right() * ppp) as u32 {
+            let (p, q) = (a.get_pixel(x, y).0, b.get_pixel(x, y).0);
+            differ += usize::from(p.iter().zip(q).any(|(u, v)| u.abs_diff(v) > 48));
+            all += 1;
+        }
+    }
+    differ as f64 / all.max(1) as f64
+}
+
+/// How much of `area` is dark, as ink is.
+fn inked(image: &image::RgbaImage, area: egui::Rect, ppp: f32) -> f64 {
+    let (mut dark, mut all) = (0usize, 0usize);
+    for y in (area.top() * ppp) as u32..(area.bottom() * ppp) as u32 {
+        for x in (area.left() * ppp) as u32..(area.right() * ppp) as u32 {
+            dark += usize::from(image.get_pixel(x, y).0.iter().take(3).all(|c| *c < 120));
+            all += 1;
+        }
+    }
+    dark as f64 / all.max(1) as f64
+}
+
+fn snapshot_to(image: &image::RgbaImage, name: &str) {
+    if let Some(dir) = std::env::var_os("PDFCRAFT_OCR_PREVIEW_DIR") {
+        image.save(std::path::Path::new(&dir).join(name)).unwrap();
+    }
+}
+
+/// Deleting a word while the phrase is open looks as it will once applied: that word is covered,
+/// and the words around it are still the scan's pixels, not redrawn in a stand-in font (#3313).
+#[test]
+fn deleting_a_word_while_typing_leaves_the_scan_showing_around_it() {
+    let (mut h, words) = phrase_on_a_scan();
+    open_phrase(&mut h, words[1].center());
+    let before = h.render().unwrap();
+    snapshot_to(&before, "1-open.png");
+    let ppp = h.ctx.pixels_per_point();
+    assert!(inked(&before, words[3], ppp) > 0.05, "the last word is on the scan");
+
+    h.key_press(egui::Key::End);
+    for _ in 0.."words".len() {
+        h.key_press(egui::Key::Backspace);
+    }
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().text.trim_end(), "Recognize these scanned");
+    let typing = h.render().unwrap();
+    snapshot_to(&typing, "2-deleted.png");
+    assert!(inked(&typing, words[3], ppp) < 0.005, "the deleted word is covered");
+    for (word, name) in words.iter().zip(["Recognize", "these", "scanned"]) {
+        assert!(changed(&before, &typing, *word, ppp) < 0.02, "{name} is still the scan's pixels");
+    }
+
+    // Applied, the page looks the same.
+    let outside = egui::pos2(words[3].right() + 300.0, words[3].bottom() + 300.0);
+    h.hover_at(outside);
+    h.run_steps(2);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: outside, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+    }
+    crate::support::settle(&mut h);
+    h.run_steps(4);
+    let applied = h.render().unwrap();
+    snapshot_to(&applied, "3-applied.png");
+    let app = h.state();
+    let blocks = app.session.get(app.views[0].id).unwrap().text_blocks(0);
+    assert_eq!(blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Recognize these scanned"]);
+    assert!(blocks[0].invisible, "the kept words are still the layer's");
+}
+
+/// Backspacing over a word in the middle of the phrase leaves a space either side of it. The words
+/// around it stay the scan's pixels, while typing and once applied.
+#[test]
+fn backspacing_over_a_middle_word_leaves_the_scan_showing_around_it() {
+    let (mut h, words) = phrase_on_a_scan();
+    open_phrase(&mut h, words[1].center());
+    let before = h.render().unwrap();
+    let ppp = h.ctx.pixels_per_point();
+    let text = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].line_editor.as_ref().unwrap().text.clone();
+    // To just after "scanned", then back over it.
+    h.key_press(egui::Key::End);
+    for _ in 0.." words".len() {
+        h.key_press(egui::Key::ArrowLeft);
+    }
+    for _ in 0.."scanned".len() {
+        h.key_press(egui::Key::Backspace);
+    }
+    h.run_steps(3);
+    assert_eq!(text(&h), "Recognize these  words", "both spaces are still there");
+    let typing = h.render().unwrap();
+    snapshot_to(&typing, "5-backspaced.png");
+    assert!(inked(&typing, words[2], ppp) < 0.005, "the deleted word is covered");
+    for (word, name) in [(words[0], "Recognize"), (words[1], "these"), (words[3], "words")] {
+        assert!(changed(&before, &typing, word, ppp) < 0.02, "{name} is still the scan's pixels while typing");
+    }
+
+    let outside = egui::pos2(words[3].right() + 300.0, words[3].bottom() + 300.0);
+    h.hover_at(outside);
+    h.run_steps(2);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: outside, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+    }
+    crate::support::settle(&mut h);
+    h.run_steps(4);
+    let app = h.state();
+    let blocks = app.session.get(app.views[0].id).unwrap().text_blocks(0);
+    assert!(blocks.iter().all(|b| b.invisible), "nothing was redrawn: {:?}", blocks.iter().map(|b| &b.text).collect::<Vec<_>>());
+    assert!(blocks.iter().all(|b| !b.text.contains("scanned")), "and the word is gone");
+}
+
+/// A space typed after the last word is no change to show or to apply: the line stays the scan,
+/// while typing and after, with nothing to undo.
+#[test]
+fn a_space_after_the_last_word_leaves_the_scan_alone() {
+    let (mut h, words) = phrase_on_a_scan();
+    open_phrase(&mut h, words[1].center());
+    let before = h.render().unwrap();
+    let ppp = h.ctx.pixels_per_point();
+    let bytes = h.state().session.get(h.state().views[0].id).unwrap().bytes.clone();
+    h.key_press(egui::Key::End);
+    h.event(egui::Event::Text(" ".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().text, "Recognize these scanned words ");
+    let typing = h.render().unwrap();
+    for (word, name) in words.iter().zip(["Recognize", "these", "scanned", "words"]) {
+        assert!(changed(&before, &typing, *word, ppp) < 0.02, "{name} is still the scan's pixels");
+    }
+    let outside = egui::pos2(words[3].right() + 300.0, words[3].bottom() + 300.0);
+    h.hover_at(outside);
+    h.run_steps(2);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: outside, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+    }
+    crate::support::settle(&mut h);
+    h.run_steps(4);
+    let app = h.state();
+    assert!(app.views[0].line_editor.is_none(), "the editor closed");
+    assert_eq!(app.session.get(app.views[0].id).unwrap().bytes, bytes, "nothing was written");
+}
+
+/// A replaced word is drawn while typing, where Apply will draw it, and the rest stays the scan.
+#[test]
+fn replacing_a_word_while_typing_draws_only_that_word() {
+    let (mut h, words) = phrase_on_a_scan();
+    open_phrase(&mut h, words[1].center());
+    let before = h.render().unwrap();
+    let ppp = h.ctx.pixels_per_point();
+    h.key_press(egui::Key::End);
+    for _ in 0.."words".len() {
+        h.key_press(egui::Key::Backspace);
+    }
+    h.event(egui::Event::Text("birds".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().text, "Recognize these scanned birds");
+    let typing = h.render().unwrap();
+    snapshot_to(&typing, "4-replaced.png");
+    assert!(changed(&before, &typing, words[3], ppp) > 0.05, "the replaced word is different");
+    assert!(inked(&typing, words[3], ppp) > 0.05, "and drawn in ink");
+    for (word, name) in words.iter().zip(["Recognize", "these", "scanned"]) {
+        assert!(changed(&before, &typing, *word, ppp) < 0.02, "{name} is still the scan's pixels");
+    }
+}
+
 /// A page of real text, not a picture.
 fn text_page() -> Vec<u8> {
     let s = Session::new();

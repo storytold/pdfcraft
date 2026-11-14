@@ -174,8 +174,9 @@ a deleted word leaves its gap, because the words after it are pixels. A replacem
 wide is squeezed across to fit its place (by up to a quarter); wider than that it takes over the
 word it would run into, and new words with nothing to replace take a neighbour.
 The whole phrase is redrawn for a change of formatting or a new line, and for a layer whose words
-would move without the ones before them. While the phrase is open, the editor still shows all of
-it in the layer's Helvetica. The cover is one flat colour, and the text uses the layer's Helvetica, not the scanned typeface.
+would move without the ones before them. While a text edit is open, the editor shows what Apply
+will do, from the same word plan: the kept words as the scan, and the covers and new words over
+it. The cover is one flat colour, and the text uses the layer's Helvetica, not the scanned typeface.
 This applies to any invisible text (rendering mode 3), not just a PdfCraft OCR layer: editing
 invisible text, such as another OCR tool's layer, makes the rewritten paragraph visible over a
 painted cover in the sampled paper colour. Edit text also groups invisible text differently: its lines never
