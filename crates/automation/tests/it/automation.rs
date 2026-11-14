@@ -4359,6 +4359,86 @@ trailer << /Root 1 0 R >>
     assert!(matches!(a.call("accessibility_mark_tag_artifact", &json!({ "doc": doc, "object": 6, "generation": 0 })), Err(ToolError::Failed(_))));
 }
 
+/// A figure drawn in a form XObject, owned through an MCR's `/Stm` (#3221): the tools locate it,
+/// read it and retag it in the form, never the page content that uses the same MCID.
+#[test]
+fn tag_tools_act_on_the_form_an_mcr_names() {
+    let dir = workdir("a11y-form-stm");
+    let page = "/Figure <</MCID 0>> BDC 1 0 0 rg 72 600 60 60 re f EMC\n\
+                /P <</MCID 1>> BDC BT /F1 14 Tf 72 560 Td (Page paragraph) Tj ET EMC\n\
+                q 1 0 0 1 300 600 cm /FmF Do Q\n";
+    let form = "/Figure <</MCID 0>> BDC 0 0 1 rg 0 0 60 60 re f EMC";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /StructTreeRoot 3 0 R /MarkInfo << /Marked true >> /Lang (en) >> endobj
+2 0 obj << /Type /Pages /Kids [10 0 R] /Count 1 >> endobj
+3 0 obj << /Type /StructTreeRoot /K 4 0 R /ParentTree 5 0 R /ParentTreeNextKey 2 >> endobj
+4 0 obj << /Type /StructElem /S /Document /P 3 0 R /K [20 0 R 21 0 R 22 0 R] >> endobj
+5 0 obj << /Nums [0 [20 0 R 21 0 R] 1 [22 0 R]] >> endobj
+6 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> endobj
+10 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 11 0 R /StructParents 0 /Resources << /Font << /F1 6 0 R >> /XObject << /FmF 12 0 R >> >> >> endobj
+11 0 obj << /Length {} >> stream
+{page}
+endstream endobj
+12 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 60 60] /StructParents 1 /Length {} >> stream
+{form}
+endstream endobj
+20 0 obj << /Type /StructElem /S /Figure /P 4 0 R /Pg 10 0 R /K 0 /Alt (Page figure) >> endobj
+21 0 obj << /Type /StructElem /S /P /P 4 0 R /Pg 10 0 R /K 1 >> endobj
+22 0 obj << /Type /StructElem /S /Figure /P 4 0 R /Pg 10 0 R /K << /Type /MCR /MCID 0 /Stm 12 0 R /Pg 10 0 R >> /Alt (Form figure) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        page.len(),
+        form.len()
+    );
+    std::fs::write(dir.join("stm_figures.pdf"), pdf).unwrap();
+    // The decoded content of the page and of the form, in a saved file.
+    let saved_marks = |name: &str| {
+        let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(name)).unwrap())).unwrap();
+        let page = pdfcraft_model::pages(&saved)[0].dict.clone();
+        let read = |o: &pdfcraft_cos::Object| match &*saved.resolve(o) {
+            pdfcraft_cos::Object::Stream(s) => String::from_utf8(s.decoded().unwrap()).unwrap(),
+            _ => String::new(),
+        };
+        let res = saved.resolve(page.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let fm = res.get(b"XObject").and_then(|x| x.as_dict()).and_then(|x| x.get(b"FmF")).cloned().unwrap();
+        (read(page.get(b"Contents").unwrap()), read(&fm), pdfcraft_engine::a11y::figures(&saved))
+    };
+    for tool in ["accessibility_set_alt", "accessibility_mark_tag_artifact"] {
+        let mut a = auto(&dir);
+        let fd = ok(&mut a, "doc_open", json!({ "path": "stm_figures.pdf" }))["doc"].as_u64().unwrap();
+        let figs = ok(&mut a, "accessibility_figures", json!({ "doc": fd }));
+        let rects: Vec<_> = figs["figures"].as_array().unwrap().iter().map(|f| (f["alt"].clone(), f["rect"].clone())).collect();
+        assert_eq!(
+            rects,
+            [(json!("Page figure"), json!([72.0, 132.0, 132.0, 192.0])), (json!("Form figure"), json!([300.0, 132.0, 360.0, 192.0]))],
+            "each figure where its own square is drawn"
+        );
+        let content = ok(&mut a, "accessibility_tag_content", json!({ "doc": fd, "object": 22, "generation": 0 }));
+        assert_eq!(content["content"][0]["stream"], json!({ "object": 12, "generation": 0 }));
+        assert_eq!(content["content"][0]["mcid"], 0);
+        let page_content = ok(&mut a, "accessibility_tag_content", json!({ "doc": fd, "object": 21, "generation": 0 }));
+        assert_eq!(page_content["content"][0]["stream"], Value::Null);
+        assert_eq!(page_content["content"][0]["text"], "Page paragraph");
+        if tool == "accessibility_set_alt" {
+            let form_figure = figs["figures"][1]["figure"].clone();
+            ok(&mut a, tool, json!({ "doc": fd, "figure": form_figure, "decorative": true }));
+        } else {
+            ok(&mut a, tool, json!({ "doc": fd, "object": 22, "generation": 0 }));
+        }
+        let out = format!("{tool}.pdf");
+        ok(&mut a, "doc_save", json!({ "doc": fd, "path": out, "full": true }));
+        let (page_marks, form_marks, figures) = saved_marks(&out);
+        assert_eq!(page_marks.trim_end(), page.trim_end(), "{tool}: the page's figure and paragraph keep their tags");
+        assert_eq!(form_marks.trim_end(), "/Artifact BMC 0 0 1 rg 0 0 60 60 re f EMC", "{tool}: the form's figure is the artifact");
+        assert_eq!(figures.len(), 1);
+        assert_eq!(figures[0].alt.as_deref(), Some("Page figure"));
+        assert_eq!(figures[0].bbox, Some([72.0, 600.0, 132.0, 660.0]), "{tool}: the page figure keeps its content");
+        assert!(ok(&mut a, "edit_undo", json!({ "doc": fd }))["undone"].is_string());
+        assert_eq!(ok(&mut a, "accessibility_figures", json!({ "doc": fd }))["count"], 2);
+    }
+}
+
 #[test]
 fn accessibility_review_record_compares_two_versions_without_changing_them() {
     let dir = workdir("a11y-review-record");

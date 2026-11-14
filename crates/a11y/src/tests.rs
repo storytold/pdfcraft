@@ -1573,7 +1573,7 @@ fn figure_bounds_read_the_marked_content_state_in_constant_steps() {
     let page = deeply_nested_page(&mut doc, 5_000, 5_000);
     // No mark encloses figure 7, so a scan of the stack per operator reads all of it.
     let reads = mark_reads(|| {
-        crate::alt::content_bboxes(&doc, &page, &std::collections::HashSet::from([7]));
+        crate::alt::content_bboxes(&doc, &page, &std::collections::HashSet::from([(None, 7)]));
     });
     assert!(reads <= 4 * 15_000, "{reads} stack reads");
 }
