@@ -243,3 +243,5 @@ fn combine_of_a_hostile_structure_tree_stays_bounded() {
         assert!(out.resolve(&entry[1]).as_array().is_none_or(|a| a.len() < 16));
     }
 }
+
+mod split_tags;

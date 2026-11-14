@@ -2854,8 +2854,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.extract"]
 tools = ["page_extract"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::extract_button_copies_selected_pages_to_a_new_tab", "crates/automation/tests/it/automation.rs::combine_extract_and_split", "crates/organize/src/tests.rs::extract_and_split_keep_the_pdfx_output_intent_and_identification", "crates/ui-egui/tests/it/pickers.rs::extract_pages_takes_the_page_ranges_typed_in_the_dialog"]
-notes = "Carries the PDF/X output intent and identification (#263) in a new XMP packet; the source XMP (dates, other schemas) is not copied. The dialog's Pages field takes page ranges (\"1-5, 8, 11-13\", in the order typed, each page once) instead of the selection (#3593); page labels are not accepted there yet."
+evidence = ["crates/ui-egui/tests/it/editing.rs::extract_button_copies_selected_pages_to_a_new_tab", "crates/automation/tests/it/automation.rs::combine_extract_and_split", "crates/organize/src/tests.rs::extract_and_split_keep_the_pdfx_output_intent_and_identification", "crates/ui-egui/tests/it/pickers.rs::extract_pages_takes_the_page_ranges_typed_in_the_dialog", "crates/organize/src/tests/combine_tags/split_tags.rs::extract_pages_keeps_the_tags_of_the_pages_taken"]
+notes = "Tagged files keep their tags (ISO 32000-2 14.7, 14.8): the new document keeps the structure elements with content on its pages, under a new structure tree root with a rebuilt parent tree, the role and class maps, the IDs of the elements kept, /Lang and /MarkInfo (Marked, UserProperties); an element with nothing on those pages is left out, and the PDF/UA identification stays only when every page is taken. Carries the PDF/X output intent and identification (#263) in a new XMP packet; the source XMP (dates, other schemas) is not copied. The dialog's Pages field takes page ranges (\"1-5, 8, 11-13\", in the order typed, each page once) instead of the selection (#3593); page labels are not accepted there yet."
 
 [[feature]]
 id = "organize.extract-separate-files"
@@ -2974,8 +2974,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.split"]
 tools = ["doc_split"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::split_dialog_writes_one_file_per_part", "crates/organize/src/tests.rs::split_ranges_cover_every_page_once", "crates/organize/src/tests.rs::split_produces_standalone_documents_with_metadata", "crates/organize/src/tests.rs::extract_and_split_keep_the_pdfx_output_intent_and_identification"]
-notes = "Each part carries the PDF/X output intent and identification (#263), as Extract does."
+evidence = ["crates/ui-egui/tests/it/editing.rs::split_dialog_writes_one_file_per_part", "crates/organize/src/tests.rs::split_ranges_cover_every_page_once", "crates/organize/src/tests.rs::split_produces_standalone_documents_with_metadata", "crates/organize/src/tests.rs::extract_and_split_keep_the_pdfx_output_intent_and_identification", "crates/organize/src/tests/combine_tags/split_tags.rs::split_every_page_keeps_each_parts_tags"]
+notes = "Each part carries the PDF/X output intent and identification (#263), as Extract does, and the tags of its pages: the structure elements with content on them, with a parent tree of its own (ISO 32000-2 14.7, 14.8)."
 
 [[feature]]
 id = "organize.split-before-pages"

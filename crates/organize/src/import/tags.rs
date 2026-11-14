@@ -18,6 +18,13 @@
 //! - the document `/Lang` is the first tagged source's (that has one). A later source in another
 //!   language puts its own on its top-level elements that don't name one.
 //!
+//! Extract Pages and Split carry one source's tree the same way into each part ([`Tags::single`]):
+//! its top-level elements stay directly under the new tree root, with no `Document` element
+//! added, so a part's tree is the source's, cut down to the elements with content on its pages.
+//! `/MarkInfo /UserProperties true` comes along when a source declares it. Split makes many parts
+//! of one source, so it first reads which pages each element's content is on ([`PageIndex`]),
+//! once, and each part's walk passes over the elements with nothing on its pages.
+//!
 //! A source without a structure tree adds untagged pages. The PDF/UA identification is kept only
 //! when every source declares the same part, is tagged, and came along whole (no page left out,
 //! none of its tree cut off).
@@ -25,6 +32,8 @@
 //! The walk is bounded: each element is visited once (a cycle ends), nesting deeper than
 //! [`MAX_DEPTH`] and marked-content IDs above [`MAX_MCID`] are not carried, and at most
 //! [`MAX_NODES`] tree entries are read per source.
+
+use std::sync::Arc;
 
 use super::{Dict, Document, HashMap, HashSet, ObjRef, Object, OrganizeError};
 use pdfcraft_cos::PdfString;
@@ -38,6 +47,153 @@ const MAX_MCID: i64 = 1 << 20;
 const MAX_NODES: usize = 1 << 22;
 /// How deep an element's other entries (attributes and the like) are copied.
 const MAX_VALUE_DEPTH: usize = 32;
+/// The most pages a [`PageIndex`] lists for one element: one spread wider is walked by every part.
+const MAX_INDEXED_PAGES: usize = 64;
+/// The most page entries a [`PageIndex`] holds in all, beyond which there is none.
+const MAX_INDEX_ENTRIES: usize = 1 << 23;
+
+/// Where an element's content is: on these source pages (sorted), or anywhere (not known).
+#[derive(Clone)]
+enum Reach {
+    Pages(Vec<ObjRef>),
+    Any,
+}
+
+impl Reach {
+    fn join(&mut self, other: &Reach) {
+        match (&mut *self, other) {
+            (Reach::Any, _) => {}
+            (_, Reach::Any) => *self = Reach::Any,
+            (Reach::Pages(mine), Reach::Pages(theirs)) => {
+                mine.extend_from_slice(theirs);
+                mine.sort_unstable();
+                mine.dedup();
+                if mine.len() > MAX_INDEXED_PAGES {
+                    *self = Reach::Any;
+                }
+            }
+        }
+    }
+
+    fn page(&mut self, page: ObjRef) {
+        self.join(&Reach::Pages(vec![page]));
+    }
+}
+
+/// The source pages each of a source's elements has content on (its own and its descendants'),
+/// read once for a Split, so a part's walk passes over the elements with nothing on its pages
+/// instead of reading the whole tree for every part. It only says "nothing here" of an element
+/// whose content it read in full: an element in a cycle, deeper than [`MAX_DEPTH`], spread over
+/// many pages, or naming an object it cannot place, reads as anywhere.
+pub(super) struct PageIndex {
+    reach: HashMap<ObjRef, Reach>,
+}
+
+/// Building a [`PageIndex`]: the elements read so far and those being read.
+struct IndexWalk<'a> {
+    src: &'a Document,
+    /// Annotation → the page that lists it.
+    annots: HashMap<ObjRef, ObjRef>,
+    reach: HashMap<ObjRef, Reach>,
+    open: HashSet<ObjRef>,
+    nodes: usize,
+    entries: usize,
+}
+
+impl PageIndex {
+    /// Read `src`'s structure tree; `None` when it has none or is beyond the index's budget
+    /// (then every part reads the whole tree, as Extract does).
+    pub(super) fn build(src: &Document) -> Option<PageIndex> {
+        let catalog = src.root().and_then(|r| src.get(r).as_dict().cloned())?;
+        let root = catalog.get(b"StructTreeRoot").map(|r| src.resolve(r)).and_then(|r| r.as_dict().cloned())?;
+        let mut annots = HashMap::new();
+        for page in crate::pages(src).ok()? {
+            let held = src.get(page.obj);
+            let Some(listed) = held.as_dict().and_then(|d| d.get(b"Annots")) else { continue };
+            for a in list(src, Some(listed)) {
+                if let Some(a) = a.as_ref() {
+                    annots.entry(a).or_insert(page.obj);
+                }
+            }
+        }
+        let mut walk = IndexWalk { src, annots, reach: HashMap::new(), open: HashSet::new(), nodes: 0, entries: 0 };
+        for kid in list(src, root.get(b"K")) {
+            walk.element(&kid, None, 0)?;
+        }
+        Some(PageIndex { reach: walk.reach })
+    }
+
+    /// Whether the element `r` has no content on any of `pages` (source page → copy).
+    fn misses(&self, r: ObjRef, pages: &HashMap<ObjRef, ObjRef>) -> bool {
+        match self.reach.get(&r) {
+            Some(Reach::Pages(on)) => !on.iter().any(|p| pages.contains_key(p)),
+            Some(Reach::Any) | None => false,
+        }
+    }
+}
+
+impl IndexWalk<'_> {
+    /// Where the element `kid` (with `pg` its inherited page) has content; `None` once the
+    /// budget is spent.
+    fn element(&mut self, kid: &Object, pg: Option<ObjRef>, depth: usize) -> Option<Reach> {
+        self.nodes = self.nodes.saturating_add(1);
+        if self.nodes > MAX_NODES || self.entries > MAX_INDEX_ENTRIES {
+            return None;
+        }
+        if depth >= MAX_DEPTH {
+            return Some(Reach::Any);
+        }
+        let r = kid.as_ref();
+        if let Some(r) = r {
+            if let Some(known) = self.reach.get(&r) {
+                return Some(known.clone());
+            }
+            if !self.open.insert(r) {
+                // A cycle: what it leads to is not read in full.
+                return Some(Reach::Any);
+            }
+        }
+        let resolved = self.src.resolve(kid);
+        let mut reach = Reach::Pages(Vec::new());
+        if let Some(d) = resolved.as_dict().filter(|d| d.contains(b"S")) {
+            let pg = d.get(b"Pg").and_then(Object::as_ref).or(pg);
+            for k in list(self.src, d.get(b"K")) {
+                if let Object::Int(_) = k {
+                    if let Some(p) = pg {
+                        reach.page(p);
+                    }
+                    continue;
+                }
+                let held = self.src.resolve(&k);
+                let item = held.as_dict().filter(|i| !i.contains(b"S"));
+                if let Some(i) = item.filter(|i| i.contains(b"Obj") || i.name(b"Type") == Some(b"OBJR")) {
+                    // An annotation is on the page that lists it; another object is copied with
+                    // the page it is drawn on, which the reference names.
+                    let obj = i.get(b"Obj").and_then(Object::as_ref);
+                    match obj.and_then(|o| self.annots.get(&o).copied()).or_else(|| i.get(b"Pg").and_then(Object::as_ref).or(pg)) {
+                        Some(p) => reach.page(p),
+                        None => reach = Reach::Any,
+                    }
+                } else if let Some(i) = item.filter(|i| i.contains(b"MCID") || i.name(b"Type") == Some(b"MCR")) {
+                    if let Some(p) = i.get(b"Pg").and_then(Object::as_ref).or(pg) {
+                        reach.page(p);
+                    }
+                } else {
+                    let child = self.element(&k, pg, depth.saturating_add(1))?;
+                    reach.join(&child);
+                }
+            }
+        }
+        if let Some(r) = r {
+            self.open.remove(&r);
+            if let Reach::Pages(p) = &reach {
+                self.entries = self.entries.saturating_add(p.len());
+            }
+            self.reach.insert(r, reach.clone());
+        }
+        Some(reach)
+    }
+}
 
 /// The structure trees of the sources added so far, and what the combined tree needs from them.
 #[derive(Default)]
@@ -62,6 +218,12 @@ pub(super) struct Tags {
     ua: Option<String>,
     /// The first source's title, which a PDF/UA claim needs (ISO 14289-1 7.1).
     title: Option<String>,
+    /// One source's elements go directly under the tree root, as they were (Extract / Split).
+    single: bool,
+    /// A source declares `/MarkInfo /UserProperties true`.
+    user_properties: bool,
+    /// Where the source's elements have content, when Split read it beforehand.
+    index: Option<Arc<PageIndex>>,
 }
 
 /// One source being carried: its document, what was copied from it, and the new tree's pieces.
@@ -87,6 +249,8 @@ struct Walk<'a> {
     objr_seen: HashSet<ObjRef>,
     /// Entries read so far, against [`MAX_NODES`].
     nodes: usize,
+    /// Where the source's elements have content, when known beforehand (Split).
+    index: Option<&'a PageIndex>,
     /// Whether anything was left out other than content on pages not copied.
     cut: bool,
     /// The source's `/IDTree` entries the copies take.
@@ -94,6 +258,13 @@ struct Walk<'a> {
 }
 
 impl Tags {
+    /// The tree of one source's pages (Extract Pages / Split): its top-level elements stay at the
+    /// top, under the new tree root, rather than going under a `Document` element of their own.
+    /// `index`: where the source's elements have content, read beforehand (Split).
+    pub(super) fn single(index: Option<Arc<PageIndex>>) -> Self {
+        Tags { single: true, index, ..Tags::default() }
+    }
+
     /// Carry `src`'s structure tree into `out`, after its pages were copied (`pages`: source page
     /// → copy; `objects`: source object → copy). `whole`: every page of `src` was copied.
     pub(super) fn add(
@@ -115,11 +286,9 @@ impl Tags {
             self.ua = None;
         }
         let root = catalog.get(b"StructTreeRoot").map(|r| src.resolve(r)).and_then(|r| r.as_dict().cloned());
-        let marked = catalog
-            .get(b"MarkInfo")
-            .map(|m| src.resolve(m))
-            .and_then(|m| m.as_dict().and_then(|d| d.get(b"Marked")).map(|v| matches!(&*src.resolve(v), Object::Bool(true))))
-            .unwrap_or(false);
+        let mark_info = catalog.get(b"MarkInfo").map(|m| src.resolve(m)).and_then(|m| m.as_dict().cloned()).unwrap_or_default();
+        let flag = |key: &[u8]| mark_info.get(key).is_some_and(|v| matches!(&*src.resolve(v), Object::Bool(true)));
+        let marked = flag(b"Marked");
         let Some(root) = root else {
             self.ua = None;
             clear_stale_keys(out, objects, &HashSet::new())?;
@@ -128,6 +297,7 @@ impl Tags {
         if !whole || !marked {
             self.ua = None;
         }
+        self.user_properties |= flag(b"UserProperties");
         let document = match self.document {
             Some(d) => d,
             None => {
@@ -136,6 +306,7 @@ impl Tags {
                 d
             }
         };
+        let index = self.index.clone();
         let mut walk = Walk {
             src,
             pages,
@@ -149,6 +320,7 @@ impl Tags {
             objr_seen: HashSet::new(),
             objrs: Vec::new(),
             nodes: 0,
+            index: index.as_deref(),
             cut: false,
             ids: Vec::new(),
         };
@@ -163,8 +335,9 @@ impl Tags {
         };
         for kid in list(src, root.get(b"K")) {
             if let Some(copy) = walk.element(out, &kid, document, None, 0, whole)? {
+                let single = self.single;
                 out.update_dict(copy, |d| {
-                    if d.name(b"S") == Some(b"Document") {
+                    if !single && d.name(b"S") == Some(b"Document") {
                         d.set(b"S".to_vec(), Object::name("Part"));
                     }
                     if let Some(l) = &own_lang
@@ -201,13 +374,19 @@ impl Tags {
     pub(super) fn finish(self, out: &mut Document) -> Result<Option<String>, OrganizeError> {
         let Some(document) = self.document else { return Ok(None) };
         let catalog = out.root().ok_or(OrganizeError::NoPageTree)?;
-        let root = out.add(Object::Null);
-        let mut element = Dict::new();
-        element.set(b"Type".to_vec(), Object::name("StructElem"));
-        element.set(b"S".to_vec(), Object::name("Document"));
-        element.set(b"P".to_vec(), Object::Ref(root));
-        element.set(b"K".to_vec(), Object::Array(self.kids));
-        out.set(document, Object::Dict(element));
+        // One source's top-level elements name `document` as their parent: it is the root itself.
+        let (root, top) = if self.single {
+            (document, Object::Array(self.kids))
+        } else {
+            let root = out.add(Object::Null);
+            let mut element = Dict::new();
+            element.set(b"Type".to_vec(), Object::name("StructElem"));
+            element.set(b"S".to_vec(), Object::name("Document"));
+            element.set(b"P".to_vec(), Object::Ref(root));
+            element.set(b"K".to_vec(), Object::Array(self.kids));
+            out.set(document, Object::Dict(element));
+            (root, Object::Ref(document))
+        };
         let next_key = self.parents.len();
         let mut nums = Vec::with_capacity(self.parents.len().saturating_mul(2));
         for (key, value) in self.parents {
@@ -219,7 +398,7 @@ impl Tags {
         let parent_tree = out.add(Object::Dict(parent_tree));
         let mut tree = Dict::new();
         tree.set(b"Type".to_vec(), Object::name("StructTreeRoot"));
-        tree.set(b"K".to_vec(), Object::Ref(document));
+        tree.set(b"K".to_vec(), top);
         tree.set(b"ParentTree".to_vec(), Object::Ref(parent_tree));
         tree.set(b"ParentTreeNextKey".to_vec(), Object::Int(i64::try_from(next_key).unwrap_or(i64::MAX)));
         if !self.role_map.is_empty() {
@@ -239,10 +418,14 @@ impl Tags {
         out.set(root, Object::Dict(tree));
         let ua = self.ua.filter(|_| self.title.is_some());
         let lang = self.lang;
+        let user_properties = self.user_properties;
         out.update_dict(catalog, |c| {
             c.set(b"StructTreeRoot".to_vec(), Object::Ref(root));
             let mut mark_info = Dict::new();
             mark_info.set(b"Marked".to_vec(), Object::Bool(true));
+            if user_properties {
+                mark_info.set(b"UserProperties".to_vec(), Object::Bool(true));
+            }
             c.set(b"MarkInfo".to_vec(), Object::Dict(mark_info));
             if let Some(l) = lang {
                 c.set(b"Lang".to_vec(), Object::String(PdfString { bytes: l, hex: false }));
@@ -293,6 +476,13 @@ impl Walk<'_> {
     ) -> Result<Option<ObjRef>, OrganizeError> {
         if depth >= MAX_DEPTH {
             self.cut = true;
+            return Ok(None);
+        }
+        // Nothing of it on these pages: what the walk would read and then leave out.
+        if !whole
+            && let (Some(index), Some(r)) = (self.index, kid.as_ref())
+            && index.misses(r, self.pages)
+        {
             return Ok(None);
         }
         if !self.spend() {

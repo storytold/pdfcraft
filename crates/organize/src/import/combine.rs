@@ -1,12 +1,39 @@
 use super::carry::{Mark, add_outline, collect_attachments, kept_bookmarks, set_attachments, source_outline, write_outline_level};
-use super::tags::Tags;
+use std::sync::Arc;
+
+use super::tags::{PageIndex, Tags};
 use super::{Dict, Document, FieldConflicts, HashMap, HashSet, ObjRef, Object, OrganizeError, import_pages_mapped, rebuild};
 
 /// A new document containing copies of `pages` from `src` (Extract Pages / Split).
 /// Document information (title, author…) is carried over, and so is the print standard the
-/// source declares (PDF/X: its output intents and identification, #263), and the bookmarks that
-/// go to the copied pages.
+/// source declares (PDF/X: its output intents and identification, #263), the bookmarks that
+/// go to the copied pages, and the structure tree's elements with content on them (tags; see
+/// `tags`).
 pub fn extract_pages(src: &Document, pages: &[usize]) -> Result<Document, OrganizeError> {
+    extract_with(src, pages, None)
+}
+
+/// [`extract_pages`] for many parts of one document (Split): the source's structure tree is read
+/// once, when the extractor is made, rather than once for every part.
+pub struct Extractor<'a> {
+    src: &'a Document,
+    index: Option<Arc<PageIndex>>,
+}
+
+impl<'a> Extractor<'a> {
+    /// An extractor of `src`'s pages.
+    pub fn new(src: &'a Document) -> Self {
+        Extractor { src, index: PageIndex::build(src).map(Arc::new) }
+    }
+
+    /// A new document containing copies of `pages` (as [`extract_pages`]).
+    pub fn extract(&self, pages: &[usize]) -> Result<Document, OrganizeError> {
+        extract_with(self.src, pages, self.index.clone())
+    }
+}
+
+/// [`extract_pages`], with where the source's elements have content when it was read beforehand.
+fn extract_with(src: &Document, pages: &[usize], index: Option<Arc<PageIndex>>) -> Result<Document, OrganizeError> {
     let mut out = Document::new_empty();
     let mut labels = Vec::new();
     let mut has_labels = false;
@@ -15,6 +42,10 @@ pub fn extract_pages(src: &Document, pages: &[usize]) -> Result<Document, Organi
     // same-named field roots stays one field, as it was), so Extract and Split never rename.
     let imported = import_pages_mapped(&mut out, src, pages, 0, FieldConflicts::Merge)?;
     crate::labels::finish_page_labels(&mut out, &labels, has_labels)?;
+    // The tags of these pages come along, the parent tree rebuilt for the part.
+    let whole = pages.iter().collect::<HashSet<_>>().len() == crate::page_count(src)?;
+    let mut tags = Tags::single(index);
+    tags.add(&mut out, src, &imported.page_map, &imported.objects, whole)?;
     // The bookmarks of these pages come along, mapped to the copies (#4020).
     let outline = kept_bookmarks(source_outline(src, imported.page_map));
     if !outline.is_empty() {
@@ -33,8 +64,9 @@ pub fn extract_pages(src: &Document, pages: &[usize]) -> Result<Document, Organi
             crate::set_info(&mut out, key, &v)?;
         }
     }
+    let ua = tags.finish(&mut out)?;
     // After the title: the XMP packet repeats it.
-    crate::pdfx::carry(&mut out, Some(src), &crate::pdfx::PrintStandard::of(src), imported.objects, None)?;
+    crate::pdfx::carry(&mut out, Some(src), &crate::pdfx::PrintStandard::of(src), imported.objects, ua.as_deref())?;
     // The pages share their source's resource dictionary, so the part would otherwise carry every
     // XObject the source lists — images and all (#204). Keep only what these pages draw.
     crate::prune::prune_unused_xobjects(&mut out)?;
@@ -72,7 +104,8 @@ pub fn split_ranges(page_count: usize, by: &SplitBy) -> Vec<std::ops::Range<usiz
 /// Split a document into several new documents.
 pub fn split(src: &Document, by: &SplitBy) -> Result<Vec<Document>, OrganizeError> {
     let n = crate::page_count(src)?;
-    split_ranges(n, by).into_iter().map(|r| extract_pages(src, &r.collect::<Vec<_>>())).collect()
+    let extractor = Extractor::new(src);
+    split_ranges(n, by).into_iter().map(|r| extractor.extract(&r.collect::<Vec<_>>())).collect()
 }
 
 /// What combining produced, beyond the document: the fields renamed to keep colliding names

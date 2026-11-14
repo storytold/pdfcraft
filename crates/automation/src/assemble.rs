@@ -268,7 +268,9 @@ impl Automation {
     /// are removed.
     fn extract_separate(&self, id: pdfcraft_engine::DocId, pages: &[usize], out_dir: &str, stem: &str) -> Result<Vec<String>> {
         let Some(&first) = pages.first() else { return Ok(Vec::new()) };
-        let mut first_bytes = Some(self.session.extract(id, &[first]).map_err(failed)?);
+        // The document's tags are read once for all the pages.
+        let extractor = self.session.page_extractor(id).map_err(failed)?;
+        let mut first_bytes = Some(extractor.extract(&[first]).map_err(failed)?);
         let dir = self.resolve(out_dir, true)?;
         let made_dir = !dir.exists();
         std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
@@ -276,7 +278,7 @@ impl Automation {
         let outcome = pages.iter().try_for_each(|&p| -> Result<()> {
             let bytes = match first_bytes.take() {
                 Some(bytes) => bytes,
-                None => self.session.extract(id, &[p]).map_err(failed)?,
+                None => extractor.extract(&[p]).map_err(failed)?,
             };
             let path = child(&dir, &format!("{stem}-page{}.pdf", p.saturating_add(1)));
             let existed = path.exists();
