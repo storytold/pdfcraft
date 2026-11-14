@@ -144,6 +144,9 @@ copies retain their current preferences locations.
 |---|---|
 | `RUST_LOG` | Log levels for standard error and the log file (see [Logs](#logs)) |
 | `RUST_BACKTRACE` | `1` adds a backtrace to the report of an internal error |
+| `PDFCRAFT_SOFFICE` | Preferred LibreOffice program path for native Office-to-PDF conversion. Empty or non-file values allow the search to continue through `PATH`, then usual install locations. |
+| `PDFCRAFT_TESSERACT` | Native Tesseract executable path: it must be absolute and answer `--list-langs`. A set value is exclusive; an unusable value makes Tesseract unavailable without `PATH` fallback. Unset, it searches absolute `PATH` entries. |
+| `PDFCRAFT_MODELS` | Preferred directory for native built-in OCR models. Search continues through packaged model locations and `assets/models/` until a complete detection/recognition pair is found. Within a directory, ONNX is preferred over legacy RTEN; files from different directories or formats are never combined. |
 | `XDG_CONFIG_HOME` | Linux/FreeBSD: absolute configuration base for `pdfcraft/app.ron`; defaults to `~/.config` |
 | `XDG_DATA_HOME` | Linux/FreeBSD: base of the log folder and crash recovery; previous preferences are migrated from here |
 | `WGPU_POWER_PREF` | GPU choice; by default PdfCraft draws on the GPU the Wayland compositor draws with (it says so through linux-dmabuf feedback), else the GPU that drives the primary display (Windows) or the built-in panel (Linux), else the low-power (integrated) GPU. The log says which one was chosen |
