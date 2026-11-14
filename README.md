@@ -1,4 +1,9 @@
 <p align="center">
+  <a href="https://github.com/storytold/pdfcraft/blob/main/README.md">English</a> ·
+  <a href="https://github.com/storytold/pdfcraft/blob/main/README.ru.md">Русский</a> ·
+  <a href="https://github.com/storytold/pdfcraft/blob/main/README.fr.md">Français</a>
+</p>
+<p align="center">
   <a href="https://getartcraft.com/">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/brand/artcraft-logo-white.svg">
