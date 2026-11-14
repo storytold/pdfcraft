@@ -19,6 +19,11 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
         R::OpenDoc(path) => json!({ "open_doc": path }),
         R::OpenAttachment { name, open } => json!({ "attachment": name, "open": open }),
         R::ShowPanel(p) => json!({ "panel": p.id() }),
+        // Applied by the engine with the script's field changes; listed only if one is left over.
+        R::SpawnTemplate { name, page, rename, overlay } => {
+            json!({ "spawn_template": name, "page": page.saturating_add(1), "rename": rename, "overlay": overlay })
+        }
+        R::SetTemplateHidden { name, hidden } => json!({ "template": name, "hidden": hidden }),
     }
 }
 
