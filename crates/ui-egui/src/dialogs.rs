@@ -14,6 +14,7 @@ pub(super) mod convert_colours_ui;
 pub(super) mod credits;
 pub(super) mod hairlines_ui;
 pub(super) mod marks_ui;
+pub mod named_dests_ui;
 pub(super) mod pageboxes;
 pub(super) mod palette;
 pub(super) mod preferences;
@@ -160,6 +161,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Dialog::Preferences => 610.0,
             Dialog::About => 820.0,
             Dialog::PinTool => 540.0,
+            Dialog::NamedDestinations => 720.0,
             _ => 520.0,
         });
         if dialog_body(ui, app, dialog, &mut req) {
@@ -506,6 +508,10 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
         }
         Dialog::BookmarksFromTextStyles => {
             req.close = crate::bookmark_styles_ui::body(ui, app, &t);
+            return false;
+        }
+        Dialog::NamedDestinations => {
+            req.close = crate::dialogs::named_dests_ui::body(ui, app, &t);
             return false;
         }
         Dialog::NumberPages => {
@@ -1024,15 +1030,31 @@ fn dialog_split(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> 
         crate::SplitPlan::Size(_) => None,
     };
     ui.add_space(8.0);
-    let text = match files {
-        Some(f) => {
-            if f == 1 {
-                crate::i18n::fmt(tl!("Creates 1 file from {n} pages."), &[("n", &n.to_string())])
-            } else {
-                crate::i18n::fmt(tl!("Creates {f} files from {n} pages."), &[("f", &f.to_string()), ("n", &n.to_string())])
-            }
+    #[cfg(feature = "collab")]
+    let shared = app.collab_shares(id);
+    #[cfg(not(feature = "collab"))]
+    let shared = false;
+    let text = if shared {
+        // In a room the only shape one `page.split` can carry is one part: the
+        // pages after the plan's first cut leave (RFC §3.1.5).
+        match app.split_cut(id, &plan) {
+            Some(cut) => crate::i18n::fmt(
+                tl!("A shared split takes the pages from page {p} out of the document ({n} pages leave); Undo brings them back."),
+                &[("p", &(cut + 1).to_string()), ("n", &n.saturating_sub(cut).to_string())],
+            ),
+            None => tl!("A shared split takes one part out of the document; Undo brings it back.").to_string(),
         }
-        None => crate::i18n::fmt(tl!("Each file holds as many of the {n} pages as fit."), &[("n", &n.to_string())]),
+    } else {
+        match files {
+            Some(f) => {
+                if f == 1 {
+                    crate::i18n::fmt(tl!("Creates 1 file from {n} pages."), &[("n", &n.to_string())])
+                } else {
+                    crate::i18n::fmt(tl!("Creates {f} files from {n} pages."), &[("f", &f.to_string()), ("n", &n.to_string())])
+                }
+            }
+            None => crate::i18n::fmt(tl!("Each file holds as many of the {n} pages as fit."), &[("n", &n.to_string())]),
+        }
     };
     ui.label(egui::RichText::new(text).color(t.text_muted));
     if files.is_none_or(|f| f > 1) {

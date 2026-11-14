@@ -2425,6 +2425,92 @@ fn extracting_unrepresentable_labels_uses_physical_numbers() {
     assert_eq!(crate::page_labels(&extracted).unwrap(), ["ok-1", "2"]);
 }
 
+/// Every page keeps the label it had when pages are inserted, duplicated or moved: an explicit
+/// range follows its pages (a range is split when the move lands inside it), and a page before
+/// the first range keeps showing its physical number. Clearing a range hands its pages back to
+/// the range before it; the undo is the range whole.
+#[test]
+fn page_operations_keep_each_label_on_its_page() {
+    use crate::LabelStyle::{Decimal, LowerRoman};
+    let labelled = || {
+        let mut d = doc_a();
+        for at in 3..10 {
+            crate::insert_blank_page(&mut d, at, 300.0, 400.0).unwrap();
+        }
+        crate::set_page_label_ranges(
+            &mut d,
+            &[
+                LabelRange { start: 0, style: LowerRoman, prefix: String::new(), first: 1 },
+                LabelRange { start: 3, style: Decimal, prefix: String::new(), first: 1 },
+                LabelRange { start: 7, style: Decimal, prefix: "A-".into(), first: 1 },
+            ],
+        )
+        .unwrap();
+        d
+    };
+    // A blank page falls into the numbering around it; every page after it keeps its own label.
+    let mut blank = labelled();
+    crate::insert_blank_page(&mut blank, 4, 300.0, 400.0).unwrap();
+    assert_eq!(crate::page_labels(&blank).unwrap(), ["i", "ii", "iii", "1", "2", "2", "3", "4", "A-1", "A-2", "A-3"]);
+    // Deleting it again leaves the same ranges: the labels describe the same pages.
+    crate::delete_pages(&mut blank, &[4]).unwrap();
+    assert_eq!(crate::page_label_ranges(&blank), crate::page_label_ranges(&labelled()));
+    // A duplicate brings the label of the page it copies.
+    let mut duplicate = labelled();
+    crate::duplicate_pages(&mut duplicate, &[0], Some(1)).unwrap();
+    assert_eq!(crate::page_labels(&duplicate).unwrap(), ["i", "i", "ii", "iii", "1", "2", "3", "4", "A-1", "A-2", "A-3"]);
+    // A move keeps every label with its page.
+    let mut moved = labelled();
+    crate::move_pages(&mut moved, &[0], 9).unwrap();
+    assert_eq!(crate::page_labels(&moved).unwrap(), ["ii", "iii", "1", "2", "3", "4", "A-1", "A-2", "A-3", "i"]);
+    // Clearing a range hands its pages back to the range before it.
+    let mut cleared = labelled();
+    crate::clear_page_label_range(&mut cleared, 7).unwrap();
+    assert_eq!(crate::page_labels(&cleared).unwrap(), ["i", "ii", "iii", "1", "2", "3", "4", "5", "6", "7"]);
+    // Its undo is the range whole, as the operation carries it.
+    crate::number_pages(&mut cleared, 7, 9, Decimal, "A-", 1).unwrap();
+    assert_eq!(crate::page_label_ranges(&cleared), crate::page_label_ranges(&labelled()));
+    // A page inside a range begins none: clearing it is refused, not guessed.
+    assert!(crate::clear_page_label_range(&mut cleared, 5).is_err());
+}
+
+/// A page inserted from another file brings its own label; the pages around it keep the number
+/// they showed, an unlabelled one by its physical position.
+#[test]
+fn inserted_pages_bring_their_labels() {
+    use crate::LabelStyle::{Decimal, UpperAlpha};
+    let mut src = doc_b();
+    crate::set_page_label_ranges(&mut src, &[LabelRange { start: 0, style: UpperAlpha, prefix: "B-".into(), first: 1 }]).unwrap();
+    let mut dst = doc_a();
+    crate::insert_file_pages(&mut dst, &src, "b.pdf", &[0, 1], 1, crate::FieldConflicts::Rename).unwrap();
+    assert_eq!(crate::page_labels(&dst).unwrap(), ["1", "B-A", "B-B", "4", "5"]);
+    assert_eq!(
+        crate::page_label_ranges(&dst),
+        [
+            LabelRange { start: 0, style: Decimal, prefix: String::new(), first: 1 },
+            LabelRange { start: 1, style: UpperAlpha, prefix: "B-".into(), first: 1 },
+            LabelRange { start: 3, style: Decimal, prefix: String::new(), first: 4 },
+        ]
+    );
+    // An unlabelled source leaves the destination unlabelled.
+    let mut plain = doc_a();
+    crate::insert_file_pages(&mut plain, &doc_b(), "b.pdf", &[0], 0, crate::FieldConflicts::Rename).unwrap();
+    assert!(crate::page_label_ranges(&plain).is_empty());
+}
+
+/// The label check refuses what cannot be written, before any range is stored.
+#[test]
+fn a_label_span_is_checked_before_it_is_written() {
+    use crate::LabelStyle::{Decimal, LowerRoman, None as PrefixOnly};
+    let at = |style, prefix: String, first| LabelRange { start: 2, style, prefix, first };
+    assert!(crate::check_page_label(&at(PrefixOnly, String::new(), 1), 3).is_err(), "an empty label");
+    assert!(crate::check_page_label(&at(PrefixOnly, "x".repeat(pdfcraft_cos::page_labels::MAX_LABEL_BYTES + 1), 1), 3).is_err(), "a long prefix");
+    assert!(crate::check_page_label(&at(Decimal, String::new(), 1), 1).is_err(), "an empty span");
+    assert!(crate::check_page_label(&at(Decimal, String::new(), u32::MAX), 5).is_err(), "a number past 32 bits");
+    assert!(crate::check_page_label(&at(LowerRoman, String::new(), 1), 3).is_ok());
+    assert!(crate::check_page_label(&at(PrefixOnly, "Cover".into(), 1), 3).is_ok());
+}
+
 #[test]
 fn page_label_limits_reject_unsupported_edits_before_mutating() {
     use crate::LabelStyle::*;
@@ -4981,4 +5067,240 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
     let all = full_roundtrip(&combine_selected(&[("C", &doc_c(), Some(&[0, 1]))]).unwrap());
     assert_eq!(source_bookmarks(&all), [("Chapter one".to_string(), vec!["Section".to_string()])]);
     assert!(attachments(&all));
+}
+
+/// Named destinations (ISO 32000-2 §12.3.2.3) are one list: set, read back,
+/// moved and deleted, with the name tree as the one place a name lives.
+#[test]
+fn named_destinations_are_set_listed_moved_and_deleted() {
+    let mut doc = open(fixture());
+    assert!(named_destinations(&doc).is_empty(), "the fixture has none");
+    set_named_destination(&mut doc, "intro", &BookmarkDest::Page { page: 1, left: Some(10.0), top: Some(380.0) }).unwrap();
+    let listed = named_destinations(&doc);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, "intro");
+    assert_eq!(listed[0].page, Some(1));
+    assert_eq!(listed[0].view, Some((b"XYZ".to_vec(), vec![Some(10.0), Some(380.0), None])));
+    // A reader resolves the name to the same place.
+    let resolved = named_destination(&doc, "intro").unwrap();
+    assert_eq!((resolved.page, resolved.view), (Some(1), listed[0].view.clone()));
+    assert!(named_destination(&doc, "missing").is_none());
+
+    // An update replaces the entry in place (same count, new place).
+    set_named_destination(&mut doc, "intro", &BookmarkDest::Page { page: 2, left: None, top: None }).unwrap();
+    set_named_destination(&mut doc, "appendix", &BookmarkDest::Page { page: 0, left: None, top: None }).unwrap();
+    let names: Vec<String> = named_destinations(&doc).into_iter().map(|d| d.name).collect();
+    assert_eq!(names, ["appendix", "intro"], "the tree lists its keys in order");
+    assert_eq!(named_destination(&doc, "intro").unwrap().page, Some(2));
+
+    // Details are refused before anything changes.
+    let before = named_destinations(&doc).len();
+    assert!(set_named_destination(&mut doc, "  ", &BookmarkDest::Page { page: 0, left: None, top: None }).is_err());
+    assert!(set_named_destination(&mut doc, "gone", &BookmarkDest::Page { page: 3, left: None, top: None }).is_err());
+    assert!(set_named_destination(&mut doc, "wild", &BookmarkDest::Page { page: 0, left: Some(f64::NAN), top: None }).is_err());
+    assert_eq!(named_destinations(&doc).len(), before);
+
+    delete_named_destination(&mut doc, "intro").unwrap();
+    assert!(named_destination(&doc, "intro").is_none());
+    assert_eq!(named_destinations(&doc).len(), 1);
+    assert!(delete_named_destination(&mut doc, "intro").is_err(), "a name that is not there is refused, not ignored");
+    // The last one takes the slot with it.
+    delete_named_destination(&mut doc, "appendix").unwrap();
+    let root = doc.root().unwrap();
+    assert!(doc.get(root).as_dict().and_then(|c| c.get(b"Names")).is_none(), "an empty tree is not left behind");
+}
+
+/// A legacy `/Dests` dictionary entry is listed, taken over by the name tree when
+/// the same name is set, and removed with it; the other trees in `/Names` stay.
+#[test]
+fn legacy_dests_and_the_other_name_trees_survive_an_edit() {
+    let mut doc = open(fixture());
+    let root = doc.root().unwrap();
+    let page = walk(&doc).unwrap()[0].0;
+    let mut dests = pdfcraft_cos::Dict::new();
+    dests.set(b"old".to_vec(), Object::Array(vec![Object::Ref(page), Object::name("Fit")]));
+    let mut names = pdfcraft_cos::Dict::new();
+    let mut js = pdfcraft_cos::Dict::new();
+    js.set(b"Names".to_vec(), Object::Array(vec![Object::String(PdfString::text("doc")), Object::String(PdfString::text("1"))]));
+    names.set(b"JavaScript".to_vec(), Object::Dict(js));
+    doc.update_dict(root, |c| {
+        c.set(b"Dests".to_vec(), Object::Dict(dests));
+        c.set(b"Names".to_vec(), Object::Dict(names));
+    })
+    .unwrap();
+    let listed = named_destinations(&doc);
+    assert_eq!(listed.len(), 1);
+    assert_eq!((listed[0].name.as_str(), listed[0].page), ("old", Some(0)));
+    assert_eq!(listed[0].view.as_ref().map(|(kind, _)| kind.as_slice()), Some(b"Fit".as_slice()));
+
+    // Setting the same name moves it into the tree; a reader still resolves it,
+    // and the legacy entry no longer shadows the new place.
+    set_named_destination(&mut doc, "old", &BookmarkDest::Page { page: 1, left: None, top: None }).unwrap();
+    assert_eq!(named_destination(&doc, "old").unwrap().page, Some(1));
+    let root = doc.root().unwrap();
+    let legacy = doc.get(root).as_dict().and_then(|c| c.get(b"Dests")).map(|d| doc.resolve(d).as_dict().is_some_and(|d| d.get(b"old").is_some()));
+    assert_eq!(legacy, Some(false), "the tree owns the name now");
+    let javascript =
+        doc.get(root).as_dict().and_then(|c| c.get(b"Names")).map(|n| doc.resolve(n).as_dict().is_some_and(|d| d.get(b"JavaScript").is_some()));
+    assert_eq!(javascript, Some(true), "another tree in /Names is untouched");
+
+    // A name only the dictionary has is deleted from it.
+    let mut doc = open(fixture());
+    let root = doc.root().unwrap();
+    let page = walk(&doc).unwrap()[1].0;
+    let mut dests = pdfcraft_cos::Dict::new();
+    dests.set(b"only-legacy".to_vec(), Object::Array(vec![Object::Ref(page), Object::name("Fit")]));
+    doc.update_dict(root, |c| c.set(b"Dests".to_vec(), Object::Dict(dests))).unwrap();
+    delete_named_destination(&mut doc, "only-legacy").unwrap();
+    assert!(named_destinations(&doc).is_empty());
+}
+
+/// A bookmark may go to a named destination or somewhere explicit, and the two
+/// are one edit each; a name nobody defines is refused.
+#[test]
+fn a_bookmark_goes_to_a_named_destination_and_back() {
+    let mut doc = open(fixture());
+    set_named_destination(&mut doc, "intro", &BookmarkDest::Page { page: 2, left: Some(5.0), top: Some(390.0) }).unwrap();
+    add_bookmark_with(&mut doc, &[], 0, "Start", BookmarkDest::Named { name: "intro".into() }).unwrap();
+    add_bookmark_with(&mut doc, &[], 1, "End", BookmarkDest::Nowhere).unwrap();
+    let items = bookmarks(&doc);
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].title, "Start");
+    assert_eq!(items[0].page, Some(2), "the name resolves to its page");
+    assert_eq!(items[1].page, None, "a container goes nowhere");
+
+    // A destination that is not a place, a page this document lacks and a name
+    // nobody defines are refused, and the outline is unchanged.
+    assert!(add_bookmark_with(&mut doc, &[], 2, "Lost", BookmarkDest::Named { name: "nowhere".into() }).is_err());
+    assert!(add_bookmark_with(&mut doc, &[], 2, "Lost", BookmarkDest::Page { page: 3, left: None, top: None }).is_err());
+    assert!(add_bookmark_with(&mut doc, &[], 2, "   ", BookmarkDest::Nowhere).is_err());
+    assert_eq!(bookmarks(&doc).len(), 2);
+
+    // The named destination is rewritten as an explicit place, and the item that
+    // went nowhere gets one.
+    set_bookmark_dest(&mut doc, &[0], BookmarkDest::Page { page: 1, left: None, top: None }).unwrap();
+    set_bookmark_dest(&mut doc, &[1], BookmarkDest::View { page: 0, kind: b"Fit".to_vec(), values: Vec::new() }).unwrap();
+    let items = bookmarks(&doc);
+    assert_eq!((items[0].page, items[1].page), (Some(1), Some(0)));
+    assert_eq!(items[1].view.as_ref().map(|(kind, _)| kind.as_slice()), Some(b"Fit".as_slice()));
+    // And a view of the wrong shape is refused.
+    assert!(set_bookmark_dest(&mut doc, &[1], BookmarkDest::View { page: 0, kind: b"FitR".to_vec(), values: vec![None; 3] }).is_err());
+    set_bookmark_dest(&mut doc, &[1], BookmarkDest::Nowhere).unwrap();
+    assert_eq!(bookmarks(&doc)[1].page, None);
+}
+
+/// A three-page document whose first page links to the third by number and by name, and to
+/// another file by number: only the first one is a page of this document.
+fn doc_with_numbered_links() -> Document {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),                                             // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Annots [7 0 R 8 0 R 9 0 R] >>".into(),   // 3
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>".into(),                               // 4
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>".into(),                               // 5
+        body("page"),                                                                           // 6
+        "<< /Type /Annot /Subtype /Link /Rect [0 0 30 30] /Dest [2 /Fit] >>".into(),            // 7: page 3, by number
+        "<< /Type /Annot /Subtype /Link /Rect [0 40 30 70] /A << /S /GoToR /F (other.pdf) /D [1 /Fit] >> >>".into(), // 8
+        "<< /Type /Annot /Subtype /Link /Rect [0 80 30 110] /Dest (intro) >>".into(),           // 9: a name
+    ];
+    open(build(&b, "/Root 1 0 R"))
+}
+
+/// The destination an annotation names: its `/Dest`, or a go-to action's `/D`.
+fn link_destination(doc: &Document, number: u32) -> Option<Object> {
+    let d = doc.get(ObjRef::new(number, 0)).as_dict().cloned()?;
+    d.get(b"Dest").map(|x| doc.resolve(x).as_ref().clone()).or_else(|| {
+        let action = d.get(b"A").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned())?;
+        action.get(b"D").map(|x| doc.resolve(x).as_ref().clone())
+    })
+}
+
+fn object_number_of_first_link(doc: &Document) -> u32 {
+    let page = pages(doc).unwrap()[0].obj;
+    doc.get(page).as_dict().and_then(|d| d.get(b"Annots")).and_then(Object::as_array).and_then(|a| a.first()).and_then(Object::as_ref).unwrap().num
+}
+
+#[test]
+fn page_numbers_in_links_follow_the_pages_they_name() {
+    let mut doc = doc_with_numbered_links();
+    let link = object_number_of_first_link(&doc);
+    let number = |doc: &Document| match link_destination(doc, link) {
+        Some(Object::Array(a)) => doc.resolve(a.first().unwrap()).as_int(),
+        Some(other) => panic!("the link lost its array destination: {other:?}"),
+        None => None,
+    };
+    assert_eq!(number(&doc), Some(2));
+
+    // The page the link is on moves to the end: its target is now the second page.
+    move_pages(&mut doc, &[0], 2).unwrap();
+    assert_eq!(number(&doc), Some(1), "a moved page's link follows its page");
+
+    // A blank page at the front pushes both pages one place along.
+    insert_blank_page(&mut doc, 0, 300.0, 400.0).unwrap();
+    assert_eq!(number(&doc), Some(2));
+
+    // The remote go-to and the named destination are not this document's numbering.
+    let remote = doc.get(ObjRef::new(8, 0)).as_dict().cloned().unwrap();
+    assert!(remote.get(b"A").is_some(), "a remote go-to keeps its action");
+    let action = remote.get(b"A").and_then(|a| doc.resolve(a).as_dict().cloned()).unwrap();
+    let dest = action.get(b"D").and_then(|d| doc.resolve(d).as_array().cloned()).unwrap();
+    assert_eq!(doc.resolve(dest.first().unwrap()).as_int(), Some(1), "the other file's page number is left alone");
+    assert_eq!(
+        doc.get(ObjRef::new(9, 0)).as_dict().and_then(|d| d.get(b"Dest")).map(|d| doc.resolve(d).as_string().map(|s| s.to_text())),
+        Some(Some("intro".to_string())),
+        "a named destination is a name, not a number"
+    );
+}
+
+#[test]
+fn a_link_to_a_deleted_page_loses_its_destination() {
+    let mut doc = doc_with_numbered_links();
+    let link = object_number_of_first_link(&doc);
+    assert!(link_destination(&doc, link).is_some());
+    delete_pages(&mut doc, &[2]).unwrap();
+    assert_eq!(link_destination(&doc, link), None, "the page it opened is gone");
+    // The link annotation itself stays on its page, and its page is still there.
+    let page = pages(&doc).unwrap()[0].obj;
+    let annots = doc.get(page).as_dict().and_then(|d| d.get(b"Annots")).and_then(Object::as_array).cloned().unwrap();
+    assert_eq!(annots.len(), 3, "the annotations are kept, only the destination goes");
+}
+
+/// A bookmark with no children has no `/Count` to change: opening or closing it
+/// leaves the file as it is. The room refuses the request instead of writing
+/// nothing, so a client is told rather than left thinking it changed a state
+/// that a file cannot hold.
+#[test]
+fn opening_a_bookmark_without_children_changes_nothing() {
+    let mut d = doc_a();
+    crate::add_bookmark(&mut d, &[], 0, "Leaf", 0).unwrap();
+    let leaf = crate::bookmarks(&d)[0].obj;
+    assert_eq!(count_of(&d, leaf), None);
+    crate::set_bookmark_open(&mut d, &[0], false).unwrap();
+    assert_eq!(count_of(&d, leaf), None, "nothing to close");
+    crate::set_bookmark_open(&mut d, &[0], true).unwrap();
+    assert_eq!(count_of(&d, leaf), None, "and nothing to open");
+    // A parent does change, and its children stay where they are.
+    crate::add_bookmark(&mut d, &[0], 0, "Child", 0).unwrap();
+    let leaf = crate::bookmarks(&d)[0].obj;
+    crate::set_bookmark_open(&mut d, &[0], false).unwrap();
+    assert_eq!(count_of(&d, leaf), Some(-1));
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Leaf[Child]"]);
+}
+
+/// The colour a shared session writes back is the number the file holds, not
+/// the `f32` the listing rounds it to: an operation's undo image is read at full
+/// precision, and the default black is no colour at all.
+#[test]
+fn a_bookmarks_colour_is_read_back_at_the_files_precision() {
+    let mut d = doc_a();
+    crate::add_bookmark(&mut d, &[], 0, "Tinted", 0).unwrap();
+    assert_eq!(crate::bookmark_color(&d, &[0]).unwrap(), None, "no /C is the default black");
+    crate::set_bookmark_color(&mut d, &[0], Some([0.1, 0.25, 0.75])).unwrap();
+    assert_eq!(crate::bookmark_color(&d, &[0]).unwrap(), Some([0.1, 0.25, 0.75]));
+    // The listing rounds the same colour for the interface; that is the value it
+    // is meant to show, not the one an undo writes.
+    assert_eq!(crate::bookmarks(&d)[0].color, Some([0.1_f32, 0.25, 0.75]));
+    crate::set_bookmark_color(&mut d, &[0], Some([0.0, 0.0, 0.0])).unwrap();
+    assert_eq!(crate::bookmark_color(&d, &[0]).unwrap(), None, "black removes /C");
+    assert_eq!(crate::bookmark_color(&d, &[4]).unwrap_err(), crate::OutlineError::NoSuchBookmark(vec![4]));
 }

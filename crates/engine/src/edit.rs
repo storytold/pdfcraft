@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use crate::{
     AddedContent, AddedText, Background, BorderShape, BoxSpec, EditError, FieldProps, FieldValue, FillMark, Hairlines, HeaderFooter, Hidden,
-    ImageEdit, InitialView, Label, LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget,
-    PageBox, PrinterMarks, Protection, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image,
-    decode_data_file, embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, strip_xfa,
-    unrestricted, xfa, xfa_after_data_change,
+    ImageEdit, InitialView, Label, LineEnding, LinkAction, LinkContent, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon,
+    ObjectTarget, PageBox, PrinterMarks, Protection, Restyle, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y,
+    copy_image, decode_data_file, embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure,
+    model_poster, strip_xfa, unrestricted, xfa, xfa_after_data_change,
 };
 
 mod labels;
@@ -129,6 +129,38 @@ pub enum Edit {
         bookmarks: Vec<pdfcraft_organize::OutlineNode>,
         replace: bool,
     },
+    /// Add a bookmark to `dest` (a page at a point, or one of this document's named
+    /// destinations) as child `index` of the bookmark at `parent` (`[]` = the top level).
+    AddBookmarkWith {
+        parent: Vec<usize>,
+        index: usize,
+        title: String,
+        dest: pdfcraft_organize::BookmarkDest,
+    },
+    /// Change a bookmark's title, where it goes and how it looks, as one step. A title
+    /// that is only spaces, an empty destination or a name this document does not
+    /// define is refused, and nothing changes. `color: Some(None)` is the default
+    /// black; a style or an open state left out keeps what the file has.
+    UpdateBookmark {
+        path: Vec<usize>,
+        title: Option<String>,
+        dest: Option<pdfcraft_organize::BookmarkDest>,
+        color: Option<Option<[f64; 3]>>,
+        bold: Option<bool>,
+        italic: Option<bool>,
+        open: Option<bool>,
+    },
+    /// Point the named destination `name` at `dest` (a page and a point, or a page
+    /// with the view type the file already had), creating it when it does not exist
+    /// yet (`/Names /Dests`). A destination that does not name a page is refused.
+    SetNamedDestination {
+        name: String,
+        dest: pdfcraft_organize::BookmarkDest,
+    },
+    /// Remove the named destination `name`; a name this document does not define is refused.
+    DeleteNamedDestination {
+        name: String,
+    },
     /// Bookmarks for the tagged headings (H, H1–H6), nested by level under a new first
     /// "Untitled" bookmark (New Bookmarks from Structure).
     BookmarksFromStructure,
@@ -145,6 +177,11 @@ pub enum Edit {
         prefix: String,
         first: u32,
     },
+    /// Remove the label range that begins at `start` (0-based): the pages it labelled take the
+    /// numbering of the range before them. A page that begins no range is refused.
+    ClearPageLabels {
+        start: usize,
+    },
     /// Add a calibrated distance, perimeter or area annotation.
     AddMeasurement(measure::NewMeasurement),
     /// Store a drawing scale for a rectangular viewport (PDF user space).
@@ -156,6 +193,9 @@ pub enum Edit {
     },
     /// Add a comment (sticky note, highlight, shape, drawing, text box…).
     AddAnnotation(NewAnnotation),
+    /// Add a comment whose `/NM` the caller chooses. Collaboration uses this so
+    /// every replica and the server name the annotation identically (ADR-0002).
+    AddAnnotationNamed(NewAnnotation, String),
     /// A custom stamp from a picture file (a PDF page or an image) on `page`. A zero-size
     /// `rect` is a point: the stamp is centred there at its natural size (at most 200 pt).
     /// Any other `rect` is a box: the picture is scaled to fit inside it, keeping its shape,
@@ -196,12 +236,30 @@ pub enum Edit {
         text: String,
         author: String,
     },
+    /// A reply whose `/NM` the caller chooses (see [`Edit::AddAnnotationNamed`]).
+    ReplyToAnnotationNamed {
+        page: usize,
+        index: usize,
+        text: String,
+        author: String,
+        name: String,
+    },
     /// Acrobat's "Set status" (a state reply by `author`).
     SetAnnotationStatus {
         page: usize,
         index: usize,
         state: ReviewState,
         author: String,
+    },
+    /// [`Edit::SetAnnotationStatus`] with a caller-chosen `/NM` for the state reply: a
+    /// collaboration session names every annotation it adds, so each replica uses one stable id
+    /// (ADR-0002).
+    SetAnnotationStatusNamed {
+        page: usize,
+        index: usize,
+        state: ReviewState,
+        author: String,
+        name: String,
     },
     /// The Eraser: rub out the parts of drawing `(page, index)` near `path` (user space).
     EraseInk {
@@ -302,6 +360,15 @@ pub enum Edit {
         page: usize,
         index: usize,
         shape: BorderShape,
+    },
+    /// Restyle a comment as one all-or-nothing edit: colour, opacity, line width, fill and
+    /// border. [`Edit::StyleAnnotation`], [`Edit::FillAnnotation`],
+    /// [`Edit::BorderColorAnnotation`] and [`Edit::BorderShapeAnnotation`] are the interactive
+    /// steps; a shared operation carries them together (one version, one undo step, ADR-0010).
+    RestyleAnnotation {
+        page: usize,
+        index: usize,
+        style: Restyle,
     },
     /// Comment properties ▸ General / note icon.
     SetAnnotationInfo {
@@ -631,6 +698,20 @@ pub enum Edit {
     DeleteLink {
         page: usize,
         index: usize,
+    },
+    /// Every link on `page`, in order: the room's form of a link edit. Links that
+    /// did not change keep their annotation object, so a rewrite touches only what
+    /// it must; the page's links the model cannot carry refuse the whole edit.
+    SetPageLinks {
+        page: usize,
+        links: Vec<LinkContent>,
+    },
+    /// The links on several pages, each list whole: the room's form of a
+    /// whole-document link operation (`links.add_many`, `links.remove_many`).
+    /// Every list is checked before the first write, so one bad page refuses the
+    /// edit without touching the others, and one edit is one undo record.
+    SetPagesLinks {
+        pages: Vec<(usize, Vec<LinkContent>)>,
     },
     /// Remove all links (on `pages`, or everywhere).
     RemoveLinks {

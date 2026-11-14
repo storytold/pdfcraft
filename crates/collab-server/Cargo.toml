@@ -1,0 +1,15 @@
+[package]
+name = "pdfcraft-collab-server"
+description = "Authoritative room state for collaborative PDF editing: versions, lease, journal, roles"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pdfcraft-collab-proto = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

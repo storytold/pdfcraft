@@ -84,8 +84,9 @@ pub use stamp_preview::{CommentLayer, StampPreview};
 pub use text_preview::{TextEditPreview, UnmarkedPages};
 
 pub use pdfcraft_organize::{
-    BoxSpec, FieldConflicts, MAX_IMPORT_BOOKMARKS, OutlineNode, OutlineTree, PageBox, SplitBy, Transition, TransitionSpec, mime_for_name,
-    split_ranges, unmapped as outline_unmapped, view_arity as outline_view_arity,
+    BookmarkDest, BoxSpec, FieldConflicts, MAX_IMPORT_BOOKMARKS, MAX_NAMED_DESTINATIONS, NamedDestination as DocumentNamedDestination, OutlineNode,
+    OutlineTree, PageBox, SplitBy, Transition, TransitionSpec, delete_named_destination, mime_for_name, named_destination, named_destinations,
+    set_named_destination, split_ranges, unmapped as outline_unmapped, view_arity as outline_view_arity,
 };
 
 pub use pdfcraft_organize::LabelStyle;
@@ -125,11 +126,11 @@ pub use pdfcraft_fonts::{MAX_SIGNATURE_CHARS, ScriptOutline, script_missing, scr
 
 /// Comment geometry helpers (text-box line breaking) for frontends.
 pub use pdfcraft_annot::appearance as annot_text;
-pub use pdfcraft_annot::links::{Highlight as LinkHighlight, LinkAction, LinkItem, LinkStyle, LinkZoom};
+pub use pdfcraft_annot::links::{Highlight as LinkHighlight, LinkAction, LinkBody as LinkContent, LinkItem, LinkStyle, LinkZoom};
 pub use pdfcraft_annot::{
     Activation3d, AppearanceCache, AttachIcon, BorderShape, CALLOUT_KNEE_LINE, FillMark, LineEnding, Markup, NOTE_SIZE, NewAnnotation, NoteIcon,
-    OverlayFont, OverlayLook, Props as CommentProps, ReviewState, Rgb, Shape, Side as CalloutSide, StampGroup, StampKind, Style, callout_attach,
-    callout_knee, callout_side, rect_quad,
+    OverlayFont, OverlayLook, Props as CommentProps, Restyle, ReviewState, Rgb, Shape, Side as CalloutSide, StampGroup, StampKind, Style,
+    callout_attach, callout_knee, callout_side, rect_quad,
 };
 pub use pdfcraft_annot::{MAX_MODEL_BYTES as MAX_3D_MODEL_BYTES, ModelFormat as Model3dFormat};
 pub use pdfcraft_forms::detect;

@@ -4,7 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PdfCraft</title>
-    <link data-trunk rel="rust" data-wasm-opt="z" />
+    <!-- The page is the app that speaks the host bridge: `data-cargo-features`
+         turns on `collab` for this asset only (the OCR worker below has no such
+         feature). Without it the page never answers `pdfcraft:session` and the
+         cabinet's room is never dialled (D4); the crate feature stays off by
+         default, so `cargo build`/`cargo test` are single-user as before. -->
+    <link data-trunk rel="rust" data-wasm-opt="z" data-cargo-features="collab" />
     <!-- Recognises text off the page's thread (crates/ui-egui/src/workflows/ocr_web.rs). -->
     <link data-trunk rel="rust" href="../pdfcraft-ocr-worker/Cargo.toml" data-type="worker" data-loader-shim data-bindgen-target="web" data-wasm-opt="3" />
     <style>

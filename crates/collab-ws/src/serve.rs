@@ -1,0 +1,1223 @@
+//! A blocking WebSocket front end for [`Hub`].
+//!
+//! One thread per connection; the room and the hub are behind one mutex. Frames
+//! are JSON text, checked against the protocol size limit before parsing. Each
+//! connection has a bounded outbox: presence is dropped when the client falls
+//! behind, and a client that cannot keep up with authoritative messages is
+//! disconnected instead of growing memory (RFC §5).
+
+use crate::token::{TokenError, Verifier};
+use pdfcraft_collab_hub::{ClientId, Hub, Pending};
+use pdfcraft_collab_proto::{ActorId, ClientMessage, DocKey, ErrorCode, Hello, MAX_MESSAGE_BYTES, ServerError, ServerMessage};
+use pdfcraft_collab_server::{Adapter, Publication, Published};
+use std::collections::HashMap;
+use std::io;
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{SyncSender, TryRecvError, TrySendError, sync_channel};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+use tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tungstenite::http::StatusCode;
+use tungstenite::protocol::WebSocketConfig;
+use tungstenite::{Error as WsError, Message, WebSocket, accept_hdr_with_config};
+
+/// Transport settings. `app` is the only application this server accepts.
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub app: String,
+    /// How often a connection wakes to write queued messages when idle.
+    pub poll_interval: Duration,
+    /// A connection that does not send `hello` in time is closed.
+    pub handshake_timeout: Duration,
+    /// A write that cannot finish in time closes the connection.
+    pub write_timeout: Duration,
+    /// When set, the `Origin` header must match (web client, RFC §12).
+    pub origin: Option<String>,
+    /// Outbox depth per connection.
+    pub outbox: usize,
+    /// First delay before a failed publication is tried again (limitation 6).
+    pub publication_backoff: Duration,
+    /// The delay doubles per attempt up to this cap.
+    pub publication_backoff_max: Duration,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            app: "pdfcraft".into(),
+            poll_interval: Duration::from_millis(10),
+            handshake_timeout: Duration::from_secs(10),
+            write_timeout: Duration::from_secs(10),
+            origin: None,
+            outbox: 256,
+            publication_backoff: Duration::from_secs(1),
+            publication_backoff_max: Duration::from_secs(60),
+        }
+    }
+}
+
+/// One process's hub plus the outboxes of its connected clients.
+pub struct WsServer<A: Adapter> {
+    shared: Arc<Mutex<Shared<A>>>,
+    verifier: Arc<dyn Verifier>,
+    config: Config,
+}
+
+struct Shared<A: Adapter> {
+    hub: Hub<A>,
+    sinks: HashMap<ClientId, SyncSender<ServerMessage>>,
+    /// Commits that have written their base and wait for the cabinet call.
+    /// The lock is released before they run (RFC §16, limitation 9).
+    pending: Vec<Pending>,
+    /// Server-initiated journal compactions so far (limitation 10). A counter,
+    /// not a gauge: it only grows, and `/metrics` exposes it as a `_total`.
+    forced_commits: u64,
+    /// `conflict` rooms resolved by the operator through the control plane.
+    /// Exposed as `pdfcraft_collab_conflicts_resolved_total`.
+    conflicts_resolved: u64,
+    /// Publications that failed retryably, by document. The room stays
+    /// `publishing` while an entry exists, so a newer base cannot overtake the
+    /// queued one.
+    retries: HashMap<DocKey, Queued>,
+    /// Publication retries attempted since the process started (limitation 6),
+    /// exposed as `pdfcraft_collab_publication_retries_total`.
+    publication_retries: u64,
+    /// Publications a restart put back in the queue from the store, exposed as
+    /// `pdfcraft_collab_publications_restored_total` (limitation 6).
+    publications_restored: u64,
+    /// Publications an operator's `resolve` put in the queue without a commit,
+    /// exposed as `pdfcraft_collab_publications_after_resolve_total`.
+    publications_after_resolve: u64,
+    /// The retry schedule, copied out of [`Config`] so `Shared` owns its clock.
+    backoff: Duration,
+    backoff_max: Duration,
+}
+
+/// One publication waiting for an attempt, or for its next one.
+struct Queued {
+    publication: Box<dyn Publication>,
+    /// Attempts already made for this publication; `0` before the first one.
+    attempts: u32,
+    due_ms: u64,
+    /// `true` when a commit's POST failed and the queue owns the retry;
+    /// `false` for a publication a restart or a resolve queued before its first
+    /// attempt. The difference is only the metric: the first attempt of the
+    /// latter is counted by `publications_restored`/`publications_after_resolve`,
+    /// not as a retry.
+    retry: bool,
+}
+
+impl<A: Adapter> Shared<A> {
+    /// Move every queued room message to the matching connection.
+    fn pump(&mut self) {
+        let ids: Vec<ClientId> = self.sinks.keys().copied().collect();
+        for id in ids {
+            for message in self.hub.receive(id) {
+                self.deliver(id, message);
+            }
+        }
+    }
+
+    fn deliver(&mut self, id: ClientId, message: ServerMessage) {
+        let Some(sink) = self.sinks.get(&id).cloned() else { return };
+        match sink.try_send(message) {
+            Ok(()) => {}
+            // Ephemeral state is allowed to go stale; a version is not.
+            Err(TrySendError::Full(ServerMessage::Presence(_))) => {}
+            Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+                let doc = self.hub.client_doc(id);
+                self.sinks.remove(&id);
+                self.hub.disconnect(id);
+                if let Some(doc) = doc
+                    && self.hub.members(&doc) == 0
+                {
+                    // A client that fell too far behind still leaves its work on disk.
+                    if let Some(pending) = self.hub.commit_if_dirty(&doc) {
+                        self.pending.push(pending);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Take the commits whose publication has to run outside the lock.
+    fn take_pending(&mut self) -> Vec<Pending> {
+        std::mem::take(&mut self.pending)
+    }
+
+    /// Queue a journal compaction if the room crossed one of its thresholds —
+    /// operations, bytes or idle time (RFC §4.6, limitation 10). The base is
+    /// written here under the lock; the caller runs the returned publication
+    /// outside it. A `busy` room (a publication already in flight) queues
+    /// nothing: the threshold stays crossed, so the next message, the end of
+    /// that publication or the background sweep retries.
+    fn queue_forced(&mut self, doc: &DocKey, now_ms: u64) {
+        if let Some(pending) = self.hub.forced_commit(doc, now_ms) {
+            self.forced_commits = self.forced_commits.saturating_add(1);
+            self.pending.push(pending);
+        }
+    }
+
+    /// Keep a failed publication for a later attempt (limitation 6). The room is
+    /// already `publishing`; the queue is the only thing that releases it.
+    fn queue_publication(&mut self, doc: DocKey, publication: Box<dyn Publication>, now_ms: u64) {
+        let due_ms = now_ms.saturating_add(backoff_ms(0, self.backoff, self.backoff_max));
+        self.retries.insert(doc, Queued { publication, attempts: 0, due_ms, retry: true });
+    }
+
+    /// Put a publication the process did not run yet — one a restart recovered
+    /// from the store, or one an operator's `resolve` created — at the head of
+    /// the queue: no backoff, because no attempt of this process failed.
+    fn queue_restored(&mut self, doc: DocKey, publication: Box<dyn Publication>, now_ms: u64) {
+        self.retries.insert(doc, Queued { publication, attempts: 0, due_ms: now_ms, retry: false });
+    }
+
+    /// Take the retries whose backoff has elapsed. They are removed so the
+    /// cabinet call runs outside the lock; a failure goes back through
+    /// [`Self::requeue`].
+    fn due_retries(&mut self, now_ms: u64) -> Vec<(DocKey, Queued)> {
+        let due: Vec<DocKey> = self.retries.iter().filter(|(_, queued)| queued.due_ms <= now_ms).map(|(doc, _)| doc.clone()).collect();
+        due.into_iter().filter_map(|doc| self.retries.remove(&doc).map(|queued| (doc, queued))).collect()
+    }
+
+    /// Schedule the next attempt of a retry that failed again.
+    fn requeue(&mut self, doc: DocKey, mut queued: Queued, now_ms: u64) {
+        queued.attempts = queued.attempts.saturating_add(1);
+        queued.due_ms = now_ms.saturating_add(backoff_ms(queued.attempts, self.backoff, self.backoff_max));
+        self.retries.insert(doc, queued);
+    }
+}
+
+/// The delay before retry number `attempts + 1`: the base delay doubled per
+/// attempt, capped. `attempts` is how many retries already ran.
+fn backoff_ms(attempts: u32, base: Duration, max: Duration) -> u64 {
+    let base = u64::try_from(base.as_millis()).unwrap_or(u64::MAX);
+    let max = u64::try_from(max.as_millis()).unwrap_or(u64::MAX);
+    let factor = 1u64 << attempts.min(32);
+    base.saturating_mul(factor).min(max)
+}
+
+impl<A: Adapter> WsServer<A> {
+    pub fn new(hub: Hub<A>, verifier: Arc<dyn Verifier>, config: Config) -> Self {
+        let shared = Shared {
+            hub,
+            sinks: HashMap::new(),
+            pending: Vec::new(),
+            forced_commits: 0,
+            conflicts_resolved: 0,
+            retries: HashMap::new(),
+            publication_retries: 0,
+            publications_restored: 0,
+            publications_after_resolve: 0,
+            backoff: config.publication_backoff,
+            backoff_max: config.publication_backoff_max,
+        };
+        Self { shared: Arc::new(Mutex::new(shared)), verifier, config }
+    }
+
+    /// Run the cabinet calls of commits that were prepared under the lock, and
+    /// record their outcomes. The hub lock is released for every call: a
+    /// cabinet that does not answer delays this connection, not the other
+    /// documents in the process (RFC §16).
+    ///
+    /// A retryable failure is handed to the publication queue instead of being
+    /// dropped: [`Self::retry_publications`] tries it again after a backoff,
+    /// without waiting for the next commit or the last client leaving.
+    fn run_pending(&self, mut pending: Vec<Pending>) {
+        while let Some(mut item) = pending.pop() {
+            let doc = item.doc().clone();
+            let outcome = item.publish();
+            let Ok(mut shared) = lock(&self.shared) else { return };
+            let published = outcome.is_ok();
+            let retry = shared.hub.finish(item, outcome);
+            if let Some(publication) = retry {
+                shared.queue_publication(doc.clone(), publication, now_ms());
+            }
+            // Edits accepted while the publication ran may have crossed the
+            // threshold again: the compaction is not lost behind the lock.
+            if published && shared.hub.members(&doc) == 0 {
+                // The last participant left while this publication ran: the
+                // room still has to reach the cabinet (RFC §8). Only after a
+                // successful publication, so a cabinet that keeps failing is
+                // not retried here: the queue owns that.
+                if let Some(next) = shared.hub.commit_if_dirty(&doc) {
+                    shared.pending.push(next);
+                }
+            }
+            shared.queue_forced(&doc, now_ms());
+            shared.pump();
+            pending.extend(shared.take_pending());
+        }
+    }
+
+    /// Try the publications whose backoff has elapsed (limitation 6). Called by
+    /// the daemon's publication thread; a test can pass its own clock and drive
+    /// it by hand. Returns how many attempts were made.
+    ///
+    /// Each attempt runs outside the hub lock, and the room stays `publishing`
+    /// until it is reported, so a commit made in the meantime is `busy` rather
+    /// than reaching the cabinet out of order.
+    pub fn retry_publications(&self, now_ms: u64) -> usize {
+        let mut attempts = 0;
+        loop {
+            let due = match lock(&self.shared) {
+                Ok(mut shared) => shared.due_retries(now_ms),
+                Err(_) => return attempts,
+            };
+            if due.is_empty() {
+                return attempts;
+            }
+            let mut follow_up = Vec::new();
+            for (doc, queued) in due {
+                attempts += 1;
+                let outcome = queued.publication.run();
+                let published = outcome.is_ok();
+                let retried = queued.retry || queued.attempts > 0;
+                let Ok(mut shared) = lock(&self.shared) else { return attempts };
+                if retried {
+                    shared.publication_retries = shared.publication_retries.saturating_add(1);
+                }
+                let again = shared.hub.finish_retry(&doc, outcome);
+                if again {
+                    shared.requeue(doc.clone(), queued, now_ms);
+                }
+                shared.pump();
+                if published {
+                    // Edits accepted while the publication was queued are not
+                    // in the base that was just published. With nobody left to
+                    // commit them, publish them now.
+                    shared.queue_forced(&doc, now_ms);
+                    if shared.hub.members(&doc) == 0
+                        && let Some(next) = shared.hub.commit_if_dirty(&doc)
+                    {
+                        shared.pending.push(next);
+                    }
+                }
+                follow_up.extend(shared.take_pending());
+            }
+            self.run_pending(follow_up);
+        }
+    }
+
+    /// Compact the rooms whose journal has been idle past
+    /// `RoomConfig::forced_commit_idle_secs` — the case no client message can
+    /// trigger, because nothing arrives (limitation 10). The daemon's background
+    /// loop calls this with the wall clock; a test can pass its own clock.
+    ///
+    /// Returns how many compactions were queued. Each one is counted in
+    /// `/metrics` as `pdfcraft_collab_forced_commits_total`, like the thresholds
+    /// a message triggers. The base is written under the hub lock and the
+    /// cabinet call runs outside it, through [`Self::run_pending`].
+    pub fn sweep_forced_commits(&self, now_ms: u64) -> usize {
+        let (queued, pending) = {
+            let Ok(mut shared) = lock(&self.shared) else { return 0 };
+            let docs = shared.hub.documents();
+            let before = shared.forced_commits;
+            for doc in docs {
+                shared.queue_forced(&doc, now_ms);
+            }
+            (shared.forced_commits.saturating_sub(before), shared.take_pending())
+        };
+        self.run_pending(pending);
+        usize::try_from(queued).unwrap_or(usize::MAX)
+    }
+
+    /// Open a room before clients connect. The adapter owns the authoritative
+    /// document; the transport never touches its contents.
+    pub fn open_room(&self, doc: pdfcraft_collab_proto::DocKey, adapter: A) -> Result<(), TransportError> {
+        lock(&self.shared)?.hub.open_room(doc, adapter).map_err(TransportError::Room)
+    }
+
+    /// Run `step` under the hub lock. This is the seam a control plane needs to
+    /// check a room and open it in one atomic step (two `POST /v1/sessions` for
+    /// the same file must not both create it). `step` must not call back into
+    /// the server: the lock it holds is the one every method here takes.
+    pub fn with_hub<T>(&self, step: impl FnOnce(&mut Hub<A>) -> T) -> Result<T, TransportError> {
+        let mut shared = lock(&self.shared)?;
+        Ok(step(&mut shared.hub))
+    }
+
+    /// An operator resolved a `conflict` room through the control plane: the
+    /// room adopts the cabinet's `published` marker, so the next commit
+    /// publishes again with that version as `expectedVersion`. The marker is
+    /// moved under the hub lock, so a publication cannot run with the old one,
+    /// and a successful resolution is counted for `/metrics`. The answer is the
+    /// room's document version and epoch after the marker moved.
+    ///
+    /// The base the cabinet refused is published now, without waiting for a
+    /// commit, a join or a leave (limitation 6): a room that goes quiet after a
+    /// resolution still reaches the cabinet. It is queued like a restored
+    /// publication — no backoff, because no attempt of this call failed — and
+    /// its `409`, if it comes, stops the queue exactly as a commit's does.
+    pub fn resolve_conflict(&self, doc: &DocKey, published: Published) -> Result<(u64, u64), ResolveError> {
+        let mut shared = lock(&self.shared).map_err(|_| ResolveError::Hub)?;
+        let (version, epoch, publication) = {
+            let Some(room) = shared.hub.room_mut(doc) else { return Err(ResolveError::Missing) };
+            room.resolve_conflict(published).map_err(|e| match e.code {
+                ErrorCode::Conflict => ResolveError::NotInConflict,
+                ErrorCode::Busy => ResolveError::Busy,
+                ErrorCode::Invalid => ResolveError::Invalid(e.message),
+                _ => ResolveError::Failed(e.message),
+            })?;
+            let version = room.version();
+            let epoch = room.epoch();
+            // An error here leaves the room as it was; the resolve itself has
+            // already moved the marker. The next commit then publishes, which
+            // is what happened before this method published at all.
+            (version, epoch, room.republish().ok().flatten())
+        };
+        shared.conflicts_resolved = shared.conflicts_resolved.saturating_add(1);
+        if let Some(publication) = publication {
+            shared.publications_after_resolve = shared.publications_after_resolve.saturating_add(1);
+            shared.queue_restored(doc.clone(), publication, now_ms());
+        }
+        Ok((version, epoch))
+    }
+
+    /// Queue the publications a restart recovered from the store (limitation
+    /// 6). Each room was opened from its base and journal and is already
+    /// `publishing` (`rooms::restore_publications`), so no client commit can
+    /// overtake the restored one; the queue runs them at once, without a
+    /// backoff, and counts them for `/metrics`. Returns how many were queued.
+    pub fn restore_publications(&self, items: Vec<(DocKey, Box<dyn Publication>)>) -> usize {
+        let Ok(mut shared) = lock(&self.shared) else { return 0 };
+        let now = now_ms();
+        let mut queued = 0;
+        for (doc, publication) in items {
+            shared.publications_restored = shared.publications_restored.saturating_add(1);
+            shared.queue_restored(doc, publication, now);
+            queued += 1;
+        }
+        queued
+    }
+
+    /// Publish a room now, because the cabinet asked for it: the `Save` of an
+    /// application whose room owns the document reaches the cabinet as
+    /// `POST /v1/sessions/{fileId}/commit`, and the control plane turns it into
+    /// this call (RFC §8, INTEGRATION.md §5.2).
+    ///
+    /// A clean room has nothing to publish: the answer is the copy the cabinet
+    /// already holds. Otherwise the base is written under the hub lock, the
+    /// cabinet call runs outside it (RFC §16), and the outcome is recorded like
+    /// any other publication — including the retry queue, so a cabinet that
+    /// answers `5xx` leaves a queued attempt instead of a lost document.
+    pub fn commit_now(&self, doc: &DocKey) -> Result<CommitNow, TransportError> {
+        let pending = {
+            let mut shared = lock(&self.shared)?;
+            let Some(room) = shared.hub.room(doc) else { return Ok(CommitNow::Missing) };
+            if !room.is_dirty() {
+                return Ok(CommitNow::Clean { version: room.version(), published: Adapter::published(room.adapter()) });
+            }
+            let busy = room.is_publishing();
+            match shared.hub.commit_if_dirty(doc) {
+                Some(pending) => pending,
+                None if busy => return Ok(CommitNow::Busy),
+                // Nobody to answer a failed commit, so the room keeps its
+                // journal and the next attempt sees the same dirty state.
+                None => return Ok(CommitNow::Failed("the room could not build the document".into())),
+            }
+        };
+        let mut pending = pending;
+        let outcome = pending.publish();
+        let failure = match &outcome {
+            Ok(_) => None,
+            Err(error) => Some(error.clone()),
+        };
+        let (version, published, queued) = {
+            let mut shared = lock(&self.shared)?;
+            let retry = shared.hub.finish(pending, outcome);
+            let (version, published) = shared.hub.room(doc).map_or((0, None), |room| (room.version(), Adapter::published(room.adapter())));
+            if let Some(publication) = retry {
+                shared.queue_publication(doc.clone(), publication, now_ms());
+            }
+            shared.queue_forced(doc, now_ms());
+            (version, published, shared.take_pending())
+        };
+        // The lock is released: the compactions this publication made due run
+        // like any other, outside it.
+        self.run_pending(queued);
+        match failure {
+            None => Ok(CommitNow::Published { version, published }),
+            Some(error) => Ok(match error.code {
+                ErrorCode::Conflict => CommitNow::Conflict(error.message),
+                _ if error.retryable => CommitNow::Retryable(error.message),
+                _ => CommitNow::Failed(error.message),
+            }),
+        }
+    }
+}
+
+impl<A: Adapter + Send + 'static> WsServer<A> {
+    /// Listen on `addr` and serve until the returned handle is dropped.
+    pub fn bind(self, addr: &str) -> io::Result<ServerHandle> {
+        Arc::new(self).bind_arc(addr)
+    }
+
+    /// The same, keeping the shared server so `/metrics` can read it later.
+    pub fn bind_arc(self: Arc<Self>, addr: &str) -> io::Result<ServerHandle> {
+        let listener = TcpListener::bind(addr)?;
+        let local_addr = listener.local_addr()?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let server = self;
+        let thread = thread::Builder::new().name("collab-ws-accept".into()).spawn(move || {
+            while !flag.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((stream, _peer)) => {
+                        let server = server.clone();
+                        // A failed spawn drops the stream and closes the connection;
+                        // one client never takes the listener down.
+                        let _ = thread::Builder::new().name("collab-ws-client".into()).spawn(move || server.serve(stream));
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+        })?;
+        Ok(ServerHandle { local_addr, stop, thread: Some(thread) })
+    }
+
+    /// Run the background maintenance loop: every `interval` it tries the failed
+    /// publications whose backoff has elapsed and compacts the rooms whose
+    /// journal has been idle past their time threshold (a room nobody edits
+    /// sends no message, so the transport cannot notice on its own). The daemon
+    /// starts one; tests start one with a short interval and a synthetic clock
+    /// is not needed because the loop reads the wall clock.
+    ///
+    /// Dropping the handle stops the loop and waits for the attempt in flight,
+    /// so a test cannot leave a cabinet call racing its own teardown.
+    pub fn spawn_publication_retries(self: &Arc<Self>, interval: Duration) -> io::Result<PublicationRetries> {
+        let server = self.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let interval = interval.max(Duration::from_millis(1));
+        let thread = thread::Builder::new().name("collab-ws-publication".into()).spawn(move || {
+            while !flag.load(Ordering::Relaxed) {
+                thread::sleep(interval);
+                if flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                server.retry_publications(now_ms());
+                server.sweep_forced_commits(now_ms());
+            }
+        })?;
+        Ok(PublicationRetries { stop, thread: Some(thread) })
+    }
+
+    fn serve(self: Arc<Self>, stream: TcpStream) {
+        let _ = self.serve_inner(stream);
+    }
+
+    // The handshake callback's error type is tungstenite's `ErrorResponse`.
+    #[allow(clippy::result_large_err)]
+    fn serve_inner(&self, stream: TcpStream) -> Result<(), TransportError> {
+        stream.set_nodelay(true).map_err(TransportError::Io)?;
+        stream.set_read_timeout(Some(self.config.handshake_timeout)).map_err(TransportError::Io)?;
+        stream.set_write_timeout(Some(self.config.write_timeout)).map_err(TransportError::Io)?;
+
+        let origin = self.config.origin.clone();
+        let mut ws_config = WebSocketConfig::default();
+        ws_config.max_message_size = Some(MAX_MESSAGE_BYTES);
+        ws_config.max_frame_size = Some(MAX_MESSAGE_BYTES);
+        let mut ws = accept_hdr_with_config(
+            stream,
+            move |request: &Request, response: Response| {
+                if let Some(expected) = origin.as_deref() {
+                    let actual = request.headers().get("origin").and_then(|value| value.to_str().ok());
+                    if actual != Some(expected) {
+                        let mut denied = ErrorResponse::new(None);
+                        *denied.status_mut() = StatusCode::FORBIDDEN;
+                        return Err(denied);
+                    }
+                }
+                Ok(response)
+            },
+            Some(ws_config),
+        )
+        .map_err(|e| TransportError::Handshake(e.to_string()))?;
+
+        let hello = match read_hello(&mut ws) {
+            Ok(hello) => hello,
+            Err(message) => return reject(&mut ws, ErrorCode::Invalid, message),
+        };
+        if let Err(e) = ClientMessage::Hello(hello.clone()).validate() {
+            return reject(&mut ws, ErrorCode::Invalid, e.to_string());
+        }
+        let claims = match self.verifier.verify(&hello.jwt) {
+            Ok(claims) => claims,
+            Err(TokenError::Expired) => return reject(&mut ws, ErrorCode::Auth, "the session token has expired; reconnect with a fresh one"),
+            Err(e) => return reject(&mut ws, ErrorCode::Auth, e.to_string()),
+        };
+        if claims.app != self.config.app {
+            return reject(&mut ws, ErrorCode::Unsupported, "the session token is for another application");
+        }
+        if claims.file_id != hello.doc.as_str() {
+            return reject(&mut ws, ErrorCode::Forbidden, "the session token is for another file");
+        }
+        let actor = match ActorId::new(claims.subject.clone()) {
+            Ok(actor) => actor,
+            Err(e) => return reject(&mut ws, ErrorCode::Invalid, e.to_string()),
+        };
+
+        let doc = hello.doc.clone();
+        let (sink, outbox) = sync_channel(self.config.outbox.max(1));
+        let connected = {
+            let mut shared = lock(&self.shared)?;
+            match shared.hub.connect(actor, claims.role, &hello, now_ms()) {
+                Ok(id) => {
+                    shared.sinks.insert(id, sink);
+                    shared.pump();
+                    // A room resumed with a journal past the threshold is
+                    // compacted as soon as somebody is there to keep the work
+                    // alive (limitation 10).
+                    shared.queue_forced(&doc, now_ms());
+                    let pending = shared.take_pending();
+                    drop(shared);
+                    self.run_pending(pending);
+                    Ok(id)
+                }
+                Err(e) => Err(e),
+            }
+        };
+        let id = match connected {
+            Ok(id) => id,
+            Err(e) => return reject(&mut ws, e.code, e.message),
+        };
+
+        ws.get_ref().set_read_timeout(Some(self.config.poll_interval)).map_err(TransportError::Io)?;
+        let outcome = self.pump_loop(&mut ws, id, &outbox);
+        let pending = {
+            let mut shared = lock(&self.shared)?;
+            shared.sinks.remove(&id);
+            shared.hub.disconnect(id);
+            if shared.hub.members(&doc) == 0 {
+                // Last participant out: the server commits so the cabinet has the work (RFC §8).
+                shared.hub.commit_if_dirty(&doc).into_iter().collect()
+            } else {
+                Vec::new()
+            }
+        };
+        self.run_pending(pending);
+        let _ = ws.close(None);
+        let _ = ws.flush();
+        outcome
+    }
+
+    /// Read one frame, then write whatever the room queued. The read timeout is
+    /// the wake-up for outgoing messages; there is no timer thread.
+    fn pump_loop(
+        &self,
+        ws: &mut WebSocket<TcpStream>,
+        id: ClientId,
+        outbox: &std::sync::mpsc::Receiver<ServerMessage>,
+    ) -> Result<(), TransportError> {
+        loop {
+            match ws.read() {
+                Ok(Message::Text(text)) => {
+                    let pending = self.handle_text(ws, id, text.as_str())?;
+                    // The author sees the acknowledgement of its own operation
+                    // before a server-initiated compaction that operation
+                    // triggered waits for the cabinet: the edit is confirmed,
+                    // only the cabinet call stalls this connection.
+                    if !drain_outbox(ws, outbox)? {
+                        return Ok(());
+                    }
+                    flush(ws)?;
+                    self.run_pending(pending);
+                }
+                Ok(Message::Binary(_)) => {
+                    send_error(ws, ErrorCode::Unsupported, "binary frames are not supported")?;
+                }
+                Ok(Message::Close(_)) => return Ok(()),
+                Ok(_) => {}
+                Err(WsError::Io(e)) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {}
+                Err(WsError::ConnectionClosed | WsError::AlreadyClosed) => return Ok(()),
+                Err(e) => return Err(TransportError::Socket(e.to_string())),
+            }
+            if !drain_outbox(ws, outbox)? {
+                // The hub dropped this connection (backlog or shutdown).
+                return Ok(());
+            }
+            flush(ws)?;
+        }
+    }
+
+    fn handle_text(&self, ws: &mut WebSocket<TcpStream>, id: ClientId, text: &str) -> Result<Vec<Pending>, TransportError> {
+        let message = match serde_json::from_str::<ClientMessage>(text) {
+            Ok(message) => message,
+            Err(_) => {
+                send_error(ws, ErrorCode::Invalid, "the frame is not a protocol message")?;
+                return Ok(Vec::new());
+            }
+        };
+        if let Err(e) = message.validate() {
+            send_error(ws, ErrorCode::Invalid, e.to_string())?;
+            return Ok(Vec::new());
+        }
+        let pending = {
+            let mut shared = lock(&self.shared)?;
+            let doc = shared.hub.client_doc(id);
+            let mut pending = match shared.hub.send(id, message, now_ms()) {
+                Ok(pending) => pending.into_iter().collect::<Vec<_>>(),
+                Err(e) => {
+                    shared.deliver(id, ServerMessage::Error(e));
+                    Vec::new()
+                }
+            };
+            // The accepted operation may have filled the journal: compact it
+            // while the client stays connected (limitation 10). A ping or a
+            // presence frame retries a commit that was refused as busy.
+            if let Some(doc) = doc {
+                shared.queue_forced(&doc, now_ms());
+            }
+            shared.pump();
+            pending.extend(shared.take_pending());
+            pending
+        };
+        // The caller runs these outside the hub lock: a commit answers only
+        // after its publication ran.
+        Ok(pending)
+    }
+}
+
+/// Move every message the room queued to the socket. `false` means the hub
+/// dropped this connection (backlog or shutdown).
+fn drain_outbox(ws: &mut WebSocket<TcpStream>, outbox: &std::sync::mpsc::Receiver<ServerMessage>) -> Result<bool, TransportError> {
+    loop {
+        match outbox.try_recv() {
+            Ok(message) => send(ws, &message)?,
+            Err(TryRecvError::Empty) => return Ok(true),
+            Err(TryRecvError::Disconnected) => return Ok(false),
+        }
+    }
+}
+
+/// Flush without treating a busy socket or an orderly close as a failure.
+fn flush(ws: &mut WebSocket<TcpStream>) -> Result<(), TransportError> {
+    match ws.flush() {
+        Ok(()) => Ok(()),
+        Err(WsError::Io(e)) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => Ok(()),
+        Err(WsError::ConnectionClosed | WsError::AlreadyClosed) => Ok(()),
+        Err(other) => Err(TransportError::Socket(other.to_string())),
+    }
+}
+
+/// A point-in-time snapshot for `/health` and `/metrics`; no document content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Metrics {
+    pub rooms: usize,
+    pub clients: usize,
+    pub versions: Vec<(String, u64, u64)>,
+    /// Rooms that refuse writes because their durable journal failed.
+    pub poisoned: Vec<String>,
+    /// Rooms that refuse commits because the cabinet's copy changed outside
+    /// the session.
+    pub conflict: Vec<String>,
+    /// Server-initiated journal compactions since the process started
+    /// (limitation 10), exposed as `pdfcraft_collab_forced_commits_total`.
+    pub forced_commits: u64,
+    /// `conflict` rooms resolved by an operator through the control plane,
+    /// exposed as `pdfcraft_collab_conflicts_resolved_total`.
+    pub conflicts_resolved: u64,
+    /// Publication retries attempted since the process started (limitation 6),
+    /// exposed as `pdfcraft_collab_publication_retries_total`.
+    pub publication_retries: u64,
+    /// Publications a restart recovered from the store and queued, exposed as
+    /// `pdfcraft_collab_publications_restored_total` (limitation 6).
+    pub publications_restored: u64,
+    /// Publications an operator's `resolve` queued without a commit, exposed as
+    /// `pdfcraft_collab_publications_after_resolve_total`.
+    pub publications_after_resolve: u64,
+}
+
+impl<A: Adapter> WsServer<A> {
+    pub fn metrics(&self) -> Result<Metrics, TransportError> {
+        let shared = lock(&self.shared)?;
+        let mut versions = Vec::new();
+        let mut poisoned = Vec::new();
+        let mut conflict = Vec::new();
+        for doc in shared.hub.docs() {
+            if let Some(room) = shared.hub.room(doc) {
+                versions.push((doc.as_str().to_owned(), room.version(), room.epoch()));
+                if room.poisoned().is_some() {
+                    poisoned.push(doc.as_str().to_owned());
+                }
+                if room.conflict().is_some() {
+                    conflict.push(doc.as_str().to_owned());
+                }
+            }
+        }
+        Ok(Metrics {
+            rooms: shared.hub.rooms(),
+            clients: shared.sinks.len(),
+            versions,
+            poisoned,
+            conflict,
+            forced_commits: shared.forced_commits,
+            conflicts_resolved: shared.conflicts_resolved,
+            publication_retries: shared.publication_retries,
+            publications_restored: shared.publications_restored,
+            publications_after_resolve: shared.publications_after_resolve,
+        })
+    }
+}
+
+/// A running listener. Dropping it stops the accept thread.
+pub struct ServerHandle {
+    local_addr: SocketAddr,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+/// The background publication queue. Dropping it stops the loop.
+pub struct PublicationRetries {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Drop for PublicationRetries {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl ServerHandle {
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+}
+
+impl Drop for ServerHandle {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        // Wake the blocking `accept`; the loop sees the flag and exits.
+        let _ = TcpStream::connect(self.wake_address());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl ServerHandle {
+    /// A wildcard bind cannot be connected to, so the wake-up goes to loopback.
+    fn wake_address(&self) -> SocketAddr {
+        if !self.local_addr.ip().is_unspecified() {
+            return self.local_addr;
+        }
+        match self.local_addr {
+            SocketAddr::V4(address) => SocketAddr::from(([127, 0, 0, 1], address.port())),
+            SocketAddr::V6(address) => SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], address.port())),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TransportError {
+    #[error("the hub is unavailable")]
+    Hub,
+    #[error("the handshake failed: {0}")]
+    Handshake(String),
+    #[error("the connection failed: {0}")]
+    Socket(String),
+    #[error("i/o failed: {0}")]
+    Io(#[from] io::Error),
+    #[error("{0}")]
+    Room(ServerError),
+}
+
+/// Why an operator's resolution of a `conflict` room was refused
+/// ([`WsServer::resolve_conflict`]). The control plane maps these onto its HTTP
+/// answers; none of them changes the room.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ResolveError {
+    #[error("no session for this document")]
+    Missing,
+    #[error("the session is not in conflict")]
+    NotInConflict,
+    #[error("a publication of this document is in flight; try again")]
+    Busy,
+    #[error("{0}")]
+    Invalid(String),
+    #[error("{0}")]
+    Failed(String),
+    #[error("the hub is unavailable")]
+    Hub,
+}
+
+/// What asking a room to publish produced ([`WsServer::commit_now`]). The
+/// control plane maps these onto its HTTP answers; none of them silently
+/// discards the room's work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitNow {
+    /// The room is clean: the cabinet already holds this copy, described the
+    /// same way a publication's answer describes it.
+    Clean { version: u64, published: Option<Published> },
+    /// A commit was published. `version` is the room's document version.
+    Published { version: u64, published: Option<Published> },
+    /// There is no room for this document.
+    Missing,
+    /// A publication of this document is in flight; another call may succeed.
+    Busy,
+    /// The cabinet refused the publication: the file changed outside the
+    /// session (`409`).
+    Conflict(String),
+    /// The cabinet did not take the file and the queue will try again.
+    Retryable(String),
+    /// The commit could not be built or published at all.
+    Failed(String),
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, TransportError> {
+    mutex.lock().map_err(|_| TransportError::Hub)
+}
+
+fn read_hello(ws: &mut WebSocket<TcpStream>) -> Result<Hello, String> {
+    loop {
+        match ws.read() {
+            Ok(Message::Text(text)) => {
+                let message: ClientMessage = serde_json::from_str(text.as_str()).map_err(|_| "hello must be a JSON protocol message".to_owned())?;
+                return match message {
+                    ClientMessage::Hello(hello) => Ok(hello),
+                    _ => Err("the first message must be hello".to_owned()),
+                };
+            }
+            Ok(Message::Ping(_) | Message::Pong(_)) => {}
+            Ok(Message::Binary(_)) => return Err("binary frames are not supported".to_owned()),
+            Ok(Message::Close(_)) => return Err("the connection closed before hello".to_owned()),
+            Ok(_) => {}
+            Err(WsError::Io(e)) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {
+                return Err("hello did not arrive in time".to_owned());
+            }
+            Err(_) => return Err("the connection failed before hello".to_owned()),
+        }
+    }
+}
+
+fn send(ws: &mut WebSocket<TcpStream>, message: &ServerMessage) -> Result<(), TransportError> {
+    let json = serde_json::to_string(message).map_err(|e| TransportError::Socket(e.to_string()))?;
+    ws.send(Message::text(json)).map_err(|e| TransportError::Socket(e.to_string()))
+}
+
+fn send_error(ws: &mut WebSocket<TcpStream>, code: ErrorCode, message: impl Into<String>) -> Result<(), TransportError> {
+    send(ws, &ServerMessage::Error(ServerError { code, message: message.into(), retryable: false }))
+}
+
+fn reject(ws: &mut WebSocket<TcpStream>, code: ErrorCode, message: impl Into<String>) -> Result<(), TransportError> {
+    let _ = send_error(ws, code, message);
+    let _ = ws.close(None);
+    let _ = ws.flush();
+    Ok(())
+}
+
+/// Wall-clock milliseconds for versions, presence and the lease.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Config, ResolveError, TransportError, WsServer};
+    use crate::token::{Claims, TokenError, Verifier};
+    use pdfcraft_collab_hub::Hub;
+    use pdfcraft_collab_proto::{
+        ActorId, BlobRef, ClientInfo, ClientMessage, ConflictClass, DocKey, ErrorCode, Hello, Op, OpId, OpKind, PageRef, Role, ServerMessage, Target,
+    };
+    use pdfcraft_collab_server::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, PublishOutcome, Published, RoomConfig};
+    use serde_json::json;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use tungstenite::stream::MaybeTlsStream;
+    use tungstenite::{Message, WebSocket};
+
+    struct Fake {
+        epoch: u64,
+    }
+
+    impl Adapter for Fake {
+        fn apply(&mut self, _actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+            if op.class == ConflictClass::Structural {
+                self.epoch += 1;
+            }
+            Ok(ApplyOutcome { result: json!({"ok": true}), op: op.clone(), epoch: self.epoch })
+        }
+
+        fn commit(&mut self, _version: u64, _epoch: u64) -> Result<CommitOutcome, AdapterError> {
+            Ok(CommitOutcome { sha256: "abc".into(), bytes: 10, conflict: false })
+        }
+
+        fn base(&self) -> Option<BlobRef> {
+            None
+        }
+    }
+
+    /// The transport tests do not exercise the signature; the token module does.
+    struct TestVerifier;
+
+    impl Verifier for TestVerifier {
+        fn verify(&self, token: &str) -> Result<Claims, TokenError> {
+            // `role` or `role:name`, so two clients can be different actors.
+            let role = match token.split_once(':').map_or(token, |(role, _)| role) {
+                "owner" => Role::Owner,
+                "editor" => Role::Editor,
+                "commenter" => Role::Commenter,
+                "viewer" => Role::Viewer,
+                _ => return Err(TokenError::Invalid),
+            };
+            Ok(Claims {
+                subject: token.to_owned(),
+                audience: "lzmkm".into(),
+                file_id: "file-1".into(),
+                app: "pdfcraft".into(),
+                role,
+                session_id: "session-9".into(),
+                expires_at: u64::MAX,
+            })
+        }
+    }
+
+    fn start() -> Result<super::ServerHandle, TransportError> {
+        let doc = DocKey::new("file-1").map_err(|e| TransportError::Socket(e.to_string()))?;
+        let mut hub = Hub::new(RoomConfig::default());
+        hub.open_room(doc, Fake { epoch: 0 }).map_err(|e| TransportError::Socket(e.message))?;
+        let server = WsServer::new(hub, Arc::new(TestVerifier), Config { poll_interval: Duration::from_millis(2), ..Config::default() });
+        server.bind("127.0.0.1:0").map_err(TransportError::Io)
+    }
+
+    struct Client {
+        ws: WebSocket<MaybeTlsStream<std::net::TcpStream>>,
+    }
+
+    impl Client {
+        fn join(addr: std::net::SocketAddr, token: &str, name: &str) -> Result<Self, Box<dyn std::error::Error>> {
+            let (mut ws, _) = tungstenite::connect(format!("ws://{addr}/"))?;
+            let hello = json!({
+                "type": "hello",
+                "v": 1,
+                "app": "pdfcraft",
+                "doc": "file-1",
+                "jwt": token,
+                "client": {"name": name, "version": "0"},
+            });
+            ws.send(Message::text(hello.to_string()))?;
+            Ok(Self { ws })
+        }
+
+        fn next(&mut self) -> Result<ServerMessage, Box<dyn std::error::Error>> {
+            loop {
+                match self.ws.read()? {
+                    Message::Text(text) => return Ok(serde_json::from_str(text.as_str())?),
+                    Message::Close(_) => return Err("the server closed the connection".into()),
+                    _ => {}
+                }
+            }
+        }
+
+        fn send(&mut self, message: serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+            self.ws.send(Message::text(message.to_string()))?;
+            Ok(())
+        }
+    }
+
+    fn comment_op(op_id: &str) -> Result<Op, Box<dyn std::error::Error>> {
+        Ok(Op {
+            op_id: OpId::new(op_id)?,
+            doc: DocKey::new("file-1")?,
+            base_version: 0,
+            epoch: 0,
+            kind: OpKind::Primitive,
+            class: ConflictClass::Merge,
+            target: Target::Annotation { page: PageRef { index: 0, epoch: 0 }, nm: "ann-1".into() },
+            payload: json!({"action": "set_contents", "text": "hello"}),
+            preview: None,
+        })
+    }
+
+    fn comment(op_id: &str) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+        Ok(serde_json::to_value(ClientMessage::Op(comment_op(op_id)?))?)
+    }
+
+    #[test]
+    fn the_publication_backoff_doubles_and_caps() {
+        let base = Duration::from_millis(1000);
+        let max = Duration::from_millis(60_000);
+        assert_eq!(super::backoff_ms(0, base, max), 1_000, "the first retry waits the base delay");
+        assert_eq!(super::backoff_ms(1, base, max), 2_000);
+        assert_eq!(super::backoff_ms(2, base, max), 4_000);
+        assert_eq!(super::backoff_ms(5, base, max), 32_000);
+        assert_eq!(super::backoff_ms(6, base, max), 60_000, "the cap holds");
+        assert_eq!(super::backoff_ms(64, base, max), 60_000, "no overflow after many attempts");
+    }
+
+    #[test]
+    fn a_comment_reaches_every_connected_client() -> Result<(), Box<dyn std::error::Error>> {
+        let handle = start()?;
+        let mut editor = Client::join(handle.local_addr(), "editor", "a")?;
+        let mut commenter = Client::join(handle.local_addr(), "commenter", "b")?;
+        assert!(matches!(editor.next()?, ServerMessage::Welcome(_)));
+        assert!(matches!(commenter.next()?, ServerMessage::Welcome(_)));
+
+        editor.send(comment("c1")?)?;
+        assert!(matches!(editor.next()?, ServerMessage::Applied(_)));
+        assert!(matches!(commenter.next()?, ServerMessage::Applied(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn a_bad_token_is_refused_before_joining() -> Result<(), Box<dyn std::error::Error>> {
+        let handle = start()?;
+        let mut client = Client::join(handle.local_addr(), "intruder", "evil")?;
+        match client.next()? {
+            ServerMessage::Error(e) => assert_eq!(e.code, ErrorCode::Auth),
+            other => return Err(format!("expected an auth error, got {other:?}").into()),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_viewer_is_rejected_by_the_room_not_the_transport() -> Result<(), Box<dyn std::error::Error>> {
+        let handle = start()?;
+        let mut viewer = Client::join(handle.local_addr(), "viewer", "v")?;
+        let mut editor = Client::join(handle.local_addr(), "editor", "e")?;
+        assert!(matches!(viewer.next()?, ServerMessage::Welcome(_)));
+        assert!(matches!(editor.next()?, ServerMessage::Welcome(_)));
+
+        viewer.send(comment("v1")?)?;
+        match viewer.next()? {
+            ServerMessage::Rejected(r) => assert_eq!(r.code, ErrorCode::Forbidden),
+            other => return Err(format!("expected a forbidden rejection, got {other:?}").into()),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_second_editor_joins_and_gets_a_zero_lease() -> Result<(), Box<dyn std::error::Error>> {
+        let handle = start()?;
+        // The lease goes to the first join the server processes, so the second
+        // client is joined only after the first one was welcomed.
+        let mut first = Client::join(handle.local_addr(), "editor:a", "a")?;
+        let ServerMessage::Welcome(one) = first.next()? else {
+            return Err("expected a welcome".into());
+        };
+        let mut second = Client::join(handle.local_addr(), "editor:b", "b")?;
+        let ServerMessage::Welcome(two) = second.next()? else {
+            return Err("expected a welcome".into());
+        };
+        assert!(one.lease.ttl_secs > 0);
+        assert_eq!(two.lease.ttl_secs, 0);
+        Ok(())
+    }
+
+    /// An adapter that hands a publication to every commit, the way the
+    /// cabinet adapter does.
+    struct Publishing {
+        runs: Arc<AtomicUsize>,
+    }
+
+    impl Adapter for Publishing {
+        fn apply(&mut self, _actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
+            Ok(ApplyOutcome { result: json!({"ok": true}), op: op.clone(), epoch: op.epoch })
+        }
+
+        fn commit(&mut self, _version: u64, _epoch: u64) -> Result<CommitOutcome, AdapterError> {
+            Ok(CommitOutcome { sha256: "abc".into(), bytes: 10, conflict: false })
+        }
+
+        fn base(&self) -> Option<BlobRef> {
+            None
+        }
+
+        fn take_publication(&mut self) -> Option<Box<dyn super::Publication>> {
+            Some(Box::new(Counted(self.runs.clone())))
+        }
+    }
+
+    /// A publication that counts its runs and answers successfully.
+    struct Counted(Arc<AtomicUsize>);
+
+    impl super::Publication for Counted {
+        fn run(&self) -> PublishOutcome {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn a_restored_publication_is_queued_at_once_and_counted() -> Result<(), Box<dyn std::error::Error>> {
+        let doc = DocKey::new("file-1")?;
+        let mut hub = Hub::new(RoomConfig::default());
+        hub.open_room(doc.clone(), Fake { epoch: 0 })?;
+        let server = WsServer::new(hub, Arc::new(TestVerifier), Config::default());
+        let runs = Arc::new(AtomicUsize::new(0));
+
+        assert_eq!(server.restore_publications(vec![(doc.clone(), Box::new(Counted(runs.clone())))]), 1);
+        let metrics = server.metrics()?;
+        assert_eq!(metrics.publications_restored, 1);
+        assert_eq!(metrics.publications_after_resolve, 0);
+        assert_eq!(runs.load(Ordering::Relaxed), 0, "queued, not run under the lock");
+
+        assert_eq!(server.retry_publications(super::now_ms()), 1, "a restored publication has no backoff");
+        assert_eq!(runs.load(Ordering::Relaxed), 1);
+        let metrics = server.metrics()?;
+        assert_eq!(metrics.publications_restored, 1, "a run is not a second restore");
+        assert_eq!(metrics.publication_retries, 0, "a first attempt of a restored base is not a retry");
+        assert_eq!(server.retry_publications(super::now_ms()), 0, "a success is not queued again");
+        Ok(())
+    }
+
+    #[test]
+    fn a_restored_base_is_followed_by_the_journal_tail() -> Result<(), Box<dyn std::error::Error>> {
+        let doc = DocKey::new("file-1")?;
+        let tails = Arc::new(AtomicUsize::new(0));
+        // A room resumed at base 1 with the cabinet still at 0: the base was
+        // written and never published. Nobody is connected.
+        let mut hub = Hub::new(RoomConfig::default());
+        hub.open_room_at(doc.clone(), Publishing { runs: tails.clone() }, 1, 0)?;
+        let server = WsServer::new(hub, Arc::new(TestVerifier), Config::default());
+        let hello = Hello {
+            v: 1,
+            app: "pdfcraft".into(),
+            doc: doc.clone(),
+            jwt: "editor".into(),
+            client: ClientInfo { name: "test".into(), version: "0".into() },
+        };
+        let tail = comment_op("tail-1")?;
+        server.with_hub(|hub| {
+            let editor = ActorId::new("editor").map_err(|e| e.to_string())?;
+            let client = hub.connect(editor, Role::Editor, &hello, 0).map_err(|e| e.message)?;
+            hub.send(client, ClientMessage::Op(tail), 0).map_err(|e| e.message)?;
+            // The operation was acknowledged; the process died before anybody
+            // committed it, and no client is left.
+            hub.disconnect(client);
+            Ok::<(), String>(())
+        })??;
+
+        let base = Arc::new(AtomicUsize::new(0));
+        assert_eq!(server.restore_publications(vec![(doc.clone(), Box::new(Counted(base.clone())))]), 1);
+        assert_eq!(server.retry_publications(super::now_ms()), 1);
+        assert_eq!(base.load(Ordering::Relaxed), 1, "the base went first");
+        assert_eq!(tails.load(Ordering::Relaxed), 1, "then the journal tail, as one commit of its own");
+        let room = server.with_hub(|hub| hub.room(&doc).map(|room| (room.version(), room.is_dirty())))?;
+        assert_eq!(room, Some((2, false)), "the tail reached the cabinet and the room is clean");
+        Ok(())
+    }
+
+    #[test]
+    fn a_resolution_needs_a_room_and_a_conflict() -> Result<(), Box<dyn std::error::Error>> {
+        let doc = DocKey::new("file-1")?;
+        let mut hub = Hub::new(RoomConfig::default());
+        hub.open_room(doc.clone(), Fake { epoch: 0 })?;
+        let server = WsServer::new(hub, Arc::new(TestVerifier), Config::default());
+        let published = Published { version: 3, etag: "sha256:33".into() };
+        let missing = DocKey::new("file-2")?;
+        assert_eq!(server.resolve_conflict(&missing, published.clone()), Err(ResolveError::Missing));
+        assert_eq!(server.resolve_conflict(&doc, published), Err(ResolveError::NotInConflict));
+        assert_eq!(server.metrics()?.conflicts_resolved, 0, "a refusal is not counted");
+        Ok(())
+    }
+}

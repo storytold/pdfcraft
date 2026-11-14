@@ -1367,11 +1367,11 @@ title = "Named destinations panel"
 area = "B"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["bookmark.destinations"]
+tools = ["destinations", "destination_set", "destination_delete"]
+evidence = ["crates/automation/tests/it/automation.rs::named_destinations_through_tools", "crates/collab-pdf/src/lib.rs::a_bookmark_look_is_updated_with_the_whole_node_as_its_undo_image"]
+notes = "Bookmarks ▸ Named destinations… lists the document's /Names /Dests entries — name, the page it opens (1-based) and its view — and adds, moves or deletes one; a name is the address, so a bookmark or a link that points at it moves with it. Every change is an engine edit (SetNamedDestination/DeleteNamedDestination) or, in a shared session, a dest.add/dest.update/dest.delete operation, so a commenter or a viewer is refused. The automation tools take the view type (Table 149) and its values in PDF user space; a null value keeps the reader's position or zoom. Not yet: renaming a destination in place (add the new name, delete the old), destinations that are a name of a name, and listing the links that point at a name."
 
 [[feature]]
 id = "view.articles-panel"
@@ -3405,9 +3405,9 @@ tier = "P1"
 milestone = "M4"
 status = "shipped"
 commands = ["file.properties"]
-tools = []
-evidence = ["crates/ui-egui/tests/it/bookmarks.rs::expanding_and_collapsing_all_bookmarks", "crates/ui-egui/tests/it/bookmarks.rs::a_closed_top_level_bookmark_opens_closed", "crates/organize/src/tests.rs::bookmarks_add_rename_move_delete"]
-notes = "Bookmarks panel options: expand all, expand top-level, collapse all. Each bookmark, top level included, opens as its /Count says (positive open; negative or missing closed, ISO 32000-2 Table 151); the triangle toggles it for the session and a search shows matches inside closed ones. Adding or moving a bookmark into another opens that one. Missing: the open/closed state the reader sets is not written back to /Count on save"
+tools = ["bookmark_set_style"]
+evidence = ["crates/ui-egui/tests/it/bookmarks.rs::expanding_and_collapsing_all_bookmarks", "crates/ui-egui/tests/it/bookmarks.rs::a_closed_top_level_bookmark_opens_closed", "crates/organize/src/tests.rs::bookmarks_add_rename_move_delete", "crates/organize/src/tests.rs::opening_a_bookmark_without_children_changes_nothing", "crates/automation/tests/it/automation.rs::bookmarks_through_tools"]
+notes = "Bookmarks panel options: expand all, expand top-level, collapse all. Each bookmark, top level included, opens as its /Count says (positive open; negative or missing closed, ISO 32000-2 Table 151); the triangle toggles it for the session and a search shows matches inside closed ones. Adding or moving a bookmark into another opens that one. The bookmark's context menu has Expanded in the document, which writes the state to /Count (one undoable step; in a shared session an outline.item.update), and is disabled for a bookmark with no children, which has no state to write; the triangle stays the reader's own view of the file's state"
 
 [[feature]]
 id = "organize.bookmarks-from-structure"

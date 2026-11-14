@@ -468,8 +468,8 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc(), "path": path("The bookmark"), "page": { "type": "integer", "minimum": 1 } }), &["doc", "path", "page"])),
         t(
             "bookmark_set_style",
-            "Set a bookmark's style and colour",
-            "Colour a bookmark's title and make it bold or italic (ISO 32000-2 §12.3.3: /C and /F), as bookmark_list reports them. Give any of color ([r, g, b], each 0-1; [0, 0, 0] is the default black), bold and italic; what is left out stays as it is. Undoable.",
+            "Set a bookmark's style, colour and open state",
+            "Colour a bookmark's title, make it bold or italic (ISO 32000-2 §12.3.3: /C and /F) and say whether it shows expanded in the file (/Count's sign, Table 151), as bookmark_list and bookmark_export report them. Give any of color ([r, g, b], each 0-1; [0, 0, 0] is the default black), bold, italic and open; what is left out stays as it is. open is refused for a bookmark with no children, which has no state to change. One undoable step for everything given.",
         )
         .with(schema(
             json!({
@@ -477,10 +477,41 @@ pub fn tools() -> Vec<ToolDef> {
                 "path": path("The bookmark"),
                 "color": { "type": "array", "items": { "type": "number", "minimum": 0, "maximum": 1 }, "minItems": 3, "maxItems": 3 },
                 "bold": { "type": "boolean" },
-                "italic": { "type": "boolean" }
+                "italic": { "type": "boolean" },
+                "open": { "type": "boolean", "description": "Whether the bookmark shows expanded; only one with children has an open state." }
             }),
             &["doc", "path"],
         )),
+        t(
+            "destinations",
+            "List named destinations",
+            "The document's named destinations (ISO 32000-2 §12.3.2.3): each name, the page it opens (1-based; null when this document no longer has that page) and its view ({type, values}: a Table 149 type and its values in PDF user space, or null when the reader keeps its own position). A bookmark or a link can point at a name, so a name that moves moves every reference to it.",
+        )
+        .ro()
+        .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t(
+            "destination_set",
+            "Add or move a named destination",
+            "Point the name at a page and a view: the name is added when this document has none of that name and moved when it has. view is a Table 149 type (default XYZ) and values exactly its numbers in PDF user space — XYZ 3 (left, top, zoom), FitH/FitV/FitBH/FitBV 1, FitR 4, Fit/FitB none; a null value, or leaving values out, keeps the reader's position or zoom there. A blank or over-long name, a page past the last, an unknown view type, a wrong number of values and a FitR with a hole are refused before anything is written. Undoable.",
+        )
+        .destructive()
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "name": { "type": "string", "minLength": 1, "description": "The destination's name, as /Names /Dests keeps it." },
+                "page": { "type": "integer", "minimum": 1 },
+                "view": { "type": "string", "enum": ["XYZ", "Fit", "FitH", "FitV", "FitB", "FitBH", "FitBV", "FitR"], "description": "The destination type (default XYZ)." },
+                "values": { "type": "array", "items": { "type": ["number", "null"] }, "maxItems": 4, "description": "The type's values in PDF user space; null keeps the reader's." }
+            }),
+            &["doc", "name", "page"],
+        )),
+        t(
+            "destination_delete",
+            "Delete a named destination",
+            "Remove a named destination. A bookmark or a link that pointed at the name stays where it is and then goes nowhere; the undo puts the name back. A name this document does not define is refused.",
+        )
+        .destructive()
+        .with(schema(json!({ "doc": doc(), "name": { "type": "string", "minLength": 1 } }), &["doc", "name"])),
         t(
             "bookmark_from_structure",
             "New bookmarks from structure",

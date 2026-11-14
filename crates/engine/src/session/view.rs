@@ -1,5 +1,5 @@
 use super::{
-    Arc, BookmarkPage, BookmarkRow, DocId, Document, EditError, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, Session, SummarySort,
+    Arc, BookmarkPage, DocId, Document, EditError, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, Session, SummarySort,
     apply_layer_state, comment_summary, display_config, local_utc_offset, outline_rows, parse_ymd, render_threads, use_layer_choices,
 };
 
@@ -207,17 +207,7 @@ impl Session {
         let doc = self.get(id)?;
         if let Some(editor) = doc.editor.as_ref() {
             let page = pdfcraft_organize::bookmark_page(&editor.cos, offset, limit);
-            let rows = page
-                .bookmarks
-                .into_iter()
-                .map(|b| {
-                    let view = b.view.map_or_else(Default::default, |(kind, numbers)| {
-                        let numbers: Vec<Option<f32>> = numbers.iter().map(|n| n.map(|n| n as f32)).collect();
-                        pdfcraft_render::DestView::from_operands(Some(&kind), &numbers)
-                    });
-                    BookmarkRow { path: b.path, title: b.title, open: b.open, page: b.page, view, color: b.color, italic: b.italic, bold: b.bold }
-                })
-                .collect();
+            let rows = page.bookmarks.into_iter().map(crate::bookmarks::row_of).collect();
             return Some(BookmarkPage { rows, next: page.next, truncated: false });
         }
         let all = outline_rows(&doc.info.outline);

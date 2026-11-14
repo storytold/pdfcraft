@@ -39,6 +39,8 @@ pub const EDIT_LABELS: &[&str] = &[
     "Set bookmark destination",
     "Colour",
     "Style",
+    "Expand bookmark",
+    "Collapse bookmark",
     "Import bookmarks",
     "New bookmarks from structure",
     "New bookmarks from text styles",
@@ -203,7 +205,20 @@ impl Edit {
             },
             Edit::InsertPagesFrom { name, .. } => Label::with("Insert pages from {name}", name.as_str()),
             Edit::AddBookmark { .. } => Label::of("Add bookmark"),
+            Edit::AddBookmarkWith { .. } => Label::of("Add bookmark"),
             Edit::RenameBookmark { .. } => Label::of("Rename bookmark"),
+            // One step that changes a bookmark's look says which look it changed;
+            // a step that changes several at once keeps the general wording below.
+            Edit::UpdateBookmark { title: None, dest: None, color: Some(_), bold: None, italic: None, open: None, .. } => Label::of("Colour"),
+            Edit::UpdateBookmark { title: None, dest: None, color: None, bold: Some(_), italic: None, open: None, .. } => Label::of("Style"),
+            Edit::UpdateBookmark { title: None, dest: None, color: None, bold: None, italic: Some(_), open: None, .. } => Label::of("Style"),
+            Edit::UpdateBookmark { title: None, dest: None, color: None, bold: None, italic: None, open: Some(open), .. } => {
+                Label::of(if *open { "Expand bookmark" } else { "Collapse bookmark" })
+            }
+            // A step that changes where a bookmark goes says so; one that only
+            // renames keeps the rename's wording.
+            Edit::UpdateBookmark { dest: Some(_), .. } => Label::of("Set bookmark destination"),
+            Edit::UpdateBookmark { .. } => Label::of("Rename bookmark"),
             Edit::DeleteBookmark { .. } => Label::of("Delete bookmark"),
             Edit::MoveBookmark { .. } => Label::of("Move bookmark"),
             Edit::SetBookmarkPage { .. } => Label::of("Set bookmark destination"),
@@ -211,9 +226,14 @@ impl Edit {
             Edit::SetBookmarkColor { .. } => Label::of("Colour"),
             Edit::SetBookmarkStyle { .. } => Label::of("Style"),
             Edit::ImportBookmarks { .. } => Label::of("Import bookmarks"),
+            // A named destination is where a bookmark goes, and the two wordings
+            // already say that in every language.
+            Edit::SetNamedDestination { .. } => Label::of("Set bookmark destination"),
+            Edit::DeleteNamedDestination { .. } => Label::of("Delete bookmark"),
             Edit::BookmarksFromStructure => Label::of("New bookmarks from structure"),
             Edit::BookmarksFromTextStyles { .. } => Label::of("New bookmarks from text styles"),
             Edit::NumberPages { .. } => Label::of("Number pages"),
+            Edit::ClearPageLabels { .. } => Label::of("Clear page numbering"),
             // What was measured is part of the wording too, for the same reason.
             Edit::AddMeasurement(m) => Label::of(match m.kind {
                 pdfcraft_measure::Kind::Distance => "Measure distance",
@@ -221,15 +241,15 @@ impl Edit {
                 pdfcraft_measure::Kind::Area => "Measure area",
             }),
             Edit::SetMeasurementScale { .. } => Label::of("Set measurement scale"),
-            Edit::AddAnnotation(a) => Label::of(add_annotation(&a.shape)),
+            Edit::AddAnnotation(a) | Edit::AddAnnotationNamed(a, _) => Label::of(add_annotation(&a.shape)),
             Edit::AddCustomStamp { .. } => Label::of("Add stamp"),
             Edit::AddModel3d { .. } => Label::of("Add 3D model"),
             Edit::DeleteAnnotation { .. } => Label::of("Delete comment"),
             Edit::PasteComments { .. } => Label::of("Paste comments"),
             Edit::SetAnnotationContents { .. } => Label::of("Edit comment"),
-            Edit::ReplyToAnnotation { .. } => Label::of("Reply"),
+            Edit::ReplyToAnnotation { .. } | Edit::ReplyToAnnotationNamed { .. } => Label::of("Reply"),
             // The state's name is part of the wording: a language may need to agree it with the rest.
-            Edit::SetAnnotationStatus { state, .. } => Label::of(match state {
+            Edit::SetAnnotationStatus { state, .. } | Edit::SetAnnotationStatusNamed { state, .. } => Label::of(match state {
                 ReviewState::None => "Set status None",
                 ReviewState::Accepted => "Set status Accepted",
                 ReviewState::Rejected => "Set status Rejected",
@@ -254,6 +274,7 @@ impl Edit {
             | Edit::FontSizeAnnotation { .. }
             | Edit::BorderColorAnnotation { .. }
             | Edit::BorderShapeAnnotation { .. }
+            | Edit::RestyleAnnotation { .. }
             | Edit::SetAnnotationInfo { .. } => Label::of("Change comment properties"),
             Edit::SetFieldValue { name, .. } => Label::with("Fill in {name}", name.as_str()),
             Edit::SetFieldImage { name, .. } | Edit::SetFieldImageTarget { name, .. } => Label::with("Set the image of {name}", name.as_str()),
@@ -333,6 +354,8 @@ impl Edit {
             Edit::AddLink { .. } => Label::of("Add link"),
             Edit::SetLink { .. } => Label::of("Change link properties"),
             Edit::DeleteLink { .. } => Label::of("Delete link"),
+            Edit::SetPageLinks { .. } => Label::of("Change links"),
+            Edit::SetPagesLinks { .. } => Label::of("Change links"),
             Edit::RemoveLinks { .. } => Label::of("Remove all links"),
             Edit::AddLinks { links, .. } => plural("Create link", "Create links", links.len()),
             Edit::Sanitize => Label::of("Sanitize document"),

@@ -619,6 +619,34 @@ impl StyleChange {
     }
 }
 
+/// The whole appearance one restyle sets on a comment (Comment Properties ▸ OK, the comment
+/// bar). `None` leaves a property as it is; for a property that can be taken away (a fill, a
+/// border colour) the inner `None` clears it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Restyle {
+    pub color: Option<Rgb>,
+    pub opacity: Option<f64>,
+    pub width: Option<f64>,
+    /// `/LE`: two endings for a line or polyline, one for a callout.
+    pub endings: Option<Vec<LineEnding>>,
+    pub fill: Option<Option<Rgb>>,
+    pub border_color: Option<Option<Rgb>>,
+    pub border_shape: Option<BorderShape>,
+}
+
+impl Restyle {
+    /// Whether the restyle names no property at all.
+    pub fn is_empty(&self) -> bool {
+        self.color.is_none()
+            && self.opacity.is_none()
+            && self.width.is_none()
+            && self.endings.is_none()
+            && self.fill.is_none()
+            && self.border_color.is_none()
+            && self.border_shape.is_none()
+    }
+}
+
 /// Inputs for replacing selected text with a grouped strikeout and caret annotation.
 pub struct TextReplacement<'a> {
     pub page: usize,
@@ -780,6 +808,14 @@ pub struct NewAnnotation {
 pub struct Meta {
     pub date: Option<String>,
     pub id: String,
+}
+
+impl Meta {
+    /// The same stamp with a caller-chosen `/NM`. Collaboration clients name
+    /// their own annotations so every replica uses one stable id (ADR-0002).
+    pub(crate) fn named(&self, id: &str) -> Self {
+        Self { date: self.date.clone(), id: id.to_owned() }
+    }
 }
 
 /// Review states a reply can set (§12.5.6.3, Table 172; Acrobat's "Set status").

@@ -479,6 +479,132 @@ pub(crate) fn snapshot_tab_name(title: &str, file_name: &str, snapshot: &Snapsho
     }
 }
 
+/// Another participant's pointer on a page, in PDF user space. Drawn by the canvas and
+/// filled from the collaboration session's presence; the canvas knows nothing else about it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteCursor {
+    /// Who it belongs to, shown beside the pointer.
+    pub actor: String,
+    pub color: Color32,
+    pub page: usize,
+    pub point: [f64; 2],
+}
+
+/// Another participant's selection on a page. Ephemeral presence, like the pointer: it is
+/// never an edit and never touches the document.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteSelection {
+    /// Who selected it, kept for the colour and the tests.
+    pub actor: String,
+    pub color: Color32,
+    pub page: usize,
+    pub kind: RemoteSelectionKind,
+    /// The caret at the active end of a text selection, in PDF user space.
+    pub caret: Option<[f64; 2]>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum RemoteSelectionKind {
+    /// A comment named by its `/NM`; the canvas looks up its geometry on the page.
+    Annotation(String),
+    /// Several comments selected together, by `/NM`; each one's geometry is drawn.
+    Annotations(Vec<String>),
+    /// Rectangles in PDF user space (`[x0, y0, x1, y1]`): one per selected line piece,
+    /// or the rectangle of a column selection.
+    Rects(Vec<[f64; 4]>),
+}
+
+/// Draw other participants' selections on page `i`: a translucent fill in the actor's
+/// colour, so the page's own content stays readable. A page with none draws nothing.
+pub(crate) fn paint_remote_selections(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, selections: &[RemoteSelection]) {
+    let Some(page_info) = info.pages.get(page) else { return };
+    for selection in selections.iter().filter(|selection| selection.page == page) {
+        let rects = match &selection.kind {
+            RemoteSelectionKind::Annotation(nm) => annotation_rects(info, page, nm),
+            RemoteSelectionKind::Annotations(names) => names.iter().flat_map(|nm| annotation_rects(info, page, nm)).collect(),
+            RemoteSelectionKind::Rects(rects) => rects.iter().map(|r| [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32]).collect(),
+        };
+        let fill = Color32::from_rgba_unmultiplied(selection.color.r(), selection.color.g(), selection.color.b(), 48);
+        let stroke = egui::Stroke::new(1.0, selection.color);
+        for rect in rects {
+            let (x0, x1) = (rect[0].min(rect[2]), rect[0].max(rect[2]));
+            let (y0, y1) = (rect[1].min(rect[3]), rect[1].max(rect[3]));
+            if !x0.is_finite() || !x1.is_finite() || !y0.is_finite() || !y1.is_finite() {
+                continue;
+            }
+            let [vx0, vy0] = page_info.user_to_view(x0, y0);
+            let [vx1, vy1] = page_info.user_to_view(x1, y1);
+            let a = xf.norm_to_screen(vx0.min(vx1) / xf.pw, vy0.min(vy1) / xf.ph);
+            let b = xf.norm_to_screen(vx0.max(vx1) / xf.pw, vy0.max(vy1) / xf.ph);
+            let r = Rect::from_two_pos(a, b).intersect(xf.rect);
+            if r.is_positive() {
+                painter.rect_filled(r, 1.0, fill);
+                painter.rect_stroke(r, 1.0, stroke, egui::StrokeKind::Inside);
+            }
+        }
+        // The caret is a thin line at the active end, not a box: it says where typing goes.
+        if let Some(caret) = selection.caret.filter(|caret| caret[0].is_finite() && caret[1].is_finite()) {
+            let [vx, vy] = page_info.user_to_view(caret[0] as f32, caret[1] as f32);
+            let at = xf.norm_to_screen(vx / xf.pw, vy / xf.ph);
+            if xf.rect.expand(8.0).contains(at) {
+                let top = at - egui::vec2(0.0, 10.0);
+                let bottom = at + egui::vec2(0.0, 4.0);
+                painter.line_segment([top, bottom], egui::Stroke::new(2.0, selection.color));
+            }
+        }
+    }
+}
+
+/// The geometry of the comment `/NM` on `page`: its markup quads, or its rectangle when it
+/// has none (a note, a stamp, a text box). A name that is not on the page draws nothing.
+fn annotation_rects(info: &DocInfo, page: usize, nm: &str) -> Vec<[f32; 4]> {
+    let Some(annotation) = info.annotations.iter().find(|a| a.page == page && a.name.as_deref() == Some(nm)) else { return Vec::new() };
+    if annotation.quads.is_empty() {
+        return vec![annotation.rect];
+    }
+    annotation.quads.iter().filter_map(quad_rect).collect()
+}
+
+fn quad_rect(q: &[f32; 8]) -> Option<[f32; 4]> {
+    let mut rect: Option<[f32; 4]> = None;
+    for [x, y] in [[q[0], q[1]], [q[2], q[3]], [q[4], q[5]], [q[6], q[7]]] {
+        if !x.is_finite() || !y.is_finite() {
+            continue;
+        }
+        rect = Some(match rect {
+            None => [x, y, x, y],
+            Some([x0, y0, x1, y1]) => [x0.min(x), y0.min(y), x1.max(x), y1.max(y)],
+        });
+    }
+    rect
+}
+
+/// Draw other participants' pointers on page `i`: an arrow with the actor's name beside
+/// it, in the colour the session gave them. A page with none draws nothing.
+pub(crate) fn paint_remote_cursors(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, cursors: &[RemoteCursor]) {
+    let Some(page_info) = info.pages.get(page) else { return };
+    for cursor in cursors.iter().filter(|cursor| cursor.page == page) {
+        if !cursor.point[0].is_finite() || !cursor.point[1].is_finite() {
+            continue;
+        }
+        let [vx, vy] = page_info.user_to_view(cursor.point[0] as f32, cursor.point[1] as f32);
+        let at = xf.norm_to_screen(vx / xf.pw, vy / xf.ph);
+        if !xf.rect.expand(8.0).contains(at) {
+            continue;
+        }
+        // A small arrow whose tip is the point, as a reader's pointer reads.
+        let tip = at;
+        let head = [tip, egui::pos2(tip.x + 10.0, tip.y + 3.5), egui::pos2(tip.x + 3.5, tip.y + 10.0), egui::pos2(tip.x + 2.6, tip.y + 2.6)];
+        painter.add(egui::Shape::convex_polygon(head.to_vec(), cursor.color, egui::Stroke::new(1.0, Color32::WHITE)));
+        let font = egui::FontId::proportional(11.0);
+        let label = painter.layout_no_wrap(cursor.actor.clone(), font, Color32::WHITE);
+        let label_pos = egui::pos2(tip.x + 12.0, tip.y + 10.0);
+        let bubble = egui::Rect::from_min_size(label_pos, label.size()).expand2(egui::vec2(3.0, 1.0));
+        painter.rect_filled(bubble, 3.0, cursor.color);
+        painter.galley(label_pos, label, Color32::WHITE);
+    }
+}
+
 pub struct DocView {
     /// Where the tab shows (split view's panes) and the key that tells two
     /// views of one document apart (`crate::panes`).
@@ -546,6 +672,15 @@ pub struct DocView {
     /// The interface the document hid in this tab, and what is hidden now (ISO 32000-2 Table 147
     /// `HideToolbar`, `HideMenubar`, `HideWindowUI`). Never saved.
     pub interface: crate::viewer_prefs::TabInterface,
+    /// Another participant's pointer, where the collaboration session last said it was. The
+    /// canvas draws what it is given; without the feature the list stays empty.
+    pub remote_cursors: Vec<RemoteCursor>,
+    /// Other participants' selections, where the collaboration session last said they were.
+    /// Ephemeral, like the pointers: without the feature the list stays empty.
+    pub remote_selections: Vec<RemoteSelection>,
+    /// Where this frame's pointer is on a page, in PDF user space (page, x, y): what the
+    /// collaboration session sends as presence. `None` when it is not over a page.
+    pub local_cursor: Option<(usize, [f64; 2])>,
     /// Full screen (Acrobat's Full Screen Mode): the display saved on entering it, while the view
     /// shows one page or spread at a time, fitted to the screen. `None` outside full screen.
     presentation: Option<SavedDisplay>,
@@ -1093,6 +1228,9 @@ impl DocView {
             page_sizes: info.pages.iter().map(|p| (p.width, p.height)).collect(),
             screen_rects: Vec::new(),
             screen_xforms: Vec::new(),
+            remote_cursors: Vec::new(),
+            remote_selections: Vec::new(),
+            local_cursor: None,
             screen_ppp: 1.0,
             viewport_screen: Rect::NOTHING,
             zoom_anchor: None,
@@ -1179,6 +1317,23 @@ impl DocView {
             router: Default::default(),
             menu_for: None,
             press_cancelled: false,
+        }
+    }
+
+    /// A change that keeps what the pages are addressed by (a page turn, or a
+    /// replay whose operations leave page addresses alone). The text selection is
+    /// kept (its glyphs are still on the page), so the next presence frame
+    /// re-addresses the range to the new epoch instead of dropping it
+    /// (`with_epoch`'s rule for a merge intent, applied to presence). The text
+    /// layer itself is re-extracted, as for any content change.
+    #[cfg(feature = "collab")]
+    pub(crate) fn document_keeping_selection(&mut self, info: &DocInfo) {
+        let selection = self.selection;
+        let dismissed = self.actions_dismissed;
+        self.document_changed(info);
+        if let Some(selection) = selection.filter(|selection| selection.page < info.pages.len()) {
+            self.selection = Some(selection);
+            self.actions_dismissed = dismissed;
         }
     }
 
@@ -1744,6 +1899,13 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         frame.current = i;
     }
     let xf = PageXform { rect: r, rot: view.rotation, pw: info.pages[i].width.max(1.0), ph: info.pages[i].height.max(1.0) };
+    if let Some(pointer) = ptr.within(r)
+        && let Some(page) = info.pages.get(i)
+    {
+        let (vx, vy) = xf.screen_to_view(pointer);
+        let [x, y] = page.view_to_user(vx, vy);
+        view.local_cursor = Some((i, [f64::from(x), f64::from(y)]));
+    }
     paint_page_surface(ui, view, frame, &PageSlot { i, r, xf });
     let painter = ui.painter();
     view.text_background.paint(painter, &xf, i, view.line_editor.as_ref(), view.content.draft.as_ref());
@@ -1799,6 +1961,12 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     }
     text_layer(ui, view, frame, &slot, &input);
     page_overlays(ui, view, frame, &slot, &input);
+    if !view.remote_cursors.is_empty() {
+        paint_remote_cursors(ui.painter(), &xf, i, info, &view.remote_cursors);
+    }
+    if !view.remote_selections.is_empty() {
+        paint_remote_selections(ui.painter(), &xf, i, info, &view.remote_selections);
+    }
 }
 
 #[allow(clippy::cognitive_complexity)]
@@ -1886,6 +2054,7 @@ fn draw_pages(
     view.screen_rects.clear();
     view.screen_ppp = ui.ctx().pixels_per_point();
     view.screen_xforms.clear();
+    view.local_cursor = None;
     // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
     // or a press they hold. The page modules read it rather than egui's raw pointer state.
     let ptr = PagePointer::read(ui, &resp, modal);

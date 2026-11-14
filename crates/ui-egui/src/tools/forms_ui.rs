@@ -55,6 +55,13 @@ pub struct Focus {
     /// Whether the text box had the keyboard at the end of the editor's last frame
     /// ([`crate::edit_text_ui::lost_focus_once`]).
     pub(crate) had_focus: bool,
+    /// Where the caret sits while this field is being typed into: the offset in
+    /// characters into `text`, and where it is on the page in PDF user space. The
+    /// collaboration presence publishes the address and this offset, never the
+    /// text (RFC §5); both are `None` once the editor no longer holds the keyboard,
+    /// so the trace goes with the focus.
+    pub caret: Option<u32>,
+    pub caret_at: Option<[i64; 2]>,
 }
 
 /// A drop-down's open list: the first item shown, the item the keys or the pointer are on, and
@@ -272,6 +279,48 @@ fn turned_caret_and_paint(ui: &egui::Ui, r: &egui::Response, rect: Rect, frame: 
     }
 }
 
+/// The page frame a field editor draws in: what maps its caret back to PDF user space.
+struct CaretFrame<'a> {
+    xf: &'a PageXform,
+    info: &'a DocInfo,
+    page: usize,
+    frame: TextFrame,
+}
+
+/// Where a field editor's caret is, in PDF user space, from the same galley it drew:
+/// presence carries a point and the caret's offset, never the text around it. `None`
+/// when the caret has no place yet or the page is not laid out.
+fn caret_point(area: &CaretFrame<'_>, laid: Option<&Laid>, cursor: egui::text::CCursorRange) -> Option<[i64; 2]> {
+    let (galley, pos) = laid?;
+    let mut caret = galley.pos_from_cursor(cursor.primary);
+    // A caret on an empty line has no height of its own: give it the line's bottom.
+    caret.max.y = caret.max.y.max(caret.min.y + 1.0);
+    let bottom = if area.frame.turn != 0 {
+        let start = area.frame.text_origin() - vec2(galley.rect.left(), 0.0);
+        area.frame.on_screen(start + caret.center_bottom().to_vec2())
+    } else {
+        *pos + caret.center_bottom().to_vec2()
+    };
+    let (vx, vy) = area.xf.screen_to_view(bottom);
+    let [ux, uy] = area.info.pages.get(area.page)?.view_to_user(vx, vy);
+    (ux.is_finite() && uy.is_finite()).then(|| [coord_i64(ux), coord_i64(uy)])
+}
+
+/// A user-space coordinate as the whole unit presence sends; non-finite input becomes 0
+/// rather than a cast artefact.
+fn coord_i64(value: f32) -> i64 {
+    if value.is_finite() { value.round() as i64 } else { 0 }
+}
+
+/// Keeps the focused editor's caret for presence: its offset in characters into the
+/// draft and its point in user space. A field that does not hold the keyboard has no
+/// caret to share, so both are cleared and the next presence frame takes the trace away.
+fn record_caret(ui: &egui::Ui, r: &egui::Response, fx: &mut Focus, area: &CaretFrame<'_>, laid: Option<&Laid>) {
+    let range = r.has_focus().then(|| egui::TextEdit::load_state(ui.ctx(), r.id).and_then(|st| st.cursor.char_range())).flatten();
+    fx.caret = range.and_then(|range| u32::try_from(range.primary.index.0).ok());
+    fx.caret_at = range.and_then(|range| caret_point(area, laid, range));
+}
+
 fn fillable(f: &FormField) -> bool {
     !f.read_only() && !matches!(f.kind, FormFieldKind::PushButton | FormFieldKind::Signature)
 }
@@ -371,6 +420,8 @@ pub(crate) fn open_focus(f: &FormField, widget: usize) -> Focus {
         calendar_text: None,
         list: ChoiceList::default(),
         had_focus: false,
+        caret: None,
+        caret_at: None,
     }
 }
 
@@ -704,10 +755,13 @@ struct ComboEditor<'a> {
     frame: TextFrame,
     zoom: f32,
     index: usize,
+    page: usize,
+    xf: &'a PageXform,
+    info: &'a DocInfo,
 }
 
 fn combo_editor(ctx: &egui::Context, view: &mut DocView, editor: ComboEditor<'_>) {
-    let ComboEditor { form, field: f, widget: w, rect, frame, zoom, index: widget } = editor;
+    let ComboEditor { form, field: f, widget: w, rect, frame, zoom, index: widget, page, xf, info } = editor;
     let mut enter = false;
     let view_key = view.view_key();
     egui::Area::new(egui::Id::unique(("form-editor", view_key)))
@@ -738,6 +792,7 @@ fn combo_editor(ctx: &egui::Context, view: &mut DocView, editor: ComboEditor<'_>
             // The form field's own logical name; not a visual/preordered label.
             let r = r.accessible_name(f.name.clone());
             turned_caret_and_paint(ui, &r, rect, frame, laid_out.as_ref(), false, font);
+            let laid = laid_out.clone();
             if std::mem::take(&mut fx.request_focus) {
                 r.request_focus();
                 // Entered with Tab: typing replaces the value.
@@ -749,6 +804,7 @@ fn combo_editor(ctx: &egui::Context, view: &mut DocView, editor: ComboEditor<'_>
                     st.store(ui.ctx(), r.id);
                 }
             }
+            record_caret(ui, &r, fx, &CaretFrame { xf, info, page, frame }, laid.as_ref());
             enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         });
     if enter {
@@ -1263,6 +1319,13 @@ pub(crate) fn overlay(
     }
     let toggle = std::mem::take(&mut view.forms.toggle);
     view.forms.keys = None;
+    // The editor records its caret afresh in each frame it draws, so a field whose
+    // editor did not run this frame (scrolled away, a dialog took the keyboard) has
+    // no caret to share: presence must not keep an old trace standing.
+    if let Some(focused) = view.forms.focus.as_mut() {
+        focused.caret = None;
+        focused.caret_at = None;
+    }
     let focus = view.forms.focus.clone()?;
     let Some(f) = focused_field(&focus, form) else {
         view.forms.focus = None;
@@ -1346,6 +1409,10 @@ pub(crate) fn overlay(
                     let r = r.accessible_name(f.name.clone());
                     let caret_placed = settle_text_editor(ui, fx, &r, primary_down, laid_out.clone(), text_box.zip(before), frame);
                     turned_caret_and_paint(ui, &r, rect, frame, laid_out.as_ref(), caret_placed, font);
+                    // Presence says which field is being typed into and where the caret
+                    // sits inside its text; both go with the keyboard, so losing focus
+                    // takes the trace away (RFC §5).
+                    record_caret(ui, &r, fx, &CaretFrame { xf: &xf, info, page, frame }, laid_out.as_ref());
                     let lost = crate::edit_text_ui::lost_focus_once(&r, &mut fx.had_focus);
                     let (enter, esc, tab) =
                         (keys.pressed(ctx, egui::Key::Enter), keys.pressed(ctx, egui::Key::Escape), keys.pressed(ctx, egui::Key::Tab));
@@ -1386,7 +1453,18 @@ pub(crate) fn overlay(
                 combo_editor(
                     ctx,
                     view,
-                    ComboEditor { form, field: f, widget: w, rect, frame: TextFrame::of(&xf, info, page, w, rect), zoom, index: focus.widget },
+                    ComboEditor {
+                        form,
+                        field: f,
+                        widget: w,
+                        rect,
+                        frame: TextFrame::of(&xf, info, page, w, rect),
+                        zoom,
+                        index: focus.widget,
+                        page,
+                        xf: &xf,
+                        info,
+                    },
                 );
             }
             let mut st = view.forms.focus.as_ref().map(|x| x.list).unwrap_or_default();
@@ -1697,6 +1775,8 @@ mod tests {
             calendar_text: None,
             list: ChoiceList::default(),
             had_focus: false,
+            caret: None,
+            caret_at: None,
         }
     }
 

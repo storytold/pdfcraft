@@ -35,6 +35,17 @@ craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-l
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b", features = ["egui"] }
 # internal
+pdfcraft-collab-annot = { path = "crates/collab-annot", version = "0.21.0" }
+pdfcraft-collab-outline = { path = "crates/collab-outline", version = "0.21.0" }
+pdfcraft-collab-client = { path = "crates/collab-client", version = "0.21.0" }
+pdfcraft-collab-client-pdf = { path = "crates/collab-client-pdf", version = "0.21.0" }
+pdfcraft-collab-hub = { path = "crates/collab-hub", version = "0.21.0" }
+pdfcraft-collab-link = { path = "crates/collab-link", version = "0.21.0" }
+pdfcraft-collab-pdf = { path = "crates/collab-pdf", version = "0.21.0" }
+pdfcraft-collab-proto = { path = "crates/collab-proto", version = "0.21.0" }
+pdfcraft-collab-server = { path = "crates/collab-server", version = "0.21.0" }
+pdfcraft-collab-session = { path = "crates/collab-session", version = "0.21.0" }
+pdfcraft-collab-ws = { path = "crates/collab-ws", version = "0.21.0" }
 pdfcraft-geom = { path = "crates/geom", version = "0.21.0" }
 pdfcraft-filters = { path = "crates/filters", version = "0.21.0" }
 pdfcraft-cos = { path = "crates/cos", version = "0.21.0" }

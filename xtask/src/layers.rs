@@ -37,6 +37,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("prc", Class::Standalone(0)),
     // L1 object layer
     ("cos", Class::Standalone(1)),
+    ("collab-proto", Class::Layer(1)),
     // L2 core model
     ("content", Class::Layer(2)),
     ("model", Class::Layer(2)),
@@ -53,6 +54,9 @@ pub const TABLE: &[(&str, Class)] = &[
     ("xfa", Class::Layer(3)),
     ("ml", Class::Layer(3)),
     // L4 features
+    ("collab-annot", Class::Layer(4)),
+    ("collab-link", Class::Layer(4)),
+    ("collab-outline", Class::Layer(4)),
     ("edit", Class::Layer(4)),
     ("organize", Class::Layer(4)),
     ("security", Class::Layer(4)),
@@ -80,6 +84,14 @@ pub const TABLE: &[(&str, Class)] = &[
     ("engine", Class::Layer(6)),
     // L7 platform + frontends
     ("platform", Class::Layer(7)),
+    ("collab-client", Class::Layer(7)),
+    ("collab-client-pdf", Class::Layer(7)),
+    ("collab-hub", Class::Layer(7)),
+    ("collab-pdf", Class::Layer(7)),
+    ("collab-server", Class::Layer(7)),
+    ("collab-daemon", Class::Exempt),
+    ("collab-session", Class::Layer(7)),
+    ("collab-ws", Class::Layer(7)),
     ("ui-common", Class::Layer(7)),
     ("ui-egui", Class::Layer(7)),
     ("automation", Class::Layer(7)),
@@ -99,6 +111,8 @@ pub const STANDALONE_DEPS: &[(&str, &[&str])] = &[("cos", &["filters", "crypt", 
 
 /// Allowed same-layer edges (architecture §3 rule 1). `forms → js` is deliberately absent.
 pub const SIDEWAYS: &[(&str, &str)] = &[
+    // The outline's wire form is a leaf over `organize`, as `redact` is over `edit`.
+    ("collab-outline", "organize"),
     ("redact", "edit"),
     ("audit", "edit"),
     ("a11y", "preflight"),
@@ -106,8 +120,22 @@ pub const SIDEWAYS: &[(&str, &str)] = &[
     ("export", "ocr"),
     ("sign", "security"),
     ("ui-egui", "ui-common"),
+    ("ui-egui", "collab-client-pdf"),
+    ("ui-egui", "collab-session"),
     ("ui-egui", "platform"),
     ("automation", "platform"),
+    ("collab-pdf", "collab-server"),
+    ("collab-hub", "collab-server"),
+    ("collab-client", "collab-hub"),
+    ("collab-session", "collab-client"),
+    ("collab-session", "collab-ws"),
+    ("collab-session", "collab-hub"),
+    ("collab-session", "collab-server"),
+    ("collab-client", "collab-server"),
+    ("collab-ws", "collab-hub"),
+    ("collab-ws", "collab-server"),
+    ("collab-ws", "collab-pdf"),
+    ("collab-ws", "collab-client-pdf"),
 ];
 
 /// External crates that constitute a UI toolkit / windowing dependency (prefix match with `*`).

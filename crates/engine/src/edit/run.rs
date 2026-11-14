@@ -28,8 +28,13 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::SetBookmarkColor { .. }
         | Edit::SetBookmarkStyle { .. }
         | Edit::ImportBookmarks { .. }
+        | Edit::AddBookmarkWith { .. }
+        | Edit::UpdateBookmark { .. }
+        | Edit::SetNamedDestination { .. }
+        | Edit::DeleteNamedDestination { .. }
         | Edit::BookmarksFromStructure
-        | Edit::NumberPages { .. } => {
+        | Edit::NumberPages { .. }
+        | Edit::ClearPageLabels { .. } => {
             if p.assemble() {
                 Ok(())
             } else {
@@ -49,13 +54,16 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         }
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
+        | Edit::AddAnnotationNamed(..)
         | Edit::PasteComments { .. }
         | Edit::AddCustomStamp { .. }
         | Edit::AddModel3d { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
         | Edit::ReplyToAnnotation { .. }
+        | Edit::ReplyToAnnotationNamed { .. }
         | Edit::SetAnnotationStatus { .. }
+        | Edit::SetAnnotationStatusNamed { .. }
         | Edit::MarkAnnotation { .. }
         | Edit::ReplaceText { .. }
         | Edit::EraseInk { .. }
@@ -70,6 +78,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::FontSizeAnnotation { .. }
         | Edit::BorderColorAnnotation { .. }
         | Edit::BorderShapeAnnotation { .. }
+        | Edit::RestyleAnnotation { .. }
         | Edit::SetAnnotationInfo { .. }
         | Edit::SetMeasurementScale { .. } => {
             if p.annotate() {
@@ -129,6 +138,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddLink { .. }
         | Edit::SetLink { .. }
         | Edit::DeleteLink { .. }
+        | Edit::SetPageLinks { .. }
+        | Edit::SetPagesLinks { .. }
         | Edit::RemoveLinks { .. }
         | Edit::AddLinks { .. }
         | Edit::Sanitize
@@ -578,6 +589,14 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::ImportBookmarks { parent, index, bookmarks, replace } => {
             pdfcraft_organize::import_outline(doc, parent, *index, bookmarks, *replace)?;
         }
+        Edit::AddBookmarkWith { parent, index, title, dest } => {
+            pdfcraft_organize::add_bookmark_with(doc, parent, *index, title, dest.clone())?;
+        }
+        Edit::UpdateBookmark { path, title, dest, color, bold, italic, open } => {
+            update_bookmark(doc, path, title.as_deref(), dest.as_ref(), *color, *bold, *italic, *open)?;
+        }
+        Edit::SetNamedDestination { name, dest } => pdfcraft_organize::set_named_destination(doc, name, dest)?,
+        Edit::DeleteNamedDestination { name } => pdfcraft_organize::delete_named_destination(doc, name)?,
         Edit::BookmarksFromStructure => {
             let entries: Vec<_> = pdfcraft_a11y::headings(doc)
                 .into_iter()
@@ -606,12 +625,16 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
         }
         Edit::NumberPages { from, to, style, prefix, first } => pdfcraft_organize::number_pages(doc, *from, *to, *style, prefix, *first)?,
+        Edit::ClearPageLabels { start } => pdfcraft_organize::clear_page_label_range(doc, *start)?,
         Edit::AddMeasurement(m) => {
             measure::add(doc, m, &cx.meta())?;
         }
         Edit::SetMeasurementScale { page, bbox, name, scale } => measure::set_scale(doc, *page, *bbox, name, scale)?,
         Edit::AddAnnotation(a) => {
             pdfcraft_annot::add_annotation(doc, a, &cx.meta())?;
+        }
+        Edit::AddAnnotationNamed(a, name) => {
+            pdfcraft_annot::add_annotation_named(doc, a, &cx.meta(), name)?;
         }
         Edit::PasteComments { xfdf, page, offset } => {
             // Names from the edit's own id generator: unique to this paste within the document.
@@ -660,8 +683,14 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::ReplyToAnnotation { page, index, text, author } => {
             pdfcraft_annot::add_reply(doc, *page, *index, text, author, &cx.meta())?;
         }
+        Edit::ReplyToAnnotationNamed { page, index, text, author, name } => {
+            pdfcraft_annot::add_reply_named(doc, *page, *index, text, author, name, &cx.meta())?;
+        }
         Edit::SetAnnotationStatus { page, index, state, author } => {
             pdfcraft_annot::set_review_state(doc, *page, *index, *state, author, &cx.meta())?;
+        }
+        Edit::SetAnnotationStatusNamed { page, index, state, author, name } => {
+            pdfcraft_annot::set_review_state_named(doc, *page, *index, *state, author, name, &cx.meta())?;
         }
         Edit::EraseInk { page, index, path, radius } => {
             pdfcraft_annot::erase_ink(doc, *page, *index, path, *radius, &cx.meta())?;
@@ -733,6 +762,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::FontSizeAnnotation { page, index, size } => pdfcraft_annot::set_font_size(doc, *page, *index, *size, &cx.meta())?,
         Edit::BorderColorAnnotation { page, index, color } => pdfcraft_annot::set_border_color(doc, *page, *index, *color, &cx.meta())?,
         Edit::BorderShapeAnnotation { page, index, shape } => pdfcraft_annot::set_border_shape(doc, *page, *index, *shape, &cx.meta())?,
+        Edit::RestyleAnnotation { page, index, style } => pdfcraft_annot::restyle(doc, *page, *index, style.clone(), &cx.meta())?,
         Edit::SetAnnotationInfo { page, index, author, subject, icon } => {
             pdfcraft_annot::set_info(doc, *page, *index, author.as_deref(), subject.as_deref(), *icon, &cx.meta())?;
         }
@@ -1027,6 +1057,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::SetLink { page, index, rect, action, style } => pdfcraft_annot::links::set(doc, *page, *index, *rect, action.as_ref(), style.as_ref())?,
         Edit::DeleteLink { page, index } => pdfcraft_annot::links::delete(doc, *page, *index)?,
+        Edit::SetPageLinks { page, links } => pdfcraft_annot::links::set_page_links(doc, *page, links)?,
+        Edit::SetPagesLinks { pages } => pdfcraft_annot::links::set_pages_links(doc, pages)?,
         Edit::RemoveLinks { pages } => {
             if pdfcraft_annot::links::remove_all(doc, pages.as_deref())? == 0 {
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("there are no links to remove".into())));
@@ -1168,6 +1200,37 @@ fn run_batch(doc: &mut pdfcraft_cos::Document, edits: &[Edit], cx: &mut EditCtx)
             }
             js.refresh_after_batch_edit(doc, e);
         }
+    }
+    Ok(())
+}
+
+/// A bookmark's title, where it goes and how it looks, as one step: each field
+/// the edit names is written, the ones it leaves out keep what the file has.
+#[allow(clippy::too_many_arguments)]
+fn update_bookmark(
+    doc: &mut pdfcraft_cos::Document,
+    path: &[usize],
+    title: Option<&str>,
+    dest: Option<&pdfcraft_organize::BookmarkDest>,
+    color: Option<Option<[f64; 3]>>,
+    bold: Option<bool>,
+    italic: Option<bool>,
+    open: Option<bool>,
+) -> Result<(), EditError> {
+    if let Some(title) = title {
+        pdfcraft_organize::rename_bookmark(doc, path, title)?;
+    }
+    if let Some(dest) = dest {
+        pdfcraft_organize::set_bookmark_dest(doc, path, dest.clone())?;
+    }
+    if let Some(color) = color {
+        pdfcraft_organize::set_bookmark_color(doc, path, color)?;
+    }
+    if bold.is_some() || italic.is_some() {
+        pdfcraft_organize::set_bookmark_style(doc, path, bold, italic)?;
+    }
+    if let Some(open) = open {
+        pdfcraft_organize::set_bookmark_open(doc, path, open)?;
     }
     Ok(())
 }

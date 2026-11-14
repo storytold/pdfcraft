@@ -1,4 +1,4 @@
-use super::create::finite;
+use super::create::{finite, normalize};
 use super::draw::set_appearance;
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, drawn_upright, is_fill_sign, page_ref, page_refs};
 use super::modify::{callout_line, callout_text_box, fillable, touch, unlocked};
@@ -271,24 +271,40 @@ pub fn set_info(
 ) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
-    let is_note = annot_dict(doc, r).name(b"Subtype") == Some(b"Text");
+    let before = annot_dict(doc, r);
+    let is_note = before.name(b"Subtype") == Some(b"Text");
     if icon.is_some() && !is_note {
         return Err(AnnotError::Invalid("only sticky notes have an icon".into()));
     }
     doc.update_dict(r, |d| {
+        // An empty name removes the property (the wire's `null`): a comment that
+        // had no author gets "no author" back, not an empty `/T`.
         if let Some(a) = author {
-            d.set(b"T".to_vec(), PdfString::text(a));
+            if a.is_empty() {
+                d.remove(b"T");
+            } else {
+                d.set(b"T".to_vec(), PdfString::text(a));
+            }
         }
         if let Some(s) = subject {
-            d.set(b"Subj".to_vec(), PdfString::text(s));
+            if s.is_empty() {
+                d.remove(b"Subj");
+            } else {
+                d.set(b"Subj".to_vec(), PdfString::text(s));
+            }
         }
         if let Some(i) = icon {
             d.set(b"Name".to_vec(), Object::name(i.name()));
         }
         touch(d, meta);
     })?;
-    if icon.is_some() {
-        set_appearance(doc, r)?;
+    // A note whose appearance cannot be redrawn keeps the properties it had: the
+    // shared operation is all-or-nothing, like `restyle`.
+    if icon.is_some()
+        && let Err(error) = set_appearance(doc, r)
+    {
+        doc.set(r, Object::Dict(before));
+        return Err(error);
     }
     Ok(())
 }
@@ -328,6 +344,53 @@ pub struct Props {
     pub fill_opacity: Option<f64>,
     /// How opaque a text box's, typewriter text's or callout's text is drawn.
     pub text_opacity: Option<f64>,
+    /// The comment's `/Rect` in user space, corners ordered (`None` when it has no readable one).
+    pub rect: Option<[f64; 4]>,
+    /// The rectangle Comment Properties names for a resize: a callout's text box, else `/Rect`
+    /// (`None` for a callout whose text box can't be read).
+    pub frame: Option<[f64; 4]>,
+    /// A line's two ends (`/L`), the corners of connected lines, a polygon or a cloud
+    /// (`/Vertices`), or a callout's arrow point and knee (`/CL` without its end, which follows
+    /// the text box), in user space; empty for other comments. Keep in step with [`Summary`].
+    pub points: Vec<[f64; 2]>,
+    /// `/IT`, the intent: `FreeTextCallout`, `PolygonCloud`, `FreeTextTypeWriter`…
+    pub intent: Option<String>,
+    /// The comment's own pop-up window (`/Popup`), when it has one (see [`Summary::popup`]).
+    pub popup: Option<PopupInfo>,
+    /// A Fill & Sign mark ([`is_fill_sign`]): it has no pop-up window of its own.
+    pub fill_sign: bool,
+    /// A reply (`/IRT`): it shows in its parent's window, not one of its own.
+    pub reply: bool,
+}
+
+/// A comment's `/Rect` with its corners in order: `None` without four finite numbers, or when one
+/// is a reference that leads nowhere.
+fn rect_of(doc: &Document, d: &Dict) -> Option<[f64; 4]> {
+    let numbers: Vec<f64> = doc.resolve(d.get(b"Rect")?).as_array()?.iter().map(|o| doc.resolve(o).as_f64()).collect::<Option<_>>()?;
+    let [x0, y0, x1, y1] = numbers[..] else { return None };
+    let rect = normalize([x0, y0, x1, y1]);
+    rect.iter().all(|x| x.is_finite()).then_some(rect)
+}
+
+/// A line's, a polygon's, a cloud's or a callout's points, as [`Summary::points`] reads them.
+fn points_of(doc: &Document, d: &Dict, subtype: &str) -> Vec<[f64; 2]> {
+    let numbers = |key: &[u8]| -> Option<Vec<f64>> {
+        let values: Vec<f64> = doc.resolve(d.get(key)?).as_array()?.iter().map(|o| doc.resolve(o).as_f64()).collect::<Option<_>>()?;
+        values.iter().all(|x| x.is_finite()).then_some(values)
+    };
+    match subtype {
+        "Line" => numbers(b"L").filter(|line| line.len() == 4).map(|line| line.as_chunks::<2>().0.to_vec()).unwrap_or_default(),
+        "PolyLine" | "Polygon" => numbers(b"Vertices")
+            .map(|mut corners| {
+                if corners.len() % 2 != 0 {
+                    corners.pop();
+                }
+                corners.as_chunks::<2>().0.to_vec()
+            })
+            .unwrap_or_default(),
+        "FreeText" => callout_line(doc, d).and_then(|line| line.split_last().map(|(_, lead)| lead.to_vec())).unwrap_or_default(),
+        _ => Vec::new(),
+    }
 }
 
 /// The current properties of the comment at `(page, index)`.
@@ -345,6 +408,16 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     }
     // A text box reports the colour and size it is drawn in (`/DA`, or `/DS` where it sets one).
     let style = (subtype == "FreeText").then(|| text_style::text_style(d, None));
+    // A callout's text box, where the comment bar and Comment Properties put a move's or a
+    // resize's frame; a callout without a readable one only moves (keep in step with
+    // `pdfcraft_ui_egui::tools::comments::geometry`).
+    let callout = (subtype == "FreeText").then(|| callout_line(doc, d).zip(callout_text_box(doc, d))).flatten();
+    let rect = rect_of(doc, d);
+    let frame = match (subtype == "FreeText" && d.contains(b"CL"), &callout) {
+        (true, Some((_, text_box))) => Some(*text_box),
+        (true, None) => None,
+        _ => rect,
+    };
     let color = match &style {
         Some(s) => Some(s.color),
         None => drawn_color(d, b"C"),
@@ -373,8 +446,15 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         border_shape: (subtype == "FreeText" && !d.contains(b"CL")).then(|| BorderShape::of(d)),
         fill_opacity: fillable(&subtype).then(|| appearance::part_opacity(d).fill),
         text_opacity: (subtype == "FreeText").then(|| appearance::part_opacity(d).text),
+        rect,
+        frame,
+        points: points_of(doc, d, &subtype),
+        intent: d.name(b"IT").map(|name| String::from_utf8_lossy(name).into_owned()),
         subtype,
         endings: line_endings_of(d),
+        popup: popup_info(doc, entry.as_ref().map(|r| final_ref(doc, r)), raw),
+        fill_sign: is_fill_sign(doc, d),
+        reply: d.contains(b"IRT"),
     })
 }
 

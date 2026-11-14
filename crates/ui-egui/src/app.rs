@@ -67,6 +67,10 @@ impl PdfCraftApp {
     /// Construct default session, panels, theme and control state with no active property-edit session.
     pub fn new() -> Self {
         Self {
+            #[cfg(feature = "collab")]
+            collab: None,
+            #[cfg(feature = "collab")]
+            collab_off: false,
             panes: Default::default(),
             session: Session::new(),
             status_captions_lang: None,
@@ -198,6 +202,14 @@ impl PdfCraftApp {
             startup_inbox: Default::default(),
             startup_superseded: false,
             failed_inbox: Default::default(),
+            host_session_inbox: Default::default(),
+            host_committed_inbox: Default::default(),
+            #[cfg(feature = "collab")]
+            host_collab_state: None,
+            #[cfg(feature = "collab")]
+            host_collab_presence: None,
+            #[cfg(feature = "collab")]
+            host_commit: None,
             unsaved_flag: Default::default(),
             os_events: None,
             host_save: None,
@@ -330,6 +342,7 @@ impl PdfCraftApp {
             pending_remote_link: None,
             protect_draft: Default::default(),
             text_style_draft: Default::default(),
+            named_dests_draft: Default::default(),
             boxes_draft: Default::default(),
             marks_draft: Default::default(),
             unmarked_page: Default::default(),
@@ -637,6 +650,8 @@ impl PdfCraftApp {
         self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.dialog.is_some() || self.password_prompt.is_some();
         // Also done in `raw_input_hook`, before input; here for hosts that don't call the hook.
         self.scroll_speed.set_line_speed(ctx);
+        #[cfg(feature = "collab")]
+        self.poll_collab(ctx);
         // Motion reads this frame's wheel input, so it begins in `ui`, in a known UI phase:
         // `logic` also runs alone while hidden, where the input events and time are stale.
         // Before taking this frame's drop: the grid must be drawn once with the pointer where
@@ -917,6 +932,8 @@ impl PdfCraftApp {
         });
         // FitWindow and CenterWindow, once the document just opened is laid out.
         self.window_preferences_frame(&ctx);
+        #[cfg(feature = "collab")]
+        self.show_collab(&ctx);
         self.process_pending_edits();
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);

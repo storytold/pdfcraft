@@ -76,6 +76,7 @@ pub fn import_pages_with(
     conflicts: FieldConflicts,
 ) -> Result<ImportOutcome, OrganizeError> {
     let before: HashSet<u32> = dst.object_numbers().into_iter().collect();
+    let pages_before = crate::page_links::page_order(dst)?;
     let imported = match import_pages_mapped(dst, src, src_pages, at, conflicts) {
         Ok(imported) => imported,
         Err(e) => {
@@ -89,6 +90,9 @@ pub fn import_pages_with(
     };
     let created = added_objects(dst, &before);
     crate::dedupe::dedupe_resources(dst, &created, true);
+    // The pages that were here keep the pages their links named by number; the inserted
+    // pages keep their own file's numbers (they never named a page of this document).
+    crate::page_links::keep_page_numbers(dst, &pages_before)?;
     Ok(ImportOutcome { pages: imported.pages, renamed_fields: imported.renamed_fields })
 }
 
@@ -113,10 +117,20 @@ pub fn insert_file_pages(
     at: usize,
     conflicts: FieldConflicts,
 ) -> Result<ImportOutcome, OrganizeError> {
+    let at = at.min(crate::page_count(dst)?);
+    // The inserted pages bring their own labels; the pages around them keep theirs. Checked
+    // before any object is copied, so a label problem refuses the whole insert.
+    let plan = match crate::labels::snapshot(dst) {
+        Some(before) => Some(crate::labels::plan_insert(&before, at, &crate::labels::carried_labels(src, src_pages))?),
+        None => None,
+    };
     let before: HashSet<u32> = dst.object_numbers().into_iter().collect();
     let imported = import_pages_mapped(dst, src, src_pages, at, conflicts)?;
     let created = added_objects(dst, &before);
     crate::dedupe::dedupe_resources(dst, &created, true);
+    if let Some(plan) = plan {
+        crate::labels::write_plan(dst, plan.as_deref())?;
+    }
     let outline = source_outline(src, imported.page_map);
     if let Some(first) = imported.pages.first()
         && !outline.is_empty()

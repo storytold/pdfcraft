@@ -198,6 +198,16 @@ impl PdfCraftApp {
             "file.clear_recent" => self.recent.clear(),
             "file.pin_folder" => self.pin_folder_dialog(),
             "file.save" => {
+                // A hosted session owns the document: Save is the cabinet's
+                // commit, not a copy of this window's build. Bytes written next
+                // to the room leave its marker on the previous copy, and the
+                // next commit (and the next ticket) answer 409.
+                #[cfg(feature = "collab")]
+                {
+                    if self.commit_instead_of_save() {
+                        return Some(true);
+                    }
+                }
                 self.save_active(SaveTarget::InPlace);
             }
             "file.save_as" => {
@@ -406,6 +416,11 @@ impl PdfCraftApp {
             "bookmark.add" => self.bookmark_action(crate::panels::BmAction::New),
             "bookmark.from_structure" => self.bookmark_action(crate::panels::BmAction::FromStructure),
             "bookmark.from_text_styles" => self.bookmark_action(crate::panels::BmAction::FromTextStyles),
+            "bookmark.destinations" => {
+                if let Some((_, id)) = self.active_ids() {
+                    self.open_named_destinations(id);
+                }
+            }
             "page.organize" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     if v.organize {

@@ -410,6 +410,62 @@ impl Document {
         self.generation
     }
 
+    /// The document's named destinations (`/Names /Dests` and the older `/Dests`
+    /// dictionary), sorted by name. Empty when the document can't be read for editing.
+    pub fn named_destinations(&self) -> Vec<pdfcraft_organize::NamedDestination> {
+        self.editor.as_ref().map(|e| pdfcraft_organize::named_destinations(&e.cos)).unwrap_or_default()
+    }
+
+    /// The colour a bookmark's title has (`/C`), each component from 0 to 1 at the
+    /// precision the file keeps it. `None` is the default black, and also what a
+    /// document that can't be read for editing gives. The listing rounds a colour
+    /// to an `f32` for the interface; an undo writes back the number the file held.
+    pub fn bookmark_color(&self, path: &[usize]) -> Option<[f64; 3]> {
+        self.editor.as_ref().and_then(|e| pdfcraft_organize::bookmark_color(&e.cos, path).ok().flatten())
+    }
+
+    /// Every bookmark of the document's own outline, in listing order, with the
+    /// path an edit takes and the object reference that outlives a position. Empty
+    /// when the structure can't be read for editing (the viewer's copy is not
+    /// addressable).
+    pub fn bookmarks(&self) -> Vec<crate::BookmarkRow> {
+        self.editor.as_ref().map(|e| crate::bookmarks::document_rows(&e.cos)).unwrap_or_default()
+    }
+
+    /// The bookmark at `path` with everything under it, or the whole outline for `[]`, as a tree
+    /// an import writes back. `None` when the structure can't be read for editing.
+    pub fn outline_tree(&self, path: &[usize]) -> Option<Result<pdfcraft_organize::OutlineTree, pdfcraft_organize::OutlineError>> {
+        let editor = self.editor.as_ref()?;
+        Some(pdfcraft_organize::outline_tree(&editor.cos, path))
+    }
+
+    /// The bookmarks "New bookmarks from structure" would make: one entry per tagged heading, in
+    /// document order. Empty when the document can't be read for editing. A collaboration client
+    /// builds the same tree in its replica (RFC §3.1.7).
+    pub fn structure_bookmarks(&self) -> Vec<pdfcraft_organize::OutlineEntry> {
+        self.editor
+            .as_ref()
+            .map(|editor| {
+                a11y::headings(&editor.cos)
+                    .into_iter()
+                    .map(|heading| pdfcraft_organize::OutlineEntry {
+                        level: heading.level,
+                        title: heading.title,
+                        page: heading.page,
+                        element: heading.obj,
+                        top: None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The bookmarks the lines in `levels`' text styles would make, in document order. Empty when
+    /// the document can't be read for editing.
+    pub fn text_style_bookmarks(&self, levels: &[crate::text_style_bookmarks::TextStyle]) -> Vec<pdfcraft_organize::OutlineEntry> {
+        self.editor.as_ref().map(|editor| crate::text_style_bookmarks::headings(&editor.cos, levels)).unwrap_or_default()
+    }
+
     /// The styles the document's text is set in, the largest first, for bookmarks from text
     /// styles (#1693).
     /// Empty when the document doesn't allow copying: the samples are its text.
@@ -500,6 +556,57 @@ impl Document {
         self.editor.as_ref().is_some_and(|e| pdfcraft_annot::deletable(&e.cos, page, index).is_ok())
     }
 
+    /// The indirect references of the leaf pages, in document order. A page's reference is the
+    /// identity a collaboration session uses for a page (`ADR-0002`); it survives incremental
+    /// saves and changes only on a full rewrite. Empty when the document cannot be edited.
+    pub fn page_refs(&self) -> Vec<pdfcraft_cos::ObjRef> {
+        self.editor
+            .as_ref()
+            .and_then(|e| pdfcraft_organize::pages(&e.cos).ok())
+            .map(|pages| pages.into_iter().map(|p| p.obj).collect())
+            .unwrap_or_default()
+    }
+
+    /// The indirect reference of leaf page `page`, or `None` when the document cannot be edited
+    /// or the page does not exist. See [`Self::page_refs`].
+    pub fn page_ref(&self, page: usize) -> Option<pdfcraft_cos::ObjRef> {
+        self.page_refs().get(page).copied()
+    }
+
+    /// The indirect reference of the annotation at `(page, index)`, its position in the page's
+    /// `/Annots`. `None` for an inline annotation dictionary: such an entry has no reference of
+    /// its own until an edit promotes it (an edit that needs `/IRT` does so).
+    pub fn annotation_ref(&self, page: usize, index: usize) -> Option<pdfcraft_cos::ObjRef> {
+        let editor = self.editor.as_ref()?;
+        let annots = editor.cos.get(self.page_ref(page)?);
+        let annots = annots.as_dict()?.get(b"Annots").map(|a| editor.cos.resolve(a))?;
+        annots.as_array()?.get(index)?.as_ref()
+    }
+
+    /// Every indirect annotation on `page` whose `/NM` is `name`. `/NM` need not be unique
+    /// (`crates/automation/src/comments.rs` refuses an ambiguous one), so callers that address
+    /// a comment by name must treat more than one result as ambiguous.
+    pub fn annotation_refs_named(&self, page: usize, name: &str) -> Vec<pdfcraft_cos::ObjRef> {
+        let Some(editor) = self.editor.as_ref() else { return Vec::new() };
+        let Some(page_ref) = self.page_ref(page) else { return Vec::new() };
+        let page_dict = editor.cos.get(page_ref);
+        let Some(annots) = page_dict.as_dict().and_then(|d| d.get(b"Annots")) else { return Vec::new() };
+        let annots = editor.cos.resolve(annots);
+        let mut found = Vec::new();
+        for item in annots.as_array().into_iter().flatten() {
+            let Some(annot) = item.as_ref() else { continue };
+            let dict = editor.cos.get(annot);
+            let Some(value) = dict.as_dict().and_then(|d| d.get(b"NM")) else { continue };
+            let value = editor.cos.resolve(value);
+            if let pdfcraft_cos::Object::String(s) = &*value
+                && s.to_text() == name
+            {
+                found.push(annot);
+            }
+        }
+        found
+    }
+
     pub fn can_undo(&self) -> Option<&str> {
         self.undo_label().map(Label::as_str)
     }
@@ -526,6 +633,17 @@ impl Document {
 
     pub fn editable(&self) -> bool {
         self.editor.is_some()
+    }
+
+    /// The page-label ranges of the working file (ISO 32000-2 §12.4.2), read
+    /// strictly: a tree that cannot be read is an error, not an empty list, so a
+    /// caller that rewrites the labels cannot silently lose them.
+    pub fn page_label_ranges(&self) -> Result<Vec<pdfcraft_organize::LabelRange>, EditError> {
+        let cos = pdfcraft_cos::Document::open_with_password(self.bytes.clone(), self.password.as_deref())
+            .map_err(|error| EditError::Invalid(format!("the page labels cannot be read: {error}")))?;
+        pdfcraft_organize::PageLabels::new(&cos)
+            .map(|labels| labels.ranges().to_vec())
+            .map_err(|error| EditError::Invalid(format!("the page labels cannot be read: {error}")))
     }
 
     /// What the opening password allows; `None` when the document is not encrypted.
