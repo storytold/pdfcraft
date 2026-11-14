@@ -420,6 +420,21 @@ impl PageText {
                 }
             }
             let in_column = |l: u32| lines.get(&l).is_some_and(|&(l0, l1)| l0.max(left) < l1.min(right));
+            // Across columns, nearly every row of a table has cells side by side; a column of
+            // running text beside a sidebar or a figure caption has many rows with nothing beside
+            // them. Rows would interleave the two, so reading order is kept. The whole rows of the
+            // band within the columns, not just the glyphs picked: the bottom row is cut off at the
+            // pointer and may show a single cell, and text left of the drag is no part of the rows.
+            if other_column {
+                let band: Vec<usize> = (0..self.glyphs.len())
+                    .filter(|&i| self.glyphs.get(i).is_some_and(|g| (top..=bottom).contains(&centre(g))))
+                    .filter(|&i| self.line_of.get(i).is_some_and(|&l| in_column(l)))
+                    .collect();
+                let (multi, rows) = self.cell_rows(&band);
+                if (multi as f32) < rows as f32 * ROW_CELLS {
+                    return None;
+                }
+            }
             let wanted = |(g, &l): (&TextGlyph, &u32)| {
                 let (cx, cy) = ((g.rect[0] + g.rect[2]) / 2.0, centre(g));
                 let on_top_row = cy <= upper.rect[3];
@@ -434,19 +449,6 @@ impl PageText {
         let same = picked.first() == Some(&lo) && picked.last() == Some(&hi) && picked.len() == hi - lo + 1;
         if same && !self.side_by_side(&picked) {
             return None;
-        }
-        // Across columns, nearly every row of a table has cells side by side; a column of running
-        // text beside a sidebar or a figure caption has many rows with nothing beside them. Rows
-        // would interleave the two, so reading order is kept.
-        if other_column && !one_row {
-            // The whole rows of the band, not just the glyphs picked: the bottom row is cut off at
-            // the pointer and may show a single cell.
-            let band: Vec<usize> =
-                (0..self.glyphs.len()).filter(|&i| self.glyphs.get(i).is_some_and(|g| (top..=bottom).contains(&centre(g)))).collect();
-            let (multi, rows) = self.cell_rows(&band);
-            if (multi as f32) < rows as f32 * ROW_CELLS {
-                return None;
-            }
         }
         (!picked.is_empty()).then_some(picked)
     }

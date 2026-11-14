@@ -3045,6 +3045,24 @@ fn a_word_on_a_barcode_rows_baseline_does_not_take_the_row() {
     assert_eq!(layout(v).plain_text(), "Seal\nABCDEFGHIJKL\nFGHIJKLMNOPQ\nKLMNOPQRSTUV\nPQRSTUVWXYZA");
 }
 
+/// A table beside a line of prose on one of its rows: the prose, left of everywhere the drag
+/// went, does not count as a row with one cell, and a drag down the table still takes its rows.
+#[test]
+fn prose_left_of_a_table_does_not_hide_its_rows() {
+    let mut v = Vec::new();
+    for (row, (name, qty)) in [("Name", "Qty"), ("Apple", "12"), ("Pear", "7")].into_iter().enumerate() {
+        let y = 10.0 + row as f32 * 14.0;
+        word(&mut v, name, 200.0, y, 6.0);
+        word(&mut v, qty, 290.0, y, 6.0);
+    }
+    word(&mut v, "Some unrelated prose", 10.0, 17.0, 6.0);
+    let t = layout(v);
+    let at = |c: &str, x: f32| t.glyphs.iter().position(|g| g.text == c && (g.rect[0] - x).abs() < 0.5).expect("a glyph");
+    let (name, two) = (at("N", 200.0), at("2", 296.0));
+    let picked = t.visual_between(name, two, Some(t.glyphs[two].rect[2] + 4.0)).expect("rows");
+    assert_eq!(t.column_text(&picked), "Name\tQty\nApple\t12");
+}
+
 /// A rectangle that misses every glyph, or is not a number, selects nothing.
 #[test]
 fn an_empty_or_degenerate_column_selection_is_empty() {
