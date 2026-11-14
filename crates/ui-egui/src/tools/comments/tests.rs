@@ -898,3 +898,13 @@ fn comment_marker_wins_over_an_overlapping_body_for_pick_and_hover() {
     super::input::describe(&hidden, &mut view);
     assert!(view.cursor.resolve(&ctx, QuickTool::Select).is_none());
 }
+
+#[test]
+fn insert_text_icon_is_distinct_from_edit_text_and_matches_its_command() {
+    let insert = CommentTool::Caret.icon();
+    let edit = pdfcraft_engine::commands::command("edit.edit_text").unwrap().icon;
+    let command = pdfcraft_engine::commands::command("comment.caret").unwrap().icon;
+    assert_ne!(insert, edit, "adjacent tools need distinct icons");
+    assert_eq!(insert, command, "the annotation toolbar and command use the same icon");
+    assert!(crate::widgets::icons::exists(insert));
+}
