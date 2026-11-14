@@ -594,8 +594,6 @@ impl PdfCraftApp {
         self.ctx = Some(ctx.clone());
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_script_dialog(ctx);
-        #[cfg(not(target_arch = "wasm32"))]
-        self.window_state.repair(ctx);
         self.dialog_epoch();
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);
@@ -812,10 +810,15 @@ impl PdfCraftApp {
         self.sync_titles(ctx);
     }
 
+    /// Each drawn pass: the window check that keeps it on its monitor (here and not in `logic`, see
+    /// `WindowState::repair`), the interface language and direction, then everything on screen.
     fn ui_unguarded(&mut self, ui: &mut egui::Ui) {
         #[cfg(test)]
         self.injected_panic(crate::frame_guard::FramePart::Ui);
         let ctx = ui.ctx().clone();
+        // Here and not in `logic`: see `WindowState::repair`.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.window_state.repair(&ctx);
         i18n::set_current(i18n::Lang::from_pref(&self.language));
         // A language change switches stock chrome between LTR and RTL before anything is drawn.
         theme::sync_direction(&ctx);
