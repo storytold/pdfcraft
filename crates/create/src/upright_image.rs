@@ -81,7 +81,6 @@ fn turned(bytes: &[u8]) -> Option<Vec<u8>> {
     let opts = craft_image_codecs::DecodeOptions {
         keep_orientation: false,
         limits: craft_image_codecs::Limits { max_pixels: MAX_PIXELS, ..Default::default() },
-        ..Default::default()
     };
     let mut img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Jpeg, bytes, &opts).ok()?;
     if let Some((mut dx, mut dy)) = jfif_density_dpi(bytes) {
