@@ -254,7 +254,7 @@ pub(crate) fn body(
 
     // Cap the settings+preview area to the screen's available height (#4252, #5317).
     let screen_h = ui.ctx().input(|i| i.viewport_rect().height());
-    let max_h = (screen_h - 235.0).max(300.0);
+    let max_h = (screen_h - 130.0).max(520.0);
 
     egui::ScrollArea::vertical()
         .id_salt("print-dialog-scroll")
@@ -270,7 +270,7 @@ pub(crate) fn body(
                     ui.spacing_mut().item_spacing.y = 3.0;
 
                     // Card 1: Printer & Paper Setup
-                    print_card(ui, t, tl!("Printer & Paper Setup"), Some("printer"), 452.0, Some(140.0), |ui| {
+                    print_card(ui, t, tl!("Printer & Paper Setup"), Some("printer"), 452.0, Some(204.0), |ui| {
                         egui::Grid::new("print-top").num_columns(2).spacing([8.0, 2.0]).show(ui, |ui| {
                         let printer_caption = ui.label(tl!("Printer:"));
                         let before = d.printer.clone();
@@ -561,7 +561,7 @@ pub(crate) fn body(
                 });
 
                 // Card 3: Page Sizing & Handling
-                print_card(ui, t, tl!("Page Sizing & Handling"), Some("sliders-horizontal"), 452.0, Some(154.0), |ui| {
+                print_card(ui, t, tl!("Page Sizing & Handling"), Some("sliders-horizontal"), 452.0, Some(172.0), |ui| {
                     ui.horizontal_wrapped(|ui| {
                         for (h, label) in [
                             (Handling::Size, tl!("Size")),
@@ -578,7 +578,7 @@ pub(crate) fn body(
                     });
                     ui.add_space(3.0);
                     ui.scope(|ui| {
-                        ui.set_min_height(52.0);
+                        ui.set_min_height(78.0);
                         match d.handling {
                         Handling::Size => {
                             ui.horizontal(|ui| {
@@ -736,7 +736,7 @@ pub(crate) fn body(
                 });
 
                 // Card 4: Comments & Forms
-                print_card(ui, t, tl!("Comments & Forms"), Some("message-square"), 452.0, None, |ui| {
+                print_card(ui, t, tl!("Comments & Forms"), Some("message-square"), 452.0, Some(84.0), |ui| {
                     ui.horizontal(|ui| {
                         combo(
                             ui,
