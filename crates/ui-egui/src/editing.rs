@@ -15,6 +15,8 @@ pub use save::PendingLock;
 pub use save::PendingOverwrite;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use save::download;
+#[doc(hidden)]
+pub use save::download_mime_type;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use save::in_document_folder;
 pub use save::{SaveTarget, write_atomically};
@@ -28,6 +30,16 @@ fn new_text_typed(v: &crate::DocView) -> bool {
     v.content.draft.as_ref().is_some_and(|d| d.index.is_none() && !d.text.trim().is_empty())
 }
 
+/// Clear an unfinished page-anchored drawing or composer when a page edit shifts or removes `page`.
+fn clear_shifted_page_comment_state(view: &mut crate::DocView, shifted_from: usize) {
+    if matches!(view.comments.gesture, Some(crate::comments::Gesture::Draw { page, .. }) if page >= shifted_from) {
+        view.comments.gesture = None;
+    }
+    if view.comments.composer.as_ref().is_some_and(|c| !matches!(c.kind, crate::comments::ComposerKind::Edit(_)) && c.page >= shifted_from) {
+        view.comments.composer = None;
+    }
+}
+
 /// Keeps the pages (or comment) the user acted on selected, where they now are. `annots_before`
 /// is the page's annotations before a delete or a paste of comments (empty for other edits).
 fn select_after_edit(
@@ -39,17 +51,27 @@ fn select_after_edit(
 ) {
     match edit {
         Edit::MovePages { pages, to } => {
+            clear_shifted_page_comment_state(view, 0);
             let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
             let to = (*to).min(info.pages.len() - n);
             view.select_pages(&(to..to + n).collect::<Vec<_>>());
         }
         Edit::DuplicatePages { pages, at: Some(at) } => {
+            clear_shifted_page_comment_state(view, *at);
             let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
             let at = (*at).min(info.pages.len().saturating_sub(n));
             view.select_pages(&(at..at + n).collect::<Vec<_>>());
         }
-        Edit::InsertBlankPage { at, .. } => view.select_pages(&[(*at).min(info.pages.len() - 1)]),
-        Edit::DeletePages { .. } => view.select_pages(&[]),
+        Edit::InsertBlankPage { at, .. } => {
+            clear_shifted_page_comment_state(view, *at);
+            view.select_pages(&[(*at).min(info.pages.len() - 1)]);
+        }
+        Edit::DeletePages { pages } => {
+            if let Some(&first) = pages.iter().min() {
+                clear_shifted_page_comment_state(view, first);
+            }
+            view.select_pages(&[]);
+        }
         // A stroke drawn with the pen stays unselected, so the selection box and
         // author popup don't sit over the next stroke (#429).
         Edit::AddAnnotation(a)
@@ -76,7 +98,6 @@ fn select_after_edit(
                 view.comments.open_editor(a.page, n, String::new());
             }
         }
-        Edit::DeleteAnnotation { page, index } => view.comments.annotation_deleted(annots_before, &info.annotations, (*page, *index)),
         // A group moved together stays selected (its positions don't change), so it
         // can be moved or copied again; anything else in a batch clears the selection.
         Edit::Batch { edits, .. } if edits.iter().all(|e| matches!(e, Edit::MoveAnnotation { .. })) => {}
@@ -207,25 +228,15 @@ impl PdfCraftApp {
                     .map(|before| form_edit_pages(&before, &doc.form));
                 let one_page = comment_page(&edit).or_else(|| content_page(&edit));
                 if signatures_before.is_some_and(|before| crate::canvas::signature_states_changed(&before, &doc.signatures)) {
-                    // A signature shows its state on its own page, which an edit elsewhere can
-                    // change (a certification forbidding it, say): every page redraws. An edit that
-                    // moves no page (a form edit, or one to a page's comments or content) keeps the
-                    // values typed, in it and before it, showing until their pages redraw.
-                    let waiting = (form_edit.is_some() || one_page.is_some()).then(|| std::mem::take(&mut view.forms.unbaked));
-                    view.document_changed(info);
-                    if let Some(waiting) = waiting {
-                        view.forms.unbaked = waiting;
-                    }
-                    if let Some((_, unbaked)) = form_edit {
-                        view.forms.unbaked.extend(unbaked);
-                    }
+                    signatures_changed_after_edit(view, &edit, info, &annots_before, form_edit.map(|(_, u)| u), one_page);
                 } else if let Some(page) = one_page {
-                    one_page_changed(view, &edit, page);
+                    one_page_changed(view, &edit, page, &annots_before, info);
                 } else if let Some((changed_pages, unbaked)) = form_edit {
                     view.forms.unbaked.extend(unbaked);
                     for page in changed_pages {
                         view.page_changed(page);
                     }
+                    view.comments.document_changed(info);
                 } else {
                     view.document_changed(info);
                 }
@@ -513,10 +524,22 @@ impl PdfCraftApp {
         // click that brought this pane forward took the focus). It goes in first, as it came first.
         let (other_applied, stay) = self.apply_other_pane_edit(i);
         let modal = self.modal_open();
+        let generation = |app: &Self| app.views.get(i).and_then(|v| app.session.get(v.id)).map(|d| d.edit_generation());
+        let before = generation(self);
+        let queued = self.views.get(i).is_some_and(|v| v.pending_edit.is_some());
         let applied = self.apply_queued_edit(i) && other_applied;
+        // A click's Mouse Up waits on the edit it queued (a check box's toggle, a list's pick):
+        // when that was refused, the click did nothing and its Mouse Up doesn't run either.
+        if queued
+            && generation(self) == before
+            && let Some(view) = self.views.get_mut(i)
+        {
+            view.forms.triggers.retain(|(_, t)| *t != pdfcraft_engine::FieldTrigger::MouseUp);
+        }
         // After the queued edit: a value typed into the field the focus left has been taken (and
         // its change has run the field's exit) before the focus scripts run.
         self.run_focus_scripts(i);
+        self.run_field_triggers(i);
         if !applied {
             // Nor may a shortcut pressed with it (⌘S right after Enter) run behind the refusal.
             self.deferred_commands.clear();
@@ -559,6 +582,7 @@ impl PdfCraftApp {
                 self.leave_camera(i);
                 self.execute(command);
             }
+            Some(crate::canvas::ViewAction::Replace { all }) => self.replace_found(i, all),
             None => {}
         }
         // That tab comes forward when its value was refused (its editor is open again with the
@@ -806,7 +830,8 @@ impl PdfCraftApp {
     /// ([`crate::forms_ui::refresh_draft`]), so leaving the field doesn't write the old value back.
     fn run_focus_scripts(&mut self, i: usize) {
         let Some(view) = self.views.get_mut(i) else { return };
-        let now = view.forms.focus.as_ref().map(|f| (f.name.clone(), f.widget));
+        // The field's object too: moving between fields sharing a name is a move (#344 review).
+        let now = view.forms.focus.as_ref().map(|f| (f.name.clone(), f.obj, f.widget));
         if view.forms.focused == now {
             return;
         }
@@ -814,13 +839,13 @@ impl PdfCraftApp {
         let id = view.id;
         let edited = view.forms.focus.clone();
         use pdfcraft_engine::js::FieldFocus;
-        for ((name, widget), focus) in [left.map(|l| (l, FieldFocus::Exit)), now.map(|n| (n, FieldFocus::Enter))].into_iter().flatten() {
+        for ((name, obj, widget), focus) in [left.map(|l| (l, FieldFocus::Exit)), now.map(|n| (n, FieldFocus::Enter))].into_iter().flatten() {
             // The edited field's value before this script, to tell its untouched draft from typing:
             // the exit of the field left may have changed it already, and the draft with it.
             let before: Option<(String, Vec<String>)> = edited.as_ref().and_then(|e| {
                 crate::forms_ui::focused_field(e, &self.session.get(id)?.form).map(|f| (crate::forms_ui::draft_text(f), f.value.clone()))
             });
-            match self.session.field_focus(id, &name, widget, focus) {
+            match self.session.field_focus_target(id, &name, obj.map(pdfcraft_engine::js::field_object_id), widget, focus) {
                 Ok(changed) => {
                     if changed
                         && let Some(info) = self.session.get(id).map(|d| d.info.clone())
@@ -836,6 +861,42 @@ impl PdfCraftApp {
                     }
                     let out = self.session.take_js_output(id);
                     self.handle_js(id, out);
+                }
+                Err(e) => self.notify_error(e),
+            }
+        }
+    }
+
+    /// The pointer triggers tab `i` queued (Mouse Enter, Exit, Down, and a check box's Mouse Up
+    /// after its toggle), each running its widget's JavaScript in the document's realm (#269).
+    fn run_field_triggers(&mut self, i: usize) {
+        let Some(view) = self.views.get_mut(i) else { return };
+        let triggers = std::mem::take(&mut view.forms.triggers);
+        let id = view.id;
+        for ((name, object, widget), trigger) in triggers {
+            // The field being edited as it was, so a script changing it shows in its editor
+            // while a draft the user already typed into is kept (as `run_focus_scripts` does).
+            let before: Option<(String, Vec<String>)> = self.views.get(i).and_then(|v| v.forms.focus.as_ref()).and_then(|e| {
+                crate::forms_ui::focused_field(e, &self.session.get(id)?.form).map(|f| (crate::forms_ui::draft_text(f), f.value.clone()))
+            });
+            match self.session.field_trigger_target(id, &name, Some(object), widget, trigger) {
+                Ok(changed) => {
+                    if changed
+                        && let Some(info) = self.session.get(id).map(|d| d.info.clone())
+                        && let Some(view) = self.views.get_mut(i)
+                    {
+                        view.document_changed(&info);
+                        if let Some(before) = &before
+                            && let Some(draft) = view.forms.focus.as_mut()
+                            && let Some(f) = self.session.get(id).and_then(|d| crate::forms_ui::focused_field(draft, &d.form))
+                        {
+                            crate::forms_ui::refresh_draft(draft, (&before.0, &before.1), (crate::forms_ui::draft_text(f), &f.value));
+                        }
+                    }
+                    let out = self.session.take_js_output(id);
+                    if !out.is_empty() {
+                        self.handle_js(id, out);
+                    }
                 }
                 Err(e) => self.notify_error(e),
             }
@@ -1109,12 +1170,50 @@ fn content_page(edit: &Edit) -> Option<usize> {
     }
 }
 
+/// A signature shows its state on its own page, which an edit elsewhere can change (a
+/// certification forbidding it, say): every page redraws. An edit that moves no page (a form edit,
+/// or one to a page's comments or content) keeps the values typed, in it and before it, showing
+/// until their pages redraw.
+fn signatures_changed_after_edit(
+    view: &mut crate::DocView,
+    edit: &Edit,
+    info: &pdfcraft_render::DocInfo,
+    annots_before: &[pdfcraft_render::Annotation],
+    form_unbaked: Option<Vec<(String, usize)>>,
+    one_page: Option<usize>,
+) {
+    let waiting = (form_unbaked.is_some() || one_page.is_some()).then(|| std::mem::take(&mut view.forms.unbaked));
+    if let Edit::DeleteAnnotation { page, index } = edit {
+        // Remap surviving comments before generic slot pruning loses their state.
+        view.comments.annotation_deleted(annots_before, info, (*page, *index));
+    }
+    view.document_changed(info);
+    if let Some(waiting) = waiting {
+        view.forms.unbaked = waiting;
+    }
+    if let Some(unbaked) = form_unbaked {
+        view.forms.unbaked.extend(unbaked);
+    }
+}
+
 /// A comment or content edit changes one page, `page`: keep every other raster. Opening, closing
 /// or moving a pop-up changes none: the window is drawn over the page, and a /Popup annotation
 /// paints nothing in the raster (ISO 32000-2 §12.5.6.14).
-fn one_page_changed(view: &mut crate::DocView, edit: &Edit, page: usize) {
+fn one_page_changed(
+    view: &mut crate::DocView,
+    edit: &Edit,
+    page: usize,
+    annots_before: &[pdfcraft_render::Annotation],
+    info: &pdfcraft_render::DocInfo,
+) {
     if !matches!(edit, Edit::SetAnnotationPopup { .. }) {
         view.page_changed(page);
+    }
+    if let Edit::DeleteAnnotation { page, index } = edit {
+        // Remap surviving comments before generic slot pruning loses their state.
+        view.comments.annotation_deleted(annots_before, info, (*page, *index));
+    } else {
+        view.comments.document_changed(info);
     }
 }
 
@@ -1152,6 +1251,7 @@ fn is_form_edit(edit: &Edit) -> bool {
             | Edit::DuplicateField { .. }
             | Edit::SetFieldProps { .. }
             | Edit::SetFieldImage { .. }
+            | Edit::SetFieldImageTarget { .. }
             | Edit::SetFieldScript { .. }
             | Edit::SetCalculationOrder { .. }
             | Edit::ApplyScriptChanges { .. }
@@ -1527,6 +1627,43 @@ mod revert_draft_tests {
         assert_eq!(hint(&app), "", "hint's enter ran before the document is read");
         assert_eq!(app.views[0].forms.focus.as_ref().map(|f| f.text.as_str()), Some(""), "and its editor shows it");
     }
+    /// A pointer trigger whose script changes the field being edited shows the change in its
+    /// editor, unless the user already typed there: then the typed draft is kept.
+    #[test]
+    fn a_pointer_trigger_changing_the_edited_field_refreshes_an_untouched_draft() {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (old) /Rect [20 250 180 270] /P 3 0 R /F 4 >>".into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (hot) /V () /Rect [20 200 180 220] /P 3 0 R /F 4 /AA << /E << /S /JavaScript /JS (getField\\('name'\\).value = 'new';) >> >> >>".into(),
+        ];
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        for (typed, shown) in [(false, "new"), (true, "typed")] {
+            let mut app = PdfCraftApp::new();
+            app.open_bytes("hot.pdf", None, pdf.clone()).unwrap();
+            let hot = app.session.get(app.views[0].id).unwrap().form.iter().find(|f| f.name == "hot").unwrap().obj;
+            let text = if typed { "typed" } else { "old" };
+            app.views[0].forms.focus = Some(Focus { text: text.into(), picked: vec!["old".into()], ..focus("") });
+            let hot = ("hot".to_string(), pdfcraft_engine::js::field_object_id(hot), 0);
+            app.views[0].forms.triggers.push((hot, pdfcraft_engine::FieldTrigger::MouseEnter));
+            app.run_field_triggers(0);
+            assert_eq!(app.views[0].forms.focus.as_ref().map(|f| f.text.as_str()), Some(shown), "typed: {typed}");
+        }
+    }
+
     #[test]
     fn successful_revert_clears_focused_or_queued_drafts_only_on_its_document() {
         for queued in [false, true] {

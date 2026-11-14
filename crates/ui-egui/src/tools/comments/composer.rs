@@ -2,12 +2,13 @@ use super::geometry::{drawn_text_box_rect, page_rotation, text_box_rect};
 use super::paint::{edited_in_view, new_comment};
 use super::state::{ComposerKind, PageCx};
 use super::{
-    Color32, CommentPrefs, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NoteIcon, PagePointer, QuickTool, Shape, Tokens, pos2,
-    theme,
+    Color32, CommentPrefs, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, Markup, NoteIcon, PagePointer, QuickTool, Shape, Tokens,
+    pos2, theme,
 };
+use crate::page_keys::PageKeys;
 
 /// The floating composer card (new note, new text box, edit). Returns the edit to apply.
-pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs) -> Option<Edit> {
+pub(crate) fn composer(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs) -> Option<Edit> {
     let c = view.comments.composer.as_ref()?;
     let page = c.page;
     let Some(xf) = view.page_xform(page) else {
@@ -27,6 +28,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         allowed: true,
         hidden: false,
         redact_mark: ([0.89, 0.13, 0.13], 1.0),
+        keys,
     };
     let anchor = cx.to_screen(c.at);
     let viewport = view.viewport_rect();
@@ -36,6 +38,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     let c = view.comments.composer.as_mut()?;
     let title = match c.kind {
         ComposerKind::Note => "Sticky note",
+        ComposerKind::TextNote { .. } => "Add comment",
         ComposerKind::TextBox { .. } => "Text box",
         ComposerKind::Callout { .. } => "Callout",
         ComposerKind::Caret { .. } => "Inserted text",
@@ -79,7 +82,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 c.focus = false;
             }
             let enter = submit_key(ui, &edit, false);
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if keys.pressed(ui.ctx(), egui::Key::Escape) {
                 cancel = true;
             }
             ui.add_space(8.0);
@@ -116,10 +119,16 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     ));
     let text = if typewriter_edit { c.text } else { c.text.trim_end().to_string() };
     match c.kind {
-        ComposerKind::Edit(index) => Some(Edit::SetAnnotationContents { page, index, text }),
+        ComposerKind::Edit(index) => {
+            info.annotations.iter().any(|a| a.page == page && a.index == index).then_some(Edit::SetAnnotationContents { page, index, text })
+        }
         ComposerKind::Note => {
             view.comments.tool_done = true;
             Some(new_comment(&cx, CommentTool::Note, Shape::Note { at: c.at, icon: NoteIcon::Comment }, text))
+        }
+        ComposerKind::TextNote { quads } => {
+            view.comments.tool_done = true;
+            Some(new_comment(&cx, CommentTool::Highlight, Shape::TextMarkup { kind: Markup::Highlight, quads }, text))
         }
         ComposerKind::TextBox { size } => {
             view.comments.tool_done = true;

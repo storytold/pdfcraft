@@ -178,9 +178,10 @@ fn a_font_without_widths_measures_with_its_embedded_program() {
     }
 }
 
-#[test]
-fn mac_subset_cmap_uses_pdf_unicode_without_changing_source_program() {
-    use skrifa::{MetadataProvider as _, raw::TableProvider as _};
+/// Inter with its cmap replaced by a Mac format-6 one mapping code 65 to Ω's glyph, which egui
+/// can't use; and that glyph.
+fn mac_subset() -> (Vec<u8>, skrifa::GlyphId) {
+    use skrifa::MetadataProvider as _;
     let original = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
     let face = skrifa::FontRef::new(original).unwrap();
     let expected = face.charmap().map('Ω').unwrap();
@@ -194,6 +195,13 @@ fn mac_subset_cmap_uses_pdf_unicode_without_changing_source_program() {
     subset[entry + 8..entry + 12].copy_from_slice(&offset.to_be_bytes());
     subset[entry + 12..entry + 16].copy_from_slice(&(cmap.len() as u32).to_be_bytes());
     subset.extend_from_slice(&cmap);
+    (subset, expected)
+}
+
+#[test]
+fn mac_subset_cmap_uses_pdf_unicode_without_changing_source_program() {
+    use skrifa::{MetadataProvider as _, raw::TableProvider as _};
+    let (subset, expected) = mac_subset();
     let face = skrifa::FontRef::new(&subset).unwrap();
     assert!(!face.charmap().has_map(), "egui cannot directly use Mac format 6");
     assert_eq!(face.cmap().unwrap().map_codepoint(65_u32), Some(expected));
@@ -212,6 +220,380 @@ fn mac_subset_cmap_uses_pdf_unicode_without_changing_source_program() {
     assert_eq!(source.decoded().unwrap(), subset, "only an in-memory editor copy is adapted");
     let mut broken = vec![0; 16];
     assert!(append_editor_cmap(&mut broken, &std::collections::BTreeMap::from([(65, 1)])).is_none());
+}
+
+/// The metrics read that adapts a program's cmap is paid for from the editor's allowance too: a
+/// step short of the program, its ToUnicode and the program again for its widths and for the
+/// readings of its codes by glyph name and as Mac OS Roman, the metrics are read past the allowance
+/// and no copy is adapted.
+#[test]
+fn adapting_a_programs_cmap_is_paid_for() {
+    use skrifa::MetadataProvider as _;
+    let (subset, expected) = mac_subset();
+    let mut doc = Document::new_empty();
+    let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &subset)));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+    let cmap = b"1 beginbfchar <41> <03A9> endbfchar";
+    let unicode = doc.add(Object::Stream(Stream::flate(Dict::new(), cmap)));
+    let source = font(&mut doc, vec![("FontDescriptor", Object::Dict(descriptor)), ("ToUnicode", Object::Ref(unicode))]);
+    let cost = 4 * subset.len() + cmap.len();
+    let mut budget = DecodeBudget::new(cost, 0);
+    let editor = embedded_sfnt_within(&doc, &source, &mut budget).unwrap();
+    assert_eq!(skrifa::FontRef::new(&editor).unwrap().charmap().map('Ω'), Some(expected));
+    assert_eq!(budget.remaining(), 0);
+    assert!(embedded_sfnt_within(&doc, &source, &mut DecodeBudget::new(cost - 1, 0)).is_none());
+    // A composite font whose codes aren't Identity-H can't be adapted, so its metrics aren't
+    // read: the program is all it pays for.
+    let mut budget = DecodeBudget::new(cost, 0);
+    let mut composite = source.clone();
+    composite.set(b"Subtype".to_vec(), Object::name("Type0"));
+    assert!(embedded_sfnt_within(&doc, &composite, &mut budget).is_none());
+    assert_eq!(budget.remaining(), cost - subset.len());
+}
+
+/// A Type 0 subset font whose `/Encoding`, program, `/CIDToGIDMap` and ToUnicode are streams, and
+/// what each decodes to.
+fn subset_type0(doc: &mut Document, to_unicode: &[u8]) -> (Dict, [usize; 4]) {
+    let encoding = b"1 begincodespacerange <0000> <FFFF> endcodespacerange";
+    let program = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    let map = [0u8, 0, 0, 1, 0, 2];
+    let mut stream = |data: &[u8]| Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), data))));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"FontFile2".to_vec(), stream(program));
+    let mut descendant = Dict::new();
+    descendant.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+    descendant.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+    descendant.set(b"CIDToGIDMap".to_vec(), stream(&map));
+    let entries = vec![
+        ("Subtype", Object::name("Type0")),
+        ("BaseFont", Object::name("ABCDEF+Inter")),
+        ("Encoding", stream(encoding)),
+        ("DescendantFonts", Object::Array(vec![Object::Dict(descendant)])),
+        ("ToUnicode", stream(to_unicode)),
+    ];
+    (font(doc, entries), [encoding.len(), program.len(), map.len(), to_unicode.len()])
+}
+
+/// Each stream a font's metrics come from is paid for from the allowance they are read within,
+/// down to the byte; a stream it can't pay for is left unread, and the metrics say so.
+#[test]
+fn a_fonts_streams_are_paid_for_from_its_allowance() {
+    let mut doc = Document::new_empty();
+    let (f, sizes) = subset_type0(&mut doc, b"1 beginbfchar <0001> <0058> endbfchar");
+    let cost: usize = sizes.iter().sum();
+    let whole = Metrics::from_dict(&doc, &f);
+    assert!(!whole.past_allowance);
+    assert_eq!((whole.code_len, whole.text_of(1).as_deref()), (2, Some("X")));
+    assert!(!whole.outlined_cids.is_empty(), "the program and its map were read");
+    let mut budget = DecodeBudget::new(cost, 0);
+    assert_eq!(Metrics::from_dict_within(&doc, &f, &mut budget), whole);
+    assert_eq!(budget.remaining(), 0);
+    // A byte short, the ToUnicode, read last, is left unread; what came before is kept.
+    let mut budget = DecodeBudget::new(cost - 1, 0);
+    let m = Metrics::from_dict_within(&doc, &f, &mut budget);
+    assert!(m.past_allowance);
+    assert_eq!((m.code_len, m.text_of(1)), (2, None));
+    assert_eq!(m.outlined_cids, whole.outlined_cids);
+    // With nothing left, none of them is read.
+    let m = Metrics::from_dict_within(&doc, &f, &mut budget);
+    assert!(m.past_allowance && m.outlined_cids.is_empty());
+    assert_eq!(m.codes, Codes::Two, "the Encoding CMap was left unread");
+    // Only a subset's program says which glyphs it lacks: the whole font pays for its CMaps alone.
+    let mut whole_font = f.clone();
+    whole_font.set(b"BaseFont".to_vec(), Object::name("Inter"));
+    let mut budget = DecodeBudget::new(cost, 0);
+    let m = Metrics::from_dict_within(&doc, &whole_font, &mut budget);
+    assert!(!m.past_allowance && m.outlined_cids.is_empty());
+    assert_eq!(cost - budget.remaining(), sizes[0] + sizes[3]);
+}
+
+/// With nothing left, an empty stream still reads, as the allowance reads one, and is no reason to
+/// call the font read past it; a stream with data is left unread, and is. An empty stream behind a
+/// filter nothing decodes is unread with any allowance, so it isn't either: the font is read past
+/// its allowance exactly when the allowance counts a refusal, which is what callers refuse on.
+#[test]
+fn an_empty_stream_reads_with_nothing_left() {
+    let past = |filter: Option<&str>, data: &[u8]| {
+        let mut doc = Document::new_empty();
+        let mut dict = Dict::new();
+        if let Some(filter) = filter {
+            dict.set(b"Filter".to_vec(), Object::name(filter));
+        }
+        let unicode = Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, data.to_vec()))));
+        let f = font(&mut doc, vec![("Subtype", Object::name("TrueType")), ("ToUnicode", unicode)]);
+        let mut budget = DecodeBudget::new(0, 0);
+        let past = Metrics::from_dict_within(&doc, &f, &mut budget).past_allowance;
+        assert_eq!(past, budget.refused() > 0, "{filter:?}");
+        past
+    };
+    assert!(!past(None, b""));
+    assert!(!past(Some("NoSuchFilter"), b""));
+    assert!(past(None, b"1 beginbfchar <41> <0058> endbfchar"));
+}
+
+/// A stream behind one filter past its own limit, with more left than its limit, is left unread as
+/// it always was, paying for the limit, and is no reason to call the font read past the allowance.
+#[test]
+fn a_cmap_past_its_own_limit_is_not_past_the_allowance() {
+    let mut doc = Document::new_empty();
+    let mut cmap = b"1 beginbfchar <0001> <0058> endbfchar".to_vec();
+    cmap.resize(MAX_CMAP_BYTES + 1, b' ');
+    let (f, sizes) = subset_type0(&mut doc, &cmap);
+    let mut budget = DecodeBudget::new(usize::MAX / 2, 0);
+    let m = Metrics::from_dict_within(&doc, &f, &mut budget);
+    assert!(!m.past_allowance);
+    assert_eq!(m.text_of(1), None);
+    assert_eq!(usize::MAX / 2 - budget.remaining(), sizes[..3].iter().sum::<usize>() + MAX_CMAP_BYTES);
+}
+
+/// A `/CIDToGIDMap` as long as a map can be, which compresses well, reads the same behind no
+/// filter, Flate, or ASCIIHex and Flate: each stage may make as much as the map's limit, so the hex
+/// stage's output on top of it doesn't leave it unread. A map past the limit is unread behind each.
+#[test]
+fn a_full_cid_map_reads_behind_one_or_two_filters() {
+    let read = |entries: usize, filters: usize| {
+        let mut doc = Document::new_empty();
+        let (mut f, _) = subset_type0(&mut doc, b"");
+        let map: Vec<u8> = (0..entries).flat_map(|cid| u16::try_from(cid % 2000).unwrap().to_be_bytes()).collect();
+        let flate = Stream::flate(Dict::new(), &map);
+        let stream = match filters {
+            0 => Stream::from_raw(Dict::new(), map),
+            1 => flate,
+            _ => {
+                let hex: String = flate.raw.iter().map(|b| format!("{b:02X}")).chain([">".to_string()]).collect();
+                let mut dict = Dict::new();
+                dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("FlateDecode")]));
+                Stream::from_raw(dict, hex.into_bytes())
+            }
+        };
+        let map = Object::Ref(doc.add(Object::Stream(stream)));
+        let Some(Object::Array(mut descendants)) = f.get(b"DescendantFonts").cloned() else { panic!("descendant") };
+        if let Some(Object::Dict(d)) = descendants.get_mut(0) {
+            d.set(b"CIDToGIDMap".to_vec(), map);
+        }
+        f.set(b"DescendantFonts".to_vec(), Object::Array(descendants));
+        Metrics::from_dict(&doc, &f).outlined_cids
+    };
+    let full = read(1 << 16, 1);
+    assert!(!full.is_empty());
+    assert_eq!(read(1 << 16, 0), full);
+    assert_eq!(read(1 << 16, 2), full);
+    for filters in 0..=2 {
+        assert!(read((1 << 16) + 1, filters).is_empty(), "{filters} filters");
+    }
+}
+
+/// The editor's program read holds every filter stage to the program's limit: a program behind
+/// ASCIIHex and Flate whose Flate stage would make 24 MiB stops at 16 MiB, charged that and what
+/// the hex stage made, where the stages' total alone would let it make all 24 MiB. A program
+/// within the limit behind the same two filters reads (see also
+/// `an_editors_program_reads_behind_ascii_hex_and_flate_within_its_limit`).
+#[test]
+fn an_editors_program_read_holds_each_stage_to_its_limit() {
+    let mut doc = Document::new_empty();
+    let flate = Stream::flate(Dict::new(), &vec![b' '; 24 << 20]);
+    let hex: Vec<u8> = flate.raw.iter().flat_map(|b| format!("{b:02X}").into_bytes()).chain(*b">").collect();
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("FlateDecode")]));
+    let program = doc.add(Object::Stream(Stream::from_raw(dict, hex)));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+    let f = font(&mut doc, vec![("Subtype", Object::name("TrueType")), ("FontDescriptor", Object::Dict(descriptor))]);
+    let mut budget = DecodeBudget::new(usize::MAX / 2, 0);
+    assert!(embedded_sfnt_within(&doc, &f, &mut budget).is_none());
+    assert_eq!(usize::MAX / 2 - budget.remaining(), flate.raw.len() + MAX_SFNT);
+}
+
+/// Each stage of a stream a font's metrics are read from is held to the stream's limit, as a
+/// decode without an allowance holds it: a `/CIDToGIDMap` behind Flate and ASCIIHex whose Flate
+/// stage makes hex text past the map's limit is unread, as `Stream::decoded_within` leaves it,
+/// though the two stages together make less than twice the limit; with its hex text within the
+/// limit it reads.
+#[test]
+fn each_stage_of_a_metrics_stream_is_held_to_its_limit() {
+    let read = |cids: usize| {
+        let mut doc = Document::new_empty();
+        let (mut f, _) = subset_type0(&mut doc, b"");
+        let map: Vec<u8> = (0..cids).flat_map(|cid| u16::try_from(cid % 2000).unwrap().to_be_bytes()).collect();
+        let hex: Vec<u8> = map.iter().flat_map(|b| format!("{b:02X}").into_bytes()).collect();
+        let mut dict = Dict::new();
+        dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("ASCIIHexDecode")]));
+        let stream = Stream::from_raw(dict, Stream::flate(Dict::new(), &hex).raw.to_vec());
+        let unread = stream.decoded_within(MAX_CID_TO_GID).is_err();
+        let map = Object::Ref(doc.add(Object::Stream(stream)));
+        let Some(Object::Array(mut descendants)) = f.get(b"DescendantFonts").cloned() else { panic!("descendant") };
+        if let Some(Object::Dict(d)) = descendants.get_mut(0) {
+            d.set(b"CIDToGIDMap".to_vec(), map);
+        }
+        f.set(b"DescendantFonts".to_vec(), Object::Array(descendants));
+        (Metrics::from_dict(&doc, &f).outlined_cids.is_empty(), unread)
+    };
+    // 0.6 of the limit: its hex text, 1.2 of it, is past the limit; the stages make 1.8 of it.
+    assert_eq!(read(MAX_CID_TO_GID * 6 / 20), (true, true));
+    assert_eq!(read(MAX_CID_TO_GID / 4), (false, false));
+}
+
+/// The editor's program list reads a legacy Thai font's metrics after its program. With the program
+/// spending the allowance to the byte, a ToUnicode that is an empty stream behind a filter nothing
+/// decodes, unread with any allowance, doesn't put the metrics past the allowance: the program is
+/// listed. A ToUnicode with data is refused by the allowance, and the program isn't.
+#[test]
+fn an_editors_program_is_listed_past_a_stream_unread_on_its_own() {
+    let bytes = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    let listed = |filter: Option<&str>, data: &[u8]| {
+        let mut doc = Document::new_empty();
+        let mut dict = Dict::new();
+        if let Some(filter) = filter {
+            dict.set(b"Filter".to_vec(), Object::name(filter));
+        }
+        let unicode = Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, data.to_vec()))));
+        let program = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), bytes.to_vec()))));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), program);
+        let f = font(
+            &mut doc,
+            vec![
+                ("Subtype", Object::name("TrueType")),
+                ("BaseFont", Object::name("THSarabunPSK")),
+                ("FirstChar", Object::Int(65)),
+                ("LastChar", Object::Int(65)),
+                ("Widths", Object::Array(vec![Object::Int(500)])),
+                ("Encoding", Object::name("WinAnsiEncoding")),
+                ("FontDescriptor", Object::Dict(descriptor)),
+                ("ToUnicode", unicode),
+            ],
+        );
+        let mut budget = DecodeBudget::new(bytes.len(), 0);
+        let listed = embedded_sfnt_within(&doc, &f, &mut budget).is_some();
+        assert_eq!(budget.remaining(), 0, "the program spends the allowance to the byte");
+        (listed, budget.refused())
+    };
+    assert_eq!(listed(Some("NoSuchFilter"), b""), (true, 0));
+    assert_eq!(listed(None, b"1 beginbfchar <41> <0058> endbfchar"), (false, 1));
+}
+
+/// The editor's program is held to its limit as the metrics reads' streams are: a 12 MiB program
+/// whose Flate data is about 8 MiB reads behind ASCIIHex and Flate as behind Flate alone, though
+/// the two stages make about 20 MiB together. A program of the limit reads behind either, and one a
+/// byte past it is unread behind either.
+#[test]
+fn an_editors_program_reads_behind_ascii_hex_and_flate_within_its_limit() {
+    let program = |len: usize, noise: usize| {
+        let mut program = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf").to_vec();
+        // Bytes Flate can't shrink, then zeros.
+        let mut x = 1u32;
+        program.extend((0..noise).map(|_| {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            x.to_be_bytes()[0]
+        }));
+        program.resize(len, 0);
+        program
+    };
+    let read = |program: &[u8], hex: bool| {
+        let mut doc = Document::new_empty();
+        let flate = Stream::flate(Dict::new(), program);
+        let stream = if hex {
+            let digits = b"0123456789ABCDEF";
+            let mut data: Vec<u8> = flate.raw.iter().flat_map(|b| [digits[usize::from(b >> 4)], digits[usize::from(b & 15)]]).collect();
+            data.push(b'>');
+            let mut dict = Dict::new();
+            dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("FlateDecode")]));
+            Stream::from_raw(dict, data)
+        } else {
+            flate
+        };
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), Object::Ref(doc.add(Object::Stream(stream))));
+        let simple = font(&mut doc, vec![("FontDescriptor", Object::Dict(descriptor))]);
+        embedded_sfnt(&doc, &simple)
+    };
+    let near = program(12 << 20, 8 << 20);
+    let full = program(MAX_SFNT, 0);
+    for hex in [false, true] {
+        assert_eq!(read(&near, hex).as_deref(), Some(near.as_slice()), "behind ASCIIHex too: {hex}");
+        assert_eq!(read(&full, hex).as_deref(), Some(full.as_slice()), "behind ASCIIHex too: {hex}");
+        assert!(read(&program(MAX_SFNT + 1, 0), hex).is_none(), "behind ASCIIHex too: {hex}");
+    }
+}
+
+/// `data` in rows of `columns` bytes behind Flate and a PNG predictor, each row tagged Up (the
+/// difference from the row above), so read without the predictor it is garbled; with its
+/// `/DecodeParms` given by reference or direct.
+fn predicted(doc: &mut Document, data: &[u8], columns: usize, by_reference: bool) -> Object {
+    let mut above = vec![0u8; columns];
+    let mut rows = Vec::new();
+    for row in data.chunks(columns) {
+        rows.push(2);
+        rows.extend(row.iter().zip(&above).map(|(b, a)| b.wrapping_sub(*a)));
+        above[..row.len()].copy_from_slice(row);
+    }
+    let mut s = Stream::flate(Dict::new(), &rows);
+    let parms: Dict =
+        [(b"Predictor".to_vec(), Object::Int(12)), (b"Columns".to_vec(), Object::Int(i64::try_from(columns).unwrap()))].into_iter().collect();
+    let parms = if by_reference { Object::Ref(doc.add(Object::Dict(parms))) } else { Object::Dict(parms) };
+    s.dict.set(b"DecodeParms".to_vec(), parms);
+    Object::Ref(doc.add(Object::Stream(s)))
+}
+
+/// A stream whose `/DecodeParms` are given by reference reads as it does with them direct: a PNG
+/// predictor's tag bytes are taken out of the map, the CMap and the editor's program, not left in.
+#[test]
+fn parameters_given_by_reference_are_read() {
+    let read = |by_reference: bool| {
+        let mut doc = Document::new_empty();
+        let (mut f, _) = subset_type0(&mut doc, b"");
+        let map: Vec<u8> = (0..1000u16).flat_map(u16::to_be_bytes).collect();
+        let map = predicted(&mut doc, &map, 2, by_reference);
+        let mut cmap = b"1 beginbfchar <0001> <0058> endbfchar".to_vec();
+        cmap.resize(48, b' ');
+        let unicode = predicted(&mut doc, &cmap, 16, by_reference);
+        let Some(Object::Array(mut descendants)) = f.get(b"DescendantFonts").cloned() else { panic!("descendant") };
+        if let Some(Object::Dict(d)) = descendants.get_mut(0) {
+            d.set(b"CIDToGIDMap".to_vec(), map);
+        }
+        f.set(b"DescendantFonts".to_vec(), Object::Array(descendants));
+        f.set(b"ToUnicode".to_vec(), unicode);
+        let m = Metrics::from_dict(&doc, &f);
+        (m.outlined_cids.clone(), m.text_of(1).map(Cow::into_owned))
+    };
+    let direct = read(false);
+    assert!(!direct.0.is_empty());
+    assert_eq!(direct.1.as_deref(), Some("X"));
+    assert_eq!(read(true), direct);
+    let mut program = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    program.resize(program.len().next_multiple_of(4), 0);
+    for by_reference in [false, true] {
+        let mut doc = Document::new_empty();
+        let file = predicted(&mut doc, &program, 4, by_reference);
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), file);
+        let simple = font(&mut doc, vec![("FontDescriptor", Object::Dict(descriptor))]);
+        assert_eq!(embedded_sfnt(&doc, &simple).as_deref(), Some(program.as_slice()), "by reference: {by_reference}");
+    }
+}
+
+/// Fonts that each name one large ToUnicode share the allowance they are read within: it pays for
+/// as many readings as it holds, and the rest are left unread, where each reading used to decode
+/// it afresh.
+#[test]
+fn fonts_naming_one_cmap_share_one_allowance() {
+    let mut doc = Document::new_empty();
+    let mut cmap = b"1 beginbfchar <41> <0058> endbfchar".to_vec();
+    cmap.resize(1_000_000, b' ');
+    let unicode = doc.add(Object::Stream(Stream::flate(Dict::new(), &cmap)));
+    let fonts: Vec<Dict> = (0..100)
+        .map(|_| {
+            font(&mut doc, vec![("Subtype", Object::name("Type1")), ("BaseFont", Object::name("Helvetica")), ("ToUnicode", Object::Ref(unicode))])
+        })
+        .collect();
+    let mut budget = DecodeBudget::new(64 << 20, 0);
+    let read: Vec<Metrics> = fonts.iter().map(|f| Metrics::from_dict_within(&doc, f, &mut budget)).collect();
+    let whole = read.iter().filter(|m| !m.past_allowance).count();
+    assert_eq!(whole, (64 << 20) / cmap.len());
+    assert!(read[..whole].iter().all(|m| m.text_of(0x41).as_deref() == Some("X")));
+    assert!(read[whole..].iter().all(|m| m.text_of(0x41).as_deref() == Some("A")), "the encoding's meaning, unread past the allowance");
+    assert_eq!(budget.remaining(), 0);
 }
 
 /// The names read once give what `Post::glyph_name` gives, for every glyph of a font with its
@@ -388,6 +770,21 @@ fn a_symbolic_truetype_font_without_an_encoding_reads_its_glyph_names() {
         ],
     );
     assert_eq!(Metrics::from_dict(&doc, &f).decode(&codes), "");
+    // The names are read within the allowance the metrics are read within: the program is paid
+    // for by the glyph-name reading, by the Mac OS Roman one (which finds the glyphs named and
+    // reads nothing) and for the widths. A byte short of the first, the names go unread.
+    let mut doc = Document::new_empty();
+    let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &subset)));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"Flags".to_vec(), Object::Int(4));
+    descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+    let f = font(&mut doc, vec![("Subtype", Object::name("TrueType")), ("FontDescriptor", Object::Dict(descriptor))]);
+    let mut budget = DecodeBudget::new(3 * subset.len(), 0);
+    assert_eq!(Metrics::from_dict_within(&doc, &f, &mut budget), symbolic);
+    assert_eq!(budget.remaining(), 0);
+    let short = Metrics::from_dict_within(&doc, &f, &mut DecodeBudget::new(subset.len() - 1, 0));
+    assert!(short.past_allowance);
+    assert_ne!(short.decode(&codes), TEXT, "the names unread");
 }
 
 /// The glyph list specification's `uni` and `u` forms spell their hex digits in uppercase
@@ -601,6 +998,59 @@ fn type3_glyph_byte_limits_leave_honest_metrics() {
     with_differences(&mut f, &names);
     let m = Metrics::from_dict(&doc, &f);
     assert_eq!((m.ascent, m.descent), (5.0, -2.0), "the /FontBBox, not the first glyph's box alone");
+}
+
+/// A Type 3 font's glyph descriptions are paid for from the allowance its metrics are read within,
+/// each what it decodes to: one the allowance can't pay for is left unread, and the metrics say so.
+#[test]
+fn type3_glyph_boxes_are_paid_for_from_the_allowance() {
+    let mut doc = Document::new_empty();
+    let procs = ["1 0 0 -20 1 300 d1", "1 0 0 0 1 400 d1"];
+    let f = type3(&mut doc, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, 0, 0, 0], &procs);
+    let cost: usize = procs.iter().map(|p| p.len()).sum();
+    let whole = Metrics::from_dict(&doc, &f);
+    assert!(!whole.past_allowance);
+    assert_eq!((whole.ascent, whole.descent), (400.0, -20.0));
+    let mut budget = DecodeBudget::new(cost, 0);
+    assert_eq!(Metrics::from_dict_within(&doc, &f, &mut budget), whole);
+    assert_eq!(budget.remaining(), 0);
+    let m = Metrics::from_dict_within(&doc, &f, &mut DecodeBudget::new(cost - 1, 0));
+    assert!(m.past_allowance, "a byte short, the second description is left unread");
+}
+
+/// A glyph description that fails on its own once the allowance is spent to the byte, an empty one
+/// behind a filter nothing decodes, fails the same with more left: it doesn't make the metrics read
+/// past the allowance, and the descriptions after it are read, or refused by the allowance.
+#[test]
+fn a_type3_description_unread_on_its_own_is_not_past_the_allowance() {
+    let mut doc = Document::new_empty();
+    let procs = ["1 0 0 -20 1 300 d1", "", "1 0 0 0 1 400 d1"];
+    let mut f = type3(&mut doc, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], [0, 0, 0, 0], &procs);
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    let unread = Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, Vec::new()))));
+    let Some(Object::Dict(mut charprocs)) = f.get(b"CharProcs").cloned() else { panic!("CharProcs") };
+    charprocs.set(b"g1".to_vec(), unread);
+    f.set(b"CharProcs".to_vec(), Object::Dict(charprocs));
+    with_differences(&mut f, &["g0", "g1", "g2"].map(String::from));
+    let first = procs[0].len();
+    let whole = Metrics::from_dict_within(&doc, &f, &mut DecodeBudget::new(usize::MAX, 0));
+    assert!(!whole.past_allowance);
+    assert_eq!((whole.ascent, whole.descent), (400.0, -20.0));
+    // The first description spends it to the byte; the third, which has data, is refused.
+    let mut budget = DecodeBudget::new(first, 0);
+    let m = Metrics::from_dict_within(&doc, &f, &mut budget);
+    assert_eq!(budget.refused(), 1);
+    assert!(m.past_allowance);
+    // Without the third, nothing is refused, and the metrics aren't past the allowance.
+    let Some(Object::Dict(mut charprocs)) = f.get(b"CharProcs").cloned() else { panic!("CharProcs") };
+    charprocs.remove(b"g2");
+    f.set(b"CharProcs".to_vec(), Object::Dict(charprocs));
+    let mut budget = DecodeBudget::new(first, 0);
+    let m = Metrics::from_dict_within(&doc, &f, &mut budget);
+    assert_eq!((budget.refused(), budget.remaining()), (0, 0));
+    assert!(!m.past_allowance);
+    assert_eq!((m.ascent, m.descent), (300.0, -20.0));
 }
 
 /// A Type 3 font measured from its glyphs' `d1` boxes keeps them over a descriptor's `/Ascent`
@@ -1142,7 +1592,7 @@ fn malformed_cmaps_never_panic() {
     let mut enc = Dict::new();
     enc.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(i64::MAX), Object::name("A"), Object::name("B")]));
     let f = font(&mut doc, vec![("Subtype", Object::name("Type1")), ("Encoding", Object::Dict(enc))]);
-    assert_eq!(unicode_map(&doc, &f, false).text(u32::MAX).as_deref(), Some("B"));
+    assert_eq!(unicode_map(&doc, &f, false, &mut Reads::new(&doc, &mut DecodeBudget::new(usize::MAX, 0))).text(u32::MAX).as_deref(), Some("B"));
 }
 
 #[test]
@@ -1373,6 +1823,39 @@ fn low_codes_resolve_to_the_covering_range() {
     assert_eq!((u.covering(0xFFFF).is_some(), u.covering(0x1_0001).is_some(), u.covering(0x1_0002).is_none()), (true, true, true));
 }
 
+#[test]
+fn base_font_name_matches_the_metrics_name() {
+    let doc = Document::new_empty();
+    let mut f = Dict::new();
+    f.set(b"BaseFont".to_vec(), Object::name("ABCDEF+Body"));
+    assert_eq!(base_font_name(&doc, &f), "ABCDEF+Body");
+    assert_eq!(base_font_name(&doc, &f), Metrics::from_dict(&doc, &f).base_font);
+    assert_eq!(base_font_name(&doc, &Dict::new()), "");
+}
+
+#[test]
+fn refused_subset_reads_do_not_encode_unverified_glyphs() {
+    let mut doc = Document::new_empty();
+    let (mut f, sizes) = subset_type0(&mut doc, b"");
+    f.set(b"Encoding".to_vec(), Object::name("Identity-H"));
+    f.set(b"ToUnicode".to_vec(), Object::name("Identity-H"));
+    if let Some(Object::Array(descendants)) = f.get_mut(b"DescendantFonts")
+        && let Some(Object::Dict(descendant)) = descendants.first_mut()
+    {
+        descendant.set(b"DW".to_vec(), Object::Int(1000));
+    }
+    let whole = Metrics::from_dict(&doc, &f);
+    assert!(!whole.past_allowance && !whole.outlined_cids.is_empty());
+    assert!(whole.encode("\u{ffff}").is_none());
+    // Refuse the program, then the CID map after reading the complete program.
+    for allowance in [0, sizes[1]] {
+        let partial = Metrics::from_dict_within(&doc, &f, &mut DecodeBudget::new(allowance, 0));
+        assert!(partial.past_allowance);
+        assert_eq!(partial.encode(""), Some(Vec::new()));
+        assert!(partial.encode("\u{ffff}").is_none(), "allowance {allowance} must not turn /DW into proof of a glyph");
+    }
+}
+
 /// [`cmap_only_sfnt_named`] without a `post` table.
 fn cmap_only_sfnt(mac: Option<&[(u8, u8)]>, windows: &[(u16, u16)]) -> Vec<u8> {
     cmap_only_sfnt_named(mac, windows, false)
@@ -1457,7 +1940,7 @@ fn a_symbolic_truetype_font_in_the_macintosh_order_reads_its_codes_as_mac_roman(
         descriptor.set(b"Flags".to_vec(), Object::Int(flags));
         descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
         let f = font(&mut doc, vec![("Subtype", Object::name("TrueType")), ("FontDescriptor", Object::Dict(descriptor))]);
-        let u = unicode_map(&doc, &f, false);
+        let u = unicode_map(&doc, &f, false, &mut Reads::new(&doc, &mut DecodeBudget::new(usize::MAX, 0)));
         codes.map(|c| u.text(c).unwrap_or_default().into_owned())
     };
     // `agrave` and `eacute` are glyphs 106 and 112 of the standard Macintosh order, `endash` and
@@ -1492,7 +1975,7 @@ fn the_mac_roman_reading_needs_no_base_encoding_and_no_symbolic_builtin() {
         let mut all = vec![("Subtype", Object::name("TrueType")), ("FontDescriptor", Object::Dict(descriptor))];
         all.extend(entries);
         let f = font(&mut doc, all);
-        let u = unicode_map(&doc, &f, false);
+        let u = unicode_map(&doc, &f, false, &mut Reads::new(&doc, &mut DecodeBudget::new(usize::MAX, 0)));
         [0x88, 0x8E].map(|c| u.text(c).unwrap_or_default().into_owned())
     };
     assert_eq!(read(vec![]), ["à", "é"]);
@@ -1512,8 +1995,40 @@ fn the_mac_roman_reading_needs_no_base_encoding_and_no_symbolic_builtin() {
     assert_eq!(read(vec![("Encoding", Object::Dict(notdef))]), ["à", ""], "/Differences naming .notdef");
 }
 
+/// The program reads that tell a symbolic TrueType font's codes by its glyph names and as Mac OS
+/// Roman are each paid for from the allowance the metrics are read within: one it can't pay for is
+/// left unread, and the metrics say so.
 #[test]
-fn composite_subset_without_cmap_uses_pdf_glyph_ids_in_editor_and_shaper_without_replacing_the_program() {
+fn the_symbolic_readings_of_a_program_are_paid_for() {
+    let program = cmap_only_sfnt(Some(&[(0x88, 106)]), &[(0xF088, 106)]);
+    let mut doc = Document::new_empty();
+    let stream = doc.add(Object::Stream(Stream::flate(Dict::new(), &program)));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"Flags".to_vec(), Object::Int(4));
+    descriptor.set(b"FontFile2".to_vec(), Object::Ref(stream));
+    // With `/Widths` the program isn't read for its advances: these are its only reads.
+    let entries = vec![
+        ("Subtype", Object::name("TrueType")),
+        ("FontDescriptor", Object::Dict(descriptor)),
+        ("FirstChar", Object::Int(0x88)),
+        ("Widths", Object::Array(vec![Object::Int(500)])),
+    ];
+    let f = font(&mut doc, entries);
+    let whole = Metrics::from_dict(&doc, &f);
+    assert!(!whole.past_allowance);
+    assert_eq!(whole.text_of(0x88).as_deref(), Some("à"));
+    let mut budget = DecodeBudget::new(2 * program.len(), 0);
+    assert_eq!(Metrics::from_dict_within(&doc, &f, &mut budget), whole);
+    assert_eq!(budget.remaining(), 0);
+    let m = Metrics::from_dict_within(&doc, &f, &mut DecodeBudget::new(2 * program.len() - 1, 0));
+    assert!(m.past_allowance, "a byte short, the Mac OS Roman reading's read is left unread");
+    assert_eq!(m.text_of(0x88), None);
+}
+
+/// A Type 0 font over Inter's program without its `cmap`, Identity-H, whose `/CIDToGIDMap` sends
+/// CID 17 to Inter's Ω and whose ToUnicode says code 17 is Ω; also the program object, the
+/// program, Ω's glyph and what the ToUnicode and the map decode to.
+fn cmapless_composite(doc: &mut Document) -> (Dict, pdfcraft_cos::ObjRef, Vec<u8>, skrifa::GlyphId, [usize; 2]) {
     use skrifa::{MetadataProvider as _, raw::TableProvider as _};
     let original = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
     let expected = skrifa::FontRef::new(original).unwrap().charmap().map('Ω').unwrap();
@@ -1525,7 +2040,6 @@ fn composite_subset_without_cmap_uses_pdf_glyph_ids_in_editor_and_shaper_without
         subset[12 + index * 16..28 + index * 16].copy_from_slice(record);
     }
     assert!(skrifa::FontRef::new(&subset).unwrap().cmap().is_err());
-    let mut doc = Document::new_empty();
     let program = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), &subset)));
     let mut descriptor = Dict::new();
     descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
@@ -1535,9 +2049,10 @@ fn composite_subset_without_cmap_uses_pdf_glyph_ids_in_editor_and_shaper_without
     let mut descendant = Dict::new();
     descendant.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
     descendant.set(b"CIDToGIDMap".to_vec(), Object::Ref(gids));
-    let unicode = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), b"1 beginbfchar <0011> <03a9> endbfchar")));
+    let cmap = b"1 beginbfchar <0011> <03a9> endbfchar";
+    let unicode = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), cmap)));
     let source = font(
-        &mut doc,
+        doc,
         vec![
             ("Subtype", Object::name("Type0")),
             ("Encoding", Object::name("Identity-H")),
@@ -1545,10 +2060,89 @@ fn composite_subset_without_cmap_uses_pdf_glyph_ids_in_editor_and_shaper_without
             ("ToUnicode", Object::Ref(unicode)),
         ],
     );
+    (source, program, subset, expected, [cmap.len(), 36])
+}
+
+#[test]
+fn composite_subset_without_cmap_uses_pdf_glyph_ids_in_editor_and_shaper_without_replacing_the_program() {
+    use skrifa::MetadataProvider as _;
+    let mut doc = Document::new_empty();
+    let (source, program, subset, expected, _) = cmapless_composite(&mut doc);
     let editor = embedded_sfnt(&doc, &source).expect("the source outlines must be usable in the editor");
     assert_eq!(skrifa::FontRef::new(&editor).unwrap().charmap().map('Ω'), Some(expected));
     let shaped = crate::source_shaping::shape(&editor, "Ω").expect("the rebuilt cmap must work in the actual shaping engine too");
     assert_eq!(shaped.glyphs[0].id, expected);
     let Object::Stream(saved) = doc.get(program).as_ref().clone() else { panic!("fixture") };
     assert_eq!(saved.decoded().unwrap(), subset, "the source PDF font program stays byte-for-byte intact");
+}
+
+/// The metrics read that rebuilds a composite subset's cmap is paid for from the editor's
+/// allowance, as a simple font's is: the program, its ToUnicode, then its `/CIDToGIDMap`. With the
+/// ToUnicode left unread no copy is adapted, though what is left would pay for the map.
+#[test]
+fn adapting_a_composite_subsets_cmap_is_paid_for() {
+    use skrifa::MetadataProvider as _;
+    let mut doc = Document::new_empty();
+    let (source, _, subset, expected, [cmap, map]) = cmapless_composite(&mut doc);
+    let cost = subset.len() + cmap + map;
+    let mut budget = DecodeBudget::new(cost, 0);
+    let editor = embedded_sfnt_within(&doc, &source, &mut budget).unwrap();
+    assert_eq!(skrifa::FontRef::new(&editor).unwrap().charmap().map('Ω'), Some(expected));
+    assert_eq!(budget.remaining(), 0);
+    assert!(cmap > map);
+    assert!(embedded_sfnt_within(&doc, &source, &mut DecodeBudget::new(subset.len() + cmap - 1, 0)).is_none());
+}
+
+/// A composite font whose `/Encoding` isn't Identity-H can't have its cmap rebuilt
+/// (`composite_glyph_maps` reads only Identity-H codes), so the editor reads its program and no
+/// more: its ToUnicode and `/CIDToGIDMap` are left for what is left of the allowance.
+#[test]
+fn a_composite_font_that_cant_be_adapted_spends_only_its_program() {
+    let mut doc = Document::new_empty();
+    let (source, _, subset, _, [cmap, map]) = cmapless_composite(&mut doc);
+    for encoding in ["Identity-V", "UniJIS-UCS2-H"] {
+        let mut f = source.clone();
+        f.set(b"Encoding".to_vec(), Object::name(encoding));
+        let mut budget = DecodeBudget::new(subset.len() + cmap + map, 0);
+        assert!(embedded_sfnt_within(&doc, &f, &mut budget).is_none(), "{encoding}");
+        assert_eq!(budget.remaining(), cmap + map, "{encoding}");
+    }
+}
+
+/// A composite font's `/Encoding` given through a reference is the name it refers to, as the
+/// metrics read it: Identity-H by reference is adapted as Identity-H written directly is.
+#[test]
+fn a_composite_fonts_encoding_given_by_reference_is_read() {
+    use skrifa::MetadataProvider as _;
+    let mut doc = Document::new_empty();
+    let (mut source, _, _, expected, _) = cmapless_composite(&mut doc);
+    let identity = doc.add(Object::name("Identity-H"));
+    source.set(b"Encoding".to_vec(), Object::Ref(identity));
+    assert_eq!(Metrics::from_dict(&doc, &source).code_len, 2);
+    let editor = embedded_sfnt(&doc, &source).expect("Identity-H by reference is adapted");
+    assert_eq!(skrifa::FontRef::new(&editor).unwrap().charmap().map('Ω'), Some(expected));
+}
+
+/// The `/CIDToGIDMap` a composite subset's cmap is rebuilt from reads as the font's other streams
+/// do: a full map, which compresses well, reads behind ASCIIHex and Flate, though the hex stage's
+/// output comes on top of the map.
+#[test]
+fn a_full_cid_map_rebuilds_a_composite_subsets_cmap_behind_two_filters() {
+    use skrifa::MetadataProvider as _;
+    let mut doc = Document::new_empty();
+    let (mut source, _, _, expected, _) = cmapless_composite(&mut doc);
+    let mut map = vec![0u8; MAX_CID_TO_GID];
+    map[34..36].copy_from_slice(&(expected.to_u32() as u16).to_be_bytes());
+    let flate = Stream::flate(Dict::new(), &map);
+    let hex: String = flate.raw.iter().map(|b| format!("{b:02X}")).chain([">".to_string()]).collect();
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("FlateDecode")]));
+    let map = Object::Ref(doc.add(Object::Stream(Stream::from_raw(dict, hex.into_bytes()))));
+    let Some(Object::Array(mut descendants)) = source.get(b"DescendantFonts").cloned() else { panic!("descendant") };
+    if let Some(Object::Dict(d)) = descendants.get_mut(0) {
+        d.set(b"CIDToGIDMap".to_vec(), map);
+    }
+    source.set(b"DescendantFonts".to_vec(), Object::Array(descendants));
+    let editor = embedded_sfnt(&doc, &source).expect("the map behind two filters is read");
+    assert_eq!(skrifa::FontRef::new(&editor).unwrap().charmap().map('Ω'), Some(expected));
 }

@@ -169,6 +169,8 @@ fn turning_the_check_at_start_on_waits_for_the_next_start() {
 #[test]
 fn preferences_turn_the_check_at_start_off() {
     let (mut h, _calls) = started_with(r#"{"update_check_at_start": true}"#);
+    // The check at start answers on its own thread; its prompt would take the click below.
+    later_on_the_startup_prompt(&mut h);
     h.state_mut().execute("app.preferences");
     h.run_steps(3);
     h.get_by_label("Check for updates when PdfCraft starts").click();
@@ -196,6 +198,12 @@ fn the_check_at_start_offers_the_prompt_and_later_dismisses_it() {
         app.set_startup_update_check(true);
         app
     });
+    later_on_the_startup_prompt(&mut h);
+    assert!(h.query_by_label_contains("is available").is_none(), "Later closes the prompt");
+}
+
+/// Waits for the check at start to offer its prompt, then answers Later.
+fn later_on_the_startup_prompt(h: &mut Harness<'static, PdfCraftApp>) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while h.query_by_label_contains("is available").is_none() {
         h.run_steps(2);
@@ -204,5 +212,4 @@ fn the_check_at_start_offers_the_prompt_and_later_dismisses_it() {
     }
     h.get_by_label("LATER").click();
     h.run_steps(3);
-    assert!(h.query_by_label_contains("is available").is_none(), "Later closes the prompt");
 }

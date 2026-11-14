@@ -19,14 +19,14 @@ fn one_step(step: Step) -> Action {
 /// The standard fonts can't draw the character, so the watermark step fails and no file is produced.
 #[test]
 fn failing_watermark_step_fails_the_file_and_publishes_nothing() {
-    let r = run_on(&one_step(Step::AddWatermark("中".into())), "one.pdf", Arc::new(pdf()), |_, _| {});
+    let r = run_on(&one_step(Step::AddWatermark("中".into())), "one.pdf", Arc::new(pdf()), true, |_, _| {});
     assert!(r.is_err(), "a failed step must fail its file: {r:?}");
 }
 
 /// A comment step on a document with no comments has nothing to do, which is not a failure.
 #[test]
 fn nothing_to_do_step_still_succeeds() {
-    let r = run_on(&one_step(Step::FlattenComments), "one.pdf", Arc::new(pdf()), |_, _| {});
+    let r = run_on(&one_step(Step::FlattenComments), "one.pdf", Arc::new(pdf()), true, |_, _| {});
     assert!(r.is_ok(), "a step with nothing to do is not a failure: {r:?}");
 }
 
@@ -61,6 +61,6 @@ fn action_run_marks_the_failing_file_as_error_without_output() {
 /// A removal step with nothing to remove keeps its existing note and succeeds.
 #[test]
 fn removal_step_with_nothing_to_remove_still_succeeds() {
-    let r = run_on(&one_step(Step::RemoveHiddenInformation), "one.pdf", Arc::new(pdf()), |_, _| {});
+    let r = run_on(&one_step(Step::RemoveHiddenInformation), "one.pdf", Arc::new(pdf()), true, |_, _| {});
     assert!(r.is_ok(), "nothing to remove is not a failure: {r:?}");
 }

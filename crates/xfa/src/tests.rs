@@ -9,7 +9,7 @@ use crate::data::{
 use crate::data::{add_data_instances, remove_data_instance, write_data_value};
 use crate::fixtures::{
     TINY_GIF, bound_date_template, fields_template, scripted_template, shell, static_shell, template, template_with_data, tiny_bmp, tiny_png,
-    tiny_tiff, unnamed_hidden_template,
+    tiny_tiff, traversal_targets_template, traversal_template, unnamed_hidden_template,
 };
 use crate::layout::Item;
 use crate::layout::WidgetKind;
@@ -4968,6 +4968,149 @@ fn a_typed_date_is_rewritten_only_by_date_clauses_into_a_first_pattern_that_keep
     assert_eq!(typed("form[0].pick[0]", "20011203").as_deref(), Some("011203"), "the next pattern that the first keeps");
 }
 
+/// A one-page positioned form around `body`, for Tab-order tests.
+fn positioned_form(body: &str) -> String {
+    format!(
+        r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form1" layout="tb"><pageSet><pageArea><contentArea x="0.25in" y="0.25in" w="8in" h="10.5in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+<subform name="page" layout="position" w="8in" h="10in">{body}</subform></subform></template></xdp:xdp>"#
+    )
+}
+
+/// The SOM paths of the widgets on the first page, in the order they are written.
+fn widget_soms(xml: &str) -> Vec<String> {
+    let form = layout_xml(xml).unwrap();
+    widgets(&form.pages[0]).iter().map(|w| w.som.trim_start_matches("form1[0].page[0].").to_string()).collect()
+}
+
+/// The widgets are written in the order another viewer tabs the probe form: rows without
+/// links, `next` links, a subform's `first` link through a draw, the stops the chain never
+/// reached at the end, and hidden, invisible and protected fields passed over (the protected
+/// ones keep their places, as do widgets the order doesn't cover).
+#[test]
+fn widgets_are_written_in_the_templates_tab_order() {
+    let soms = widget_soms(&traversal_template());
+    let stops: Vec<&str> = soms.iter().map(String::as_str).filter(|s| *s != "log[0]" && *s != "D5[0]").collect();
+    assert_eq!(
+        stops,
+        [
+            "start[0]",
+            "A2[0]",
+            "A3[0]",
+            "A4[0]",
+            "A1[0]",
+            "B1[0]",
+            "B3[0]",
+            "B2[0]",
+            "B4[0]",
+            "C[0].C3[0]",
+            "D1[0]",
+            "D4[0]",
+            "D6[0]",
+            "finish[0]",
+            "C[0].C1[0]",
+            "C[0].C2[0]"
+        ]
+    );
+    // The protected widgets keep their places among the widgets: `log` first, as written, and
+    // `D5` 16th, between `D4` and `D6` in the order written, so after `finish` here.
+    assert_eq!(soms.iter().position(|s| s == "log[0]"), Some(0), "{soms:?}");
+    assert_eq!(soms.iter().position(|s| s == "D5[0]"), Some(15), "{soms:?}");
+    assert_eq!(soms.len(), 18, "{soms:?}");
+}
+
+/// Links to objects that aren't stops, as another viewer follows them: a hidden subform is
+/// passed over as if it weren't there (the link is ignored, and so is the subform's own),
+/// while a hidden, invisible or protected field passes Tab on by its own link.
+#[test]
+fn links_to_hidden_subforms_are_ignored_and_other_non_stops_pass_tab_on() {
+    let soms = widget_soms(&traversal_targets_template());
+    let stops: Vec<&str> = soms.iter().map(String::as_str).filter(|s| *s != "HT[0]").collect();
+    assert_eq!(
+        stops,
+        [
+            "start[0]",
+            "E1[0]",
+            "E2[0]",
+            "E3[0]",
+            "E4[0]",
+            "F1[0]",
+            "F4[0]",
+            "G1[0]",
+            "G4[0]",
+            "H1[0]",
+            "H4[0]",
+            "finish[0]",
+            "F2[0]",
+            "F3[0]",
+            "G2[0]",
+            "G3[0]",
+            "H2[0]",
+            "H3[0]"
+        ]
+    );
+}
+
+/// `#draw[1]` counts every draw, named or not, and a dotted reference goes down from the
+/// first part found: `a` links into the subform's second draw, which links to `z`.
+#[test]
+fn class_and_dotted_traversal_references_resolve_as_som_paths() {
+    let field = |n: &str, x: &str, y: &str, link: &str| {
+        let t = if link.is_empty() { String::new() } else { format!(r#"<traversal><traverse ref="{link}"/></traversal>"#) };
+        format!(r#"<field name="{n}" x="{x}" y="{y}" w="1.5in" h="0.3in"><ui><textEdit/></ui>{t}</field>"#)
+    };
+    let body = format!(
+        r#"{}<subform name="S" x="0in" y="1in" w="8in" h="3in" layout="position">
+<draw name="head" x="0in" y="0in" w="2in" h="0.3in"><value><text>Head</text></value></draw>
+<draw x="0in" y="0.4in" w="2in" h="0.3in"><value><text>Note</text></value><traversal><traverse ref="z[0]"/></traversal></draw>
+{}{}{}</subform>{}"#,
+        field("a", "0in", "0in", "S[0].#draw[1]"),
+        field("x", "0in", "1in", ""),
+        field("y", "0in", "1.5in", ""),
+        field("z", "0in", "2in", ""),
+        field("b", "0in", "5in", ""),
+    );
+    assert_eq!(widget_soms(&positioned_form(&body)), ["a[0]", "S[0].z[0]", "b[0]", "S[0].x[0]", "S[0].y[0]"]);
+}
+
+/// Links that loop or name nothing end the chain, and the rest follow in rows; every field is
+/// still written once (they are written in the template out of order).
+#[test]
+fn looping_and_dangling_traversal_links_keep_every_field_once() {
+    let field = |n: &str, y: &str, link: &str| {
+        format!(
+            r#"<field name="{n}" x="0in" y="{y}" w="1.5in" h="0.3in"><ui><textEdit/></ui><traversal><traverse ref="{link}"/></traversal></field>"#
+        )
+    };
+    let body = [field("q", "1in", "p[0]"), field("s", "3in", "#field[99]"), field("r", "2in", "nowhere[0]"), field("p", "0in", "q[0]")].concat();
+    assert_eq!(widget_soms(&positioned_form(&body)), ["p[0]", "q[0]", "r[0]", "s[0]"]);
+}
+
+/// A repeating subform is tabbed one instance after another, each in its own rows.
+#[test]
+fn repeated_subform_instances_are_tabbed_one_after_another() {
+    let body = r#"<subform name="rows" x="0in" y="0in" w="8in" h="3in" layout="tb">
+<subform name="row" layout="position" w="8in" h="0.5in"><occur min="3" max="5" initial="3"/>
+<field name="b" x="3in" y="0in" w="1.5in" h="0.3in"><ui><textEdit/></ui></field>
+<field name="a" x="0in" y="0in" w="1.5in" h="0.3in"><ui><textEdit/></ui></field>
+</subform></subform>"#;
+    let soms = widget_soms(&positioned_form(body));
+    let short: Vec<String> = soms.iter().map(|s| s.trim_start_matches("rows[0].").to_string()).collect();
+    assert_eq!(short, ["row[0].a[0]", "row[0].b[0]", "row[1].a[0]", "row[1].b[0]", "row[2].a[0]", "row[2].b[0]"]);
+}
+
+/// `<traversal>` keeps the first `first` and `next` links and ignores the arrow-key ones.
+#[test]
+fn traversal_links_are_parsed() {
+    let (tpl, _) = parse(&positioned_form(
+        r##"<field name="f" x="0in" y="0in" w="1in" h="0.3in"><ui><textEdit/></ui><traversal><traverse operation="down" ref="d[0]"/><traverse ref=" n[0] "/><traverse operation="next" ref="later[0]"/><traverse operation="first" ref="#draw[2]"/><traverse operation="next"/></traversal></field>"##,
+    ))
+    .unwrap();
+    let Some(Node::Subform(page)) = tpl.root.children.first() else { panic!("no page") };
+    let Some(Node::Field(f)) = page.children.first() else { panic!("no field") };
+    assert_eq!(f.common.traversal, Traversal { first: Some("#draw[2]".into()), next: Some("n[0]".into()) });
+}
+
 /// A word longer than its line is broken by character in work linear in its length.
 #[test]
 fn a_long_word_breaks_in_linear_work() {
@@ -5206,6 +5349,22 @@ fn faces_measure_text_at_their_standard_14_widths() {
     // A condensed face is narrower by its scale.
     let condensed = text::Face { h_scale: 0.8, ..face(text::Family::Times, true, false) };
     assert!((condensed.width(sample) - 0.8 * Std14::TimesBold.text_width(sample, 10.0)).abs() < 1e-9);
+}
+
+/// Every instance of a repeating subform the layout makes is there to link to, even one that
+/// holds no field: `a` links to the third instance of a row of labels, whose label links to `z`.
+#[test]
+fn links_reach_every_instance_of_a_repeating_subform() {
+    let field = |n: &str, y: &str, link: &str| {
+        let t = if link.is_empty() { String::new() } else { format!(r#"<traversal><traverse ref="{link}"/></traversal>"#) };
+        format!(r#"<field name="{n}" x="0in" y="{y}" w="1.5in" h="0.3in"><ui><textEdit/></ui>{t}</field>"#)
+    };
+    let rows = r#"<subform name="rows" x="0in" y="2in" w="8in" h="2in" layout="tb">
+<subform name="row" layout="position" w="8in" h="0.4in"><occur min="1" max="5" initial="3"/>
+<draw x="0in" y="0in" w="2in" h="0.3in"><value><text>Row</text></value><traversal><traverse ref="z[0]"/></traversal></draw>
+</subform></subform>"#;
+    let body = [field("a", "0in", "rows[0].row[2]"), field("b", "1in", ""), rows.to_string(), field("z", "5in", "")].concat();
+    assert_eq!(widget_soms(&positioned_form(&body)), ["a[0]", "z[0]", "b[0]"]);
 }
 
 /// #3944: clearing XFA password values removes values typed into `<passwordEdit/>` fields from the
@@ -6953,6 +7112,99 @@ fn a_container_is_as_wide_as_a_turned_draw_stands() {
         let got = row(&format!(r#"anchorType="bottomRight" rotate="{rotate}""#)) - (upright - 50.4);
         assert!((got - right).abs() < 0.01, "{rotate}: the neighbour stands {got} right of the anchor, not {right}");
     }
+}
+
+/// The static fixture with its text field (`form1[0].page1[0].name[0]`) flagged Password and
+/// `levels` unnamed fields between `form1[0]` and `page1[0]`, which add no SOM segment.
+fn static_password_doc(levels: usize, data: &str) -> Document {
+    let mut doc = Document::open(Arc::new(static_shell(data))).unwrap();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(8, 0), |d| d.set(b"Ff".to_vec(), Object::Int(1 << 13))).unwrap();
+    let mut next = pdfcraft_cos::ObjRef::new(7, 0);
+    for _ in 0..levels {
+        let mut d = Dict::new();
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(next)]));
+        next = doc.add(Object::Dict(d));
+    }
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(next)]))).unwrap();
+    doc
+}
+
+/// #3944: a Password-flagged AcroForm field of a static XFA form nested deeper than 32 levels (as
+/// deep as the form's own field walk reaches) has its typed value cleared from the datasets.
+#[test]
+fn a_deeply_nested_acroform_password_field_is_cleared_from_the_datasets() {
+    let data = "<form1><page1><name>hunter2</name></page1></form1>";
+    let mut doc = static_password_doc(40, data);
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+    assert!(!String::from_utf8_lossy(&xfa_bytes(&doc)).contains("hunter2"));
+}
+
+/// A field tree deeper than the walk reaches can't be shown to hold no password field: clearing
+/// refuses (so the save does) rather than leave a typed password in the datasets.
+#[test]
+fn a_field_tree_too_deep_to_check_for_passwords_refuses_to_clear() {
+    let mut doc = static_password_doc(80, "<form1><page1><name>hunter2</name></page1></form1>");
+    assert!(has_password_values(&doc));
+    assert!(clear_password_values(&mut doc).is_err());
+    // A shallow form without a typed value has nothing to clear.
+    let mut doc = static_password_doc(0, "<form1><page1><name></name></page1></form1>");
+    assert!(!has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 0);
+}
+
+/// A datasets packet of an XFA array may use the `xfa` prefix its preamble declares: the typed
+/// password in it is still found and cleared, as the datasets writer reads that packet too.
+#[test]
+fn a_password_in_a_datasets_packet_using_the_preamble_prefix_is_cleared() {
+    let mut doc = static_password_doc(0, "");
+    let pre = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">"#;
+    let tpl = r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form1"/></template>"#;
+    let ds = "<xfa:datasets><xfa:data><form1><page1><name>hunter2</name></page1></form1></xfa:data></xfa:datasets>";
+    let parts: Vec<Object> = [("preamble", pre), ("template", tpl), ("datasets", ds), ("postamble", "</xdp:xdp>")]
+        .into_iter()
+        .flat_map(|(name, text)| {
+            let r = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), text.as_bytes())));
+            [Object::String(pdfcraft_cos::PdfString::literal(name.as_bytes().to_vec())), Object::Ref(r)]
+        })
+        .collect();
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| {
+        let mut acro = c.get(b"AcroForm").and_then(Object::as_dict).cloned().unwrap();
+        acro.set(b"XFA".to_vec(), Object::Array(parts));
+        c.set(b"AcroForm".to_vec(), Object::Dict(acro));
+    })
+    .unwrap();
+    assert!(crate::data::parse_datasets(ds).is_none(), "the packet doesn't parse alone");
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+}
+
+/// Every sibling a SOM index skips owns a copy of the element name: the in-memory builder refuses
+/// a path whose copies would pass the name-byte bound the writer holds itself to, and creates
+/// nothing for it.
+#[test]
+fn the_in_memory_data_builder_bounds_copied_name_bytes() {
+    let mut root = DataNode::default();
+    // 1 KiB x 9,999 skipped siblings is about 10 MB, over the 4 MiB bound.
+    let long = "n".repeat(1 << 10);
+    root.apply(&DataOp::Value { path: vec![(long.clone(), 9_999)], text: "x".into() });
+    assert!(root.children.is_empty());
+    // Within the bound, the same shape still builds (and keeps indexes).
+    root.apply(&DataOp::Value { path: vec![(long, 100)], text: "x".into() });
+    assert_eq!(root.children.len(), 101);
+}
+
+/// Each queued instance owns a copy of its parent path: a long ancestor stops the queue at the
+/// byte allowance, reported as capped, instead of being multiplied by the instance count.
+#[test]
+fn queued_instances_are_bounded_by_the_path_bytes_they_copy() {
+    let mut doc = Document::new_empty();
+    let parent: DataPath = vec![("a".repeat(16 << 20), 0), ("b".repeat(16 << 20), 0)];
+    let written = crate::data::write_data_ops(&mut doc, &[DataOp::Instances { parent, name: "row".into(), count: 100 }], None).unwrap();
+    assert!(written.warnings.iter().any(|w| w.contains("not written past")), "{:?}", written.warnings);
 }
 
 /// A page break splits an empty multi-line field that grows with its text (XFA 3.3 pp. 291–292:

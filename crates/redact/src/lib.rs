@@ -13,7 +13,9 @@
 //! under a region the whole operation fails (callers keep the previous document: fail-closed).
 //! Finally, document metadata (`/Info` entries, XMP) that repeats the removed text is removed.
 //! Places it leaves as they are (bookmark titles, attachments, remaining comments, other XMP)
-//! are only counted when they still hold that text ([`Report::still_holding`]).
+//! are only counted when they still hold that text ([`Report::still_holding`]). Last, a shared
+//! JBIG2 symbol dictionary (`/JBIG2Globals`) that anything gone by then used leaves the file too:
+//! what still names it is stored again without it, or the redaction is refused.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -23,6 +25,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 pub mod codes;
 mod elsewhere;
+mod globals;
 mod identification;
 mod image;
 mod interp;
@@ -55,6 +58,12 @@ pub enum RedactError {
     NothingToApply,
     #[error("page {0} has content that can't be read, so it can't be redacted safely")]
     Unreadable(usize),
+    /// The page tree and the renderer count a different number of pages (a page repeated in
+    /// `/Kids`, say), so a mark's page can't be matched to the page the renderer drew.
+    #[error(
+        "the document's page tree and its rendered pages disagree on how many pages there are, so the redaction could not be verified; nothing was changed"
+    )]
+    AmbiguousPages,
     /// Redact annotations with no readable area (neither usable `/QuadPoints` nor a usable `/Rect`).
     /// Skipping them would leave the text under them in the file while the others report success.
     #[error(
@@ -96,18 +105,37 @@ pub enum RedactError {
     /// take what no mark covers with it, unreported.
     #[error("the images under these marks are more than one redaction can decode, so nothing was changed; redact fewer pages at a time")]
     ImagesPastAllowance,
-    /// A JBIG2 image shares its `/JBIG2Globals` with a redacted one and can't be stored again
-    /// without them, so the shapes they hold, those of marks under the area included, would stay.
-    #[error(
-        "{0} JBIG2 image(s) share their symbol data with a redacted image and can't be decoded to be stored without it, so that data, which can show what is under the marks, would stay in the file; nothing was redacted"
-    )]
+    /// `/JBIG2Globals` used by something removed would stay: something that names them can't be
+    /// stored again without them, or something else refers to them. Either way the shapes they
+    /// hold, those of marks under the area included, would stay. Counts what can't be stored without
+    /// them: 0 when only something else keeps them.
+    #[error("{}", shared_jbig2_text(*.0))]
     SharedJbig2Globals(usize),
+    /// Finding what shares JBIG2 symbol data with what is being removed would read more of the file
+    /// than one run allows (`globals::RUN_BUDGET`): its images and parameters refer to the same
+    /// objects in more ways than are checked, or hold more than is decoded. Removing hidden
+    /// information says so too when the dictionaries it reads to know copies, or the images it
+    /// stores again, would decode more than its image allowance, which no choice of pages makes
+    /// smaller.
+    #[error(
+        "finding and storing again what shares JBIG2 symbol data with something being removed would read more of this file than one run allows, so it can't be shown that the data leaves with it; this was refused"
+    )]
+    SharedJbig2Budget,
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),
     #[error(transparent)]
     Form(#[from] pdfcraft_forms::FormError),
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
+}
+
+/// [`RedactError::SharedJbig2Globals`]'s text, which says what keeps the data.
+fn shared_jbig2_text(stuck: usize) -> String {
+    let why = match stuck {
+        0 => "something else in the file refers to JBIG2 symbol data shared with something being removed".to_string(),
+        n => format!("{n} item(s) share JBIG2 symbol data with something being removed and can't be stored without it"),
+    };
+    format!("{why}, so that data, which can show what was removed, would stay in the file; this was refused")
 }
 
 /// A redaction mark on a page.
@@ -167,7 +195,7 @@ pub struct Report {
     pub images_removed: usize,
     pub images_cleared: usize,
     /// JBIG2 images, anywhere in the document, stored again (as a cleared copy is) without the
-    /// `/JBIG2Globals` they shared with a redacted image, so those globals leave the file.
+    /// `/JBIG2Globals` they shared with something this removed, so those globals leave the file.
     pub images_restored: usize,
     pub paths_removed: usize,
     pub paths_clipped: usize,
@@ -225,6 +253,19 @@ pub(crate) fn annots_of(doc: &Document, page: &Dict) -> Vec<Object> {
     page.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default()
 }
 
+/// An annotation's `/Subtype`, resolved: it may be an indirect reference (ISO 32000-2 §7.3.10),
+/// and the audit reads it that way, so a mark it reports must not be one [`apply`] passes over.
+pub(crate) fn subtype(doc: &Document, d: &Dict) -> Option<Vec<u8>> {
+    d.get(b"Subtype").and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec))
+}
+
+/// The pop-up `d` names (`/Popup`), when it is one: it goes with `d`. Anything else it might name
+/// (a mark on another page, say) is left alone.
+fn named_popup(doc: &Document, d: &Dict) -> Option<ObjRef> {
+    let r = d.reference(b"Popup")?;
+    doc.get(r).as_dict().is_some_and(|p| subtype(doc, p).as_deref() == Some(b"Popup")).then_some(r)
+}
+
 /// Every annotation the pages list. Compared before and after a removal, what is no longer listed
 /// leaves the structure tree too ([`tags::drop_object_refs`]).
 pub(crate) fn listed_annotations(doc: &Document) -> HashSet<ObjRef> {
@@ -245,14 +286,14 @@ pub(crate) fn marks_checked(doc: &Document) -> (Vec<Mark>, Vec<usize>) {
             let Some(r) = a.as_ref() else {
                 // A mark written in place has no object to find, apply or remove: refuse it
                 // rather than apply the others as if it were not there.
-                if doc.resolve(&a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Redact")) {
+                if doc.resolve(&a).as_dict().is_some_and(|d| subtype(doc, d).as_deref() == Some(b"Redact")) {
                     unreadable.push(pi);
                 }
                 continue;
             };
             let obj = doc.get(r);
             let Some(d) = obj.as_dict() else { continue };
-            if d.name(b"Subtype") != Some(b"Redact") {
+            if subtype(doc, d).as_deref() != Some(b"Redact") {
                 continue;
             }
             let mut rects: Vec<[f64; 4]> = quad_points(doc, d)
@@ -484,6 +525,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
             pdfcraft_fonts::undrawable_message(&format!("the overlay text of a redaction mark on page {}", m.page + 1), c)
         )));
     }
+    let kept_before = globals::kept(doc)?;
     let mut report = Report { marks: chosen.len(), ..Report::default() };
     // `marks` visits pages in order. Keep slices of that order for appearance generation,
     // content rewriting and verification instead of scanning all marks for every page.
@@ -557,18 +599,41 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
             let annots = annots_of(doc, &p.dict);
             let mut kept = Vec::with_capacity(annots.len());
             for a in &annots {
-                let Some(r) = a.as_ref() else {
-                    kept.push(a.clone());
-                    continue;
-                };
-                let obj = doc.get(r);
+                // An entry written in place is read as one listed by reference: its `/IRT` or
+                // `/Parent` keeps a removed comment reachable all the same, and it has its own text.
+                let obj = doc.resolve(a);
                 let Some(d) = obj.as_dict() else {
                     kept.push(a.clone());
                     continue;
                 };
-                let is_reply =
-                    d.get(b"IRT").and_then(Object::as_ref).is_some_and(|x| removed_everywhere.contains(&x)) && d.name(b"Subtype") != Some(b"Widget");
-                let is_popup = d.get(b"Parent").and_then(Object::as_ref).is_some_and(|x| removed_everywhere.contains(&x));
+                let is_reply = d.reference(b"IRT").is_some_and(|x| removed_everywhere.contains(&x)) && subtype(doc, d).as_deref() != Some(b"Widget");
+                let is_popup = d.reference(b"Parent").is_some_and(|x| removed_everywhere.contains(&x));
+                let Some(r) = a.as_ref() else {
+                    if is_reply || is_popup {
+                        grew = true;
+                        if is_reply {
+                            report.annotations += 1;
+                        }
+                        // Its appearance can be shared with an annotation that stays elsewhere.
+                        if !appearance_scan_limit {
+                            match appearance_refs(doc, d) {
+                                Some(references) => removed_appearances.extend(references),
+                                None => appearance_scan_limit = true,
+                            }
+                            if removed_appearances.len() > 16_384 {
+                                appearance_scan_limit = true;
+                                removed_appearances.clear();
+                            }
+                        }
+                        // It has no reference to remove elsewhere; the pop-up it names has.
+                        if let Some(p) = named_popup(doc, d) {
+                            removed_everywhere.insert(p);
+                        }
+                    } else {
+                        kept.push(a.clone());
+                    }
+                    continue;
+                };
                 if removed_everywhere.contains(&r) || is_reply || is_popup {
                     // A reply or pop-up removed here can share its appearance with an annotation
                     // that stays on an unselected page, like one removed under a mark: the
@@ -615,6 +680,30 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
             report.fields += 1;
         }
     }
+    // A widget written in place on another page names its deleted field through `/Parent`, which
+    // would keep the field and its value in the file: it goes with the field.
+    if !doomed_fields.is_empty() {
+        for p in pdfcraft_model::pages(doc) {
+            let annots = annots_of(doc, &p.dict);
+            let kept: Vec<Object> = annots
+                .iter()
+                .filter(|a| {
+                    a.as_ref().is_some() || !matches!(&**a, Object::Dict(d) if d.reference(b"Parent").is_some_and(|f| doomed_fields.contains(&f)))
+                })
+                .cloned()
+                .collect();
+            if kept.len() != annots.len() {
+                report.annotations += annots.len() - kept.len();
+                doc.update_dict(p.obj, |d| {
+                    if kept.is_empty() {
+                        d.remove(b"Annots");
+                    } else {
+                        d.set(b"Annots".to_vec(), Object::Array(kept));
+                    }
+                })?;
+            }
+        }
+    }
 
     // 3a. A tagged PDF's structure tree still points at the removed comments and widgets
     // (`/OBJR`, #2874): drop those references, or a full rewrite keeps them reachable, the
@@ -645,7 +734,6 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     interp::unlink_doomed(doc, &doomed_xobjects, &retired_properties)?;
     // Likewise a pruned pattern: a /Pages node above the page can still name its cell.
     interp::unlink_pruned_patterns(doc, &pruned_patterns)?;
-    report.images_restored = restore_shared_jbig2(doc, &doomed_xobjects, &mut images)?;
 
     // 5. Verify: nothing readable may remain under a region.
     let mut residue = 0;
@@ -694,82 +782,16 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     let scrubbed = metadata::scrub(doc, &removed_text, !removed_cut)?;
     report.metadata = scrubbed.removed;
     report.identification = scrubbed.identification;
+    // Last of what leaves: an image that left with any of the above, the metadata removed just
+    // now included, is a user of a dictionary too. Storing images again changes no page's content
+    // or pattern cells, so the checks above hold for what follows.
+    report.images_restored = globals::unshare(doc, &kept_before, &mut images)?;
     // What it doesn't scrub is counted, never changed.
     report.still_holding = elsewhere::find(doc, &removed_text, !removed_cut);
     // The previous revision still holds the removed content: the next save must rewrite, and the
     // rewritten file is a different file from its source, so it gets a new identifier.
     doc.require_full_save_with_new_id();
     Ok(report)
-}
-
-/// Most XObjects followed down from the removed and replaced ones to find their JBIG2 images.
-const MAX_JBIG2_WALK: usize = 100_000;
-
-/// The `/JBIG2Globals` of a redacted JBIG2 image hold the symbol dictionary of every image that
-/// shares them (`jbig2enc -s` and most scanners give one to all the pages of a scan): the bitmaps
-/// of marks drawn only under the area too. The image itself is replaced or removed, but the globals
-/// would stay for as long as another image uses them. So every image that uses the globals of a
-/// removed or replaced image (`doomed`), or of one drawn in a removed or replaced form, is decoded
-/// and stored again in place without them, as a cleared copy is, and a full save then leaves them
-/// out. An image that can't be stored again refuses the redaction (nothing changes, as `apply`
-/// works on a copy), but for a removed or replaced one, which is either unlinked or still drawn
-/// whole on another page. They are decoded within what is left of the run's allowance (`images`);
-/// past it the redaction is refused as one clearing too many images is. Returns how many images
-/// that weren't removed or replaced were stored again.
-fn restore_shared_jbig2(doc: &mut Document, doomed: &[ObjRef], images: &mut pdfcraft_cos::ImageBudget) -> Result<usize, RedactError> {
-    let mut globals = HashSet::new();
-    let mut seen = HashSet::new();
-    let mut stack: Vec<ObjRef> = doomed.to_vec();
-    while let Some(r) = stack.pop() {
-        if !seen.insert(r) || seen.len() > MAX_JBIG2_WALK {
-            continue;
-        }
-        let object = doc.get(r);
-        let Object::Stream(s) = &*object else { continue };
-        if let Some(g) = doc.jbig2_globals_ref(s) {
-            globals.insert(g);
-        }
-        // A form's images, and its forms' (an image's /SMask is a stream of its own, found below).
-        let resources = s.dict.get(b"Resources").map(|r| doc.resolve(r));
-        let xobjects = resources.as_deref().and_then(Object::as_dict).and_then(|d| d.get(b"XObject")).map(|x| doc.resolve(x));
-        if let Some(x) = xobjects.as_deref().and_then(Object::as_dict) {
-            stack.extend(x.iter().filter_map(|(_, v)| v.as_ref()));
-        }
-        if let Some(m) = s.dict.get(b"SMask").and_then(Object::as_ref) {
-            stack.push(m);
-        }
-    }
-    if globals.is_empty() {
-        return Ok(0);
-    }
-    let sharing: Vec<ObjRef> = doc
-        .scan_objects()
-        .filter(|(_, o)| matches!(&**o, Object::Stream(s) if doc.jbig2_globals_ref(s).is_some_and(|g| globals.contains(&g))))
-        .map(|(r, _)| r)
-        .collect();
-    let doomed: HashSet<ObjRef> = doomed.iter().copied().collect();
-    let (mut restored, mut stuck, mut past_allowance) = (0, 0, false);
-    for r in sharing {
-        let object = doc.get(r);
-        let Object::Stream(s) = &*object else { continue };
-        let refused = images.refused();
-        match image::without_globals(doc, s, images) {
-            Some(new) => {
-                doc.set(r, Object::Stream(new));
-                restored += usize::from(!doomed.contains(&r));
-            }
-            None if doomed.contains(&r) => {}
-            None if images.refused() > refused => past_allowance = true,
-            None => stuck += 1,
-        }
-    }
-    if past_allowance {
-        return Err(RedactError::ImagesPastAllowance);
-    }
-    if stuck > 0 {
-        return Err(RedactError::SharedJbig2Globals(stuck));
-    }
-    Ok(restored)
 }
 
 /// What applying the marks collects across pages.
@@ -812,14 +834,15 @@ fn redact_page_content(
     let mut budget = pdfcraft_cos::DecodeBudget::page();
     let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
     let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
-    let out = {
+    // What the walk leaves of the page's allowance, the cleanups below spend.
+    let (out, mut budget) = {
         let mut scope = Scope::new(rects, Mode::Apply, report, budget, images).with_removed_room(*removed_room);
         let out = process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY);
         scope.flush();
         removed_text.append(&mut scope.removed_text);
         *removed_cut |= scope.removed_cut;
         *removed_room = scope.removed_room;
-        out
+        (out, scope.into_budget())
     };
     // Fail closed: the interpreter lays vertical-writing text out horizontally, so it cannot
     // tell whether those glyphs lie under a mark. Rather than report success and possibly
@@ -834,8 +857,10 @@ fn redact_page_content(
     }
     // An inline image the renderer reads no image for (no `EI` it accepts, or parameters it
     // can't read): where the page's operators resume after it is a guess, so neither removal
-    // nor the verify pass can be trusted on this page.
-    if out.ambiguous {
+    // nor the verify pass can be trusted on this page. Likewise bytes the parser can't read in
+    // what the walk read, the page's content or a form under a mark: text they hide is neither
+    // found nor removed, and other readers may draw it.
+    if out.ambiguous || out.unparsed {
         return Err(RedactError::Unreadable(pi + 1));
     }
     doomed_xobjects.extend_from_slice(&out.doomed);
@@ -861,6 +886,11 @@ fn redact_page_content(
         let mut res = resources.clone();
         if !out.xobjects.is_empty() || !out.replaced.is_empty() {
             let mut xo = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
+            // The rewritten XObjects first, as for a rewritten form: one left without resources of
+            // its own draws through these, and `prune` follows it only under a name it can find.
+            for (n, r) in &out.xobjects {
+                xo.set(n.clone(), Object::Ref(*r));
+            }
             // A full save keeps whatever is still referenced: unlink the originals this page no
             // longer draws so the removed image or form bytes cannot survive in the saved file.
             let page_content: Vec<Vec<u8>> = new_list
@@ -875,10 +905,7 @@ fn redact_page_content(
                     _ => Vec::new(),
                 })
                 .collect();
-            interp::prune(&mut xo, &out.replaced, &page_content);
-            for (n, r) in &out.xobjects {
-                xo.set(n.clone(), Object::Ref(*r));
-            }
+            interp::prune(doc, &mut budget, &mut xo, &out.replaced, &page_content)?;
             res.set(b"XObject".to_vec(), Object::Dict(xo));
         }
         let (_, cleaned_data) = page_streams(
@@ -895,8 +922,8 @@ fn redact_page_content(
         // A Type 3 glyph without resources paints with patterns nobody tracked: keep them all.
         let painted = if out.keeps_all_patterns { &out.patterns_seen } else { &out.patterns_painted };
         report.patterns_removed += interp::prune_patterns(doc, &mut res, &out.patterns_seen, painted, pruned_patterns);
-        retired_properties.extend(interp::prune_properties(doc, &mut res, &cleaned_data)?);
-        type3::prune_type3_from_resources(doc, &mut res, &cleaned_data, Some(&page.dict))?;
+        retired_properties.extend(interp::prune_properties(doc, &mut budget, &mut res, &cleaned_data)?);
+        type3::prune_type3_from_resources(doc, &mut budget, &mut res, &cleaned_data, Some(&page.dict))?;
         doc.update_dict(page.obj, |d| {
             d.set(b"Contents".to_vec(), Object::Array(new_list));
             d.set(b"Resources".to_vec(), Object::Dict(res));
@@ -924,30 +951,66 @@ fn remove_page_annotations(
     page_marks: &[&Mark],
 ) -> Result<(), RedactError> {
     let Applying { report, doomed_fields, widget_owner, removed_everywhere, removed_appearances, appearance_scan_limit, .. } = applying;
-    // 2. Annotations: the marks, and whatever lies under them (with their pop-ups).
+    // 2. Annotations: the marks, and whatever lies under them (with their pop-ups). An entry
+    // written in place (a dictionary in `/Annots`, not a reference) is judged like any other: its
+    // `/Contents` and `/IRT` stay in the file for as long as the page lists it.
     let annots = annots_of(doc, &doc.get(page.obj).as_dict().cloned().unwrap_or_default());
+    /// What decides an entry's fate, read once.
+    struct Entry {
+        r: Option<ObjRef>,
+        widget: bool,
+        irt: Option<ObjRef>,
+        parent: Option<ObjRef>,
+        popup: Option<ObjRef>,
+    }
+    let entries: Vec<Option<Entry>> = annots
+        .iter()
+        .map(|a| {
+            let obj = doc.resolve(a);
+            let d = obj.as_dict()?;
+            Some(Entry {
+                r: a.as_ref(),
+                widget: subtype(doc, d).as_deref() == Some(b"Widget"),
+                irt: d.reference(b"IRT"),
+                parent: d.reference(b"Parent"),
+                popup: named_popup(doc, d),
+            })
+        })
+        .collect();
     let mut removed: Vec<ObjRef> = Vec::new();
-    for a in &annots {
-        let Some(r) = a.as_ref() else { continue };
-        let obj = doc.get(r);
+    // Entries written in place that go, by position in `/Annots`.
+    let mut inline_gone = vec![false; annots.len()];
+    for (i, a) in annots.iter().enumerate() {
+        let obj = doc.resolve(a);
         let Some(d) = obj.as_dict() else { continue };
-        let subtype = d.name(b"Subtype").unwrap_or(b"");
-        if subtype == b"Redact" {
-            if page_marks.iter().any(|m| m.obj == r) {
+        let r = a.as_ref();
+        let kind = subtype(doc, d).unwrap_or_default();
+        if kind == b"Redact" {
+            // A mark written in place was refused before anything changed.
+            if let Some(r) = r
+                && page_marks.iter().any(|m| m.obj == r)
+            {
                 removed.push(r);
             }
             continue;
         }
-        if subtype == b"Popup" {
+        if kind == b"Popup" {
             continue;
         }
         if rect_of(doc, d.get(b"Rect")).is_some_and(|b| rects.iter().any(|x| pdfcraft_content::overlaps(*x, b, 0.0))) {
-            removed.push(r);
-            if subtype == b"Widget" {
-                if let Some((_, field)) = widget_owner.iter().find(|(w, _)| *w == r)
-                    && !doomed_fields.contains(field)
+            match r {
+                Some(r) => removed.push(r),
+                None => inline_gone[i] = true,
+            }
+            if kind == b"Widget" {
+                // A widget written in place has no reference of its own; its `/Parent` is the field,
+                // even one no referenced widget belongs to (it then has no entry in `widget_owner`).
+                // Step 3 deletes only what the form lists as a field, so any `/Parent` is safe here.
+                let owner = r.and_then(|r| widget_owner.iter().find(|(w, _)| *w == r).map(|(_, f)| *f)).or_else(|| d.reference(b"Parent"));
+                if let Some(field) = owner
+                    && !doomed_fields.contains(&field)
                 {
-                    doomed_fields.push(*field);
+                    doomed_fields.push(field);
                 }
             } else {
                 report.annotations += 1;
@@ -958,29 +1021,25 @@ fn remove_page_annotations(
     // those: a reply placed elsewhere would keep its parent — the comment and the QuadPoints
     // of the redacted words — in the file through its `/IRT` (#2659). Each pass removes at
     // least one more annotation of this page or stops, so it ends.
-    let replies: Vec<(ObjRef, ObjRef)> = annots
-        .iter()
-        .filter_map(Object::as_ref)
-        .filter_map(|r| {
-            let obj = doc.get(r);
-            let d = obj.as_dict()?;
-            (d.name(b"Subtype") != Some(b"Widget")).then_some(())?;
-            Some((r, d.get(b"IRT").and_then(Object::as_ref)?))
-        })
-        .collect();
     loop {
-        let before = removed.len();
-        for (r, parent) in &replies {
-            if !removed.contains(r) && removed.contains(parent) {
-                removed.push(*r);
-                report.annotations += 1;
+        let mut grew = false;
+        for (i, e) in entries.iter().enumerate() {
+            let Some(e) = e else { continue };
+            let gone = e.r.map_or(inline_gone[i], |r| removed.contains(&r));
+            if gone || e.widget || !e.irt.is_some_and(|p| removed.contains(&p)) {
+                continue;
             }
+            match e.r {
+                Some(r) => removed.push(r),
+                None => inline_gone[i] = true,
+            }
+            report.annotations += 1;
+            grew = true;
         }
-        if removed.len() == before {
+        if !grew {
             break;
         }
     }
-    removed_everywhere.extend(removed.iter().copied());
     // A removed annotation's appearance streams can be shared with a kept one on another page,
     // which would keep a pruned pattern's cell reachable: remember them for the pattern guard.
     for reference in &removed {
@@ -1000,24 +1059,53 @@ fn remove_page_annotations(
             }
         }
     }
-    // Pop-ups dropped with their parent below count too: a reply on another page may answer one.
-    for a in &annots {
-        let Some(r) = a.as_ref() else { continue };
-        if doc.get(r).as_dict().and_then(|d| d.get(b"Parent")).and_then(Object::as_ref).is_some_and(|p| removed.contains(&p)) {
-            removed_everywhere.insert(r);
+    // An entry written in place that goes keeps no reference, but its appearances count as well.
+    for (i, a) in annots.iter().enumerate() {
+        if *appearance_scan_limit {
+            break;
+        }
+        if let (true, Some(annotation)) = (inline_gone[i], doc.resolve(a).as_dict()) {
+            match appearance_refs(doc, annotation) {
+                Some(references) => removed_appearances.extend(references),
+                None => *appearance_scan_limit = true,
+            }
+            if removed_appearances.len() > 16_384 {
+                *appearance_scan_limit = true;
+                removed_appearances.clear();
+            }
         }
     }
+    // Pop-ups go with their annotation: those that name it (`/Parent`), and those it names
+    // (`/Popup`), the only link an annotation written in place can have to its pop-up.
+    let mut going: HashSet<ObjRef> = removed.iter().copied().collect();
+    for (i, e) in entries.iter().enumerate() {
+        let Some(e) = e else { continue };
+        let gone = e.r.map_or(inline_gone[i], |r| removed.contains(&r));
+        if gone {
+            going.extend(e.popup);
+        }
+    }
+    for (i, e) in entries.iter().enumerate() {
+        let Some(e) = e else { continue };
+        if e.parent.is_some_and(|p| removed.contains(&p)) {
+            match e.r {
+                Some(r) => {
+                    going.insert(r);
+                }
+                None => inline_gone[i] = true,
+            }
+        }
+    }
+    // Pop-ups dropped with their parent count too: a reply on another page may answer one.
+    removed_everywhere.extend(going.iter().copied());
     let kept: Vec<Object> = annots
         .into_iter()
-        .filter(|a| {
-            let Some(r) = a.as_ref() else { return true };
-            if removed.contains(&r) {
-                return false;
-            }
-            // Pop-ups of removed annotations go too.
-            let obj = doc.get(r);
-            !obj.as_dict().and_then(|d| d.get(b"Parent")).and_then(Object::as_ref).is_some_and(|p| removed.contains(&p))
+        .enumerate()
+        .filter(|(i, a)| match a.as_ref() {
+            Some(r) => !going.contains(&r),
+            None => !inline_gone[*i],
         })
+        .map(|(_, a)| a)
         .collect();
     doc.update_dict(page.obj, |d| {
         if kept.is_empty() {
@@ -1053,6 +1141,19 @@ pub fn clear_marks(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize,
         }
     }
     Ok(targets.len())
+}
+
+/// `o` with a chain of references followed, as a viewer follows it, to at most 16 links (so a
+/// reference cycle ends): hidden-layer state must not escape classification through one.
+pub(crate) fn resolve_chain(doc: &pdfcraft_cos::Document, o: &pdfcraft_cos::Object) -> std::sync::Arc<pdfcraft_cos::Object> {
+    let mut o = doc.resolve(o);
+    for _ in 0..16 {
+        if !matches!(*o, pdfcraft_cos::Object::Ref(_)) {
+            break;
+        }
+        o = doc.resolve(&o);
+    }
+    o
 }
 
 /// The name to save a document under after [`apply`]: `_Redacted` before the extension, as

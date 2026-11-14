@@ -15,7 +15,8 @@
 //!   that use only palette entries 0 and 1, packed to one bit) above a threshold are averaged down to a
 //!   target resolution when grey, image masks or indexed, halftones and dithers aside (see the README), and
 //!   are stored as CCITT Group 4 or lossless JBIG2, or 1-bit
-//!   Flate once resampled or packed, when that is smaller.
+//!   Flate once resampled or packed, when that is smaller. So are pictures' stencil and one-bit soft
+//!   masks, at their size.
 //! - **Discard objects:** page thumbnails, alternate images, document tags (structure tree),
 //!   print settings, form submission, import and reset actions.
 //! - **Clean up:** drop images and forms that pages list but never draw (such as a deleted
@@ -29,6 +30,9 @@
 //! runs alongside. Links that open another document, and bookmark actions that do, are discarded
 //! here (Discard User Data ▸ Discard external cross-references, see
 //! [`Settings::discard_external_refs`]).
+//!
+//! Apart from optimizing, [`tile_large_images`] redraws large pictures as tiles in the copy of a
+//! document printed on Windows, whose PDF renderer shrinks any image over 2²² pixels.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -40,6 +44,7 @@ mod images;
 mod links;
 mod pool;
 mod samples;
+mod tiles;
 mod unused;
 
 pub use audit::{SpaceCategory, SpaceUse, audit_space};
@@ -50,6 +55,7 @@ use pdfcraft_filters::{Filter, Params};
 pub use images::{ImageTarget, effective_resolutions, recolour_image};
 pub use pool::give_way_to_other_programs;
 pub use samples::{NotDecoded, Samples, decode_samples, encode_samples};
+pub use tiles::{DOWNSAMPLED_ABOVE, TileReport, tile_large_images};
 
 #[derive(Debug, thiserror::Error)]
 pub enum OptimizeError {
@@ -154,7 +160,8 @@ pub enum MonoCompression {
 
 /// How black-and-white images (1-bit, CCITT fax among them; and eight-bit grey and RGB of only black
 /// and white, and indexed images that use only palette entries 0 and 1, packed to one bit), and
-/// image masks, are resampled and stored.
+/// image masks, are resampled and stored. Pictures' stencil and one-bit soft masks are stored the
+/// same way, at their size.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MonoSettings {
     /// Average images whose effective resolution is above `above_ppi` down to `target_ppi`.
@@ -201,7 +208,7 @@ pub struct Settings {
     pub merge_fragments: bool,
     pub color: ImageSettings,
     pub gray: ImageSettings,
-    /// Black-and-white images, and image masks.
+    /// Black-and-white images, image masks, and pictures' one-bit masks.
     pub mono: MonoSettings,
     pub discard_thumbnails: bool,
     pub discard_alternate_images: bool,
@@ -309,6 +316,7 @@ pub struct Report {
     /// Images merged from fragments, and how many fragments went into them.
     pub merged_images: usize,
     pub fragments_merged: usize,
+    /// Images the image step read: those the pages draw, and their pictures' one-bit masks.
     pub images: usize,
     pub images_resampled: usize,
     pub images_recompressed: usize,

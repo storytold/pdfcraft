@@ -283,13 +283,14 @@ fn unsupported_measurements_are_reported_not_fatal() {
     let mut d = fixture("", "", &[]);
     add(&mut d, &new(Kind::Distance, vec![[0.0, 0.0], [3.0, 4.0]]), &Meta::default()).unwrap();
     add(&mut d, &new(Kind::Distance, vec![[10.0, 0.0], [13.0, 4.0]]), &Meta::default()).unwrap();
-    // An imported compound feet-and-inches format (two NumberFormat dictionaries).
+    // An imported format this crate can't show (an unknown /F).
     let (r, _) = annot(&d, 0, 1).unwrap();
     let format = |unit: &str, c: f64| {
         let mut f = Dict::new();
         f.set(b"Type".to_vec(), Object::name("NumberFormat"));
         f.set(b"U".to_vec(), PdfString::text(unit));
         f.set(b"C".to_vec(), Object::Real(c));
+        f.set(b"F".to_vec(), Object::name("X"));
         Object::Dict(f)
     };
     d.update_dict(r, |a| {
@@ -302,7 +303,7 @@ fn unsupported_measurements_are_reported_not_fatal() {
     assert_eq!(listing.measurements.len(), 1);
     assert_eq!(listing.unsupported.len(), 1);
     assert_eq!((listing.unsupported[0].page, listing.unsupported[0].index), (0, 1));
-    assert!(listing.unsupported[0].reason.contains("compound"), "{}", listing.unsupported[0].reason);
+    assert_eq!(listing.unsupported[0].reason, "unknown measurement number format");
     // Invalid geometry on an imported annotation is reported the same way.
     let (r, _) = annot(&d, 0, 0).unwrap();
     d.update_dict(r, |a| a.set(b"L".to_vec(), nums([0.0, 0.0, f64::NAN, 1.0]))).unwrap();
@@ -631,4 +632,80 @@ fn indirect_scale_fields_and_closed_area_edges_are_handled() {
     assert_eq!(item.author, "Architect");
     assert_eq!(item.label, "Floor Plan");
     assert_eq!(item.scale, Scale { y: 3.0, ..Scale::new(2.0, "m", 3).unwrap() });
+}
+
+/// An Acrobat-style drawing scale of 1 in = 1 ft whose distances show in feet and sixteenths of
+/// inches (ISO 32000-2 §12.9.2): a viewport and a saved measurement using it read, are labelled
+/// in feet and inches, and a measurement added inside the viewport keeps the formats.
+#[test]
+fn compound_and_fractional_scales_read_label_and_carry_into_new_measurements() {
+    let feet_inches = "[<< /Type /NumberFormat /U (ft) /C 0.0138888888888889 /D 100 >> << /U (in) /C 12 /F /F /D 16 >>]";
+    let measure = format!(
+        "<< /Type /Measure /Subtype /RL /R (1 in = 1 ft) /X {feet_inches} /D [<< /U (ft) /C 1 >> << /U (in) /C 12 /F /F /D 16 >>] /A [<< /U (sq ft) /C 1 /F /T >>] >>"
+    );
+    let mut d = fixture("", &format!("/VP [<< /Type /Viewport /BBox [0 0 612 792] /Measure {measure} >>]"), &[]);
+    let scale = scale_at(&d, 0, [10.0, 10.0]).unwrap();
+    assert_eq!((scale.unit.as_str(), scale.area_unit.as_str(), scale.precision), ("ft", "sq ft", 0));
+    close(scale.x, 1.0 / 72.0);
+    let formats = scale.formats.as_ref().unwrap();
+    assert_eq!(formats.distance.len(), 2);
+    // 3 ft 6 1/2 in at 1 in = 1 ft is 3 in and 6.5 / 12 in on the page: 216 + 39 points.
+    let distance = reading(Kind::Distance, &[[0.0, 0.0], [0.0, 255.0]], &scale).unwrap();
+    close(distance.value, 255.0 / 72.0);
+    assert_eq!(distance.label, "3 ft 6 1/2 in");
+    // Just short of 2 ft carries into the feet; an area of 2.9 sq ft is cut off to 2.
+    assert_eq!(reading(Kind::Distance, &[[0.0, 0.0], [143.99, 0.0]], &scale).unwrap().label, "2 ft 0 in");
+    let side = (2.9f64).sqrt() * 72.0;
+    assert_eq!(reading(Kind::Area, &[[0.0, 0.0], [side, 0.0], [side, side], [0.0, side]], &scale).unwrap().label, "2 sq ft");
+
+    // Added inside the viewport, as the Measure tool and measure_distance do, the measurement
+    // keeps the compound formats and reads the same after a save.
+    let mut m = new(Kind::Distance, vec![[0.0, 0.0], [0.0, 255.0]]);
+    m.scale = scale.clone();
+    add(&mut d, &m, &Meta { date: None, id: "plan".into() }).unwrap();
+    let (_, dict) = annot(&d, 0, 0).unwrap();
+    assert_eq!(text(&d, &dict, b"Contents"), "3 ft 6 1/2 in");
+    let saved = d.resolve(dict.get(b"Measure").unwrap());
+    let saved_d = d.resolve(saved.as_dict().unwrap().get(b"D").unwrap());
+    let inches = saved_d.as_array().unwrap()[1].as_dict().unwrap().clone();
+    assert_eq!(inches.get(b"F").and_then(Object::as_name), Some(b"F".as_slice()));
+    assert_eq!(inches.get(b"D").and_then(Object::as_int), Some(16));
+    let reopened = Document::open(Arc::new(write_full(&d, &SaveOptions::default()).unwrap())).unwrap();
+    let listing = list(&reopened);
+    assert!(listing.unsupported.is_empty(), "{:?}", listing.unsupported);
+    assert_eq!(listing.measurements[0].reading.label, "3 ft 6 1/2 in");
+    close(listing.measurements[0].scale.x, scale.x);
+    assert_eq!(listing.measurements[0].scale.formats.as_ref().map(|f| (f.x.len(), f.distance.len(), f.area.len())), Some((2, 2, 1)));
+    // A plain decimal scale keeps no formats and labels as before.
+    assert_eq!(Scale::read(&d, &Object::Dict(Scale::new(2.0, "m", 3).unwrap().dictionary().unwrap())).unwrap().formats, None);
+}
+
+/// A compound Y in units of its own (metres and centimetres against feet and inches) is written
+/// back as read, with its CYX, so a viewer showing y coordinates reads the same units.
+#[test]
+fn a_compound_y_keeps_its_units_and_cyx() {
+    let x = "[<< /U (ft) /C 0.0138888888888889 >> << /U (in) /C 12 /F /F /D 16 >>]";
+    let y = "[<< /U (m) /C 0.000352778 >> << /U (cm) /C 100 /D 10 >>]";
+    let measure = format!("<< /Type /Measure /Subtype /RL /X {x} /Y {y} /CYX 3.28084 /D {x} /A [<< /U (sq ft) /C 1 >>] >>");
+    let d = fixture("", &format!("/VP [<< /Type /Viewport /BBox [0 0 612 792] /Measure {measure} >>]"), &[]);
+    let scale = scale_at(&d, 0, [10.0, 10.0]).unwrap();
+    close(scale.y, 0.000352778 * 3.28084);
+    let written = scale.dictionary().unwrap();
+    close(written.get(b"CYX").and_then(Object::as_f64).unwrap(), 3.28084);
+    let ys = written.get(b"Y").and_then(Object::as_array).unwrap();
+    let first = ys[0].as_dict().unwrap();
+    assert_eq!(text(&d, first, b"U"), "m");
+    close(first.get(b"C").and_then(Object::as_f64).unwrap(), 0.000352778);
+    assert_eq!(text(&d, ys[1].as_dict().unwrap(), b"U"), "cm");
+    let again = Scale::read(&d, &Object::Dict(written)).unwrap();
+    close(again.y, scale.y);
+    let formats = again.formats.unwrap();
+    assert_eq!((formats.y.unwrap()[1].factor, formats.cyx), (100.0, 3.28084));
+    // If `Scale.y` is mutated so `self.y / cyx` exceeds the factor bound, `dictionary()` refuses it.
+    let mut overflow_y = scale;
+    if let Some(f) = &mut overflow_y.formats {
+        f.cyx = 1e-12;
+    }
+    overflow_y.y = 2.0;
+    assert!(overflow_y.dictionary().is_err());
 }

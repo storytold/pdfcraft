@@ -614,8 +614,72 @@ fn selected_text_comment_action_opens_note_composer() {
     h.run_steps(3);
     h.get_by_label("Add comment").click();
     h.run_steps(2);
-    assert!(matches!(h.state().views[0].comments.composer.as_ref().map(|c| &c.kind), Some(pdfcraft_ui_egui::comments::ComposerKind::Note)));
+    assert!(matches!(
+        h.state().views[0].comments.composer.as_ref().map(|c| &c.kind),
+        Some(pdfcraft_ui_egui::comments::ComposerKind::TextNote { .. })
+    ));
+    h.get_by_label("Add comment");
+    assert!(h.query_by_label("Sticky note").is_none());
     assert!(h.state().views[0].selected_text().is_none());
+}
+
+#[test]
+fn selection_note_replaced_by_sticky_note_posts_at_the_new_anchor() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.run_steps(3);
+    h.get_by_label("Add comment").click();
+    h.run_steps(2);
+    h.state_mut().set_option("quick", "note").unwrap();
+    click_pt(&mut h, (250.0, 180.0));
+    let anchor = h.state().views[0].comments.composer.as_ref().unwrap().at;
+    field(&h, "Add a comment").type_text("New sticky note");
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].subtype, "Text");
+    assert_eq!(c[0].contents.as_deref(), Some("New sticky note"));
+    assert!(c[0].quads.is_empty());
+    assert!((anchor[0] - 250.0).abs() < 1.0 && (anchor[1] - 180.0).abs() < 1.0);
+    assert!((f64::from(c[0].rect[0]) - anchor[0]).abs() < 1.0 && (f64::from(c[0].rect[3]) - anchor[1]).abs() < 1.0, "{:?}", c[0].rect);
+}
+
+#[test]
+fn selection_note_posts_highlight_and_hovers_author_and_comment() {
+    let _gpu = std::env::var_os("PDFCRAFT_SHOTS").map(|_| crate::gpu());
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    let selected = h.state().views[0].selected_text().unwrap();
+    h.run_steps(3);
+    h.get_by_label("Add comment").click();
+    h.run_steps(2);
+    field(&h, "Add a comment").type_text("Check these words");
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    crate::support::settle(&mut h);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].subtype, "Highlight");
+    assert_eq!(c[0].contents.as_deref(), Some("Check these words"));
+    assert!(!c[0].quads.is_empty());
+    let hover = format!("{}\nCheck these words", c[0].author.as_deref().expect("comment has an author"));
+    h.state_mut().set_option("panel", "none").unwrap();
+    h.state_mut().views[0].comments.selected = None;
+    h.hover_at(pos2(0.0, 0.0));
+    h.run_steps(3);
+    assert!(h.query_by_label(&hover).is_none());
+    let r = c[0].rect;
+    let p = at(&h, (r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    h.hover_at(p);
+    h.run_steps(3);
+    h.get_by_label(&hover);
+    assert!(h.query_by_label_contains(&selected).is_none(), "hover omits the selected text");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/selection-comment-hover.png")).unwrap();
+    }
 }
 
 #[test]
@@ -3100,6 +3164,36 @@ fn hover_markup_at(h: &mut Harness<'static, PdfCraftApp>, x: f32, y: f32) {
 }
 
 #[test]
+fn imported_commented_markup_keeps_author_at_rotated_zoomed_page_edges() {
+    let _gpu = std::env::var_os("PDFCRAFT_SHOTS").map(|_| crate::gpu());
+    for subtype in ["Highlight", "Underline", "StrikeOut", "Squiggly"] {
+        for (page_rotation, view_rotation) in [(0, 0), (90, 0), (0, 90), (90, 90)] {
+            for zoom in ["50", "125"] {
+                let pdf = String::from_utf8(markup_hover_fixture(subtype, page_rotation, "", ""))
+                    .unwrap()
+                    .replace("/Rect [20 105 250 165]", "/Rect [270 180 300 200]")
+                    .replace(
+                        "/QuadPoints [120 165 250 165 120 145 250 145 20 125 100 125 20 105 100 105]",
+                        "/QuadPoints [270 200 300 200 270 180 300 180]",
+                    );
+                let mut h = markup_hover_harness(pdf.into_bytes(), view_rotation);
+                h.state_mut().set_option("zoom", zoom).unwrap();
+                h.run_steps(4);
+                support::settle(&mut h);
+                hover_markup_at(&mut h, 285.0, 190.0);
+                h.get_by_label("Ada\nFirst multiline comment");
+                if subtype == "Highlight"
+                    && matches!((page_rotation, view_rotation, zoom), (0, 0, "50") | (90, 90, "125"))
+                    && let Ok(dir) = std::env::var("PDFCRAFT_SHOTS")
+                {
+                    h.render().unwrap().save(format!("{dir}/edge-comment-{page_rotation}-{view_rotation}-{zoom}.png")).unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn multiline_markup_hover_stays_on_marked_lines() {
     // #3541: /Rect encloses both lines, including text before/after the selection and the gap.
     for subtype in ["Highlight", "Underline", "StrikeOut", "Squiggly"] {
@@ -5320,6 +5414,375 @@ fn escape_with_a_fill_tool_deselects_every_comment_then_drops_the_tool() {
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
+}
+
+/// A square drawn and selected with the Select tool.
+fn selected_square() -> Harness<'static, PdfCraftApp> {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    click_pt(&mut h, (250.0, 20.0));
+    click_pt(&mut h, (90.0, 70.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    h
+}
+
+/// Delete or Backspace with a dialog open is the dialog's: the comment selected behind it stays.
+/// Both deleted it.
+#[test]
+fn delete_under_a_dialog_leaves_the_selected_comment() {
+    use pdfcraft_ui_egui::Dialog;
+    for (dialog, key) in [(Dialog::Shortcuts, egui::Key::Delete), (Dialog::About, egui::Key::Backspace)] {
+        let mut h = selected_square();
+        h.state_mut().dialog = Some(dialog);
+        h.run_steps(3);
+        h.key_press(key);
+        h.run_steps(3);
+        assert_eq!(comments(&h).len(), 1, "{key:?} under a dialog deletes nothing");
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "and the comment stays selected");
+    }
+}
+
+/// Escape with a dialog open closes the dialog and nothing else: the comment stays selected. It
+/// was deselected too.
+#[test]
+fn escape_under_a_dialog_closes_it_and_keeps_the_selected_comment() {
+    let mut h = selected_square();
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::Shortcuts);
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "and nothing else");
+}
+
+/// With a menu of the menu bar open, Delete is the menu's: the comment stays. It was deleted.
+#[test]
+fn delete_with_a_menu_open_leaves_the_selected_comment() {
+    let mut h = selected_square();
+    crate::support::open_menu(&mut h, "View");
+    assert!(egui::Popup::is_any_open(&h.ctx), "the menu is open");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment was still selected for the Delete");
+}
+
+/// Edit ▸ Delete removes the selected comment: the key a menu click stands for is not under the
+/// menu it came from.
+#[test]
+fn edit_delete_removes_the_selected_comment() {
+    let mut h = selected_square();
+    crate::support::open_menu(&mut h, "Edit");
+    crate::support::menu_row(&h, "Delete").click();
+    h.run_steps(4);
+    assert!(comments(&h).is_empty());
+}
+
+/// The Escape that closes a dialog opened from a menu while a comment is being typed is the
+/// dialog's: the typing stays, in the composer or posted. It was thrown away.
+#[test]
+fn escape_closing_a_dialog_over_a_comment_being_typed_keeps_the_typing() {
+    let mut h = harness(|app| app.set_option("quick", "note").unwrap());
+    click_pt(&mut h, (250.0, 180.0));
+    field(&h, "Add a comment").click();
+    h.run_steps(2);
+    h.event(egui::Event::Text("First line".into()));
+    h.run_steps(2);
+    crate::support::open_shortcuts_from_the_help_menu(&mut h);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    let open = h.state().views[0].comments.composer.as_ref().is_some_and(|c| c.text.contains("First line"));
+    let posted = comments(&h).iter().any(|c| c.contents.as_deref().is_some_and(|t| t.contains("First line")));
+    assert!(open || posted, "the typing stays");
+}
+
+/// With a menu of the menu bar open, the arrows are the menu's: the selected comment stays put.
+#[test]
+fn an_arrow_with_a_menu_open_leaves_the_selected_comment_where_it_is() {
+    let mut h = selected_square();
+    let before = comments(&h)[0].rect;
+    crate::support::open_menu(&mut h, "View");
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(comments(&h)[0].rect, before, "not moved");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment was still selected for the arrow");
+}
+
+/// Edit ▸ Delete from a native menu with the comment's own menu still open removes the comment:
+/// the click never reaches the window, so Edit ▸ Delete closes the popup, as a click anywhere else
+/// would, before its key joins the pages'. The popup held the Delete.
+#[test]
+fn edit_delete_with_a_popup_open_removes_the_selected_comment() {
+    let mut h = selected_square();
+    let p = at(&h, 90.0, 70.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the comment's menu is open");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+    h.run_steps(4);
+    assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
+}
+
+/// A native menu's click never reaches the window, so Edit ▸ Delete closes the Hotbar tools window,
+/// as it closes egui's popups, and removes the selected comment. The window held the Delete.
+#[test]
+fn edit_delete_from_a_native_menu_with_the_hotbar_window_open_removes_the_comment() {
+    let mut h = selected_square();
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "the Hotbar tools window is open");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is still selected");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+    h.run_steps(4);
+    assert!(h.query_by_label("Close menu").is_none(), "Edit ▸ Delete closed the Hotbar tools window");
+    assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
+}
+
+/// Edit ▸ Delete goes to a text field that has the keyboard, as the user's Delete does: with the
+/// Hotbar tools window's search field focused, a native Edit ▸ Delete leaves the window open and
+/// deletes in the field. Closed, the window took the field with it, and the Delete removed the
+/// selected comment. (A native click on Edit ▸ Copy, Cut, Paste or Select all reaches a focused
+/// field as craft-menu's tap of the shortcut, not as a menu command.)
+#[test]
+fn edit_delete_from_a_native_menu_into_the_hotbar_window_search_keeps_the_window() {
+    let mut h = selected_square();
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "the Hotbar tools window is open");
+    let search = |h: &Harness<'static, PdfCraftApp>, text: &str| h.query_all_by_role(Role::TextInput).any(|n| n.value().as_deref() == Some(text));
+    assert!(search(&h, ""), "the search field is empty");
+    h.query_all_by_role(Role::TextInput).find(|n| n.value().as_deref() == Some("")).expect("the search field").click();
+    h.run_steps(2);
+    h.event(egui::Event::Text("pen".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::ArrowLeft);
+    h.run_steps(2);
+    assert!(search(&h, "pen"), "typed into the search field");
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "Edit ▸ Delete closed the Hotbar tools window");
+    assert!(search(&h, "pe"), "Edit ▸ Delete deleted in the search field");
+    assert_eq!(comments(&h).len(), 1, "Edit ▸ Delete removed the comment");
+}
+
+/// Full screen hides the hotbar and closes its tools window, which doesn't come back with the
+/// hotbar: back from full screen, a Delete on the pass that shows the hotbar again removes the
+/// selected comment with nothing over it. The window came back, drawn after that pass's keys.
+#[test]
+fn full_screen_closes_the_hotbar_tools_window() {
+    let mut h = selected_square();
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "the Hotbar tools window is open");
+    assert!(h.state_mut().execute("view.full_screen"));
+    h.run_steps(4);
+    assert!(h.state().full_screen, "full screen");
+    // Back, as a native menu's click is, between passes.
+    assert!(h.state_mut().execute("view.full_screen"));
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert!(!h.state().full_screen, "back from full screen");
+    assert!(h.query_by_label("Close menu").is_none(), "the Hotbar tools window came back");
+    assert!(comments(&h).is_empty(), "Delete removed the comment");
+}
+
+/// A square drawn and selected, then the update prompt a check at start shows when it finds a
+/// newer release (the check waits until the square is selected).
+fn selected_square_under_the_update_prompt() -> Harness<'static, PdfCraftApp> {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let found = Arc::new(AtomicBool::new(false));
+    let answer = found.clone();
+    let mut h = harness(move |app| {
+        app.set_startup_update_check(true);
+        app.set_update_source(Arc::new(move || {
+            // Not forever: a test that fails before the square is selected leaves no thread behind.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            while !answer.load(Ordering::SeqCst) {
+                if std::time::Instant::now() >= deadline {
+                    return Ok(None);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Ok(Some(craft_update::Release {
+                tag: "v99.0.0".into(),
+                version: craft_update::parse_version("v99.0.0"),
+                html_url: "https://example.invalid/release".into(),
+                ..Default::default()
+            }))
+        }));
+        app.set_option("quick", "square").unwrap();
+    });
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    click_pt(&mut h, (250.0, 20.0));
+    click_pt(&mut h, (90.0, 70.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    found.store(true, Ordering::SeqCst);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while h.query_by_label_contains("is available").is_none() {
+        h.run_steps(2);
+        assert!(std::time::Instant::now() < deadline, "timed out waiting for the update prompt");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(2);
+    h
+}
+
+/// The update prompt is over the window, in full screen too: Delete under it leaves the selected
+/// comment, and the Escape that closes it (Later) leaves it selected. Both acted on the comment.
+#[test]
+fn keys_under_the_update_prompt_leave_the_selected_comment() {
+    for full_screen in [false, true] {
+        let mut h = selected_square_under_the_update_prompt();
+        if full_screen {
+            assert!(h.state_mut().execute("view.full_screen"));
+            h.run_steps(4);
+            assert!(h.state().full_screen && h.query_by_label_contains("is available").is_some(), "full screen, the prompt over it");
+        }
+        h.key_press(egui::Key::Delete);
+        h.run_steps(3);
+        assert_eq!(comments(&h).len(), 1, "Delete under the update prompt deleted the comment (full screen: {full_screen})");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("is available").is_none(), "Escape closed the prompt");
+        assert_eq!(h.state().full_screen, full_screen, "the Escape that closed the prompt is the prompt's alone");
+        let selected = h.state().views[0].comments.selected;
+        assert_eq!(selected, Some((0, 0)), "Escape under the update prompt deselected the comment (full screen: {full_screen})");
+    }
+}
+
+/// The update prompt leaves the menus on, but covers the pages as a dialog does: Edit ▸ Delete from
+/// a native menu under it leaves the selected comment, which the prompt hides.
+#[test]
+fn edit_delete_from_a_native_menu_under_the_update_prompt_leaves_the_comment() {
+    let mut h = selected_square_under_the_update_prompt();
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+    h.run_steps(4);
+    assert_eq!(comments(&h).len(), 1, "Edit ▸ Delete under the update prompt deleted the comment");
+    assert!(h.query_by_label_contains("is available").is_some(), "the prompt is still open");
+}
+
+/// "Open in Full Screen mode?", asked for a document that wants it, leaves the menus on as the
+/// update prompt does, and covers the pages as it does, in full screen too: neither the user's
+/// Delete nor Edit ▸ Delete from a native menu removes the comment selected in another document
+/// under it, and the Escape that answers the prompt is the prompt's alone.
+#[test]
+fn edit_delete_from_a_native_menu_under_the_full_screen_prompt_leaves_the_comment() {
+    for full_screen in [false, true] {
+        let mut h = selected_square();
+        if full_screen {
+            assert!(h.state_mut().execute("view.full_screen"));
+            h.run_steps(4);
+            assert!(h.state().full_screen, "full screen");
+        }
+        let deck = String::from_utf8(TEXT_FIXTURE.to_vec()).unwrap().replace("/Type /Catalog", "/Type /Catalog /PageMode /FullScreen").into_bytes();
+        h.state_mut().open_bytes("deck.pdf", None, deck).expect("the deck opens");
+        h.run_steps(3);
+        assert!(h.state().pending_full_screen.is_some(), "the full-screen prompt is open");
+        let ctx = h.ctx.clone();
+        h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::with_params("window.document", serde_json::json!({ "index": 0 })));
+        h.run_steps(3);
+        assert_eq!(h.state().active, Some(0), "Window ▸ the first document switched to it");
+        assert!(h.state().pending_full_screen.is_some(), "the full-screen prompt is still open");
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is still selected");
+        h.key_press(egui::Key::Delete);
+        h.run_steps(3);
+        assert_eq!(comments(&h).len(), 1, "Delete under the full-screen prompt deleted the comment (full screen: {full_screen})");
+        h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.delete"));
+        h.run_steps(4);
+        assert_eq!(comments(&h).len(), 1, "Edit ▸ Delete under the full-screen prompt deleted the comment (full screen: {full_screen})");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().pending_full_screen.is_none(), "Escape answered the prompt");
+        assert_eq!(h.state().full_screen, full_screen, "the Escape that answered the prompt is the prompt's alone");
+    }
+}
+
+/// The OCR Verify screen takes the pages' place, and the pages' own chords don't reach them under
+/// it: ⌘A selects none of the hidden page's text, and ⌘= leaves its zoom. Both acted on the
+/// hidden page, and stayed after the screen closed.
+#[test]
+fn chords_on_the_ocr_verify_screen_leave_the_hidden_page() {
+    let mut h = harness(|_| {});
+    h.state_mut().ocr_verify.open = true;
+    h.run_steps(3);
+    assert!(h.state().views[0].selected_text().is_none(), "nothing is selected");
+    let zoom = h.state().views[0].zoom;
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(3);
+    assert!(h.state().views[0].selected_text().is_none(), "⌘A on the OCR Verify screen selected the hidden page's text");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Equals);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].zoom, zoom, "⌘= on the OCR Verify screen zoomed the hidden page");
+    h.state_mut().ocr_verify.open = false;
+    h.run_steps(3);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(3);
+    assert!(h.state().views[0].selected_text().is_some(), "with the screen closed, ⌘A selects the page's text");
+}
+
+/// The comment card's "…" menu is drawn from the button on the selected card. Undo with the menu
+/// open deselects the card, and egui kept the menu open with nowhere to show it: an open popup,
+/// which held every page key, H included.
+#[test]
+fn undo_with_a_card_menu_open_leaves_the_page_keys() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    drag_pt(&mut h, (170.0, 180.0), (270.0, 120.0));
+    assert_eq!(comments(&h).len(), 2);
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.state_mut().right = Some(pdfcraft_ui_egui::RightPanel::Comments);
+    h.run_steps(3);
+    click_pt(&mut h, (250.0, 20.0));
+    click_pt(&mut h, (90.0, 70.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    h.get_by_label("More").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Set status").is_some(), "the card's menu is shown");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1, "Undo took the second square back");
+    assert_eq!(h.state().views[0].comments.selected, None, "and deselected the first");
+    assert!(!egui::Popup::is_any_open(&h.ctx), "the menu closed with its card's button");
+    h.key_press(egui::Key::H);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand, "H picks the Hand tool");
+}
+
+/// ⌘C with a menu of the menu bar open is the menu's: the selected comment isn't copied.
+#[test]
+fn copy_with_a_menu_open_copies_no_comment() {
+    let mut h = selected_square();
+    support::open_menu(&mut h, "View");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::C);
+    h.run_steps(3);
+    assert!(h.state().comment_clipboard.is_none(), "⌘C with a menu open copied the comment");
+}
+
+/// The OCR Verify screen takes the window: an arrow there leaves the comment selected on the
+/// hidden page where it is. It moved it.
+#[test]
+fn an_arrow_on_the_ocr_verify_screen_leaves_the_selected_comment() {
+    let mut h = selected_square();
+    let before = comments(&h)[0].rect;
+    h.state_mut().ocr_verify.open = true;
+    h.run_steps(3);
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is still selected");
+    assert_eq!(comments(&h)[0].rect, before, "the hidden comment moved");
 }
 
 /// #5767: Make Properties Default on a text box or callout keeps its font size too, so the next
