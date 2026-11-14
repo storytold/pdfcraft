@@ -101,6 +101,19 @@ fn a_documents_pages_read_the_same_in_any_order_and_on_any_thread() {
     assert_eq!(read, alone);
 }
 
+/// Review finding: a font decided while the document was unprepared is decided without its
+/// evidence, so the decision stays the page's even when the evidence arrives (another thread's
+/// survey finishing) while it is being made; a decision made with the evidence there is kept.
+#[test]
+fn a_decision_made_before_the_evidence_is_not_kept() {
+    let pdf = parse(numbered_names_pages(1));
+    let document = Arc::new(RecoveryDocument::new());
+    let kept = document.decide_for_tests(1, || document.prepare(&pdf, &settings(Some(document.clone()))));
+    assert!(document.prepared());
+    assert!(!kept, "decided before the evidence");
+    assert!(document.decide_for_tests(1, || {}), "decided with it");
+}
+
 /// A pool's workers share one recovery state: the font every page shows is decided once for the
 /// pool, whichever worker reads which page.
 #[cfg(not(target_arch = "wasm32"))]
@@ -195,6 +208,29 @@ fn the_survey_counts_each_glyph_shown_across_the_document() {
     let before = recovery_counters();
     extract_page_recovering(&pdf, 1, &settings(Some(document.clone()))).unwrap();
     assert_eq!(recovery_counters().since(&before).survey_pages, 0);
+}
+
+/// Review finding: the survey reads text state as the interpreter does. A form draws in the
+/// font selected where it is drawn until it selects its own, and `q` and `Q` save and restore
+/// the font with the graphics state (a `Q` of a form with no `q` of its own restores nothing).
+#[test]
+fn the_survey_follows_the_font_through_forms_and_saved_states() {
+    let doc = Doc {
+        fonts: vec![Font::truetype("ABCDEF+Outer", 20), Font::truetype("ABCDEF+Inner", 20)],
+        pages: vec![vec![
+            // The form shows code 3 in the caller's font.
+            Show::Raw("/F0 10 Tf"),
+            Show::Form(vec![Show::Raw("BT 20 700 Td <0003> Tj ET")], 1),
+            // A font selected inside `q` … `Q` is gone after it.
+            Show::Raw("q /F1 10 Tf Q BT 20 600 Td <0004> Tj ET"),
+            // A form's unmatched `Q` doesn't restore the caller's saved font.
+            Show::Raw("q /F1 10 Tf"),
+            Show::Form(vec![Show::Raw("Q BT 20 500 Td <0005> Tj ET")], 1),
+            Show::Raw("Q"),
+        ]],
+    };
+    let document = surveyed(&doc);
+    assert_eq!(document.surveyed_fonts(), vec![(vec![(3, 1), (4, 1)], None), (vec![(5, 1)], None)]);
 }
 
 /// Fonts with the same `/BaseFont` after the subset tag, the same glyph count and the same kind

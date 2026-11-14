@@ -252,6 +252,18 @@ impl RecoveryDocument {
         out
     }
 
+    /// Test hook: decide the font keyed `key` with no rule taking it, running `during` while
+    /// deciding (another thread's survey finishing then); whether the decision is kept for the
+    /// document.
+    #[cfg(feature = "test-counters")]
+    pub fn decide_for_tests(&self, key: u128, during: impl FnOnce()) -> bool {
+        let _ = self.guards(key, || {
+            during();
+            Guards::taking_nothing()
+        });
+        lock(&self.decisions).contains_key(&key)
+    }
+
     /// Whether the survey passed one of its caps: no font has evidence in this document.
     pub fn survey_over_cap(&self) -> bool {
         matches!(self.evidence.get(), Some(Evidence::OverCap))
@@ -259,20 +271,23 @@ impl RecoveryDocument {
 
     /// The decisions for the font keyed `key`: the document's, or `decide`'s, kept for the
     /// document while it has room ([`MAX_DOCUMENT_FONTS`]) and once it is surveyed (a decision
-    /// made before the evidence is ready is the page's alone). Deciding runs without the lock,
-    /// so two threads may decide one font at once; the decisions are the same, and the first
-    /// kept is the one every later page reads.
+    /// made before the evidence is ready is the page's alone, even when the evidence arrives
+    /// while it is being made). Deciding runs without the lock, so two threads may decide one
+    /// font at once; the decisions are the same, and the first kept is the one every later page
+    /// reads.
     pub(crate) fn guards(&self, key: u128, decide: impl FnOnce() -> Guards) -> Arc<Guards> {
         if let Some(kept) = lock(&self.decisions).get(&key) {
             count(Counter::DecisionReused);
             return kept.clone();
         }
+        // Whether `decide` sees the evidence: evidence set after this was not read by it.
+        let prepared = self.prepared();
         let decided = Arc::new(decide());
         let mut decisions = lock(&self.decisions);
         if let Some(kept) = decisions.get(&key) {
             return kept.clone();
         }
-        if decisions.len() < MAX_DOCUMENT_FONTS && self.prepared() {
+        if decisions.len() < MAX_DOCUMENT_FONTS && prepared {
             decisions.insert(key, decided.clone());
         }
         decided

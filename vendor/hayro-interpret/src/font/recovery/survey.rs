@@ -4,7 +4,8 @@
 //! kind of font it counts ([`SURVEYED_KINDS`]), and counts only fonts of those kinds.
 //!
 //! The survey reads the content of the first [`SURVEY_PAGES`] pages and of the form XObjects
-//! they draw (nested up to [`MAX_FORM_DEPTH`] deep), follows `Tf` and counts every code each
+//! they draw (nested up to [`MAX_FORM_DEPTH`] deep), follows `Tf` (into the forms drawn, and
+//! saved and restored by `q` and `Q`, as the graphics state holds it) and counts every code each
 //! text-showing operator (`Tj`, `TJ`, `'`, `"`) shows in a font that may need it: a Type 0 font
 //! with an `Identity-H` or `Identity-V` encoding (two-byte codes that are CIDs, ISO 32000-2
 //! §9.7.6.2), no `/ToUnicode` stream, no Adobe character collection, and an embedded TrueType,
@@ -52,6 +53,9 @@ pub(crate) const SURVEY_PAGES: usize = 400;
 
 /// Deepest form XObject nesting the survey follows (a deeper form is skipped).
 const MAX_FORM_DEPTH: usize = 12;
+/// Most `q` saves of the surveyed font one content stream keeps open, as the interpreter keeps
+/// at most this many graphics states.
+const MAX_SAVED_FONTS: usize = 4096;
 
 /// Most content operators the survey reads across the document.
 const MAX_SURVEY_OPERATORS: u64 = 1 << 26;
@@ -313,16 +317,24 @@ impl Survey<'_> {
         Ok(())
     }
 
-    /// Read one content stream with `resources`; `chain` holds the forms being drawn (a form
-    /// that draws itself is not entered again).
+    /// Read one content stream with `resources`, starting in `inherited`, the font selected where
+    /// it is drawn (a form inherits the graphics state, the text state's font included); `chain`
+    /// holds the forms being drawn (a form that draws itself is not entered again). `q` and `Q`
+    /// save and restore the font, as they do the graphics state, up to [`MAX_SAVED_FONTS`]
+    /// saves: past it, as in the interpreter, a `q` saves nothing and its `Q` restores nothing;
+    /// a `Q` with no `q` of its stream to match restores nothing.
     fn content(
         &mut self,
         data: &[u8],
         resources: &Resources<'_>,
         depth: usize,
         chain: &mut Vec<ObjectIdentifier>,
+        inherited: Option<usize>,
     ) -> Result<(), Stop> {
-        let mut font: Option<usize> = None;
+        let mut font: Option<usize> = inherited;
+        let mut saved: Vec<Option<usize>> = Vec::new();
+        // `q`s past the cap, each matched by a `Q` that restores nothing.
+        let mut unsaved: u64 = 0;
         let mut ops = TypedIter::new(data);
         while let Some(op) = ops.next() {
             self.operators = self.operators.saturating_add(1);
@@ -333,6 +345,20 @@ impl Survey<'_> {
                 return Err(Stop::Cancelled);
             }
             match op {
+                TypedInstruction::SaveState(_) => {
+                    if unsaved > 0 || saved.len() >= MAX_SAVED_FONTS {
+                        unsaved = unsaved.saturating_add(1);
+                    } else {
+                        saved.push(font);
+                    }
+                }
+                TypedInstruction::RestoreState(_) => {
+                    if unsaved > 0 {
+                        unsaved -= 1;
+                    } else if let Some(restored) = saved.pop() {
+                        font = restored;
+                    }
+                }
                 TypedInstruction::TextFont(t) => {
                     font = match resources.get_font(&t.0) {
                         Some(dict) => self.font(&dict)?,
@@ -379,7 +405,7 @@ impl Survey<'_> {
                         resources.clone(),
                     );
                     chain.push(id);
-                    let read = self.content(&data, &inner, depth.saturating_add(1), chain);
+                    let read = self.content(&data, &inner, depth.saturating_add(1), chain, font);
                     chain.pop();
                     read?;
                 }
@@ -407,7 +433,7 @@ impl Survey<'_> {
             count(Counter::SurveyPage);
             let data = page_content(page.raw(), MAX_SURVEY_BYTES.saturating_sub(self.bytes));
             self.read_bytes(data.len())?;
-            self.content(&data, page.resources(), 0, &mut Vec::new())?;
+            self.content(&data, page.resources(), 0, &mut Vec::new(), None)?;
         }
         Ok(())
     }
