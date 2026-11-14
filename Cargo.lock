@@ -1265,7 +1265,7 @@ dependencies = [
 [[package]]
 name = "craft-pdf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=9c6d8b4fda48ca5226d6dca727031e79a2654183#9c6d8b4fda48ca5226d6dca727031e79a2654183"
+source = "git+https://github.com/storytold/craft-libs?rev=3334d2cec36adc1e112e0ba57a20d4b98ffcb9cd#3334d2cec36adc1e112e0ba57a20d4b98ffcb9cd"
 dependencies = [
  "aes",
  "chrono",
@@ -1327,7 +1327,7 @@ dependencies = [
 [[package]]
 name = "craft-stream-codecs"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=9c6d8b4fda48ca5226d6dca727031e79a2654183#9c6d8b4fda48ca5226d6dca727031e79a2654183"
+source = "git+https://github.com/storytold/craft-libs?rev=3334d2cec36adc1e112e0ba57a20d4b98ffcb9cd#3334d2cec36adc1e112e0ba57a20d4b98ffcb9cd"
 dependencies = [
  "fax",
  "hayro-ccitt",
