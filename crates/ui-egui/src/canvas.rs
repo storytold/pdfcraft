@@ -512,6 +512,8 @@ pub struct DocView {
     pub close_requested: bool,
     /// A historical snapshot of another document (see [`Snapshot`]): `None` for real documents.
     pub snapshot: Option<Snapshot>,
+    /// Whether this document tab has been detached into its own window (view.multiple-windows).
+    pub detached: bool,
     /// Two-page view: show the first page alone, as a cover (View ▸ Page display).
     pub cover: bool,
     /// Previous view / Next view: pages visited before (and after, once going back).
@@ -1041,6 +1043,7 @@ impl DocView {
             disk_changed: false,
             close_requested: false,
             snapshot: None,
+            detached: false,
             cover: false,
             back: Vec::new(),
             forward: Vec::new(),
@@ -1241,6 +1244,7 @@ impl DocView {
         fresh.snapshot = self.snapshot.clone();
         fresh.close_requested = self.close_requested;
         fresh.cover = self.cover;
+        fresh.detached = self.detached;
         // What the document asked to hide, and what is hidden now (F8), belong to the tab.
         fresh.interface = self.interface;
         // Still presenting, with the display to go back to on leaving.

@@ -26,7 +26,7 @@ pub(super) mod word_count_ui;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use prompts::{PromptButton, save_prompt_key, shorten_middle};
+pub(crate) use prompts::{PromptButton, save_prompt_key, shorten_middle, show_save_prompt_modal};
 use prompts::{full_screen_prompt, link_prompt, password, remote_link_prompt, save_prompt, unlock};
 
 use crate::properties_session::INFO_KEYS;

@@ -388,8 +388,9 @@ pub(crate) fn shortcuts(
     keys: crate::page_keys::PageKeys,
     chords: bool,
     speed: crate::scroll_speed::ScrollSpeed,
+    detached_prompt_open: bool,
 ) {
-    if let Some((arrows, field_open)) = view_chords(view, ctx, chords) {
+    if let Some((arrows, field_open)) = view_chords(view, ctx, chords, detached_prompt_open) {
         view_keys(view, ctx, keys, speed, arrows, field_open);
     }
 }
@@ -399,7 +400,7 @@ pub(crate) fn shortcuts(
 /// has the keyboard, and then it has the plain keys too; else whether the arrows are the view's (a
 /// focused radio button keeps them), and whether an open form field (a drop-down's or a list box's
 /// items) keeps the plain keys.
-fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool) -> Option<(bool, bool)> {
+fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool, detached_prompt_open: bool) -> Option<(bool, bool)> {
     use egui::{Key, KeyboardShortcut, Modifiers};
     let pressed = |s: KeyboardShortcut| chords && ctx.input_mut(|i| i.consume_shortcut(&s));
     if pressed(KeyboardShortcut::new(Modifiers::COMMAND, Key::F)) {
@@ -418,7 +419,7 @@ fn view_chords(view: &mut DocView, ctx: &egui::Context, chords: bool) -> Option<
     // A focused check box or radio button holds egui's keyboard focus only for Space, and a
     // radio button for the arrows that move within its group: the other page keys still work.
     let form_box = view.forms.keys.filter(|(id, _)| ctx.memory(|m| m.focused()) == Some(*id));
-    if ctx.egui_wants_keyboard_input() && form_box.is_none() {
+    if ctx.egui_wants_keyboard_input() && form_box.is_none() && !detached_prompt_open {
         return None;
     }
     let arrows = !form_box.is_some_and(|(_, radio)| radio);

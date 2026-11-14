@@ -99,8 +99,8 @@ impl PdfCraftApp {
         self.combine_thumbs_frame(ctx);
         // Retire hidden documents before admitting the visible documents' textures, so the
         // three cache limits apply to the application, regardless of how many tabs are open.
-        // On screen: the active tab, the comparison's old file side by side with it, and what
-        // split view's other pane shows.
+        // On screen: the active tab, the comparison's old file side by side with it, what
+        // split view's other pane shows, and a tab torn out into its own window.
         let shown = self.views_on_screen();
         let shown_docs: std::collections::HashSet<DocId> = shown.iter().filter_map(|&i| self.views.get(i)).map(|v| v.id).collect();
         for (i, view) in self.views.iter_mut().enumerate() {
