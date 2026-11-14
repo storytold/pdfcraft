@@ -5686,3 +5686,27 @@ endstream",
     assert!(list(&doc, 0)[0].contains(b"AAPL:AKExtras"));
     assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
 }
+
+/// Geometry stored as indirect objects (`/Rect 5 0 R`) is valid. Moving the comment moves it,
+/// writes direct arrays, and leaves the shared source object as it was.
+#[test]
+fn moving_a_comment_with_indirect_geometry_moves_it() {
+    let mut doc = fixture();
+    let (_, annot) = annot_ref(&mut doc, 1, 0).unwrap();
+    let rect = doc.add(num_array(&[100.0, 100.0, 200.0, 150.0]));
+    let quads = doc.add(num_array(&[100.0, 150.0, 200.0, 150.0, 100.0, 100.0, 200.0, 100.0]));
+    doc.update_dict(annot, |d| {
+        d.set(b"Rect".to_vec(), Object::Ref(rect));
+        d.set(b"QuadPoints".to_vec(), Object::Ref(quads));
+    })
+    .unwrap();
+    let mut doc = reopen(&doc);
+
+    move_annotation(&mut doc, 1, 0, 10.0, -20.0, &meta("m")).unwrap();
+    let moved = list(&doc, 1)[0].clone();
+    let numbers = |key: &[u8]| -> Vec<f64> { doc.resolve(moved.get(key).unwrap()).as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect() };
+    assert_eq!(numbers(b"Rect"), [110.0, 80.0, 210.0, 130.0]);
+    assert_eq!(numbers(b"QuadPoints"), [110.0, 130.0, 210.0, 130.0, 110.0, 80.0, 210.0, 80.0]);
+    let source: Vec<f64> = doc.get(rect).as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect();
+    assert_eq!(source, [100.0, 100.0, 200.0, 150.0], "the source object is unchanged");
+}
