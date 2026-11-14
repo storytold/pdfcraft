@@ -25,11 +25,19 @@ pub(crate) fn drawn_as(c: char) -> char {
     if c == '\u{ad}' { '-' } else { c }
 }
 
+/// Uncomposed combining marks cannot be positioned by a simple `Tj` show without OpenType mark
+/// attachment, even when the bundled Inter face has a glyph for the mark code point (e.g. U+0307).
+fn is_combining(c: char) -> bool {
+    unicode_normalization::char::is_combining_mark(c)
+        || matches!(u32::from(c), 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0xFE20..=0xFE2F)
+}
+
 /// The line (1-based, lines split at `\n`) and character of the first one the bundled face can't
 /// draw, or `None` when it draws all of `text`.
 pub(crate) fn first_missing(text: &str) -> Option<(usize, char)> {
     let face = face();
-    let draws = |s: &str| !s.chars().any(char::is_control) && face.is_some_and(|f| pdfcraft_fonts::embedding::covers(f.bytes, s));
+    let draws =
+        |s: &str| !s.chars().any(|c| c.is_control() || is_combining(c)) && face.is_some_and(|f| pdfcraft_fonts::embedding::covers(f.bytes, s));
     let mut buf = [0u8; 4];
     text.split('\n').enumerate().find_map(|(i, line)| {
         // A whole line at once; the character only for a line the face can't draw.

@@ -4326,6 +4326,7 @@ dependencies = [
  "pdfcraft-geom",
  "pdfcraft-model",
  "thiserror 2.0.21",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -4428,6 +4429,7 @@ dependencies = [
  "rustix 1.1.6",
  "thiserror 2.0.21",
  "tiff",
+ "unicode-normalization",
  "zune-jpeg",
 ]
 
@@ -4461,6 +4463,7 @@ dependencies = [
  "sha2 0.11.1",
  "thiserror 2.0.21",
  "unicode-bidi",
+ "unicode-normalization",
 ]
 
 [[package]]

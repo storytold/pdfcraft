@@ -208,6 +208,20 @@ fn validate(c: &Content) -> Result<(), EditError> {
 
 /// Write an item's stream (new, or replacing `obj`) and make its resources available to the page.
 fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> Result<ObjRef, EditError> {
+    let normalized;
+    let c = match c {
+        Content::Text(t) => {
+            use unicode_normalization::UnicodeNormalization;
+            let text: String = t.text.nfc().collect();
+            if text == t.text {
+                c
+            } else {
+                normalized = Content::Text(AddedText { text, ..t.clone() });
+                &normalized
+            }
+        }
+        Content::Image(_) => c,
+    };
     validate(c)?;
     let all = page_list(doc);
     check(&[page], all.len())?;

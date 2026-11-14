@@ -23,6 +23,8 @@ zune-jpeg = "0.5"
 thiserror = { workspace = true }
 # Already in the graph through lopdf; used only to read plain-text files (decode_text).
 encoding_rs = "0.8"
+# NFC normalisation for plain text in decomposed form (NFD).
+unicode-normalization = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 # Already in the graph (pdfcraft-platform, ui-egui); stops a timed-out LibreOffice's whole process
