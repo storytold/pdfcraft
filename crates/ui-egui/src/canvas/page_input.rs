@@ -632,12 +632,17 @@ impl PageHits<'_> {
             // there finishes the box being typed and opens the paragraph, `ParagraphCx::adding`):
             // not on pictures, nor beside a paragraph, where a click starts a new box.
             let edit_text = tool == QuickTool::EditText;
-            let on_paragraphs = edit_text || crate::edit_text_ui::over_paragraph(xf, info, page, lines, p);
+            // An unchanged open paragraph exposes its frame beyond the text box so it can be
+            // selected as an object. Once it has typed changes, a click on that frame applies the
+            // edit instead; do not advertise a move cursor where the press cannot take the box.
+            let changed_open = open.is_some_and(|e| e.has_changes());
+            let over_paragraph = crate::edit_text_ui::over_paragraph(xf, info, page, lines, p);
+            let on_paragraphs = edit_text && !changed_open || over_paragraph;
             (
                 edit_text.then(|| crate::edit_text_ui::picture_hit(xf, page, info, images, view, p)).flatten(),
                 on_paragraphs.then(|| crate::edit_text_ui::hit(xf, info, page, lines, open.map(|e| e.block), p)).flatten(),
-                edit_text.then(|| crate::object_ui::hit(view, xf, info, page, frame, p)).flatten(),
-                edit_text.then(|| crate::edit_text_ui::picture_handle_hit(clip, xf, page, info, images, view, p)).flatten(),
+                (edit_text && !changed_open).then(|| crate::object_ui::hit(view, xf, info, page, frame, p)).flatten(),
+                (edit_text && !changed_open).then(|| crate::edit_text_ui::picture_handle_hit(clip, xf, page, info, images, view, p)).flatten(),
             )
         } else {
             (None, None, None, None)

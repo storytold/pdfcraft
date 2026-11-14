@@ -1,6 +1,7 @@
 //! Headless UI tests (egui_kittest + AccessKit). They drive the real app shell without a window.
 
 use crate::support;
+use crate::support::wait_until;
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{By, NodeT, Queryable};
@@ -2160,14 +2161,12 @@ fn home_recent_context_menu_reveals_the_target_without_opening_or_removing_it() 
     assert!(h.state().views.is_empty(), "right-click must not open the PDF");
     assert_eq!(h.state().recent.len(), 2);
     h.get_by_label(label).click();
-    h.run_steps(3);
+    wait_until(&mut h, "the selected path is checked and the existing reveal error is shown", |app| {
+        app.toast.as_ref().is_some_and(|(text, _)| text.contains("The file no longer exists"))
+    });
     assert!(h.query_by_label(label).is_none(), "choosing the action closes its menu");
     assert!(h.state().views.is_empty(), "reveal must not open the PDF");
     assert_eq!(h.state().active, None);
     assert_eq!(h.state().recent.len(), 2, "reveal must not remove missing recent files");
     assert_eq!(h.state().recent[1].path, expected);
-    assert!(
-        h.state().toast.as_ref().is_some_and(|(text, _)| text.contains("The file no longer exists")),
-        "the selected path is checked and the existing reveal error is shown"
-    );
 }

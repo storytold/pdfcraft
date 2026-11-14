@@ -765,43 +765,43 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
     ctx.label_secondary(ui, tl!("Used when opening PDFs. An explicit launch or control mode takes precedence for the session."), t);
     ui.add_space(6.0);
 
-    let mut layout_choice = app.view_defaults.layout;
-    let mut continuous = app.view_defaults.continuous;
+    let defaults = &mut app.view_defaults;
+    let mut layout_choice = defaults.layout;
+    let mut continuous = defaults.continuous;
     let mut layout_changed = false;
     let mut continuous_changed = false;
     ui.horizontal(|ui| {
         ctx.label_primary(ui, tl!("Default page display"), t);
         if ctx.pill_choice(ui, t, &mut layout_choice, &[(PageLayout::Single, tl!("Single page")), (PageLayout::TwoUp, tl!("Two-page view"))]) {
-            app.view_defaults.layout = layout_choice;
+            defaults.layout = layout_choice;
             layout_changed = true;
         }
         if ctx.toggle_pill(ui, t, &mut continuous, tl!("Continuous scrolling")) {
-            app.view_defaults.continuous = continuous;
+            defaults.continuous = continuous;
             continuous_changed = true;
         }
     });
-    let mut show_page_gaps = app.view_defaults.show_page_gaps;
+    let mut show_page_gaps = defaults.show_page_gaps;
     let gaps_changed = ctx.checkbox(ui, &mut show_page_gaps, tl!("Show gaps between pages"), t).changed();
     if gaps_changed {
-        app.view_defaults.show_page_gaps = show_page_gaps;
+        defaults.show_page_gaps = show_page_gaps;
     }
     ctx.label_secondary(ui, tl!("Hide gaps to join page edges. Margins inside the PDF remain unchanged."), t);
     ui.add_space(6.0);
 
-    let mut fit_changed = false;
-    let mut zoom_changed = false;
+    let fit_changed = false;
+    let zoom_changed = false;
     ui.horizontal(|ui| {
         ctx.label_primary(ui, tl!("Default zoom"), t);
-        let mut fit = app.view_defaults.fit;
-        if ctx.pill_choice(ui, t, &mut fit, &[(Fit::Width, tl!("Fit to width")), (Fit::Page, tl!("Zoom to page level")), (Fit::None, tl!("Custom"))])
-        {
-            app.view_defaults.fit = fit;
-            fit_changed = true;
-        }
-        let mut percent = app.view_defaults.zoom * 100.0;
-        if ui.add(egui::DragValue::new(&mut percent).range(8.0..=6400.0).max_decimals(0).suffix("%")).changed() {
-            (app.view_defaults.fit, app.view_defaults.zoom) = (Fit::None, percent / 100.0);
-            zoom_changed = true;
+        ctx.pill_choice(
+            ui,
+            t,
+            &mut defaults.fit,
+            &[(Fit::Width, tl!("Fit to width")), (Fit::Page, tl!("Zoom to page level")), (Fit::None, tl!("Custom"))],
+        );
+        let mut percent = defaults.zoom * 100.0;
+        if ui.add(egui::DragValue::new(&mut percent).range(1.0..=6400.0).max_decimals(0).suffix("%")).changed() {
+            (defaults.fit, defaults.zoom) = (Fit::None, percent / 100.0);
         }
     });
     ctx.label_secondary(ui, tl!("Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages."), t);
