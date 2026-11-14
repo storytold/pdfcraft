@@ -224,22 +224,7 @@ pub(crate) fn body(
     thumb: &mut dyn FnMut(usize) -> Option<egui::TextureId>,
 ) -> (bool, bool) {
     ui.set_width(820.0);
-    let mut close_dialog = false;
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!("Print")).font(theme::semibold(18.0)));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), egui::Sense::click());
-            let resp = theme::hand(resp);
-            if resp.clicked() {
-                close_dialog = true;
-            }
-            let stroke_color = if resp.hovered() { t.text } else { t.text_muted };
-            let center = rect.center();
-            let r = 5.0;
-            ui.painter().line_segment([pos2(center.x - r, center.y - r), pos2(center.x + r, center.y + r)], Stroke::new(1.5, stroke_color));
-            ui.painter().line_segment([pos2(center.x - r, center.y + r), pos2(center.x + r, center.y - r)], Stroke::new(1.5, stroke_color));
-        });
-    });
+    ui.label(egui::RichText::new(tl!("Print")).font(theme::semibold(18.0)));
     ui.add_space(6.0);
 
     let settings = d.settings(sizes.len(), labels);
@@ -592,10 +577,10 @@ pub(crate) fn body(
                                     Shrink,
                                 }
                                 let current_pill = match d.size {
-                                    SizeMode::Fit => SizePill::Fit,
-                                    SizeMode::Actual => SizePill::Actual,
-                                    SizeMode::Shrink => SizePill::Shrink,
-                                    SizeMode::Custom(_) => SizePill::Fit,
+                                    SizeMode::Fit => Some(SizePill::Fit),
+                                    SizeMode::Actual => Some(SizePill::Actual),
+                                    SizeMode::Shrink => Some(SizePill::Shrink),
+                                    SizeMode::Custom(_) => None,
                                 };
                                 let mut dummy = current_pill;
                                 if segmented_pills(
@@ -603,12 +588,13 @@ pub(crate) fn body(
                                     t,
                                     &mut dummy,
                                     &[
-                                        (SizePill::Fit, tl!("Fit")),
-                                        (SizePill::Actual, tl!("Actual size")),
-                                        (SizePill::Shrink, tl!("Shrink oversized pages")),
+                                        (Some(SizePill::Fit), tl!("Fit")),
+                                        (Some(SizePill::Actual), tl!("Actual size")),
+                                        (Some(SizePill::Shrink), tl!("Shrink oversized pages")),
                                     ],
-                                ) {
-                                    d.size = match dummy {
+                                ) && let Some(pill) = dummy
+                                {
+                                    d.size = match pill {
                                         SizePill::Fit => SizeMode::Fit,
                                         SizePill::Actual => SizeMode::Actual,
                                         SizePill::Shrink => SizeMode::Shrink,
@@ -884,7 +870,7 @@ pub(crate) fn body(
     });
 
     ui.add_space(10.0);
-    let (mut go, mut cancel) = (false, close_dialog);
+    let (mut go, mut cancel) = (false, false);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let looking = still_looking(d);
         let waiting_paper = d.papers_loading();

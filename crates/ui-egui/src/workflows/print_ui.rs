@@ -761,6 +761,11 @@ impl PdfCraftApp {
             self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillPrint);
             // What it showed may lie outside the printed areas Label printing found: find them again.
             if self.session.get(id).map(|d| d.edit_generation()) != before && self.print_draft.handling == Handling::Label {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.print_tasks.label_crops = None;
+                }
+                self.print_draft.crops.clear();
                 self.print_draft.crop_pages = None;
                 self.read_label_crops(id);
             }
