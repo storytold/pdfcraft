@@ -1,4 +1,4 @@
-use super::{Arc, DocInfo, DocView, Edit, HashMap, PageText, Pos2, Range, Rect, comments, pos2};
+use super::{Arc, DocInfo, DocView, Edit, HashMap, PageText, Pos2, Range, Rect, Vec2, comments, icons, pos2, vec2};
 
 /// A text selection on one page.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -177,8 +177,31 @@ enum SelectionAction {
     Copy,
 }
 
-/// The selection bar's width before it has been laid out once (English labels).
-const SELECTION_BAR_GUESS: f32 = 520.0;
+/// The selection bar's width before it has been laid out once: five icon buttons and the
+/// Replace text label.
+const SELECTION_BAR_GUESS: f32 = 260.0;
+
+/// The selection bar's height before it has been laid out once: an icon button plus the popup
+/// frame. The laid-out size is used once the bar has been shown.
+const SELECTION_BAR_HEIGHT: f32 = 42.0;
+
+/// The screen rectangle the selection bar anchors to: the first selected line that is on screen,
+/// so a selection whose first line is scrolled out of view keeps its bar usable (the bar would
+/// otherwise be hidden with the whole selection still partly visible). `None` when no selected
+/// line is on screen.
+fn selection_anchor(rects: &[Rect], viewport: Rect) -> Option<Rect> {
+    rects.iter().copied().find(|r| viewport.intersects(*r))
+}
+
+/// Where the selection bar goes: above the first selected line when there is room for it (the
+/// bar must not cover the next line being read), else below it, kept inside the pages' area so
+/// it never covers a side panel. `size` is the bar's laid-out size, or the first-frame guess.
+fn selection_bar_pos(anchor: Rect, viewport: Rect, size: Vec2) -> Pos2 {
+    let x = anchor.left().clamp(viewport.left() + 8.0, (viewport.right() - size.x - 8.0).max(viewport.left() + 8.0));
+    let fits_above = anchor.top() - 6.0 - size.y - 6.0 >= viewport.top();
+    let y = if fits_above { anchor.top() - 6.0 - size.y } else { anchor.bottom() + 6.0 };
+    pos2(x, y.clamp(viewport.top() + 6.0, (viewport.bottom() - size.y - 6.0).max(viewport.top() + 6.0)))
+}
 
 /// Actions on an existing text selection, next to the selected words.
 pub(super) fn selection_actions(
@@ -202,37 +225,41 @@ pub(super) fn selection_actions(
     }
     let Some(text) = view.texts.get(&selection.page) else { return false };
     let Some(xf) = view.page_xform(selection.page) else { return false };
-    let Some(last) = selection.rects(text).last().copied() else { return false };
+    let rects: Vec<Rect> = selection.rects(text).into_iter().map(|r| xf.view_rect(r)).collect();
     let selected = selection.text(text);
     if selected.is_empty() {
         return false;
     }
-    let rect = xf.view_rect(last);
-    if !viewport.intersects(rect) {
-        return false;
-    }
+    let Some(rect) = selection_anchor(&rects, viewport) else { return false };
     let id = egui::Id::unique(("text-selection-actions", view.view_key()));
-    // The bar stays inside the pages' area, by the width it had last frame (its labels make it
-    // wider in some languages), so it never covers a side panel; a first guess before it has one.
-    let width = egui::AreaState::load(ui.ctx(), id).and_then(|a| a.size).map_or(SELECTION_BAR_GUESS, |s| s.x);
-    let x = rect.left().clamp(viewport.left() + 8.0, (viewport.right() - width - 8.0).max(viewport.left() + 8.0));
-    let y = if rect.bottom() + 48.0 < viewport.bottom() { rect.bottom() + 6.0 } else { (rect.top() - 44.0).max(viewport.top() + 6.0) };
+    // The bar stays inside the pages' area, by the size it had last frame (its Replace text label
+    // makes it wider in some languages), so it never covers a side panel; a guess before it has one.
+    let size = egui::AreaState::load(ui.ctx(), id).and_then(|a| a.size).unwrap_or(vec2(SELECTION_BAR_GUESS, SELECTION_BAR_HEIGHT));
+    let pos = selection_bar_pos(rect, viewport, size);
     let mut chosen = None;
-    egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(ui.ctx(), |ui| {
+    egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.horizontal(|ui| {
-                for (label, action) in [
-                    (tl!("Add comment"), SelectionAction::Note),
-                    (tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
-                    (tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
-                    (tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
-                    (tl!("Replace text"), SelectionAction::Replace),
+                let icon = |ui: &mut egui::Ui, tool: comments::CommentTool, tip: &str| {
+                    ui.add_enabled_ui(can_comment, |ui| icons::button(ui, tool.icon(), 26.0, false, tip)).inner
+                };
+                if icon(ui, comments::CommentTool::Note, tl!("Add comment")).clicked() {
+                    chosen = Some(SelectionAction::Note);
+                }
+                for (tool, action) in [
+                    (comments::CommentTool::Highlight, SelectionAction::Markup(comments::CommentTool::Highlight)),
+                    (comments::CommentTool::Underline, SelectionAction::Markup(comments::CommentTool::Underline)),
+                    (comments::CommentTool::StrikeOut, SelectionAction::Markup(comments::CommentTool::StrikeOut)),
                 ] {
-                    if ui.add_enabled(can_comment, egui::Button::new(label)).clicked() {
+                    if icon(ui, tool, tl!(tool.label())).clicked() {
                         chosen = Some(action);
                     }
                 }
-                if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy"))).clicked() {
+                // No clear icon for Replace text: it keeps its label, sized to the icon buttons.
+                if ui.add_enabled(can_comment, egui::Button::new(tl!("Replace text")).min_size(Vec2::splat(26.0))).clicked() {
+                    chosen = Some(SelectionAction::Replace);
+                }
+                if ui.add_enabled_ui(can_copy, |ui| icons::button(ui, "copy", 26.0, false, tl!("Copy"))).inner.clicked() {
                     chosen = Some(SelectionAction::Copy);
                 }
             });
@@ -273,4 +300,55 @@ pub(super) fn selection_actions(
         SelectionAction::Copy => {}
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn viewport() -> Rect {
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(1100.0, 900.0))
+    }
+
+    #[test]
+    fn the_bar_opens_above_the_first_selected_line() {
+        // A selection in the middle of the page: the bar goes above its top line.
+        let anchor = Rect::from_min_max(pos2(100.0, 400.0), pos2(300.0, 470.0));
+        let pos = selection_bar_pos(anchor, viewport(), vec2(220.0, 42.0));
+        assert_eq!(pos, pos2(100.0, 400.0 - 6.0 - 42.0), "above the selection's first line, by its left edge");
+    }
+
+    #[test]
+    fn the_bar_goes_below_when_there_is_no_room_above() {
+        // A selection near the top: there is no room above, so the bar goes below the selection.
+        let anchor = Rect::from_min_max(pos2(100.0, 20.0), pos2(300.0, 40.0));
+        let pos = selection_bar_pos(anchor, viewport(), vec2(220.0, 42.0));
+        assert_eq!(pos, pos2(100.0, 46.0));
+    }
+
+    #[test]
+    fn the_bar_anchors_to_the_first_visible_selected_line() {
+        // A multi-line selection whose first line is scrolled out of view: the bar anchors to
+        // the first line still on screen, instead of hiding with the offscreen first line.
+        let viewport = Rect::from_min_max(pos2(0.0, 0.0), pos2(1100.0, 900.0));
+        let rects = [
+            Rect::from_min_max(pos2(100.0, -120.0), pos2(300.0, -60.0)),
+            Rect::from_min_max(pos2(100.0, 10.0), pos2(300.0, 40.0)),
+            Rect::from_min_max(pos2(100.0, 60.0), pos2(300.0, 90.0)),
+        ];
+        assert_eq!(selection_anchor(&rects, viewport), Some(rects[1]));
+        // And a selection scrolled entirely out of view still shows no bar.
+        let offscreen = [Rect::from_min_max(pos2(100.0, -200.0), pos2(300.0, -10.0))];
+        assert_eq!(selection_anchor(&offscreen, viewport), None);
+    }
+
+    #[test]
+    fn the_bar_stays_inside_the_pages_area() {
+        // A wide bar next to a selection at the right edge is clamped to the viewport, and a
+        // selection that fills the viewport keeps the bar inside its bottom, never over it.
+        let anchor = Rect::from_min_max(pos2(1000.0, 10.0), pos2(1080.0, 880.0));
+        let pos = selection_bar_pos(anchor, viewport(), vec2(400.0, 42.0));
+        let bar = Rect::from_min_size(pos, vec2(400.0, 42.0));
+        assert!(viewport().contains_rect(bar), "{bar:?} inside {:?}", viewport());
+    }
 }
