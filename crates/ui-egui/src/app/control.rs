@@ -53,6 +53,9 @@ impl PdfCraftApp {
             ("scroll_speed", _) => {
                 self.scroll_speed = scroll_speed::ScrollSpeed::parse(value).ok_or("scroll_speed must be slow, normal, or fast")?;
             }
+            ("middle_button", _) => {
+                self.middle_button = canvas::MiddleButton::parse(value).ok_or("middle_button must be autoscroll or pan")?;
+            }
             ("invert_middle_drag", _) => {
                 self.invert_middle_drag = value.parse::<bool>().map_err(|_| "invert_middle_drag must be true or false")?;
             }

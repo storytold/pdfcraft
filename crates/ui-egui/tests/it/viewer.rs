@@ -2218,6 +2218,29 @@ fn the_invert_middle_drag_preference_is_off_by_default_and_kept_in_the_settings(
     assert!(!off.invert_middle_drag, "turned off, that is saved too");
 }
 
+#[test]
+fn the_middle_button_preference_defaults_to_autoscroll_and_is_kept_in_the_settings() {
+    use pdfcraft_ui_egui::canvas::MiddleButton;
+    let mut app = PdfCraftApp::new();
+    assert_eq!(app.middle_button, MiddleButton::Autoscroll, "auto-scroll on every platform unless asked (#915)");
+    app.set_option("middle_button", "pan").unwrap();
+    assert_eq!(app.middle_button, MiddleButton::Pan);
+    assert!(app.set_option("middle_button", "hand").unwrap_err().contains("autoscroll or pan"));
+    assert_eq!(app.middle_button, MiddleButton::Pan, "a refused value changes nothing");
+    let mut again = PdfCraftApp::new();
+    again.restore(&app.persist());
+    assert_eq!(again.middle_button, MiddleButton::Pan, "Pan survives a restart");
+    again.set_option("middle_button", "Autoscroll").unwrap();
+    let mut back = PdfCraftApp::new();
+    back.middle_button = MiddleButton::Pan;
+    back.restore(&again.persist());
+    assert_eq!(back.middle_button, MiddleButton::Autoscroll, "switching back is saved too");
+    // Settings from before this preference, or with a value this version does not know, keep the default.
+    let mut old = PdfCraftApp::new();
+    old.restore(r#"{ "middle_button": "sideways" }"#);
+    assert_eq!(old.middle_button, MiddleButton::Autoscroll);
+}
+
 /// A 40 × 30 picture (one red corner) and a harness showing a PDF of it.
 fn picture_harness() -> (image::RgbaImage, Harness<'static, PdfCraftApp>) {
     picture_harness_sized(egui::vec2(1400.0, 900.0))

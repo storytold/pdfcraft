@@ -268,7 +268,7 @@ pub(super) fn organize_grid(
     unobstructed: bool,
     keys: PageKeys,
     show_page_edge_shadows: bool,
-    invert_middle: bool,
+    middle: super::autoscroll::Middle,
     ui: &mut egui::Ui,
     t: &Tokens,
 ) {
@@ -285,7 +285,7 @@ pub(super) fn organize_grid(
     let viewport = ui.available_rect_before_wrap();
     view.viewport_screen = viewport;
     let auto_delta = if unobstructed {
-        view.auto_scroll.update(ui, viewport, true, invert_middle)
+        view.auto_scroll.update(ui, viewport, true, middle)
     } else {
         view.auto_scroll.cancel();
         Vec2::ZERO

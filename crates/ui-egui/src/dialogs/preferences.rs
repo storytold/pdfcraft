@@ -4,7 +4,7 @@
 use egui::{Color32, CornerRadius, Margin, Rect, RichText, Sense, Stroke, pos2, vec2};
 
 use crate::PdfCraftApp;
-use crate::canvas::{Fit, PageLayout, ViewDefaults};
+use crate::canvas::{Fit, MiddleButton, PageLayout, ViewDefaults};
 use crate::motion::AnimationEffects;
 use crate::scroll_speed::ScrollSpeed;
 use crate::side_panels::ToolsSide;
@@ -862,6 +862,24 @@ fn scrolling(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut Pre
             ],
         );
     });
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ctx.label_primary(ui, tl!("Middle button"), t);
+        ctx.pill_choice(
+            ui,
+            t,
+            &mut app.middle_button,
+            &[
+                (MiddleButton::Autoscroll, tl_ctx!("middle button", MiddleButton::Autoscroll.label())),
+                (MiddleButton::Pan, tl_ctx!("middle button", MiddleButton::Pan.label())),
+            ],
+        );
+    });
+    ctx.label_secondary(
+        ui,
+        tl!("Autoscroll: click, or hold and drag, then move the pointer to scroll. Pan: drag the page while the button is held."),
+        t,
+    );
     ui.add_space(6.0);
     ctx.checkbox(ui, &mut app.invert_middle_drag, tl!("Invert middle-button drag"), t);
     ctx.label_secondary(ui, tl!("Panning or auto-scrolling with the middle (wheel) button moves the page the other way."), t);

@@ -387,6 +387,8 @@ pub struct PdfCraftApp {
     /// Preferences ▸ Invert middle-button drag: the middle button's pan or auto-scroll moves the
     /// view the other way. Off by default.
     pub invert_middle_drag: bool,
+    /// Preferences ▸ Middle button: auto-scroll (the default) or a 1:1 pan while held.
+    pub middle_button: canvas::MiddleButton,
     /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.
     pub animation_effects: motion::AnimationEffects,
     /// Whether the system asked for no animations, and how the desktop app asks it.

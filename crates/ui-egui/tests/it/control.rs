@@ -578,7 +578,6 @@ fn language_switch_preserves_document_and_command_ids() {
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "en");
 }
 
-#[cfg(target_os = "linux")]
 fn start_autoscroll(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient) -> egui::Pos2 {
     let p = h.state().views[0].viewport_rect().center();
     ok(h, c, "ui.click", json!({ "x": p.x, "y": p.y, "button": "middle" }));
@@ -590,12 +589,10 @@ fn start_autoscroll(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient) ->
 /// cell to remain instantiated. Learn the grid's column count and row pitch before scrolling;
 /// any currently rendered cell then identifies the same content origin. This tests actual
 /// layout displacement, independently of the autoscroll velocity calculation.
-#[cfg(target_os = "linux")]
 struct CanvasPosition {
     grid: Option<(usize, f32)>,
 }
 
-#[cfg(target_os = "linux")]
 impl CanvasPosition {
     fn new(h: &Harness<'static, PdfCraftApp>) -> Self {
         let grid = h.state().views[0].organize.then(|| {
@@ -630,7 +627,6 @@ impl CanvasPosition {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn middle_click_autoscroll_latches_has_a_dead_zone_and_scrolls_both_directions() {
     let (mut h, c) = harness();
@@ -665,7 +661,6 @@ fn middle_click_autoscroll_latches_has_a_dead_zone_and_scrolls_both_directions()
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty, "scrolling never edits the PDF");
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn moving_before_middle_button_release_keeps_scrolling_without_starting_page_tools() {
     let (mut h, c) = harness();
@@ -700,7 +695,6 @@ fn moving_before_middle_button_release_keeps_scrolling_without_starting_page_too
     assert!(!h.state().views[0].auto_scrolling(), "the next middle click toggles scrolling off");
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn autoscroll_uses_the_initial_click_position_when_input_arrives_in_one_frame() {
     let (mut h, c) = harness();
@@ -717,7 +711,6 @@ fn autoscroll_uses_the_initial_click_position_when_input_arrives_in_one_frame() 
     ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn farther_from_the_click_scrolls_faster_in_the_viewer_and_page_grid() {
     for organize in [false, true] {
@@ -746,7 +739,6 @@ fn farther_from_the_click_scrolls_faster_in_the_viewer_and_page_grid() {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn autoscroll_uses_elapsed_frame_time_and_preserves_fractional_motion_in_both_views() {
     for (organize, scale, zoom) in [(false, 1.0, "100"), (false, 2.0, "100"), (false, 1.0, "400"), (true, 1.0, "100"), (true, 2.0, "100")] {
@@ -806,7 +798,6 @@ fn autoscroll_uses_elapsed_frame_time_and_preserves_fractional_motion_in_both_vi
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn escape_stops_autoscroll_without_closing_find() {
     let (mut h, c) = harness();
@@ -822,7 +813,6 @@ fn escape_stops_autoscroll_without_closing_find() {
     assert!(h.state().views[0].find.is_some(), "Escape cancels the scrolling gesture first");
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn autoscroll_cancels_on_click_wheel_focus_loss_and_pointer_exit() {
     let (mut h, c) = harness();
@@ -851,7 +841,6 @@ fn autoscroll_cancels_on_click_wheel_focus_loss_and_pointer_exit() {
     assert!(!h.state().views[0].auto_scrolling());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn autoscroll_is_scoped_to_the_active_view_and_cannot_start_under_a_dialog() {
     let (mut h, c) = harness();
@@ -872,7 +861,6 @@ fn autoscroll_is_scoped_to_the_active_view_and_cannot_start_under_a_dialog() {
     assert!(call(&mut h, &c, "ui.drag", json!({ "from": [1, 2], "to": [3, 4], "button": "bad" })).is_err());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn the_click_that_stops_autoscroll_preserves_the_page_selection() {
     use egui_kittest::kittest::Queryable;
@@ -890,7 +878,6 @@ fn the_click_that_stops_autoscroll_preserves_the_page_selection() {
     assert_eq!(h.state().views[0].target_pages(), vec![1]);
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn organize_pages_supports_autoscroll_without_selecting_or_reordering_pages() {
     let (mut h, c) = harness_pages(40);
@@ -917,22 +904,24 @@ fn organize_pages_supports_autoscroll_without_selecting_or_reordering_pages() {
     assert!(!h.state().views[0].auto_scrolling(), "changing canvas mode cancels the gesture");
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Preferences ▸ Middle button ▸ Pan: the 1:1 hand pan of #565, on every platform (#3895).
 #[test]
-fn middle_button_pans_while_held_outside_linux() {
+fn middle_button_pans_while_held_in_pan_mode() {
     for organize in [false, true] {
         let (mut h, c) = harness_pages(40);
+        ok(&mut h, &c, "ui.set", json!({ "key": "middle_button", "value": "pan" }));
         h.state_mut().views[0].organize = organize;
         h.run_steps(3);
         let p = h.state().views[0].viewport_rect().center();
         ok(&mut h, &c, "ui.click", json!({ "x": p.x, "y": p.y, "button": "middle" }));
         ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y + 50.0 }));
         h.run_steps(8);
-        assert!(!h.state().views[0].auto_scrolling(), "a click does not latch auto-scroll outside Linux: organize={organize}");
+        assert!(!h.state().views[0].auto_scrolling(), "a click does not latch auto-scroll in Pan mode: organize={organize}");
         assert!(!h.state().views[0].middle_panning(), "a released click leaves nothing to pan: organize={organize}");
     }
     // A drag pans while the button is held, and the Crop tool never sees it.
     let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({ "key": "middle_button", "value": "pan" }));
     h.state_mut().set_option("zoom", "400").unwrap();
     h.run_steps(3);
     h.state_mut().views[0].go_to_page(1);
@@ -951,11 +940,11 @@ fn middle_button_pans_while_held_outside_linux() {
 }
 
 /// With Invert middle-button drag on, a held middle drag moves the view the way the pointer goes.
-#[cfg(not(target_os = "linux"))]
 #[test]
 fn inverted_middle_drag_moves_the_view_the_way_the_pointer_goes() {
     let (mut h, c) = harness();
     h.state_mut().set_option("zoom", "400").unwrap();
+    ok(&mut h, &c, "ui.set", json!({ "key": "middle_button", "value": "pan" }));
     ok(&mut h, &c, "ui.set", json!({ "key": "invert_middle_drag", "value": "true" }));
     h.run_steps(3);
     h.state_mut().views[0].go_to_page(1);

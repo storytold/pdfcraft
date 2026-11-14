@@ -2937,28 +2937,31 @@ fn middle_drag(h: &mut Harness<'static, PdfCraftApp>, from: Pos2, to: Pos2) {
 #[test]
 fn a_middle_drag_with_a_drawing_tool_scrolls_instead_of_drawing() {
     // egui's drag responses accept any button, so the drawing tools used to draw with the wheel.
-    let mut h = harness(|app| {
-        app.set_option("zoom", "400").unwrap();
-        app.set_option("quick", "ink").unwrap();
-    });
-    let from = at(&h, 150.0, 100.0);
-    let top = h.state().views[0].page_screen_rect(0).expect("page 1 on screen").top();
-    middle_drag(&mut h, from, from - egui::vec2(0.0, 120.0));
-    assert!(comments(&h).is_empty(), "{:?}", comments(&h));
-    let s = h.state();
-    assert!(!s.session.get(s.views[0].id).unwrap().dirty, "scrolling never edits the PDF");
-    assert!(!s.views[0].middle_panning(), "releasing the wheel ends the pan");
-    let moved = s.views[0].page_screen_rect(0).expect("page 1 on screen").top();
-    if cfg!(target_os = "linux") {
-        // Linux auto-scrolls while the wheel is held and stops on release.
-        assert!(!s.views[0].auto_scrolling());
-    } else {
-        assert!((moved - (top - 120.0)).abs() < 1.0, "the page follows the pointer: {top} -> {moved}");
+    for mode in ["autoscroll", "pan"] {
+        let mut h = harness(|app| {
+            app.set_option("zoom", "400").unwrap();
+            app.set_option("quick", "ink").unwrap();
+            app.set_option("middle_button", mode).unwrap();
+        });
+        let from = at(&h, 150.0, 100.0);
+        let top = h.state().views[0].page_screen_rect(0).expect("page 1 on screen").top();
+        middle_drag(&mut h, from, from - egui::vec2(0.0, 120.0));
+        assert!(comments(&h).is_empty(), "{mode}: {:?}", comments(&h));
+        let s = h.state();
+        assert!(!s.session.get(s.views[0].id).unwrap().dirty, "{mode}: scrolling never edits the PDF");
+        assert!(!s.views[0].middle_panning(), "{mode}: releasing the wheel ends the pan");
+        let moved = s.views[0].page_screen_rect(0).expect("page 1 on screen").top();
+        if mode == "autoscroll" {
+            // Auto-scroll runs while the wheel is held and stops on release.
+            assert!(!s.views[0].auto_scrolling());
+        } else {
+            assert!((moved - (top - 120.0)).abs() < 1.0, "the page follows the pointer: {top} -> {moved}");
+        }
+        // The tool still draws with the primary button afterwards.
+        drag_pt(&mut h, (60.0, 120.0), (200.0, 80.0));
+        let kinds: Vec<String> = comments(&h).into_iter().map(|a| a.subtype).collect();
+        assert_eq!(kinds, ["Ink"], "{mode}");
     }
-    // The tool still draws with the primary button afterwards.
-    drag_pt(&mut h, (60.0, 120.0), (200.0, 80.0));
-    let kinds: Vec<String> = comments(&h).into_iter().map(|a| a.subtype).collect();
-    assert_eq!(kinds, ["Ink"]);
 }
 
 #[test]
