@@ -580,9 +580,10 @@ fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui:
     theme::hand(resp).on_hover_text(if dirty { crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", &shown)]) } else { shown })
 }
 
-/// Width the print, save and info buttons and their gaps take in the mode bar: three buttons, the
-/// 4 pt `item_spacing` after each of them (three gaps, not two), and the 8 pt spacer.
-const MODE_BAR_RIGHT: f32 = 3.0 * 32.0 + 3.0 * 4.0 + 8.0;
+/// Width the print, save, info, Redo and Undo buttons and their gaps take in the mode bar: five
+/// buttons, the 4 pt `item_spacing` after each of them, the 4 pt space before Redo, and the 8 pt
+/// spacer.
+const MODE_BAR_RIGHT: f32 = 5.0 * 32.0 + 5.0 * 4.0 + 4.0 + 8.0;
 /// Narrowest search field the mode bar shows; below it the field becomes an icon button.
 const MODE_BAR_SEARCH_MIN: f32 = 140.0;
 
@@ -661,6 +662,22 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             app.dialog = Some(Dialog::Properties(PropsTab::Description));
                         }
                     });
+                    // Undo and Redo within reach of the mouse (#4050), greyed out when there is
+                    // nothing to undo or redo. They act as Edit ▸ Undo and Redo do, on the
+                    // Combine files list too while its tab shows.
+                    ui.add_space(4.0);
+                    for (id, icon, template) in [("edit.redo", "redo-2", tl!("Redo ({key})")), ("edit.undo", "undo-2", tl!("Undo ({key})"))] {
+                        let enabled = pdfcraft_engine::commands::command(id).is_some_and(|c| app.command_enabled(c));
+                        let tip = crate::commands::command_tip(ui.ctx(), template, id);
+                        let response = ui.add_enabled_ui(enabled, |ui| icons::button(ui, icon, 32.0, false, &tip)).inner;
+                        let clicked = response.clicked();
+                        if !enabled {
+                            response.on_disabled_hover_text(&tip);
+                        }
+                        if clicked {
+                            app.run_command(id);
+                        }
+                    }
                     ui.add_space(8.0);
                     let search_w = (left - MODE_BAR_RIGHT).clamp(0.0, 260.0);
                     let opened = if search_w >= MODE_BAR_SEARCH_MIN {
