@@ -431,7 +431,7 @@ pub(crate) fn matrix_of(doc: &Document, dict: &Dict) -> Result<Matrix, ()> {
 }
 
 /// A form's `/BBox` as `[x0 y0 x1 y1]`: absent is `None`, present but malformed is an error.
-pub(super) fn bbox_of(doc: &Document, dict: &Dict) -> Result<Option<[f64; 4]>, ()> {
+pub(crate) fn bbox_of(doc: &Document, dict: &Dict) -> Result<Option<[f64; 4]>, ()> {
     let Some(b) = dict.get(b"BBox") else { return Ok(None) };
     let b = doc.resolve(b);
     let v: Vec<f64> =
