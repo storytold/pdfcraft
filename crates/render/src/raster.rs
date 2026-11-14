@@ -35,6 +35,7 @@ use crate::{Pixels, ReadingColors};
 
 mod pool;
 
+pub(crate) use pool::STUCK_AFTER;
 use pool::lock;
 #[cfg(test)]
 use pool::{BusyPublishGate, ParseGate, ParserState, PoolParser, RenderGate, Shared, same_request, worker, worker_settings};
@@ -204,8 +205,14 @@ pub enum RequestKind {
     /// A raster of the page.
     #[default]
     Pixels,
-    /// The page's text layer (glyphs with Unicode and boxes); `scale` is ignored.
+    /// The page's text layer (glyphs with Unicode and boxes); `scale` is ignored. Only the
+    /// strict text: no recovery rule runs (Find, search, plain copy, text extraction).
     Text,
+    /// The same text layer as `Text`, byte for byte, and in the same pass Copy with
+    /// formatting's recovered layer ([`crate::RecoveredText`]) when a recovery rule read some
+    /// glyph of the page. Only for readers that copy with formatting (the view's selection
+    /// layer, HTML extraction); `scale` is ignored.
+    RecoveredText,
 }
 
 /// A region of a scaled page, in device pixels (for tiled rendering of large pages).
@@ -256,8 +263,15 @@ struct RequestFailureKey {
 }
 
 impl From<RenderRequest> for RequestFailureKey {
+    /// A recovered-text request is remembered as a text request: both interpret the page's
+    /// text, so one that crashed or overran the watchdog fails the other at once rather than
+    /// costing a second crash or watchdog.
     fn from(req: RenderRequest) -> Self {
-        Self { page: req.page, kind: req.kind }
+        let kind = match req.kind {
+            RequestKind::RecoveredText => RequestKind::Text,
+            kind => kind,
+        };
+        Self { page: req.page, kind }
     }
 }
 
@@ -270,8 +284,12 @@ pub struct RenderedPage {
     pub rgba: Pixels,
     /// Why the page could not be rendered (renderer panic, empty page box, …).
     pub error: Option<String>,
-    /// For `RequestKind::Text`.
+    /// For `RequestKind::Text` and `RequestKind::RecoveredText`.
     pub text: Option<Arc<crate::text::PageText>>,
+    /// For `RequestKind::RecoveredText`, read in the same pass as `text`: Copy with
+    /// formatting's layer, when a recovery rule read some glyph of the page. Always `None` for
+    /// `RequestKind::Text`.
+    pub recovered: Option<Arc<crate::text::RecoveredText>>,
     /// Non-fatal conditions that made the result partial or otherwise noteworthy.
     pub warnings: Vec<RenderWarning>,
     pub millis: u32,
@@ -337,7 +355,7 @@ impl AtomicRenderStats {
                 self.page_interpretations.fetch_add(1, Ordering::Relaxed);
                 self.rasterizations.fetch_add(1, Ordering::Relaxed);
             }
-            RequestKind::Text => {
+            RequestKind::Text | RequestKind::RecoveredText => {
                 self.text_interpretations.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -377,7 +395,7 @@ pub fn device_pixels(pt: f32, scale: f32) -> u32 {
 
 /// Render one page with a caller-owned parser and cache. Panics inside the renderer are caught
 /// and reported as `Err((message, panicked))`.
-type Output = (u32, u32, Pixels, Option<Arc<crate::text::PageText>>);
+type Output = (u32, u32, Pixels, Option<Arc<crate::text::PageText>>, Option<Arc<crate::text::RecoveredText>>);
 
 fn render_page<'a>(
     pdf: &'a Pdf,
@@ -412,9 +430,24 @@ fn render_page<'a>(
         (settings, cache)
     };
     let reading = request_reading(config, &req);
-    if req.kind == RequestKind::Text {
-        return match catch_unwind(AssertUnwindSafe(|| crate::text::extract_page(pdf, req.page, settings))) {
-            Ok(Some(t)) => Ok((0, 0, Pixels::default(), Some(Arc::new(t)))),
+    // Only Copy with formatting's requests read with the document's recovery state; every other
+    // request interprets as without it.
+    let plain_settings;
+    let settings = if req.kind == RequestKind::RecoveredText || settings.recovery_document.is_none() {
+        settings
+    } else {
+        plain_settings = InterpreterSettings { recovery_document: None, ..settings.clone() };
+        &plain_settings
+    };
+    if matches!(req.kind, RequestKind::Text | RequestKind::RecoveredText) {
+        // Strict text never runs the recovery rules; a recovered-text request reads both layers
+        // in one interpretation.
+        let read = || match req.kind {
+            RequestKind::RecoveredText => crate::text::extract_page_recovering(pdf, req.page, settings),
+            _ => crate::text::extract_page(pdf, req.page, settings).map(|t| (t, None)),
+        };
+        return match catch_unwind(AssertUnwindSafe(read)) {
+            Ok(Some((t, recovered))) => Ok((0, 0, Pixels::default(), Some(Arc::new(t)), recovered.map(Arc::new))),
             Ok(None) => Err((format!("page {} does not exist", req.page + 1), false)),
             Err(panic) => Err((format!("text extraction crashed on page {}: {}", req.page + 1, panic_message(&panic)), true)),
         };
@@ -485,7 +518,7 @@ fn render_page<'a>(
         // A print preview shows what prints, and printing is not the View event.
         preview_settings.view_auto_state &= req.tag & PRINT_TAG == 0;
         render_into(page, cache, &preview_settings, &rs, pixels.bytes_mut());
-        Ok((w.into(), h.into(), pixels, None))
+        Ok((w.into(), h.into(), pixels, None, None))
     }));
     match result {
         Ok(Ok(v)) => Ok(v),
@@ -497,8 +530,12 @@ fn render_page<'a>(
 fn finish(req: RenderRequest, start: Stopwatch, r: Result<Output, (String, bool)>, warnings: Vec<RenderWarning>) -> RenderedPage {
     let millis = start.millis();
     match r {
-        Ok((width, height, rgba, text)) => RenderedPage { request: req, width, height, rgba, error: None, text, warnings, millis },
-        Err((e, _)) => RenderedPage { request: req, width: 0, height: 0, rgba: Pixels::default(), error: Some(e), text: None, warnings, millis },
+        Ok((width, height, rgba, text, recovered)) => {
+            RenderedPage { request: req, width, height, rgba, error: None, text, recovered, warnings, millis }
+        }
+        Err((e, _)) => {
+            RenderedPage { request: req, width: 0, height: 0, rgba: Pixels::default(), error: Some(e), text: None, recovered: None, warnings, millis }
+        }
     }
 }
 
@@ -538,11 +575,47 @@ pub struct PageRenderer {
     stats: RenderStats,
 }
 
+/// What Copy with formatting's recovery layer keeps for one version of a document, shared by
+/// the [`PageRenderer`]s reading those bytes ([`PageRenderer::recovery_scope`]): each font's
+/// rule decisions, made once for the document whichever page asks first.
+#[derive(Clone, Debug)]
+pub struct RecoveryScope {
+    /// The bytes it belongs to: a renderer of other bytes (another version) never takes it.
+    bytes: std::sync::Weak<Vec<u8>>,
+    document: Arc<hayro::hayro_interpret::font::RecoveryDocument>,
+}
+
+impl RecoveryScope {
+    /// A fresh scope for `bytes`, nothing decided yet: for renderers of those bytes to share
+    /// ([`PageRenderer::with_recovery_scope`]).
+    pub fn for_bytes(bytes: &Arc<Vec<u8>>) -> Self {
+        Self { bytes: Arc::downgrade(bytes), document: Arc::default() }
+    }
+}
+
 impl PageRenderer {
     pub fn new(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
         let pdf = parse(&bytes, config.password.as_deref());
-        let settings = config.settings();
+        let scope = RecoveryScope::for_bytes(&bytes);
+        let settings = InterpreterSettings { recovery_document: Some(scope.document), ..config.settings() };
         Self { bytes, config, pdf, settings, stats: RenderStats { parser_builds: 1, ..RenderStats::default() } }
+    }
+
+    /// This renderer's recovery state ([`RecoveryScope`]), for another renderer of the same bytes
+    /// to share ([`Self::with_recovery_scope`]).
+    pub fn recovery_scope(&self) -> RecoveryScope {
+        let document = self.settings.recovery_document.clone().unwrap_or_default();
+        RecoveryScope { bytes: Arc::downgrade(&self.bytes), document }
+    }
+
+    /// This renderer, sharing `scope`'s recovery state when `scope` belongs to the same bytes
+    /// (the same `Arc`); a scope of other bytes is ignored, and the renderer keeps its own.
+    #[must_use]
+    pub fn with_recovery_scope(mut self, scope: &RecoveryScope) -> Self {
+        if std::ptr::eq(scope.bytes.as_ptr(), Arc::as_ptr(&self.bytes)) {
+            self.settings.recovery_document = Some(scope.document.clone());
+        }
+        self
     }
 
     pub fn page_count(&self) -> usize {
@@ -575,7 +648,7 @@ impl PageRenderer {
                     self.stats.page_interpretations += 1;
                     self.stats.rasterizations += 1;
                 }
-                RequestKind::Text => self.stats.text_interpretations += 1,
+                RequestKind::Text | RequestKind::RecoveredText => self.stats.text_interpretations += 1,
             }
         }
         let Some(pdf) = self.pdf.as_ref() else {

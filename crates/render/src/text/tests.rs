@@ -3603,3 +3603,30 @@ fn an_unattached_alphabetic_mark_reads_with_the_glyphs_at_its_place() {
     let text = layout(v).plain_text();
     assert_eq!(text, "שלום\u{345}ab");
 }
+
+/// Review on #6733: a layout under a deadline gives up in bounded time. 131,072 glyphs in 64
+/// narrow columns take about a minute to lay out (the line-merging pass compares every pair of
+/// lines), past the render pool's 20 s watchdog; under a one-second deadline the layout gives up,
+/// finishes the cheap way and says so. The strict layout never runs under one.
+#[test]
+fn a_layout_under_a_deadline_gives_up_in_bounded_time() {
+    let mut v = Vec::new();
+    for l in 0..2048 {
+        let y = 10.0 + 12.0 * l as f32;
+        for c in 0..64 {
+            let x = 10.0 + c as f32 * 60.0;
+            v.push(g("a", x, y, x + 6.0));
+        }
+    }
+    let start = std::time::Instant::now();
+    let deadline = super::layout::LayoutDeadline::until(start.checked_add(std::time::Duration::from_secs(1)));
+    let text = layout(v);
+    let took = start.elapsed();
+    assert!(deadline.gave_up());
+    assert_eq!(text.glyphs.len(), 2048 * 64, "every glyph is still laid out");
+    assert!(took < std::time::Duration::from_secs(10), "took {took:?}");
+    drop(deadline);
+    let mut small = Vec::new();
+    word(&mut small, "Hi", 10.0, 10.0, 7.0);
+    assert_eq!(layout(small).plain_text(), "Hi");
+}

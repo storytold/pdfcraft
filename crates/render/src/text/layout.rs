@@ -5,6 +5,72 @@ use super::order::{
 };
 use super::{HashMap, PageText, TextGlyph};
 
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    /// When the layout on this thread gives up ([`LayoutDeadline`]); `None`: never.
+    static GIVE_UP_AT: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+thread_local! {
+    /// Whether a layout on this thread gave up since its [`LayoutDeadline`] was set.
+    static GAVE_UP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Makes the layout under a [`LayoutDeadline`] on this thread give up at once.
+    pub(super) static GIVE_UP_NOW: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A deadline for the layouts on this thread while it lives: past it, the passes of [`arrange`]
+/// whose work grows with the square of the page's lines and blocks (merging lines, forming
+/// blocks, ordering them) stop early and finish in the cheapest valid way, and
+/// [`Self::gave_up`] says so, for the caller to discard the result. The recovered layer's layout
+/// (Copy with formatting's) runs under one; the strict layer's never does, so its result is
+/// unchanged. Dropping it (also while unwinding) lifts the deadline.
+pub(super) struct LayoutDeadline(());
+
+impl LayoutDeadline {
+    /// Layouts on this thread give up at `at` (no clock on wasm: never there).
+    pub(super) fn until(#[cfg_attr(target_arch = "wasm32", allow(unused_variables))] at: Option<std::time::Instant>) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        GIVE_UP_AT.with(|g| g.set(at));
+        #[cfg(test)]
+        if GIVE_UP_NOW.with(std::cell::Cell::get) {
+            #[cfg(not(target_arch = "wasm32"))]
+            GIVE_UP_AT.with(|g| g.set(Some(std::time::Instant::now())));
+        }
+        GAVE_UP.with(|g| g.set(false));
+        Self(())
+    }
+
+    /// Whether a layout under this deadline gave up.
+    pub(super) fn gave_up(&self) -> bool {
+        GAVE_UP.with(std::cell::Cell::get)
+    }
+}
+
+impl Drop for LayoutDeadline {
+    fn drop(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        GIVE_UP_AT.with(|g| g.set(None));
+        GAVE_UP.with(|g| g.set(false));
+    }
+}
+
+/// Whether the layout on this thread is past its [`LayoutDeadline`] (and so gives up); never
+/// without one.
+fn out_of_time() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    let late = GIVE_UP_AT.with(std::cell::Cell::get).is_some_and(|at| std::time::Instant::now() >= at);
+    #[cfg(target_arch = "wasm32")]
+    let late = false;
+    if late {
+        GAVE_UP.with(|g| g.set(true));
+    }
+    late
+}
+
 /// Glyphs in reading order, as indices into the page's glyphs, with their lines and word gaps.
 pub(super) struct Flow {
     /// The top of the flow's topmost glyph in view space.
@@ -17,10 +83,22 @@ pub(super) struct Flow {
 }
 
 /// Lay out the page's glyphs `ids`, giving each the box at the same position in `rects`.
-pub(super) fn arrange_flow(glyphs: &[Drawn], ids: Vec<usize>, rects: Vec<[f32; 4]>, quarter: Option<u8>) -> Flow {
+/// `protected[i]` marks glyph `i` of `glyphs` as one no unprotected glyph may displace as its
+/// double (see [`arrange`]); empty, no glyph is.
+pub(super) fn arrange_flow(glyphs: &[Drawn], ids: Vec<usize>, rects: Vec<[f32; 4]>, quarter: Option<u8>, protected: &[bool]) -> Flow {
     let top = ids.iter().filter_map(|&i| glyphs.get(i)).map(|g| g.2.rect[1]).fold(f32::INFINITY, f32::min);
-    let framed: Vec<TextGlyph> = ids.iter().zip(rects).filter_map(|(&i, rect)| glyphs.get(i).map(|g| TextGlyph { rect, ..g.2.clone() })).collect();
-    let (order, line_of, space_before) = arrange(&framed);
+    let mut framed = Vec::with_capacity(ids.len());
+    let mut kept_ids = Vec::with_capacity(ids.len());
+    for (&i, rect) in ids.iter().zip(rects) {
+        if let Some(g) = glyphs.get(i) {
+            framed.push(TextGlyph { rect, ..g.2.clone() });
+            kept_ids.push(i);
+        }
+    }
+    let ids = kept_ids;
+    let shielded: Vec<bool> =
+        if protected.is_empty() { Vec::new() } else { ids.iter().map(|&i| protected.get(i).copied().unwrap_or(false)).collect() };
+    let (order, line_of, space_before) = arrange(&framed, &shielded);
     let ids = order.into_iter().filter_map(|k| ids.get(k).copied()).collect();
     Flow { top, quarter, ids, line_of, space_before }
 }
@@ -190,15 +268,16 @@ pub(super) fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 ///    several lines does so only after a one-line block narrower than [`SAME_LINE_GAP`] heights (a
 ///    label): beside a wider one, or the last line of a column, it is the next column.
 pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
-    let (order, line_of, space_before) = arrange(&glyphs);
+    let (order, line_of, space_before) = arrange(&glyphs, &[]);
     let mut slots: Vec<Option<TextGlyph>> = glyphs.into_iter().map(Some).collect();
     // Each glyph is emitted exactly once.
     let glyphs = order.iter().filter_map(|i| slots.get_mut(*i).and_then(Option::take)).collect();
     PageText { glyphs, line_of, space_before, truncated: false }
 }
 
-/// [`layout`] as the reading order of indices into `glyphs`, with each one's line and word gap.
-fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
+/// Which glyphs survive the "fake bold" dedupe (see [`arrange`]); a `shielded` glyph is never
+/// dropped as the double of an unshielded one.
+fn fake_bold_kept(glyphs: &[TextGlyph], shielded: &impl Fn(usize) -> bool) -> Vec<bool> {
     // Drop "fake bold" duplicates: the same character redrawn at (almost) the same place. A redraw
     // also overlaps most of its own width: a narrow letter in condensed text (80 Tz and below) sits
     // closer than a fifth of its height to its double, as the second "l" of "Alle" (#1467), and
@@ -213,12 +292,84 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
         for j in (i.saturating_sub(4)..i).rev() {
             let p = &glyphs[j];
             if keep[j] && p.text == g.text && (p.rect[0] - g.rect[0]).abs() < dx && (p.rect[1] - g.rect[1]).abs() < h * 0.2 {
+                // A shielded glyph is never dropped: an unshielded double before it goes instead.
+                if shielded(i) {
+                    if !shielded(j) {
+                        keep[j] = false;
+                    }
+                    continue;
+                }
                 keep[i] = false;
                 break;
             }
         }
     }
+    keep
+}
+
+/// Merge same-baseline segments that nearly touch, then attach any remaining superscript or
+/// subscript segments to the closest host line segment they sit on (step 1 of [`arrange`]).
+fn merge_segments(segs: &mut Vec<Seg>) {
+    let mut merged = true;
+    while merged {
+        merged = false;
+        'outer: for a in 0..segs.len() {
+            if out_of_time() {
+                break 'outer;
+            }
+            for b in 0..segs.len() {
+                if a == b {
+                    continue;
+                }
+                let (sa, sb) = (&segs[a], &segs[b]);
+                let h = sa.h.min(sb.h);
+                let gap = (sb.bbox[0] - sa.bbox[2]).max(sa.bbox[0] - sb.bbox[2]);
+                if (sa.cy() - sb.cy()).abs() < h * 0.3 && (sa.h / sb.h - 1.0).abs() < 0.35 && gap < h * 1.2 {
+                    let sb = segs.remove(b);
+                    let a = if b < a { a - 1 } else { a };
+                    segs[a].merge(sb);
+                    merged = true;
+                    break 'outer;
+                }
+            }
+        }
+        if !merged {
+            let mut b = 0;
+            while b < segs.len() && !out_of_time() {
+                let sb = &segs[b];
+                let best_host = (0..segs.len())
+                    .filter(|&a| {
+                        if a == b {
+                            return false;
+                        }
+                        let sa = &segs[a];
+                        let gap = (sb.bbox[0] - sa.bbox[2]).max(sa.bbox[0] - sb.bbox[2]);
+                        sa.bbox[2] - sa.bbox[0] > sb.bbox[2] - sb.bbox[0] && gap < sa.h * 1.2 && is_script_on(&sa.bbox, sa.h, &sb.bbox, sb.h)
+                    })
+                    .min_by(|&a1, &a2| (segs[a1].cy() - sb.cy()).abs().total_cmp(&(segs[a2].cy() - sb.cy()).abs()));
+                if let Some(a) = best_host {
+                    let sb = segs.remove(b);
+                    let a = if b < a { a - 1 } else { a };
+                    segs[a].merge(sb);
+                    merged = true;
+                } else {
+                    b += 1;
+                }
+            }
+        }
+    }
+}
+
+/// [`layout`] as the reading order of indices into `glyphs`, with each one's line and word gap.
+///
+/// `protected[i]` (empty: all `false`) marks a glyph that no unprotected glyph may displace as
+/// its double: where a protected glyph or run doubles an unprotected one, the unprotected one is
+/// dropped instead of the later one (the recovered layer keeps every strict glyph so).
+fn arrange(glyphs: &[TextGlyph], protected: &[bool]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
+    let shielded = |i: usize| protected.get(i).copied().unwrap_or(false);
+    let keep = fake_bold_kept(glyphs, &shielded);
     let kept: Vec<usize> = (0..glyphs.len()).filter(|i| keep[*i]).collect();
+    let run_shielded: Vec<bool> = kept.iter().map(|&i| shielded(i)).collect();
     let glyphs: Vec<&TextGlyph> = kept.iter().map(|i| &glyphs[*i]).collect();
     let n = glyphs.len();
     if n == 0 {
@@ -286,25 +437,33 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                 let (cx, cy_) = ((glyphs[run.start].rect[0] / tol).floor() as i32, (glyphs[run.start].rect[1] / tol).floor() as i32);
                 let fp = fingerprint(&glyphs, run);
                 let mut checks = REDRAW_CANDIDATES;
-                let twin = (-1..=1i32).any(|dx| {
-                    (-1..=1i32).any(|dy| {
+                let twin = (-1..=1i32).find_map(|dx| {
+                    (-1..=1i32).find_map(|dy| {
                         let mut link = latest.get(&(fp, cx.saturating_add(dx), cy_.saturating_add(dy))).copied();
                         while let Some(k) = link {
                             let Some(prev) = segs.get(k) else { break };
                             if checks == 0 {
-                                return false;
+                                return None;
                             }
                             checks -= 1;
                             if redraws(&glyphs, prev.first, run) {
-                                return true;
+                                return Some(k);
                             }
                             link = older.get(k).copied().filter(|&o| o != NONE);
                         }
-                        false
+                        None
                     })
                 });
-                if twin {
-                    continue;
+                // A run holding a protected glyph is never dropped: if the run it doubles holds
+                // none, that one goes instead; if both hold some, both stay.
+                let shields = |r: Run| (r.start..r.end).any(|g| run_shielded.get(g).copied().unwrap_or(false));
+                match twin {
+                    Some(k) if shields(run) && segs.get(k).is_some_and(|p| !shields(p.first)) => {
+                        segs.swap(k, i);
+                        continue;
+                    }
+                    Some(_) if !shields(run) => continue,
+                    _ => {}
                 }
                 older[kept_runs] = latest.insert((fp, cx, cy_), kept_runs).unwrap_or(NONE);
             }
@@ -316,51 +475,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     segs.truncate(retained);
     // Merge same-baseline segments that nearly touch, then attach any remaining superscript or
     // subscript segments to the closest host line segment they sit on.
-    let mut merged = true;
-    while merged {
-        merged = false;
-        'outer: for a in 0..segs.len() {
-            for b in 0..segs.len() {
-                if a == b {
-                    continue;
-                }
-                let (sa, sb) = (&segs[a], &segs[b]);
-                let h = sa.h.min(sb.h);
-                let gap = (sb.bbox[0] - sa.bbox[2]).max(sa.bbox[0] - sb.bbox[2]);
-                if (sa.cy() - sb.cy()).abs() < h * 0.3 && (sa.h / sb.h - 1.0).abs() < 0.35 && gap < h * 1.2 {
-                    let sb = segs.remove(b);
-                    let a = if b < a { a - 1 } else { a };
-                    segs[a].merge(sb);
-                    merged = true;
-                    break 'outer;
-                }
-            }
-        }
-        if !merged {
-            let mut b = 0;
-            while b < segs.len() {
-                let sb = &segs[b];
-                let best_host = (0..segs.len())
-                    .filter(|&a| {
-                        if a == b {
-                            return false;
-                        }
-                        let sa = &segs[a];
-                        let gap = (sb.bbox[0] - sa.bbox[2]).max(sa.bbox[0] - sb.bbox[2]);
-                        sa.bbox[2] - sa.bbox[0] > sb.bbox[2] - sb.bbox[0] && gap < sa.h * 1.2 && is_script_on(&sa.bbox, sa.h, &sb.bbox, sb.h)
-                    })
-                    .min_by(|&a1, &a2| (segs[a1].cy() - sb.cy()).abs().total_cmp(&(segs[a2].cy() - sb.cy()).abs()));
-                if let Some(a) = best_host {
-                    let sb = segs.remove(b);
-                    let a = if b < a { a - 1 } else { a };
-                    segs[a].merge(sb);
-                    merged = true;
-                } else {
-                    b += 1;
-                }
-            }
-        }
-    }
+    merge_segments(&mut segs);
 
     // 2. Blocks.
     let mut by_top: Vec<usize> = (0..segs.len()).collect();
@@ -368,6 +483,11 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     let mut blocks: Vec<(Vec<usize>, [f32; 4])> = Vec::new();
     for si in by_top {
         let s = &segs[si];
+        // Past the deadline every remaining line is a block of its own.
+        if out_of_time() {
+            blocks.push((vec![si], s.bbox));
+            continue;
+        }
         let target = blocks.iter().position(|(members, bb)| {
             let Some(&m) = members.last() else { return false };
             let last = &segs[m];
@@ -398,6 +518,11 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     // that is never used.
     let first_line = |b: usize| blocks[b].0.first().and_then(|&s| segs.get(s)).map_or(blocks[b].1, |s| s.bbox);
     while let Some(&top) = remaining.iter().min_by(|a, b| blocks[**a].1[1].total_cmp(&blocks[**b].1[1])) {
+        // Past the deadline the remaining blocks follow in their own order.
+        if out_of_time() {
+            block_order.append(&mut remaining);
+            break;
+        }
         // A column goes on past a paragraph gap (#3658): the nearest block below the one just read that overlaps it
         // horizontally comes next, if the gap above it is at most two and a half heights of the last line read (a
         // footer, a footnote or a caption under a figure is further) and no other unread block
