@@ -87,10 +87,8 @@ pub(crate) fn png_from_rgba(width: usize, height: usize, rgba: &[u8]) -> Result<
     if w == 0 || h == 0 || width > MAX_IMAGE_SIDE || height > MAX_IMAGE_SIDE || expected != Some(rgba.len()) || rgba.len() > MAX_IMAGE_BYTES {
         return Err("the clipboard image is empty, malformed or exceeds size limits".into());
     }
-    let img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgba, rgba.to_vec())
-        .map_err(|e| e.to_string())?;
-    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default())
-        .map_err(|e| e.to_string())
+    let img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgba, rgba.to_vec()).map_err(|e| e.to_string())?;
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).map_err(|e| e.to_string())
 }
 
 fn stem(name: &str) -> &str {

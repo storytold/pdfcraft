@@ -154,9 +154,7 @@ pub(crate) fn decode_source(bytes: &[u8]) -> Result<DynamicImage, SignatureImage
         return Err(SignatureImageError::Size);
     }
     let raw = decoded.to_rgba8();
-    let mut image = DynamicImage::ImageRgba8(
-        image::RgbaImage::from_raw(dw, dh, raw).ok_or(SignatureImageError::Size)?,
-    );
+    let mut image = DynamicImage::ImageRgba8(image::RgbaImage::from_raw(dw, dh, raw).ok_or(SignatureImageError::Size)?);
     let (w, h) = (f64::from(image.width()), f64::from(image.height()));
     let scale = (f64::from(MAX_SIDE) / w.max(h)).min((MAX_PIXELS as f64 / (w * h)).sqrt());
     if scale < 1.0 {
@@ -269,7 +267,8 @@ mod tests {
     }
 
     fn png(w: u32, h: u32) -> Vec<u8> {
-        let img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgba, [40u8, 60, 80, 128].repeat((w * h) as usize)).unwrap();
+        let img =
+            craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgba, [40u8, 60, 80, 128].repeat((w * h) as usize)).unwrap();
         craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()
     }
 

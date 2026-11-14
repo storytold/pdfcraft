@@ -7,8 +7,8 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream, serialize}
 mod extract;
 mod text_font;
 mod upright_image;
-pub use upright_image::jpeg_exif_orientation;
 pub use extract::{ExtractedImage, ImageExport, extract_images, image_file, image_file_within};
+pub use upright_image::jpeg_exif_orientation;
 mod office;
 #[cfg(not(target_arch = "wasm32"))]
 pub use office::libreoffice;
@@ -430,10 +430,7 @@ fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     let bad = |m: String| CreateError::Image(name.into(), m);
     let opts = craft_image_codecs::DecodeOptions {
         keep_orientation: true,
-        limits: craft_image_codecs::Limits {
-            max_alloc: MAX_DECODED_BYTES as u64,
-            ..Default::default()
-        },
+        limits: craft_image_codecs::Limits { max_alloc: MAX_DECODED_BYTES as u64, ..Default::default() },
         ..Default::default()
     };
     let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, bytes, &opts).map_err(|e| match e {
@@ -697,10 +694,7 @@ fn tiff_pages_within(name: &str, bytes: &[u8], wanted: usize, budget: usize) -> 
     let info = craft_image_codecs::tiff_info(bytes).map_err(|e| bad(e.to_string()))?;
     let opts = craft_image_codecs::DecodeOptions {
         keep_orientation: true,
-        limits: craft_image_codecs::Limits {
-            max_alloc: MAX_DECODED_BYTES as u64,
-            ..Default::default()
-        },
+        limits: craft_image_codecs::Limits { max_alloc: MAX_DECODED_BYTES as u64, ..Default::default() },
         ..Default::default()
     };
     let mut out = Vec::new();

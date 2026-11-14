@@ -145,7 +145,14 @@ impl Findings {
                     );
                     for (n, (field, fscope)) in entries(value_type, &vtscope, TYPE, "field").flat_map(|(e, es)| items(e, &es)).enumerate() {
                         let field_name = value(field, &fscope, FIELD, "name").unwrap_or_else(|| position(n));
-                        self.need(&at(Some(format!("{name}/{field_name}"))), field, &fscope, FIELD, "pdfaField", &["name", "valueType", "description"]);
+                        self.need(
+                            &at(Some(format!("{name}/{field_name}"))),
+                            field,
+                            &fscope,
+                            FIELD,
+                            "pdfaField",
+                            &["name", "valueType", "description"],
+                        );
                     }
                 }
             }

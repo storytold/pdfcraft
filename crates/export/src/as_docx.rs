@@ -379,12 +379,7 @@ xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawin
     pkg.rels("", &root_rels);
 
     let mut doc_rels = RelsOut::default();
-    doc_rels.items.push(RelOut {
-        id: "rIdStyles".into(),
-        ty: format!("{RT_BASE}styles"),
-        target: "styles.xml".into(),
-        external: false,
-    });
+    doc_rels.items.push(RelOut { id: "rIdStyles".into(), ty: format!("{RT_BASE}styles"), target: "styles.xml".into(), external: false });
     for (i, (name, im)) in media.iter().enumerate() {
         doc_rels.items.push(RelOut {
             id: format!("rIdImg{}", i + 1),
@@ -395,12 +390,7 @@ xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawin
         pkg.binary(&format!("word/media/{name}"), image_mime(&im.ext), im.bytes.to_vec());
     }
     if page_colour.is_some() {
-        doc_rels.items.push(RelOut {
-            id: "rIdSettings".into(),
-            ty: format!("{RT_BASE}settings"),
-            target: "settings.xml".into(),
-            external: false,
-        });
+        doc_rels.items.push(RelOut { id: "rIdSettings".into(), ty: format!("{RT_BASE}settings"), target: "settings.xml".into(), external: false });
     }
     pkg.rels("word/document.xml", &doc_rels);
     let defaults = language_tag(language)
@@ -420,11 +410,7 @@ xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawin
         let mut settings = Writer::document();
         settings.open("w:settings", &[("xmlns:w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main")]);
         settings.empty("w:displayBackgroundShape", &[]);
-        pkg.xml_part(
-            "word/settings.xml",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
-            settings.into_bytes(),
-        );
+        pkg.xml_part("word/settings.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml", settings.into_bytes());
     }
     pkg.finish().unwrap_or_default()
 }

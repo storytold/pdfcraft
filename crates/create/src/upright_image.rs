@@ -35,7 +35,9 @@ pub fn jpeg_exif_orientation(bytes: &[u8]) -> u16 {
                     break;
                 }
                 let Some(seg) = bytes.get(i + 4..i + 2 + len) else { break };
-                if marker == 0xE1 && let Some(tiff) = seg.strip_prefix(b"Exif\0\0") {
+                if marker == 0xE1
+                    && let Some(tiff) = seg.strip_prefix(b"Exif\0\0")
+                {
                     let Some(hdr_order) = tiff.get(0..2) else { return 1 };
                     let order = match hdr_order {
                         b"II" => craft_tiff::ByteOrder::Little,
@@ -78,10 +80,7 @@ fn turned(bytes: &[u8]) -> Option<Vec<u8>> {
     DECODES.with(|c| c.set(c.get().saturating_add(1)));
     let opts = craft_image_codecs::DecodeOptions {
         keep_orientation: false,
-        limits: craft_image_codecs::Limits {
-            max_pixels: MAX_PIXELS,
-            ..Default::default()
-        },
+        limits: craft_image_codecs::Limits { max_pixels: MAX_PIXELS, ..Default::default() },
         ..Default::default()
     };
     let mut img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Jpeg, bytes, &opts).ok()?;
@@ -91,11 +90,7 @@ fn turned(bytes: &[u8]) -> Option<Vec<u8>> {
         }
         img.meta.dpi = Some((dx, dy));
     }
-    let enc_opts = craft_image_codecs::EncodeOptions {
-        jpeg_quality: QUALITY,
-        embed_metadata: true,
-        ..Default::default()
-    };
+    let enc_opts = craft_image_codecs::EncodeOptions { jpeg_quality: QUALITY, embed_metadata: true, ..Default::default() };
     craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &enc_opts).ok()
 }
 

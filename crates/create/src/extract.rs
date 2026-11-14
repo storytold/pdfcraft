@@ -746,9 +746,6 @@ fn png(w: u32, h: u32, rgb: &[u8], alpha: Option<&[u8]>) -> Result<Vec<u8>, Stri
         None => (craft_image_codecs::ChannelLayout::Rgb, rgb.to_vec()),
     };
     let img = craft_image_codecs::Image::from_u8(w, h, layout, data).map_err(|e| e.to_string())?;
-    let opts = craft_image_codecs::EncodeOptions {
-        png_compression: craft_image_codecs::PngCompression::Fast,
-        ..Default::default()
-    };
+    let opts = craft_image_codecs::EncodeOptions { png_compression: craft_image_codecs::PngCompression::Fast, ..Default::default() };
     craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &opts).map_err(|e| e.to_string())
 }

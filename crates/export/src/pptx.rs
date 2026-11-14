@@ -350,8 +350,16 @@ xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" type=\"blank\"
 
     pkg.xml_part("docProps/core.xml", "application/vnd.openxmlformats-package.core-properties+xml", core_properties_xml(title));
     pkg.xml_part("ppt/presentation.xml", "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml", pres.into_bytes());
-    pkg.xml_part("ppt/slideMasters/slideMaster1.xml", "application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml", slide_master.into_bytes());
-    pkg.xml_part("ppt/slideLayouts/slideLayout1.xml", "application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml", slide_layout.into_bytes());
+    pkg.xml_part(
+        "ppt/slideMasters/slideMaster1.xml",
+        "application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml",
+        slide_master.into_bytes(),
+    );
+    pkg.xml_part(
+        "ppt/slideLayouts/slideLayout1.xml",
+        "application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml",
+        slide_layout.into_bytes(),
+    );
     pkg.xml_part("ppt/theme/theme1.xml", "application/vnd.openxmlformats-officedocument.theme+xml", theme.into_bytes());
     for (i, (s_xml, s_rels)) in slides.iter().enumerate() {
         let num = i + 1;

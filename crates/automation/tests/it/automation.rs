@@ -7108,9 +7108,8 @@ fn natural_image_stamps_through_tools_on_rotated_pages() {
         let dir = workdir(&format!("natural-stamps-{degrees}"));
         let pixels: Vec<u8> = (0..40)
             .flat_map(|y| {
-                (0..80).flat_map(move |x| {
-                    [[240, 20, 20], [20, 180, 20], [20, 20, 240], [230, 180, 20]][usize::from(y >= 20) * 2 + usize::from(x >= 40)]
-                })
+                (0..80)
+                    .flat_map(move |x| [[240, 20, 20], [20, 180, 20], [20, 20, 240], [230, 180, 20]][usize::from(y >= 20) * 2 + usize::from(x >= 40)])
             })
             .collect();
         let bytes = encode_png(80, 40, craft_image_codecs::ChannelLayout::Rgb, pixels);

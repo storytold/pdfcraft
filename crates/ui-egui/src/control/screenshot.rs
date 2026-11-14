@@ -183,8 +183,7 @@ pub(super) fn screenshot_png(image: &egui::ColorImage, region: Option<egui::Rect
         }
     }
     let (cw, ch) = ((x1 - x0) as u32, (y1 - y0) as u32);
-    let img = craft_image_codecs::Image::from_u8(cw, ch, craft_image_codecs::ChannelLayout::Rgba, rgba)
-        .map_err(|e| e.to_string())?;
+    let img = craft_image_codecs::Image::from_u8(cw, ch, craft_image_codecs::ChannelLayout::Rgba, rgba).map_err(|e| e.to_string())?;
     let out = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default())
         .map_err(|e| e.to_string())?;
     if out.len() > MAX_ENCODED_BYTES {

@@ -624,9 +624,7 @@ fn jpeg_header_info(data: &[u8]) -> Option<(Option<u8>, bool)> {
                 {
                     // Version, flags0 and flags1 (two bytes each), then the transform flag.
                     flag = Some(*rest.get(6)?);
-                } else if matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF)
-                    && segment.get(5) == Some(&3)
-                {
+                } else if matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF) && segment.get(5) == Some(&3) {
                     rgb_ids = [segment.get(6).copied(), segment.get(9).copied(), segment.get(12).copied()] == [Some(b'R'), Some(b'G'), Some(b'B')];
                 }
                 i = end;

@@ -1,8 +1,8 @@
 //! Template XML → [`model`](crate::model). Only what the layout engine uses is read; everything
 //! else in the template is ignored, never rejected.
 
-use base64::Engine;
 use crate::xml::Node as XmlNode;
+use base64::Engine;
 
 use crate::XfaError;
 use crate::model::{

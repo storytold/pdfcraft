@@ -213,13 +213,7 @@ impl Document {
                     namespaces.retain(|(_, u)| !u.is_empty());
                     let id = nodes.len();
                     nodes.push(NodeData {
-                        kind: NodeKind::Element {
-                            ns: el_ns,
-                            name: el_local.to_string(),
-                            attrs: el_attrs,
-                            namespaces,
-                            range: span.start..span.end,
-                        },
+                        kind: NodeKind::Element { ns: el_ns, name: el_local.to_string(), attrs: el_attrs, namespaces, range: span.start..span.end },
                         children: Vec::new(),
                     });
                     if let Some(&(parent, _)) = open.last() {
@@ -377,15 +371,10 @@ impl<'a> Node<'a> {
     pub(crate) fn text(&self) -> Option<&'a str> {
         match &self.doc.nodes[self.id].kind {
             NodeKind::Text(t) => Some(t.as_str()),
-            NodeKind::Element { .. } => self
-                .doc
-                .nodes[self.id]
-                .children
-                .first()
-                .and_then(|&cid| match &self.doc.nodes[cid].kind {
-                    NodeKind::Text(t) => Some(t.as_str()),
-                    _ => None,
-                }),
+            NodeKind::Element { .. } => self.doc.nodes[self.id].children.first().and_then(|&cid| match &self.doc.nodes[cid].kind {
+                NodeKind::Text(t) => Some(t.as_str()),
+                _ => None,
+            }),
         }
     }
 

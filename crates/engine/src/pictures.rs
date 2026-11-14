@@ -77,11 +77,7 @@ pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
             let info = craft_image_codecs::tiff_info(bytes).ok()?;
             let page = info.default_page().and_then(|i| info.pages.get(i))?;
             let (w, h) = (page.width, page.height);
-            if (5..=8).contains(&craft_image_codecs::tiff_orientation(bytes)) {
-                Some((h, w))
-            } else {
-                Some((w, h))
-            }
+            if (5..=8).contains(&craft_image_codecs::tiff_orientation(bytes)) { Some((h, w)) } else { Some((w, h)) }
         }
         craft_image_codecs::Format::Png => {
             if bytes.get(12..16)? != b"IHDR" {
@@ -93,11 +89,7 @@ pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         }
         craft_image_codecs::Format::Jpeg => {
             let (w, h) = pdfcraft_xfa::image::size(bytes)?;
-            if (5..=8).contains(&pdfcraft_create::jpeg_exif_orientation(bytes)) {
-                Some((h, w))
-            } else {
-                Some((w, h))
-            }
+            if (5..=8).contains(&pdfcraft_create::jpeg_exif_orientation(bytes)) { Some((h, w)) } else { Some((w, h)) }
         }
         _ => craft_image_codecs::probe_size(bytes).ok(),
     }

@@ -182,10 +182,7 @@ impl Session {
             ),
         };
         let img = img.map_err(|e| EditError::Invalid(format!("the straightened page could not be encoded: {e}")))?;
-        let opts = craft_image_codecs::EncodeOptions {
-            jpeg_quality: QUALITY,
-            ..Default::default()
-        };
+        let opts = craft_image_codecs::EncodeOptions { jpeg_quality: QUALITY, ..Default::default() };
         let encoded = craft_image_codecs::encode(&img, format, &opts)
             .map_err(|e| EditError::Invalid(format!("the straightened page could not be encoded: {e}")))?;
         // One device pixel per `k` points keeps the page's physical size.

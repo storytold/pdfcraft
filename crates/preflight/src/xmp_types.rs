@@ -22,9 +22,9 @@
 
 use std::collections::BTreeMap;
 
-use pdfcraft_cos::{DecodeBudget, ObjRef, Object};
 use crate::xmp::NsScope;
 use craft_xml::El;
+use pdfcraft_cos::{DecodeBudget, ObjRef, Object};
 
 /// How deep arrays, structures and qualifiers are followed. No type nests nearly this deep, so a
 /// value nested deeper doesn't have its type.
@@ -634,12 +634,7 @@ fn unicode(bytes: &[u8]) -> String {
 /// name order: each by its name with the namespace's preferred prefix and by its name as the packet
 /// writes it (see [`written`]), with the type it should have as [`named`] gives it.
 pub(crate) fn mistyped(doc: &El) -> BTreeMap<(String, String), String> {
-    fn walk<'a>(
-        el: &'a El,
-        parent_scope: &NsScope<'a>,
-        parent_is_rdf: bool,
-        out: &mut BTreeMap<(String, String), String>,
-    ) {
+    fn walk<'a>(el: &'a El, parent_scope: &NsScope<'a>, parent_is_rdf: bool, out: &mut BTreeMap<(String, String), String>) {
         let scope = parent_scope.child(el);
         if parent_is_rdf && scope.is(el, RDF, "Description") {
             for (k, v) in &el.attrs {
@@ -754,11 +749,7 @@ fn fits<'a>(ty: Ty, e: &'a El, scope: &NsScope<'a>, depth: usize) -> bool {
             [] => {}
             [v] => {
                 let vs = ns.child(v);
-                return ns.attr(n, RDF, "value").is_none()
-                    && blank(e)
-                    && blank(n)
-                    && fits(ty, v, &vs, deeper)
-                    && predefined_ok(n, &ns, deeper);
+                return ns.attr(n, RDF, "value").is_none() && blank(e) && blank(n) && fits(ty, v, &vs, deeper) && predefined_ok(n, &ns, deeper);
             }
             _ => return false,
         }
@@ -779,9 +770,7 @@ fn fits<'a>(ty: Ty, e: &'a El, scope: &NsScope<'a>, depth: usize) -> bool {
             children.is_empty() && !resource && field_attributes(e, scope).next().is_none() && simple(ty, &text(e))
         }
         Ty::LangAlt => match array(e, scope, &children, "Alt") {
-            Some(items) => items
-                .iter()
-                .all(|(i, iscope)| iscope.attr(i, XML, "lang").is_some() && fits(Ty::Text, i, iscope, deeper)),
+            Some(items) => items.iter().all(|(i, iscope)| iscope.attr(i, XML, "lang").is_some() && fits(Ty::Text, i, iscope, deeper)),
             None => false,
         },
         Ty::Seq(item) | Ty::Bag(item) | Ty::Alt(item) => {
@@ -812,7 +801,9 @@ fn fits<'a>(ty: Ty, e: &'a El, scope: &NsScope<'a>, depth: usize) -> bool {
         }
         // A structure of any fields, such as a Pantry item: predefined properties in it still have
         // their types.
-        Ty::AnyStruct => structure(e, scope, &children, resource, description.as_ref()).is_some_and(|(holder, hscope)| predefined_ok(holder, &hscope, deeper)),
+        Ty::AnyStruct => {
+            structure(e, scope, &children, resource, description.as_ref()).is_some_and(|(holder, hscope)| predefined_ok(holder, &hscope, deeper))
+        }
         Ty::OneOf(types) => types.iter().any(|t| fits(*t, e, scope, depth)),
     }
 }
@@ -841,7 +832,9 @@ fn array<'a>(e: &'a El, scope: &NsScope<'a>, children: &[(&'a El, NsScope<'a>)],
         // Items are `rdf:li` (ISO 16684-1 7.9.2.4); any other element, or character data around
         // them, breaks the array, and so does `rdf:parseType` or `rdf:resource` on the property,
         // which makes its value something else.
-        [(a, ascope)] if is(a, ascope, RDF, kind) && field_attributes(e, scope).next().is_none() && blank(e) && blank(a) && !other_value_form(e, scope) => {
+        [(a, ascope)]
+            if is(a, ascope, RDF, kind) && field_attributes(e, scope).next().is_none() && blank(e) && blank(a) && !other_value_form(e, scope) =>
+        {
             let items: Vec<(&'a El, NsScope<'a>)> = a.elements().map(|i| (i, ascope.child(i))).collect();
             items.iter().all(|(i, iscope)| is(i, iscope, RDF, "li")).then_some(items)
         }

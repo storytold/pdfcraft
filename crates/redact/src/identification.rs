@@ -184,10 +184,8 @@ fn read(text: &str) -> Option<Found> {
         return None;
     }
     const CANON: craft_xml::Canonical<'_> = craft_xml::Canonical::new(&[("pdfaid", PDFA_ID), ("pdfuaid", PDFUA_ID)]);
-    let mut opts = craft_xml::Options::canonical(&CANON).strict().with_limits(craft_xml::Limits {
-        max_nodes: MAX_NODES as usize,
-        ..Default::default()
-    });
+    let mut opts =
+        craft_xml::Options::canonical(&CANON).strict().with_limits(craft_xml::Limits { max_nodes: MAX_NODES as usize, ..Default::default() });
     opts.doctype = craft_xml::Doctype::Reject;
     let xml = opts.parse(text.as_bytes()).ok()?;
     let mut found = Found::default();

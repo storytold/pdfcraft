@@ -93,9 +93,11 @@ fn read_own_keys(node: &craft_xml::El, ns: &[(String, String)], d: &mut Dict) {
     let mut keys_text = None;
     for (k, v) in &node.attrs {
         if let Some((prefix, "keys")) = k.split_once(':') {
-            let uri = node.ns_decls().find(|(p, _)| *p == prefix).map(|(_, u)| u).or_else(|| {
-                ns.iter().rfind(|(p, _)| p == prefix).map(|(_, u)| u.as_str())
-            });
+            let uri = node
+                .ns_decls()
+                .find(|(p, _)| *p == prefix)
+                .map(|(_, u)| u)
+                .or_else(|| ns.iter().rfind(|(p, _)| p == prefix).map(|(_, u)| u.as_str()));
             if uri == Some(PDFCRAFT_NS) {
                 keys_text = Some(v.as_str());
                 break;
@@ -316,10 +318,7 @@ fn walk_rich_plain(node: &craft_xml::El, out: &mut String) {
             craft_xml::Node::El(el) => {
                 if el.local() == "br" {
                     out.push('\r');
-                } else if matches!(el.local(), "p" | "div" | "li")
-                    && !out.is_empty()
-                    && !out.ends_with('\r')
-                {
+                } else if matches!(el.local(), "p" | "div" | "li") && !out.is_empty() && !out.ends_with('\r') {
                     out.push('\r');
                 }
                 walk_rich_plain(el, out);
@@ -669,11 +668,7 @@ fn with_comment_nodes(text: &str, mut f: impl FnMut(&craft_xml::El)) {
 fn comment_nodes(text: &str) -> Vec<(String, Option<String>, Vec<f64>)> {
     let mut out = Vec::new();
     with_comment_nodes(text, |node| {
-        out.push((
-            node.local().to_owned(),
-            node.attr("inreplyto").map(str::to_owned),
-            node.attr("rect").map(csv).unwrap_or_default(),
-        ));
+        out.push((node.local().to_owned(), node.attr("inreplyto").map(str::to_owned), node.attr("rect").map(csv).unwrap_or_default()));
     });
     out
 }
@@ -715,9 +710,7 @@ pub fn comment_outlines(text: &str) -> Vec<Outline> {
             "ink" => {
                 let strokes: Vec<Vec<[f64; 2]>> = node
                     .child(craft_xml::Local("inklist"))
-                    .map(|list| {
-                        list.children(craft_xml::Local("gesture")).map(|g| pairs(&g.text())).filter(|s| !s.is_empty()).collect()
-                    })
+                    .map(|list| list.children(craft_xml::Local("gesture")).map(|g| pairs(&g.text())).filter(|s| !s.is_empty()).collect())
                     .unwrap_or_default();
                 if !strokes.is_empty() {
                     out.push(Outline::Ink { strokes, color });

@@ -346,10 +346,7 @@ pub fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u
         (craft_image_codecs::ChannelLayout::Rgba, rgba)
     };
     let img = craft_image_codecs::Image::from_u8(width, height, layout, data).map_err(|e| e.to_string())?;
-    let opts = craft_image_codecs::EncodeOptions {
-        png_compression: craft_image_codecs::PngCompression::Fast,
-        ..Default::default()
-    };
+    let opts = craft_image_codecs::EncodeOptions { png_compression: craft_image_codecs::PngCompression::Fast, ..Default::default() };
     craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &opts).map_err(|e| e.to_string())
 }
 
@@ -418,11 +415,7 @@ pub fn encode_jpeg(width: u32, height: u32, premultiplied: &[u8], quality: u8, d
     let mut img = craft_image_codecs::Image::from_u8(width, height, craft_image_codecs::ChannelLayout::Rgb, rgb).map_err(|e| e.to_string())?;
     let d = dpi.round() as f32;
     img.meta.dpi = Some((d, d));
-    let opts = craft_image_codecs::EncodeOptions {
-        jpeg_quality: quality.clamp(1, 100),
-        embed_metadata: true,
-        ..Default::default()
-    };
+    let opts = craft_image_codecs::EncodeOptions { jpeg_quality: quality.clamp(1, 100), embed_metadata: true, ..Default::default() };
     craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &opts).map_err(|e| e.to_string())
 }
 
@@ -433,11 +426,8 @@ pub fn encode_tiff(width: u32, height: u32, premultiplied: &[u8], dpi: f64) -> R
     let mut img = craft_image_codecs::Image::from_u8(width, height, craft_image_codecs::ChannelLayout::Rgb, rgb).map_err(|e| e.to_string())?;
     let d = dpi as f32;
     img.meta.dpi = Some((d, d));
-    let opts = craft_image_codecs::EncodeOptions {
-        tiff_compression: craft_image_codecs::TiffCompression::Lzw,
-        embed_metadata: true,
-        ..Default::default()
-    };
+    let opts =
+        craft_image_codecs::EncodeOptions { tiff_compression: craft_image_codecs::TiffCompression::Lzw, embed_metadata: true, ..Default::default() };
     craft_image_codecs::encode(&img, craft_image_codecs::Format::Tiff, &opts).map_err(|e| e.to_string())
 }
 

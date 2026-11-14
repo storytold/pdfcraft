@@ -53,7 +53,10 @@ fn the_identification_of_a_removed_packet_is_written_back() {
         let qname = format!("{prefix}:{local}");
         std::iter::once(&xml).chain(xml.descendants()).find(|n| n.name == qname).map(|n| n.text().into_owned())
     };
-    assert_eq!((value("pdfaid", "part").as_deref(), value("pdfaid", "conformance").as_deref(), value("pdfuaid", "part").as_deref()), (Some("2"), Some("B"), Some("1")));
+    assert_eq!(
+        (value("pdfaid", "part").as_deref(), value("pdfaid", "conformance").as_deref(), value("pdfuaid", "part").as_deref()),
+        (Some("2"), Some("B"), Some("1"))
+    );
     // PDF/A-2 accepts pdfuaid only through an extension schema describing it.
     assert_eq!(value("pdfaSchema", "prefix").as_deref(), Some("pdfuaid"), "{text}");
 }

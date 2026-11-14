@@ -475,12 +475,8 @@ fn images_export_as_jpeg_unchanged_and_others_as_png() {
     assert_eq!(kinds, [(0, "png", 4, 2), (1, "jpg", 3, 2), (2, "png", 4, 2)]);
     assert_eq!(out.images[1].data, jpeg_bytes(), "JPEG data is written as is");
     // The PNG round-trips the pixels, with the soft mask as alpha.
-    let img = craft_image_codecs::decode_as_with(
-        craft_image_codecs::Format::Png,
-        &out.images[0].data,
-        &craft_image_codecs::DecodeOptions::default(),
-    )
-    .unwrap();
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, &out.images[0].data, &craft_image_codecs::DecodeOptions::default())
+        .unwrap();
     assert_eq!(img.layout(), craft_image_codecs::ChannelLayout::Rgba);
     let buf = img.as_u8().unwrap();
     assert_eq!(&buf[..8], &[200, 200, 200, 0, 200, 200, 200, 200]);
@@ -514,12 +510,8 @@ fn indexed_and_one_bit_images_decode() {
     );
     doc.set(r, Object::Stream(Stream::from_raw(d, vec![0b0101_0000])));
     let out = extract_images(&doc, &[0], 0);
-    let img = craft_image_codecs::decode_as_with(
-        craft_image_codecs::Format::Png,
-        &out.images[0].data,
-        &craft_image_codecs::DecodeOptions::default(),
-    )
-    .unwrap();
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, &out.images[0].data, &craft_image_codecs::DecodeOptions::default())
+        .unwrap();
     let buf = img.as_u8().unwrap();
     assert_eq!(&buf[..12], &[255, 0, 0, 0, 0, 255, 255, 0, 0, 0, 0, 255]);
 }
@@ -607,10 +599,7 @@ fn source_kind_tells_pdfs_images_and_text_apart() {
 fn bigtiff_images_become_pages() {
     let mut img = craft_image_codecs::Image::from_u8(4, 2, craft_image_codecs::ChannelLayout::Gray, vec![128; 8]).unwrap();
     img.meta.dpi = Some((144.0, 144.0));
-    let opts = craft_image_codecs::EncodeOptions {
-        tiff_bigtiff: true,
-        ..Default::default()
-    };
+    let opts = craft_image_codecs::EncodeOptions { tiff_bigtiff: true, ..Default::default() };
     let tif = craft_image_codecs::encode(&img, craft_image_codecs::Format::Tiff, &opts).unwrap();
     assert!(tif.starts_with(b"II+\0"), "the encoder wrote a BigTIFF");
     assert_eq!(source_kind("scan.tif", &tif), Some(SourceKind::Image));
@@ -885,10 +874,7 @@ fn alphas(rgba: &[u8]) -> Vec<u8> {
 /// A 4×2 grey JPEG (mid grey).
 fn real_jpeg() -> Vec<u8> {
     let img = craft_image_codecs::Image::from_u8(4, 2, craft_image_codecs::ChannelLayout::Gray, vec![128u8; 8]).unwrap();
-    let opts = craft_image_codecs::EncodeOptions {
-        jpeg_quality: 95,
-        ..Default::default()
-    };
+    let opts = craft_image_codecs::EncodeOptions { jpeg_quality: 95, ..Default::default() };
     craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &opts).unwrap()
 }
 
@@ -1126,12 +1112,7 @@ fn indexed_image_export_clamps_samples_to_hival() {
 }
 
 fn exported_png_pixels(bytes: &[u8]) -> Vec<u8> {
-    let img = craft_image_codecs::decode_as_with(
-        craft_image_codecs::Format::Png,
-        bytes,
-        &craft_image_codecs::DecodeOptions::default(),
-    )
-    .unwrap();
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, bytes, &craft_image_codecs::DecodeOptions::default()).unwrap();
     img.as_u8().unwrap().to_vec()
 }
 
@@ -1504,19 +1485,8 @@ fn cmyk_and_ycck_jpegs_export_in_the_colours_the_page_shows() {
 /// A 60 x 20 JPEG at `dpi` x 72 dpi, tagged with EXIF `orientation` (6: shown turned 90 degrees
 /// clockwise).
 pub(crate) fn phone_jpeg(orientation: u8, dpi: u16) -> Vec<u8> {
-    let rgb = craft_image_codecs::Image::from_u8(
-        60,
-        20,
-        craft_image_codecs::ChannelLayout::Rgb,
-        vec![20; 60 * 20 * 3],
-    )
-    .unwrap();
-    let jpeg = craft_image_codecs::encode(
-        &rgb,
-        craft_image_codecs::Format::Jpeg,
-        &craft_image_codecs::EncodeOptions::default(),
-    )
-    .unwrap();
+    let rgb = craft_image_codecs::Image::from_u8(60, 20, craft_image_codecs::ChannelLayout::Rgb, vec![20; 60 * 20 * 3]).unwrap();
+    let jpeg = craft_image_codecs::encode(&rgb, craft_image_codecs::Format::Jpeg, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec();
     exif.extend_from_slice(&[orientation, 0, 0, 0, 0, 0, 0, 0]);
     let mut out = jpeg[..2].to_vec();
@@ -1901,12 +1871,7 @@ fn black_and_white_images_are_stored_at_one_bit() {
 
 /// The pixels of an exported PNG (RGB), as true for white.
 fn exported_white(png_data: &[u8]) -> Vec<bool> {
-    let img = craft_image_codecs::decode_as_with(
-        craft_image_codecs::Format::Png,
-        png_data,
-        &craft_image_codecs::DecodeOptions::default(),
-    )
-    .unwrap();
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, png_data, &craft_image_codecs::DecodeOptions::default()).unwrap();
     assert_eq!(img.layout(), craft_image_codecs::ChannelLayout::Rgb);
     img.as_u8().unwrap().as_chunks::<3>().0.iter().map(|p| *p == [255, 255, 255]).collect()
 }
@@ -2659,19 +2624,8 @@ fn flate_images_past_the_exports_allowance_are_left_out_with_the_reason() {
     assert!(refused.contains("more image decoding than"), "{refused}");
     assert_eq!(budget.refused(), 1);
 
-    let jpeg_img = craft_image_codecs::Image::from_u8(
-        2,
-        2,
-        craft_image_codecs::ChannelLayout::Rgb,
-        vec![9; 2 * 2 * 3],
-    )
-    .unwrap();
-    let bytes = craft_image_codecs::encode(
-        &jpeg_img,
-        craft_image_codecs::Format::Jpeg,
-        &craft_image_codecs::EncodeOptions::default(),
-    )
-    .unwrap();
+    let jpeg_img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![9; 2 * 2 * 3]).unwrap();
+    let bytes = craft_image_codecs::encode(&jpeg_img, craft_image_codecs::Format::Jpeg, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let jpeg = doc.add(Object::Stream(image("DCTDecode", bytes)));
     assert!(crate::extract::image_file_within(&doc, jpeg, &mut budget).is_ok(), "nothing charged");
     assert_eq!(budget.refused(), 1);
@@ -3037,12 +2991,8 @@ fn a_mask_of_other_proportions_than_its_image_is_scaled_without_the_memory_of_bo
         let image = doc.add(Object::Stream(image));
         let (name, png) = crate::image_file(&doc, image).unwrap_or_else(|e| panic!("{mask_w} × {mask_h} on {w} × {h}: {e}"));
         assert_eq!(name, "png");
-        let decoded = craft_image_codecs::decode_as_with(
-            craft_image_codecs::Format::Png,
-            &png,
-            &craft_image_codecs::DecodeOptions::default(),
-        )
-        .unwrap();
+        let decoded =
+            craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, &png, &craft_image_codecs::DecodeOptions::default()).unwrap();
         assert_eq!((decoded.width() as usize, decoded.height() as usize, decoded.layout()), (w, h, craft_image_codecs::ChannelLayout::Rgba));
         let rgba = decoded.as_u8().unwrap();
         assert!(rgba.as_chunks::<4>().0.iter().all(|p| p[3].abs_diff(0x80u8) <= 1), "{mask_w} × {mask_h} on {w} × {h}");

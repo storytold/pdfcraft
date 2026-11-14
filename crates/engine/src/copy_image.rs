@@ -80,17 +80,11 @@ impl Document {
     pub fn page_image_rgba(&self, page: usize, index: usize) -> Result<(u32, u32, Vec<u8>), String> {
         let (_, bytes) = self.page_image_copy_file(page, index)?;
         let opts = craft_image_codecs::DecodeOptions {
-            limits: craft_image_codecs::Limits {
-                max_pixels: MAX_COPY_PIXELS,
-                max_alloc: MAX_COPY_PIXELS * 4,
-                ..Default::default()
-            },
+            limits: craft_image_codecs::Limits { max_pixels: MAX_COPY_PIXELS, max_alloc: MAX_COPY_PIXELS * 4, ..Default::default() },
             ..Default::default()
         };
         let img = craft_image_codecs::decode_with(&bytes, &opts).map_err(|e| match e {
-            craft_image_codecs::CodecError::LimitExceeded(_) => {
-                "the image is too large to copy; use Save Image As".to_string()
-            }
+            craft_image_codecs::CodecError::LimitExceeded(_) => "the image is too large to copy; use Save Image As".to_string(),
             other => other.to_string(),
         })?;
         let (w, h) = (img.width(), img.height());
@@ -136,9 +130,7 @@ pub(crate) fn is_picture(cos: &Cos, image: ObjRef, file: &[u8]) -> bool {
         Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => size(s),
         _ => return false,
     };
-    let given = craft_image_codecs::probe_size(file)
-        .ok()
-        .or_else(|| craft_image_codecs::decode(file).ok().map(|img| (img.width(), img.height())));
+    let given = craft_image_codecs::probe_size(file).ok().or_else(|| craft_image_codecs::decode(file).ok().map(|img| (img.width(), img.height())));
     stored.is_some() && stored == given && picture_file(cos, image).is_ok_and(|(_, data)| data == file)
 }
 
