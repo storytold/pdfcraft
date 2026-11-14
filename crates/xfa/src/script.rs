@@ -1034,16 +1034,22 @@ pub fn script_objects_for(tpl: &Template, index: &ScriptObjectIndex, som: &str) 
     let mut nodes: &[Node] = &tpl.root.children;
     let mut at = root_som;
     let mut follow = true;
+    // the page a page master's script is on, when it isn't the first its area makes: (first page's SOM, this page's)
+    let mut page_copy: Option<(String, String)> = None;
     if tpl.root.common.name.as_deref() != Some(first_name) {
         // a page master's script: `Page1[0].button[0]`, or `#pageArea[2].button[0]` for an unnamed area
         follow = false;
         if let Some(ps) = &tpl.root.page_set {
             chain.push((&ps.script_objects, None));
             let area = match first_name {
-                "#pageArea" => som_index(first).and_then(|i| ps.areas.get(i)),
-                name => ps.areas.iter().find(|a| a.name.as_deref() == Some(name)),
+                "#pageArea" => som_index(first).and_then(|i| ps.areas.get(i).map(|a| (i, a))),
+                name => ps.areas.iter().enumerate().find(|(_, a)| a.name.as_deref() == Some(name)),
             };
-            if let Some(area) = area {
+            if let Some((i, area)) = area {
+                let page0 = area_som(area, i, 0);
+                if page0 != first {
+                    page_copy = Some((page0, first.to_string()));
+                }
                 chain.push((&area.script_objects, Some(first.to_string())));
                 nodes = &area.items;
                 at = Some(first.to_string());
@@ -1082,7 +1088,14 @@ pub fn script_objects_for(tpl: &Template, index: &ScriptObjectIndex, som: &str) 
         for (name, som, text) in &index.all {
             if index.counts.get(name) == Some(&1) && !out.iter().any(|x| x.name == *name) {
                 let unnamed = index.unnamed.contains(name);
-                out.push(ReachableObject { name: name.clone(), som: som.clone(), text: Arc::clone(text), bare: true, unnamed });
+                // the index records a page master's objects on its first page: on another page they are that page's
+                let on_page = |s: &String| {
+                    let (page0, here) = page_copy.as_ref()?;
+                    let rest = s.strip_prefix(page0.as_str()).filter(|r| r.is_empty() || r.starts_with('.'))?;
+                    Some(format!("{here}{rest}"))
+                };
+                let som = som.as_ref().map(|s| on_page(s).unwrap_or_else(|| s.clone()));
+                out.push(ReachableObject { name: name.clone(), som, text: Arc::clone(text), bare: true, unnamed });
             }
         }
     }
@@ -1246,6 +1259,32 @@ mod script_object_tests {
         // an object two places declare is reached only from its own scope
         assert!(!master.iter().any(|(n, _)| n == "Other"), "{master:?}");
         assert!(names(&reach(&tpl, "Page2[0].button[0]")).iter().any(|(n, _)| n == "Other"));
+    }
+
+    /// A page area makes a page each time it is used, each with its own SOM (`Page1[5]`): an object its content declares is
+    /// the one on the script's own page, so a script on the sixth page finds it as well as one on the first.
+    #[test]
+    fn a_page_masters_objects_are_found_on_every_page_it_makes() {
+        let sub = |name: &str, objects: Vec<ScriptObject>, children: Vec<Node>| {
+            Node::Subform(Box::new(Subform { common: named(name), script_objects: objects, children, ..Default::default() }))
+        };
+        let mut tpl = Template { root: Subform { common: named("form"), ..Default::default() }, ..Default::default() };
+        tpl.root.page_set = Some(PageSet {
+            script_objects: Vec::new(),
+            areas: vec![PageArea {
+                name: Some("Page1".into()),
+                items: vec![sub("frag", Vec::new(), vec![sub("ctl", vec![object("Mode")], Vec::new())])],
+                ..Default::default()
+            }],
+        });
+        for page in [0, 5] {
+            let found = reach(&tpl, &format!("Page1[{page}].frag[0].btn[0]"));
+            assert!(
+                found.iter().any(|o| o.name == "Mode" && o.som.as_deref() == Some(&*format!("Page1[{page}].frag[0].ctl[0]"))),
+                "page {page}: {:?}",
+                names(&found)
+            );
+        }
     }
 
     #[test]
