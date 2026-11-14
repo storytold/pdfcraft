@@ -825,10 +825,17 @@ fn update_dragged_selection(view: &mut DocView, text: &PageText, gesture: &TextG
                     && let Some((first, last)) = click_unit(text, clicks, *anchor)
                 {
                     let (to_first, to_last) = click_unit(text, clicks, hit).unwrap_or((hit, hit));
-                    (*anchor, *head) = if to_first < first { (last, to_first) } else { (first, to_last.max(last)) };
                     // A drag, so it selects table rows as a plain drag does, by whole units.
                     // The page unit (four clicks) is the page's text in reading order.
                     *head_x = Some(gesture.vx).filter(|x| x.is_finite() && clicks < 4);
+                    let in_order = if to_first < first { (last, to_first) } else { (first, to_last.max(last)) };
+                    // Rows run from the upper unit's start to the lower one's end, which reading
+                    // order may have the other way round (a drag from a right-hand cell down into
+                    // a left-hand one).
+                    let centre = |i: usize| text.glyphs.get(i).map_or(f32::NAN, |g| (g.rect[1] + g.rect[3]) / 2.0);
+                    let by_rows = if centre(to_first) > centre(first) { (first, to_last) } else { (last, to_first) };
+                    let rows = head_x.is_some() && text.visual_between(by_rows.0, by_rows.1, *head_x).is_some();
+                    (*anchor, *head) = if rows { by_rows } else { in_order };
                 }
             }
             Span::Run { head, head_x, .. } => {
