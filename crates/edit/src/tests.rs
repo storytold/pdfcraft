@@ -3363,6 +3363,123 @@ fn a_five_letter_prefix_is_not_a_subset_tag() {
     assert_eq!(lines.len(), 3, "{:?}", lines.iter().map(|l| &l.text).collect::<Vec<_>>());
 }
 
+/// A page drawing `content` in two Chromium-style Type 3 subsets of one face, `/F1` and `/F2`
+/// (#5769): each encodes only its own glyphs, the first the space, `a` and `b`, the second `c` and
+/// `d`. `fillers` more resources for `/F1` are listed under names that sort first.
+fn two_type3_subsets(content: &str, fillers: usize) -> Document {
+    type3_subsets(content, fillers, &[&[(32, "space", 250), (97, "a", 500), (98, "b", 500)], &[(99, "c", 500), (100, "d", 500)]])
+}
+
+/// A page drawing `content` in Chromium-style Type 3 subsets of one face, `/F1`, `/F2` and so on,
+/// one per entry of `subsets`, each encoding only its own glyphs (code, glyph name, width).
+/// `fillers` more resources for `/F1` are listed under names that sort first.
+fn type3_subsets(content: &str, fillers: usize, subsets: &[&[(u32, &str, u32)]]) -> Document {
+    let (descriptor, proc) = (5 + subsets.len(), 6 + subsets.len());
+    let type3 = |glyphs: &[(u32, &str, u32)]| {
+        let (first, last) = (glyphs[0].0, glyphs[glyphs.len() - 1].0);
+        let widths: Vec<String> = (first..=last).map(|code| glyphs.iter().find(|g| g.0 == code).map_or(0, |g| g.2).to_string()).collect();
+        let names: Vec<String> = glyphs.iter().map(|(code, name, _)| format!("{code} /{name}")).collect();
+        let procs: Vec<String> = glyphs.iter().map(|(_, name, _)| format!("/{name} {proc} 0 R")).collect();
+        format!(
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar {first} /LastChar {last}              /Widths [{}] /Encoding << /Type /Encoding /Differences [{}] >> /CharProcs << {} >> /Resources << >> /FontDescriptor {descriptor} 0 R >>",
+            widths.join(" "),
+            names.join(" "),
+            procs.join(" "),
+        )
+    };
+    let fillers: String = (0..fillers).map(|i| format!("/A{i:04} 5 0 R ")).collect();
+    let names: String = (0..subsets.len()).map(|i| format!("/F{} {} 0 R ", i + 1, i + 5)).collect();
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << {fillers}{names}>> >> >>"),
+        stream("", content),
+    ];
+    objects.extend(subsets.iter().map(|glyphs| type3(glyphs)));
+    objects.push("<< /Type /FontDescriptor /FontName /AAAAAA+Inter /Flags 32 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 /CapHeight 700 /StemV 80 >>".to_owned());
+    objects.push(stream("", "500 0 d0"));
+    build(&objects.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+/// Edits the first word of `doc`'s two-row paragraph and returns the horizontal scales the
+/// rewrite sets, with the page's content.
+fn rewritten_scales(mut doc: Document) -> (Vec<String>, String) {
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1, "{blocks:?}");
+    let draft = blocks[0].editor_text.replacen("ab", "ba", 1);
+    assert!(draft.contains('\n'), "{draft:?}");
+    text::replace_block(&mut doc, 0, 0, &draft).unwrap();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    (content.lines().filter(|l| l.ends_with(" Tz")).map(str::to_owned).collect(), content)
+}
+
+/// A line joined across two subsets of one font (#3661) is measured run by run, each in its own
+/// resource's widths. Measured in the first subset alone, the words only the second one can
+/// encode counted for nothing, the line seemed narrower than it is drawn, and a paragraph edit
+/// stretched every row to make up for it (`200 Tz` in the issue's file, #5769).
+#[test]
+fn a_paragraph_across_two_subsets_of_one_font_keeps_its_scale() {
+    let doc = two_type3_subsets("BT /F1 20 Tf 72 700 Td (ab ) Tj /F2 20 Tf (cd) Tj /F1 20 Tf 0 -24 Td (ba ) Tj /F2 20 Tf (dc) Tj ET", 0);
+    let (scales, content) = rewritten_scales(doc);
+    assert_eq!(scales, ["100 Tz"; 3], "{content}");
+    assert!(content.contains("(ba ) Tj") && content.contains("(cd) Tj"), "{content}");
+}
+
+/// The general case of the run-by-run measure: three subsets, the space only in the middle one.
+/// The edited row draws its first space as that subset's glyph, then joins its last word across a
+/// 5 pt gap, which reading turns into a space measured in the line's font. That subset has no
+/// space, so its face's space is used (the middle subset's 250 units), and the row, drawn exactly
+/// that wide, keeps `100 Tz`. Leaving the joined space out measured the row 5 pt short.
+#[test]
+fn a_space_joined_between_subsets_is_measured_in_the_face() {
+    let subsets: [&[(u32, &str, u32)]; 3] = [&[(97, "a", 500), (98, "b", 500)], &[(32, "space", 250)], &[(99, "c", 500), (100, "d", 500)]];
+    let content = "BT /F1 20 Tf 72 700 Td (ab) Tj /F2 20 Tf ( ) Tj /F3 20 Tf (cd) Tj /F1 20 Tf 50 0 Td (ba) Tj /F3 20 Tf -50 -24 Td (dc) Tj ET";
+    let doc = type3_subsets(content, 0, &subsets);
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["ab cd ba", "dc"]);
+    let (scales, content) = rewritten_scales(doc);
+    assert_eq!(scales, ["100 Tz"; 4], "{content}");
+}
+
+/// The run-by-run measure reads every run's font, also one past the first 256 resources that are
+/// read for the paragraph up front: kerning the row is drawn with (here 10 pt after `ab `) is kept
+/// the same way wherever the second subset is listed (the edited row is 55 pt where its text
+/// measures 45 pt: `122.2222 Tz`).
+#[test]
+fn a_subset_past_the_first_256_fonts_is_measured_too() {
+    let content = "BT /F1 20 Tf 72 700 Td [(ab ) -500] TJ /F2 20 Tf (cd) Tj /F1 20 Tf 0 -24 Td [(ba ) -500] TJ /F2 20 Tf (dc) Tj ET";
+    let (near, _) = rewritten_scales(two_type3_subsets(content, 0));
+    assert_eq!(near, ["122.2222 Tz", "122.2222 Tz", "100 Tz"], "the kerning is calibrated");
+    let (far, content) = rewritten_scales(two_type3_subsets(content, 300));
+    assert_eq!(far, near, "{content}");
+}
+
+/// A row restyled into another face (here bold for the whole paragraph) keeps the runs it was read
+/// from, but it is written in the new face: it is still measured whole in that face, not run by run
+/// in the fonts it was drawn in, so the rewrite keeps the row's width.
+#[test]
+fn a_row_restyled_into_another_face_is_measured_in_that_face() {
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Hello world) Tj ET");
+    let before = text::text_lines(&doc, 0).unwrap()[0].rect;
+    // A coloured range sends the edit through the styled path; the bold applies to every row.
+    let range = text::RangeStyle {
+        range: 0..5,
+        family: None,
+        resource: None,
+        size: None,
+        color: Some([1.0, 0.0, 0.0]),
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    let style = text::BlockStyle { bold: Some(true), ranges: vec![range], ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("Hello world"), &style).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    let (left, right) = lines.iter().fold((f64::MAX, f64::MIN), |(l, r), line| (l.min(line.rect[0]), r.max(line.rect[2])));
+    assert!(lines.iter().all(|l| l.base_font == "Helvetica-Bold"), "{lines:?}");
+    assert!(((right - left) - (before[2] - before[0])).abs() < 0.5, "{left}..{right} against {before:?}");
+}
+
 #[test]
 fn text_lines_are_found_and_replaced_in_place() {
     let mut doc =
