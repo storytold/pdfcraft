@@ -7706,6 +7706,29 @@ fn comparing_two_versions_of_a_document() {
 /// Built-in and custom actions run their steps on a file (with JavaScript on), report each
 /// step's progress, and fail cleanly on a file that is not a PDF.
 #[test]
+fn marking_a_deletion_on_a_page_the_newer_file_lacks() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = |n: usize| {
+        (1..=n).map(|i| format!("Row {i} of the schedule.")).collect::<Vec<_>>().join(
+            "
+
+",
+        )
+    };
+    let v1 = s.create_from_text("t", &text(120)).unwrap();
+    let v2 = s.create_from_text("t", &text(20)).unwrap();
+    let old = s.open("v1.pdf", None, v1, None).unwrap();
+    let new = s.open("v2.pdf", None, v2, None).unwrap();
+    assert!(s.get(old).unwrap().info.pages.len() > 1 && s.get(new).unwrap().info.pages.len() == 1);
+    // Page 2 of the older file has no counterpart in the one-page newer file.
+    let c = s.compare_pages(old, new, &[1]).unwrap();
+    assert!(!c.changes.is_empty() && c.changes.iter().all(|ch| ch.kind == compare::Kind::Deleted), "{:?}", c.changes);
+    assert!(s.mark_differences_of(old, new, &[1]).unwrap() > 0);
+    let marks: Vec<_> = s.get(new).unwrap().info.annotations.iter().filter(|a| a.author.as_deref() == Some("Compare")).map(|a| a.page).collect();
+    assert!(!marks.is_empty() && marks.iter().all(|&p| p == 0), "{marks:?}");
+}
+
+#[test]
 fn actions_run_their_steps_on_files() {
     let s = Session::new();
     let src = s.create_from_text("t", "Quarterly numbers").unwrap();

@@ -39,10 +39,19 @@ impl crate::Document {
 
     /// Every word of the document in reading order, with page and box.
     pub fn words(&self) -> Vec<pdfcraft_compare::Word> {
+        self.words_on_pages(&[])
+    }
+
+    /// [`Self::words`] of the 0-based `pages` only (every page when empty): pages not
+    /// selected are skipped before any text is extracted from them.
+    pub fn words_on_pages(&self, pages: &[usize]) -> Vec<pdfcraft_compare::Word> {
         let config = pdfcraft_render::RenderConfig { password: self.password.as_deref().map(Arc::from), ..Default::default() };
         let mut r = pdfcraft_render::PageRenderer::new(self.bytes.clone(), config);
         let mut out = Vec::new();
         for (page, info) in self.info.pages.iter().enumerate() {
+            if !pages.is_empty() && !pages.contains(&page) {
+                continue;
+            }
             let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
             if let Some(t) = res.text {
                 out.extend(crate::js::page_words(&t, info).into_iter().map(|(text, rect)| pdfcraft_compare::Word { text, page, rect }));
@@ -56,25 +65,51 @@ impl Session {
     /// Compare files: the text differences from document `old` to document `new`. The result
     /// carries both documents' text, so both must allow copying it.
     pub fn compare(&self, old: DocId, new: DocId) -> Result<Comparison, EditError> {
+        self.compare_pages(old, new, &[])
+    }
+
+    /// [`Session::compare`], restricted to the 0-based `pages` (every page when empty):
+    /// words on other pages take no part in the diff.
+    pub fn compare_pages(&self, old: DocId, new: DocId, pages: &[usize]) -> Result<Comparison, EditError> {
         let a = self.get(old).ok_or(EditError::NoDocument)?;
         let b = self.get(new).ok_or(EditError::NoDocument)?;
         a.check_copying()?;
         b.check_copying()?;
-        Ok(pdfcraft_compare::compare(&a.words(), &b.words()))
-    }
-
-    /// [`Session::compare`], keeping the changes on `pages` of `new` (0-based; empty: every page).
-    pub fn compare_pages(&self, old: DocId, new: DocId, pages: &[usize]) -> Result<Comparison, EditError> {
-        let mut c = self.compare(old, new)?;
-        if !pages.is_empty() {
-            c.changes.retain(|ch| pages.iter().any(|page| (ch.new.page..=ch.new.last_page).contains(page)));
+        let (old_words, new_words) = (a.words_on_pages(pages), b.words_on_pages(pages));
+        let mut c = pdfcraft_compare::compare(&old_words, &new_words);
+        let new_pages = b.info.pages.len();
+        for ch in &mut c.changes {
+            // A deletion keeps the newer document's own anchor when it has one. Otherwise it goes
+            // on the old page when the newer document has that page, or else on the newer
+            // document's last page, at its top left.
+            if ch.new.rects.is_empty() && ch.new.near.is_none() {
+                let page = ch.old.page.min(new_pages.saturating_sub(1));
+                ch.new.page = page;
+                ch.new.near = if ch.old.page == page { ch.old.rects.first().copied() } else { None };
+                if ch.new.near.is_none() {
+                    ch.new.near = b.info.pages.get(page).map(|info| info.crop.map(f64::from));
+                }
+            }
+            if ch.old.rects.is_empty() {
+                ch.old.page = ch.new.page;
+                if ch.old.near.is_none() {
+                    ch.old.near = ch.new.rects.first().copied();
+                }
+            }
         }
         Ok(c)
     }
 
     /// Visual compare: regions where page n of `new` looks different from page n of `old`
-    /// (rendered at `dpi`), as (page, user-space box in `new`).
+    /// (rendered at `dpi`), as (page, user-space box in `new`). Every shared page is
+    /// compared when `pages` is empty, otherwise only the selected pages are rendered.
     pub fn compare_visual(&self, old: DocId, new: DocId, dpi: f32) -> Result<Vec<(usize, [f64; 4])>, EditError> {
+        self.compare_visual_on_pages(old, new, dpi, &[])
+    }
+
+    /// [`Session::compare_visual`] of the 0-based `pages` only (every shared page when
+    /// empty): pages not selected are skipped before any of them is rendered.
+    pub fn compare_visual_on_pages(&self, old: DocId, new: DocId, dpi: f32, pages: &[usize]) -> Result<Vec<(usize, [f64; 4])>, EditError> {
         let a = self.get(old).ok_or(EditError::NoDocument)?;
         let b = self.get(new).ok_or(EditError::NoDocument)?;
         let renderer = |d: &crate::Document| {
@@ -87,6 +122,9 @@ impl Session {
         let scale = dpi.clamp(18.0, 150.0) / 72.0;
         let mut out = Vec::new();
         for (page, info) in b.info.pages.iter().enumerate().take(a.info.pages.len()) {
+            if !pages.is_empty() && !pages.contains(&page) {
+                continue;
+            }
             let req = pdfcraft_render::RenderRequest { page, scale, ..Default::default() };
             let (x, y) = (ra.render(req), rb.render(req));
             if x.error.is_some() || y.error.is_some() {
