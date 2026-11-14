@@ -47,13 +47,13 @@ impl Space {
 }
 
 fn nums(doc: &Document, o: &Object) -> Vec<f64> {
-    doc.resolve(o).as_array().map(|a| a.iter().filter_map(|v| doc.resolve(v).as_f64()).collect()).unwrap_or_default()
+    doc.resolve(o).as_array().map(|a| a.iter().filter_map(|v| doc.resolve(v).as_f64()).filter(|v| v.is_finite()).collect()).unwrap_or_default()
 }
 
 /// The colour space an operand of `cs` names: a device space, or a name in the resources'
 /// `/ColorSpace` dictionary, or (inside arrays) a family.
 pub(crate) fn space_of(doc: &Document, operand: &Object, cs_res: &Dict, depth: u8) -> Space {
-    if depth > 4 {
+    if depth > 8 {
         return Space::Gray;
     }
     let resolved = doc.resolve(operand);
@@ -64,23 +64,24 @@ pub(crate) fn space_of(doc: &Document, operand: &Object, cs_res: &Dict, depth: u
             b"DeviceCMYK" | b"CMYK" => Space::Cmyk,
             b"Pattern" => Space::Pattern,
             other => match cs_res.get(other) {
-                Some(o) => space_of(doc, o, &Dict::default(), depth + 1),
+                Some(o) => space_of(doc, o, cs_res, depth + 1),
                 None => Space::Gray,
             },
         },
         Object::Array(a) => {
-            let family = a.first().map(|f| doc.resolve(f)).and_then(|f| f.as_name().map(|n| n.to_vec())).unwrap_or_default();
-            match family.as_slice() {
+            let family_obj = a.first().map(|f| doc.resolve(f));
+            let family = family_obj.as_deref().and_then(Object::as_name).unwrap_or_default();
+            match family {
                 b"ICCBased" => {
                     let stream = a.get(1).map(|s| doc.resolve(s));
-                    let dict = stream.as_ref().and_then(|s| match &**s {
-                        Object::Stream(st) => Some(st.dict.clone()),
+                    let dict = stream.as_deref().and_then(|s| match s {
+                        Object::Stream(st) => Some(&st.dict),
                         _ => None,
                     });
-                    if let Some(alt) = dict.as_ref().and_then(|d| d.get(b"Alternate").cloned()) {
-                        return space_of(doc, &alt, cs_res, depth + 1);
+                    if let Some(alt) = dict.and_then(|d| d.get(b"Alternate")) {
+                        return space_of(doc, alt, cs_res, depth + 1);
                     }
-                    match dict.and_then(|d| d.int(b"N")) {
+                    match dict.and_then(|d| d.get(b"N").and_then(|n| doc.resolve(n).as_int())) {
                         Some(1) => Space::Gray,
                         Some(4) => Space::Cmyk,
                         _ => Space::Rgb,
@@ -89,16 +90,23 @@ pub(crate) fn space_of(doc: &Document, operand: &Object, cs_res: &Dict, depth: u
                 b"CalRGB" => Space::Rgb,
                 b"CalGray" => Space::Gray,
                 b"Lab" => {
-                    let d = a.get(1).map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap_or_default();
-                    let wp = d.get(b"WhitePoint").map(|w| nums(doc, w)).unwrap_or_default();
-                    let white = if wp.len() == 3 { [wp[0], wp[1], wp[2]] } else { [0.9505, 1.0, 1.089] };
-                    let r = d.get(b"Range").map(|w| nums(doc, w)).unwrap_or_default();
-                    let range = if r.len() == 4 { [r[0], r[1], r[2], r[3]] } else { [-100.0, 100.0, -100.0, 100.0] };
+                    let dict_obj = a.get(1).map(|d| doc.resolve(d));
+                    let d = dict_obj.as_deref().and_then(Object::as_dict);
+                    let wp = d.and_then(|d| d.get(b"WhitePoint")).map(|w| nums(doc, w)).unwrap_or_default();
+                    let white = match wp.as_slice() {
+                        [x, y, z] => [*x, *y, *z],
+                        _ => [0.9505, 1.0, 1.089],
+                    };
+                    let r = d.and_then(|d| d.get(b"Range")).map(|w| nums(doc, w)).unwrap_or_default();
+                    let range = match r.as_slice() {
+                        [a0, a1, b0, b1] => [*a0, *a1, *b0, *b1],
+                        _ => [-100.0, 100.0, -100.0, 100.0],
+                    };
                     Space::Lab { white, range }
                 }
                 b"Indexed" | b"I" => {
                     let base = a.get(1).map(|b| space_of(doc, b, cs_res, depth + 1)).unwrap_or(Space::Rgb);
-                    let hival = a.get(2).and_then(|h| doc.resolve(h).as_f64()).unwrap_or(0.0).clamp(0.0, 255.0) as usize;
+                    let hival = a.get(2).and_then(|h| doc.resolve(h).as_f64()).filter(|h| h.is_finite()).unwrap_or(0.0).clamp(0.0, 255.0) as usize;
                     let table = match a.get(3).map(|t| doc.resolve(t)) {
                         Some(t) => match &*t {
                             Object::String(s) => s.bytes.clone(),
@@ -125,18 +133,21 @@ pub(crate) fn space_of(doc: &Document, operand: &Object, cs_res: &Dict, depth: u
                         a.get(1).map(|n| doc.resolve(n)).and_then(|n| n.as_array().map(Vec::len)).unwrap_or(1).max(1)
                     };
                     let alt = a.get(2).map(|b| space_of(doc, b, cs_res, depth + 1)).unwrap_or(Space::Gray);
+                    let out_n = alt.components().max(1);
                     let exp = a.get(3).map(|f| doc.resolve(f)).and_then(|f| {
                         let d = match &*f {
-                            Object::Dict(d) => d.clone(),
-                            Object::Stream(s) => s.dict.clone(),
+                            Object::Dict(d) => d,
+                            Object::Stream(s) => &s.dict,
                             _ => return None,
                         };
-                        if d.int(b"FunctionType") != Some(2) {
+                        if d.get(b"FunctionType").and_then(|t| doc.resolve(t).as_int()) != Some(2) {
                             return None;
                         }
-                        let c0 = d.get(b"C0").map(|v| nums(doc, v)).unwrap_or_else(|| vec![0.0]);
-                        let c1 = d.get(b"C1").map(|v| nums(doc, v)).unwrap_or_else(|| vec![1.0]);
-                        let n = d.get(b"N").and_then(|v| doc.resolve(v).as_f64()).unwrap_or(1.0);
+                        let mut c0 = d.get(b"C0").map(|v| nums(doc, v)).unwrap_or_default();
+                        c0.resize(out_n, 0.0);
+                        let mut c1 = d.get(b"C1").map(|v| nums(doc, v)).unwrap_or_default();
+                        c1.resize(out_n, 1.0);
+                        let n = d.get(b"N").and_then(|v| doc.resolve(v).as_f64()).filter(|n| n.is_finite() && *n > 0.0).unwrap_or(1.0);
                         Some((c0, c1, n))
                     });
                     Space::Tint { inputs, alt: Box::new(alt), exp }
@@ -180,7 +191,7 @@ fn lab(white: [f64; 3], l: f64, a: f64, b: f64) -> [f64; 3] {
 
 /// The sRGB of `values` in `space` (missing values read as 0; a pattern reads as black).
 pub(crate) fn rgb(space: &Space, values: &[f64]) -> [f64; 3] {
-    let v = |i: usize| values.get(i).copied().unwrap_or(0.0);
+    let v = |i: usize| values.get(i).copied().filter(|x| x.is_finite()).unwrap_or(0.0);
     match space {
         Space::Gray => {
             let g = clamp01(v(0));
@@ -196,13 +207,13 @@ pub(crate) fn rgb(space: &Space, values: &[f64]) -> [f64; 3] {
         }
         Space::Indexed { base, hival, table } => {
             let n = base.components().max(1);
-            let i = (v(0).max(0.0).round() as usize).min(*hival);
+            let i = (v(0).clamp(0.0, *hival as f64).round() as usize).min(*hival);
             let vals: Vec<f64> = (0..n).map(|k| table.get(i * n + k).map(|b| *b as f64 / 255.0).unwrap_or(0.0)).collect();
             // Lab tables hold the L*, a*, b* range in bytes; the others are 0..1 already.
             match &**base {
                 Space::Lab { range, .. } => {
                     let scaled = [
-                        vals[0] * 100.0,
+                        vals.first().copied().unwrap_or(0.0) * 100.0,
                         range[0] + vals.get(1).copied().unwrap_or(0.0) * (range[1] - range[0]),
                         range[2] + vals.get(2).copied().unwrap_or(0.0) * (range[3] - range[2]),
                     ];
@@ -214,7 +225,7 @@ pub(crate) fn rgb(space: &Space, values: &[f64]) -> [f64; 3] {
         Space::Tint { inputs, alt, exp } => match exp {
             Some((c0, c1, n)) => {
                 let t = clamp01(v(0));
-                let k = if *n == 1.0 { t } else { t.powf(*n) };
+                let k = if *n == 1.0 { t } else { clamp01(t.powf(*n)) };
                 let out: Vec<f64> = c0.iter().zip(c1.iter()).map(|(a, b)| a + k * (b - a)).collect();
                 rgb(alt, &out)
             }
@@ -226,5 +237,48 @@ pub(crate) fn rgb(space: &Space, values: &[f64]) -> [f64; 3] {
             }
         },
         Space::Pattern => [0.0, 0.0, 0.0],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pdfcraft_cos::{Dict, Document, Object, PdfString};
+
+    use super::{Space, rgb, space_of};
+
+    #[test]
+    fn resolves_nested_resource_colour_spaces_and_type2_tint_defaults() {
+        let doc = Document::new_empty();
+        let mut cs_res = Dict::new();
+        cs_res.set(b"CSBase".to_vec(), Object::name("DeviceRGB"));
+        cs_res.set(
+            b"CSIdx".to_vec(),
+            Object::Array(vec![
+                Object::name("Indexed"),
+                Object::name("CSBase"),
+                Object::Int(1),
+                Object::String(PdfString::literal(vec![0, 0, 0, 255, 0, 0])),
+            ]),
+        );
+        let space = space_of(&doc, &Object::name("CSIdx"), &cs_res, 0);
+        assert_eq!(rgb(&space, &[1.0]), [1.0, 0.0, 0.0]);
+
+        let mut tint = Dict::new();
+        tint.set(b"FunctionType".to_vec(), Object::Int(2));
+        tint.set(b"C0".to_vec(), Object::Array(vec![Object::Real(0.0)]));
+        tint.set(b"C1".to_vec(), Object::Array(vec![Object::Real(0.2), Object::Real(0.4), Object::Real(0.8)]));
+        tint.set(b"N".to_vec(), Object::Real(-2.0));
+        let sep = Object::Array(vec![Object::name("Separation"), Object::name("Spot"), Object::name("CSBase"), Object::Dict(tint)]);
+        let sep_space = space_of(&doc, &sep, &cs_res, 0);
+        let c = rgb(&sep_space, &[0.5]);
+        assert!((c[0] - 0.1).abs() < 1e-6 && (c[1] - 0.2).abs() < 1e-6 && (c[2] - 0.4).abs() < 1e-6, "{c:?}");
+
+        cs_res.set(b"CycleA".to_vec(), Object::name("CycleB"));
+        cs_res.set(b"CycleB".to_vec(), Object::name("CycleA"));
+        assert_eq!(space_of(&doc, &Object::name("CycleA"), &cs_res, 0), Space::Gray);
+
+        let lab = Space::Lab { white: [0.9505, 1.0, 1.089], range: [-100.0, 100.0, -100.0, 100.0] };
+        assert!(rgb(&lab, &[f64::NAN, f64::NAN, f64::NAN]).iter().all(|v| v.is_finite()));
+        assert!(rgb(&sep_space, &[f64::NAN]).iter().all(|v| v.is_finite()));
     }
 }
