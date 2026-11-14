@@ -1,6 +1,6 @@
 use super::common::{
-    FLAGS, MAX_DEPTH, SUBTYPES, arr, check_form_xml_depth, csv, esc, hex, n, nums_of, parse_form_xml, parse_hex, quad_has_area, rect_strict, text_of,
-    walk_xfdf, xml_nesting_depth,
+    FLAGS, MAX_DEPTH, SUBTYPES, arr, check_form_xml_depth, csv, el_text, esc, hex, n, nums_of, parse_form_xml, parse_hex, quad_has_area, rect_strict,
+    text_of, walk_xfdf, xml_nesting_depth,
 };
 use super::*;
 
@@ -89,8 +89,22 @@ fn own_keys(d: &Dict) -> Option<String> {
 
 /// The `pdfcraft:keys` of an XFDF comment back as dictionary entries: PdfCraft's keys only, with
 /// values that mean the same here. Anything malformed is skipped.
-fn read_own_keys(node: roxmltree::Node, d: &mut Dict) {
-    let Some(text) = node.attribute((PDFCRAFT_NS, "keys")).filter(|t| t.len() <= MAX_OWN_KEYS) else { return };
+fn read_own_keys(node: &craft_xml::El, ns: &[(String, String)], d: &mut Dict) {
+    let mut keys_text = None;
+    for (k, v) in &node.attrs {
+        if let Some((prefix, "keys")) = k.split_once(':') {
+            let uri = node
+                .ns_decls()
+                .find(|(p, _)| *p == prefix)
+                .map(|(_, u)| u)
+                .or_else(|| ns.iter().rfind(|(p, _)| p == prefix).map(|(_, u)| u.as_str()));
+            if uri == Some(PDFCRAFT_NS) {
+                keys_text = Some(v.as_str());
+                break;
+            }
+        }
+    }
+    let Some(text) = keys_text.filter(|t| t.len() <= MAX_OWN_KEYS) else { return };
     let Ok(Object::Dict(keys)) = pdfcraft_cos::Lexer::new(text.as_bytes(), 0).object() else { return };
     for (k, v) in keys.iter().filter(|(k, v)| k.starts_with(b"PC") && portable(v, 0)) {
         if !d.contains(k) {
@@ -105,13 +119,13 @@ const MAX_RICH_DEPTH: usize = 512;
 
 /// Rich text (`/RC`) as `<contents-richtext>` holds it: its root element alone (no XML
 /// declaration), when the text is well-formed XML; `None` otherwise.
-fn rich_text_element(rc: &str) -> Option<&str> {
+fn rich_text_element(rc: &str) -> Option<String> {
     let t = rc.trim_start_matches('\u{feff}');
     if xml_nesting_depth(t) > MAX_RICH_DEPTH {
         return None;
     }
     let parsed = parse_form_xml(t).ok()?;
-    t.get(parsed.root_element().range())
+    Some(parsed.to_xml())
 }
 
 /// The formatting attributes of a comment: XFDF 3.0 "Border style attributes" (`width`, `style`,
@@ -215,10 +229,10 @@ fn format_attrs(doc: &Document, d: &Dict, sub: &[u8], attrs: &mut String) {
 
 /// The formatting attributes of an XFDF comment element back as dictionary entries (see
 /// [`format_attrs`]). Values that are not numbers, or out of range, are left out.
-fn read_format(node: roxmltree::Node, d: &mut Dict) {
-    let num = |a: &str| node.attribute(a).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
-    let style = node.attribute("style").map(str::trim);
-    let dashes = node.attribute("dashes").map(csv).filter(|v| !v.is_empty() && v.iter().all(|x| *x >= 0.0) && v.iter().any(|x| *x > 0.0));
+fn read_format(node: &craft_xml::El, d: &mut Dict) {
+    let num = |a: &str| node.attr(a).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
+    let style = node.attr("style").map(str::trim);
+    let dashes = node.attr("dashes").map(csv).filter(|v| !v.is_empty() && v.iter().all(|x| *x >= 0.0) && v.iter().any(|x| *x > 0.0));
     let bs_style = match style {
         Some("dash") => Some("D"),
         Some("bevelled" | "beveled") => Some("B"),
@@ -245,10 +259,10 @@ fn read_format(node: roxmltree::Node, d: &mut Dict) {
         be.set(b"I".to_vec(), Object::Real(intensity.clamp(0.0, 2.0)));
         d.set(b"BE".to_vec(), Object::Dict(be));
     }
-    if let Some(r) = node.attribute("rotation").and_then(|r| r.trim().parse::<i32>().ok()) {
+    if let Some(r) = node.attr("rotation").and_then(|r| r.trim().parse::<i32>().ok()) {
         d.set(b"Rotate".to_vec(), Object::Int(i64::from(r)));
     }
-    let q = match node.attribute("justification").map(str::trim) {
+    let q = match node.attr("justification").map(str::trim) {
         Some("left" | "0") => Some(0),
         Some("centered" | "center" | "1") => Some(1),
         Some("right" | "2") => Some(2),
@@ -257,7 +271,7 @@ fn read_format(node: roxmltree::Node, d: &mut Dict) {
     if let Some(q) = q {
         d.set(b"Q".to_vec(), Object::Int(q));
     }
-    if let Some(rd) = node.attribute("fringe").map(csv).filter(|r| r.len() == 4) {
+    if let Some(rd) = node.attr("fringe").map(csv).filter(|r| r.len() == 4) {
         d.set(b"RD".to_vec(), arr(&rd));
     }
     if let Some(ll) = num("leaderLength") {
@@ -269,27 +283,27 @@ fn read_format(node: roxmltree::Node, d: &mut Dict) {
     if let Some(llo) = num("leader-offset").filter(|v| *v >= 0.0) {
         d.set(b"LLO".to_vec(), Object::Real(llo));
     }
-    match node.attribute("caption").map(str::trim) {
+    match node.attr("caption").map(str::trim) {
         Some("yes" | "true") => d.set(b"Cap".to_vec(), Object::Bool(true)),
         Some("no" | "false") => d.set(b"Cap".to_vec(), Object::Bool(false)),
         _ => {}
     }
-    if let Some(cp) = node.attribute("caption-style").map(str::trim).filter(|c| matches!(*c, "Inline" | "Top")) {
+    if let Some(cp) = node.attr("caption-style").map(str::trim).filter(|c| matches!(*c, "Inline" | "Top")) {
         d.set(b"CP".to_vec(), Object::name(cp));
     }
     let (h, v) = (num("caption-offset-h"), num("caption-offset-v"));
     if h.is_some() || v.is_some() {
         d.set(b"CO".to_vec(), arr(&[h.unwrap_or(0.0), v.unwrap_or(0.0)]));
     }
-    match node.attribute("symbol").map(str::trim) {
+    match node.attr("symbol").map(str::trim) {
         Some("paragraph" | "P") => d.set(b"Sy".to_vec(), Object::name("P")),
         Some("none" | "None") => d.set(b"Sy".to_vec(), Object::name("None")),
         _ => {}
     }
-    if let Some(t) = node.attribute("overlay-text") {
+    if let Some(t) = node.attr("overlay-text") {
         d.set(b"OverlayText".to_vec(), PdfString::text(t));
     }
-    match node.attribute("overlay-text-repeat").map(str::trim) {
+    match node.attr("overlay-text-repeat").map(str::trim) {
         Some("true" | "yes") => d.set(b"Repeat".to_vec(), Object::Bool(true)),
         Some("false" | "no") => d.set(b"Repeat".to_vec(), Object::Bool(false)),
         _ => {}
@@ -298,24 +312,31 @@ fn read_format(node: roxmltree::Node, d: &mut Dict) {
 
 /// A `<contents-richtext>` element's plain text, a line per paragraph: what `/Contents` gets
 /// when the element comes without `<contents>`.
-fn rich_plain(node: roxmltree::Node) -> String {
-    let mut out = String::new();
-    for n in node.descendants() {
-        // A line break is a line of its own, so two in a row leave a blank line; a paragraph
-        // starts on a new line.
-        if n.is_element() && n.tag_name().name() == "br" {
-            out.push('\r');
-        } else if n.is_element() && matches!(n.tag_name().name(), "p" | "div" | "li") {
-            if !out.is_empty() && !out.ends_with('\r') {
-                out.push('\r');
+fn walk_rich_plain(node: &craft_xml::El, out: &mut String) {
+    for n in &node.children {
+        match n {
+            craft_xml::Node::El(el) => {
+                if el.local() == "br" {
+                    out.push('\r');
+                } else if matches!(el.local(), "p" | "div" | "li") && !out.is_empty() && !out.ends_with('\r') {
+                    out.push('\r');
+                }
+                walk_rich_plain(el, out);
             }
-        } else if let Some(t) = n.text().filter(|_| n.is_text()) {
-            // Indentation between elements is not text.
-            if !(t.trim().is_empty() && t.contains('\n')) {
-                out.push_str(&t.replace("\r\n", "\r").replace('\n', "\r"));
+            craft_xml::Node::Text(t) => {
+                // Indentation between elements is not text.
+                if !(t.trim().is_empty() && t.contains('\n')) {
+                    out.push_str(&t.replace("\r\n", "\r").replace('\n', "\r"));
+                }
             }
+            _ => {}
         }
     }
+}
+
+fn rich_plain(node: &craft_xml::El) -> String {
+    let mut out = String::new();
+    walk_rich_plain(node, &mut out);
     out.trim_end_matches('\r').to_string()
 }
 
@@ -627,18 +648,17 @@ pub enum Outline {
 }
 
 /// Every comment element of an XFDF text, in order (none when it is no XFDF).
-fn with_comment_nodes(text: &str, mut f: impl FnMut(roxmltree::Node<'_, '_>)) {
+fn with_comment_nodes(text: &str, mut f: impl FnMut(&craft_xml::El)) {
     if check_form_xml_depth(text).is_err() {
         return;
     }
-    let Ok(xml) = parse_form_xml(text) else { return };
-    let root = xml.root_element();
-    if root.tag_name().name() != "xfdf" {
+    let Ok(root) = parse_form_xml(text) else { return };
+    if root.local() != "xfdf" {
         return;
     }
-    let Some(annots) = root.children().find(|c| c.has_tag_name("annots")) else { return };
-    for node in annots.children().filter(|c| c.is_element()) {
-        if SUBTYPES.iter().any(|(_, t)| *t == node.tag_name().name().to_ascii_lowercase()) {
+    let Some(annots) = root.child(craft_xml::Local("annots")) else { return };
+    for node in annots.elements() {
+        if SUBTYPES.iter().any(|(_, t)| *t == node.local().to_ascii_lowercase()) {
             f(node);
         }
     }
@@ -648,11 +668,7 @@ fn with_comment_nodes(text: &str, mut f: impl FnMut(roxmltree::Node<'_, '_>)) {
 fn comment_nodes(text: &str) -> Vec<(String, Option<String>, Vec<f64>)> {
     let mut out = Vec::new();
     with_comment_nodes(text, |node| {
-        out.push((
-            node.tag_name().name().to_owned(),
-            node.attribute("inreplyto").map(str::to_owned),
-            node.attribute("rect").map(csv).unwrap_or_default(),
-        ));
+        out.push((node.local().to_owned(), node.attr("inreplyto").map(str::to_owned), node.attr("rect").map(csv).unwrap_or_default()));
     });
     out
 }
@@ -667,44 +683,41 @@ fn pairs(text: &str) -> Vec<[f64; 2]> {
 pub fn comment_outlines(text: &str) -> Vec<Outline> {
     let mut out = Vec::new();
     with_comment_nodes(text, |node| {
-        if node.attribute("inreplyto").is_some() {
+        if node.attr("inreplyto").is_some() {
             return;
         }
-        let tag = node.tag_name().name().to_ascii_lowercase();
-        let color = node.attribute("color").and_then(parse_hex);
+        let tag = node.local().to_ascii_lowercase();
+        let color = node.attr("color").and_then(parse_hex);
         let rect = node
-            .attribute("rect")
+            .attr("rect")
             .map(csv)
             .filter(|r| r.len() == 4 && r.iter().all(|v| v.is_finite()))
             .map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]);
         match tag.as_str() {
             "line" => {
-                if let (Some(a), Some(b)) = (node.attribute("start").map(csv), node.attribute("end").map(csv))
+                if let (Some(a), Some(b)) = (node.attr("start").map(csv), node.attr("end").map(csv))
                     && let ([ax, ay], [bx, by]) = (a.as_slice(), b.as_slice())
                 {
                     out.push(Outline::Line { points: vec![[*ax, *ay], [*bx, *by]], color });
                 }
             }
             "polygon" | "polyline" => {
-                let points = node.children().find(|c| c.has_tag_name("vertices")).and_then(|v| v.text()).map(pairs).unwrap_or_default();
+                let points = node.child(craft_xml::Local("vertices")).map(|v| pairs(&v.text())).unwrap_or_default();
                 if points.len() >= 2 {
                     out.push(Outline::Poly { points, closed: tag == "polygon", color });
                 }
             }
             "ink" => {
                 let strokes: Vec<Vec<[f64; 2]>> = node
-                    .children()
-                    .find(|c| c.has_tag_name("inklist"))
-                    .map(|list| {
-                        list.children().filter(|g| g.has_tag_name("gesture")).filter_map(|g| g.text()).map(pairs).filter(|s| !s.is_empty()).collect()
-                    })
+                    .child(craft_xml::Local("inklist"))
+                    .map(|list| list.children(craft_xml::Local("gesture")).map(|g| pairs(&g.text())).filter(|s| !s.is_empty()).collect())
                     .unwrap_or_default();
                 if !strokes.is_empty() {
                     out.push(Outline::Ink { strokes, color });
                 }
             }
             "highlight" | "underline" | "strikeout" | "squiggly" | "redact" => {
-                let coords = node.attribute("coords").map(csv).unwrap_or_default();
+                let coords = node.attr("coords").map(csv).unwrap_or_default();
                 let quads: Vec<[f64; 8]> = coords.as_chunks::<8>().0.to_vec();
                 if quads.is_empty() {
                     if let Some(rect) = rect {
@@ -717,7 +730,7 @@ pub fn comment_outlines(text: &str) -> Vec<Outline> {
             // A Fill & Sign mark: its tick, cross, dot or line, as its appearance draws it.
             "stamp"
                 if let Some(rect) = rect
-                    && let Some(mark) = node.attribute("icon").and_then(|i| pdfcraft_annot::FillMark::from_name(i.as_bytes())) =>
+                    && let Some(mark) = node.attr("icon").and_then(|i| pdfcraft_annot::FillMark::from_name(i.as_bytes())) =>
             {
                 if mark == pdfcraft_annot::FillMark::Dot {
                     let r = (rect[2] - rect[0]).min(rect[3] - rect[1]) * 0.3;
@@ -733,7 +746,7 @@ pub fn comment_outlines(text: &str) -> Vec<Outline> {
                     out.push(Outline::Rect { rect, round: tag == "circle", color });
                 }
                 // A callout's leader, from the box to what it points at.
-                let callout = node.attribute("callout").map(csv).filter(|c| c.len() == 4 || c.len() == 6);
+                let callout = node.attr("callout").map(csv).filter(|c| c.len() == 4 || c.len() == 6);
                 if tag == "freetext"
                     && let Some(cl) = &callout
                 {
@@ -743,14 +756,17 @@ pub fn comment_outlines(text: &str) -> Vec<Outline> {
                 // is its rect inset by the fringe).
                 if tag == "freetext"
                     && let Some(rect) = rect
-                    && let Some(text) = node.children().find(|c| c.has_tag_name("contents")).and_then(|c| c.text()).filter(|t| !t.trim().is_empty())
+                    && let Some(text) = node.child(craft_xml::Local("contents")).map(|c| c.text().into_owned()).filter(|t| !t.trim().is_empty())
                 {
                     let mut da = Dict::new();
-                    if let Some(s) = node.children().find(|c| c.has_tag_name("defaultappearance")).and_then(|c| c.text()) {
-                        da.set(b"DA".to_vec(), PdfString::literal(s.as_bytes().to_vec()));
+                    if let Some(el) = node.child(craft_xml::Local("defaultappearance")) {
+                        let s = el.text();
+                        if !s.is_empty() {
+                            da.set(b"DA".to_vec(), PdfString::literal(s.as_bytes().to_vec()));
+                        }
                     }
                     let (text_color, size) = pdfcraft_annot::appearance::parse_da(&da);
-                    let fringe = node.attribute("fringe").map(csv).filter(|f| callout.is_some() && f.len() == 4 && f.iter().all(|v| v.is_finite()));
+                    let fringe = node.attr("fringe").map(csv).filter(|f| callout.is_some() && f.len() == 4 && f.iter().all(|v| v.is_finite()));
                     let rect = match fringe.as_deref() {
                         Some([l, b, r, t]) => [rect[0] + l, rect[1] + b, rect[2] - r, rect[3] - t],
                         _ => rect,
@@ -863,12 +879,12 @@ pub(crate) fn apply_values(doc: &mut Document, values: &[(String, Vec<String>)],
 }
 
 /// A new annotation dictionary from an XFDF element.
-fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Option<Dict> {
+fn annot_from_xml(node: &craft_xml::El, ns: &[(String, String)], subtype: &str, page_ref: ObjRef) -> Option<Dict> {
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("Annot"));
     d.set(b"Subtype".to_vec(), Object::name(subtype));
     d.set(b"P".to_vec(), Object::Ref(page_ref));
-    let rect = csv(node.attribute("rect")?);
+    let rect = csv(node.attr("rect")?);
     if rect.len() != 4 {
         return None;
     }
@@ -882,86 +898,85 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
         ("state", b"State"),
         ("statemodel", b"StateModel"),
     ] {
-        if let Some(v) = node.attribute(attr) {
+        if let Some(v) = node.attr(attr) {
             d.set(key.to_vec(), PdfString::text(v));
         }
     }
-    if let Some(v) = node.attribute("replyType") {
+    if let Some(v) = node.attr("replyType") {
         d.set(b"RT".to_vec(), Object::name(if v.eq_ignore_ascii_case("group") { "Group" } else { "R" }));
     }
-    if let Some(v) = node.attribute("icon") {
+    if let Some(v) = node.attr("icon") {
         d.set(b"Name".to_vec(), Object::name(v));
     }
     let flags: i64 = node
-        .attribute("flags")
+        .attr("flags")
         .unwrap_or("print")
         .split(',')
         .filter_map(|f| FLAGS.iter().find(|(_, s)| s.eq_ignore_ascii_case(f.trim())).map(|x| x.0))
         .fold(0, |bits, flag| bits | flag);
     d.set(b"F".to_vec(), Object::Int(flags));
-    if let Some(c) = node.attribute("color").and_then(parse_hex) {
+    if let Some(c) = node.attr("color").and_then(parse_hex) {
         d.set(b"C".to_vec(), arr(&c));
     }
-    if let Some(c) = node.attribute("interior-color").and_then(parse_hex) {
+    if let Some(c) = node.attr("interior-color").and_then(parse_hex) {
         d.set(b"IC".to_vec(), arr(&c));
     }
-    if let Some(o) = node.attribute("opacity").and_then(|o| o.parse::<f64>().ok()) {
+    if let Some(o) = node.attr("opacity").and_then(|o| o.parse::<f64>().ok()) {
         d.set(b"CA".to_vec(), Object::Real(o.clamp(0.0, 1.0)));
     }
     read_format(node, &mut d);
-    if let Some(q) = node.attribute("coords") {
+    if let Some(q) = node.attr("coords") {
         d.set(b"QuadPoints".to_vec(), arr(&csv(q)));
     }
-    if let (Some(s), Some(e)) = (node.attribute("start"), node.attribute("end")) {
+    if let (Some(s), Some(e)) = (node.attr("start"), node.attr("end")) {
         let (s, e) = (csv(s), csv(e));
         if s.len() == 2 && e.len() == 2 {
             d.set(b"L".to_vec(), arr(&[s[0], s[1], e[0], e[1]]));
         }
     }
-    if node.attribute("head").is_some() || node.attribute("tail").is_some() {
+    if node.attr("head").is_some() || node.attr("tail").is_some() {
         d.set(
             b"LE".to_vec(),
-            Object::Array(vec![Object::name(node.attribute("head").unwrap_or("None")), Object::name(node.attribute("tail").unwrap_or("None"))]),
+            Object::Array(vec![Object::name(node.attr("head").unwrap_or("None")), Object::name(node.attr("tail").unwrap_or("None"))]),
         );
     }
     // The intent (/IT), spelt `intent` or `IT`.
-    let intent = node.attribute("intent").filter(|it| !it.is_empty()).or_else(|| node.attribute("IT").filter(|it| !it.is_empty()));
+    let intent = node.attr("intent").filter(|it| !it.is_empty()).or_else(|| node.attr("IT").filter(|it| !it.is_empty()));
     if let Some(it) = intent {
         d.set(b"IT".to_vec(), Object::name(it));
     }
-    if let Some(cl) = node.attribute("callout").map(csv).filter(|c| c.len() == 4 || c.len() == 6) {
+    if let Some(cl) = node.attr("callout").map(csv).filter(|c| c.len() == 4 || c.len() == 6) {
         d.set(b"CL".to_vec(), arr(&cl));
         d.set(b"IT".to_vec(), Object::name(intent.unwrap_or("FreeTextCallout")));
         // A callout's /LE is one name, not the head/tail pair of a line.
-        match node.attribute("head") {
+        match node.attr("head") {
             Some(h) => d.set(b"LE".to_vec(), Object::name(h)),
             None => {
                 d.remove(b"LE");
             }
         }
     }
-    for child in node.children().filter(|c| c.is_element()) {
-        match child.tag_name().name() {
+    for child in node.elements() {
+        match child.local() {
             "contents" => {
-                d.set(b"Contents".to_vec(), PdfString::text(&child.text().unwrap_or("").replace("\r\n", "\r").replace('\n', "\r")));
+                d.set(b"Contents".to_vec(), PdfString::text(&child.text().replace("\r\n", "\r").replace('\n', "\r")));
             }
             "defaultappearance" => {
-                d.set(b"DA".to_vec(), PdfString::literal(child.text().unwrap_or("").as_bytes().to_vec()));
+                d.set(b"DA".to_vec(), PdfString::literal(child.text().as_bytes().to_vec()));
             }
             "defaultstyle" => {
-                d.set(b"DS".to_vec(), PdfString::text(&child.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect::<String>()));
+                d.set(b"DS".to_vec(), PdfString::text(&el_text(child)));
             }
             "inklist" => {
                 let list: Vec<Object> = child
-                    .children()
-                    .filter(|g| g.has_tag_name("gesture"))
-                    .map(|g| arr(&g.text().unwrap_or("").split(';').flat_map(|p| csv(p).into_iter()).collect::<Vec<_>>()))
+                    .children(craft_xml::Local("gesture"))
+                    .map(|g| arr(&g.text().split(';').flat_map(|p| csv(p).into_iter()).collect::<Vec<_>>()))
                     .collect();
                 d.set(b"InkList".to_vec(), Object::Array(list));
             }
             "vertices" => {
                 // Whole x,y pairs only; a stray trailing number is dropped.
-                let mut v = csv(child.text().unwrap_or(""));
+                let mut v = csv(&child.text());
                 v.truncate(v.len() - v.len() % 2);
                 if !v.is_empty() {
                     d.set(b"Vertices".to_vec(), arr(&v));
@@ -970,10 +985,14 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
             _ => {}
         }
     }
-    if let Some(rich) = node.children().find(|c| c.has_tag_name("contents-richtext")) {
-        read_rich_text(rich, node.children().any(|c| c.has_tag_name("contents")), &mut d);
+    if let Some(rich) = node.child(craft_xml::Local("contents-richtext")) {
+        let mut rich_ns: Vec<(String, String)> = ns.to_vec();
+        for (p, u) in node.ns_decls().chain(rich.ns_decls()) {
+            rich_ns.push((p.to_string(), u.to_string()));
+        }
+        read_rich_text(rich, &rich_ns, node.child(craft_xml::Local("contents")).is_some(), &mut d);
     }
-    read_own_keys(node, &mut d);
+    read_own_keys(node, ns, &mut d);
     Some(d)
 }
 
@@ -982,22 +1001,20 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
 /// (`/Contents`) when the element comes alone; beside `<contents>` it is kept as `/RC` (rich text
 /// PdfCraft exported as text because it was not well-formed XML). Markup without `<contents>`
 /// gives `/Contents` its plain text too, so the comment's text shows where rich text is not read.
-fn read_rich_text(rich: roxmltree::Node, has_contents: bool, d: &mut Dict) {
-    let elements: Vec<roxmltree::Node> = rich.children().filter(|c| c.is_element()).collect();
-    let (Some(first), Some(last)) = (elements.first(), elements.last()) else {
-        let text: String = rich.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
+fn read_rich_text(rich: &craft_xml::El, ns: &[(String, String)], has_contents: bool, d: &mut Dict) {
+    let elements: Vec<&craft_xml::El> = rich.elements().collect();
+    if elements.is_empty() {
+        let text = el_text(rich);
         if has_contents {
             d.set(b"RC".to_vec(), PdfString::text(&text));
         } else {
             d.set(b"Contents".to_vec(), PdfString::text(&text.replace("\r\n", "\r").replace('\n', "\r")));
         }
         return;
-    };
-    let source = rich.document().input_text();
-    let Some(markup) = source.get(first.range().start..last.range().end) else { return };
+    }
     let markup = match elements.as_slice() {
-        [_] => standalone(rich, markup),
-        _ => markup.to_string(),
+        [el] => standalone(el, ns),
+        _ => elements.iter().map(|e| e.to_xml()).collect(),
     };
     // Rich text is an XML document of its own; export left its declaration out.
     d.set(b"RC".to_vec(), PdfString::text(&format!("<?xml version=\"1.0\"?>{markup}")));
@@ -1050,35 +1067,26 @@ fn start_tag_end(markup: &str) -> usize {
 /// the default one (XHTML declared on `<contents-richtext>`, say; not XFDF's own, which a
 /// standalone document has no use for) and the prefixes it uses. Unchanged when nothing is
 /// inherited, or when the declarations would not make it parse.
-fn standalone(rich: roxmltree::Node, markup: &str) -> String {
-    // The start tag's name ends at white space, `/` or `>`.
-    let Some(name_end) = markup.get(1..).and_then(|t| t.find(|c: char| c.is_whitespace() || c == '/' || c == '>')).map(|i| i + 1) else {
-        return markup.to_string();
-    };
-    let start_tag = markup.get(..start_tag_end(markup)).unwrap_or(markup);
-    let mut declared = String::new();
-    // The default namespace in scope where the element sits: its own when it has no prefix, and
-    // its unprefixed descendants' when it has one.
-    if let Some(uri) = rich.namespaces().find(|ns| ns.name().is_none()).map(|ns| ns.uri())
+fn standalone(el: &craft_xml::El, ns: &[(String, String)]) -> String {
+    let mut clone = (*el).clone();
+    let markup = clone.to_xml();
+    if let Some((_, uri)) = ns.iter().rfind(|(p, _)| p.is_empty())
         && !uri.is_empty()
         && uri != XFDF_NS
-        && !declares(start_tag, "xmlns")
+        && !clone.has_attr("xmlns")
     {
-        let _ = write!(declared, " xmlns=\"{}\"", esc(uri));
+        clone.set_attr("xmlns", uri);
     }
-    for ns in rich.namespaces() {
-        let Some(prefix) = ns.name() else { continue };
-        if prefix == "xml" || !markup.contains(&format!("{prefix}:")) || declares(start_tag, &format!("xmlns:{prefix}")) {
+    for (prefix, uri) in ns {
+        if prefix.is_empty() || prefix == "xml" {
             continue;
         }
-        let _ = write!(declared, " xmlns:{prefix}=\"{}\"", esc(ns.uri()));
+        let attr_name = format!("xmlns:{prefix}");
+        if markup.contains(&format!("{prefix}:")) && !clone.has_attr(&attr_name) {
+            clone.set_attr(&attr_name, uri);
+        }
     }
-    if declared.is_empty() {
-        return markup.to_string();
-    }
-    let (Some(head), Some(tail)) = (markup.get(..name_end), markup.get(name_end..)) else { return markup.to_string() };
-    let fixed = format!("{head}{declared}{tail}");
-    if parse_form_xml(&fixed).is_ok() { fixed } else { markup.to_string() }
+    clone.to_xml()
 }
 
 /// XFDF's own namespace (ISO 19444-1).
@@ -1283,9 +1291,8 @@ pub(crate) fn import_xfdf_with(
     comments_only: bool,
 ) -> Result<Report, DataError> {
     check_form_xml_depth(text)?;
-    let xml = parse_form_xml(text).map_err(|e| DataError::Malformed(e.to_string()))?;
-    let root = xml.root_element();
-    if root.tag_name().name() != "xfdf" {
+    let root = parse_form_xml(text).map_err(|e| DataError::Malformed(e.to_string()))?;
+    if root.local() != "xfdf" {
         return Err(DataError::UnknownFormat);
     }
     let mut report = Report::default();
@@ -1302,30 +1309,33 @@ pub(crate) fn import_xfdf_with(
     // so replies find their copied parent (a name two source comments share, as other tools
     // write, still gives two copies).
     let mut renamed: HashMap<String, String> = HashMap::new();
-    if let (Some(prefix), Some(annots)) = (fresh, root.children().find(|c| c.has_tag_name("annots"))) {
-        for (n, node) in annots.children().filter(|c| c.is_element()).enumerate() {
-            if let Some(nm) = node.attribute("name") {
+    let root_ns: Vec<(String, String)> = root.ns_decls().map(|(p, u)| (p.to_string(), u.to_string())).collect();
+    if let (Some(prefix), Some(annots)) = (fresh, root.child(craft_xml::Local("annots"))) {
+        for (n, node) in annots.elements().enumerate() {
+            if let Some(nm) = node.attr("name") {
                 renamed.entry(nm.to_string()).or_insert_with(|| format!("{prefix}-{}", n + 1));
             }
         }
     }
-    if let Some(annots) = root.children().find(|c| c.has_tag_name("annots")) {
-        for (n, node) in annots.children().filter(|c| c.is_element()).enumerate() {
-            let tag = node.tag_name().name().to_ascii_lowercase();
+    if let Some(annots) = root.child(craft_xml::Local("annots")) {
+        let mut annot_ns = root_ns;
+        annot_ns.extend(annots.ns_decls().map(|(p, u)| (p.to_string(), u.to_string())));
+        for (n, node) in annots.elements().enumerate() {
+            let tag = node.local().to_ascii_lowercase();
             let Some((subtype, _)) = SUBTYPES.iter().find(|(_, t)| *t == tag) else { continue };
-            let own_page = node.attribute("page").and_then(|p| p.parse::<usize>().ok());
+            let own_page = node.attr("page").and_then(|p| p.parse::<usize>().ok());
             let Some(page) = target_page.or(own_page).and_then(|p| pages.get(p).copied()) else { continue };
-            let Some(mut d) = annot_from_xml(node, subtype, page) else { continue };
+            let Some(mut d) = annot_from_xml(node, &annot_ns, subtype, page) else { continue };
             // The appearance the file carries (XFDF 3.0 "appearance"), when it can be read.
             // A redaction mark is always drawn by PdfCraft (see `place`): its appearance is not read.
-            if let Some(ap) = node.children().find(|c| c.has_tag_name("appearance")).filter(|_| *subtype != "Redact") {
-                let text: String = ap.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
+            if let Some(ap) = node.child(craft_xml::Local("appearance")).filter(|_| *subtype != "Redact") {
+                let text = el_text(ap);
                 match super::appearance::decode(&text, &mut appearance_budget) {
                     Ok(tree) => {
                         let ap = super::appearance::materialize(doc, tree);
                         d.set(b"AP".to_vec(), ap);
                     }
-                    Err(why) => report.skipped.push(format!("{}: {why}", node.attribute("name").unwrap_or(&tag))),
+                    Err(why) => report.skipped.push(format!("{}: {why}", node.attr("name").unwrap_or(&tag))),
                 }
             }
             let assigned = fresh.map(|prefix| format!("{prefix}-{}", n + 1));
@@ -1339,10 +1349,10 @@ pub(crate) fn import_xfdf_with(
             let r = place(doc, page, d)?;
             // A later same-name record replaces this comment, including its reply relation.
             later.remove(&r);
-            if let Some(name) = assigned.clone().or_else(|| node.attribute("name").map(str::to_owned)) {
+            if let Some(name) = assigned.clone().or_else(|| node.attr("name").map(str::to_owned)) {
                 by_name.insert(name, r);
             }
-            if let Some(irt) = node.attribute("inreplyto") {
+            if let Some(irt) = node.attr("inreplyto") {
                 match (fresh, renamed.get(irt)) {
                     // The parent is among the copies: the reply follows it.
                     (Some(_), Some(parent)) => later.insert(r, parent.clone()),
@@ -1353,15 +1363,15 @@ pub(crate) fn import_xfdf_with(
                 };
             }
             // A pop-up window.
-            if let Some(pop) = node.children().find(|c| c.has_tag_name("popup"))
-                && let Some(mut rect) = pop.attribute("rect").map(csv).filter(|r| r.len() == 4)
+            if let Some(pop) = node.child(craft_xml::Local("popup"))
+                && let Some(mut rect) = pop.attr("rect").map(csv).filter(|r| r.len() == 4)
             {
                 if let Some([dx, dy]) = offset {
                     for (i, v) in rect.iter_mut().enumerate() {
                         *v += if i % 2 == 0 { dx } else { dy };
                     }
                 }
-                add_popup(doc, page, r, &rect, pop.attribute("open") == Some("yes"))?;
+                add_popup(doc, page, r, &rect, pop.attr("open") == Some("yes"))?;
             }
             report.comments += 1;
         }
@@ -1376,7 +1386,7 @@ pub(crate) fn import_xfdf_with(
         return Ok(report);
     }
     // Fields.
-    if let Some(fields) = root.children().find(|c| c.has_tag_name("fields")) {
+    if let Some(fields) = root.child(craft_xml::Local("fields")) {
         let mut values = Vec::new();
         walk_xfdf(fields, "", &mut values, 0)?;
         apply_values(doc, &values, &mut report);
