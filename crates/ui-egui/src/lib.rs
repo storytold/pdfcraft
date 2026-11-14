@@ -60,11 +60,13 @@ mod home;
 mod hotbar;
 mod panels;
 pub mod panes;
+pub mod tab_group;
 pub use print_ui::{
     DefaultPaperSource, Handling as PrintHandling, OptionsSource, PrintDraft, PrinterPapersSource, PrinterSetup, PrinterSource, Spooler,
     TwoSidedSource, Which as PrintWhich, system_printers, system_two_sided,
 };
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
+pub use tab_group::{TabGroup, TabGroupColor, TabGroupId};
 pub mod i18n;
 pub mod theme;
 pub mod viewer_prefs;
@@ -315,6 +317,12 @@ pub struct PdfCraftApp {
     pub(crate) status_captions_lang: Option<i18n::Lang>,
     pub views: Vec<DocView>,
     pub(crate) closed_tabs: Vec<String>,
+    /// Browser-styled tab groups for document tabs.
+    pub tab_groups: Vec<tab_group::TabGroup>,
+    pub next_group_id: u64,
+    pub editing_group: Option<tab_group::TabGroupId>,
+    pub group_title_draft: String,
+    pub vertical_tabs: bool,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
     pub mode: Mode,

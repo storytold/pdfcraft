@@ -277,6 +277,7 @@ impl PdfCraftApp {
         }
         let Some(anchor) = self.views.get(anchor).map(|v| v.pane.key) else { return };
         let active = self.active_key();
+        let old_group = self.views[from].group;
         let view = self.views.remove(from);
         let Some(a) = self.tab_with_key(anchor) else {
             self.views.insert(from.min(self.views.len()), view);
@@ -285,6 +286,20 @@ impl PdfCraftApp {
         let at = if before { a } else { a.saturating_add(1) };
         self.views.insert(at.min(self.views.len()), view);
         self.active = active.and_then(|k| self.tab_with_key(k));
+
+        let new_idx = at.min(self.views.len().saturating_sub(1));
+        let left_group = if new_idx > 0 { self.views.get(new_idx - 1).and_then(|v| v.group) } else { None };
+        let right_group = self.views.get(new_idx + 1).and_then(|v| v.group);
+
+        if left_group.is_some() && left_group == right_group {
+            self.views[new_idx].group = left_group;
+        } else if left_group.is_none() && right_group.is_none() {
+            self.views[new_idx].group = None;
+        }
+
+        if let Some(og) = old_group {
+            self.cleanup_empty_group(og);
+        }
     }
 
     /// Remove tab `index` but not its document, which another tab still shows. When it was the

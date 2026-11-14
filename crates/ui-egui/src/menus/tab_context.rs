@@ -5,6 +5,29 @@ pub(crate) enum Action {
     /// Close a tab, by its view key (`DocView::view_key`: split view can show one document in two
     /// tabs).
     Close(u64),
+    /// Close all tabs except this one.
+    CloseOthers(u64),
+    /// Close all tabs to the right of this one.
+    CloseToRight(u64),
+    /// Duplicate this tab as a second view of the document.
+    Duplicate(u64),
+    /// Toggle pinned state of this tab.
+    TogglePin(u64),
+    /// Create a new group and add this tab to it.
+    AddToNewGroup(u64),
+    /// Add this tab to an existing group.
+    AddToGroup {
+        tab: u64,
+        group_id: crate::tab_group::TabGroupId,
+    },
+    /// Remove this tab from its current group.
+    RemoveFromGroup(u64),
+    /// Ungroup all tabs in a group.
+    #[allow(dead_code)]
+    Ungroup(crate::tab_group::TabGroupId),
+    /// Close all tabs in a group.
+    #[allow(dead_code)]
+    CloseGroup(crate::tab_group::TabGroupId),
     Reopen,
     Reveal(DocId),
     /// Split right (or down) with a tab, by its view key.
@@ -54,6 +77,51 @@ impl crate::PdfCraftApp {
                 if let Some(i) = self.tab_with_key(tab) {
                     self.request_close_tab(i);
                 }
+            }
+            Action::CloseOthers(tab) => {
+                if let Some(i) = self.tab_with_key(tab) {
+                    self.close_other_tabs(i);
+                }
+            }
+            Action::CloseToRight(tab) => {
+                if let Some(i) = self.tab_with_key(tab) {
+                    self.close_tabs_to_right(i);
+                }
+            }
+            Action::Duplicate(tab) => {
+                if let Some(i) = self.tab_with_key(tab) {
+                    self.duplicate_tab(i);
+                }
+            }
+            Action::TogglePin(tab) => {
+                if let Some(i) = self.tab_with_key(tab) {
+                    let pinned = !self.views[i].pinned;
+                    self.set_tab_pinned(i, pinned);
+                }
+            }
+            Action::AddToNewGroup(tab) => {
+                if let Some(i) = self.tab_with_key(tab) {
+                    let gid = self.create_tab_group(String::new(), crate::tab_group::TabGroupColor::Blue);
+                    self.add_tab_to_group(i, gid);
+                    self.editing_group = Some(gid);
+                    self.group_title_draft.clear();
+                }
+            }
+            Action::AddToGroup { tab, group_id } => {
+                if let Some(i) = self.tab_with_key(tab) {
+                    self.add_tab_to_group(i, group_id);
+                }
+            }
+            Action::RemoveFromGroup(tab) => {
+                if let Some(i) = self.tab_with_key(tab) {
+                    self.remove_tab_from_group(i);
+                }
+            }
+            Action::Ungroup(group_id) => {
+                self.ungroup(group_id);
+            }
+            Action::CloseGroup(group_id) => {
+                self.close_tab_group(group_id);
             }
             Action::Split { tab, down } => {
                 if let Some(i) = self.tab_with_key(tab) {
