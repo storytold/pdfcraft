@@ -53,6 +53,9 @@ getrandom = "0.4"
 [target.'cfg(target_os = "windows")'.dependencies]
 # Safe Windows certificate store and CNG signing wrappers (MIT OR Apache-2.0).
 rustls-cng = { version = "0.7.1", default-features = false }
+# Safe read of the store's Friendly Name property (CERT_FRIENDLY_NAME_PROP_ID), which
+# rustls-cng doesn't expose (MIT; issue #7232).
+schannel = "0.1.29"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Signing with Keychain identities (MIT OR Apache-2.0).

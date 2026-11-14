@@ -366,11 +366,14 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         d.step = SignStep::Choose;
         return false;
     };
+    // The name the saved signature shows, not the picker's label (which may carry the store's
+    // Friendly Name beside the subject): the preview must show what signing will stamp.
+    let sign_name = entry.signed_name();
     title(
         ui,
         &crate::i18n::fmt(
             tl!("{verb} as \"{name}\""),
-            &[("verb", if d.certify.is_some() { tl!("Certify") } else { tl!("Sign") }), ("name", &entry.name)],
+            &[("verb", if d.certify.is_some() { tl!("Certify") } else { tl!("Sign") }), ("name", sign_name)],
         ),
     );
     let in_os_key_store = entry.path.starts_with("keychain:") || entry.path.starts_with("windows:");
@@ -382,8 +385,8 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         ui.label(egui::RichText::new(tl!("Appearance")).font(theme::semibold(12.5)));
         let graphic = graphic_of(app.signature.as_ref(), &d.graphic);
         let (labels, in_english) = appearance_labels(crate::i18n::current());
-        let lines = detail_lines(&d.appearance, &labels, &entry.name, &d.reason, &d.location, &date);
-        preview(ui, t, &entry.name, &d.appearance, &lines, graphic.as_ref(), &mut app.sign_graphic_preview);
+        let lines = detail_lines(&d.appearance, &labels, sign_name, &d.reason, &d.location, &date);
+        preview(ui, t, sign_name, &d.appearance, &lines, graphic.as_ref(), &mut app.sign_graphic_preview);
         if in_english && d.appearance.labels {
             ui.label(
                 egui::RichText::new(tl!("The labels are in English: the signature's font can't draw them in this language."))
