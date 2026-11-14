@@ -64,6 +64,11 @@ impl Fling {
     /// (animations off, single-page paging, a zoom, a dialog).
     pub(crate) fn read(&mut self, events: &[Event], now: f64, glide: bool) {
         for event in events {
+            if matches!(event, Event::Touch { phase: TouchPhase::Start, .. }) {
+                self.stop();
+                self.samples.clear();
+                continue;
+            }
             let Event::MouseWheel { unit, delta, phase, modifiers, .. } = event else { continue };
             self.stop();
             // Zooming, a mouse wheel and sideways Shift scrolling never glide.
@@ -87,6 +92,26 @@ impl Fling {
                 TouchPhase::Cancel => self.samples.clear(),
             }
         }
+    }
+
+    /// Push a touch drag motion sample at time `now`.
+    pub(crate) fn touch_move(&mut self, now: f64, delta: Vec2) {
+        self.push(now, delta);
+    }
+
+    /// Complete a touch drag gesture at time `now`, starting an inertial glide if swiped at speed.
+    pub(crate) fn touch_end(&mut self, now: f64, glide: bool) {
+        if glide && self.enabled {
+            self.velocity = self.lift_velocity(now);
+            self.at = now;
+        }
+        self.samples.clear();
+    }
+
+    /// Cancel a touch drag without gliding.
+    #[allow(dead_code)]
+    pub(crate) fn touch_cancel(&mut self) {
+        self.samples.clear();
     }
 
     fn push(&mut self, now: f64, delta: Vec2) {
@@ -157,7 +182,7 @@ impl Fling {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui::{Modifiers, vec2};
+    use egui::{Modifiers, pos2, vec2};
 
     fn wheel(dy: f32, phase: TouchPhase) -> Event {
         Event::MouseWheel {
@@ -292,5 +317,57 @@ mod tests {
         let mut fling = Fling::new(true);
         swipe(&mut fling, f32::NAN, 6);
         assert!(!fling.gliding(), "a speed that isn't a number");
+    }
+
+    #[test]
+    fn touch_drag_fling_and_cancellation() {
+        let mut fling = Fling::new(true);
+        let dt = 1.0 / 60.0;
+        let mut now = 0.0;
+        for _ in 0..6 {
+            now += dt;
+            fling.touch_move(now, vec2(0.0, -30.0));
+        }
+        fling.touch_end(now, true);
+        assert!(fling.gliding(), "touch fling should be active after quick swipe");
+        let initial_v = fling.velocity;
+        assert!(initial_v.y < 0.0);
+
+        let step1 = fling.step(now + dt);
+        assert!(step1.y < 0.0);
+        assert!(fling.gliding());
+
+        let touch_start =
+            Event::Touch { device_id: egui::TouchDeviceId(0), id: egui::TouchId(0), phase: TouchPhase::Start, pos: pos2(100.0, 100.0), force: None };
+        fling.read(&[touch_start], now + 2.0 * dt, true);
+        assert!(!fling.gliding(), "touch down halts glide immediately");
+    }
+
+    #[test]
+    fn touch_cancel_clears_samples_without_gliding() {
+        let mut fling = Fling::new(true);
+        let dt = 1.0 / 60.0;
+        let mut now = 0.0;
+        for _ in 0..6 {
+            now += dt;
+            fling.touch_move(now, vec2(0.0, -30.0));
+        }
+        fling.touch_cancel();
+        fling.touch_end(now, true);
+        assert!(!fling.gliding(), "canceled touch drag does not fling");
+    }
+
+    #[test]
+    fn touch_rest_before_lift_does_not_fling() {
+        let mut fling = Fling::new(true);
+        let dt = 1.0 / 60.0;
+        let mut now = 0.0;
+        for _ in 0..4 {
+            now += dt;
+            fling.touch_move(now, vec2(0.0, -30.0));
+        }
+        now += 0.15;
+        fling.touch_end(now, true);
+        assert!(!fling.gliding(), "resting finger before lift produces no fling");
     }
 }

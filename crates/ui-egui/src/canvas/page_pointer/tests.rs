@@ -44,6 +44,7 @@ fn a_touch_tap_keeps_its_position_on_the_frame_it_lifts() {
     let p = pos2(50.0, 60.0);
     frame(&ctx, vec![], false);
     let down = frame(&ctx, vec![touch(TouchPhase::Start, p), Event::PointerMoved(p), button(p, PointerButton::Primary, true)], false);
+    assert!(down.is_touch, "touch tap sets is_touch");
     assert_eq!((down.pos, down.origin, down.pressed()), (Some(p), Some(p), Some(p)));
     // egui-winit ends a touch with the release and `PointerGone` in one frame.
     let up = frame(&ctx, vec![touch(TouchPhase::End, p), button(p, PointerButton::Primary, false), Event::PointerGone], false);
@@ -51,6 +52,12 @@ fn a_touch_tap_keeps_its_position_on_the_frame_it_lifts() {
     assert_eq!(up.pos, Some(p), "the pages still know where the finger lifted");
     assert_eq!(up.edges, [Edge::Release(p)]);
     assert_eq!(frame(&ctx, vec![], false), PagePointer::default(), "and forget it the frame after");
+    assert!(ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("pdfcraft-sticky-touch-ui")).unwrap_or(false)), "sticky touch stays true after lift");
+    frame(&ctx, vec![Event::PointerMoved(p)], false);
+    assert!(
+        !ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("pdfcraft-sticky-touch-ui")).unwrap_or(false)),
+        "sticky touch clears once a mouse pointer moves"
+    );
 }
 
 /// A click is located where it came up even after a stall's many presses and releases, past the

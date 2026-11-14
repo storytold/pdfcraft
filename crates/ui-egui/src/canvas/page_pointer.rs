@@ -52,13 +52,17 @@ pub(crate) struct PagePointer {
     /// A primary press the pages hold turned into a drag this frame. egui's own `drag_started()`
     /// counts every button, so a right-button drag would start what a left-button drag does.
     pub drag_started: bool,
+    /// Whether this pointer input originated from a touch screen.
+    pub is_touch: bool,
 }
 
 impl PagePointer {
     /// The pointer for `resp`, the content widget that holds every page, allocated in `ui`, while
     /// a dialog is open over the window or not (`modal`).
     pub(crate) fn read(ui: &egui::Ui, resp: &egui::Response, modal: bool) -> Self {
-        let (at, origin, edges, released, primary_down, any_down, modifiers) = ui.input(|i| {
+        let (at, origin, edges, released, primary_down, any_down, modifiers, is_touch_event, non_touch_pointer) = ui.input(|i| {
+            let touch = i.events.iter().any(|e| matches!(e, Event::Touch { .. })) || i.multi_touch().is_some();
+            let pointer_event = i.events.iter().any(|e| matches!(e, Event::PointerMoved(_) | Event::PointerButton { .. }));
             (
                 i.pointer.interact_pos(),
                 i.pointer.press_origin(),
@@ -67,8 +71,30 @@ impl PagePointer {
                 i.pointer.primary_down(),
                 i.pointer.any_down(),
                 press_modifiers(&i.events).unwrap_or(i.modifiers),
+                touch,
+                !touch && pointer_event,
             )
         });
+        let touch_id = egui::Id::unique("pdfcraft-active-touch-pointer");
+        let is_touch = if edges.iter().any(|e| matches!(e, Edge::Press(_))) {
+            ui.data_mut(|d| {
+                d.insert_temp(touch_id, is_touch_event);
+                is_touch_event
+            })
+        } else if any_down {
+            ui.data(|d| d.get_temp(touch_id).unwrap_or(is_touch_event))
+        } else {
+            ui.data_mut(|d| {
+                d.remove_temp::<bool>(touch_id);
+                is_touch_event
+            })
+        };
+        let sticky_touch_id = egui::Id::unique("pdfcraft-sticky-touch-ui");
+        if is_touch_event {
+            ui.data_mut(|d| d.insert_temp(sticky_touch_id, true));
+        } else if non_touch_pointer {
+            ui.data_mut(|d| d.insert_temp(sticky_touch_id, false));
+        }
         // egui's own answer to "do the pages hold a press?": from the press on until the frame
         // of its click, release or drag stop. A drag can outlive egui's press while the
         // pointer is outside the window. With a dialog open only a drag counts, up to the frame
@@ -82,10 +108,16 @@ impl PagePointer {
             resp.dragged() || resp.drag_stopped() || (!modal && (resp.interact_pointer_pos().is_some() || press_origin.is_some_and(|p| on_top(&p))));
         let pos = at.filter(|p| held || on_top(p));
         if !held {
-            return Self { pos, origin: None, edges: Vec::new(), released: None, primary_down, any_down, modifiers, drag_started: false };
+            return Self { pos, origin: None, edges: Vec::new(), released: None, primary_down, any_down, modifiers, drag_started: false, is_touch };
         }
         let drag_started = resp.drag_started_by(PointerButton::Primary);
-        Self { pos, origin: press_origin, edges, released, primary_down, any_down, modifiers, drag_started }
+        Self { pos, origin: press_origin, edges, released, primary_down, any_down, modifiers, drag_started, is_touch }
+    }
+
+    /// Whether the most recent pointer input used touch (persists across idle frames after lift
+    /// until non-touch pointer motion arrives, so selection handles stay visible).
+    pub(crate) fn sticky_touch(ui: &egui::Ui) -> bool {
+        ui.data(|d| d.get_temp(egui::Id::unique("pdfcraft-sticky-touch-ui")).unwrap_or(false))
     }
 
     /// Where the pointer is, when it is inside `r`.

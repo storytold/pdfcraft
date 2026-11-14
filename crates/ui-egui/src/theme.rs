@@ -487,6 +487,8 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
         s.text_styles.insert(egui::TextStyle::Small, regular(11.0));
         s.text_styles.insert(egui::TextStyle::Heading, semibold(17.0));
         s.interaction.tooltip_delay = 0.35;
+        // Expand hit-test boundary by 12 pt for effortless touch interaction without altering visual layout.
+        s.interaction.interact_radius = 12.0;
     });
     let style = ctx.global_style();
     ctx.set_style_of(egui::Theme::Light, style.clone());
