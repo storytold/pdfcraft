@@ -101,6 +101,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         tool,
         pcx: &pcx,
         form,
+        doc,
         can_fill,
         can_modify,
         editing_content,
@@ -486,6 +487,8 @@ struct PageHits<'a> {
     tool: QuickTool,
     pcx: &'a comments::PageCx<'a>,
     form: &'a [pdfcraft_engine::FormField],
+    /// Its document: what its scripts show while it is read (`Document::shown_by_scripts`).
+    doc: &'a pdfcraft_engine::Document,
     can_fill: bool,
     can_modify: bool,
     /// Edit a PDF is open: added text and pictures can be picked up.
@@ -576,6 +579,7 @@ impl PageHits<'_> {
             tool,
             pcx,
             form,
+            doc,
             can_fill,
             can_modify,
             editing_content,
@@ -611,7 +615,7 @@ impl PageHits<'_> {
         let fields = if preparing {
             crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p)
         } else if tool == QuickTool::Select {
-            crate::forms_ui::hit(xf, info, page, form, tabs, can_fill, p)
+            crate::forms_ui::hit(xf, info, page, doc, tabs, can_fill, p)
         } else {
             None
         };
@@ -882,6 +886,11 @@ pub(super) fn veiled(view: &DocView) -> bool {
     view.presentation.is_some() && !view.presenter.settled_on(view.current)
 }
 
+/// The page and index of `l` when clicking it runs a JavaScript action (#2081).
+fn javascript_link(l: &pdfcraft_render::Link) -> Option<(usize, usize)> {
+    matches!(l.target, LinkTarget::JavaScript(_)).then_some((l.page, l.index))
+}
+
 /// Everything drawn over the page after its text: pictures, comments, content, links, fields, marks
 /// and badges.
 pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot, input: &PageInput) {
@@ -989,6 +998,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         && let Some(l) = info.links.iter().find(|l| l.page == i && l.index == index)
     {
         frame.out.clicked_link = Some(l.target.clone());
+        frame.out.javascript_link = javascript_link(l);
     }
     // A web or email address written as plain text (#4207): the same click as a link annotation,
     // and the same check and confirmation on opening.
@@ -1068,7 +1078,9 @@ fn paint_field_highlights(painter: &egui::Painter, xf: &PageXform, info: &DocInf
     if !enabled {
         return;
     }
-    for field in form.iter() {
+    // A push button holds no value, so it is left as drawn (the frames and controls of a LaTeX
+    // `animate` animation are push buttons).
+    for field in form.iter().filter(|f| f.kind != pdfcraft_engine::FormFieldKind::PushButton) {
         let required = field.has(pdfcraft_engine::field_flags::REQUIRED);
         for widget in field.widgets.iter().filter(|widget| widget.page == Some(page) && !widget.hidden && !widget.read_only) {
             let rect = widget.rect;
