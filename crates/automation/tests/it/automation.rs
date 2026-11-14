@@ -4910,6 +4910,31 @@ fn enhance_camera_image_through_tools() {
 }
 
 #[test]
+fn deskew_pages_through_tools() {
+    let dir = workdir("deskew-pages");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "page_deskew", json!({ "doc": doc, "min_angle": 0.2 }));
+    // The answer names what was done, page by page.
+    let page_count = ok(&mut a, "doc_info", json!({ "doc": doc }))["pages"].as_array().unwrap().len() as u64;
+    assert_eq!(r["pages"].as_u64(), Some(page_count));
+    for key in ["straightened", "angles", "unmeasured"] {
+        assert!(r[key].is_array(), "{key}: {}", r[key]);
+    }
+    assert!(r["already_straight"].is_u64());
+    // Whatever it straightened, the angle it reports for a page is a number in degrees.
+    for angle in r["angles"].as_array().unwrap() {
+        let v = angle.as_f64().unwrap();
+        assert!(v != 0.0 && v.abs() <= 10.0, "{v}");
+    }
+    // Pages outside the document are simply not visited, never an error.
+    let r = ok(&mut a, "page_deskew", json!({ "doc": doc, "pages": [99] }));
+    assert_eq!(r["straightened"].as_array().unwrap().len(), 0);
+    // A min_angle outside 0..=10 is refused like every other bad argument.
+    assert!(matches!(a.call("page_deskew", &json!({ "doc": doc, "min_angle": 45 })), Err(ToolError::InvalidArgs(_))));
+}
+
+#[test]
 fn enhance_scanned_file_cleans_the_scan_in_place_through_tools() {
     let dir = workdir("enhance-scan");
     // A 300 × 400 grey scan: dull paper, a dark gutter at the left, text bars and a speck.

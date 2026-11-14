@@ -377,6 +377,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("tools.document_js", "Document JavaScripts…", None, None, Modification, "file-code"),
     c("ocr.recognize", "Recognize text…", None, None, Modification, "scan-text"),
     c("ocr.enhance_camera", "Enhance camera image", None, None, Modification, "camera"),
+    c("ocr.deskew", "Straighten page", None, None, Modification, "camera"),
+    c("ocr.deskew_all", "Straighten all pages", None, None, Modification, "camera"),
     c("ocr.enhance", "Enhance scanned file…", None, None, Modification, "sparkles"),
     c("ocr.recognize_batch", "Recognize text in multiple files…", None, None, Nothing, "files"),
     c("ocr.correct", "Correct recognized text…", None, None, Document, "text-select"),

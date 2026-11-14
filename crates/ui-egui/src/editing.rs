@@ -667,7 +667,7 @@ impl PdfCraftApp {
             restore(self);
             return;
         }
-        let result = self.session.enhance_camera_page_at(id, done.page, done.corners, done.look, done.level).and_then(|()| {
+        let result = self.session.enhance_camera_page_at_keep(id, done.page, done.corners, done.look, done.level, true).and_then(|()| {
             let turn = done.turns.rem_euclid(360);
             if turn == 0 { Ok(1) } else { self.session.apply(id, Edit::RotatePages { pages: vec![done.page], degrees: turn }).map(|()| 2) }
         });
@@ -712,7 +712,7 @@ impl PdfCraftApp {
             [u as f64, v as f64]
         });
         let (look, level) = (crate::camera_ui::Look::Colour, crate::camera_ui::DEFAULT_LEVEL);
-        match self.session.enhance_camera_page_at(id, q.page, corners, look, level) {
+        match self.session.enhance_camera_page_at_keep(id, q.page, corners, look, level, true) {
             Ok(()) => {
                 // The tool stays open with the clean-up slider, rotate, crop and organize.
                 if let (Some(doc), Some(view)) = (self.session.get(id), self.views.get_mut(i)) {

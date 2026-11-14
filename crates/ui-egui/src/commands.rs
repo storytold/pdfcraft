@@ -622,6 +622,55 @@ impl PdfCraftApp {
             "export.pptx" => self.export_office_dialog(pdfcraft_engine::compare::OfficeFormat::Pptx),
             "export.html" => self.export_office_dialog(pdfcraft_engine::compare::OfficeFormat::Html),
             "export.rtf" => self.export_office_dialog(pdfcraft_engine::compare::OfficeFormat::Rtf),
+            "ocr.deskew" => {
+                // A dialog, not a toast: the angle is small enough that the page's change is hard
+                // to see, and the toast used to be gone before it could be read.
+                if let Some(i) = self.active
+                    && let Some(view) = self.views.get_mut(i)
+                {
+                    let (id, page) = (view.id, view.current);
+                    let text = match self.session.deskew_page_report(id, page, 0.15) {
+                        Ok((pdfcraft_engine::deskew::Deskewed::Straightened(angle), _)) => {
+                            view.invalidate_content();
+                            format!("Page {}: straightened by {angle:.2}°. The page keeps its size.", page + 1)
+                        }
+                        Ok((pdfcraft_engine::deskew::Deskewed::AlreadyStraight, _)) => {
+                            format!("Page {}: already straight.", page + 1)
+                        }
+                        Ok((pdfcraft_engine::deskew::Deskewed::Unmeasured, why)) => format!(
+                            "Page {}: left alone — {}.",
+                            page + 1,
+                            why.unwrap_or_else(|| "no skew could be measured (a photograph or a drawing); straighten it by its corners instead".into())
+                        ),
+                        Err(e) => format!("Page {}: could not be straightened: {e}", page + 1),
+                    };
+                    self.deskew_report = Some(text);
+                    self.dialog = Some(crate::Dialog::DeskewReport);
+                }
+            }
+            "ocr.deskew_all" => {
+                if let Some(i) = self.active
+                    && let Some(view) = self.views.get_mut(i)
+                {
+                    let id = view.id;
+                    let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
+                    let pages: Vec<usize> = (0..count).collect();
+                    // Gathering the inputs is quick; the measuring itself runs on a worker thread
+                    // so the window keeps painting while it happens.
+                    match self.session.deskew_inputs(id, &pages, 0.15) {
+                        Ok(inputs) => {
+                            let job = crate::deskew_job::Job::new(id, inputs, count);
+                            self.deskew_report = Some(job.text());
+                            self.deskew_job = Some(job);
+                            self.dialog = Some(crate::Dialog::DeskewReport);
+                        }
+                        Err(e) => {
+                            self.deskew_report = Some(format!("The pages could not be measured: {e}"));
+                            self.dialog = Some(crate::Dialog::DeskewReport);
+                        }
+                    }
+                }
+            }
             "ocr.enhance_camera" => {
                 // The corners start on the document's edges when they can be found, else
                 // inset on the current page (camera_ui::page_input).

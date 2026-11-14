@@ -72,6 +72,8 @@ impl PdfCraftApp {
             status_captions_lang: None,
             views: Vec::new(),
             closed_tabs: Vec::new(),
+            deskew_report: None,
+            deskew_job: None,
             active: None,
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,

@@ -871,6 +871,52 @@ pub fn from_images(images: &[(String, Vec<u8>)]) -> Result<Document, CreateError
 }
 
 /// Create image pages with embedded resolution or a fixed dpi (72 gives one point per pixel).
+/// One page per image on a page of `size` points (width, height), each image placed centred at
+/// its natural size for `resolution` (never resampled), scaled down only when it would not fit.
+/// The rest of the page stays white, so a straightened sheet keeps the page it came from.
+pub fn from_images_centred(images: &[(String, Vec<u8>)], resolution: ImageResolution, size: (f64, f64)) -> Result<Document, CreateError> {
+    if let ImageResolution::Dpi(dpi) = resolution
+        && (!dpi.is_finite() || !(1.0..=1200.0).contains(&dpi))
+    {
+        return Err(CreateError::Invalid("image DPI must be finite and between 1 and 1200".into()));
+    }
+    if images.is_empty() {
+        return Err(CreateError::Invalid("no images".into()));
+    }
+    // `clamp` keeps a NaN, and a NaN MediaBox is an unreadable page: refuse it here.
+    if !size.0.is_finite() || !size.1.is_finite() {
+        return Err(CreateError::Invalid(format!("page size must be finite, not {} × {}", size.0, size.1)));
+    }
+    let (pw, ph) = (size.0.clamp(1.0, MAX_SIDE), size.1.clamp(1.0, MAX_SIDE));
+    let mut doc = Document::new_empty();
+    let mut tree = Pages::of(&doc)?;
+    let mut profiles = Vec::new();
+    for img in images.iter().map(|(name, bytes)| embed(name, bytes, usize::MAX)).collect::<Result<Vec<_>, _>>()?.into_iter().flatten() {
+        let dpi = match resolution {
+            ImageResolution::Embedded => img.dpi,
+            ImageResolution::Dpi(dpi) => (dpi, dpi),
+        };
+        let (mut w, mut h) = (img.px.0 as f64 * 72.0 / dpi.0, img.px.1 as f64 * 72.0 / dpi.1);
+        // Fit the picture inside the page, never enlarging it.
+        let k = (pw / w.max(1e-6)).min(ph / h.max(1e-6)).min(1.0);
+        w *= k;
+        h *= k;
+        let xr = add_image(&mut doc, img, &mut profiles);
+        let mut xobj = Dict::new();
+        xobj.set(b"Im0".to_vec(), Object::Ref(xr));
+        let mut res = Dict::new();
+        res.set(b"XObject".to_vec(), Object::Dict(xobj));
+        let (x, y) = ((pw - w) / 2.0, (ph - h) / 2.0);
+        let content = format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q\n").into_bytes();
+        tree.add(&mut doc, pw, ph, res, Some(content));
+    }
+    tree.finish(&mut doc)?;
+    if let Some((name, _)) = images.first() {
+        set_title(&mut doc, name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s));
+    }
+    Ok(doc)
+}
+
 pub fn from_images_with_resolution(images: &[(String, Vec<u8>)], resolution: ImageResolution) -> Result<Document, CreateError> {
     if let ImageResolution::Dpi(dpi) = resolution
         && (!dpi.is_finite() || !(1.0..=1200.0).contains(&dpi))

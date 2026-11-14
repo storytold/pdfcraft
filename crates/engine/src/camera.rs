@@ -129,6 +129,21 @@ impl Session {
         look: crate::camera_clean::Look,
         level: u8,
     ) -> Result<(), EditError> {
+        self.enhance_camera_page_at_keep(id, page, corners, look, level, false)
+    }
+
+    /// [`Session::enhance_camera_page_at`], but with `keep_page` the straightened sheet is put
+    /// back on a page of the original size, centred, over white, so the page keeps the size it
+    /// had (what Acrobat and ABBYY do when they straighten a scan). Still one undoable step.
+    pub fn enhance_camera_page_at_keep(
+        &mut self,
+        id: DocId,
+        page: usize,
+        corners: [Point; 4],
+        look: crate::camera_clean::Look,
+        level: u8,
+        keep_page: bool,
+    ) -> Result<(), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         if let Some(why) = &doc.read_only_reason {
             return Err(EditError::ReadOnly(why.clone()));
@@ -200,7 +215,15 @@ impl Session {
         written.map_err(|e| EditError::Invalid(format!("the straightened page could not be encoded: {e}")))?;
         // One device pixel per `k` points keeps the page's physical size.
         let dpi = (k * 72.0).clamp(1.0, 1200.0);
-        let bytes = self.create_from_images_with_resolution(&[(name.into(), encoded)], ImageResolution::Dpi(dpi))?;
+        let bytes = if keep_page {
+            self.create_from_images_centred(
+                &[(name.into(), encoded)],
+                ImageResolution::Dpi(dpi),
+                (info.width as f64, info.height as f64),
+            )?
+        } else {
+            self.create_from_images_with_resolution(&[(name.into(), encoded)], ImageResolution::Dpi(dpi))?
+        };
         let replace = Edit::ReplacePages { pages: vec![page], name: "camera.pdf".into(), bytes, src_pages: vec![0] };
         self.apply(id, Edit::Batch { label: "Enhance camera image".into(), edits: vec![replace] })
     }

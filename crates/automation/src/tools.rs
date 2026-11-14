@@ -162,6 +162,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "narrower_than": { "type": "number", "minimum": 0, "description": "Points on the page (default 0.216)." },
                     "width": { "type": "number", "exclusiveMinimum": 0, "description": "Points on the page (default 0.72)." },
                     "type3": { "type": "boolean" }, "patterns": { "type": "boolean" },
+                    "keep_page": { "type": "boolean" },
                 }),
                 &["doc"],
             )),
@@ -308,6 +309,16 @@ pub fn tools() -> Vec<ToolDef> {
                     "mode": { "type": "string", "enum": ["original", "colour", "greyscale", "bw"] },
                 }),
                 &["doc", "page"],
+            )),
+        t("page_deskew", "Deskew pages", "Straighten skewed scanned pages by themselves (no corners to drag): the skew of the page's text lines is measured the way OCR measures it, and the page's picture is rotated about its centre by that angle, over white. The picture keeps its pixel count, so the page keeps its size. Comments are not drawn into the picture. A page that already has searchable text is left alone and reported in skipped: replacing its picture would drop that text, so such a page is straightened with page_enhance_camera, which keeps the page's content. Pages already straighter than min_angle (default 0.15 degrees) are left alone. Returns the pages straightened (1-based) with the angle corrected on each, the pages that came out already straight, the pages whose skew could not be judged, and the pages left alone with the reason. One undoable step per page.")
+            .cmd("ocr.deskew")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "pages": pages("to straighten (default: all)"),
+                    "min_angle": { "type": "number", "minimum": 0, "maximum": 10 },
+                }),
+                &["doc"],
             )),
         t("page_enhance_scan", "Enhance scanned file", "Clean up scanned pages in place (Scan & OCR ▸ Enhance ▸ Scanned document). A page is a scan when its pictures cover at least half of it; the pictures covering at least a tenth of it are cleaned and written back into the same image objects at the same size and colour space (a JPEG stays a JPEG at quality 90, other grey/RGB images are stored losslessly, a 1-bit image stays 1-bit), so the page's invisible OCR text, comments, links and other content stay as they were, and an image drawn on several pages is cleaned once. level (0–100, default 50) is background removal: the paper's illumination is evened out so a grey, yellowed or unevenly lit background turns white, then the contrast is raised so faint strokes darken; colour ink stays colour. edge_shadows (default: on unless level is 0) lightens shadows along the scan's edges (book gutters, a copier's dark border). despeckle (default: from level 60) turns isolated dark specks white; it is the only change a 1-bit scan takes. Returns pages_cleaned (1-based), images (rewritten), not_scanned (pages that are no scan) and skipped ([{pages, name, reason}]: CMYK, indexed, JPEG 2000, JBIG2 or CCITT images, a scan drawn inside grouped Form artwork, broken data, or nothing to change). One undoable step; none when nothing changed.")
             .cmd("ocr.enhance")

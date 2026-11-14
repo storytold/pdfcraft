@@ -10571,6 +10571,80 @@ fn enhance_camera_page_straightens_the_sheet() {
     assert_eq!((p.width, p.height), (400.0, 300.0));
 }
 
+/// A 600 × 800 px page of horizontal rules on white paper, rotated by `deg` degrees about its
+/// centre (what a skewed scan of a ruled page looks like), as a PNG.
+fn ruled_scan(deg: f64) -> Vec<u8> {
+    let (w, h) = (600u32, 800u32);
+    let (cx, cy) = (f64::from(w) / 2.0, f64::from(h) / 2.0);
+    let (cos, sin) = (deg.to_radians().cos(), deg.to_radians().sin());
+    let img = image::RgbImage::from_fn(w, h, |x, y| {
+        let (dx, dy) = (f64::from(x) - cx, f64::from(y) - cy);
+        // Inverse rotation: which pixel of the upright page this one came from.
+        let sx = (cos * dx + sin * dy + cx).round();
+        let sy = (-sin * dx + cos * dy + cy).round();
+        if sx < 0.0 || sy < 0.0 || sx >= f64::from(w) || sy >= f64::from(h) {
+            return image::Rgb([255, 255, 255]);
+        }
+        if (sy as u32) % 40 < 3 { image::Rgb([20, 20, 20]) } else { image::Rgb([255, 255, 255]) }
+    });
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    png
+}
+
+fn open_ruled(s: &mut Session, deg: f64) -> DocId {
+    let bytes = s.create_from_images_with_resolution(&[("scan.png".into(), ruled_scan(deg))], ImageResolution::Dpi(72.0)).unwrap();
+    s.open("scan.pdf", None, bytes, None).unwrap()
+}
+
+#[test]
+fn deskew_page_straightens_a_skewed_scan_and_keeps_the_page() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = open_ruled(&mut s, 2.0);
+    let before = s.get(id).unwrap().info.pages[0].clone();
+    match s.deskew_page(id, 0, 0.15).unwrap() {
+        crate::deskew::Deskewed::Straightened(angle) => {
+            assert!((angle - 2.0).abs() < 0.8, "measured {angle}");
+        }
+        other => panic!("expected a straightened page, got {other:?}"),
+    }
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), 1);
+    assert_eq!(doc.can_undo(), Some("Deskew page"));
+    // The page keeps its size: the picture is rotated, not rebuilt.
+    let after = &doc.info.pages[0];
+    assert!((after.width - before.width).abs() < 0.01 && (after.height - before.height).abs() < 0.01, "{:?} → {:?}", (before.width, before.height), (after.width, after.height));
+
+    // Straightening it again finds nothing left to do.
+    assert_eq!(s.deskew_page(id, 0, 0.15).unwrap(), crate::deskew::Deskewed::AlreadyStraight);
+
+    s.undo(id).unwrap();
+    let p = &s.get(id).unwrap().info.pages[0];
+    assert!((p.width - before.width).abs() < 0.01);
+}
+
+#[test]
+fn deskew_page_leaves_a_straight_page_alone() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = open_ruled(&mut s, 0.0);
+    assert_eq!(s.deskew_page(id, 0, 0.15).unwrap(), crate::deskew::Deskewed::AlreadyStraight);
+    assert_eq!(s.get(id).unwrap().can_undo(), None);
+}
+
+#[test]
+fn deskew_page_does_not_guess_on_a_blank_page() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let blank = image::RgbImage::from_pixel(600, 800, image::Rgb([255, 255, 255]));
+    let mut png = Vec::new();
+    blank.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let bytes = s.create_from_images_with_resolution(&[("blank.png".into(), png)], ImageResolution::Dpi(72.0)).unwrap();
+    let id = s.open("blank.pdf", None, bytes, None).unwrap();
+    // Nothing to measure is not a guess: the page is left alone, and nothing is undoable.
+    assert_eq!(s.deskew_page(id, 0, 0.15).unwrap(), crate::deskew::Deskewed::AlreadyStraight);
+    assert_eq!(s.get(id).unwrap().can_undo(), None);
+    assert!(matches!(s.deskew_page(DocId(999), 0, 0.15), Err(EditError::NoDocument)));
+}
+
 #[test]
 fn detect_camera_corners_finds_the_sheet_in_user_space() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
