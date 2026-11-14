@@ -183,6 +183,29 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
     (out, names)
 }
 
+/// The names an earlier layout pass gave the fields and radio groups it generated, by the SOM
+/// path each names (`/PCSom`), in the order it wrote them, so a new pass gives each object the
+/// name it had ([`crate::layout::KeptNames`]). Only the top level of the AcroForm's `/Fields` is
+/// read, at most [`MAX_FIELDS_SEARCHED`] entries: a generated field or radio group is there, with
+/// its name. The fields above signature fields named by their SOM path, and the fields the file
+/// came with, are not generated names and are skipped.
+pub(crate) fn generated_names(doc: &Document) -> crate::layout::KeptNames {
+    let mut kept = crate::layout::KeptNames::default();
+    let Some(root) = doc.root() else { return kept };
+    let catalog = doc.get(root);
+    let Some(acro) = catalog.as_dict().and_then(|c| c.get(b"AcroForm")).map(|a| doc.resolve(a)) else { return kept };
+    let Some(fields) = acro.as_dict().and_then(|a| a.get(b"Fields")).map(|f| doc.resolve(f)) else { return kept };
+    for field in fields.as_array().map(Vec::as_slice).unwrap_or_default().iter().take(MAX_FIELDS_SEARCHED) {
+        let field = doc.resolve(field);
+        let Some(d) = field.as_dict().filter(|d| !d.contains(NODE_KEY)) else { continue };
+        let text = |key: &[u8]| d.get(key).map(|v| doc.resolve(v)).and_then(|v| v.as_string().map(|s| s.to_text()));
+        if let (Some(som), Some(name)) = (text(SOM_KEY), text(b"T")) {
+            kept.add(som, name);
+        }
+    }
+    kept
+}
+
 /// Required (`Ff` bit 2), which viewers outline when they highlight a form's fields, for widget
 /// `w` when it must be filled in. A radio button's flags are its group's (the group takes it,
 /// [`Emitter::radio_group`]), and a push button keeps no value (ISO 32000-2 §12.7.5.2.2), so

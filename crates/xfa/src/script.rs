@@ -721,7 +721,8 @@ pub fn rerender(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> 
     let data = parse_datasets(&packets.xdp);
     let ov = overrides(doc);
     let laid = apply_overrides(tpl, &ov);
-    let form = crate::layout::layout_with_overrides(&laid, data.as_ref(), &ov)?;
+    // Each field and radio group keeps the name the pass before gave it.
+    let form = crate::layout::layout_keeping_names(&laid, data.as_ref(), &ov, crate::pdf::generated_names(doc))?;
     if form.pages.is_empty() {
         return Err(XfaError::Malformed("the template laid out to no pages".into()));
     }

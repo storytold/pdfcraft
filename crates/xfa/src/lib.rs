@@ -166,7 +166,7 @@ pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
     let data = parse_datasets(&packets.xdp);
     let ov = overrides(doc);
     let laid = apply_overrides(&tpl, &ov);
-    let mut form = layout::layout_with_overrides(&laid, data.as_ref(), &ov)?;
+    let mut form = layout::layout_keeping_names(&laid, data.as_ref(), &ov, pdf::generated_names(doc))?;
     form.warnings.splice(0..0, parse_warnings);
     if form.pages.is_empty() {
         return Err(XfaError::Malformed("the template laid out to no pages".into()));
@@ -180,6 +180,9 @@ pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
     warnings.dedup();
     Ok(Report { pages: written.pages, fields: written.fields, template_bytes: packets.xdp.len(), warnings })
 }
+
+#[cfg(test)]
+mod name_tests;
 
 #[cfg(test)]
 mod repeat_tests;

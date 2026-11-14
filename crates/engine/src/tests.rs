@@ -12534,6 +12534,59 @@ fn xfa_focus_targets_the_widget_after_relayout() {
     assert_eq!(out.requests, [pdfcraft_js::Request::FocusField { name: "note".into(), object_id: crate::js::field_object_id(after) }], "{out:?}");
 }
 
+/// A script that shows a section laid out before a radio group, holding a group of the same
+/// name, leaves the first group its field name: a selection made by that name, as the focused
+/// group or a script that listed the fields earlier makes it, still lands in that group's data.
+#[test]
+fn an_xfa_radio_group_keeps_its_name_when_a_script_shows_a_group_before_it() {
+    let group = |a: &str, b: &str| {
+        format!(
+            r#"<exclGroup name="R" w="2in" h="0.3in" layout="lr-tb"><field name="a" w="0.5in" h="0.3in"><ui><checkButton shape="round"/></ui><items><integer>{a}</integer></items></field><field name="b" w="0.5in" h="0.3in"><ui><checkButton shape="round"/></ui><items><integer>{b}</integer></items></field></exclGroup>"#
+        )
+    };
+    let xdp = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="go" w="2in" h="0.3in"><ui><button/></ui>
+  <event activity="click"><script contentType="application/x-javascript">tax.presence = "visible";</script></event>
+ </field>
+ <subform name="tax" layout="tb" presence="hidden">{tax}</subform>
+ {own}
+</subform>
+</template>
+</xdp:xdp>
+"##,
+        tax = group("1", "2"),
+        own = group("1", "0"),
+    );
+    let mut s = Session::new();
+    let id = s.open("groups.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&xdp)), None).unwrap();
+    let som_of = |s: &Session, name: &str| {
+        let d = s.get(id).unwrap();
+        let f = d.form.iter().find(|f| f.name == name)?;
+        let cos = d.editor.as_ref()?.cos.clone();
+        let object = cos.get(f.obj);
+        object.as_dict()?.get(pdfcraft_xfa::SOM_KEY).map(|v| cos.resolve(v)).and_then(|v| v.as_string().map(|t| t.to_text()))
+    };
+    assert_eq!(som_of(&s, "R").as_deref(), Some("form[0].R[0]"), "the one group laid out is named R");
+    s.apply(id, Edit::XfaEvent { som: "form[0].go[0]".into(), activity: "click".into() }).unwrap();
+    assert_eq!(som_of(&s, "R").as_deref(), Some("form[0].R[0]"), "R still names the form's own group");
+    let shown =
+        s.get(id).unwrap().form.iter().filter(|f| f.name != "R" && f.kind == FormFieldKind::Radio).map(|f| f.name.clone()).collect::<Vec<_>>();
+    assert_eq!(shown.len(), 1, "the shown section's group has a field of its own: {shown:?}");
+    assert_eq!(som_of(&s, &shown[0]).as_deref(), Some("form[0].tax[0].R[0]"));
+
+    s.apply(id, Edit::SetFieldValue { name: "R".into(), value: FieldValue::Radio(Some("1".into())) }).unwrap();
+    let saved = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    let data = pdfcraft_xfa::data_of(&saved).unwrap();
+    let at = |som: &str| data.text_at(&pdfcraft_xfa::som_to_path(som)).map(str::trim).unwrap_or("").to_string();
+    assert_eq!(at("form[0].R[0]"), "1", "the selection is the form's own group's");
+    assert_eq!(at("form[0].tax[0].R[0]"), "", "the shown group stays unanswered");
+}
+
 #[test]
 fn an_xfa_button_may_show_a_side_panel_and_other_events_may_not() {
     let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
