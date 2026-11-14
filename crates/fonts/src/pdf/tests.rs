@@ -1856,6 +1856,73 @@ fn refused_subset_reads_do_not_encode_unverified_glyphs() {
     }
 }
 
+#[test]
+fn subset_width_and_unicode_entries_do_not_prove_a_dropped_outline_exists() {
+    for mapping in ["1 beginbfchar <0064> <4E2D> endbfchar", "1 beginbfrange <0064> <0065> <4E2D> endbfrange"] {
+        let mut doc = Document::new_empty();
+        let (mut font, _) = subset_type0(&mut doc, mapping.as_bytes());
+        font.set(b"Encoding".to_vec(), Object::name("Identity-H"));
+        let Some(Object::Array(descendants)) = font.get_mut(b"DescendantFonts") else { panic!() };
+        let Some(Object::Dict(descendant)) = descendants.first_mut() else { panic!() };
+        // A subsetter may retain /W and ToUnicode entries after dropping the glyph program.
+        descendant.set(b"W".to_vec(), Object::Array(vec![Object::Int(100), Object::Int(101), Object::Int(1000)]));
+        let metrics = Metrics::from_dict(&doc, &font);
+        assert_eq!(metrics.decode(&[0, 100]), "中");
+        assert_eq!(metrics.width(100), 1.0);
+        assert_eq!(metrics.has_outline(100), Some(false));
+        assert_eq!(metrics.encode("中"), None, "writing this code would draw no Chinese glyph");
+    }
+}
+
+#[test]
+fn subset_invisible_format_characters_keep_their_empty_glyphs() {
+    use skrifa::MetadataProvider as _;
+    let face = skrifa::FontRef::new(include_bytes!("../../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+    let gid = |c| u16::try_from(face.charmap().map(c).unwrap().to_u32()).unwrap();
+    let map: Vec<u8> = [0, gid('A'), gid(' ')].into_iter().flat_map(u16::to_be_bytes).collect();
+    for ch in [
+        '\u{00AD}',
+        '\u{034F}',
+        '\u{061C}',
+        '\u{180E}',
+        '\u{200B}',
+        '\u{200C}',
+        '\u{200D}',
+        '\u{200E}',
+        '\u{200F}',
+        '\u{202A}',
+        '\u{202E}',
+        '\u{2060}',
+        '\u{2066}',
+        '\u{2069}',
+        '\u{FE0F}',
+        '\u{FEFF}',
+        '\u{E0100}',
+    ] {
+        let hex: String = ch.encode_utf16(&mut [0; 2]).iter().map(|u| format!("{u:04X}")).collect();
+        for mapping in [
+            format!("2 beginbfchar <0001> <0041> <0002> <{hex}> endbfchar"),
+            format!("1 beginbfchar <0001> <0041> endbfchar 1 beginbfrange <0002> <0003> <{hex}> endbfrange"),
+        ] {
+            let mut doc = Document::new_empty();
+            let (mut font, _) = subset_type0(&mut doc, mapping.as_bytes());
+            font.set(b"Encoding".to_vec(), Object::name("Identity-H"));
+            let Some(Object::Array(descendants)) = font.get_mut(b"DescendantFonts") else { panic!() };
+            let Some(Object::Dict(descendant)) = descendants.first_mut() else { panic!() };
+            descendant.set(b"CIDToGIDMap".to_vec(), Object::Stream(Stream::flate(Dict::new(), &map)));
+            descendant.set(b"W".to_vec(), Object::Array(vec![Object::Int(1), Object::Array(vec![Object::Int(600), Object::Int(0)])]));
+            let metrics = Metrics::from_dict(&doc, &font);
+            assert!(metrics.has_glyph(2));
+            assert_eq!(metrics.has_outline(2), Some(false));
+            assert_eq!(metrics.width(2), 0.0);
+            let text = format!("A{ch}A");
+            let codes = [0, 1, 0, 2, 0, 1];
+            assert_eq!(metrics.decode(&codes), text);
+            assert_eq!(metrics.encode(&text).as_deref(), Some(codes.as_slice()), "U+{:04X}: {mapping}", u32::from(ch));
+        }
+    }
+}
+
 /// [`cmap_only_sfnt_named`] without a `post` table.
 fn cmap_only_sfnt(mac: Option<&[(u8, u8)]>, windows: &[(u16, u16)]) -> Vec<u8> {
     cmap_only_sfnt_named(mac, windows, false)

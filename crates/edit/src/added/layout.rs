@@ -1,3 +1,4 @@
+use super::cjk::{CjkText, is_cjk};
 use super::types::{AddedImage, AddedText};
 use super::{
     Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedScript, shape_arabic, shape_hebrew, shape_thai,
@@ -34,14 +35,15 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
     #[cfg(test)]
     WRAP_CALLS.with(|c| c.set(c.get().saturating_add(1)));
     let width = (t.rect[2] - t.rect[0]).max(t.size);
+    let cjk = CjkText::new(t).unwrap_or_default();
     let mut out = Vec::new();
     for (index, para) in t.text.split('\n').enumerate() {
         // Arabic or Hebrew: laid out with the bidirectional algorithm and shaped.
         let rtl_script = para.chars().any(|c| is_arabic(c) || is_hebrew(c));
         let thai = para.chars().any(is_thai);
-        if thai
+        if (thai || para.chars().any(is_cjk))
             && !rtl_script
-            && let Ok(lines) = thai_lines(t, para, width)
+            && let Ok(lines) = script_lines(t, para, width, &cjk)
         {
             out.extend(lines.into_iter().map(|line| (line, false, index)));
             continue;
@@ -51,7 +53,13 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
         // sum of its words' and shaping stays linear in the paragraph's length. The space is the
         // paragraph's; a space between Latin words is drawn in the item's font, a few hundredths
         // of an em apart.
-        let measure = |s: &str| if rtl_script || thai { shaped_width(t, s, rtl) } else { latin_width(t, s) };
+        let measure = |s: &str| {
+            if rtl_script || thai {
+                shaped_layout(t, s, rtl, &cjk).map(|(_, width)| width).unwrap_or_else(|_| cjk.width(t, s))
+            } else {
+                cjk.width(t, s)
+            }
+        };
         let space = measure(" ");
         let (mut line, mut line_w) = (String::new(), 0.0);
         // Widths add up (the standard-14 widths have no kerning), so each word is measured once
@@ -77,25 +85,25 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
     out
 }
 
-/// Thai wrapping: a row ends before a word that would overflow it, the words found by the
-/// dictionary ([`crate::linebreak`]) inside runs without spaces and at the spaces between them. The
+/// CJK and Thai wrapping: a row ends before a word that would overflow it, the words found by
+/// [`crate::linebreak`] inside runs without spaces and at the spaces between them. The
 /// spaces where a row ends are dropped, as in the Latin wrapper. Only a word wider than the row is
 /// broken inside, at shaped cluster boundaries, which never detach a tone or vowel mark from its
 /// base.
-fn thai_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, EditError> {
-    let (pieces, _) = shaped_layout(t, para, false)?;
+fn script_lines(t: &AddedText, para: &str, width: f64, cjk: &CjkText) -> Result<Vec<String>, EditError> {
+    let (pieces, _) = shaped_layout(t, para, false, cjk)?;
     let mut atoms = Vec::new();
     for piece in pieces {
         match piece {
             Piece::Shaped(clusters) => atoms.extend(clusters.into_iter().map(|c| (c.text, c.advance * t.size + t.char_spacing))),
             Piece::Latin(s) => atoms.extend(s.chars().map(|c| {
                 let text = c.to_string();
-                let w = latin_width(t, &text);
+                let w = cjk.width(t, &text);
                 (text, w)
             })),
         }
     }
-    Ok(wrap_words(thai_words(atoms), width))
+    Ok(wrap_words(script_words(atoms), width))
 }
 
 /// `words` (each a list of text and advance, with the spaces that follow it) laid into rows no
@@ -139,7 +147,7 @@ fn wrap_words(words: Vec<Vec<(String, f64)>>, width: f64) -> Vec<String> {
 /// The shaped clusters `atoms` (text and advance) grouped into words: a word starts after spaces,
 /// or where [`crate::linebreak::breaks`] lets a row end inside a run without spaces, and keeps the
 /// spaces that follow it. A break that falls inside a cluster is not one.
-fn thai_words(atoms: Vec<(String, f64)>) -> Vec<Vec<(String, f64)>> {
+fn script_words(atoms: Vec<(String, f64)>) -> Vec<Vec<(String, f64)>> {
     let text: String = atoms.iter().map(|(s, _)| s.as_str()).collect();
     let mut cuts = Vec::new();
     let mut run_start: Option<usize> = None;
@@ -194,6 +202,10 @@ pub(super) fn is_hebrew(c: char) -> bool {
 /// draw (or that has no face to draw it). Page-content tools refuse such text; the Add-text editor
 /// keeps it open.
 pub fn first_undrawable(t: &AddedText) -> Option<char> {
+    let cjk = match CjkText::new(t) {
+        Ok(cjk) => cjk,
+        Err((_, ch)) => return Some(ch),
+    };
     if t.text.chars().any(is_thai) {
         if let Some(c) = t.text.chars().find(|c| is_thai(*c) && !pdfcraft_fonts::thai_has(*c)) {
             return Some(c);
@@ -210,13 +222,13 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
     if !shaped_by_a_face(t) {
         // Drawn line by line in the item's standard font (`\n` splits lines). Without the face
         // that is also how `draw` redraws an existing item, so it's checked that way.
-        return t.text.split('\n').find_map(pdfcraft_fonts::first_non_win_ansi);
+        return t.text.split('\n').find_map(|line| cjk.first_undrawable(line));
     }
     // What `shaped_layout` leaves to the standard font, exactly as `draw_shaped` splits it.
     wrapped(t).into_iter().find_map(|(line, rtl, _)| {
-        let (pieces, _) = shaped_layout(t, &line, rtl).ok()?;
+        let (pieces, _) = shaped_layout(t, &line, rtl, &cjk).ok()?;
         pieces.iter().find_map(|p| match p {
-            Piece::Latin(s) => pdfcraft_fonts::first_non_win_ansi(s),
+            Piece::Latin(s) => cjk.first_undrawable(s),
             Piece::Shaped(_) => None,
         })
     })
@@ -257,7 +269,7 @@ fn mirrored(c: char) -> char {
 
 /// A line of a shaped-text item in drawing order (the Unicode bidirectional algorithm, UAX #9), and
 /// its width at the item's size. `rtl` is its paragraph's direction.
-pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f64), EditError> {
+pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool, cjk: &CjkText) -> Result<(Vec<Piece>, f64), EditError> {
     // unicode-bidi indexes the first level of a line, so an empty one would panic.
     if line.is_empty() {
         return Ok((Vec::new(), 0.0));
@@ -308,14 +320,16 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
             });
         }
     }
-    let width = pdfcraft_fonts::shaped_text::pieces_width(&pieces, t.size, t.char_spacing, |s, _| latin_width(t, s));
+    let width = pdfcraft_fonts::shaped_text::pieces_width(&pieces, t.size, t.char_spacing, |s, _| cjk.width(t, s));
     Ok((pieces, width))
 }
 
 /// The width of `s` in a shaped-text item; the item's font's estimate if it can't be shaped (drawing
 /// then reports why).
+#[cfg(test)]
 pub(crate) fn shaped_width(t: &AddedText, s: &str, rtl: bool) -> f64 {
-    shaped_layout(t, s, rtl).map(|(_, w)| w).unwrap_or_else(|_| latin_width(t, s))
+    let Ok(cjk) = CjkText::new(t) else { return latin_width(t, s) };
+    shaped_layout(t, s, rtl, &cjk).map(|(_, w)| w).unwrap_or_else(|_| latin_width(t, s))
 }
 
 pub(super) fn arabic_error(e: GlyphError, text: &str) -> EditError {
@@ -406,12 +420,20 @@ fn copy_key(c: &Content) -> Content {
 
 /// The widest explicit line before wrapping, measured with the PDF writing fonts.
 pub fn text_width(t: &AddedText) -> f64 {
-    t.text.split('\n').map(|line| shaped_width(t, line, unicode_bidi::get_base_direction(line) == unicode_bidi::Direction::Rtl)).fold(0.0, f64::max)
+    let cjk = CjkText::new(t).unwrap_or_default();
+    t.text
+        .split('\n')
+        .map(|line| {
+            shaped_layout(t, line, unicode_bidi::get_base_direction(line) == unicode_bidi::Direction::Rtl, &cjk)
+                .map(|(_, width)| width)
+                .unwrap_or_else(|_| cjk.width(t, line))
+        })
+        .fold(0.0, f64::max)
 }
 
 #[cfg(test)]
 mod thai_wrap_tests {
-    use super::{thai_words, wrap_words};
+    use super::{script_words, wrap_words};
 
     /// One atom per character, each `advance` wide: what shaping hands over, without a Thai face.
     fn atoms(text: &str, advance: f64) -> Vec<(String, f64)> {
@@ -424,11 +446,11 @@ mod thai_wrap_tests {
 
     #[test]
     fn thai_atoms_group_into_dictionary_words_with_their_spaces() {
-        assert_eq!(texts(&thai_words(atoms("น้ำประปาสะอาด", 1.0))), ["น้ำ", "ประปา", "สะอาด"]);
-        assert_eq!(texts(&thai_words(atoms("สวัสดี ครับ", 1.0))), ["สวัสดี ", "ครับ"]);
+        assert_eq!(texts(&script_words(atoms("น้ำประปาสะอาด", 1.0))), ["น้ำ", "ประปา", "สะอาด"]);
+        assert_eq!(texts(&script_words(atoms("สวัสดี ครับ", 1.0))), ["สวัสดี ", "ครับ"]);
         // A break the dictionary finds inside one shaped cluster is not a place to end a row.
-        assert_eq!(texts(&thai_words(vec![("น้ำประปา".into(), 8.0)])), ["น้ำประปา"]);
-        assert!(thai_words(Vec::new()).is_empty());
+        assert_eq!(texts(&script_words(vec![("น้ำประปา".into(), 8.0)])), ["น้ำประปา"]);
+        assert!(script_words(Vec::new()).is_empty());
     }
 
     #[test]

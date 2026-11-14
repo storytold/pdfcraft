@@ -1,3 +1,4 @@
+use super::cjk::{CjkText, is_cjk};
 use super::layout::{
     Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, latin_width, norm, shaped_layout, text_rect, thai_error, wrapped,
 };
@@ -37,13 +38,14 @@ fn placed(t: &AddedText, r: [f64; 4], paragraphs: &[usize], i: usize, w: f64, sp
     (x, tw)
 }
 
-/// Draw a text item that has Arabic, Hebrew or Thai in it. Each line is laid out in display order; their glyphs
+/// Draw a text item that has CJK, Arabic, Hebrew or Thai in it. Each line is laid out in display order; their glyphs
 /// come from Type 3 fonts drawn from the craft-fonts face's outlines (no font file is embedded),
 /// with a ToUnicode map for copy and search. Other text uses the item's standard font.
 fn draw_shaped(doc: &mut Document, t: &AddedText, taken: &Dict, fonts: &mut Dict, out: &mut Vec<u8>) -> Result<(), EditError> {
+    let cjk = CjkText::new(t).map_err(|(e, _)| e)?;
     let laid = wrapped(t)
         .into_iter()
-        .map(|(line, rtl, paragraph)| shaped_layout(t, &line, rtl).map(|(pieces, w)| (line, rtl, paragraph, pieces, w)))
+        .map(|(line, rtl, paragraph)| shaped_layout(t, &line, rtl, &cjk).map(|(pieces, w)| (line, rtl, paragraph, pieces, w)))
         .collect::<Result<Vec<_>, _>>()?;
     draw_laid_shaped(doc, t, &laid, taken, fonts, out, shaped_glyph)
 }
@@ -61,6 +63,8 @@ pub(super) fn draw_laid_shaped(
 ) -> Result<(), EditError> {
     let r = text_rect(t);
     let latin = font_name(t.family.base_font(t.bold, t.italic));
+    let mut cjk = CjkText::new(t).map_err(|(e, _)| e)?;
+    let fallback = cjk.register(doc, taken, fonts);
     let shaped =
         ShapedFonts::new(shaped_text::clusters(laid.iter().map(|(_, _, _, pieces, _)| pieces.as_slice())), outline, taken, fonts, "PCAr", &mut |o| {
             Object::Ref(doc.add(o))
@@ -88,11 +92,15 @@ pub(super) fn draw_laid_shaped(
         for piece in pieces {
             match piece {
                 Piece::Latin(s) => {
-                    out.extend(format!("/{latin} {} Tf {} Tw 1 0 0 1 {} {} Tm ", n(t.size), n(tw), n(pen), n(y)).bytes());
-                    out.extend(literal(&win_ansi(s)));
-                    out.extend_from_slice(b" Tj\n");
+                    for (font, bytes, advance, spaces) in cjk.runs(t, s, &latin, fallback.as_ref())? {
+                        // PDF Tw stretches byte 32 even when a CJK font maps it to a Han glyph.
+                        let word_spacing = if font == latin { tw } else { 0.0 };
+                        out.extend(format!("/{font} {} Tf {} Tw 1 0 0 1 {} {} Tm ", n(t.size), n(word_spacing), n(pen), n(y)).bytes());
+                        out.extend(literal(&bytes));
+                        out.extend_from_slice(b" Tj\n");
+                        pen += advance + tw * spaces as f64;
+                    }
                     current = None;
-                    pen += latin_width(t, s) + tw * s.matches(' ').count() as f64;
                 }
                 Piece::Shaped(clusters) => pen = shaped.show(out, clusters, pen, y, t.size, t.char_spacing, tw, &mut current),
             }
@@ -134,6 +142,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
             fonts.set(name.clone().into_bytes(), Object::Dict(font));
             let face_or_new = |has: fn(char) -> bool, face: bool| t.text.chars().any(has) && (face || !existing);
             if t.text.chars().any(is_thai)
+                || t.text.chars().any(is_cjk)
                 || face_or_new(is_arabic, pdfcraft_fonts::document_arabic_font().is_some())
                 || face_or_new(is_hebrew, pdfcraft_fonts::document_hebrew_font(false).is_some())
             {

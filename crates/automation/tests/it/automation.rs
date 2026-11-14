@@ -7,6 +7,9 @@ use pdfcraft_automation::mcp::McpServer;
 use pdfcraft_automation::{Automation, Content, ToolError, tools};
 use serde_json::{Value, json};
 
+#[path = "mixed_text.rs"]
+mod mixed_text;
+
 /// A PDF with `n` 200×300 pt pages reading "Page 1", "Page 2", …
 fn fixture(n: usize) -> Vec<u8> {
     fixture_with(n, "")

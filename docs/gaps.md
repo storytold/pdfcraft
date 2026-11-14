@@ -87,6 +87,8 @@ update the numbers.
 
 ### 3. Editing existing text is fragile on real files
 
+- **Local candidate (2026-11-13):** mixed English/Simplified Chinese can be added and retyped with the native craft-fonts Hans input. Existing paragraphs retain source glyphs and use the Hans face for missing Simplified Chinese glyphs. Synthetic regressions cover glyph advances, rejection, repeated edits, resource cleanup, undo/redo and saving/reopening. Subset encoding now checks available TrueType outlines instead of trusting retained width/Unicode entries alone. All-script editing and real macOS IME acceptance remain unqualified; estimates unchanged.
+
 - **Fork progress (2026-10-11):** compatible words and subset-font spaces form lines;
   source fonts lacking a space glyph remain reusable; inline editing previews remove source
   glyphs on a clone. Aligned visual rows now form mixed-style regions (including matrix-scaled headings),

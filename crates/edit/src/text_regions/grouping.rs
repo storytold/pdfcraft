@@ -348,8 +348,8 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
             (!mixed || !(invisible(prev) || invisible(first)))
                 && (mixed || same_style(prev, first))
                 && same_plane(prev, first)
-                // The rewrite sets every row in the first one's horizontal scale.
-                && (prev.origin.state.scale - first.origin.state.scale).abs() < 1e-6
+                // A marked soft wrap stays in its paragraph when source fonts need different scales.
+                && ((prev.origin.state.scale - first.origin.state.scale).abs() < 1e-6 || (first.scope.is_some() && first.soft_break))
                 && aligned
                 && first.size.min(prev.size) >= first.size.max(prev.size) * 0.4
                 && gap > first.size.min(prev.size) * 0.8

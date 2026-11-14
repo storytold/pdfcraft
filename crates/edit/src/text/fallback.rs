@@ -357,14 +357,17 @@ fn no_hebrew_font() -> EditError {
 
 /// The faces a Type 3 replacement may draw `text` with, best first. Text with Hebrew takes the
 /// Hebrew face first (its Latin and digits too, so a line keeps one look), then the Japanese faces
-/// and the bundled Latin one for anything it lacks; other text takes the Japanese faces, and the
+/// and the bundled Latin one for anything it lacks; CJK text also has the native Hans face after
+/// the Japanese faces. Other text takes the Japanese faces, and the
 /// bundled Latin face behind them, which covers the Latin, Greek and Cyrillic letters they lack
 /// (#2593: the Japanese faces have no қ, ғ, ҳ, ә, ө, ү, ұ or һ).
 pub(crate) fn type3_faces(text: &str, family: crate::added::Family, bold: bool) -> Result<(Vec<&'static CraftFont>, bool), EditError> {
     let japanese = pdfcraft_fonts::document_japanese_fonts_for_style(family == crate::added::Family::Times, bold);
+    let cjk = text.chars().any(needs_japanese);
+    let chinese = pdfcraft_fonts::CRAFT_FONTS.iter().filter(|face| cjk && face.covers("Hans"));
     let latin = pdfcraft_fonts::document_latin_fonts(bold);
     if !text.chars().any(crate::bidi::is_hebrew) {
-        return Ok((japanese.into_iter().chain(latin).collect(), false));
+        return Ok((japanese.into_iter().chain(chinese).chain(latin).collect(), false));
     }
     // Points are drawn on their letter with the font's positioning, which a one-glyph-per-
     // character Type 3 font can't do; refuse rather than print them beside the letter.
@@ -372,7 +375,7 @@ pub(crate) fn type3_faces(text: &str, family: crate::added::Family, bold: bool) 
         return Err(EditError::Invalid("Hebrew points (niqqud) can't be written into a PDF yet; type the text without them".into()));
     }
     let hebrew = pdfcraft_fonts::document_hebrew_font(bold).ok_or_else(no_hebrew_font)?;
-    Ok((std::iter::once(hebrew).chain(japanese).chain(latin).collect(), true))
+    Ok((std::iter::once(hebrew).chain(japanese).chain(chinese).chain(latin).collect(), true))
 }
 
 pub(super) fn type3_font(
