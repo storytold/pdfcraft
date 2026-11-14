@@ -753,6 +753,9 @@ struct TextGesture<'a> {
     over_link: bool,
     text_drag: bool,
     column: bool,
+    /// A finger's drag pans the page in the Select tool (`finger_pans` in `document_area`), so it
+    /// starts and moves no selection; its taps still click.
+    pans: bool,
 }
 
 fn text_pointer_input(ui: &mut egui::Ui, view: &mut DocView, text: &PageText, pointer: TextPointer<'_>) {
@@ -760,10 +763,13 @@ fn text_pointer_input(ui: &mut egui::Ui, view: &mut DocView, text: &PageText, po
     let (vx, vy) = xf.screen_to_view(screen_pointer);
     let over_text = text.glyph_at(vx, vy).is_some();
     let column = tool == QuickTool::ColumnSelect || ui.input(|input| input.modifiers.alt);
-    let gesture = TextGesture { page, xf, rect, tool, ptr, resp, pointer: screen_pointer, vx, vy, over_text, over_link, text_drag, column };
+    let pans = ptr.finger && tool == QuickTool::Select;
+    let gesture = TextGesture { page, xf, rect, tool, ptr, resp, pointer: screen_pointer, vx, vy, over_text, over_link, text_drag, column, pans };
     update_text_cursor(view, &gesture);
     update_selection_on_press(ui, view, text, &gesture);
-    update_dragged_selection(view, text, &gesture);
+    if !gesture.pans {
+        update_dragged_selection(view, text, &gesture);
+    }
     finish_text_pointer_gesture(ui, view, text, &gesture);
 }
 
@@ -795,7 +801,7 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
             view.selection = Some(Selection::run(gesture.page, first, last));
         }
     }
-    if gesture.ptr.drag_started && press_here && gesture.text_drag {
+    if gesture.ptr.drag_started && press_here && gesture.text_drag && !gesture.pans {
         view.actions_dismissed = None;
         view.selection_drag = true;
         let origin = gesture.ptr.origin.unwrap_or(gesture.pointer);

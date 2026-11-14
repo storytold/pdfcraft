@@ -234,6 +234,13 @@ impl PageRouter {
         self.capture.as_ref().is_some_and(|c| !c.declines_drag)
     }
 
+    /// Whether a drag of the press moves nothing on the page: nobody holds it, its holder lets the
+    /// drag go (a highlight's, to the text), or it is a link's, which follows a click and does
+    /// nothing with a drag. A finger's drag then pans the page in the Select tool (#5667).
+    pub(in crate::canvas) fn drag_moves_nothing(&self) -> bool {
+        self.capture.as_ref().is_none_or(|c| c.declines_drag || matches!(c.owner, Owner::Link { .. }))
+    }
+
     /// The press turned into a drag: an owner that declines its drag lets it go, and from then on
     /// the press is nobody's (a drag across a highlight selects the text under it; with the Link
     /// tool, a drag from a link draws a new one). Its click stayed the owner's.
@@ -351,5 +358,25 @@ mod tests {
         r.press(1, [hit(Layer::Comment, 2)], QuickTool::Select);
         r.drag_began();
         assert_eq!(r.press_for(1), PagePress::Mine(hit(Layer::Comment, 2).owner));
+    }
+
+    /// What a finger's drag in the Select tool pans past (#5667): everything but a press that
+    /// moves something with its drag.
+    #[test]
+    fn a_drag_moves_nothing_unless_its_holder_keeps_it() {
+        let mut r = PageRouter::default();
+        assert!(r.drag_moves_nothing(), "no press");
+        r.begin();
+        r.press(0, [], QuickTool::Select);
+        assert!(r.drag_moves_nothing(), "a press nobody holds");
+        r.begin();
+        r.press(0, [Hit::new(Owner::Link { index: 0 }, Layer::Link, CursorIcon::PointingHand)], QuickTool::Select);
+        assert!(r.keeps_drag() && r.drag_moves_nothing(), "a link holds its drag but does nothing with it");
+        r.begin();
+        r.press(0, [Hit { declines_drag: true, ..hit(Layer::Comment, 0) }], QuickTool::Select);
+        assert!(r.drag_moves_nothing(), "a highlight lets its drag go");
+        r.begin();
+        r.press(0, [hit(Layer::Comment, 1)], QuickTool::Select);
+        assert!(!r.drag_moves_nothing(), "a comment moves with its drag");
     }
 }

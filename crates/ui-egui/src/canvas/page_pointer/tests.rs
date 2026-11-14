@@ -608,17 +608,31 @@ const COMMENT_POINT_TESTERS: [(&str, &str, &str); 4] = [
 ];
 
 /// What reads who holds the press the pages hold.
-const ROUTER_READS: [&str; 4] = ["router.press_for(", "router.keeps_drag(", "PageRouter::press_for(", "PageRouter::keeps_drag("];
+const ROUTER_READS: [&str; 6] = [
+    "router.press_for(",
+    "router.keeps_drag(",
+    "router.drag_moves_nothing(",
+    "PageRouter::press_for(",
+    "PageRouter::keeps_drag(",
+    "PageRouter::drag_moves_nothing(",
+];
 
 /// The functions that read who holds the press: (file, function, why). The page view asks once per
 /// page and tells each module what the press is to its page (`PagePress`): modules never read the
 /// router, and outside `canvas` the compiler refuses them (its methods are `pub(in crate::canvas)`).
 /// An unused entry fails the test.
-const ROUTER_READERS: [(&str, &str, &str); 1] = [(
-    "canvas/page_input.rs",
-    "page_tool_input",
-    "the page view: what the press is to each page (`press_for`), and whether its drag is the text's (`keeps_drag`)",
-)];
+const ROUTER_READERS: [(&str, &str, &str); 2] = [
+    (
+        "canvas/page_input.rs",
+        "page_tool_input",
+        "the page view: what the press is to each page (`press_for`), and whether its drag is the text's (`keeps_drag`)",
+    ),
+    (
+        "canvas.rs",
+        "document_area",
+        "a finger's drag pans the pages unless the press moves something (#5667): the scroll area is set up before the pages are drawn",
+    ),
+];
 
 /// Words a page module's functions are not named with: a function that grabs or owns a press decides
 /// for itself whether the press is its own, which the page view tells it (`PagePress`).
