@@ -5,6 +5,8 @@
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-11-13 | **Last updated:** 2026-11-13 | **Change:** patch (M3 #6851: filter Recent filenames on Home before the display limit using shared case folding, with Greek sigma regression coverage, empty-result feedback and Escape to clear; estimates unchanged)
+
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: vector printing preserves annotation optional-content membership; estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M10 #5029: Text appearances have implicit NoRotate during vector printing even when the flag is clear; estimates unchanged)
 >
@@ -373,6 +375,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | patch | M3 #6851: filter Recent filenames on Home before the display limit using shared case folding, with Greek sigma regression coverage, empty-result feedback and Escape to clear; estimates unchanged. |
 | 2026-10-29 | minor | M10 #5029: existing Text appearances keep their implicit NoRotate orientation in vector printing even when the flag is clear. Print eligibility and source/AP objects remain unchanged; native viewing without the flag remains a separate gap. Estimates unchanged. |
 | 2026-10-27 | minor | M10 #5029: vector printing preserves existing NoRotate appearance orientation and anchors; estimates unchanged. Missing appearances and NoZoom print behavior remain unchanged. |
 | 2026-11-09 | patch | M10 #5130: Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Estimates unchanged. |
