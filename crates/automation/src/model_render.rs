@@ -10,6 +10,7 @@ use super::Automation;
 use super::dispatch::Content;
 use super::error::{Result, ToolError, failed};
 use super::json::Args;
+use super::model_walk::walk_camera;
 use super::pages::encode_png;
 
 /// Default and largest side of the image, in pixels.
@@ -21,6 +22,15 @@ const DEFAULT_DIRECTION: [f64; 3] = [-1.0, 1.0, -1.0];
 
 impl Automation {
     pub(crate) fn model_render(&mut self, a: &Args) -> Result<Vec<Content>> {
+        let view = self.model_view(a)?;
+        let options = RenderOptions { width: view.width, height: view.height, ..RenderOptions::default() };
+        let image = render(&view.meshes, &view.camera, &options).map_err(failed)?;
+        let data = encode_png(image.width, image.height, &premultiplied(image.rgba))?;
+        Ok(vec![Content::Png { data, width: image.width, height: image.height }])
+    }
+
+    /// The model `a` names, assembled, and the camera and image size `model_render` draws it with.
+    pub(crate) fn model_view(&mut self, a: &Args) -> Result<ModelView> {
         let page = self.page(a)?;
         let width = side(a, "width")?;
         let height = side(a, "height")?;
@@ -43,18 +53,29 @@ impl Automation {
         let prc = PrcFile::parse(&model.data).map_err(|e| failed(format!("the 3D model could not be read: {e}")))?;
         let meshes = assemble(&prc).map_err(failed)?;
         let aspect = f64::from(width) / f64::from(height);
-        let camera = match a.get("orbit") {
-            Some(_) if a.get("direction").is_some() => return Err(Args::wrong("orbit", "left out when direction is given")),
-            Some(moves) => orbit_camera(moves, &meshes, perspective, aspect)?,
-            None => {
+        let camera = match (a.get("orbit"), a.get("walk")) {
+            (Some(_), _) if a.get("direction").is_some() => return Err(Args::wrong("orbit", "left out when direction is given")),
+            (Some(_), Some(_)) => return Err(Args::wrong("walk", "left out when orbit is given")),
+            (_, Some(_)) if a.get("direction").is_some() || a.get("perspective").is_some() => {
+                return Err(Args::wrong("walk", "left out when direction or perspective is given"));
+            }
+            (Some(moves), None) => orbit_camera(moves, &meshes, perspective, aspect)?,
+            (None, Some(walk)) => walk_camera(walk, &meshes, aspect)?,
+            (None, None) => {
                 let direction = direction(a)?;
                 Camera::fit_meshes(&meshes, direction, up_for(direction), perspective, aspect).map_err(failed)?
             }
         };
-        let image = render(&meshes, &camera, &RenderOptions { width, height, ..RenderOptions::default() }).map_err(failed)?;
-        let data = encode_png(image.width, image.height, &premultiplied(image.rgba))?;
-        Ok(vec![Content::Png { data, width: image.width, height: image.height }])
+        Ok(ModelView { meshes, camera, width, height })
     }
+}
+
+/// A page's model as `model_render` sees it.
+pub(crate) struct ModelView {
+    pub(crate) meshes: Vec<WorldMesh>,
+    pub(crate) camera: Camera,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
 }
 
 fn side(a: &Args, key: &str) -> Result<u32> {

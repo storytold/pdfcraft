@@ -94,14 +94,19 @@ impl Anchor {
 
 /// Yaw 0, pitch 0 looks along `front`, and `up` appears upward; both unit and perpendicular.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Axes {
-    front: Vec3,
-    up: Vec3,
+pub(super) struct Axes {
+    pub(super) front: Vec3,
+    pub(super) up: Vec3,
 }
 
 impl Axes {
+    /// `upright`'s Front look and up axis.
+    pub(super) fn upright(upright: Upright) -> Axes {
+        Axes { front: upright.front().vector(), up: upright.up().vector() }
+    }
+
     /// The unit direction `yaw` round and `pitch` down from `front`.
-    fn look(&self, yaw: f64, pitch: f64) -> Vec3 {
+    pub(super) fn look(&self, yaw: f64, pitch: f64) -> Vec3 {
         let (sy, cy) = yaw.sin_cos();
         let (sp, cp) = pitch.sin_cos();
         let right = cross(self.front, self.up);
@@ -110,7 +115,7 @@ impl Axes {
 
     /// The yaw and pitch [`Axes::look`] turns into `direction`, the pitch held inside
     /// [`PITCH_LIMIT`]; `None` for a zero or non-finite direction.
-    fn angles(&self, direction: Vec3) -> Option<(f64, f64)> {
+    pub(super) fn angles(&self, direction: Vec3) -> Option<(f64, f64)> {
         let d = normalize(direction)?;
         let pitch = (-dot(d, self.up)).clamp(-1.0, 1.0).asin();
         let yaw = (-dot(d, cross(self.front, self.up))).atan2(dot(d, self.front));
@@ -141,7 +146,7 @@ impl Orbit {
     #[must_use]
     pub fn named(view: NamedView, perspective: bool, upright: Upright) -> Orbit {
         let (yaw, pitch) = view.angles();
-        let axes = Axes { front: upright.front().vector(), up: upright.up().vector() };
+        let axes = Axes::upright(upright);
         Orbit { yaw: yaw.to_radians(), pitch: pitch.to_radians(), zoom: 1.0, pan: [0.0; 2], perspective, axes, anchor: None }
     }
 

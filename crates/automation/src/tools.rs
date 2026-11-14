@@ -32,6 +32,43 @@ fn pages(what: &str) -> Value {
     json!({ "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1, "description": format!("1-based page numbers {what}.") })
 }
 
+/// The `orbit` moves `model_render` and `model_pick` share.
+fn model_orbit() -> Value {
+    json!({ "type": "object", "description": "A viewer's orbit moves, applied in the order of these keys; all optional. Mutually exclusive with direction and walk.", "properties": {
+        "view": { "type": "string", "enum": ["iso", "front", "right", "top", "back"], "description": "The view to start from (default iso)." },
+        "up": { "type": "string", "enum": ["+x", "+y", "+z", "-x", "-y", "-z"], "description": "The model axis that appears upward (default +z)." },
+        "front": { "type": "string", "enum": ["+x", "+y", "+z", "-x", "-y", "-z"], "description": "The axis the Front view looks along, perpendicular to up (default +y, or -z when y is up)." },
+        "turn": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[yaw, pitch] in degrees, pitch looking down (default [0, 0])." },
+        "zoom": { "type": "number", "exclusiveMinimum": 0, "description": "A factor on the fitted view (default 1); the result is held within 0.05 to 50." },
+        "zoom_at": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "The picture point the zoom keeps still, [right, up] in picture heights from the centre (default [0, 0]). Requires zoom." },
+        "pan": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Moves the target [right, up] in model radii, so the model moves the other way (default [0, 0]); each held within 1000." }
+    }, "additionalProperties": false })
+}
+
+/// `model_render`'s and `model_pick`'s `walk`.
+fn walk_schema() -> Value {
+    let triple = |d: &str| json!({ "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": d });
+    let pair = |d: &str| json!({ "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": d });
+    let share = |d: &str| json!({ "type": "number", "minimum": -1, "maximum": 1, "description": d });
+    let flag = |d: &str| json!({ "type": "boolean", "description": d });
+    json!({ "type": "object", "description": "A walker's eye and the steps it takes, in place of direction, orbit and perspective.", "properties": {
+        "from": triple("Where the walker's eye starts, [x, y, z] in model coordinates."),
+        "look": triple("The direction it looks (default towards the model's centre)."),
+        "up": { "type": "string", "enum": ["+x", "+y", "+z", "-x", "-y", "-z"], "description": "The model axis that is up (default +z)." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "description": "The eye height above the floor, in model units (default 0.08 of the model's radius)." },
+        "ghost": flag("Pass through everything (default false)."),
+        "level": flag("A ghost moves level whatever its pitch (default true); false flies where it looks."),
+        "stairs": flag("Also climb anything under a third of the eye height (default false)."),
+        "steps": { "type": "array", "maxItems": 1000, "description": "Steps taken in order; seconds add up to at most 600.", "items": { "type": "object", "properties": {
+            "forward": share("Forward, -1 to 1 (default 0)."), "right": share("Right, -1 to 1 (default 0)."),
+            "rise": share("Up, -1 to 1, for a ghost (default 0)."), "run": flag("Three times faster (default false)."),
+            "turn": pair("Turns the heading [yaw, pitch] in degrees (default [0, 0])."),
+            "look": pair("Turns the camera alone [yaw, pitch] in degrees (default [0, 0])."),
+            "seconds": { "type": "number", "minimum": 0, "maximum": 600, "description": "How long it moves (default 0)." }
+        }, "additionalProperties": false } }
+    }, "required": ["from"], "additionalProperties": false })
+}
+
 /// The Search & Redact pattern ids, from the engine's registry, so the advertised schema cannot
 /// drift from the patterns the runtime accepts.
 fn pattern_enum() -> Value {
@@ -218,22 +255,26 @@ pub fn tools() -> Vec<ToolDef> {
                 "hide_text_block": { "type": "integer", "minimum": 1, "description": "Render an inline editor background without this paragraph (number from text_paragraphs, resolved as text_edit does: refused once an edit merged that paragraph into a neighbour). Does not modify the document." },
                 "hide_added_text": { "type": "integer", "minimum": 1, "description": "Render a retyping background without this added text item (added index from object_list). Mutually exclusive with hide_text_block. Does not modify the document." }
             }), &["doc", "page"])),
-        t("model_render", "Render a 3D model", "Draw a page's 3D model (a 3D annotation's PRC stream) to a PNG, framed to fill the image, with headlight shading on a white background. model is its 1-based position among the page's 3D models (default 1). direction is the view direction [x, y, z] from the eye towards the model (default [-1, 1, -1]); Z is up unless the view looks along Z. orbit, in place of direction, frames the model as a viewer's orbit control does (the same size from every side) and applies, in order: view (iso, front, right, top or back; default iso) about up (+x, +y, +z, -x, -y or -z; default +z) with the Front view looking along front (an axis perpendicular to up; default +y, or -z when y is up), then turn [yaw, pitch] in degrees (pitch looks down and stops just short of the up axis), then zoom (a factor, the result held within 0.05 to 50) about the picture point zoom_at [right, up] in picture heights from the centre (default the centre), then pan [right, up] in model radii (it moves the target, so the model moves the other way). perspective defaults to true. U3D models can't be drawn yet and give an error. Does not modify the document.")
+        t("model_render", "Render a 3D model", "Draw a page's 3D model (a 3D annotation's PRC stream) to a PNG, framed to fill the image, with headlight shading on a white background. model is its 1-based position among the page's 3D models (default 1). direction is the view direction [x, y, z] from the eye towards the model (default [-1, 1, -1]); Z is up unless the view looks along Z. orbit, in place of direction, frames the model as a viewer's orbit control does (the same size from every side) and applies, in order: view (iso, front, right, top or back; default iso) about up (+x, +y, +z, -x, -y or -z; default +z) with the Front view looking along front (an axis perpendicular to up; default +y, or -z when y is up), then turn [yaw, pitch] in degrees (pitch looks down and stops just short of the up axis), then zoom (a factor, the result held within 0.05 to 50) about the picture point zoom_at [right, up] in picture heights from the centre (default the centre), then pan [right, up] in model radii (it moves the target, so the model moves the other way). walk, in place of direction, orbit and perspective, draws in perspective from a walker's eye: it stands at from [x, y, z] looking along look (default towards the model's centre) about up (default +z), then takes steps in order, each turning its heading by turn [yaw, pitch] and its camera alone by look [yaw, pitch], in degrees, then walking for seconds with forward, right and rise from -1 to 1 (run walks three times faster), at a quarter of the model's radius a second. Solid by default, it stops at walls and slides along them, falls onto the floor below and stands at height (model units; default 0.08 of the model's radius) above it, walks up a ramp of up to about 46 degrees (steeper is a wall), otherwise climbs only a seam, or with stairs anything under a third of that height, never rises into what is over its head, and ignores rise; ghost flies through everything, and with level false flies where it looks. perspective defaults to true. U3D models can't be drawn yet and give an error. Does not modify the document.")
             .ro()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "model": { "type": "integer", "minimum": 1 },
                 "width": { "type": "integer", "minimum": 1, "maximum": 4096 }, "height": { "type": "integer", "minimum": 1, "maximum": 4096 },
-                "direction": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "The view direction from the eye towards the model (default [-1, 1, -1]). Mutually exclusive with orbit." },
-                "perspective": { "type": "boolean" },
-                "orbit": { "type": "object", "description": "A viewer's orbit moves, applied in the order of these keys; all optional. Mutually exclusive with direction.", "properties": {
-                    "view": { "type": "string", "enum": ["iso", "front", "right", "top", "back"], "description": "The view to start from (default iso)." },
-                    "up": { "type": "string", "enum": ["+x", "+y", "+z", "-x", "-y", "-z"], "description": "The model axis that appears upward (default +z)." },
-                    "front": { "type": "string", "enum": ["+x", "+y", "+z", "-x", "-y", "-z"], "description": "The axis the Front view looks along, perpendicular to up (default +y, or -z when y is up)." },
-                    "turn": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[yaw, pitch] in degrees, pitch looking down (default [0, 0])." },
-                    "zoom": { "type": "number", "exclusiveMinimum": 0, "description": "A factor on the fitted view (default 1); the result is held within 0.05 to 50." },
-                    "zoom_at": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "The picture point the zoom keeps still, [right, up] in picture heights from the centre (default [0, 0]). Requires zoom." },
-                    "pan": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Moves the target [right, up] in model radii, so the model moves the other way (default [0, 0]); each held within 1000." }
-                }, "additionalProperties": false }
+                "direction": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "The view direction from the eye towards the model (default [-1, 1, -1]). Mutually exclusive with orbit and walk." },
+                "perspective": { "type": "boolean", "description": "Perspective rather than orthographic (default true); left out with walk." },
+                "orbit": model_orbit(),
+                "walk": walk_schema()
             }), &["doc", "page"])),
+        t("model_pick", "Pick a point on a 3D model", "Find what of a page's 3D model lies under a position of the picture model_render draws with the same model, width, height, direction, perspective, orbit or walk. at is [x, y] in pixels from the picture's top left (a pixel's centre is its index plus 0.5), from 0 up to the width and height. Gives { hit: { mesh, triangle, point, normal, distance } }, mesh and triangle 1-based among the placed model's meshes and that mesh's triangles, point and normal in model coordinates, distance along the pick ray (from the eye in perspective, from the picture plane in orthographic); hit is null over the background. Does not modify the document.")
+            .ro()
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "model": { "type": "integer", "minimum": 1 },
+                "at": { "type": "array", "items": { "type": "number", "minimum": 0 }, "minItems": 2, "maxItems": 2, "description": "[x, y] in pixels from the picture's top left." },
+                "width": { "type": "integer", "minimum": 1, "maximum": 4096, "description": "The picture's width, as given to model_render (default 512)." },
+                "height": { "type": "integer", "minimum": 1, "maximum": 4096, "description": "The picture's height, as given to model_render (default 512)." },
+                "direction": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "The view direction, as given to model_render (default [-1, 1, -1]). Mutually exclusive with orbit and walk." },
+                "perspective": { "type": "boolean", "description": "As given to model_render (default true)." },
+                "orbit": model_orbit(),
+                "walk": walk_schema()
+            }), &["doc", "page", "at"])),
         t("object_list", "List editable objects", "List existing paragraphs, Image/Form artwork and added content once, with source kind/index references, displayed rectangles and document generation. Indexes change when content changes; use generation in object_move to reject stale references.")
             .ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1}}), &["doc","page"])),
         t("object_move", "Move objects together", "Atomically translate 1–1000 mixed references from object_list (or with all: true every object on the page) by [dx, dy] in displayed points (right/down). Preserves glyph codes, fonts, image data and relative spacing; success is one undo step. Text used as a clipping path and vertical text are refused. A bad/stale reference refuses the entire move.")

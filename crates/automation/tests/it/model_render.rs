@@ -134,6 +134,13 @@ fn a_model_outside_the_root_is_never_opened_to_be_drawn() {
     assert!(a.call("model_render", &json!({ "doc": doc, "page": 1 })).is_ok());
 }
 
+fn json_of(mut out: Vec<Content>) -> Value {
+    match out.remove(0) {
+        Content::Json(v) => v,
+        other => panic!("expected JSON: {other:?}"),
+    }
+}
+
 #[test]
 fn an_orbit_frames_the_model_from_a_named_view_and_its_moves() {
     let (_dir, mut a) = setup("orbit");
@@ -218,6 +225,72 @@ fn zoom_at_keeps_the_point_under_it_still() {
 }
 
 #[test]
+fn a_pick_finds_the_model_exactly_where_the_picture_shows_it() {
+    let (_dir, mut a) = setup("pick");
+    let doc = open(&mut a, "prc.pdf");
+    let view = json!({ "doc": doc, "page": 1, "width": 64, "height": 48, "direction": [0, 0, -1], "perspective": false });
+    let Content::Png { data, .. } = &a.call("model_render", &view).unwrap()[0] else { panic!("expected a PNG") };
+    let mut drawn = 0;
+    for y in (0..48).step_by(3) {
+        for x in (0..64).step_by(3) {
+            let mut args = view.clone();
+            args["at"] = json!([x as f64 + 0.5, y as f64 + 0.5]);
+            let hit = json_of(a.call("model_pick", &args).unwrap());
+            let shown = rgb(data, x, y) != [255, 255, 255];
+            assert_eq!(!hit["hit"].is_null(), shown, "pixel {x}, {y}: {hit}");
+            drawn += usize::from(shown);
+        }
+    }
+    assert!(drawn > 20, "the triangle fills part of the picture");
+    let mut centre = view.clone();
+    centre["at"] = json!([32.0, 24.0]);
+    let hit = json_of(a.call("model_pick", &centre).unwrap())["hit"].clone();
+    assert_eq!((hit["mesh"].as_u64(), hit["triangle"].as_u64()), (Some(1), Some(1)), "{hit}");
+    assert!(hit["point"][2].as_f64().unwrap().abs() < 1e-9, "the triangle lies at z = 0: {hit}");
+    assert_eq!(hit["normal"], json!([0.0, 0.0, 1.0]), "it faces +z");
+    // The default perspective view meets the model too.
+    let hit = json_of(a.call("model_pick", &json!({ "doc": doc, "page": 1, "at": [256, 256] })).unwrap());
+    assert!(!hit["hit"].is_null(), "{hit}");
+}
+
+#[test]
+fn a_pick_through_an_orbit_meets_what_that_orbit_draws() {
+    let (_dir, mut a) = setup("pick-orbit");
+    let doc = open(&mut a, "prc.pdf");
+    let orbit = json!({ "view": "top", "turn": [20, 10], "zoom": 1.5, "pan": [0.1, 0] });
+    let data = orbit_picture(&mut a, doc, true, &orbit);
+    let mut drawn = 0;
+    for y in (0..48).step_by(3) {
+        for x in (0..64).step_by(3) {
+            let args = json!({ "doc": doc, "page": 1, "width": 64, "height": 48, "orbit": orbit, "at": [x as f64 + 0.5, y as f64 + 0.5] });
+            let hit = json_of(a.call("model_pick", &args).unwrap());
+            let shown = rgb(&data, x, y) != [255, 255, 255];
+            assert_eq!(!hit["hit"].is_null(), shown, "pixel {x}, {y}: {hit}");
+            drawn += usize::from(shown);
+        }
+    }
+    assert!(drawn > 20, "the orbited triangle fills part of the picture");
+    let both = json!({ "doc": doc, "page": 1, "at": [0, 0], "orbit": {}, "direction": [0, 0, -1] });
+    assert!(a.call("model_pick", &both).unwrap_err().to_string().contains("orbit must"));
+}
+
+#[test]
+fn a_wrong_pick_position_is_a_clear_error() {
+    let (_dir, mut a) = setup("pick-bad");
+    let doc = open(&mut a, "prc.pdf");
+    for at in [json!(null), json!([1]), json!([1, 2, 3]), json!([-1, 0]), json!(["1", 0]), json!([65, 0]), json!([0, 48.5])] {
+        let mut args = json!({ "doc": doc, "page": 1, "width": 64, "height": 48 });
+        if !at.is_null() {
+            args["at"] = at.clone();
+        }
+        let err = a.call("model_pick", &args).unwrap_err().to_string();
+        assert!(err.contains("at must") || err.ends_with("missing argument at"), "{at}: {err}");
+    }
+    let err = a.call("model_pick", &json!({ "doc": doc, "page": 1, "at": [0, 0], "model": 2 })).unwrap_err().to_string();
+    assert!(err.contains("has 1 3D models, not 2"), "{err}");
+}
+
+#[test]
 fn the_zoom_is_held_within_its_range() {
     let (_dir, mut a) = setup("orbit-zoom-range");
     let doc = open(&mut a, "prc.pdf");
@@ -299,5 +372,66 @@ fn a_wrong_orbit_is_a_clear_error() {
         args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
         let err = a.call("model_render", &args).unwrap_err().to_string();
         assert!(err.contains("orbit must be") && err.contains(reason), "{bad}: {err}");
+    }
+}
+
+/// The distance `model_pick` finds straight below a walker after `walk`, looking straight down.
+fn floor_below(a: &mut Automation, doc: u64, mut walk: Value) -> Option<f64> {
+    walk["look"] = json!([0, 0, -1]);
+    let args = json!({ "doc": doc, "page": 1, "width": 64, "height": 64, "at": [32, 32], "walk": walk });
+    json_of(a.call("model_pick", &args).unwrap())["hit"]["distance"].as_f64()
+}
+
+#[test]
+fn a_walker_falls_onto_the_model_and_stands_at_its_eye_height() {
+    let (_dir, mut a) = setup("walk");
+    let doc = open(&mut a, "prc.pdf");
+    // Above the triangle at z = 3, falling for two seconds: standing 0.5 above it.
+    let fall = json!({ "from": [0, -0.2, 3], "height": 0.5, "steps": [{ "seconds": 2 }] });
+    let stood = floor_below(&mut a, doc, fall.clone()).expect("the triangle is below");
+    assert!((stood - 0.5).abs() < 1e-3, "{stood}");
+    // A ghost does not fall, and rising lifts it.
+    let mut ghost = fall.clone();
+    ghost["ghost"] = json!(true);
+    let floated = floor_below(&mut a, doc, ghost.clone()).unwrap();
+    assert!((floated - 3.0).abs() < 1e-3, "{floated}");
+    ghost["steps"] = json!([{ "rise": 1, "seconds": 2 }]);
+    assert!(floor_below(&mut a, doc, ghost).unwrap() > 3.0);
+    // Walking forward off the triangle's edge leaves nothing below.
+    let off = json!({ "from": [0, -0.2, 3], "height": 0.5, "steps": [{ "seconds": 2 }, { "turn": [90, 0] }, { "forward": 1, "seconds": 8 }] });
+    assert_eq!(floor_below(&mut a, doc, off), None);
+    // The picture is drawn from the walker's eye: standing on the triangle and looking down shows it.
+    let out = a.call("model_render", &json!({ "doc": doc, "page": 1, "width": 64, "height": 64, "walk": { "from": [0, -0.2, 3], "look": [0, 0, -1], "steps": [{ "seconds": 2 }] } })).unwrap();
+    let Content::Png { data, .. } = &out[0] else { panic!("expected a PNG") };
+    assert_ne!(rgb(data, 32, 32), [255, 255, 255]);
+}
+
+#[test]
+fn a_wrong_walk_is_a_clear_error() {
+    let (_dir, mut a) = setup("walk-bad");
+    let doc = open(&mut a, "prc.pdf");
+    for bad in [
+        json!({ "walk": 1 }),
+        json!({ "walk": {} }),
+        json!({ "walk": { "from": [0, 0] } }),
+        json!({ "walk": { "from": [0, 0, 1], "look": [0, 0, 0] } }),
+        json!({ "walk": { "from": [0, 0, 1], "up": "z" } }),
+        json!({ "walk": { "from": [0, 0, 1], "height": 0 } }),
+        json!({ "walk": { "from": [0, 0, 1], "ghost": 1 } }),
+        json!({ "walk": { "from": [0, 0, 1], "fly": true } }),
+        json!({ "walk": { "from": [0, 0, 1], "steps": [{ "forward": 2 }] } }),
+        json!({ "walk": { "from": [0, 0, 1], "steps": [{ "seconds": -1 }] } }),
+        json!({ "walk": { "from": [0, 0, 1], "steps": [{ "seconds": 400 }, { "seconds": 400 }] } }),
+        json!({ "walk": { "from": [0, 0, 1], "steps": [{ "turn": [1] }] } }),
+        json!({ "walk": { "from": [0, 0, 1], "steps": [{ "jump": 1 }] } }),
+        json!({ "walk": { "from": [0, 0, 1] }, "orbit": {} }),
+        json!({ "walk": { "from": [0, 0, 1] }, "direction": [0, 0, -1] }),
+        json!({ "walk": { "from": [0, 0, 1] }, "perspective": false }),
+        json!({ "walk": { "from": [0, 0, 1], "steps": vec![json!({}); 1001] } }),
+    ] {
+        let mut args = json!({ "doc": doc, "page": 1, "width": 16, "height": 16 });
+        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        let err = a.call("model_render", &args).unwrap_err().to_string();
+        assert!(err.contains("walk"), "{bad}: {err}");
     }
 }
