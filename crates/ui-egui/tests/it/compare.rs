@@ -224,7 +224,8 @@ fn compare_panel_screenshot() {
 
 #[test]
 fn pdfa_dialog_verifies_and_converts() {
-    let doc = Session::new().create_from_text("t", "Keep forever").unwrap().to_vec();
+    // A blank page: no fonts to embed, so conversion can identify it as PDF/A (#6845).
+    let doc = Session::new().create_blank(612.0, 792.0, 1).unwrap().to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
