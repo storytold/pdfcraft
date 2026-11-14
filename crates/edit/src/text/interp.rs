@@ -131,6 +131,57 @@ impl TextState {
 pub(super) struct Paint {
     layers: Vec<Vec<u8>>,
     gs: Gs,
+    /// The clipping paths in force; text in different clips (table cells) is never one paragraph.
+    shape: Rc<Shape>,
+}
+
+/// One point of a clipping path: the byte of the operator that added it (`m`, `l`, `c`, `v`, `y`, `re`
+/// as `r`), so a curve never equals line segments through the same points, and its page-space position.
+type Pt = (u8, f64, f64);
+
+/// The most points one clip shape keeps. Past this a path is left out and only the bounds keep
+/// telling clips apart, so a stream that builds huge paths cannot grow every run it shows.
+const MAX_SHAPE_POINTS: usize = 1024;
+
+/// The clipping paths (`W`/`W*`) in force: their intersected page-space bounding box, and each path's
+/// fill rule and points. Two shapes are the same cell only when every path agrees, since equal bounds
+/// can still show different parts of a cell. Beside [`Clip`], which only decides what is visible.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Shape {
+    bounds: Option<[f64; 4]>,
+    paths: Vec<(bool, Vec<Pt>)>,
+}
+
+impl PartialEq for Shape {
+    fn eq(&self, other: &Shape) -> bool {
+        // The same clip computes the same numbers, so only rounding noise is tolerated: a wider
+        // tolerance would join clips that are slivers apart.
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        let same_bounds = match (self.bounds, other.bounds) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a.iter().zip(&b).all(|(x, y)| near(*x, *y)),
+            _ => false,
+        };
+        let same_path = |a: &(bool, Vec<Pt>), b: &(bool, Vec<Pt>)| {
+            a.0 == b.0 && a.1.len() == b.1.len() && a.1.iter().zip(&b.1).all(|(p, q)| p.0 == q.0 && near(p.1, q.1) && near(p.2, q.2))
+        };
+        same_bounds && self.paths.len() == other.paths.len() && self.paths.iter().zip(&other.paths).all(|(a, b)| same_path(a, b))
+    }
+}
+
+/// The points a path-construction operator adds, in page space.
+fn path_points(op: &Op, ctm: &Matrix) -> Vec<Pt> {
+    let tag = if op.op.as_slice() == b"re" { b'r' } else { op.op.first().copied().unwrap_or(0) };
+    let pts: Vec<(f64, f64)> = match op.op.as_slice() {
+        b"re" => match op.nums::<4>() {
+            Some([x, y, w, h]) => vec![(x, y), (x + w, y), (x + w, y + h), (x, y + h)],
+            None => Vec::new(),
+        },
+        b"c" => op.nums::<6>().map_or_else(Vec::new, |[a, b, c, d, e, f]| vec![(a, b), (c, d), (e, f)]),
+        b"v" | b"y" => op.nums::<4>().map_or_else(Vec::new, |[a, b, c, d]| vec![(a, b), (c, d)]),
+        _ => op.nums::<2>().map_or_else(Vec::new, |[x, y]| vec![(x, y)]),
+    };
+    pts.into_iter().map(|(x, y)| ctm.apply(x, y)).map(|(x, y)| (tag, x, y)).collect()
 }
 
 /// The transparency parameters of the graphics state: what the `gs` operators have set, resolved,
@@ -346,6 +397,8 @@ pub(super) fn shows(r: [f64; 4], region: &Region) -> bool {
 #[derive(Clone)]
 pub(super) struct Ts {
     pub(super) ctm: Matrix,
+    /// The shapes of the clipping paths in force, which keep text of different table cells apart.
+    pub(super) shape: Rc<Shape>,
     /// The clip in force, if any, as what it leaves visible: the intersection of every
     /// rectangular content-stream clip (`re` `W`/`W*` `n`, ISO 32000-2 §8.5.4) and every enclosing
     /// form's `/BBox` ([`super::lines`]), each in the shape its matrix gives it. `q`/`Q` save and
@@ -637,6 +690,7 @@ impl Carry {
         let ts = Ts {
             ctm: Matrix::IDENTITY,
             clip: None,
+            shape: Rc::default(),
             fill: Vec::new(),
             font: None,
             face: None,
@@ -958,7 +1012,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         visual_order: m.visual_order,
         decodable,
         scope: marked.regions.last().copied().flatten(),
-        paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
+        paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone(), shape: ts.shape.clone() },
         logical_order: false,
         actual_text: false,
         soft_break: state.soft_break,
@@ -989,6 +1043,10 @@ pub(super) fn interpret(
     let mut stack: Vec<(Ts, Matrix, Matrix)> = std::mem::take(&mut carry.stack);
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let mut bt = 0usize;
+    // The path under construction (bounding box and points), and the fill rule when `W`/`W*` made it the next clip.
+    let mut path_box: Option<[f64; 4]> = None;
+    let mut path_pts: Vec<Pt> = Vec::new();
+    let mut shape_pending: Option<bool> = None;
     let mut marked =
         MarkedContent { regions: std::mem::take(&mut carry.marked), layers: std::mem::take(&mut carry.layers), ..MarkedContent::default() };
     // A rewrite names a wrap (`/PCSoft`) or a break it kept (`/PCHard`) in an empty marker
@@ -1089,6 +1147,28 @@ pub(super) fn interpret(
                 if let Some(m) = op.nums::<6>() {
                     ts.ctm = Matrix(m).then(&ts.ctm);
                 }
+            }
+            b"m" | b"l" | b"re" | b"c" | b"v" | b"y" => {
+                for (tag, x, y) in path_points(op, &ts.ctm) {
+                    path_box = Some(path_box.map_or([x, y, x, y], |b| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)]));
+                    if path_pts.len() < MAX_SHAPE_POINTS {
+                        path_pts.push((tag, x, y));
+                    }
+                }
+            }
+            b"W" => shape_pending = Some(false),
+            b"W*" => shape_pending = Some(true),
+            b"n" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
+                if let (Some(even_odd), Some(b)) = (shape_pending, path_box) {
+                    let shape = Rc::make_mut(&mut ts.shape);
+                    shape.bounds = Some(shape.bounds.map_or(b, |c| [c[0].max(b[0]), c[1].max(b[1]), c[2].min(b[2]), c[3].min(b[3])]));
+                    if shape.paths.iter().map(|(_, pts)| pts.len()).sum::<usize>() + path_pts.len() <= MAX_SHAPE_POINTS {
+                        shape.paths.push((even_odd, std::mem::take(&mut path_pts)));
+                    }
+                }
+                path_box = None;
+                path_pts.clear();
+                shape_pending = None;
             }
             b"BT" => {
                 tm = Matrix::IDENTITY;
