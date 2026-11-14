@@ -72,6 +72,13 @@ impl Automation {
                     .ok_or_else(|| ToolError::InvalidArgs(format!("pdfa must be \"2b\" or \"3b\", not {l:?}")))?,
             );
         }
+        // Editable output is a new document of visible text; it is not converted, so a level
+        // asked for with it would be dropped without a word.
+        if settings.pdfa.is_some() && settings.output_mode == OutputMode::EditableText {
+            return Err(ToolError::InvalidArgs(
+                "pdfa applies to searchable output; output_mode \"editable\" writes a new document that is not converted (drop pdfa, or use searchable)".into(),
+            ));
+        }
         Ok(settings)
     }
 

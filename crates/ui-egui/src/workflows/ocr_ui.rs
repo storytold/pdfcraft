@@ -98,7 +98,9 @@ impl OcrDraft {
             skip_text_files: self.skip_text_files,
             skip_text_pages: self.skip_text_pages && !self.text_pages,
             force_ocr: self.force_ocr,
-            pdfa: self.pdfa.then_some(pdfcraft_engine::pdfa::Level::A2b),
+            // Editable text is a new document that is not converted: the choice waits, unused,
+            // until the output is a searchable image again.
+            pdfa: (self.pdfa && self.output_mode == OutputMode::Searchable).then_some(pdfcraft_engine::pdfa::Level::A2b),
             ..Default::default()
         }
     }
@@ -359,8 +361,11 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 ui.add_space(4.0);
                 ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
                     .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));
-                ui.add(crate::widgets::checkbox(&mut d.pdfa, tl!("Save as PDF/A-2b")))
-                    .on_hover_text(tl!("Converts the result to PDF/A-2b for archiving and says what still keeps it from complying"));
+                ui.add_enabled(d.output_mode == OutputMode::Searchable, crate::widgets::checkbox(&mut d.pdfa, tl!("Save as PDF/A-2b")))
+                    .on_hover_text(tl!("Converts the result to PDF/A-2b for archiving and says what still keeps it from complying"))
+                    .on_disabled_hover_text(tl!(
+                        "Editable text writes a new document that is not converted; PDF/A needs the Searchable Image output"
+                    ));
                 ui.add(crate::widgets::checkbox(&mut d.auto_rotate, tl!("Straighten pages scanned sideways or upside down")));
                 ui.add(crate::widgets::checkbox(&mut d.deskew, tl!("Straighten skewed text lines")));
                 ui.add(crate::widgets::checkbox(&mut d.denoise, tl!("Remove scan speckle")));
@@ -494,8 +499,6 @@ impl PdfCraftApp {
         // a page with real text and a background picture is left alone.
         settings.skip_text_pages = true;
         settings.native_text_only = true;
-        // Edit only makes the words editable: it never converts the document.
-        settings.pdfa = None;
         // Edit only makes the words editable: it never converts the document.
         settings.pdfa = None;
         self.start_ocr_pages(scan.doc, &[scan.page], settings, true);
@@ -1284,6 +1287,20 @@ mod tests {
         app.poll_ocr();
         assert_eq!(label(&app).as_deref(), Some("Recognize text"));
     }
+    /// Editable text writes a new document that is not converted, so the dialog's PDF/A choice
+    /// does not reach a run with that output: it waits, and applies again when the output is a
+    /// searchable image.
+    #[test]
+    fn editable_text_output_asks_for_no_pdfa_conversion() {
+        use pdfcraft_engine::pdfa::Level;
+        let mut app = app_with(scan());
+        app.ocr_draft.pdfa = true;
+        app.ocr_draft.output_mode = OutputMode::EditableText;
+        assert_eq!(app.ocr_draft.settings().pdfa, None);
+        app.ocr_draft.output_mode = OutputMode::Searchable;
+        assert_eq!(app.ocr_draft.settings().pdfa, Some(Level::A2b));
+    }
+
     /// Save as PDF/A-2b in the dialog reaches the run: the result is converted in the same undo
     /// step and the summary says so. A run Edit starts never converts, whatever the dialog says.
     #[test]

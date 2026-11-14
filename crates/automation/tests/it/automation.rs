@@ -9390,6 +9390,13 @@ fn ocr_recognize_can_save_the_scan_as_pdfa() {
     let mut a = auto(&dir);
     assert!(matches!(a.call("ocr_recognize", &json!({ "doc": 1, "pdfa": "1b" })), Err(ToolError::InvalidArgs(_))));
     assert!(matches!(a.call("ocr_recognize_files", &json!({ "paths": ["a.pdf"], "folder": "out", "pdfa": "x" })), Err(ToolError::InvalidArgs(_))));
+    // Editable output is a new document that is not converted: asking for PDF/A with it is an
+    // error, not a request quietly ignored.
+    match a.call("ocr_recognize", &json!({ "doc": 1, "output_mode": "editable", "out": "new.pdf", "pdfa": "2b" })) {
+        Err(ToolError::InvalidArgs(why)) => assert!(why.contains("pdfa") && why.contains("editable"), "{why}"),
+        other => panic!("expected InvalidArgs, got {other:?}"),
+    }
+    assert!(!dir.join("new.pdf").exists());
     assert!(!dir.join("out").exists());
     if ok(&mut a, "ocr_status", json!({}))["available"] != true {
         eprintln!("skipped: OCR models not installed");

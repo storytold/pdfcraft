@@ -1543,7 +1543,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "deskew": { "type": "boolean", "description": "Straighten skewed text lines before reading (default false)." },
                     "denoise": { "type": "boolean", "description": "A 3×3 median filter against scan speckle (default false)." },
                     "binarize": { "type": "boolean", "description": "Sauvola binarization: ink to black, paper to white (default false)." },
-                    "pdfa": { "type": "string", "enum": ["2b", "3b"], "description": "Also save as PDF/A at this level (default: no)." },
+                    "pdfa": { "type": "string", "enum": ["2b", "3b"], "description": "Also save as PDF/A at this level (default: no). Searchable output only: editable output is a new document that is not converted, so combining them is an error." },
                 }),
                 &["doc"],
             )),
