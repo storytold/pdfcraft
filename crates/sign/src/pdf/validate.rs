@@ -60,6 +60,13 @@ fn names_certification(doc: &Document, v: &Dict) -> bool {
     named.as_dict() == Some(v)
 }
 
+/// Whether signature value `v` is `doc`'s certification and allows no changes (DocMDP P=1), read
+/// as [`set_certification`] reads the level later changes are judged by. Signing asks, so that it
+/// refuses what validation would then call a broken certification.
+pub(super) fn certifies_no_changes(doc: &Document, v: &Dict) -> bool {
+    docmdp_reference(doc, v) == Some(1) && names_certification(doc, v)
+}
+
 /// Set `info.certify` from `doc`, the revision signature value `v` covers. A document has at most
 /// one certification, the signature its catalog's `/Perms /DocMDP` names (ISO 32000-2, 12.8.2.2),
 /// so a DocMDP reference in any other signature dictionary does not choose the permissions later
