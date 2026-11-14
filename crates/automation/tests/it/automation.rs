@@ -6423,6 +6423,38 @@ fn adding_content_through_tools() {
     assert!(matches!(a.call("content_delete", &json!({ "doc": doc, "page": 1, "index": 5 })), Err(ToolError::Failed(_))));
 }
 
+/// #7252: a replacement picture that cannot be read changes nothing: not the box, the dirty
+/// flag, the Undo stack or Redo.
+#[test]
+fn a_rejected_image_replacement_changes_nothing() {
+    let dir = workdir("content-bad-image");
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 40, 20);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[200u8; 2400]).unwrap();
+    }
+    std::fs::write(dir.join("logo.png"), png).unwrap();
+    std::fs::write(dir.join("broken.png"), b"not an image").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_image", json!({ "doc": doc, "page": 1, "path": "logo.png", "rect": [100, 200, 180, 240] }));
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "rect": [110, 210, 190, 250] }));
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    let before = ok(&mut a, "doc_info", json!({ "doc": doc }))["document"].clone();
+    let items = ok(&mut a, "content_list", json!({ "doc": doc }));
+    for extra in [json!({}), json!({ "rect": [200, 200, 260, 260] })] {
+        let mut args = json!({ "doc": doc, "page": 1, "index": 1, "image": "broken.png" });
+        args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        assert!(matches!(a.call("content_update", &args), Err(ToolError::Failed(_))));
+        assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["document"], before);
+        assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc })), items);
+    }
+    // Redo survived.
+    ok(&mut a, "edit_redo", json!({ "doc": doc }));
+}
+
 /// #6440: `page_add_text` paints text in CMYK or gray for a print file, so its black is 100 K
 /// (`0 0 0 1 k`) rather than DeviceRGB; `content_update` restyles it either way.
 #[test]
