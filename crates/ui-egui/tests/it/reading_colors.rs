@@ -9,41 +9,7 @@ use pdfcraft_ui_egui::PdfCraftApp;
 
 /// One valid page (proper xref, so no repair banner covers the dialog): black text on white.
 fn pdf() -> Vec<u8> {
-    pdf_pages(1)
-}
-
-fn pdf_pages(count: usize) -> Vec<u8> {
-    let mut objs: Vec<Vec<u8>> = vec![
-        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
-        {
-            let body = b"BT /F1 14 Tf 20 150 Td (The quick brown fox) Tj ET";
-            format!("<< /Length {} >>\nstream\n{}\nendstream", body.len(), String::from_utf8_lossy(body)).into_bytes()
-        },
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
-    ];
-    let mut kids = vec!["3 0 R".to_owned()];
-    for _ in 1..count {
-        kids.push(format!("{} 0 R", objs.len() + 1));
-        objs.push(objs[2].clone());
-    }
-    objs[1] = format!("<< /Type /Pages /Kids [{}] /Count {count} >>", kids.join(" ")).into_bytes();
-    let mut out = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, o) in objs.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
-        out.extend_from_slice(o);
-        out.extend_from_slice(b"\nendobj\n");
-    }
-    let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    out
+    crate::support::fixtures::pdf_pages(1)
 }
 
 #[test]
@@ -61,7 +27,7 @@ fn pending_pages_use_document_reading_background() {
     ] {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("pending.pdf", None, pdf_pages(3)).unwrap();
+        app.open_bytes("pending.pdf", None, crate::support::fixtures::pdf_pages(3)).unwrap();
         let id = app.views[0].id;
         // Deliberately differ from the app preference: the document is the source of truth.
         app.session.set_reading_colors(id, colors);
@@ -100,17 +66,6 @@ fn png() -> Vec<u8> {
     out
 }
 
-/// The Reading colours combo of the preferences dialog: it shows the chosen mode as its value,
-/// and no other combo in the dialog shows `Off` while the setting is off.
-fn combo(h: &mut Harness<'static, PdfCraftApp>) {
-    // The preferences dialog grew taller than the window, which leaves this combo below the
-    // fold where a click lands outside the dialog and dismisses it; scroll it into view and
-    // let the scroll settle before clicking.
-    h.get_by(|n| n.role() == Role::ComboBox && n.value().is_some_and(|v| v == "Off")).scroll_to_me();
-    h.run_steps(4);
-    h.get_by(|n| n.role() == Role::ComboBox && n.value().is_some_and(|v| v == "Off")).click();
-}
-
 #[test]
 fn reading_colours_preference_round_trips() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
@@ -122,11 +77,9 @@ fn reading_colours_preference_round_trips() {
     });
     h.run_steps(4);
     assert_eq!(h.state().reading_colors, ReadingColors::default());
-    // Switch the preset to white-on-black in the dialog's Reading colours combo. The open
-    // document keeps repainting, so run a fixed number of steps and let the popup settle.
-    combo(&mut h);
-    h.run_steps(20);
-    h.get_by_label("White on black").click();
+    h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("White on black")).scroll_to_me();
+    h.run_steps(4);
+    h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("White on black")).click();
     h.run_steps(2);
     assert_eq!(h.state().reading_colors, ReadingColors::WHITE_ON_BLACK);
     // The preference is app-wide: the already open document follows it too.
@@ -149,6 +102,41 @@ fn reading_colours_preference_round_trips() {
     assert_eq!(fresh.reading_colors, ReadingColors::default());
     fresh.restore(r#"{"reading_colors": 7}"#);
     assert_eq!(fresh.reading_colors, ReadingColors::default());
+}
+
+#[test]
+fn reading_presets_follow_appearance_and_do_not_change_the_interface_theme() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.set_option("dialog", "preferences").unwrap();
+        app
+    });
+    h.run_steps(6);
+    assert!(h.query_by_label("Original").is_some());
+    let theme = h.state().theme_preference;
+    let appearance = h.get_by_label("Light theme").rect();
+    let preset = h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("White on black")).rect();
+    let documents = h.get_by_label("Documents and view").rect();
+    assert!(appearance.bottom() < preset.top() && preset.bottom() < documents.top());
+    for (label, expected) in [
+        ("White on black", ReadingColors::WHITE_ON_BLACK),
+        ("Yellow on black", ReadingColors::YELLOW_ON_BLACK),
+        ("Green on black", ReadingColors::GREEN_ON_BLACK),
+        ("Black on white", ReadingColors::BLACK_ON_WHITE),
+        ("Off", ReadingColors::default()),
+    ] {
+        h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some(label)).scroll_to_me();
+        h.run_steps(4);
+        h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some(label)).click();
+        h.run_steps(4);
+        assert_eq!(h.state().reading_colors, expected);
+        assert_eq!(h.state().theme_preference, theme);
+        assert_eq!(h.query_by_label("Original").is_some(), expected.params.is_none());
+    }
+    if let Ok(path) = std::env::var("PDFCRAFT_READING_SHOT") {
+        h.render().unwrap().save(path).unwrap();
+    }
 }
 
 #[test]

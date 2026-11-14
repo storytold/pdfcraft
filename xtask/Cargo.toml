@@ -5,6 +5,9 @@ edition = "2024"
 publish = false
 license.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 pdfcraft-oracle = { workspace = true }
 pdfcraft-cos = { workspace = true }

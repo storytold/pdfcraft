@@ -29,13 +29,18 @@ pub(crate) fn identifier(xmp: &str, namespace: &str, local: &str) -> Option<Stri
     }
 }
 
+/// `xmp` parsed within the depth, attribute and node limits; `None` when it can't be.
+pub(crate) fn parse(xmp: &str) -> Option<roxmltree::Document<'_>> {
+    if !xml_limits_ok(xmp) {
+        return None;
+    }
+    let options = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: 100_000, ..Default::default() };
+    roxmltree::Document::parse_with_options(xmp, options).ok()
+}
+
 /// [`identifier`] through an XML parser; `Err` when the packet can't be parsed within the limits.
 fn parsed_identifier(xmp: &str, namespace: &str, local: &str) -> Result<Option<String>, ()> {
-    if !xml_limits_ok(xmp) {
-        return Err(());
-    }
-    let options = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: 100_000 };
-    let doc = roxmltree::Document::parse_with_options(xmp, options).map_err(|_| ())?;
+    let doc = parse(xmp).ok_or(())?;
     for node in doc.descendants().filter(roxmltree::Node::is_element) {
         if let Some(value) = node.attribute((namespace, local)) {
             return Ok(Some(value.trim().to_owned()));
@@ -151,7 +156,7 @@ fn esc(s: &str) -> String {
 /// A PDF date (`D:YYYYMMDDHHmmSSOHH'mm'`) as an XMP (ISO 8601) date.
 pub fn iso_date(pdf: &str) -> Option<String> {
     let d = pdf.trim().trim_start_matches("D:");
-    let digits: String = d.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = d.chars().take_while(char::is_ascii_digit).collect();
     if digits.len() < 4 {
         return None;
     }
@@ -161,7 +166,7 @@ pub fn iso_date(pdf: &str) -> Option<String> {
     let tz = match rest.chars().next() {
         Some('Z') | None => "Z".to_string(),
         Some(sign @ ('+' | '-')) => {
-            let t: String = rest[1..].chars().filter(|c| c.is_ascii_digit()).collect();
+            let t: String = rest[1..].chars().filter(char::is_ascii_digit).collect();
             format!("{sign}{}:{}", t.get(0..2).unwrap_or("00"), t.get(2..4).unwrap_or("00"))
         }
         _ => "Z".to_string(),

@@ -55,19 +55,8 @@ fn harness(rotate: u16) -> Harness<'static, PdfCraftApp> {
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     h
-}
-
-/// Run frames until rendering has finished and the layout holds still.
-fn settle(h: &mut Harness<'static, PdfCraftApp>) {
-    for _ in 0..200 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
 }
 
 /// Make a bookmark with ⌘B, as the Bookmarks button does, and say what it goes to.
@@ -103,7 +92,7 @@ fn a_new_bookmark_goes_to_the_top_of_the_window_not_the_top_of_the_page() {
     h.state_mut().apply_edit(Edit::AddBookmark { parent: vec![], index: 0, title: "Mid".into(), page: 1, left: None, top: Some(250.0) });
     h.run_steps(3);
     h.get_by_label("Mid").click();
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let (page, view) = new_bookmark(&mut h);
     assert_eq!(page, Some(1), "the page at the top of the window");
     let (left, top) = xyz(view);
@@ -151,7 +140,7 @@ fn a_bookmark_made_on_a_turned_page_pins_the_axis_the_window_scrolls_along() {
 fn rotate_view(h: &mut Harness<'static, PdfCraftApp>, degrees: u16) {
     h.state_mut().views[0].rotation = degrees;
     h.run_steps(3);
-    settle(h);
+    crate::support::settle(h);
 }
 
 #[test]
@@ -216,12 +205,12 @@ fn a_bookmark_in_a_spread_of_unequal_pages_goes_to_the_page_crossing_the_top_of_
     });
     h.state_mut().views[0].layout = PageLayout::TwoUp;
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     // 20 pt below page 2's top is at the window's top, where page 1 has not started.
     h.state_mut().apply_edit(Edit::AddBookmark { parent: vec![], index: 0, title: "Right".into(), page: 1, left: None, top: Some(380.0) });
     h.run_steps(3);
     h.get_by_label("Right").click();
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let (page, view) = new_bookmark(&mut h);
     assert_eq!(page, Some(1), "page 2 crosses the top of the window; page 1 starts below it");
     close(xyz(view).1, 380.0, "top");

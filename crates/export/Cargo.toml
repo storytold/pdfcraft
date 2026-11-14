@@ -11,4 +11,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+craft-rtf.workspace = true
+craft-zip.workspace = true
+
+[dev-dependencies]
 flate2.workspace = true

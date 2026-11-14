@@ -63,7 +63,7 @@ const CKB_DAYS: [&str; 7] = ["یەکشەممە", "دووشەممە", "سێشەم
 
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
 /// the interface languages, in the same order and with the same names.
-pub static DATE_LANGUAGES: [DateLanguage; 34] = [
+pub static DATE_LANGUAGES: [DateLanguage; 35] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -266,6 +266,17 @@ pub static DATE_LANGUAGES: [DateLanguage; 34] = [
         months_short: CKB_MONTHS,
         days: CKB_DAYS,
         days_short: CKB_DAYS,
+    },
+    // Persian (Farsi); Gregorian month and weekday names, right to left like Arabic and Kurdish.
+    // Persian does not change the month form after a day number, so `months_with_day` is `None`.
+    DateLanguage {
+        code: "fa",
+        name: "فارسی",
+        months: ["ژانویه", "فوریه", "مارس", "آوریل", "مه", "ژوئن", "ژوئیه", "اوت", "سپتامبر", "اکتبر", "نوامبر", "دسامبر"],
+        months_with_day: None,
+        months_short: ["ژانویه", "فوریه", "مارس", "آوریل", "مه", "ژوئن", "ژوئیه", "اوت", "سپتامبر", "اکتبر", "نوامبر", "دسامبر"],
+        days: ["یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنج‌شنبه", "جمعه", "شنبه"],
+        days_short: ["یک", "دو", "سه", "چه", "پن", "جم", "شن"],
     },
     DateLanguage {
         code: "pl",
@@ -569,6 +580,18 @@ pub static DATE_LANGUAGES: [DateLanguage; 34] = [
 /// The date language for `code` (any case), or `None` when there's none.
 pub fn date_language(code: &str) -> Option<&'static DateLanguage> {
     DATE_LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(code.trim()))
+}
+
+/// Form date fields (`AFDate_FormatEx`, `util.printd`, `util.scand`) write month and weekday
+/// names in date language `code` from now on, as a localized Acrobat writes its own language's:
+/// `dd-mmm-yy` is `18-ott-26` in Italian (#5303). An unknown code is English.
+pub fn use_form_date_language(code: &str) {
+    let l = date_language(code).unwrap_or(&DATE_LANGUAGES[0]);
+    let names = pdfcraft_forms::af::DateNames { months: l.months, months_short: l.months_short, days: l.days, days_short: l.days_short };
+    if pdfcraft_forms::af::date_names() != names {
+        pdfcraft_forms::af::set_date_names(names);
+        pdfcraft_js::set_date_names(l.months, l.months_short, l.days, l.days_short);
+    }
 }
 
 /// The characters of `text` that Fill & Sign can't write into a PDF yet, each once. Its text is

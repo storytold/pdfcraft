@@ -1,5 +1,62 @@
 use super::*;
 
+thread_local! {
+    /// Bytes the lexer read before an operand failed, on this thread.
+    pub(crate) static RESCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+thread_local! {
+    /// Pieces [`Pieces::splice`] looked at while copying, on this thread.
+    pub(crate) static PIECE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[test]
+fn operands_are_counted_from_the_end() {
+    let op = parse(b"(x) /OC /MC0 BDC").ops.remove(0);
+    assert_eq!((op.name_back(1), op.name_back(0)), (Some(&b"OC"[..]), Some(&b"MC0"[..])));
+    assert_eq!(op.back(2).and_then(Object::as_string).map(|s| s.bytes.clone()), Some(b"x".to_vec()));
+    assert_eq!((op.back(3), op.back(usize::MAX)), (None, None));
+    let op = parse(b"/F1 10 Tf").ops.remove(0);
+    assert_eq!((op.name_back(1), op.num_back(0), op.num_back(1)), (Some(&b"F1"[..]), Some(10.0), None));
+    assert_eq!(Op::new("Q", vec![]).back(0), None);
+}
+
+#[test]
+fn splicing_visits_each_piece_a_few_times() {
+    let n = 5_000;
+    let pieces: Vec<String> = (0..n).map(|i| format!("({i}) Tj")).collect();
+    let joined = Pieces::join(&pieces);
+    let parsed = joined.parse();
+    let edits: Vec<_> = parsed.ops.iter().map(|op| (op.span.clone(), b"(x) Tj".to_vec())).collect();
+    assert_eq!(edits.len(), n);
+    PIECE_VISITS.with(|c| c.set(0));
+    let out = joined.splice(edits);
+    let visits = PIECE_VISITS.with(|c| c.get());
+    assert!(visits <= 4 * n, "{visits} piece visits for {n} pieces");
+    assert!(out.iter().all(|p| p == b"(x) Tj"));
+    // A replacement spanning two pieces stays whole in the first and leaves the rest of the second.
+    let two = Pieces::join(&["q (a)", "Tj Q"]);
+    let tj = two.parse().ops.into_iter().find(|o| o.is("Tj")).map(|o| o.span).unwrap_or_default();
+    assert_eq!(two.splice([(tj, b"(b) Tj".to_vec())]), [b"q (b) Tj".to_vec(), b" Q".to_vec()]);
+}
+
+#[test]
+fn a_long_unreadable_number_is_read_once() {
+    for junk in ["+", "5"] {
+        let n = 20_000;
+        let src = format!("{}{} 1 0 0 1 0 0 cm", junk.repeat(n), if junk == "5" { "x" } else { "" });
+        RESCANNED.with(|c| c.set(0));
+        let p = parse(src.as_bytes());
+        let rescanned = RESCANNED.with(|c| c.get());
+        assert!(rescanned <= 2 * n, "{rescanned} bytes read for a {n}-byte token");
+        assert_eq!(p.ops.last().and_then(|o| o.nums::<6>()), Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+    }
+    // A short damaged number still recovers byte by byte.
+    let p = parse(b"-+5 0 Td");
+    assert_eq!((p.ops.len(), p.skipped), (1, 1));
+    assert_eq!(p.ops[0].nums::<2>(), Some([5.0, 0.0]));
+}
+
 #[test]
 fn operators_keep_operands_and_spans() {
     let src = b"q 1 0 0 1 72 720 cm BT /F1 12 Tf (Hello \\(world\\)) Tj [(A) -120 (B)] TJ ET Q";
@@ -157,7 +214,20 @@ fn filtered_unknown_and_damaged_inline_images_end_where_the_renderer_ends_them()
         let parsed = parse(src);
         assert_eq!(parsed.ops[0].inline.as_ref().unwrap().1, b"abc");
         assert_eq!(parsed.ambiguous_images, ambiguous);
+        let mut reader = ops(src);
+        reader.by_ref().for_each(drop);
+        assert_eq!(reader.ambiguous_images(), ambiguous, "the streaming reader counts it too");
     }
+}
+
+/// The renderer reads an image whose parameters this parser can't (a stray operand before `ID`):
+/// the page draws an image `ops` doesn't hold, so it is counted as ambiguous rather than dropped
+/// silently.
+#[test]
+fn an_inline_image_read_by_the_renderer_but_not_here_is_ambiguous() {
+    let parsed = parse(b"q BI /W 1 /H 1 /BPC 8 /CS /G 7 ID \x80 EI Q");
+    assert_eq!(parsed.ops.iter().map(|op| op.op.as_slice()).collect::<Vec<_>>(), [b"q".as_slice(), b"Q"]);
+    assert_eq!(parsed.ambiguous_images, 1);
 }
 
 /// A zlib stream (one stored block) for 64 DeviceGray samples whose bytes hold " EI\n" at offset 41,
@@ -502,4 +572,18 @@ fn inline_images_end_where_the_renderer_ends_them() {
         assert_eq!(ours, renderer_operators(data), "{}", String::from_utf8_lossy(data));
         assert_eq!((parsed.skipped, parsed.ambiguous_images), (0, 0), "{}", String::from_utf8_lossy(data));
     }
+}
+
+#[test]
+fn invert_accepts_small_scale_and_rejects_singular() {
+    let m = Matrix([1e-7, 0., 0., 1e-7, 0., 0.]);
+    let inv = m.invert().expect("a uniform 1e-7 scale is invertible");
+    let id = m.then(&inv).0;
+    for (got, want) in id.iter().zip(Matrix::IDENTITY.0) {
+        assert!((got - want).abs() < 1e-9, "{id:?}");
+    }
+    assert!(Matrix([1., 2., 2., 4., 0., 0.]).invert().is_none());
+    assert!(Matrix([f64::NAN, 0., 0., 1., 0., 0.]).invert().is_none());
+    // A subnormal scale passes the relative check but its inverse overflows (CodeRabbit on #5703).
+    assert!(Matrix([1e-310, 0., 0., 1., 0., 0.]).invert().is_none());
 }

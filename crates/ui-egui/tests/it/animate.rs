@@ -18,7 +18,7 @@ fn pdf(annots: &[&str]) -> Vec<u8> {
         "<< /Length 0 >>\nstream\n\nendstream".into(),
         "<< /Type /XObject /Subtype /Form /BBox [0 0 200 100] /Length 0 >>\nstream\n\nendstream".into(),
     ];
-    objs.extend(annots.iter().map(|o| o.to_string()));
+    objs.extend(annots.iter().map(ToString::to_string));
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {

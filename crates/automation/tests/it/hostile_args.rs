@@ -11,9 +11,10 @@
 //!
 //! 1. **Nothing panics.** A panic in a tool is a crashed MCP server or CLI (AGENTS.md §4), so
 //!    every call must come back as `Ok` or as a `ToolError` the agent can read.
-//! 2. **Nothing escapes `--root`.** Every path argument is tried with `..` traversal, absolute
-//!    paths, Windows drive and UNC paths, and a planted symbolic link. The call must fail, and
-//!    afterwards nothing outside the root may have been created.
+//! 2. **Nothing escapes `--root` or the automation roots.** Every path argument is tried with `..`
+//!    traversal, absolute paths, Windows drive and UNC paths, and a planted symbolic link, under
+//!    both `--root` and `--automation-read-root`/`--automation-write-root` (#4003). The call must
+//!    fail, and afterwards nothing outside the root may have been created.
 //!
 //! The second is the mechanized form of the D3 audit. Reading the code says every handler resolves
 //! its own paths and that no tool dispatches another internally; this keeps that true as tools are
@@ -22,6 +23,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
+use pdfcraft_automation::file_access::AutomationRoots;
 use pdfcraft_automation::{Automation, ToolError, tools};
 use serde_json::{Value, json};
 
@@ -84,6 +86,7 @@ fn zoo() -> Vec<Value> {
 /// bug can only touch what the test made. `linked`: the root holds `link-out`, a symbolic link
 /// to `base`.
 fn escapes(base: &std::path::Path, linked: bool) -> Vec<String> {
+    let root = base.join("root");
     let mut out: Vec<String> = vec![
         "../outside.pdf".into(),
         "../../outside.pdf".into(),
@@ -93,13 +96,16 @@ fn escapes(base: &std::path::Path, linked: bool) -> Vec<String> {
         base.join("outside.pdf").to_string_lossy().into_owned(),
         base.join("new-outside.pdf").to_string_lossy().into_owned(),
         base.join("sub").join("new-outside.pdf").to_string_lossy().into_owned(),
+        root.join("..").join("outside.pdf").to_string_lossy().into_owned(),
     ];
     if linked {
         out.push("link-out/outside.pdf".into());
+        out.push(root.join("link-out").join("outside.pdf").to_string_lossy().into_owned());
     }
     // Backslashes separate only on Windows; elsewhere this is an ordinary file name in the root.
     if cfg!(windows) {
         out.push(r"..\..\outside.pdf".into());
+        out.push(r"\\.\pipe\pdfcraft-hostile-escape.pdf".into());
     }
     out
 }
@@ -190,6 +196,74 @@ fn guarded(a: &mut Automation, tool: &str, args: &Value) -> std::result::Result<
     }
 }
 
+/// A new one-page blank document, by id.
+fn blank_doc(a: &mut Automation) -> u64 {
+    let created = a.call("doc_create", &json!({ "from": "blank", "pages": 1 })).expect("create a blank document");
+    created
+        .into_iter()
+        .find_map(|c| match c {
+            pdfcraft_automation::Content::Json(v) => v["doc"].as_u64(),
+            pdfcraft_automation::Content::Png { .. } => None,
+        })
+        .expect("the new document has an id")
+}
+
+/// Delete everything inside `dir`, so one tool never sees files an earlier tool wrote: a digital ID
+/// that `sign_id_create` wrote to the `in.pdf` placeholder would stop every later `sign_document`
+/// call at its decrypt, before the argument under test.
+///
+/// The entries are reached through the canonical path, as the tools reach them: on Windows that
+/// is a `\\?\` path, whose names are taken literally. Through the plain path a file the tools
+/// named `" "` would lose its trailing space and name `dir` itself, which would then be deleted.
+fn empty_dir(dir: &Path) {
+    let dir = dir.canonicalize().expect("the root exists");
+    for entry in std::fs::read_dir(&dir).expect("read the root") {
+        let entry = entry.unwrap_or_else(|e| panic!("list {}: {e}", dir.display()));
+        let path = entry.path();
+        let is_dir = entry.file_type().unwrap_or_else(|e| panic!("file type of {}: {e}", path.display())).is_dir();
+        let removed = if is_dir { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+        removed.unwrap_or_else(|e| panic!("remove {} before the next tool: {e}", path.display()));
+    }
+}
+
+/// `action_run` keeps going when one input path is refused and reports that refusal on the file.
+/// That is still a confinement refusal: every file has an error naming the boundary, and none
+/// has an output.
+fn per_file_confinement_refusal(content: &[pdfcraft_automation::Content]) -> bool {
+    let Some(files) = content.iter().find_map(|c| match c {
+        pdfcraft_automation::Content::Json(v) => v.get("files").and_then(Value::as_array),
+        pdfcraft_automation::Content::Png { .. } => None,
+    }) else {
+        return false;
+    };
+    !files.is_empty()
+        && files.iter().all(|file| file.get("output").is_none() && file.get("error").and_then(Value::as_str).is_some_and(|e| e.contains("outside")))
+}
+
+/// Real values for the arguments a tool checks before the others, so a hostile value reaches the
+/// argument it is meant for instead of failing on a placeholder. `sign_document` checks its
+/// digital ID first and its document second: this ID opens with its password, and each call gets
+/// a fresh document (which the caller closes), since a successful call signs it. The ID is a test
+/// key with a low key derivation count, so the hundreds of calls that open it stay fast.
+fn fixture(a: &mut Automation, root: &Path, tool: &str) -> serde_json::Map<String, Value> {
+    match tool {
+        "sign_document" => {
+            let id = Path::new(env!("CARGO_MANIFEST_DIR")).join("../sign/tests/data/ec-p256.p12");
+            std::fs::copy(&id, root.join("id.p12")).expect("copy the test digital ID");
+            let doc = blank_doc(a);
+            let args = json!({ "doc": doc, "id": "id.p12", "password": "test", "out": "signed.pdf" });
+            args.as_object().cloned().unwrap_or_default()
+        }
+        // Without a step, action_run returns "give action or steps" before it resolves folder
+        // or paths, and that error would be counted as a confinement refusal.
+        "action_run" => {
+            let args = json!({ "steps": [{ "step": "set_title", "arg": "Confined" }] });
+            args.as_object().cloned().unwrap_or_default()
+        }
+        _ => serde_json::Map::new(),
+    }
+}
+
 #[test]
 fn no_tool_panics_on_hostile_arguments() {
     let root = tmp("args");
@@ -199,6 +273,7 @@ fn no_tool_panics_on_hostile_arguments() {
     let mut calls = 0usize;
 
     for def in tools() {
+        empty_dir(&root);
         // The whole arguments object, not just its properties.
         for bad in [json!(null), json!([]), json!("string"), json!(7), json!(true), json!({})] {
             calls += 1;
@@ -210,12 +285,23 @@ fn no_tool_panics_on_hostile_arguments() {
         for prop in &props {
             for value in &values {
                 let mut obj = plausible(&def);
+                let fixed = fixture(&mut a, &root, def.name);
+                let fixture_doc = fixed.get("doc").cloned();
+                obj.extend(fixed);
                 obj.insert(prop.clone(), value.clone());
                 calls += 1;
                 if let Err(e) = guarded(&mut a, def.name, &Value::Object(obj)) {
                     failures.push(e);
                 }
+                // Later tools pass placeholder document ids, which must not find this one open.
+                if let Some(doc) = fixture_doc {
+                    a.call("doc_close", &json!({ "doc": doc, "discard_changes": true })).expect("close the fixture's document");
+                }
             }
+        }
+        // A signed file shows the fixture got calls past the ID and document checks.
+        if def.name == "sign_document" {
+            assert!(root.join("signed.pdf").is_file(), "no sign_document call signed: the hostile values stop at the ID or document");
         }
     }
 
@@ -253,35 +339,34 @@ fn no_tool_escapes_the_root() {
         }
     };
 
-    let mut a = Automation::new().with_root(&root).expect("root");
-
-    // A real document, so tools reach their path arguments instead of failing on `doc` first.
-    let created = a.call("doc_create", &json!({ "from": "blank", "pages": 1 })).expect("create a blank document");
-    let doc = created
-        .into_iter()
-        .find_map(|c| match c {
-            pdfcraft_automation::Content::Json(v) => v["doc"].as_u64(),
-            pdfcraft_automation::Content::Png { .. } => None,
-        })
-        .expect("the new document has an id");
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).expect("roots");
+    let modes = [("--root", Automation::new().with_root(&root).expect("root")), ("automation roots", Automation::new().with_automation_roots(roots))];
 
     let mut leaked = Vec::new();
     let mut tried = 0usize;
     let mut refused = 0usize;
 
-    for def in tools() {
-        for (prop, is_list) in path_props(&def) {
-            for escape in escapes(&base, linked) {
-                let mut obj = plausible_with(&def, Some(doc));
-                obj.insert(prop.clone(), if is_list { json!([escape]) } else { json!(escape) });
-                let args = Value::Object(obj);
-                tried += 1;
-                match catch_unwind(AssertUnwindSafe(|| a.call(def.name, &args))) {
-                    // A path that leaves the root must be refused. Succeeding means the tool
-                    // either used it or ignored an argument it declares — both are faults.
-                    Ok(Ok(_)) => leaked.push(format!("{} accepted {prop}={escape:?}", def.name)),
-                    Ok(Err(_)) => refused += 1,
-                    Err(_) => leaked.push(format!("{} panicked on {prop}={escape:?}", def.name)),
+    for (mode, mut a) in modes {
+        // A real document, so tools reach their path arguments instead of failing on `doc` first.
+        let doc = blank_doc(&mut a);
+
+        for def in tools() {
+            for (prop, is_list) in path_props(&def) {
+                for escape in escapes(&base, linked) {
+                    let mut obj = plausible_with(&def, Some(doc));
+                    obj.insert(prop.clone(), if is_list { json!([escape]) } else { json!(escape) });
+                    let args = Value::Object(obj);
+                    tried += 1;
+                    match catch_unwind(AssertUnwindSafe(|| a.call(def.name, &args))) {
+                        // A path that leaves the root must be refused. Succeeding means the tool
+                        // either used it or ignored an argument it declares — both are faults.
+                        // action_run reports a refused input inside an otherwise successful
+                        // result, one error per file, and writes nothing for that file.
+                        Ok(Ok(content)) if per_file_confinement_refusal(&content) => refused += 1,
+                        Ok(Ok(_)) => leaked.push(format!("{mode}: {} accepted {prop}={escape:?}", def.name)),
+                        Ok(Err(_)) => refused += 1,
+                        Err(_) => leaked.push(format!("{mode}: {} panicked on {prop}={escape:?}", def.name)),
+                    }
                 }
             }
         }
