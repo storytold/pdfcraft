@@ -45,7 +45,12 @@ impl Session {
     /// all, characters Helvetica can't draw are written as `[U+XXXX]`, and the report's first line
     /// says so, rather than the report being refused.
     pub(crate) fn create_report(&self, title: &str, text: &str) -> Result<Arc<Vec<u8>>, EditError> {
-        let (doc, _escaped) = pdfcraft_create::from_text_escaped(title, text, pdfcraft_create::LETTER, 11.0)?;
+        self.create_report_on(title, text, pdfcraft_create::LETTER)
+    }
+
+    /// [`Self::create_report`] on pages of `paper` size.
+    pub(crate) fn create_report_on(&self, title: &str, text: &str, paper: (f64, f64)) -> Result<Arc<Vec<u8>>, EditError> {
+        let (doc, _escaped) = pdfcraft_create::from_text_escaped(title, text, paper, 11.0)?;
         self.write_new(&doc)
     }
 

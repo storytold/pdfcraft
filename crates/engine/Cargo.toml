@@ -47,10 +47,12 @@ url = "2.5"
 idna = "1.1"
 icu_properties = "2.3"
 unicode-segmentation = "1.13"
+# Already in the graph through lopdf: reads comment dates (`/M`) in full to sort a comment summary.
+chrono = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# Already in the graph through lopdf; used only for the local UTC offset ("today"). The workspace
-# entry is std-only; this target adds `clock` for `chrono::Local::now`.
+# The workspace entry is std-only; this target adds `clock` for `chrono::Local::now` (the local
+# UTC offset, "today").
 chrono = { workspace = true, features = ["clock"] }
 getrandom = "0.4"
 

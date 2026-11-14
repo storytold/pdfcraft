@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 
 use pdfcraft_engine::{
-    BorderShape, Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort,
+    BorderShape, Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, SUMMARY_PAPERS, Shape, StampGroup, StampKind, Style,
+    SummarizeOptions, SummaryLayout, SummarySort,
 };
 use pdfcraft_render::{Annotation, PageInfo};
 use serde_json::{Value, json};
@@ -739,6 +740,8 @@ impl Automation {
         Ok(json!({ "hidden": hidden }))
     }
 
+    /// `comments_summarize`: makes the comment summary in the chosen layout, paper and sort order,
+    /// and delivers it as [`deliver`](Self::deliver) does.
     pub(crate) fn comments_summarize(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, stem) = (doc.id, std::path::Path::new(&doc.name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
@@ -746,7 +749,26 @@ impl Automation {
             Some(s) => SummarySort::parse(s).ok_or_else(|| ToolError::InvalidArgs(format!("unknown sort {s:?}")))?,
             None => SummarySort::Page,
         };
-        let bytes = self.session.summarize_comments(id, sort).map_err(failed)?;
+        let layout = match a.opt_str("layout")? {
+            Some(s) => SummaryLayout::parse(s).ok_or_else(|| {
+                let allowed: Vec<&str> = SummaryLayout::ALL.iter().map(|l| l.key()).collect();
+                ToolError::InvalidArgs(format!("unknown layout {s:?}; use one of {}", allowed.join(", ")))
+            })?,
+            None => SummaryLayout::CommentsOnly,
+        };
+        // A paper by name, or the one the document's first page is printed on.
+        let paper = match a.opt_str("paper")? {
+            None => None,
+            Some(s) if s.eq_ignore_ascii_case("document") => None,
+            Some(s) => {
+                let name = SUMMARY_PAPERS.iter().find(|p| p.eq_ignore_ascii_case(s)).ok_or_else(|| {
+                    ToolError::InvalidArgs(format!("unknown paper {s:?}; use \"document\" or one of {}", SUMMARY_PAPERS.join(", ")))
+                })?;
+                pdfcraft_engine::print::PAPERS.iter().find(|(p, _)| p == name).map(|(_, size)| *size)
+            }
+        };
+        let opts = SummarizeOptions { sort, layout, paper, pages_without_comments: a.opt_bool("pages_without_comments")?.unwrap_or(true) };
+        let bytes = self.session.summarize_comments(id, &opts).map_err(failed)?;
         self.deliver(a, &format!("Summary of comments on {stem}.pdf"), bytes)
     }
 

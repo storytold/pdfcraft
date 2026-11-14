@@ -6,7 +6,8 @@ use egui::{Pos2, pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::Annotation;
-use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
+use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
+use pdfcraft_ui_egui::{PdfCraftApp, QuickTool, RightPanel};
 
 use crate::support;
 
@@ -2261,6 +2262,71 @@ fn comments_take_checkmarks_lock_hide_and_summarize() {
     let s = h.state();
     assert_eq!(s.views.len(), 2);
     assert!(s.session.get(s.views[1].id).unwrap().name.starts_with("Summary of comments on text"));
+    assert_eq!(s.session.get(s.views[1].id).unwrap().info.pages[0].width, 612.0, "comments only: portrait text pages");
+
+    // The layout with each page beside its comments (#6791): a landscape sheet showing the page.
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    h.get_by_label("More options").click();
+    h.run_steps(2);
+    h.get_by_label("Create PDF comment summary…").click();
+    h.run_steps(2);
+    h.get_by_label("Document and comments with connector lines on single pages").click();
+    h.run_steps(1);
+    h.get_by_label("Create PDF Comment Summary").click();
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!(s.views.len(), 3);
+    assert_eq!(s.summary_layout, pdfcraft_engine::SummaryLayout::DocumentAndCommentsWithLines, "the choice is kept for next time");
+    let info = &s.session.get(s.views[2].id).unwrap().info;
+    assert_eq!((info.pages[0].width, info.pages[0].height), (792.0, 612.0));
+
+    // Sequence numbers on separate pages, on A4, without the pages that have no comments.
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    h.get_by_label("More options").click();
+    h.run_steps(2);
+    h.get_by_label("Create PDF comment summary…").click();
+    h.run_steps(2);
+    h.get_by_label("Document and comments with sequence numbers on separate pages").click();
+    h.run_steps(1);
+    h.get_by(|n| n.role() == Role::ComboBox && n.value().is_some_and(|v| v.starts_with("Match the document ("))).click();
+    h.run_steps(2);
+    h.get_by_label("A4").click();
+    h.run_steps(1);
+    h.get_by_label("Pages containing no comments").click();
+    h.run_steps(1);
+    h.get_by_label("Create PDF Comment Summary").click();
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!(s.views.len(), 4);
+    assert_eq!((s.summary_paper, s.summary_pages_without_comments), (Some("A4"), false));
+    let info = &s.session.get(s.views[3].id).unwrap().info;
+    let a4 = |w: f32, h: f32| (w.min(h) - 595.28).abs() < 0.01 && (w.max(h) - 841.89).abs() < 0.01;
+    assert!(info.pages.iter().all(|p| a4(p.width, p.height)), "{:?}", info.pages);
+    assert_eq!(info.pages.len(), 2, "the commented page and its comments; the other pages left out");
+    // It opens as it asks: in a two-page view, the page beside its comments, the spread fitted;
+    // its comments are comments again, listed in the Comments panel.
+    let view = &s.views[3];
+    assert_eq!((view.layout, view.continuous, view.cover, view.fit), (PageLayout::TwoUp, false, false, Fit::Page));
+    assert!(!info.annotations.is_empty() && info.annotations.iter().all(|a| a.page == 0), "{:?}", info.annotations);
+    assert_eq!(s.right, Some(RightPanel::Comments));
+
+    // The choices survive a restart.
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert_eq!(restored.summary_layout, pdfcraft_engine::SummaryLayout::DocumentAndCommentsWithNumbers);
+    assert_eq!((restored.summary_paper, restored.summary_pages_without_comments), (Some("A4"), false));
+    let mut sorted = PdfCraftApp::new();
+    sorted.summary_sort = pdfcraft_engine::SummarySort::Author;
+    restored.restore(&sorted.persist());
+    assert_eq!(restored.summary_sort, pdfcraft_engine::SummarySort::Author);
+    sorted.summary_sort = pdfcraft_engine::SummarySort::LastDate;
+    restored.restore(&sorted.persist());
+    assert_eq!(restored.summary_sort, pdfcraft_engine::SummarySort::LastDate, "Date of last comment is kept too");
+    // A paper this version doesn't offer leaves the document's.
+    restored.restore(r#"{"comment_summary": {"paper": "Napkin"}}"#);
+    assert_eq!(restored.summary_paper, None);
 }
 
 #[test]

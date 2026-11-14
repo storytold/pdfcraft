@@ -609,6 +609,13 @@ pub struct PdfCraftApp {
     pub rotate_draft: RotateDraft,
     /// Summarize Comments: sort order.
     pub summary_sort: pdfcraft_engine::SummarySort,
+    /// Summarize Comments: layout (comments only, or each page beside its comments).
+    pub summary_layout: pdfcraft_engine::SummaryLayout,
+    /// Summarize Comments: the paper, by its name in `pdfcraft_engine::SUMMARY_PAPERS`; `None`
+    /// takes the paper the document is. Remembered across restarts, as are the other choices.
+    pub summary_paper: Option<&'static str>,
+    /// Summarize Comments: pages without comments are shown too.
+    pub summary_pages_without_comments: bool,
     /// The signing dialogs' state.
     pub sign_draft: Option<SignDraft>,
     /// A dynamic form's preSign step, run when signing a field began: the document and its undo

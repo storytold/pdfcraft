@@ -195,6 +195,13 @@ impl PdfCraftApp {
         let size = self.print_draft.paper_size();
         v["print_paper_size"] = serde_json::json!([size.0, size.1]);
         v["print_paper_overridden"] = serde_json::json!(self.print_draft.paper_overridden);
+        // Summarize Comments' choices (#6791); a null paper takes the document's.
+        v["comment_summary"] = serde_json::json!({
+            "layout": self.summary_layout.key(),
+            "sort": self.summary_sort.name(),
+            "paper": self.summary_paper,
+            "pages_without_comments": self.summary_pages_without_comments,
+        });
         // Also set outside json! above, which is at serde_json's macro recursion limit.
         v["print"] = print;
         // Each printer's paper, sizing and two-sided choice, the one printed to last first (#2001).
@@ -308,6 +315,23 @@ impl PdfCraftApp {
         }
     }
 
+    /// Summarize Comments' choices (#6791).
+    fn restore_summary_prefs(&mut self, summary: &serde_json::Value) {
+        if let Some(layout) = summary["layout"].as_str().and_then(pdfcraft_engine::SummaryLayout::parse) {
+            self.summary_layout = layout;
+        }
+        if let Some(sort) = summary["sort"].as_str().and_then(pdfcraft_engine::SummarySort::parse) {
+            self.summary_sort = sort;
+        }
+        // A paper this version doesn't offer leaves the document's.
+        if let Some(name) = summary["paper"].as_str() {
+            self.summary_paper = pdfcraft_engine::SUMMARY_PAPERS.iter().copied().find(|p| *p == name);
+        }
+        if let Some(on) = summary["pages_without_comments"].as_bool() {
+            self.summary_pages_without_comments = on;
+        }
+    }
+
     /// The Print dialog's papers, each printer's setup and the choices it keeps (#2001).
     fn restore_print_prefs(&mut self, v: &serde_json::Value) {
         // The Print dialog's own paper sizes; settings are untrusted, so each custom paper is
@@ -394,6 +418,7 @@ impl PdfCraftApp {
             self.always_default_view = on;
         }
         self.restore_print_prefs(v);
+        self.restore_summary_prefs(&v["comment_summary"]);
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;
         }

@@ -7943,6 +7943,47 @@ fn comment_checkmarks_locks_hiding_and_summaries_through_tools() {
     let found = ok(&mut a, "text_find", json!({ "doc": text, "query": "Sticky" }));
     assert!(found["count"].as_u64().unwrap() >= 1, "{found}");
     assert!(matches!(a.call("comments_summarize", &json!({ "doc": doc, "sort": "colour" })), Err(ToolError::InvalidArgs(_))));
+    // The pages by their newest comment.
+    ok(
+        &mut a,
+        "comments_summarize",
+        json!({ "doc": doc, "sort": "date_of_last_comment", "layout": "document_and_comments_with_lines", "out": "latest.pdf" }),
+    );
+    // The pages with their comments (#6791): page 1 beside its comments on one landscape sheet,
+    // or on a sheet of its own followed by its comments; here without the pages that have none.
+    for (layout, sheets) in [("document_and_comments_with_lines", 1), ("document_and_comments_with_numbers", 2)] {
+        ok(&mut a, "comments_summarize", json!({ "doc": doc, "layout": layout, "pages_without_comments": false, "paper": "a4", "out": "pages.pdf" }));
+        let pages = ok(&mut a, "doc_open", json!({ "path": "pages.pdf" }))["doc"].as_u64().unwrap();
+        let info = ok(&mut a, "doc_info", json!({ "doc": pages }));
+        assert_eq!(info["pages"].as_array().unwrap().len(), sheets, "{layout}: {info}");
+        let (w, h) = (info["pages"][0]["width"].as_f64().unwrap(), info["pages"][0]["height"].as_f64().unwrap());
+        assert!((w.min(h) - 595.28).abs() < 0.01 && (w.max(h) - 841.89).abs() < 0.01, "{layout}: A4, {w} × {h}");
+        let text = page_text(&mut a, pages).join("\n");
+        assert!(text.contains("Page 1") && text.contains("Sticky Note  Ada") && text.contains("Sticky"), "{layout}: {text}");
+        ok(&mut a, "doc_close", json!({ "doc": pages }));
+    }
+    // Asked for explicitly, the defaults keep every page: beside the comments, a sheet each; on
+    // separate pages, each page and then its comments or a sheet saying it has none.
+    let n = ok(&mut a, "doc_info", json!({ "doc": doc }))["pages"].as_array().unwrap().len();
+    assert!(n > 1, "a.pdf has pages without comments");
+    for (layout, sheets) in [("document_and_comments_with_lines", n), ("document_and_comments_with_numbers", 2 * n)] {
+        ok(
+            &mut a,
+            "comments_summarize",
+            json!({ "doc": doc, "layout": layout, "pages_without_comments": true, "paper": "document", "out": "all.pdf" }),
+        );
+        let all = ok(&mut a, "doc_open", json!({ "path": "all.pdf" }))["doc"].as_u64().unwrap();
+        assert_eq!(ok(&mut a, "doc_info", json!({ "doc": all }))["pages"].as_array().unwrap().len(), sheets, "{layout}");
+        ok(&mut a, "doc_close", json!({ "doc": all }));
+    }
+    match a.call("comments_summarize", &json!({ "doc": doc, "paper": "napkin" })) {
+        Err(ToolError::InvalidArgs(e)) => assert!(e.contains("A4") && e.contains("document"), "says what is allowed: {e}"),
+        other => panic!("{other:?}"),
+    }
+    match a.call("comments_summarize", &json!({ "doc": doc, "layout": "side_by_side" })) {
+        Err(ToolError::InvalidArgs(e)) => assert!(e.contains("document_and_comments_with_lines"), "says what is allowed: {e}"),
+        other => panic!("{other:?}"),
+    }
 }
 
 /// Text the standard fonts can't draw is never written as `?` silently, through the tools. A form

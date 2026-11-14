@@ -1447,7 +1447,7 @@ trailer << /Root 1 0 R >>
 %%EOF"
     );
     let id = s.open("note.pdf", None, Arc::new(pdf.into_bytes()), None).expect("opens");
-    let summary = s.summarize_comments(id, SummarySort::Page).unwrap();
+    let summary = s.summarize_comments(id, &SummarizeOptions::default()).unwrap();
     let id = s.open_new("summary.pdf", summary).unwrap();
     let shown = page_texts(&s, id).join("\n");
     assert!(shown.contains(note) && !shown.contains("[U+"), "{shown}");
@@ -1886,7 +1886,9 @@ fn copy_restricted_documents_refuse_extraction_unless_opened_by_the_owner() {
     assert!(s.compare(oid, oid).is_ok());
     assert_eq!(s.mark_differences(id, oid).map(|_| ()), refused());
     // The comment summary copies comment text out like the exports do.
-    assert_eq!(s.summarize_comments(id, SummarySort::Page).map(|_| ()), refused());
+    for layout in SummaryLayout::ALL {
+        assert_eq!(s.summarize_comments(id, &SummarizeOptions { layout, ..Default::default() }).map(|_| ()), refused());
+    }
     // Unencrypted documents allow everything.
     let (s, plain) = session_with(1);
     assert!(s.get(plain).unwrap().check_copying().is_ok() && extracting.iter().all(|c| enabled(&s, plain, c)));
@@ -5382,10 +5384,204 @@ fn comments_lock_take_checkmarks_hide_and_summarize() {
     assert!(text.contains("Page: 2\nNumber: 1  Author: Reviewer  Subject: Rectangle"), "{text}");
     assert!(text.contains("Still editable") && text.contains("    Agreed"), "{text}");
     assert!(!text.contains("Marked"), "checkmarks aren't listed: {text}");
-    let pdf = s.summarize_comments(id, SummarySort::Author).unwrap();
+    let pdf = s.summarize_comments(id, &SummarizeOptions { sort: SummarySort::Author, ..Default::default() }).unwrap();
     let n = s.open_new("summary.pdf", pdf).unwrap();
     assert!(!s.get(n).unwrap().info.pages.is_empty());
     assert_eq!(comment_summary("x", &[], SummarySort::Page), "Summary of Comments on x\n\nThis document has no comments.\n");
+}
+
+/// Summarize Comments ▸ Document and comments (#6791): the pages with their comments, beside
+/// them with connector lines, or on separate sheets with the comments' numbers on the page.
+#[test]
+fn comment_summary_shows_the_pages_with_their_comments() {
+    let (mut s, id) = session_with(3);
+    s.apply(id, rect_comment(1, [80.0, 80.0, 120.0, 120.0])).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 1, index: 0, text: "Agreed".into(), author: "Ada".into() }).unwrap();
+    let summary = |s: &mut Session, layout, pages_without_comments| {
+        let pdf = s.summarize_comments(id, &SummarizeOptions { layout, pages_without_comments, ..Default::default() }).unwrap();
+        s.open_new("summary.pdf", pdf).unwrap()
+    };
+    // Red pixels between x0 and x1 on sheet `page` at 1 px/pt.
+    let red = |s: &Session, n: DocId, page: usize, x0: u32, x1: u32| {
+        let doc = s.get(n).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), doc.config.clone());
+        let out = r.render(pdfcraft_render::RenderRequest { page, scale: 1.0, ..Default::default() });
+        assert!(out.error.is_none(), "{:?}", out.error);
+        (0..out.height)
+            .flat_map(|y| (x0..x1.min(out.width)).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let i = ((y * out.width + x) * 4) as usize;
+                out.rgba[i] > 200 && out.rgba[i + 1] < 120 && out.rgba[i + 2] < 120
+            })
+            .count()
+    };
+    let wanted = ["1. Rectangle  Reviewer", "Look here", "Reply  Ada", "Agreed"];
+
+    // Connector lines: page 2 beside its comments on a landscape sheet (the 200 × 300 pt pages
+    // are no standard paper, so US Letter).
+    let n = summary(&mut s, SummaryLayout::DocumentAndCommentsWithLines, false);
+    let info = &s.get(n).unwrap().info;
+    assert_eq!(info.pages.len(), 1, "only page 2 has comments");
+    assert_eq!((info.pages[0].width, info.pages[0].height), (792.0, 612.0));
+    let text = page_texts(&s, n).join("\n");
+    for want in wanted.iter().chain(&["Summary of Comments on fixture.pdf", "Page 2"]) {
+        assert!(text.contains(want), "{want:?} in {text}");
+    }
+    assert!(!text.contains("Page 1") && !text.contains("Page 3"), "pages without comments are left out: {text}");
+    assert!(red(&s, n, 0, 0, 384) > 400, "the comment is drawn on the page");
+    assert!(red(&s, n, 0, 408, 792) > 100, "its box");
+    // With pages without comments: every page.
+    let n = summary(&mut s, SummaryLayout::DocumentAndCommentsWithLines, true);
+    assert_eq!(page_texts(&s, n).len(), 3);
+
+    // Sequence numbers: page 2 on a sheet of its own, then its comments.
+    let n = summary(&mut s, SummaryLayout::DocumentAndCommentsWithNumbers, false);
+    let texts = page_texts(&s, n);
+    assert_eq!(texts.len(), 2, "{texts:?}");
+    assert!(texts[0].contains("Page 2") && !texts[0].contains("Look here"), "{}", texts[0]);
+    assert!(texts[1].contains("Comments on page 2") && wanted.iter().all(|w| texts[1].contains(w)), "{}", texts[1]);
+    assert!(red(&s, n, 0, 0, 612) > 1000, "the page shows the comment, at nearly twice its size");
+    let n = summary(&mut s, SummaryLayout::DocumentAndCommentsWithNumbers, true);
+    let texts = page_texts(&s, n);
+    assert_eq!(texts.len(), 6, "each page beside its comments or a sheet saying it has none: {texts:?}");
+    assert!(texts[1].contains("No comments on this page.") && texts[3].contains("Comments on page 2"), "{texts:?}");
+
+    // A chosen paper.
+    let a4 = PAPERS_A4;
+    let pdf = s.summarize_comments(id, &SummarizeOptions { layout: SummaryLayout::CommentsOnly, paper: Some(a4), ..Default::default() }).unwrap();
+    let n = s.open_new("summary.pdf", pdf).unwrap();
+    let p = &s.get(n).unwrap().info.pages[0];
+    assert!((f64::from(p.width) - a4.0).abs() < 0.01 && (f64::from(p.height) - a4.1).abs() < 0.01, "comments only on A4 too: {p:?}");
+    // The names comments_summarize takes.
+    assert_eq!(SummaryLayout::parse("Document_And_Comments_With_Numbers"), Some(SummaryLayout::DocumentAndCommentsWithNumbers));
+    assert_eq!(SummaryLayout::parse("side_by_side"), None);
+}
+
+const PAPERS_A4: (f64, f64) = (595.28, 841.89);
+
+/// Without a chosen paper the summary is on the paper the document is: A4 for an A4 document,
+/// either way round; US Letter for a page of no standard size.
+#[test]
+fn the_summary_paper_matches_the_document() {
+    assert_eq!(summary_paper(Some(PAPERS_A4)), ("A4", PAPERS_A4));
+    assert_eq!(summary_paper(Some((841.89, 595.28))), ("A4", PAPERS_A4));
+    assert_eq!(summary_paper(Some((200.0, 300.0))).0, "US Letter");
+    assert_eq!(summary_paper(None).0, "US Letter");
+    // Papers not offered for summaries: a poster or a label gets US Letter.
+    assert_eq!(summary_paper(Some((2383.94, 3370.39))).0, "US Letter");
+    assert_eq!(summary_paper(Some((288.0, 432.0))).0, "US Letter");
+    let (mut s, id) = session_with(1);
+    assert_eq!(s.summary_paper(id).0, "US Letter");
+    // A paper of no usable size is the document's, for comments only as for the page layouts.
+    let pdf = s.summarize_comments(id, &SummarizeOptions { paper: Some((f64::NAN, -1.0)), ..Default::default() }).unwrap();
+    let n = s.open_new("summary.pdf", pdf).unwrap();
+    let p = &s.get(n).unwrap().info.pages[0];
+    assert_eq!((p.width, p.height), (612.0, 792.0));
+    assert!(SUMMARY_PAPERS.iter().all(|name| pdfcraft_print::PAPERS.iter().any(|(p, _)| p == name)), "every offered paper is one printing knows");
+}
+
+/// The page layouts list each page's comments together: the pages in the order of their first
+/// comment, each page's comments in the chosen order, numbered in that order.
+#[test]
+fn page_layout_summaries_sort_within_each_page() {
+    let (mut s, id) = session_with(3);
+    for (page, author, y) in [(2, "Zed", 200.0), (0, "Mia", 80.0), (2, "Ann", 80.0)] {
+        let Edit::AddAnnotation(mut a) = rect_comment(page, [20.0, y, 40.0, y + 20.0]) else { panic!() };
+        a.author = author.into();
+        s.apply(id, Edit::AddAnnotation(a)).unwrap();
+    }
+    let all = &s.get(id).unwrap().info.annotations;
+    let order = |sort| summary_comments(all, sort, &SummaryDates::new()).iter().map(|c| (c.page, c.number, c.lines[0].1.clone())).collect::<Vec<_>>();
+    // By author: Ann's page first, with Zed's comment after hers; then Mia's.
+    let by_author = order(SummarySort::Author);
+    assert_eq!(by_author.iter().map(|(p, n, _)| (*p, *n)).collect::<Vec<_>>(), [(2, 1), (2, 2), (0, 1)], "{by_author:?}");
+    assert!(by_author[0].2.contains("Ann") && by_author[1].2.contains("Zed"), "{by_author:?}");
+    // The number in each box is the one on the page.
+    assert!(by_author.iter().all(|(_, n, heading)| heading.starts_with(&format!("{n}. "))), "{by_author:?}");
+    // By page: top to bottom on each page, numbered so.
+    let by_page = order(SummarySort::Page);
+    assert_eq!(by_page.iter().map(|(p, n, _)| (*p, *n)).collect::<Vec<_>>(), [(0, 1), (2, 1), (2, 2)], "{by_page:?}");
+    assert!(by_page[1].2.contains("Zed"), "{by_page:?}");
+}
+
+/// PDF dates are read to the second and in their own time zone; the fields after the year may be
+/// left out; what isn't a date reads as none rather than as some other moment.
+#[test]
+fn pdf_dates_are_read_in_full() {
+    let at = |s: &str| crate::comments::pdf_date(s).map(|d| d.to_rfc3339());
+    assert_eq!(at("D:20260301050000+10'00'").as_deref(), Some("2026-02-28T19:00:00+00:00"));
+    assert_eq!(at("D:20260228235930-05'30'").as_deref(), Some("2026-03-01T05:29:30+00:00"));
+    assert_eq!(at("D:20260228235930Z").as_deref(), Some("2026-02-28T23:59:30+00:00"));
+    assert_eq!(at("D:2026").as_deref(), Some("2026-01-01T00:00:00+00:00"));
+    assert_eq!(at("20260704").as_deref(), Some("2026-07-04T00:00:00+00:00"));
+    assert_eq!(at("D:20260228235930Z00'00'").as_deref(), Some("2026-02-28T23:59:30+00:00"));
+    assert_eq!(at("D:202602282359+01").as_deref(), Some("2026-02-28T22:59:00+00:00"));
+    for bad in ["", "D:", "D:26", "yesterday", "D:20261340", "D:20260230", "D:2026010125", "2026-07-04T10:00:00Z", "D:2026 noon", "D:20260101+1"] {
+        assert_eq!(at(bad), None, "{bad:?}");
+    }
+}
+
+/// By date, the page commented on first comes first, each page's comments oldest first, by their
+/// full dates: to the second, and in their own time zones. Undated comments come last.
+#[test]
+fn summaries_by_date_put_the_page_commented_on_first_first() {
+    // Page 1's first comment, 05:00 on 1 March at UTC+10, is the oldest: 19:00 on 28 February in
+    // UTC; its second, noon on 1 March, the newest.
+    // Page 2's are in the same minute, the second listed 15 seconds older. Page 3's first has no
+    // date and its second one that can't be read: after every dated one, but before the undated.
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [11 0 R 6 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [7 0 R 8 0 R 12 0 R] >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [9 0 R 10 0 R] >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 140 40 160] /T (A) /M (D:20260301050000+10'00') >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 140 40 160] /T (B) /M (D:20260228235945Z) >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 100 40 120] /T (C) /M (D:20260228235930Z) >> endobj
+9 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 140 40 160] /T (D) >> endobj
+10 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 100 40 120] /T (E) /M (last Tuesday) >> endobj
+11 0 obj << /Type /Annot /Subtype /Text /F 4 /Rect [20 100 40 120] /T (F) /M (D:20260301120000Z) >> endobj
+12 0 obj << /Type /Annot /Subtype /Text /Rect [20 100 40 120] /IRT 8 0 R /T (R) /M (D:20260302000000Z) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("dates.pdf", None, Arc::new(pdf.to_vec()), None).expect("opens");
+    let doc = s.get(id).unwrap();
+    let dates = summary_dates(&doc.editor.as_ref().unwrap().cos);
+    let all = &doc.info.annotations;
+    let order = |sort| -> Vec<(usize, usize, String)> {
+        summary_comments(all, sort, &dates).iter().map(|c| (c.page, c.number, c.lines[0].1.split("  ").nth(1).unwrap_or("").to_string())).collect()
+    };
+    let want = |w: &[(usize, usize, &str)]| -> Vec<(usize, usize, String)> { w.iter().map(|(p, n, a)| (*p, *n, a.to_string())).collect() };
+    assert_eq!(order(SummarySort::Date), want(&[(0, 1, "A"), (0, 2, "F"), (1, 1, "C"), (1, 2, "B"), (2, 1, "E"), (2, 2, "D")]));
+    let headings: Vec<String> = summary_comments(all, SummarySort::Date, &dates).iter().map(|c| c.lines[0].1.clone()).collect();
+    assert!(headings[2].starts_with("1. ") && headings[3].starts_with("2. "), "numbered as listed: {headings:?}");
+    // By the date of the last comment: page 1 (last commented noon on 1 March) before page 2,
+    // whose newest activity is R's reply to C on 2 March, each page's comments still oldest first;
+    // page 3, whose last dated comment can't be read in full, after them.
+    assert_eq!(order(SummarySort::LastDate), want(&[(0, 1, "A"), (0, 2, "F"), (1, 1, "C"), (1, 2, "B"), (2, 1, "E"), (2, 2, "D")]));
+    let text = comment_summary_with("dates.pdf", all, SummarySort::LastDate, &dates);
+    let at = |who: &str| text.find(&format!("Author: {who}")).unwrap();
+    assert!(at("A") < at("F") && at("F") < at("C") && at("C") < at("R") && at("R") < at("B") && at("B") < at("E") && at("E") < at("D"), "{text}");
+    assert_eq!(SummarySort::parse("date_of_last_comment"), Some(SummarySort::LastDate));
+    // Comments only sorts by the same dates.
+    let text = comment_summary_with("dates.pdf", all, SummarySort::Date, &dates);
+    let at = |who: &str| text.find(&format!("Author: {who}")).unwrap();
+    assert!(at("A") < at("C") && at("C") < at("B") && at("B") < at("E") && at("E") < at("D"), "{text}");
+    // The summary made through the session shows the pages in that order.
+    let opts = SummarizeOptions { sort: SummarySort::Date, layout: SummaryLayout::DocumentAndCommentsWithLines, ..Default::default() };
+    let bytes = s.summarize_comments(id, &opts).unwrap();
+    let summary = s.open_new("summary.pdf", bytes).unwrap();
+    let texts = page_texts(&s, summary);
+    assert!(texts[0].contains("Page 1") && texts[1].contains("Page 2") && texts[2].contains("Page 3"), "{texts:?}");
+    // Its comments are comments again, on the sheets showing their pages, listed and found there.
+    let listed: Vec<(usize, Option<String>)> = s.get(summary).unwrap().info.annotations.iter().map(|a| (a.page, a.author.clone())).collect();
+    let mut want: Vec<(usize, Option<String>)> =
+        [(0, "A"), (0, "F"), (1, "B"), (1, "C"), (1, "R"), (2, "D"), (2, "E")].map(|(p, a)| (p, Some(a.to_string()))).to_vec();
+    want.sort();
+    let mut listed = listed;
+    listed.sort();
+    assert_eq!(listed, want);
 }
 
 /// Replies thread by their `/IRT` reference, not `/NM`: PyMuPDF names the first comment on every

@@ -1103,10 +1103,18 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "mode"],
             )),
-        t("comments_summarize", "Summarize comments", "Make a PDF summarising every comment (number, author, type, date, text, replies), sorted by page, author, date or type.")
+        t("comments_summarize", "Summarize comments", "Make a PDF summarising every comment (number, author, type, date, text, replies), sorted by page, author, date (oldest first), date_of_last_comment (oldest first, the pages by their newest comment or reply, so the page commented on most recently comes last) or type; the layouts that show the pages put each page where its first comment comes, its comments together. layout: comments_only (default) lists them grouped by page; document_and_comments_with_lines shows each page beside its comments on landscape sheets, with a connector line from each comment to its entry; document_and_comments_with_numbers shows each page on a sheet of its own with its comments' numbers on it, then its comments (or a sheet saying it has none) on the sheet after it, and opens in a two-page view. In those layouts the comments are annotations again on each page's first sheet. paper: \"document\" (default: the paper the document's first page is, else US Letter) or a paper name. pages_without_comments (default true): the layouts that show the pages show those too.")
             .cmd("comment.summarize")
             .with(schema(
-                json!({ "doc": doc(), "sort": { "type": "string", "enum": ["page", "author", "date", "type"] }, "out": save_out, "open": open }),
+                json!({
+                    "doc": doc(),
+                    "sort": { "type": "string", "enum": ["page", "author", "date", "date_of_last_comment", "type"] },
+                    "layout": { "type": "string", "enum": ["comments_only", "document_and_comments_with_lines", "document_and_comments_with_numbers"], "default": "comments_only" },
+                    "paper": { "type": "string", "enum": ["document", "US Letter", "US Legal", "Tabloid", "A3", "A4", "A5"], "default": "document" },
+                    "pages_without_comments": { "type": "boolean", "default": true },
+                    "out": save_out,
+                    "open": open
+                }),
                 &["doc"],
             )),
         t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity (the whole comment's, or its fill's and text's own), line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), border colour (`border_color`, text box/typewriter/callout; \"text\" gives it the text's colour again), rectangle (rectangle/oval/text box/stamp, or a callout's text box: its arrow point stays and its leader line re-attaches), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, the corners of connected lines, a polygon or a cloud, or a callout's arrow point and knee, as comment_list gives them). Stamps keep their original appearance when resized. One undo step.").with(schema(
