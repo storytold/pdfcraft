@@ -8173,6 +8173,72 @@ fn round_xfa_check_buttons_open_drawn_round() {
     }
 }
 
+/// An opened dynamic XFA form's check boxes and radio buttons draw the mark their template asks
+/// for (`<checkButton mark>`), and without one the spec's default: a cross on a square button and
+/// a filled circle on a round one (XFA 3.3, pp. 650–651), not the check (or, for a radio button,
+/// the circle) a plain AcroForm field gets.
+#[test]
+fn xfa_check_buttons_open_with_the_mark_their_template_asks_for() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<field name="plain" w="1in" h="0.3in"><ui><checkButton/></ui><items><integer>1</integer><integer>0</integer></items></field>
+<field name="round" w="1in" h="0.3in"><ui><checkButton shape="round"/></ui><items><integer>1</integer><integer>0</integer></items></field>
+<field name="star" w="1in" h="0.3in"><ui><checkButton mark="star"/></ui><items><integer>1</integer><integer>0</integer></items></field>
+<field name="check" w="1in" h="0.3in"><ui><checkButton mark="check"/></ui><items><integer>1</integer><integer>0</integer></items></field>
+<field name="diamond" w="1in" h="0.3in"><ui><checkButton mark="diamond"/></ui><items><integer>1</integer><integer>0</integer></items></field>
+<field name="square" w="1in" h="0.3in"><ui><checkButton mark="square"/></ui><items><integer>1</integer><integer>0</integer></items></field>
+<exclGroup name="pick" layout="tb"><field name="yes" w="1in" h="0.3in"><ui><checkButton/></ui><items><text>Y</text></items></field></exclGroup>
+</subform></template></xdp:xdp>"##;
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let cos = s.get(id).unwrap().editor.as_ref().unwrap().cos.clone();
+    let all = pdfcraft_forms::fields(&cos);
+    let style = |name: &str| {
+        let f = all.iter().find(|f| f.name.ends_with(name)).unwrap_or_else(|| panic!("no field {name}"));
+        pdfcraft_forms::check_style(&cos, f)
+    };
+    // The on state is drawn with that mark. Each mark follows the dash reset that ends the box's
+    // border, and has its own shape: a check is one stroke with round joins, a cross two strokes,
+    // a square a filled rectangle, a diamond a filled 4-point polygon, a star a filled 10-point
+    // one, and a circle filled curves.
+    let drawn = |name: &str, state: &[u8]| {
+        let w = all.iter().find(|f| f.name.ends_with(name)).unwrap_or_else(|| panic!("no field {name}")).widgets[0].obj;
+        let wd = cos.get(w).as_dict().cloned().unwrap();
+        let n = cos.resolve(wd.get(b"AP").unwrap().as_dict().unwrap().get(b"N").unwrap());
+        let r = n.as_dict().unwrap().reference(state).unwrap_or_else(|| panic!("{name} has no {} state", String::from_utf8_lossy(state)));
+        let pdfcraft_cos::Object::Stream(st) = &*cos.get(r) else { panic!("a stream") };
+        String::from_utf8_lossy(&st.decoded().unwrap()).into_owned()
+    };
+    let shape = |on: &str| {
+        let (_, m) = on.rsplit_once("[] 0 d").unwrap_or_else(|| panic!("no mark after the border: {on}"));
+        let points = m.matches(" m ").count() + m.matches(" l ").count();
+        let strokes = m.matches(" l S").count();
+        match () {
+            _ if m.contains("h f") && points == 4 => "diamond",
+            _ if m.contains("h f") && points == 10 => "star",
+            _ if m.contains(" re f") => "square",
+            _ if m.contains(" c f") => "circle",
+            _ if strokes == 1 && m.contains("1 j") => "check",
+            _ if strokes == 2 && !m.contains("1 j") => "cross",
+            _ => "something else",
+        }
+    };
+    use pdfcraft_forms::CheckStyle;
+    for (name, on, want, look, why) in [
+        ("plain", &b"1"[..], CheckStyle::Cross, "cross", "a square button's default mark"),
+        ("round", b"1", CheckStyle::Circle, "circle", "a round button's default mark"),
+        ("pick", b"Y", CheckStyle::Cross, "cross", "a square radio button's default mark"),
+        ("check", b"1", CheckStyle::Check, "check", "mark=\"check\""),
+        ("star", b"1", CheckStyle::Star, "star", "mark=\"star\""),
+        ("diamond", b"1", CheckStyle::Diamond, "diamond", "mark=\"diamond\""),
+        ("square", b"1", CheckStyle::Square, "square", "mark=\"square\""),
+    ] {
+        assert_eq!(style(name), want, "{name}: {why}");
+        let stream = drawn(name, on);
+        assert_eq!(shape(&stream), look, "{name} draws a {look} ({why}): {stream}");
+    }
+}
+
 /// A dynamic XFA form with usage rights is saved without them once laid out, as the layout voids
 /// them, with a note saying so.
 #[test]
