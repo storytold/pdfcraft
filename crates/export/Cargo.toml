@@ -1,6 +1,6 @@
 [package]
 name = "pdfcraft-export"
-description = "Export a PDF to HTML, Word (.docx) and RTF from its paragraphs and images"
+description = "Export a PDF to HTML, Word (.docx), Excel (.xlsx), PowerPoint (.pptx) and RTF from its paragraphs and images"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,3 +16,5 @@ craft-zip.workspace = true
 
 [dev-dependencies]
 flate2.workspace = true
+# Reads the Excel export back in tests, as another program would.
+calamine = { version = "0.38.0", default-features = false }

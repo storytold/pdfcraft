@@ -10,10 +10,13 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod cells;
 mod pptx;
+mod xlsx;
 mod zip;
 
 pub use pptx::pptx;
+pub use xlsx::{XlsxSheets, xlsx};
 pub use zip::Zip;
 
 mod as_docx;
@@ -28,9 +31,10 @@ pub(crate) use as_docx::hex;
 #[cfg(test)]
 use as_docx::{MAX_MEDIA, docx_table};
 pub use as_docx::{docx, docx_with_language};
-pub(crate) use as_html::esc;
+pub(crate) use as_html::allowed;
 #[cfg(test)]
-use as_html::{allowed, base64};
+use as_html::base64;
+pub(crate) use as_html::esc;
 pub use as_html::{html, html_simple, html_simple_with_language, html_with_language};
 pub use as_markdown::markdown;
 #[cfg(test)]
@@ -40,9 +44,9 @@ pub use clip::{ClipBuilder, ClipSpan, ClipStyle, ClipText, MAX_CLIP_HTML_BYTES, 
 #[cfg(test)]
 use flow::list_item;
 pub use layout::{Block, Cell, Image, Page, Table};
+pub(crate) use layout::{Item, Run, flowing_paragraphs, items, reading_order, tables};
 #[cfg(test)]
 use layout::{LOOKUP_STEPS, MAX_COLS, body_size};
-pub(crate) use layout::{Run, flowing_paragraphs, reading_order, tables};
 
 #[cfg(test)]
 mod tests;
