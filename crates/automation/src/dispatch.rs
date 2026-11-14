@@ -1,7 +1,7 @@
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, document_attachment_keys, info, one_based, parse_style_ranges, security, summary, text_style_levels};
 use super::paths::{read_input, write_atomic};
-use super::{Arc, Automation, Edit, Value, block_overlapping, comments, content, json, tools};
+use super::{Arc, Automation, Edit, Value, a11y, block_overlapping, comments, content, json, tools};
 
 /// One piece of a tool's result.
 #[derive(Clone, Debug, PartialEq)]
@@ -130,13 +130,13 @@ impl Automation {
                     Some(m) => pdfcraft_engine::camera_clean::Look::from_name(m)
                         .ok_or_else(|| ToolError::InvalidArgs(format!("unknown mode {m:?} (original, colour, greyscale, bw)")))?,
                 };
-                self.session.enhance_camera_page_at(id, page, corners, look, level).map_err(failed)?;
+                let ((), own) = self.session.with_own_js_output(id, |s| s.enhance_camera_page_at(id, page, corners, look, level)).map_err(failed)?;
                 let r = |v: f32| (v * 100.0).round() / 100.0;
                 let used: Vec<f32> = corners.iter().flat_map(|&[x, y]| info.user_to_view(x as f32, y as f32)).map(r).collect();
                 let mut out = summary(self.doc(&a)?);
                 out["corners"] = json!(used);
                 out["detected"] = json!(given.is_none());
-                out
+                a11y::with_warnings(out, own.errors)
             }
             "page_enhance_scan" => self.page_enhance_scan(&a)?,
             "page_delete" => {
@@ -1003,7 +1003,7 @@ impl Automation {
             settings.despeckle = on;
         }
         let id = self.doc(a)?.id;
-        let report = self.session.enhance_scanned_pages(id, &pages, settings).map_err(failed)?;
+        let (report, own) = self.session.with_own_js_output(id, |s| s.enhance_scanned_pages(id, &pages, settings)).map_err(failed)?;
         let numbered = |p: &[usize]| p.iter().map(|p| p + 1).collect::<Vec<_>>();
         let skipped: Vec<Value> = report.skipped.iter().map(|k| json!({ "pages": numbered(&k.pages), "name": k.name, "reason": k.reason })).collect();
         let mut out = summary(self.doc(a)?);
@@ -1011,6 +1011,6 @@ impl Automation {
         out["images"] = json!(report.images);
         out["not_scanned"] = json!(numbered(&report.not_scanned));
         out["skipped"] = json!(skipped);
-        Ok(out)
+        Ok(a11y::with_warnings(out, own.errors))
     }
 }
