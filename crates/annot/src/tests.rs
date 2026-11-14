@@ -4764,18 +4764,33 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
         list(doc, 0)[idx].get(b"Rect").unwrap().as_array().unwrap().iter().filter_map(Object::as_f64).collect()
     };
     let rect_before = rect_of(&doc, index);
-    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(34.0), endings: None }, &meta("wider")).unwrap();
+    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(34.0), endings: None, round_corners: None }, &meta("wider"))
+        .unwrap();
     let rect_after = rect_of(&doc, index);
     assert!((rect_after[0] - (rect_before[0] - 10.0)).abs() < 1e-4);
     assert!((rect_after[2] - (rect_before[2] + 10.0)).abs() < 1e-4);
 
     // Repeated increase/decrease cycles must keep bounds stable and never accumulate padding.
-    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(14.0), endings: None }, &meta("narrower")).unwrap();
+    set_style(
+        &mut doc,
+        0,
+        index,
+        StyleChange { color: None, opacity: None, width: Some(14.0), endings: None, round_corners: None },
+        &meta("narrower"),
+    )
+    .unwrap();
     let rect_restored = rect_of(&doc, index);
     for (a, b) in rect_restored.iter().zip(rect_before.iter()) {
         assert!((a - b).abs() < 1e-4, "expected {rect_before:?}, got {rect_restored:?}");
     }
-    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(34.0), endings: None }, &meta("wider-again")).unwrap();
+    set_style(
+        &mut doc,
+        0,
+        index,
+        StyleChange { color: None, opacity: None, width: Some(34.0), endings: None, round_corners: None },
+        &meta("wider-again"),
+    )
+    .unwrap();
     let rect_second_wide = rect_of(&doc, index);
     for (a, b) in rect_second_wide.iter().zip(rect_after.iter()) {
         assert!((a - b).abs() < 1e-4, "expected {rect_after:?}, got {rect_second_wide:?}");
@@ -4790,7 +4805,14 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
         d.set(b"Rect".to_vec(), create::num_array(&[5.0, 85.0, 135.0, 115.0]));
     })
     .unwrap();
-    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(10.0), endings: None }, &meta("border-shrink")).unwrap();
+    set_style(
+        &mut doc,
+        0,
+        index,
+        StyleChange { color: None, opacity: None, width: Some(10.0), endings: None, round_corners: None },
+        &meta("border-shrink"),
+    )
+    .unwrap();
     let rect_from_border = rect_of(&doc, index);
     for (a, b) in rect_from_border.iter().zip([10.0, 90.0, 130.0, 110.0]) {
         assert!((a - b).abs() < 1e-4, "expected [10, 90, 130, 110], got {rect_from_border:?}");
@@ -5677,7 +5699,13 @@ stream
 endstream",
     ]);
     assert_eq!(
-        set_style(&mut doc, 0, 0, StyleChange { color: Some([1.0, 0.0, 0.0]), opacity: None, width: None, endings: None }, &meta("")),
+        set_style(
+            &mut doc,
+            0,
+            0,
+            StyleChange { color: Some([1.0, 0.0, 0.0]), opacity: None, width: None, endings: None, round_corners: None },
+            &meta("")
+        ),
         Err(AnnotError::Invalid("the comment is locked".into()))
     );
     let page = doc.get(page_refs(&doc).unwrap()[0]);
@@ -5685,4 +5713,69 @@ endstream",
     assert!(page.contains(b"AAPL:PPK") && page.contains(b"AAPL:PPKHash"));
     assert!(list(&doc, 0)[0].contains(b"AAPL:AKExtras"));
     assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
+}
+
+/// Round corners mode on highlights: persistence, appearance streams, normalization, and validation.
+#[test]
+fn highlight_round_corners_appearance_and_persistence() {
+    let mut doc = fixture();
+    let q = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
+    let mut item = new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![q] });
+    // Default is square corners (round_corners = false)
+    let square_idx = add_annotation(&mut doc, &item, &meta("h1")).unwrap();
+
+    // With round_corners = true
+    item.style.round_corners = true;
+    let round_idx = add_annotation(&mut doc, &item, &meta("h2")).unwrap();
+
+    let doc2 = reopen(&doc);
+    let all = list(&doc2, 0);
+
+    let square_dict = &all[square_idx];
+    assert!(!square_dict.contains(b"PCRoundCorners"));
+    let square_ap = ap_content(&doc2, square_dict);
+    // Square highlight uses lines: m ... l ... l ... l h f
+    assert!(square_ap.contains(" m ") && square_ap.contains(" l ") && !square_ap.contains(" c "));
+    assert_eq!(props(&doc2, 0, square_idx).unwrap().round_corners, Some(false));
+
+    let round_dict = &all[round_idx];
+    assert_eq!(round_dict.get(b"PCRoundCorners"), Some(&Object::Bool(true)));
+    let round_ap = ap_content(&doc2, round_dict);
+    // Rounded highlight uses Bézier curves: contains " c " operator
+    assert!(round_ap.contains(" c ") && round_ap.contains(" h f"));
+    assert_eq!(props(&doc2, 0, round_idx).unwrap().round_corners, Some(true));
+
+    // Test modifying via set_style
+    let mut doc3 = doc2;
+    // Turn off round corners on round_idx
+    let change = StyleChange { round_corners: Some(false), ..Default::default() };
+    set_style(&mut doc3, 0, round_idx, change, &meta("")).unwrap();
+    let p_after = props(&doc3, 0, round_idx).unwrap();
+    assert_eq!(p_after.round_corners, Some(false));
+
+    // Turn on round corners on square_idx
+    let change2 = StyleChange { round_corners: Some(true), ..Default::default() };
+    set_style(&mut doc3, 0, square_idx, change2, &meta("")).unwrap();
+    let p2_after = props(&doc3, 0, square_idx).unwrap();
+    assert_eq!(p2_after.round_corners, Some(true));
+
+    // CCW QuadPoints (§12.5.6.10): TL, BL, BR, TR normalized to Acrobat Z-order without a bow-tie
+    let ccw_q = [72.0, 712.0, 72.0, 700.0, 200.0, 700.0, 200.0, 712.0];
+    let mut ccw_item = new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![ccw_q] });
+    ccw_item.style.round_corners = true;
+    let ccw_idx = add_annotation(&mut doc3, &ccw_item, &meta("ccw")).unwrap();
+    let ccw_ap = ap_content(&doc3, &list(&doc3, 0)[ccw_idx]);
+    assert_eq!(ccw_ap, round_ap, "CCW QuadPoints must normalize to identical appearance stream as Z-order");
+
+    // Degenerate / zero-height quad falls back to straight quadrilateral (no Bézier 'c' operator)
+    let degen_q = [72.0, 700.0, 200.0, 700.0, 72.0, 700.0, 200.0, 700.0];
+    let mut degen_item = new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![degen_q] });
+    degen_item.style.round_corners = true;
+    let degen_idx = add_annotation(&mut doc3, &degen_item, &meta("degen")).unwrap();
+    let degen_ap = ap_content(&doc3, &list(&doc3, 0)[degen_idx]);
+    assert!(degen_ap.contains(" l ") && !degen_ap.contains(" c "), "degenerate quad falls back to straight lines");
+
+    // Rejecting round_corners on non-highlight
+    let rect_idx = add_annotation(&mut doc3, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] }), &meta("r")).unwrap();
+    assert!(set_style(&mut doc3, 0, rect_idx, StyleChange { round_corners: Some(true), ..Default::default() }, &meta("")).is_err());
 }
