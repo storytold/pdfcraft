@@ -3855,6 +3855,16 @@ fn an_escaped_default_appearance_alias_is_decoded() {
     assert_eq!(dr_base_font_for_da(&dst, "imported").as_deref(), Some(b"Courier".as_slice()));
 }
 
+/// An escaped alias that does not collide is still normalized to its plain name: the appearance
+/// parser does not decode `#xx` escapes, so an unchanged `/F#31` would not resolve to `/F1`.
+#[test]
+fn an_escaped_default_appearance_alias_is_normalized_without_a_collision() {
+    let mut dst = doc_with_da_field("destination", "Helvetica", "H");
+    let src = doc_form(&[("F1", "Courier")], None, &[("imported", Some("(/F#31 18 Tf 0 g)"))], &[]);
+    import_pages_with(&mut dst, &src, &[0], 1, FieldConflicts::Rename).unwrap();
+    assert_eq!(dr_base_font_for_da(&dst, "imported").as_deref(), Some(b"Courier".as_slice()));
+}
+
 /// A field nested deeper than the old 32-level scan (but within the field reader's 64) still
 /// gets its `/DA` font imported and its appearance rewritten.
 #[test]

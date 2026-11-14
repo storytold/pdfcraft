@@ -562,18 +562,22 @@ fn rewrite_da(dst: &mut Document, fields: &[ObjRef], map: &HashMap<String, Strin
 }
 
 /// The `/DA` bytes with every colliding font name replaced, or `None` when nothing changes.
-/// Selected names are matched after decoding PDF `#xx` escapes; a replacement is written back
-/// escaped. Replacements run back to front so earlier spans stay valid.
+/// Selected names are matched after decoding PDF `#xx` escapes, and a name is rewritten whenever
+/// its written form differs from the canonical one — an escaped alias is normalized even when it
+/// maps to itself, because the appearance parser does not decode escapes. Replacements run back
+/// to front so earlier spans stay valid.
 fn rewrite_da_bytes(bytes: &[u8], map: &HashMap<String, String>) -> Option<Vec<u8>> {
     let tokens = da_tokens(bytes);
     let mut edits = Vec::new();
     for i in 0..tokens.len() {
         if bytes[tokens[i].0] == b'/' && selects_font(&tokens[i + 1..], bytes) {
-            let name = String::from_utf8_lossy(&decode_pdf_name(&bytes[tokens[i].0 + 1..tokens[i].1])).into_owned();
-            if let Some(new) = map.get(&name)
-                && new.as_bytes() != name.as_bytes()
-            {
-                edits.push((tokens[i].0 + 1, tokens[i].1, encode_pdf_name(new)));
+            let raw = &bytes[tokens[i].0 + 1..tokens[i].1];
+            let name = String::from_utf8_lossy(&decode_pdf_name(raw)).into_owned();
+            if let Some(new) = map.get(&name) {
+                let encoded = encode_pdf_name(new);
+                if encoded != raw {
+                    edits.push((tokens[i].0 + 1, tokens[i].1, encoded));
+                }
             }
         }
     }
