@@ -613,39 +613,44 @@ pub fn move_annotation(doc: &mut Document, page: usize, index: usize, dx: f64, d
     }
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
-    let shift = |o: &Object, every: bool| -> Option<Object> {
-        let a = o.as_array()?;
+    // Geometry may be indirect (`/Rect 5 0 R` is valid): resolve it first and write back a direct
+    // array, so a source object shared with other annotations is left as it was.
+    let shift = |doc: &Document, o: &Object, every: bool| -> Option<Object> {
+        let resolved = doc.resolve(o);
+        let a = resolved.as_array()?;
         Some(Object::Array(
             a.iter()
                 .enumerate()
-                .map(|(i, v)| match v.as_f64() {
+                .map(|(i, v)| match doc.resolve(v).as_f64() {
                     Some(x) if every || i < 4 => Object::Real(x + if i % 2 == 0 { dx } else { dy }),
                     _ => v.clone(),
                 })
                 .collect(),
         ))
     };
-    let popup = annot_dict(doc, r).reference(b"Popup");
-    doc.update_dict(r, |d| {
-        for (k, every) in [(&b"Rect"[..], false), (b"QuadPoints", true), (b"L", false), (b"CL", true), (b"Vertices", true)] {
-            if let Some(v) = d.get(k).and_then(|o| shift(o, every)) {
-                d.set(k.to_vec(), v);
-            }
+    let annot = annot_dict(doc, r);
+    let popup = annot.reference(b"Popup");
+    let mut moved: Vec<(&[u8], Object)> = Vec::new();
+    for (k, every) in [(&b"Rect"[..], false), (b"QuadPoints", true), (b"L", false), (b"CL", true), (b"Vertices", true)] {
+        if let Some(v) = annot.get(k).and_then(|o| shift(doc, o, every)) {
+            moved.push((k, v));
         }
-        if let Some(Object::Array(list)) = d.get(b"InkList").cloned() {
-            let moved = list.iter().map(|s| shift(s, true).unwrap_or_else(|| s.clone())).collect();
-            d.set(b"InkList".to_vec(), Object::Array(moved));
+    }
+    if let Some(list) = annot.get(b"InkList").map(|o| doc.resolve(o))
+        && let Some(list) = list.as_array()
+    {
+        let strokes = list.iter().map(|s| shift(doc, s, true).unwrap_or_else(|| s.clone())).collect();
+        moved.push((b"InkList", Object::Array(strokes)));
+    }
+    let popup_rect = popup.and_then(|p| doc.get(p).as_dict().and_then(|pd| pd.get(b"Rect")).and_then(|o| shift(doc, o, false)));
+    doc.update_dict(r, |d| {
+        for (k, v) in moved {
+            d.set(k.to_vec(), v);
         }
         touch(d, meta);
     })?;
-    if let Some(p) = popup
-        && doc.get(p).as_dict().is_some()
-    {
-        doc.update_dict(p, |d| {
-            if let Some(v) = d.get(b"Rect").and_then(|o| shift(o, false)) {
-                d.set(b"Rect".to_vec(), v);
-            }
-        })?;
+    if let (Some(p), Some(v)) = (popup, popup_rect) {
+        doc.update_dict(p, |d| d.set(b"Rect".to_vec(), v))?;
     }
     Ok(())
 }
