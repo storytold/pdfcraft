@@ -48,7 +48,13 @@ pub(crate) fn print_output(
 
 /// What a PNG result is reported as when it isn't written to a file.
 fn png_summary(data: &[u8], width: u32, height: u32) -> serde_json::Value {
-    serde_json::json!({ "image": "png", "width": width, "height": height, "bytes": data.len(), "hint": "pass --out file.png to save it" })
+    serde_json::json!({
+        "image": "png",
+        "width": width,
+        "height": height,
+        "bytes": data.len(),
+        "hint": "pass --out file.png for a single call, or set the script step's out to file.png"
+    })
 }
 
 /// A tool's result as JSON values, for the `--report` of a script. Same content as
