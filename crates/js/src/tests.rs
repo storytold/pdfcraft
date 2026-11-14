@@ -1095,6 +1095,167 @@ mod xfa_model {
         assert_eq!(o.result.as_deref(), Some("4/1"));
     }
 
+    #[test]
+    fn resolve_node_reaches_instance_managers_in_som_paths() {
+        let o = go("this.resolveNode('table._row').addInstance(1)", "form1[0].page1[0].go[0]", "click");
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.effects, vec![XfaEffect::AddInstance { som: "form1[0].page1[0].table[0].row[2]".into() }]);
+
+        let o = go("this.resolveNode('table._row').removeInstance(this.parent.index)", "form1[0].page1[0].table[0].row[1].amount[0]", "click");
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.effects, vec![XfaEffect::RemoveInstance { som: "form1[0].page1[0].table[0].row[1]".into() }]);
+
+        let o = go(
+            "this.resolveNode('_row').count + '/' + xfa.resolveNode('table._row').max + '/' + (this.resolveNode('table._missing') === null)",
+            "form1[0].page1[0].table[0].row[0].amount[0]",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2/-1/true"));
+
+        let mut bounded = form();
+        let table = bounded.children[0].children.iter_mut().find(|n| n.name == "table").unwrap();
+        for row in &mut table.children {
+            row.occur_max = Some(2);
+        }
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa("this.resolveNode('table._row').addInstance(1) === null", &event, &XfaDoc::default(), &bounded, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("true"));
+        assert!(o.effects.is_empty());
+    }
+
+    #[test]
+    fn resolve_node_finds_descendant_instance_manager() {
+        let o = go("this.resolveNode('$form.._row').count", "form1[0].page1[0].go[0]", "click");
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn resolve_node_indexes_the_manager_not_its_rows() {
+        let o =
+            go("this.resolveNode('table._row[0]').count + '/' + (this.resolveNode('table._row[1]') === null)", "form1[0].page1[0].go[0]", "click");
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2/true"));
+    }
+
+    #[test]
+    fn resolve_node_trims_manager_selector() {
+        let o = go(
+            "this.resolveNode('table._row[ 0 ]').count + '/' + this.resolveNode('table._row[ * ]').count + '/' + (this.resolveNode('table._row[ 1 ]') === null)",
+            "form1[0].page1[0].go[0]",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2/2/true"));
+    }
+
+    #[test]
+    fn resolve_node_trims_manager_step() {
+        let o = go(
+            "this.resolveNode('table. _row [ 0 ]').count + '/' + this.resolveNode(' _row [ 0 ]').count + '/' + this.resolveNode('$form.. _row [ 0 ]').count",
+            "form1[0].page1[0].table[0].row[0].amount[0]",
+            "click",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2/2/2"));
+    }
+
+    #[test]
+    fn resolve_node_preserves_document_order_across_manager_and_real_node() {
+        let mut model = form();
+        model.children[0].children.push(XfaNode {
+            name: "table".into(),
+            som: "form1[0].page1[0].table[1]".into(),
+            kind: Some(XfaKind::Subform),
+            index: 1,
+            children: vec![field("_row", "form1[0].page1[0].table[1]._row[0]", "later", false)],
+            ..Default::default()
+        });
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa("this.resolveNode('table[*]._row').count", &event, &XfaDoc::default(), &model, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn descendant_manager_precedes_a_later_direct_field() {
+        let mut model = form();
+        model.children.push(field("_row", "form1[0]._row[0]", "later", false));
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa("this.resolveNode('$form.._row').addInstance(1)", &event, &XfaDoc::default(), &model, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.effects, vec![XfaEffect::AddInstance { som: "form1[0].page1[0].table[0].row[2]".into() }]);
+    }
+
+    #[test]
+    fn bare_manager_precedes_a_real_field_in_an_outer_scope() {
+        let mut model = form();
+        model.children[0].children.push(field("_row", "form1[0].page1[0]._row[0]", "outer", false));
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].table[0].row[1].amount[0]".into(), ..Default::default() };
+        let o = run_xfa("this.resolveNode('_row').addInstance(1)", &event, &XfaDoc::default(), &model, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.effects, vec![XfaEffect::AddInstance { som: "form1[0].page1[0].table[0].row[2]".into() }]);
+
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa("this.resolveNode('_row').rawValue", &event, &XfaDoc::default(), &model, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("outer"));
+    }
+
+    #[test]
+    fn missing_manager_index_does_not_select_an_outer_field() {
+        let mut model = form();
+        model.children[0].children.push(field("_row", "form1[0].page1[0]._row[0]", "outer first", false));
+        model.children[0].children.push(field("_row", "form1[0].page1[0]._row[1]", "outer second", false));
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].table[0].row[0].amount[0]".into(), ..Default::default() };
+        let o = run_xfa(
+            "this.resolveNode('_row[0]').count + '/' + (this.resolveNode('_row[1]') === null)",
+            &event,
+            &XfaDoc::default(),
+            &model,
+            Limits::default(),
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2/true"));
+
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa("this.resolveNode('_row[1]').rawValue", &event, &XfaDoc::default(), &model, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("outer second"));
+    }
+
+    #[test]
+    fn missing_real_node_index_does_not_select_an_outer_field() {
+        let mut model = form();
+        let details = model.children[0].children.iter_mut().find(|node| node.name == "details").unwrap();
+        details.children.push(field("_row", "form1[0].page1[0].details[0]._row[0]", "near", false));
+        model.children[0].children.push(field("_row", "form1[0].page1[0]._row[0]", "outer first", false));
+        model.children[0].children.push(field("_row", "form1[0].page1[0]._row[1]", "outer second", false));
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].details[0].note[0]".into(), ..Default::default() };
+        let o = run_xfa(
+            "this.resolveNode('_row[0]').rawValue + '/' + (this.resolveNode('_row[1]') === null)",
+            &event,
+            &XfaDoc::default(),
+            &model,
+            Limits::default(),
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("near/true"));
+    }
+
+    #[test]
+    fn missing_descendant_manager_index_stops_before_later_field() {
+        let mut model = form();
+        model.children.push(field("_row", "form1[0]._row[0]", "later first", false));
+        model.children.push(field("_row", "form1[0]._row[1]", "later second", false));
+        let event = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), ..Default::default() };
+        let o = run_xfa("this.resolveNode('$form.._row[1]') === null", &event, &XfaDoc::default(), &model, Limits::default());
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("true"));
+    }
+
     /// `xfa.host`, `xfa.layout`, `xfa.event` and `app` calls become effects, and messages keep
     /// their details.
     #[test]
