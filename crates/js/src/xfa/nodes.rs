@@ -129,6 +129,22 @@ pub(crate) fn resolve_som(h: &XHost, from: usize, expr: &str) -> Vec<usize> {
                         next.push(p);
                     }
                 }
+                // `#subform`, `#field[1]`: the node's own children of that class, named or not (XFA 3.3 p. 96)
+                _ if !descend && name.strip_prefix('#').is_some_and(is_node_class) => {
+                    let class = name.trim_start_matches('#');
+                    let found: Vec<usize> = h
+                        .nodes
+                        .get(c)
+                        .map(|n| {
+                            n.children.iter().copied().filter(|&k| h.nodes.get(k).is_some_and(|k| !k.gone && k.kind.class_name() == class)).collect()
+                        })
+                        .unwrap_or_default();
+                    match index.as_deref() {
+                        Some("*") => next.extend(found),
+                        Some(i) => next.extend(i.parse::<usize>().ok().and_then(|i| found.get(i))),
+                        None => next.extend(found.first()),
+                    }
+                }
                 _ => {
                     let mut found: Vec<usize> = if descend { descendants_named(h, c, name, 0) } else { instances(h, c, name) };
                     // A relative name a node has no child for is looked for among its siblings
@@ -170,6 +186,11 @@ pub(crate) fn resolve_som(h: &XHost, from: usize, expr: &str) -> Vec<usize> {
         }
     }
     cur
+}
+
+/// Whether `class` names a class of the live form's nodes, which `#class` selects by.
+fn is_node_class(class: &str) -> bool {
+    matches!(class, "subform" | "field" | "exclGroup" | "draw" | "area")
 }
 
 /// The live descendants of node `from` named `name` (`from..name` in a SOM path), in document
