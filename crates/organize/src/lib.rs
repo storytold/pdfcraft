@@ -561,8 +561,7 @@ pub fn duplicate_pages(doc: &mut Document, indices: &[usize], at: Option<usize>)
     let mut order = indices.to_vec();
     order.sort_unstable();
     order.dedup();
-    let src = doc.clone();
-    import_pages(doc, &src, &order, at.unwrap_or(last + 1)).map(|_| ())
+    import::duplicate_own_pages(doc, &order, at.unwrap_or(last + 1)).map(|_| ())
 }
 
 /// Replace Pages: the content of `targets` (in order) is replaced by that of `src_pages` of
