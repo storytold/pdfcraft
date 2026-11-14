@@ -969,7 +969,7 @@ impl PdfCraftApp {
     ///
     /// Each tab of the document holds typing of its own (split view). The tab in use stays active
     /// when the others have been committed.
-    pub(crate) fn commit_typing_in(&mut self, id: pdfcraft_engine::DocId) -> bool {
+    pub fn commit_typing_in(&mut self, id: pdfcraft_engine::DocId) -> bool {
         let keep = self.active_ids().filter(|(_, active)| *active == id).and_then(|(i, _)| self.views.get(i)).map(|v| v.pane.key);
         let tabs: Vec<u64> = self.views.iter().filter(|v| v.id == id).map(|v| v.pane.key).collect();
         for key in tabs {
@@ -998,7 +998,9 @@ impl PdfCraftApp {
             Some(c)
         });
         if let Some(c) = blocked {
-            self.active = Some(i);
+            if !self.views.get(i).is_some_and(|v| v.detached) {
+                self.active = Some(i);
+            }
             self.notify(crate::content_ui::undrawable_message(c));
             return false;
         }
@@ -1013,7 +1015,9 @@ impl PdfCraftApp {
             if !typing {
                 return true;
             }
-            self.active = Some(i);
+            if !self.views.get(i).is_some_and(|v| v.detached) {
+                self.active = Some(i);
+            }
         }
         self.commit_form_typing() && self.commit_open_fill_text(i, id) && self.commit_open_text_edits(i, id)
     }

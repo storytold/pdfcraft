@@ -28,6 +28,7 @@ pub const MAC_CONTENT_LEFT: f32 = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_
 const TAB_STRIP: f32 = 38.0;
 const TAB_HEIGHT: f32 = 30.0;
 const STRIP_BUTTON: f32 = 28.0;
+const TAB_TEAR_OFF_DISTANCE: f32 = 15.0;
 
 /// Draw the window's tab strip: home and open controls, shrinkable and scrollable document tabs with drag
 /// reordering, and platform window controls.
@@ -83,8 +84,12 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 // Tabs shrink to share the strip (names end in "…") and scroll only once they reach
                 // their narrowest; then arrows either side say so and step through them.
                 let mut natural: Vec<f32> = Vec::with_capacity(app.views.len() + 1);
-                // (The main pane's tabs: split view's second pane has a strip of its own.)
+                // (The main pane's tabs: split view's second pane has a strip of its own.
+                // A tab torn out into its own window is drawn there, not here.)
                 for i in app.tabs_in(Place::Main) {
+                    if app.views.get(i).is_some_and(|v| v.detached) {
+                        continue;
+                    }
                     if let Some(name) = crate::canvas::tab_label(app, i) {
                         natural.push(tab_natural_width(ui, &t, &name));
                     }
@@ -131,6 +136,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             let mut slots = Vec::with_capacity(app.views.len());
                             let mut dragged = None;
                             for i in app.tabs_in(Place::Main) {
+                                if app.views.get(i).is_some_and(|v| v.detached) {
+                                    continue;
+                                }
                                 let Some(doc) = app.session.get(app.views[i].id) else { continue };
                                 let Some(name) = crate::canvas::tab_label(app, i) else { continue };
                                 let dirty = doc.dirty;
@@ -314,6 +322,16 @@ fn tab_menu(app: &PdfCraftApp, ui: &mut egui::Ui, index: usize, action: &mut Opt
         *action = Some(Action::Split { tab, down: true });
         ui.close();
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ui.separator();
+        let detach = egui::Button::new(tl!("Move to New Window"));
+        let detach = ui.add_enabled(app.views.len() > 1, detach).on_disabled_hover_text(tl!("Cannot detach the only open document"));
+        if detach.clicked() {
+            *action = Some(Action::Detach(id));
+            ui.close();
+        }
+    }
     ui.separator();
     let reveal = cfg!(not(target_arch = "wasm32")) && app.session.get(id).is_some_and(|d| d.path.is_some());
     let label = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
@@ -332,6 +350,27 @@ fn tab_menu(app: &PdfCraftApp, ui: &mut egui::Ui, index: usize, action: &mut Opt
 fn tab_drag(app: &mut PdfCraftApp, ui: &egui::Ui, slots: &[(usize, Rect)], dragged: Option<(usize, bool)>, place: Place, busy: bool) -> Option<f32> {
     let (from, released) = dragged?;
     let pos = ui.ctx().pointer_latest_pos()?;
+    // Past the strip, the tab leaves for its own window. A drag along the strip still reorders
+    // it, and a drag onto the right half of the page still splits.
+    #[cfg(not(target_arch = "wasm32"))]
+    if app.views.len() > 1 {
+        let strip = slots.iter().skip(1).fold(slots.first().map(|(_, rect)| *rect).unwrap_or(Rect::ZERO), |acc, (_, rect)| acc.union(*rect));
+        let outside = pos.y < strip.top() - TAB_TEAR_OFF_DISTANCE
+            || pos.y > strip.bottom() + TAB_TEAR_OFF_DISTANCE
+            || pos.x < strip.left() - TAB_TEAR_OFF_DISTANCE
+            || pos.x > strip.right() + TAB_TEAR_OFF_DISTANCE;
+        let stays = matches!(app.drop_target(pos, place), TabDrop::SplitRight | TabDrop::Pane(_));
+        if outside && !stays {
+            if released && !busy {
+                if let Some(view) = app.views.get(from) {
+                    app.detach_tab(view.id);
+                }
+            } else if !released {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            }
+            return None;
+        }
+    }
     match app.drop_target(pos, place) {
         TabDrop::Strip => {
             let x = pos.x;

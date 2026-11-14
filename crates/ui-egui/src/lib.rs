@@ -41,6 +41,7 @@ pub use combine_grid::ThumbState as CombineThumb;
 pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
 mod commands;
 pub mod control;
+pub use control::PdfCraftControl;
 mod menus;
 mod properties_session;
 /// Header & footer / watermark / background dialog types (tests and automation).
@@ -757,7 +758,7 @@ pub struct PdfCraftApp {
     /// yet: their first Save asks where, starting at that path, instead of writing it (#3923).
     recovered_paths: std::collections::HashSet<DocId>,
     last_autosave: Option<web_time::Instant>,
-    allow_quit: bool,
+    pub allow_quit: bool,
     /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see
     /// `registry_shortcuts`).
     deferred_commands: Vec<(&'static str, Option<DocId>)>,

@@ -818,12 +818,13 @@ impl PdfCraftApp {
     }
 
     /// Shows the next tab (or the previous one) in the strip's order, wrapping around at either
-    /// end (#1542). The Combine files tab, when open, comes after the documents. From Home the
-    /// next tab is the first and the previous one the last.
+    /// end (#1542). The Combine files tab, when open, comes after the documents. Detached tabs
+    /// are skipped. From Home the next tab is the first and the previous one the last.
     fn step_tab(&mut self, forward: bool) {
         // The tabs of the strip being worked in: split view's second pane steps through its own.
+        // A tab torn out into its own window is not in that strip.
         let place = self.active.and_then(|i| self.place_of(i)).unwrap_or_default();
-        let tabs = self.tabs_in(place);
+        let tabs: Vec<usize> = self.tabs_in(place).into_iter().filter(|&i| self.views.get(i).is_some_and(|v| !v.detached)).collect();
         let count = tabs.len() + usize::from(place == crate::panes::Place::Main && self.combine_tab.open);
         let current = if self.combine_showing() { Some(tabs.len()) } else { self.active.and_then(|a| tabs.iter().position(|&i| i == a)) };
         let Some(next) = tab_after(current, count, forward) else { return };
