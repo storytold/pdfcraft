@@ -5630,8 +5630,17 @@ fn replacing_pages_through_tools() {
     assert_eq!(page_text(&mut a, doc), ["Page 1", "Page 2", "Page 1"]);
     assert!(
         matches!(a.call("page_replace", &json!({ "doc": doc, "pages": [1, 2, 3], "path": "b.pdf" })), Err(ToolError::Failed(_))),
-        "b.pdf has only 2 pages"
+        "b.pdf has only 2 pages when from_pages is omitted"
     );
+    // Explicit unequal counts: 3 target pages replaced by 2 pages of b.pdf, then 1 page replaced by 2 pages.
+    let r_fewer = ok(&mut a, "page_replace", json!({ "doc": doc, "pages": [1, 2, 3], "path": "b.pdf", "from_pages": [2, 1] }));
+    assert_eq!(r_fewer["pages"], 2);
+    assert_eq!(page_text(&mut a, doc), ["Page 2", "Page 1"]);
+    let r_more = ok(&mut a, "page_replace", json!({ "doc": doc, "pages": [1], "path": "b.pdf", "from_pages": [1, 2] }));
+    assert_eq!(r_more["pages"], 3);
+    assert_eq!(page_text(&mut a, doc), ["Page 1", "Page 2", "Page 1"]);
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(page_text(&mut a, doc), ["Page 2", "Page 1"]);
 }
 
 #[test]

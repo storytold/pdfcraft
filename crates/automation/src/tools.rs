@@ -1178,9 +1178,9 @@ pub fn tools() -> Vec<ToolDef> {
             .cmd("protect.remove")
             .destructive()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
-        t("page_replace", "Replace pages", "Replace the content of pages with pages of another PDF (same count). Links, comments, form fields and bookmarks on the original pages stay, as in Acrobat. Undoable.")
+        t("page_replace", "Replace pages", "Replace the content of pages with pages of another PDF. Links, comments, form fields and bookmarks on the pages replaced in place stay, as in Acrobat; excess target pages are deleted and extra replacement pages are inserted after the replaced pages. Undoable.")
             .cmd("page.replace")
-            .with(schema(json!({ "doc": doc(), "pages": pages("to replace"), "path": path_arg(), "from_pages": pages("of the other file, in order (default: its first pages)") }), &["doc", "pages", "path"])),
+            .with(schema(json!({ "doc": doc(), "pages": pages("to replace"), "path": path_arg(), "from_pages": pages("of the other file, in order (default: 1..=pages.len(); pass a shorter or longer list to delete excess target pages or insert extra ones)") }), &["doc", "pages", "path"])),
         t("page_duplicate", "Duplicate pages", "Insert copies of pages so the first copy becomes page `at`, or after the last of them when `at` is left out (fonts and images are shared, not copied). Undoable.")
             .cmd("page.duplicate")
             .with(schema(json!({ "doc": doc(), "pages": pages("to duplicate"), "at": { "type": "integer", "minimum": 1 } }), &["doc", "pages"])),

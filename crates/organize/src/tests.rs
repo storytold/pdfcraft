@@ -2838,7 +2838,153 @@ fn replace_pages_swaps_content_but_keeps_annotations() {
     let p2 = doc.get(pages(&doc).unwrap()[1].obj);
     assert!(p2.as_dict().unwrap().contains(b"Annots"), "the original page's annotations stay");
     let mut doc = doc;
-    assert!(replace_pages(&mut doc, &[0, 1], &src, &[0]).is_err(), "counts must match");
+    assert_eq!(
+        replace_pages(&mut doc, &[], &src, &[0]),
+        Err(OrganizeError::Invalid("replacing pages needs at least one target page and one replacement page".into()))
+    );
+    assert_eq!(
+        replace_pages(&mut doc, &[0], &src, &[]),
+        Err(OrganizeError::Invalid("replacing pages needs at least one target page and one replacement page".into()))
+    );
+    assert_eq!(replace_pages(&mut doc, &[0, 0], &src, &[0, 1]), Err(OrganizeError::Invalid("each target page can be replaced at most once".into())));
+    assert_eq!(replace_pages(&mut doc, &[0], &src, &[0, 9]), Err(OrganizeError::NoSuchPage(9)));
+    assert_eq!(labels(&doc), ["Page 1", "Page 3", "Page 3"], "rejected replacement leaves doc unchanged");
+}
+
+#[test]
+fn replace_pages_fewer_replacements_deletes_excess_targets() {
+    let mut doc = open(fixture());
+    crate::number_pages(&mut doc, 0, 1, crate::LabelStyle::LowerRoman, "", 1).unwrap();
+    crate::number_pages(&mut doc, 2, 2, crate::LabelStyle::Decimal, "A-", 1).unwrap();
+    add_bookmark(&mut doc, &[], 0, "First", 0).unwrap();
+    add_bookmark(&mut doc, &[], 1, "Second", 1).unwrap();
+    add_bookmark(&mut doc, &[], 2, "Third", 2).unwrap();
+    let p1 = pages(&doc).unwrap()[0].obj;
+    let annot = doc.add(Object::Dict({
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Square"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+        d
+    }));
+    doc.update_dict(p1, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(annot)]))).unwrap();
+    let src = open(fixture());
+    // Replace pages 1 and 2 with only page 3 of src: page 1 gets page 3's content and keeps its
+    // annotation and bookmark; excess target page 2 is deleted and page 3 shifts to index 1.
+    replace_pages(&mut doc, &[0, 1], &src, &[2]).unwrap();
+    let doc = open(write_full(&doc, &SaveOptions::default()).unwrap());
+    assert_eq!(labels(&doc), ["Page 3", "Page 3"]);
+    assert_eq!(crate::page_labels(&doc).unwrap(), ["i", "A-1"]);
+    let p1_after = doc.get(pages(&doc).unwrap()[0].obj);
+    assert!(p1_after.as_dict().unwrap().contains(b"Annots"), "surviving replaced page keeps annotations");
+    let marks: Vec<(String, Option<usize>)> = bookmarks(&doc).into_iter().map(|b| (b.title, b.page)).collect();
+    assert_eq!(marks, [("First".into(), Some(0)), ("Second".into(), None), ("Third".into(), Some(1))]);
+}
+
+#[test]
+fn replace_pages_more_replacements_inserts_extras_after_targets() {
+    let mut doc = open(fixture());
+    crate::number_pages(&mut doc, 0, 1, crate::LabelStyle::LowerRoman, "", 1).unwrap();
+    crate::number_pages(&mut doc, 2, 2, crate::LabelStyle::Decimal, "A-", 1).unwrap();
+    add_bookmark(&mut doc, &[], 0, "First", 0).unwrap();
+    add_bookmark(&mut doc, &[], 1, "Second", 1).unwrap();
+    add_bookmark(&mut doc, &[], 2, "Third", 2).unwrap();
+    let p2 = pages(&doc).unwrap()[1].obj;
+    let annot = doc.add(Object::Dict({
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Square"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+        d
+    }));
+    doc.update_dict(p2, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(annot)]))).unwrap();
+    let src = open(fixture());
+    // Replace page 2 alone with all 3 pages of src: page 2 gets src page 1 in place (keeping its
+    // annotation and bookmark), src pages 2 and 3 are inserted right after it, and original page 3
+    // moves to index 4 with its bookmark and page-label range ("A-1") intact.
+    let renamed = replace_pages(&mut doc, &[1], &src, &[0, 1, 2]).unwrap();
+    assert!(renamed.is_empty());
+    let doc = open(write_full(&doc, &SaveOptions::default()).unwrap());
+    assert_eq!(labels(&doc), ["Page 1", "Page 1", "Page 2", "Page 3", "Page 3"]);
+    assert_eq!(crate::page_labels(&doc).unwrap(), ["i", "ii", "iii", "iv", "A-1"]);
+    let p2_after = doc.get(pages(&doc).unwrap()[1].obj);
+    assert!(p2_after.as_dict().unwrap().contains(b"Annots"), "replaced page keeps annotations");
+    let marks: Vec<(String, Option<usize>)> = bookmarks(&doc).into_iter().map(|b| (b.title, b.page)).collect();
+    assert_eq!(marks, [("First".into(), Some(0)), ("Second".into(), Some(1)), ("Third".into(), Some(4))]);
+}
+
+#[test]
+fn replace_pages_all_targets_and_non_contiguous_selections() {
+    // Replacing every page of a 3-page document with 1 page shrinks to 1 page without tripping WouldRemoveAllPages.
+    let mut all_doc = open(fixture());
+    let src = open(fixture());
+    replace_pages(&mut all_doc, &[0, 1, 2], &src, &[1]).unwrap();
+    assert_eq!(labels(&all_doc), ["Page 2"]);
+
+    // Non-contiguous targets [0, 2] with 1 replacement page leaves the middle page untouched and deletes target 2.
+    let mut split_shrink = open(fixture());
+    replace_pages(&mut split_shrink, &[0, 2], &src, &[2]).unwrap();
+    assert_eq!(labels(&split_shrink), ["Page 3", "Page 2"]);
+
+    // Non-contiguous targets [0, 2] (and out-of-order [2, 0]) with 3 replacement pages leave the middle page untouched
+    // and append the extra page after the highest target page in document order (target 2).
+    let mut split_grow = open(fixture());
+    replace_pages(&mut split_grow, &[0, 2], &src, &[2, 1, 0]).unwrap();
+    assert_eq!(labels(&split_grow), ["Page 3", "Page 2", "Page 2", "Page 1"]);
+    let mut rev_grow = open(fixture());
+    replace_pages(&mut rev_grow, &[2, 0], &src, &[0, 1, 2]).unwrap();
+    assert_eq!(labels(&rev_grow), ["Page 2", "Page 2", "Page 1", "Page 3"]);
+
+    // /UserUnit transfers from a scaled source page and clears from a scaled target page when the source omits it.
+    let mut unit_src = open(fixture());
+    let src_p0 = pages(&unit_src).unwrap()[0].obj;
+    let mut d0 = unit_src.get(src_p0).as_dict().cloned().unwrap();
+    d0.set(b"UserUnit", Object::Real(2.5));
+    unit_src.set(src_p0, Object::Dict(d0));
+    let mut unit_dst = open(fixture());
+    replace_pages(&mut unit_dst, &[0], &unit_src, &[0]).unwrap();
+    let dst_p0 = pages(&unit_dst).unwrap()[0].obj;
+    assert_eq!(unit_dst.get(dst_p0).as_dict().unwrap().get(b"UserUnit").and_then(Object::as_f64), Some(2.5));
+    replace_pages(&mut unit_dst, &[0], &src, &[1]).unwrap();
+    assert!(!unit_dst.get(dst_p0).as_dict().unwrap().contains(b"UserUnit"));
+
+    // Extra inserted pages bring their form widgets along without renaming when unique, while paired pages drop the temporary source widgets.
+    let mut form_dst = doc_with_field("KeepOrig");
+    let mut form_src = doc_with_field("PairedDropped");
+    import_pages_with(&mut form_src, &doc_with_field("ExtraKept"), &[0], 1, FieldConflicts::Merge).unwrap();
+    assert!(replace_pages(&mut form_dst, &[0], &form_src, &[0, 1]).unwrap().is_empty());
+    assert_eq!(form_field_names(&form_dst), ["KeepOrig", "ExtraKept"]);
+
+    // Colliding fields on extra inserted pages are renamed so they stay independent of surviving destination fields.
+    let mut collide_dst = doc_with_field("KeepOrig");
+    let mut collide_src = doc_with_field("KeepOrig");
+    import_pages_with(&mut collide_src, &doc_with_field("KeepOrig"), &[0], 1, FieldConflicts::Merge).unwrap();
+    let renamed = replace_pages(&mut collide_dst, &[0], &collide_src, &[0, 1]).unwrap();
+    assert_eq!(renamed, [("KeepOrig".to_string(), "KeepOrig-1".to_string())]);
+    assert_eq!(form_field_names(&collide_dst), ["KeepOrig", "KeepOrig-1"]);
+
+    // Links on extra inserted pages that target a paired source page resolve to the surviving replaced target page.
+    let mut link_dst = open(fixture());
+    let mut link_src = open(fixture());
+    let src_p0 = pages(&link_src).unwrap()[0].obj;
+    let src_p1 = pages(&link_src).unwrap()[1].obj;
+    let link_annot = link_src.add(Object::Dict({
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Link"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 20.into(), 20.into()]));
+        d.set(b"Dest".to_vec(), Object::Array(vec![Object::Ref(src_p0), Object::name("Fit")]));
+        d
+    }));
+    link_src.update_dict(src_p1, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link_annot)]))).unwrap();
+    replace_pages(&mut link_dst, &[1], &link_src, &[0, 1]).unwrap();
+    let dst_pages = pages(&link_dst).unwrap();
+    let replaced_target = dst_pages[1].obj;
+    let extra_page = dst_pages[2].obj;
+    let extra_annots = link_dst.get(extra_page).as_dict().and_then(|d| d.get(b"Annots")).and_then(Object::as_array).cloned().unwrap();
+    let copied_link = link_dst.resolve(&extra_annots[0]);
+    let dest = copied_link.as_dict().and_then(|d| d.get(b"Dest")).and_then(Object::as_array).unwrap();
+    assert_eq!(dest.first().and_then(Object::as_ref), Some(replaced_target));
 }
 
 #[test]

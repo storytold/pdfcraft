@@ -1041,6 +1041,33 @@ fn dialog_split(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> 
     true
 }
 
+/// Clamp the replacement page range in `d` before drawing its controls.
+fn sync_replace_src_range(d: &mut crate::files::ReplaceDraft, target_count: usize, src_count: usize) {
+    d.src_from = d.src_from.clamp(1, src_count);
+    if !d.src_range_edited {
+        d.src_to = d.src_from.saturating_add(target_count.saturating_sub(1)).min(src_count);
+    } else {
+        d.src_to = d.src_to.clamp(1, src_count);
+    }
+}
+
+/// Update `d`'s replacement range after either replacement `DragValue` changes.
+fn apply_replace_src_edits(
+    d: &mut crate::files::ReplaceDraft,
+    src_from_changed: bool,
+    src_to_changed: bool,
+    typing_src_to: bool,
+    target_count: usize,
+    src_count: usize,
+) {
+    if src_to_changed {
+        d.src_range_edited = true;
+    } else if src_from_changed && !d.src_range_edited {
+        d.src_to = d.src_from.saturating_add(target_count.saturating_sub(1)).min(src_count);
+    }
+    widgets::keep_range_ordered(d.src_from, &mut d.src_to, typing_src_to);
+}
+
 /// `Dialog::ReplacePages` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_replace_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
     let t = Tokens::get(ui.ctx());
@@ -1051,8 +1078,8 @@ fn dialog_replace_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pend
     };
     ui.label(egui::RichText::new(tl!("Replace Pages")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
+    d.from = d.from.clamp(1, count);
     d.to = d.to.clamp(1, count);
-    d.from = d.from.clamp(1, d.to);
     ui.horizontal(|ui| {
         let from_label = ui.label(tl!("Original: replace pages"));
         let from = ui.add(egui::DragValue::new(&mut d.from).range(1..=count)).labelled_by(from_label.id);
@@ -1061,18 +1088,41 @@ fn dialog_replace_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pend
         if from.changed() || to.changed() {
             d.range_edited = true;
         }
+        widgets::keep_range_ordered(d.from, &mut d.to, widgets::typing_into(&to));
         ui.label(egui::RichText::new(crate::i18n::fmt(tl!("of {name}"), &[("name", &count.to_string())])).color(t.text_muted));
     });
-    let n = if d.range_edited { d.to - d.from + 1 } else { d.pages.len().max(1) };
-    let max_start = d.src_pages.saturating_sub(n) + 1;
-    d.src_from = d.src_from.clamp(1, max_start.max(1));
+    let n = if d.range_edited { d.to.max(d.from) - d.from + 1 } else { d.pages.len().max(1) };
+    let src_count = d.src_pages.max(1);
+    sync_replace_src_range(d, n, src_count);
     ui.horizontal(|ui| {
         let replacement_label = ui.label(crate::i18n::fmt(tl!("Replacement: pages of {name}"), &[("name", &d.name)]));
-        ui.add(egui::DragValue::new(&mut d.src_from).range(1..=max_start.max(1))).labelled_by(replacement_label.id);
-        ui.label(crate::i18n::fmt(tl!("to {n}"), &[("n", &(d.src_from + n - 1).to_string())]));
+        let src_from = ui.add(egui::DragValue::new(&mut d.src_from).range(1..=src_count)).labelled_by(replacement_label.id);
+        let src_to_label = ui.label(tl!("to"));
+        let src_to = ui.add(egui::DragValue::new(&mut d.src_to).range(1..=src_count)).labelled_by(src_to_label.id);
+        apply_replace_src_edits(d, src_from.changed(), src_to.changed(), widgets::typing_into(&src_to), n, src_count);
         ui.label(egui::RichText::new(crate::i18n::fmt(tl!("of {name}"), &[("name", &d.src_pages.to_string())])).color(t.text_muted));
     });
-    let fits = n <= d.src_pages;
+    let fits = d.src_pages > 0;
+    let src_len = d.src_to.max(d.src_from) - d.src_from + 1;
+    if fits && src_len != n {
+        ui.add_space(4.0);
+        let delta_note = if src_len < n {
+            let removed = n - src_len;
+            if removed == 1 {
+                tl!("1 extra original page will be deleted.").to_owned()
+            } else {
+                crate::i18n::fmt(tl!("{name} extra original pages will be deleted."), &[("name", &removed.to_string())])
+            }
+        } else {
+            let added = src_len - n;
+            if added == 1 {
+                tl!("1 extra replacement page will be inserted.").to_owned()
+            } else {
+                crate::i18n::fmt(tl!("{name} extra replacement pages will be inserted."), &[("name", &added.to_string())])
+            }
+        };
+        ui.label(egui::RichText::new(delta_note).small().color(t.text_muted));
+    }
     ui.add_space(6.0);
     ui.label(
         egui::RichText::new(if fits {
@@ -1086,6 +1136,8 @@ fn dialog_replace_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pend
     ui.add_space(10.0);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         if ui.add_enabled_ui(fits, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
+            widgets::keep_range_ordered(d.from, &mut d.to, false);
+            widgets::keep_range_ordered(d.src_from, &mut d.src_to, false);
             req.replace_now = true;
             req.close = true;
         }
@@ -1885,14 +1937,12 @@ fn finish_requests(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, re
         && let Some(d) = app.replace_draft.take()
         && app.still_pick_target(d.target)
     {
-        let pages = if d.range_edited { (d.from - 1..d.to).collect() } else { d.pages.clone() };
-        let n = pages.len();
-        app.apply_edit(Edit::ReplacePages {
-            pages,
-            name: d.name.clone(),
-            bytes: d.bytes.clone(),
-            src_pages: (d.src_from - 1..d.src_from - 1 + n).collect(),
-        });
+        let from = d.from.max(1);
+        let to = d.to.max(from);
+        let pages = if d.range_edited { (from - 1..to).collect() } else { d.pages.clone() };
+        let src_from = d.src_from.max(1).min(d.src_pages.max(1));
+        let src_to = d.src_to.max(src_from).min(d.src_pages);
+        app.apply_edit(Edit::ReplacePages { pages, name: d.name.clone(), bytes: d.bytes.clone(), src_pages: (src_from - 1..src_to).collect() });
     }
     // A print or save that fails keeps the dialog open, with the reason in a notice.
     if req.print_go && !app.print_now() {

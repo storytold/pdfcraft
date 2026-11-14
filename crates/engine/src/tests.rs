@@ -13787,6 +13787,55 @@ fn saving_without_deleting_pages_stays_incremental() {
 }
 
 #[test]
+fn saving_after_replacing_with_fewer_pages_rewrites_and_roundtrips_undo() {
+    let (mut s, id) = session_with(5);
+    let original = s.save_bytes(id).unwrap();
+    let replacement = Arc::new(fixture(2));
+    s.apply(id, Edit::ReplacePages { pages: vec![1, 2, 3], name: "r.pdf".into(), bytes: replacement.clone(), src_pages: vec![0] }).unwrap();
+    assert_eq!(page_texts(&s, id), ["Page 1", "Page 1", "Page 5"]);
+    s.undo(id).unwrap();
+    assert_eq!(page_texts(&s, id), ["Page 1", "Page 2", "Page 3", "Page 4", "Page 5"]);
+    s.redo(id).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    assert!(!saved.starts_with(original.as_slice()), "shrinking replacement triggers full rewrite");
+    assert!(!contains(&saved, b"Page 4"), "deleted excess target page text is scrubbed on save");
+
+    // Replacing 1 page with 2 pages does not delete pages, so save stays incremental.
+    let (mut s2, id2) = session_with(2);
+    let orig2 = s2.save_bytes(id2).unwrap();
+    s2.apply(id2, Edit::ReplacePages { pages: vec![0], name: "r.pdf".into(), bytes: replacement, src_pages: vec![0, 1] }).unwrap();
+    assert_eq!(page_texts(&s2, id2), ["Page 1", "Page 2", "Page 2"]);
+    let saved2 = s2.save_bytes(id2).unwrap();
+    assert!(saved2.starts_with(orig2.as_slice()), "growing replacement stays incremental");
+}
+
+#[test]
+fn replace_pages_with_extra_pages_renames_colliding_fields_and_notes_it() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("a.pdf", None, Arc::new(form_with_field("Text1")), None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "Text1".into(), value: FieldValue::Text("Alice".into()) }).unwrap();
+    s.apply(id, Edit::ReplacePages { pages: vec![0], name: "b.pdf".into(), bytes: Arc::new(form_with_field("Text1")), src_pages: vec![0, 0] })
+        .unwrap();
+    let doc = s.get(id).unwrap();
+    let fields: Vec<(&str, &[String])> = doc.form.iter().map(|f| (f.name.as_str(), f.value.as_slice())).collect();
+    assert_eq!(fields, [("Text1", &["Alice".to_string()][..]), ("Text1-1", &["x".to_string()][..])]);
+    assert!(
+        doc.repair_log().iter().any(|l| l.contains("Text1 → Text1-1") && l.contains("were not rewritten")),
+        "repair log records the rename and scripts caveat: {:?}",
+        doc.repair_log()
+    );
+    s.apply(id, Edit::SetFieldValue { name: "Text1".into(), value: FieldValue::Text("Updated".into()) }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.form.iter().find(|f| f.name == "Text1-1").unwrap().value, ["x"], "renamed extra field stays independent");
+    s.undo(id).unwrap();
+    let label = s.undo(id).unwrap();
+    assert_eq!(label.as_str(), "Replace page — 1 field renamed");
+    let doc = s.get(id).unwrap();
+    let fields: Vec<(&str, &[String])> = doc.form.iter().map(|f| (f.name.as_str(), f.value.as_slice())).collect();
+    assert_eq!(fields, [("Text1", &["Alice".to_string()][..])]);
+}
+
+#[test]
 fn original_image_edit_does_not_match_an_added_sibling_of_the_same_xobject() {
     let mut document = pdfcraft_cos::Document::open(Arc::new(jpeg_cover_pdf(650))).unwrap();
     let original = pdfcraft_edit::page_images(&document, 0).unwrap()[0].clone();

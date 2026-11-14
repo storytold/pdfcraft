@@ -524,6 +524,26 @@ fn invalidate_form_script_snapshot(cx: &mut EditCtx) {
     }
 }
 
+fn run_replace_pages(
+    doc: &mut pdfcraft_cos::Document,
+    pages: &[usize],
+    name: &str,
+    bytes: &std::sync::Arc<Vec<u8>>,
+    src_pages: &[usize],
+    cx: &mut EditCtx,
+) -> Result<(), EditError> {
+    let src = crate::sources::open_source_into(name, bytes, doc)?;
+    let renamed = pdfcraft_organize::replace_pages(doc, pages, &src, src_pages)?;
+    if src_pages.len() != pages.len() {
+        cx.pages = pdfcraft_organize::page_count(doc).unwrap_or(cx.pages);
+    }
+    if src_pages.len() != pages.len() || !renamed.is_empty() {
+        invalidate_form_script_snapshot(cx);
+    }
+    cx.renamed_fields.extend(renamed);
+    Ok(())
+}
+
 /// Perform an edit on a working copy (the caller discards it on error).
 pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
     match edit {
@@ -546,10 +566,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
             pdfcraft_organize::duplicate_pages(doc, pages, *at)?
         }
-        Edit::ReplacePages { pages, name, bytes, src_pages } => {
-            let src = crate::sources::open_source_into(name, bytes, doc)?;
-            pdfcraft_organize::replace_pages(doc, pages, &src, src_pages)?;
-        }
+        Edit::ReplacePages { pages, name, bytes, src_pages } => run_replace_pages(doc, pages, name, bytes, src_pages, cx)?,
         Edit::SetPageBox { pages, which, spec } => pdfcraft_organize::set_page_box(doc, pages, *which, *spec)?,
         Edit::SetTransition { pages, spec } => pdfcraft_organize::set_transition(doc, pages, spec)?,
         Edit::InsertPagesFrom { name, bytes, pages, at, field_conflicts } => {
@@ -561,7 +578,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             // The file's bookmarks come along under one named after it, as in Combine Files.
             let title = std::path::Path::new(name).file_stem().map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned());
             let outcome = pdfcraft_organize::insert_file_pages(doc, &src, &title, &pages, *at, *field_conflicts)?;
-            cx.renamed_fields = outcome.renamed_fields;
+            cx.renamed_fields.extend(outcome.renamed_fields);
             invalidate_form_script_snapshot(cx);
         }
         Edit::AddBookmark { parent, index, title, page, left, top } => {

@@ -40,6 +40,34 @@ fn clear_shifted_page_comment_state(view: &mut crate::DocView, shifted_from: usi
     }
 }
 
+/// Update comment state and selected pages after an unequal-count `ReplacePages` edit.
+fn select_after_replace_pages(view: &mut crate::DocView, page_count: usize, pages: &[usize], src_len: usize) {
+    let paired = pages.len().min(src_len);
+    let paired_pages = pages.get(..paired).unwrap_or_default();
+    if src_len < pages.len() {
+        let removed = pages.get(paired..).unwrap_or_default();
+        if let Some(&first) = removed.iter().min() {
+            clear_shifted_page_comment_state(view, first);
+        }
+        let selected: Vec<usize> =
+            paired_pages.iter().map(|&p| p.saturating_sub(removed.iter().filter(|&&d| d < p).count())).filter(|&p| p < page_count).collect();
+        view.select_pages(&selected);
+        return;
+    }
+    let extra = src_len - paired;
+    let insert_at = paired_pages.iter().max().map_or(page_count.saturating_sub(extra), |last| last + 1);
+    clear_shifted_page_comment_state(view, insert_at);
+    let mut selected: Vec<usize> = paired_pages
+        .iter()
+        .map(|&p| p + usize::from(p >= insert_at) * extra)
+        .chain(insert_at..insert_at.saturating_add(extra))
+        .filter(|&p| p < page_count)
+        .collect();
+    selected.sort_unstable();
+    selected.dedup();
+    view.select_pages(&selected);
+}
+
 /// Keeps the pages (or comment) the user acted on selected, where they now are. `annots_before`
 /// is the page's annotations before a delete or a paste of comments (empty for other edits).
 fn select_after_edit(
@@ -71,6 +99,9 @@ fn select_after_edit(
                 clear_shifted_page_comment_state(view, first);
             }
             view.select_pages(&[]);
+        }
+        Edit::ReplacePages { pages, src_pages, .. } if src_pages.len() != pages.len() => {
+            select_after_replace_pages(view, info.pages.len(), pages, src_pages.len());
         }
         // A stroke drawn with the pen stays unselected, so the selection box and
         // author popup don't sit over the next stroke (#429).

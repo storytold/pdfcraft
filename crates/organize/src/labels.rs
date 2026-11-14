@@ -423,6 +423,31 @@ pub(crate) fn drop_deleted_pages(doc: &mut Document, deleted: &[usize]) -> Resul
     set_page_label_ranges(doc, &ranges)
 }
 
+/// After `count` pages are inserted at `at` (0-based), move every label range starting at or after
+/// `at` (past page 0) forward by `count` so later ranges stay with the pages they labelled while
+/// the range covering the replaced pages extends across the inserted pages. A tree that can't be
+/// read or rewritten within label limits is left as it is.
+pub(crate) fn shift_inserted_pages(doc: &mut Document, at: usize, count: usize) -> Result<(), OrganizeError> {
+    if count == 0 {
+        return Ok(());
+    }
+    let Ok(old) = checked_ranges(doc) else { return Ok(()) };
+    let ranges: Vec<LabelRange> = old
+        .iter()
+        .map(|r| {
+            let start = if r.start >= at && r.start > 0 { r.start.saturating_add(count) } else { r.start };
+            LabelRange { start, ..r.clone() }
+        })
+        .collect();
+    if ranges == old {
+        return Ok(());
+    }
+    match set_page_label_ranges(doc, &ranges) {
+        Ok(()) | Err(OrganizeError::Invalid(_)) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Acrobat's "Number pages": label pages `from..=to` (0-based) with `style`, `prefix` and
 /// starting number `first`; pages after `to` keep the labels they had.
 pub fn number_pages(doc: &mut Document, from: usize, to: usize, style: LabelStyle, prefix: &str, first: u32) -> Result<(), OrganizeError> {
