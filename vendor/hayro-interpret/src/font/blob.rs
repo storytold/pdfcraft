@@ -254,8 +254,8 @@ fn with_loca_format_fixed(data: &[u8], index: u32) -> Option<Vec<u8>> {
 /// the last glyph (OpenType `loca`), and some subsetters write it as 0: the last glyph then had a
 /// negative length and was dropped, and with it every composite glyph using it, so an `é` whose
 /// accent was the subset's last glyph drew neither the `e` nor the accent (PDFBOX-5917
-/// `test.pdf`). A font whose last glyph starts past the end of `glyf` is left as it is, and so
-/// are the offsets before the last one.
+/// `test.pdf`). A font whose last glyph starts past the end of `glyf`, or whose earlier offsets
+/// are out of order too, is left as it is, and the offsets before the last one never change.
 fn with_loca_end_fixed(data: &[u8], index: u32) -> Option<Vec<u8>> {
     use skrifa::raw::types::Tag;
     const LOCA: Tag = Tag::new(b"loca");
@@ -283,6 +283,16 @@ fn with_loca_end_fixed(data: &[u8], index: u32) -> Option<Vec<u8>> {
     let end = offset(last)?;
     if start > glyf_len || (start <= end && end <= glyf_len) {
         return None;
+    }
+    // Only the last offset is out of place: a table out of order before it says nothing
+    // trustworthy about where the last glyph starts either.
+    let mut previous = 0;
+    for i in 0..last {
+        let at = offset(i)?;
+        if at < previous {
+            return None;
+        }
+        previous = at;
     }
     // Short offsets count 2-byte units: an odd length ends the glyph a byte early, never before
     // its start, which is even.
@@ -647,7 +657,10 @@ mod tests {
         // Past the end of `glyf`: clamped to it.
         assert_eq!(fixed_end(true, [0, 8, 16, 400]), Some(21));
         assert_eq!(fixed_end(false, [0, 8, 16, 24]), Some(20));
-        // The last glyph starting past the end of `glyf` is not repaired.
+        // The last glyph starting past the end of `glyf`, or offsets out of order before the
+        // last one, are not repaired.
         assert_eq!(fixed_end(true, [0, 8, 30, 0]), None);
+        assert_eq!(fixed_end(true, [0, 12, 8, 0]), None);
+        assert_eq!(fixed_end(true, [0, 12, 8, 400]), None);
     }
 }
