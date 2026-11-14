@@ -162,7 +162,6 @@ pub fn tools() -> Vec<ToolDef> {
                     "narrower_than": { "type": "number", "minimum": 0, "description": "Points on the page (default 0.216)." },
                     "width": { "type": "number", "exclusiveMinimum": 0, "description": "Points on the page (default 0.72)." },
                     "type3": { "type": "boolean" }, "patterns": { "type": "boolean" },
-                    "keep_page": { "type": "boolean" },
                 }),
                 &["doc"],
             )),
@@ -298,7 +297,7 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "degrees"],
             )),
-        t("page_enhance_camera", "Enhance camera image", "Straighten a photographed document (Scan & OCR ▸ Enhance ▸ Camera image): the part of the page inside the four corners (x1, y1, … x4, y4 in top-left-origin points, any order, a convex quadrilateral; when omitted, the document's edges are found automatically, or an error says they could not be) is warped to an upright rectangle that replaces what the page shows, at the page picture's own resolution (at most 600 dpi). mode is how it looks: original, colour (default), greyscale or bw (black and white, stored losslessly). level (0–100, default 0) then cleans the photo up: even lighting so the paper turns white (casts, shadows, dark edges), more contrast, and from 60 no isolated specks; colour ink stays colour. For bw the level is the threshold (higher keeps fainter strokes black). The page's comments, links and bookmarks stay. Undoable.")
+        t("page_enhance_camera", "Enhance camera image", "Straighten a photographed document (Scan & OCR ▸ Enhance ▸ Camera image): the part of the page inside the four corners (x1, y1, … x4, y4 in top-left-origin points, any order, a convex quadrilateral; when omitted, the document's edges are found automatically, or an error says they could not be) is warped to an upright rectangle that replaces what the page shows, at the page picture's own resolution (at most 600 dpi). mode is how it looks: original, colour (default), greyscale or bw (black and white, stored losslessly). level (0–100, default 0) then cleans the photo up: even lighting so the paper turns white (casts, shadows, dark edges), more contrast, and from 60 no isolated specks; colour ink stays colour. For bw the level is the threshold (higher keeps fainter strokes black). keep_page (default true) keeps the page as it is and centres the warped picture in it; false makes the page the size of the quad. The page's comments, links and bookmarks stay. Undoable.")
             .cmd("ocr.enhance_camera")
             .with(schema(
                 json!({
@@ -307,10 +306,11 @@ pub fn tools() -> Vec<ToolDef> {
                     "corners": { "type": "array", "items": { "type": "number" }, "minItems": 8, "maxItems": 8 },
                     "level": { "type": "integer", "minimum": 0, "maximum": 100 },
                     "mode": { "type": "string", "enum": ["original", "colour", "greyscale", "bw"] },
+                    "keep_page": { "type": "boolean" },
                 }),
                 &["doc", "page"],
             )),
-        t("page_deskew", "Deskew pages", "Straighten skewed scanned pages by themselves (no corners to drag): the skew of the page's text lines is measured the way OCR measures it, and the page's picture is rotated about its centre by that angle, over white. The picture keeps its pixel count, so the page keeps its size. Comments are not drawn into the picture. A page that already has searchable text is left alone and reported in skipped: replacing its picture would drop that text, so such a page is straightened with page_enhance_camera, which keeps the page's content. Pages already straighter than min_angle (default 0.15 degrees) are left alone. Returns the pages straightened (1-based) with the angle corrected on each, the pages that came out already straight, the pages whose skew could not be judged, and the pages left alone with the reason. One undoable step per page.")
+        t("page_deskew", "Deskew pages", "Straighten skewed scanned pages by themselves (no corners to drag): the skew of the page's text lines is measured the way OCR measures it, and the page's picture is rotated about its centre by that angle, over white. The picture keeps its pixel count, so the page keeps its size. Comments are not drawn into the picture. A page that already has searchable text is left alone and reported in skipped: replacing its picture would drop that text. Pages already straighter than min_angle (default 0.15 degrees) are left alone. Returns the pages straightened (1-based) with the angle corrected on each, the pages that came out already straight, the pages whose skew could not be judged, and the pages left alone with the reason. One undoable step per page.")
             .cmd("ocr.deskew")
             .with(schema(
                 json!({

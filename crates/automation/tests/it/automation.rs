@@ -4935,6 +4935,30 @@ fn deskew_pages_through_tools() {
 }
 
 #[test]
+fn enhance_camera_image_keep_page_keeps_the_page_and_its_size() {
+    let dir = workdir("enhance-camera-keep-page");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 72, "pages": [1] }));
+    let photo = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["src/a_page_1.png"] }))["doc"].as_u64().unwrap();
+    let page_size = |a: &mut Automation| {
+        let info = ok(a, "doc_info", json!({ "doc": photo }));
+        let p = &info["pages"][0];
+        (p["width"].as_f64().unwrap(), p["height"].as_f64().unwrap())
+    };
+    let before = page_size(&mut a);
+    // The corners keep a 160 × 240 part of the 200 × 300 pt page.
+    let corners = json!([180, 270, 20, 30, 20, 270, 180, 30]);
+    // keep_page keeps the page as it was and centres the picture in it.
+    ok(&mut a, "page_enhance_camera", json!({ "doc": photo, "page": 1, "corners": corners, "keep_page": true }));
+    assert_eq!(page_size(&mut a), before, "keep_page: true must keep the page size");
+    // Without it the page becomes the quad, which is how the tool used to behave.
+    ok(&mut a, "page_enhance_camera", json!({ "doc": photo, "page": 1, "corners": corners, "keep_page": false }));
+    let after = page_size(&mut a);
+    assert!((after.0 - 160.0).abs() < 1.0 && (after.1 - 240.0).abs() < 1.0, "{after:?}");
+}
+
+#[test]
 fn enhance_scanned_file_cleans_the_scan_in_place_through_tools() {
     let dir = workdir("enhance-scan");
     // A 300 × 400 grey scan: dull paper, a dark gutter at the left, text bars and a speck.
