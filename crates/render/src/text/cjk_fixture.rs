@@ -90,6 +90,10 @@ pub(super) struct Streams {
     /// Flate-compressed (`/Filter [/FlateDecode /ASCIIHexDecode]`): the hex is twice the
     /// content's size, and nothing this large is held in memory.
     pub(super) hex_after: Option<usize>,
+    /// With `flate`, the content in PNG rows of this many bytes (`/Predictor 12`, each row
+    /// tagged None, the last one padded with spaces): the inflated data is longer than the
+    /// content by a byte a row.
+    pub(super) png_columns: Option<usize>,
 }
 
 /// `content` as a stream's dictionary entries (after `dict`) and data, as `streams` says.
@@ -109,6 +113,15 @@ fn content_stream(dict: String, content: String, streams: Streams) -> (String, O
     }
     if !streams.flate {
         return (dict, Some(content.into_bytes()));
+    }
+    if let Some(columns) = streams.png_columns.filter(|c| *c > 0) {
+        for row in content.as_bytes().chunks(columns) {
+            z.write_all(&[0]).expect("compress in memory");
+            z.write_all(row).expect("compress in memory");
+            z.write_all(&vec![b' '; columns - row.len()]).expect("compress in memory");
+        }
+        let parms = format!(" /DecodeParms << /Predictor 12 /Columns {columns} >>");
+        return (format!("{dict} /Filter /FlateDecode{parms}"), Some(z.finish().expect("compress in memory")));
     }
     z.write_all(content.as_bytes()).expect("compress in memory");
     (format!("{dict} /Filter /FlateDecode"), Some(z.finish().expect("compress in memory")))

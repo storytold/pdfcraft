@@ -19,13 +19,15 @@ pub(crate) mod flate {
 
     /// PdfCraft patch: `limit` is the most bytes inflated (see `filter::decode_limit`), and `rows`
     /// the `/Height` of the image the data is the samples of, if it is (see [`untagged_png_rows`]).
+    /// Also returns whether inflating stopped at `limit` (patch 47): told before the predictor is
+    /// undone, which leaves fewer bytes than were inflated.
     #[cfg(feature = "unsafe")]
     pub(crate) fn decode(
         data: &[u8],
         params: &Dict<'_>,
         limit: usize,
         rows: Option<usize>,
-    ) -> Option<Vec<u8>> {
+    ) -> Option<(Vec<u8>, bool)> {
         use flate2::read::{DeflateDecoder, ZlibDecoder};
         use std::io::Read;
 
@@ -54,10 +56,11 @@ pub(crate) mod flate {
                 fallback::decode(data, limit)
             })?;
         // PdfCraft patch: output cut at the limit is reported, never dropped silently.
-        if decoded.len() >= limit {
+        let cut = decoded.len() >= limit;
+        if cut {
             warn!("flate stream stopped at its decode limit of {limit} bytes");
         }
-        undo_predictor(decoded, &PredictorParams::from_params(params), rows)
+        undo_predictor(decoded, &PredictorParams::from_params(params), rows).map(|d| (d, cut))
     }
 
     #[cfg(not(feature = "unsafe"))]
@@ -66,13 +69,14 @@ pub(crate) mod flate {
         params: &Dict<'_>,
         limit: usize,
         rows: Option<usize>,
-    ) -> Option<Vec<u8>> {
+    ) -> Option<(Vec<u8>, bool)> {
         let decoded = fallback::decode(data, limit)?;
         // PdfCraft patch: output cut at the limit is reported, never dropped silently.
-        if decoded.len() >= limit {
+        let cut = decoded.len() >= limit;
+        if cut {
             warn!("flate stream stopped at its decode limit of {limit} bytes");
         }
-        undo_predictor(decoded, &PredictorParams::from_params(params), rows)
+        undo_predictor(decoded, &PredictorParams::from_params(params), rows).map(|d| (d, cut))
     }
 
     /// PdfCraft patch: the predictor undone, unless the image's rows carry none
@@ -811,17 +815,19 @@ pub(crate) mod lzw {
 
     /// Decode a LZW-encoded stream. PdfCraft patch: `limit` is the most bytes produced (see
     /// `filter::decode_limit`); with a full table every 12-bit code can repeat an entry of
-    /// thousands of bytes.
-    pub(crate) fn decode(data: &[u8], params: &Dict<'_>, limit: usize) -> Option<Vec<u8>> {
+    /// thousands of bytes. Also returns whether decoding stopped at `limit` (patch 47): told
+    /// before the predictor is undone, which leaves fewer bytes than were decoded.
+    pub(crate) fn decode(data: &[u8], params: &Dict<'_>, limit: usize) -> Option<(Vec<u8>, bool)> {
         let params = PredictorParams::from_params(params);
 
         let decoded = decode_impl(data, params.early_change, limit)?;
         // PdfCraft patch: output cut at the limit is reported, never dropped silently.
-        if decoded.len() >= limit {
+        let cut = decoded.len() >= limit;
+        if cut {
             warn!("LZW stream stopped at its decode limit of {limit} bytes");
         }
 
-        apply_predictor(decoded, &params)
+        apply_predictor(decoded, &params).map(|d| (d, cut))
     }
 
     const CLEAR_TABLE: usize = 256;
@@ -1319,7 +1325,7 @@ mod tests {
     #[test]
     fn decode_lzw() {
         let input = [0x80, 0x0B, 0x60, 0x50, 0x22, 0x0C, 0x0C, 0x85, 0x01];
-        let decoded = lzw::decode(&input, &Dict::default(), usize::MAX).unwrap();
+        let (decoded, _) = lzw::decode(&input, &Dict::default(), usize::MAX).unwrap();
 
         assert_eq!(decoded, vec![45, 45, 45, 45, 45, 65, 45, 45, 45, 66]);
     }
@@ -1330,7 +1336,7 @@ mod tests {
             0x78, 0x9c, 0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x7, 0x0, 0x5, 0x8c, 0x1, 0xf5,
         ];
 
-        let decoded = flate::decode(&input, &Dict::default(), usize::MAX, None).unwrap();
+        let (decoded, _) = flate::decode(&input, &Dict::default(), usize::MAX, None).unwrap();
         assert_eq!(decoded, b"Hello");
     }
 
@@ -1338,7 +1344,7 @@ mod tests {
     fn decode_flate() {
         let input = [0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x7, 0x0];
 
-        let decoded = flate::decode(&input, &Dict::default(), usize::MAX, None).unwrap();
+        let (decoded, _) = flate::decode(&input, &Dict::default(), usize::MAX, None).unwrap();
         assert_eq!(decoded, b"Hello");
     }
     
@@ -1494,7 +1500,7 @@ mod pdfcraft_png_predictor_tests {
     /// `data` inflated and its PNG predictor undone, as the last filter of an image `rows` high.
     fn inflate(parms: &[u8], data: &[u8], rows: Option<usize>) -> Option<Vec<u8>> {
         let parms = Dict::from_bytes(parms).unwrap();
-        flate::decode(&stored(data), &parms, usize::MAX, rows)
+        flate::decode(&stored(data), &parms, usize::MAX, rows).map(|(d, _)| d)
     }
 
     const RGB3: &[u8] = b"<< /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns 3 >>";

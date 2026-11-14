@@ -298,7 +298,10 @@ impl<'a> Stream<'a> {
                 limit,
                 rows,
             )?;
-            cut |= new.data.len() >= limit;
+            // A filter that undoes a predictor after stopping at the limit (Flate, LZW) returns
+            // fewer bytes than the limit, so it says so itself.
+            let (new, stopped) = new;
+            cut |= stopped || new.data.len() >= limit;
             current = Some(new);
         }
 
