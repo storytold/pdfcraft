@@ -4828,6 +4828,30 @@ fn pages_export_as_png_jpeg_and_tiff() {
     assert_eq!((compression, predictor), (5, 1), "LZW, without a predictor");
 }
 
+/// Invert colours is how the reader sees the page, not part of the document: an image export
+/// keeps the document's own colours, in both inversion modes and in every image format.
+#[test]
+fn image_exports_keep_the_documents_colours_while_the_view_is_inverted() {
+    use crate::export::{Exporter, ImageFormat};
+    use pdfcraft_render::InvertPalette;
+    let formats = [ImageFormat::Png, ImageFormat::Jpeg { quality: 85 }, ImageFormat::Tiff];
+    let (mut s, id) = session_with(1);
+    let plain: Vec<Vec<u8>> = {
+        let mut ex = Exporter::new(s.get(id).unwrap());
+        formats.iter().map(|&f| ex.image(0, 72.0, f).unwrap()).collect()
+    };
+    for keep_images in [false, true] {
+        s.set_invert_palette(id, InvertPalette::PURE);
+        s.set_invert_keep_images(id, keep_images);
+        s.set_invert_colors(id, true);
+        let mut ex = Exporter::new(s.get(id).unwrap());
+        for (&format, expected) in formats.iter().zip(&plain) {
+            let exported = ex.image(0, 72.0, format).unwrap();
+            assert!(&exported == expected, "{} export with keep_images = {keep_images} differs from the document's colours", format.label());
+        }
+    }
+}
+
 /// Export ▸ Image draws several pages at once: each file is the one exporting that page alone
 /// writes, handed over in the order asked for, whatever the number of pages drawn at once.
 #[test]
@@ -5550,6 +5574,49 @@ fn deleting_a_group_primary_releases_its_member_in_one_undo_step() {
     s.undo(id).unwrap();
     assert_eq!(names(&s), grouped, "one undo puts the group back");
     assert!(member(&s).reference(b"IRT").is_some());
+}
+
+#[test]
+fn invert_view_set_and_invalidated() {
+    use pdfcraft_render::InvertPalette;
+    let (mut s, id) = session_with(1);
+    // Every open document holds the settings; the view is off, the palette black and white.
+    assert_eq!(s.invert_colors(id), Some(false));
+    assert_eq!(s.invert_palette(id), Some(InvertPalette::PURE));
+    assert!(s.set_invert_colors(id, true));
+    assert!(!s.set_invert_colors(id, true), "unchanged");
+    // A palette or mode change shows while the view is on...
+    assert!(s.set_invert_palette(id, InvertPalette::SEPIA));
+    assert!(s.set_invert_keep_images(id, true));
+    assert!(!s.set_invert_keep_images(id, true), "unchanged");
+    assert_eq!(s.invert_keep_images(id), Some(true));
+    // ...and is only kept while it is off.
+    assert!(s.set_invert_colors(id, false));
+    assert!(!s.set_invert_palette(id, InvertPalette::SOFT_DARK), "nothing on screen changes while off");
+    assert_eq!(s.invert_palette(id), Some(InvertPalette::SOFT_DARK));
+    assert!(!s.set_invert_keep_images(id, false));
+    assert_eq!(s.invert_keep_images(id), Some(false));
+    // No such document.
+    assert_eq!(s.invert_colors(DocId(u64::MAX)), None);
+    assert!(!s.set_invert_colors(DocId(u64::MAX), true));
+    assert!(!s.set_invert_palette(DocId(u64::MAX), InvertPalette::SEPIA));
+}
+
+/// A reloaded document (its file changed on disk) keeps the reader's inverted view: it is how the
+/// document is shown, not part of the file.
+#[test]
+fn reload_keeps_the_inverted_view() {
+    use pdfcraft_render::InvertPalette;
+    let (mut s, id) = session_with(1);
+    s.set_invert_palette(id, InvertPalette::SEPIA);
+    s.set_invert_keep_images(id, true);
+    s.set_invert_colors(id, true);
+    s.reload(id, Arc::new(fixture(2))).unwrap();
+    assert_eq!(s.invert_colors(id), Some(true));
+    assert_eq!(s.invert_palette(id), Some(InvertPalette::SEPIA));
+    assert_eq!(s.invert_keep_images(id), Some(true));
+    let config = s.render_config(id).expect("open");
+    assert!(config.invert_colors && config.invert_keep_images);
 }
 
 #[test]

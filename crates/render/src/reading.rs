@@ -119,7 +119,7 @@ impl From<ReadingParams> for hayro::ColorReplacement {
 
 /// Parses a colour given as `#rrggbb` — exactly this shape, either case of digits. The error
 /// names the argument and the expected shape.
-fn parse_hex(name: &str, value: &str) -> Result<[u8; 3], String> {
+pub(crate) fn parse_hex(name: &str, value: &str) -> Result<[u8; 3], String> {
     let invalid = || format!("invalid {name} colour {value:?}; expected #rrggbb (six hex digits, e.g. #00ff00)");
     let Some(digits) = value.strip_prefix('#') else { return Err(invalid()) };
     if digits.len() != 6 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -135,7 +135,7 @@ fn parse_hex(name: &str, value: &str) -> Result<[u8; 3], String> {
 }
 
 /// Formats sRGB bytes as lowercase `#rrggbb`.
-fn hex(rgb: [u8; 3]) -> String {
+pub(crate) fn hex(rgb: [u8; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])
 }
 
