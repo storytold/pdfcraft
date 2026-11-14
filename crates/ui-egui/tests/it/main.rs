@@ -48,6 +48,7 @@ mod fill_sign;
 mod find_replace;
 mod folders;
 mod fonts;
+mod form_reminder;
 mod forms;
 mod identity;
 mod javascript;

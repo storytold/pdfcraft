@@ -179,6 +179,7 @@ impl PdfCraftApp {
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
         // The Print dialog's own paper sizes (print.page-setup).
         v["print_custom_papers"] = serde_json::json!(self.print_draft.custom_papers);
+        v["show_form_field_reminder"] = serde_json::Value::Bool(self.show_form_field_reminder);
         v["show_page_edge_shadows"] = self.show_page_edge_shadows.into();
         // Not `check_updates_at_start`: that key was an opt-in of its own, off unless chosen, and
         // settings written then would turn this off unasked.
@@ -396,6 +397,9 @@ impl PdfCraftApp {
         self.restore_print_prefs(v);
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;
+        }
+        if let Some(show) = v["show_form_field_reminder"].as_bool() {
+            self.show_form_field_reminder = show;
         }
         if let Some(closed) = v["comments_panel_closed"].as_bool() {
             self.comments_panel_closed = closed;
