@@ -13,6 +13,7 @@ mod craft;
 pub mod embedding;
 mod encodings;
 pub mod fallback;
+mod line;
 pub mod pdf;
 pub mod plan;
 mod script;
@@ -26,6 +27,7 @@ pub use craft::{
     document_japanese_font_for_style, document_japanese_fonts_for_style, document_latin_fonts, document_thai_font, ui_arabic_fonts, ui_chinese_fonts,
     ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
 };
+pub use line::{MAX_LINE_CHARS, line_faces, line_missing, line_outline};
 pub use plan::{MAX_PLAN_GLYPHS, MAX_TYPE3_GLYPHS, PlannedType3, TextPlan};
 pub use script::{
     GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, craft_glyph, face_has, japanese_glyph, japanese_glyph_from,
