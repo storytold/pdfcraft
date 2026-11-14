@@ -95,7 +95,9 @@ mod platform;
 #[cfg(not(target_arch = "wasm32"))]
 mod script_dialog;
 mod state;
+pub mod tab_windows;
 mod tools;
+mod window_drop;
 mod workflows;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -758,6 +760,11 @@ pub struct PdfCraftApp {
     recovered_paths: std::collections::HashSet<DocId>,
     last_autosave: Option<web_time::Instant>,
     allow_quit: bool,
+    /// Native window host owns close decisions and tab transfers (false in browser/embedders).
+    pub(crate) managed_windows: bool,
+    pub(crate) window_close_ready: bool,
+    pub(crate) detach_request: Option<(DocId, Option<egui::Pos2>)>,
+    pub(crate) tab_drag_cancelled: bool,
     /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see
     /// `registry_shortcuts`).
     deferred_commands: Vec<(&'static str, Option<DocId>)>,

@@ -12,6 +12,7 @@ pub(crate) enum Action {
         tab: u64,
         down: bool,
     },
+    Detach(DocId),
 }
 
 impl crate::PdfCraftApp {
@@ -59,6 +60,9 @@ impl crate::PdfCraftApp {
                 if let Some(i) = self.tab_with_key(tab) {
                     self.split_tab(i, down);
                 }
+            }
+            Action::Detach(id) => {
+                self.request_detach_tab(id, None);
             }
             Action::Reopen => {
                 #[cfg(not(target_arch = "wasm32"))]

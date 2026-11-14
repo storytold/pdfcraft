@@ -306,6 +306,10 @@ impl PdfCraftApp {
             recovered_paths: Default::default(),
             last_autosave: None,
             allow_quit: false,
+            managed_windows: false,
+            window_close_ready: false,
+            detach_request: None,
+            tab_drag_cancelled: false,
             deferred_commands: Vec::new(),
             native_menu: None,
             menu_input: Vec::new(),
@@ -588,6 +592,14 @@ impl eframe::App for PdfCraftApp {
 }
 
 impl PdfCraftApp {
+    /// Escape drops a tab drag without moving or tearing the tab off.
+    fn cancel_tab_drag(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.tab_drag_cancelled = true;
+            crate::window_drop::drag(ctx, None);
+        }
+    }
+
     fn logic_unguarded(&mut self, ctx: &egui::Context) {
         #[cfg(test)]
         self.injected_panic(crate::frame_guard::FramePart::Logic);
@@ -596,6 +608,7 @@ impl PdfCraftApp {
         self.poll_script_dialog(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         self.window_state.repair(ctx);
+        self.cancel_tab_drag(ctx);
         self.dialog_epoch();
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);
@@ -733,7 +746,9 @@ impl PdfCraftApp {
         self.guard_quit(ctx);
         // macOS: quit through `terminate:` instead of dropping the window (Touch Bar crash, #1136).
         #[cfg(target_os = "macos")]
-        craft_quit::on_close_request(ctx);
+        if !self.managed_windows {
+            craft_quit::on_close_request(ctx);
+        }
         self.autosave_tick(ctx, web_time::Instant::now());
         // Reload documents whose files a build rewrote (#431).
         #[cfg(not(target_arch = "wasm32"))]
@@ -816,6 +831,7 @@ impl PdfCraftApp {
         #[cfg(test)]
         self.injected_panic(crate::frame_guard::FramePart::Ui);
         let ctx = ui.ctx().clone();
+        crate::window_drop::begin(&ctx, self.managed_windows && !self.window_close_ready);
         i18n::set_current(i18n::Lang::from_pref(&self.language));
         // A language change switches stock chrome between LTR and RTL before anything is drawn.
         theme::sync_direction(&ctx);

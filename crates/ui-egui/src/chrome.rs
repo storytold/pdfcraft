@@ -154,6 +154,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     &mut close,
                                 );
                                 slots.push((i, response.rect));
+                                if response.drag_started() {
+                                    app.tab_drag_cancelled = false;
+                                }
                                 if response.dragged() || response.drag_stopped() {
                                     dragged = Some((i, response.drag_stopped()));
                                 }
@@ -170,6 +173,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     close = Some(i);
                                 }
                             }
+                            crate::window_drop::tabs(ui, full, &slots);
                             drag_x = tab_drag(app, ui, &slots, dragged, Place::Main, close.is_some() || action.is_some());
                             if let Some(i) = close
                                 && let Some(view) = app.views.get(i)
@@ -314,6 +318,10 @@ fn tab_menu(app: &PdfCraftApp, ui: &mut egui::Ui, index: usize, action: &mut Opt
         *action = Some(Action::Split { tab, down: true });
         ui.close();
     }
+    if ui.add_enabled(app.can_detach_tab(id), egui::Button::new(tl!("Move Tab to New Window"))).clicked() {
+        *action = Some(Action::Detach(id));
+        ui.close();
+    }
     ui.separator();
     let reveal = cfg!(not(target_arch = "wasm32")) && app.session.get(id).is_some_and(|d| d.path.is_some());
     let label = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
@@ -332,6 +340,27 @@ fn tab_menu(app: &PdfCraftApp, ui: &mut egui::Ui, index: usize, action: &mut Opt
 fn tab_drag(app: &mut PdfCraftApp, ui: &egui::Ui, slots: &[(usize, Rect)], dragged: Option<(usize, bool)>, place: Place, busy: bool) -> Option<f32> {
     let (from, released) = dragged?;
     let pos = ui.ctx().pointer_latest_pos()?;
+    // Past the strip, or over another PdfCraft window, the live tab leaves. A drag along the
+    // strip still reorders it, and a drag onto the right half of the page still splits.
+    let id = app.views.get(from).map(|view| view.id);
+    let foreign = crate::window_drop::foreign_target(ui.ctx(), pos);
+    let viewport = ui.ctx().input(|input| input.viewport_rect());
+    let strip = slots.iter().skip(1).fold(slots.first().map(|(_, rect)| *rect).unwrap_or(Rect::ZERO), |acc, (_, rect)| acc.union(*rect));
+    let outside = crate::tab_windows::outside_strip(strip, viewport, pos);
+    let stays = matches!(app.drop_target(pos, place), TabDrop::SplitRight | TabDrop::Pane(_));
+    let tear_off = id.is_some_and(|id| app.can_detach_tab(id)) && (foreign.is_some() || (outside && !stays));
+    crate::window_drop::drag(ui.ctx(), (!released && !app.tab_drag_cancelled && tear_off).then_some(pos));
+    if tear_off {
+        if released && !busy && !app.tab_drag_cancelled {
+            if let Some(id) = id {
+                let position = ui.ctx().input(|input| input.viewport().inner_rect.map(|rect| rect.min + pos.to_vec2()));
+                app.request_detach_tab(id, position);
+            }
+        } else if !released && !app.tab_drag_cancelled {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        }
+        return None;
+    }
     match app.drop_target(pos, place) {
         TabDrop::Strip => {
             let x = pos.x;

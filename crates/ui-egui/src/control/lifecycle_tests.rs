@@ -7,7 +7,7 @@ use egui_kittest::Harness;
 #[test]
 fn discarded_passes_are_not_counted_as_accepted_frames() {
     let shared = Arc::new(Mutex::new(Shared::default()));
-    let mut plugin = ControlPlugin { shared: shared.clone() };
+    let mut plugin = ControlPlugin { shared: shared.clone(), viewport: egui::ViewportId::ROOT };
     let ctx = egui::Context::default();
     let mut accepted = egui::FullOutput::default();
     plugin.output_hook(&ctx, &mut accepted);
@@ -24,7 +24,7 @@ fn discarded_passes_are_not_counted_as_accepted_frames() {
 fn a_final_capped_pass_is_counted_as_presented() {
     let shared = Arc::new(Mutex::new(Shared::default()));
     let ctx = egui::Context::default();
-    ctx.add_plugin(ControlPlugin { shared: shared.clone() });
+    ctx.add_plugin(ControlPlugin { shared: shared.clone(), viewport: egui::ViewportId::ROOT });
     ctx.options_mut(|o| o.max_passes = 2.try_into().expect("two is non-zero"));
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| ui.ctx().request_discard("control test must discard"));
     output.textures_delta.clear();
@@ -40,7 +40,7 @@ fn a_final_capped_pass_is_counted_as_presented() {
 fn a_frame_that_settles_before_a_higher_pass_cap_is_counted_once() {
     let shared = Arc::new(Mutex::new(Shared::default()));
     let ctx = egui::Context::default();
-    ctx.add_plugin(ControlPlugin { shared: shared.clone() });
+    ctx.add_plugin(ControlPlugin { shared: shared.clone(), viewport: egui::ViewportId::ROOT });
     ctx.options_mut(|o| o.max_passes = 3.try_into().expect("three is non-zero"));
     let mut pass = 0;
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -84,7 +84,7 @@ fn key_commands_deliver_modifier_state() {
 #[test]
 fn a_stale_synthetic_batch_is_dropped_and_reported() {
     let shared = Arc::new(Mutex::new(Shared::default()));
-    let mut plugin = ControlPlugin { shared: shared.clone() };
+    let mut plugin = ControlPlugin { shared: shared.clone(), viewport: egui::ViewportId::ROOT };
     {
         let mut s = shared.lock().unwrap();
         s.epoch = 2;
@@ -110,7 +110,7 @@ fn a_stale_synthetic_batch_is_dropped_and_reported() {
 #[test]
 fn a_stale_request_does_not_drop_a_later_current_one() {
     let shared = Arc::new(Mutex::new(Shared::default()));
-    let mut plugin = ControlPlugin { shared: shared.clone() };
+    let mut plugin = ControlPlugin { shared: shared.clone(), viewport: egui::ViewportId::ROOT };
     {
         let mut s = shared.lock().unwrap();
         s.epoch = 2;
@@ -148,7 +148,7 @@ fn a_stale_request_does_not_drop_a_later_current_one() {
 #[test]
 fn a_started_request_finishes_its_batches_after_focus_moves() {
     let shared = Arc::new(Mutex::new(Shared::default()));
-    let mut plugin = ControlPlugin { shared: shared.clone() };
+    let mut plugin = ControlPlugin { shared: shared.clone(), viewport: egui::ViewportId::ROOT };
     {
         let mut s = shared.lock().unwrap();
         s.epoch = 7;
@@ -872,7 +872,7 @@ fn expired_unissued_screenshots_are_not_issued_and_late_callbacks_are_harmless()
 #[test]
 fn one_batch_is_consumed_by_one_pass() {
     let shared = Arc::new(Mutex::new(Shared::default()));
-    let mut plugin = ControlPlugin { shared: shared.clone() };
+    let mut plugin = ControlPlugin { shared: shared.clone(), viewport: egui::ViewportId::ROOT };
     {
         let mut s = shared.lock().unwrap();
         s.epoch = 3;
