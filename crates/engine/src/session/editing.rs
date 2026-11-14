@@ -324,7 +324,9 @@ impl Session {
             next.require_full_save();
         }
         let rewrites = |c: &pdfcraft_cos::Document| c.full_save_required() || c.encryption_changed();
-        if signed && ((rewrites(&next) && !rewrites(&editor.cos)) || (next.is_modified() && next.revisions().is_empty())) {
+        // Sanitizing with the signatures removed is asked for knowing that (#4622).
+        let unsigns = crate::edit::unsigns(&edit);
+        if signed && !unsigns && ((rewrites(&next) && !rewrites(&editor.cos)) || (next.is_modified() && next.revisions().is_empty())) {
             discard_edit_callbacks(&cx);
             return Err(EditError::SignedRewrite(edit.label().to_string()));
         }
