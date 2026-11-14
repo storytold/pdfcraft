@@ -51,24 +51,17 @@ fn xfa_field_data(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_xfa::FieldDatum>
 
 /// Keep sibling AcroForm widgets bound to the same XFA data node (such as a repeated
 /// page-area field with `match="global"` or an explicit data reference) in step after an edit
-/// or script run, before [`xfa_sync_datasets`] writes their values into the datasets packet.
+/// or script run, before [`xfa_sync_datasets`] writes their values into the datasets packet,
+/// and return the current field list so callers avoid an extra form walk.
 pub(crate) fn xfa_sync_shared_fields(
-    prev: &pdfcraft_cos::Document,
+    prev_fields: &[pdfcraft_forms::Field],
     next: &mut pdfcraft_cos::Document,
     tpl: Option<&pdfcraft_xfa::model::Template>,
     edit: Option<&Edit>,
-) -> Result<(), String> {
+) -> Result<Vec<pdfcraft_forms::Field>, String> {
     let next_fields = pdfcraft_forms::fields(next);
     if next_fields.len() < 2 {
-        return Ok(());
-    }
-    let prev_values: std::collections::HashMap<String, Vec<String>> = pdfcraft_forms::fields(prev).into_iter().map(|f| (f.name, f.value)).collect();
-    let mut targets = Vec::new();
-    if let Some(e) = edit {
-        collect_edit_targets(e, &mut targets);
-    }
-    if targets.is_empty() && next_fields.iter().all(|f| prev_values.get(&f.name) == Some(&f.value)) {
-        return Ok(());
+        return Ok(next_fields);
     }
     let parsed;
     let tpl = match tpl {
@@ -78,7 +71,6 @@ pub(crate) fn xfa_sync_shared_fields(
             parsed.as_ref()
         }
     };
-    let data = xfa_field_data(next);
     let mut groups: Vec<Vec<usize>> = Vec::new();
     let mut group_idx: std::collections::HashMap<pdfcraft_xfa::DataPath, usize> = std::collections::HashMap::new();
     for (idx, f) in next_fields.iter().enumerate() {
@@ -107,6 +99,18 @@ pub(crate) fn xfa_sync_shared_fields(
             }
         }
     }
+    if !groups.iter().any(|m| m.len() >= 2) {
+        return Ok(next_fields);
+    }
+    let prev_values: std::collections::HashMap<&str, &[String]> = prev_fields.iter().map(|f| (f.name.as_str(), f.value.as_slice())).collect();
+    let mut targets = Vec::new();
+    if let Some(e) = edit {
+        collect_edit_targets(e, &mut targets);
+    }
+    if targets.is_empty() && next_fields.iter().all(|f| prev_values.get(f.name.as_str()) == Some(&f.value.as_slice())) {
+        return Ok(next_fields);
+    }
+    let data = xfa_field_data(next);
     let mut changes: Vec<pdfcraft_forms::FieldChange> = Vec::new();
     for members in groups {
         if members.len() < 2 {
@@ -114,12 +118,13 @@ pub(crate) fn xfa_sync_shared_fields(
         }
         let explicit = targets.iter().rev().find_map(|t| {
             let &m = members.iter().find(|&&m| next_fields[m].name == *t)?;
-            let changed = prev_values.get(&next_fields[m].name) != Some(&next_fields[m].value);
+            let changed = prev_values.get(next_fields[m].name.as_str()) != Some(&next_fields[m].value.as_slice());
             let disagrees = members.iter().any(|&o| next_fields[o].value != next_fields[m].value);
             (changed || disagrees).then_some(m)
         });
-        let leader =
-            explicit.or_else(|| members.iter().rev().copied().find(|&m| prev_values.get(&next_fields[m].name) != Some(&next_fields[m].value)));
+        let leader = explicit.or_else(|| {
+            members.iter().rev().copied().find(|&m| prev_values.get(next_fields[m].name.as_str()) != Some(&next_fields[m].value.as_slice()))
+        });
         let Some(src_idx) = leader else { continue };
         let src = &next_fields[src_idx];
         let text = shared_field_text(next, src, data.get(src_idx));
@@ -135,8 +140,9 @@ pub(crate) fn xfa_sync_shared_fields(
     }
     if !changes.is_empty() {
         pdfcraft_forms::apply_script_changes(next, &changes, &mut pdfcraft_forms::NoScripts).map_err(|e| e.to_string())?;
+        return Ok(pdfcraft_forms::fields(next));
     }
-    Ok(())
+    Ok(next_fields)
 }
 
 fn collect_edit_targets(edit: &Edit, out: &mut Vec<String>) {
@@ -412,6 +418,7 @@ pub(crate) fn sync_usage_rights_warning(doc: &mut Document) {
 pub(crate) fn keeps_xfa_usage_rights(
     edit: &Edit,
     prev: &pdfcraft_cos::Document,
+    prev_fields: &[pdfcraft_forms::Field],
     next: &pdfcraft_cos::Document,
     sync_warnings: &[String],
     xfa_errors: &[String],
@@ -420,7 +427,7 @@ pub(crate) fn keeps_xfa_usage_rights(
         && sync_warnings.is_empty()
         && xfa_errors.is_empty()
         && pdfcraft_xfa::overrides_roundtrip(next)
-        && edit_is_xfa_data_only(edit, prev, next, xfa_errors)
+        && edit_is_xfa_data_only(edit, prev, prev_fields, next, xfa_errors)
 }
 
 fn field_som_key(doc: &pdfcraft_cos::Document, mut obj: pdfcraft_cos::ObjRef) -> Option<String> {
@@ -442,9 +449,15 @@ fn field_som_key(doc: &pdfcraft_cos::Document, mut obj: pdfcraft_cos::ObjRef) ->
     None
 }
 
-fn edit_is_xfa_data_only(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfcraft_cos::Document, xfa_errors: &[String]) -> bool {
+fn edit_is_xfa_data_only(
+    edit: &Edit,
+    prev: &pdfcraft_cos::Document,
+    prev_fields: &[pdfcraft_forms::Field],
+    next: &pdfcraft_cos::Document,
+    xfa_errors: &[String],
+) -> bool {
     match edit {
-        Edit::SetFieldValue { .. } | Edit::ResetForm { .. } => acroform_field_properties_unchanged(prev, next),
+        Edit::SetFieldValue { .. } | Edit::ResetForm { .. } => acroform_field_properties_unchanged(prev, prev_fields, next),
         Edit::XfaEvent { .. } => true,
         Edit::SetFieldImage { name, .. } | Edit::SetFieldImageTarget { name, .. } => {
             if !xfa_errors.is_empty() {
@@ -457,9 +470,8 @@ fn edit_is_xfa_data_only(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfc
                 Edit::SetFieldImageTarget { object, .. } => Some(*object),
                 _ => None,
             };
-            let fields = pdfcraft_forms::fields(prev);
             let mut matched_any = false;
-            for f in fields.iter().filter(|f| f.name == *name && target.is_none_or(|o| f.obj == o)) {
+            for f in prev_fields.iter().filter(|f| f.name == *name && target.is_none_or(|o| f.obj == o)) {
                 matched_any = true;
                 if f.button != Some(pdfcraft_forms::af::ButtonAction::ImportIcon)
                     || !field_som_key(prev, f.obj).is_some_and(|som| pdfcraft_xfa::is_template_image_field(&tpl, &som))
@@ -471,12 +483,14 @@ fn edit_is_xfa_data_only(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfc
         }
         Edit::ImportData { bytes, .. } => {
             !bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-")
-                && acroform_field_properties_unchanged(prev, next)
+                && acroform_field_properties_unchanged(prev, prev_fields, next)
                 && (matches!(decode_data_file(bytes), Some(Ok(t)) if is_xfa_data_file(&t) && xfa_errors.is_empty())
                     || pdfcraft_xfdf::export_xfdf(prev, true, false, "") == pdfcraft_xfdf::export_xfdf(next, true, false, ""))
         }
-        Edit::ApplyScriptChanges { changes } => changes.iter().all(field_change_is_value_only) && acroform_field_properties_unchanged(prev, next),
-        Edit::Batch { edits, .. } => edits.iter().all(|e| edit_is_xfa_data_only(e, prev, next, xfa_errors)),
+        Edit::ApplyScriptChanges { changes } => {
+            changes.iter().all(field_change_is_value_only) && acroform_field_properties_unchanged(prev, prev_fields, next)
+        }
+        Edit::Batch { edits, .. } => edits.iter().all(|e| edit_is_xfa_data_only(e, prev, prev_fields, next, xfa_errors)),
         _ => false,
     }
 }
@@ -526,16 +540,20 @@ pub(crate) fn field_change_is_value_only(c: &pdfcraft_forms::FieldChange) -> boo
 /// geometry, options, tooltip or actions) modified by an AcroForm callback during `prev -> next`,
 /// and no non-XFA shell field changed value without a matching laid-out XFA field holding that
 /// value.
-fn acroform_field_properties_unchanged(prev: &pdfcraft_cos::Document, next: &pdfcraft_cos::Document) -> bool {
-    let prev_fields = pdfcraft_forms::fields(prev);
+fn acroform_field_properties_unchanged(prev: &pdfcraft_cos::Document, prev_fields: &[pdfcraft_forms::Field], next: &pdfcraft_cos::Document) -> bool {
     let next_fields = pdfcraft_forms::fields(next);
     let prev_by_obj: std::collections::HashMap<pdfcraft_cos::ObjRef, &pdfcraft_forms::Field> = prev_fields.iter().map(|f| (f.obj, f)).collect();
     for after in &next_fields {
-        let Some(before) = prev_by_obj.get(&after.obj) else { continue };
+        let is_laid_out_xfa = next.get(after.obj).as_dict().is_some_and(|d| d.contains(pdfcraft_xfa::SOM_KEY));
+        let Some(before) = prev_by_obj.get(&after.obj) else {
+            if !is_laid_out_xfa {
+                return false;
+            }
+            continue;
+        };
         if !field_properties_unchanged(prev, before, next, after) {
             return false;
         }
-        let is_laid_out_xfa = next.get(after.obj).as_dict().is_some_and(|d| d.contains(pdfcraft_xfa::SOM_KEY));
         if !is_laid_out_xfa && before.value != after.value {
             let shared_with_xfa = next_fields.iter().any(|other| {
                 other.obj != after.obj

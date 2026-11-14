@@ -8469,14 +8469,16 @@ fn dynamic_xfa_usage_rights_edge_cases_reconstructed_undo_past_save_and_imports(
 
     // Importing XFDF that changes a PDF-only AcroForm field (no XFA SOM binding) also selects the
     // laid-out save path so the imported field value is not lost on a shell save.
+    let doc = s.doc_mut(iid).unwrap();
     pdfcraft_forms::add_field(
-        &mut s.doc_mut(iid).unwrap().editor.as_mut().unwrap().cos,
+        &mut doc.editor.as_mut().unwrap().cos,
         0,
         [72.0, 640.0, 200.0, 660.0],
         &pdfcraft_forms::NewField::Text { multiline: false },
         Some("pdfOnly"),
     )
     .unwrap();
+    doc.form = Arc::new(pdfcraft_forms::fields(&doc.editor.as_ref().unwrap().cos));
     let xfdf_pdf_only = br#"<?xml version="1.0" encoding="UTF-8"?>
 <xfdf xmlns="http://ns.adobe.com/xfdf/">
   <fields><field name="pdfOnly"><value>ShellCannotHoldThis</value></field></fields>
@@ -8486,7 +8488,9 @@ fn dynamic_xfa_usage_rights_edge_cases_reconstructed_undo_past_save_and_imports(
     assert!(!pdfcraft_xfa::has_usage_rights(&pdfcraft_cos::Document::open(s.save_bytes(iid).unwrap()).unwrap()));
     s.undo(iid).unwrap();
     // Remove the unmapped field from `cos` so subsequent assertions see only XFA-mapped fields.
-    pdfcraft_forms::delete_field(&mut s.doc_mut(iid).unwrap().editor.as_mut().unwrap().cos, "pdfOnly").unwrap();
+    let doc = s.doc_mut(iid).unwrap();
+    pdfcraft_forms::delete_field(&mut doc.editor.as_mut().unwrap().cos, "pdfOnly").unwrap();
+    doc.form = Arc::new(pdfcraft_forms::fields(&doc.editor.as_ref().unwrap().cos));
     assert!(!s.get(iid).unwrap().xfa.as_ref().unwrap().warnings.iter().any(|w| w.contains("usage rights")));
 
     // 4. `ApplyScriptChanges` with value-only changes preserves usage-rights shell saving, whereas
@@ -8520,20 +8524,24 @@ fn dynamic_xfa_usage_rights_edge_cases_reconstructed_undo_past_save_and_imports(
     //    `SetFieldImageTarget` only on genuine template `<imageEdit/>` fields, and rejects
     //    PDF-only buttons (without `SOM_KEY`, with unmapped `SOM_KEY`, or mapped to non-image fields).
     let cos_snapshot = s.doc_mut(iid).unwrap().editor.as_ref().unwrap().cos.clone();
+    let cos_fields = pdfcraft_forms::fields(&cos_snapshot);
     assert!(!crate::xfa_form::keeps_xfa_usage_rights(
         &Edit::SetFieldValue { name: "familyName".into(), value: FieldValue::Text("Rao".into()) },
         &cos_snapshot,
+        &cos_fields,
         &cos_snapshot,
         &[],
         &["calculate script failed".into()],
     ));
     let mut img_cos = cos_snapshot;
     pdfcraft_forms::add_field(&mut img_cos, 0, [72.0, 600.0, 140.0, 630.0], &pdfcraft_forms::NewField::Image, Some("pdfIcon")).unwrap();
-    let icon_obj = pdfcraft_forms::fields(&img_cos).into_iter().find(|f| f.name == "pdfIcon").unwrap().obj;
+    let img_fields = pdfcraft_forms::fields(&img_cos);
+    let icon_obj = img_fields.iter().find(|f| f.name == "pdfIcon").unwrap().obj;
     assert!(
         !crate::xfa_form::keeps_xfa_usage_rights(
             &Edit::SetFieldImage { name: "pdfIcon".into(), image: Arc::new(Vec::new()) },
             &img_cos,
+            &img_fields,
             &img_cos,
             &[],
             &[]
@@ -8541,10 +8549,12 @@ fn dynamic_xfa_usage_rights_edge_cases_reconstructed_undo_past_save_and_imports(
         "PDF-only ImportIcon button without SOM_KEY must use the laid-out save path"
     );
     img_cos.update_dict(icon_obj, |d| d.set(pdfcraft_xfa::SOM_KEY.to_vec(), pdfcraft_cos::PdfString::text("form[0].head[0].pdfIcon[0]"))).unwrap();
+    let img_fields = pdfcraft_forms::fields(&img_cos);
     assert!(
         !crate::xfa_form::keeps_xfa_usage_rights(
             &Edit::SetFieldImageTarget { name: "pdfIcon".into(), object: icon_obj, image: Arc::new(Vec::new()) },
             &img_cos,
+            &img_fields,
             &img_cos,
             &[],
             &[],
@@ -8552,10 +8562,12 @@ fn dynamic_xfa_usage_rights_edge_cases_reconstructed_undo_past_save_and_imports(
         "ImportIcon button whose SOM_KEY is absent from the XFA template must use the laid-out save path"
     );
     img_cos.update_dict(icon_obj, |d| d.set(pdfcraft_xfa::SOM_KEY.to_vec(), pdfcraft_cos::PdfString::text("form[0].head[0].familyName[0]"))).unwrap();
+    let img_fields = pdfcraft_forms::fields(&img_cos);
     assert!(
         !crate::xfa_form::keeps_xfa_usage_rights(
             &Edit::SetFieldImageTarget { name: "pdfIcon".into(), object: icon_obj, image: Arc::new(Vec::new()) },
             &img_cos,
+            &img_fields,
             &img_cos,
             &[],
             &[],
@@ -8576,11 +8588,13 @@ fn dynamic_xfa_usage_rights_edge_cases_reconstructed_undo_past_save_and_imports(
     let img_shell = Arc::new(pdfcraft_xfa::fixtures::usage_rights_shell(img_xdp, "", false));
     let pid = s.open("img-field.pdf", None, img_shell, None).unwrap();
     let photo_cos = s.doc_mut(pid).unwrap().editor.as_ref().unwrap().cos.clone();
-    let photo_obj = pdfcraft_forms::fields(&photo_cos).into_iter().find(|f| f.name == "photo").unwrap().obj;
+    let photo_fields = pdfcraft_forms::fields(&photo_cos);
+    let photo_obj = photo_fields.iter().find(|f| f.name == "photo").unwrap().obj;
     assert!(
         crate::xfa_form::keeps_xfa_usage_rights(
             &Edit::SetFieldImage { name: "photo".into(), image: Arc::new(Vec::new()) },
             &photo_cos,
+            &photo_fields,
             &photo_cos,
             &[],
             &[],
@@ -8591,6 +8605,7 @@ fn dynamic_xfa_usage_rights_edge_cases_reconstructed_undo_past_save_and_imports(
         crate::xfa_form::keeps_xfa_usage_rights(
             &Edit::SetFieldImageTarget { name: "photo".into(), object: photo_obj, image: Arc::new(Vec::new()) },
             &photo_cos,
+            &photo_fields,
             &photo_cos,
             &[],
             &[],

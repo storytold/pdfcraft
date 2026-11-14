@@ -592,17 +592,10 @@ impl<'a, 'b> Runner<'a, 'b> {
                 by_som.insert(som, name);
             }
             let mut by_path: HashMap<pdfcraft_xfa::DataPath, Vec<String>> = HashMap::new();
-            for f in pdfcraft_forms::fields(self.doc) {
-                let som = self
-                    .doc
-                    .get(f.obj)
-                    .as_dict()
-                    .and_then(|d| d.get(pdfcraft_xfa::SOM_KEY).map(|s| self.doc.resolve(s)))
-                    .and_then(|s| s.as_string().map(|s| s.to_text()))
-                    .unwrap_or_else(|| f.name.clone());
-                let path = pdfcraft_xfa::data_path(self.tpl, &som);
+            for (som, name) in &by_som {
+                let path = pdfcraft_xfa::data_path(self.tpl, som);
                 if !path.is_empty() {
-                    by_path.entry(path).or_default().push(f.name);
+                    by_path.entry(path).or_default().push(name.clone());
                 }
             }
             for names in by_path.values_mut() {

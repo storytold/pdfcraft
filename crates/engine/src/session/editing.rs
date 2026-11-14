@@ -111,6 +111,117 @@ fn icon_changed(previous: &pdfcraft_cos::Document, restored: &pdfcraft_cos::Docu
     false
 }
 
+struct XfaEditSync {
+    exited: Vec<String>,
+    sync_warnings: Vec<String>,
+    xfa_notes: Vec<String>,
+}
+
+/// Keep shared XFA widgets, datasets, XFA scripts, and text reflow in sync after `edit` runs on `next`.
+fn finish_xfa_edit(
+    next: &mut pdfcraft_cos::Document,
+    edit: &Edit,
+    cx: &mut EditCtx,
+    doc_tpl: Option<&pdfcraft_xfa::model::Template>,
+    prev_form: &[pdfcraft_forms::Field],
+    is_xfa: bool,
+    scope: &mut Scope,
+) -> Result<XfaEditSync, EditError> {
+    let form_edit = is_xfa && matches!(*scope, Scope::Form | Scope::Full | Scope::Content);
+    let mut fields_before_scripts = None;
+    if form_edit {
+        fields_before_scripts = Some(
+            guard(|| xfa_sync_shared_fields(prev_form, next, doc_tpl, Some(edit)))
+                .unwrap_or_else(|m| Err(format!("keeping shared XFA fields in step failed unexpectedly ({m})")))
+                .map_err(EditError::Write)
+                .inspect_err(|_| discard_edit_callbacks(cx))?,
+        );
+    }
+    // An XFA form's scripts answer the change: exit and validate scripts of the field, then
+    // every calculation (and a reset recalculates). They read the data, so it is brought up
+    // to date first. The fields whose exit scripts ran are noted once the edit is kept.
+    let mut exited: Vec<String> = Vec::new();
+    if let Some(tpl) = cx.xfa.clone() {
+        if form_edit {
+            let datasets = &mut cx.xfa_datasets;
+            let notes = guard(|| xfa_sync_datasets(next, Some(&tpl), datasets))
+                .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
+                .map_err(EditError::Write)
+                .inspect_err(|_| discard_edit_callbacks(cx))?;
+            cx.xfa_out.errors.extend(notes);
+        }
+        /// The fields edit `e` (and the edits it batches) gives new values, and whether it
+        /// resets the form.
+        fn collect(e: &Edit, changed: &mut Vec<String>, reset: &mut bool) {
+            match e {
+                Edit::SetFieldValue { name, .. } => changed.push(name.clone()),
+                Edit::ResetForm { .. } => *reset = true,
+                Edit::Batch { edits, .. } => edits.iter().for_each(|e| collect(e, changed, reset)),
+                _ => {}
+            }
+        }
+        let mut changed: Vec<String> = Vec::new();
+        let mut reset = false;
+        collect(edit, &mut changed, &mut reset);
+        if !changed.is_empty() || reset {
+            let state_before_scripts = next.read_state();
+            let highlight = cx.highlight();
+            let mut run = xfa::XfaRun {
+                page_count: cx.pages,
+                out: &mut cx.xfa_out,
+                datasets: cx.xfa_datasets,
+                ran_away: false,
+                highlight,
+                time_scale: cx.xfa_time_scale,
+            };
+            // Every changed field's scripts, then the calculations once (after a reset,
+            // only those).
+            let ran = guard(|| xfa::on_changes(next, &tpl, &changed, &mut run, &mut exited))
+                .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
+            cx.xfa_datasets = run.datasets;
+            cx.xfa_ran_away |= run.ran_away;
+            // The next edit of a batch reads the highlight this one's scripts set.
+            let on = run.highlight;
+            cx.set_highlight(on);
+            if let Err(e) = ran {
+                cx.xfa_out.errors.push(e);
+            }
+            if !state_before_scripts.matches(next) {
+                let prev = fields_before_scripts.as_deref().unwrap_or(prev_form);
+                guard(|| xfa_sync_shared_fields(prev, next, Some(&tpl), None))
+                    .unwrap_or_else(|m| Err(format!("keeping shared XFA fields in step failed unexpectedly ({m})")))
+                    .map_err(EditError::Write)
+                    .inspect_err(|_| discard_edit_callbacks(cx))?;
+            }
+        }
+    }
+    // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
+    let mut sync_warnings = Vec::new();
+    let mut xfa_notes = Vec::new();
+    if form_edit {
+        let (tpl, datasets) = (cx.xfa.as_deref(), &mut cx.xfa_datasets);
+        sync_warnings = guard(|| xfa_sync_datasets(next, tpl, datasets))
+            .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
+            .map_err(EditError::Write)
+            .inspect_err(|_| discard_edit_callbacks(cx))?;
+        xfa_notes.clone_from(&sync_warnings);
+        // Rebuilding from stale data would discard accepted widget values.
+        if sync_warnings.is_empty() {
+            let reflow = guard(|| xfa::relayout_changed_text(next, tpl, prev_form))
+                .unwrap_or_else(|m| Err(format!("laying out the XFA text failed unexpectedly ({m})")))
+                .map_err(EditError::Write)
+                .inspect_err(|_| discard_edit_callbacks(cx))?;
+            if let Some(warnings) = reflow {
+                xfa_notes.extend(warnings);
+                // Layout replaces pages and widgets, even if the page count is unchanged.
+                // Undo/redo must rebuild these too instead of refreshing only field values.
+                *scope = Scope::Full;
+            }
+        }
+    }
+    Ok(XfaEditSync { exited, sync_warnings, xfa_notes })
+}
+
 fn sync_script_history(doc: &Document, previous: &pdfcraft_cos::Document, restored: &pdfcraft_cos::Document) {
     if let Ok(mut runtime) = doc.js_runtime.lock() {
         let mut budget = 250_000;
@@ -244,92 +355,8 @@ impl Session {
             ),
             _ => edit.label(),
         };
-        if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
-            let tpl = doc.xfa_template.as_deref();
-            guard(|| xfa_sync_shared_fields(&editor.cos, &mut next, tpl, Some(&edit)))
-                .unwrap_or_else(|m| Err(format!("keeping shared XFA fields in step failed unexpectedly ({m})")))
-                .map_err(EditError::Write)
-                .inspect_err(|_| discard_edit_callbacks(&cx))?;
-        }
-        // An XFA form's scripts answer the change: exit and validate scripts of the field, then
-        // every calculation (and a reset recalculates). They read the data, so it is brought up
-        // to date first. The fields whose exit scripts ran are noted once the edit is kept.
-        let mut exited: Vec<String> = Vec::new();
-        if let Some(tpl) = cx.xfa.clone() {
-            if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
-                let datasets = &mut cx.xfa_datasets;
-                let notes = guard(|| xfa_sync_datasets(&mut next, Some(&tpl), datasets))
-                    .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
-                    .map_err(EditError::Write)
-                    .inspect_err(|_| discard_edit_callbacks(&cx))?;
-                cx.xfa_out.errors.extend(notes);
-            }
-            /// The fields edit `e` (and the edits it batches) gives new values, and whether it
-            /// resets the form.
-            fn collect(e: &Edit, changed: &mut Vec<String>, reset: &mut bool) {
-                match e {
-                    Edit::SetFieldValue { name, .. } => changed.push(name.clone()),
-                    Edit::ResetForm { .. } => *reset = true,
-                    Edit::Batch { edits, .. } => edits.iter().for_each(|e| collect(e, changed, reset)),
-                    _ => {}
-                }
-            }
-            let mut changed: Vec<String> = Vec::new();
-            let mut reset = false;
-            collect(&edit, &mut changed, &mut reset);
-            if !changed.is_empty() || reset {
-                let before_scripts = next.clone();
-                let highlight = cx.highlight();
-                let mut run = xfa::XfaRun {
-                    page_count: cx.pages,
-                    out: &mut cx.xfa_out,
-                    datasets: cx.xfa_datasets,
-                    ran_away: false,
-                    highlight,
-                    time_scale: cx.xfa_time_scale,
-                };
-                // Every changed field's scripts, then the calculations once (after a reset,
-                // only those).
-                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run, &mut exited))
-                    .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
-                cx.xfa_datasets = run.datasets;
-                cx.xfa_ran_away |= run.ran_away;
-                // The next edit of a batch reads the highlight this one's scripts set.
-                let on = run.highlight;
-                cx.set_highlight(on);
-                if let Err(e) = ran {
-                    cx.xfa_out.errors.push(e);
-                }
-                guard(|| xfa_sync_shared_fields(&before_scripts, &mut next, Some(&tpl), None))
-                    .unwrap_or_else(|m| Err(format!("keeping shared XFA fields in step failed unexpectedly ({m})")))
-                    .map_err(EditError::Write)
-                    .inspect_err(|_| discard_edit_callbacks(&cx))?;
-            }
-        }
-        // XFA forms keep their values in the datasets packet too, for Adobe's viewers.
-        let mut sync_warnings = Vec::new();
-        let mut xfa_notes = Vec::new();
-        if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
-            let (tpl, datasets) = (cx.xfa.as_deref(), &mut cx.xfa_datasets);
-            sync_warnings = guard(|| xfa_sync_datasets(&mut next, tpl, datasets))
-                .unwrap_or_else(|m| Err(format!("writing the XFA data failed unexpectedly ({m})")))
-                .map_err(EditError::Write)
-                .inspect_err(|_| discard_edit_callbacks(&cx))?;
-            xfa_notes.clone_from(&sync_warnings);
-            // Rebuilding from stale data would discard accepted widget values.
-            if sync_warnings.is_empty() {
-                let reflow = guard(|| xfa::relayout_changed_text(&mut next, tpl, &doc.form))
-                    .unwrap_or_else(|m| Err(format!("laying out the XFA text failed unexpectedly ({m})")))
-                    .map_err(EditError::Write)
-                    .inspect_err(|_| discard_edit_callbacks(&cx))?;
-                if let Some(warnings) = reflow {
-                    xfa_notes.extend(warnings);
-                    // Layout replaces pages and widgets, even if the page count is unchanged.
-                    // Undo/redo must rebuild these too instead of refreshing only field values.
-                    scope = Scope::Full;
-                }
-            }
-        }
+        let XfaEditSync { exited, sync_warnings, xfa_notes } =
+            finish_xfa_edit(&mut next, &edit, &mut cx, doc.xfa_template.as_deref(), &doc.form, is_xfa, &mut scope)?;
         // Signed documents are only ever saved incrementally: an edit that needs a full rewrite
         // (applying redactions, changing security, sanitizing) would invalidate the signatures.
         // So does any edit to a file rebuilt from object headers: it has no chain to append to.
@@ -352,7 +379,7 @@ impl Session {
         }
         let next_ur_data_only = editor.ur_shell.is_some()
             && editor.ur_data_only
-            && crate::keeps_xfa_usage_rights(&edit, &editor.cos, &next, &sync_warnings, &cx.xfa_out.errors);
+            && crate::keeps_xfa_usage_rights(&edit, &editor.cos, &doc.form, &next, &sync_warnings, &cx.xfa_out.errors);
         let previous = std::mem::replace(&mut editor.cos, next);
         let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
