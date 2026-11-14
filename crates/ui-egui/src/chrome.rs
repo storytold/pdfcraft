@@ -305,32 +305,39 @@ fn compute_tab_scale(app: &PdfCraftApp, view: &DocView, animated: bool) -> f32 {
     (group_scale * tab_scale).clamp(0.0, 1.0)
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct TabDragState {
+    from: usize,
+    to: usize,
+    grab_offset_x: f32,
+    pointer_x: f32,
+}
+
 fn compute_tab_shift(
     app: &PdfCraftApp,
     ui: &egui::Ui,
-    active_drag: Option<(usize, usize)>,
+    active_drag: Option<TabDragState>,
     i: usize,
     view_id: pdfcraft_engine::DocId,
-    gap: f32,
-    animated: bool,
+    cfg: &TabsStripConfig<'_>,
 ) -> f32 {
-    let target_shift = if let Some((from, to)) = active_drag {
-        let from_w = app.views.get(from).map_or(TAB_MIN_WIDTH, |v| if v.pinned { 36.0 } else { TAB_MIN_WIDTH }) + gap;
-        if i == from {
-            0.0
-        } else if from < to && i > from && i <= to {
+    let Some(drag) = active_drag else { return 0.0 };
+    let (from, to) = (drag.from, drag.to);
+    if i == from {
+        0.0
+    } else {
+        let from_w = app.views.get(from).map_or(TAB_MIN_WIDTH, |v| if v.pinned { 36.0 } else { TAB_MIN_WIDTH }) + cfg.gap;
+        let target_shift = if from < to && i > from && i <= to {
             -from_w
         } else if to < from && i >= to && i < from {
             from_w
         } else {
             0.0
-        }
-    } else {
-        0.0
-    };
-    let shift_anim_id = ui.scope_id().with(("tab_shift_x", view_id));
-    let shift_duration = if animated { 0.16 } else { 0.0 };
-    ui.ctx().animate_value_with_time(shift_anim_id, target_shift, shift_duration)
+        };
+        let shift_anim_id = ui.scope_id().with(("tab_shift_x", view_id));
+        let shift_duration = if cfg.animated { 0.16 } else { 0.0 };
+        ui.ctx().animate_value_with_time(shift_anim_id, target_shift, shift_duration)
+    }
 }
 
 fn show_group_editor_if_active(app: &mut PdfCraftApp, ui: &mut egui::Ui, pill_slots: &[(TabGroupId, egui::Id, Rect)]) {
@@ -381,7 +388,7 @@ fn show_main_tabs_content(app: &mut PdfCraftApp, ui: &mut egui::Ui, cfg: &TabsSt
     let mut action = None;
     let mut close = None;
 
-    let active_drag: Option<(usize, usize)> = ui.data(|d| d.get_temp(ui.scope_id().with("drag_reorder"))).flatten();
+    let active_drag: Option<TabDragState> = ui.data(|d| d.get_temp(ui.scope_id().with("drag_reorder")));
 
     for i in app.tabs_in(Place::Main) {
         let Some(view) = app.views.get(i) else { continue };
@@ -402,7 +409,7 @@ fn show_main_tabs_content(app: &mut PdfCraftApp, ui: &mut egui::Ui, cfg: &TabsSt
             continue;
         }
 
-        let current_shift = compute_tab_shift(app, ui, active_drag, i, view_id, cfg.gap, cfg.animated);
+        let current_shift = compute_tab_shift(app, ui, active_drag, i, view_id, cfg);
 
         let same_group_as_prev = match (last_group, view_group) {
             (Some(prev), Some(curr)) => prev == curr,
@@ -432,11 +439,19 @@ fn show_main_tabs_content(app: &mut PdfCraftApp, ui: &mut egui::Ui, cfg: &TabsSt
                 bridge_left,
                 scale: total_scale,
                 shift_x: current_shift,
+                drag: active_drag,
             },
             &mut close,
         );
         last_group = view_group;
-        last_tab_right = Some(response.rect.right() + current_shift);
+        let effective_shift = if let Some(drag) = active_drag
+            && drag.from == i
+        {
+            drag.pointer_x - drag.grab_offset_x - response.rect.left()
+        } else {
+            current_shift
+        };
+        last_tab_right = Some(response.rect.right() + effective_shift);
         slots.push((i, response.rect));
         if response.dragged() || response.drag_stopped() {
             dragged = Some((i, response.drag_stopped()));
@@ -499,6 +514,7 @@ fn show_main_tabs_content(app: &mut PdfCraftApp, ui: &mut egui::Ui, cfg: &TabsSt
                 bridge_left: None,
                 scale: 1.0,
                 shift_x: 0.0,
+                drag: None,
             },
             &mut close,
         );
@@ -676,7 +692,10 @@ fn tab_drag(app: &mut PdfCraftApp, ui: &egui::Ui, slots: &[(usize, Rect)], dragg
     let (from, released) = match dragged {
         Some(d) => d,
         None => {
-            ui.data_mut(|d| d.remove_temp::<(usize, usize)>(ui.scope_id().with("drag_reorder")));
+            ui.data_mut(|d| {
+                d.remove_temp::<TabDragState>(ui.scope_id().with("drag_reorder"));
+                d.remove_temp::<f32>(ui.scope_id().with("drag_grab_offset"));
+            });
             return None;
         }
     };
@@ -686,13 +705,22 @@ fn tab_drag(app: &mut PdfCraftApp, ui: &egui::Ui, slots: &[(usize, Rect)], dragg
             let x = pos.x;
             let to = drop_index(slots, from, x);
             if released {
-                ui.data_mut(|d| d.remove_temp::<(usize, usize)>(ui.scope_id().with("drag_reorder")));
+                ui.data_mut(|d| {
+                    d.remove_temp::<TabDragState>(ui.scope_id().with("drag_reorder"));
+                    d.remove_temp::<f32>(ui.scope_id().with("drag_grab_offset"));
+                });
                 if !busy {
                     app.move_tab_in_strip(from, slots, to);
                 }
                 return None;
             }
-            ui.data_mut(|d| d.insert_temp(ui.scope_id().with("drag_reorder"), (from, to)));
+            let grab_id = ui.scope_id().with("drag_grab_offset");
+            let grab_offset_x = ui.data_mut(|d| {
+                *d.get_temp_mut_or_insert_with(grab_id, || {
+                    slots.iter().find(|(i, _)| *i == from).map_or(20.0, |(_, r)| (x - r.left()).clamp(0.0, r.width()))
+                })
+            });
+            ui.data_mut(|d| d.insert_temp(ui.scope_id().with("drag_reorder"), TabDragState { from, to, grab_offset_x, pointer_x: x }));
             ui.ctx().request_repaint();
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
             if let Some(marker) = drop_marker(slots, from, to, ui.spacing().item_spacing.x) {
@@ -707,7 +735,10 @@ fn tab_drag(app: &mut PdfCraftApp, ui: &egui::Ui, slots: &[(usize, Rect)], dragg
             Some(x)
         }
         target => {
-            ui.data_mut(|d| d.remove_temp::<(usize, usize)>(ui.scope_id().with("drag_reorder")));
+            ui.data_mut(|d| {
+                d.remove_temp::<TabDragState>(ui.scope_id().with("drag_reorder"));
+                d.remove_temp::<f32>(ui.scope_id().with("drag_grab_offset"));
+            });
             if !released {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                 app.panes.drop_hint = app.drop_hint_rect(target);
@@ -768,6 +799,7 @@ pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Re
             bridge_left,
             scale: 1.0,
             shift_x: 0.0,
+            drag: None,
         };
         let response = tab(&mut row, spec, &mut close);
         last_group = view.group;
@@ -899,32 +931,61 @@ struct TabSpec<'a> {
     bridge_left: Option<f32>,
     scale: f32,
     shift_x: f32,
+    drag: Option<TabDragState>,
 }
 
 fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui::Response {
-    let TabSpec { id, theme: t, icon, name, file, dirty, active, index, cap, height, draggable, pinned, group_color, bridge_left, scale, shift_x } =
-        spec;
+    let TabSpec {
+        id,
+        theme: t,
+        icon,
+        name,
+        file,
+        dirty,
+        active,
+        index,
+        cap,
+        height,
+        draggable,
+        pinned,
+        group_color,
+        bridge_left,
+        scale,
+        shift_x,
+        drag,
+    } = spec;
     let font = theme::regular(13.0);
     let height = ui.available_height().max(height);
 
     if pinned {
         let width = 36.0 * scale;
         let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-        let draw_rect = rect.translate(vec2(shift_x, 0.0));
+        let (draw_rect, is_dragged) = if let Some(drag) = drag
+            && drag.from == index
+        {
+            let target_x = drag.pointer_x - drag.grab_offset_x;
+            (rect.translate(vec2(target_x - rect.left(), 0.0)), true)
+        } else {
+            (rect.translate(vec2(shift_x, 0.0)), false)
+        };
         let a11y = if dirty { format!("{name} (pinned, edited)") } else { format!("{name} (pinned)") };
         let sense = if draggable { Sense::click_and_drag() } else { Sense::click() };
         let resp = craft_ui::tabs::Tab::new(id, &a11y, active).sense(sense).focus_stroke(Stroke::new(1.0, t.accent)).show_at(ui, rect, |ui, resp| {
             let p = if scale < 0.99 { ui.painter().with_clip_rect(draw_rect) } else { ui.painter().clone() };
             let press = theme::Press::track(ui, resp);
-            let bg = if active {
+            let bg = if active || is_dragged {
                 press.fill(t.chrome, t.chrome.lerp_to_gamma(t.hover, 0.65), t.hover)
             } else {
                 press.fill(Color32::TRANSPARENT, t.hover, t.pressed)
             };
+            if is_dragged {
+                let shadow_rect = draw_rect.translate(vec2(0.0, 2.0));
+                p.rect_filled(shadow_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, Color32::from_black_alpha(40));
+            }
             if bg.a() > 0 {
                 p.rect_filled(draw_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg.linear_multiply(scale));
             }
-            if resp.dragged() {
+            if resp.dragged() || is_dragged {
                 p.rect_stroke(draw_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
             }
             if draw_rect.width() >= 16.0 {
@@ -965,21 +1026,32 @@ fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui:
     let full_width = cap.map_or(text_w + TAB_CHROME, |cap| (text_w + TAB_CHROME).min(cap));
     let width = full_width * scale;
     let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-    let draw_rect = rect.translate(vec2(shift_x, 0.0));
+    let (draw_rect, is_dragged) = if let Some(drag) = drag
+        && drag.from == index
+    {
+        let target_x = drag.pointer_x - drag.grab_offset_x;
+        (rect.translate(vec2(target_x - rect.left(), 0.0)), true)
+    } else {
+        (rect.translate(vec2(shift_x, 0.0)), false)
+    };
     let a11y = if dirty { format!("{name} (edited)") } else { name.to_string() };
     let sense = if draggable { Sense::click_and_drag() } else { Sense::click() };
     let resp = craft_ui::tabs::Tab::new(id, &a11y, active).sense(sense).focus_stroke(Stroke::new(1.0, t.accent)).show_at(ui, rect, |ui, resp| {
         let p = if scale < 0.99 { ui.painter().with_clip_rect(draw_rect) } else { ui.painter().clone() };
         let press = theme::Press::track(ui, resp);
-        let bg = if active {
+        let bg = if active || is_dragged {
             press.fill(t.chrome, t.chrome.lerp_to_gamma(t.hover, 0.65), t.hover)
         } else {
             press.fill(Color32::TRANSPARENT, t.hover, t.pressed)
         };
+        if is_dragged {
+            let shadow_rect = draw_rect.translate(vec2(0.0, 2.0));
+            p.rect_filled(shadow_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, Color32::from_black_alpha(40));
+        }
         if bg.a() > 0 {
             p.rect_filled(draw_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg.linear_multiply(scale));
         }
-        if resp.dragged() {
+        if resp.dragged() || is_dragged {
             p.rect_stroke(draw_rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
         }
         // Microsoft Edge standard group top accent line
