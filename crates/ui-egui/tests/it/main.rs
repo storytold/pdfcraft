@@ -90,6 +90,7 @@ mod split_view;
 mod split_view_edits;
 mod split_view_find;
 mod split_view_render;
+mod stamp_locale;
 mod stamps;
 mod status_layers;
 mod text_select;
