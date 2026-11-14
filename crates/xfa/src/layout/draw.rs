@@ -354,12 +354,21 @@ impl Layouter<'_> {
                 if !edge.visible() {
                     return Ok(());
                 }
-                let (from, to) = if *slope_up {
+                // A line without a width is vertical and one without a height is horizontal, as is
+                // one too narrow (or too flat) for its stroke, whatever its slope says.
+                let width = edge.thickness.clamp(0.1, 20.0);
+                let (from, to) = if d.common.w.is_none() || (d.common.h.is_some() && inner.w <= width * 2.0) {
+                    let x = inner.x + inner.w / 2.0;
+                    ((x, inner.y), (x, inner.bottom()))
+                } else if d.common.h.is_none() || inner.h <= width * 2.0 {
+                    let y = inner.y + inner.h / 2.0;
+                    ((inner.x, y), (inner.right(), y))
+                } else if *slope_up {
                     ((inner.x, inner.bottom()), (inner.right(), inner.y))
                 } else {
                     ((inner.x, inner.y), (inner.right(), inner.bottom()))
                 };
-                self.push(Item::Line { from, to, width: edge.thickness.clamp(0.1, 20.0), color: edge.color.0, dashed: edge.stroke == Stroke::Dashed })
+                self.push(Item::Line { from, to, width, color: edge.color.0, dashed: edge.stroke == Stroke::Dashed })
             }
             Value::Rectangle(b) => self.draw_border(b, inner),
             Value::Empty => Ok(()),
