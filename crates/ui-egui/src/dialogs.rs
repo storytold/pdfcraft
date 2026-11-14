@@ -79,6 +79,8 @@ struct Pending {
     attachment_description_now: Option<(pdfcraft_engine::DocId, Edit)>,
     replace_now: bool,
     open_revision: Option<usize>,
+    /// A path to show in the file manager (Properties ▸ Advanced ▸ Location, #7210).
+    reveal: Option<String>,
     a11y_now: bool,
     ocr_now: bool,
     scan_clean_now: bool,
@@ -537,6 +539,35 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
     true
 }
 
+/// Properties ▸ Advanced ▸ Location: the document's path, left to right, which a click shows in
+/// the file manager with the file selected, as the tab's Reveal does (#7210). `true` when it was
+/// clicked. A document with no file (unsaved, or opened from bytes) shows a dash, and the web
+/// build, which has no file manager, a plain label.
+fn location_row(ui: &mut egui::Ui, t: &Tokens, path: Option<&str>) -> bool {
+    ui.label(egui::RichText::new(tl!("Location")).color(t.text_muted));
+    let clicked = ui
+        .scope(|ui| {
+            ui.set_max_width(420.0);
+            let Some(path) = path.filter(|p| !p.is_empty()) else {
+                ui.label(egui::RichText::new("—").color(t.text_faint));
+                return false;
+            };
+            if cfg!(target_arch = "wasm32") {
+                widgets::label_ltr(ui, path, theme::regular(13.0), t.text);
+                return false;
+            }
+            let reveal = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
+            let mut job = egui::text::LayoutJob::simple(path.to_owned(), theme::regular(13.0), t.text, ui.available_width().max(0.0));
+            job.direction = egui::epaint::text::TextDirection::LeftToRight;
+            let galley = ui.painter().layout_job(job);
+            let r = ui.add(egui::Label::new(egui::WidgetText::Galley(galley)).selectable(false).sense(egui::Sense::click()));
+            theme::hand(r.on_hover_text(reveal)).clicked()
+        })
+        .inner;
+    ui.end_row();
+    clicked
+}
+
 /// `Dialog::Properties(tab)` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending, tab: PropsTab) -> bool {
     let t = Tokens::get(ui.ctx());
@@ -895,7 +926,9 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
             }
             PropsTab::Advanced => {
                 row(ui, "PDF version", i.pdf_version.clone());
-                path_row(ui, "Location", doc.path.clone().unwrap_or_default());
+                if location_row(ui, &t, doc.path.as_deref()) {
+                    req.reveal = doc.path.clone();
+                }
                 row(ui, "File size", format!("{} ({})", human_size(i.file_size), crate::panels::byte_count(i.file_size)));
                 let p = &i.pages[0];
                 row(ui, "Page size", units.size(f64::from(p.width), f64::from(p.height)));
@@ -2224,6 +2257,13 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     if let Some(n) = req.open_revision {
         app.open_revision(n);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(path) = req.reveal.take() {
+        app.reveal_path(std::path::Path::new(&path));
+    }
+    // The web build has no file manager, and `location_row` never asks for one there.
+    #[cfg(target_arch = "wasm32")]
+    let _ = req.reveal.take();
     if req.alt_now {
         app.save_alt_text();
     }

@@ -1349,6 +1349,34 @@ fn a_placeholder_title_leaves_the_file_name_on_the_tab_and_window() {
     assert!(h.query_by_label_contains("about:blank").is_none());
 }
 
+/// #7210: Properties ▸ Advanced ▸ Location shows the file in the file manager when clicked, as the
+/// tab's Reveal does, and the dialog stays open. The file here is gone, so the reveal reports that
+/// instead of starting a file manager.
+#[test]
+fn the_location_in_document_properties_reveals_the_file() {
+    let missing = std::env::temp_dir().join("pdfcraft-7210-no-such-dir").join("located.pdf");
+    let path = missing.to_string_lossy().into_owned();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe({
+        let path = path.clone();
+        move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.run_inline = true;
+            app.open_bytes("located.pdf", Some(path.clone()), fixture(1)).unwrap();
+            app
+        }
+    });
+    crate::support::settle(&mut h);
+    h.state_mut().dialog = Some(Dialog::Properties(pdfcraft_ui_egui::PropsTab::Advanced));
+    // Let the dialog finish centering before the path is clicked.
+    h.run_steps(6);
+    assert!(h.state().toast.is_none());
+    h.get_by_label(path.as_str()).click();
+    h.run_steps(3);
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("The file no longer exists"), "the click asked for a reveal");
+    assert_eq!(h.state().dialog, Some(Dialog::Properties(pdfcraft_ui_egui::PropsTab::Advanced)), "the dialog stays open");
+}
+
 #[test]
 fn an_earlier_revision_opens_from_document_properties() {
     use pdfcraft_engine::Edit;
