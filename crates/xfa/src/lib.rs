@@ -28,6 +28,7 @@ pub mod script;
 pub mod text;
 mod traverse;
 pub mod validation_rules;
+mod xml;
 
 use pdfcraft_cos::Document;
 

@@ -351,7 +351,7 @@ pub(crate) fn restyle(node: &mut Node, sets: &BTreeMap<String, String>) -> bool 
         let xml = props_xml(&props);
         // Written from names and escaped text above, so it parses; should it not, the object
         // keeps its layout and only scripts see the change.
-        match roxmltree::Document::parse(&xml) {
+        match crate::xml::Document::parse_with_options(&xml, crate::xml::ParsingOptions::default()) {
             Ok(doc) => crate::parse::restyle_from(node, doc.root_element(), &|t| roots.contains(t)),
             Err(_) => cut = true,
         }
