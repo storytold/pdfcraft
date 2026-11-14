@@ -1987,7 +1987,7 @@ source = "https://github.com/JetBrains/JetBrainsMono"
 licence = "OFL-1.1"
 licence_file = "assets/fonts/OFL-JetBrainsMono.txt"
 kind = "font"
-usage = "UI monospace font; demo PDF code"
+usage = "UI monospace font and proportional missing-glyph fallback; demo PDF code"
 sha256 = "e6fd0d7e91550b3ed2b735d4312474362c4716edc4fc0577a0f61ed782d5aed1"
 
 [[asset]]
