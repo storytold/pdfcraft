@@ -48,7 +48,7 @@ fn main() {
                         });
                     }
                     // eframe never raises a close request on a browser reload or tab close, so `guard_quit` never
-                    // prompts; ask the browser to confirm instead while a document has unsaved work (#812).
+                    // prompts; ask the browser to confirm instead while a document has unsaved work or an OCR review is open (#812).
                     warn_before_unload(app.unsaved_flag.clone());
                     // Host modes (`host` below, over `craft-web-host`): `?host=parent`, a
                     // same-origin page embedding PdfCraft in an iframe (such as the Nextcloud

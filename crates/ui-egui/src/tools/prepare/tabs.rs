@@ -325,17 +325,30 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
     });
 }
 
+/// The longest custom calculation script the Calculate tab offers to edit. A file can carry far
+/// more (forms read up to 64 MiB of script), and laying that out in a text box every frame would
+/// hang the dialog; of a longer one the start is shown, read-only, and the script is kept as it is
+/// unless another calculation is chosen. The JavaScript engine runs no script past 256 KiB either.
+const MAX_EDITED_SCRIPT: usize = 256 * 1024;
+
 pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens) {
     #[derive(PartialEq, Clone, Copy)]
     enum Mode {
         None,
         Simple,
         Notation,
+        Custom,
     }
+    // Choosing Custom again brings back the script the field had, not an empty box.
+    let custom = |d: &FieldDraft| match d.original.as_ref().as_ref().map(|o| &o.calculate) {
+        Some(Calculate::Custom(js)) => Calculate::Custom(js.clone()),
+        _ => Calculate::Custom(String::new()),
+    };
     let mode = match d.calculate {
         Calculate::None => Mode::None,
         Calculate::Simple { .. } => Mode::Simple,
         Calculate::Notation(_) => Mode::Notation,
+        Calculate::Custom(_) => Mode::Custom,
     };
     let mut m = mode;
     widgets::radio_value(ui, &mut m, Mode::None, tl!("Value is not calculated"));
@@ -345,6 +358,7 @@ pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::th
             Mode::None => Calculate::None,
             Mode::Simple => Calculate::Simple { op: CalcOp::Sum, fields: Vec::new() },
             Mode::Notation => Calculate::Notation(String::new()),
+            Mode::Custom => custom(d),
         };
     }
     if let Calculate::Simple { op, fields } = &mut d.calculate {
@@ -382,5 +396,59 @@ pub(super) fn calculate_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::th
     if let Calculate::Notation(expr) = &mut d.calculate {
         ui.add(crate::widgets::block(expr).hint_text("Price * Quantity").desired_rows(2).desired_width(420.0));
         ui.label(egui::RichText::new(tl!("Field names with + - * / and parentheses; put \\ before spaces in names.")).small().color(t.text_faint));
+    }
+    let mut m3 = match d.calculate {
+        Calculate::Custom(_) => Mode::Custom,
+        _ => m2,
+    };
+    let radio = widgets::radio_value(ui, &mut m3, Mode::Custom, tl!("Custom calculation script:"));
+    if radio.clicked() && !matches!(d.calculate, Calculate::Custom(_)) {
+        d.calculate = custom(d);
+    }
+    if !matches!(d.calculate, Calculate::Custom(_)) {
+        d.script_refused = false;
+    }
+    if let Calculate::Custom(js) = &mut d.calculate {
+        // The box is named by its radio, and a note about it is its description too, so a screen
+        // reader on the box hears it.
+        let script_box = |ui: &mut egui::Ui, text: &mut dyn egui::TextBuffer| {
+            let edit = crate::widgets::block(text).code_editor().hint_text("event.value = …;").desired_rows(6).desired_width(420.0);
+            let scroll = egui::ScrollArea::vertical().id_salt("calc-script").max_height(180.0);
+            scroll.show(ui, |ui| ui.add(edit.char_limit(MAX_EDITED_SCRIPT + 1)).labelled_by(radio.id).id).inner
+        };
+        let describe = |ui: &egui::Ui, id: egui::Id, note: &str| {
+            let note = note.to_owned();
+            ui.ctx().accesskit_node_builder(id, |node| node.set_description(note));
+        };
+        if js.len() > MAX_EDITED_SCRIPT {
+            // Too long to edit: its start is shown, read-only (selectable, so it can be copied).
+            let kib = (js.len() / 1024).to_string();
+            let note =
+                crate::i18n::fmt(tl!("This script is too long to edit here ({kib} KiB); its start is shown. It is kept as it is."), &[("kib", &kib)]);
+            let mut start: &str = &js[..js.floor_char_boundary(MAX_EDITED_SCRIPT)];
+            let id = script_box(ui, &mut start);
+            describe(ui, id, &note);
+            ui.label(egui::RichText::new(note).small().color(t.text_faint));
+        } else {
+            // The box edits a copy: an edit that would take the script past the limit (a large
+            // paste) is refused and said so, rather than hiding the box the user is typing in.
+            // The box itself takes at most one character past the limit, so a huge paste is cut
+            // there before it is laid out, and is still over the limit to refuse. The limit is on
+            // bytes (`len`), as the JavaScript engine's is; the cut counts characters, which is
+            // what laying out costs.
+            let mut draft = js.clone();
+            let id = script_box(ui, &mut draft);
+            if draft != *js {
+                d.script_refused = draft.len() > MAX_EDITED_SCRIPT;
+                if !d.script_refused {
+                    *js = draft;
+                }
+            }
+            if d.script_refused {
+                let refusal = tl!("A script edited here can be at most 256 KiB long; that change wasn't made.");
+                describe(ui, id, refusal);
+                ui.colored_label(ui.visuals().error_fg_color, refusal);
+            }
+        }
     }
 }

@@ -87,8 +87,16 @@ fn sign(id: &pdfcraft_engine::sign::pkcs12::DigitalId, file: Vec<u8>, more: impl
     v.set(b"Contents".to_vec(), Object::String(PdfString { bytes: vec![0; RESERVE], hex: true }));
     v.set(b"M".to_vec(), PdfString::literal(b"D:20261002120000+01'00'".to_vec()));
     more(&mut v);
+    let certifies = v.get(b"Reference").is_some();
     let sig = doc.add(Object::Dict(v));
     doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"V".to_vec(), Object::Ref(sig))).unwrap();
+    if certifies {
+        // A certification is the signature the catalog's /Perms /DocMDP names (ISO 32000-2, 12.8.2.2).
+        let mut perms = Dict::new();
+        perms.set(b"DocMDP".to_vec(), Object::Ref(sig));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"Perms".to_vec(), Object::Dict(perms))).unwrap();
+    }
     let save = pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() };
     let mut out = pdfcraft_cos::write_incremental(&doc, &save).unwrap();
     let br = out.windows(MARK.len()).position(|w| w == MARK.as_bytes()).unwrap();

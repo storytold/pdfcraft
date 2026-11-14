@@ -65,6 +65,12 @@ pub use renderer::{image_resampling_size, tiling_cell_pixels, tiling_cell_scale,
 /// PdfCraft patch: exported for its regression test.
 #[doc(hidden)]
 pub use renderer::set_skip_offscreen_paths;
+/// PdfCraft patch (27): exported for its regression test.
+#[doc(hidden)]
+pub use renderer::set_cmyk_band_pixels;
+/// PdfCraft patch (30): exported for its regression tests.
+#[doc(hidden)]
+pub use renderer::{OffscreenDraws, offscreen_draws};
 
 /// A cache used by the renderer.
 ///
@@ -157,6 +163,10 @@ pub struct RenderSettings {
     /// PdfCraft patch: when set, solid text and line-art paint colours are remapped while
     /// rendering; `None` renders exactly as without the patch.
     pub color_replacement: Option<ColorReplacement>,
+    /// PdfCraft patch (31): the most coverage values the rasterizer keeps for the page; paths
+    /// past it are left out, with `InterpreterWarning::ContentTruncated`. `None` keeps as many
+    /// as a strip's index reaches (2^31).
+    pub max_coverage: Option<usize>,
 }
 
 impl Default for RenderSettings {
@@ -170,6 +180,7 @@ impl Default for RenderSettings {
             x_offset: 0.0,
             y_offset: 0.0,
             color_replacement: None,
+            max_coverage: None,
         }
     }
 }
@@ -254,6 +265,10 @@ pub fn render_into<'a>(
         interpreter_settings.preview,
     );
 
+    if let Some(max) = render_settings.max_coverage {
+        device.ctx.set_max_coverage(max);
+    }
+
     // PdfCraft patch (18): the page renders as one transparency group (the page group). Its
     // objects composite with an initially transparent backdrop, and the group is then put on
     // the paper (ISO 32000-2, page group), so a blend mode only blends where something was
@@ -284,6 +299,11 @@ pub fn render_into<'a>(
     }
 
     interpret_page(page, &mut state, &mut device);
+    // PdfCraft patch (31): what the rasterizer left out once its coverage was full (a page that
+    // paints the same content millions of times over) is content left out, said as such.
+    if device.ctx.coverage_full() {
+        (interpreter_settings.warning_sink)(hayro_interpret::InterpreterWarning::ContentTruncated);
+    }
 
     if !backdrop_inside {
         device.pop_transparency_group();

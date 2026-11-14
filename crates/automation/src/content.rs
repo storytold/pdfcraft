@@ -21,7 +21,7 @@ fn to_view(r: [f64; 4], ph: f64) -> [f64; 4] {
     [r[0], ph - r[3], r[2], ph - r[1]]
 }
 
-fn rect_arg(a: &Args, key: &str) -> Result<Option<[f64; 4]>> {
+pub(crate) fn rect_arg(a: &Args, key: &str) -> Result<Option<[f64; 4]>> {
     a.get(key)
         .map(|v| {
             let r: Vec<f64> = v.as_array().map(|x| x.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
@@ -354,14 +354,32 @@ impl Automation {
         Ok(json!({"page":page+1,"generation":doc.edit_generation(),"count":items.len(),"objects":items}))
     }
 
-    pub(crate) fn object_move(&mut self, a: &Args) -> Result<Value> {
+    /// The references `objects` names (from object_list), or with `all` every object on `page`,
+    /// as ⌘A selects them in Edit a PDF; refused when `generation` is not the document's.
+    fn object_targets(&self, a: &Args, page: usize) -> Result<Vec<pdfcraft_engine::ObjectTarget>> {
         use pdfcraft_engine::{MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
-        let page = self.page(a)?;
+        let doc = self.doc(a)?;
+        if let Some(g) = a.get("generation") {
+            let g = g.as_u64().ok_or_else(|| bad("generation must be a non-negative integer from object_list"))?;
+            if g != doc.edit_generation() {
+                return Err(failed("the document changed; call object_list again"));
+            }
+        }
+        if a.opt_bool("all")?.unwrap_or(false) {
+            if a.get("objects").is_some() {
+                return Err(bad("give objects or all, not both"));
+            }
+            let all: Vec<_> = doc.editable_objects(page).map_err(failed)?.into_iter().map(|o| o.target).collect();
+            if all.is_empty() || all.len() > MAX_MOVE_OBJECTS {
+                return Err(failed(format!("page {} has {} objects; select 1–1000", page + 1, all.len())));
+            }
+            return Ok(all);
+        }
         let rows = a
             .get("objects")
             .and_then(Value::as_array)
             .filter(|r| !r.is_empty() && r.len() <= MAX_MOVE_OBJECTS)
-            .ok_or_else(|| bad("objects must contain 1–1000 references from object_list"))?;
+            .ok_or_else(|| bad("objects must contain 1–1000 references from object_list (or pass all: true)"))?;
         let mut targets = Vec::with_capacity(rows.len());
         for row in rows {
             let row = row.as_object().ok_or_else(|| bad("each object must contain kind and index"))?;
@@ -382,6 +400,12 @@ impl Automation {
                 .ok_or_else(|| bad("object index must be a positive integer from object_list"))?;
             targets.push(ObjectTarget { kind, index });
         }
+        Ok(targets)
+    }
+
+    pub(crate) fn object_move(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let targets = self.object_targets(a, page)?;
         let delta = a
             .get("offset")
             .and_then(Value::as_array)
@@ -389,17 +413,46 @@ impl Automation {
             .and_then(|v| Some([v.first()?.as_f64()?, v.get(1)?.as_f64()?]))
             .filter(|v| v.iter().all(|n| n.is_finite() && n.abs() <= 1e9))
             .ok_or_else(|| bad("offset must contain two finite numbers [dx, dy] in displayed points"))?;
-        let doc = self.doc(a)?;
-        if let Some(g) = a.get("generation") {
-            let g = g.as_u64().ok_or_else(|| bad("generation must be a non-negative integer from object_list"))?;
-            if g != doc.edit_generation() {
-                return Err(failed("the document changed; call object_list again before moving"));
-            }
-        }
-        let offset = doc.object_move_offset(page, delta).map_err(failed)?;
+        let offset = self.doc(a)?.object_move_offset(page, delta).map_err(failed)?;
         let count = targets.len();
         let mut result = self.apply(a, Edit::MoveObjects { page, objects: targets, offset })?;
         result["moved"] = json!(count);
+        Ok(result)
+    }
+
+    /// Edit ▸ Copy (or with `cut`, Cut) of objects selected together, kept for object_paste into
+    /// any open document. A cut then deletes them as one undo step.
+    pub(crate) fn object_copy(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let targets = self.object_targets(a, page)?;
+        let cut = a.opt_bool("cut")?.unwrap_or(false);
+        let doc = self.doc(a)?;
+        if cut && !doc.allows_modification() {
+            return Err(failed(pdfcraft_engine::EditError::NotPermitted("changes")));
+        }
+        let clip = doc.copy_objects(page, &targets).map_err(failed)?;
+        let out = json!({ "copied": clip.objects().len(), "text": clip.text() });
+        self.objects_clipboard = Some(pdfcraft_engine::ObjectClipboard::new(clip));
+        if !cut {
+            return Ok(out);
+        }
+        let delete = Edit::delete_objects(page, targets).ok_or_else(|| failed("nothing to cut"))?;
+        let mut result = self.apply(a, delete)?;
+        result["copied"] = out["copied"].clone();
+        result["text"] = out["text"].clone();
+        Ok(result)
+    }
+
+    /// Edit ▸ Paste of the objects object_copy copied: onto `page`, where they were, or on the
+    /// page they came from (and on each further paste onto a page) 18 points down and right.
+    pub(crate) fn object_paste(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let mut clipboard = self.objects_clipboard.take().ok_or_else(|| failed("copy objects first (object_copy)"))?;
+        let count = clipboard.clip().objects().len();
+        let edit = self.doc(a).and_then(|doc| clipboard.paste(doc, page).map_err(failed));
+        self.objects_clipboard = Some(clipboard);
+        let mut result = self.apply(a, edit?)?;
+        result["pasted"] = json!(count);
         Ok(result)
     }
 }

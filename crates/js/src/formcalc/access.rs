@@ -25,6 +25,7 @@ impl Interp<'_> {
             && let Some(d) = self.deadline
             && std::time::Instant::now() > d
         {
+            self.out_of_time = true;
             return Err(RAN_TOO_LONG.into());
         }
         #[cfg(target_arch = "wasm32")]
@@ -32,9 +33,12 @@ impl Interp<'_> {
         Ok(())
     }
 
-    /// `more` nodes into `out`, each once, never past [`MAX_LIST`].
+    /// `more` nodes into `out`, each once, never past [`MAX_LIST`]. Every node visited costs a
+    /// step, kept or not, and the call itself one more: a search that matches nothing still
+    /// costs work when it is repeated over a long list.
     pub(super) fn gather(&mut self, out: &mut Vec<usize>, seen: &mut HashSet<usize>, more: impl IntoIterator<Item = usize>) -> R<()> {
         for i in more {
+            self.step()?;
             if seen.insert(i) {
                 out.push(i);
                 if out.len() > MAX_LIST {
@@ -42,7 +46,7 @@ impl Interp<'_> {
                 }
             }
         }
-        self.charge(1)
+        self.step()
     }
 
     /// The nodes of `v`, each once.
@@ -293,8 +297,10 @@ impl Interp<'_> {
         }
     }
 
-    /// `v` onto `out`: a node only once, never past [`MAX_LIST`].
+    /// `v` onto `out`: a node only once, never past [`MAX_LIST`]. A duplicate costs its step
+    /// too: `all` on a list of same-named siblings makes one for every pair.
     fn list_push(&mut self, out: &mut Vec<Val>, seen: &mut HashSet<usize>, v: Val) -> R<()> {
+        self.step()?;
         if let Val::Node(i) = v
             && !seen.insert(i)
         {
@@ -304,7 +310,7 @@ impl Interp<'_> {
         if out.len() > MAX_LIST {
             return Err(LIST_TOO_LONG.into());
         }
-        self.charge(1)
+        Ok(())
     }
 
     /// Property `name` of form object `i` as FormCalc reads it: its value, attributes,
@@ -313,16 +319,16 @@ impl Interp<'_> {
         let Some(n) = self.node(i) else { return Ok(Val::Null) };
         Ok(match name {
             "formattedValue" => match &n.formatted {
-                Some(f) => Val::Str(f.clone()),
+                Some(f) => Val::Str(f.to_string()),
                 None => self.node_value(i),
             },
             "rawValue" | "value" => self.node_value(i),
-            "name" => Val::Str(n.name.clone()),
-            "somExpression" => Val::Str(n.som.clone()),
+            "name" => Val::Str(n.name.to_string()),
+            "somExpression" => Val::Str(n.som.to_string()),
             "className" => Val::Str(n.kind.class_name().into()),
             "index" | "instanceIndex" => Val::Num(n.index as f64),
-            "presence" => Val::Str(n.presence.clone()),
-            "access" => Val::Str(n.access.clone()),
+            "presence" => Val::Str(n.presence.to_string()),
+            "access" => Val::Str(n.access.to_string()),
             "isNull" => Val::Num(if n.value.is_empty() { 1.0 } else { 0.0 }),
             "mandatory" => Val::Str("disabled".into()),
             "parent" => n.parent.map_or(Val::Null, Val::Node),
@@ -332,7 +338,7 @@ impl Interp<'_> {
                 None => Val::Node(i),
             },
             "instanceManager" => match n.parent {
-                Some(p) => Val::Im(p, n.name.clone()),
+                Some(p) => Val::Im(p, n.name.to_string()),
                 None => Val::Null,
             },
             "border" | "ui" | "font" | "caption" | "fillColor" | "borderColor" | "fontColor" | "margin" | "para" | "assist" | "validate"
