@@ -233,3 +233,27 @@ fn a_password_answered_after_combine_opens_behind_the_combine_tab() {
     app.combine_paths(&[]);
     assert!(app.password_prompt.as_ref().unwrap().activate, "a tool's open keeps its focus");
 }
+
+/// #2541 review: files the file manager hands over keep the order they came in, not the sort a
+/// person picked in the list earlier.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn files_from_the_file_manager_keep_their_arrival_order_over_a_chosen_sort() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-combine-order-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let paths: Vec<String> = ["b.pdf", "a.pdf"]
+        .iter()
+        .map(|n| {
+            let p = dir.join(n);
+            std::fs::write(&p, locked()).unwrap();
+            p.to_string_lossy().into_owned()
+        })
+        .collect();
+    let mut app = PdfCraftApp::new();
+    app.combine_tab.sort = Some((SortKey::Name, true));
+    app.combine_paths(&paths);
+    let names: Vec<&str> = app.combine_draft.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["b.pdf", "a.pdf"], "arrival order, not name order");
+    assert_eq!(app.combine_tab.sort, None);
+    std::fs::remove_dir_all(&dir).ok();
+}

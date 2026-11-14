@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Service
+# Dolphin and other KDE file managers: right-click PDFs and pictures > "Combine files in PdfCraft".
+# The same file types as the Windows installer's "Combine files" menus (#585). A `[Desktop Action]`
+# in the application's own .desktop file is only a launcher quicklist entry, not a file-manager
+# menu item, so this separate service menu is what puts the entry on KDE's context menu.
+MimeType=application/pdf;image/png;image/jpeg;image/tiff;image/gif;image/bmp;image/jp2;image/jpx;image/x-jp2-codestream;
+Actions=combine;
+X-KDE-Priority=TopLevel
+X-KDE-StartupNotify=false
+
+[Desktop Action combine]
+Name=Combine files in PdfCraft
+Icon=ai.storyteller.pdfcraft
+Exec=pdfcraft --combine %F
