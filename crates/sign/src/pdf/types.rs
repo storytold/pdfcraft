@@ -8,7 +8,22 @@ pub struct TrustStore {
 
 impl TrustStore {
     pub(super) fn trusts(&self, c: &Certificate) -> bool {
-        self.certs.iter().any(|t| t.raw == c.raw)
+        // A trust anchor is a name plus a public key (RFC 5280 §6.1), not one particular
+        // encoding of them: an authority that reissues or cross-signs its root keeps the same
+        // anchor, and a chain that runs through such a copy still ends where the user trusted.
+        //
+        // A different encoding anchors only when the trusted certificate may issue. Otherwise
+        // whoever holds a trusted end-entity key could mint a CA-bearing copy of it (same name,
+        // same key) and anchor a hierarchy of their own under a certificate the user trusted
+        // for one identity. [`Certificate::may_issue`] is the rule the chain builder applies to
+        // an issuer, legacy self-signed root included.
+        //
+        // The key compared is the parsed `SubjectPublicKeyInfo`: the algorithm (and, for EC,
+        // the curve) plus the key bits. `PublicKey::from_spki` normalises RSA's integer
+        // encoding and leaves out the parameters the algorithm itself fixes (NULL for RSA,
+        // absent for Ed25519), so two certificates compare equal exactly when they carry the
+        // same key, not merely the same bytes under a different one.
+        self.certs.iter().any(|t| t.subject.raw == c.subject.raw && t.public_key == c.public_key && (t.raw == c.raw || t.may_issue()))
     }
 }
 
@@ -227,3 +242,56 @@ pub const WORDINGS: &[&str] = &[
     "Signature validity is unknown",
     "Signature is invalid",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cert(pem: &str) -> Certificate {
+        crate::x509::load_certificates(pem.as_bytes()).unwrap().into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn an_anchor_is_a_name_and_a_key_not_an_encoding() {
+        let root = cert(include_str!("../../tests/data/ca.crt.pem"));
+        let other = cert(include_str!("../../tests/data/rsa.crt.pem"));
+        let store = TrustStore { certs: vec![root.clone()] };
+        assert!(store.trusts(&root), "the trusted certificate itself is the anchor");
+        // A cross-signed or reissued copy of the same root: same subject and key, other bytes.
+        let mut copy = root.clone();
+        copy.raw.push(0);
+        assert!(store.trusts(&copy), "the same name and key is the same anchor");
+        assert!(!store.trusts(&other), "a different subject and key is not the anchor");
+
+        // A trusted end-entity certificate anchors itself, but not a same-key copy: that copy
+        // may claim CA rights and issue a hierarchy under an identity trusted for one signer.
+        // The fixture is a CA, so the certificate is made an end entity the way a CA:FALSE one
+        // reads; `trusts` looks at nothing else.
+        let mut end_entity_cert = other.clone();
+        end_entity_cert.is_ca = false;
+        end_entity_cert.has_basic_constraints = true;
+        let end_entity = TrustStore { certs: vec![end_entity_cert.clone()] };
+        assert!(end_entity.trusts(&end_entity_cert), "the exact trusted certificate is its own anchor");
+        let mut ca_copy = end_entity_cert.clone();
+        ca_copy.raw.push(0);
+        assert!(!end_entity.trusts(&ca_copy), "a trusted end-entity may not anchor a copy of itself");
+
+        // A v3 end entity with no basicConstraints at all: only a self-signed v1 root is the
+        // legacy exception `may_issue` allows, so this one anchors only as itself.
+        let mut bare = other.clone();
+        bare.is_ca = false;
+        bare.has_basic_constraints = false;
+        bare.version = 2;
+        let bare_store = TrustStore { certs: vec![bare.clone()] };
+        assert!(bare_store.trusts(&bare), "the exact certificate anchors itself, basicConstraints or not");
+        let mut bare_copy = bare.clone();
+        bare_copy.raw.push(0);
+        assert!(!bare_store.trusts(&bare_copy), "a v3 certificate that may not issue cannot anchor a copy");
+
+        // The same key bytes under another algorithm are not the same key: the anchor is the
+        // parsed `SubjectPublicKeyInfo`, so the algorithm (and, for EC, the curve) counts too.
+        let mut other_algorithm = root.clone();
+        other_algorithm.public_key = crate::keys::PublicKey::Ed25519(root.public_key.key_bits());
+        assert!(!store.trusts(&other_algorithm), "the same bytes under another algorithm are not the anchor");
+    }
+}
