@@ -4306,6 +4306,35 @@ fn images_behind_the_text_show_on_pages_that_paint_themselves_white() {
     assert!(s.get(again).unwrap().edit_notices.is_empty(), "turned back on: nothing to say");
 }
 
+/// The image tools take an added image behind the text away without going through Add content:
+/// deleting it there turns the page's own backdrop back on; cropping it makes it page content
+/// drawn before the backdrop, which then stays off so the picture still shows, and nothing is
+/// said about it.
+#[test]
+fn the_image_tools_leave_the_backdrop_as_an_image_behind_the_text_needs_it() {
+    let (blue, white) = ([0, 0, 255, 255], [255, 255, 255, 255]);
+    let mut s = Session::new();
+    let id = s.open("white.pdf", None, Arc::new(white_page_pdf(None)), None).unwrap();
+    let add = |s: &mut Session| {
+        let bytes = Arc::new(bmp(2, 2, [255, 0, 0]));
+        s.apply(id, Edit::AddImage { page: 0, rect: Some([0.0, 100.0, 200.0, 200.0]), name: "blue.bmp".into(), bytes, behind: true }).unwrap();
+        assert_eq!(s.get(id).unwrap().page_backdrop(0), None);
+    };
+    add(&mut s);
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Delete }).unwrap();
+    assert_eq!(s.get(id).unwrap().page_backdrop(0), Some(Backdrop::Fill), "deleted: the backdrop is back");
+    assert!(s.get(id).unwrap().edit_notices.is_empty());
+    assert_eq!(pixel(&s, id, 0, 5, 150), white);
+    add(&mut s);
+    let keep = [0.0, 100.0, 100.0, 200.0];
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop(keep) }).unwrap();
+    let d = s.get(id).unwrap();
+    assert_eq!(d.page_backdrop(0), None, "cropped: the backdrop stays off");
+    assert!(d.edit_notices.is_empty(), "{:?}", d.edit_notices);
+    assert_eq!(pixel(&s, id, 0, 5, 150), blue, "and the picture still shows");
+    assert_eq!(pixel(&s, id, 0, 150, 150), white, "where the crop kept it");
+}
+
 /// Deleting an image behind the text says which pages keep their own white backdrop off (it
 /// couldn't be turned back on safely), and only for pages the edit left off.
 #[test]

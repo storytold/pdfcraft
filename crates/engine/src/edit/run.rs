@@ -901,9 +901,17 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             crate::ocr::layer::add_text(doc, *page, words)?;
         }
         Edit::EnhanceScan { images } => crate::scan_clean::write_back(doc, images)?,
-        Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
+        Edit::EditPageImage { page, index, change } => {
+            run_edit_page_image(doc, *page, *index, change)?;
+            // Deleting an added image behind the content here, or making it ordinary page content,
+            // may leave nothing that needs the page's own backdrop off.
+            pdfcraft_edit::settle_backdrop(doc, *page)?;
+        }
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
-        Edit::DeleteObjects { page, objects } => crate::object_clip::delete(doc, *page, objects, |doc, edit| run_edit(doc, edit, cx))?,
+        Edit::DeleteObjects { page, objects } => {
+            crate::object_clip::delete(doc, *page, objects, |doc, edit| run_edit(doc, edit, cx))?;
+            pdfcraft_edit::settle_backdrop(doc, *page)?;
+        }
         Edit::PasteObjects { page, clip, offset } => crate::object_clip::paste(doc, *page, clip, *offset)?,
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;

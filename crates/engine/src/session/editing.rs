@@ -759,10 +759,16 @@ fn edit_notices(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfcraft_cos:
             notices.push(EditNotice::BackdropsLeftOff { pages });
         }
     }
-    // The page whose backdrop an image behind the content turned off, when deleting the image or
-    // bringing it to the top couldn't turn it back on. Only when this edit left it off: a page
+    // The page whose backdrop an image behind the content turned off, when deleting the image
+    // (here, with the image tools or among other objects) or bringing it to the top couldn't turn
+    // it back on. Cropping or arranging it with the image tools makes it page content drawn
+    // before the backdrop, which then stays off on purpose. Only when this edit left it off: a page
     // left off before is not news.
-    if let Edit::DeleteContent { page, .. } | Edit::UpdateContent { page, .. } = edit {
+    if let Edit::DeleteContent { page, .. }
+    | Edit::UpdateContent { page, .. }
+    | Edit::EditPageImage { page, change: crate::ImageEdit::Delete, .. }
+    | Edit::DeleteObjects { page, .. } = edit
+    {
         let left = guard(|| !pdfcraft_edit::backdrop_left_off(prev, *page) && pdfcraft_edit::backdrop_left_off(next, *page)).unwrap_or(false);
         if left {
             notices.push(EditNotice::ImageBackdropsLeftOff { pages: vec![*page] });

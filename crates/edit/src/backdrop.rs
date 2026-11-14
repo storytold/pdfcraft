@@ -144,6 +144,18 @@ pub fn backdrop_left_off(doc: &Document, page: usize) -> bool {
     pdfcraft_model::pages(doc).get(page).is_some_and(|p| left_off(doc, p))
 }
 
+/// Turn page `page`'s (0-based) own white backdrop back on when [`replace`] turned it off and
+/// nothing on the page needs it off any more ([`backdrops_left_off`]), where [`restore`] finds that
+/// safe. For edits that take an image behind the content away without knowing it was one (the
+/// image tools delete it, or make it ordinary page content). Returns whether it did.
+pub fn settle_backdrop(doc: &mut Document, page: usize) -> Result<bool, EditError> {
+    let Some(p) = pdfcraft_model::pages(doc).into_iter().nth(page) else { return Ok(false) };
+    if !left_off(doc, &p) {
+        return Ok(false);
+    }
+    Ok(restore(doc, &p)? > 0)
+}
+
 fn left_off(doc: &Document, p: &pdfcraft_model::Page) -> bool {
     let copy = |o: &Object| doc.resolve(o).as_dict().is_some_and(|d| d.get(TAG).is_some());
     let list: Vec<Object> = match p.dict.get(b"Contents").map(|c| doc.resolve(c)).as_deref() {
