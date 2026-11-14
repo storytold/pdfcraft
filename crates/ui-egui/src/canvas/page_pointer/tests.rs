@@ -824,7 +824,7 @@ const RAW_KEY_READS: [&str; 17] = [
 /// a window's or a field's own keys, which `PageKeys` would hide, and the pages' reads that
 /// `PageKeys` can't make (chords that wait for the menu bar instead, Escape ending what the pages
 /// hold, any key stopping a glide, the clipboard's hand-off to text fields): (file, function, why).
-const NOT_PAGE_KEYS: [(&str, &str, &str); 17] = [
+const NOT_PAGE_KEYS: [(&str, &str, &str); 18] = [
     (
         "app/clipboard.rs",
         "clipboard_keys",
@@ -852,6 +852,7 @@ const NOT_PAGE_KEYS: [(&str, &str, &str); 17] = [
     ("tools/field_table_ui.rs", "column_dividers", "the Text field table window's own arrows"),
     ("tools/fill_sign.rs", "signature_pad", "the signature dialog's own ⌘Z"),
     ("tools/forms_ui.rs", "combo_editor", "the combo box's own Enter, while its field has the focus"),
+    ("tools/forms_ui.rs", "ctrl_enter_starts_a_line", "a multi-line text field's own Ctrl+Enter, while it has the focus"),
     ("tools/prepare/properties.rs", "body", "the field properties' own Enter, while one of their fields has the focus"),
     ("tools/redact_ui.rs", "search_body", "the redaction search field's own Enter, while it has the focus"),
     ("tools/sign_ui/dialog.rs", "sign_as", "the signing dialog's own Enter"),

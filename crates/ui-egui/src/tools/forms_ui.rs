@@ -210,6 +210,26 @@ fn turned_layouter(
     }
 }
 
+/// Ctrl+Enter (⌘Enter on a Mac) starts a new line in a multi-line field, as Enter does (#7140).
+/// egui's editor starts one only for Enter, Shift+Enter and Alt+Enter, so the key reaches it
+/// without Ctrl. Only while the field `id` has the focus, so no other editor's key changes, and
+/// only while nothing is over the pages (`keys`): a dialog or menu over them keeps its Ctrl+Enter.
+fn ctrl_enter_starts_a_line(ui: &mut egui::Ui, id: egui::Id, keys: PageKeys) {
+    if keys.over() || !ui.memory(|m| m.has_focus(id)) {
+        return;
+    }
+    ui.input_mut(|input| {
+        for event in &mut input.events {
+            if let egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. } = event
+                && (modifiers.ctrl || modifiers.command || modifiers.mac_cmd)
+                && !modifiers.alt
+            {
+                *modifiers = egui::Modifiers { shift: modifiers.shift, ..egui::Modifiers::NONE };
+            }
+        }
+    });
+}
+
 /// Show a field's editor over `rect`. A turned field's editor takes the keys and the pointer
 /// over the field but draws nothing: [`turned_caret_and_paint`] paints its text turned (#4296).
 fn show_field_editor(ui: &mut egui::Ui, te: egui::TextEdit<'_>, rect: Rect, turned: bool) -> (egui::Response, Option<Laid>) {
@@ -1322,6 +1342,10 @@ pub(crate) fn overlay(
                     // the box less 3 pt each side, scaled.
                     let wrap = (upright.width() - 6.0 * zoom).max(1.0);
                     let mut layouter = turned_layouter(font, multiline.then_some(wrap), password);
+                    let field_id = egui::Id::unique(("form-field", view.pane.key, &f.name, focus.widget));
+                    if multiline {
+                        ctrl_enter_starts_a_line(ui, field_id, keys);
+                    }
                     let mut te = if multiline { egui::TextEdit::multiline(&mut fx.text) } else { egui::TextEdit::singleline(&mut fx.text) };
                     te = te
                         .desired_width((upright.width() - 6.0 * zoom + 6.0).max(1.0))
@@ -1330,7 +1354,7 @@ pub(crate) fn overlay(
                         .text_color(Color32::BLACK)
                         .margin(egui::Margin::symmetric(3, 1))
                         .password(password)
-                        .id(egui::Id::unique(("form-field", view.pane.key, &f.name, focus.widget)));
+                        .id(field_id);
                     if let Some(max) = f.max_len {
                         te = te.char_limit(max);
                     }
@@ -1698,6 +1722,37 @@ mod tests {
             list: ChoiceList::default(),
             had_focus: false,
         }
+    }
+
+    /// The Enter key's modifiers once a focused multi-line field has seen a Ctrl+Enter, with
+    /// something over the pages (`over`) or not.
+    fn ctrl_enter_as_the_field_leaves_it(over: bool) -> Option<egui::Modifiers> {
+        let ctx = egui::Context::default();
+        let key = egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::CTRL };
+        let input = egui::RawInput { events: vec![key], ..Default::default() };
+        let mut seen = None;
+        let mut output = ctx.run_ui(input, |ui| {
+            let id = egui::Id::unique("multi-line field");
+            ui.memory_mut(|m| m.request_focus(id));
+            ctrl_enter_starts_a_line(ui, id, PageKeys::new(over));
+            seen = ui.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Key { key: egui::Key::Enter, modifiers, .. } => Some(*modifiers),
+                    _ => None,
+                })
+            });
+        });
+        // The frame's textures aren't painted here: egui asks that they be cleared before dropping.
+        output.textures_delta.clear();
+        seen
+    }
+
+    /// CodeRabbit on #7212: Ctrl+Enter becomes Enter for the field only while nothing is over the
+    /// pages; a menu or popup over them keeps the Ctrl+Enter it was given.
+    #[test]
+    fn ctrl_enter_is_left_alone_while_something_is_over_the_pages() {
+        assert_eq!(ctrl_enter_as_the_field_leaves_it(false), Some(egui::Modifiers::NONE));
+        assert_eq!(ctrl_enter_as_the_field_leaves_it(true), Some(egui::Modifiers::CTRL));
     }
 
     /// An untouched draft takes the value a script gave the field; typing is kept.
