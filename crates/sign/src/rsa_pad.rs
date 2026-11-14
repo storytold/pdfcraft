@@ -3,7 +3,7 @@
 //! any digest, any MGF1 hash and any salt length, which the `rsa` crate's typed API can't do.
 //! Verification only; public data, so nothing here needs to be constant-time.
 
-use rsa::{BoxedUint, RsaPublicKey};
+use rsa::{BoxedUint, PublicKey};
 
 use crate::SignError;
 use crate::der;
@@ -18,7 +18,10 @@ fn encoded_message(n: &[u8], e: &[u8], sig: &[u8], notes: &mut Vec<&'static str>
     // limit) by the encoding rather than the number, so they are dropped before anything is built.
     let (n, e) = (trim_zeros(n), trim_zeros(e));
     let k = n.len();
-    let key = RsaPublicKey::new(BoxedUint::from_be_slice_vartime(n), BoxedUint::from_be_slice_vartime(e))
+    // `PublicKey::new` refuses a modulus under 1024 bits, which documents signed years ago still
+    // carry. Those signatures are checked as before (up to the crate's 8192-bit cap); the
+    // certificate's key reports itself weak below 2048 bits (`keys::PublicKey::weakness`).
+    let key = PublicKey::new_with_size_limits(BoxedUint::from_be_slice_vartime(n), BoxedUint::from_be_slice_vartime(e), 1..=PublicKey::MAX_SIZE)
         .map_err(|e| SignError::Malformed(format!("RSA key: {e}")))?;
     if sig.len() != k {
         notes
@@ -144,4 +147,35 @@ pub fn pss_verify(
         return Ok(false);
     }
     Ok(alg.digest(&[&[0u8; 8], digest, salt]) == h)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len()).step_by(2).filter_map(|i| s.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok())).collect()
+    }
+
+    /// A 512-bit key, as old documents carry: `rsa` 0.10 refuses it in `PublicKey::new`, but its
+    /// signatures still verify here (the key is reported weak elsewhere). Made with
+    /// `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:512` and
+    /// `openssl dgst -sha256 -sign` over the bytes `legacy key`.
+    #[test]
+    fn a_key_under_1024_bits_still_verifies() {
+        let n =
+            hex("F8AD355D80DF13A88CA540E6DE3F67F253692A7D6BE4ED7965DB3E4D73F1A2CBC3C81E983E3913FADB4DB44A6DA8A43DDB296862CB3173979B5D0EC4479D0139");
+        let sig =
+            hex("8dc7452df5b6a294a2094e0eda60fef22dcbfa605d1390cb1241ab049260edaefc10c415a89a91c83984af90ee2df3723028ed3c221c41db8fb6cd7fde20bd45");
+        let digest = hex("db8539851b985a88a95f53b3ecec0001ef24ab2ca1cb00387e7ac514a8624673");
+        let e = [1, 0, 1];
+        let mut notes = Vec::new();
+        assert_eq!(pkcs1_verify(&n, &e, DigestAlg::Sha256, &digest, &sig, &mut notes).ok(), Some(true));
+        assert!(notes.is_empty(), "{notes:?}");
+        let mut other = digest.clone();
+        if let Some(b) = other.first_mut() {
+            *b ^= 1;
+        }
+        assert_eq!(pkcs1_verify(&n, &e, DigestAlg::Sha256, &other, &sig, &mut notes).ok(), Some(false));
+    }
 }
