@@ -63,7 +63,7 @@ const CKB_DAYS: [&str; 7] = ["یەکشەممە", "دووشەممە", "سێشەم
 
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
 /// the interface languages, in the same order and with the same names.
-pub static DATE_LANGUAGES: [DateLanguage; 35] = [
+pub static DATE_LANGUAGES: [DateLanguage; 36] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -277,6 +277,30 @@ pub static DATE_LANGUAGES: [DateLanguage; 35] = [
         months_short: ["ژانویه", "فوریه", "مارس", "آوریل", "مه", "ژوئن", "ژوئیه", "اوت", "سپتامبر", "اکتبر", "نوامبر", "دسامبر"],
         days: ["یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنج‌شنبه", "جمعه", "شنبه"],
         days_short: ["یک", "دو", "سه", "چه", "پن", "جم", "شن"],
+    },
+    // Hebrew; Gregorian month and weekday names, right to left like Arabic. After a day number the
+    // month takes the prefix ב (`8 באוקטובר`).
+    DateLanguage {
+        code: "he",
+        name: "עברית",
+        months: ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"],
+        months_with_day: Some([
+            "בינואר",
+            "בפברואר",
+            "במרץ",
+            "באפריל",
+            "במאי",
+            "ביוני",
+            "ביולי",
+            "באוגוסט",
+            "בספטמבר",
+            "באוקטובר",
+            "בנובמבר",
+            "בדצמבר",
+        ]),
+        months_short: ["ינו׳", "פבר׳", "מרץ", "אפר׳", "מאי", "יוני", "יולי", "אוג׳", "ספט׳", "אוק׳", "נוב׳", "דצמ׳"],
+        days: ["יום ראשון", "יום שני", "יום שלישי", "יום רביעי", "יום חמישי", "יום שישי", "שבת"],
+        days_short: ["א׳", "ב׳", "ג׳", "ד׳", "ה׳", "ו׳", "ש׳"],
     },
     DateLanguage {
         code: "pl",
@@ -584,13 +608,21 @@ pub fn date_language(code: &str) -> Option<&'static DateLanguage> {
 
 /// Form date fields (`AFDate_FormatEx`, `util.printd`, `util.scand`) write month and weekday
 /// names in date language `code` from now on, as a localized Acrobat writes its own language's:
-/// `dd-mmm-yy` is `18-ott-26` in Italian (#5303). An unknown code is English.
+/// `dd-mmm-yy` is `18-ott-26` in Italian (#5303). An unknown code is English. A month's day-form
+/// (`months_with_day`, Hebrew `במרץ`) is accepted when a date is read; what is written stays the
+/// plain month name.
 pub fn use_form_date_language(code: &str) {
     let l = date_language(code).unwrap_or(&DATE_LANGUAGES[0]);
-    let names = pdfcraft_forms::af::DateNames { months: l.months, months_short: l.months_short, days: l.days, days_short: l.days_short };
+    let names = pdfcraft_forms::af::DateNames {
+        months: l.months,
+        months_short: l.months_short,
+        days: l.days,
+        days_short: l.days_short,
+        months_with_day: l.months_with_day,
+    };
     if pdfcraft_forms::af::date_names() != names {
         pdfcraft_forms::af::set_date_names(names);
-        pdfcraft_js::set_date_names(l.months, l.months_short, l.days, l.days_short);
+        pdfcraft_js::set_date_names(l.months, l.months_short, l.days, l.days_short, l.months_with_day);
     }
 }
 
@@ -658,11 +690,18 @@ fn runs(fmt: &str) -> Vec<(char, usize, bool)> {
     runs
 }
 
+/// Languages whose `months_with_day` form only reads after the day: Hebrew `7 במרץ`, but
+/// `מרץ 7`; the short name then takes the prefix ב too (`8 באוק׳`). Elsewhere the form follows
+/// any day in the pattern (Lithuanian `kovo 7 d.`).
+const DAY_FIRST_MONTH_FORMS: &[&str] = &["he"];
+
 /// The day `(year, month, day)` written in `fmt` with `lang`'s names. Anything but the date
 /// letters is copied as is; a month or day out of range shows as its number.
 pub fn format_day(fmt: &str, (y, m, d): (i64, u32, u32), lang: &DateLanguage) -> String {
     let runs = runs(fmt);
-    let with_day = runs.iter().any(|&(c, n, escaped)| !escaped && c == 'd' && n <= 2);
+    let any_day = runs.iter().any(|&(c, n, escaped)| !escaped && c == 'd' && n <= 2);
+    let day_first = DAY_FIRST_MONTH_FORMS.contains(&lang.code);
+    let mut day_seen = false;
     let month = (m as usize).checked_sub(1);
     let weekday = weekday(y, m, d);
     let mut out = String::new();
@@ -672,7 +711,12 @@ pub fn format_day(fmt: &str, (y, m, d): (i64, u32, u32), lang: &DateLanguage) ->
             ('y', 4..) => out.push_str(&format!("{:04}", y.clamp(0, 9999))),
             ('y', _) => out.push_str(&format!("{:02}", y.rem_euclid(100))),
             ('m', 3..) => {
+                let with_day = if day_first { day_seen } else { any_day };
                 let names = if n >= 4 { lang.months_with_day.filter(|_| with_day).unwrap_or(lang.months) } else { lang.months_short };
+                // Hebrew's short month takes the same ב after a day (`7 במרץ`, `8 באוק׳`).
+                if n == 3 && day_first && day_seen && month.is_some_and(|i| i < 12) {
+                    out.push('ב');
+                }
                 match month.and_then(|i| names.get(i)) {
                     Some(name) => out.push_str(name),
                     None => out.push_str(&m.to_string()),
@@ -687,8 +731,14 @@ pub fn format_day(fmt: &str, (y, m, d): (i64, u32, u32), lang: &DateLanguage) ->
                     None => out.push_str(&d.to_string()),
                 }
             }
-            ('d', 2) => out.push_str(&format!("{d:02}")),
-            ('d', _) => out.push_str(&d.to_string()),
+            ('d', 2) => {
+                day_seen = true;
+                out.push_str(&format!("{d:02}"))
+            }
+            ('d', _) => {
+                day_seen = true;
+                out.push_str(&d.to_string())
+            }
             _ => out.extend(std::iter::repeat_n(c, n)),
         }
     }
@@ -911,6 +961,45 @@ mod tests {
         assert_eq!(in_lang("mmmm yyyy", "ru"), "март 2026");
         // A weekday (dddd) is not a day number.
         assert_eq!(in_lang("dddd, mmmm", "cs"), "sobota, březen");
+    }
+
+    /// Every Hebrew month and weekday, spelled out, and the places where ב is or isn't added.
+    /// March 1 2026 is a Sunday: March 7 is a Saturday.
+    #[test]
+    fn hebrew_months_weekdays_and_the_day_prefix() {
+        let he = date_language("he").unwrap();
+        let months = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
+        let with_day = ["בינואר", "בפברואר", "במרץ", "באפריל", "במאי", "ביוני", "ביולי", "באוגוסט", "בספטמבר", "באוקטובר", "בנובמבר", "בדצמבר"];
+        let short = ["ינו׳", "פבר׳", "מרץ", "אפר׳", "מאי", "יוני", "יולי", "אוג׳", "ספט׳", "אוק׳", "נוב׳", "דצמ׳"];
+        let days = ["יום ראשון", "יום שני", "יום שלישי", "יום רביעי", "יום חמישי", "יום שישי", "שבת"];
+        let days_short = ["א׳", "ב׳", "ג׳", "ד׳", "ה׳", "ו׳", "ש׳"];
+        assert_eq!(he.months, months);
+        assert_eq!(he.months_with_day, Some(with_day));
+        assert_eq!(he.months_short, short);
+        assert_eq!(he.days, days);
+        assert_eq!(he.days_short, days_short);
+        for (i, ((month, with_day), short)) in months.iter().zip(&with_day).zip(&short).enumerate() {
+            let day = (2026, (i + 1) as u32, 8);
+            assert_eq!(format_day("mmmm", day, he), *month, "{}", i + 1);
+            assert_eq!(format_day("d mmmm", day, he), format!("8 {with_day}"));
+            assert_eq!(format_day("mmm", day, he), *short);
+            assert_eq!(format_day("d mmm", day, he), format!("8 ב{short}"));
+            // No numeric day before the month: the plain form, long or short.
+            assert_eq!(format_day("mmm yyyy", day, he), format!("{short} 2026"));
+            assert_eq!(format_day("mmmm d, yyyy", day, he), format!("{month} 8, 2026"));
+        }
+        for (i, (day_name, short_name)) in days.iter().zip(&days_short).enumerate() {
+            let day = (2026, 3, (i + 1) as u32);
+            assert_eq!(format_day("dddd", day, he), *day_name);
+            assert_eq!(format_day("ddd", day, he), *short_name);
+        }
+        // Padded day, escaped day, short month with no day before it, month out of range.
+        assert_eq!(format_day("dd mmmm", DAY, he), "07 במרץ");
+        assert_eq!(format_day(r"\d mmmm", DAY, he), "d מרץ", "an escaped day is not a day number");
+        assert_eq!(format_day("mmm yyyy", DAY, he), "מרץ 2026");
+        assert_eq!(format_day("d mmm", (2026, 13, 8), he), "8 13", "out of range is the number, with no ב");
+        assert_eq!(format_day("dddd, d mmmm yyyy", DAY, he), "שבת, 7 במרץ 2026");
+        assert_eq!(format_day("d mmm yyyy", (2026, 10, 8), he), "8 באוק׳ 2026");
     }
 
     /// Indonesian month and weekday names are the same with and after a day number. (Vietnamese

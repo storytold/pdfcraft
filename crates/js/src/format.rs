@@ -134,23 +134,31 @@ const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "Jun
 
 const DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-/// Month and weekday names (weekdays from Sunday): full, then short.
-type Names = ([&'static str; 12], [&'static str; 12], [&'static str; 7], [&'static str; 7]);
+/// Month and weekday names (weekdays from Sunday): full, short, then the month form used after a
+/// day (`במרץ`). That form is read by `util.scand` and not written by `util.printd`.
+type Names = ([&'static str; 12], [&'static str; 12], [&'static str; 7], [&'static str; 7], Option<[&'static str; 12]>);
 
 const ENGLISH: Names = (
     MONTHS,
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
     DAYS,
     ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    None,
 );
 
 static NAMES: std::sync::RwLock<Names> = std::sync::RwLock::new(ENGLISH);
 
 /// Sets the month and weekday names `util.printd` writes for `mmmm`, `mmm`, `dddd` and `ddd`
 /// (weekdays from Sunday), as a localized Acrobat writes its own language's (#5303).
-/// `util.scand` reads them as well as English.
-pub fn set_date_names(months: [&'static str; 12], months_short: [&'static str; 12], days: [&'static str; 7], days_short: [&'static str; 7]) {
-    *NAMES.write().unwrap_or_else(std::sync::PoisonError::into_inner) = (months, months_short, days, days_short);
+/// `util.scand` reads them, the day-form `months_with_day` (`במרץ`), and English.
+pub fn set_date_names(
+    months: [&'static str; 12],
+    months_short: [&'static str; 12],
+    days: [&'static str; 7],
+    days_short: [&'static str; 7],
+    months_with_day: Option<[&'static str; 12]>,
+) {
+    *NAMES.write().unwrap_or_else(std::sync::PoisonError::into_inner) = (months, months_short, days, days_short, months_with_day);
 }
 
 /// `text` with the month and weekday names of `lists` (in the order months, short months,
@@ -162,7 +170,7 @@ pub fn set_date_names(months: [&'static str; 12], months_short: [&'static str; 1
 /// "mar"), the order of the format's name fields (`mmm`, `ddd`) decides. English names are
 /// found too, so that one typed ("Tue" before "Mar") fills its field of the format as a
 /// localized one does.
-fn english_names(text: &str, fmt: &str, lists: [&[&str]; 4]) -> String {
+fn english_names(text: &str, fmt: &str, lists: [&[&str]; 4], also_months: Option<&[&str; 12]>) -> String {
     const EN: [&[&str]; 4] = [&MONTHS, &MONTHS, &DAYS, &DAYS];
     // No date is this long: hostile text is left as it is rather than scanned name by name.
     if text.len() > MAX_DATE_TEXT_BYTES {
@@ -182,6 +190,15 @@ fn english_names(text: &str, fmt: &str, lists: [&[&str]; 4]) -> String {
                 if !n.is_empty() && n.len() <= MAX_NAME_CHARS {
                     names.push((n, k % 4 < 2, english));
                 }
+            }
+        }
+    }
+    // The same twelve months in the form used after a day (`במרץ`, `октября`).
+    if let Some(extra) = also_months {
+        for (name, english) in extra.iter().copied().zip(MONTHS) {
+            let n: Vec<String> = name.chars().map(fold).collect();
+            if !n.is_empty() && n.len() <= MAX_NAME_CHARS {
+                names.push((n, true, english));
             }
         }
     }
@@ -332,7 +349,7 @@ pub(crate) fn printd(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResu
     let (y, mo, day, wd, h, mi, sec) =
         (part("getFullYear")?, part("getMonth")?, part("getDate")?, part("getDay")?, part("getHours")?, part("getMinutes")?, part("getSeconds")?);
     let mut out = String::new();
-    let (months, months_short, days, days_short) = printd_names();
+    let (months, months_short, days, days_short, _) = printd_names();
     let b = fmt.as_bytes();
     let mut i = 0;
     while i < b.len() {
@@ -607,12 +624,14 @@ fn scan_date(fmt: &str, text: &str, this_year: i32) -> Option<Scanned> {
                 p += 1;
             }
             (ScanPart::Field { unit: DateUnit::MonthName, .. }, ScanToken::Letters(l)) => {
-                let (months, months_short, ..) = names();
-                v.mo = Some(named(&months, l).or_else(|| named(&months_short, l)).or_else(|| named(&MONTHS, l))?.saturating_add(1));
+                let (months, months_short, _, _, with_day) = names();
+                // The day-form (`במרץ`) is the same month as the plain name.
+                let prefixed = with_day.as_ref().and_then(|m| named(m, l));
+                v.mo = Some(named(&months, l).or(prefixed).or_else(|| named(&months_short, l)).or_else(|| named(&MONTHS, l))?.saturating_add(1));
                 p += 1;
             }
             (ScanPart::Field { unit: DateUnit::Weekday, .. }, ScanToken::Letters(l)) => {
-                let (.., days, days_short) = names();
+                let (_, _, days, days_short, _) = names();
                 named(&days, l).or_else(|| named(&days_short, l)).or_else(|| named(&DAYS, l))?;
                 p += 1;
             }
@@ -699,8 +718,8 @@ pub(crate) fn scand(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
         return Ok(JsValue::null());
     };
     let fmt = text(&arg(args, 0), ctx)?;
-    let (months, months_short, days, days_short) = names();
-    let typed = english_names(&typed, &fmt, [&months, &months_short, &days, &days_short]);
+    let (months, months_short, days, days_short, with_day) = names();
+    let typed = english_names(&typed, &fmt, [&months, &months_short, &days, &days_short], with_day.as_ref());
     let date = JsDate::new(ctx);
     let this_year = date.get_full_year(ctx)?.to_number(ctx)?;
     let this_year = if this_year.is_finite() { this_year as i32 } else { 2000 };

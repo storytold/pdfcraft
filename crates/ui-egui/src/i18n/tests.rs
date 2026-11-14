@@ -48,7 +48,9 @@ fn the_macos_bundle_declares_every_interface_language() {
     let block = block.split("</array>").next().expect("the declaration is an array");
     let declared: Vec<String> = block.split("<string>").skip(1).filter_map(|s| s.split("</string>").next()).map(str::to_lowercase).collect();
     let registered: Vec<String> = LANGUAGES.iter().map(|l| l.code.to_lowercase()).collect();
+    let dates: Vec<String> = pdfcraft_engine::dates::DATE_LANGUAGES.iter().map(|l| l.code.to_lowercase()).collect();
     assert_eq!(declared, registered, "packaging/macos/Info.plist.in and LANGUAGES list different languages");
+    assert_eq!(dates, registered, "DATE_LANGUAGES and LANGUAGES list different languages");
 }
 
 #[test]
@@ -549,6 +551,13 @@ fn pdfcraft_plural_rule(code: &str) -> fn(u64) -> usize {
             _ => 2,
         }
     }
+    fn he(n: u64) -> usize {
+        match n {
+            1 => 0,
+            2 => 1,
+            _ => 2,
+        }
+    }
     fn cs(n: u64) -> usize {
         match n {
             1 => 0,
@@ -602,6 +611,7 @@ fn pdfcraft_plural_rule(code: &str) -> fn(u64) -> usize {
         "sl" => sl,
         "lt" => lt,
         "ro" => ro,
+        "he" => he,
         _ => one_other,
     }
 }
@@ -1270,7 +1280,7 @@ fn arabic_is_registered_and_persists() {
     assert_eq!(ar.name(), "العربية");
     assert!(ar.rtl());
     let rtl: Vec<&str> = Lang::all().filter(|l| l.rtl()).map(|l| l.code()).collect();
-    assert_eq!(rtl, ["ar", "ckb", "fa"], "Arabic, Kurdish and Persian are the right-to-left languages");
+    assert_eq!(rtl, ["ar", "ckb", "fa", "he"], "Arabic, Kurdish, Persian and Hebrew are the right-to-left languages");
     assert_eq!(normalize_pref("AR"), Some("ar"));
     for tag in ["ar", "ar-MA", "ar_EG.UTF-8", "AR-sa", "ar_DZ@variant"] {
         assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
@@ -1351,6 +1361,79 @@ fn persian_is_registered_and_persists() {
     assert_eq!(restored.language, "fa");
     assert!(restored.set_option("language", "xx").is_err());
     assert_eq!(restored.language, "fa");
+}
+
+fn hebrew() -> Lang {
+    Lang::from_code("he").expect("he registered")
+}
+
+/// The registered code `candidates` would offer for `tag`, without needing a catalog.
+fn registered_for(tag: &str) -> Option<&'static str> {
+    candidates(tag).iter().find_map(|c| LANGUAGES.iter().find(|l| l.code == c).map(|l| l.code))
+}
+
+/// Registration, the English name, right to left, CLDR plurals, locale tags and the preference.
+/// None of that reads a catalog. A build without craft-i18n still offers English only, so saving
+/// `HE` is refused until the catalog is embedded; with one, the preference survives a restart.
+#[test]
+fn hebrew_is_registered_and_persists() {
+    let info = LANGUAGES.iter().find(|l| l.code == "he").expect("he is registered");
+    assert!(info.rtl);
+    let rtl: Vec<&str> = LANGUAGES.iter().filter(|l| l.rtl).map(|l| l.code).collect();
+    assert_eq!(rtl, ["ar", "ckb", "fa", "he"]);
+    let he = if catalogs_embedded() { hebrew() } else { fixture_lang("he", "@id\tlanguage.name\tעברית\n") };
+    assert_eq!(he.name(), "עברית");
+    assert_eq!(he.english_name(), "Hebrew");
+    assert!(he.rtl());
+    // CLDR `he`: 1 is singular, 2 the dual, every other count the plural.
+    let form = plural_fixture("he", 3);
+    assert_eq!([0, 1, 2, 3, 10, 11, 20, 100].map(&form), [2, 0, 1, 2, 2, 2, 2, 2]);
+    // `IW_IL` / `iw-IL` / `iw_ILvariant` match the case, separator and variant tags other languages use.
+    assert_eq!(candidates("IW_IL"), ["iw-il", "iw", "he"]);
+    assert_eq!(candidates("iw-IL"), ["iw-il", "iw", "he"]);
+    assert_eq!(candidates("iw_ILvariant"), ["iw-ilvariant", "iw", "he"]);
+    assert_eq!(candidates("iw_IL@variant"), ["iw-il", "iw", "he"]);
+    let offered = catalogs_embedded().then(hebrew);
+    for tag in
+        ["he", "he-IL", "he_IL.UTF-8", "HE-il", "he_IL@variant", "iw", "iw_IL", "iw-IL.UTF-8", "IW_IL", "iw-IL", "iw_ILvariant", "iw_IL@variant"]
+    {
+        assert_eq!(registered_for(tag), Some("he"), "{tag}");
+        if let Some(he) = offered {
+            assert_eq!(lang_from_tag(tag), Some(he), "{tag}");
+        }
+    }
+    // Unknown strings and user text are never reordered by a lookup.
+    assert_eq!(tr(he, "דוח סופי {n}.pdf"), "דוח סופי {n}.pdf");
+    let mut app = crate::PdfCraftApp::default();
+    if catalogs_embedded() {
+        assert_eq!(normalize_pref("HE"), Some("he"));
+        app.set_option("language", "HE").expect("HE is a language");
+        assert_eq!(app.language, "he");
+        let mut restored = crate::PdfCraftApp::default();
+        restored.restore(&app.persist());
+        assert_eq!(restored.language, "he");
+        assert_eq!(first_supported("he-IL\r\nen-US"), Some(hebrew()));
+    } else {
+        // Registered, but not offered until the catalog is embedded. See
+        // `the_languages_offered_are_the_embedded_ones_of_the_list`.
+        assert_eq!(normalize_pref("HE"), None);
+        assert_eq!(lang_from_tag("he"), None);
+        assert_eq!(lang_from_tag("IW_IL"), None);
+        let err = app.set_option("language", "HE").expect_err("Hebrew is not offered without its catalog");
+        assert!(err.contains("language must be one of"), "{err}");
+    }
+}
+
+/// Catalog rows. Skipped when craft-i18n was not embedded; registration is covered above.
+#[test]
+fn hebrew_catalog_lookups() {
+    needs_catalogs!();
+    let he = hebrew();
+    assert_eq!(he.name(), "עברית");
+    // Lookups return Hebrew in logical order; epaint handles visual ordering.
+    assert_eq!(tr(he, "Save"), "שמירה");
+    assert_eq!(tr(he, "Cancel"), "ביטול");
+    assert_eq!(tr(he, "File"), "קובץ");
 }
 
 /// A form picker for `code`: a fixture row with `forms` plural forms, and for a count the form

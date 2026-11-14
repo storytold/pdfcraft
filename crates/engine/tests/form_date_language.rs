@@ -451,3 +451,29 @@ fn greek_names_typed_in_capitals_are_read() {
     }
     assert!(bad.is_empty(), "{}", bad.join("; "));
 }
+
+/// Hebrew's day-form (`7 במרץ`) is a real month when a form date is read, beside the plain name
+/// (`מרץ`). A form field still writes the plain name, including month-first `mmmm d, yyyy`.
+#[test]
+fn hebrew_prefixed_month_forms_are_read() {
+    let _names = names_lock();
+    use_form_date_language("he");
+    let plain = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
+    let with_day = ["בינואר", "בפברואר", "במרץ", "באפריל", "במאי", "ביוני", "ביולי", "באוגוסט", "בספטמבר", "באוקטובר", "בנובמבר", "בדצמבר"];
+    for (i, (bare, pref)) in plain.iter().zip(with_day).enumerate() {
+        let m = (i + 1) as u32;
+        let dt = DateTime { y: 2026, m, d: 8, hh: 0, mm: 0, ss: 0 };
+        let prefixed = format!("8 {pref} 2026");
+        assert_eq!(parse_date(&prefixed, "d mmmm yyyy").map(|d| (d.y, d.m, d.d)), Some((2026, m, 8)), "{prefixed}");
+        assert_eq!(scanned("d mmmm yyyy", &prefixed), format!("2026-{m:02}-08"), "{prefixed}");
+        let bare_text = format!("8 {bare} 2026");
+        assert_eq!(parse_date(&bare_text, "d mmmm yyyy").map(|d| (d.y, d.m, d.d)), Some((2026, m, 8)), "{bare_text}");
+        let month_first = format_date(dt, "mmmm d, yyyy");
+        assert_eq!(month_first, format!("{bare} 8, 2026"), "ב only after the day; a form field writes the plain month");
+        assert_eq!(parse_date(&month_first, "mmmm d, yyyy").map(|d| (d.y, d.m, d.d)), Some((2026, m, 8)));
+    }
+    // The review's example, through both parsers.
+    assert_eq!(parse_date("7 במרץ 2026", "d mmmm yyyy").map(|d| (d.y, d.m, d.d)), Some((2026, 3, 7)));
+    assert_eq!(scanned("d mmmm yyyy", "7 במרץ 2026"), "2026-03-07");
+    use_form_date_language("en");
+}
