@@ -1,3 +1,5 @@
+[English](README.md) · [Bahasa Indonesia](README.id.md)
+
 <p align="center">
   <a href="https://getartcraft.com/">
     <picture>
