@@ -5531,6 +5531,49 @@ fn edit_delete_with_a_popup_open_removes_the_selected_comment() {
     assert!(comments(&h).is_empty(), "Edit ▸ Delete removed the comment");
 }
 
+/// Edit ▸ Copy and Paste take a selected drawn comment as ⌘C and ⌘V do (#7123). Both were
+/// greyed out, as the menu only counted selected text, pictures and objects.
+#[test]
+fn edit_copy_and_paste_are_enabled_for_a_selected_comment() {
+    let mut h = selected_square();
+    let state = |h: &Harness<'static, PdfCraftApp>, id: &str| h.state().menu_state(&h.ctx, &craft_menu::CommandRef::new(id)).enabled;
+    assert!(state(&h, "edit.copy"), "Edit ▸ Copy is enabled with a comment selected");
+    assert!(!state(&h, "edit.paste"), "nothing is copied yet");
+
+    let ctx = h.ctx.clone();
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.copy"));
+    h.run_steps(4);
+    assert!(h.state().comment_clipboard.is_some(), "Edit ▸ Copy copied the comment");
+    assert!(state(&h, "edit.paste"), "Edit ▸ Paste is enabled with a comment copied");
+
+    // Edit ▸ Paste asks the platform for the clipboard; its answer, the XFDF Copy put there,
+    // arrives as a paste (the harness has no platform, so the test delivers it). The copy hangs
+    // on the pointer, as with ⌘V, and a click places it there.
+    let id = h.state().views[0].id;
+    let annotations = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.annotations.clone();
+    let before = annotations(&h).len();
+    let xfdf = h.state().comment_clipboard.as_ref().map(|c| c.xfdf.clone()).expect("copied");
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+    h.step();
+    assert!(crate::support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
+    h.step();
+    h.event(egui::Event::Paste(xfdf));
+    h.run_steps(2);
+    assert!(h.state().views[0].comments.gesture.is_some(), "Edit ▸ Paste waits for a click to place the copy");
+    let at = (200.0, 160.0);
+    click_pt(&mut h, at);
+    let after = annotations(&h);
+    assert_eq!(after.len(), before + 1, "Edit ▸ Paste placed one copy: {after:?}");
+    let placed = after.iter().max_by_key(|a| a.index).map(|a| a.rect).expect("placed");
+    assert!(((placed[0] + placed[2]) / 2.0 - at.0).abs() < 1.0, "centred on the click: {placed:?}");
+    assert!(h.state().views[0].comments.gesture.is_none(), "the copy is placed");
+    assert!(h.state().views[0].comments.selected.is_some(), "the copy is selected");
+
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(2);
+    assert!(!state(&h, "edit.copy"), "with nothing selected, Copy is greyed out again");
+}
+
 /// A native menu's click never reaches the window, so Edit ▸ Delete closes the Hotbar tools window,
 /// as it closes egui's popups, and removes the selected comment. The window held the Delete.
 #[test]
