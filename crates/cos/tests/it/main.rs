@@ -5,6 +5,7 @@ mod corpus;
 mod efopen;
 mod encryption;
 mod generations;
+mod linearize;
 mod proptests;
 mod serialize_format;
 mod shared_streams;

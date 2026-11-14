@@ -57,6 +57,7 @@ doc.text_blocks(page); doc.page_boxes(page); doc.security_summary();
 
 let bytes = s.save_bytes(id)?;        // incremental: keeps signatures over earlier revisions valid
 let bytes = s.save_full_bytes(id)?;   // full rewrite, garbage-collected
+let bytes = s.save_linearized_bytes(id)?;   // full rewrite laid out for Fast Web View (Annex F)
 s.mark_saved(id, bytes.clone(), path)?;
 ```
 

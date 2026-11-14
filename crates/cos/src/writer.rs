@@ -7,7 +7,8 @@
 //!   any more are left out (written as free).
 //! * `write_full` writes only objects reachable from the trailer, renumbered densely, with a
 //!   cross-reference table or stream — the "Save As" / garbage-collecting path. Unknown trailer
-//!   entries are copied, including objects reachable only from them.
+//!   entries are copied, including objects reachable only from them. With
+//!   `SaveOptions::linearize` the rewrite is laid out for Fast Web View (`linearize`).
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -17,6 +18,10 @@ use std::sync::Arc;
 use crate::CosError;
 use crate::document::{Document, ObjectReader, XrefEntry, held_bytes};
 use crate::object::{Dict, ObjRef, Object, PdfString, Stream};
+
+mod linearize;
+
+pub use linearize::is_linearized;
 
 /// Serialize one object. Deterministic: same object → same bytes.
 pub fn serialize(o: &Object, out: &mut Vec<u8>) {
@@ -185,11 +190,13 @@ fn keyless_check(doc: &Document) -> Result<(), CosError> {
 }
 
 /// The object as written: encrypted with its (output) number when the document is encrypted,
-/// except the `/Encrypt` dictionary itself (`source_num` is its number in the source document).
-/// `o` has the document's numbers in its references ([`crate::security::transform`]).
-fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &'a Object) -> Cow<'a, Object> {
+/// except the `/Encrypt` dictionary itself and what it and `/ID` hold as stored. `source_num` is
+/// the object's number in the source document, `None` for an object the writer makes, which no
+/// number in the source can exempt. `o` has the document's numbers in its references
+/// ([`crate::security::transform`]).
+fn prepared<'a>(doc: &Document, source_num: Option<u32>, num: u32, generation: u16, o: &'a Object) -> Cow<'a, Object> {
     match doc.output_security() {
-        (Some(h), encrypt_num) if Some(source_num) != encrypt_num && !doc.stored_as_is(source_num) => {
+        (Some(h), encrypt_num) if source_num.is_none_or(|n| Some(n) != encrypt_num && !doc.stored_as_is(n)) => {
             let pass = if doc.encryption_changed() { crate::security::Pass::EncryptReplacing } else { crate::security::Pass::Encrypt };
             Cow::Owned(crate::security::transform(doc, h, o, num, generation, pass))
         }
@@ -212,7 +219,12 @@ pub struct SaveOptions {
     pub id_seed: u64,
     /// Full saves: pack non-stream objects into compressed object streams with a cross-reference
     /// stream (PDF 1.5+, §7.5.7–7.5.8). Off writes a classic table that any reader accepts.
+    /// A linearized save always writes classic tables.
     pub object_streams: bool,
+    /// Full saves: linearize for Fast Web View (Annex F), so a reader fetching the file can show
+    /// the first page before the rest arrives. An incremental update is never linearized (it
+    /// would end a linearized file's linearization), so only rewrites honour this.
+    pub linearize: bool,
     /// Incremental saves: leave out what was added since the file was read and nothing refers to
     /// any more, such as a comment added and deleted again or a redaction mark added and cleared
     /// (written as free). Off by default, because a writer may add an object only it finds again
@@ -230,7 +242,7 @@ pub struct SaveOptions {
 
 impl Default for SaveOptions {
     fn default() -> Self {
-        Self { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, drop_unlinked: false, id_entropy: None }
+        Self { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, linearize: false, drop_unlinked: false, id_entropy: None }
     }
 }
 
@@ -290,7 +302,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
             }
             Some(o) => {
                 offsets.insert(num, (base + out.len() as u64, generation, true));
-                write_indirect(num, generation, &prepared(&doc, num, num, generation, &o), &mut out);
+                write_indirect(num, generation, &prepared(&doc, Some(num), num, generation, &o), &mut out);
             }
             None => {
                 offsets.insert(num, (0, generation, false));
@@ -347,22 +359,7 @@ fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict, retain: bool) -
     let mut kept_budget = KeptObjects::default();
     let mut queue: VecDeque<ObjRef> = VecDeque::new();
     let visit_refs = |o: &Object, queue: &mut VecDeque<ObjRef>| collect_refs(o, &mut |r| queue.push_back(r));
-    for key in [&b"Root"[..], b"Info", b"Encrypt"] {
-        if let Some(r) = trailer_in.reference(key) {
-            queue.push_back(r);
-        }
-    }
-    // A direct /Encrypt can refer to objects, /CF or /StmF, say.
-    if let Some(encrypt @ Object::Dict(_)) = trailer_in.get(b"Encrypt") {
-        visit_refs(encrypt, &mut queue);
-    }
-    // Unknown trailer entries are document data. Objects they alone reference must be written
-    // too, or a full rewrite would keep the key and drop its value.
-    for (key, value) in trailer_in.iter() {
-        if !trailer_key_rewritten(key) {
-            collect_refs(value, &mut |r| queue.push_back(r));
-        }
-    }
+    trailer_roots(trailer_in, &mut |r| queue.push_back(r));
     while let Some(r) = queue.pop_front() {
         if map.contains_key(&r) {
             continue;
@@ -411,6 +408,9 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
                 .into(),
         ));
     }
+    if opts.linearize {
+        return linearize::write(doc, opts);
+    }
     // A full traversal must not fill the editor's shared caches (which undo snapshots also
     // own). Parsed objects and decoded object streams are temporary working data here.
     let mut reader = doc.object_reader();
@@ -454,7 +454,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             packed.push((num, *r, kept[i].take()));
         } else {
             let o = written_object(&mut reader, *r, *is_stream, kept[i].take())?;
-            let o = renumber(&prepared(&reader.document, r.num, num, 0, &o), &map);
+            let o = renumber(&prepared(&reader.document, Some(r.num), num, 0, &o), &map);
             rows.insert(num, Row::InFile(out.len() as u64, 0));
             write_indirect(num, 0, &o, &mut out);
         }
@@ -595,7 +595,7 @@ impl ObjectStreamBatch {
         d.set(b"First".to_vec(), Object::Int(first as i64));
         let stm = Object::Stream(Stream::flate(d, &header));
         rows.insert(*next, Row::InFile(out.len() as u64, 0));
-        write_indirect(*next, 0, &prepared(doc, u32::MAX, *next, 0, &stm), out);
+        write_indirect(*next, 0, &prepared(doc, None, *next, 0, &stm), out);
         *next = following;
         Ok(())
     }
@@ -624,6 +624,26 @@ fn trailer_key_rewritten(key: &[u8]) -> bool {
         key,
         b"Size" | b"Prev" | b"XRefStm" | b"Type" | b"W" | b"Index" | b"Filter" | b"DecodeParms" | b"Length" | b"Root" | b"Info" | b"Encrypt" | b"ID"
     )
+}
+
+/// The references a full rewrite starts from: `/Root`, `/Info`, `/Encrypt`, and those in
+/// unknown trailer entries, which are document data — objects they alone reference must be
+/// written too, or a rewrite would keep the key and drop its value.
+fn trailer_roots(trailer: &Dict, f: &mut impl FnMut(ObjRef)) {
+    for key in [&b"Root"[..], b"Info", b"Encrypt"] {
+        if let Some(r) = trailer.reference(key) {
+            f(r);
+        }
+    }
+    // A direct /Encrypt can refer to objects, /CF or /StmF, say.
+    if let Some(encrypt @ Object::Dict(_)) = trailer.get(b"Encrypt") {
+        collect_refs(encrypt, f);
+    }
+    for (key, value) in trailer.iter() {
+        if !trailer_key_rewritten(key) {
+            collect_refs(value, f);
+        }
+    }
 }
 
 fn output_number(index: usize) -> Result<u32, CosError> {
