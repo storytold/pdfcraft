@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use super::reader::find;
 use super::state::{
-    LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadFrame, ReadState, ScanLengths, Slot, SourceIdentity, loaded_bytes, loading, note_overlay_read,
-    note_read, objstm_member, overlay_reads,
+    LENGTHS, LoadGuard, Noted, ObjStm, ObjectNotes, ObjectReader, ReadFrame, ReadState, ScanLengths, Slot, SourceIdentity, loaded_bytes, loading,
+    note_overlay_read, note_read, objstm_member, overlay_reads,
 };
 use super::xref::{Revision, XrefEntry, XrefIndex};
 use super::{
@@ -106,18 +106,49 @@ impl Document {
     /// line says there were more. Opening again, authenticating or rebuilding the index starts
     /// the list afresh, as it does the object cache.
     pub fn unreadable_objects(&self) -> Vec<String> {
-        let Ok(unreadable) = self.unreadable.lock() else { return Vec::new() };
-        unreadable.lines(|num| self.overlay.contains_key(&num))
+        let Ok(notes) = self.object_notes.lock() else { return Vec::new() };
+        notes.unreadable.lines(|num| self.overlay.contains_key(&num), "could not be read")
+    }
+
+    /// Objects of the file that were read only by repairing their syntax, lowest number first, as
+    /// lines such as "object 9 0 was repaired: a dictionary key written with spaces was read as one
+    /// key". Unlike [`Self::unreadable_objects`] nothing was lost, but the object is not what the
+    /// file wrote. Bounded, listed and reset as [`Self::unreadable_objects`] is; each object is
+    /// listed once however often it is read.
+    pub fn repaired_objects(&self) -> Vec<String> {
+        let Ok(notes) = self.object_notes.lock() else { return Vec::new() };
+        notes.repaired.lines(|num| self.overlay.contains_key(&num), "was repaired")
     }
 
     /// Record `num` as unreadable. `reason` is built only for an object not yet listed, so a file
     /// whose broken object is asked for again and again pays for it once.
     fn note_unreadable(&self, num: u32, reason: impl FnOnce() -> String) {
-        // A poisoned lock only means the object goes unlisted; the read itself still fails.
-        let Ok(mut unreadable) = self.unreadable.lock() else { return };
+        self.note_object(num, |notes| &mut notes.unreadable, reason);
+    }
+
+    fn note_spaced_key(&self, num: u32) {
+        self.note_object(num, |notes| &mut notes.repaired, || "a dictionary key written with spaces was read as one key".into());
+    }
+
+    /// [`Self::scan_for`] counted as a read of `num` of its own: a spaced key it joins is noted
+    /// under `num`, not under the object whose read called it.
+    fn scan_for_noting(&self, num: u32) -> Option<(ObjRef, Object)> {
+        let outer = crate::parser::swap_spaced_keys(0);
+        let found = self.scan_for(num);
+        if crate::parser::swap_spaced_keys(outer) > 0 && found.is_some() {
+            self.note_spaced_key(num);
+        }
+        found
+    }
+
+    /// Record `num` in the list `pick` chooses, once.
+    fn note_object(&self, num: u32, pick: impl FnOnce(&mut ObjectNotes) -> &mut Noted, reason: impl FnOnce() -> String) {
+        // A poisoned lock only means the object goes unlisted; the read itself is unaffected.
+        let Ok(mut notes) = self.object_notes.lock() else { return };
+        let list = pick(&mut notes);
         let hidden = |n: u32| self.overlay.contains_key(&n);
-        if unreadable.wants(num, hidden) {
-            unreadable.note(num, self.generation(num), &reason(), hidden);
+        if list.wants(num, hidden) {
+            list.note(num, self.generation(num), &reason(), hidden);
         }
     }
 
@@ -582,10 +613,18 @@ impl Document {
             LoadGuard::enter(num).ok_or_else(|| CosError::Syntax { offset: 0, detail: format!("reference cycle while loading object {num}") })?;
         let _scope = crate::security::FollowScope::enter();
         let edits_read = overlay_reads();
+        // Counts every attempt `load` makes, so an object found only at a second offset is listed
+        // if an abandoned copy had a spaced key: a rare false report, never a missed one.
+        let outer = crate::parser::swap_spaced_keys(0);
         let frame = ReadFrame::enter();
         let loaded = self.load(num, 0).map(Arc::new);
         let reads = frame.reads();
         drop(frame);
+        // The notes are shared by clones, so a load that read this document's edits (an edited
+        // object stream) is not noted, as it is not cached below.
+        if crate::parser::swap_spaced_keys(outer) > 0 && loaded.is_ok() && overlay_reads() == edits_read {
+            self.note_spaced_key(num);
+        }
         if let Err(e) = &loaded
             && !matches!(e, CosError::Poisoned)
         {
@@ -759,7 +798,7 @@ impl Document {
             _ if self.overlay.contains_key(&num) || matches!(self.xref_entry(num), Some(XrefEntry::Free { .. })) => {
                 return Err(CosError::MissingObject(num));
             }
-            _ => Arc::new(self.scan_for(num).map(|(id, o)| self.decrypted(id, o)).ok_or(CosError::MissingObject(num))?),
+            _ => Arc::new(self.scan_for_noting(num).map(|(id, o)| self.decrypted(id, o)).ok_or(CosError::MissingObject(num))?),
         };
         let Object::Stream(s) = &*loaded else { return Err(CosError::MissingObject(num)) };
         let n = s.dict.int(b"N").unwrap_or(0).clamp(0, 1_000_000) as usize;

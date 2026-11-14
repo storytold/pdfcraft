@@ -364,8 +364,10 @@ pub(crate) fn info(d: &Document) -> Value {
         "warnings": i.warnings,
         "repairs": d.repair_log(),
         // Objects that could not be read (each reads as null): nothing was repaired, what they held is
-        // lost. Last, so it includes what reading the fields above failed on.
+        // lost. Then objects read only by repairing their syntax: nothing was lost, but each differs
+        // from what the file wrote. Last, so they include what reading the fields above found.
         "unreadable_objects": d.unreadable_objects(),
+        "repaired_objects": d.repaired_objects(),
     })
 }
 

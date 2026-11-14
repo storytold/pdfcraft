@@ -777,6 +777,12 @@ impl Document {
     pub fn unreadable_objects(&self) -> Vec<String> {
         self.editor.as_ref().map(|e| e.cos.unreadable_objects()).unwrap_or_default()
     }
+
+    /// Objects of the file read only by repairing their syntax, one line each (see
+    /// [`pdfcraft_cos::Document::repaired_objects`]): only those read so far.
+    pub fn repaired_objects(&self) -> Vec<String> {
+        self.editor.as_ref().map(|e| e.cos.repaired_objects()).unwrap_or_default()
+    }
 }
 
 /// A title that names no document: what a web browser writes when it saves a blank page or a

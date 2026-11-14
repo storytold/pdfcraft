@@ -55,10 +55,27 @@ fn doc_info_lists_an_object_that_could_not_be_read() {
     let line = lines[0].as_str().unwrap();
     assert!(line.starts_with("object 4 0 could not be read: syntax error"), "{line}");
     assert_eq!(info["repairs"], json!([]), "nothing was repaired");
+    assert_eq!(info["repaired_objects"], json!([]), "{info}");
     assert_eq!(info["pages"].as_array().unwrap().len(), 1, "the rest of the file reads");
 
     let info = info_of(&mut a, "sound.pdf");
     assert_eq!(info["unreadable_objects"], json!([]), "{info}");
     assert_eq!(info["title"], "Report");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// An `/Info` key written with spaces is read, and the object is listed once as repaired.
+#[test]
+fn doc_info_lists_an_object_read_by_repairing_a_spaced_key() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-repaired-objects-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("spaced.pdf"), with_info("<< /Title (Report) /Universal PDF(Acme) >>")).unwrap();
+    let mut a = Automation::new().with_root(&dir).unwrap();
+
+    let info = info_of(&mut a, "spaced.pdf");
+    assert_eq!(info["title"], "Report", "the dictionary reads");
+    assert_eq!(info["repaired_objects"], json!(["object 4 0 was repaired: a dictionary key written with spaces was read as one key"]), "{info}");
+    assert_eq!(info["unreadable_objects"], json!([]), "{info}");
     let _ = std::fs::remove_dir_all(dir);
 }

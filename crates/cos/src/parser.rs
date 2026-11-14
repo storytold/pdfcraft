@@ -283,8 +283,9 @@ impl<'a> Lexer<'a> {
                 }
                 Some(b'/') => {
                     self.pos += 1;
-                    let key = self.name_body();
+                    let mut key = self.name_body();
                     self.skip_ws();
+                    self.spaced_key_words(&mut key);
                     // A key directly followed by `>>` has no value: treat as null. (A following
                     // `/` is a name *value*, so it cannot signal a missing value.)
                     if self.peek() == Some(b'>') && self.data.get(self.pos + 1) == Some(&b'>') {
@@ -308,6 +309,37 @@ impl<'a> Lexer<'a> {
             }
         }
     }
+
+    /// The rest of a key written with raw spaces, as in `/Universal PDF(...)` (seen in Info
+    /// dictionaries). Bare words join the key only when a string follows them: before a name,
+    /// number or keyword they are more likely a value missing its slash, and the dictionary
+    /// fails as before. At most [`Self::KEY_WORDS`] words.
+    fn spaced_key_words(&mut self, key: &mut Vec<u8>) {
+        let start = self.pos;
+        let mut words = Vec::new();
+        while words.len() < Self::KEY_WORDS && self.peek().is_some_and(|b| is_regular(b) && !matches!(b, b'+' | b'-' | b'.' | b'0'..=b'9')) {
+            let at = self.pos;
+            if matches!(self.token(), b"true" | b"false" | b"null" | b"R" | b"obj" | b"endobj" | b"stream" | b"endstream") {
+                self.pos = at;
+                break;
+            }
+            self.pos = at;
+            words.push(self.name_body());
+            self.skip_ws();
+        }
+        if words.is_empty() || !matches!(self.peek(), Some(b'(' | b'<')) {
+            self.pos = start;
+            return;
+        }
+        for word in words {
+            key.push(b' ');
+            key.extend(word);
+        }
+        let _ = SPACED_KEYS.try_with(|c| c.set(c.get().saturating_add(1)));
+    }
+
+    /// The most bare words [`Self::spaced_key_words`] joins to one key.
+    const KEY_WORDS: usize = 8;
 
     fn number_or_ref(&mut self) -> Result<Object, CosError> {
         let start = self.pos;
@@ -386,6 +418,18 @@ fn real_prefix_len(s: &[u8]) -> usize {
         }
     }
     at
+}
+
+thread_local! {
+    /// Keys [`Lexer::spaced_key_words`] joined on this thread (see [`swap_spaced_keys`]).
+    static SPACED_KEYS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Set the count of keys joined from words written with spaces, returning the count it replaces:
+/// a reader swaps in 0 before parsing an object and the old count back after, so the count it gets
+/// is that object's alone, objects parsed meanwhile included only through their own swaps.
+pub(crate) fn swap_spaced_keys(count: u64) -> u64 {
+    SPACED_KEYS.try_with(|c| c.replace(count)).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -594,6 +638,41 @@ fn find_endstream(data: &[u8], from: usize, endstreams: Option<&EndstreamIndex>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A key written with raw spaces reads as one key, and the rest of the dictionary reads.
+    #[test]
+    fn a_key_with_raw_spaces_keeps_the_dictionary() {
+        let Ok(Object::Dict(d)) =
+            Lexer::new(b"<< /Title (Report) /Universal PDF(Acme) /A B  C#41 <4B> /T x\n<< /K 1 >> /Author (Ken) /On true /Off null >>", 0).object()
+        else {
+            panic!("the dictionary did not parse")
+        };
+        let text = |k: &[u8]| d.get(k).and_then(|v| v.as_string().map(|s| s.to_text()));
+        assert_eq!(text(b"Title").as_deref(), Some("Report"));
+        assert_eq!(text(b"Universal PDF").as_deref(), Some("Acme"));
+        assert_eq!(text(b"A B CA").as_deref(), Some("K"));
+        assert!(matches!(d.get(b"T x"), Some(Object::Dict(_))), "a dictionary value");
+        assert_eq!(text(b"Author").as_deref(), Some("Ken"));
+        assert_eq!(d.get(b"On"), Some(&Object::Bool(true)), "true is a value");
+        assert_eq!(d.get(b"Off"), Some(&Object::Null), "null is a value");
+        assert_eq!(d.len(), 7);
+    }
+
+    /// A bare word before a name, a number or a keyword is a value missing its slash, not part of
+    /// the key: the dictionary fails as before, for the file's own repair, rather than read
+    /// with entries silently moved.
+    #[test]
+    fn a_bare_word_that_is_not_a_key_still_fails_the_dictionary() {
+        for bad in [
+            &b"<< /Type Catalog /Pages 2 0 R >>"[..],
+            b"<< /Length 10 /Filter FlateDecode >>",
+            b"<< /Contents endobj 4 0 obj (x) >>",
+            b"<< /S Span >> BDC",
+            b"<< /K a b c d e f g h i (x) >>",
+        ] {
+            assert!(Lexer::new(bad, 0).object().is_err(), "{}", String::from_utf8_lossy(bad));
+        }
+    }
 
     #[test]
     fn numbers_with_multibyte_garbage_do_not_panic() {
