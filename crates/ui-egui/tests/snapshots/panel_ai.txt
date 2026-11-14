@@ -11,7 +11,7 @@ CheckBox "Remember token in app settings (stored unencrypted)" [off]
 Button "Test connection"
 Button "Use this provider"
 Label = "Run on this PC"
-Label = "One click downloads a curated open model — everything then runs offline"
+Label = "One click downloads a curated open model — local inference needs a build with the `ai-local` feature"
 Button "Detect this PC"
 Label = "Translate document"
 Label = "To:"

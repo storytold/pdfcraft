@@ -440,7 +440,8 @@ fn control_ai_reports_state_and_drives_the_panel() {
     assert_eq!(ai["ready"], false, "{ai}");
     assert_eq!(ai["lang"], "English", "{ai}");
     assert!(ai["models"].as_array().unwrap().len() > 1, "{ai}");
-    assert_eq!(ai["models"][0]["downloaded"], false, "{ai}");
+    // `downloaded` is not asserted: it reflects the machine's shared craft-ai
+    // model cache, which the test does not isolate.
 
     ok(&mut h, &c, "ui.command", json!({"id": "ai.panel"}));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["right_panel"], "Ai");

@@ -36,14 +36,22 @@ enum Msg {
     /// A local model finished loading into memory.
     #[cfg(feature = "ai-local")]
     Loaded(Result<Box<dyn Provider>, AiError>),
+    /// Page text extraction progress (done, total).
+    Extracting(usize, usize),
     /// One page of the document translated.
     Page(usize, String),
-    /// The whole job finished; the provider comes back to the app.
-    Translated(Result<Box<dyn Provider>, AiError>),
+    /// Extraction ran but the document has no text layer (scanned).
+    NoText(Box<dyn Provider>),
+    /// The whole job finished; the provider comes back to the app — it is
+    /// returned on failure too, so a transient error keeps readiness.
+    Translated(Result<Box<dyn Provider>, (AiError, Box<dyn Provider>)>),
 }
 
 /// A finished (or in-flight) translation of one document.
 pub struct Translation {
+    /// The document it was produced from — pages for another tab are
+    /// neither rendered nor collected.
+    pub doc: pdfcraft_engine::DocId,
     pub lang: String,
     /// Pages translated so far; `page == text` pairs, sparse while running.
     pub pages: Vec<(usize, String)>,
@@ -68,6 +76,8 @@ pub(crate) struct Ai {
     pub caps: Option<craft_ai::probe::MachineCaps>,
     provider: Option<Box<dyn Provider>>,
     rx: Option<Receiver<Msg>>,
+    /// Cancel flag for the running translation's extraction loop.
+    job_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// One-line narration of the current job ("Downloading… 412/986 MB").
     pub busy: Option<String>,
     /// Download progress (done, total, bytes/sec).
@@ -94,6 +104,7 @@ impl Default for Ai {
             caps: None,
             provider: None,
             rx: None,
+            job_cancel: None,
             busy: None,
             dl: None,
             test_result: None,
@@ -193,8 +204,23 @@ impl Ai {
         });
     }
 
+    /// Refuse a second job while one runs: `spawn` replaces `rx`, which
+    /// would orphan the running job's channel and let both fight over
+    /// `busy`/`provider`.
+    fn refuse_while_busy(&mut self) -> bool {
+        if self.busy.is_some() {
+            self.note("Another AI job is running — wait for it to finish");
+            true
+        } else {
+            false
+        }
+    }
+
     /// "Test connection" on the BYOT card — a handshake, no document text.
     pub(crate) fn test_endpoint(&mut self, ctx: &egui::Context) {
+        if self.refuse_while_busy() {
+            return;
+        }
         let mut p = OpenAiCompat::new(self.endpoint.clone(), (!self.token.is_empty()).then(|| self.token.clone()), self.model.clone());
         self.test_result = None;
         self.busy_with("Testing the connection…");
@@ -239,6 +265,9 @@ impl Ai {
     /// Download the picked model (resumable; tokenizer included), then mark
     /// it loadable. Existing files are verified and reused.
     pub(crate) fn download_picked(&mut self, ctx: &egui::Context) {
+        if self.refuse_while_busy() {
+            return;
+        }
         let Some(entry) = by_id(&self.local_id) else {
             self.note("Pick a model first");
             return;
@@ -263,7 +292,15 @@ impl Ai {
     pub(crate) fn load_downloaded(&mut self, ctx: &egui::Context) {
         #[cfg(feature = "ai-local")]
         {
-            let Some(id) = self.local_ready.clone().or_else(|| self.downloaded_ids().first().cloned()) else { return };
+            if self.refuse_while_busy() {
+                return;
+            }
+            // Load the *selected* model: several may be cached, and the
+            // button's enablement tracks `local_id`, not `local_ready`.
+            let downloaded = self.downloaded_ids();
+            let Some(id) = (if downloaded.contains(&self.local_id) { Some(self.local_id.clone()) } else { downloaded.first().cloned() }) else {
+                return;
+            };
             let Some(entry) = by_id(&id) else { return };
             let Some(dir) = craft_ai::probe::models_dir() else { return };
             self.busy_with(&format!("Loading {} — this takes a moment…", entry.name));
@@ -335,6 +372,16 @@ impl Ai {
 
 /// Drain the job channel once per frame.
 pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    // A translation belongs to the document it came from: closing that
+    // document cancels the extraction loop and drops the result.
+    if let Some(t) = &app.ai.translation
+        && app.session.get(t.doc).is_none()
+    {
+        if let Some(c) = &app.ai.job_cancel {
+            c.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        app.ai.translation = None;
+    }
     let mut repaint = false;
     loop {
         let msg = match app.ai.rx.as_ref().map(|rx| rx.try_recv()) {
@@ -394,22 +441,37 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 ai.busy = None;
                 ai.note(format!("Model failed to load: {e}"));
             }
+            Msg::Extracting(done, total) => {
+                ai.busy = Some(format!("Extracting text… {done}/{total} pages"));
+            }
             Msg::Page(page, text) => {
-                if let Some(t) = &mut ai.translation {
+                if let Some(t) = &mut ai.translation
+                    && app.session.get(t.doc).is_some()
+                {
                     t.pages.push((page, text));
                     ai.busy = Some(format!("Translating… {}/{} pages", t.pages.len(), t.total));
                 }
             }
+            Msg::NoText(p) => {
+                ai.provider = Some(p);
+                ai.translation = None;
+                ai.job_cancel = None;
+                ai.busy = None;
+                ai.note("This document has no extractable text (scanned PDFs need OCR first)");
+            }
             Msg::Translated(Ok(p)) => {
                 ai.provider = Some(p);
+                ai.job_cancel = None;
                 ai.busy = None;
                 if let Some(t) = &ai.translation {
                     ai.note(format!("Translation finished: {} pages → {}", t.pages.len(), t.lang));
                 }
             }
-            Msg::Translated(Err(e)) => {
+            Msg::Translated(Err((e, p))) => {
+                ai.provider = Some(p);
+                ai.job_cancel = None;
                 ai.busy = None;
-                ai.note(format!("Translation stopped: {e}"));
+                ai.note(format!("Translation stopped: {e} — provider kept"));
             }
         }
     }
@@ -418,58 +480,63 @@ pub(crate) fn tick(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
 }
 
-/// Translate the active document with the configured provider. Extracts the
-/// text on the UI thread (the session isn't Send), then hands plain text to a
-/// worker — the document itself never leaves the app.
+/// Translate the active document with the configured provider. Only document
+/// bytes + password cross the thread boundary (`DocumentCopyJob`) — text
+/// extraction and the model calls both run on the worker, so a large document
+/// never freezes the UI. The document itself never leaves the app.
 pub(crate) fn translate_active(app: &mut PdfCraftApp, ctx: &egui::Context) {
-    let Some((_, id)) = app.active_ids() else {
+    let Some((index, id)) = app.active_ids() else {
         app.ai.note("Open a document first");
         return;
     };
+    if app.ai.refuse_while_busy() {
+        return;
+    }
     let Some(mut provider) = app.ai.provider.take() else {
         app.ai.note("Set up a provider first (API or local model)");
         return;
     };
-    if app.ai.busy.is_some() {
+    let Some(job) = app.views.get(index).and_then(|v| app.session.get(id).map(|d| crate::state::DocumentCopyJob::of(v, d))) else {
         app.ai.provider = Some(provider);
+        app.ai.note("Document is not ready for text extraction yet");
         return;
-    }
-    let Some(doc) = app.session.get(id) else { return };
-    let pages = doc.info.pages.len();
+    };
+    let total = job.pages.len();
     let lang = app.ai.lang.clone();
-    app.ai.busy_with(&format!("Extracting text from {pages} page(s)…"));
-    let mut texts: Vec<(usize, String)> = Vec::with_capacity(pages);
-    {
-        let mut ex = pdfcraft_engine::export::Exporter::new(doc);
-        for p in 0..pages {
-            match ex.text(p) {
-                Ok(t) if !t.trim().is_empty() => texts.push((p, t)),
-                Ok(_) => {}
-                Err(e) => app.ai.note(format!("Page {}: no text extracted ({e})", p + 1)),
-            }
-        }
-    }
-    if texts.is_empty() {
-        app.ai.provider = Some(provider);
-        app.ai.busy = None;
-        app.ai.note("This document has no extractable text (scanned PDFs need OCR first)");
-        return;
-    }
-    app.ai.translation = Some(Translation { lang: lang.clone(), pages: Vec::new(), total: texts.len() });
-    app.ai.busy_with(&format!("Translating {} page(s) to {lang}…", texts.len()));
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    app.ai.job_cancel = Some(cancel.clone());
+    app.ai.translation = Some(Translation { doc: id, lang: lang.clone(), pages: Vec::new(), total });
+    app.ai.busy_with(&format!("Extracting and translating {total} page(s) to {lang}…"));
     app.ai.spawn(ctx, move |tx| {
+        let progress = |done: usize, total: usize| {
+            let _ = tx.send(Msg::Extracting(done, total));
+        };
+        let Some(texts) = job.text_pages(&cancel, &progress) else {
+            // Cancelled (document closed): give the provider back quietly.
+            let _ = tx.send(Msg::Translated(Ok(provider)));
+            return;
+        };
         let grammar = craft_ai::PdfGrammar;
+        let mut any_text = false;
         for (page, text) in &texts {
+            if text.trim().is_empty() {
+                continue;
+            }
+            any_text = true;
             let segs = craft_ai::segment(text, &grammar);
             match craft_ai::translate_segments(provider.as_mut(), &segs, &lang) {
                 Ok(parts) => {
                     let _ = tx.send(Msg::Page(*page, parts.concat()));
                 }
                 Err(e) => {
-                    let _ = tx.send(Msg::Translated(Err(e)));
+                    let _ = tx.send(Msg::Translated(Err((e, provider))));
                     return;
                 }
             }
+        }
+        if !any_text {
+            let _ = tx.send(Msg::NoText(provider));
+            return;
         }
         let _ = tx.send(Msg::Translated(Ok(provider)));
     });
@@ -573,7 +640,13 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 ui.label(egui::RichText::new(tl!("Run on this PC")).font(theme::semibold(13.0)));
                 ui.add_space(4.0);
                 ui.label(
-                    egui::RichText::new(tl!("One click downloads a curated open model — everything then runs offline")).small().color(t.text_muted),
+                    egui::RichText::new(if cfg!(feature = "ai-local") {
+                        tl!("One click downloads a curated open model — everything then runs offline")
+                    } else {
+                        tl!("One click downloads a curated open model — local inference needs a build with the `ai-local` feature")
+                    })
+                    .small()
+                    .color(t.text_muted),
                 );
                 ui.add_space(6.0);
                 if let Some(c) = &ai.caps {
@@ -638,6 +711,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         ui.add_space(10.0);
         ui.label(egui::RichText::new(tl!("Translate document")).font(theme::semibold(13.0)));
         ui.add_space(4.0);
+        let active_doc = app.active_ids().map(|(_, id)| id);
         let ai = &mut app.ai;
         ui.horizontal(|ui| {
             let lang_label = ui.label(tl!("To:"));
@@ -665,7 +739,10 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 ui.label(egui::RichText::new(busy).small().color(t.text_muted));
             });
         }
-        if let Some(tr) = &ai.translation {
+        // Render only the translation produced from the active document —
+        // pages of another open tab must not appear next to it.
+        let tr_for_active = ai.translation.as_ref().filter(|tr| Some(tr.doc) == active_doc);
+        if let Some(tr) = tr_for_active {
             ui.add_space(8.0);
             ui.separator();
             ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Translated to {lang}"), &[("lang", &tr.lang)])).font(theme::semibold(12.5)));

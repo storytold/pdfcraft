@@ -297,22 +297,22 @@ impl DocumentCopyJob {
     /// once its text is taken, so a large document never holds every page's text layer at once.
     /// `None` when `cancel` was set.
     pub(crate) fn text(self, cancel: &std::sync::atomic::AtomicBool) -> Option<String> {
+        self.text_pages(cancel, &|_, _| {}).map(|v| v.into_iter().map(|(_, t)| t).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n"))
+    }
+
+    /// The same read as [`Self::text`] but keeps page boundaries — callers working page by
+    /// page (e.g. translation) need them. `progress` reports `(done, total)` after each page.
+    /// `None` when `cancel` was set.
+    pub(crate) fn text_pages(self, cancel: &std::sync::atomic::AtomicBool, progress: &dyn Fn(usize, usize)) -> Option<Vec<(usize, String)>> {
+        let total = self.pages.len();
         let mut renderer: Option<pdfcraft_render::PageRenderer> = None;
-        let mut out = String::new();
-        let mut push = |text: String| {
-            if !text.is_empty() {
-                if !out.is_empty() {
-                    out.push('\n');
-                }
-                out.push_str(&text);
-            }
-        };
+        let mut out = Vec::new();
         for (page, p) in self.pages.into_iter().enumerate() {
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 return None;
             }
             match p {
-                CopyPage::Read(t) => push(t.text_of(0..t.glyphs.len())),
+                CopyPage::Read(t) => out.push((page, t.text_of(0..t.glyphs.len()))),
                 CopyPage::ToRead => {
                     let r = renderer.get_or_insert_with(|| {
                         let config = pdfcraft_render::RenderConfig { password: self.password.clone(), ..Default::default() };
@@ -327,11 +327,12 @@ impl DocumentCopyJob {
                         preview: false,
                     };
                     if let Some(t) = r.render(req).text {
-                        push(t.text_of(0..t.glyphs.len()));
+                        out.push((page, t.text_of(0..t.glyphs.len())));
                     }
                 }
                 CopyPage::Skip => {}
             }
+            progress(page + 1, total);
         }
         Some(out)
     }
