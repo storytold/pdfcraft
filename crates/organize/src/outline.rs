@@ -23,6 +23,10 @@ pub(crate) const LIST_DEPTH: usize = 32;
 
 /// Deepest name-tree node read when looking up named destinations.
 const NAME_TREE_DEPTH: usize = 32;
+/// Most name-tree nodes, entries and key bytes one lookup of named destinations reads.
+const MAX_DEST_NODES: usize = 200_000;
+const MAX_DEST_ENTRIES: usize = 100_000;
+const MAX_DEST_KEY_BYTES: usize = 16 << 20;
 
 /// Deepest chain of indirect or named destinations followed for one bookmark.
 const DEST_DEPTH: u8 = 8;
@@ -202,13 +206,27 @@ fn name_tree(doc: &Document) -> HashMap<Vec<u8>, Object> {
     let Some(tree) = names.as_dict().and_then(|n| n.get(b"Dests").cloned()) else { return out };
     // Nodes still to read, with their depth. Kids go on the stack in reverse, so they are read in order.
     let mut stack = vec![(tree, 0usize)];
-    let mut seen: HashSet<ObjRef> = HashSet::new();
+    // Each node and shared `/Kids` array with the shallowest depth it was read at: one first met
+    // deep, where the depth limit cut its subtree, is read again from a shallower path, so its
+    // entries aren't lost. Each is read at most once per depth, so the work stays bounded.
+    let mut seen: HashMap<ObjRef, usize> = HashMap::new();
+    let mut first_at = |r: ObjRef, depth: usize| match seen.get(&r) {
+        Some(&d) if d <= depth => false,
+        _ => {
+            seen.insert(r, depth);
+            true
+        }
+    };
+    let (mut visited, mut key_bytes) = (0usize, 0usize);
     while let Some((raw, depth)) = stack.pop() {
-        if depth > NAME_TREE_DEPTH {
+        // Past any of these limits nothing more is read: one bookmark's lookup is bounded, and a
+        // destination beyond them is not found (the bookmark then has none).
+        visited += 1;
+        if depth > NAME_TREE_DEPTH || visited > MAX_DEST_NODES || out.len() >= MAX_DEST_ENTRIES || key_bytes > MAX_DEST_KEY_BYTES {
             continue;
         }
         if let Object::Ref(r) = raw
-            && !seen.insert(r)
+            && !first_at(r, depth)
         {
             continue;
         }
@@ -220,11 +238,21 @@ fn name_tree(doc: &Document) -> HashMap<Vec<u8>, Object> {
                 if let [k, v] = pair
                     && let Some(key) = name_key(doc, k)
                 {
+                    key_bytes = key_bytes.saturating_add(key.len());
+                    if out.len() >= MAX_DEST_ENTRIES || key_bytes > MAX_DEST_KEY_BYTES {
+                        break;
+                    }
                     out.entry(key).or_insert_with(|| v.clone());
                 }
             }
         }
-        let kids = d.get(b"Kids").map(|k| doc.resolve(k));
+        // An indirect `/Kids` array shared by several nodes is read under the first one only:
+        // its entries are the same, and each is read once anyway.
+        let kids = match d.get(b"Kids") {
+            Some(Object::Ref(r)) if !first_at(*r, depth) => None,
+            Some(k) => Some(doc.resolve(k)),
+            None => None,
+        };
         if let Some(kids) = kids.as_deref().and_then(Object::as_array) {
             for kid in kids.iter().rev() {
                 stack.push((kid.clone(), depth + 1));
@@ -315,7 +343,12 @@ fn item_dest(doc: &Document, targets: &mut Targets, d: &Dict) -> Option<Vec<Obje
     explicit_dest(doc, targets, action.get(b"D")?, 0)
 }
 
-/// A bookmark's title as viewers show it: the decoded text, without NULs or surrounding space.
+/// Longest bookmark title listed, in characters: one long string named as the title of many
+/// items would otherwise be copied once per item.
+const MAX_TITLE_CHARS: usize = 4_096;
+
+/// A bookmark's title as viewers show it: the decoded text, without NULs or surrounding space,
+/// cut to [`MAX_TITLE_CHARS`].
 fn title_of(doc: &Document, d: &Dict) -> String {
     let title = d.get(b"Title").map(|t| doc.resolve(t));
     let text = match title.as_deref() {
@@ -323,7 +356,11 @@ fn title_of(doc: &Document, d: &Dict) -> String {
         Some(Object::Name(n)) => String::from_utf8_lossy(n).into_owned(),
         _ => return String::new(),
     };
-    text.trim_matches('\0').trim().to_string()
+    let text = text.trim_matches('\0').trim();
+    match text.char_indices().nth(MAX_TITLE_CHARS) {
+        Some((at, _)) => text.get(..at).unwrap_or_default().to_string(),
+        None => text.to_string(),
+    }
 }
 
 fn describe(doc: &Document, targets: &mut Targets, obj: ObjRef, path: Vec<usize>) -> Bookmark {
@@ -741,4 +778,41 @@ pub fn set_bookmark_open(doc: &mut Document, path: &[usize], open: bool) -> Resu
         recount(doc)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod name_tree_tests {
+    use super::{NAME_TREE_DEPTH, name_tree};
+    use pdfcraft_cos::{Dict, Document, Object, PdfString};
+
+    /// A `/Kids` array shared by a node at the depth limit and by the root: first read at the
+    /// limit (its entries are past it), it is read again from the root, so its name is found.
+    #[test]
+    fn a_shared_kids_array_first_met_at_the_limit_is_read_from_the_root() {
+        let mut doc = Document::new_empty();
+        let mut leaf = Dict::new();
+        leaf.set(b"Names".to_vec(), Object::Array(vec![Object::String(PdfString::literal(b"deep".to_vec())), Object::Int(7)]));
+        let shared = doc.add(Object::Array(vec![Object::Dict(leaf)]));
+        // A chain reaching the shared array at NAME_TREE_DEPTH, read first (kids go on the stack
+        // in reverse, so the first kid is read first).
+        let mut node = Dict::new();
+        node.set(b"Kids".to_vec(), Object::Ref(shared));
+        for _ in 0..NAME_TREE_DEPTH - 1 {
+            let mut up = Dict::new();
+            up.set(b"Kids".to_vec(), Object::Array(vec![Object::Dict(node)]));
+            node = up;
+        }
+        let mut near = Dict::new();
+        near.set(b"Kids".to_vec(), Object::Ref(shared));
+        let mut root = Dict::new();
+        root.set(b"Kids".to_vec(), Object::Array(vec![Object::Dict(node), Object::Dict(near)]));
+        let mut names = Dict::new();
+        names.set(b"Dests".to_vec(), Object::Dict(root));
+        let mut catalog = Dict::new();
+        catalog.set(b"Type".to_vec(), Object::name("Catalog"));
+        catalog.set(b"Names".to_vec(), Object::Dict(names));
+        let catalog = doc.add(Object::Dict(catalog));
+        doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+        assert_eq!(name_tree(&doc).get(b"deep".as_slice()), Some(&Object::Int(7)));
+    }
 }

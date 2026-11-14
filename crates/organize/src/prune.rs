@@ -56,6 +56,8 @@ struct Pruner<'a> {
     /// Forms already analysed, with the owner of the resources they drew against: drawing one
     /// again records nothing new, and re-reading it on every `Do` is exponential in the nesting.
     forms_seen: HashSet<(ObjRef, Owner)>,
+    /// The current page's decode allowance, its content and the forms it draws together.
+    budget: DecodeBudget,
     /// Owners of resources that content not read whole drew against, whose every form was read
     /// as drawn ([`Pruner::unread`]): once is enough.
     partly_read: HashSet<Owner>,
@@ -194,7 +196,8 @@ impl Pruner<'_> {
             self.too_deep = true;
             return;
         }
-        for op in pdfcraft_content::parse(data).ops {
+        // One operator at a time: only the `Do` names are kept.
+        for op in pdfcraft_content::ops(data) {
             if op.op.as_slice() != b"Do" {
                 continue;
             }
@@ -253,10 +256,19 @@ impl Pruner<'_> {
         if !self.forms_seen.insert((r, inner_owner)) {
             return;
         }
+        // Each form entered uses the page's form allowance, and nothing more is read once either
+        // allowance is spent: what is left can't be told, so nothing of the file is pruned (as for a
+        // file nested too deep), rather than each remaining form being visited and its inherited
+        // dictionary cloned.
+        if self.budget.exhausted() || !self.budget.enter_form() {
+            self.too_deep = true;
+            return;
+        }
         #[cfg(test)]
         crate::work(1);
-        match DecodeBudget::new(usize::MAX, 0).decode_with_damage(self.doc, s, usize::MAX) {
+        match self.budget.decode_with_damage(self.doc, s, usize::MAX) {
             Ok((data, false)) => self.content(&data, &inner, inner_owner, depth + 1),
+            Err(_) if self.budget.exhausted() => self.too_deep = true,
             Ok((_, true)) | Err(_) => self.unread(&inner, inner_owner, depth + 1),
         }
     }
@@ -267,10 +279,10 @@ impl Pruner<'_> {
 /// whether a stream is damaged partway (its part is then what decoded before the damage). An
 /// error when a stream can't be decoded or the budget runs out: the page may draw names that
 /// can't be seen.
-pub(crate) fn content_bytes(doc: &Document, contents: &Object) -> Result<(Vec<u8>, bool), CosError> {
+pub(crate) fn content_bytes(doc: &Document, contents: &Object, budget: &mut DecodeBudget) -> Result<(Vec<u8>, bool), CosError> {
     let mut out = Vec::new();
     let mut damaged = false;
-    for read in DecodeBudget::page().decode_contents_with_damage(doc, contents) {
+    for read in budget.decode_contents_with_damage(doc, contents) {
         let (data, partial) = read?;
         damaged |= partial;
         out.extend(data);
@@ -290,11 +302,13 @@ fn resolve_resources(doc: &Document, resources: &Object, page: ObjRef) -> Option
 
 /// Drop the entries `names` never draws. Returns how many were removed.
 fn drop_unused(xobjects: &mut Dict, names: &HashSet<Vec<u8>>) -> usize {
-    let unused: Vec<Vec<u8>> = xobjects.iter().map(|(k, _)| k.clone()).filter(|k| !names.contains(k)).collect();
-    for k in &unused {
-        xobjects.remove(k);
+    // In one pass: removing entries one at a time shifts the rest each time.
+    let kept: Dict = xobjects.iter().filter(|(k, _)| names.contains(*k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+    let removed = xobjects.len().saturating_sub(kept.len());
+    if removed > 0 {
+        *xobjects = kept;
     }
-    unused.len()
+    removed
 }
 
 /// Filter the dictionary `key` names to `names`.
@@ -353,6 +367,7 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
         glyph_seen: HashSet::new(),
         glyph_fonts: HashSet::new(),
         forms_seen: HashSet::new(),
+        budget: DecodeBudget::page(),
         partly_read: HashSet::new(),
     };
     for (page, attrs) in &pages {
@@ -360,7 +375,8 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
         let Some((res_dict, owner)) = resolve_resources(pruner.doc, res, *page) else { continue };
         let Some(pd) = pruner.doc.get(*page).as_dict().cloned() else { continue };
         let Some(contents) = pd.get(b"Contents").cloned() else { continue };
-        match content_bytes(pruner.doc, &contents) {
+        pruner.budget = DecodeBudget::page();
+        match content_bytes(pruner.doc, &contents, &mut pruner.budget) {
             Ok((data, false)) if data.is_empty() => {}
             Ok((data, false)) => pruner.content(&data, &res_dict, owner, 0),
             Ok((_, true)) | Err(_) => pruner.unread(&res_dict, owner, 0),
