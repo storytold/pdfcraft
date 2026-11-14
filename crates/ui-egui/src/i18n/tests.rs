@@ -47,7 +47,14 @@ fn the_macos_bundle_declares_every_interface_language() {
     let block = plist.split("<key>CFBundleLocalizations</key>").nth(1).expect("the template declares CFBundleLocalizations");
     let block = block.split("</array>").next().expect("the declaration is an array");
     let declared: Vec<String> = block.split("<string>").skip(1).filter_map(|s| s.split("</string>").next()).map(str::to_lowercase).collect();
-    let registered: Vec<String> = LANGUAGES.iter().map(|l| l.code.to_lowercase()).collect();
+    let mut registered = Vec::new();
+    for language in &LANGUAGES {
+        // AppKit also needs the base language for Portuguese locales such as pt-PT.
+        if language.code.eq_ignore_ascii_case("pt-br") {
+            registered.push("pt".to_owned());
+        }
+        registered.push(language.code.to_lowercase());
+    }
     assert_eq!(declared, registered, "packaging/macos/Info.plist.in and LANGUAGES list different languages");
 }
 

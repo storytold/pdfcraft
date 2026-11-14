@@ -21,6 +21,9 @@
 //! 1. craft-i18n gets `locales/<code>/pdfcraft.tsv` with its `@id language.name` row.
 //! 2. Add one row to [`LANGUAGES`] (code, right to left), and its English name to
 //!    [`Lang::english_name`].
+//! 3. Add its BCP 47 code to `CFBundleLocalizations` in `packaging/macos/Info.plist.in`, so
+//!    AppKit can select the language for its native file panels (checked by
+//!    `tests/it/macos_localizations.rs`).
 //!
 //! The Preferences dropdown and the system-locale match pick it up from there.
 //!
