@@ -4440,6 +4440,36 @@ fn indirectly_referenced_destination_is_kept() {
 }
 
 #[test]
+fn many_links_naming_one_destination_string_by_reference_keep_it() {
+    // The name string is copied once however many links name it by reference; it is still a use.
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    let s = |t: &str| Object::String(pdfcraft_cos::PdfString::literal(t.as_bytes().to_vec()));
+    let name_ref = Object::Ref(doc.add(s("target")));
+    let links: Vec<Object> = (0..50)
+        .map(|_| {
+            let mut link = Dict::new();
+            link.set(b"Subtype".to_vec(), Object::name("Link"));
+            link.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+            link.set(b"Dest".to_vec(), name_ref.clone());
+            Object::Ref(doc.add(Object::Dict(link)))
+        })
+        .collect();
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(links))).unwrap();
+    let fit = Object::Array(vec![Object::Ref(p), Object::name("Fit")]);
+    let mut tree = Dict::new();
+    tree.set(b"Names".to_vec(), Object::Array(vec![s("target"), fit.clone(), s("unused"), fit]));
+    let tree = doc.add(Object::Dict(tree));
+    let mut names = Dict::new();
+    names.set(b"Dests".to_vec(), Object::Ref(tree));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Names".to_vec(), Object::Dict(names))).unwrap();
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(report.unreferenced_dests, 1);
+    assert_eq!(named_dest_keys(&doc), vec![b"target".to_vec()]);
+}
+
+#[test]
 fn a_destination_named_only_by_a_remote_or_embedded_go_to_is_removed() {
     // The /D of a GoToR or GoToE action names a destination in another document. A local
     // destination of the same name that nothing else uses is unreferenced.

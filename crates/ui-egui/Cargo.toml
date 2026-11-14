@@ -75,9 +75,8 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSBundle", "NSURL", "NSString", "NSError"] }
 block2 = "0.6"
 plist = "1.10"
-# A plain fsync where a volume refuses the full flush `sync_all` asks for (SMB, FUSE); already in
-# the tree through pdfcraft-cli.
-rustix = { version = "1", features = ["fs"] }
+# Query and read Finder association attributes without following symbolic links.
+rustix = { version = "1.1.6", features = ["fs"] }
 
 [target.'cfg(windows)'.dependencies]
 # Auto interface language: the Windows display language, without starting a process.

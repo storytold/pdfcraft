@@ -9,6 +9,11 @@ use serde_json::{Value, json};
 /// file structure with no product tree, in hexadecimal for the stream's `/ASCIIHexDecode`.
 const TRIANGLE_PRC_HEX: &str = "505243c91f0000c91f00000100000002000000030000000400000000000000000000000000000000000000010000000500000006000000070000000800000000000000060000006b0000009a000000a3000000ab000000cd000000d5000000dd000000e500000000000000505243c91f0000c91f0000050000000600000007000000080000000000000000000000000000000000000000000000789c63000000010001789c030000000001789c9b71c087758da2422b43084fe3140e038713464cd759381a162800006ed70828789c030000000001789c030000000001789c030000000001";
 
+/// The same triangle stored as a `TESS_3D_Compressed` whose normals are recalculated, so it is
+/// drawn only once its triangles are rebuilt. `prc-render`'s tests build it
+/// (`the_automation_fixture_is_the_compressed_triangle` keeps this copy their output).
+const COMPRESSED_TRIANGLE_PRC_HEX: &str = "505243c91f0000c91f00000100000002000000030000000400000000000000000000000000000000000000010000000500000006000000070000000800000000000000060000006b0000009a000000a3000000ab000000d2000000da000000e2000000ea00000000000000505243c91f0000c91f0000050000000600000007000000080000000000000000000000000000000000000000000000789c63000000010001789c030000000001789c9b71c08775aded1d0624d0d2c808055a8d0c8c8ccc0c0c0c0a0a223ce2e50c2c00bed0061f789c030000000001789c030000000001789c030000000001";
+
 /// A one-page PDF whose page holds a 3D annotation over a stream of `/Subtype /{subtype}`.
 fn pdf(subtype: &str, hex: &str) -> Vec<u8> {
     let stream = format!("<< /Type /3D /Subtype /{subtype} /Filter /ASCIIHexDecode /Length {} >>\nstream\n{hex}>\nendstream", hex.len() + 1);
@@ -80,6 +85,24 @@ fn a_prc_model_is_drawn_over_the_background() {
     assert_ne!(rgb(data, 32, 24), [255, 255, 255], "the centre is drawn in perspective too");
     // The same model named explicitly, and the default isometric view, both draw.
     assert!(a.call("model_render", &json!({ "doc": doc, "page": 1, "model": 1 })).is_ok());
+}
+
+#[test]
+fn a_compressed_prc_model_is_rebuilt_and_drawn() {
+    let (dir, mut a) = setup("prc-compressed");
+    std::fs::write(dir.join("in/compressed.pdf"), pdf("PRC", COMPRESSED_TRIANGLE_PRC_HEX)).unwrap();
+    let doc = open(&mut a, "compressed.pdf");
+    let args = json!({ "doc": doc, "page": 1, "width": 64, "height": 48, "direction": [0, 0, -1], "perspective": false });
+    let out = a.call("model_render", &args).unwrap();
+    let Content::Png { data, .. } = &out[0] else { panic!("expected a PNG") };
+    assert_eq!(rgb(data, 0, 0), [255, 255, 255], "the corner is background");
+    assert_eq!(rgb(data, 32, 24), [190, 192, 200], "the centre is the triangle, lit head on");
+    // Its apex is up: the drawn span narrows from the base to the top, and the centre column
+    // is covered over many rows.
+    let (top, bottom) = rows(data, 32);
+    assert!(bottom - top > 20, "rows {top}..{bottom}");
+    let (near_top, near_bottom) = (extent(data, top + 4), extent(data, bottom - 2));
+    assert!(near_bottom.1 - near_bottom.0 > 2 * (near_top.1 - near_top.0), "{near_top:?} {near_bottom:?}");
 }
 
 #[test]
