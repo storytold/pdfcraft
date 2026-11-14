@@ -2,7 +2,7 @@ use super::common::clean_name;
 use super::items::{Item, Rounded, Turned};
 use super::{
     Arc, Border, Ctx, Draw, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Rect, SomIndices, Stroke,
-    Subform, Value, XfaError, data_path, text,
+    Subform, Value, XfaError, bound_data_path, text,
 };
 
 impl Layouter<'_> {
@@ -376,8 +376,11 @@ impl Layouter<'_> {
         }
         let ctx = ctx.with_som(&g.common, sib);
         // The group's data node holds the selected button's on value.
-        let selected: Option<String> =
-            self.data.and_then(|d| d.text_at(&data_path(self.tpl, &ctx.som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        let selected: Option<String> = self
+            .data
+            .and_then(|d| d.text_at(&bound_data_path(self.tpl, self.data, &ctx.som)))
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty());
         let inner = rect.inset(&g.common.margin);
         let group = self.unique_name(g.common.name.as_deref().unwrap_or("group"), g.common.name.is_none());
         let nodes: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();

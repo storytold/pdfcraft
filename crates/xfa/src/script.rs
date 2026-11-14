@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString};
 
-use crate::data::{DataNode, data_path, parse_datasets};
+use crate::data::{DataNode, bound_data_path, data_path, parse_datasets};
 use crate::model::{Access, Field, Node, Presence, Props, Script, SomIndices, Template};
 use crate::{Report, XfaError};
 
@@ -381,8 +381,11 @@ impl Walker<'_> {
                 }
                 Node::ExclGroup(g) => {
                     let som = child_som(parent_som, g.common.name.as_deref().or(Some("group")), sib);
-                    let selected =
-                        self.data.and_then(|d| d.text_at(&data_path(self.tpl, &som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+                    let selected = self
+                        .data
+                        .and_then(|d| d.text_at(&bound_data_path(self.tpl, self.data, &som)))
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty());
                     self.push_events(&som, &g.scripts, None, None, None);
                     let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
                     let fsibs = SomIndices::of(&fields);
