@@ -1,7 +1,10 @@
 //! PowerPoint presentation (.pptx, Office Open XML PresentationML): slides per page,
 //! largest text as slide title, remaining paragraphs as body text, images and tables between them.
 
-use crate::{Image, Page, Run, Table, Zip, esc, hex};
+use crate::as_docx::{core_properties_xml, image_mime};
+use crate::{Image, Page, Run, Table, hex};
+use craft_opc::{PackageOut, RT_BASE, RelOut, RelsOut};
+use craft_xml::{DECL_STANDALONE, esc};
 
 /// Items on a slide in reading order.
 enum SlideBodyItem<'a> {
@@ -124,7 +127,7 @@ pub fn pptx(pages: &[Page], title: &str) -> Vec<u8> {
     let content_w = sw - 2 * mx;
 
     let mut global_media: Vec<(String, &Image)> = Vec::new();
-    let mut slides: Vec<(String, String)> = Vec::new(); // (slide_xml, slide_rels)
+    let mut slides: Vec<(String, RelsOut)> = Vec::new(); // (slide_xml, slide_rels)
     let body = crate::layout::body_size(pages);
 
     for p in pages {
@@ -240,90 +243,97 @@ xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><p:cSld><p:spT
 {shapes}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>"
         );
 
-        let mut slide_rels = String::from(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
-<Relationship Id=\"rIdLayout\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout\" Target=\"../slideLayouts/slideLayout1.xml\"/>",
-        );
+        let mut slide_rels = RelsOut::default();
+        slide_rels.items.push(RelOut {
+            id: "rIdLayout".into(),
+            ty: format!("{RT_BASE}slideLayout"),
+            target: "../slideLayouts/slideLayout1.xml".into(),
+            external: false,
+        });
         for (r_id, global_idx) in &slide_media_rels {
             if let Some((name, _)) = global_media.get(*global_idx - 1) {
-                slide_rels.push_str(&format!(
-                    "<Relationship Id=\"{r_id}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"../media/{name}\"/>"
-                ));
+                slide_rels.items.push(RelOut {
+                    id: r_id.clone(),
+                    ty: format!("{RT_BASE}image"),
+                    target: format!("../media/{name}"),
+                    external: false,
+                });
             }
         }
-        slide_rels.push_str("</Relationships>");
 
         slides.push((slide_xml, slide_rels));
     }
 
-    let mut types = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
-<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/>\
-<Default Extension=\"png\" ContentType=\"image/png\"/><Default Extension=\"jpg\" ContentType=\"image/jpeg\"/><Default Extension=\"jpeg\" ContentType=\"image/jpeg\"/>\
-<Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>\
-<Override PartName=\"/ppt/presentation.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml\"/>\
-<Override PartName=\"/ppt/slideMasters/slideMaster1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml\"/>\
-<Override PartName=\"/ppt/slideLayouts/slideLayout1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml\"/>\
-<Override PartName=\"/ppt/theme/theme1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>",
-    );
-    for i in 1..=slides.len() {
-        types.push_str(&format!(
-            "<Override PartName=\"/ppt/slides/slide{i}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
-        ));
-    }
-    types.push_str("</Types>");
-
-    let rels = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
-<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"ppt/presentation.xml\"/>\
-<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties\" Target=\"docProps/core.xml\"/></Relationships>";
-
-    let core = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" \
-xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title>{}</dc:title></cp:coreProperties>",
-        esc(title)
-    );
+    let mut pkg = PackageOut::default();
+    let mut root_rels = RelsOut::default();
+    root_rels.add("officeDocument", "ppt/presentation.xml", false);
+    root_rels.add("metadata/core-properties", "docProps/core.xml", false);
+    pkg.rels("", &root_rels);
 
     let mut sld_id_lst = String::new();
-    let mut pres_rels = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
-<Relationship Id=\"rIdMaster1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster\" Target=\"slideMasters/slideMaster1.xml\"/>",
-    );
+    let mut pres_rels = RelsOut::default();
+    pres_rels.items.push(RelOut {
+        id: "rIdMaster1".into(),
+        ty: format!("{RT_BASE}slideMaster"),
+        target: "slideMasters/slideMaster1.xml".into(),
+        external: false,
+    });
     for i in 1..=slides.len() {
         let sld_id = 255 + i;
         sld_id_lst.push_str(&format!("<p:sldId id=\"{sld_id}\" r:id=\"rIdSld{i}\"/>"));
-        pres_rels.push_str(&format!(
-            "<Relationship Id=\"rIdSld{i}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/slide{i}.xml\"/>"
-        ));
+        pres_rels.items.push(RelOut {
+            id: format!("rIdSld{i}"),
+            ty: format!("{RT_BASE}slide"),
+            target: format!("slides/slide{i}.xml"),
+            external: false,
+        });
     }
-    pres_rels.push_str("</Relationships>");
+    pkg.rels("ppt/presentation.xml", &pres_rels);
 
     let pres = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
+        "{DECL_STANDALONE}\
 <p:presentation xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" \
 xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><p:sldMasterIdLst><p:sldMasterId id=\"2147483648\" r:id=\"rIdMaster1\"/></p:sldMasterIdLst>\
 <p:sldIdLst>{sld_id_lst}</p:sldIdLst><p:sldSz cx=\"{sw}\" cy=\"{sh}\"/><p:notesSz cx=\"6858000\" cy=\"9144000\"/></p:presentation>"
     );
 
-    let slide_master = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
+    let slide_master = format!(
+        "{DECL_STANDALONE}\
 <p:sldMaster xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" \
 xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>\
 <p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"0\" cy=\"0\"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld>\
 <p:clrMap bg1=\"lt1\" tx1=\"dk1\" bg2=\"lt2\" tx2=\"dk2\" accent1=\"accent1\" accent2=\"accent2\" accent3=\"accent3\" accent4=\"accent4\" accent5=\"accent5\" accent6=\"accent6\" hlink=\"hlink\" folHlink=\"folHlink\"/>\
-<p:sldLayoutIdLst><p:sldLayoutId id=\"2147483649\" r:id=\"rIdLayout1\"/></p:sldLayoutIdLst></p:sldMaster>";
+<p:sldLayoutIdLst><p:sldLayoutId id=\"2147483649\" r:id=\"rIdLayout1\"/></p:sldLayoutIdLst></p:sldMaster>"
+    );
 
-    let slide_master_rels = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
-<Relationship Id=\"rIdLayout1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout\" Target=\"../slideLayouts/slideLayout1.xml\"/>\
-<Relationship Id=\"rIdTheme1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme\" Target=\"../theme/theme1.xml\"/></Relationships>";
+    let mut slide_master_rels = RelsOut::default();
+    slide_master_rels.items.push(RelOut {
+        id: "rIdLayout1".into(),
+        ty: format!("{RT_BASE}slideLayout"),
+        target: "../slideLayouts/slideLayout1.xml".into(),
+        external: false,
+    });
+    slide_master_rels.items.push(RelOut {
+        id: "rIdTheme1".into(),
+        ty: format!("{RT_BASE}theme"),
+        target: "../theme/theme1.xml".into(),
+        external: false,
+    });
+    pkg.rels("ppt/slideMasters/slideMaster1.xml", &slide_master_rels);
 
-    let slide_layout = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
+    let slide_layout = format!(
+        "{DECL_STANDALONE}\
 <p:sldLayout xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" \
 xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" type=\"blank\"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>\
-<p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"0\" cy=\"0\"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld></p:sldLayout>";
+<p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"0\" cy=\"0\"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld></p:sldLayout>"
+    );
 
-    let slide_layout_rels = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
-<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster\" Target=\"../slideMasters/slideMaster1.xml\"/></Relationships>";
+    let mut slide_layout_rels = RelsOut::default();
+    slide_layout_rels.add("slideMaster", "../slideMasters/slideMaster1.xml", false);
+    pkg.rels("ppt/slideLayouts/slideLayout1.xml", &slide_layout_rels);
 
-    let theme = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
+    let theme = format!(
+        "{DECL_STANDALONE}\
 <a:theme xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" name=\"Office Theme\"><a:themeElements>\
 <a:clrScheme name=\"Office\"><a:dk1><a:sysClr val=\"windowText\" lastClr=\"000000\"/></a:dk1><a:lt1><a:sysClr val=\"window\" lastClr=\"FFFFFF\"/></a:lt1>\
 <a:dk2><a:srgbClr val=\"1F497D\"/></a:dk2><a:lt2><a:srgbClr val=\"EEECE1\"/></a:lt2><a:accent1><a:srgbClr val=\"4F81BD\"/></a:accent1>\
@@ -335,28 +345,32 @@ xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" type=\"blank\"
 <a:lnStyleLst><a:ln w=\"9525\"><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill></a:ln><a:ln w=\"25400\"><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill></a:ln><a:ln w=\"38100\"><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill></a:ln></a:lnStyleLst>\
 <a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst>\
 <a:bgFillStyleLst><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme>\
-</a:themeElements></a:theme>";
+</a:themeElements></a:theme>"
+    );
 
-    let mut z = Zip::default();
-    z.add("[Content_Types].xml", types.as_bytes(), true);
-    z.add("_rels/.rels", rels.as_bytes(), true);
-    z.add("docProps/core.xml", core.as_bytes(), true);
-    z.add("ppt/presentation.xml", pres.as_bytes(), true);
-    z.add("ppt/_rels/presentation.xml.rels", pres_rels.as_bytes(), true);
-    z.add("ppt/slideMasters/slideMaster1.xml", slide_master.as_bytes(), true);
-    z.add("ppt/slideMasters/_rels/slideMaster1.xml.rels", slide_master_rels.as_bytes(), true);
-    z.add("ppt/slideLayouts/slideLayout1.xml", slide_layout.as_bytes(), true);
-    z.add("ppt/slideLayouts/_rels/slideLayout1.xml.rels", slide_layout_rels.as_bytes(), true);
-    z.add("ppt/theme/theme1.xml", theme.as_bytes(), true);
+    pkg.xml_part("docProps/core.xml", "application/vnd.openxmlformats-package.core-properties+xml", core_properties_xml(title));
+    pkg.xml_part("ppt/presentation.xml", "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml", pres.into_bytes());
+    pkg.xml_part(
+        "ppt/slideMasters/slideMaster1.xml",
+        "application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml",
+        slide_master.into_bytes(),
+    );
+    pkg.xml_part(
+        "ppt/slideLayouts/slideLayout1.xml",
+        "application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml",
+        slide_layout.into_bytes(),
+    );
+    pkg.xml_part("ppt/theme/theme1.xml", "application/vnd.openxmlformats-officedocument.theme+xml", theme.into_bytes());
     for (i, (s_xml, s_rels)) in slides.iter().enumerate() {
         let num = i + 1;
-        z.add(&format!("ppt/slides/slide{num}.xml"), s_xml.as_bytes(), true);
-        z.add(&format!("ppt/slides/_rels/slide{num}.xml.rels"), s_rels.as_bytes(), true);
+        let path = format!("ppt/slides/slide{num}.xml");
+        pkg.xml_part(&path, "application/vnd.openxmlformats-officedocument.presentationml.slide+xml", s_xml.as_bytes().to_vec());
+        pkg.rels(&path, s_rels);
     }
     for (name, im) in &global_media {
-        z.add(&format!("ppt/media/{name}"), &im.bytes, false);
+        pkg.binary(&format!("ppt/media/{name}"), image_mime(&im.ext), im.bytes.to_vec());
     }
-    z.finish()
+    pkg.finish().unwrap_or_default()
 }
 
 #[cfg(test)]
