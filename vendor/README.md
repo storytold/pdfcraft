@@ -19,7 +19,7 @@ Review upstream changes before replacing the snapshot and run the lifecycle and 
 ## Window-stack provenance after the egui 0.37 migration
 
 The checked-in, resolved Cargo graph pins `winit` to storytold/winit
-`a517b3846ee8457d84ee4975110bfda6797c44dc` and the egui crates to storytold/egui
+`934cb6a6406c794772c66654742f10445f32d0d9` and the egui crates to storytold/egui
 `725a39fca940f77149ffbb9c58eef405a16997bc`. Neither `vendor/winit` nor
 `vendor/egui-wgpu` is a root `[patch.crates-io]` path entry. The retained copies
 record the app's earlier patches; their source-reading tests establish provenance,
@@ -34,6 +34,18 @@ W12 `7facf001`, W13 `5506b1a9`). The reviewed winit fork additionally carries
 W14–W27 (W14 is opt-in and is not enabled by PdfCraft). `vendor/egui-wgpu` carries
 E2 (`surface_fit`) and E3 (`catch_errors`); the egui-wgpu 0.37 fork retains both,
 including its `surface_fit` tests exercised by PdfCraft's behavioral tests.
+
+The winit pin also includes the pinch-only W16 backport from
+[storytold/winit#20](https://github.com/storytold/winit/pull/20), using that PR's
+immutable head through the canonical repository URL. It binds the optional Wayland
+pointer-gestures protocol and converts cumulative two-finger scales to the
+logarithmic deltas egui-winit consumes. PdfCraft's existing document zoom, cursor
+anchor and zoom limits handle those events; the interface scale stays unchanged.
+The fork's `tests/wayland_pinch.rs` covers scale conversion in both directions,
+completion/cancellation, invalid scales and unsupported fingers/surfaces. The
+retained vendor copy is not changed or used as the runtime gesture implementation.
+The dependency PR must be accepted before this pin is released; if it is rebased or
+squashed, update the manifest, lockfile and exact graph guard together.
 
 Keep both copies while their provenance tests remain in use. Renderer and security
 vendors below retain their independent path patches and licenses.
