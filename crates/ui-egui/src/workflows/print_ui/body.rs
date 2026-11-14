@@ -225,12 +225,9 @@ pub(crate) fn body(
 ) -> (bool, bool) {
     ui.set_width(820.0);
     let mut close_dialog = false;
-    egui::Sides::new().show(
-        ui,
-        |ui| {
-            ui.label(egui::RichText::new(tl!("Print")).font(theme::semibold(18.0)));
-        },
-        |ui| {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tl!("Print")).font(theme::semibold(18.0)));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), egui::Sense::click());
             let resp = theme::hand(resp);
             if resp.clicked() {
@@ -241,8 +238,8 @@ pub(crate) fn body(
             let r = 5.0;
             ui.painter().line_segment([pos2(center.x - r, center.y - r), pos2(center.x + r, center.y + r)], Stroke::new(1.5, stroke_color));
             ui.painter().line_segment([pos2(center.x - r, center.y + r), pos2(center.x + r, center.y - r)], Stroke::new(1.5, stroke_color));
-        },
-    );
+        });
+    });
     ui.add_space(6.0);
 
     let settings = d.settings(sizes.len(), labels);
@@ -271,7 +268,7 @@ pub(crate) fn body(
 
                     // Card 1: Printer & Paper Setup
                     print_card(ui, t, tl!("Printer & Paper Setup"), Some("printer"), 452.0, Some(204.0), |ui| {
-                        egui::Grid::new("print-top").num_columns(2).spacing([8.0, 2.0]).show(ui, |ui| {
+                        egui::Grid::new("print-top").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                         let printer_caption = ui.label(tl!("Printer:"));
                         let before = d.printer.clone();
                         let browser = d.printer.as_deref() == Some(crate::web_print::BROWSER_PRINTER);
@@ -378,6 +375,10 @@ pub(crate) fn body(
                                     160.0,
                                 );
                             });
+                            ui.end_row();
+                        } else {
+                            ui.label(tl!("Two-sided:"));
+                            ui.label(egui::RichText::new(tl!("Controlled by Booklet subset")).small().color(t.text_muted));
                             ui.end_row();
                         }
 
@@ -545,6 +546,8 @@ pub(crate) fn body(
                             d.which = Which::Range;
                         }
                     });
+
+                    ui.add_space(4.0);
 
                     ui.horizontal(|ui| {
                         ui.label(tl!("More options:"));
@@ -774,8 +777,8 @@ pub(crate) fn body(
 
             // Right Column: Preview Card.
             ui.vertical(|ui| {
-                ui.set_width(348.0);
-                print_card(ui, t, tl!("Preview"), Some("eye"), 348.0, Some(454.0), |ui| {
+                ui.set_width(358.0);
+                print_card(ui, t, tl!("Preview"), Some("eye"), 358.0, Some(454.0), |ui| {
                     let (area, _) = ui.allocate_exact_size(vec2(PREVIEW_W, PREVIEW_H), egui::Sense::hover());
                     ui.painter().rect_filled(area, 6.0, t.hover);
                     match (&settings, sheets.get(d.sheet)) {
