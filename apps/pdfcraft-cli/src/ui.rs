@@ -56,7 +56,7 @@ const CONTROL_FILE_ADVICE: &str =
 // cmd.exe doesn't expand `~` (#3922).
 #[cfg(windows)]
 const CONTROL_FILE_ADVICE: &str =
-    r"Start the app with a control file in a folder only you can write, such as `pdfcraft --control %USERPROFILE%\.pdfcraft-control.json`";
+    r#"Start the app with a control file in a folder only you can write, such as `pdfcraft --control "%USERPROFILE%\.pdfcraft-control.json"`"#;
 
 /// Read the file written by `pdfcraft --control FILE`.
 ///
