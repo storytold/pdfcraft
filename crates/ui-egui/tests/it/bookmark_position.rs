@@ -61,11 +61,14 @@ fn harness(rotate: u16) -> Harness<'static, PdfCraftApp> {
 
 /// Make a bookmark with ⌘B, as the Bookmarks button does, and say what it goes to.
 fn new_bookmark(h: &mut Harness<'static, PdfCraftApp>) -> (Option<usize>, DestView) {
+    let id = h.state().views[0].id;
+    let before = h.state().session.get(id).unwrap().info.outline.len();
     h.key_press_modifiers(Modifiers::COMMAND, Key::B);
     h.run_steps(3);
-    let id = h.state().views[0].id;
     let outline = &h.state().session.get(id).unwrap().info.outline;
-    let made = outline.iter().find(|b| b.title == "Untitled").expect("the new bookmark");
+    assert_eq!(outline.len(), before + 1, "one bookmark added");
+    // The newest, last: with text selected it is named after the words, else "Untitled" (#5577).
+    let made = outline.last().expect("the new bookmark");
     (made.page, made.view)
 }
 
