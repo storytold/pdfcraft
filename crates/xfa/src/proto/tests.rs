@@ -399,3 +399,16 @@ fn a_som_expression_past_its_length_limit_is_not_followed() {
     assert_eq!(field(&t, "long").common.h, None);
     assert!(close(field(&t, "short").common.h, 2.0 * MM));
 }
+
+#[test]
+fn proto_only_child_cache_keeps_attributes_text_and_rich_text_boundary() {
+    let xml = form(r#"<field id="P" w="1mm"><proto/></field>"#, r##"<field name="first" use="#P"/><field name="second" use="#P"/>"##);
+    let (t, warnings) = parse(&xml).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(field(&t, "first").common.w, field(&t, "second").common.w);
+    assert!(field(&t, "first").common.w.is_some());
+    let text = expanded(r##"<template><value id="P">kept<proto/></value><value use="#P"/></template>"##);
+    assert!(text.matches("kept").count() >= 2, "{text}");
+    let rich = expanded(r##"<template><exData id="P">hidden</exData><exData use="#P"><proto/></exData></template>"##);
+    assert_eq!(rich.matches("hidden").count(), 1, "nearest nonempty exData still wins: {rich}");
+}

@@ -75,6 +75,7 @@ pub(crate) fn expand(template: Node) -> (Option<String>, Vec<String>) {
         search: MAX_SEARCH,
         work: MAX_WORK,
         active: HashMap::new(),
+        non_rendering_children: HashSet::new(),
         missing: false,
         external: false,
         looped: false,
@@ -126,6 +127,9 @@ struct Writer<'a> {
     work: usize,
     /// The elements being written around the current one: inheriting from one is a loop.
     active: HashMap<NodeId, u32>,
+    /// Nodes whose direct children are all omitted prototype definitions (or absent).
+    /// The DOM is immutable; remembering these avoids repeated no-output child walks.
+    non_rendering_children: HashSet<NodeId>,
     missing: bool,
     external: bool,
     looped: bool,
@@ -465,7 +469,25 @@ impl<'a> Writer<'a> {
         self.out.push('>');
         // Rich text is taken whole from the nearest layer that has any.
         let cut = if tag == "exData" { layers.iter().position(|l| has_content(l, true)).map_or(layers.len(), |i| i + 1) } else { layers.len() };
-        let merged = layers.get(..cut).unwrap_or(&layers);
+        // Do this only after charging every original child and selecting the rich-text
+        // layer boundary. Omitting a proto-only layer from child traversal must never
+        // reduce its work charge or change which exData layer wins.
+        let merged: Vec<_> = layers
+            .get(..cut)
+            .unwrap_or(&layers)
+            .iter()
+            .copied()
+            .filter(|layer| {
+                if self.non_rendering_children.contains(&layer.id()) {
+                    return false;
+                }
+                if layer.children().all(|child| child.is_element() && child.tag_name().name() == "proto") {
+                    self.non_rendering_children.insert(layer.id());
+                    return false;
+                }
+                true
+            })
+            .collect();
         // Data content: the nearest layer's that has any (empty content overrides nothing).
         let text_layer = merged.iter().position(|l| has_content(l, false)).unwrap_or(0);
         let chosen = if matches!(tag, "ui" | "value") {
