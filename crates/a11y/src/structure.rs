@@ -218,9 +218,11 @@ pub(crate) fn has_struct_tree(doc: &Document) -> bool {
 /// Walks the structure tree in document order, telling `v` about each element.
 fn walk<V: Visitor>(doc: &Document, pages: &[Page], v: &mut V) {
     let Some(root) = struct_root(doc) else { return };
-    let role_map = root.as_dict().and_then(|d| d.get(b"RoleMap")).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+    let root_map =
+        |key: &[u8]| root.as_dict().and_then(|d| d.get(key)).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+    let (role_map, class_map) = (root_map(b"RoleMap"), root_map(b"ClassMap"));
     let page_index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
-    let mut w = Walker { doc, role_map, page_index, seen: HashSet::new(), frames: Vec::new(), tasks: Vec::new(), opened: 0 };
+    let mut w = Walker { doc, role_map, class_map, page_index, seen: HashSet::new(), frames: Vec::new(), tasks: Vec::new(), opened: 0 };
     if root.as_dict().is_some_and(|d| d.contains(b"K")) {
         w.tasks.push(Task::Node { loc: Loc { owner: root, path: vec![Step::K] }, depth: 0, page: None });
     }
@@ -277,6 +279,8 @@ enum Task {
 struct Walker<'a> {
     doc: &'a Document,
     role_map: Dict,
+    /// The structure tree root's /ClassMap, resolved: the attribute objects each class names.
+    class_map: Dict,
     page_index: HashMap<ObjRef, usize>,
     /// Indirect kids already read. A kid reached again (a shared kid, or a cycle) is skipped, so a
     /// kid counts once, where it first appears.
@@ -425,13 +429,33 @@ impl Walker<'_> {
         t
     }
 
-    /// The attribute dictionaries of an element: the dictionaries its /A entry holds, one or an array.
+    /// The attribute dictionaries of an element, in precedence order (ISO 32000-2 §14.7.6.2):
+    /// those its /A entry holds, then those of each class its /C names, in /C order. Each is one
+    /// attribute object or an array of them (an /A array also holds revision numbers, which are
+    /// not dictionaries); a class name not in the class map gives nothing.
     fn attr_dicts(&self, d: &Dict) -> Vec<Arc<Object>> {
-        let Some(a) = d.get(b"A").map(|o| self.doc.resolve(o)) else { return Vec::new() };
-        let held: Vec<Arc<Object>> = match &*a {
-            Object::Array(items) => items.iter().map(|x| self.doc.resolve(x)).collect(),
-            other => vec![self.doc.resolve(other)],
+        let mut held: Vec<Arc<Object>> = Vec::new();
+        let mut hold = |o: &Object| {
+            let o = self.doc.resolve(o);
+            match &*o {
+                Object::Array(items) => held.extend(items.iter().map(|x| self.doc.resolve(x))),
+                _ => held.push(o),
+            }
         };
+        if let Some(a) = d.get(b"A") {
+            hold(a);
+        }
+        if let Some(c) = d.get(b"C").map(|c| self.doc.resolve(c)) {
+            let names = match &*c {
+                Object::Array(items) => items.clone(),
+                other => vec![other.clone()],
+            };
+            for name in &names {
+                if let Some(class) = self.doc.resolve(name).as_name().and_then(|n| self.class_map.get(n)) {
+                    hold(class);
+                }
+            }
+        }
         held.into_iter().filter(|x| x.as_dict().is_some()).collect()
     }
 }
