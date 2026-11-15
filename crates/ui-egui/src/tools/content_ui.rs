@@ -11,6 +11,7 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
+use crate::page_keys::PageKeys;
 use crate::page_router::{Hit, Owner, PagePress};
 use crate::theme::Tokens;
 use crate::widgets;
@@ -632,8 +633,9 @@ pub(crate) fn release_image_selection(view: &mut DocView, added: &[Added]) {
     }
 }
 
-/// Delete removes the selected item; Escape clears the selection.
-pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, image_controller_active: bool) {
+/// Delete removes the selected item; Escape clears the selection. Not while something is over the
+/// pages.
+pub(crate) fn keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, image_controller_active: bool) {
     if image_controller_active && view.image_selection.is_some()
         || matches!(view.pending_edit.as_ref(), Some(Edit::EditPageImage { .. }))
         || view.content.selected.is_none()
@@ -642,7 +644,8 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, image_controller_act
     {
         return;
     }
-    let (del, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace), i.key_pressed(egui::Key::Escape)));
+    let del = keys.pressed(ctx, egui::Key::Delete) || keys.pressed(ctx, egui::Key::Backspace);
+    let esc = keys.pressed(ctx, egui::Key::Escape);
     // Not while a button is down: the press held would then name another item.
     if del
         && !view.content.held
@@ -671,7 +674,7 @@ pub(crate) fn after_refresh(view: &mut DocView, added: &[Added]) {
 /// The in-place text editor, with Done and Discard beside it. Returns the edit once the text is
 /// committed (a click away, or Done), and whether Done finished adding text. Discard or Escape
 /// throws the draft away.
-pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, added: &[Added]) -> (Option<Edit>, bool) {
+pub(crate) fn editor(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo, added: &[Added]) -> (Option<Edit>, bool) {
     let doc_id = view.id;
     let Some(page) = view.content.draft.as_ref().map(|d| d.page) else { return (None, false) };
     let Some(xf) = view.page_xform(page) else { return (None, false) };
@@ -811,7 +814,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                 // that is not a click away.
                 let on_buttons = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| buttons.contains(p))
                     || crate::edit_text_ui::focus_pos(ui.ctx()).is_some_and(|p| buttons.contains(p));
-                cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
+                cancel |= keys.pressed(ui.ctx(), egui::Key::Escape);
                 commit = done || resp.lost_focus() && !on_buttons && !outside && !view.objects.hold_editor;
             });
             // Page text is drawn with the standard fonts; anything else would be saved as `?` (#125).
@@ -1088,13 +1091,45 @@ impl crate::PdfCraftApp {
 
     /// Click an image field: pick a picture for it.
     pub fn choose_field_image(&mut self, name: &str) {
+        let Some((_, id)) = self.active_ids() else { return };
+        self.choose_field_image_target(id, name, None);
+    }
+    /// Keep the clicked document and field identity through the asynchronous image picker.
+    pub fn choose_field_image_target(&mut self, id: pdfcraft_engine::DocId, name: &str, identity: Option<u64>) {
+        if identity.is_some_and(|key| key >= 1u64 << 48) {
+            self.notify("The selected image field identity is invalid");
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             let name = name.to_string();
+            let Some(generation) = self.session.get(id).map(|d| d.edit_generation()) else { return };
             self.pick_image(tl!("Select Icon"), move |app, _, bytes| {
-                app.apply_edit(Edit::SetFieldImage { name, image: std::sync::Arc::new(bytes) });
+                if app.session.get(id).is_none_or(|d| d.edit_generation() != generation) {
+                    app.notify("The document changed while choosing the image; the picture was not applied");
+                    return;
+                }
+                let image = std::sync::Arc::new(bytes);
+                let edit = match identity {
+                    Some(key) => {
+                        Edit::SetFieldImageTarget { name, object: pdfcraft_cos::ObjRef { num: (key >> 16) as u32, generation: key as u16 }, image }
+                    }
+                    None => Edit::SetFieldImage { name, image },
+                };
+                match app.session.apply(id, edit) {
+                    Ok(_) => {
+                        if let Some(view) = app.views.iter_mut().find(|v| v.id == id)
+                            && let Some(doc) = app.session.get(id)
+                        {
+                            view.document_changed(&doc.info);
+                        }
+                    }
+                    Err(e) => app.notify(e.to_string()),
+                }
             });
         }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (id, identity);
         #[cfg(target_arch = "wasm32")]
         self.notify_fmt("{name}: choosing images arrives on the web with file pickers for images", &[("name", &name)]);
     }

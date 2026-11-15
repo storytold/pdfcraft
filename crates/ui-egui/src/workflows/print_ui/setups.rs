@@ -5,7 +5,8 @@
 //! Copies, the pages to print, orientation and the Multiple / Booklet / Poster layouts stay one
 //! job's choices, as before.
 
-use super::{CUSTOM_SCALE, PAPERS, SizeMode, print::names, spool::Duplex};
+use super::{CUSTOM_SCALE, SizeMode, print::names, spool::Duplex};
+use crate::print_paper::is_paper_name;
 
 /// At most this many printers are remembered, the most recently printed to first (settings are
 /// untrusted, and a long-gone queue shouldn't stay forever).
@@ -15,10 +16,10 @@ pub const MAX_PRINTERS: usize = 32;
 const MAX_NAME_BYTES: usize = 1024;
 
 /// The paper, sizing and two-sided choice a printer was last printed with.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PrinterSetup {
-    /// `PAPERS` index.
-    pub paper: usize,
+    /// The paper's name: a standard size's canonical name, or a custom paper's (print.page-setup).
+    pub paper: String,
     pub size: SizeMode,
     /// The percent `SizeMode::Custom` prints at.
     pub custom_scale: f64,
@@ -34,20 +35,19 @@ pub fn record(setups: &mut Vec<(String, PrinterSetup)>, printer: &str, setup: Pr
     setups.truncate(MAX_PRINTERS);
 }
 
-/// The setups for the settings file: the paper by its canonical name (as `print_paper`), sizing
-/// and two-sided by the names `doc_print` and the `print` setting use ([`names`]).
+/// The setups for the settings file: the paper by its name (as `print_paper`), sizing and
+/// two-sided by the names `doc_print` and the `print` setting use ([`names`]).
 pub fn to_json(setups: &[(String, PrinterSetup)]) -> serde_json::Value {
     setups
         .iter()
-        .filter_map(|(printer, s)| {
-            let (paper, _) = PAPERS.get(s.paper)?;
-            Some(serde_json::json!({
+        .map(|(printer, s)| {
+            serde_json::json!({
                 "printer": printer,
-                "paper": paper,
+                "paper": s.paper,
                 "size": names::size_mode(s.size),
                 "custom_scale": s.custom_scale,
                 "duplex": names::duplex(s.duplex),
-            }))
+            })
         })
         .collect()
 }
@@ -71,8 +71,8 @@ pub fn from_json(v: &serde_json::Value) -> Option<Vec<(String, PrinterSetup)>> {
 
 fn read_entry(entry: &serde_json::Value) -> Option<(String, PrinterSetup)> {
     let printer = entry.get("printer")?.as_str().filter(|p| !p.is_empty() && p.len() <= MAX_NAME_BYTES)?;
-    let paper_name = entry.get("paper")?.as_str()?;
-    let paper = PAPERS.iter().position(|(name, _)| *name == paper_name)?;
+    // A custom paper's name is kept even when the paper isn't on this list: it may be added again.
+    let paper = entry.get("paper")?.as_str().filter(|name| is_paper_name(name))?.to_string();
     let custom_scale = entry.get("custom_scale")?.as_f64().filter(|s| CUSTOM_SCALE.contains(s))?;
     let size = names::parse_size_mode(entry.get("size")?.as_str()?, custom_scale)?;
     let duplex = names::parse_duplex(entry.get("duplex")?.as_str()?)?;
@@ -84,7 +84,7 @@ mod tests {
     use super::*;
 
     fn setup(paper: usize, size: SizeMode, duplex: Option<Duplex>) -> PrinterSetup {
-        PrinterSetup { paper, size, custom_scale: 62.5, duplex }
+        PrinterSetup { paper: pdfcraft_engine::print::PAPERS[paper].0.to_string(), size, custom_scale: 62.5, duplex }
     }
 
     #[test]
@@ -94,6 +94,8 @@ mod tests {
         record(&mut setups, "Label", setup(super::super::print::LABEL_PAPER, SizeMode::Actual, Some(Duplex::Off)));
         record(&mut setups, "Plotter", setup(0, SizeMode::Custom(62.5), None));
         record(&mut setups, "Shrinker", setup(1, SizeMode::Shrink, Some(Duplex::ShortEdge)));
+        // A custom paper goes by the name it was given (print.page-setup).
+        record(&mut setups, "Labeller", PrinterSetup { paper: "Label 4×6".into(), ..setup(0, SizeMode::Actual, None) });
         assert_eq!(from_json(&to_json(&setups)), Some(setups));
     }
 
@@ -121,6 +123,8 @@ mod tests {
             ("printer", serde_json::json!(5)),
             ("printer", serde_json::json!("x".repeat(MAX_NAME_BYTES + 1))),
             ("paper", serde_json::json!("a4")),
+            ("paper", serde_json::json!("")),
+            ("paper", serde_json::json!("x".repeat(65))),
             ("paper", serde_json::json!(4)),
             ("size", serde_json::json!("fit-to-page")),
             ("size", serde_json::Value::Null),

@@ -366,7 +366,9 @@ mod tests {
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
-    #[cfg(unix)]
+    // Not on macOS: APFS keeps only UTF-8 file names, so no output there can have such a name, and
+    // creating the probe fails before the check runs.
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn output_probe_paths_preserve_non_utf8_names() {
         use std::os::unix::ffi::OsStringExt;

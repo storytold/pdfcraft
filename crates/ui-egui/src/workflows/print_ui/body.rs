@@ -1,8 +1,39 @@
 use super::draft::{CUSTOM_SCALE, Handling, PrintDraft, Which};
 use super::{
-    Binding, BookletSubset, Color32, Content, Orientation, PAPERS, PREVIEW_BOX, PREVIEW_H, PREVIEW_W, PageOrder, Pos2, Rect, SizeMode, Stroke,
-    Subset, Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
+    Binding, BookletSubset, Color32, Content, Orientation, PREVIEW_BOX, PREVIEW_H, PREVIEW_W, PageOrder, Pos2, Rect, SizeMode, Stroke, Subset,
+    Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
 };
+
+/// The narrowest the title is still worth cutting: an ellipsis and a couple of pixels at the title's
+/// font. Given less room than this, [`egui::Sides::truncate`] cannot cut any further and the label
+/// is painted back over the buttons, which is the defect of #5545; the title is left out instead.
+const TITLE_MIN_WIDTH: f32 = 16.0;
+
+/// The panel's own header: "Printer properties" on the left, Done and Reset on the right.
+///
+/// The buttons take their room first, from the right (`shrink_left`), and the title gets what is
+/// left of the row: [`egui::Sides::truncate`] cuts it with an ellipsis instead of letting a label wider than the row
+/// spill over it. Laid out the other way round, the label is placed first at its natural width and
+/// the buttons are painted back over it, which is what a translation of "Reset to printer
+/// defaults" long enough to fill the row did in Italian (#5545).
+///
+/// The title comes back as `None` when the row is too narrow for even an ellipsis, which a catalog
+/// whose two buttons nearly fill the row reaches (Bulgarian, Ukrainian, Spanish at about 450 px).
+fn driver_options_header(ui: &mut egui::Ui, show: &mut bool, can_reset: bool) -> (Option<egui::Response>, egui::Response) {
+    egui::Sides::new().shrink_left().truncate().show(
+        ui,
+        |ui| {
+            let room = ui.available_width();
+            (room >= TITLE_MIN_WIDTH).then(|| ui.add(egui::Label::new(egui::RichText::new(tl!("Printer properties")).font(theme::semibold(13.0)))))
+        },
+        |ui| {
+            if ui.button(tl!("Done")).clicked() {
+                *show = false;
+            }
+            ui.add_enabled(can_reset, egui::Button::new(tl!("Reset to printer defaults")))
+        },
+    )
+}
 
 /// Properties… on CUPS: the driver's options for this print, grouped as the driver groups them.
 /// Only choices away from the printer's defaults are kept, and sent with the job.
@@ -10,17 +41,10 @@ fn driver_options_panel(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
     let PrintDraft { driver_options: Some((_, options)), driver_choices: choices, show_driver_options: show, .. } = d else { return };
     egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tl!("Printer properties")).font(theme::semibold(13.0)));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(tl!("Done")).clicked() {
-                    *show = false;
-                }
-                if ui.add_enabled(!choices.is_empty(), egui::Button::new(tl!("Reset to printer defaults"))).clicked() {
-                    choices.clear();
-                }
-            });
-        });
+        let (_, reset) = driver_options_header(ui, show, !choices.is_empty());
+        if reset.clicked() {
+            choices.clear();
+        }
         if options.is_empty() {
             ui.label(egui::RichText::new(tl!("This printer offers no settings of its own.")).small().color(t.text_muted));
             return;
@@ -177,6 +201,11 @@ pub(crate) fn body(
                     d.driver_error = None;
                     // What this printer was last printed with (#2001).
                     d.apply_setup();
+                    d.reset_unoverridden_custom_paper();
+                    d.apply_printer_papers(Vec::new());
+                    if let Some(p) = d.printer.clone() {
+                        d.read_papers_for = Some(p);
+                    }
                 }
                 ui.end_row();
                 // The spooler answered with no printer at all (#160): say so, rather than
@@ -221,28 +250,91 @@ pub(crate) fn body(
                     ui.end_row();
                 }
                 let paper_label = ui.label(tl!("Paper:"));
-                let paper_name = PAPERS.get(d.paper).map_or("US Letter", |p| p.0);
+                d.paper = d.paper.min(d.paper_count().saturating_sub(1));
                 let before = d.paper;
-                craft_ui::ComboBox::from_id_salt("paper").selected_text(tl!(paper_name)).width(260.0).show_ui(ui, |ui| {
-                    for (i, (name, _)) in PAPERS.iter().enumerate() {
-                        ui.selectable_value(&mut d.paper, i, tl!(name));
+                let mut paper_clicked = false;
+                let detecting = d.papers_loading();
+                ui.horizontal(|ui| {
+                    // A standard size's name is translated; a custom paper keeps the name it was given.
+                    let shown = if d.paper_is_custom() { d.paper_name().to_string() } else { tl!(&d.paper_name()).to_string() };
+                    craft_ui::ComboBox::from_id_salt("paper").selected_text(shown).width(180.0).show_ui(ui, |ui| {
+                        if detecting {
+                            ui.add_enabled(false, egui::Label::new(tl!("Detecting paper…")));
+                        }
+                        for (i, (name, _)) in d.papers.iter().enumerate() {
+                            if ui.selectable_value(&mut d.paper, i, tl!(name)).clicked() {
+                                paper_clicked = true;
+                            }
+                        }
+                        if !d.custom_papers.is_empty() {
+                            ui.separator();
+                        }
+                        for (i, p) in d.custom_papers.iter().enumerate() {
+                            let label = format!("{} ({})", p.name, d.units.size(p.width, p.height));
+                            if ui.selectable_value(&mut d.paper, d.papers.len() + i, label).clicked() {
+                                paper_clicked = true;
+                            }
+                        }
+                    })
+                    .response
+                    .labelled_by(paper_label.id);
+                    if detecting {
+                        ui.label(egui::RichText::new(tl!("Detecting…")).small().color(t.text_muted));
                     }
-                })
-                .response
-                .labelled_by(paper_label.id);
+                    if ui.button(tl!("Custom…")).on_hover_text(tl!("Add a paper size of your own to the list")).clicked() {
+                        d.custom_new = match d.custom_new {
+                            Some(_) => None,
+                            None => Some((String::new(), String::new(), String::new())),
+                        };
+                    }
+                    if d.paper_is_custom() && ui.button(tl!("Remove")).on_hover_text(tl!("Take this paper size off the list")).clicked() {
+                        d.remove_custom_paper();
+                        paper_clicked = true;
+                    }
+                    let page_setup_tip = if spool::HAS_PRINTER_PREFERENCES {
+                        tl!("Selects paper size and orientation from the printer driver. For paper tray, print quality or other driver defaults, use Properties…")
+                    } else {
+                        tl!("Page setup dialog is not available on this system.")
+                    };
+                    let page_setup = ui
+                        .add_enabled(d.printer.is_some() && !browser && spool::HAS_PRINTER_PREFERENCES, egui::Button::new(tl!("Page Setup…")))
+                        .on_hover_text(page_setup_tip);
+                    if page_setup.clicked()
+                        && let Some(p) = d.printer.clone()
+                    {
+                        d.driver_error = None;
+                        #[cfg(windows)]
+                        let parent = winsafe::HWND::GetActiveWindow().map(|h| h.ptr() as isize);
+                        #[cfg(not(windows))]
+                        let parent = None;
+                        match spool::show_printer_properties(&p, parent) {
+                            Ok(Some((name, size))) => {
+                                d.apply_driver_paper(name, size);
+                            }
+                            Ok(None) => {}
+                            Err(e) => d.driver_error = Some(e.to_string()),
+                        }
+                    }
+                });
+                if paper_clicked || d.paper != before {
+                    d.paper_overridden = true;
+                }
                 // Label stock gets the label layout (cut, turned upright, fitted).
-                if d.paper != before && d.paper == print::LABEL_PAPER {
+                if paper_clicked && d.paper != before && d.paper == print::LABEL_PAPER && d.which != Which::Area {
                     d.paper_before_label = Some(before);
                     d.handling = Handling::Label;
                     d.sheet = 0;
                 }
                 ui.end_row();
+                if d.custom_new.is_some() {
+                    ui.label("");
+                    custom_paper_row(ui, d, t);
+                    ui.end_row();
+                }
             });
             // Windows says which drivers can't print two-sided as they're asked; they keep their
-            // own setting, even when Two-sided is Off.
-            if let Some(p) = d.printers.iter().find(|p| d.printer.as_ref() == Some(&p.name))
-                && p.two_sided.or_else(|| d.two_sided.get(&p.name).copied().flatten()) == Some(false)
-            {
+            // own setting, even when Two-sided is Off, and for a booklet's both sides.
+            if d.printer_two_sided() == Some(false) {
                 ui.label(egui::RichText::new(tl!("This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…")).small().color(t.text_muted));
             }
             if d.printer.as_deref() == Some(crate::web_print::BROWSER_PRINTER) {
@@ -261,11 +353,12 @@ pub(crate) fn body(
             if let Some(&source) = sizes.get(d.current_page) {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(crate::i18n::fmt(tl!("PDF page: {size}"), &[("size", &d.units.size(source.0, source.1))]));
-                    let matched = print::matching_paper(source);
+                    let matched = d.matching_paper(source);
                     if ui.add_enabled(matched.is_some(), egui::Button::new(tl!("Match page at 100%"))).clicked()
                         && let Some(paper) = matched
                     {
                         d.paper = paper;
+                        d.paper_overridden = true;
                         // A paper picked outright: nothing for leaving Label to give back.
                         d.paper_before_label = None;
                         d.handling = Handling::Size;
@@ -289,6 +382,17 @@ pub(crate) fn body(
                     d.which = Which::Range;
                 }
             });
+            // Offered only when an area was chosen with Snapshot (its menu's Print area…).
+            if let Some((page, a)) = d.area {
+                let label = crate::i18n::fmt(
+                    tl!("Selected area (page {page}, {size})"),
+                    &[("page", &(page + 1).to_string()), ("size", &d.units.size(a[2] - a[0], a[3] - a[1]))],
+                );
+                if widgets::radio_value(ui, &mut d.which, Which::Area, label).clicked() {
+                    // Leaving Label this way gives back the paper it replaced, as its tabs do.
+                    d.set_handling(Handling::Size);
+                }
+            }
             // Offered only when pages were picked before the dialog opened.
             if !d.selected.is_empty() {
                 let label = format!("{} ({})", tl!("Selected pages"), d.selected.len());
@@ -316,7 +420,9 @@ pub(crate) fn body(
                     (Handling::Booklet, tl!("Booklet")),
                     (Handling::Label, tl!("Label")),
                 ] {
-                    if widgets::mode_tab(ui, label, d.handling == h).clicked() {
+                    // A selected area prints only with Size.
+                    let offered = d.which != Which::Area || h == Handling::Size;
+                    if ui.add_enabled_ui(offered, |ui| widgets::mode_tab(ui, label, d.handling == h)).inner.clicked() {
                         d.set_handling(h);
                     }
                 }
@@ -589,8 +695,13 @@ pub(crate) fn body(
     let (mut go, mut cancel) = (false, false);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let looking = still_looking(d);
+        let waiting_paper = d.papers_loading();
         let label = if d.printer.is_some() || looking { tl!("Print") } else { tl!("Save as PDF") };
-        if ui.add_enabled_ui(settings.is_ok() && !sheets.is_empty() && !looking, |ui| widgets::pill_button(ui, label, true)).inner.clicked() {
+        if ui
+            .add_enabled_ui(settings.is_ok() && !sheets.is_empty() && !looking && !waiting_paper, |ui| widgets::pill_button(ui, label, true))
+            .inner
+            .clicked()
+        {
             go = true;
         }
         if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
@@ -600,12 +711,154 @@ pub(crate) fn body(
     (go, cancel)
 }
 
+/// The row that adds a custom paper: name, width and height in the preferences' unit.
+fn custom_paper_row(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
+    let unit = d.units;
+    let Some((name, width, height)) = d.custom_new.as_mut() else { return };
+    let side = |s: &str| s.trim().replace(',', ".").parse::<f64>().ok().map(|v| v / unit.per_point());
+    let paper = match (side(width), side(height)) {
+        (Some(w), Some(h)) => crate::print_paper::CustomPaper::new(name, w, h),
+        _ => None,
+    };
+    let (mut add, mut cancel) = (false, false);
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(name).hint_text(tl!("Name")).desired_width(110.0)).accessible_name(tl!("Name"));
+        ui.add(egui::TextEdit::singleline(width).hint_text(tl!("Width")).desired_width(52.0)).accessible_name(tl!("Width"));
+        ui.label("×");
+        ui.add(egui::TextEdit::singleline(height).hint_text(tl!("Height")).desired_width(52.0)).accessible_name(tl!("Height"));
+        ui.label(egui::RichText::new(unit.label()).color(t.text_muted));
+        add = ui.add_enabled(paper.is_some(), egui::Button::new(tl!("Add"))).clicked();
+        cancel = ui.button(tl!("Cancel")).clicked();
+    });
+    if add && let Some(paper) = paper {
+        d.add_custom_paper(paper);
+        d.custom_new = None;
+    } else if cancel {
+        d.custom_new = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
 
+    use super::*;
+    use crate::i18n::Lang;
     use crate::{Dialog, PdfCraftApp};
+
+    /// The row the settings column really gives the header: `body` sets it to 470 px, less the
+    /// frame's 10 px margins.
+    const PANEL_ROW: f32 = 450.0;
+
+    /// One frame of the header at `width`, drawn in the app's own fonts; with `hover`, the pointer
+    /// is parked on the title and the frames after the first are run so that a tooltip can come up.
+    /// Returns the title's rectangle (none when the title was left out), the reset button's, and
+    /// whether a tooltip layer is open.
+    fn header_frame(lang: &str, width: f32, hover: bool) -> (Option<egui::Rect>, egui::Rect, bool) {
+        crate::i18n::set_current(Lang::from_code(lang).expect("a catalogued language"));
+        let ctx = egui::Context::default();
+        ctx.set_fonts(theme::font_definitions());
+        // Without this the tooltip would need half a second of frames to show.
+        ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+        let row = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 400.0));
+        let pointer = std::cell::Cell::new(None);
+        let seen = std::cell::Cell::new((None, egui::Rect::NOTHING));
+        for _ in 0..3 {
+            let mut input = egui::RawInput { screen_rect: Some(row), ..Default::default() };
+            if let Some(at) = hover.then(|| pointer.get()).flatten() {
+                input.events.push(egui::Event::PointerMoved(at));
+            }
+            let mut output = ctx.run_ui(input, |ui| {
+                let mut show = true;
+                let (title, reset) = driver_options_header(ui, &mut show, true);
+                let title = title.map(|title| title.rect);
+                pointer.set(title.map(|title| title.center()));
+                seen.set((title, reset.rect));
+            });
+            // Nothing draws the frame, but epaint's deltas must be taken anyway.
+            output.textures_delta.clear();
+        }
+        let tooltip = ctx.memory(|memory| memory.areas().visible_layer_ids().iter().any(|layer| layer.order == egui::Order::Tooltip));
+        crate::i18n::set_current(Lang::EN);
+        let (title, reset) = seen.get();
+        (title, reset, tooltip)
+    }
+
+    fn header_at(lang: &str, width: f32) -> (Option<egui::Rect>, egui::Rect) {
+        let (title, reset, _) = header_frame(lang, width, false);
+        (title, reset)
+    }
+
+    /// #5545: in a long locale the reset label is wider than the row, and it used to be painted
+    /// over the title. Every catalogued language is checked at the row the panel really gives the
+    /// header, so the longest translation of "Reset to printer defaults" is covered by the run
+    /// rather than by a guess at which locale is the worst one.
+    #[test]
+    fn the_reset_button_never_covers_the_title_in_any_language() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
+        for lang in Lang::all() {
+            let (title, reset) = header_at(lang.code(), PANEL_ROW);
+            assert!(
+                title.is_none_or(|title| !title.intersects(reset)),
+                "{} at {PANEL_ROW}px: the title {title:?} is drawn on top of the reset button {reset:?}",
+                lang.code()
+            );
+            assert!(reset.right() <= PANEL_ROW, "{}: the reset button {reset:?} runs out of the row", lang.code());
+        }
+    }
+
+    /// A row narrower than the buttons plus one ellipsis cannot be cut any further: the title is
+    /// left out instead of being painted back over the buttons. Bulgarian, Ukrainian and Spanish
+    /// are the catalogs that get there first, at the row's own width.
+    #[test]
+    fn a_row_without_room_for_a_title_leaves_it_out() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
+        for width in [449.0, 440.0, 400.0, 300.0] {
+            for lang in ["bg", "uk", "es", "it", "en"] {
+                let (title, reset) = header_at(lang, width);
+                assert!(
+                    title.is_none_or(|title| !title.intersects(reset)),
+                    "{lang} at {width}px: the title {title:?} is drawn on top of the reset button {reset:?}"
+                );
+            }
+        }
+        let (title, reset) = header_at("bg", 440.0);
+        assert!(title.is_none(), "the title is dropped, not squeezed to a sliver: {:?} next to {reset:?}", title);
+    }
+
+    /// The title is what gives way: it truncates in a narrow row while the buttons keep their
+    /// size, and a wide row keeps it whole instead of cutting it for nothing.
+    #[test]
+    fn the_title_truncates_and_leaves_the_buttons_whole() {
+        let (wide_title, wide_reset) = header_at("en", 620.0);
+        let (narrow_title, narrow_reset) = header_at("en", 300.0);
+        let (wide_title, narrow_title) = (wide_title.expect("the wide row keeps the title"), narrow_title.expect("the narrow row keeps a title"));
+        assert!(narrow_title.width() < wide_title.width(), "the title shrinks in a narrow row");
+        assert_eq!(narrow_reset.width(), wide_reset.width(), "the buttons keep their size");
+        assert!(narrow_reset.right() <= 301.0, "the reset button stays inside the row");
+    }
+
+    /// The cut title stays reachable: hovering it shows the full string in a tooltip (egui's
+    /// `Label` does that by itself when it elides), and a title that fits whole shows none.
+    #[test]
+    fn the_truncated_title_is_reachable_through_a_tooltip() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
+        let (whole, _, _) = header_frame("it", 620.0, false);
+        let whole = whole.expect("a wide row keeps the title");
+        let (cut, _, tooltip) = header_frame("it", PANEL_ROW, true);
+        let cut = cut.expect("the Italian title is elided, not dropped");
+        assert!(cut.width() < whole.width(), "the Italian title is cut at {PANEL_ROW}px: {} of {}", cut.width(), whole.width());
+        assert!(tooltip, "hovering the elided title opens a tooltip with the full string");
+        let (_, _, tooltip) = header_frame("en", 620.0, true);
+        assert!(!tooltip, "a title that fits whole needs no tooltip");
+    }
 
     /// #4252, #5317: on a short screen the settings+preview area used to grow past
     /// both the top and bottom of the screen (centered modals overflow both edges equally),

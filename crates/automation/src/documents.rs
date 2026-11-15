@@ -104,12 +104,27 @@ impl Automation {
     }
 
     pub(crate) fn doc_open(&mut self, a: &Args) -> Result<Value> {
-        let path = self.resolve(a.str("path")?, false)?;
+        let requested = a.str("path")?;
+        // `manual.pdf#nameddest=Intro`, as a help system starts a PDF reader (#3425): the file under
+        // --root, and where it opens. A path that names a file is never split.
+        let parameters = pdfcraft_engine::open_parameters::split(requested, |p| self.resolve(p, false).is_ok_and(|p| p.is_file()));
+        let (requested, destination) = match &parameters {
+            Some((file, destination)) => (file.as_str(), Some(destination.clone())),
+            None => (requested, None),
+        };
+        let path = self.resolve(requested, false)?;
         let bytes = read_input(&path)?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let id = self.session.open(name, Some(path.to_string_lossy().into_owned()), Arc::new(bytes), a.opt_str("password")?).map_err(failed)?;
         let doc = self.session.get(id).ok_or_else(|| failed("the document vanished"))?;
-        Ok(summary(doc))
+        let mut value = summary(doc);
+        if let Some(destination) = destination {
+            let (applied, destination, warning) = crate::links::destination_report(doc, destination);
+            value["destination_applied"] = json!(applied);
+            value["destination"] = destination;
+            value["warning"] = json!(warning);
+        }
+        Ok(value)
     }
 
     pub(crate) fn doc_close(&mut self, a: &Args) -> Result<Value> {
@@ -153,11 +168,19 @@ impl Automation {
         if flatten_fill_sign {
             self.apply(a, Edit::FlattenFillSign)?;
         }
+        // The document's Will Save actions run first: what they change is saved (#269).
+        let scripts = self.session.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillSave);
         let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) }.map_err(failed)?;
         // A save that adds or removes encryption, or must not keep the old revision (Sanitize,
         // redaction), is rewritten in full even when an incremental save was asked for.
         let incremental = !full && bytes.starts_with(&self.doc(a)?.saved_bytes());
-        self.publish_save(id, &target, bytes, incremental, write)
+        let mut out = self.publish_save(id, &target, bytes, incremental, write)?;
+        if !scripts.is_empty()
+            && let Some(o) = out.as_object_mut()
+        {
+            o.insert("will_save".into(), crate::a11y::form_tools::js_output_json(&scripts));
+        }
+        Ok(out)
     }
 
     /// Validate the prepared bytes before publishing them or marking the document saved.

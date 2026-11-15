@@ -245,13 +245,13 @@ fn an_unnamed_group_primary_gets_an_export_only_name() {
         add_annotation(&mut src, &note, &Meta { date: None, id: clash.clone() }).unwrap();
 
         let xfdf = export_xfdf(&src, true, false, "a.pdf");
-        let doc = roxmltree::Document::parse(&xfdf).unwrap();
-        let el = |t: &str| doc.descendants().find(|n| n.has_tag_name(t)).unwrap_or_else(|| panic!("no <{t}>: {xfdf}"));
+        let doc = common::parse_form_xml(&xfdf).unwrap();
+        let el = |t: &str| doc.descendants().find(|n| n.local() == t).unwrap_or_else(|| panic!("no <{t}>: {xfdf}"));
         let (tag, sub_tag) = if caret_primary { ("caret", "strikeout") } else { ("strikeout", "caret") };
-        let name = el(tag).attribute("name").unwrap_or_else(|| panic!("the unnamed primary gets a name ({caret_primary}): {xfdf}"));
-        assert_eq!(el(sub_tag).attribute("inreplyto"), Some(name), "{xfdf}");
+        let name = el(tag).attr("name").unwrap_or_else(|| panic!("the unnamed primary gets a name ({caret_primary}): {xfdf}"));
+        assert_eq!(el(sub_tag).attr("inreplyto"), Some(name), "{xfdf}");
         assert_ne!(name, clash, "a made-up name never repeats a real /NM");
-        assert_eq!(doc.descendants().filter(|n| n.attribute("name") == Some(name)).count(), 1, "{xfdf}");
+        assert_eq!(doc.descendants().filter(|n| n.attr("name") == Some(name)).count(), 1, "{xfdf}");
         assert!(src.get(primary).as_dict().unwrap().get(b"NM").is_none(), "the name is for the export only");
         assert!(src.get(sub).as_dict().unwrap().get(b"NM").is_none());
 
@@ -306,11 +306,11 @@ fn an_export_only_name_never_repeats_an_inline_annotations_nm() {
     src.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Array(annots))).unwrap();
 
     let xfdf = export_xfdf(&src, true, false, "a.pdf");
-    let doc = roxmltree::Document::parse(&xfdf).unwrap();
-    let caret = doc.descendants().find(|n| n.has_tag_name("caret")).unwrap_or_else(|| panic!("no <caret>: {xfdf}"));
-    let name = caret.attribute("name").unwrap_or_else(|| panic!("the unnamed primary gets a name: {xfdf}"));
+    let doc = common::parse_form_xml(&xfdf).unwrap();
+    let caret = doc.descendants().find(|n| n.local() == "caret").unwrap_or_else(|| panic!("no <caret>: {xfdf}"));
+    let name = caret.attr("name").unwrap_or_else(|| panic!("the unnamed primary gets a name: {xfdf}"));
     assert_ne!(name, clash, "a made-up name never repeats an inline annotation's /NM: {xfdf}");
-    assert_eq!(doc.descendants().filter(|n| n.attribute("name") == Some(&clash[..])).count(), 1, "{xfdf}");
+    assert_eq!(doc.descendants().filter(|n| n.attr("name") == Some(&clash[..])).count(), 1, "{xfdf}");
 }
 
 #[test]
@@ -318,15 +318,15 @@ fn xml_exports_drop_xml_noncharacters() {
     let mut src = filled();
     set_value(&mut src, "Name", &FieldValue::Text("a\u{FFFE}b\u{FFFF}c".into())).unwrap();
     let xfdf = export_xfdf(&src, false, true, "f.pdf");
-    let doc = roxmltree::Document::parse(&xfdf).unwrap_or_else(|e| panic!("XFDF is not well-formed: {e}: {xfdf:?}"));
+    let doc = common::parse_form_xml(&xfdf).unwrap_or_else(|e| panic!("XFDF is not well-formed: {e}: {xfdf:?}"));
     let value = doc
         .descendants()
-        .find(|n| n.has_tag_name("field") && n.attribute("name") == Some("Name"))
-        .and_then(|n| n.children().find(|c| c.has_tag_name("value")))
-        .and_then(|n| n.text());
-    assert_eq!(value, Some("abc"));
+        .find(|n| n.local() == "field" && n.attr("name") == Some("Name"))
+        .and_then(|n| n.child(craft_xml::Local("value")))
+        .map(|n| n.text());
+    assert_eq!(value.as_deref(), Some("abc"));
     let data = export_data(&src, Format::Xml);
-    roxmltree::Document::parse(&data).unwrap_or_else(|e| panic!("XML is not well-formed: {e}: {data:?}"));
+    common::parse_form_xml(&data).unwrap_or_else(|e| panic!("XML is not well-formed: {e}: {data:?}"));
 }
 
 #[test]
@@ -347,15 +347,11 @@ fn xml_exports_preserve_whitespace_in_field_names() {
     let src = Document::open(Arc::new(source_bytes.clone())).unwrap();
     for format in [Format::Xml, Format::Xfdf] {
         let exported = if format == Format::Xfdf { export_xfdf(&src, false, true, "form.pdf") } else { export_data(&src, format) };
-        let xml = roxmltree::Document::parse(&exported).unwrap();
+        let xml = common::parse_form_xml(&exported).unwrap();
         let exported_names: Vec<_> = if format == Format::Xfdf {
-            xml.descendants().filter(|n| n.has_tag_name("field")).map(|n| n.attribute("name").unwrap()).collect()
+            xml.descendants().filter(|n| n.local() == "field").map(|n| n.attr("name").unwrap()).collect()
         } else {
-            xml.root_element()
-                .children()
-                .filter(|n| n.is_element())
-                .map(|n| n.attribute(("http://ns.adobe.com/xfdf-transition/", "original")).unwrap())
-                .collect()
+            xml.elements().map(|n| n.attr("xfdf:original").unwrap()).collect()
         };
         assert_eq!(exported_names, names, "{format:?}: {exported}");
         let mut dst = Document::open(Arc::new(source_bytes.clone())).unwrap();
@@ -409,14 +405,14 @@ fn xfdf_exports_preserve_whitespace_in_comment_attributes() {
     let mut dst = Document::open(Arc::new(source_bytes)).unwrap();
     let file = "form\twith\nlines.pdf";
     let xfdf = export_xfdf(&dst, true, false, file);
-    let xml = roxmltree::Document::parse(&xfdf).unwrap();
-    let notes: Vec<_> = xml.descendants().filter(|n| n.has_tag_name("text")).collect();
-    assert_eq!(notes.iter().map(|n| n.attribute("name").unwrap()).collect::<Vec<_>>(), names);
+    let xml = common::parse_form_xml(&xfdf).unwrap();
+    let notes: Vec<_> = xml.descendants().filter(|n| n.local() == "text").collect();
+    assert_eq!(notes.iter().map(|n| n.attr("name").unwrap()).collect::<Vec<_>>(), names);
     for note in notes {
-        assert_eq!(note.attribute("title"), Some(author));
-        assert_eq!(note.attribute("subject"), Some(subject));
+        assert_eq!(note.attr("title"), Some(author));
+        assert_eq!(note.attr("subject"), Some(subject));
     }
-    assert_eq!(xml.descendants().find(|n| n.has_tag_name("f")).unwrap().attribute("href"), Some(file));
+    assert_eq!(xml.descendants().find(|n| n.local() == "f").unwrap().attr("href"), Some(file));
     let before = annotation_refs(&dst);
     let report = import(&mut dst, xfdf.as_bytes()).unwrap();
     assert_eq!(report.comments, names.len());
@@ -646,12 +642,12 @@ fn xml_field_names_remain_valid_and_round_trip_without_collisions() {
     let want = values(&src);
     for format in [Format::Xml, Format::Xdp] {
         let text = export_data(&src, format);
-        let xml = roxmltree::Document::parse(&text).unwrap();
-        let children: Vec<_> = xml.root_element().children().filter(|n| n.is_element()).collect();
+        let xml = common::parse_form_xml(&text).unwrap();
+        let children: Vec<_> = xml.elements().collect();
         assert_eq!(children.len(), names.len());
         for (child, (original, tag)) in children.iter().zip(names) {
-            assert_eq!(child.tag_name().name(), tag);
-            assert_eq!(child.attribute(("http://ns.adobe.com/xfdf-transition/", "original")), (original != tag).then_some(original));
+            assert_eq!(child.local(), tag);
+            assert_eq!(child.attr("xfdf:original"), (original != tag).then_some(original));
         }
         assert!(!src.is_modified(), "export must not change the source PDF");
         assert_eq!(src.bytes().as_slice(), source.as_slice());
@@ -2101,11 +2097,11 @@ fn xfdf_line_ending_names_are_escaped() {
     let line = doc.add(line);
     doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(line)]))).unwrap();
     let xml = export_xfdf(&doc, true, false, "form.pdf");
-    let parsed = roxmltree::Document::parse(&xml).unwrap();
-    assert!(!parsed.descendants().any(|n| n.has_tag_name("field")), "{xml}");
-    let el = parsed.descendants().find(|n| n.has_tag_name("line")).unwrap();
+    let parsed = common::parse_form_xml(&xml).unwrap();
+    assert!(!parsed.descendants().any(|n| n.local() == "field"), "{xml}");
+    let el = parsed.descendants().find(|n| n.local() == "line").unwrap();
     let want = String::from_utf8(hostile).unwrap();
-    assert_eq!((el.attribute("head"), el.attribute("tail")), (Some(want.as_str()), Some(want.as_str())));
+    assert_eq!((el.attr("head"), el.attr("tail")), (Some(want.as_str()), Some(want.as_str())));
 }
 
 /// A comment locked through an indirect `/F` is as protected from a same-named import as one
