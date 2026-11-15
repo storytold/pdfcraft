@@ -4541,6 +4541,7 @@ version = "0.21.1"
 dependencies = [
  "base64 0.23.1",
  "craft-cms",
+ "craft-csv",
  "craft-image-codecs",
  "craft-prc",
  "flate2",

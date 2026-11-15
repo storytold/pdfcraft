@@ -9652,6 +9652,30 @@ fn merging_form_data_into_a_spreadsheet() {
 }
 
 #[test]
+fn merging_form_data_counts_a_quoted_header_as_one_column() {
+    let dir = workdir("merge-data-quoted-header");
+    let mut a = auto(&dir);
+    let xfdf = |name: &str| {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><fields><field name="{name}"><value>Checked</value></field></fields></xfdf>"#
+        )
+    };
+    // A comma or a quote in a name makes it a quoted CSV cell, still one column.
+    for (file, name) in [("comma.xfdf", "Shipping, notes"), ("quote.xfdf", "Say &quot;hi&quot;, ok"), ("plain.xfdf", "Shipping notes")] {
+        std::fs::write(dir.join(file), xfdf(name)).unwrap();
+        let out = format!("{file}.csv");
+        let r = ok(&mut a, "form_merge_data", json!({ "paths": [file], "path": out }));
+        assert_eq!((r["rows"].as_u64(), r["columns"].as_u64()), (Some(1), Some(1)), "{file}: {r}");
+    }
+    // Two files with different names, one of them quoted: three columns in all.
+    std::fs::write(dir.join("a.xfdf"), xfdf("A, B")).unwrap();
+    std::fs::write(dir.join("b.xfdf"), xfdf("C")).unwrap();
+    std::fs::write(dir.join("c.xfdf"), xfdf("D")).unwrap();
+    let r = ok(&mut a, "form_merge_data", json!({ "paths": ["a.xfdf", "b.xfdf", "c.xfdf"], "path": "three.csv" }));
+    assert_eq!((r["rows"].as_u64(), r["columns"].as_u64()), (Some(3), Some(3)), "{r}");
+}
+
+#[test]
 fn field_actions_through_tools() {
     let dir = workdir("field-actions");
     let mut a = auto(&dir);
