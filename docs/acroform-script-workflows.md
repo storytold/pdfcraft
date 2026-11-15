@@ -172,8 +172,8 @@ The prompt channel and default menu renderer support interactive form scripts. #
 supply an anchored renderer through the UI menu callback when it adds link actions. Once
 the shared parser lands upstream, this integration can use it directly.
 
-`ScriptSession::run` executes timer and page actions in the retained realm on its own
-worker.
+Timer and page actions use `ScriptSession::run`. Native jobs execute in the retained realm
+on its worker; the wasm32 implementation executes jobs inline in its own realm.
 
 Document actions and widget triggers (ported from #344 by @DWAA1660) run through the same
 realm. On opening, the document scripts run, then the catalog `/OpenAction`'s JavaScript
