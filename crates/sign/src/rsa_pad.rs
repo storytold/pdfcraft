@@ -14,6 +14,9 @@ use crate::keys::{DigestAlg, PssParams};
 /// signature value was not written with exactly the modulus' length (RFC 8017 §8.2.2 wants
 /// that); some signers drop or add leading zero bytes.
 fn encoded_message(n: &[u8], e: &[u8], sig: &[u8], notes: &mut Vec<&'static str>) -> Result<Option<Vec<u8>>, SignError> {
+    // Redundant leading zeros would size the big-integer arithmetic (and the backend's own size
+    // limit) by the encoding rather than the number, so they are dropped before anything is built.
+    let (n, e) = (trim_zeros(n), trim_zeros(e));
     let k = n.len();
     let key = RsaPublicKey::new(BoxedUint::from_be_slice_vartime(n), BoxedUint::from_be_slice_vartime(e))
         .map_err(|e| SignError::Malformed(format!("RSA key: {e}")))?;
@@ -38,6 +41,10 @@ fn encoded_message(n: &[u8], e: &[u8], sig: &[u8], notes: &mut Vec<&'static str>
     let skip = bytes.len().saturating_sub(k);
     out.extend_from_slice(bytes.get(skip..).unwrap_or_default());
     Ok(Some(out))
+}
+
+fn trim_zeros(b: &[u8]) -> &[u8] {
+    b.get(b.iter().position(|x| *x != 0).unwrap_or(b.len())..).unwrap_or_default()
 }
 
 /// `DigestInfo ::= SEQUENCE { AlgorithmIdentifier, OCTET STRING }`.
@@ -99,6 +106,7 @@ pub fn pss_verify(
     notes: &mut Vec<&'static str>,
 ) -> Result<bool, SignError> {
     let Some(raw) = encoded_message(n, e, sig, notes)? else { return Ok(false) };
+    let n = trim_zeros(n);
     let mod_bits = n.first().map_or(0, |b| (n.len() * 8) as u32 - b.leading_zeros());
     let Some(em_bits) = mod_bits.checked_sub(1) else { return Ok(false) };
     let em_len = em_bits.div_ceil(8) as usize;

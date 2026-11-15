@@ -80,9 +80,8 @@ fn duplicate_warnings_reuse_results_and_track_removal_and_parts() {
 #[test]
 fn the_same_image_or_text_file_added_twice_is_a_duplicate() {
     static NOW: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1_700_000_000);
-    let mut png = std::io::Cursor::new(Vec::new());
-    image::RgbaImage::from_pixel(12, 4, image::Rgba([20, 30, 40, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
-    let png = png.into_inner();
+    let img = craft_image_codecs::Image::from_u8(12, 4, craft_image_codecs::ChannelLayout::Rgba, [20, 30, 40, 255].repeat(48)).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let warnings = |first: (&str, &[u8]), second: (&str, &[u8])| {
         let mut app = PdfCraftApp::new();
         app.session = std::mem::take(&mut app.session).with_clock(|| NOW.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
@@ -209,4 +208,27 @@ fn removing_pages_drops_emptied_parts_and_joins_what_meets() {
     assert_eq!(removed_pages(&repeats, &BTreeSet::from([(1, 1)]), &mut new_id), Some(vec![part(1, 1, &[0])]));
     // A page that isn't there: nothing changes, and it says so.
     assert_eq!(removed_pages(&two, &BTreeSet::from([(1, 9)]), &mut new_id), None);
+}
+
+/// #2503 review: a PDF waiting for its password when Combine arrives opens behind the Combine
+/// files tab once unlocked, like one still opening; a prompt that a chosen tool waits on keeps
+/// its focus, since the tool runs on the document in front.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_password_answered_after_combine_opens_behind_the_combine_tab() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("locked.pdf", None, locked()).unwrap();
+    assert!(app.password_prompt.is_some() && app.views.is_empty());
+    app.combine_paths(&[]);
+    assert!(app.combine_showing());
+    app.submit_password(Some("pw".into()));
+    assert!(app.password_prompt.is_none());
+    assert_eq!(app.views.len(), 1, "the document is open");
+    assert!(app.combine_showing(), "and the Combine files tab still shows");
+
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("locked.pdf", None, locked()).unwrap();
+    app.password_prompt.as_mut().unwrap().then = Some("export.text");
+    app.combine_paths(&[]);
+    assert!(app.password_prompt.as_ref().unwrap().activate, "a tool's open keeps its focus");
 }

@@ -11,7 +11,8 @@
 use hayro::hayro_interpret::font::Glyph;
 use hayro::hayro_interpret::hayro_syntax::Pdf;
 use hayro::hayro_interpret::{
-    BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask, interpret_page,
+    BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, InterpreterWarning, Paint, PathDrawMode,
+    SoftMask, interpret_page,
 };
 use kurbo::{Affine, BezPath, Rect, Shape};
 use std::collections::{HashMap, HashSet};
@@ -23,6 +24,9 @@ pub struct TextFilter {
     pub code: bool,
     /// Exclude Figure-marked text and invisible text layers, including OCR.
     pub images: bool,
+    /// Exclude `/ActualText` that marks no glyph, whose words are drawn as outlines or pictures:
+    /// a page's own text, for deciding whether it still needs reading from its pixels.
+    pub painted: bool,
     /// Page-local MCIDs whose structure ancestors match the selected exclusions.
     pub mcids: HashSet<i32>,
 }
@@ -89,6 +93,15 @@ pub fn fold_case(s: &str) -> String {
     out
 }
 
+/// Byte ranges in `text` where `needle` occurs, with the find bar's rules ([`PageText::find_opts`]):
+/// case folded unless `case_sensitive`, any run of whitespace matching one space, and with
+/// `whole_words` only where no letter or digit adjoins the match. At most `limit` ranges, in order
+/// and not overlapping. Find and replace matches a paragraph's text with it, so what the find bar
+/// highlights is what gets replaced.
+pub fn find_in_text(text: &str, needle: &str, case_sensitive: bool, whole_words: bool, limit: usize) -> Vec<std::ops::Range<usize>> {
+    search::find_in_text(text, needle, case_sensitive, whole_words, limit)
+}
+
 /// The text of one page, in content order, with line structure.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageText {
@@ -97,6 +110,9 @@ pub struct PageText {
     pub line_of: Vec<u32>,
     /// `true` when a word break precedes the glyph on the same line.
     pub space_before: Vec<bool>,
+    /// The page's content was cut at the renderer's limits (#623), so this text is incomplete:
+    /// whatever the cut part drew is missing, and a search over it can miss.
+    pub truncated: bool,
 }
 
 impl PageText {
@@ -128,7 +144,10 @@ impl PageText {
     }
 
     /// Case-insensitive search. Returns glyph ranges of every match (words may span line breaks,
-    /// which count as a single space).
+    /// which count as a single space, or as nothing where the line runs on between two Chinese or
+    /// Japanese characters or ends in a soft hyphen: there a query with a space across the break
+    /// doesn't match, and one without does; a ligature matches its letters, and a word divided by a
+    /// hyphen at a line end matches whole as well as with the hyphen).
     pub fn find(&self, needle: &str) -> Vec<std::ops::Range<usize>> {
         self.find_opts(needle, false, false)
     }
@@ -173,6 +192,11 @@ impl PageText {
                 (start < end).then_some(start..end)
             })
             .collect()
+    }
+
+    /// Index of the first glyph whose box holds a view-space point: the text under the pointer.
+    pub fn glyph_at(&self, x: f32, y: f32) -> Option<usize> {
+        self.glyphs.iter().position(|g| x >= g.rect[0] && x <= g.rect[2] && y >= g.rect[1] && y <= g.rect[3])
     }
 
     /// Index of the glyph nearest to a view-space point (for selection anchors).
@@ -305,13 +329,21 @@ impl PageText {
     /// turned by `/Rotate`) rows mean nothing, and the lines come out one per row in reading order
     /// instead.
     pub fn column_text(&self, glyphs: &[usize]) -> String {
-        // The selected glyphs of each line, with their box: (glyphs, bbox).
+        // The selected glyphs of each line, with their box: (glyphs, bbox). A line is cut where a gap wider than one run
+        // of text can hold separates two glyphs (`arrange` joins runs on one baseline into a line, as table cells are), so
+        // cells keep their tab.
         let mut lines: Vec<(Vec<usize>, [f32; 4])> = Vec::new();
         let mut line_ids: Vec<u32> = Vec::new();
+        let mut previous: Option<&TextGlyph> = None;
         for &i in glyphs {
             let (Some(g), Some(&line)) = (self.glyphs.get(i), self.line_of.get(i)) else { continue };
+            let apart = previous.is_some_and(|p| {
+                let h = (p.rect[3] - p.rect[1]).max(g.rect[3] - g.rect[1]);
+                g.rect[0] - p.rect[2] >= CELL_GAP * h
+            });
+            previous = Some(g);
             match (lines.last_mut(), line_ids.last()) {
-                (Some((members, bb)), Some(&l)) if l == line => {
+                (Some((members, bb)), Some(&l)) if l == line && !apart => {
                     members.push(i);
                     union(bb, &g.rect);
                 }
@@ -376,9 +408,9 @@ mod device;
 mod layout;
 mod order;
 
-use device::WORD_GAP;
+use device::{CELL_GAP, WORD_GAP};
 #[cfg(test)]
-use device::{MAX_REDRAW_TEXT, REDRAW_TEXT_BYTES, Replaced, TextDevice};
+use device::{MAX_REDRAW_TEXT, REDRAW_TEXT_BYTES, Replaced, TextDevice, ligature_letters};
 pub(crate) use device::{extract_page, extract_page_filtered};
 pub use layout::layout;
 #[cfg(test)]
