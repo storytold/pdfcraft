@@ -183,7 +183,12 @@ mod page_argument_tests {
                 let out = Command::new(BIN).arg("text").arg(input).args(args).output().unwrap();
                 assert_eq!(out.status.code(), Some(1), "{args:?}: {out:?}");
                 assert!(out.stdout.is_empty(), "{args:?}: no text may be printed");
-                assert_eq!(String::from_utf8(out.stderr).unwrap().trim(), "pdfcraft-cli: bad --page: expected a positive page number");
+                let diagnostic = if args.last() == Some(&"--page") {
+                    "pdfcraft-cli: text: --page needs a value"
+                } else {
+                    "pdfcraft-cli: bad --page: expected a positive page number"
+                };
+                assert_eq!(String::from_utf8(out.stderr).unwrap().trim(), diagnostic);
                 assert_eq!(std::fs::read(&path).unwrap(), bytes);
                 assert!(!missing.exists());
             }
