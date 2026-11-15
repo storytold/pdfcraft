@@ -36,7 +36,7 @@ craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-l
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "e2dc681a3", features = ["egui"] }
 # The document model at storytold/craft-libs#1494 (what decryption covers, an unreadable /Encrypt),
 # on the e2dc681a3 pin: only craft-pdf moves.
-craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "890ee5166eef89eb8ecb94917e4d2bb7129c4a53", features = ["cos", "crypt", "filters"] }
+craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "c96c5ad0731696b9972abfd840a27a820db57202", features = ["cos", "crypt", "filters"] }
 # The writer the RTF export maps onto (storytold/craft-libs#793), at storytold/craft-libs#1467:
 # its font and colour lookups take constant time, as PdfCraft's own writer did.
 craft-rtf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "f29e82f1a7a009e68312bd2e84adab72be23344d" }
