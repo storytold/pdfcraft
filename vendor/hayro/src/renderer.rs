@@ -752,6 +752,89 @@ fn may_paint_rect(rect: Rect, transform: Affine, width: u16, height: u16) -> boo
     paints_canvas(device, width, height)
 }
 
+/// PdfCraft patch (36): how far, in device pixels, a clip rectangle's edge may stray from a
+/// pixel boundary, or its sides from the device axes, and still count as on it: a 256th of a
+/// pixel, less than one step of 8-bit coverage, so treating it as on the boundary changes no
+/// pixel that anti-aliasing would have drawn, while rounding noise in the matrix (an edge at
+/// 100.000001) does not claim a whole extra row of pixels.
+const CLIP_EDGE_SLACK: f64 = 1.0 / 256.0;
+
+/// PdfCraft patch (36): the whole-pixel device rectangle a clip path that is an axis-aligned
+/// rectangle in device space clips to, or `None` for any other path (or non-finite geometry).
+/// ISO 32000-2 §10.7.4: "the clipping region consists of the set of pixels that would be included
+/// by a fill operation", and a fill includes "any pixel whose half-open square region intersects
+/// the shape, no matter how small the intersection is", so every pixel the rectangle reaches
+/// into is wholly inside the clip. With the clip's edge anti-aliased instead, what was painted
+/// inside was cut to a fraction of each edge pixel and what lay under it showed through: a photo
+/// set as strips, each under its own `re W n`, had a light line at every boundary between strips
+/// (coverages of 0.3 and 0.7 leave 0.21 of the paper), and a shading clipped to a box filled
+/// underneath left the fill's colour as a frame. Only rectangles snap: a turned or curved clip
+/// keeps its anti-aliased edge, as no set of whole pixels matches it.
+fn pixel_clip_rect(path: &BezPath) -> Option<Rect> {
+    let elements = path.elements();
+    let mut points: Vec<Point> = Vec::with_capacity(5);
+    for (i, el) in elements.iter().enumerate() {
+        match el {
+            kurbo::PathEl::MoveTo(p) if i == 0 => points.push(*p),
+            kurbo::PathEl::LineTo(p) if i > 0 => points.push(*p),
+            // Closing ends the path: anything after it is a second subpath.
+            kurbo::PathEl::ClosePath if i > 0 && i + 1 == elements.len() => {}
+            _ => return None,
+        }
+        if points.len() > 5 {
+            return None;
+        }
+    }
+    if !points.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+        return None;
+    }
+    let near = |a: f64, b: f64| (a - b).abs() <= CLIP_EDGE_SLACK;
+    // A fifth point back at the start closes the rectangle as `h` does.
+    if points.len() == 5 {
+        let (first, last) = (points.first()?, points.last()?);
+        if !(near(first.x, last.x) && near(first.y, last.y)) {
+            return None;
+        }
+        points.pop();
+    }
+    let corners: [Point; 4] = points.try_into().ok()?;
+    let bounds = path.bounding_box();
+    // A point encloses nothing and touches no pixel's interior: it keeps clipping everything
+    // away, as it did (and does in PDFium and MuPDF). A line is widened to an area before it
+    // gets here (hayro-interpret's `degenerate_fill_area`).
+    if bounds.width() == 0.0 && bounds.height() == 0.0 {
+        return None;
+    }
+    // Each side runs along an axis and each point sits on a corner of the bounding box, so the
+    // four sides go round the box.
+    for (i, p) in corners.iter().enumerate() {
+        let q = corners.get((i + 1) % 4)?;
+        if !(near(p.x, q.x) || near(p.y, q.y)) {
+            return None;
+        }
+        let on_x = near(p.x, bounds.x0) || near(p.x, bounds.x1);
+        let on_y = near(p.y, bounds.y0) || near(p.y, bounds.y1);
+        if !(on_x && on_y) {
+            return None;
+        }
+    }
+    // Every pixel the rectangle reaches into by more than the slack. A rectangle thinner than
+    // the slack still marks a pixel (§10.7.4, EXAMPLE): the one holding its middle, by the
+    // half-open rule, so a line on a pixel boundary marks the pixel after it.
+    let span = |lo: f64, hi: f64| {
+        let (a, b) = ((lo + CLIP_EDGE_SLACK).floor(), (hi - CLIP_EDGE_SLACK).ceil());
+        if b > a {
+            (a, b)
+        } else {
+            let c = (lo / 2.0 + hi / 2.0).floor();
+            (c, c + 1.0)
+        }
+    };
+    let (x0, x1) = span(bounds.x0, bounds.x1);
+    let (y0, y1) = span(bounds.y0, bounds.y1);
+    Some(Rect::new(x0, y0, x1, y1))
+}
+
 /// PdfCraft patch: how far, in device pixels, the terms [`snap_minified_image`] drops may move an
 /// image's far edges: a hundredth of a pixel, which no edge shows. Rounding noise in a turned or
 /// scaled matrix stays far below it.
@@ -1687,7 +1770,11 @@ impl Renderer {
 
         self.ctx.set_fill_rule(convert_fill_rule(fill));
         self.ctx.set_transform(Affine::IDENTITY);
-        self.ctx.push_clip_path(clip_path);
+        // PdfCraft patch (36): see `pixel_clip_rect`.
+        match pixel_clip_rect(clip_path) {
+            Some(rect) => self.ctx.push_clip_path(&rect.to_path(0.1)),
+            None => self.ctx.push_clip_path(clip_path),
+        }
 
         self.ctx.set_transform(old_transform);
     }

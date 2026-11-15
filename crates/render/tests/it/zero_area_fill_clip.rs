@@ -218,9 +218,12 @@ fn a_thin_rectangle_with_area_keeps_its_partial_coverage() {
         assert!((150..=210).contains(&p[1]), "row 149 at {x} is 30 % covered: {p:?}");
         assert!(is_white(px(&rgba, x, 148)) && is_white(px(&rgba, x, 150)));
     }
-    // The same rectangle as a clip keeps the same partial coverage.
+    // As a clip, the same rectangle keeps the whole of row 149: the clipping region is the set
+    // of pixels a fill would include, every pixel the shape reaches into (§10.7.4), and an
+    // axis-aligned clip rectangle is applied as exactly those pixels (vendored hayro patch 36),
+    // as PDFium and MuPDF also apply it.
     let clip = render(&format!("q 10 50.2 100 0.3 re W n {FLOOD} Q"));
-    assert_eq!(clip, rgba);
+    assert_only_red_run(&clip, (10, 110), (149, 150), "0.3 pt clip");
 }
 
 #[test]
@@ -234,9 +237,12 @@ fn a_zero_area_clip_with_nothing_painted_on_it_stays_blank() {
     // A clip that is a point keeps nothing, as before.
     let rgba = render(&format!("q 10 50 0 0 re W n {FLOOD} Q"));
     assert!(red_pixels(&rgba).is_empty() && tinted_pixels(&rgba) == 0, "a point clip shows the fill");
-    // So does a point a little off zero both ways.
+    // A point a little off zero both ways has area, so it keeps the one pixel it lies in, at
+    // device (10.0005, 149.9995): column 10, row 149 (§10.7.4; vendored hayro patch 36), as in
+    // PDFium and MuPDF.
     let rgba = render(&format!("q 10 50 0.001 0.001 re W n {FLOOD} Q"));
-    assert!(red_pixels(&rgba).is_empty() && tinted_pixels(&rgba) == 0, "a tiny clip shows the fill");
+    assert_eq!(red_pixels(&rgba), vec![(10, 149)], "a tiny clip keeps the pixel it lies in");
+    assert_eq!(tinted_pixels(&rgba), 0, "and nothing else is tinted");
 }
 
 #[test]

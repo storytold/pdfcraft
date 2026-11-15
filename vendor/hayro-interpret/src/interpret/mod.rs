@@ -1122,7 +1122,15 @@ fn interpret_window<'a>(
                     device.set_soft_mask(st.graphics_state.soft_mask.clone());
                     device.set_blend_mode(st.graphics_state.blend_mode);
 
-                    let bbox = context.bbox().to_path(0.1);
+                    // PdfCraft patch (114): `sh` paints the whole device pixels its clip box
+                    // reaches into. The box is the clip's bounding box, so filled as it stands
+                    // its fractional edges were anti-aliased a second time, on top of the clip,
+                    // and a shading clipped to a box let the box's edge pixels show what lay
+                    // under them; the clip, which a device draws to the pixels it marks (ISO
+                    // 32000-2 §10.7.4), still bounds what is painted. Non-finite boxes stay.
+                    let b = context.bbox();
+                    let whole = kurbo::Rect::new(b.x0.floor(), b.y0.floor(), b.x1.ceil(), b.y1.ceil());
+                    let bbox = if whole.is_finite() { whole } else { b }.to_path(0.1);
                     let inverted_bbox = context.get().ctm.inverse() * bbox;
                     fill_path_impl(context, device, FillRule::NonZero, Some(&inverted_bbox));
 
