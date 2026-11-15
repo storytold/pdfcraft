@@ -245,9 +245,12 @@ fn word_at_caret(text: &str, caret: usize) -> Option<std::ops::Range<usize>> {
 fn char_under(galley: &egui::Galley, pos: egui::Vec2) -> Option<usize> {
     use egui::text::CCursor;
     let caret = usize::from(galley.cursor_from_pos(pos).index);
-    let at = |i: usize| galley.pos_from_cursor(CCursor::new(i));
+    // A glyph starts on the row that begins with it and ends on the row it is on, so at a soft wrap
+    // the start is asked for with `prefer_next_row` and the end without.
+    let start = |i: usize| galley.pos_from_cursor(CCursor { index: i.into(), prefer_next_row: true });
+    let end = |i: usize| galley.pos_from_cursor(CCursor::new(i));
     [caret.checked_sub(1), Some(caret)].into_iter().flatten().find(|&i| {
-        let (from, to) = (at(i), at(i + 1));
+        let (from, to) = (start(i), end(i + 1));
         (from.center().y - to.center().y).abs() < 1.0 && from.min.x <= pos.x && pos.x < to.min.x
     })
 }
@@ -255,18 +258,22 @@ fn char_under(galley: &egui::Galley, pos: egui::Vec2) -> Option<usize> {
 /// Narrow the selection a double-click just made in the text box `id` to the word under the
 /// pointer (see [`word_at_caret`]), and keep a following Shift-click extending from that word.
 /// Shown from the next pass on. Runs once per pass after the text box.
-fn narrow_double_click(ui: &egui::Ui, id: egui::Id, text: &str, output: &egui::text_edit::TextEditOutput) {
+pub(crate) fn narrow_double_click(ui: &egui::Ui, id: egui::Id, text: &str, output: &egui::text_edit::TextEditOutput) {
     use egui::text::{CCursor, CCursorRange};
     let marker = id.with("narrowed word");
-    let narrowed: Option<[usize; 2]> = ui.ctx().data(|d| d.get_temp(marker));
+    // The word, and the selection as this function left it: another one (a key moved it, text was
+    // typed, the box was reopened) ends the anchor.
+    let kept: Option<[usize; 4]> = ui.ctx().data(|d| d.get_temp(marker));
     let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
     let sorted = |r: CCursorRange| r.sorted_cursors().map(|c| usize::from(c.index));
     let ends = |r: CCursorRange| (usize::from(r.primary.index), usize::from(r.secondary.index));
     let mut selected = state.cursor.char_range();
     let mut changed = false;
+    let down = output.response.is_pointer_button_down_on();
+    let stored = kept.filter(|m| down || selected.map(ends) == Some((m[2], m[3])));
+    let narrowed = stored.map(|m| [m[0], m[1]]);
     let mut keep = narrowed;
     let shift = ui.input(|i| i.modifiers.shift);
-    let down = output.response.is_pointer_button_down_on();
     // egui keeps the word a double-click selected as the anchor of the next Shift-clicks, so each
     // click extends from that word, in either direction, and never drops it. It cannot be set from
     // outside and `set_char_range` clears it, so a selection narrowed here has none: egui's plain
@@ -308,19 +315,21 @@ fn narrow_double_click(ui: &egui::Ui, id: egui::Id, text: &str, output: &egui::t
         if selected.map(sorted) != Some([word.start, word.end]) {
             let range = CCursorRange::two(CCursor::new(word.start), CCursor::new(word.end));
             state.cursor.set_char_range(Some(range));
+            selected = Some(range);
             changed = true;
         }
         keep = Some([word.start, word.end]);
     }
     // The anchor lasts while the selection still holds the word; typing or a new selection ends it.
     let keep = keep.filter(|&[start, end]| selected.map(sorted).is_some_and(|[low, high]| low <= start && end <= high));
-    if keep != narrowed {
-        ui.ctx().data_mut(|d| match keep {
-            Some(word) => {
-                d.insert_temp(marker, word);
+    let now = keep.zip(selected).map(|([start, end], range)| [start, end, ends(range).0, ends(range).1]);
+    if now != kept {
+        ui.ctx().data_mut(|d| match now {
+            Some(m) => {
+                d.insert_temp(marker, m);
             }
             None => {
-                d.remove::<[usize; 2]>(marker);
+                d.remove::<[usize; 4]>(marker);
             }
         });
     }
@@ -1242,12 +1251,17 @@ mod tests {
         text: String,
         time: f64,
         narrow: bool,
-        /// Left edge of every caret position (char index 0..=len) on the row, as screen points.
-        carets: Vec<egui::Pos2>,
+        width: f32,
+        /// Where each char starts and ends (on the row it is drawn on), as screen points.
+        spans: Vec<(egui::Pos2, egui::Pos2)>,
     }
 
     impl LiveBox {
         fn new(narrow: bool) -> Self {
+            Self::with_width(narrow, 300.0)
+        }
+
+        fn with_width(narrow: bool, width: f32) -> Self {
             use egui::text::{CCursor, CCursorRange};
             let mut live = LiveBox {
                 ctx: egui::Context::default(),
@@ -1255,7 +1269,8 @@ mod tests {
                 text: String::from("Take a calm walk."),
                 time: 0.0,
                 narrow,
-                carets: Vec::new(),
+                width,
+                spans: Vec::new(),
             };
             live.pass(vec![], egui::Modifiers::NONE);
             // The caret at the start of the text, in a focused box, as after typing there.
@@ -1271,20 +1286,26 @@ mod tests {
             self.time += 0.05;
             events.insert(0, egui::Event::ModifiersChanged(modifiers));
             let input = egui::RawInput { events, time: Some(self.time), ..Default::default() };
-            let (id, narrow) = (self.id, self.narrow);
+            let (id, narrow, width) = (self.id, self.narrow, self.width);
             let mut selection = None;
-            let mut carets = Vec::new();
+            let mut spans = Vec::new();
             let mut output = self.ctx.run_ui(input, |ui| {
-                let out = egui::TextEdit::multiline(&mut self.text).id(id).desired_width(300.0).show(ui);
+                let out = egui::TextEdit::multiline(&mut self.text).id(id).desired_width(width).show(ui);
                 let row = out.galley_pos.to_vec2();
-                carets = (0..=17).map(|i| out.galley.pos_from_cursor(egui::text::CCursor::new(i)).left_center() + row).collect();
+                spans = (0..17)
+                    .map(|i| {
+                        let start = egui::text::CCursor { index: i.into(), prefer_next_row: true };
+                        let end = egui::text::CCursor::new(i + 1);
+                        (out.galley.pos_from_cursor(start).left_center() + row, out.galley.pos_from_cursor(end).left_center() + row)
+                    })
+                    .collect();
                 if narrow {
                     narrow_double_click(ui, id, &self.text, &out);
                 }
                 selection = out.cursor_range;
             });
             output.textures_delta.clear();
-            self.carets = carets;
+            self.spans = spans;
             selection.map(|r| {
                 let [start, end] = r.sorted_cursors().map(|c| usize::from(c.index));
                 self.text[start..end].to_owned()
@@ -1293,7 +1314,7 @@ mod tests {
 
         /// A point `fraction` of the way through char `at`, on its row.
         fn point(&self, at: usize, fraction: f32) -> egui::Pos2 {
-            let (from, to) = (self.carets[at], self.carets[at + 1]);
+            let (from, to) = self.spans[at];
             egui::Pos2::new(from.x + fraction * (to.x - from.x), from.y)
         }
 
@@ -1403,6 +1424,31 @@ mod tests {
         let egui = shift_sequence(false, 9, &[(2, 2), (14, 2), (0, 2)]);
         assert_eq!(narrowed, ["a", "Take a", "a calm walk", "Take a"]);
         assert_eq!(egui, ["calm", "Take a calm", "calm walk", "Take a calm"]);
+    }
+
+    /// A word that starts a wrapped row is narrowed too: the hit there is the end of the row above.
+    #[test]
+    fn a_one_letter_word_that_starts_a_wrapped_row_is_narrowed() {
+        // Narrow enough that "Take a" does not fit on one row.
+        let mut live = LiveBox::with_width(true, 34.0);
+        assert!(live.spans[5].0.y > live.spans[4].0.y + 1.0, "the box wraps before the a: {:?}", live.spans);
+        let at = live.point(5, 0.2);
+        assert_eq!(live.click(at, 2, egui::Modifiers::NONE).as_deref(), Some("a"));
+    }
+
+    /// A key that moves the selection ends the word anchor: the next Shift-click extends from the
+    /// selection's own end, as egui does, not from the word.
+    #[test]
+    fn a_key_that_moves_the_selection_ends_the_word_anchor() {
+        let shift = egui::Modifiers { shift: true, ..Default::default() };
+        let mut live = LiveBox::new(true);
+        let a = live.point(5, 0.2);
+        assert_eq!(live.click(a, 2, egui::Modifiers::NONE).as_deref(), Some("a"));
+        let right = |pressed| egui::Event::Key { key: egui::Key::ArrowRight, physical_key: None, pressed, repeat: false, modifiers: shift };
+        live.pass(vec![right(true)], shift);
+        assert_eq!(live.pass(vec![right(false)], shift).as_deref(), Some("a "), "Shift+Right extends by a char");
+        let before = live.point(2, 0.5);
+        assert_eq!(live.click(before, 1, shift).as_deref(), Some("ke "), "from the selection's own start");
     }
 
     /// A double-click on the space after "Take" is left to egui, from either half of the space;
