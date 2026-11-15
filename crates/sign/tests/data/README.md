@@ -31,6 +31,8 @@ printf "basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,nonRepudia
 openssl x509 -req -in leaf.csr -CA ca.crt -CAkey ca.key -set_serial 77 -days 3650 -extfile leaf.ext -out leaf.crt
 openssl pkcs12 -export -inkey leaf.key -in leaf.crt -certfile ca.crt -out chain.p12 -passout pass:test -name "Ada Lovelace"
 openssl pkcs12 -export -legacy -inkey leaf.key -in leaf.crt -certfile ca.crt -out chain-legacy.p12 -passout pass:test -name "Ada Lovelace"
+cp rsa.crt rsa.crt.pem
+cp ca.crt ca.crt.pem
 ```
 
 `openssl-signed.pdf` is a hand-written one-page PDF with a `/Contents` placeholder, signed with
