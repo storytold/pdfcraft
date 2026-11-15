@@ -837,18 +837,10 @@ mod tests {
         let files = &["NotoSansCJKsc-Regular.otf", "NotoSansCJK-Regular.ttc"];
         let installed = &[PathBuf::from("/custom/fonts/NotoSansCJKsc-Regular.otf")];
         let list = unix_candidates(files, installed);
-        let sc_otf: Vec<usize> = list
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJKsc-Regular.otf"))
-            .map(|(i, _)| i)
-            .collect();
-        let ttc: Vec<usize> = list
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc"))
-            .map(|(i, _)| i)
-            .collect();
+        let sc_otf: Vec<usize> =
+            list.iter().enumerate().filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJKsc-Regular.otf")).map(|(i, _)| i).collect();
+        let ttc: Vec<usize> =
+            list.iter().enumerate().filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc")).map(|(i, _)| i).collect();
         assert!(
             sc_otf.iter().all(|i| ttc.iter().all(|j| i < j)),
             "every NotoSansCJKsc-Regular.otf candidate must precede every NotoSansCJK-Regular.ttc candidate: {list:?}"
