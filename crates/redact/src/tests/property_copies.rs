@@ -169,6 +169,47 @@ fn stripping_stops_once_the_allowance_is_spent() {
     assert_eq!(crate::interp::strips() - before, 3);
 }
 
+/// A list given by reference, kept stripped for the page, is copied from where it is kept only
+/// when the copy fits what is left: a form naming one of 6 MiB, drawn ten times, strips it once and
+/// takes one copy of that (the second form's), not one more for each form drawn after the refusal,
+/// each only to be refused.
+#[test]
+fn a_list_kept_for_the_page_is_copied_only_when_it_fits() {
+    let list = format!("<< /ActualText (SECRET) /Junk ({}) >>", "x".repeat(6 << 20));
+    let form = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> /Properties << /M0 7 0 R >> >>",
+        b"/Span /M0 BDC BT /F1 10 Tf 20 260 Td (S) Tj ET EMC",
+    );
+    let content = format!("{} BT /F1 10 Tf 20 20 Td (PUBLIC) Tj ET", "/Fm Do ".repeat(10));
+    let mut doc = one_page(content.as_bytes(), "/XObject << /Fm 8 0 R >>", vec![list.into_bytes(), form]);
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    let (strips, kept) = (crate::interp::strips(), crate::interp::kept_copies());
+    assert_eq!(apply(&mut doc, None).unwrap_err(), RedactError::PropertyCopies(1));
+    assert_eq!((crate::interp::strips() - strips, crate::interp::kept_copies() - kept), (1, 1));
+}
+
+/// A kept list whose copy fills what is left of the allowance exactly still fits: a list whose
+/// copy takes half the allowance, named by reference in a form drawn twice, is copied into both.
+#[test]
+fn a_kept_list_that_fills_the_allowance_exactly_is_copied() {
+    let written = |junk: usize| {
+        let list: Dict = [(b"Junk".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(vec![b'x'; junk])))].into_iter().collect();
+        let mut bytes = Vec::new();
+        pdfcraft_cos::serialize(&Object::Dict(list), &mut bytes);
+        bytes.len()
+    };
+    let junk = crate::interp::MAX_PROPERTY_COPIES / 2 - written(0);
+    assert_eq!(written(junk), crate::interp::MAX_PROPERTY_COPIES / 2, "the copy takes half the allowance");
+    let list = format!("<< /ActualText (SECRET) /Junk ({}) >>", "x".repeat(junk));
+    let form = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> /Properties << /M0 7 0 R >> >>",
+        b"/Span /M0 BDC BT /F1 10 Tf 20 260 Td (S) Tj ET EMC",
+    );
+    let mut doc = one_page(b"/Fm Do /Fm Do BT /F1 10 Tf 20 20 Td (PUBLIC) Tj ET", "/XObject << /Fm 8 0 R >>", vec![list.into_bytes(), form]);
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().replacement_text, 2);
+}
+
 /// An operand that is neither a name, a reference nor a list (`/Span 5 BDC`) gives no list, and
 /// shares nothing with a list kept under the empty name: the block naming `/` still loses its
 /// replacement text. Filed under that name, the first left the second's text in place.

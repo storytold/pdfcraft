@@ -986,11 +986,22 @@ fn clean_replacements(
                         _ => continue,
                     };
                     let memo = match key {
-                        Ok(r) => scope.stripped.get(&r).cloned(),
-                        Err(name) => named.get(name).cloned(),
+                        Ok(r) => scope.stripped.get(&r),
+                        Err(name) => named.get(name),
                     };
                     let stripped = match memo {
-                        Some(stripped) => stripped,
+                        // A list stripped before is copied from where it is kept only when the copy
+                        // fits: once the allowance is spent, each form drawn after that names it
+                        // would copy it only to be refused.
+                        Some(Some((_, len))) if *len > scope.property_room => {
+                            scope.property_room = 0;
+                            return false;
+                        }
+                        Some(stripped) => {
+                            #[cfg(test)]
+                            KEPT_COPIES.with(|n| n.set(n.get() + 1));
+                            stripped.clone()
+                        }
                         None => {
                             // A list written directly in `/Properties` is looked at where it stands,
                             // one given by reference through it: neither is copied to see whether it
@@ -1059,12 +1070,21 @@ fn stripped_copy(dict: &Dict) -> (Object, usize) {
 thread_local! {
     /// Property lists copied to strip their replacement text on this thread.
     static STRIPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Copies taken on this thread of what is kept for a list (none, for one with no replacement
+    /// text).
+    static KEPT_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How many property lists this thread has copied to strip their replacement text.
 #[cfg(test)]
 pub(crate) fn strips() -> usize {
     STRIPS.with(std::cell::Cell::get)
+}
+
+/// How many copies this thread has taken of what is kept for a property list.
+#[cfg(test)]
+pub(crate) fn kept_copies() -> usize {
+    KEPT_COPIES.with(std::cell::Cell::get)
 }
 
 /// The most bytes of property lists, named or given by reference, [`clean_replacements`] writes
