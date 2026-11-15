@@ -233,6 +233,7 @@ Twelve key languages: the share of the 2,897 strings in the i18n report's denomi
 | Arabic | `ar` | 97.9% | partial (logical catalog, explicit RTL labels, mirrored stock chrome; native/browser/IME workflows unqualified) |
 | French | `fr` | 98.4% | partial |
 | Portuguese (Brazil) | `pt-br` | 98.4% | partial |
+| Portuguese (Portugal) | `pt-pt` | 28.0% (810 strings, the visible core) | partial |
 | Indonesian | `id` | 97.5% | partial |
 | Japanese | `ja` | 89.6% | partial |
 | German | `de` | 89.7% | partial |
@@ -261,6 +262,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+- **2026-11-13 (M14, European Portuguese):** Added the `pt-pt` interface catalog (810 strings: dialogs, panels, tools, menus, status and chrome), `LANGUAGES` and the macOS localization list; `pt-PT` resolves to it while `pt` and `pt-BR` stay Brazilian. The rest of the interface falls back to English and can follow catalog-only. No native-speaker review yet.
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
 - **2026-10-27 (M10, #5005):** Vector printing retains each annotation's optional-content membership when drawing its appearance.
@@ -902,6 +904,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | M14: European Portuguese interface (`pt-pt`), 810 strings; 36 interface languages |
 | 2026-11-09 | patch | M10 #5130: Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Estimates unchanged. |
 | 2026-11-08 | patch | M10 #6514/#636: retain main's public GDI Git revision (64e7afd4) to preserve downstream Rust type identity, update the internal PDF loader independently, and refresh the application dependency/lockfile. New-graph CI pending; estimates unchanged. |
 | 2026-11-08 | patch | M10 #6514: refresh the craft-print and winprint/GDI pins after #605 merged; retain the Direct2D crash fix and stream-test cleanup repairs, record single-page HUAWEI output with its diagnostic limits, and rerun CI for the new dependency graph. Estimates unchanged. |

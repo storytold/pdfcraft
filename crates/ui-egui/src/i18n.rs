@@ -66,7 +66,7 @@ pub struct LangInfo {
 }
 
 /// How many languages [`LANGUAGES`] lists.
-const LANGUAGE_COUNT: usize = 35;
+const LANGUAGE_COUNT: usize = 36;
 
 /// The languages PdfCraft offers. English first: it is the fallback and the source language.
 pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
@@ -78,8 +78,11 @@ pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
     // locales all resolve here (see `candidates`).
     LangInfo { code: "zh-hant", rtl: false },
     LangInfo { code: "cs", rtl: false },
-    // Brazilian Portuguese; `pt`, `pt-BR` and `pt-PT` locales all resolve here (see `candidates`).
+    // Brazilian Portuguese; `pt`, `pt-BR` and `pt-BR-*` locales resolve here (see `candidates`).
     LangInfo { code: "pt-br", rtl: false },
+    // European Portuguese; `pt-PT`, `pt_PT.UTF-8` and `pt-PT@euro` locales resolve here, while a
+    // bare `pt` and the other regions keep falling to Brazilian Portuguese.
+    LangInfo { code: "pt-pt", rtl: false },
     // German (informal "du"); every `de-*` locale (`de-DE`, `de-AT`, `de-CH` ...) resolves here.
     LangInfo { code: "de", rtl: false },
     // Spanish (European vocabulary); every `es-*` locale (`es-ES`, `es-MX`, `es-419` ...) resolves here.
@@ -248,6 +251,7 @@ impl Lang {
             "zh-hant" => "Traditional Chinese",
             "cs" => "Czech",
             "pt-br" => "Portuguese (Brazil)",
+            "pt-pt" => "Portuguese (Portugal)",
             "de" => "German",
             "es" => "Spanish",
             "fr" => "French",
@@ -361,7 +365,8 @@ fn candidates(tag: &str) -> Vec<String> {
         out.insert(out.len().saturating_sub(1), script.to_string());
     }
     if primary == "pt" && !out.iter().any(|c| c == "pt-br") {
-        // The only Portuguese catalog is Brazilian; other regions use it rather than English.
+        // A bare `pt` and the regions without a catalog of their own read Brazilian Portuguese;
+        // `pt-PT` comes first, so a catalog of its own wins and an older pin still falls back here.
         out.insert(out.len().saturating_sub(1), "pt-br".to_string());
     }
     if matches!(primary, "no" | "nn") {
