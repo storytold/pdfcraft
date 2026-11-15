@@ -326,7 +326,15 @@ impl FontText {
         match self {
             Self::WinAnsi => pdfcraft_fonts::first_undrawable(s),
             Self::Simple(metrics) => {
-                s.chars().map(|c| if c == '\t' { ' ' } else { c }).find(|c| metrics.encode(c.encode_utf8(&mut [0; 4])).is_none())
+                // A whole string that encodes has no such character, in one pass over the font's
+                // ranges. Otherwise each distinct character is asked once (a call scans every range).
+                if metrics.encode(&s.replace('\t', " ")).is_some() {
+                    return None;
+                }
+                let mut held = std::collections::HashSet::new();
+                s.chars()
+                    .map(|c| if c == '\t' { ' ' } else { c })
+                    .find(|c| !held.contains(c) && !(metrics.encode(c.encode_utf8(&mut [0; 4])).is_some() && held.insert(*c)))
             }
             Self::Unicode(cmap) => cmap.first_unencodable(s),
         }
@@ -1243,5 +1251,20 @@ mod tests {
         assert_eq!(ListRows::top_showing(2, &[0], 3, 5), 0);
         // When empty selection:
         assert_eq!(ListRows::top_showing(0, &[], 3, 5), 0);
+    }
+
+    #[test]
+    fn first_unencodable_finds_the_first_character_the_simple_font_cannot_hold() {
+        let doc = Document::new_empty();
+        let mut f = Dict::new();
+        f.set(b"Type".to_vec(), Object::name("Font"));
+        f.set(b"Subtype".to_vec(), Object::name("Type1"));
+        f.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+        f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+        let font = FontText::Simple(Box::new(Metrics::from_dict(&doc, &f)));
+        assert_eq!(font.first_unencodable("h\u{e9}llo\tw\u{e9}rld"), None);
+        assert_eq!(font.first_unencodable(&"a\u{e9}".repeat(1000)), None);
+        assert_eq!(font.first_unencodable("ab\u{3a9}c\u{3a8}"), Some('\u{3a9}'));
+        assert_eq!(font.first_unencodable(""), None);
     }
 }
