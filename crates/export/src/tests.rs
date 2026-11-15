@@ -32,6 +32,9 @@ fn many_distinct_sizes_are_counted_in_constant_steps_each() {
     assert!(steps <= 2 * 3000, "{steps} steps");
 }
 
+/// The colour table is craft-rtf's now. Its writer keeps each lookup constant and counts them in
+/// its own test (storytold/craft-libs#1466, `many_distinct_fonts_and_colours_take_constant_steps_each`);
+/// this one still counts any lookup the mapping makes, and checks the last colour's slot.
 #[test]
 fn many_distinct_colours_take_constant_steps_each() {
     let pages = [varied_page(3000)];
@@ -359,6 +362,19 @@ fn text_colour_survives_every_format() {
     assert!(html(&[t], "Grid").contains("style=\"color:#FF0000\""));
 }
 
+/// A run read back from RTF: its text, bold, italic and size in half points.
+type RtfRun = (String, bool, bool, Option<u32>);
+
+/// The paragraphs RTF holds, read back, as their runs.
+fn rtf_paras(r: &str) -> Vec<Vec<RtfRun>> {
+    let doc = craft_rtf::read(r.as_bytes()).unwrap();
+    doc.blocks
+        .iter()
+        .filter_map(|b| if let craft_rtf::Block::Para(p) = b { Some(p) } else { None })
+        .map(|p| p.runs.iter().map(|r| (r.text.clone(), r.fmt.bold, r.fmt.italic, r.fmt.half_points)).collect())
+        .collect()
+}
+
 #[test]
 fn rtf_escapes_and_sizes() {
     let mut p = page();
@@ -374,8 +390,27 @@ fn rtf_escapes_and_sizes() {
     });
     let r = rtf(&[p]);
     assert!(r.starts_with("{\\rtf1") && r.ends_with('}'));
-    assert!(r.contains("\\fs48\\b Annual Report"));
-    assert!(r.contains("\\fs20\\i Caf\\u233? \\{x\\}"), "{r}");
+    assert!(r.contains("Caf\\u233? \\{x\\}"), "escaped: {r}");
+    let runs: Vec<_> = rtf_paras(&r).into_iter().flatten().collect();
+    assert!(runs.contains(&("Annual Report".into(), true, false, Some(48))), "{runs:?}");
+    assert!(runs.contains(&("Café {x}".into(), false, true, Some(20))), "{runs:?}");
+}
+
+/// A page break starts the next page's first paragraph, and stands in a paragraph of its own
+/// before a table, rather than in the table's first cell.
+#[test]
+fn rtf_page_breaks_stay_out_of_tables() {
+    let r = rtf(&[page(), table_page(), page()]);
+    let back = craft_rtf::read(r.as_bytes()).unwrap();
+    let first_cell = back.blocks.iter().find_map(|b| match b {
+        craft_rtf::Block::Table(t) => t.rows.first().and_then(|row| row.first()).map(|c| c.paras.iter().map(|p| p.text()).collect::<String>()),
+        craft_rtf::Block::Para(_) => None,
+    });
+    assert_eq!(first_cell.as_deref(), Some("Meter"), "{r}");
+    let texts: Vec<String> = back.blocks.iter().map(|b| if let craft_rtf::Block::Para(p) = b { p.text() } else { "<table>".into() }).collect();
+    let table = texts.iter().position(|t| t == "<table>");
+    assert_eq!(table.and_then(|i| i.checked_sub(1)).and_then(|i| texts.get(i)).map(String::as_str), Some("\u{000C}"), "{texts:?}");
+    assert_eq!(texts.iter().filter(|t| t.starts_with('\u{000C}')).count(), 2, "one break before each later page: {texts:?}");
 }
 
 /// A 3-column table with a spanning header row and a hole in the last row.
@@ -444,9 +479,18 @@ fn grid_text_becomes_a_real_table_in_every_format() {
     let r = rtf(std::slice::from_ref(&p));
     assert!(r.contains("\\trowd"), "{r}");
     assert_eq!(r.matches("\\row").count(), 4);
-    // Boundaries precede the cells; "Totals" spans two columns, so it ends at the third edge.
-    assert!(r.contains("\\trowd\\trgaph108\\cellx4640\\cellx7840\\cellx9920{"), "{r}");
-    assert!(r.contains("\\trowd\\trgaph108\\cellx7840{\\intbl\\fs22 Totals}\\cell\\row"), "{r}");
+    // Each cell ends at its last column's right edge; "Totals" spans two columns, so it ends at
+    // the second of the three.
+    let back = craft_rtf::read(r.as_bytes()).unwrap();
+    let rows: Vec<Vec<(i32, String)>> = back
+        .blocks
+        .iter()
+        .filter_map(|b| if let craft_rtf::Block::Table(t) = b { Some(t) } else { None })
+        .flat_map(|t| &t.rows)
+        .map(|row| row.iter().map(|c| (c.right, c.paras.iter().map(|p| p.text()).collect())).collect())
+        .collect();
+    assert_eq!(rows.first().map(|r| r.iter().map(|c| c.0).collect::<Vec<_>>()), Some(vec![4640, 7840, 9920]), "{rows:?}");
+    assert!(rows.contains(&vec![(7840, "Totals".to_string())]), "{rows:?}");
 
     let pt = pptx(std::slice::from_ref(&p), "Bill");
     assert!(pt.starts_with(b"PK"));
@@ -746,7 +790,12 @@ fn an_italic_word_stays_in_its_sentence() {
     let h = html(std::slice::from_ref(&p), "Opinion");
     assert!(h.contains("<p>Before <em>Chevron </em>after.</p>"), "{h}");
     let r = rtf(std::slice::from_ref(&p));
-    assert!(r.contains("{\\pard\\fs24 Before {\\fs24\\b0\\i\\cf0 Chevron }{\\fs24\\b0\\i0\\cf0 after.}\\par}"), "{r}");
+    let size = Some(24);
+    assert_eq!(
+        rtf_paras(&r).first(),
+        Some(&vec![("Before ".into(), false, false, size), ("Chevron ".into(), false, true, size), ("after.".into(), false, false, size)]),
+        "{r}"
+    );
     // The longest line is the slide's title; the sentence is one paragraph of the body.
     let pxml = part(&pptx(std::slice::from_ref(&p), "Opinion"), "ppt/slides/slide1.xml");
     assert!(
@@ -1125,7 +1174,7 @@ named in the schedule, <em>Blue Finch Studio</em>, who agree as follows to rent 
         "{h}"
     );
     let r = rtf(std::slice::from_ref(&p));
-    assert_eq!(r.matches("{\\pard").count(), 2, "{r}");
+    assert_eq!(rtf_paras(&r).len(), 2, "{r}");
     let md = markdown(std::slice::from_ref(&p));
     assert_eq!(md.trim().split("\n\n").count(), 2, "{md}");
     assert!(md.contains("of 4 Quay Street, and the tenant named in the schedule, "), "{md}");

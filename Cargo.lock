@@ -1202,7 +1202,7 @@ dependencies = [
 [[package]]
 name = "craft-codepage"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/storytold/craft-libs?rev=74495a579ad1247a149229d5b4185467aaa33f00#74495a579ad1247a149229d5b4185467aaa33f00"
 
 [[package]]
 name = "craft-csv"
@@ -1364,7 +1364,7 @@ dependencies = [
 [[package]]
 name = "craft-rtf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/storytold/craft-libs?rev=74495a579ad1247a149229d5b4185467aaa33f00#74495a579ad1247a149229d5b4185467aaa33f00"
 dependencies = [
  "craft-codepage",
  "encoding_rs",
