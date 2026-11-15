@@ -410,10 +410,16 @@ impl Layouter<'_> {
             _ => self.pack(&nodes, inner.w, &ctx, depth).0,
         };
         // The SOM path the group's field records, and its name is kept under: the group's own,
-        // or, for an unnamed group under an unnamed root (no path at all), its first button's in
-        // the template, drawn or not, so the path stays the same when a button is hidden.
+        // or, for an unnamed group under an unnamed root (no path at all), the path of its first
+        // button in the template that is drawn as a field (not as text), whether or not it is
+        // shown, so the path stays the same when a button is hidden.
         let group_som = if ctx.som.is_empty() {
-            g.fields.first().map(|f| format!("{}[{}]", f.common.name.as_deref().unwrap_or("field"), sibs.at(0))).unwrap_or_default()
+            g.fields
+                .iter()
+                .enumerate()
+                .find(|(_, f)| super::field::shown_as_field(f))
+                .map(|(i, f)| format!("{}[{}]", f.common.name.as_deref().unwrap_or("field"), sibs.at(i)))
+                .unwrap_or_default()
         } else {
             ctx.som.clone()
         };

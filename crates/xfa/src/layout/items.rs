@@ -95,7 +95,7 @@ pub enum WidgetKind {
         /// The SOM path the group's field records (`/PCSom`), the key its name is kept under
         /// ([`super::KeptNames`]): the group's own path, which for an unnamed group is its
         /// container's. A group with no path at all (unnamed, under an unnamed root) records its
-        /// first button's in the template.
+        /// first button in the template that is drawn as a field.
         group_som: String,
         on: String,
         round: bool,

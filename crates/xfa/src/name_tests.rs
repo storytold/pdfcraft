@@ -196,6 +196,21 @@ fn an_unnamed_group_under_an_unnamed_root_keeps_its_name() {
     assert_eq!(kids, Some(1), "the first button is hidden");
 }
 
+/// A first button drawn as text (non-interactive) makes no widget, so such a group records the
+/// path of its first button drawn as a field, where its selection is saved.
+#[test]
+fn an_unnamed_group_under_an_unnamed_root_skips_a_button_drawn_as_text() {
+    let xdp = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><medium short="612pt" long="792pt"/></pageArea></pageSet>
+ <exclGroup layout="lr-tb" w="7in"><field name="a" access="nonInteractive" w="2in" h="0.3in"><ui><checkButton shape="round"/></ui><items><integer>1</integer></items></field><field name="b" w="2in" h="0.3in"><ui><checkButton shape="round"/></ui><items><integer>2</integer></items></field></exclGroup>
+</subform></template>
+</xdp:xdp>"#;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    assert_eq!(radio_groups(&doc), [("group".to_string(), "b[0]".to_string())]);
+}
+
 /// The radio groups of the AcroForm, in the order the layout wrote them: (name, SOM path).
 fn radio_groups(doc: &Document) -> Vec<(String, String)> {
     let root = doc.root().unwrap();

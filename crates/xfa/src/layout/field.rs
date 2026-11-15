@@ -5,6 +5,12 @@ use super::{
     XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
 };
 
+/// Whether [`Layouter::draw_field`] draws `f` as a field (a widget) rather than as text: every
+/// field but a non-interactive one that isn't a button.
+pub(super) fn shown_as_field(f: &Field) -> bool {
+    f.access != Access::NonInteractive || f.ui == Ui::Button
+}
+
 /// What [`Layouter::draw_field`] needs to draw a radio group's button.
 pub(super) struct RadioButton<'a> {
     /// The group's field name.
@@ -130,7 +136,7 @@ impl Layouter<'_> {
             }
             _ => {}
         }
-        if f.access == Access::NonInteractive && f.ui != Ui::Button {
+        if !shown_as_field(f) {
             // Shown as text, not as a field.
             return self.draw_value_text(&f.value, ui.inset(&f.ui_margin), &fctx.font, &fctx.para, &fctx.som);
         }
