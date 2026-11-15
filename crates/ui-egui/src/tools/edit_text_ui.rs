@@ -242,7 +242,9 @@ fn word_at_caret(text: &str, caret: usize) -> Option<std::ops::Range<usize>> {
 /// Narrow the selection a double-click just made in the text box `id` to the word under the
 /// pointer (see [`word_at_caret`]). Shown from the next pass on.
 fn narrow_double_click(ui: &egui::Ui, id: egui::Id, text: &str, output: &egui::text_edit::TextEditOutput) {
-    if !output.response.double_clicked() {
+    // With Shift held egui extends the selection instead; keep that range (egui's own check in
+    // `pointer_interaction` is `double_clicked() && !shift`).
+    if !output.response.double_clicked() || ui.input(|i| i.modifiers.shift) {
         return;
     }
     let Some(pointer) = output.response.interact_pointer_pos() else { return };
@@ -1162,17 +1164,19 @@ mod tests {
         assert_eq!(word(11), Some("calm"), "at the end of a word, before a space");
     }
 
-    /// The live text box: egui's double-click selects "Take a" at the left of the one-letter word;
-    /// the correction narrows it to "a" (#7413).
-    #[test]
-    fn double_clicking_a_one_letter_word_selects_only_that_word() {
-        use egui::{Event, PointerButton, Pos2, RawInput};
+    /// Double-click one fifth into the one-letter "a" of "Take a calm walk." in a live text box, with
+    /// `shift` held or not; `narrow` runs the correction. Returns the selected text.
+    fn double_click_on_a(shift: bool, narrow: bool) -> String {
+        use egui::{Event, Modifiers, PointerButton, Pos2, RawInput};
         let ctx = egui::Context::default();
         let id = egui::Id::unique("paragraph");
         let mut text = String::from("Take a calm walk.");
         let mut time = 0.0;
-        let mut pass = |events: Vec<Event>, pointer: Option<Pos2>| {
+        let modifiers = Modifiers { shift, ..Default::default() };
+        let mut pass = |events: Vec<Event>, pointer: Option<Pos2>, modifiers: Modifiers| {
             time += 0.05;
+            let mut events = events;
+            events.insert(0, Event::ModifiersChanged(modifiers));
             let input = RawInput { events, time: Some(time), ..Default::default() };
             let mut shown = (Pos2::ZERO, Pos2::ZERO, None);
             let mut output = ctx.run_ui(input, |ui| {
@@ -1181,26 +1185,47 @@ mod tests {
                 let (from, to) = (at(5), at(6));
                 let row = out.galley_pos.to_vec2();
                 shown = (from.left_center() + row, to.left_center() + row, out.cursor_range);
-                if pointer.is_some() {
+                if narrow && pointer.is_some() {
                     narrow_double_click(ui, id, &text, &out);
                 }
             });
             output.textures_delta.clear();
             shown
         };
-        let (a_start, a_end, _) = pass(vec![], None);
+        let (a_start, a_end, _) = pass(vec![], None, Modifiers::NONE);
         // One-fifth into the letter, as in the report.
         let click = Pos2::new(a_start.x + 0.2 * (a_end.x - a_start.x), a_start.y);
-        let press = |pressed| Event::PointerButton { pos: click, button: PointerButton::Primary, pressed, modifiers: Default::default() };
-        pass(vec![Event::PointerMoved(click)], None);
+        let press = |pos, pressed, modifiers| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers };
+        // The caret at the start of the text, in a focused box, as after typing there.
+        ctx.memory_mut(|m| m.request_focus(id));
+        let mut state = egui::TextEdit::load_state(&ctx, id).unwrap_or_default();
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(0))));
+        egui::TextEdit::store_state(&ctx, id, state);
+        pass(vec![Event::PointerMoved(click)], None, modifiers);
         for _ in 0..2 {
-            pass(vec![press(true)], None);
-            pass(vec![press(false)], Some(click));
+            pass(vec![press(click, true, modifiers)], None, modifiers);
+            pass(vec![press(click, false, modifiers)], Some(click), modifiers);
         }
-        let (_, _, selection) = pass(vec![], None);
+        let (_, _, selection) = pass(vec![], None, modifiers);
         let selection = selection.expect("the double-click leaves a selection");
         let [start, end] = selection.sorted_cursors().map(|c| usize::from(c.index));
-        assert_eq!(&text[start..end], "a");
+        text[start..end].to_owned()
+    }
+
+    /// The live text box: egui's double-click selects "Take a" at the left of the one-letter word;
+    /// the correction narrows it to "a" (#7413).
+    #[test]
+    fn double_clicking_a_one_letter_word_selects_only_that_word() {
+        assert_eq!(double_click_on_a(false, true), "a");
+    }
+
+    /// With Shift held egui extends the selection from the caret; the correction leaves that
+    /// range alone instead of cutting it down to the word under the pointer.
+    #[test]
+    fn a_shift_double_click_keeps_the_extended_selection() {
+        let extended = double_click_on_a(true, false);
+        assert!(extended.len() > 1, "egui's own Shift-double-click extends past the word: {extended:?}");
+        assert_eq!(double_click_on_a(true, true), extended);
     }
 
     /// Where an edge's reach above or below its box overlaps the next paragraph's edge, the
