@@ -794,11 +794,20 @@ impl<'a> ImageXObject<'a> {
     /// to the [`size_bucket`] it is averaged down to.
     fn has_larger_mask(&self) -> bool {
         let dict = self.stream.dict();
+        // PdfCraft patch (113): larger than the image as decoded, which for a JBIG2 image decoded
+        // reduced is its reduced size: a mask between that and the full size is averaged down to
+        // the drawn size too, and keyed without it, its alpha averaged for a small draw was
+        // reused for a large one.
+        let (width, height) = if !image_size_ok(self.width, self.height) && self.reduces_past_full_size() {
+            hayro_syntax::reduced_jbig2_size(self.width, self.height).unwrap_or((self.width, self.height))
+        } else {
+            (self.width, self.height)
+        };
         let larger = |s: &Stream<'_>| {
             let d = s.dict();
             // The dimension keys as `ImageXObject::new` reads them, abbreviations first.
             let (w, h) = (d.get::<u32>(W).or_else(|| d.get::<u32>(WIDTH)), d.get::<u32>(H).or_else(|| d.get::<u32>(HEIGHT)));
-            w.is_some_and(|w| w > self.width) || h.is_some_and(|h| h > self.height)
+            w.is_some_and(|w| w > width) || h.is_some_and(|h| h > height)
         };
         dict.get::<Stream<'_>>(SMASK).is_some_and(|s| larger(&s)) || dict.get::<Stream<'_>>(MASK).is_some_and(|s| larger(&s))
     }

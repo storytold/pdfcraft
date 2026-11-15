@@ -11,7 +11,7 @@ mod jbig2;
 #[cfg(feature = "images")]
 pub use jbig2::{
     MAX_PAGE_JBIG2_WORK, MAX_REDUCED_JBIG2_PIXELS, clear_jbig2_limited, jbig2_limited,
-    jbig2_limited_by_stream, page_jbig2_work_spent,
+    jbig2_limited_by_stream, page_jbig2_work_spent, reduced_jbig2_size,
 };
 #[cfg(all(feature = "images", feature = "std"))]
 pub use jbig2::set_page_jbig2_work;

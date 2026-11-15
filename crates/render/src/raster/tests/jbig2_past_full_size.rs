@@ -254,3 +254,41 @@ fn a_reduced_jbig2_image_averages_each_block_of_pixels() {
     assert_eq!(pixel(&page, 30, 50), [255, 255, 255, 255], "white on its left");
     assert_eq!(pixel(&page, 70, 50), [0, 0, 0, 255], "black on its right");
 }
+
+/// A reduced JBIG2 image whose soft mask is larger than the image as decoded (5,462 × 5,462 here)
+/// but smaller than its full size has the mask averaged down to the size it is drawn at, so each
+/// size it is drawn at gets its own alpha. The mask was compared with the full size, so the image
+/// was cached once for every size, and the alpha averaged for a small draw was reused for a large
+/// one: the mask's 256-pixel bands, averaged to an even grey for the small draw (16 samples
+/// across), came out grey in the large one too.
+#[test]
+fn a_reduced_jbig2_image_keeps_a_soft_mask_for_each_size_it_is_drawn_at() {
+    let (width, height) = (16385, 16384);
+    // An 8,192 × 2 mask of 32 bands 256 pixels wide (32 bytes), opaque and transparent in turn.
+    let row: Vec<u8> = (0..32).flat_map(|band| [if band % 2 == 0 { 0xff } else { 0x00 }; 32]).collect();
+    let mask = [row.clone(), row].concat();
+    let mut objects = format!(
+        "6 0 obj << /Type /XObject /Subtype /Image /Width 8192 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Length {} >> stream
+",
+        mask.len()
+    )
+    .into_bytes();
+    objects.extend_from_slice(&mask);
+    objects.extend_from_slice(
+        b"
+endstream endobj
+",
+    );
+    let entries = "/BitsPerComponent 1 /ColorSpace /DeviceGray /SMask 6 0 R /Filter /JBIG2Decode";
+    let stream = black_jbig2_page_of(width, height);
+    // 90 × 10 pt along the bottom (rows 80 to 90), alone and after a 1 pt draw near the top.
+    let large = "q 90 0 0 10 5 10 cm /Im Do Q";
+    let alone = render_first_page(image_page(width, height, entries, &stream, large, &objects));
+    let after_small = render_first_page(image_page(width, height, entries, &stream, &format!("q 1 0 0 1 5 90 cm /Im Do Q {large}"), &objects));
+    assert!(after_small.warnings.is_empty(), "{:?}", after_small.warnings);
+    let row = |page: &RenderedPage| (5..95).map(|x| pixel(page, x, 85)[0]).collect::<Vec<u8>>();
+    let (alone, after_small) = (row(&alone), row(&after_small));
+    let bands = alone.windows(2).filter(|w| w[0].abs_diff(w[1]) > 64).count();
+    assert!(bands > 10, "drawn alone, the mask's bands show: {alone:?}");
+    assert_eq!(after_small, alone, "drawn after a small draw, it keeps its own mask");
+}

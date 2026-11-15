@@ -284,6 +284,15 @@ fn decode_reduced(image: &hayro_jbig2::Image<'_>) -> Option<FilterResult<'static
     })
 }
 
+/// PdfCraft patch (53): the size a JBIG2 image of `width` × `height` past the full-size bound is
+/// decoded at when its caller takes it reduced (`ImageDecodeParams::reduce_past_full_size`): each
+/// side divided by [`reduction_factor`], rounded up, as the decode reports it. `None` past any
+/// factor.
+pub fn reduced_jbig2_size(width: u32, height: u32) -> Option<(u32, u32)> {
+    let factor = reduction_factor(width, height)?;
+    Some((width.div_ceil(factor), height.div_ceil(factor)))
+}
+
 /// PdfCraft patch (53): the smallest whole factor that reduces an image of `width` × `height`
 /// to [`MAX_REDUCED_OUTPUT_PIXELS`] or fewer, the same on both axes so the samples stay square.
 /// An image of 2^29 pixels takes 4, or a little more when a side doesn't divide evenly; 12 holds
