@@ -745,7 +745,10 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                         // reachable even when a tool adds several of them (#7312). The tools'
                         // own scroll area stays separate, after these.
                         let fixed_overhead = grip_size.x + cell + 24.0;
-                        let scroll_max = (bounds.width() - fixed_overhead).max(cell);
+                        // Keep egui's 64 px minimum width for the custom-tools region when
+                        // it is shown, so it and the gear stay inside the bar.
+                        let tools_reserve = if bar.tools.is_empty() { 0.0 } else { 64.0 };
+                        let scroll_max = (bounds.width() - fixed_overhead - tools_reserve).max(cell);
                         egui::ScrollArea::horizontal().id_salt("hotbar-core-controls").max_height(cell).max_width(scroll_max).auto_shrink([true, true]).show(ui, |ui| {
                             ui.with_layout(layout, |ui| {
                                 core_tool_buttons(ui, app, cell, popup_align, &t);
