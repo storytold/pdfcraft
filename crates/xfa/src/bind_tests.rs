@@ -253,3 +253,73 @@ fn a_master_page_field_binds_by_its_reference() {
     let form = layout_xml(&xml).unwrap();
     assert_eq!(value_at(&form, "code[0]").as_deref(), Some("K9"));
 }
+
+/// A `[*]` in a reference binds "one more instance of the object matching the `*`" (XFA 3.3,
+/// "Explicit Data References", p. 199): objects whose reference reads the same, in the same
+/// data scope, take the instances in turn, in the order the form holds them. Here three
+/// copies of a row (not one repeating subform) read lines 0, 1 and 2; a reference that reads
+/// differently counts on its own.
+#[test]
+fn copies_with_the_same_star_reference_take_its_instances_in_turn() {
+    let row = |n: &str| {
+        format!(
+            r#"<subform name="row" layout="tb"><bind match="none"/><field name="amount{n}" {TEXT}<bind match="dataRef" ref="$.income.line[*].amount"/></field></subform>"#
+        )
+    };
+    let body = format!(
+        r#"<subform name="page1" layout="tb"><bind match="none"/>{}{}{}<field name="code" {TEXT}<bind match="dataRef" ref="$.codes.code[*]"/></field></subform>"#,
+        row("A"),
+        row("B"),
+        row("C")
+    );
+    let data = "<income><line><amount>100</amount></line><line><amount>200</amount></line><line><amount>300</amount></line></income><codes><code>X</code></codes>";
+    let xml = xdp(&body, data);
+    let (tpl, _) = parse(&xml).unwrap();
+    assert_eq!(path(&tpl, "form[0].page1[0].row[0].amountA[0]"), "form[0].income[0].line[0].amount[0]");
+    assert_eq!(path(&tpl, "form[0].page1[0].row[1].amountB[0]"), "form[0].income[0].line[1].amount[0]");
+    assert_eq!(path(&tpl, "form[0].page1[0].row[2].amountC[0]"), "form[0].income[0].line[2].amount[0]");
+    assert_eq!(path(&tpl, "form[0].page1[0].code[0]"), "form[0].codes[0].code[0]");
+    let form = layout_xml(&xml).unwrap();
+    assert_eq!(value_at(&form, "amountA[0]").as_deref(), Some("100"));
+    assert_eq!(value_at(&form, "amountB[0]").as_deref(), Some("200"));
+    assert_eq!(value_at(&form, "amountC[0]").as_deref(), Some("300"));
+    assert_eq!(value_at(&form, "code[0]").as_deref(), Some("X"));
+}
+
+/// A repeating subform whose reference ends in `[*]` lays out one instance per node the
+/// reference matches, instance `k` bound to the `k`-th; its fields bind by name under it.
+#[test]
+fn a_repeating_subform_bound_with_a_star_reference_repeats_with_the_data() {
+    let body = format!(
+        r#"<subform name="page1" layout="tb"><bind match="none"/>
+ <subform name="item" layout="tb"><occur min="0" max="-1"/><bind match="dataRef" ref="$.income.line[*]"/><field name="amount" {TEXT}</field></subform>
+</subform>"#
+    );
+    let data = "<income><line><amount>100</amount></line><line><amount>200</amount></line><line><amount>300</amount></line></income>";
+    let xml = xdp(&body, data);
+    let (tpl, _) = parse(&xml).unwrap();
+    assert_eq!(path(&tpl, "form[0].page1[0].item[2].amount[0]"), "form[0].income[0].line[2].amount[0]");
+    let form = layout_xml(&xml).unwrap();
+    let amounts: Vec<Option<String>> =
+        form.pages.iter().flat_map(|p| widgets(p)).filter(|w| w.som.ends_with(".amount[0]")).map(|w| w.value.clone()).collect();
+    assert_eq!(amounts, [Some("100".to_string()), Some("200".to_string()), Some("300".to_string())]);
+}
+
+/// Objects take the instances of a `[*]` reference in turn only within one data scope: the
+/// same reference in two repeated rows (each its own scope) starts again in each.
+#[test]
+fn star_references_count_within_their_data_scope() {
+    let body = format!(
+        r#"<subform name="row" layout="tb"><occur min="1" max="-1"/>
+ <field name="first" {TEXT}<bind match="dataRef" ref="$.v[*]"/></field>
+ <field name="second" {TEXT}<bind match="dataRef" ref="$.v[*]"/></field>
+</subform>"#
+    );
+    let xml = xdp(&body, "<row><v>a</v><v>b</v></row><row><v>c</v><v>d</v></row>");
+    let (tpl, _) = parse(&xml).unwrap();
+    assert_eq!(path(&tpl, "form[0].row[1].first[0]"), "form[0].row[1].v[0]");
+    assert_eq!(path(&tpl, "form[0].row[1].second[0]"), "form[0].row[1].v[1]");
+    let form = layout_xml(&xml).unwrap();
+    let values: Vec<Option<String>> = form.pages.iter().flat_map(|p| widgets(p)).map(|w| w.value.clone()).collect();
+    assert_eq!(values, ["a", "b", "c", "d"].map(|v| Some(v.to_string())));
+}

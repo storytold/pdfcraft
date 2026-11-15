@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 use super::{DataNode, DataPath, Field, MAX_DEPTH, MAX_NODES, Node, SomIndices, Template, XFA_DATA_NS};
+use crate::model::{Common, Subform};
 
 fn to_node(n: crate::xml::Node, depth: usize) -> DataNode {
     let name = n.tag_name().name().to_string();
@@ -102,8 +105,8 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
             None => (None, index, None),
             Some(children) => match named_in(children, &name, index, 0) {
                 Some((siblings, node)) => {
+                    let data_ref = node.common().data_ref.as_deref().map(|r| (r, star(siblings, node, index)));
                     let index = data_index(siblings, &name, index);
-                    let data_ref = node.common().data_ref.as_deref();
                     match node {
                         Node::Subform(sf) if sf.unbound => (Some(Container::Area(&sf.children)), index, None),
                         Node::Subform(sf) => (Some(Container::Children(&sf.children)), index, data_ref),
@@ -131,22 +134,38 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
 }
 
 /// Extend `out`, the parent's data path, with the node the object `name[index]` binds to: the
-/// node its explicit data reference names, or else the one its name names. A reference this
-/// binding can't follow ([`resolve_ref`]) binds by name, so a value written there still has
-/// somewhere to go.
-fn bind(out: &mut DataPath, name: String, index: usize, data_ref: Option<&str>, record: Option<&str>) {
-    match data_ref.and_then(|r| resolve_ref(r, out, record)) {
+/// node its explicit data reference names (with the instance its `[*]` takes), or else the one
+/// its name names. A reference this binding can't follow ([`resolve_ref`]) binds by name, so a
+/// value written there still has somewhere to go.
+fn bind(out: &mut DataPath, name: String, index: usize, data_ref: Option<(&str, usize)>, record: Option<&str>) {
+    match data_ref.and_then(|(r, star)| resolve_ref(r, out, record, star)) {
         Some(path) => *out = path,
         None => out.push((name, index)),
     }
 }
 
+/// The instance a `[*]` in `node`'s reference takes, for its instance at SOM index `index`:
+/// the instances the objects before it with the same reference took
+/// ([`Common::star_ordinal`](crate::model::Common::star_ordinal)), and then its own instance
+/// number when it is a repeating subform (its instances take SOM numbers from its own on).
+fn star(siblings: &[Node], node: &Node, index: usize) -> usize {
+    let instance = match node {
+        Node::Subform(sf) if sf.occur.max != Some(1) => {
+            let at = siblings.iter().position(|n| std::ptr::eq(n, node)).unwrap_or(0);
+            index.saturating_sub(SomIndices::of(siblings).at(at))
+        }
+        _ => 0,
+    };
+    node.common().star_ordinal.saturating_add(instance)
+}
+
 /// The data path a `bind ref` SOM expression names, from the object's parent data node at
 /// `parent` (XFA 3.3, "Explicit Data References", p. 199): `$record.a.b` (`record` is the
 /// root subform's name, which names the record's data group), `$data.a.b`, `$.a.b` or `a.b`
-/// (relative to the parent), each segment with an optional `[n]`. Anything else (another DOM
-/// such as `$form`, `..`, `[*]`, predicates, functions) is `None`.
-fn resolve_ref(r: &str, parent: &DataPath, record: Option<&str>) -> Option<DataPath> {
+/// (relative to the parent), each segment with an optional `[n]`, or `[*]`, which takes the
+/// instance `star` (see [`star`]). Anything else (another DOM such as `$form`, `..`,
+/// predicates, functions) is `None`.
+fn resolve_ref(r: &str, parent: &DataPath, record: Option<&str>, star: usize) -> Option<DataPath> {
     let r = r.trim();
     let after = |prefix: &str| r.strip_prefix(prefix).filter(|rest| rest.is_empty() || rest.starts_with('.'));
     let (mut path, rest) = if let Some(rest) = after("$record") {
@@ -166,7 +185,10 @@ fn resolve_ref(r: &str, parent: &DataPath, record: Option<&str>) -> Option<DataP
     }
     for seg in rest.split('.') {
         let (name, idx) = match seg.trim().split_once('[') {
-            Some((n, idx)) => (n.trim(), idx.strip_suffix(']')?.trim().parse::<usize>().ok()?),
+            Some((n, idx)) => match idx.strip_suffix(']')?.trim() {
+                "*" => (n.trim(), star),
+                idx => (n.trim(), idx.parse::<usize>().ok()?),
+            },
             None => (seg.trim(), 0),
         };
         if !ref_name(name) {
@@ -178,6 +200,91 @@ fn resolve_ref(r: &str, parent: &DataPath, record: Option<&str>) -> Option<DataP
         }
     }
     Some(path)
+}
+
+/// How many instances of the repeating subform `sf` under the container at `parent_som` the
+/// data holds: the nodes its reference matches when it ends in `[*]` (from the one its first
+/// instance takes on), else the groups named after it under its parent's data node. A
+/// subform with no data group of its own ([`Subform::data_name`]) and one that occurs once
+/// count none.
+pub(crate) fn data_instances(tpl: &Template, data: &DataNode, sf: &Subform, parent_som: &str) -> usize {
+    if sf.occur.max == Some(1) {
+        return 0;
+    }
+    let parent = data_path(tpl, parent_som);
+    if let Some(r) = sf.common.data_ref.as_deref().filter(|r| r.trim_end().ends_with("[*]")) {
+        let record = tpl.root.common.name.as_deref();
+        if let Some(mut path) = resolve_ref(r, &parent, record, sf.common.star_ordinal)
+            && let Some((name, first)) = path.pop()
+        {
+            return data.count(&path, &name).saturating_sub(first);
+        }
+    }
+    sf.data_name().map_or(0, |name| data.count(&parent, name))
+}
+
+/// Number the objects whose reference has a `[*]` ([`Common::star_ordinal`]): each counts the
+/// objects before it, in the form's order, with the same reference in the same data scope (the
+/// data path of its container). Master-page objects are left at 0.
+pub(crate) fn number_star_refs(tpl: &mut Template) {
+    fn has_star(c: &Common) -> bool {
+        c.data_ref.as_deref().is_some_and(|r| r.contains("[*]"))
+    }
+    fn walk(tpl: &Template, nodes: &[Node], som: &str, seen: &mut HashMap<(DataPath, String), usize>, out: &mut Vec<usize>, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let sibs = SomIndices::of(nodes);
+        for (i, n) in nodes.iter().enumerate() {
+            let c = n.common();
+            if has_star(c) {
+                let key = (data_path(tpl, som), c.data_ref.clone().unwrap_or_default());
+                let count = seen.entry(key).or_insert(0);
+                out.push(*count);
+                *count = count.saturating_add(1);
+            }
+            let here = match &c.name {
+                Some(name) if som.is_empty() => format!("{name}[{}]", sibs.at(i)),
+                Some(name) => format!("{som}.{name}[{}]", sibs.at(i)),
+                None => som.to_string(),
+            };
+            match n {
+                Node::Subform(s) => walk(tpl, &s.children, &here, seen, out, depth + 1),
+                Node::Area(a) => walk(tpl, &a.children, &here, seen, out, depth + 1),
+                Node::Field(_) | Node::ExclGroup(_) | Node::Draw(_) => {}
+            }
+        }
+    }
+    /// Hands the numbers out in the order [`walk`] made them.
+    fn assign(nodes: &mut [Node], numbers: &mut std::vec::IntoIter<usize>, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        for n in nodes {
+            let c = match n {
+                Node::Subform(s) => &mut s.common,
+                Node::Area(a) => &mut a.common,
+                Node::Field(f) => &mut f.common,
+                Node::ExclGroup(g) => &mut g.common,
+                Node::Draw(d) => &mut d.common,
+            };
+            if has_star(c) {
+                c.star_ordinal = numbers.next().unwrap_or(0);
+            }
+            match n {
+                Node::Subform(s) => assign(&mut s.children, numbers, depth + 1),
+                Node::Area(a) => assign(&mut a.children, numbers, depth + 1),
+                Node::Field(_) | Node::ExclGroup(_) | Node::Draw(_) => {}
+            }
+        }
+    }
+    let mut numbers = Vec::new();
+    let root = tpl.root.common.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default();
+    walk(tpl, &tpl.root.children, &root, &mut HashMap::new(), &mut numbers, 1);
+    if numbers.is_empty() {
+        return;
+    }
+    assign(&mut tpl.root.children, &mut numbers.into_iter(), 1);
 }
 
 /// Whether `name` is a plain element name in a `bind ref` (an empty one is part of a `..`).

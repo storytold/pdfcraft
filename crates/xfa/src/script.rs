@@ -313,10 +313,7 @@ impl Walker<'_> {
             let sib = sibs.at(i);
             match n {
                 Node::Subform(sf) => {
-                    let from_data = match (sf.data_name(), self.data) {
-                        (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
-                        _ => 0,
-                    };
+                    let from_data = self.data.map_or(0, |d| crate::data::data_instances(self.tpl, d, sf, parent_som));
                     let instances = crate::layout::instance_count(&sf.occur, from_data);
                     for k in 0..instances {
                         // The first instance was counted above.

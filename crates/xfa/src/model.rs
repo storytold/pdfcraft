@@ -396,6 +396,11 @@ pub struct Common {
     /// `<bind match="dataRef" ref="…"/>`: the SOM expression naming the data node the object
     /// binds to, in place of binding by name (XFA 3.3, "Explicit Data References", p. 199).
     pub data_ref: Option<String>,
+    /// For a `data_ref` with `[*]`: how many objects before this one, in the form's order and in
+    /// the same data scope, have the same reference. A `[*]` binds "one more instance" (p. 199),
+    /// so this object's first instance takes the instance after theirs. Set once the template
+    /// is parsed (`data::number_star_refs`).
+    pub star_ordinal: usize,
 }
 
 /// A container's or object's `<traversal>` links, as SOM references relative to it. Only the
