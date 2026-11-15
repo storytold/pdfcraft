@@ -40,6 +40,18 @@ fn translations(code: &str) -> String {
 }
 
 #[test]
+fn the_macos_bundle_declares_every_interface_language() {
+    // AppKit translates its own dialogs (open and save panels) only into the languages the app
+    // bundle declares, so `CFBundleLocalizations` must list every entry of `LANGUAGES`.
+    let plist = include_str!("../../../../packaging/macos/Info.plist.in");
+    let block = plist.split("<key>CFBundleLocalizations</key>").nth(1).expect("the template declares CFBundleLocalizations");
+    let block = block.split("</array>").next().expect("the declaration is an array");
+    let declared: Vec<String> = block.split("<string>").skip(1).filter_map(|s| s.split("</string>").next()).map(str::to_lowercase).collect();
+    let registered: Vec<String> = LANGUAGES.iter().map(|l| l.code.to_lowercase()).collect();
+    assert_eq!(declared, registered, "packaging/macos/Info.plist.in and LANGUAGES list different languages");
+}
+
+#[test]
 fn keyboard_key_names_have_a_separate_context_and_english_fallback() {
     let keys = fixture_lang("x-keys", "key\tDelete\tEntf\n\tDelete\tLöschen\n\tOpen\tÖffnen\n");
     let previous = current();
@@ -1543,6 +1555,12 @@ fn date_languages_are_the_interface_languages() {
     let interface: Vec<(&str, &str)> = Lang::all().map(|l| (l.code(), l.name())).collect();
     let dates: Vec<(&str, &str)> = pdfcraft_engine::dates::DATE_LANGUAGES.iter().map(|l| (l.code, l.name)).collect();
     assert_eq!(dates, interface);
+}
+
+/// The stale-draft notice remains discoverable after the UI modules are reorganized.
+#[test]
+fn properties_stale_notice_is_in_translation_scan() {
+    assert!(ui_literals().contains("The document changed. Reopen Document Properties to edit the current version."));
 }
 
 /// A report, not a check: the notifications pasting an image and pinning a tool show, in each

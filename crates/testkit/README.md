@@ -26,6 +26,7 @@ let bytes = Pdf::new()
     .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
     .obj("<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>")
     .stream("", b"BT /F1 12 Tf (hi) Tj ET")                // /Length computed
+    .obj("<< /Producer (pdfcraft-testkit example) >>")       // becomes 5 0 R
     .trailer_entry("/Info 5 0 R")
     .build();
 ```
