@@ -1150,6 +1150,32 @@ fn text_search_agrees_with_the_page_search() {
     assert!(find_in_text("cat", "cat", false, false, 0).is_empty());
 }
 
+/// Fullwidth Latin and digits and halfwidth katakana drawn in a PDF are found from their ordinary
+/// width, and the hit's highlight is the box of the glyphs that drew them, the halfwidth sound
+/// mark's glyph included. The string search behind find and replace agrees, in bytes.
+#[test]
+fn width_forms_in_a_pdf_are_found_and_highlighted_on_their_own_glyphs() {
+    let shown = "型番 ＡＢＣ－１２３ ｶﾞｲﾄﾞ end";
+    let text = extract_page(&one_show_string(shown, 500), 0, &InterpreterSettings::default()).unwrap();
+    assert_eq!(text.plain_text(), shown);
+    let boxes = |range: std::ops::Range<usize>| {
+        let rects: Vec<[f32; 4]> = text.glyphs[range].iter().map(|g| g.rect).collect();
+        [
+            rects.iter().map(|r| r[0]).fold(f32::MAX, f32::min),
+            rects.iter().map(|r| r[1]).fold(f32::MAX, f32::min),
+            rects.iter().map(|r| r[2]).fold(f32::MIN, f32::max),
+            rects.iter().map(|r| r[3]).fold(f32::MIN, f32::max),
+        ]
+    };
+    for (query, glyphs) in [("abc-123", 3..10), ("ＡＢＣ-123", 3..10), ("ガイド", 11..16), ("ｶﾞｲﾄﾞ", 11..16), ("END", 17..20)] {
+        let hits = text.find(query);
+        assert_eq!(hits, vec![glyphs.clone()], "{query:?}");
+        assert_eq!(text.line_rects(glyphs.clone()), vec![boxes(glyphs.clone())], "{query:?} highlights its glyphs");
+        let bytes: Vec<&str> = find_in_text(shown, query, false, false, usize::MAX).into_iter().filter_map(|r| shown.get(r)).collect();
+        assert_eq!(bytes, vec![text.text_of(glyphs)], "{query:?} in the string");
+    }
+}
+
 #[test]
 fn greek_sigma_forms_match_without_changing_exact_search_or_glyph_ranges() {
     let mut v = Vec::new();
