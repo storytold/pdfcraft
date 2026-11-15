@@ -12,38 +12,24 @@ pub(crate) fn decode_into(data: &[u8], out: &mut Vec<u8>) -> Option<()> {
             b'\\' => {
                 let next = r.read_byte()?;
 
-                if is_octal_digit(next) {
-                    let second = r.read_byte();
-                    let third = r.read_byte();
-
-                    let bytes = match (second, third) {
-                        (Some(n1), Some(n2)) => match (is_octal_digit(n1), is_octal_digit(n2)) {
-                            (true, true) => [next, n1, n2],
-                            (true, _) => {
-                                r.jump(r.offset() - 1);
-                                [b'0', next, n1]
+                // PdfCraft patch (3): `\ddd` is one to three octal digits "with high-order
+                // overflow ignored" (PostScript Language Reference, third edition,
+                // §3.2.2), so `\737` is 0o737 & 0xFF, 0xDF, as in hayro-syntax.
+                if let Some(first) = octal_digit(next) {
+                    let mut value = first;
+                    for _ in 0..2 {
+                        match r.peek_byte().and_then(octal_digit) {
+                            Some(digit) => {
+                                r.read_byte();
+                                // At most 0o777 after three digits: no overflow in u16.
+                                value = value * 8 + digit;
                             }
-                            _ => {
-                                r.jump(r.offset() - 2);
-                                [b'0', b'0', next]
-                            }
-                        },
-                        (Some(n1), None) => {
-                            if is_octal_digit(n1) {
-                                [b'0', next, n1]
-                            } else {
-                                r.jump(r.offset() - 1);
-                                [b'0', b'0', next]
-                            }
+                            None => break,
                         }
-                        _ => [b'0', b'0', next],
-                    };
-
-                    let str = core::str::from_utf8(&bytes).unwrap();
-
-                    if let Ok(num) = u8::from_str_radix(str, 8) {
-                        out.push(num);
                     }
+
+                    let [low, _] = value.to_le_bytes();
+                    out.push(low);
                 } else {
                     match next {
                         b'n' => out.push(0xA),
@@ -80,6 +66,10 @@ pub(crate) fn decode_into(data: &[u8], out: &mut Vec<u8>) -> Option<()> {
     Some(())
 }
 
-fn is_octal_digit(byte: u8) -> bool {
-    matches!(byte, b'0'..=b'7')
+/// The value of an octal digit, `None` for any other byte.
+fn octal_digit(byte: u8) -> Option<u16> {
+    match byte {
+        b'0'..=b'7' => Some(u16::from(byte - b'0')),
+        _ => None,
+    }
 }

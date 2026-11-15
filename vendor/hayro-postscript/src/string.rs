@@ -187,6 +187,14 @@ mod tests {
         assert_eq!(decode_literal(b"(\\3)").unwrap(), b"\x03");
     }
 
+    // PdfCraft patch (3) test: high-order overflow is ignored.
+    #[test]
+    fn literal_octal_overflow_keeps_the_low_eight_bits() {
+        assert_eq!(decode_literal(b"(\\737)").unwrap(), b"\xDF");
+        assert_eq!(decode_literal(b"(\\400\\777)").unwrap(), b"\x00\xFF");
+        assert_eq!(decode_literal(b"(\\1234)").unwrap(), b"S4");
+    }
+
     #[test]
     fn literal_line_continuation_lf() {
         assert_eq!(decode_literal(b"(Hi \\\nthere)").unwrap(), b"Hi there");

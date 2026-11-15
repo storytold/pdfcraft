@@ -195,40 +195,25 @@ fn read_literal<'a>(r: &mut Reader<'a>) -> Option<StringInner<'a>> {
             b'\\' => {
                 let next = r.read_byte()?;
 
-                if is_octal_digit(next) {
-                    let second = r.read_byte();
-                    let third = r.read_byte();
-
-                    let bytes = match (second, third) {
-                        (Some(n1), Some(n2)) => match (is_octal_digit(n1), is_octal_digit(n2)) {
-                            (true, true) => [next, n1, n2],
-                            (true, _) => {
-                                r.jump(r.offset() - 1);
-                                [b'0', next, n1]
+                // PdfCraft patch (54): `\ddd` is one to three octal digits, and
+                // "high-order overflow shall be ignored" (ISO 32000-2 §7.3.4.2, Table 3),
+                // so `\737` is 0o737 & 0xFF, 0xDF, and a fourth digit is an ordinary byte.
+                // The escape was dropped whenever its value passed 0o377.
+                if let Some(first) = octal_digit(next) {
+                    let mut value = first;
+                    for _ in 0..2 {
+                        match r.peek_byte().and_then(octal_digit) {
+                            Some(digit) => {
+                                r.read_byte();
+                                // At most 0o777 after three digits: no overflow in u16.
+                                value = value * 8 + digit;
                             }
-                            _ => {
-                                r.jump(r.offset() - 2);
-                                [b'0', b'0', next]
-                            }
-                        },
-                        (Some(n1), None) => {
-                            if is_octal_digit(n1) {
-                                [b'0', next, n1]
-                            } else {
-                                r.jump(r.offset() - 1);
-                                [b'0', b'0', next]
-                            }
+                            None => break,
                         }
-                        _ => [b'0', b'0', next],
-                    };
-
-                    let str = core::str::from_utf8(&bytes).unwrap();
-
-                    if let Ok(num) = u8::from_str_radix(str, 8) {
-                        result.push(num);
-                    } else {
-                        warn!("overflow occurred while parsing octal literal string");
                     }
+
+                    let [low, _] = value.to_le_bytes();
+                    result.push(low);
                 } else {
                     match next {
                         b'n' => result.push(0xA),
@@ -267,8 +252,12 @@ fn read_literal<'a>(r: &mut Reader<'a>) -> Option<StringInner<'a>> {
     Some(StringInner::Owned(result))
 }
 
-fn is_octal_digit(byte: u8) -> bool {
-    matches!(byte, b'0'..=b'7')
+/// The value of an octal digit, `None` for any other byte.
+fn octal_digit(byte: u8) -> Option<u16> {
+    match byte {
+        b'0'..=b'7' => Some(u16::from(byte - b'0')),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -390,6 +379,30 @@ mod tests {
                 .read_without_context::<String<'_>>()
                 .is_some()
         );
+    }
+
+    // PdfCraft patch (54) test: high-order overflow is ignored (ISO 32000-2 §7.3.4.2).
+    #[test]
+    fn literal_string_octal_overflow_keeps_the_low_eight_bits() {
+        for (input, expected) in [
+            (&b"(\\737)"[..], &[0xDF][..]),
+            (b"(\\400)", &[0x00]),
+            (b"(\\777)", &[0xFF]),
+            (b"(Hi \\777)", b"Hi \xFF"),
+            (b"(\\101)", b"A"),
+            (b"(\\12)", b"\n"),
+            (b"(\\1234)", b"S4"),
+            (b"(\\48)", b"\x048"),
+            (b"(\\7)", b"\x07"),
+        ] {
+            assert_eq!(
+                Reader::new(input)
+                    .read_without_context::<String<'_>>()
+                    .unwrap()
+                    .as_bytes(),
+                expected
+            );
+        }
     }
 
     #[test]
