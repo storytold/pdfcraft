@@ -145,14 +145,19 @@ can't check. The walk, the verification pass, the check of what pages sharing a 
 dictionary still draw, the cleanups of a rewritten page's and form's own resources (the XObjects
 replaced, fonts and properties) and the Type 3 font cleanup all read it so. A form without
 resources of its own inside such a form reads the page's properties, and the page keeps them. The
-cleanups of a page's and form's own resources read a form with resources of its own within an
-allowance of a page of their own, not following a form drawn inside itself again nor a chain
-deeper than the walk follows forms, where the renderer draws nothing either. Where such a form
-can't all be read (it doesn't decode or runs past that allowance, the parser passes over bytes in
-it, or 2,000,000 of such forms' operators or 65,536 scopes are passed), a cleanup that would
-remove a name refuses the operation, since that form may still draw with it: removing it could
-lose paint beside a mark, and keeping an image or form the redaction replaced would keep what was
-redacted. A cleanup with nothing to remove goes on. A name nothing draws is never kept,
+cleanups of a page's and form's own resources read a form with resources of its own once for the
+page, within one allowance of a page and 2,000,000 of such forms' operators that all of the page's
+cleanups share (a form taken again costs what it hands on: each name it draws and each operator it
+keeps, a name counted with its bytes; of an operator only what the cleanups read is kept, its last
+two operands where they are names), not following a form drawn inside itself again nor a chain
+deeper than the walk follows forms, where the renderer draws nothing either; the font cleanup, with
+no Type 3 font listed, doesn't read them. The cleanups made once for the whole operation (the
+properties pages share, a Type 3 font's forms) read them on an allowance of their own each time.
+Where such a form can't all be read (it doesn't decode or runs past that allowance, the parser
+passes over bytes in it, or those operators or a read's 65,536 scopes are passed), a cleanup that
+would remove a name refuses the operation, since that form may still draw with it: removing it
+could lose paint beside a mark, and keeping an image or form the redaction replaced would keep what
+was redacted. A cleanup with nothing to remove goes on. A name nothing draws is never kept,
 except a property named by a form whose `/Resources` isn't a dictionary, which is kept as the page's. The
 Type 3 font cleanup's scan of the glyphs shown is the exception: it reads such forms in full, as
 before, and scans one again under another chain of names only where its scan looked a name up
@@ -175,7 +180,13 @@ hidden information refuses a page for both too, in whatever content it walks. A 
 skipping that mark. The count covers the marks on the pages being applied.
 
 Tiling-pattern cells are separate streams. Applying a mark removes a pattern resource when no
-surviving paint uses it. If a cell remains reachable after rewriting the selected pages and may
+surviving paint uses it. A form the walk leaves as it is, because it reaches no mark, still paints
+all it did: the patterns it selects through the names it is drawn with count as used. Such a form
+is read for them only where those names give a pattern, once for each chain of forms it is drawn
+in, and no more than 4,096 times on a page, within an allowance of a page for forms without
+resources of their own and another for forms with them; where it can't all be read (it doesn't
+decode, the parser passes over bytes in it, or a limit is passed), Apply refuses rather than
+remove a pattern. If a cell remains reachable after rewriting the selected pages and may
 contain text, images, replacement descriptions, or unreadable content, Apply refuses with a
 `RedactError::Pattern` and restores the document and pending marks. This includes patterns owned
 by Forms and patterns inherited by Forms. Vector-only retained cells remain supported. The

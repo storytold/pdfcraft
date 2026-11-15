@@ -3420,7 +3420,15 @@ fn the_pages_check_does_not_follow_a_form_with_resources_of_its_own() {
         stream(image, b"p"),
     ]);
     let mut xo = Dict::from_iter([(b"FmOwn".to_vec(), Object::Ref(ObjRef::new(3, 0))), (b"Im1".to_vec(), Object::Ref(ObjRef::new(5, 0)))]);
-    crate::interp::prune(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &mut xo, &[b"Im1".to_vec()], &[b"/FmOwn Do".to_vec()]).unwrap();
+    crate::interp::prune(
+        &doc,
+        &mut pdfcraft_cos::DecodeBudget::page(),
+        &mut crate::interp::ScopedReads::default(),
+        &mut xo,
+        &[b"Im1".to_vec()],
+        &[b"/FmOwn Do".to_vec()],
+    )
+    .unwrap();
     assert!(!xo.contains(b"Im1") && xo.contains(b"FmOwn"), "{xo:?}");
 }
 
@@ -3473,6 +3481,33 @@ fn forms_with_resources_of_their_own_are_read_up_to_two_million_operators() {
     }
 }
 
+/// `/B`, whose own resources give nothing, draws `/Im`: drawn inside `/A`, whose own `/Im` is a
+/// form, its `/Im` is `/A`'s, and not what the resources read give; drawn by the content, it is
+/// theirs. The reads share one page's: `/B`, read once, is taken through the names of the forms on
+/// the way to it each time, in either order.
+#[test]
+fn a_form_read_once_is_taken_through_the_names_on_the_way_to_it() {
+    let doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Im 4 0 R /B 5 0 R >> >>", b"/B Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b""),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >>", b"/Im Do"),
+    ]);
+    let names = Dict::from_iter([(b"A".to_vec(), Object::Ref(ObjRef::new(3, 0))), (b"B".to_vec(), Object::Ref(ObjRef::new(5, 0)))]);
+    let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(names))]);
+    let draws_im = |content: &[u8], scoped: &mut crate::interp::ScopedReads| {
+        let found = crate::interp::resource_ops_with(&doc, &mut pdfcraft_cos::DecodeBudget::page(), scoped, &res, &[content.to_vec()]).unwrap();
+        found.ops.iter().any(|op| op.is("Do") && op.last_name() == Some(b"Im".as_slice()))
+    };
+    let mut scoped = crate::interp::ScopedReads::default();
+    assert!(!draws_im(b"/A Do", &mut scoped), "inside /A");
+    assert!(draws_im(b"/B Do", &mut scoped), "by the content, after /A");
+    let mut scoped = crate::interp::ScopedReads::default();
+    assert!(draws_im(b"/B Do", &mut scoped), "by the content");
+    assert!(!draws_im(b"/A Do", &mut scoped), "inside /A, after the content");
+}
+
 /// Forms with resources of their own are read in up to 65,536 scopes; past that the later ones
 /// aren't read, and the read is partial. 255 forms each draw, through their own names, the same 256
 /// forms with resources of their own: a scope for each of the 255 and for each pair, 65,535; one
@@ -3500,6 +3535,57 @@ fn forms_with_resources_of_their_own_are_read_in_up_to_65536_scopes() {
         let content: String = (0..256).map(|i| format!("/F{i} Do ")).collect();
         let found = crate::interp::resource_ops(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &res, &[content.into_bytes()]).unwrap();
         assert_eq!(found.partial, partial, "the last form drawing {last_draws:?}");
+    }
+}
+
+/// 255 forms each draw the same 256 forms with resources of their own, as above, so each of those
+/// is read once and taken again 65,024 times, at what it hands on. Drawing one name its own
+/// resources give, 1,000 times, it is cheap to take again, and the read is whole; so it is keeping
+/// one operator of 10,000 operands and a string of 4,096 bytes, which is handed on with only the
+/// last two, as names or null.
+/// Drawing 1,000 such names, or one of 4,096 bytes, or a form without resources whose 1,000 marks
+/// (malformed, a dictionary alone) name nothing, each taking again costs them, and past 2,000,000
+/// the read is partial.
+#[test]
+fn a_form_taken_again_costs_the_names_it_hands_on() {
+    let long = "X".repeat(4096);
+    let names: Vec<u8> = (0..1000).flat_map(|i| format!("/X{i} Do ").into_bytes()).collect();
+    let rows: [(Vec<u8>, String, bool); 5] = [
+        (b"/X Do ".repeat(1000), "/Resources << /XObject << /X 516 0 R >> >>".into(), false),
+        ([b"0 ".repeat(10_000), format!("({long}) /P0 scn").into_bytes()].concat(), "/Resources << /ProcSet [/PDF] >>".into(), false),
+        (names, "/Resources << /XObject 517 0 R >>".into(), true),
+        (format!("/{long} Do").into_bytes(), format!("/Resources << /XObject << /{long} 516 0 R >> >>"), true),
+        (b"/G Do".to_vec(), "/Resources << /XObject << /G 518 0 R >> >>".into(), true),
+    ];
+    for (content, own, partial) in rows {
+        let seconds: String = (0..256).map(|i| format!("/S{i} {} 0 R ", 4 + i)).collect();
+        let draws: String = (0..256).map(|i| format!("/S{i} Do ")).collect();
+        let mut objs = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(),
+            format!("<< {seconds}>>").into_bytes(),
+        ];
+        for _ in 0..256 {
+            objs.push(stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 1 1] {own}"), &content));
+        }
+        for _ in 0..256 {
+            objs.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject 3 0 R >>", draws.as_bytes()));
+        }
+        objs.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b""));
+        let xs: String = (0..1000).map(|i| format!("/X{i} 516 0 R ")).collect();
+        objs.push(format!("<< {xs}>>").into_bytes());
+        objs.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b"<< >> BDC EMC ".repeat(1000)));
+        let doc = pdf(objs);
+        let firsts: Dict = (0..255u32).map(|i| (format!("F{i}").into_bytes(), Object::Ref(ObjRef::new(260 + i, 0)))).collect();
+        let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(firsts))]);
+        let content: String = (0..255).map(|i| format!("/F{i} Do ")).collect();
+        let found = crate::interp::resource_ops(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &res, &[content.into_bytes()]).unwrap();
+        let label = &own[..own.len().min(60)];
+        assert_eq!(found.partial, partial, "{label}");
+        assert!(
+            found.ops.iter().all(|op| op.operands.len() <= 2 && op.operands.iter().all(|o| matches!(o, Object::Name(_) | Object::Null))),
+            "{label}"
+        );
     }
 }
 

@@ -88,6 +88,278 @@ fn a_page_pattern_a_form_paints_through_its_callers_names_stays() {
     assert_eq!(apply(&mut doc, None).unwrap().patterns_removed, 1, "the form's own /P0");
 }
 
+/// The page fills a box under the mark with `/P0`, and draws `/Fm` clear of the mark (its bounding
+/// box below it), filling a box, or stroking a line, with `/P0` through the page's names: the walk
+/// leaves the form as it is, and the pattern it still paints with stays, with resources of its own
+/// or without. Where the form's own resources give `/P0`, the page's goes.
+#[test]
+fn a_page_pattern_a_form_clear_of_the_marks_paints_stays() {
+    let run = |form_res: &str, extra: Vec<Vec<u8>>, paint: &[u8]| {
+        let form = stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 100] {form_res}"), paint);
+        let mut objs = vec![red_cell(), form];
+        objs.extend(extra);
+        let mut doc = one_page(b"/Pattern cs /P0 scn 20 140 100 30 re f 0 g /Fm Do", "/Pattern << /P0 7 0 R >> /XObject << /Fm 8 0 R >>", objs);
+        mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+        apply(&mut doc, None).map(|r| r.patterns_removed)
+    };
+    let fill = b"/Pattern cs /P0 scn 20 40 100 30 re f".as_slice();
+    let stroke = b"5 w /Pattern CS /P0 SCN 20 40 m 120 40 l S".as_slice();
+    for paint in [fill, stroke] {
+        for form_res in ["", "/Resources << >>", "/Resources << /ProcSet [/PDF] >>"] {
+            assert_eq!(run(form_res, vec![], paint), Ok(0), "form {form_res:?}");
+        }
+        assert_eq!(run("/Resources << /Pattern << /P0 9 0 R >> >>", vec![red_cell()], paint), Ok(1), "the form's own /P0");
+    }
+}
+
+/// `/G`, clear of the mark, draws `/H` through the names of what draws it. The page draws `/Fm`
+/// over the mark, which draws `/G` with its own `/H`, a form painting nothing; then the page draws
+/// `/G` itself, whose `/H` is then the page's, painting with `/P0`. `/G` is read for each, and the
+/// page's `/P0` stays.
+#[test]
+fn a_form_clear_of_the_marks_is_read_for_each_chain_of_forms_it_is_drawn_in() {
+    let clear = "/Type /XObject /Subtype /Form /BBox [0 0 300 100]";
+    let mut doc = one_page(
+        b"/Pattern cs /P0 scn 20 140 100 30 re f 0 g /Fm Do /G Do",
+        "/Pattern << /P0 7 0 R >> /XObject << /Fm 8 0 R /G 9 0 R /H 10 0 R >>",
+        vec![
+            red_cell(),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /G 9 0 R /H 11 0 R >> >>", b"/G Do"),
+            stream(clear, b"/H Do"),
+            stream(clear, b"/Pattern cs /P0 scn 20 40 100 30 re f"),
+            stream(clear, b"0 0 10 10 re f"),
+        ],
+    );
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    crate::interp::UNWALKED_READS.with(|c| c.set(0));
+    assert_eq!(apply(&mut doc, None).map(|r| r.patterns_removed), Ok(0));
+    assert_eq!(crate::interp::UNWALKED_READS.with(std::cell::Cell::get), 2);
+}
+
+/// The page draws `/Fm` over the mark, which draws `/G` clear of it through `/Fm`'s names: `/G` is
+/// left as it is, and the page's `/P0` it paints with stays.
+#[test]
+fn a_page_pattern_a_form_clear_of_the_marks_paints_inside_a_walked_form_stays() {
+    for fm_res in ["", "/Resources << /XObject << /G 9 0 R >> >>"] {
+        let fm = stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] {fm_res}"), b"/Pattern cs /P0 scn 20 140 100 30 re f 0 g /G Do");
+        let g = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100]", b"/Pattern cs /P0 scn 20 40 100 30 re f");
+        let mut doc = one_page(b"/Fm Do", "/Pattern << /P0 7 0 R >> /XObject << /Fm 8 0 R /G 9 0 R >>", vec![red_cell(), fm, g]);
+        mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+        assert_eq!(apply(&mut doc, None).map(|r| r.patterns_removed), Ok(0), "/Fm {fm_res:?}");
+    }
+}
+
+/// A form clear of the mark that can't all be read (a string left open) may paint with the page's
+/// `/P0`, which nothing else still paints with: the redaction is refused rather than drop it, for
+/// the form drawn by the page or inside a form the walk enters. Where the page paints with `/P0`
+/// beside the mark too, nothing is dropped, and the page drawing such a form with resources of its
+/// own is redacted.
+#[test]
+fn a_page_pattern_a_form_clear_of_the_marks_may_paint_past_what_is_read_refuses_the_redaction() {
+    let run = |form_res: &str, page: &[u8]| {
+        let form = stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 100] {form_res}"), b"( /Pattern cs /P0 scn 20 40 100 30 re f");
+        // Over the mark, so it is walked, but painting nothing there: it is left unchanged.
+        let over = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"/Fm Do");
+        let mut doc = one_page(page, "/Pattern << /P0 7 0 R >> /XObject << /Fm 8 0 R /Over 9 0 R >>", vec![red_cell(), form, over]);
+        mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+        apply(&mut doc, None)
+    };
+    let refused = |out: &Result<Report, RedactError>| matches!(out, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. })) if detail.contains("may paint with a pattern it would remove"));
+    for form_res in ["", "/Resources << >>"] {
+        let out = run(form_res, b"/Pattern cs /P0 scn 20 140 100 30 re f 0 g /Fm Do");
+        assert!(refused(&out), "{form_res:?}: {out:?}");
+        let out = run(form_res, b"/Pattern cs /P0 scn 20 140 100 30 re f 0 g /Over Do");
+        assert!(refused(&out), "inside /Over, {form_res:?}: {out:?}");
+    }
+    // With resources of its own: a form without, which the page draws, is read in full by the
+    // page's font cleanup, and refused there, as before.
+    let out = run("/Resources << >>", b"/Pattern cs /P0 scn 20 140 100 30 re f 20 240 100 30 re f 0 g /Fm Do");
+    assert_eq!(out.map(|r| r.patterns_removed), Ok(0), "painted beside the mark too");
+}
+
+/// A form clear of the mark drawn 1,000 times is read for its patterns once; on a page whose
+/// resources give no pattern, not at all. 4,096 forms clear of the mark are read, and the page's
+/// `/P0`, painted only under the mark, goes; with one more, which isn't read, which of the patterns
+/// that one paints with isn't known, and the redaction is refused rather than drop `/P0`.
+#[test]
+fn forms_clear_of_the_marks_are_read_for_their_patterns_once_and_up_to_4096() {
+    let reads = |page_res: &str, objs: Vec<Vec<u8>>, content: &[u8]| {
+        let mut doc = one_page(content, page_res, objs);
+        mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+        crate::interp::UNWALKED_READS.with(|c| c.set(0));
+        let out = apply(&mut doc, None).map(|r| r.patterns_removed);
+        (out, crate::interp::UNWALKED_READS.with(std::cell::Cell::get))
+    };
+    let form = || stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100]", b"0 0 10 10 re f");
+    let again = [b"/Pattern cs /P0 scn 20 140 100 30 re f 0 g ".as_slice(), &b"/Fm Do ".repeat(1000)].concat();
+    assert_eq!(reads("/Pattern << /P0 7 0 R >> /XObject << /Fm 8 0 R >>", vec![red_cell(), form()], &again), (Ok(1), 1));
+    let unpatterned = [b"0 g 20 140 100 30 re f ".as_slice(), &b"/Fm Do ".repeat(1000)].concat();
+    assert_eq!(reads("/XObject << /Fm 7 0 R >>", vec![form()], &unpatterned), (Ok(0), 0));
+    for (forms, refused) in [(4096, false), (4097, true)] {
+        let names: String = (0..forms).map(|i| format!("/F{i} {} 0 R ", 8 + i)).collect();
+        let draws: String = (0..forms).map(|i| format!("/F{i} Do ")).collect();
+        let mut objs = vec![red_cell()];
+        objs.extend((0..forms).map(|_| form()));
+        let content = format!("/Pattern cs /P0 scn 20 140 100 30 re f 0 g {draws}");
+        let (out, read) = reads(&format!("/Pattern << /P0 7 0 R >> /XObject << {names}>>"), objs, content.as_bytes());
+        assert_eq!((out.is_err(), read), (refused, 4096), "{forms} forms: {out:?}");
+        if !refused {
+            assert_eq!(out, Ok(1));
+        }
+    }
+}
+
+/// A form clear of the mark selecting `/P0` 10,000 times and `/Q` once is drawn 1,000 times by the
+/// page and 300 times inside a form over the mark: it is read once for each chain, and counts its
+/// two names once in each scope it is drawn in. The page's `/P1`, painted only under the mark, goes.
+#[test]
+fn a_form_clear_of_the_marks_counts_each_pattern_once_in_each_scope() {
+    let paints = [b"/Pattern cs ".as_slice(), &b"/P0 scn ".repeat(10_000), b"/Q scn 0 0 10 10 re f"].concat();
+    let draws = b"/Fm Do ".repeat(1000);
+    let over = [b"/Pattern cs /P1 scn 20 140 100 30 re f 0 g ".as_slice(), &draws[..300 * 7]].concat();
+    let page = [b"/Pattern cs /P1 scn 20 140 100 30 re f 0 g /Over Do ".as_slice(), &draws].concat();
+    let mut doc = one_page(
+        &page,
+        "/Pattern << /P0 7 0 R /P1 7 0 R >> /XObject << /Fm 8 0 R /Over 9 0 R >>",
+        vec![
+            red_cell(),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100]", &paints),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", &over),
+        ],
+    );
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    crate::interp::UNWALKED_READS.with(|c| c.set(0));
+    crate::interp::UNWALKED_NAMES.with(|c| c.set(0));
+    assert_eq!(apply(&mut doc, None).map(|r| r.patterns_removed), Ok(1));
+    assert_eq!(crate::interp::UNWALKED_READS.with(std::cell::Cell::get), 2);
+    assert_eq!(crate::interp::UNWALKED_NAMES.with(std::cell::Cell::get), 4);
+}
+
+/// A form clear of the mark selects one pattern whose name is 4,064 bytes long, counted as 4,096,
+/// drawn inside a form over the mark, a scope for each draw: 4,096 draws count 16 MiB, and the
+/// page's `/Q`, painted only under the mark, goes; with one more, past what a page counts, which
+/// patterns it paints with isn't known, and the redaction is refused rather than drop `/Q`.
+#[test]
+fn forms_clear_of_the_marks_count_up_to_16_mib_of_pattern_names_on_a_page() {
+    let long = "P".repeat(4064);
+    for (draws, refused) in [(4096, false), (4097, true)] {
+        let mut doc = one_page(
+            &[b"/Pattern cs /Q scn 20 140 100 30 re f 0 g ".as_slice(), &b"/Over Do ".repeat(draws)].concat(),
+            &format!("/Pattern << /{long} 7 0 R /Q 7 0 R >> /XObject << /Fm 8 0 R /Over 9 0 R >>"),
+            vec![
+                red_cell(),
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100]", format!("/Pattern cs /{long} scn 0 0 10 10 re f").as_bytes()),
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"/Fm Do"),
+            ],
+        );
+        mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+        let out = apply(&mut doc, None).map(|r| r.patterns_removed);
+        assert_eq!(out.is_err(), refused, "{draws} draws: {out:?}");
+        if !refused {
+            assert_eq!(out, Ok(1));
+        }
+    }
+}
+
+/// A page whose `/Pattern` gives 1,000 names draws 100 forms clear of the mark, each 1,000 times:
+/// whether the page's names give a pattern is looked up once, not for each form or draw, and not
+/// at all by the check that walks the page again after.
+#[test]
+fn forms_clear_of_the_marks_drawn_again_and_again_look_the_patterns_up_once() {
+    let names: String = (0..1000).map(|i| format!("/P{i} 7 0 R ")).collect();
+    let forms: String = (0..100).map(|i| format!("/F{i} {} 0 R ", 8 + i)).collect();
+    let draws: Vec<u8> = (0..100_000).flat_map(|i| format!("/F{} Do ", i % 100).into_bytes()).collect();
+    let mut objs = vec![red_cell()];
+    objs.extend((0..100).map(|_| stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100]", b"0 0 10 10 re f")));
+    let mut doc = one_page(
+        &[b"/Pattern cs /P0 scn 20 140 100 30 re f 0 g ".as_slice(), &draws].concat(),
+        &format!("/Pattern << {names}>> /XObject << {forms}>>"),
+        objs,
+    );
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    crate::interp::PATTERN_LOOKUPS.with(|c| c.set(0));
+    assert_eq!(apply(&mut doc, None).map(|r| r.patterns_removed), Ok(1));
+    assert_eq!(crate::interp::PATTERN_LOOKUPS.with(std::cell::Cell::get), 1);
+}
+
+/// 100 forms clear of the mark each draw `/F`, whose own resources give 1,000 XObject names: the
+/// reads of those forms for their patterns copy `/F`'s own names once between them, not once each.
+#[test]
+fn forms_clear_of_the_marks_share_what_their_reads_take_of_a_form() {
+    let own: String = (0..1000).map(|i| format!("/X{i} 9 0 R ")).collect();
+    let forms: String = (0..100).map(|i| format!("/G{i} {} 0 R ", 10 + i)).collect();
+    let draws: String = (0..100).map(|i| format!("/G{i} Do ")).collect();
+    let clear = "/Type /XObject /Subtype /Form /BBox [0 0 300 100]";
+    let mut objs = vec![red_cell(), stream(&format!("{clear} /Resources << /XObject << {own}>> >>"), b"0 0 10 10 re f"), stream(clear, b"")];
+    objs.extend((0..100).map(|_| stream(clear, b"/F Do")));
+    let mut doc = one_page(
+        format!("/Pattern cs /P0 scn 20 140 100 30 re f 0 g {draws}").as_bytes(),
+        &format!("/Pattern << /P0 7 0 R >> /XObject << /F 8 0 R {forms}>>"),
+        objs,
+    );
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    crate::interp::OWN_ENTRIES.with(|c| c.set(0));
+    assert_eq!(apply(&mut doc, None).map(|r| r.patterns_removed), Ok(1));
+    let copied = crate::interp::OWN_ENTRIES.with(std::cell::Cell::get);
+    assert!(copied < 10_000, "{copied}");
+}
+
+/// 1,000 forms with resources of their own, drawn by a form clear of the mark, each give the page's
+/// `/XObject` (object 7, 1,002 names) by reference, or all give one `/Resources` by reference whose
+/// `/XObject` holds the same names: the page's cleanups copy those names once each, not once for
+/// each form.
+#[test]
+fn forms_giving_one_dictionary_share_one_copy_of_it() {
+    let forms: String = (0..1000).map(|i| format!("/F{i} {} 0 R ", 11 + i)).collect();
+    let draws: String = (0..1000).map(|i| format!("/F{i} Do ")).collect();
+    for form_res in ["/Resources << /XObject 7 0 R >>", "/Resources 10 0 R"] {
+        let mut objs = vec![
+            format!("<< /Im 8 0 R /U 9 0 R {forms}>>").into_bytes(),
+            stream("/Type /XObject /Subtype /Image /Width 6 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"SECRET_IMAGE_BYTES"),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100]", draws.as_bytes()),
+            format!("<< /XObject << /Im 8 0 R /U 9 0 R {forms}>> >>").into_bytes(),
+        ];
+        objs.extend((0..1000).map(|_| stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 100] {form_res}"), b"")));
+        let mut doc = one_page(b"q 100 0 0 30 20 240 cm /Im Do Q /U Do", "/XObject 7 0 R", objs);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        crate::interp::OWN_ENTRIES.with(|c| c.set(0));
+        // What the redaction then decides is for other tests; this one weighs what it copies.
+        let _ = apply(&mut doc, None);
+        let copied = crate::interp::OWN_ENTRIES.with(std::cell::Cell::get);
+        assert!(copied < 10_020, "{form_res}: {copied}");
+    }
+}
+
+/// 4,096 forms clear of the mark each draw `/H`, which selects 1,000 patterns: their reads count
+/// those names until 16 MiB is passed, keeping no more than that, then no more are read, and the
+/// redaction is refused rather than drop the page's `/P0`.
+#[test]
+fn forms_clear_of_the_marks_stop_being_read_once_16_mib_of_names_is_passed() {
+    let selects: String = (0..1000).map(|i| format!("/N{i} scn ")).collect();
+    let forms: String = (0..4096).map(|i| format!("/F{i} {} 0 R ", 9 + i)).collect();
+    let draws: String = (0..4096).map(|i| format!("/F{i} Do ")).collect();
+    let clear = "/Type /XObject /Subtype /Form /BBox [0 0 300 100]";
+    let mut objs = vec![red_cell(), stream(clear, format!("/Pattern cs {selects}0 0 10 10 re f").as_bytes())];
+    objs.extend((0..4096).map(|_| stream(clear, b"/H Do")));
+    let mut doc = one_page(
+        format!("/Pattern cs /P0 scn 20 140 100 30 re f 0 g {draws}").as_bytes(),
+        &format!("/Pattern << /P0 7 0 R >> /XObject << /H 8 0 R {forms}>>"),
+        objs,
+    );
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    crate::interp::UNWALKED_READS.with(|c| c.set(0));
+    crate::interp::UNWALKED_HELD.with(|c| c.set(0));
+    let out = apply(&mut doc, None);
+    assert!(
+        matches!(&out, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. })) if detail.contains("may paint with a pattern it would remove")),
+        "{out:?}"
+    );
+    let reads = crate::interp::UNWALKED_READS.with(std::cell::Cell::get);
+    assert!(reads < 1000, "{reads}");
+    let held = crate::interp::UNWALKED_HELD.with(std::cell::Cell::get);
+    assert!(held <= 16 << 20, "{held}");
+}
+
 /// A page whose form shows `SECRET` with a font only the page's resources give, 20 points a glyph
 /// at 10 points: `T`, the sixth, lies at x 120 to 140.
 fn wide_text_through_a_form() -> Document {
@@ -1440,6 +1712,35 @@ fn an_image_a_page_sharing_the_resources_may_draw_past_what_is_read_refuses_the_
     }
 }
 
+/// Two pages share the `/Pages` node's resources, and the second draws `/Fa`, whose own resources
+/// give `/Fa` again, which it draws inside itself, or give `/Fb`, which draws `/Fa` back: the check
+/// of what the second page still draws reads such a form to the depth limit, can't tell, and
+/// refuses unlinking the first page's `/Im` (malformed: the renderer draws no form inside itself,
+/// but whether a form is inside itself depends on the way to it, and the check reads a form once
+/// for each scope, whatever the way).
+#[test]
+fn a_form_drawing_itself_on_a_page_sharing_the_resources_refuses_the_unlink() {
+    for fa_gives in ["/Fa 3 0 R", "/Fa 9 0 R"] {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [6 0 R 7 0 R] /Count 2 /Resources << /XObject << /Im 5 0 R /Fa 3 0 R >> >> >>".to_vec(),
+            stream(
+                &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 100] /Resources << /XObject << {fa_gives} >> >>"),
+                b"/Fa Do 0 0 10 10 re f",
+            ),
+            stream("", b"q 100 0 0 30 20 240 cm /Im Do Q"),
+            stream("/Type /XObject /Subtype /Image /Width 6 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"SECRET_IMAGE_BYTES"),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 8 0 R >>".to_vec(),
+            stream("", b"/Fa Do"),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100] /Resources << /XObject << /Fa 3 0 R >> >>", b"/Fa Do"),
+        ]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        assert!(matches!(apply(&mut doc, Some(&[0])), Err(RedactError::Residue(1))), "{fa_gives}");
+        assert!(full_save_holds(&doc, b"SECRET_IMAGE_BYTES"), "{fa_gives}");
+    }
+}
+
 /// A form the redaction rewrites draws a form beside the mark that can't all be read, which may draw
 /// `/X` through the rewritten form's names: the rewritten form's cleanup refuses the redaction
 /// rather than drop `/X`. The page draws the form again away from the mark, so its own cleanup keeps
@@ -1463,6 +1764,28 @@ fn an_image_a_nested_form_may_draw_past_what_is_read_refuses_the_redaction() {
     assert!(holds);
     let (out, holds) = run(b"");
     assert_eq!((out.map(|r| r.glyphs), holds), (Ok(6), true), "read in full");
+}
+
+/// The page draws its image under the mark, and beside it `/A`, whose own `/Im` is a form drawing
+/// nothing; `/A` draws `/B`, whose own resources give nothing, so `/B`'s `/Im` is `/A`'s: nothing
+/// else draws the page's, and its bytes leave the file. Drawn by the page, `/B`'s `/Im` is the
+/// page's, and it stays, also where the page draws `/A` first: `/B`, read once, is taken through
+/// the names of each form on the way to it.
+#[test]
+fn an_image_a_form_draws_through_a_form_giving_its_name_isnt_the_pages() {
+    let run = |content: &[u8]| {
+        let image = stream("/Type /XObject /Subtype /Image /Width 6 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"SECRET_IMAGE_BYTES");
+        let a = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100] /Resources << /XObject << /Im 9 0 R /B 10 0 R >> >>", b"/B Do");
+        let empty = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"");
+        let b = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100] /Resources << >>", b"q 100 0 0 30 20 20 cm /Im Do Q");
+        let mut doc = one_page(content, "/XObject << /Im 7 0 R /A 8 0 R /B 10 0 R >>", vec![image, a, empty, b]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        (report.images_removed, full_save_holds(&doc, b"SECRET_IMAGE_BYTES"))
+    };
+    assert_eq!(run(b"q 100 0 0 30 20 240 cm /Im Do Q /A Do"), (1, false));
+    assert_eq!(run(b"q 100 0 0 30 20 240 cm /Im Do Q /B Do"), (1, true));
+    assert_eq!(run(b"q 100 0 0 30 20 240 cm /Im Do Q /A Do /B Do"), (1, true));
 }
 
 /// A form the redaction rewrites draws, through its own `/XObject`, a form beside the mark whose
@@ -1539,8 +1862,9 @@ fn forms_drawing_themselves_open_a_scope_each() {
         assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
         assert!(full_save_holds(&doc, b"SECRET_IMAGE_BYTES"));
         let forms = if fb.is_empty() { 1 } else { 2 };
-        // The page's XObject and font cleanups each open one scope for each form.
-        assert_eq!(crate::interp::CLEANUP_SCOPES.with(std::cell::Cell::get), 2 * forms);
+        // The page's XObject cleanup opens one scope for each form; the font cleanup, with no Type 3
+        // font listed, doesn't read them.
+        assert_eq!(crate::interp::CLEANUP_SCOPES.with(std::cell::Cell::get), forms);
     }
 }
 
@@ -1557,9 +1881,45 @@ fn a_form_drawing_itself_leaves_the_cleanups_whole() {
     assert!(!full_save_holds(&doc, b"SECRET_IMAGE_BYTES"));
 }
 
+/// The page draws `/W` over the mark 64 times, and each draw, rewritten, draws `/S`, a form with
+/// resources of its own of 100,000 operators: the cleanups of the rewritten forms read `/S` within
+/// one allowance and 2,000,000 operators for the page between them, not afresh for each.
+#[test]
+fn a_rewritten_forms_cleanups_read_forms_with_resources_within_one_allowance_a_page() {
+    let w = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> /XObject << /S 8 0 R >> >>",
+        b"BT /F1 10 Tf 20 250 Td (SECRET) Tj ET /S Do",
+    );
+    let s = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100] /Resources << /ProcSet [/PDF] >>", b"n ".repeat(100_000));
+    let mut doc = one_page(&b"/W Do ".repeat(64), "/XObject << /W 7 0 R >>", vec![w, s]);
+    mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+    crate::interp::SCOPED_OPS_READ.with(|c| c.set(0));
+    assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(64 * 6));
+    let read = crate::interp::SCOPED_OPS_READ.with(std::cell::Cell::get);
+    assert!(read <= 2_000_001, "{read}");
+}
+
+/// The same, `/S` setting a graphics state its own resources don't give 100,000 times: read once,
+/// it is taken again for each rewritten `/W` at what it keeps, so the page's 2,000,000 operators run
+/// out, and the redaction is refused rather than drop `/W`, which `/S` may then draw.
+#[test]
+fn a_form_taken_again_and_again_costs_what_it_keeps() {
+    let w = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> /XObject << /S 8 0 R >> >>",
+        b"BT /F1 10 Tf 20 250 Td (SECRET) Tj ET /S Do",
+    );
+    let s = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100] /Resources << /ProcSet [/PDF] >>", b"/a gs ".repeat(100_000));
+    let mut doc = one_page(&b"/W Do ".repeat(64), "/XObject << /W 7 0 R >>", vec![w, s]);
+    mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+    crate::interp::SCOPED_OPS_READ.with(|c| c.set(0));
+    let out = apply(&mut doc, None);
+    assert!(refused_past_what_is_read(&out), "{out:?}");
+    assert_eq!(crate::interp::SCOPED_OPS_READ.with(std::cell::Cell::get), 100_000);
+}
+
 /// Sixty forms beside the mark, each with resources of its own giving the next: the cleanups follow
-/// the chain no deeper than the walk follows forms, opening 50 scopes in each of the page's XObject
-/// and font cleanups.
+/// the chain no deeper than the walk follows forms, opening 50 scopes in the page's XObject cleanup
+/// (the font cleanup, with no Type 3 font listed, doesn't read them).
 #[test]
 fn a_chain_of_forms_is_followed_no_deeper_than_the_walk() {
     let image = stream("/Type /XObject /Subtype /Image /Width 6 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"SECRET_IMAGE_BYTES");
@@ -1572,5 +1932,5 @@ fn a_chain_of_forms_is_followed_no_deeper_than_the_walk() {
     mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
     crate::interp::CLEANUP_SCOPES.with(|c| c.set(0));
     assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
-    assert_eq!(crate::interp::CLEANUP_SCOPES.with(std::cell::Cell::get), 2 * crate::interp::MAX_DEPTH);
+    assert_eq!(crate::interp::CLEANUP_SCOPES.with(std::cell::Cell::get), crate::interp::MAX_DEPTH);
 }

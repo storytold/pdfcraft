@@ -686,10 +686,12 @@ fn is_type3(doc: &Document, f: &Object) -> bool {
 /// content no longer draws any text using that font name. `page` is the page's dictionary when
 /// `res` are a page's resources. What it reads is charged to `budget`, what is left of the page's
 /// allowance, when the resources list a Type 3 font, and otherwise to an allowance of a page of its
-/// own (below).
+/// own (below); forms with resources of their own to `scoped`, which the reads made for the page
+/// share, and without a Type 3 font they aren't read.
 pub(crate) fn prune_type3_from_resources(
     doc: &Document,
     budget: &mut pdfcraft_cos::DecodeBudget,
+    scoped: &mut crate::interp::ScopedReads,
     res: &mut Dict,
     content: &[Vec<u8>],
     page: Option<&Dict>,
@@ -709,7 +711,14 @@ pub(crate) fn prune_type3_from_resources(
     // nothing about the fonts.
     let type3 = fonts.iter().any(|(_, f)| is_type3(doc, f));
     let mut own = pdfcraft_cos::DecodeBudget::page();
-    let read = crate::interp::resource_ops(doc, if type3 { &mut *budget } else { &mut own }, res, content)?;
+    // Without a Type 3 font nothing is removed, so forms with resources of their own, which a
+    // partial read only marks, aren't read either.
+    let mut none = crate::interp::ScopedReads::spent();
+    let read = if type3 {
+        crate::interp::resource_ops_with(doc, budget, scoped, res, content)?
+    } else {
+        crate::interp::resource_ops_with(doc, &mut own, &mut none, res, content)?
+    };
     let (mut ops, mut partial) = (read.ops, read.partial);
     // So do those of a page's annotation appearances, and of soft mask groups, without resources of
     // their own. They are read only when there is a Type 3 font to keep, so other files are not
@@ -723,7 +732,7 @@ pub(crate) fn prune_type3_from_resources(
             for r in resourceless_appearances(doc, page) {
                 let Object::Stream(s) = &*doc.get(r) else { continue };
                 let data = budget.decode(&doc.with_direct_parms(s))?;
-                let more = crate::interp::resource_ops(doc, budget, res, std::slice::from_ref(&data))?;
+                let more = crate::interp::resource_ops_with(doc, budget, scoped, res, std::slice::from_ref(&data))?;
                 if ops.len().saturating_add(more.ops.len()) > 2_000_000 {
                     return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect annotation appearances".into() });
                 }

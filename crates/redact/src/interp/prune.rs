@@ -15,12 +15,19 @@ use super::{
 /// listed), the walk passes 2,000,000 operators, or the parser can't read all of such a form or of
 /// `content`; or, with a name to drop, a form with resources of its own wasn't all read.
 /// Corrupt data in such a form is read, tolerantly, up to the damage, which may be nothing.
-pub(crate) fn prune(doc: &Document, budget: &mut DecodeBudget, xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) -> Result<(), CosError> {
+pub(crate) fn prune(
+    doc: &Document,
+    budget: &mut DecodeBudget,
+    scoped: &mut ScopedReads,
+    xo: &mut Dict,
+    replaced: &[Vec<u8>],
+    content: &[Vec<u8>],
+) -> Result<(), CosError> {
     if replaced.is_empty() {
         return Ok(());
     }
     let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(xo.clone()))]);
-    let read = resource_ops(doc, budget, &res, content)?;
+    let read = resource_ops_with(doc, budget, scoped, &res, content)?;
     let drawn: HashSet<&[u8]> = read.ops.iter().filter(|op| op.is("Do")).filter_map(Op::last_name).collect();
     for n in replaced {
         if !drawn.contains(n.as_slice()) {
@@ -46,10 +53,10 @@ const MAX_SCOPE_LOOKUPS: usize = 1 << 20;
 /// however many names are asked about, and each distinct name is kept once. Look-ups in such a
 /// form's scope, and the entries of each own `/XObject` read, are charged to `lookups`, what is
 /// left of the operation's [`MAX_SCOPE_LOOKUPS`]; the rest are bounded by what the forms and
-/// `contents` draw, as before. The flag says whether
-/// some of what is drawn could not be read (a form that will not decode, bytes the parser can't
-/// read in one or in `contents`, nesting past the limit, more than 65,536 scopes, or no look-ups
-/// left), so a name missing from the set may still be drawn. Operators are read one at a time, since only the `Do`s matter: no stream's are held
+/// `contents` draw, as before. The flag says whether some of what is drawn could not be read (a
+/// form that will not decode, bytes the parser can't read in one or in `contents`, nesting past the
+/// limit, more than 65,536 scopes, or no look-ups left), so a name missing from the set may still
+/// be drawn. Operators are read one at a time, since only the `Do`s matter: no stream's are held
 /// whole.
 fn names_content_draws(doc: &Document, contents: &[Vec<Vec<u8>>], xo: &Dict, lookups: &mut usize, kinds: &mut Kinds) -> (HashSet<Vec<u8>>, bool) {
     // The scopes names are looked up in: each the XObject names a form's own resources give as
@@ -252,6 +259,10 @@ fn own_streams(
 thread_local! {
     /// How many forms [`names_content_draws`] has decoded.
     pub(crate) static SHARED_FORM_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many operators of forms with resources of their own [`resource_ops`] has read.
+    pub(crate) static SCOPED_OPS_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many entries of forms' own resources [`resource_ops`] has copied.
+    pub(crate) static OWN_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How many scopes [`names_content_draws`] has opened, beyond each call's first.
     pub(crate) static SHARED_SCOPES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How many scopes of forms with resources of their own [`resource_ops`] has opened.
@@ -691,35 +702,101 @@ pub(super) fn clip_out(rects: &[[f64; 4]], ctm: &Matrix, around: [f64; 4]) -> Op
 /// Operators are read one at a time, and of forms with resources of their own only those kept are
 /// held, so the walk stops at one past a limit rather than holding them all.
 pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict, content: &[Vec<u8>]) -> Result<Drawn, CosError> {
-    const MAX_OPS: usize = 2_000_000;
-    const MAX_SCOPES: usize = 1 << 16;
+    resource_ops_with(doc, budget, &mut ScopedReads::default(), res, content)
+}
+
+/// [`resource_ops`], its reads of forms with resources of their own spending `scoped`, which the
+/// reads made for one page share.
+pub(crate) fn resource_ops_with(
+    doc: &Document,
+    budget: &mut DecodeBudget,
+    scoped: &mut ScopedReads,
+    res: &Dict,
+    content: &[Vec<u8>],
+) -> Result<Drawn, CosError> {
     let joined = Pieces::join(content);
     let mut read = pdfcraft_content::ops(joined.data());
-    let mut ops: Vec<Op> = read.by_ref().take(MAX_OPS + 1).collect();
+    let ops: Vec<Op> = read.by_ref().take(MAX_OPS + 1).collect();
     // Under the limit the reader ran to the end, so `skipped` counts all of it.
     if read.skipped() > 0 || ops.len() > MAX_OPS {
         return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully read the content that uses these resources".into() });
     }
-    let xobjects = res_dict(doc, res, b"XObject");
+    resource_ops_from(doc, budget, scoped, &res_dict(doc, res, b"XObject"), ops)
+}
+
+/// What the reads of forms with resources of their own ([`resource_ops`]) spend between them where
+/// they share it, as the reads made for one page do: an allowance of a page and 2,000,000 of their
+/// operators, past which they are partial ([`Drawn::partial`]), and what is worked out of them.
+pub(crate) struct ScopedReads {
+    budget: DecodeBudget,
+    ops: usize,
+    cache: ReadCache,
+    /// Each such form read.
+    read: HashMap<ObjRef, Rc<FormRead>>,
+}
+
+impl Default for ScopedReads {
+    fn default() -> Self {
+        ScopedReads { budget: DecodeBudget::page(), ops: 0, cache: ReadCache::default(), read: HashMap::new() }
+    }
+}
+
+impl ScopedReads {
+    /// Nothing left: such forms aren't read, and a read that meets one is partial.
+    pub(crate) fn spent() -> Self {
+        ScopedReads { ops: MAX_OPS.saturating_add(1), ..ScopedReads::default() }
+    }
+}
+
+/// What [`resource_ops_from`] works out of the forms it reads, kept for the reads that share it
+/// ([`ScopedReads`]): each form's own resources, in the categories it looks names up in, each
+/// category copied once for however many forms give it the same way ([`CategoryGiven`]), and what
+/// the objects they give are.
+#[derive(Default)]
+struct ReadCache {
+    own_of: HashMap<ObjRef, Rc<OwnResources>>,
+    copies: HashMap<CategoryGiven, Rc<Dict>>,
+    kinds: Kinds,
+}
+
+/// How a form gives one of its own categories, so that forms giving it the same way share one copy:
+/// by the reference its entry holds, else inside the `/Resources` it gives by reference, else
+/// written in the form itself.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum CategoryGiven {
+    Entry(ObjRef),
+    Resources(ObjRef, Category),
+    Form(ObjRef, Category),
+}
+
+/// How many operators [`resource_ops`] reads: of the content and the forms without resources of
+/// their own that it draws, and, apart, of forms with resources of their own.
+const MAX_OPS: usize = 2_000_000;
+
+/// [`resource_ops_with`] from operators already read, `ops`, that draw through the XObject names
+/// `xobjects`.
+pub(crate) fn resource_ops_from(
+    doc: &Document,
+    budget: &mut DecodeBudget,
+    scoped: &mut ScopedReads,
+    xobjects: &Dict,
+    mut ops: Vec<Op>,
+) -> Result<Drawn, CosError> {
+    const MAX_SCOPES: usize = 1 << 16;
     // The scopes of forms with resources of their own: each the form's own names over its caller's
     // scope (`None`: `res`'s alone).
     let mut scopes: Vec<Scoped> = Vec::new();
     let mut scope_ids: HashMap<(Option<usize>, ObjRef), usize> = HashMap::new();
-    let mut own_of: HashMap<ObjRef, Rc<OwnResources>> = HashMap::new();
     // The XObjects drawn, each with the scope it is looked up in, to follow in turn.
     let mut draws: Vec<(Vec<u8>, Option<usize>)> =
         ops.iter().filter(|op| op.is("Do")).filter_map(|op| op.last_name()).map(|n| (n.to_vec(), None)).collect();
     let mut seen = HashSet::new();
-    let mut kinds = Kinds::new();
-    // What is spent on forms with resources of their own, and whether any is left.
-    let mut scoped_budget = DecodeBudget::page();
-    let mut scoped_ops = 0usize;
-    let mut scoped_open = true;
+    let cache = &mut scoped.cache;
     let mut partial = false;
     let mut cursor = 0;
     while let Some((name, scope)) = draws.get(cursor).cloned() {
         cursor += 1;
-        let entry = given_in(doc, &scopes, scope, Category::XObject, &name, &mut kinds).or_else(|| xobjects.get(&name).cloned());
+        let entry = given_in(doc, &scopes, scope, Category::XObject, &name, &mut cache.kinds).or_else(|| xobjects.get(&name).cloned());
         let Some(r) = entry.as_ref().and_then(Object::as_ref) else { continue };
         let obj = doc.get(r);
         let Object::Stream(s) = &*obj else { continue };
@@ -738,7 +815,10 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
         let page_properties = own.is_none();
         let child = match own {
             None => scope,
-            Some(_) if !scoped_open => continue,
+            Some(_) if scoped.ops > MAX_OPS => {
+                partial = true;
+                continue;
+            }
             Some(own) => match scope_ids.get(&(scope, r)) {
                 Some(&child) => Some(child),
                 // The renderer draws no form inside itself, and the forms on the way are followed no
@@ -750,7 +830,15 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
                     continue;
                 }
                 None => {
-                    let own = own_of.entry(r).or_insert_with(|| Rc::new(OwnResources::of(doc, own))).clone();
+                    let given = resources.and_then(Object::as_ref);
+                    let own = match cache.own_of.get(&r) {
+                        Some(own) => own.clone(),
+                        None => {
+                            let read = Rc::new(OwnResources::of(doc, own, given, r, &mut cache.copies));
+                            cache.own_of.insert(r, read.clone());
+                            read
+                        }
+                    };
                     let depth = scope.and_then(|i| scopes.get(i)).map_or(1, |s| s.depth + 1);
                     #[cfg(test)]
                     CLEANUP_SCOPES.with(|c| c.set(c.get() + 1));
@@ -783,31 +871,93 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
             }
             continue;
         }
-        let Ok(data) = scoped_budget.decode(&doc.with_direct_parms(s)) else {
-            partial = true;
-            continue;
+        // Read once for the reads that share `scoped`: what the form draws, and of its operators
+        // those its own resources don't give the name of (all, without resources of its own); each
+        // read then keeps those the forms on the way don't give either.
+        let read = match scoped.read.get(&r) {
+            Some(read) => {
+                // Taken again, it costs what it hands on.
+                scoped.ops = scoped.ops.saturating_add(read.weight);
+                if scoped.ops > MAX_OPS {
+                    partial = true;
+                    continue;
+                }
+                read.clone()
+            }
+            None => {
+                let mut read = FormRead::default();
+                match scoped.budget.decode(&doc.with_direct_parms(s)) {
+                    Err(_) => read.partial = true,
+                    Ok(data) => {
+                        let mut parsed = pdfcraft_content::ops(&data);
+                        for op in parsed.by_ref() {
+                            scoped.ops += 1;
+                            #[cfg(test)]
+                            SCOPED_OPS_READ.with(|c| c.set(c.get() + 1));
+                            if scoped.ops > MAX_OPS {
+                                read.partial = true;
+                                break;
+                            }
+                            if op.is("Do")
+                                && let Some(n) = op.last_name()
+                            {
+                                read.draws.push(n.to_vec());
+                            }
+                            let marks = page_properties && matches!(op.op.as_slice(), b"BDC" | b"DP");
+                            let own = child.and_then(|i| scopes.get(i)).filter(|_| !page_properties);
+                            if marks
+                                || Category::of(&op).is_some_and(|(category, name)| {
+                                    own.is_none_or(|own| own.own.gives(doc, category, name, &mut cache.kinds).is_none())
+                                })
+                            {
+                                read.kept.push(slim(op));
+                            }
+                        }
+                        read.partial |= parsed.skipped() > 0;
+                    }
+                }
+                read.draws.sort_unstable();
+                read.draws.dedup();
+                let names = |sum: usize, name: &[u8]| sum.saturating_add(name.len()).saturating_add(1);
+                let drawn = read.draws.iter().fold(1, |sum, name| names(sum, name));
+                read.weight =
+                    read.kept.iter().flat_map(|op| &op.operands).filter_map(Object::as_name).fold(drawn.saturating_add(read.kept.len()), names);
+                let read = Rc::new(read);
+                scoped.read.insert(r, read.clone());
+                read
+            }
         };
-        let mut read = pdfcraft_content::ops(&data);
-        for op in read.by_ref() {
-            scoped_ops += 1;
-            if scoped_ops > MAX_OPS {
-                scoped_open = false;
-                partial = true;
-                break;
-            }
-            if op.is("Do")
-                && let Some(n) = op.last_name()
-            {
-                draws.push((n.to_vec(), child));
-            }
+        partial |= read.partial;
+        draws.extend(read.draws.iter().map(|n| (n.clone(), child)));
+        for op in &read.kept {
             let marks = page_properties && matches!(op.op.as_slice(), b"BDC" | b"DP");
-            if marks || Category::of(&op).is_some_and(|(category, name)| given_in(doc, &scopes, child, category, name, &mut kinds).is_none()) {
-                ops.push(op);
+            if marks || Category::of(op).is_some_and(|(category, name)| given_in(doc, &scopes, child, category, name, &mut cache.kinds).is_none()) {
+                ops.push(op.clone());
             }
         }
-        partial |= read.skipped() > 0;
     }
     Ok(Drawn { ops, partial })
+}
+
+/// `op` as the cleanups read a kept operator: its keyword, and of its operands the last two, each
+/// where it is a name and as null otherwise (the last is the name most operators look up, the one
+/// before it a `Tf`'s font). The rest isn't read, so it isn't kept, nor handed on again.
+fn slim(op: Op) -> Op {
+    let from = op.operands.len().saturating_sub(2);
+    let operands = op.operands.into_iter().skip(from).map(|o| if matches!(o, Object::Name(_)) { o } else { Object::Null }).collect();
+    Op { operands, inline: None, ..op }
+}
+
+/// What reading a form with resources of its own, or one drawn inside such a form, gave: the names
+/// it draws, each once, the operators that may look a name up past it ([`resource_ops`]) as
+/// [`slim`] keeps them, whether it wasn't all read, and what taking it again costs of [`MAX_OPS`]:
+/// one for each operator, one for each name with its bytes, and one.
+#[derive(Default)]
+struct FormRead {
+    draws: Vec<Vec<u8>>,
+    kept: Vec<Op>,
+    partial: bool,
+    weight: usize,
 }
 
 /// What content draws with a resource dictionary ([`resource_ops`]).
@@ -834,7 +984,7 @@ pub(crate) fn may_remove(partial: bool) -> Result<(), CosError> {
 
 /// The resource categories a form looks a name up in its caller's for, as [`resource_ops`] reads
 /// operators: the walk's ([`super::COPIED`]).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Category {
     XObject,
     Font,
@@ -858,19 +1008,37 @@ impl Category {
 
 /// A form's own resources, in the categories it may look a name up in its caller's for.
 struct OwnResources {
-    xobject: Dict,
-    font: Dict,
-    extgstate: Dict,
-    pattern: Dict,
+    xobject: Rc<Dict>,
+    font: Rc<Dict>,
+    extgstate: Rc<Dict>,
+    pattern: Rc<Dict>,
 }
 
 impl OwnResources {
-    fn of(doc: &Document, own: &Dict) -> Self {
+    /// The categories of `own`, the resources of the form `form`, which gives them by reference
+    /// `given` if it does: each copied once into `copies` for all the forms that give it the same way.
+    fn of(doc: &Document, own: &Dict, given: Option<ObjRef>, form: ObjRef, copies: &mut HashMap<CategoryGiven, Rc<Dict>>) -> Self {
+        let mut copy = |category: Category, key: &[u8]| {
+            let how = match (own.get(key), given) {
+                (Some(Object::Ref(entry)), _) => CategoryGiven::Entry(*entry),
+                (_, Some(resources)) => CategoryGiven::Resources(resources, category),
+                (_, None) => CategoryGiven::Form(form, category),
+            };
+            copies
+                .entry(how)
+                .or_insert_with(|| {
+                    let copied = res_dict(doc, own, key);
+                    #[cfg(test)]
+                    OWN_ENTRIES.with(|c| c.set(c.get() + copied.len()));
+                    Rc::new(copied)
+                })
+                .clone()
+        };
         OwnResources {
-            xobject: res_dict(doc, own, b"XObject"),
-            font: res_dict(doc, own, b"Font"),
-            extgstate: res_dict(doc, own, b"ExtGState"),
-            pattern: res_dict(doc, own, b"Pattern"),
+            xobject: copy(Category::XObject, b"XObject"),
+            font: copy(Category::Font, b"Font"),
+            extgstate: copy(Category::ExtGState, b"ExtGState"),
+            pattern: copy(Category::Pattern, b"Pattern"),
         }
     }
 
@@ -930,13 +1098,19 @@ fn given_in(doc: &Document, scopes: &[Scoped], scope: Option<usize>, category: C
     None
 }
 
-pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<Vec<Object>, CosError> {
+pub(crate) fn prune_properties(
+    doc: &Document,
+    budget: &mut DecodeBudget,
+    scoped: &mut ScopedReads,
+    res: &mut Dict,
+    content: &[Vec<u8>],
+) -> Result<Vec<Object>, CosError> {
     let mut properties = res_dict(doc, res, b"Properties");
     if properties.is_empty() {
         return Ok(Vec::new());
     }
     let mut retired = Vec::new();
-    let read = resource_ops(doc, budget, res, content)?;
+    let read = resource_ops_with(doc, budget, scoped, res, content)?;
     let names: Vec<Vec<u8>> = properties.iter().map(|(n, _)| n.to_vec()).collect();
     for name in names {
         if !read.ops.iter().any(|op| matches!(op.op.as_slice(), b"BDC" | b"DP") && op.last_name() == Some(&name)) {
@@ -954,8 +1128,14 @@ pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &
     Ok(retired)
 }
 
-pub(super) fn prune_form_resources(doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<(), CosError> {
-    let read = resource_ops(doc, budget, res, content)?;
+pub(super) fn prune_form_resources(
+    doc: &Document,
+    budget: &mut DecodeBudget,
+    scoped: &mut ScopedReads,
+    res: &mut Dict,
+    content: &[Vec<u8>],
+) -> Result<(), CosError> {
+    let read = resource_ops_with(doc, budget, scoped, res, content)?;
     let mut xo = res_dict(doc, res, b"XObject");
     let names: Vec<Vec<u8>> = xo.iter().map(|(n, _)| n.to_vec()).collect();
     for name in names {
@@ -1011,9 +1191,11 @@ pub(super) fn extgstate_font(
 /// for [`unlink_pruned_patterns`].
 pub(crate) fn prune_patterns(doc: &Document, res: &mut Dict, seen: &[Vec<u8>], painted: &[Vec<u8>], pruned: &mut Vec<ObjRef>) -> usize {
     let Some(mut pat) = res.get(b"Pattern").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) else { return 0 };
+    // A set, so each name seen costs one look-up however many are painted.
+    let painted: HashSet<&[u8]> = painted.iter().map(Vec::as_slice).collect();
     let mut dropped = 0;
     for n in seen {
-        if !painted.contains(n)
+        if !painted.contains(n.as_slice())
             && let Some(value) = pat.get(n)
         {
             // Every object along the reference chain: a name can lead to a reference-valued

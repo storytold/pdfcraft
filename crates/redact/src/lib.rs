@@ -835,14 +835,15 @@ fn redact_page_content(
     let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
     let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     // What the walk leaves of the page's allowance, the cleanups below spend.
-    let (out, mut budget) = {
+    let (out, mut budget, mut scoped) = {
         let mut scope = Scope::new(rects, Mode::Apply, report, budget, images).with_removed_room(*removed_room);
         let out = process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY);
         scope.flush();
         removed_text.append(&mut scope.removed_text);
         *removed_cut |= scope.removed_cut;
         *removed_room = scope.removed_room;
-        (out, scope.into_budget())
+        let (budget, scoped) = scope.into_budgets();
+        (out, budget, scoped)
     };
     // Fail closed: the interpreter lays vertical-writing text out horizontally, so it cannot
     // tell whether those glyphs lie under a mark. Rather than report success and possibly
@@ -905,7 +906,7 @@ fn redact_page_content(
                     _ => Vec::new(),
                 })
                 .collect();
-            interp::prune(doc, &mut budget, &mut xo, &out.replaced, &page_content)?;
+            interp::prune(doc, &mut budget, &mut scoped, &mut xo, &out.replaced, &page_content)?;
             res.set(b"XObject".to_vec(), Object::Dict(xo));
         }
         let (_, cleaned_data) = page_streams(
@@ -921,9 +922,18 @@ fn redact_page_content(
         // its cell -- a content stream this pass does not enter -- cannot stay in the file.
         // A Type 3 glyph without resources paints with patterns nobody tracked: keep them all.
         let painted = if out.keeps_all_patterns { &out.patterns_seen } else { &out.patterns_painted };
-        report.patterns_removed += interp::prune_patterns(doc, &mut res, &out.patterns_seen, painted, pruned_patterns);
-        retired_properties.extend(interp::prune_properties(doc, &mut budget, &mut res, &cleaned_data)?);
-        type3::prune_type3_from_resources(doc, &mut budget, &mut res, &cleaned_data, Some(&page.dict))?;
+        let dropped = interp::prune_patterns(doc, &mut res, &out.patterns_seen, painted, pruned_patterns);
+        // A form left as it is may paint with a pattern dropped here, where it couldn't all be read.
+        if dropped > 0 && out.patterns_unknown {
+            return Err(pdfcraft_cos::CosError::Syntax {
+                offset: 0,
+                detail: "redaction could not fully read a form it leaves as it is that may paint with a pattern it would remove".into(),
+            }
+            .into());
+        }
+        report.patterns_removed += dropped;
+        retired_properties.extend(interp::prune_properties(doc, &mut budget, &mut scoped, &mut res, &cleaned_data)?);
+        type3::prune_type3_from_resources(doc, &mut budget, &mut scoped, &mut res, &cleaned_data, Some(&page.dict))?;
         doc.update_dict(page.obj, |d| {
             d.set(b"Contents".to_vec(), Object::Array(new_list));
             d.set(b"Resources".to_vec(), Object::Dict(res));
