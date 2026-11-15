@@ -32,7 +32,7 @@ pub(crate) fn needs_value(command: &str, name: &str, value: Option<&str>) -> Str
     }
 }
 
-/// Refuse unknown options and malformed confinement flags before any file is read.
+/// Refuse unknown options, missing values and malformed confinement flags before any file is read.
 pub(crate) fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Result<(), CliError> {
     if specs.iter().any(|spec| spec.name == "--root") {
         // `flag` searches every token, including another option's value. Match that lookup so
@@ -56,11 +56,12 @@ pub(crate) fn validate_options(command: &str, args: &[String], specs: &[OptionSp
             };
             // A file's name is not another option, which also closes the gap the walk left for
             // those: an unknown option in that value position was skipped along with it. Other
-            // values, missing or malformed, are left to the command, which reports them in its
-            // own terms (`text` and `extract` explain what a page value must be).
+            // supplied values are left to the command, which reports them in its own terms
+            // (`text` and `extract` explain what a page value must be).
             i += if spec.takes_value {
                 let value = args.get(i + 1).map(String::as_str);
-                if !can_be_path_value(spec.name, value) {
+                // A missing operand must not silently select the command's default value.
+                if value.is_none() || !can_be_path_value(spec.name, value) {
                     return Err(needs_value(command, spec.name, value).into());
                 }
                 2
