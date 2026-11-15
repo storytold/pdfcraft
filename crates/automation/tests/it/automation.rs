@@ -9293,6 +9293,13 @@ fn initial_view_through_tools() {
     let v = &r["initial_view"];
     assert_eq!((v["navigation"].as_str(), v["magnification"].as_str(), v["page"].as_u64()), (Some("Pages"), Some("Percent(150.0)"), Some(2)));
     assert_eq!((v["language"].as_str(), v["binding"].as_str()), (Some("en-GB"), Some("right")));
+    let before = r["initial_view"].clone();
+    let generation = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().edit_generation();
+    for page in [0, -1, i64::MIN] {
+        assert!(matches!(a.call("doc_initial_view", &json!({ "doc": doc, "page": page })), Err(ToolError::InvalidArgs(_))));
+        assert_eq!(ok(&mut a, "doc_initial_view", json!({ "doc": doc }))["initial_view"], before);
+        assert_eq!(a.session().get(pdfcraft_engine::DocId(doc)).unwrap().edit_generation(), generation);
+    }
     assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Change initial view");
     assert!(matches!(a.call("doc_initial_view", &json!({ "doc": doc, "layout": "spiral" })), Err(ToolError::InvalidArgs(_))));
     assert!(matches!(a.call("doc_initial_view", &json!({ "doc": doc, "page": 9 })), Err(ToolError::Failed(_))));
