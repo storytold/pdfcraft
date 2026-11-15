@@ -1548,6 +1548,13 @@ impl Color {
             .to_rgba(&self.components, self.opacity, false)
     }
 
+    /// PdfCraft patch (107): the colour's components as the content set them (`g`, `rg`, `k`,
+    /// `sc`/`scn`), before its colour space reads them: Copy with formatting compares a glyph's
+    /// paint with the colour an editor reads from the same operators.
+    pub fn components(&self) -> &[f32] {
+        &self.components
+    }
+
     /// PdfCraft patch (70): the colour as process ink tints `[C, M, Y, K]` (0 = no ink) and
     /// its opacity, for blending in a `DeviceCMYK` transparency group (ISO 32000-2 §11.3.4).
     ///

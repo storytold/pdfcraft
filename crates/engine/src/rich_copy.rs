@@ -147,11 +147,11 @@ impl crate::Document {
     /// recovered glyphs styled to blend in: every strict glyph keeps exactly the style Copy gives
     /// it (a selection with nothing recovered is [`Self::rich_copy`] of the same glyphs, in the
     /// layer's order: callers wanting Copy's copy byte for byte select the strict glyphs on the
-    /// strict layer and call [`Self::rich_copy`]); a recovered glyph
-    /// drawn in a reading block's run (its font and size, in the block or beside it on its line)
-    /// takes that block's style, colour included; any other takes its style as drawn, joining the
-    /// span before it when the two differ only by numeric noise ([`same_style`]). Refused when
-    /// the document does not allow copying.
+    /// strict layer and call [`Self::rich_copy`]); a recovered glyph drawn in a reading block's
+    /// run (its font, size and paint, in the block or beside it on its line) takes that block's
+    /// style, colour included; any other takes its style as drawn, joining the span before it
+    /// when the two differ only by numeric noise ([`same_style`]). Refused when the document
+    /// does not allow copying.
     pub fn rich_copy_formatted(&self, page: usize, text: &PageText, glyphs: &[usize], layer: Option<&RecoveredText>) -> Result<RichCopy, EditError> {
         let mut copy = self.rich_copy_formatted_within(page, text, glyphs, MAX_MATCH_STEPS, layer)?;
         copy.recovered = layer.is_some_and(|l| l.any_recovered(glyphs));
@@ -186,6 +186,10 @@ impl crate::Document {
         let mut last_style: Option<ClipStyle> = None;
         // The previous glyph's line, block and box, and whether it was a hyphen.
         let mut prev: Option<(usize, Option<usize>, [f32; 4], bool)> = None;
+        // The previous glyph's index: a word gap anywhere between it and the next glyph is a
+        // space, as in `PageText::text_of_glyphs` (a selection of recovered glyphs can leave out
+        // a strict glyph between two of them, and the gap before it).
+        let mut prev_index: Option<usize> = None;
         for &i in glyphs {
             let (Some(g), Some(&line)) = (text.glyphs.get(i), text.line_of.get(i)) else { continue };
             // A glyph past the copy's caps isn't copied, so its match can't leave the styles
@@ -210,7 +214,7 @@ impl crate::Document {
                     } else {
                         b.paragraph();
                     }
-                } else if text.space_before.get(i).copied().unwrap_or(false) {
+                } else if prev_index.is_some_and(|p| text.space_before.get(p.saturating_add(1)..=i).is_some_and(|gaps| gaps.contains(&true))) {
                     b.space();
                 }
             }
@@ -218,12 +222,12 @@ impl crate::Document {
             let own;
             let mut as_drawn = false;
             let style = match (layer.and_then(|l| l.style_of(i)), block) {
-                // A recovered glyph drawn in its block's font and size is in the block's run and
-                // takes the block's style, colour included: the block reads a CMYK or spot colour
-                // its own way, the drawn colour comes through the colour space.
+                // A recovered glyph drawn in its block's font, size and paint is in the block's
+                // run and takes the block's style, colour included: the block reads a CMYK or spot
+                // colour its own way, the drawn colour comes through the colour space.
                 (Some(d), Some(block)) if in_run(d, block) => &block.style,
                 (Some(d), block) => {
-                    // Outside every block, one beside it on its line in its font and size runs
+                    // Outside every block, one beside it on its line in its font, size and paint runs
                     // on to it (a word of recovered glyphs after the strict ones of its font);
                     // past the match steps that is left untested, and the styles incomplete.
                     let next_to = match block {
@@ -259,6 +263,7 @@ impl crate::Document {
                 last_style = Some(style.clone());
             }
             prev = Some((line, found, g.rect, g.text.ends_with('-')));
+            prev_index = Some(i);
         }
         Ok(finish(b, incomplete))
     }
@@ -290,9 +295,25 @@ impl crate::Document {
     }
 }
 
-/// Whether a recovered glyph drawn as `d` is in `block`'s run: the same font and size.
+/// Whether a recovered glyph drawn as `d` is in `block`'s run: the same font, size and paint.
+/// The paint is compared as the block reads it, from the colour operators' operands
+/// ([`pdfcraft_edit::text::fill_rgb`]), not as drawn: the drawn colour comes through the colour
+/// space (a CMYK profile, a spot colour's tint transform), so one paint can read as two colours,
+/// and two paints differ however close their drawn colours are.
 fn in_run(d: &pdfcraft_render::GlyphStyle, block: &StyledBlock) -> bool {
-    d.font.as_deref().is_some_and(|f| strip_subset_tag(f) == block.font) && same_size(f64::from(d.size), block.style.size)
+    d.font.as_deref().is_some_and(|f| strip_subset_tag(f) == block.font) && same_size(f64::from(d.size), block.style.size) && same_paint(d, block)
+}
+
+/// Whether a recovered glyph drawn as `d` has `block`'s paint, as the block reads a paint: a
+/// pattern reads as black.
+fn same_paint(d: &pdfcraft_render::GlyphStyle, block: &StyledBlock) -> bool {
+    let operands = d.fill.as_ref().map(pdfcraft_render::FillOperands::operands).unwrap_or_default();
+    let mut values = [0.0; 4];
+    for (v, o) in values.iter_mut().zip(operands) {
+        *v = f64::from(*o);
+    }
+    let paint = pdfcraft_edit::text::fill_rgb(values.get(..operands.len()).unwrap_or_default());
+    paint.iter().zip(block.style.color).all(|(x, y)| (x - y).abs() <= COLOUR_NOISE)
 }
 
 /// The nearest block on the line of a recovered glyph (box `rect`, drawn as `d`) whose run it
@@ -758,12 +779,17 @@ mod tests {
     /// each word placed after the last), in `paint`, each font a CFF program whose
     /// `/Differences` from code 1 are the names it shows, without `/ToUnicode`.
     fn mixed_line_page(fonts: &[LineFont<'_>], paint: &str) -> Vec<u8> {
+        mixed_line_page_with(fonts, paint, "")
+    }
+
+    /// [`mixed_line_page`] with more page resources (`/ColorSpace << … >>`).
+    fn mixed_line_page_with(fonts: &[LineFont<'_>], paint: &str, resources_extra: &str) -> Vec<u8> {
         const CFF: &[u8] = include_bytes!("../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
         let mut pdf = pdfcraft_testkit::Pdf::new()
             .obj("<< /Type /Catalog /Pages 2 0 R >>")
             .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 300] >>");
         let resources: String = (0..fonts.len()).map(|k| format!("/F{k} {} 0 R ", 5 + 3 * k)).collect();
-        pdf = pdf.obj(format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << {resources}>> >> >>"));
+        pdf = pdf.obj(format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << {resources}>> {resources_extra} >> >>"));
         let mut content = format!("BT {paint} 20 250 Td");
         for (k, f) in fonts.iter().enumerate() {
             content.push_str(&format!(" {} /F{k} {} Tf", f.paint, f.size));
@@ -970,6 +996,65 @@ mod tests {
         // The two words share one style (one span, or two alike): the block's, black.
         assert!(spans.iter().all(|s| s.style == spans[0].style), "the recovered word takes its block's style: {spans:#?}");
         assert_eq!(spans[0].style.color, [0.0, 0.0, 0.0]);
+    }
+
+    /// Review finding: a recovered word beside a block of its font and size but in another
+    /// paint keeps its own colour; the same paint set as a spot colour's tint (which the block
+    /// reads its own way, and the drawn glyph through the tint transform) still takes the
+    /// block's style, and so does a recovered glyph inside its block only when the paint is the
+    /// block's.
+    #[test]
+    fn a_recovered_word_in_another_paint_keeps_its_colour() {
+        let strict: &[&[&str]] = &[&["/P", "/l", "/a", "/n"]];
+        let recovered: &[&[&str]] = &[&["/C105", "/C110", "/C107"]];
+        let spot = "/ColorSpace << /CS0 [/Separation /Spot /DeviceCMYK << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 1 1 0] /N 1 >>] >>";
+        let copy = |word_paint: &str, page_paint: &str| {
+            let fonts = [
+                LineFont { base: "AdvTTSynthetic", flags: 32, descriptor: "", paint: "", size: 12.0, words: strict },
+                LineFont { base: "AdvTTSynthetic", flags: 32, descriptor: "", paint: word_paint, size: 12.0, words: recovered },
+            ];
+            let mut s = Session::new();
+            let id = s.open("paint.pdf", None, Arc::new(mixed_line_page_with(&fonts, page_paint, spot)), None).unwrap();
+            let doc = s.get(id).unwrap();
+            let layer = recovered_layer(&s, id).expect("recovered layer");
+            let all: Vec<usize> = (0..layer.text.glyphs.len()).collect();
+            let copy = doc.rich_copy_recovered(0, &layer, &all).unwrap();
+            let spans: Vec<(String, [f64; 3])> = copy.text.paragraphs.iter().flatten().map(|s| (s.text.trim().to_owned(), s.style.color)).collect();
+            spans
+        };
+        // Beside the block: red against black.
+        let beside = copy("30 0 Td 1 0 0 rg", "0 g");
+        assert_eq!(beside, [("Plan".to_owned(), [0.0, 0.0, 0.0]), ("ink".to_owned(), [1.0, 0.0, 0.0])], "{beside:?}");
+        // The same spot paint: the block's style, one span.
+        let same = copy("30 0 Td", "/CS0 cs 1 scn");
+        assert_eq!(same.len(), 1, "{same:?}");
+        assert_eq!(same[0].0.split_whitespace().collect::<Vec<_>>(), ["Plan", "ink"], "{same:?}");
+        // In the block (no gap): red against black still keeps its colour.
+        let inside = copy("1 0 0 rg", "0 g");
+        assert_eq!(inside.last().map(|s| s.1), Some([1.0, 0.0, 0.0]), "{inside:?}");
+        assert_eq!(inside.first().map(|s| s.1), Some([0.0, 0.0, 0.0]), "{inside:?}");
+    }
+
+    /// Review finding: a selection that leaves out a glyph keeps the word gap before it, as
+    /// plain copy of the same glyphs does (`PageText::text_of_glyphs`).
+    #[test]
+    fn a_word_gap_before_a_glyph_left_out_is_kept() {
+        let strict: &[&[&str]] = &[&["/P", "/l", "/a", "/n"]];
+        let recovered: &[&[&str]] = &[&["/C105", "/C110", "/C107"]];
+        let fonts = [
+            LineFont { base: "AdvTTSynthetic", flags: 32, descriptor: "", paint: "", size: 12.0, words: strict },
+            LineFont { base: "Othername", flags: 32, descriptor: "", paint: "", size: 12.0, words: recovered },
+        ];
+        let mut s = Session::new();
+        let id = s.open("gap.pdf", None, Arc::new(mixed_line_page(&fonts, "0 g")), None).unwrap();
+        let doc = s.get(id).unwrap();
+        let layer = recovered_layer(&s, id).expect("recovered layer");
+        assert_eq!(layer.text.plain_text(), "Plan ink");
+        // `i`, the glyph after the gap, left out.
+        let picked: Vec<usize> = (0..layer.text.glyphs.len()).filter(|&i| i != 4).collect();
+        let copy = doc.rich_copy_recovered(0, &layer, &picked).unwrap();
+        assert_eq!(copy.plain_text(), layer.text.text_of_glyphs(&picked));
+        assert_eq!(copy.plain_text(), "Plan nk");
     }
 
     /// Copy with formatting is Copy's copy plus the recovered glyphs: a selection with nothing

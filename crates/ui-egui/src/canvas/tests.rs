@@ -3517,8 +3517,30 @@ fn a_drag_continuing_after_the_recovered_layer_arrives_takes_everything_it_cross
     // The drag goes on to C (the layer's glyph 3), as `update_dragged_selection` moves it.
     let s = app.views[0].selection.as_mut().expect("a selection");
     let selection::Span::Run { anchor, .. } = s.span else { panic!("a run") };
-    s.set_run(anchor, 3);
+    s.set_run(anchor, 3, None);
     assert_eq!(app.views[0].selected_text().as_deref(), Some("ABC"));
+}
+
+/// A drag along one table row on a page with a recovered layer selects that row there too, as on
+/// the strict layer (#3669): plain Copy gives its strict cells tab-separated, not reading order's
+/// detour down the first column, the row takes the recovered glyph in it, and Copy with
+/// formatting copies plain text, as for a column.
+#[test]
+fn a_drag_along_a_table_row_on_a_recovered_layer_selects_the_row() {
+    // A table read column by column: "Name" over "Apple", then "Qty" over "12".
+    let cells = [("Name", 0.0, 0.0, 0), ("Apple", 0.0, 20.0, 1), ("Qty", 100.0, 0.0, 2), ("12", 100.0, 20.0, 3)];
+    let strict = layer_text(&cells);
+    let mut on_layer = cells.to_vec();
+    on_layer.push(("R", 130.0, 20.0, 4));
+    let mut app = app_with_layer(strict, layer_text(&on_layer), vec![Some(0), Some(1), Some(2), Some(3), None]);
+    app.views[0].select_layer_text(0, 1, 1);
+    let s = app.views[0].selection.as_mut().expect("a selection");
+    // The drag ends past "12", beside the recovered glyph's row.
+    s.set_run(1, 4, Some(145.0));
+    assert_eq!(app.views[0].selected_text().as_deref(), Some("Apple\t12"));
+    assert_eq!(app.views[0].selected_layer_glyphs().map(|(_, _, g)| g), Some(vec![1, 3, 4]));
+    assert!(app.views[0].selected_recovered().is_some_and(|(.., in_order)| !in_order), "rows copy plain text");
+    assert!(app.views[0].selected_glyphs().is_none(), "no rich copy of rows");
 }
 
 /// Review finding: Shift+click after `select_text` extends the run over every glyph up to the
@@ -3529,7 +3551,7 @@ fn shift_click_after_select_text_takes_everything_up_to_the_click() {
     let layer = layer_text(&[("X", 0.0, 0.0, 0), ("A", 10.0, 0.0, 0), ("B", 20.0, 0.0, 0), ("C", 30.0, 0.0, 0)]);
     let mut app = app_with_layer(strict, layer, vec![None, Some(0), Some(1), Some(2)]);
     app.views[0].select_text(0, 0, 0);
-    assert!(app.views[0].extend_selection(0, 3));
+    assert!(app.views[0].extend_selection(0, 3, None));
     assert_eq!(app.views[0].selected_text().as_deref(), Some("ABC"));
     assert_eq!(app.views[0].selected_layer_glyphs().map(|(_, _, g)| g), Some(vec![1, 2, 3]));
 }
@@ -3561,7 +3583,7 @@ fn only_select_all_grows_to_the_whole_recovered_layer() {
     app.views[0].select_text(0, 1, 0);
     app.views[0].move_selection_onto(0, &arrived);
     let span = app.views[0].selection.map(|s| s.span);
-    assert_eq!(span, Some(selection::Span::Run { anchor: 2, head: 1 }), "backward stays backward");
+    assert_eq!(span, Some(selection::Span::Run { anchor: 2, head: 1, head_x: None }), "backward stays backward");
 }
 
 /// Review finding: with nothing recovered selected, Copy with formatting is Copy, byte for byte,

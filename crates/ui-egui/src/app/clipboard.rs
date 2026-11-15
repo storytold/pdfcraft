@@ -349,7 +349,7 @@ impl PdfCraftApp {
     /// own plain text, both with the glyphs only the page's recovered layer reads, styled to
     /// blend in ([`pdfcraft_engine::Document::rich_copy_formatted`]); Copy never takes those.
     /// Where the HTML can't be written (the web build, the system clipboard off, a refused or
-    /// capped copy, a column selection) it copies its own plain text, uncapped. Select All of the
+    /// capped copy, a column selection or a table's rows) it copies its own plain text, uncapped. Select All of the
     /// document copies the plain text, as Copy does.
     pub(crate) fn copy_selected_text_with_formatting(&mut self, i: usize, ctx: &egui::Context) -> bool {
         let Some(v) = self.views.get(i) else { return false };
@@ -371,7 +371,7 @@ impl PdfCraftApp {
             let doc = self.session.get(id);
             let copy = match (&recovered, doc) {
                 (Some((page, layer, glyphs, true)), Some(doc)) => doc.rich_copy_recovered(*page, layer, glyphs).ok(),
-                // A column copies plain text only.
+                // A column and a table's rows copy plain text only.
                 (Some((.., false)), _) => None,
                 (None, Some(doc)) => {
                     self.views.get(i).and_then(DocView::selected_glyphs).and_then(|(page, layer, glyphs)| doc.rich_copy(page, &layer, &glyphs).ok())
@@ -389,7 +389,7 @@ impl PdfCraftApp {
         }
         // Its own plain text: the strict text when nothing recovered is selected, else the
         // selection's text on the recovered layer, recovered glyphs included, uncapped as the
-        // strict text is (also without a copy: a column).
+        // strict text is (also without a copy: a column, a table's rows).
         let layer_text =
             recovered.map(|(_, layer, glyphs, run)| if run { layer.text.text_of_glyphs(&glyphs) } else { layer.text.column_text(&glyphs) });
         let fallback = layer_text.filter(|text| !text.is_empty()).or(text);

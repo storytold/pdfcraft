@@ -1,8 +1,8 @@
 use super::layout::{Flow, LayoutDeadline, along_baseline, arrange_flow, compatible, continues, from_upright, to_upright, union, unrolled};
 use super::{
-    Affine, BezPath, BlendMode, ClipPath, Context, Device, Glyph, GlyphDrawMode, GlyphStyle, HashMap, Image, InterpreterCache, InterpreterSettings,
-    InterpreterWarning, PageText, Paint, PathDrawMode, Pdf, RecoveredText, Recovery, Rect, Shape, SoftMask, TextFilter, TextGlyph, TransformExt,
-    interpret_page,
+    Affine, BezPath, BlendMode, ClipPath, Context, Device, FillOperands, Glyph, GlyphDrawMode, GlyphStyle, HashMap, Image, InterpreterCache,
+    InterpreterSettings, InterpreterWarning, PageText, Paint, PathDrawMode, Pdf, RecoveredText, Recovery, Rect, Shape, SoftMask, TextFilter,
+    TextGlyph, TransformExt, interpret_page,
 };
 
 /// Largest sine of the angle between a glyph's writing direction and a flow's for the glyph to be
@@ -614,11 +614,11 @@ impl TextDevice {
             #[cfg(test)]
             REDRAW_TEXT_BYTES.with(|c| c.set(c.get() + text.len()));
             if text.chars().all(char::is_control) {
-                merged.push(MergedRun(range.clone()));
+                merged.push(MergedRun::new(range.clone(), run));
             } else {
                 match merge(run, text) {
                     Some(glyph) => {
-                        merged.push(MergedRun(range.clone()));
+                        merged.push(MergedRun::new(range.clone(), run));
                         self.glyphs.push(glyph);
                     }
                     None => {
@@ -633,14 +633,15 @@ impl TextDevice {
             if let Some(a) = at.last_mut() {
                 *a = self.glyphs.len();
             }
-            // Between two glyphs of a merged run: drawn inside the redraw. (A recovered glyph
-            // before its first or after its last strict glyph can't be told from its neighbours'
-            // and stays.)
+            // Between two glyphs of a merged run and drawn where the run is: drawn inside the
+            // redraw. (A recovered glyph before its first or after its last strict glyph can't
+            // be told from its neighbours' and stays, as does one drawn between them elsewhere
+            // on the page: other text the content draws in the middle of the redraw.)
             // Both are in content order (the runs disjoint), so one walk does it.
             let mut runs = merged.iter().peekable();
-            self.filled.retain(|(pos, _, _)| {
+            self.filled.retain(|(pos, drawn, _)| {
                 while runs.next_if(|r| r.end() <= *pos).is_some() {}
-                !runs.peek().is_some_and(|r| r.start() < *pos && *pos < r.end())
+                !runs.peek().is_some_and(|r| r.start() < *pos && *pos < r.end() && r.holds(&drawn.2.rect))
             });
             for (pos, _, _) in &mut self.filled {
                 *pos = at.get(*pos).copied().unwrap_or(self.glyphs.len());
@@ -705,12 +706,28 @@ impl TextDevice {
     }
 }
 
-/// A redraw run (old glyph indices) that took its replacement. Its ends are read through
-/// [`Self::start`] and [`Self::end`], which tests count, so the work spent walking the runs is
-/// measured whatever the walk.
-struct MergedRun(std::ops::Range<usize>);
+/// A redraw run (old glyph indices) that took its replacement, and the box its glyphs cover
+/// (`rect`s joined). Its ends are read through [`Self::start`] and [`Self::end`], which tests
+/// count, so the work spent walking the runs is measured whatever the walk.
+struct MergedRun(std::ops::Range<usize>, [f32; 4]);
 
 impl MergedRun {
+    fn new(range: std::ops::Range<usize>, run: &[Drawn]) -> Self {
+        let mut rects = run.iter().map(|g| g.2.rect);
+        let first = rects.next().unwrap_or_default();
+        let joined = rects.fold(first, |a, r| [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])]);
+        Self(range, joined)
+    }
+
+    /// Whether a glyph boxed by `rect` is drawn where the run is: its centre inside the run's
+    /// box, widened by the redraw tolerance of the box's height.
+    fn holds(&self, rect: &[f32; 4]) -> bool {
+        let b = &self.1;
+        let tol = redraw_tolerance(b);
+        let (cx, cy) = ((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0);
+        b[0] - tol <= cx && cx <= b[2] + tol && b[1] - tol <= cy && cy <= b[3] + tol
+    }
+
     fn start(&self) -> usize {
         #[cfg(test)]
         REDRAW_WALK_STEPS.with(|c| c.set(c.get() + 1));
@@ -891,15 +908,20 @@ impl<'a> Device<'a> for TextDevice {
                 // font size in view space, whichever way the text runs (in vertical writing the
                 // box's other side is the advance).
                 let size = (t * kurbo::Point::new(0.0, em.y1)).distance(t * kurbo::Point::new(0.0, em.y0)) as f32;
-                let color = match paint {
+                let (color, fill) = match paint {
                     Paint::Color(c) => {
                         let [r, g, b, _] = c.to_rgba().to_rgba8();
-                        [r, g, b]
+                        let operands = c.components();
+                        let mut values = [0.0; 4];
+                        for (v, o) in values.iter_mut().zip(operands) {
+                            *v = *o;
+                        }
+                        ([r, g, b], Some(FillOperands { values, count: operands.len() }))
                     }
-                    Paint::Pattern(_) => [0, 0, 0],
+                    Paint::Pattern(_) => ([0, 0, 0], None),
                 };
                 let size = if size.is_finite() { size } else { 0.0 };
-                let style = GlyphStyle { font: font_style.name, size, color, bold: font_style.bold, italic: font_style.italic };
+                let style = GlyphStyle { font: font_style.name, size, color, bold: font_style.bold, italic: font_style.italic, fill };
                 let r = (r, style);
                 if glyph.text.chars().all(char::is_control) {
                     // No strict text: only Copy with formatting's layer has the glyph.
@@ -984,10 +1006,14 @@ fn extract_page_with(
     recover: bool,
 ) -> Result<(PageText, Option<RecoveredText>), String> {
     // The rules that read the whole document's text need its survey before any of the page's
-    // fonts is decided: once per document, and not counted against the page's own time.
-    if recover && let Some(document) = &settings.recovery_document {
-        document.prepare(pdf, settings);
-    }
+    // fonts is decided: once per document, and not counted against the page's own time. A
+    // survey that panics leaves the document unprepared and costs the page only its recovered
+    // layer: the page is read without recovery, its strict text as a text request reads it.
+    let recover = recover
+        && settings
+            .recovery_document
+            .as_ref()
+            .is_none_or(|document| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| document.prepare(pdf, settings))).is_ok());
     let started = Started::now();
     let pages = pdf.pages();
     let p = pages.get(page).ok_or("the page could not be read")?;

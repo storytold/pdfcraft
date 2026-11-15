@@ -658,6 +658,22 @@ fn a_recovered_glyph_inside_an_actual_text_redraw_goes_with_it() {
     assert_eq!(recovered.map(|r| r.text.plain_text()), None);
 }
 
+/// Review finding: a recovered word drawn elsewhere on the page in the middle of an
+/// `/ActualText` redraw (between two of its strict glyphs in content order) is not part of the
+/// redraw and stays; the recovered glyph drawn where the redraw is still goes with it.
+#[test]
+fn a_recovered_word_drawn_elsewhere_inside_a_redraw_stays() {
+    let span = "/Span << /ActualText (Soc) >> BDC BT /F3 20 Tf 60 250 Td <010203> Tj ET EMC";
+    // The redraw: `S`, then the word `it` at another place, then `o` (recovered) and `c`.
+    let redraw = "BT /F3 20 Tf 60 250 Td <01> Tj ET BT /F3 20 Tf 300 600 Td <0405> Tj ET BT /F3 20 Tf 72 250 Td <0203> Tj ET";
+    let (strict, recovered, plain) = layers(&parse(page_of("/S /C111 /c /C105 /C116", &format!("{span} {redraw}"))));
+    assert_eq!(strict, plain);
+    assert_eq!(strict.plain_text(), "Soc");
+    let recovered = recovered.map(|r| r.text.plain_text()).unwrap_or_default();
+    assert!(recovered.contains("it"), "{recovered:?}");
+    assert_eq!(recovered.matches('o').count(), 1, "{recovered:?}");
+}
+
 /// Review finding: rule K replaces the strict text only in a font the descriptor marks
 /// Symbolic (and not Nonsymbolic). The same program and codes in a font marked Nonsymbolic keep
 /// their strict text, with nothing overridden.

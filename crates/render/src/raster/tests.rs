@@ -236,6 +236,29 @@ fn page_panic_retires_shared_generation_and_healthy_pages_use_private_parsers() 
     assert_eq!(pool.shared.parses.load(Ordering::Relaxed), before, "a failed page does not trigger repeated parsing");
 }
 
+/// Review finding: a panic in Copy with formatting's document survey, which runs before the
+/// page's own guarded render, doesn't take the worker with it: the request is answered and the
+/// worker answers the next one. A survey that panics every time (again when the page's own
+/// extraction runs it) costs the page only its recovered layer: the page keeps its strict text,
+/// the shared parser stays, and no request is marked as one that crashes the renderer.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_survey_panic_leaves_the_worker_running() {
+    let pool = RenderPool::new(Arc::new(ONE_PAGE.to_vec()), 1, RenderConfig::default());
+    pool.shared.recovery.panic_in_survey_for_tests();
+    pool.set_queue(vec![RenderRequest { kind: RequestKind::RecoveredText, scale: 1.0, ..Default::default() }]);
+    let page = receive_before_deadline(&pool);
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert!(page.text.is_some());
+    assert!(page.recovered.is_none());
+    assert!(lock(&pool.shared.stuck).is_empty());
+    assert!(pool.shared.parser.valid.load(Ordering::Acquire));
+    // The same worker answers the next request.
+    pool.set_queue(vec![RenderRequest { kind: RequestKind::RecoveredText, scale: 1.0, tag: 1, ..Default::default() }]);
+    assert!(receive_before_deadline(&pool).text.is_some());
+    assert_eq!(pool.threads(), 1);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn results_queued_before_invalidation_are_retried_privately() {

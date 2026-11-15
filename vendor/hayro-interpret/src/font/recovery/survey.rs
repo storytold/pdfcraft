@@ -4,7 +4,8 @@
 //! kind of font it counts ([`SURVEYED_KINDS`]), and counts only fonts of those kinds.
 //!
 //! The survey reads the content of the first [`SURVEY_PAGES`] pages and of the form XObjects
-//! they draw (nested up to [`MAX_FORM_DEPTH`] deep), follows `Tf` and counts every code each
+//! they draw (nested up to [`MAX_FORM_DEPTH`] deep), follows `Tf` (into the forms drawn, and
+//! saved and restored by `q` and `Q`, as the graphics state holds it) and counts every code each
 //! text-showing operator (`Tj`, `TJ`, `'`, `"`) shows in a font that may need it: a Type 0 font
 //! with an `Identity-H` or `Identity-V` encoding (two-byte codes that are CIDs, ISO 32000-2
 //! §9.7.6.2), no `/ToUnicode` stream, no Adobe character collection, and an embedded TrueType,
@@ -52,6 +53,9 @@ pub(crate) const SURVEY_PAGES: usize = 400;
 
 /// Deepest form XObject nesting the survey follows (a deeper form is skipped).
 const MAX_FORM_DEPTH: usize = 12;
+/// Most `q` saves of the surveyed font one content stream keeps open, as the interpreter keeps
+/// at most this many graphics states.
+const MAX_SAVED_FONTS: usize = 4096;
 
 /// Most content operators the survey reads across the document.
 const MAX_SURVEY_OPERATORS: u64 = 1 << 26;
@@ -90,6 +94,21 @@ fn glyph_cap() -> u64 {
         return cap;
     }
     MAX_SURVEY_GLYPHS
+}
+
+#[cfg(feature = "test-counters")]
+thread_local! {
+    /// A smaller [`MAX_SURVEY_BYTES`] for the surveys run on this thread (tests).
+    pub(crate) static BYTE_CAP: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// [`MAX_SURVEY_BYTES`], or a test's smaller cap.
+fn byte_cap() -> u64 {
+    #[cfg(feature = "test-counters")]
+    if let Some(cap) = BYTE_CAP.with(std::cell::Cell::get) {
+        return cap;
+    }
+    MAX_SURVEY_BYTES
 }
 
 /// How the program of a surveyed font is embedded, for grouping fonts (`/FontFile2`,
@@ -212,10 +231,28 @@ fn untagged_name(dict: &Dict<'_>) -> Vec<u8> {
     }
 }
 
-/// The decoded content of a page (its streams joined by a space), within what is left of
-/// [`MAX_SURVEY_BYTES`].
-fn page_content(page: &Dict<'_>, left: u64) -> Vec<u8> {
+/// The decoded data of `stream` when it fits in `left` bytes ([`MAX_SURVEY_BYTES`] less what
+/// the survey has read): `Ok(None)` when it can't be decoded, and [`Stop::OverCap`] when it
+/// decodes to more or may have been cut short. One byte past `left` is asked for; a filter of
+/// the chain that stops at that limit or at the decoders' own cap (`MAX_DECODED_STREAM`)
+/// returns what it has, so a stream that may be cut is not surveyed from its prefix.
+fn decoded_within_budget<'a>(
+    stream: &Stream<'a>,
+    left: u64,
+) -> Result<Option<std::borrow::Cow<'a, [u8]>>, Stop> {
     let left = usize::try_from(left).unwrap_or(usize::MAX);
+    let Ok((data, cut)) = stream.decoded_within_or_cut(left.saturating_add(1)) else {
+        return Ok(None);
+    };
+    if cut || data.len() > left {
+        return Err(Stop::OverCap);
+    }
+    Ok(Some(data))
+}
+
+/// The decoded content of a page (its streams joined by a space), or [`Stop::OverCap`] when
+/// it is more than what is left of [`MAX_SURVEY_BYTES`].
+fn page_content(page: &Dict<'_>, left: u64) -> Result<Vec<u8>, Stop> {
     let streams: Vec<Stream<'_>> = if let Some(stream) = page.get::<Stream<'_>>(CONTENTS) {
         vec![stream]
     } else if let Some(array) = page.get::<Array<'_>>(CONTENTS) {
@@ -225,16 +262,13 @@ fn page_content(page: &Dict<'_>, left: u64) -> Vec<u8> {
     };
     let mut out = Vec::new();
     for stream in streams {
-        let room = left.saturating_sub(out.len());
-        if room == 0 {
-            break;
-        }
-        if let Ok(data) = stream.decoded_within(room) {
+        let room = left.saturating_sub(u64::try_from(out.len()).unwrap_or(u64::MAX));
+        if let Some(data) = decoded_within_budget(&stream, room)? {
             out.extend_from_slice(&data);
             out.push(b' ');
         }
     }
-    out
+    Ok(out)
 }
 
 impl Survey<'_> {
@@ -313,16 +347,24 @@ impl Survey<'_> {
         Ok(())
     }
 
-    /// Read one content stream with `resources`; `chain` holds the forms being drawn (a form
-    /// that draws itself is not entered again).
+    /// Read one content stream with `resources`, starting in `inherited`, the font selected where
+    /// it is drawn (a form inherits the graphics state, the text state's font included); `chain`
+    /// holds the forms being drawn (a form that draws itself is not entered again). `q` and `Q`
+    /// save and restore the font, as they do the graphics state, up to [`MAX_SAVED_FONTS`]
+    /// saves: past it, as in the interpreter, a `q` saves nothing and its `Q` restores nothing;
+    /// a `Q` with no `q` of its stream to match restores nothing.
     fn content(
         &mut self,
         data: &[u8],
         resources: &Resources<'_>,
         depth: usize,
         chain: &mut Vec<ObjectIdentifier>,
+        inherited: Option<usize>,
     ) -> Result<(), Stop> {
-        let mut font: Option<usize> = None;
+        let mut font: Option<usize> = inherited;
+        let mut saved: Vec<Option<usize>> = Vec::new();
+        // `q`s past the cap, each matched by a `Q` that restores nothing.
+        let mut unsaved: u64 = 0;
         let mut ops = TypedIter::new(data);
         while let Some(op) = ops.next() {
             self.operators = self.operators.saturating_add(1);
@@ -333,6 +375,20 @@ impl Survey<'_> {
                 return Err(Stop::Cancelled);
             }
             match op {
+                TypedInstruction::SaveState(_) => {
+                    if unsaved > 0 || saved.len() >= MAX_SAVED_FONTS {
+                        unsaved = unsaved.saturating_add(1);
+                    } else {
+                        saved.push(font);
+                    }
+                }
+                TypedInstruction::RestoreState(_) => {
+                    if unsaved > 0 {
+                        unsaved -= 1;
+                    } else if let Some(restored) = saved.pop() {
+                        font = restored;
+                    }
+                }
                 TypedInstruction::TextFont(t) => {
                     font = match resources.get_font(&t.0) {
                         Some(dict) => self.font(&dict)?,
@@ -368,9 +424,8 @@ impl Survey<'_> {
                     if self.forms > MAX_SURVEY_FORMS {
                         return Err(Stop::OverCap);
                     }
-                    let left = MAX_SURVEY_BYTES.saturating_sub(self.bytes);
-                    let Ok(data) = form.decoded_within(usize::try_from(left).unwrap_or(usize::MAX))
-                    else {
+                    let left = byte_cap().saturating_sub(self.bytes);
+                    let Some(data) = decoded_within_budget(&form, left)? else {
                         continue;
                     };
                     self.read_bytes(data.len())?;
@@ -379,7 +434,7 @@ impl Survey<'_> {
                         resources.clone(),
                     );
                     chain.push(id);
-                    let read = self.content(&data, &inner, depth.saturating_add(1), chain);
+                    let read = self.content(&data, &inner, depth.saturating_add(1), chain, font);
                     chain.pop();
                     read?;
                 }
@@ -393,7 +448,7 @@ impl Survey<'_> {
         self.bytes = self
             .bytes
             .saturating_add(u64::try_from(n).unwrap_or(u64::MAX));
-        if self.bytes > MAX_SURVEY_BYTES {
+        if self.bytes > byte_cap() {
             return Err(Stop::OverCap);
         }
         Ok(())
@@ -405,9 +460,9 @@ impl Survey<'_> {
                 return Err(Stop::Cancelled);
             }
             count(Counter::SurveyPage);
-            let data = page_content(page.raw(), MAX_SURVEY_BYTES.saturating_sub(self.bytes));
+            let data = page_content(page.raw(), byte_cap().saturating_sub(self.bytes))?;
             self.read_bytes(data.len())?;
-            self.content(&data, page.resources(), 0, &mut Vec::new())?;
+            self.content(&data, page.resources(), 0, &mut Vec::new(), None)?;
         }
         Ok(())
     }
