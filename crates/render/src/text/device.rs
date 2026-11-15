@@ -214,8 +214,10 @@ thread_local! {
     pub(super) static REDRAW_TEXT_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Makes the recovery rules panic on this thread, to show the strict text survives them.
     pub(super) static PANIC_IN_RECOVERY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// How long the strict part of the pages read on this thread takes, in milliseconds, in
-    /// place of the clock.
+    /// Glyphs whose recovery rules were asked on this thread.
+    pub(super) static RECOVERY_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How long the pages read on this thread have taken since their extraction started, in
+    /// milliseconds, in place of the clock.
     pub(super) static STRICT_MILLIS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     /// How long the recovery rules take for each font of the pages read on this thread, in
     /// milliseconds, in place of the clock ([`RECOVERY_RULES_BUDGET`]).
@@ -683,6 +685,7 @@ impl TextDevice {
             let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 #[cfg(test)]
                 {
+                    RECOVERY_ASKED.with(|c| c.set(c.get().saturating_add(1)));
                     if PANIC_IN_RECOVERY.with(std::cell::Cell::get) {
                         panic!("recovery panics in this test");
                     }

@@ -161,6 +161,28 @@ fn a_page_slow_to_read_keeps_its_strict_text_and_skips_the_recovered_layout() {
     assert!(recovered.is_none(), "past the deadline the recovered layout is skipped");
 }
 
+/// Review on #6733: the deadline also holds while the page is interpreted. Once half the render
+/// pool's watchdog has passed since the extraction started, the recovery rules are not asked for
+/// the glyphs drawn after it, so recovering inside the interpretation can't push the page past
+/// the watchdog either; the page keeps its strict layer and has no recovered one.
+#[test]
+fn past_the_deadline_the_rules_are_not_asked_while_the_page_is_read() {
+    let pdf = parse(names_page("/C83 /C111 /C99", "ABCDEF+AdvTTSynthetic", true));
+    RECOVERY_ASKED.with(|c| c.set(0));
+    let (_, recovered, _) = layers(&pdf);
+    assert!(recovered.is_some(), "a quick page has its recovered layer");
+    assert!(RECOVERY_ASKED.with(std::cell::Cell::get) > 0, "and its glyphs were asked");
+    let millis = u64::try_from(RECOVERY_DEADLINE.as_millis()).unwrap_or(u64::MAX);
+    STRICT_MILLIS.with(|m| m.set(Some(millis)));
+    let _reset = Reset(|| STRICT_MILLIS.with(|m| m.set(None)));
+    RECOVERY_ASKED.with(|c| c.set(0));
+    let (strict, recovered, plain) = layers(&pdf);
+    assert_eq!(RECOVERY_ASKED.with(std::cell::Cell::get), 0, "past the deadline no glyph is asked");
+    assert_eq!(strict, plain);
+    assert_eq!(strict.plain_text(), "Hi");
+    assert!(recovered.is_none());
+}
+
 /// Runs its function when dropped, also while a failing test unwinds: resets a thread-local
 /// override so it can't leak into the next test on the thread.
 struct Reset(fn());

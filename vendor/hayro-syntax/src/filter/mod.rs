@@ -93,7 +93,7 @@ impl Filter {
     /// PdfCraft patch: `limit` is the most bytes the filter may produce (see `decode_limit`), and
     /// `rows` the `/Height` of the image whose samples it produces, when it is an image's last
     /// filter. Also returns whether Flate or LZW stopped at `limit` before their predictor was
-    /// undone (patch 47); the caller tells a cut from the output's length for the others.
+    /// undone (patch 55); the caller tells a cut from the output's length for the others.
     pub(crate) fn apply(
         &self,
         data: &[u8],
