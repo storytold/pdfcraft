@@ -79,6 +79,8 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
     let old_info = old.trailer().get(b"Info").and_then(Object::as_ref).map(|r| r.num);
     // The signed catalog's /AcroForm, when it is an object of its own.
     let old_form = old.root().and_then(|c| old.get(c).as_dict().and_then(|c| c.get(b"AcroForm").and_then(Object::as_ref))).map(|r| r.num);
+    // Its /Fields, when that is an array object of its own (#4817).
+    let old_fields = acroform(&old).and_then(|f| f.get(b"Fields").and_then(Object::as_ref)).map(|r| r.num);
     let signed_role = |num: u32| old_content.contains(&num) || signed_pages.contains(&num) || signed_resources.contains_key(&num);
     let (mut allowed, mut disallowed): (Vec<&'static str>, Vec<&'static str>) = (Vec::new(), Vec::new());
     if annots_unbounded {
@@ -132,6 +134,7 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         page_nodes: &page_nodes,
         kids_arrays: &kids_arrays,
         old_form,
+        old_fields,
         placed_annots: &placed_annots,
         annot_budget: &annot_budget,
         signed_resources: &signed_resources,
@@ -298,6 +301,7 @@ struct ChangedObjectClassifier<'a> {
     signed_resources: &'a HashMap<u32, bool>,
     old_info: Option<u32>,
     old_form: Option<u32>,
+    old_fields: Option<u32>,
     dss: &'a HashSet<u32>,
 }
 
@@ -313,6 +317,9 @@ impl ChangedObjectClassifier<'_> {
             // A signed page-tree node's /Kids array of its own lists the pages.
             Object::Array(_) if before.is_some() && self.kids_arrays.contains(&r.num) => Some(kind::PAGES),
             Object::Array(_) if self.is_signed_annotation_array(r, before) => self.annotation_array_change(new, before),
+            // The signed AcroForm's /Fields as an array object of its own: a writer that signs may
+            // append its field there and leave the AcroForm itself as it was (#4817).
+            Object::Array(_) if before.is_some() && self.old_fields == Some(r.num) => Some(fields_kind(self.doc, self.old, before, Some(new))),
             Object::Dict(dict) => self.dictionary_change(r, dict, before),
             Object::Stream(stream) => self.stream_change(r, stream, before),
             _ if before.is_none() => None,
@@ -647,15 +654,22 @@ fn acroform(doc: &Document) -> Option<Dict> {
 fn acroform_kind(doc: &Document, old: &Document, now: &Dict, before: Option<&Dict>) -> &'static str {
     let fallback = acroform(old).unwrap_or_default();
     let before = before.unwrap_or(&fallback);
-    // A field taken out of the form: no DocMDP permission covers dropping a signed field.
-    if lost_entries(doc, old, before.get(b"Fields"), now.get(b"Fields")) {
-        return kind::OTHER;
-    }
-    if !same_entries(now, before, &[b"Fields", b"SigFlags"]) {
+    let fields = fields_kind(doc, old, before.get(b"Fields"), now.get(b"Fields"));
+    if fields != kind::OTHER && !same_entries(now, before, &[b"Fields", b"SigFlags"]) {
         return kind::FORM_FILL;
     }
-    let old_fields = refs(old, before.get(b"Fields"));
-    let added: Vec<ObjRef> = refs(doc, now.get(b"Fields")).into_iter().filter(|r| !old_fields.contains(r)).collect();
+    fields
+}
+
+/// A change of the form's `/Fields` from `was` to `now`, inline or an array object of its own.
+/// A field taken out of the form is refused: no DocMDP permission covers dropping a signed field.
+/// Signature fields added are signing, any other field added is a form change.
+fn fields_kind(doc: &Document, old: &Document, was: Option<&Object>, now: Option<&Object>) -> &'static str {
+    if lost_entries(doc, old, was, now) {
+        return kind::OTHER;
+    }
+    let old_fields = refs(old, was);
+    let added: Vec<ObjRef> = refs(doc, now).into_iter().filter(|r| !old_fields.contains(r)).collect();
     if added.is_empty() || added_annots(doc, &added) == kind::SIGNATURE { kind::SIGNATURE } else { kind::FORM_FILL }
 }
 
@@ -972,6 +986,7 @@ mod tests {
             signed_resources: &resources,
             old_info: None,
             old_form: None,
+            old_fields: None,
             dss: &none,
         };
         classifier.page_change_kind(d, before)

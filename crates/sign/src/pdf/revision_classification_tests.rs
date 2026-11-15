@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use pdfcraft_cos::{Document, ObjRef, Object};
 
-use super::Modification;
 use super::changes::classify_changes;
+use super::{Modification, kind};
 
 /// One cross-reference row: an object written with header generation `.0` under row generation `.1`.
 enum Row<'a> {
@@ -396,4 +396,41 @@ fn a_widget_rect_saved_back_as_integers_is_a_form_fill() {
     assert_eq!(verdict(&filled, signed.open(), Some(2)), Modification::Allowed(vec![super::kind::FORM_FILL]));
     let moved = save(Some(20.5));
     assert_eq!(verdict(&moved, signed.open(), Some(2)), Modification::Disallowed(vec![super::kind::PAGE_CONTENT]));
+}
+
+/// The AcroForm's `/Fields` written as an array object of its own is judged as an inline one is
+/// (#4817). A signing tool may append its field there and leave the AcroForm as it was: that is
+/// signing, not "other changes", and an earlier signature stays intact. A field taken out of the
+/// array is still refused, and a text field added is a form change.
+#[test]
+fn a_fields_array_of_its_own_that_gains_a_signature_field_is_signing() {
+    const SIG_DICT: &str = "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached /ByteRange [0 0 0 0] /Contents <00> >>";
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [6 0 R]"))),
+        (4, Row::Obj(0, 0, &page(""))),
+        (5, Row::Obj(0, 0, "<< /Fields 8 0 R /SigFlags 3 >>")),
+        (6, Row::Obj(0, 0, "<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig1) /V 7 0 R /Rect [20 20 120 40] /P 3 0 R /F 4 >>")),
+        (7, Row::Obj(0, 0, SIG_DICT)),
+        (8, Row::Obj(0, 0, "[6 0 R]")),
+    ]);
+    let later = |fields: &str, field: &str| {
+        let page4 = page("/Annots [9 0 R]");
+        let mut rows = vec![(8, Row::Obj(0, 0, fields)), (4, Row::Obj(0, 0, &page4)), (9, Row::Obj(0, 0, field))];
+        // A signature field brings its signature dictionary.
+        if field.contains("/FT /Sig") {
+            rows.push((10, Row::Obj(0, 0, SIG_DICT)));
+        }
+        signed.clone().revision(&rows)
+    };
+    let signature = "<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig2) /V 10 0 R /Rect [20 60 120 80] /P 4 0 R /F 4 >>";
+    let text = "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 60 120 80] /P 4 0 R /F 4 >>";
+    assert_eq!(verdict(&later("[6 0 R 9 0 R]", signature).open(), signed.open(), None), Modification::Allowed(vec![kind::SIGNATURE]));
+    assert!(
+        matches!(verdict(&later("[9 0 R]", signature).open(), signed.open(), None), Modification::Disallowed(d) if d.contains(&kind::OTHER)),
+        "the signed field taken out of the form"
+    );
+    let added_text = verdict(&later("[6 0 R 9 0 R]", text).open(), signed.open(), None);
+    assert!(matches!(&added_text, Modification::Allowed(a) if a.contains(&kind::FORM_FILL) && !a.contains(&kind::SIGNATURE)), "{added_text:?}");
 }
