@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::fallback::{adopt_source_font, continues_font, same_paint};
 use super::interp::{Carry, Clip, Origin, Pen, Shown, TextState, Ts, clip_shows, clip_within, direction, interpret, region, to_frame, union};
-use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
+use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
 
 impl TextLine {
     /// The baseline's height in user space.
@@ -455,6 +455,9 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
     let mut cache = HashMap::new();
     let mut lines: Vec<TextLine> = Vec::new();
     let mut carry = Carry::new();
+    // The fonts the page names, for the space width each line joins within.
+    let fonts = res.get(b"Font").and_then(|f| doc.dict(f)).unwrap_or_default();
+    let mut spaces: HashMap<Vec<u8>, f64> = HashMap::new();
     // The streams are one stream in pieces (§7.8.2), split between any two tokens: parse them
     // joined, so an operator whose operands end one piece still has them.
     let pieces = joined(&content_streams(doc, &p.dict)?);
@@ -490,6 +493,11 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                             && same_paint(l, &s.state)
                     }))
                 && near
+                // Across text objects only a word space apart still reads as one line; table
+                // cells in their own text objects sit a column gutter apart (#7086). Shows in
+                // one text object keep the wider window they always joined within.
+                && (bt == s.bt
+                    || lines.last().is_some_and(|l| join_gap(l, &s, gap) <= word_window(doc, &fonts, &mut spaces, l, &s, pen.size)))
                 // An OCR layer is one text object over the whole scan: its words continue a line
                 // only across a word space, not across a table cell or a tab stop.
                 && (s.state.render_mode != 3 || (gap < pen.size * 0.6 && !invisible_apart))
@@ -575,6 +583,51 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
     // Lines of only spaces aren't editable text.
     lines.retain(|l| !l.text.trim().is_empty());
     Ok(lines)
+}
+
+/// The width of a space in `font` (a resource name in `fonts`), in ems: the line's own word
+/// space, which bounds how far apart two shows on one baseline may be and still read as one
+/// line. A font that encodes no space takes a third of an em, as wrapping measures it
+/// everywhere else. One entry per font the page names, so a hostile page stays bounded.
+fn space_em(doc: &Document, fonts: &Dict, cache: &mut HashMap<Vec<u8>, f64>, font: &[u8]) -> f64 {
+    if let Some(space) = cache.get(font) {
+        return *space;
+    }
+    let space = fonts
+        .get(font)
+        .and_then(|f| doc.dict(f))
+        .map(|d| Metrics::from_dict(doc, &d))
+        .and_then(|m| m.encode(" ").map(|b| m.codes(&b).iter().map(|(code, _)| m.width(*code)).sum::<f64>()))
+        .filter(|space| space.is_finite() && *space > 0.0)
+        .unwrap_or(0.33);
+    cache.insert(font.to_vec(), space);
+    space
+}
+
+/// How far apart `line` and the run `s` are along the baseline, ignoring padding spaces: the
+/// pen-to-pen `gap`, or the ink-to-ink gap when both sides draw ink on an upright baseline,
+/// whichever is wider. Padding spaces inside table cells shrink the pen's gap without moving
+/// the glyphs, which once read the cells as one word (#7086).
+fn join_gap(line: &TextLine, s: &Shown, gap: f64) -> f64 {
+    if !line.upright() {
+        return gap;
+    }
+    match (line.ink.iter().map(|b| b[2]).fold(f64::NEG_INFINITY, f64::max), s.ink.iter().map(|b| b[0]).fold(f64::INFINITY, f64::min)) {
+        (end, start) if end.is_finite() && start.is_finite() => gap.max(start - end),
+        _ => gap,
+    }
+}
+
+/// How far apart two shows on one baseline may be and still read as one line: the line's own
+/// space width (its font's space advance with its character and word spacing) plus half an em
+/// for tracking and positioning slack. Words a producer splits across text objects sit about
+/// a word space apart; table columns sit a column gutter apart (#7086).
+fn word_window(doc: &Document, fonts: &Dict, spaces: &mut HashMap<Vec<u8>, f64>, line: &TextLine, s: &Shown, size: f64) -> f64 {
+    let em = space_em(doc, fonts, spaces, line.font.as_bytes());
+    let k = if s.state.size != 0.0 { s.size / s.state.size } else { 1.0 };
+    let space = (em * s.state.size + s.state.char_spacing + s.state.word_spacing) * s.state.scale.abs() * k.abs();
+    let window = space + size * 0.5;
+    if window.is_finite() { window } else { size * 1.5 }
 }
 
 /// Joining independent text objects is safe only when they use the same text and graphics
