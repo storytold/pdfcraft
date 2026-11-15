@@ -3,7 +3,7 @@
 //! Each match is rewritten inside its own paragraph ([`crate::Document::text_blocks`]) through
 //! [`Edit::EditTextBlock`], so the paragraph keeps its fonts, sizes and colours and rewraps in its
 //! box. The paragraph's `editor_text` is matched with the find bar's own rules
-//! ([`pdfcraft_render::text::find_in_text`]) and the replacement takes the style of the run it
+//! ([`pdfcraft_render::text::find_in_text_options`]) and the replacement takes the style of the run it
 //! lands in ([`pdfcraft_edit::TextBlock::replaced`]); every other run keeps its own.
 //!
 //! A longer replacement changes the paragraph only, measured with its own fonts' widths, and
@@ -34,6 +34,20 @@ pub struct Replace {
     pub with: String,
     pub case_sensitive: bool,
     pub whole_words: bool,
+    /// Ignore Latin accents. Off for existing engine callers; the Find bar and text_replace
+    /// explicitly set it from their Accent-sensitive option.
+    pub ignore_accents: bool,
+}
+
+impl Replace {
+    /// The same options for locating page hits and rewriting paragraph text.
+    pub fn options(&self) -> pdfcraft_render::text::FindOptions {
+        pdfcraft_render::text::FindOptions {
+            case_sensitive: self.case_sensitive,
+            whole_words: self.whole_words,
+            accent_sensitive: !self.ignore_accents,
+        }
+    }
 }
 
 /// Which matches to replace.
@@ -54,7 +68,7 @@ impl Which {
     /// nothing, rather than passing it for a later match that is.
     pub fn first_in<'a>(texts: impl IntoIterator<Item = (usize, &'a pdfcraft_render::PageText)>, query: &Replace) -> Option<Which> {
         texts.into_iter().find_map(|(page, text)| {
-            let found = text.find_opts_limited(&query.find, query.case_sensitive, query.whole_words, 1).into_iter().next()?;
+            let found = text.find_options(&query.find, query.options(), 1).into_iter().next()?;
             let centre = |g: usize| text.glyphs.get(g).map(|g| [(g.rect[0] + g.rect[2]) / 2.0, (g.rect[1] + g.rect[3]) / 2.0]);
             Some(Which::At { page, start: centre(found.start)?, end: centre(found.end.saturating_sub(1))? })
         })
@@ -262,7 +276,7 @@ impl Document {
 }
 
 fn find(text: &str, query: &Replace, limit: usize) -> Vec<Range<usize>> {
-    pdfcraft_render::text::find_in_text(text, &query.find, query.case_sensitive, query.whole_words, limit)
+    pdfcraft_render::text::find_in_text_options(text, &query.find, query.options(), limit)
 }
 
 fn refused(out: &mut Replacement, count: usize, page: usize, why: String) {

@@ -1,0 +1,249 @@
+//! The find bar ignores accents unless "Accent-sensitive" is ticked (#3460), driven like a user
+//! would: type a query, open Find options, tick the box.
+
+use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
+use pdfcraft_ui_egui::PdfCraftApp;
+
+/// Three pages of Helvetica (WinAnsi, so `\351` is é): "Café menu", "cafe table" and "CAFÉ bar".
+fn fixture() -> Vec<u8> {
+    let stream = |body: &str| format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len());
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 8 0 R] /Count 3 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 6 0 R /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+        stream("BT /F1 14 Tf 20 150 Td (Caf\\351 menu) Tj ET"),
+        stream("BT /F1 14 Tf 20 150 Td (cafe table) Tj ET"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 9 0 R /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+        stream("BT /F1 14 Tf 20 150 Td (CAF\\311 bar) Tj ET"),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    out
+}
+
+fn harness(query: &'static str) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("accents.pdf", None, fixture()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("find", query).unwrap();
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert!(doc.repair_log().is_empty(), "the fixture needs no repairs: {:?}", doc.repair_log());
+    h
+}
+
+fn settle(h: &mut Harness<'static, PdfCraftApp>) {
+    for _ in 0..200 {
+        h.run_steps(2);
+        if !h.state().render_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// The pages the find bar has matches on, in order.
+fn pages(h: &Harness<'static, PdfCraftApp>) -> Vec<usize> {
+    h.state().views[0].find.as_ref().expect("the find bar is open").matches.iter().map(|(p, _)| *p).collect()
+}
+
+/// What the find bar's options are.
+fn option(h: &Harness<'static, PdfCraftApp>, name: &str) -> bool {
+    let find = h.state().views[0].find.as_ref().expect("the find bar is open");
+    match name {
+        "Accent-sensitive" => find.accent_sensitive,
+        "Case-sensitive" => find.case_sensitive,
+        other => panic!("not an option: {other}"),
+    }
+}
+
+/// Tick `name` in the Find options menu, as a user would, and wait for the option to change.
+///
+/// Two things move. The button shifts as the bar's "n of m" text changes width while matches
+/// arrive, and a menu is laid out over its first frames, so a click on an entry in the frame it
+/// appears lands where the entry will not be, closes the menu and changes nothing. So: wait for
+/// the entry's place to hold still before clicking it, and if the option did not change anyway,
+/// go round again, for a bounded number of times.
+fn tick(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
+    let before = option(h, name);
+    let pause = || std::thread::sleep(std::time::Duration::from_millis(5));
+    for _ in 0..20 {
+        if option(h, name) != before {
+            break;
+        }
+        if h.query_by_label(name).is_none() {
+            h.get_by_label("Find options").click();
+        }
+        // Wait for the entry to appear and stop moving: the same place for three frames running.
+        let (mut last, mut still) = (None, 0);
+        for _ in 0..200 {
+            h.run_steps(1);
+            let at = h.query_by_label(name).map(|n| n.rect());
+            still = if at.is_some() && at == last { still + 1 } else { 0 };
+            if still >= 3 {
+                break;
+            }
+            last = at;
+            pause();
+        }
+        if h.query_by_label(name).is_some() {
+            h.get_by_label(name).click();
+        }
+        h.run_steps(3);
+    }
+    assert_ne!(option(h, name), before, "{name} could not be ticked");
+    settle(h);
+}
+
+fn toggle_accents(h: &mut Harness<'static, PdfCraftApp>) {
+    tick(h, "Accent-sensitive");
+}
+
+#[test]
+fn find_matches_accented_and_plain_spellings_until_accent_sensitive_is_ticked() {
+    let mut h = harness("cafe");
+    assert_eq!(pages(&h), [0, 1, 2], "cafe finds Café, cafe and CAFÉ");
+    toggle_accents(&mut h);
+    assert!(h.state().views[0].find.as_ref().unwrap().accent_sensitive);
+    assert_eq!(pages(&h), [1], "accent-sensitive: only the plain spelling");
+    toggle_accents(&mut h);
+    assert!(!h.state().views[0].find.as_ref().unwrap().accent_sensitive);
+    assert_eq!(pages(&h), [0, 1, 2], "and back");
+}
+
+#[test]
+fn an_accented_query_finds_the_plain_spelling_too_by_default() {
+    let mut h = harness("café");
+    assert_eq!(pages(&h), [0, 1, 2]);
+    toggle_accents(&mut h);
+    assert_eq!(pages(&h), [0, 2], "accent-sensitive, case still ignored: Café and CAFÉ");
+}
+
+#[test]
+fn the_accent_option_is_independent_of_case() {
+    let mut h = harness("Cafe");
+    // Case-sensitive: "Cafe" is not "cafe" or "CAFÉ", but it is "Café" once accents are ignored.
+    tick(&mut h, "Case-sensitive");
+    assert_eq!(pages(&h), [0], "Café matches Cafe: the accent is ignored, the capital is not");
+    toggle_accents(&mut h);
+    assert!(pages(&h).is_empty(), "with accents exact, Cafe is none of them");
+}
+
+fn type_in(h: &mut Harness<'static, PdfCraftApp>, placeholder: &str, text: &str) {
+    h.query_by(|n| n.placeholder() == Some(placeholder)).unwrap().click();
+    h.run_steps(3);
+    h.input_mut().events.push(egui::Event::Text(text.to_owned()));
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    settle(h);
+}
+
+#[test]
+fn replace_from_the_find_bar_uses_its_accent_setting() {
+    for all in [false, true] {
+        let mut h = harness("");
+        assert!(h.state_mut().execute("edit.replace"));
+        h.run_steps(4);
+        type_in(&mut h, "Find text", "cafe");
+        assert_eq!(pages(&h), [0, 1, 2]);
+        type_in(&mut h, "Replace with", "coffee");
+        h.state_mut().views[0].go_to_match(0);
+        h.run_steps(8);
+        h.get_by_label(if all { "Replace all" } else { "Replace" }).click();
+        settle(&mut h);
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        let texts: Vec<_> = (0..3).flat_map(|p| doc.text_blocks(p).into_iter().map(|b| b.text)).collect();
+        assert_eq!(texts, if all { vec!["coffee menu", "coffee table", "coffee bar"] } else { vec!["coffee menu", "cafe table", "CAFÉ bar"] });
+        assert!(h.state_mut().execute("edit.undo"));
+        settle(&mut h);
+        toggle_accents(&mut h);
+        assert_eq!(pages(&h), [1]);
+        h.run_steps(8);
+        h.get_by_label(if all { "Replace all" } else { "Replace" }).click();
+        settle(&mut h);
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        let texts: Vec<_> = (0..3).flat_map(|p| doc.text_blocks(p).into_iter().map(|b| b.text)).collect();
+        assert_eq!(texts, ["Café menu", "coffee table", "CAFÉ bar"], "accent-sensitive Replace leaves accented spellings alone");
+    }
+}
+
+fn label_shape<'a>(shape: &'a egui::Shape, label: &str) -> Option<&'a egui::epaint::TextShape> {
+    match shape {
+        egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| label_shape(s, label)),
+        egui::Shape::Text(t) if t.galley.text() == label => Some(t),
+        _ => None,
+    }
+}
+
+#[test]
+fn search_option_checkboxes_keep_single_line_labels_inside_the_default_pane() {
+    use pdfcraft_ui_egui::i18n::{Lang, tr};
+    let shots = std::env::var_os("PDFCRAFT_FIND_SHOTS").is_some();
+    let _gpu = shots.then(crate::gpu);
+    let mut h = harness("cafe");
+    assert!(h.state_mut().set_option("panel", "search").is_ok());
+    let mut failures = Vec::new();
+    for language in ["en", "de"] {
+        if language == "de" && crate::support::skip_without_catalogs("German Search options layout") {
+            continue;
+        }
+        let lang = Lang::from_code(language).unwrap();
+        h.state_mut().set_option("language", language).unwrap();
+        h.run_steps(6);
+        for key in ["Whole words only", "Case-sensitive", "Accent-sensitive"] {
+            let label = tr(lang, key);
+            if language == "de" {
+                assert_ne!(label, key, "the German case uses the translated label");
+            }
+            let checkbox = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label).rect();
+            let (clip, text) = h
+                .output()
+                .shapes
+                .iter()
+                .find_map(|s| label_shape(&s.shape, label).map(|t| (s.clip_rect, t)))
+                .unwrap_or_else(|| panic!("{language}: the checkbox label {label:?} is painted"));
+            if text.galley.rows.len() != 1 || text.galley.elided {
+                failures.push(format!("{language}: {label:?} has {} rows, elided={}", text.galley.rows.len(), text.galley.elided));
+            }
+            if !clip.expand(1.0).contains_rect(checkbox) || !clip.expand(1.0).contains_rect(text.visual_bounding_rect()) {
+                failures.push(format!("{language}: {label:?} checkbox {checkbox:?} or label escapes {clip:?}"));
+            }
+        }
+        // Report layout failures in both languages before attempting mispositioned clicks.
+        if failures.is_empty() {
+            let label = tr(lang, "Accent-sensitive");
+            h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label).click();
+            settle(&mut h);
+            assert_eq!(pages(&h), [1], "the wrapped checkbox still changes the search");
+            h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label).click();
+            settle(&mut h);
+            assert_eq!(pages(&h), [0, 1, 2]);
+        }
+        if shots {
+            h.render().unwrap().save(format!("/tmp/3889-search-{language}.png")).unwrap();
+            std::fs::write("/tmp/3889-accent-fixture.pdf", fixture()).unwrap();
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

@@ -5,6 +5,8 @@
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-11-12 | **Last updated:** 2026-11-12 | **Change:** patch (M3 #3460: rebase onto main 175992b5a; Find and Replace share Latin accent options, Search checkboxes wrap whole with English/German coverage and valid fixtures; Greek folding remains a follow-up; estimates unchanged)
+
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: vector printing preserves annotation optional-content membership; estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M10 #5029: Text appearances have implicit NoRotate during vector printing even when the flag is clear; estimates unchanged)
 >
@@ -45,6 +47,7 @@
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 review follow-up: preserve image crop/tag/stream ownership, resize in page orientation, harden clipboard and text formatting, and reload installed fonts; estimates unchanged)
+
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-30 | **Last updated:** 2026-10-30 | **Change:** minor (M6: scripts can read and change a push-button's normal caption with undo/redo and save/reopen coverage; estimates unchanged)
@@ -373,6 +376,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | patch | M3 #3460: rebase onto main 175992b5a; Find and Replace share Latin accent options, Search checkboxes wrap whole with English/German coverage and valid fixtures; Greek folding remains a follow-up; estimates unchanged. |
 | 2026-10-29 | minor | M10 #5029: existing Text appearances keep their implicit NoRotate orientation in vector printing even when the flag is clear. Print eligibility and source/AP objects remain unchanged; native viewing without the flag remains a separate gap. Estimates unchanged. |
 | 2026-10-27 | minor | M10 #5029: vector printing preserves existing NoRotate appearance orientation and anchors; estimates unchanged. Missing appearances and NoZoom print behavior remain unchanged. |
 | 2026-11-09 | patch | M10 #5130: Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Estimates unchanged. |
