@@ -1110,8 +1110,12 @@ fn decode_raster(
             .color_space
             .inverted_default_decode_arr(ctx.bits_per_component as f32);
 
+    // PdfCraft patch (110): a CalRGB image too, with its default `/Decode` (see
+    // `ColorSpace::convert_u8_image`), which converts samples to the colours the `f32` path
+    // below gives them.
+    let image_conversion = ctx.color_space.has_u8_image_conversion() && is_default_decode;
     let image_data = if ctx.bits_per_component == 8
-        && ctx.color_space.supports_u8()
+        && (ctx.color_space.supports_u8() || image_conversion)
         && obj.transfer_function.is_none()
         && (is_default_decode || is_inverted_default_decode)
     {
@@ -1144,8 +1148,13 @@ fn decode_raster(
             }))
         } else {
             let mut output_buf = vec![0; ctx.width as usize * height as usize * 3];
-            ctx.color_space
-                .convert_u8(&ctx.decoded.data, &mut output_buf)?;
+            if image_conversion {
+                ctx.color_space
+                    .convert_u8_image(&ctx.decoded.data, &mut output_buf)?;
+            } else {
+                ctx.color_space
+                    .convert_u8(&ctx.decoded.data, &mut output_buf)?;
+            }
 
             Some(ImageData::Rgb(RgbData {
                 data: output_buf,
@@ -1581,7 +1590,23 @@ fn apply_decode_array(
         }
     }
 
+    // PdfCraft patch (110): see `f32_image_samples`.
+    F32_IMAGE_SAMPLES.with(|n| n.set(n.get().saturating_add(decoded_arr.len() as u64)));
     Some(decoded_arr)
+}
+
+std::thread_local! {
+    /// PdfCraft patch (110): see [`f32_image_samples`].
+    static F32_IMAGE_SAMPLES: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+}
+
+/// PdfCraft patch (110): the image samples decoded on this thread into `f32`s, one at a time,
+/// to be converted pixel by pixel: a test hook, so a regression test checks which images take
+/// that slow path by counting rather than by timing. The count only grows; a test takes the
+/// difference across a render.
+#[doc(hidden)]
+pub fn f32_image_samples() -> u64 {
+    F32_IMAGE_SAMPLES.with(core::cell::Cell::get)
 }
 
 /// One sample mapped through its `/Decode` range (ISO 32000-2 §8.9.5.2). PdfCraft patch (28):

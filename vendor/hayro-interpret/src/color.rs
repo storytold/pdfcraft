@@ -437,6 +437,21 @@ impl ColorSpace {
         matches!(self.0.as_ref(), ColorSpaceType::DeviceGray)
     }
 
+    /// PdfCraft patch (110): an 8-bit image in this space with its default `/Decode`, `input`
+    /// holding its samples, converted into `output` (RGB) as `convert_f32` converts each
+    /// decoded pixel, where the space has a faster way (CalRGB); `None` where it has none.
+    pub(crate) fn convert_u8_image(&self, input: &[u8], output: &mut [u8]) -> Option<()> {
+        match self.0.as_ref() {
+            ColorSpaceType::CalRgb(c) => c.convert_u8_image(input, output),
+            _ => None,
+        }
+    }
+
+    /// PdfCraft patch (110): whether [`Self::convert_u8_image`] converts this space's images.
+    pub(crate) fn has_u8_image_conversion(&self) -> bool {
+        matches!(self.0.as_ref(), ColorSpaceType::CalRgb(_))
+    }
+
     // PdfCraft patch (63).
     /// Whether this is `/DeviceCMYK` itself, not an ICC-based or default colour space that
     /// stands in for it.
@@ -893,27 +908,117 @@ impl ToRgb for CalRgb {
                 if b == 1.0 { 1.0 } else { b.powf(gb) },
             ];
 
-            let m = &self.matrix;
-            let x = m[0] * agr + m[3] * bgg + m[6] * cgb;
-            let y = m[1] * agr + m[4] * bgg + m[7] * cgb;
-            let z = m[2] * agr + m[5] * bgg + m[8] * cgb;
-            let xyz = [x, y, z];
-
-            let xyz_flat = self.normalize_white_point_to_flat(&self.white_point, &xyz);
-            let xyz_black = Self::compensate_black_point(&self.black_point, &xyz_flat);
-            let xyz_d65 = Self::normalize_white_point_to_d65(&Self::FLAT_WHITEPOINT, &xyz_black);
-            let srgb_xyz = Self::matrix_product(&Self::SRGB_D65_XYZ_TO_RGB_MATRIX, &xyz_d65);
+            let srgb_xyz = self.linear_srgb([agr, bgg, cgb]);
 
             output.copy_from_slice(&[
-                (Self::srgb_transfer_function(srgb_xyz[0]) * 255.0 + 0.5) as u8,
-                (Self::srgb_transfer_function(srgb_xyz[1]) * 255.0 + 0.5) as u8,
-                (Self::srgb_transfer_function(srgb_xyz[2]) * 255.0 + 0.5) as u8,
+                Self::encode_srgb(srgb_xyz[0]),
+                Self::encode_srgb(srgb_xyz[1]),
+                Self::encode_srgb(srgb_xyz[2]),
             ]);
         }
 
         Some(())
     }
 }
+
+impl CalRgb {
+    /// Linear sRGB of the gamma-applied components `[A^GR, B^GG, C^GB]` (ISO 32000-2
+    /// §8.6.5.3), before the sRGB transfer function. PdfCraft patch (110): shared by
+    /// `convert_f32` and [`Self::convert_u8_image`], so both compute alike.
+    #[inline]
+    fn linear_srgb(&self, [agr, bgg, cgb]: [f32; 3]) -> [f32; 3] {
+        let m = &self.matrix;
+        let x = m[0] * agr + m[3] * bgg + m[6] * cgb;
+        let y = m[1] * agr + m[4] * bgg + m[7] * cgb;
+        let z = m[2] * agr + m[5] * bgg + m[8] * cgb;
+        let xyz = [x, y, z];
+
+        let xyz_flat = self.normalize_white_point_to_flat(&self.white_point, &xyz);
+        let xyz_black = Self::compensate_black_point(&self.black_point, &xyz_flat);
+        let xyz_d65 = Self::normalize_white_point_to_d65(&Self::FLAT_WHITEPOINT, &xyz_black);
+        Self::matrix_product(&Self::SRGB_D65_XYZ_TO_RGB_MATRIX, &xyz_d65)
+    }
+
+    /// One linear sRGB component as an 8-bit sample: the transfer function, then rounding.
+    #[inline]
+    fn encode_srgb(linear: f32) -> u8 {
+        (Self::srgb_transfer_function(linear) * 255.0 + 0.5) as u8
+    }
+
+    /// PdfCraft patch (110): an 8-bit image in this space with the default `/Decode`, `input`
+    /// three samples a pixel, converted into `output` (RGB) with the very colours `convert_f32`
+    /// gives each decoded pixel, without its six powers a pixel.
+    ///
+    /// Each component's power depends on its own sample alone, so it comes from a table of the
+    /// 256 values `convert_f32` computes for the samples `decode_sample` gives. The transfer
+    /// function and rounding at the end map a linear value to a byte that never falls as the
+    /// value grows, so the byte is the number of [`SRGB_ENCODE_THRESHOLDS`] the value reaches.
+    /// A run of one colour, common in drawings and scans, is converted once.
+    ///
+    /// Converted per pixel from `f32`s, the 8000 × 5333 CalRGB image of a page took 3.2 of the
+    /// 4.2 seconds the page took to draw, and turning its samples into 128 million `f32`s
+    /// (512 MB) took 0.8 more.
+    pub(crate) fn convert_u8_image(&self, input: &[u8], output: &mut [u8]) -> Option<()> {
+        let mut powers = [[0.0_f32; 256]; 3];
+        for (table, gamma) in powers.iter_mut().zip(self.gamma) {
+            for (sample, power) in (0u8..=255).zip(table.iter_mut()) {
+                // As `decode_sample` decodes an 8-bit sample through the default `[0 1]`.
+                let v = crate::function::interpolate(f32::from(sample), 0.0, 255.0, 0.0, 1.0)
+                    .clamp(0.0, 1.0);
+                *power = if v == 1.0 { 1.0 } else { v.powf(gamma) };
+            }
+        }
+        let thresholds = &*SRGB_ENCODE_THRESHOLDS;
+        // The thresholds at or below `linear`: at most 255, so the count fits; none for NaN,
+        // which `encode_srgb` also makes 0.
+        let encode = |linear: f32| thresholds.partition_point(|t| *t <= linear) as u8;
+
+        let mut last: Option<([u8; 3], [u8; 3])> = None;
+        for (pixel, rgb) in input.chunks_exact(3).zip(output.chunks_exact_mut(3)) {
+            // In bounds: `chunks_exact(3)` gives three samples, and a byte indexes a table of 256.
+            let key = [pixel[0], pixel[1], pixel[2]];
+            let colour = match last {
+                Some((k, colour)) if k == key => colour,
+                _ => {
+                    let [r, g, b] = key.map(usize::from);
+                    let linear = self.linear_srgb([powers[0][r], powers[1][g], powers[2][b]]);
+                    let colour = linear.map(encode);
+                    last = Some((key, colour));
+                    colour
+                }
+            };
+            rgb.copy_from_slice(&colour);
+        }
+
+        Some(())
+    }
+}
+
+/// PdfCraft patch (110): for each byte `k` from 1 to 255, the least linear value
+/// `CalRgb::encode_srgb` maps to `k` or more, found by halving the `f32`s from 0 to 1 (which
+/// order as their bits do). A value maps to the number of these it reaches: 0 below the first
+/// (and for every negative value and NaN), 255 from the last on (and above 1). That holds as
+/// long as `encode_srgb` never falls as its value grows: when this was written it was checked
+/// for every `f32` from 0 to 1, and `convert_u8_image` against `convert_f32` for every 8-bit
+/// colour under three CalRGB spaces; PdfCraft's `calrgb_8bit_images_convert_as_each_pixel_did`
+/// keeps checking a sample of them on every platform.
+static SRGB_ENCODE_THRESHOLDS: LazyLock<[f32; 255]> = LazyLock::new(|| {
+    let mut thresholds = [1.0_f32; 255];
+    for (k, threshold) in (1..=255u8).zip(thresholds.iter_mut()) {
+        // `encode_srgb(1.0)` is 255, at least `k`: find the least value that reaches `k`.
+        let (mut lo, mut hi) = (0u32, 1.0_f32.to_bits());
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if CalRgb::encode_srgb(f32::from_bits(mid)) >= k {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        *threshold = f32::from_bits(hi);
+    }
+    thresholds
+});
 
 #[derive(Debug, Clone)]
 pub(crate) struct Lab {

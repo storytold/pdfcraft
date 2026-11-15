@@ -10601,6 +10601,11 @@ mod tiff_predicted_images;
 // patch 27).
 mod isolated_cmyk_groups;
 
+// PDFBOX-5134 and PDFJS-9581: small mesh shadings paint only around their triangles (vendored
+// hayro patch 33), and 8-bit CalRGB images convert without `f32` samples (hayro-interpret patch
+// 110), each checked by counting.
+mod large_drawing_cost;
+
 /// The generation-0 stand-in a rebuilt table files an object under must not make the object a
 /// second object: enumeration yielded it once per key, so a document recovered without a readable
 /// page tree reported the page twice (noted in review of #5580).

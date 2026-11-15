@@ -71,6 +71,9 @@ pub use renderer::set_cmyk_band_pixels;
 /// PdfCraft patch (30): exported for its regression tests.
 #[doc(hidden)]
 pub use renderer::{OffscreenDraws, offscreen_draws};
+/// PdfCraft patch (33): exported for its regression test.
+#[doc(hidden)]
+pub use renderer::mesh_paint_pixels;
 
 /// A cache used by the renderer.
 ///
