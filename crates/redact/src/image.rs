@@ -42,6 +42,17 @@ pub(crate) fn components(doc: &Document, s: &Stream) -> Option<usize> {
     })
 }
 
+/// Whether `s`'s whole filter is a plain `/DCTDecode` — the JPEG a scanned page is made of. A DCT
+/// image behind another filter is left to the fail-closed path.
+fn plain_dct(s: &Stream) -> bool {
+    let dct = |f: &Object| f.as_name().is_some_and(|n| matches!(n, b"DCTDecode" | b"DCT"));
+    match s.dict.get(b"Filter") {
+        Some(f @ Object::Name(_)) => dct(f),
+        Some(Object::Array(a)) => a.len() == 1 && a.first().is_some_and(dct),
+        _ => false,
+    }
+}
+
 /// `Ok(Some(copy))` with the covered pixels cleared, `Ok(None)` when no pixel intersects,
 /// `Err(())` when the image can't be cleared (the caller removes it).
 #[allow(clippy::result_unit_err)]
@@ -69,14 +80,7 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     // `/Crypt` was undone when the object was loaded (ISO 32000-2 §7.4.10), and decoding leaves it
     // out wherever it stands.
     let crypt = |f: &Object| f.as_name() == Some(b"Crypt".as_slice());
-    // A plain `/DCTDecode`, with no other filter around it, is the JPEG a scanned page is made of.
-    // A DCT image behind another filter is left to the fail-closed path below.
-    let dct = |f: &Object| f.as_name().is_some_and(|n| matches!(n, b"DCTDecode" | b"DCT"));
-    let is_dct = match s.dict.get(b"Filter") {
-        Some(f @ Object::Name(_)) => dct(f),
-        Some(Object::Array(a)) => a.len() == 1 && a.first().is_some_and(dct),
-        _ => false,
-    };
+    let is_dct = plain_dct(s);
     let (ok, is_fax, is_jbig2) = match s.dict.get(b"Filter") {
         None => (true, false, false),
         Some(f @ Object::Name(_)) => (readable(f) || crypt(f) || fax(f) || jbig2(f), fax(f), jbig2(f)),
@@ -262,8 +266,8 @@ fn dct_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], w: us
                 continue;
             }
             cleared += 1;
-            let Some(at) = (j.checked_mul(w)?).checked_add(i)?.checked_mul(ncomp)? else { return None };
-            let Some(sample) = data.get_mut(at..at.checked_add(ncomp)?) else { return None };
+            let at = (j.checked_mul(w)?).checked_add(i)?.checked_mul(ncomp)?;
+            let sample = data.get_mut(at..at.checked_add(ncomp)?)?;
             sample.fill(0);
         }
     }
@@ -291,10 +295,13 @@ fn dct_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], w: us
 /// whole instead.
 fn identity_decode(doc: &Document, s: &Stream, ncomp: usize) -> bool {
     let Some(d) = s.dict.get(b"Decode") else { return true };
-    let Some(values) = crate::globals::followed(doc, d).as_array().map(<[Object]>::to_vec) else {
+    let Some(values) = crate::globals::followed(doc, d).as_array().cloned() else {
         return false;
     };
-    values.len() == ncomp.saturating_mul(2) && values.chunks_exact(2).all(|pair| pair.iter().map(|v| crate::globals::followed(doc, v).as_f64()).eq([Some(0.0), Some(1.0)]))
+    values.len() == ncomp.saturating_mul(2)
+        && values.as_chunks::<2>().0.iter().all(|pair| {
+            crate::globals::followed(doc, &pair[0]).as_f64() == Some(0.0) && crate::globals::followed(doc, &pair[1]).as_f64() == Some(1.0)
+        })
 }
 
 /// Whether `s`'s data is in another file, which a reader may draw instead of what is here: a `/F`

@@ -7388,10 +7388,8 @@ fn a_gray_scan_with_an_inverted_decode_still_fails_closed() {
 /// bytes here are never read as a JPEG (the encoder in this build cannot write a CMYK one).
 #[test]
 fn a_cmyk_jpeg_scan_is_still_removed_whole() {
-    let img = stream(
-        "/Type /XObject /Subtype /Image /Width 20 /Height 20 /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Filter /DCTDecode",
-        vec![0u8; 64],
-    );
+    let img =
+        stream("/Type /XObject /Subtype /Image /Width 20 /Height 20 /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Filter /DCTDecode", vec![0u8; 64]);
     let mut doc = one_page(b"q 100 0 0 100 10 10 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![img]);
     mark(&mut doc, 0, &[[40.0, 40.0, 60.0, 60.0]], "");
     let r = apply(&mut doc, None).unwrap();
