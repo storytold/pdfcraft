@@ -494,17 +494,22 @@ mod tests {
     }
 
     /// Reduce File Size asks first, so a heavy file can finish by itself.
-    #[test]
-    fn reduce_file_size_asks_where_to_save_before_it_compresses() {
-        let (mut app, dir) = reducing("first");
+    fn reduce_file_size_after_pick(inline: bool) {
+        let (mut app, dir) = reducing(if inline { "first-inline" } else { "first" });
+        app.run_inline = inline;
         let out = dir.join("notes (reduced).pdf");
         app.pick_override = Some(vec![out.to_string_lossy().into_owned()]);
         app.reduce_file_size();
         assert!(app.optimize_run.is_none() && app.progress_notice.is_none(), "nothing runs until the answer is in");
         assert!(app.pickers.pending(), "the question is out");
         app.process_picked();
-        let run = app.optimize_run.as_ref().expect("the answer starts it");
-        assert_eq!(run.destination.as_deref(), out.to_str());
+        // A tiny optimization may finish during the initial poll, before the test observes it.
+        // Check the destination in either state; the saved copy is verified below in both cases.
+        if let Some(run) = app.optimize_run.as_ref() {
+            assert_eq!(run.destination.as_deref(), out.to_str());
+        } else {
+            assert!(out.is_file(), "a completed optimization saved the chosen destination");
+        }
         // Nothing more is asked at the end: the copy is simply there.
         app.pick_override = Some(vec![dir.join("not asked.pdf").to_string_lossy().into_owned()]);
         let start = std::time::Instant::now();
@@ -512,6 +517,7 @@ mod tests {
             app.poll_optimize();
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        assert!(app.optimize_run.is_none(), "optimization finishes");
         assert!(!app.pickers.pending(), "it doesn't ask again");
         let written = std::fs::read(&out).unwrap_or_default();
         let mut again = pdfcraft_engine::Session::new();
@@ -519,6 +525,16 @@ mod tests {
         let text = pdfcraft_engine::export::Exporter::new(again.get(id).unwrap()).text(0).unwrap();
         assert!(text.contains("Minutes of the harbour board"), "the copy reopens with its text: {text:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reduce_file_size_asks_where_to_save_before_it_compresses() {
+        reduce_file_size_after_pick(false);
+    }
+
+    #[test]
+    fn reduce_file_size_can_finish_before_the_first_poll_returns() {
+        reduce_file_size_after_pick(true);
     }
 
     #[test]
