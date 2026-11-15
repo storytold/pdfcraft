@@ -331,8 +331,8 @@ pub fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u
     check_raster(width, height, premultiplied)?;
     let pixels = premultiplied.as_chunks::<4>().0;
     let opaque = pixels.iter().all(|px| px[3] == 255);
-    let (color, data) = if opaque {
-        (png::ColorType::Rgb, pixels.iter().flat_map(|px| [px[0], px[1], px[2]]).collect::<Vec<u8>>())
+    let (layout, data) = if opaque {
+        (craft_image_codecs::ChannelLayout::Rgb, pixels.iter().flat_map(|px| [px[0], px[1], px[2]]).collect::<Vec<u8>>())
     } else {
         let mut rgba = premultiplied.to_vec();
         for px in rgba.as_chunks_mut::<4>().0 {
@@ -343,18 +343,11 @@ pub fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u
                 }
             }
         }
-        (png::ColorType::Rgba, rgba)
+        (craft_image_codecs::ChannelLayout::Rgba, rgba)
     };
-    let mut out = Vec::new();
-    let mut enc = png::Encoder::new(&mut out, width, height);
-    enc.set_color(color);
-    enc.set_depth(png::BitDepth::Eight);
-    enc.set_deflate_compression(png::DeflateCompression::Level(3));
-    enc.set_filter(png::Filter::Adaptive);
-    let mut w = enc.write_header().map_err(|e| e.to_string())?;
-    w.write_image_data(&data).map_err(|e| e.to_string())?;
-    w.finish().map_err(|e| e.to_string())?;
-    Ok(out)
+    let img = craft_image_codecs::Image::from_u8(width, height, layout, data).map_err(|e| e.to_string())?;
+    let opts = craft_image_codecs::EncodeOptions { png_compression: craft_image_codecs::PngCompression::Fast, ..Default::default() };
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &opts).map_err(|e| e.to_string())
 }
 
 /// Image file formats for Export ▸ Image.
@@ -417,38 +410,25 @@ fn over_white(premultiplied: &[u8]) -> Vec<u8> {
 
 /// Premultiplied RGBA → baseline JPEG at `dpi` (pages are opaque: transparency becomes white paper).
 pub fn encode_jpeg(width: u32, height: u32, premultiplied: &[u8], quality: u8, dpi: f64) -> Result<Vec<u8>, String> {
-    use image::ImageEncoder;
-    use image::codecs::jpeg::{JpegEncoder, PixelDensity};
     check_raster(width, height, premultiplied)?;
     let rgb = over_white(premultiplied);
-    let mut out = Vec::new();
-    let mut enc = JpegEncoder::new_with_quality(&mut out, quality.clamp(1, 100));
-    // The JFIF density is whole dots per inch.
-    enc.set_pixel_density(PixelDensity::dpi(dpi.round() as u16));
-    enc.write_image(&rgb, width, height, image::ExtendedColorType::Rgb8).map_err(|e| e.to_string())?;
-    Ok(out)
+    let mut img = craft_image_codecs::Image::from_u8(width, height, craft_image_codecs::ChannelLayout::Rgb, rgb).map_err(|e| e.to_string())?;
+    let d = dpi.round() as f32;
+    img.meta.dpi = Some((d, d));
+    let opts = craft_image_codecs::EncodeOptions { jpeg_quality: quality.clamp(1, 100), embed_metadata: true, ..Default::default() };
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &opts).map_err(|e| e.to_string())
 }
 
-/// Premultiplied RGBA → TIFF (RGB, LZW-compressed) at `dpi`. Written with `tiff` directly:
-/// `image`'s `TiffEncoder` always says 1 × 1 with no unit and leaves the strips uncompressed.
-/// No predictor: LZW alone is the compression TIFF readers support most widely after none.
+/// Premultiplied RGBA → TIFF (RGB, LZW-compressed) at `dpi`.
 pub fn encode_tiff(width: u32, height: u32, premultiplied: &[u8], dpi: f64) -> Result<Vec<u8>, String> {
-    use tiff::encoder::{Compression, Rational, TiffEncoder, colortype::RGB8};
-    use tiff::tags::{ResolutionUnit, Tag};
-    let err = |e: tiff::TiffError| e.to_string();
     check_raster(width, height, premultiplied)?;
     let rgb = over_white(premultiplied);
-    let mut out = std::io::Cursor::new(Vec::new());
-    let mut tiff = TiffEncoder::new(&mut out).map_err(err)?.with_compression(Compression::Lzw);
-    let mut image = tiff.new_image::<RGB8>(width, height).map_err(err)?;
-    // In hundredths: a page drawn at a lowered resolution (`Exporter::dpi_used`) is rarely a whole number.
-    let resolution = Rational { n: (dpi * 100.0).round() as u32, d: 100 };
-    let tags = image.encoder();
-    tags.write_tag(Tag::ResolutionUnit, ResolutionUnit::Inch).map_err(err)?;
-    tags.write_tag(Tag::XResolution, resolution.clone()).map_err(err)?;
-    tags.write_tag(Tag::YResolution, resolution).map_err(err)?;
-    image.write_data(&rgb).map_err(err)?;
-    Ok(out.into_inner())
+    let mut img = craft_image_codecs::Image::from_u8(width, height, craft_image_codecs::ChannelLayout::Rgb, rgb).map_err(|e| e.to_string())?;
+    let d = dpi as f32;
+    img.meta.dpi = Some((d, d));
+    let opts =
+        craft_image_codecs::EncodeOptions { tiff_compression: craft_image_codecs::TiffCompression::Lzw, embed_metadata: true, ..Default::default() };
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Tiff, &opts).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -484,12 +464,9 @@ mod raster_tests {
     const FORMATS: [ImageFormat; 3] = [ImageFormat::Png, ImageFormat::Jpeg { quality: 90 }, ImageFormat::Tiff];
 
     /// The colour type and pixels of a PNG.
-    fn decode(png: &[u8]) -> (png::ColorType, Vec<u8>) {
-        let mut reader = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
-        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
-        let frame = reader.next_frame(&mut pixels).unwrap();
-        pixels.truncate(frame.buffer_size());
-        (frame.color_type, pixels)
+    fn decode(png: &[u8]) -> (craft_image_codecs::ChannelLayout, Vec<u8>) {
+        let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, png, &craft_image_codecs::DecodeOptions::default()).unwrap();
+        (img.layout(), img.as_u8().unwrap().to_vec())
     }
 
     /// A rendered page has no translucent pixel: it is written as RGB, each pixel exactly as
@@ -498,7 +475,7 @@ mod raster_tests {
     fn opaque_rasters_are_written_as_rgb_with_their_exact_pixels() {
         let rgba = [[255, 255, 255, 255], [0, 0, 0, 255], [200, 30, 90, 255], [1, 2, 3, 255], [17, 250, 128, 255], [90, 90, 90, 255]];
         let (color, pixels) = decode(&encode_png(3, 2, rgba.as_flattened()).unwrap());
-        assert_eq!(color, png::ColorType::Rgb);
+        assert_eq!(color, craft_image_codecs::ChannelLayout::Rgb);
         assert_eq!(pixels, rgba.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<_>>());
     }
 
@@ -507,7 +484,7 @@ mod raster_tests {
     fn translucent_rasters_keep_straight_alpha() {
         let rgba = [[64, 0, 32, 128], [0, 0, 0, 0], [10, 20, 30, 255]];
         let (color, pixels) = decode(&encode_png(3, 1, rgba.as_flattened()).unwrap());
-        assert_eq!(color, png::ColorType::Rgba);
+        assert_eq!(color, craft_image_codecs::ChannelLayout::Rgba);
         assert_eq!(pixels, [128, 0, 64, 128, 0, 0, 0, 0, 10, 20, 30, 255]);
     }
 

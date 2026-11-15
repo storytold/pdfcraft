@@ -100,6 +100,9 @@ struct Interp<'h> {
     /// burning a core to the loop limit).
     #[cfg(not(target_arch = "wasm32"))]
     deadline: Option<std::time::Instant>,
+    /// `deadline` passed and stopped the script: the run reports as abandoned.
+    #[cfg(not(target_arch = "wasm32"))]
+    out_of_time: bool,
 }
 
 type R<T> = Result<T, String>;
@@ -109,7 +112,7 @@ type R<T> = Result<T, String>;
 /// Run a FormCalc `script` for `event` on the form `root`, as [`crate::xfa::run_xfa`] runs a
 /// JavaScript one.
 pub fn run_formcalc(script: &str, event: &XfaEvent, doc: &XfaDoc, root: &XfaNode, limits: Limits) -> XfaOutcome {
-    run_formcalc_at(script, event, doc, root.clone(), limits, None)
+    run_formcalc_at(script, event, doc, std::sync::Arc::new(root.clone()), false, limits, None)
 }
 
 /// [`run_formcalc`] on an owned form, giving up at `deadline` (the clock is read every
@@ -118,7 +121,8 @@ pub(crate) fn run_formcalc_at(
     script: &str,
     event: &XfaEvent,
     doc: &XfaDoc,
-    root: XfaNode,
+    root: std::sync::Arc<XfaNode>,
+    reuse: bool,
     limits: Limits,
     deadline: Option<std::time::Duration>,
 ) -> XfaOutcome {
@@ -133,7 +137,7 @@ pub(crate) fn run_formcalc_at(
         Ok(b) => b,
         Err(e) => return XfaOutcome { error: Some(e), ..Default::default() },
     };
-    let mut host = XHost::new(root, &event.target, doc);
+    let mut host = XHost::new(root, reuse, &event.target, doc);
     #[cfg(target_arch = "wasm32")]
     let _ = deadline;
     let mut interp = Interp {
@@ -150,6 +154,8 @@ pub(crate) fn run_formcalc_at(
         exited: false,
         #[cfg(not(target_arch = "wasm32"))]
         deadline: deadline.and_then(|d| std::time::Instant::now().checked_add(d)),
+        #[cfg(not(target_arch = "wasm32"))]
+        out_of_time: false,
     };
     let mut out = XfaOutcome::default();
     match interp.block(&body) {
@@ -164,6 +170,19 @@ pub(crate) fn run_formcalc_at(
         }
         Err(e) => out.error = Some(e),
     }
+    // The caller stops waiting at the same time limit, so which of the two notices first is
+    // down to the scheduler. The outcome must not depend on it: stopped by the clock, the run
+    // reports what an abandoned one does, the error and no changes. Keeping the changes made
+    // it a race: a loop adding rows until the clock stopped it left the form unchanged on one
+    // run and 1000 rows longer on the next (each laid out again, tens of seconds).
+    #[cfg(not(target_arch = "wasm32"))]
+    if let (true, Some(d)) = (interp.out_of_time, deadline) {
+        return XfaOutcome {
+            error: Some(format!("the script ran longer than {:.1} s and was abandoned", d.as_secs_f64())),
+            abandoned: true,
+            ..Default::default()
+        };
+    }
     out.notes = host.notes();
     out.effects = host.effects;
     out.console = host.console;
@@ -177,7 +196,7 @@ pub fn run_formcalc_within(script: &str, event: &XfaEvent, doc: &XfaDoc, root: X
     // FormCalc has no engine to start: its time (and its own deadline) begins at once.
     run_within("pdfcraft-formcalc", timeout, move |started| {
         started();
-        run_formcalc_at(&script, &event, &doc, root, limits, Some(timeout))
+        run_formcalc_at(&script, &event, &doc, std::sync::Arc::new(root), false, limits, Some(timeout))
     })
 }
 

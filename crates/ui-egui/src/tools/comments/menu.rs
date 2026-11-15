@@ -144,10 +144,11 @@ pub(crate) fn context_menu(
             }
             ui.separator();
             // The engine's own check, for each selected comment: a locked comment, or one with a
-            // locked reply, stays.
-            let deletes = deletable(page, index) && view.comments.also.iter().all(|&(p, i)| deletable(p, i));
+            // locked reply, stays. On a group subordinate, Delete takes just it, as Acrobat's does.
+            let (dpage, dindex) = view.comments.target().unwrap_or((page, index));
+            let deletes = deletable(dpage, dindex) && view.comments.also.iter().all(|&(p, i)| deletable(p, i));
             if ui.add_enabled(allowed && deletes, egui::Button::new(tl!(if several > 0 { "Delete comments" } else { "Delete" }))).clicked() {
-                action = delete_selected(&mut view.comments).map(|e| CanvasAction::Edit(Box::new(e)));
+                action = delete_selected(&mut view.comments, info).map(|e| CanvasAction::Edit(Box::new(e)));
                 ui.close();
             }
             if ui.add_enabled(allowed, egui::Button::new(tl!("Properties…"))).clicked() {
@@ -177,7 +178,7 @@ pub(crate) fn context_menu(
     if !info.annotations.is_empty() {
         ui.separator();
         if ui.add_enabled(can_modify, egui::Button::new(tl!("Flatten comments"))).clicked() {
-            view.comments.selected = None;
+            view.comments.select(None);
             action = Some(CanvasAction::Edit(Box::new(Edit::Flatten { comments: true, fields: false })));
             ui.close();
         }

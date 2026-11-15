@@ -1,4 +1,5 @@
-use super::interp::Ts;
+use super::HashSet;
+use super::interp::{Shown, Ts};
 use super::lines::page_dict;
 use super::{
     CraftFont, Dict, Document, EditError, GlyphError, HashMap, Metrics, Object, Op, PdfString, Stream, TextLine, japanese_glyph_from, parse,
@@ -146,6 +147,23 @@ fn fonts_shown(doc: &Document, page: &Dict, resources: &Dict) -> Option<std::col
         }
     }
     Some(shown)
+}
+
+/// Whether run `s` may continue `line` font-wise: the same font, or both inside the `/PCEdLine`
+/// sequence of a replacement that set the words its font can't show in a substitute (#2378),
+/// which reads back as the one line it replaced, so the next edit replaces all of it.
+pub(super) fn continues_font(line: &TextLine, s: &Shown) -> bool {
+    same_font(line, &s.font, &s.base_font, s.face.as_deref()) || (s.edited.is_some() && line.edited == s.edited)
+}
+
+/// A line that began with a substitute run takes the source font of a later run, so the next
+/// replacement starts from the line's own font again.
+pub(super) fn adopt_source_font(line: &mut TextLine, s: &Shown) {
+    if line.edited.is_some() && line.font.starts_with("PCEd") && !s.font.starts_with(b"PCEd") {
+        line.font = String::from_utf8_lossy(&s.font).into_owned();
+        line.base_font = s.base_font.clone();
+        line.face = s.face.clone();
+    }
 }
 
 /// Whether a run shown in `font` (a resource name), with `/BaseFont` `base_font` and the Japanese
@@ -630,6 +648,21 @@ pub(super) fn type3_encode(fallback: &Type3Fallback, text: &str) -> Option<Vec<T
     runs.into_iter().map(|(font, bytes, spacing)| Some(Type3Run { name: fallback.names.get(font)?.clone(), bytes, spacing })).collect()
 }
 
+/// Consecutive source/fallback runs, without allocating a list of input-derived runs.
+pub(super) fn source_fallback_runs<'a>(mut text: &'a str, source_chars: Option<&'a HashSet<char>>) -> impl Iterator<Item = (bool, &'a str)> + 'a {
+    std::iter::from_fn(move || {
+        let first = text.chars().next()?;
+        let source = source_chars.is_some_and(|chars| chars.contains(&first));
+        let end = source_chars
+            .and_then(|chars| text.char_indices().find(|(_, ch)| chars.contains(ch) != source).map(|(offset, _)| offset))
+            .unwrap_or(text.len());
+        // char_indices supplies UTF-8 boundaries; get also handles an invalid range safely.
+        let run = text.get(..end)?;
+        text = text.get(end..)?;
+        Some((source, run))
+    })
+}
+
 /// The source font's own TrueType/OpenType program, when the document embeds a complete one whose
 /// licence allows editable embedding. A subset (an `ABCDEF+` name) is left out: a character can keep
 /// its mapping there after the subsetter dropped its outline.
@@ -702,6 +735,25 @@ pub(crate) fn source_width(metrics: &Metrics, text: &str, size: f64, space: f64,
     words + text.matches(' ').count() as f64 * (space * size + char_spacing + word_spacing)
 }
 
+#[cfg(test)]
+thread_local! {
+    static SOURCE_CHARACTER_MEASUREMENTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_source_character_measurements() -> usize {
+    SOURCE_CHARACTER_MEASUREMENTS.with(|count| count.replace(0))
+}
+
+/// An actually encodable source character in the normalized `Tw = 0` drawing state.
+pub(super) fn source_character_advance(metrics: &Metrics, ch: char, size: f64, char_spacing: f64) -> Option<f64> {
+    #[cfg(test)]
+    SOURCE_CHARACTER_MEASUREMENTS.with(|count| count.set(count.get().saturating_add(1)));
+    let mut utf8 = [0; 4];
+    let bytes = metrics.encode(ch.encode_utf8(&mut utf8))?;
+    Some(metrics.codes(&bytes).iter().map(|(code, _)| metrics.width(*code) * size + char_spacing).sum())
+}
+
 pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, char_spacing: f64, word_spacing: f64) -> Result<Vec<Op>, EditError> {
     if let Some(bytes) = metrics.encode(text) {
         return Ok(vec![Op::new("Tj", vec![Object::String(PdfString::literal(bytes))])]);
@@ -728,6 +780,30 @@ pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, 
         out.push(Op::new("EMC", Vec::new()));
     }
     Ok(out)
+}
+
+/// `text` split into runs of words `metrics` can show (`true`) and words it can't (`false`), in
+/// order. A word is shown in one font, so a word with any character the font lacks goes to the
+/// substitute whole rather than switching fonts letter by letter. Spaces join the run they are
+/// in, since [`source_show`] draws spaces the font lacks with a displacement.
+pub(super) fn source_runs(metrics: &Metrics, text: &str) -> Vec<(bool, String)> {
+    let mut runs: Vec<(bool, String)> = Vec::new();
+    // Spaces before the first word go with it: on their own they would make a run of the line's
+    // font with nothing to show (review on #2955).
+    let mut lead = String::new();
+    for (i, word) in text.split(' ').enumerate() {
+        let piece = if i == 0 { word.to_string() } else { format!(" {word}") };
+        if runs.is_empty() && word.is_empty() {
+            lead.push_str(&piece);
+            continue;
+        }
+        let own = word.is_empty() || metrics.encode(word).is_some();
+        match runs.last_mut() {
+            Some((last, run)) if *last == own || word.is_empty() => run.push_str(&piece),
+            _ => runs.push((own, std::mem::take(&mut lead) + &piece)),
+        }
+    }
+    runs
 }
 
 #[cfg(test)]

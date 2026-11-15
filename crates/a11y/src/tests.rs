@@ -50,7 +50,7 @@ fn autotag_text_writes_marked_content_and_parent_tree_across_pages() {
         "",
     );
     let result = autotag_text(&mut doc).unwrap();
-    assert_eq!(result, AutoTagResult { pages: 2, paragraphs: 3 });
+    assert_eq!(result, AutoTagResult { pages: 2, paragraphs: 2, headings: 1 });
     let catalog = doc.get(doc.root().unwrap());
     let root = catalog.as_dict().unwrap().reference(b"StructTreeRoot").unwrap();
     let tree = doc.get(root);
@@ -62,14 +62,18 @@ fn autotag_text_writes_marked_content_and_parent_tree_across_pages() {
     assert_eq!(entries[2].as_int(), Some(1));
     assert_eq!(entries[1].as_array().unwrap().len(), 2);
     assert_eq!(entries[3].as_array().unwrap().len(), 1);
-    for page in pdfcraft_model::pages(&doc) {
+    // The 18 pt line stands out from the 12 pt body: a heading, the rest paragraphs.
+    let first_marks = ["/H1 <</MCID 0>> BDC", "/P <</MCID 0>> BDC"];
+    for (page, first) in pdfcraft_model::pages(&doc).iter().zip(first_marks) {
         let content = page.dict.get(b"Contents").unwrap();
         let stream = doc.resolve(content);
         let Object::Stream(stream) = &*stream else { panic!("marked page content") };
         let text = String::from_utf8(stream.decoded_strict().unwrap()).unwrap();
-        assert!(text.contains("/P <</MCID 0>> BDC"), "{text}");
+        assert!(text.contains(first), "{text}");
         assert!(text.contains("EMC"), "{text}");
     }
+    let kinds: Vec<String> = tags(&doc).iter().map(|t| t.kind.clone()).collect();
+    assert_eq!(kinds, ["Document", "H1", "P", "P"]);
     let report = check(&doc, &Options::default());
     assert_eq!(status(&report, Rule::TaggedPdf), Status::Passed);
     assert_eq!(status(&report, Rule::TaggedContent), Status::Passed);
@@ -104,7 +108,7 @@ fn autotag_text_reads_content_with_parameters_given_by_reference() {
     let mut predicted = pdfcraft_cos::Stream::flate(Dict::new(), &rows);
     predicted.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
     doc.set(ObjRef::new(4, 0), predicted);
-    assert_eq!(autotag_text(&mut doc).unwrap(), AutoTagResult { pages: 1, paragraphs: 1 });
+    assert_eq!(autotag_text(&mut doc).unwrap(), AutoTagResult { pages: 1, paragraphs: 1, headings: 0 });
     let page = &pdfcraft_model::pages(&doc)[0];
     let written = doc.resolve(page.dict.get(b"Contents").unwrap());
     let Object::Stream(written) = &*written else { panic!("page content") };
@@ -157,7 +161,7 @@ fn autotag_text_marks_vector_graphics_and_images_as_artifacts() {
         "",
     );
     let result = autotag_text(&mut doc).unwrap();
-    assert_eq!(result, AutoTagResult { pages: 1, paragraphs: 1 });
+    assert_eq!(result, AutoTagResult { pages: 1, paragraphs: 1, headings: 0 });
     let report = check(&doc, &Options { rules: [Rule::TaggedPdf, Rule::TaggedContent].into(), pages: None });
     assert_eq!(status(&report, Rule::TaggedPdf), Status::Passed);
     assert_eq!(status(&report, Rule::TaggedContent), Status::Passed);
@@ -1882,4 +1886,38 @@ fn autotag_text_refuses_pages_that_share_content_past_the_total_operator_allowan
     let mut doc = pdf(&bodies, "");
     let Err(AutoTagError::Unsupported { reason, .. }) = autotag_text(&mut doc) else { panic!("expected a refusal") };
     assert!(reason.contains("too much content"), "{reason}");
+}
+
+#[test]
+fn autotag_form_fields_tags_widgets_of_a_shared_annots_array_once() {
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 7 0 R >>".into(),
+            "<< /Length 0 >>\nstream\n\nendstream".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 60 120 80] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 7 0 R >>".into(),
+            "[5 0 R 5 0 R]".into(),
+        ],
+        "",
+    );
+    assert_eq!(tag_form_fields(&mut doc).unwrap(), 1);
+}
+
+#[test]
+fn checker_reports_each_untagged_annotation_without_copying_shared_dictionaries() {
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 4 0 R 5 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Text /Rect [20 60 120 80] >>".into(),
+            "<< /Type /Annot /Subtype /Popup /Rect [20 60 120 80] >>".into(),
+        ],
+        "",
+    );
+    let pages = pdfcraft_model::pages(&doc);
+    let found = content::page_rule(&doc, Rule::TaggedAnnotations, &pages, &[0], &Default::default(), false);
+    assert_eq!(found.len(), 2, "the popup is skipped, each listed text annotation reported");
 }

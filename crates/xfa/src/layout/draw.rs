@@ -1,17 +1,32 @@
 use super::common::clean_name;
 use super::items::{Item, Rounded, Turned};
 use super::{
-    Arc, Border, Ctx, Draw, ExclGroup, Face, Font, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Presence, Rect, SomIndices, Stroke,
+    Arc, Border, Ctx, Draw, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_IMAGE_BYTES, Node, Para, Rect, SomIndices, Stroke,
     Subform, Value, XfaError, data_path, text,
 };
 
 impl Layouter<'_> {
     // ───────────────────────────────────────────────────────────────────────── drawing
 
+    /// Draw table row `row` at `rect` in columns `cols`, shown where it and what it is inside say
+    /// ([`Common::views`]).
     pub(super) fn draw_row(&mut self, row: &Subform, cols: &[f64], rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if depth > MAX_DEPTH {
             return Ok(());
         }
+        self.warn_other_views(&row.common);
+        let views = self.views.and(row.common.views());
+        if !views.any() {
+            return Ok(());
+        }
+        let outer = std::mem::replace(&mut self.views, views);
+        let drawn = self.draw_row_cells(row, cols, rect, ctx, depth, sib);
+        self.views = outer;
+        drawn
+    }
+
+    /// [`Self::draw_row`]'s border and cells, once where the row shows is set.
+    pub(super) fn draw_row_cells(&mut self, row: &Subform, cols: &[f64], rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if let Some(b) = &row.common.border {
             self.draw_border(b, rect)?;
         }
@@ -33,7 +48,7 @@ impl Layouter<'_> {
         if !c.presence.occupies() {
             return Ok(());
         }
-        let (w, h) = self.size_of(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1);
+        let (w, h) = self.size_at(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1, sib);
         let (x, y) = c.top_left(w, h);
         let rect = Rect::new(inner.x + x, inner.y + y, w, h);
         let start = self.item_count();
@@ -58,14 +73,27 @@ impl Layouter<'_> {
         }
     }
 
+    /// Draw `node` at `rect`, shown where it and what it is inside say ([`Common::views`]): an
+    /// invisible object that `relevant` prints is drawn for print only, and one shown nowhere
+    /// draws nothing.
     pub(super) fn draw_node(&mut self, node: &Node, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if depth > MAX_DEPTH {
             return Ok(());
         }
         let c = node.common();
-        if c.presence == Presence::Invisible {
+        self.warn_other_views(c);
+        let views = self.views.and(c.views());
+        if !views.any() {
             return Ok(());
         }
+        let outer = std::mem::replace(&mut self.views, views);
+        let drawn = self.draw_node_in(node, rect, ctx, depth, sib);
+        self.views = outer;
+        drawn
+    }
+
+    /// [`Self::draw_node`] once where the node shows is set.
+    pub(super) fn draw_node_in(&mut self, node: &Node, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         match node {
             Node::Draw(d) => {
                 let start = self.item_count();
@@ -115,23 +143,53 @@ impl Layouter<'_> {
                             if !k.common().presence.occupies() {
                                 continue;
                             }
-                            let (w, h) = self.size_of(k, inner.w, &ctx, depth + 1);
                             // A repeating subform here (a table in an area of a positioned page,
-                            // say) gets its instances, as in a flowed one, one under another.
-                            for instance in 0..self.instances(k, &ctx.som) {
-                                self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1, sibs.at(i) + instance)?;
+                            // say) gets its instances, as in a flowed one, one under another,
+                            // each as tall as its own content, and the rows past them are
+                            // reported as there.
+                            let instances = self.laid_out_instances(k, &ctx.som);
+                            for instance in 0..instances {
+                                let sib = sibs.at(i).saturating_add(instance);
+                                let (w, h) = self.size_at(k, inner.w, &ctx, depth + 1, sib);
+                                self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1, sib)?;
                                 y += h;
                             }
                         }
                     }
                     Layout::LrTb | Layout::RlTb => {
                         // A repeating subform here (rows of fields under a heading) gets its
-                        // instances, as in the other layouts.
+                        // instances, as in the other layouts, and the rows past them are reported.
+                        for k in s.children.iter().filter(|k| k.common().presence.occupies()) {
+                            self.laid_out_instances(k, &ctx.som);
+                        }
                         let (placed, _) = self.pack_instances(&s.children, inner.w, &ctx, depth, &ctx.som);
-                        for (i, instance, r) in placed {
-                            if let Some(k) = s.children.get(i) {
+                        // The sibling indices of each `subformSet` the steps go into, found once per
+                        // set (known by where its children are); the subform's own are `sibs`.
+                        let mut set_sibs: std::collections::HashMap<usize, SomIndices> = std::collections::HashMap::new();
+                        for (at, r) in placed {
+                            // Down the steps: a member of a `subformSet` takes the set's SOM path.
+                            let (mut nodes, mut node_ctx, mut node_depth) = (s.children.as_slice(), ctx.clone(), depth + 1);
+                            let mut target = None;
+                            for (step, &(i, instance)) in at.iter().enumerate() {
+                                let Some(k) = nodes.get(i) else { break };
+                                let index = if step == 0 {
+                                    sibs.at(i)
+                                } else {
+                                    set_sibs.entry(nodes.as_ptr() as usize).or_insert_with(|| SomIndices::of(nodes)).at(i)
+                                };
+                                let sib = index + instance;
+                                match k {
+                                    Node::Subform(set) if set.set && step + 1 < at.len() => {
+                                        node_ctx = node_ctx.with_som(&set.common, sib);
+                                        nodes = &set.children;
+                                        node_depth += 1;
+                                    }
+                                    _ => target = Some((k, sib)),
+                                }
+                            }
+                            if let Some((k, sib)) = target {
                                 let x = if s.layout == Layout::RlTb { inner.right() - r.x - r.w } else { inner.x + r.x };
-                                self.draw_node(k, Rect::new(x, inner.y + r.y, r.w, r.h), &ctx, depth + 1, sibs.at(i) + instance)?;
+                                self.draw_node(k, Rect::new(x, inner.y + r.y, r.w, r.h), &node_ctx, node_depth, sib)?;
                             }
                         }
                     }
@@ -146,11 +204,16 @@ impl Layouter<'_> {
                             if let Node::Subform(r) = k
                                 && r.layout == Layout::Row
                             {
-                                let h = self.row_height(r, &cols, inner.w, &ctx, depth + 1);
-                                self.draw_row(r, &cols, Rect::new(inner.x, y, inner.w, h), &ctx, depth + 1, csib)?;
-                                y += h;
+                                // A repeating row (a table in a positioned subform, say) gets its
+                                // instances one under another, as in a flowed table (XFA 3.3,
+                                // "Tables", p. 327), and the rows past them are reported.
+                                for instance in 0..self.laid_out_instances(k, &ctx.som) {
+                                    let h = self.row_height(r, &cols, inner.w, &ctx, depth + 1, csib.saturating_add(instance));
+                                    self.draw_row(r, &cols, Rect::new(inner.x, y, inner.w, h), &ctx, depth + 1, csib + instance)?;
+                                    y += h;
+                                }
                             } else {
-                                let (w, h) = self.size_of(k, inner.w, &ctx, depth + 1);
+                                let (w, h) = self.size_at(k, inner.w, &ctx, depth + 1, csib);
                                 self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1, csib)?;
                                 y += h;
                             }
@@ -276,6 +339,8 @@ impl Layouter<'_> {
         self.push_block(block)
     }
 
+    /// Draw a `draw` element (static text, an image, a line, a rectangle or an arc) in `rect`,
+    /// inside its border and margin.
     fn draw_draw(&mut self, d: &Draw, rect: Rect, ctx: &Ctx) -> Result<(), XfaError> {
         if let Some(b) = &d.common.border {
             self.draw_border(b, rect)?;
@@ -284,7 +349,7 @@ impl Layouter<'_> {
         let inner = rect.inset(&d.common.margin);
         match &d.value {
             Value::Text(_) | Value::Rich(_) => self.draw_value_text(&d.value, inner, &ctx.font, &ctx.para, &ctx.som),
-            Value::Image { content_type, data } => self.draw_image(data, content_type, inner),
+            Value::Image { content_type, data, .. } => self.draw_image(data, content_type, inner),
             Value::Line { slope_up, edge } => {
                 if !edge.visible() {
                     return Ok(());
@@ -301,6 +366,10 @@ impl Layouter<'_> {
         }
     }
 
+    /// Draw exclusion group `g` at `rect`: its border, then each of its buttons where its layout
+    /// puts it, as one radio group, the one its data selects turned on. A group that must be
+    /// answered makes each button required. `sib` is the group's index among same-named
+    /// siblings, for its SOM path.
     fn draw_group(&mut self, g: &ExclGroup, rect: Rect, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if let Some(b) = &g.common.border {
             self.draw_border(b, rect)?;
@@ -310,8 +379,10 @@ impl Layouter<'_> {
         let selected: Option<String> =
             self.data.and_then(|d| d.text_at(&data_path(self.tpl, &ctx.som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         let inner = rect.inset(&g.common.margin);
-        let group = self.unique_name(g.common.name.as_deref().unwrap_or("group"));
+        let group = self.unique_name(g.common.name.as_deref().unwrap_or("group"), g.common.name.is_none());
         let nodes: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
+        // Each field is measured under the SOM index it is drawn at.
+        let sibs = SomIndices::of(&nodes);
         let placed: Vec<(usize, Rect)> = match g.layout {
             Layout::Tb => {
                 let mut y = 0.0;
@@ -320,7 +391,7 @@ impl Layouter<'_> {
                     if !k.common().presence.occupies() {
                         continue;
                     }
-                    let (w, h) = self.size_of(k, inner.w, &ctx, depth + 1);
+                    let (w, h) = self.size_at(k, inner.w, &ctx, depth + 1, sibs.at(i));
                     out.push((i, Rect::new(0.0, y, w, h)));
                     y += h;
                 }
@@ -332,20 +403,38 @@ impl Layouter<'_> {
                 .filter(|(_, k)| k.common().presence.occupies())
                 .map(|(i, k)| {
                     let c = k.common();
-                    let (w, h) = self.size_of(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), &ctx, depth + 1);
+                    let (w, h) = self.size_at(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), &ctx, depth + 1, sibs.at(i));
                     let (x, y) = c.top_left(w, h);
                     (i, Rect::new(x, y, w, h))
                 })
                 .collect(),
             _ => self.pack(&nodes, inner.w, &ctx, depth).0,
         };
-        let sibs = SomIndices::of(&nodes);
         for (i, r) in placed {
             if let Some(f) = g.fields.get(i) {
+                // Each button shows where it and the group say ([`Common::views`]), as any field
+                // drawn through [`Self::draw_node`] does.
+                self.warn_other_views(&f.common);
+                let views = self.views.and(f.common.views());
+                if !views.any() {
+                    continue;
+                }
                 let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| (i + 1).to_string());
                 let tip = f.tooltip.clone().or_else(|| g.tooltip.clone());
                 let chosen = selected.as_deref() == Some(on.as_str());
-                self.draw_field(f, Rect::new(inner.x + r.x, inner.y + r.y, r.w, r.h), &ctx, Some((&group, &on, tip, chosen)), sibs.at(i))?;
+                // A group that must be answered makes each of its buttons required, as the group
+                // field they make is.
+                let required;
+                let f = if g.required && !f.required {
+                    required = Field { required: true, ..f.clone() };
+                    &required
+                } else {
+                    f
+                };
+                let outer = std::mem::replace(&mut self.views, views);
+                let drawn = self.draw_field(f, Rect::new(inner.x + r.x, inner.y + r.y, r.w, r.h), &ctx, Some((&group, &on, tip, chosen)), sibs.at(i));
+                self.views = outer;
+                drawn?;
             }
         }
         Ok(())
@@ -367,12 +456,26 @@ impl Layouter<'_> {
         self.push(Item::Image { rect: fitted, data: Arc::new(data.to_vec()), content_type: content_type.to_string() })
     }
 
-    /// A field name made from `base` that no earlier field of the form has: the first keeps it,
-    /// later ones get `_2`, `_3`, ….
-    pub(super) fn unique_name(&mut self, base: &str) -> String {
+    /// A field name made from `base` that no other field of the form has: the first keeps it,
+    /// later ones get `_2`, `_3`, …, skipping a name another field already has or that the
+    /// template gives another field (a template field named `Cell4_2` keeps it, and the second
+    /// `Cell4` becomes `Cell4_3`). A `fallback` base, the name an unnamed field or group gets
+    /// (`field`, `group`), is made up too: it doesn't take a name the template gives another
+    /// field either, and a template field named `field` still gets it.
+    pub(super) fn unique_name(&mut self, base: &str, fallback: bool) -> String {
         let base = clean_name(base);
-        let n = self.names.entry(base.clone()).or_insert(0);
-        *n += 1;
-        if *n == 1 { base } else { format!("{base}_{n}") }
+        // The template's own name, while no other field has it.
+        if !fallback && self.taken.insert(base.clone()) {
+            return base;
+        }
+        loop {
+            let n = self.names.entry(base.clone()).or_insert(0);
+            *n = n.saturating_add(1);
+            let candidate = if *n == 1 { base.clone() } else { format!("{base}_{n}") };
+            let reserved = (fallback || *n > 1) && self.template_names.contains(&candidate);
+            if !reserved && self.taken.insert(candidate.clone()) {
+                return candidate;
+            }
+        }
     }
 }

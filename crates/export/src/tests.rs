@@ -323,7 +323,7 @@ fn word_opens_text_with_control_characters_and_long_pages() {
     assert!(!xml.chars().any(|c| !allowed(c)));
     assert!(xml.contains("<w:pgSz w:w=\"12240\" w:h=\"31680\"/>"), "clamped to 22 in: {xml}");
     assert!(xml.contains("<w:sz w:val=\"24\"/>"), "a non-finite size falls back to 12 pt");
-    assert!(rtf(&[p]).contains("Total 4.50\tGBP"));
+    assert!(rtf(&[p]).contains("Total 4.50\\tab GBP"));
     // A narrow page keeps room for text: margins shrink.
     let narrow = Page { width: 100.0, height: 200.0, ..page() };
     let xml = part(&docx(&[narrow], "Narrow"), "word/document.xml");

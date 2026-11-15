@@ -1,5 +1,5 @@
 use super::annotations::{FieldWalk, MAX_LINK_ATTACHMENT_TEXT_BYTES};
-use super::model::{AttachmentSource, PageInfo, Xfa};
+use super::model::{Attachment, AttachmentSource, PageInfo, Portfolio, PortfolioView, Xfa};
 use super::navigation::text_string;
 use super::{
     Arc, AssertUnwindSafe, DecryptionError, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, LoadPdfError, Object,
@@ -155,16 +155,34 @@ pub(super) struct Inspector<'a> {
     /// has no `/P`. Searching every page's `/Annots` for each such field was O(fields ×
     /// annotations): a second on a form of 8,000 fields.
     pub(super) annotation_pages: OnceCell<HashMap<ObjectId, usize>>,
+    /// What is left of [`MAX_FIELD_TEXT_BYTES`]: names, values and tooltips of form fields and
+    /// layer names, which many entries can share one string of.
+    pub(super) field_text: std::cell::Cell<usize>,
+    /// Set when a field with an action went unlisted because the text allowance was spent, so the
+    /// document still reports JavaScript.
+    pub(super) field_actions: std::cell::Cell<bool>,
     /// The first page widget naming each field as its `/Parent`, built when a field has no widget
     /// among its `/Kids`.
     pub(super) parent_widgets: OnceCell<HashMap<ObjectId, ObjectId>>,
 }
 
+/// Bytes of field and layer text one inspection reads and keeps together.
+pub(super) const MAX_FIELD_TEXT_BYTES: usize = 64 << 20;
+
 impl<'a> Inspector<'a> {
     pub(super) fn new(doc: &'a dyn Structure) -> Self {
         let page_ids = doc.page_ids();
         let page_index = page_ids.iter().copied().enumerate().map(|(index, id)| (id, index)).collect();
-        let mut me = Self { doc, page_ids, page_index, named: HashMap::new(), annotation_pages: OnceCell::new(), parent_widgets: OnceCell::new() };
+        let mut me = Self {
+            doc,
+            page_ids,
+            page_index,
+            named: HashMap::new(),
+            annotation_pages: OnceCell::new(),
+            field_text: MAX_FIELD_TEXT_BYTES.into(),
+            field_actions: false.into(),
+            parent_widgets: OnceCell::new(),
+        };
         let mut named = HashMap::new();
         if let Some(tree) =
             doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| me.dict(o)).and_then(|n| n.get(b"Dests").ok()).and_then(|o| me.dict(o))
@@ -177,8 +195,8 @@ impl<'a> Inspector<'a> {
     }
 
     /// Reads what `info` holds beyond the page list: encryption, document information, tagging,
-    /// page labels, bookmarks, annotations, transitions, form fields, layers, fonts, attachments,
-    /// JavaScript and the opening destination.
+    /// page labels, bookmarks, annotations, transitions, form fields, layers, fonts, attachments
+    /// (and, for a PDF portfolio, how it presents them), JavaScript and the opening destination.
     pub(super) fn fill(&self, info: &mut DocInfo) {
         // lopdf drops /Encrypt from the trailer once it has decrypted the file.
         info.encrypted = self.doc.encrypted();
@@ -260,7 +278,7 @@ impl<'a> Inspector<'a> {
                 }
             }
         }
-        info.has_javascript |= info.fields.iter().any(|f| f.has_actions);
+        info.has_javascript |= info.fields.iter().any(|f| f.has_actions) || self.field_actions.get();
         let needs_rendering = catalog.get(b"NeedsRendering").ok().and_then(|o| self.resolve(o).as_bool().ok()).unwrap_or(false);
         if let Some(xfa) = catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o)).and_then(|form| form.get(b"XFA").ok()) {
             // A form with no fields is taken to be laid out from its template, unless its
@@ -284,6 +302,7 @@ impl<'a> Inspector<'a> {
             }
             info.has_javascript |= names.get(b"JavaScript").is_ok();
         }
+        info.portfolio = catalog.get(b"Collection").ok().and_then(|o| self.dict(o)).map(|c| self.portfolio(c, &info.attachments));
         if let Ok(action) = catalog.get(b"OpenAction")
             && let Some(dict) = self.dict(action)
             && dict.get(b"S").ok().and_then(|o| self.resolve(o).as_name().ok()) == Some(&b"JavaScript"[..])
@@ -293,6 +312,26 @@ impl<'a> Inspector<'a> {
         info.open_dest = catalog.get(b"OpenAction").ok().and_then(|o| self.open_dest(o));
     }
 
+    /// A portfolio's collection dictionary (Table 153). `/D` names the initial document's key in
+    /// the `/EmbeddedFiles` name tree, decoded as the keys are.
+    fn portfolio(&self, collection: &Dictionary, attachments: &[Attachment]) -> Portfolio {
+        let view = match self.name(collection, b"View").as_deref() {
+            Some("T") => PortfolioView::Tile,
+            Some("H") => PortfolioView::Hidden,
+            Some("C") => PortfolioView::Custom,
+            _ => PortfolioView::Details,
+        };
+        let initial = match collection.get(b"D").map(|o| self.resolve(o)) {
+            Ok(Object::String(bytes, _)) => {
+                let name = text_string(bytes);
+                attachments.iter().position(|a| matches!(&a.source, AttachmentSource::Document { key } if *key == name))
+            }
+            _ => None,
+        };
+        Portfolio { initial, view }
+    }
+
+    /// The object a reference points at, or `o` itself for a direct object or a broken reference.
     pub(super) fn resolve(&self, o: &'a Object) -> &'a Object {
         self.doc.dereference(o).map(|(_, o)| o).unwrap_or(o)
     }
@@ -330,11 +369,49 @@ impl<'a> Inspector<'a> {
 
     /// Whitespace-trimmed metadata, spent from `budget` as [`spend`] does, so text that trims
     /// short or to nothing still spends its raw length.
+    /// [`Self::budgeted_text`] against the shared field and layer text allowance.
+    pub(super) fn field_text(&self, d: &Dictionary, key: &[u8]) -> Option<String> {
+        let mut left = self.field_text.get();
+        let text = self.budgeted_text(d, key, &mut left);
+        self.field_text.set(left);
+        text
+    }
+
+    /// Converts `bytes` against the field and layer text allowance, as [`spend`] does.
+    pub(super) fn field_spend(&self, bytes: &[u8], convert: impl FnOnce(&[u8]) -> String) -> Option<String> {
+        let mut left = self.field_text.get();
+        let text = spend(bytes, &mut left, convert);
+        self.field_text.set(left);
+        text
+    }
+
+    /// Spends `n` bytes of the field and layer text allowance; `false` when too few are left.
+    pub(super) fn field_charge(&self, n: usize) -> bool {
+        let left = self.field_text.get();
+        self.field_text.set(left.saturating_sub(n));
+        n <= left
+    }
+
     pub(super) fn budgeted_text(&self, d: &Dictionary, key: &[u8], budget: &mut usize) -> Option<String> {
-        let o = self.resolve(d.get(key).ok()?);
-        let (Object::String(bytes, _) | Object::Name(bytes)) = o else { return None };
-        let text = spend(bytes, budget, |_| trimmed_text(o).unwrap_or_default())?;
-        (!text.is_empty()).then_some(text)
+        self.budgeted_text_within(d, key, budget).ok().flatten()
+    }
+
+    /// [`Self::budgeted_text`], but `Err` when the text is there and does not fit `budget`
+    /// (against `Ok(None)`: no text, or none that trims to anything).
+    pub(super) fn budgeted_text_within(&self, d: &Dictionary, key: &[u8], budget: &mut usize) -> Result<Option<String>, ()> {
+        let Ok(o) = d.get(key) else { return Ok(None) };
+        let o = self.resolve(o);
+        let (Object::String(bytes, _) | Object::Name(bytes)) = o else { return Ok(None) };
+        let text = spend(bytes, budget, |_| trimmed_text(o).unwrap_or_default()).ok_or(())?;
+        Ok((!text.is_empty()).then_some(text))
+    }
+
+    /// [`Self::field_text`], but `Err` when the text does not fit the allowance.
+    pub(super) fn field_text_within(&self, d: &Dictionary, key: &[u8]) -> Result<Option<String>, ()> {
+        let mut left = self.field_text.get();
+        let text = self.budgeted_text_within(d, key, &mut left);
+        self.field_text.set(left);
+        text
     }
 
     pub(super) fn name(&self, d: &Dictionary, key: &[u8]) -> Option<String> {

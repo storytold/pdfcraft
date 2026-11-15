@@ -422,7 +422,7 @@ impl PdfCraftApp {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
-        if ctx.input(|inp| inp.key_pressed(egui::Key::Escape)) {
+        if self.page_keys.pressed(ctx, egui::Key::Escape) {
             if let Some(view) = self.views.get_mut(i) {
                 view.picked_image = None;
                 view.pending_pick = None;
@@ -430,7 +430,7 @@ impl PdfCraftApp {
             return;
         }
         let Some(picked) = self.views.get(i).and_then(|v| v.picked_image) else { return };
-        let copy = ctx.input(|inp| inp.events.iter().any(|e| matches!(e, egui::Event::Copy)));
+        let copy = self.page_keys.clipboard(ctx).copy;
         if !copy || self.views[i].selected_text().is_some() {
             return;
         }
