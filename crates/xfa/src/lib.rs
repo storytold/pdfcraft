@@ -21,6 +21,7 @@ mod proto;
 pub mod script;
 pub mod text;
 mod traverse;
+mod xml;
 
 use pdfcraft_cos::Document;
 
