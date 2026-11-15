@@ -7418,8 +7418,8 @@ fn type1_font_programs_with_long_runs_of_numbers_load_quickly() {
 
 /// A Type 1 font program drawing `H` as a 400 by 700 box, as cleartext and an eexec section,
 /// with its two lengths (ISO 32000-2 §9.9 `/Length1`, `/Length2`; Adobe Type 1 Font Format
-/// §7). Contributor-original.
-fn box_type1_program() -> (Vec<u8>, usize, usize) {
+/// §7). With `glyphs` false its `/CharStrings` is empty. Contributor-original.
+fn box_type1_program(glyphs: bool) -> (Vec<u8>, usize, usize) {
     /// Encrypts `plain` with the Type 1 cipher from `key` (Adobe Type 1 Font Format §7.1).
     fn encrypt(plain: &[u8], key: u16) -> Vec<u8> {
         let mut r = key;
@@ -7438,9 +7438,11 @@ fn box_type1_program() -> (Vec<u8>, usize, usize) {
     let h = encrypt(&[0, 0, 0, 0, 139, 248, 228, 13, 239, 139, 21, 248, 36, 139, 5, 139, 249, 80, 5, 252, 36, 139, 5, 9, 14], 4330);
     let mut private = b"dup /Private 8 dict dup begin\n/RD{string currentfile exch readstring pop}executeonly def\n\
 /ND{noaccess def}executeonly def\n/NP{noaccess put}executeonly def\n/lenIV 4 def\n/password 5839 def\n\
-/BlueValues [] def\n/MinFeature {16 16} def\n2 index /CharStrings 2 dict dup begin\n"
+/BlueValues [] def\n/MinFeature {16 16} def\n"
         .to_vec();
-    for (name, program) in [("/.notdef", notdef), ("/H", h)] {
+    let charstrings = if glyphs { vec![("/.notdef", notdef), ("/H", h)] } else { Vec::new() };
+    private.extend_from_slice(format!("2 index /CharStrings {} dict dup begin\n", charstrings.len()).as_bytes());
+    for (name, program) in charstrings {
         private.extend_from_slice(format!("{name} {} RD ", program.len()).as_bytes());
         private.extend_from_slice(&program);
         private.extend_from_slice(b" ND\n");
@@ -7459,7 +7461,7 @@ currentdict end\ncurrentfile eexec\n";
 /// (vendored hayro-interpret patch 107). It was drawn with the standard substitute.
 #[test]
 fn a_type1c_font_file_holding_a_type1_program_draws_with_it() {
-    let (program, clear, binary) = box_type1_program();
+    let (program, clear, binary) = box_type1_program(true);
     // The same program in PFB segments: text, binary, end of file.
     let segment = |kind: u8, data: &[u8]| [&[0x80, kind][..], &(data.len() as u32).to_le_bytes(), data].concat();
     let pfb = [segment(1, &program[..clear]), segment(2, &program[clear..]), vec![0x80, 3]].concat();
@@ -7509,7 +7511,11 @@ fn a_type1c_font_file_holding_a_type1_program_draws_with_it() {
     assert_ne!(embedded, render(None), "the program draws other glyphs than the substitute");
     let type1c = " /Subtype /Type1C".to_string();
     assert_eq!(render(Some(("FontFile3", type1c.clone(), &program))), embedded, "cleartext and eexec under /Type1C");
-    assert_eq!(render(Some(("FontFile3", type1c, &pfb))), embedded, "PFB segments under /Type1C");
+    assert_eq!(render(Some(("FontFile3", type1c.clone(), &pfb))), embedded, "PFB segments under /Type1C");
+    // A program without glyphs, which the Type 1 reader accepts with a `.notdef` of its own,
+    // would draw nothing: the substitute draws instead, as before.
+    let (empty, _, _) = box_type1_program(false);
+    assert_eq!(render(Some(("FontFile3", type1c, &empty))), render(None), "a Type 1 program without glyphs under /Type1C");
 }
 
 /// From `cargo xtask fuzz`: an inline image claiming /W 4294967295 over four bytes of data

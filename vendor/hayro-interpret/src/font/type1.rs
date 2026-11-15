@@ -227,6 +227,11 @@ impl Type1Kind {
             .glyph_names()
             .map(|(gid, name)| (name.to_string(), gid))
             .collect();
+        // A `FontFile3` program without glyphs (the reader adds a `.notdef` of its own) would
+        // draw nothing, so it falls back to the standard substitute, as it did before patch (107).
+        if key == FONT_FILE3 && name_to_gid.keys().all(|name| name == ".notdef") {
+            return None;
+        }
 
         Some(Self {
             font,
