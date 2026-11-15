@@ -221,6 +221,43 @@ pub(crate) fn reselect(ctx: &egui::Context, id: egui::Id, text: &str, range: &st
     }
 }
 
+/// The word a double-click at `caret` (a char index of `text`) means: the word whose letter the
+/// caret sits before, or after it where the caret ends a word. egui's own double-click reaches back
+/// to the previous word and on to the next one wherever the caret sits at a word edge, so
+/// double-clicking the left half of a one-letter "a" in "Take a calm" selected "Take a".
+fn word_at_caret(text: &str, caret: usize) -> Option<std::ops::Range<usize>> {
+    use egui::text::CCursor;
+    use egui::text_selection::text_cursor_state::{ccursor_next_word, ccursor_previous_word};
+    let solid = |at: usize| text.chars().nth(at).is_some_and(|c| !c.is_whitespace());
+    let (start, end) = if solid(caret) {
+        (ccursor_previous_word(text, CCursor::new(caret + 1)), ccursor_next_word(text, CCursor::new(caret)))
+    } else if caret > 0 && solid(caret - 1) {
+        (ccursor_previous_word(text, CCursor::new(caret)), ccursor_next_word(text, CCursor::new(caret - 1)))
+    } else {
+        return None;
+    };
+    Some(usize::from(start.index)..usize::from(end.index))
+}
+
+/// Narrow the selection a double-click just made in the text box `id` to the word under the
+/// pointer (see [`word_at_caret`]). Shown from the next pass on.
+fn narrow_double_click(ui: &egui::Ui, id: egui::Id, text: &str, output: &egui::text_edit::TextEditOutput) {
+    if !output.response.double_clicked() {
+        return;
+    }
+    let Some(pointer) = output.response.interact_pointer_pos() else { return };
+    let caret = usize::from(output.galley.cursor_from_pos(pointer - output.galley_pos).index);
+    let Some(word) = word_at_caret(text, caret) else { return };
+    let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+    let selected = state.cursor.char_range().map(|r| r.sorted_cursors().map(|c| usize::from(c.index)));
+    if selected != Some([word.start, word.end]) {
+        let range = egui::text::CCursorRange::two(egui::text::CCursor::new(word.start), egui::text::CCursor::new(word.end));
+        state.cursor.set_char_range(Some(range));
+        egui::TextEdit::store_state(ui.ctx(), id, state);
+        ui.ctx().request_repaint();
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Extras {
     pub underline: bool,
@@ -1025,6 +1062,7 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
                     }
                 }
                 look = Some((Arc::clone(&output.galley), output.galley_pos));
+                narrow_double_click(ui, input, &ed.text, &output);
                 let r = output.response;
                 if ed.focus {
                     r.request_focus();
@@ -1109,6 +1147,61 @@ pub(crate) fn lost_focus_once(r: &egui::Response, had: &mut bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_double_click_at_a_word_edge_means_that_word() {
+        let text = "Take a calm walk.";
+        let word = |caret| word_at_caret(text, caret).map(|r| &text[r]);
+        assert_eq!(word(5), Some("a"), "before the one-letter word, after a space");
+        assert_eq!(word(6), Some("a"), "at the end of the one-letter word");
+        assert_eq!(word(17), Some("walk."), "at the end of the text");
+        assert_eq!(word(4), Some("Take"), "at the end of a word, before a space");
+        assert_eq!(word(7), Some("calm"), "at the start of a longer word");
+        assert_eq!(word(9), Some("calm"), "inside a word");
+        assert_eq!(word(0), Some("Take"));
+        assert_eq!(word(11), Some("calm"), "at the end of a word, before a space");
+    }
+
+    /// The live text box: egui's double-click selects "Take a" at the left of the one-letter word;
+    /// the correction narrows it to "a" (#7413).
+    #[test]
+    fn double_clicking_a_one_letter_word_selects_only_that_word() {
+        use egui::{Event, PointerButton, Pos2, RawInput};
+        let ctx = egui::Context::default();
+        let id = egui::Id::unique("paragraph");
+        let mut text = String::from("Take a calm walk.");
+        let mut time = 0.0;
+        let mut pass = |events: Vec<Event>, pointer: Option<Pos2>| {
+            time += 0.05;
+            let input = RawInput { events, time: Some(time), ..Default::default() };
+            let mut shown = (Pos2::ZERO, Pos2::ZERO, None);
+            let mut output = ctx.run_ui(input, |ui| {
+                let out = egui::TextEdit::multiline(&mut text).id(id).desired_width(300.0).show(ui);
+                let at = |i: usize| out.galley.pos_from_cursor(egui::text::CCursor::new(i));
+                let (from, to) = (at(5), at(6));
+                let row = out.galley_pos.to_vec2();
+                shown = (from.left_center() + row, to.left_center() + row, out.cursor_range);
+                if pointer.is_some() {
+                    narrow_double_click(ui, id, &text, &out);
+                }
+            });
+            output.textures_delta.clear();
+            shown
+        };
+        let (a_start, a_end, _) = pass(vec![], None);
+        // One-fifth into the letter, as in the report.
+        let click = Pos2::new(a_start.x + 0.2 * (a_end.x - a_start.x), a_start.y);
+        let press = |pressed| Event::PointerButton { pos: click, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+        pass(vec![Event::PointerMoved(click)], None);
+        for _ in 0..2 {
+            pass(vec![press(true)], None);
+            pass(vec![press(false)], Some(click));
+        }
+        let (_, _, selection) = pass(vec![], None);
+        let selection = selection.expect("the double-click leaves a selection");
+        let [start, end] = selection.sorted_cursors().map(|c| usize::from(c.index));
+        assert_eq!(&text[start..end], "a");
+    }
 
     /// Where an edge's reach above or below its box overlaps the next paragraph's edge, the
     /// paragraph the pointer is level with takes the press, whichever is drawn on top (the play
