@@ -64,3 +64,53 @@ fn audit_rectangles_match_the_tool_in_top_left_points() {
     let tool = serde_json::Deserializer::from_str(&stdout).into_iter::<serde_json::Value>().last().unwrap().unwrap();
     assert_eq!(rects(&tool), rects(&cli), "{tool}");
 }
+
+/// #4770: black boxes hide grey and coloured text just as they hide black text, but do not
+/// remove any of it. Exercise the issue's public script before and after flattening annotations.
+#[test]
+fn audit_finds_all_text_colours_before_and_after_flattening() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-cli-audit-colours-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let steps = serde_json::json!([
+        {"tool": "doc_create", "args": {"from": "blank", "pages": 1, "width": 595, "height": 842}},
+        {"tool": "page_add_text", "args": {"doc": 1, "page": 1, "text": "black SECRET", "at": [72, 100], "size": 14}},
+        {"tool": "page_add_text", "args": {"doc": 1, "page": 1, "text": "grey SECRET", "at": [72, 200], "size": 14, "color": "#888888"}},
+        {"tool": "page_add_text", "args": {"doc": 1, "page": 1, "text": "blue SECRET", "at": [72, 300], "size": 14, "color": "#1a6ee0"}},
+        {"tool": "page_add_text", "args": {"doc": 1, "page": 1, "text": "near-black SECRET", "at": [72, 400], "size": 14, "color": "#222222"}},
+        {"tool": "comment_add", "args": {"doc": 1, "page": 1, "type": "rectangle", "rect": [60, 92, 300, 124], "fill": "#000000", "color": "#000000"}},
+        {"tool": "comment_add", "args": {"doc": 1, "page": 1, "type": "rectangle", "rect": [60, 192, 300, 224], "fill": "#000000", "color": "#000000"}},
+        {"tool": "comment_add", "args": {"doc": 1, "page": 1, "type": "rectangle", "rect": [60, 292, 300, 324], "fill": "#000000", "color": "#000000"}},
+        {"tool": "comment_add", "args": {"doc": 1, "page": 1, "type": "rectangle", "rect": [60, 392, 300, 424], "fill": "#000000", "color": "#000000"}},
+        {"tool": "doc_audit_redactions", "args": {"doc": 1}},
+        {"tool": "doc_flatten", "args": {"doc": 1}},
+        {"tool": "doc_audit_redactions", "args": {"doc": 1}},
+        {"tool": "doc_save", "args": {"doc": 1, "path": "boxes.pdf"}}
+    ]);
+    std::fs::write(dir.join("steps.json"), steps.to_string()).unwrap();
+    let out = Command::new(BIN).arg("run").arg("--script").arg(dir.join("steps.json")).arg("--root").arg(&dir).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let tool_reports: Vec<serde_json::Value> = serde_json::Deserializer::from_slice(&out.stdout)
+        .into_iter::<serde_json::Value>()
+        .map(Result::unwrap)
+        .filter(|value| value.get("findings").is_some())
+        .collect();
+    assert_eq!(tool_reports.len(), 2, "both annotation and flattened audits must run: {tool_reports:?}");
+
+    let out = Command::new(BIN).arg("audit").arg(dir.join("boxes.pdf")).output().unwrap();
+    assert_eq!(out.status.code(), Some(1), "findings must fail the audit: {}", String::from_utf8_lossy(&out.stderr));
+    let cli: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let expected = ["black SECRET", "grey SECRET", "blue SECRET", "near-black SECRET"];
+    for report in tool_reports.iter().chain(std::iter::once(&cli)) {
+        assert_eq!(report["count"], 4, "{report}");
+        let texts: Vec<&str> = report["findings"].as_array().unwrap().iter().map(|finding| finding["covered_text"].as_str().unwrap()).collect();
+        assert_eq!(texts, expected, "{report}");
+    }
+
+    let out = Command::new(BIN).arg("text").arg(dir.join("boxes.pdf")).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let extracted = String::from_utf8(out.stdout).unwrap();
+    for text in expected {
+        assert!(extracted.contains(text), "covered text must still be extractable: {extracted}");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}

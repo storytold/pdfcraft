@@ -58,6 +58,7 @@
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M2: scans keep their strokes at screen size and are smoothed when zoomed; M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
+> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (M8, #4770: dark-cover audit includes grey/coloured text; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (web: same-document host mode on the canvas, `data-host="page"`; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M10: vector printing resolves annotation rectangle coordinates; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M10: vector printing resolves annotation rectangles and appearance-state names; estimates unchanged)
@@ -261,6 +262,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-11 (M8, PR #4773):** Reconciled current main, retaining bounded audit output accounting, dark-cover regressions and both roadmap histories. Non-stream content slots retain paint-order alignment so leading null entries cannot hide covered text from the audit. Detection remains heuristic and partial; estimates unchanged.
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
 - **2026-10-27 (M10, #5005):** Vector printing retains each annotation's optional-content membership when drawing its appearance.
@@ -336,6 +339,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-27 (M10, `ocr.ocr-web`, rebase fix):** The web build loads OCR models only when their SHA-256 matches `ATTRIBUTION.toml`. With ONNX loading now on, rten's parser spins forever on some bytes that aren't a model (a corrupt or wrong download), so a bad file now fails at once instead of hanging a worker.
 - **2026-10-27 (M3, #3425):** A file named with open parameters, as help systems start a PDF reader (`manual.pdf#nameddest=Intro`, `#page=12` or `#Intro`), opens at that destination instead of failing to read `manual.pdf#…`: at launch, when another launch hands it over, and in its tab when it is already open. Other parameters are ignored. The app and `link_open` now also apply a GoToR link's named destination, looked up in the target's /Names /Dests or catalog /Dests, instead of warning that it wasn't applied; the app looks names up off the UI thread. `doc_open` reports the destination of a path with open parameters. Estimates unchanged.
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
+- **2026-10-26 (M8, #4770):** The faux-redaction audit finds grey/coloured text under dark opaque rectangles and Square annotations, including flattened annotations. Audit-only grouping separates later text painted on top; existing light-shading exclusions remain. Blend modes, masks and transparency groups remain outside the heuristic. Estimates unchanged.
 
 - **2026-10-26 (M2, PR #4172):** Reconciled current main, preserving its Japanese serif/weight selection and both branches' progress records. Installed CJK viewer and preview fallback remains display-only; estimates unchanged.
 
