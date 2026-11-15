@@ -198,6 +198,13 @@ pub(super) fn pages(
                 if !view.target_pages().contains(&i) {
                     view.click_page(i, egui::Modifiers::NONE, true);
                 }
+                for (label, degrees) in [(tl!("Rotate counterclockwise"), -90), (tl!("Rotate clockwise"), 90)] {
+                    if ui.add_enabled(editable, egui::Button::new(label)).clicked() {
+                        view.pending_edit = Some(pdfcraft_engine::Edit::RotatePages { pages: view.target_pages(), degrees });
+                        ui.close();
+                    }
+                }
+                ui.separator();
                 if ui.button(tl!("Extract pages")).clicked() {
                     view.pending_action = Some(crate::canvas::ViewAction::Extract);
                     ui.close();

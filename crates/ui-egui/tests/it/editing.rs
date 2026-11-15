@@ -11698,3 +11698,26 @@ fn a_modified_click_away_from_a_cropped_picture_applies_its_crop() {
         assert!(keep.iter().zip(visible).all(|(a, b)| (a - b).abs() < 0.5), "{mods:?}: the crop is applied: {visible:?}");
     }
 }
+
+/// Thumbnail rotation edits the selected pages, including a right-click outside the selection.
+#[test]
+fn rotating_pages_from_the_thumbnail_menu_is_undoable() {
+    let mut h = pages_panel(4);
+    let id = h.state().views[0].id;
+    let rotations = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>();
+    h.state_mut().views[0].select_pages(&[1, 2]);
+    h.run_steps(2);
+    let at = panel_thumb(&h, "Page 2");
+    right_click_at(&mut h, at);
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(4);
+    assert_eq!(rotations(&h), [0, 90, 90, 0]);
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    assert_eq!(rotations(&h), [0, 0, 0, 0]);
+    let at = panel_thumb(&h, "Page 1");
+    right_click_at(&mut h, at);
+    h.get_by_label("Rotate counterclockwise").click();
+    h.run_steps(4);
+    assert_eq!(rotations(&h), [270, 0, 0, 0]);
+}
