@@ -413,6 +413,29 @@ fn rtf_page_breaks_stay_out_of_tables() {
     assert_eq!(texts.iter().filter(|t| t.starts_with('\u{000C}')).count(), 2, "one break before each later page: {texts:?}");
 }
 
+/// Empty and image-only pages still occupy a page when pictures are omitted from RTF.
+#[test]
+fn rtf_preserves_breaks_for_pages_without_text() {
+    let mut blank = page();
+    blank.blocks.clear();
+    blank.images.clear();
+    blank.rules.clear();
+    let mut image_only = page();
+    image_only.blocks.clear();
+    for pages in [
+        vec![blank.clone(), blank.clone(), page()],
+        vec![page(), blank.clone(), blank.clone()],
+        vec![page(), blank.clone(), blank.clone(), table_page()],
+        vec![blank.clone(), blank.clone(), blank],
+        vec![page(), image_only.clone(), image_only.clone(), page()],
+        vec![page(), image_only],
+    ] {
+        let r = rtf(&pages);
+        let breaks = rtf_paras(&r).iter().flatten().map(|run| run.0.matches(craft_rtf::PAGE_BREAK).count()).sum::<usize>();
+        assert_eq!(breaks, pages.len() - 1, "{r}");
+    }
+}
+
 /// A 3-column table with a spanning header row and a hole in the last row.
 fn table_page() -> Page {
     let cell = |t: &str, x: f64, y: f64, w: f64| Block {

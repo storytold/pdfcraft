@@ -42,6 +42,12 @@ fn table(t: &Table) -> craft_rtf::Table {
     craft_rtf::Table { rows }
 }
 
+/// Keep a break outside tables, including when no text follows it on its page.
+fn standalone_page_break(blocks: &mut Vec<Block>) {
+    let run = Run { text: PAGE_BREAK.to_string(), fmt: CharFmt::default() };
+    blocks.push(Block::Para(Para { runs: vec![run], ..Para::default() }));
+}
+
 /// Rich Text Format: paragraphs with their sizes, bold, italic and colours, real table rows, page
 /// breaks between pages (images are left out).
 pub fn rtf(pages: &[Page]) -> String {
@@ -64,14 +70,21 @@ pub fn rtf(pages: &[Page]) -> String {
             }
             Item::Table(t) => {
                 if std::mem::take(&mut page_break) {
-                    let run = Run { text: PAGE_BREAK.to_string(), fmt: CharFmt::default() };
-                    blocks.push(Block::Para(Para { runs: vec![run], ..Para::default() }));
+                    standalone_page_break(&mut blocks);
                 }
                 blocks.push(Block::Table(table(&t)));
             }
             Item::Img(_) => {}
-            Item::PageBreak => page_break = true,
+            Item::PageBreak => {
+                if page_break {
+                    standalone_page_break(&mut blocks);
+                }
+                page_break = true;
+            }
         }
+    }
+    if page_break {
+        standalone_page_break(&mut blocks);
     }
     craft_rtf::write(&Document { blocks, pictures_left_out: 0 }, "Helvetica")
 }
