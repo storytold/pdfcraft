@@ -805,8 +805,18 @@ fn pixel_clip_rect(path: &BezPath) -> Option<Rect> {
     if bounds.width() == 0.0 && bounds.height() == 0.0 {
         return None;
     }
-    // Each side runs along an axis and each point sits on a corner of the bounding box, so the
-    // four sides go round the box.
+    // Each side runs along an axis and each point sits on a corner of the bounding box: a
+    // different corner each, every side joining two neighbouring corners, so the four sides go
+    // round the box. Corners alone are not enough: `10 10 m 100 10 l 10 10 l 10 100 l h` sits on
+    // three of them and runs along the axes, but its two lines retrace themselves and enclose
+    // nothing, so it must not clip to its bounding box. Each point's corner is the bound it is
+    // nearer on each axis, which tells apart the sides of a rectangle thinner than the slack.
+    let corner = |p: &Point| {
+        let right = (p.x - bounds.x0).abs() > (p.x - bounds.x1).abs();
+        let top = (p.y - bounds.y0).abs() > (p.y - bounds.y1).abs();
+        u8::from(right) | (u8::from(top) << 1)
+    };
+    let mut seen = 0u8;
     for (i, p) in corners.iter().enumerate() {
         let q = corners.get((i + 1) % 4)?;
         if !(near(p.x, q.x) || near(p.y, q.y)) {
@@ -817,6 +827,14 @@ fn pixel_clip_rect(path: &BezPath) -> Option<Rect> {
         if !(on_x && on_y) {
             return None;
         }
+        // Neighbouring corners differ on exactly one axis.
+        if (corner(p) ^ corner(q)).count_ones() != 1 {
+            return None;
+        }
+        seen |= 1 << corner(p);
+    }
+    if seen != 0b1111 {
+        return None;
     }
     // Every pixel the rectangle reaches into by more than the slack. A rectangle thinner than
     // the slack still marks a pixel (§10.7.4, EXAMPLE): the one holding its middle, by the

@@ -138,3 +138,21 @@ fn clip_rectangles_snap_outward_but_not_for_rounding_noise() {
     assert_eq!(px(&page, 100, 98), [255; 3]);
     assert_eq!(px(&page, 100, 100), [255; 3]);
 }
+
+/// A clip path whose points sit on corners of its bounding box and whose lines run along the
+/// axes, but that retraces itself instead of going round the box, encloses nothing, so it clips
+/// everything away (ISO 32000-2 §10.7.4: the pixels a fill of it would include, and a fill of it
+/// includes none under either rule). It is not taken for the rectangle of its bounding box,
+/// which would paint a 90 × 90 pt square the clip excludes.
+#[test]
+fn a_retraced_clip_path_is_not_taken_for_its_bounding_box() {
+    let image = "BI /W 1 /H 1 /BPC 8 /CS /G ID \0 EI";
+    for (rule, path) in
+        [("W", "10 10 m 100 10 l 10 10 l 10 100 l h"), ("W*", "10 10 m 100 10 l 10 10 l 10 100 l h"), ("W", "10 10 m 100 10 l 100 100 l 100 10 l h")]
+    {
+        let content = format!("q {path} {rule} n 200 0 0 200 0 0 cm {image} Q");
+        let page = render(&content, "", "");
+        let painted = page.rgba.as_chunks::<4>().0.iter().filter(|p| p[0] < 128).count();
+        assert_eq!(painted, 0, "{path} {rule}: the clip keeps nothing, not its bounding box");
+    }
+}
