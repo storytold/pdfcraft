@@ -533,85 +533,6 @@ fn le16(b: &[u8], at: usize) -> Option<u16> {
     b.get(at..at + 2).map(|x| u16::from_le_bytes([x[0], x[1]]))
 }
 
-/// How a PCX image holds its pixels: bits per plane and planes.
-#[derive(Clone, Copy, PartialEq)]
-enum PcxLayout {
-    /// One byte per pixel per colour: each scanline has a red, a green and a blue row.
-    Rgb,
-    /// One byte per pixel, an index into the palette after the image (grey without one).
-    Indexed,
-    /// One bit per pixel in each of 1 to 4 planes, an index into the header's palette.
-    Bits(usize),
-}
-
-impl PcxLayout {
-    fn of(bits: u8, planes: usize) -> Option<PcxLayout> {
-        match (bits, planes) {
-            (8, 3) => Some(PcxLayout::Rgb),
-            (8, 1) => Some(PcxLayout::Indexed),
-            (1, 1..=4) => Some(PcxLayout::Bits(planes)),
-            _ => None,
-        }
-    }
-}
-
-/// The palette of a PCX image, and where its run-length coded scanlines end. An 8-bit image ends
-/// with a 0x0C byte and 256 colours; a one-plane bit image is black and white whatever its header
-/// holds; other bit images use the 16 colours at byte 16.
-fn pcx_palette(bytes: &[u8], layout: PcxLayout) -> (Vec<u8>, usize) {
-    match layout {
-        PcxLayout::Rgb => (Vec::new(), bytes.len()),
-        PcxLayout::Indexed => match bytes.len().checked_sub(769).filter(|at| *at >= 128 && bytes.get(*at) == Some(&0x0C)) {
-            Some(at) => (bytes.get(at + 1..).unwrap_or_default().to_vec(), at),
-            None => ((0..=255u8).flat_map(|v| [v, v, v]).collect(), bytes.len()),
-        },
-        PcxLayout::Bits(1) => (vec![0, 0, 0, 255, 255, 255], bytes.len()),
-        PcxLayout::Bits(_) => (bytes.get(16..64).unwrap_or_default().to_vec(), bytes.len()),
-    }
-}
-
-/// The `rows` scanlines of `line` bytes each, decoded. A run may cross from one plane's row into the
-/// next, but not out of its scanline.
-fn pcx_scanlines(mut body: &[u8], rows: usize, line: usize) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    out.try_reserve_exact(rows.checked_mul(line)?).ok()?;
-    for row in 1..=rows {
-        let end = row * line;
-        while out.len() < end {
-            let (&c, rest) = body.split_first()?;
-            body = rest;
-            if c < 0xC0 {
-                out.push(c);
-                continue;
-            }
-            let (&value, rest) = body.split_first()?;
-            body = rest;
-            let count = usize::from(c & 0x3F);
-            if count > end - out.len() {
-                return None;
-            }
-            out.resize(out.len() + count, value);
-        }
-    }
-    Some(out)
-}
-
-/// The RGB samples of the `w` pixels of scanline `row` (planes `stride` bytes apart).
-fn pcx_row(out: &mut Vec<u8>, row: &[u8], w: usize, stride: usize, layout: PcxLayout, palette: &[u8]) {
-    let at = |i: usize| row.get(i).copied().unwrap_or(0);
-    for x in 0..w {
-        let index = match layout {
-            PcxLayout::Rgb => {
-                out.extend([at(x), at(stride + x), at(2 * stride + x)]);
-                continue;
-            }
-            PcxLayout::Indexed => usize::from(at(x)),
-            PcxLayout::Bits(planes) => (0..planes).fold(0, |index, k| index | (usize::from(at(k * stride + x / 8) >> (7 - x % 8) & 1) << k)),
-        };
-        out.extend((0..3).map(|c| palette.get(index * 3 + c).copied().unwrap_or(0)));
-    }
-}
-
 /// A PCX image: a 128-byte header (size at 4-11, resolution at 12 and 14, plane count at 65, bytes
 /// per plane row at 66), then run-length coded scanlines, each holding one row of every plane.
 fn pcx(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
@@ -627,7 +548,9 @@ fn pcx(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     if planes == 0 || stride == 0 {
         return Err(bad("a damaged PCX header"));
     }
-    let layout = PcxLayout::of(bits, planes).ok_or_else(|| bad("this PCX plane layout is not supported"))?;
+    if !matches!((bits, planes), (8, 1 | 3) | (1, 1..=4)) {
+        return Err(bad("this PCX plane layout is not supported"));
+    }
     if stride < (w * usize::from(bits)).div_ceil(8) {
         return Err(bad("a damaged PCX header"));
     }
@@ -635,14 +558,51 @@ fn pcx(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     if line.saturating_mul(h) > MAX_DECODED_BYTES || w.saturating_mul(h).saturating_mul(3) > MAX_DECODED_BYTES {
         return Err(bad("unusual PCX image size"));
     }
-    let (palette, end) = pcx_palette(bytes, layout);
-    let body = bytes.get(128..end).unwrap_or_default();
-    let scanlines = pcx_scanlines(body, h, line).ok_or_else(|| bad("a damaged PCX body"))?;
-    let mut data = Vec::new();
-    data.try_reserve_exact(w * h * 3).map_err(|_| bad("not enough memory for this image"))?;
-    for row in scanlines.chunks_exact(line) {
-        pcx_row(&mut data, row, w, stride, layout, &palette);
+    // Preserve Create PDF's legacy palette policy, not a second pixel decoder: monochrome
+    // is black/white and an indexed file without its VGA palette is interpreted as gray.
+    // The shared reader owns all RLE, plane unpacking and palette application.
+    let has_vga = bytes.len().checked_sub(769).is_some_and(|at| at >= 128 && bytes.get(at) == Some(&0x0C));
+    // The pinned decoder predates shared version-4 recognition. Its version byte is
+    // only a header acceptance check, not a switch for pixel or palette semantics.
+    // Keep this app's existing version-4 acceptance without replacing the shared pin.
+    let version_four = byte(1) == 4;
+    let normalize = version_four || (bits == 1 && planes == 1) || (bits == 8 && planes == 1 && !has_vga);
+    let mut input = std::borrow::Cow::Borrowed(bytes);
+    if normalize {
+        // Normalization must not add an unbounded copy of hostile compressed input.
+        if bytes.len() > MAX_DECODED_BYTES {
+            return Err(bad("unusual PCX input size"));
+        }
+        let mut copy = Vec::new();
+        copy.try_reserve_exact(bytes.len()).map_err(|_| bad("not enough memory for this image"))?;
+        copy.extend_from_slice(bytes);
+        if version_four && let Some(version) = copy.get_mut(1) {
+            *version = 5;
+        }
+        if bits == 1 && planes == 1 {
+            if let Some(palette) = copy.get_mut(16..22) {
+                palette.copy_from_slice(&[0, 0, 0, 255, 255, 255]);
+            }
+        } else if bits == 8
+            && planes == 1
+            && !has_vga
+            && let Some(info) = copy.get_mut(68..70)
+        {
+            info.copy_from_slice(&2u16.to_le_bytes());
+        }
+        input = std::borrow::Cow::Owned(copy);
     }
+    let opts = craft_image_codecs::DecodeOptions {
+        limits: craft_image_codecs::Limits { max_alloc: MAX_DECODED_BYTES as u64, ..Default::default() },
+        ..Default::default()
+    };
+    let image = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Pcx, &input, &opts).map_err(|e| bad(&e.to_string()))?;
+    // The accepted layouts above are RGB8 in the pinned shared decoder. Refuse an unexpected
+    // contract rather than interpreting alpha or high-depth bytes as DeviceRGB samples.
+    if image.layout() != craft_image_codecs::ChannelLayout::Rgb || image.sample_type() != craft_image_codecs::SampleType::U8 {
+        return Err(bad("unexpected PCX pixel layout"));
+    }
+    let data = image.into_data();
     let dpi = (f64::from(word(12)), f64::from(word(14)));
     let dpi = if dpi.0 > 0.0 && dpi.1 > 0.0 { dpi } else { (72.0, 72.0) };
     let mut d = Dict::new();
