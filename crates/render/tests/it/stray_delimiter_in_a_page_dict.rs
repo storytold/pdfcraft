@@ -2,7 +2,7 @@
 //! `]`, a brace or a lone `>`) between its entries (`/Contents 6 0 R ) >>`). A dictionary is a
 //! sequence of key-value pairs (ISO 32000-2 §7.3.7), so the byte is garbage between entries:
 //! it is skipped and the dictionary keeps every entry around it (vendored hayro-syntax patch
-//! 113). Before, the byte failed the whole dictionary, and the page-tree walk (§7.7.3) ended
+//! 51). Before, the byte failed the whole dictionary, and the page-tree walk (§7.7.3) ended
 //! at that page: it and every later page were missing, with no error.
 use pdfcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
 use std::sync::Arc;

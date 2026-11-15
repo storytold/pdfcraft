@@ -213,7 +213,7 @@ impl Skippable for Dict<'_> {
     }
 }
 
-// PdfCraft patch (113): a closing delimiter or brace between dictionary entries
+// PdfCraft patch (51): a closing delimiter or brace between dictionary entries
 // (`/Contents 4 0 R ) >>`) starts no object, so the garbage skip failed and took the
 // whole dictionary with it: a page dictionary holding one ended the page-tree walk
 // there. Step over that one byte as garbage instead. Each call consumes a byte, so the
