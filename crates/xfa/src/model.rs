@@ -541,6 +541,18 @@ pub struct Subform {
     pub column_widths: Vec<f64>,
     /// `<overflow leader="…">`: the named child (a header row) is repeated after a page break.
     pub overflow_leader: Option<String>,
+    /// `<bind match="none"/>`: the subform "will not bind to any node in the XFA Data DOM"
+    /// (XFA 3.3 p. 176). Data binding treats it as a nameless subform, so what it holds binds
+    /// in the enclosing data scope, while scripts still reach it by name (p. 194).
+    pub unbound: bool,
+}
+
+impl Subform {
+    /// The name its instances take in the data: `None` for a nameless subform and for one that
+    /// binds to no data node ([`Subform::unbound`]), which have no data group of their own.
+    pub fn data_name(&self) -> Option<&str> {
+        if self.unbound { None } else { self.common.name.as_deref() }
+    }
 }
 
 /// A positioned group without a box of its own.

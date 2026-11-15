@@ -144,7 +144,7 @@ fn password_dataset_wants(doc: &Document) -> Result<Vec<Want>, XfaError> {
                         let sib = sibs.at(i);
                         match n {
                             Node::Subform(sf) => {
-                                let from_data = match &sf.common.name {
+                                let from_data = match sf.data_name() {
                                     Some(name) if sf.occur.max != Some(1) => self.data.count(&data_path(self.tpl, parent_som), name),
                                     _ => 0,
                                 };

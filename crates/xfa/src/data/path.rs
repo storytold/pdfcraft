@@ -69,11 +69,16 @@ pub fn som_to_path(som: &str) -> DataPath {
         .collect()
 }
 
-/// The data path the object at `som` binds to: [`som_to_path`] without the areas on the way.
-/// An area is a named container in the form, so it is part of SOM expressions, but only
-/// subforms, exclusion groups and fields are data scopes: what an area holds binds under the
-/// area's parent, as Adobe's viewers write it. The template tells which segments are areas;
-/// segments it doesn't have (page-set objects, or a SOM from another template) are kept.
+/// The data path the object at `som` binds to: [`som_to_path`] without the containers on the way
+/// that are no data scope. An area, and a subform with `<bind match="none"/>`, are named in
+/// SOM expressions but bind to no data node: data binding behaves "as though the transparent
+/// nodes were removed and their children adopted by the transparent node's parent" (XFA 3.3,
+/// "Transparent Nodes", pp. 193–194), so what they hold binds under their parent, as Adobe's
+/// viewers write it. For the same reason a segment's data index counts only the same-named
+/// siblings that bind. Each segment steps into the object its SOM index names ([`named_at`]),
+/// since copies of a subform share its name but may hold different objects. The template tells
+/// which segments are transparent; segments it doesn't have (page-set objects, or a SOM from
+/// another template) are kept.
 pub fn data_path(tpl: &Template, som: &str) -> DataPath {
     let mut out = DataPath::new();
     // The template children the next segment is looked up in; `None` until the root matched,
@@ -84,13 +89,20 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
     for (i, (name, index)) in segments.into_iter().enumerate() {
         // A page area's SOM index is the page made from it; see [`page_area_index`].
         let index = if i == 0 { page_area_index.unwrap_or(index) } else { index };
-        let found = match level {
-            None if i == 0 && tpl.root.common.name.as_deref() == Some(name.as_str()) => Some(Container::Children(&tpl.root.children)),
-            None => None,
-            Some(children) => match named(children, &name, 0) {
-                Some(Node::Subform(sf)) => Some(Container::Children(&sf.children)),
-                Some(Node::Area(a)) => Some(Container::Area(&a.children)),
-                _ => None,
+        let (found, index) = match level {
+            None if i == 0 && tpl.root.common.name.as_deref() == Some(name.as_str()) => (Some(Container::Children(&tpl.root.children)), index),
+            None => (None, index),
+            Some(children) => match named_in(children, &name, index, 0) {
+                Some((siblings, node)) => {
+                    let index = data_index(siblings, &name, index);
+                    match node {
+                        Node::Subform(sf) if sf.unbound => (Some(Container::Area(&sf.children)), index),
+                        Node::Subform(sf) => (Some(Container::Children(&sf.children)), index),
+                        Node::Area(a) => (Some(Container::Area(&a.children)), index),
+                        _ => (None, index),
+                    }
+                }
+                None => (None, index),
             },
         };
         match found {
@@ -144,26 +156,17 @@ enum Container<'a> {
     Area(&'a [Node]),
 }
 
-/// The child of `nodes` named `name`, looking through unnamed subforms and areas (which have no
-/// SOM segment of their own).
-fn named<'a>(nodes: &'a [Node], name: &str, depth: usize) -> Option<&'a Node> {
-    if depth > MAX_DEPTH {
-        return None;
-    }
-    nodes.iter().find(|n| n.common().name.as_deref() == Some(name)).or_else(|| {
-        nodes.iter().find_map(|n| match n {
-            Node::Subform(sf) if sf.common.name.is_none() => named(&sf.children, name, depth + 1),
-            Node::Area(a) if a.common.name.is_none() => named(&a.children, name, depth + 1),
-            _ => None,
-        })
-    })
-}
-
 /// The child of `nodes` the SOM segment `name[index]` names, numbered as the form numbers its
 /// objects ([`SomIndices`]): same-named siblings count up, and the instances of a repeating
-/// subform take the numbers from its own on. Unnamed subforms and areas are looked through,
-/// as [`named`] does.
+/// subform take the numbers from its own on. Unnamed subforms and areas, which have no SOM
+/// segment of their own, are looked through.
 fn named_at<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Option<&'a Node> {
+    named_in(nodes, name, index, depth).map(|(_, n)| n)
+}
+
+/// [`named_at`], with the siblings the object was found among: `nodes`, or the children of the
+/// nameless subform or area it was found in.
+fn named_in<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Option<(&'a [Node], &'a Node)> {
     if depth > MAX_DEPTH {
         return None;
     }
@@ -175,19 +178,33 @@ fn named_at<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Op
         }
         let sib = sibs.at(i);
         if sib == index {
-            return Some(n);
+            return Some((nodes, n));
         }
         if sib < index && matches!(n, Node::Subform(sf) if sf.occur.max != Some(1)) {
-            repeating = Some(n);
+            repeating = Some((nodes, n));
         }
     }
     repeating.or_else(|| {
         nodes.iter().find_map(|n| match n {
-            Node::Subform(sf) if sf.common.name.is_none() => named_at(&sf.children, name, index, depth + 1),
-            Node::Area(a) if a.common.name.is_none() => named_at(&a.children, name, index, depth + 1),
+            Node::Subform(sf) if sf.common.name.is_none() => named_in(&sf.children, name, index, depth + 1),
+            Node::Area(a) if a.common.name.is_none() => named_in(&a.children, name, index, depth + 1),
             _ => None,
         })
     })
+}
+
+/// The data index of the object at SOM index `index` among the `siblings` named `name`: the
+/// same-named siblings before it that bind to no data node (areas, and subforms with
+/// `<bind match="none"/>`) take no data node, so they are not counted.
+fn data_index(siblings: &[Node], name: &str, index: usize) -> usize {
+    let sibs = SomIndices::of(siblings);
+    let transparent = siblings
+        .iter()
+        .enumerate()
+        .filter(|(i, n)| n.common().name.as_deref() == Some(name) && sibs.at(*i) < index)
+        .filter(|(_, n)| matches!(n, Node::Area(_)) || matches!(n, Node::Subform(sf) if sf.unbound))
+        .count();
+    index.saturating_sub(transparent)
 }
 
 /// The template field the object at a SOM path is an instance of, each segment's number counted

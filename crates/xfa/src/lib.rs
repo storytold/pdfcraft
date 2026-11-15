@@ -183,6 +183,9 @@ pub fn render_into(doc: &mut Document) -> Result<Report, XfaError> {
 }
 
 #[cfg(test)]
+mod bind_tests;
+
+#[cfg(test)]
 mod repeat_tests;
 
 #[cfg(test)]

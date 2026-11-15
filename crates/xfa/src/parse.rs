@@ -989,6 +989,7 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize, set_layou
         set: false,
         column_widths,
         overflow_leader: child(n, "overflow").and_then(|o| o.attribute("leader")).map(str::to_string).filter(|s| !s.is_empty()),
+        unbound: child(n, "bind").and_then(|b| b.attribute("match")).is_some_and(|m| m.trim() == "none"),
     }
 }
 

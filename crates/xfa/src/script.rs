@@ -313,7 +313,7 @@ impl Walker<'_> {
             let sib = sibs.at(i);
             match n {
                 Node::Subform(sf) => {
-                    let from_data = match (&sf.common.name, self.data) {
+                    let from_data = match (sf.data_name(), self.data) {
                         (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
                         _ => 0,
                     };

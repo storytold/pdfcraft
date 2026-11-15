@@ -319,11 +319,16 @@ fn count_instances(root: &FormNode, parent_som: &str, name: &str) -> usize {
 }
 
 /// An instance SOM (`…table[0].row[2]`) split into its parent's data path (areas left out,
-/// see [`pdfcraft_xfa::data_path`]) and SOM, its name and its index.
+/// see [`pdfcraft_xfa::data_path`]) and SOM, its name and its index. `None` when the instance
+/// has no data group of its own (a nameless subform, or one with `<bind match="none"/>`): its
+/// data path is then its parent's, whose last segment is not the instance.
 fn split_instance(tpl: &Template, som: &str) -> Option<(pdfcraft_xfa::DataPath, String, String, usize)> {
     let mut path = pdfcraft_xfa::data_path(tpl, som);
-    let (name, index) = path.pop()?;
     let parent_som = som.rsplit_once('.').map(|(p, _)| p).unwrap_or("").to_string();
+    if path.len() != pdfcraft_xfa::data_path(tpl, &parent_som).len().saturating_add(1) {
+        return None;
+    }
+    let (name, index) = path.pop()?;
     Some((path, parent_som, name, index))
 }
 
@@ -912,7 +917,11 @@ impl<'a, 'b> Runner<'a, 'b> {
                     }
                 }
                 XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } => {
-                    let Some((parent, parent_som, name, index)) = split_instance(self.tpl, som) else { continue };
+                    let Some((parent, parent_som, name, index)) = split_instance(self.tpl, som) else {
+                        // Its count lives in no data group, and nowhere else yet.
+                        self.console([format!("{som}: this subform binds to no data node, so its instances can't be added or removed yet; ignored")]);
+                        continue;
+                    };
                     let key = (parent_som, name.clone());
                     let have = counts.get(&key).copied().unwrap_or(0);
                     if matches!(e, XfaEffect::AddInstance { .. }) {
@@ -1511,6 +1520,30 @@ mod tests {
             assert_eq!(target.as_deref(), after);
         }
         assert!(indexed_som_tail("form[0].row[bad]").is_none());
+    }
+
+    /// An instance of a repeating subform with `<bind match="none"/>`, or of a nameless one, has
+    /// no data group of its own: its data path is its parent's. Splitting it must not take the
+    /// parent's last segment for the instance, or adding or removing a row would copy or remove
+    /// the parent's data group.
+    #[test]
+    fn an_instance_without_a_data_group_of_its_own_is_not_split() {
+        let (tpl, _) = pdfcraft_xfa::parse(
+            r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+                <subform name="form"><subform name="table">
+                    <subform name="row"><bind match="none"/><occur min="1" max="4"/></subform>
+                    <subform><occur min="1" max="4"/></subform>
+                    <subform name="line"><occur min="1" max="4"/></subform>
+                </subform></subform>
+            </template>"#,
+        )
+        .unwrap();
+        assert_eq!(split_instance(&tpl, "form[0].table[0].row[2]"), None);
+        assert_eq!(split_instance(&tpl, "form[0].table[0].#subform[2]"), None);
+        assert_eq!(
+            split_instance(&tpl, "form[0].table[0].line[2]").map(|(p, ps, n, i)| (p.len(), ps, n, i)),
+            Some((2, "form[0].table[0]".into(), "line".into(), 2))
+        );
     }
 
     #[test]

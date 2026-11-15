@@ -4,8 +4,9 @@
 //!
 //! Binding is the default "normal" one: a field's data node is named after the field and nested
 //! under nodes named after its named ancestor subforms, repeated instances as repeated sibling
-//! elements. Areas are named in SOM expressions but are not data scopes, so their contents bind
-//! under the area's parent ([`data_path`]). Explicit `bind ref` expressions are not followed.
+//! elements. Areas, and subforms marked `<bind match="none"/>`, are named in SOM expressions but
+//! are not data scopes, so their contents bind under their parent ([`data_path`]). Explicit
+//! `bind ref` expressions are not followed.
 
 use std::collections::HashMap;
 
