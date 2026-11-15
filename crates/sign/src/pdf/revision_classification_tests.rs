@@ -434,3 +434,25 @@ fn a_fields_array_of_its_own_that_gains_a_signature_field_is_signing() {
     let added_text = verdict(&later("[6 0 R 9 0 R]", text).open(), signed.open(), None);
     assert!(matches!(&added_text, Modification::Allowed(a) if a.contains(&kind::FORM_FILL) && !a.contains(&kind::SIGNATURE)), "{added_text:?}");
 }
+
+/// A `/Fields` array that a signed page also draws as its `/Contents` is page content, not a
+/// form listing: reordering it reorders what the page draws, and a hostile file must not pass
+/// that off as signing (review of #4817).
+#[test]
+fn a_fields_array_that_is_also_page_contents_is_judged_as_page_content() {
+    let stream = |data: &str| format!("<< /Length {} >>\nstream\n{data}\nendstream", data.len());
+    let (red, blue) = (stream("1 0 0 rg 0 0 100 100 re f"), stream("0 0 1 rg 0 0 100 100 re f"));
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Contents 8 0 R"))),
+        (4, Row::Obj(0, 0, &page(""))),
+        (5, Row::Obj(0, 0, "<< /Fields 8 0 R /SigFlags 3 >>")),
+        (6, Row::Obj(0, 0, &red)),
+        (7, Row::Obj(0, 0, &blue)),
+        (8, Row::Obj(0, 0, "[6 0 R 7 0 R]")),
+    ]);
+    let reordered = signed.clone().revision(&[(8, Row::Obj(0, 0, "[7 0 R 6 0 R]"))]);
+    let verdict = verdict(&reordered.open(), signed.open(), None);
+    assert!(matches!(&verdict, Modification::Disallowed(_)), "{verdict:?}");
+}

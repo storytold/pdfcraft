@@ -318,8 +318,12 @@ impl ChangedObjectClassifier<'_> {
             Object::Array(_) if before.is_some() && self.kids_arrays.contains(&r.num) => Some(kind::PAGES),
             Object::Array(_) if self.is_signed_annotation_array(r, before) => self.annotation_array_change(new, before),
             // The signed AcroForm's /Fields as an array object of its own: a writer that signs may
-            // append its field there and leave the AcroForm itself as it was (#4817).
-            Object::Array(_) if before.is_some() && self.old_fields == Some(r.num) => Some(fields_kind(self.doc, self.old, before, Some(new))),
+            // append its field there and leave the AcroForm itself as it was (#4817). Not an array
+            // a signed page also draws as its /Contents: reordering it reorders the page, which
+            // no signing permits, and it is judged as page content below.
+            Object::Array(_) if before.is_some() && self.old_fields == Some(r.num) && !self.old_content.contains(&r.num) => {
+                Some(fields_kind(self.doc, self.old, before, Some(new)))
+            }
             Object::Dict(dict) => self.dictionary_change(r, dict, before),
             Object::Stream(stream) => self.stream_change(r, stream, before),
             _ if before.is_none() => None,
