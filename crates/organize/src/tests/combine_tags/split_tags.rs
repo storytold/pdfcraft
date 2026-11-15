@@ -274,3 +274,52 @@ fn split_keeps_the_same_tags_as_extract_of_each_part() {
         assert!(types(&second).contains(&"Link".to_string()));
     }
 }
+
+/// Review on #7333: an object reference to something other than an annotation (an image here)
+/// keeps its element in a part wherever its object comes along, whatever page the reference
+/// names. The image is in resources page 1 shares with page 2, which draws it, so Extract Pages
+/// of page 1 copies it and keeps the figure. The page index can't tell where such an object is
+/// copied, so it reads the figure as anywhere, and Split keeps what Extract Pages keeps.
+#[test]
+fn split_keeps_an_object_reference_wherever_its_object_comes_along() {
+    let image = "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /StructParent 1 /Length 1 >>\nstream\nA\nendstream";
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 12 0 R /MarkInfo << /Marked true >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>".into(),               // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources 5 0 R /StructParents 0 >>".into(),     // 3
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources 5 0 R >>".into(),                      // 4
+        "<< /Font << /F1 9 0 R >> /XObject << /Im0 10 0 R >> >>".into(),                                // 5
+        marked(&[("P", 0, "C1")], ""),                                                                  // 6
+        marked(&[], "q 10 0 0 10 20 20 cm /Im0 Do Q"),                                                  // 7
+        "null".into(),                                                                                  // 8
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),                                // 9
+        image.into(),                                                                                   // 10
+        "null".into(),                                                                                  // 11
+        "<< /Type /StructTreeRoot /K 13 0 R /ParentTree 16 0 R /ParentTreeNextKey 2 >>".into(),         // 12
+        "<< /Type /StructElem /S /Document /P 12 0 R /K [14 0 R 15 0 R] >>".into(),                     // 13
+        "<< /Type /StructElem /S /P /P 13 0 R /Pg 3 0 R /K 0 >>".into(),                                // 14
+        "<< /Type /StructElem /S /Figure /P 13 0 R /Pg 4 0 R /Alt (A dot) /K << /Type /OBJR /Obj 10 0 R >> >>".into(), // 15
+        "<< /Nums [0 [14 0 R] 1 15 0 R] >>".into(),                                                     // 16
+    ];
+    let src = open(build(&b, "/Root 1 0 R"));
+    let extractor = Extractor::new(&src);
+    for pages in [vec![0], vec![1], vec![0, 1]] {
+        let fast = full_roundtrip(&extractor.extract(&pages).unwrap());
+        let slow = full_roundtrip(&extract_pages(&src, &pages).unwrap());
+        assert_eq!(kept(&fast), kept(&slow), "pages {pages:?}");
+        assert!(types(&slow).contains(&"Figure".to_string()), "pages {pages:?}: the image came along");
+    }
+}
+
+/// Review on #7333: a page taken twice is copied twice, and only its first copy carries the
+/// page's tags (the second has no `/StructParents`). A selection repeating a page is then not
+/// the whole tagged file, even when it lists every page, and keeps no PDF/UA claim.
+#[test]
+fn a_repeated_page_keeps_no_pdf_ua_claim() {
+    let out = full_roundtrip(&extract_pages(&doc_three(true), &[0, 0, 1, 2]).unwrap());
+    assert_eq!(labels(&out), ["P1", "P1", "P2", "P3"]);
+    assert!(page_dict(&out, 0).contains(b"StructParents"));
+    assert!(!page_dict(&out, 1).contains(b"StructParents"), "the second copy of page 1 is untagged");
+    assert_parent_tree_consistent(&out);
+    assert!(pdfx_of(&out).xmp.is_none_or(|x| !x.contains("pdfuaid")), "a repeated page drops the PDF/UA claim");
+}

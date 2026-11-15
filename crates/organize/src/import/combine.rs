@@ -43,7 +43,9 @@ fn extract_with(src: &Document, pages: &[usize], index: Option<Arc<PageIndex>>) 
     let imported = import_pages_mapped(&mut out, src, pages, 0, FieldConflicts::Merge)?;
     crate::labels::finish_page_labels(&mut out, &labels, has_labels)?;
     // The tags of these pages come along, the parent tree rebuilt for the part.
-    let whole = pages.iter().collect::<HashSet<_>>().len() == crate::page_count(src)?;
+    // Every source page, each once: a page taken twice carries its tags on its first copy only.
+    let distinct = pages.iter().collect::<HashSet<_>>().len();
+    let whole = distinct == pages.len() && distinct == crate::page_count(src)?;
     let mut tags = Tags::single(index);
     tags.add(&mut out, src, &imported.page_map, &imported.objects, whole)?;
     // The bookmarks of these pages come along, mapped to the copies (#4020).

@@ -167,10 +167,12 @@ impl IndexWalk<'_> {
                 let held = self.src.resolve(&k);
                 let item = held.as_dict().filter(|i| !i.contains(b"S"));
                 if let Some(i) = item.filter(|i| i.contains(b"Obj") || i.name(b"Type") == Some(b"OBJR")) {
-                    // An annotation is on the page that lists it; another object is copied with
-                    // the page it is drawn on, which the reference names.
+                    // An annotation is on the page that lists it. Another object (an image, a
+                    // form XObject) comes along with any copied page whose resources reach it,
+                    // whatever page the reference names, and a part keeps the reference whenever
+                    // its object came along (`object_reference`): where it is reads as anywhere.
                     let obj = i.get(b"Obj").and_then(Object::as_ref);
-                    match obj.and_then(|o| self.annots.get(&o).copied()).or_else(|| i.get(b"Pg").and_then(Object::as_ref).or(pg)) {
+                    match obj.and_then(|o| self.annots.get(&o).copied()) {
                         Some(p) => reach.page(p),
                         None => reach = Reach::Any,
                     }
