@@ -1,0 +1,2 @@
+// The POC uses the same validated Rust development library in both app configurations.
+#include "Debug.xcconfig"

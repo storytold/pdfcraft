@@ -1,0 +1,90 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "iOS: Build Rust Simulator",
+      "type": "process",
+      "command": "bash",
+      "args": ["scripts/build-ios-rust.sh"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "iOS: Build Rust Device",
+      "type": "process",
+      "command": "bash",
+      "args": ["scripts/build-ios-rust.sh", "aarch64-apple-ios"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "iOS: Generate Swift Bindings",
+      "type": "process",
+      "command": "bash",
+      "args": ["scripts/generate-swift-bindings.sh"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "iOS: Generate Xcode Project",
+      "type": "process",
+      "command": "bash",
+      "args": ["scripts/generate-ios-project.sh"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "iOS: Build Simulator",
+      "type": "process",
+      "command": "bash",
+      "args": ["scripts/build-ios-simulator.sh"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$rustc"],
+      "group": "build"
+    },
+    {
+      "label": "iOS: Run Simulator",
+      "type": "process",
+      "command": "bash",
+      "args": ["scripts/run-ios-simulator.sh", "${input:simulator}"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "iOS: Test All",
+      "type": "process",
+      "command": "bash",
+      "args": ["scripts/test-ios.sh", "${input:simulator}"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$rustc"],
+      "group": "test"
+    },
+    {
+      "label": "iOS: Test Rust",
+      "type": "process",
+      "command": "cargo",
+      "args": ["test", "--locked", "-p", "pdfcraft-mobile", "--features", "swift", "--test", "workflow"],
+      "options": { "cwd": "${workspaceFolder}", "env": { "CARGO_INCREMENTAL": "0", "CARGO_PROFILE_DEV_DEBUG": "0" } },
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "iOS: Format Rust",
+      "type": "process",
+      "command": "cargo",
+      "args": ["fmt", "-p", "pdfcraft-mobile"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "iOS: Lint Rust",
+      "type": "process",
+      "command": "cargo",
+      "args": ["clippy", "--locked", "-p", "pdfcraft-mobile", "--all-targets", "--features", "swift", "--no-deps", "--", "-D", "warnings"],
+      "options": { "cwd": "${workspaceFolder}", "env": { "CARGO_INCREMENTAL": "0", "CARGO_PROFILE_DEV_DEBUG": "0" } },
+      "problemMatcher": ["$rustc"]
+    }
+  ],
+  "inputs": [
+    { "id": "simulator", "type": "promptString", "description": "Simulator UUID from xcrun simctl list devices available" }
+  ]
+}
