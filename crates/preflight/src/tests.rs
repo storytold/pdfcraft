@@ -1712,36 +1712,92 @@ fn xmp_value_forms_are_those_xmp_allows() {
     );
 }
 
-/// PDF/A asks for the fonts "used for rendering" to be embedded (ISO 19005-2, 6.2.11.4.1). A font
-/// that only the form's default resources hold (`/AcroForm /DR`, ISO 32000-1 12.7.2) draws
-/// nothing, as in veraPDF's 6-4-1-t02-pass-a; one that a widget's appearance stream draws with is
-/// named in that stream's `/Resources`, and still has to be embedded.
+/// PDF/A asks for the fonts "used for rendering" to be embedded (ISO 19005-2, 6.2.11.4.1; ISO
+/// 19005-4, 6.2.10.4.1). A font draws when content selects it with `Tf`: one that only the form's
+/// default resources (`/AcroForm /DR`) or a default appearance string (`/DA`) name draws nothing, as
+/// in veraPDF's 6-4-1-t02-pass-a, and neither does one an appearance stream's `/Resources` list but
+/// its content never selects, as in the signature fields of octopdf-sample.pdf (PDFBOX-6264). One
+/// the appearance stream selects still has to be embedded.
 #[test]
 fn only_fonts_something_draws_with_must_be_embedded() {
-    let fonts =
-        |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect() };
-    let form = |appearance_fonts: &str| {
+    let fonts_at = |doc: &Document, level: Level, clause: &str| -> Vec<String> {
+        verify(doc, level).into_iter().filter(|i| i.clause == clause).map(|i| i.message).collect()
+    };
+    let fonts = |doc: &Document| fonts_at(doc, Level::A2b, "6.2.11.4");
+    let form = |appearance: &str, content: &str, page: &str| {
         build(
             &[
                 "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 4 0 R /ZaDb 5 0 R >> >> >> >>",
                 "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
-                "<< /Type /Page /Parent 2 0 R /Resources << >> /Annots [6 0 R] >>",
+                &format!("<< /Type /Page /Parent 2 0 R /Resources << {page} >> /Annots [6 0 R] >>"),
                 "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
                 "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>",
                 "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /F 4 /Rect [10 10 90 30] /P 3 0 R /AP << /N 7 0 R >> >>",
-                &format!("<< /Type /XObject /Subtype /Form /BBox [0 0 80 20] /Resources << {appearance_fonts} >> /Length 0 >>\nstream\n\nendstream"),
+                &format!(
+                    "<< /Type /XObject /Subtype /Form /BBox [0 0 80 20] {appearance} /Length {} >>
+stream
+{content}
+endstream",
+                    content.len()
+                ),
                 // An object that is nothing but a reference to the Helvetica font (ISO 32000-1 7.3.10).
                 "4 0 R",
             ],
             "",
         )
     };
-    assert!(fonts(&form("")).is_empty(), "{:?}", fonts(&form("")));
-    assert_eq!(fonts(&form("/Font << /Helv 4 0 R >>")), ["The font Helvetica isn't embedded"]);
+    let draws = "BT /Helv 10 Tf (x) Tj ET";
+    let helvetica = || vec!["The font Helvetica isn't embedded".to_string()];
+    for (appearance, content) in [
+        ("/Resources << >>", ""),
+        // Listed, never selected: the fonts of octopdf-sample.pdf's signature appearances.
+        ("/Resources << /Font << /Helv 4 0 R /ZaDb 5 0 R >> >>", ""),
+        ("/Resources << /Font << /Helv 4 0 R >> >>", "BT /ZaDb 10 Tf ET (/Helv 10 Tf) Tj % /Helv 10 Tf"),
+    ] {
+        let doc = form(appearance, content, "");
+        assert!(fonts(&doc).is_empty(), "{appearance} {content}: {:?}", fonts(&doc));
+        assert!(fonts_at(&doc, Level::A4, "6.2.10.4.1").is_empty(), "{appearance} {content}");
+    }
+    let selected = form("/Resources << /Font << /Helv 4 0 R >> >>", draws, "");
+    assert_eq!(fonts(&selected), helvetica());
+    // PDF/A-4 asks the same, under its own clause.
+    assert_eq!(fonts_at(&selected, Level::A4, "6.2.10.4.1"), helvetica());
     // Named through a reference to it, it is still the font something draws with.
-    assert_eq!(fonts(&form("/Font << /Helv 8 0 R >>")), ["The font Helvetica isn't embedded"]);
+    assert_eq!(fonts(&form("/Resources << /Font << /Helv 8 0 R >> >>", draws, "")), helvetica());
+    // Content without resources of its own may draw with any font of that name.
+    assert_eq!(fonts(&form("", draws, "/Font << /Helv 4 0 R >>")), helvetica());
+    // Content that can't be decoded may select any font its resources list.
+    assert_eq!(fonts(&form("/Filter /NoSuchDecode /Resources << /Font << /Helv 4 0 R >> >>", "x", "")), helvetica());
     // A page's own font is checked as before.
-    assert_eq!(fonts(&messy()), ["The font Helvetica isn't embedded"]);
+    assert_eq!(fonts(&messy()), helvetica());
+    // A Type 3 glyph procedure draws with the fonts it selects; one that can't be read may draw with
+    // any font.
+    let glyphs = |proc_dict: &str, proc: &str| {
+        build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /T3 5 0 R >> >> >>",
+                "<< /Length 22 >>
+stream
+BT /T3 10 Tf (a) Tj ET
+endstream",
+                "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 6 0 R >>                  /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] /Resources << /Font << /F2 7 0 R >> >> >>",
+                &format!(
+                    "<< {proc_dict} /Length {} >>
+stream
+{proc}
+endstream",
+                    proc.len()
+                ),
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            ],
+            "",
+        )
+    };
+    assert_eq!(fonts(&glyphs("", "1000 0 d0 BT /F2 10 Tf (x) Tj ET")), helvetica());
+    assert!(fonts(&glyphs("", "1000 0 d0 0 0 1 1 re f")).is_empty());
+    assert_eq!(fonts(&glyphs("/Filter /NoSuchDecode", "x")), helvetica());
 }
 
 /// PDF/A-2 6.1.2: the file starts with `%PDF-1.0` to `%PDF-1.7` and an end-of-line marker, then a

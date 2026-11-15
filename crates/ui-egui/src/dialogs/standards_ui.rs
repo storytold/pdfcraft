@@ -1,5 +1,5 @@
-//! Standards ▸ PDF/A: what the document declares, verifying it against PDF/A-2b or 3b, and
-//! fixing what can be fixed (Save as PDF/A).
+//! Standards ▸ PDF/A: what the document declares, verifying it against PDF/A-2b, 3b, 4, 4e or 4f,
+//! and fixing what can be fixed for PDF/A-2b and 3b (Save as PDF/A).
 
 use egui::{Align, Layout};
 use pdfcraft_engine::pdfa::{Issue, Level};
@@ -13,15 +13,38 @@ pub struct PdfaState {
     pub level: Level,
     pub issues: Option<Vec<Issue>>,
     pub fixed: Vec<String>,
+    /// The document `level` was chosen for ([`PdfCraftApp::pdfa_choose_level`]).
+    pub chosen_for: Option<pdfcraft_engine::DocId>,
 }
 
 impl Default for PdfaState {
     fn default() -> Self {
-        PdfaState { level: Level::A2b, issues: None, fixed: Vec::new() }
+        PdfaState { level: Level::A2b, issues: None, fixed: Vec::new(), chosen_for: None }
     }
 }
 
+/// The levels the dialog verifies against. Save as PDF/A makes only the PDF/A-2b and 3b ones.
+const LEVELS: [Level; 5] = [Level::A2b, Level::A3b, Level::A4, Level::A4e, Level::A4f];
+
+/// Whether Save as PDF/A makes files of `level`: PDF/A-2b and 3b, not the PDF/A-4 levels.
+fn convertible(level: Level) -> bool {
+    level.part() != 4
+}
+
 impl PdfCraftApp {
+    /// Chooses the level for the active document once, when the dialog opens or another document
+    /// becomes active: the level the document declares when the dialog verifies it, PDF/A-2b
+    /// otherwise. A level picked by hand stays while the same document is active.
+    pub fn pdfa_choose_level(&mut self) {
+        let id = self.active_ids().map(|(_, id)| id);
+        if self.pdfa.chosen_for == id {
+            return;
+        }
+        let declared = id.and_then(|id| self.session.get(id)).and_then(|d| d.standards().pdfa);
+        let level = declared.and_then(|(part, conformance)| Level::from_declared(part, &conformance)).filter(|l| LEVELS.contains(l));
+        self.pdfa = PdfaState { level: level.unwrap_or(PdfaState::default().level), chosen_for: id, ..PdfaState::default() };
+    }
+
     pub fn pdfa_verify(&mut self) {
         let Some((_, id)) = self.active_ids() else { return };
         let level = self.pdfa.level;
@@ -31,6 +54,9 @@ impl PdfCraftApp {
 
     pub fn pdfa_convert(&mut self) {
         let level = self.pdfa.level;
+        if !convertible(level) {
+            return;
+        }
         if self.apply_edit(pdfcraft_engine::Edit::ConvertPdfA { level }) {
             self.pdfa_verify();
             let left = self.pdfa.issues.as_ref().map_or(0, Vec::len);
@@ -50,6 +76,7 @@ impl PdfCraftApp {
 
 /// Returns `true` to close.
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
+    app.pdfa_choose_level();
     ui.label(egui::RichText::new("PDF/A").font(theme::semibold(18.0)));
     ui.add_space(6.0);
     let declared = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.standards()).unwrap_or_default();
@@ -76,7 +103,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool
     ui.horizontal(|ui| {
         ui.label(tl!("Conformance level:"));
         craft_ui::ComboBox::from_id_salt("pdfa-level").selected_text(app.pdfa.level.label()).show_ui(ui, |ui| {
-            for l in [Level::A2b, Level::A3b] {
+            for l in LEVELS {
                 ui.selectable_value(&mut app.pdfa.level, l, l.label());
             }
         });
@@ -115,9 +142,16 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool
     ui.add_space(10.0);
     let mut close = false;
     let mut action = None;
+    let can_convert = convertible(app.pdfa.level);
+    if !can_convert {
+        ui.label(
+            egui::RichText::new(tl!("PDF/A-4 levels are verified only: Save as PDF/A makes PDF/A-2b and 3b files.")).small().color(t.text_muted),
+        );
+        ui.add_space(4.0);
+    }
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill_button(ui, tl!("Save as PDF/A"), true).clicked() {
+            if ui.add_enabled_ui(can_convert, |ui| widgets::pill_button(ui, tl!("Save as PDF/A"), true)).inner.clicked() {
                 action = Some(true);
             }
             if widgets::pill_button(ui, tl!("Verify"), false).clicked() {

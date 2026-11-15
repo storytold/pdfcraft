@@ -8,7 +8,7 @@
 //!   the document information dictionary;
 //! - no encryption; no LZW; no external streams;
 //! - an output intent (`GTS_PDFA1`) with an ICC profile when device colour is used;
-//! - every font embedded;
+//! - every font used for rendering (selected with `Tf` by some content) embedded;
 //! - annotations: allowed types, printable, not hidden, with appearance streams;
 //! - actions: none of the forbidden kinds (JavaScript, Launch, Sound, Movie, ResetForm,
 //!   ImportData, Hide, SetOCGState, Rendition, Trans, GoTo3DView, and the PDF 1.2 SetState and
@@ -537,15 +537,7 @@ fn type3_procs_within(
 fn referenced_content(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> std::collections::HashSet<ObjRef> {
     let mut out = std::collections::HashSet::new();
     for p in pdfcraft_model::pages(doc) {
-        let contents = match p.dict.get(b"Contents") {
-            Some(Object::Ref(r)) => match &*doc.get(*r) {
-                Object::Array(a) => a.clone(),
-                _ => vec![Object::Ref(*r)],
-            },
-            Some(Object::Array(a)) => a.clone(),
-            _ => Vec::new(),
-        };
-        out.extend(contents.iter().filter_map(Object::as_ref));
+        out.extend(page_contents(doc, &p.dict));
     }
     let mut read = std::collections::HashSet::new();
     for (_, o) in objs {
@@ -556,22 +548,141 @@ fn referenced_content(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
     out
 }
 
-/// The fonts the document draws with: those a resource dictionary names (`/Resources`, of a page or
-/// a page tree node, a form XObject or an annotation's appearance stream, a pattern or a Type 3
-/// font). PDF/A asks that every font "used for rendering" be embedded (ISO 19005-2, 6.2.11.4.1). A
-/// font that only the interactive form's default resources hold (`/AcroForm /DR`, ISO 32000-1
-/// 12.7.2) draws nothing, so it needn't be: an appearance stream that does draw with it names it in
-/// its own `/Resources`.
+/// The content streams of the page `page`, in order: its `/Contents`, one stream or an array of
+/// them (ISO 32000-2 7.7.3.3, Table 31).
+fn page_contents(doc: &Document, page: &Dict) -> Vec<ObjRef> {
+    let contents = match page.get(b"Contents") {
+        Some(Object::Ref(r)) => match &*doc.get(*r) {
+            Object::Array(a) => a.clone(),
+            _ => vec![Object::Ref(*r)],
+        },
+        Some(Object::Array(a)) => a.clone(),
+        _ => Vec::new(),
+    };
+    contents.iter().filter_map(Object::as_ref).collect()
+}
+
+/// The most content [`drawing_fonts`] decodes, all streams together. Past it, every font of a
+/// stream it didn't read counts as drawing.
+const MAX_FONT_CONTENT_DECODED: usize = 1 << 30;
+
+/// The fonts the document draws with. PDF/A asks that every font "used for rendering" be embedded
+/// (ISO 19005-2 6.2.11.4.1, ISO 19005-4 6.2.10.4.1): a font draws when content selects it with
+/// `Tf` (ISO 32000-2 9.3.1, Table 103) by its name in that content's resource dictionary. The
+/// content read is a page's `/Contents` with the page's resources, a form XObject's, a tiling
+/// pattern's or an appearance stream's with its own, and a Type 3 glyph procedure's.
+///
+/// A font that a resource dictionary lists but no content selects draws nothing, nor does one that
+/// only the interactive form's default resources (`/AcroForm /DR`, ISO 32000-2 12.7.3) or a
+/// default appearance string (`/DA`) name: an appearance stream that does draw with it selects it
+/// in its own content. Where the answer isn't certain the font counts: a name selected by content
+/// without resources of its own (a form that leaves them out, or a glyph procedure) counts in
+/// every resource dictionary, and every font of content that can't be decoded counts.
 fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> std::collections::HashSet<ObjRef> {
     let mut out = std::collections::HashSet::new();
-    for (_, o) in objs {
-        let Some(resources) = dict_of(o).and_then(|d| d.get(b"Resources")).map(|r| doc.resolve(r)) else { continue };
-        let Some(fonts) = resources.as_dict().and_then(|r| r.get(b"Font")).map(|f| doc.resolve(f)) else { continue };
-        if let Some(fonts) = fonts.as_dict() {
-            out.extend(fonts.iter().filter_map(|(_, f)| f.as_ref()).map(|r| font_object(doc, r)));
+    // Names selected by content whose resource dictionary isn't known.
+    let mut anywhere: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+    let mut every_font = false;
+    let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_FONT_CONTENT_DECODED, usize::MAX);
+    // What each page content stream selects, `None` where it couldn't be decoded: a stream that
+    // many pages share is read once.
+    let mut page_streams: std::collections::HashMap<ObjRef, Option<std::collections::HashSet<Vec<u8>>>> = std::collections::HashMap::new();
+    for p in pdfcraft_model::pages(doc) {
+        let fonts = resource_fonts(doc, &p.dict);
+        let mut selected = std::collections::HashSet::new();
+        let mut unread = false;
+        for r in page_contents(doc, &p.dict) {
+            // A page's streams are read as one (ISO 32000-2 7.8.2), but split only between tokens,
+            // so an operator's operands are in the stream that has the operator.
+            let read = page_streams.entry(r).or_insert_with(|| match &*doc.get(r) {
+                Object::Stream(s) => budget.decode(s).ok().map(|data| {
+                    let mut names = std::collections::HashSet::new();
+                    selected_fonts(&data, &mut names);
+                    names
+                }),
+                _ => Some(std::collections::HashSet::new()),
+            });
+            match read {
+                Some(names) => selected.extend(names.iter().cloned()),
+                None => unread = true,
+            }
+        }
+        add_selected(&fonts, &selected, unread, &mut out);
+    }
+    let glyph_procs = {
+        let (mut read, mut procs) = (std::collections::HashSet::new(), std::collections::HashSet::new());
+        for (_, o) in objs {
+            if let Some(d) = dict_of(o) {
+                type3_procs(doc, d, 0, &mut read, &mut procs);
+            }
+        }
+        procs
+    };
+    for (r, o) in objs {
+        let Object::Stream(s) = &**o else { continue };
+        if page_streams.contains_key(r) || !(is_content(&s.dict) || glyph_procs.contains(r)) {
+            continue;
+        }
+        let own = s.dict.get(b"Resources").is_some().then(|| resource_fonts(doc, &s.dict));
+        let mut selected = std::collections::HashSet::new();
+        let unread = match budget.decode(s) {
+            Ok(data) => {
+                selected_fonts(&data, &mut selected);
+                false
+            }
+            Err(_) => true,
+        };
+        match own {
+            Some(fonts) => add_selected(&fonts, &selected, unread, &mut out),
+            None if unread => every_font = true,
+            None => anywhere.extend(selected),
+        }
+    }
+    if every_font || !anywhere.is_empty() {
+        for (_, o) in objs {
+            let Some(d) = dict_of(o) else { continue };
+            for (name, font) in resource_fonts(doc, d) {
+                if every_font || anywhere.contains(&name) {
+                    out.insert(font);
+                }
+            }
         }
     }
     out
+}
+
+/// The fonts the resource dictionary of `holder` (`/Resources`, held directly or by reference)
+/// lists in `/Font`, by name, each the object its reference ends at.
+fn resource_fonts(doc: &Document, holder: &Dict) -> Vec<(Vec<u8>, ObjRef)> {
+    let Some(resources) = holder.get(b"Resources").map(|r| doc.resolve(r)) else { return Vec::new() };
+    let Some(fonts) = resources.as_dict().and_then(|r| r.get(b"Font")).map(|f| doc.resolve(f)) else { return Vec::new() };
+    let Some(fonts) = fonts.as_dict() else { return Vec::new() };
+    fonts.iter().filter_map(|(k, f)| Some((k.to_vec(), font_object(doc, f.as_ref()?)))).collect()
+}
+
+/// Adds to `out` the fonts of `fonts` whose names content `selected`, or all of them when some of
+/// the content was `unread`.
+fn add_selected(
+    fonts: &[(Vec<u8>, ObjRef)],
+    selected: &std::collections::HashSet<Vec<u8>>,
+    unread: bool,
+    out: &mut std::collections::HashSet<ObjRef>,
+) {
+    out.extend(fonts.iter().filter(|(name, _)| unread || selected.contains(name)).map(|(_, r)| *r));
+}
+
+/// The font names the content `data` selects with `Tf`, its operator for the font and size
+/// (`/F1 12 Tf`), added to `out`. Operators are read one at a time, so a string, a comment or an
+/// inline image never passes for one.
+fn selected_fonts(data: &[u8], out: &mut std::collections::HashSet<Vec<u8>>) {
+    for op in pdfcraft_content::ops(data) {
+        if op.op == b"Tf"
+            && let Some(name) = op.name_back(1)
+            && !out.contains(name)
+        {
+            out.insert(name.to_vec());
+        }
+    }
 }
 
 /// How many references [`font_object`] follows, as the document's own `resolve` does.
@@ -984,10 +1095,20 @@ fn check_output_intent(
     objs: &[(ObjRef, std::sync::Arc<Object>)],
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
-    let used = uses_device_colour(doc, objs);
+    let mut used = uses_device_colour(doc, objs);
     // PDF/A-4 says what device colour needs under 6.2.4.3, and keeps 6.2.3 for the output intent
     // itself.
     let part4 = level.part() == 4;
+    // PDF/A-4 also accepts DeviceRGB or DeviceCMYK drawn in a device-independent blending space of
+    // as many components: here, every page's transparency group colour space.
+    let pages = if part4 { pdfcraft_model::pages(doc) } else { Vec::new() };
+    if part4 {
+        match part4::page_blending_components(doc, &pages) {
+            Some(3) => used.rgb = false,
+            Some(4) => used.cmyk = false,
+            _ => {}
+        }
+    }
     if used.incomplete && part4 {
         issue("6.2.4.3", "Some content could not be read for device colour", None, None, false);
     } else if used.incomplete {
@@ -998,7 +1119,6 @@ fn check_output_intent(
     // none. Device colour is judged for the document as a whole, so that holds when every page has
     // one; pages whose profiles differ in their components leave the components unknown.
     if intent.is_none() && part4 {
-        let pages = pdfcraft_model::pages(doc);
         let profiles: Option<Vec<Option<i64>>> = pages.iter().map(|p| pdfa_intent_profile_in(doc, &p.dict)).collect();
         if let Some(profiles) = profiles.filter(|p| !p.is_empty()) {
             let first = profiles.first().copied().flatten();

@@ -383,6 +383,74 @@ fn a_page_output_intent_stands_in_for_the_documents() {
     passes(&transparent(&format!("{group} {PAGE_INTENT}")), Level::A4);
 }
 
+/// An ICC profile stream object of `n` components whose header names the data colour space
+/// `space` (ICC.1 7.2.6): the sRGB profile with that one field changed.
+fn profile_of(n: u8, space: &[u8; 4]) -> Vec<u8> {
+    let mut data = icc::srgb();
+    if let Some(field) = data.get_mut(16..20) {
+        field.copy_from_slice(space);
+    }
+    stream(&format!("/N {n}"), &data)
+}
+
+/// PDF/A-4 6.2.4.3 (as veraPDF 1.30.4 prints it): DeviceRGB may be used where the current
+/// transparency blending space is a device-independent RGB-based space, and DeviceCMYK where it is
+/// a CMYK-based one. A page group's colour space (ISO 32000-2 11.4.7, Table 145 `/CS`) is that
+/// space for the page (11.7.2). PDF/A-2 has no such allowance, nor does DeviceGray.
+#[test]
+fn a_page_groups_blending_space_covers_device_colour_of_as_many_components() {
+    let drawn =
+        |content: &'static str, cs: &str, more: Vec<Vec<u8>>| File { content, more, ..with_page(&format!("/Group << /S /Transparency {cs} >>")) };
+    let rgb = "1 0 0 rg 0 0 10 10 re f";
+    let cmyk = "0 0 0 1 k 0 0 10 10 re f";
+    passes(&drawn(rgb, "/CS [/ICCBased 6 0 R]", vec![srgb_profile()]), Level::A4);
+    passes(&drawn(rgb, "/CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>]", Vec::new()), Level::A4);
+    passes(&drawn(cmyk, "/CS 7 0 R", vec![profile_of(4, b"CMYK"), o("[/ICCBased 6 0 R]")]), Level::A4);
+    for (content, cs, more) in [
+        // No blending space, a device one, Lab, and profiles that aren't RGB or CMYK.
+        (rgb, "", Vec::new()),
+        (rgb, "/CS /DeviceRGB", Vec::new()),
+        (rgb, "/CS [/Lab << /WhitePoint [0.9505 1 1.089] >>]", Vec::new()),
+        (rgb, "/CS [/ICCBased 6 0 R]", vec![profile_of(3, b"Lab ")]),
+        (rgb, "/CS [/ICCBased 6 0 R]", vec![profile_of(4, b"CMYK")]),
+        (cmyk, "/CS [/ICCBased 6 0 R]", vec![srgb_profile()]),
+        ("0.5 g 0 0 10 10 re f", "/CS [/ICCBased 6 0 R]", vec![srgb_profile()]),
+    ] {
+        let f = drawn(content, cs, more);
+        reports(&f, Level::A4, "6.2.4.3", "no PDF/A output intent");
+    }
+    // A group that isn't a transparency group sets no blending space.
+    let other = File { content: rgb, more: vec![srgb_profile()], ..with_page("/Group << /S /Other /CS [/ICCBased 6 0 R] >>") };
+    reports(&other, Level::A4, "6.2.4.3", "no PDF/A output intent");
+    // Beside a CMYK output intent, an RGB blending space still covers DeviceRGB.
+    let intent = "/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (CMYK) /DestOutputProfile 7 0 R >>]";
+    let beside = File { catalog: intent.to_owned(), ..drawn(rgb, "/CS [/ICCBased 6 0 R]", vec![srgb_profile(), profile_of(4, b"CMYK")]) };
+    passes(&beside, Level::A4);
+    let without = File { catalog: intent.to_owned(), ..drawn(rgb, "", vec![srgb_profile(), profile_of(4, b"CMYK")]) };
+    reports(&without, Level::A4, "6.2.4.3", "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile");
+    // Every page needs one: device colour is judged for the document as a whole.
+    let two_pages = |second: &str| {
+        let page = |group: &str| o(&format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 5 0 R /Resources << >> {group} >>"));
+        let objects = vec![
+            o("<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>"),
+            o("<< /Type /Pages /Kids [4 0 R 7 0 R] /Count 2 >>"),
+            stream("/Type /Metadata /Subtype /XML", &packet("4", Some("2020"), None)),
+            page("/Group << /S /Transparency /CS [/ICCBased 6 0 R] >>"),
+            stream("", rgb.as_bytes()),
+            srgb_profile(),
+            page(second),
+        ];
+        verify(&Document::open(std::sync::Arc::new(raw("%PDF-2.0", &objects, "", b""))).unwrap(), Level::A4)
+    };
+    assert!(two_pages("/Group << /S /Transparency /CS [/ICCBased 6 0 R] >>").is_empty());
+    let found = two_pages("");
+    assert!(found.iter().any(|i| i.clause == "6.2.4.3" && i.message.contains("no PDF/A output intent")), "{found:#?}");
+    // PDF/A-2 6.2.4.3 has no such allowance.
+    let covered = drawn(rgb, "/CS [/ICCBased 6 0 R]", vec![srgb_profile()]);
+    let found = verify(&open(bytes(&covered)), Level::A2b);
+    assert!(found.iter().any(|i| i.message == "Device colour is used, but there is no PDF/A output intent"), "{found:#?}");
+}
+
 #[test]
 fn output_intents_share_one_local_output_or_monitor_profile() {
     let intent = |n: u8| format!("<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (sRGB) /DestOutputProfile {n} 0 R >>");

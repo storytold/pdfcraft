@@ -241,7 +241,10 @@ impl PdfCraftApp {
             "optimize.advanced" => self.dialog = Some(Dialog::Optimize),
             "doc.compare" => self.dialog = Some(Dialog::CompareFiles),
             "standards.pdfa" => {
+                // Opening the dialog chooses the level again, from what the document declares.
+                self.pdfa.chosen_for = None;
                 self.pdfa.issues = None;
+                self.pdfa_choose_level();
                 self.dialog = Some(Dialog::PdfA);
             }
             "actions.wizard" | "actions.distribution" | "actions.optimize_scans" => {

@@ -394,8 +394,8 @@ fn metadata_stream(catalog: &Dict, doc: &Document, issue: &mut Report<'_>) {
     }
 }
 
-/// The most of an output intent's profile [`output_intents`] decodes; real ICC profiles stay well
-/// under it.
+/// The most of an ICC profile [`output_intents`] and [`cie_components`] decode to read its header;
+/// real ICC profiles stay well under it.
 const MAX_ICC_HEADER_READ: usize = 16 << 20;
 
 /// How many output intents [`output_intents`] reads.
@@ -506,4 +506,51 @@ fn declares_pdfa(s: &pdfcraft_cos::Stream) -> bool {
 fn is_mime_type(name: &[u8]) -> bool {
     let mut parts = name.split(|&b| b == b'/');
     matches!((parts.next(), parts.next(), parts.next()), (Some(t), Some(s), None) if !t.is_empty() && !s.is_empty())
+}
+
+/// 6.2.4.3: the device colour space that every page's transparency group makes device-independent
+/// for PDF/A-4, as the number of its components: 3 for DeviceRGB, 4 for DeviceCMYK.
+///
+/// PDF/A-4 accepts DeviceRGB or DeviceCMYK where the current transparency blending space is a
+/// device-independent RGB- or CMYK-based one. A page's group colour space (`/Group /CS`, ISO
+/// 32000-2 11.4.7 and Table 145) is the blending space of everything painted on the page, and a
+/// device space of as many components inside it is taken as that space (11.7.2). Device colour is
+/// judged for the document as a whole here, so the allowance holds only when every page has a
+/// transparency group with a CalRGB or an ICCBased RGB space (3), or with an ICCBased CMYK one (4),
+/// the same number for all of them. A group of a form XObject inside a page isn't looked at.
+pub(crate) fn page_blending_components(doc: &Document, pages: &[pdfcraft_model::Page]) -> Option<i64> {
+    let mut found = None;
+    for p in pages {
+        let group = p.dict.get(b"Group").map(|g| doc.resolve(g));
+        let group = group.as_deref().and_then(Object::as_dict).filter(|g| g.name(b"S") == Some(b"Transparency"))?;
+        let n = cie_components(doc, group.get(b"CS")?)?;
+        if found.is_some_and(|f| f != n) {
+            return None;
+        }
+        found = Some(n);
+    }
+    found
+}
+
+/// The components of `cs` when it is a device-independent RGB-based (3) or CMYK-based (4) colour
+/// space a transparency group may blend in (ISO 32000-2 11.3.4): CalRGB, or an ICCBased space
+/// whose profile header says `RGB ` or `CMYK` (ICC.1 7.2.6). Lab and the ICC spaces that hold
+/// lightness and chromaticity apart may not be blending spaces, and CalGray covers no RGB or CMYK.
+fn cie_components(doc: &Document, cs: &Object) -> Option<i64> {
+    let cs = doc.resolve(cs);
+    let a = cs.as_array()?;
+    match doc.resolve(a.first()?).as_name()? {
+        b"CalRGB" => Some(3),
+        b"ICCBased" => {
+            let profile = doc.resolve(a.get(1)?);
+            let Object::Stream(s) = &*profile else { return None };
+            let header = s.decoded_within(MAX_ICC_HEADER_READ).ok()?;
+            match (s.dict.int(b"N")?, header.get(16..20)?) {
+                (3, b"RGB ") => Some(3),
+                (4, b"CMYK") => Some(4),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
