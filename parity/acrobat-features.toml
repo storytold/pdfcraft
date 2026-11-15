@@ -5787,7 +5787,7 @@ milestone = "M8"
 status = "shipped"
 commands = ["redact.mark"]
 tools = ["redact_mark"]
-evidence = ["crates/ui-egui/tests/it/redact.rs::marking_applying_and_clearing", "crates/redact/src/tests.rs::images_are_removed_or_have_their_pixels_cleared"]
+evidence = ["crates/ui-egui/tests/it/redact.rs::marking_applying_and_clearing", "crates/redact/src/tests.rs::images_are_removed_or_have_their_pixels_cleared", "crates/redact/src/tests/inline_images.rs::a_partly_covered_inline_image_keeps_its_uncovered_part"]
 notes = "drag a box anywhere else"
 
 [[feature]]
