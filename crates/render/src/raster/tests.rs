@@ -6199,6 +6199,37 @@ fn a_font_without_a_subtype_is_drawn_by_its_base_font() {
     assert_eq!(render("", "Courier-Bold"), courier, "no /Subtype");
 }
 
+/// A font dictionary with a key that has no value before its `>>` (`/ToUnicode>>`, as a PDF
+/// editor wrote it) keeps the rest of its entries, so its text is drawn in its own font (vendored
+/// hayro-syntax patch 47). The whole dictionary was unreadable and its text was drawn in the
+/// fallback font, as other readers and the document model don't. The same holds for such a font
+/// written in the page's resources and for such a key in the `/Font` dictionary itself.
+#[test]
+fn a_font_with_a_key_without_a_value_keeps_its_face() {
+    let content = "BT /F1 20 Tf 5 40 Td (iiiiii) Tj ET BT /F2 20 Tf 5 10 Td (iiiiii) Tj ET";
+    let render = |font: &str, fonts_tail: &str| {
+        let length = content.len();
+        let pdf = format!(
+            "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 130 70] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 {font}{fonts_tail}>> >> >> endobj
+4 0 obj << /Length {length} >> stream
+{content}
+endstream endobj
+5 0 obj {font} endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        );
+        render_first_page(pdf.into_bytes()).rgba.to_vec()
+    };
+    let courier = render("<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold >>", "");
+    assert_ne!(courier, render("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", ""), "Courier Bold and the Helvetica fallback differ");
+    let dangling = "<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /ToUnicode>>";
+    assert_eq!(render(dangling, ""), courier, "a font with /ToUnicode and no value");
+    assert_eq!(render(dangling, " /Junk"), courier, "and a /Font dictionary with /Junk and no value");
+}
+
 /// A page with no `/MediaBox`, its own or inherited, is US Letter (612 × 792 pt), as other
 /// readers draw it and as the page model and inspector already sized it; it was A4 (vendored
 /// hayro-syntax patch 44; ISO 32000-2 Table 31 makes the box required and gives no default;

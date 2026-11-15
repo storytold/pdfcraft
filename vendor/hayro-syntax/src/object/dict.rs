@@ -199,6 +199,12 @@ impl Skippable for Dict<'_> {
 
                 r.skip_white_spaces_and_comments();
 
+                // PdfCraft patch (47): a key with no value before `>>` is left out, as in
+                // `parse_dict_with_inner`.
+                if r.peek_tag(b">>").is_some() {
+                    continue;
+                }
+
                 if is_content_stream {
                     r.skip::<Object<'_>>(is_content_stream)?;
                 } else {
@@ -432,6 +438,16 @@ where
                 }
             };
             r.skip_white_spaces_and_comments();
+
+            // PdfCraft patch (47): a key directly followed by `>>` has no value (a font written
+            // `/ToUnicode>>`). Leave the key out, as a null value would be (ISO 32000-2 §7.3.7),
+            // and read the rest of the dictionary; the whole dictionary was unreadable, so the
+            // font it held was lost. `pdfcraft-cos` reads such a key as null too. An inline image
+            // dictionary still refuses it.
+            if start_tag.is_some() && r.peek_tag(end_tag).is_some() {
+                repaired = true;
+                continue;
+            }
 
             let offset = r.offset() - start_offset;
             // Do note that we are including objects in our dictionary even if they
