@@ -12,6 +12,7 @@ mod luminosity_group_space;
 mod named_form_properties;
 mod nonseparable_gray;
 mod open_type_cff_simple_font;
+mod password_errors;
 mod rotated_image_snap;
 mod search;
 mod separation_all;

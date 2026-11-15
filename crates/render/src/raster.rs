@@ -533,14 +533,15 @@ fn take_warnings(warnings: &Mutex<Vec<RenderWarning>>) -> Vec<RenderWarning> {
 pub struct PageRenderer {
     bytes: Arc<Vec<u8>>,
     config: RenderConfig,
-    pdf: Option<Pdf>,
+    /// The parsed document, or what to tell the user when it could not be opened.
+    pdf: Result<Pdf, String>,
     settings: InterpreterSettings,
     stats: RenderStats,
 }
 
 impl PageRenderer {
     pub fn new(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
-        let pdf = parse(&bytes, config.password.as_deref());
+        let pdf = load(&bytes, config.password.as_deref());
         let settings = config.settings();
         Self { bytes, config, pdf, settings, stats: RenderStats { parser_builds: 1, ..RenderStats::default() } }
     }
@@ -556,7 +557,7 @@ impl PageRenderer {
 
     /// Extract one page for statistics, with semantic exclusions. Never rasterizes or panics.
     pub fn filtered_text(&mut self, page: usize, filter: crate::text::TextFilter) -> Result<crate::PageText, String> {
-        let pdf = self.pdf.as_ref().ok_or("the document could not be parsed")?;
+        let pdf = self.pdf.as_ref().map_err(String::clone)?;
         self.stats.text_interpretations = self.stats.text_interpretations.saturating_add(1);
         catch_unwind(AssertUnwindSafe(|| crate::text::extract_page_filtered(pdf, page, &self.settings, filter)))
             .map_err(|e| format!("text extraction failed: {}", panic_message(&e)))?
@@ -565,7 +566,7 @@ impl PageRenderer {
     /// Render one page. Never panics.
     pub fn render(&mut self, req: RenderRequest) -> RenderedPage {
         let start = Stopwatch::start();
-        if self.pdf.is_some() {
+        if self.pdf.is_ok() {
             self.stats.render_requests += 1;
             if req.tile.is_some() {
                 self.stats.tile_requests += 1;
@@ -578,8 +579,9 @@ impl PageRenderer {
                 RequestKind::Text => self.stats.text_interpretations += 1,
             }
         }
-        let Some(pdf) = self.pdf.as_ref() else {
-            return finish(req, start, Err(("the document could not be parsed".into(), false)), Vec::new());
+        let pdf = match self.pdf.as_ref() {
+            Ok(pdf) => pdf,
+            Err(e) => return finish(req, start, Err((e.clone(), false)), Vec::new()),
         };
         let cache = RenderCache::new();
         let warnings = Arc::new(Mutex::new(Vec::new()));
@@ -587,7 +589,7 @@ impl PageRenderer {
         let r = render_page(pdf, &cache, &settings, &self.config, req);
         let warnings = take_warnings(&warnings);
         if matches!(r, Err((_, true))) {
-            self.pdf = parse(&self.bytes, self.config.password.as_deref());
+            self.pdf = load(&self.bytes, self.config.password.as_deref());
             self.stats.parser_builds += 1;
         }
         finish(req, start, r, warnings)
@@ -595,7 +597,22 @@ impl PageRenderer {
 }
 
 fn parse(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Option<Pdf> {
-    catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes.clone(), password.unwrap_or("")).ok())).ok().flatten()
+    load(bytes, password).ok()
+}
+
+/// [`parse`], saying why a document did not open: a missing or incorrect password in the words
+/// [`inspect`](crate::inspect) uses (ISO 32000-2 §7.6.4.1), anything else as a parse failure.
+/// Never panics.
+fn load(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Result<Pdf, String> {
+    const UNPARSED: &str = "the document could not be parsed";
+    match catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes.clone(), password.unwrap_or("")))) {
+        Ok(Ok(pdf)) => Ok(pdf),
+        Ok(Err(e)) => match crate::inspect::open_error(e, password) {
+            e @ (crate::OpenError::NeedsPassword | crate::OpenError::WrongPassword) => Err(e.to_string()),
+            _ => Err(UNPARSED.into()),
+        },
+        Err(_) => Err(UNPARSED.into()),
+    }
 }
 
 pub(crate) fn panic_message(p: &Box<dyn std::any::Any + Send>) -> String {

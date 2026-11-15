@@ -15,6 +15,23 @@ pub(super) fn load_options(password: Option<&str>) -> LoadOptions {
     LoadOptions { password: password.map(str::to_owned), max_decompressed_size: Some(LOAD_STREAM_LIMIT), ..LoadOptions::default() }
 }
 
+/// Why the renderer's parser could not open a document opened with `password`. Failing to
+/// authenticate (ISO 32000-2 §7.6.4.1, §7.6.4.4) is a missing password when none was given and
+/// an incorrect one when one was, never a parse failure.
+pub(crate) fn open_error(e: LoadPdfError, password: Option<&str>) -> OpenError {
+    match e {
+        LoadPdfError::Decryption(DecryptionError::PasswordProtected) => {
+            if password.is_some() {
+                OpenError::WrongPassword
+            } else {
+                OpenError::NeedsPassword
+            }
+        }
+        LoadPdfError::Decryption(other) => OpenError::Unsupported(format!("encryption not supported: {other:?}")),
+        LoadPdfError::Invalid => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
+    }
+}
+
 /// Check that `bytes` still open as the same document: the parser reads them and the page
 /// count matches. Content-only edits skip the full [`inspect`] (seconds on very large files)
 /// but must still catch an edit that produced something the viewer cannot display, so the
@@ -22,17 +39,7 @@ pub(super) fn load_options(password: Option<&str>) -> LoadOptions {
 pub fn check_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, expected: usize) -> Result<(), OpenError> {
     let pdf = catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes, password.unwrap_or(""))))
         .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))?
-        .map_err(|e| match e {
-            LoadPdfError::Decryption(DecryptionError::PasswordProtected) => {
-                if password.is_some() {
-                    OpenError::WrongPassword
-                } else {
-                    OpenError::NeedsPassword
-                }
-            }
-            LoadPdfError::Decryption(other) => OpenError::Unsupported(format!("encryption not supported: {other:?}")),
-            LoadPdfError::Invalid => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
-        })?;
+        .map_err(|e| open_error(e, password))?;
     let pages = catch_unwind(AssertUnwindSafe(|| pdf.pages().len()))
         .map_err(|p| OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p))))?;
     if pages != expected {
@@ -46,17 +53,7 @@ pub fn check_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, expected: usize)
 pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, OpenError> {
     let pdf = catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes.clone(), password.unwrap_or(""))))
         .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))?
-        .map_err(|e| match e {
-            LoadPdfError::Decryption(DecryptionError::PasswordProtected) => {
-                if password.is_some() {
-                    OpenError::WrongPassword
-                } else {
-                    OpenError::NeedsPassword
-                }
-            }
-            LoadPdfError::Decryption(other) => OpenError::Unsupported(format!("encryption not supported: {other:?}")),
-            LoadPdfError::Invalid => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
-        })?;
+        .map_err(|e| open_error(e, password))?;
     let mut info = DocInfo { file_size: bytes.len(), pdf_version: version_label(&format!("{:?}", pdf.version())), ..Default::default() };
     let pages = catch_unwind(AssertUnwindSafe(|| {
         let mut out = Vec::new();

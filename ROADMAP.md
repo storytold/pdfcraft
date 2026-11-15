@@ -261,6 +261,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+- **2026-11-15 (M1, core.password-prompt):** CLI `render` (and every page-renderer user) reports a missing or incorrect password in the words `info` and `doc_open` use, not "the document could not be parsed" (ISO 32000-2 §7.6.4.1). Synthetic RC4/AES regressions in the renderer and the CLI. Estimates unchanged.
+
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
 - **2026-10-27 (M10, #5005):** Vector printing retains each annotation's optional-content membership when drawing its appearance.
