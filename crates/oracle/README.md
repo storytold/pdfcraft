@@ -25,7 +25,7 @@ does not go through our own code.
 ```rust
 // In a test: bind the oracle, or return after saying why it was skipped.
 let qpdf = pdfcraft_oracle::or_skip!(pdfcraft_oracle::qpdf());
-let out = qpdf.command().arg("--check").arg(&path).output()?;
+let out = qpdf.command().arg("--check").arg(&path).output().expect("run qpdf");
 
 // Elsewhere (xtask), handle the absence yourself.
 match pdfcraft_oracle::pdftotext() {
