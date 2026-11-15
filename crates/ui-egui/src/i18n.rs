@@ -51,6 +51,23 @@ static I18N: LazyLock<I18n> = LazyLock::new(|| {
     i18n
 });
 
+/// At most 128 Gurmukhi codepoints, collected once from the embedded catalog plus a nonempty probe.
+static PUNJABI_GLYPHS: LazyLock<String> = LazyLock::new(|| {
+    "ਪੰਜਾਬੀ ਭਾਸ਼ਾ ਸਤ ਸ੍ਰੀ ਅਕਾਲ ਸਿੱਖਿਆ ਅੱਖਰ ਫ਼ਾਈਲ"
+        .chars()
+        .chain(CRAFT_I18N.iter().filter(|(code, ..)| *code == "pa").flat_map(|(_, shared, app)| shared.chars().chain(app.chars())))
+        .filter(|c| ('\u{0a00}'..='\u{0a7f}').contains(c))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+});
+
+/// Bounded Gurmukhi coverage required by the interface, independent of installed font selection.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn punjabi_required_glyphs() -> &'static str {
+    &PUNJABI_GLYPHS
+}
+
 /// The `language` preference value that follows the system locale.
 pub const AUTO: &str = "auto";
 
@@ -66,7 +83,7 @@ pub struct LangInfo {
 }
 
 /// How many languages [`LANGUAGES`] lists.
-const LANGUAGE_COUNT: usize = 35;
+const LANGUAGE_COUNT: usize = 36;
 
 /// The languages PdfCraft offers. English first: it is the fallback and the source language.
 pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
@@ -150,6 +167,8 @@ pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
     // Norwegian Bokmål; every `nb-*` locale resolves here, and so do general Norwegian (`no-*`) and
     // Nynorsk (`nn-*`), which have no catalog of their own (see `candidates`).
     LangInfo { code: "nb", rtl: false },
+    // Punjabi is offered only with its Gurmukhi catalog; see the script policy in candidates.
+    LangInfo { code: "pa", rtl: false },
 ];
 
 /// Per language of [`LANGUAGES`], the (context, source) keys of PdfCraft's own catalog as written
@@ -195,8 +214,9 @@ impl Lang {
         self.i18n().code(self.lang)
     }
 
-    /// A language by its exact code (any case): one of [`LANGUAGES`] whose catalogs are embedded.
+    /// A registered code (any case) whose catalog is embedded; legacy `pa-guru` aliases `pa`.
     pub fn from_code(code: &str) -> Option<Lang> {
+        let code = if code.eq_ignore_ascii_case("pa-guru") { "pa" } else { code };
         let info = LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(code))?;
         I18N.from_code(info.code).map(|lang| Lang { lang, catalogs: None })
     }
@@ -205,6 +225,13 @@ impl Lang {
     /// e.g. a code from a newer version) to follow the system locale.
     pub fn from_pref(pref: &str) -> Lang {
         Lang::from_code(pref).unwrap_or_else(system_lang)
+    }
+
+    /// Keep a configured Punjabi preference, but display English unless the active UI fonts
+    /// cover its Gurmukhi characters. Other languages never consult this Punjabi-only predicate.
+    /// Glyph coverage is necessary for readable labels; it does not establish correct shaping.
+    pub(crate) fn for_display(self, drawable: impl FnOnce(&str) -> bool) -> Lang {
+        if self.code() == "pa" && !drawable(&PUNJABI_GLYPHS) { Lang::EN } else { self }
     }
 
     /// Every language the interface can be shown in: [`LANGUAGES`] in order, those whose catalogs
@@ -241,7 +268,12 @@ impl Lang {
     /// The language's name in English, used by [`picker_name`](Self::picker_name) when this
     /// build's fonts cannot draw [`name`](Self::name).
     pub fn english_name(self) -> &'static str {
-        match self.code() {
+        Self::english_name_for_code(self.code())
+    }
+
+    /// English picker name independent of whether this build embeds the language's catalog.
+    pub(crate) fn english_name_for_code(code: &'static str) -> &'static str {
+        match code {
             "en" => "English",
             "ja" => "Japanese",
             "zh-hans" => "Simplified Chinese",
@@ -277,6 +309,7 @@ impl Lang {
             "lo" => "Lao",
             "hi" => "Hindi",
             "ko" => "Korean",
+            "pa" => "Punjabi (Gurmukhi)",
             // Only reached if a language is added to `LANGUAGES` without an English name; the
             // code still tells the reader which entry it is.
             code => code,
@@ -346,11 +379,16 @@ pub fn normalize_pref(pref: &str) -> Option<&'static str> {
 }
 
 /// Candidate language codes for a locale tag, most specific first: `zh_TW.UTF-8` →
-/// `zh-tw`, `zh-hant`, `zh`.
-fn candidates(tag: &str) -> Vec<String> {
+/// `zh-tw`, `zh-hant`, `zh`. Punjabi uses the runtime matcher and available catalogs.
+fn candidates(tag: &str, catalogs: &I18n) -> Vec<String> {
     let base = tag.split(['.', '@']).next().unwrap_or("").replace('_', "-").to_ascii_lowercase();
     let parts: Vec<&str> = base.split('-').filter(|p| !p.is_empty()).collect();
     let Some(&primary) = parts.first() else { return Vec::new() };
+    if primary == "pa" {
+        // The runtime excludes Arabic/other scripts and infers Shahmukhi for Pakistan; a generic
+        // base-language fallback here would incorrectly offer Gurmukhi for those users.
+        return catalogs.match_tag(tag).map_or_else(Vec::new, |lang| vec![catalogs.code(lang).to_string()]);
+    }
     let mut out = Vec::new();
     for n in (1..=parts.len()).rev() {
         out.push(parts.get(..n).unwrap_or_default().join("-"));
@@ -375,11 +413,16 @@ fn candidates(tag: &str) -> Vec<String> {
 /// The registered language for a locale tag such as `ja_JP.UTF-8`, `ja-JP`; `None` if the
 /// language isn't supported. `C`/`POSIX` mean English.
 pub fn lang_from_tag(tag: &str) -> Option<Lang> {
-    let cands = candidates(tag);
+    lang_from_tag_with(tag, &I18N).map(|lang| Lang { lang, catalogs: None })
+}
+
+/// Route through the registered language list and the supplied runtime, including fixture catalogs.
+fn lang_from_tag_with(tag: &str, catalogs: &I18n) -> Option<craft_i18n::Lang> {
+    let cands = candidates(tag, catalogs);
     if matches!(cands.first().map(String::as_str), Some("c" | "posix")) {
-        return Some(Lang::EN);
+        return Some(craft_i18n::Lang::EN);
     }
-    cands.iter().find_map(|c| Lang::from_code(c))
+    cands.iter().filter(|code| LANGUAGES.iter().any(|l| l.code.eq_ignore_ascii_case(code))).find_map(|code| catalogs.from_code(code))
 }
 
 /// The system language (cached). English when it can't be determined.
@@ -427,7 +470,7 @@ fn env_lang(var: impl Fn(&str) -> Option<String>) -> Option<Lang> {
 #[cfg(not(target_arch = "wasm32"))]
 fn language_override(tag: &str) -> Option<Lang> {
     let tag = tag.trim();
-    if cfg!(target_os = "windows") && matches!(candidates(tag).first().map(String::as_str), Some("c" | "posix")) {
+    if cfg!(target_os = "windows") && matches!(candidates(tag, &I18N).first().map(String::as_str), Some("c" | "posix")) {
         return None;
     }
     lang_from_tag(tag)

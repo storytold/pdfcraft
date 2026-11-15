@@ -31,6 +31,19 @@ impl Default for PdfCraftApp {
 }
 
 impl PdfCraftApp {
+    /// Effective UI language, distinct from the saved preference. Wait for font installation
+    /// and egui's first completed pass before querying fonts, including hidden/startup logic.
+    /// Query active fonts rather than a pending set so font changes take effect safely.
+    pub(crate) fn display_language(&self, ctx: &egui::Context) -> i18n::Lang {
+        self.display_language_for(ctx, i18n::Lang::from_pref(&self.language))
+    }
+
+    /// Apply the readiness/coverage guard to an already resolved preference. Keeping resolution
+    /// separate lets startup tests use a real Punjabi fixture even when the build has no catalog.
+    pub(crate) fn display_language_for(&self, ctx: &egui::Context, language: i18n::Lang) -> i18n::Lang {
+        language.for_display(|text| self.fonts_ready && ctx.cumulative_pass_nr() > 0 && theme::punjabi_text_is_drawable(ctx, text))
+    }
+
     /// The window's title and, on the web, the page's, from the active document (#3640). Done in
     /// `logic` too, which also runs while the window or browser tab is hidden: a document opened
     /// then (a `?file=` download finishing) still names the page an embedding host reads.
@@ -598,7 +611,7 @@ impl PdfCraftApp {
         self.window_state.repair(ctx);
         self.dialog_epoch();
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
-        let lang = i18n::Lang::from_pref(&self.language);
+        let lang = self.display_language(ctx);
         i18n::set_current(lang);
         self.apply_status_captions(lang);
         // Form date fields name months in the date language (Preferences ▸ Date format), which
@@ -816,7 +829,7 @@ impl PdfCraftApp {
         #[cfg(test)]
         self.injected_panic(crate::frame_guard::FramePart::Ui);
         let ctx = ui.ctx().clone();
-        i18n::set_current(i18n::Lang::from_pref(&self.language));
+        i18n::set_current(self.display_language(&ctx));
         // A language change switches stock chrome between LTR and RTL before anything is drawn.
         theme::sync_direction(&ctx);
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.

@@ -251,3 +251,30 @@ fn search_scrolls_option_only_and_theme_card_matches_into_visible_viewport() {
         "Dark theme card scrolled into visible viewport: {dark_card:?} between title {title:?} and OK {ok:?}"
     );
 }
+
+/// Run in an isolated process with Punjabi LC_ALL and system fonts disabled. This uses the
+/// production Auto resolver (unit tests deliberately replace that resolver with English).
+#[test]
+fn third_review_auto_punjabi_without_fonts_keeps_english_and_auto() {
+    use pdfcraft_ui_egui::i18n::{self, Lang};
+    if std::env::var("LC_ALL").as_deref() != Ok("pa_IN.UTF-8")
+        || std::env::var("PDFCRAFT_SYSTEM_FONTS").as_deref() != Ok("0")
+        || Lang::from_code("pa").is_none()
+    {
+        eprintln!("skipped Auto observation: requires isolated Punjabi locale, disabled system fonts and canonical catalog");
+        return;
+    }
+    assert_eq!(Lang::from_pref(i18n::AUTO).code(), "pa", "Auto must really resolve to Punjabi before the display guard");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("dialog", "preferences").unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert_eq!(i18n::current(), Lang::EN);
+    assert_eq!(h.state().language, i18n::AUTO, "keep following the system instead of rewriting the preference");
+    assert!(h.get_by_label("OK").rect().is_positive(), "real English preferences are rendered");
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["language"], i18n::AUTO);
+    assert!(!h.ctx.fonts_mut(|fonts| fonts.has_glyphs(&egui::FontId::proportional(13.0), "ਪੰਜਾਬੀ")));
+}

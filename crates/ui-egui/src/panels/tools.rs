@@ -246,11 +246,11 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
         ui.add_space(6.0);
     }
     let mut run = None;
-    // Redact a PDF has Acrobat's footer: Clear all / Redact all.
-    let footer = g.id == "redact";
-    let marks = if footer { app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks()) } else { 0 };
-    let list_h = if footer { (ui.available_height() - 52.0).max(80.0) } else { ui.available_height() };
-    egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(list_h).show(ui, |ui| {
+    let marks = if g.id == "redact" { app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks()) } else { 0 };
+    let count = (marks > 0)
+        .then(|| if marks == 1 { crate::i18n::fmt(tl!("1 mark"), &[]) } else { crate::i18n::fmt(tl!("{n} marks"), &[("n", &marks.to_string())]) });
+    let content = |ui: &mut egui::Ui| {
+        let mut focused_row = None;
         clear_of_scrollbar(ui);
         ui.add_space(2.0);
         for s in g.sections {
@@ -261,6 +261,9 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                 }
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!(item.label)));
+                if g.id == "redact" && resp.gained_focus() {
+                    focused_row = Some(resp.clone());
+                }
                 let ready = item.availability == Availability::Ready;
                 let press = theme::Press::track(ui, &resp);
                 press.wash(ui, rect, 6, false);
@@ -305,31 +308,599 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
             // menu over the page, where it was easy to miss (#2149).
             ui.add(widgets::checkbox(&mut app.flatten_fill_sign_on_save, tl!("Lock into the page when saving")));
         }
-    });
-    if footer {
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if marks > 0 {
-                ui.label(
-                    egui::RichText::new(if marks == 1 {
-                        crate::i18n::fmt(tl!("1 mark"), &[])
-                    } else {
-                        crate::i18n::fmt(tl!("{n} marks"), &[("n", &marks.to_string())])
-                    })
-                    .color(t.text_muted),
-                );
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add_enabled_ui(marks > 0, |ui| widgets::pill_button(ui, tl!("Redact all"), true)).inner.clicked() {
-                    run = Some("redact.apply");
-                }
-                if ui.add_enabled_ui(marks > 0, |ui| widgets::pill_button(ui, tl!("Clear all"), false)).inner.clicked() {
-                    run = Some("redact.clear");
-                }
-            });
-        });
+        focused_row
+    };
+    if g.id == "redact" {
+        let [apply, clear] = redaction_body(
+            ui,
+            RedactionFooter { count: count.as_deref(), enabled: marks > 0, labels: [tl!("Redact all"), tl!("Clear all")] },
+            content,
+        );
+        if apply.clicked() {
+            run = Some("redact.apply");
+        }
+        if clear.clicked() {
+            run = Some("redact.clear");
+        }
+    } else {
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, content);
     }
     if let Some(cmd) = run {
         app.run_command(cmd);
+    }
+}
+
+/// Inputs shared by the rendered footer and its space calculation.
+#[derive(Clone, Copy)]
+struct RedactionFooter<'a> {
+    count: Option<&'a str>,
+    enabled: bool,
+    labels: [&'a str; 2],
+}
+
+impl RedactionFooter<'_> {
+    /// Measure the same wrapped widgets in a non-interactive child without advancing the parent.
+    fn height(self, ui: &mut egui::Ui) -> f32 {
+        let rect = Rect::from_min_size(ui.available_rect_before_wrap().min, vec2(ui.available_width(), f32::INFINITY));
+        let mut child = ui.new_child(
+            egui::UiBuilder::new().id_salt("redaction-footer-measure").max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)).invisible(),
+        );
+        self.show(&mut child);
+        child.min_size().y
+    }
+
+    /// Render the real count and action widgets, retaining their responses for dispatch.
+    fn show(self, ui: &mut egui::Ui) -> [egui::Response; 2] {
+        ui.add_space(8.0);
+        ui.vertical(|ui| {
+            // A short-pane scroll bar must not obscure either text or action hit targets.
+            ui.set_max_width((ui.available_width() - SCROLLBAR_GUTTER).max(1.0));
+            if let Some(count) = self.count {
+                ui.add(egui::Label::new(egui::RichText::new(count).color(Tokens::get(ui.ctx()).text_muted)).wrap());
+            }
+            redaction_actions(ui, self.enabled, self.labels[0], self.labels[1])
+        })
+        .inner
+    }
+}
+
+/// Keep a measured footer visible normally; scroll the complete body when the pane is too short.
+/// Content returns only its newly focused tool-row response, excluding footer or popup widgets.
+fn redaction_body(
+    ui: &mut egui::Ui,
+    footer: RedactionFooter<'_>,
+    content: impl FnOnce(&mut egui::Ui) -> Option<egui::Response>,
+) -> [egui::Response; 2] {
+    let height = ui.available_height();
+    let footer_height = footer.height(ui);
+    // Below the useful list height, one scrolling surface keeps both actions reachable rather
+    // than letting a list minimum or an oversized footer escape the pane's clip.
+    let scroll_all = height < footer_height + 80.0;
+    let body = |ui: &mut egui::Ui| {
+        let list_h = if scroll_all { f32::INFINITY } else { (height - footer_height - ui.spacing().item_spacing.y).max(0.0) };
+        let list = egui::ScrollArea::new([false, !scroll_all])
+            .id_salt("redaction-tools")
+            .auto_shrink([false, scroll_all])
+            .min_scrolled_height(0.0)
+            .max_height(list_h)
+            .show(ui, |ui| {
+                let focused = content(ui);
+                // A separate list must receive its target before it closes. Short panes instead
+                // send the target below, after the disabled inner area can no longer consume it.
+                if !scroll_all
+                    && let Some(response) = &focused
+                    && response.gained_focus()
+                {
+                    response.scroll_to_me(None);
+                }
+                focused
+            });
+        // The disabled inner area consumes scroll targets even on disabled axes. Content
+        // identifies its own row: a viewport excludes offscreen responses, while global focus
+        // may belong to a footer, another pane or a popup on another layer.
+        if scroll_all
+            && let Some(response) = list.inner
+            && response.gained_focus()
+        {
+            response.scroll_to_me(None);
+        }
+        footer.show(ui)
+    };
+    if scroll_all {
+        egui::ScrollArea::vertical().id_salt("redaction-body").auto_shrink([false, false]).min_scrolled_height(0.0).show(ui, body).inner
+    } else {
+        body(ui)
+    }
+}
+
+/// Keep both actions inside the panel when their translated labels need another row.
+fn redaction_actions(ui: &mut egui::Ui, enabled: bool, apply: &str, clear: &str) -> [egui::Response; 2] {
+    let width = [apply, clear]
+        .iter()
+        .map(|label| crate::bidi::layout_ui(ui, (*label).to_owned(), theme::medium(12.5), Tokens::get(ui.ctx()).text).size().x + 26.0)
+        .sum::<f32>()
+        + ui.spacing().item_spacing.x;
+    // Select rows explicitly; top alignment also keeps measurement finite in an unbounded-height child.
+    let layout = if width > ui.available_width() { egui::Layout::top_down(egui::Align::Max) } else { egui::Layout::right_to_left(egui::Align::Min) };
+    ui.with_layout(layout, |ui| {
+        [
+            ui.add_enabled_ui(enabled, |ui| widgets::pill_button_wrapped(ui, apply, true)).inner,
+            ui.add_enabled_ui(enabled, |ui| widgets::pill_button_wrapped(ui, clear, false)).inner,
+        ]
+    })
+    .inner
+}
+
+#[cfg(test)]
+mod footer_tests {
+    /// Measured reservation includes both rows and the count's actual rendered height.
+    #[test]
+    fn translated_redaction_footer_reserves_wrapped_row() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        for count in [None, Some("12 marks")] {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_max_width(244.0);
+                let footer = super::RedactionFooter { count, enabled: true, labels: ["Apply every marked redaction", "Clear all marks"] };
+                let height = footer.height(ui);
+                assert!(height.is_finite());
+                let start = ui.cursor().top();
+                let buttons = footer.show(ui);
+                assert!(buttons[1].rect.top() > buttons[0].rect.top(), "long actions must stack");
+                assert!(buttons[1].rect.bottom() - start <= height + 0.1);
+            });
+            output.textures_delta.clear();
+        }
+    }
+
+    /// Actual emitted text geometry, not a second independent text measurement.
+    struct PaintedLabel {
+        text: String,
+        layout: egui::Rect,
+        ink: egui::Rect,
+        clip: egui::Rect,
+        elided: bool,
+    }
+
+    struct Geometry {
+        bounds: egui::Rect,
+        buttons: [egui::Rect; 2],
+        enabled: [bool; 2],
+        labels: Vec<PaintedLabel>,
+    }
+
+    /// Separate presses model real keyboard traversal rather than late programmatic focus requests.
+    fn tab(shift: bool) -> Vec<egui::Event> {
+        [false, true]
+            .into_iter()
+            .map(|pressed| egui::Event::Key {
+                key: egui::Key::Tab,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: egui::Modifiers { shift, ..Default::default() },
+            })
+            .collect()
+    }
+
+    /// Render the actual footer under a parent clip; focus models keyboard navigation.
+    fn geometry(size: egui::Vec2, count: Option<&str>, labels: [&str; 2], focus_clear: bool) -> Geometry {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let mut result = None;
+        for frame in 0..5 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(f64::from(frame)),
+                    events: if frame == 1 && focus_clear && count.is_none() {
+                        vec![
+                            egui::Event::PointerMoved(egui::pos2(size.x * 0.5, size.y * 0.5)),
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                phase: egui::TouchPhase::Move,
+                                source: egui::MouseWheelSource::Unknown,
+                                delta: egui::vec2(0.0, -2000.0),
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ]
+                    } else if frame < 2 && focus_clear && count.is_some() {
+                        tab(false)
+                    } else {
+                        vec![]
+                    },
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size + egui::vec2(16.0, 16.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.set_max_size(size);
+                    let bounds = ui.max_rect();
+                    ui.set_clip_rect(bounds);
+                    let responses = super::redaction_body(ui, super::RedactionFooter { count, enabled: count.is_some(), labels }, |ui| {
+                        ui.allocate_space(egui::vec2(10.0, 500.0));
+                        None
+                    });
+                    result = Some(Geometry {
+                        bounds,
+                        buttons: [responses[0].rect, responses[1].rect],
+                        enabled: [responses[0].enabled(), responses[1].enabled()],
+                        labels: vec![],
+                    });
+                },
+            );
+            result.as_mut().unwrap().labels = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| {
+                    let egui::epaint::Shape::Text(text) = &clipped.shape else { return None };
+                    labels.contains(&text.galley.job.text.as_str()).then(|| PaintedLabel {
+                        text: text.galley.job.text.clone(),
+                        layout: text.galley.rect.translate(text.pos.to_vec2()),
+                        ink: text.visual_bounding_rect(),
+                        clip: clipped.clip_rect,
+                        elided: text.galley.elided,
+                    })
+                })
+                .collect();
+            output.textures_delta.clear();
+        }
+        result.unwrap()
+    }
+
+    /// A translated count may occupy several rows without displacing the actions.
+    #[test]
+    fn redaction_footer_multiline_count_fits() {
+        let Geometry { bounds, buttons, .. } = geometry(
+            egui::vec2(244.0, 400.0),
+            Some(
+                "12 marks
+with a long
+translated count
+on several
+additional
+lines",
+            ),
+            ["Apply", "Clear"],
+            false,
+        );
+        assert!(buttons[1].bottom() <= bounds.bottom(), "{bounds:?} {buttons:?}");
+    }
+
+    /// Even one oversized action must fit horizontally, with the enabled state preserved.
+    #[test]
+    fn redaction_footer_oversized_actions_fit() {
+        for count in [None, Some("2 marks")] {
+            let Geometry { bounds, buttons, enabled, labels } =
+                geometry(egui::vec2(100.0, 700.0), count, ["Apply every marked redaction", "Clear all marks"], false);
+            for b in buttons {
+                assert!(b.left() >= bounds.left() && b.right() <= bounds.right(), "{bounds:?} {b:?}");
+            }
+            assert_eq!(enabled, [count.is_some(); 2]);
+            assert_eq!(labels.len(), 2, "both complete painted action labels must be present");
+            for (label, button) in ["Apply every marked redaction", "Clear all marks"].into_iter().zip(buttons) {
+                let painted = labels.iter().find(|p| p.text == label).unwrap();
+                assert!(!painted.elided, "the complete label must be retained");
+                assert!(button.shrink(1.0).contains_rect(painted.layout), "{label}: {:?} vs {button:?}", painted.layout);
+                assert!(button.shrink(1.0).contains_rect(painted.ink), "{label}: {:?} vs {button:?}", painted.ink);
+                assert!(painted.clip.contains_rect(painted.ink), "{label}: {:?} vs {:?}", painted.ink, painted.clip);
+                assert!(bounds.contains_rect(painted.ink));
+            }
+        }
+    }
+
+    /// Wheel scrolling and keyboard focus keep disabled/enabled actions reachable in a short pane.
+    #[test]
+    fn redaction_footer_short_panel_is_scroll_reachable() {
+        for count in [None, Some("2 marks")] {
+            let Geometry { bounds, buttons, .. } =
+                geometry(egui::vec2(244.0, 125.0), count, ["Apply every marked redaction", "Clear all marks"], true);
+            assert!(bounds.contains_rect(buttons[1]), "focused clear action must be reachable: {bounds:?} {buttons:?}");
+        }
+    }
+
+    /// Fitting English labels retain one row for both zero and nonzero mark counts.
+    #[test]
+    fn redaction_footer_fitting_labels_keep_one_row() {
+        for count in [None, Some("2 marks")] {
+            let Geometry { bounds, buttons, enabled, .. } = geometry(egui::vec2(244.0, 400.0), count, ["Apply", "Clear"], false);
+            assert_eq!(buttons[0].top(), buttons[1].top());
+            assert!(buttons.iter().all(|b| bounds.contains_rect(*b)));
+            assert_eq!(enabled, [count.is_some(); 2]);
+        }
+    }
+
+    /// Tab reveals an action once; retaining focus must not pull a deliberate wheel scroll back down.
+    #[test]
+    fn second_review_focused_footer_allows_wheel_away() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let mut observed = Vec::new();
+        for frame in 0..120 {
+            let events = if frame == 1 || frame == 2 {
+                tab(false)
+            } else if frame == 8 {
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(80.0, 60.0)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                        delta: egui::vec2(0.0, 400.0),
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            } else if frame == 110 {
+                tab(true)
+            } else {
+                vec![]
+            };
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(f64::from(frame)),
+                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(260.0, 141.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.set_max_size(egui::vec2(244.0, 125.0));
+                    let bounds = ui.max_rect();
+                    ui.set_clip_rect(bounds);
+                    let responses = super::redaction_body(
+                        ui,
+                        super::RedactionFooter { count: Some("2 marks"), enabled: true, labels: ["Apply every marked redaction", "Clear all marks"] },
+                        |ui| {
+                            ui.allocate_space(egui::vec2(10.0, 500.0));
+                            None
+                        },
+                    );
+                    observed.push((bounds, [responses[0].rect, responses[1].rect], [responses[0].has_focus(), responses[1].has_focus()]));
+                },
+            );
+            output.textures_delta.clear();
+        }
+        for frame in [6, 13, 60, 100, 119] {
+            println!("frame {frame}: {:?}", observed[frame]);
+        }
+        let (bounds, buttons, focus) = observed[6];
+        assert!(focus[1] && bounds.contains_rect(buttons[1]), "Tab must reveal Clear: {:?}", observed[6]);
+        let (bounds, buttons, focus) = observed[100];
+        assert!(focus[1], "wheel scrolling must retain keyboard focus");
+        assert!(buttons[1].top() > bounds.bottom() + 100.0, "wheel must stay away from focused footer: {:?}", observed[100]);
+        let (bounds, buttons, focus) = observed[119];
+        assert!(focus[0] && bounds.contains_rect(buttons[0]), "a new keyboard focus transition must reveal Apply: {:?}", observed[119]);
+    }
+
+    /// Real Tab/Shift+Tab navigation reveals a clipped tool row and does not fight later wheel input.
+    #[test]
+    fn review_regression_short_pane_reveals_keyboard_tool_focus() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let mut observed = Vec::new();
+        for frame in 0..160 {
+            let events = if [1, 3, 5, 7, 125].contains(&frame) {
+                tab(false)
+            } else if frame == 30 {
+                tab(true)
+            } else if frame == 90 {
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(80.0, 60.0)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                        delta: egui::vec2(0.0, -500.0),
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            } else {
+                vec![]
+            };
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(f64::from(frame)),
+                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(260.0, 141.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.set_max_size(egui::vec2(244.0, 125.0));
+                    let bounds = ui.max_rect();
+                    ui.set_clip_rect(bounds);
+                    let mut row = None;
+                    let buttons = super::redaction_body(
+                        ui,
+                        super::RedactionFooter { count: Some("2 marks"), enabled: true, labels: ["Apply every redaction", "Clear every mark"] },
+                        |ui| {
+                            let mut focused_row = None;
+                            for i in 0..3 {
+                                let (rect, resp) = ui.allocate_exact_size(egui::vec2(180.0, 34.0), egui::Sense::click());
+                                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Tool {i}")));
+                                if resp.gained_focus() {
+                                    focused_row = Some(resp.clone());
+                                    resp.scroll_to_me(None);
+                                }
+                                if i == 2 {
+                                    row = Some((rect, resp.has_focus()));
+                                }
+                            }
+                            ui.allocate_space(egui::vec2(10.0, 500.0));
+                            focused_row
+                        },
+                    );
+                    observed.push((bounds, row.unwrap(), buttons[0].rect, buttons[0].has_focus()));
+                },
+            );
+            output.textures_delta.clear();
+        }
+        for i in [25, 65, 120, 155] {
+            println!("focus frame {i}: {:?}", observed[i]);
+        }
+        assert!(observed[25].3, "Tab must reach Apply before reverse traversal");
+        let (bounds, (row, focus), _, _) = observed[65];
+        assert!(focus, "Shift+Tab must focus the last tool");
+        assert!(bounds.contains_rect(row), "newly focused tool must be revealed: {bounds:?} {row:?}");
+        let (bounds, (row, focus), _, _) = observed[120];
+        assert!(focus && row.bottom() < bounds.top(), "wheel input must retain focus and stay away");
+        assert!(observed[155].3 && observed[155].0.contains_rect(observed[155].2), "Tab returns visibly to Apply");
+    }
+    /// Real Tab/Shift+Tab navigation reveals a clipped tool row and does not fight later wheel input.
+    #[test]
+    fn clipped_redaction_rows_reveal_focus_in_short_panes() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let mut observed = Vec::new();
+        for frame in 0..160 {
+            let events = if [1, 3, 5, 20, 140, 145].contains(&frame) {
+                tab(false)
+            } else if frame == 30 || frame == 125 {
+                tab(true)
+            } else if frame == 90 {
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(80.0, 60.0)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                        delta: egui::vec2(0.0, 500.0),
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            } else {
+                vec![]
+            };
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(f64::from(frame)),
+                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(260.0, 141.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.set_max_size(egui::vec2(244.0, 125.0));
+                    let bounds = ui.max_rect();
+                    ui.set_clip_rect(bounds);
+                    let mut row = None;
+                    let buttons = super::redaction_body(
+                        ui,
+                        super::RedactionFooter { count: Some("2 marks"), enabled: true, labels: ["Apply every redaction", "Clear every mark"] },
+                        |ui| {
+                            let mut focused_row = None;
+                            let inner = ui.max_rect();
+                            for i in 0..3 {
+                                if i == 1 {
+                                    ui.allocate_space(egui::vec2(10.0, 500.0));
+                                }
+                                let (rect, resp) = ui.allocate_exact_size(egui::vec2(180.0, 34.0), egui::Sense::click());
+                                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Tool {i}")));
+                                if resp.gained_focus() {
+                                    focused_row = Some(resp.clone());
+                                    resp.scroll_to_me(None);
+                                }
+                                if i == if (125..140).contains(&frame) { 1 } else { 2 } {
+                                    row = Some((rect, resp.has_focus(), inner));
+                                }
+                            }
+                            focused_row
+                        },
+                    );
+                    observed.push((bounds, row.unwrap(), buttons[0].rect, buttons[0].has_focus()));
+                },
+            );
+            output.textures_delta.clear();
+        }
+        for i in [5, 15, 25, 65, 120, 125, 135, 155] {
+            println!("focus frame {i}: {:?}", observed[i]);
+        }
+        assert!(observed[5].1.1 && !observed[5].1.2.contains_rect(observed[5].1.0), "new focus must genuinely lie outside the inner rectangle");
+        assert!(
+            observed[15].1.1 && observed[15].0.contains_rect(observed[15].1.0),
+            "focused row outside inner rectangle must be revealed before Tab reaches the footer: {:?}",
+            observed[15]
+        );
+        assert!(observed[25].3, "Tab must reach Apply before reverse traversal");
+        let (bounds, (row, focus, _), _, _) = observed[65];
+        assert!(focus, "Shift+Tab must focus the last tool");
+        assert!(bounds.contains_rect(row), "newly focused tool must be revealed: {bounds:?} {row:?}");
+        let (bounds, (row, focus, _), _, _) = observed[120];
+        assert!(focus && row.top() > bounds.bottom(), "wheel input must retain focus and stay away");
+        assert!(
+            observed[135].1.1 && observed[135].0.contains_rect(observed[135].1.0),
+            "Shift+Tab must reveal the offscreen previous row: {:?}",
+            observed[135]
+        );
+        assert!(observed[155].3 && observed[155].0.contains_rect(observed[155].2), "Tab returns visibly to Apply");
+    }
+    /// Normal-height panes reveal clipped tool rows inside their separate scrolling list.
+    #[test]
+    fn separate_redaction_list_reveals_keyboard_focus() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let mut observed = Vec::new();
+        for frame in 0..160 {
+            let events = if (1..40).contains(&frame) && frame % 2 == 1 || frame == 140 || frame == 145 {
+                tab(false)
+            } else if frame == 120 {
+                tab(true)
+            } else if frame == 80 {
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(80.0, 60.0)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                        delta: egui::vec2(0.0, 500.0),
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            } else {
+                vec![]
+            };
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(f64::from(frame)),
+                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(260.0, 416.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.set_max_size(egui::vec2(244.0, 400.0));
+                    let bounds = ui.max_rect();
+                    ui.set_clip_rect(bounds);
+                    let footer = super::RedactionFooter { count: Some("2 marks"), enabled: true, labels: ["Apply", "Clear"] };
+                    assert!(ui.available_height() >= footer.height(ui) + 80.0, "must use a separate scrolling list");
+                    let mut row = None;
+                    let buttons = super::redaction_body(ui, footer, |ui| {
+                        let clip = ui.clip_rect().intersect(bounds);
+                        let mut focused = None;
+                        for i in 0..20 {
+                            let (rect, resp) = ui.allocate_exact_size(egui::vec2(180.0, 34.0), egui::Sense::click());
+                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Tool {i}")));
+                            // Match production: report the actual row; no test-only scroll request.
+                            if resp.gained_focus() {
+                                focused = Some(resp.clone());
+                            }
+                            if i == if (120..140).contains(&frame) { 18 } else { 19 } {
+                                row = Some((rect, resp.has_focus(), clip));
+                            }
+                        }
+                        focused
+                    });
+                    observed.push((row.unwrap(), buttons[0].rect, buttons[0].has_focus()));
+                },
+            );
+            output.textures_delta.clear();
+        }
+        for i in [39, 50, 110, 135, 155] {
+            println!("normal frame {i}: {:?}", observed[i]);
+        }
+        let (row, focused, clip) = observed[39].0;
+        assert!(focused && !clip.contains_rect(row), "target must genuinely gain focus while clipped");
+        let (row, focused, clip) = observed[50].0;
+        assert!(focused && clip.contains_rect(row), "focused row must be revealed: {:?}", observed[50]);
+        assert_eq!(observed[0].1, observed[50].1, "footer must stay fixed");
+        let (row, focused, clip) = observed[110].0;
+        assert!(focused && row.top() > clip.bottom(), "wheel must stay away while focus is retained");
+        let (row, focused, clip) = observed[135].0;
+        assert!(focused && clip.contains_rect(row), "Shift+Tab must reveal the previous row");
+        assert!(observed[155].2, "Tab must still reach Apply");
     }
 }
