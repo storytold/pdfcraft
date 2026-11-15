@@ -3,6 +3,9 @@
 The façade every frontend talks to. It holds the open documents, their edit history and the tool
 catalogue; frontends never reach past it into the parsing, rendering or editing crates.
 
+`word_count::count` provides cancellable, page-at-a-time Unicode word and character statistics
+with optional semantic exclusions; see [word-count behavior and limits](../../docs/word-count.md).
+
 - **Layer:** L6. It depends on most of L1–L4 and on nothing above itself. **No UI toolkit** —
   `egui`, `winit`, `eframe` and `rfd` are forbidden below L7, and `xtask layers` enforces it.
 - The crate denies `unwrap`/`expect`/`panic!`/`todo!`. Entry points that run untrusted-document
@@ -12,6 +15,14 @@ catalogue; frontends never reach past it into the parsing, rendering or editing 
 Two frontends exist on top of it today: `pdfcraft-ui-egui` (desktop and web) and
 `pdfcraft-automation` (headless tools, the CLI and MCP). Anything one can do, the other must be
 able to do — see AGENTS.md §3.
+
+When dynamic XFA layout is active, `JsRunner` does not initialize Acrobat JavaScript with
+scripts from the PDF container's `/Names /JavaScript` tree. Those scripts belong to the
+fallback PDF view and can otherwise show a misleading viewer-compatibility warning.
+They remain in the document and in `Document::document_scripts`. Requested console scripts,
+field actions and XFA events can still show messages; ordinary PDFs, static XFA and shells
+without an active layout keep their document scripts. Converting XFA to a static form and
+undoing that conversion switches the context with the document state.
 
 ## The editing model
 
@@ -67,8 +78,14 @@ family (`sign`, `sign_with_timestamp`, `timestamp_document`, `embed_ltv`).
 | `catalog` | Acrobat's "All tools" information architecture as data — groups, sections, icons, hues, and an `Availability` of `Ready`, `Planned(milestone)` or `Provider`. The UI renders what is *not* built yet, honestly |
 | `actions` | PDF action dispatch (go-to, URI, named, set-layer-state, JavaScript) |
 | `links` | Link creation, properties, and finding URLs in page text |
+| `open_parameters` | A path's PDF open parameters (`manual.pdf#nameddest=Intro`, `#page=12`): the file to open and where to show it. The app and `doc_open` both read them |
 | `js` | The bridge to `pdfcraft-js`. `forms` never depends on `js` directly; the engine injects it, so a build without JavaScript is possible |
 | `xfa`, `ocr`, `compare`, `export` | Façades over the L3/L4 crates of the same names |
+
+AcroForm Keystroke, Validate, Calculate and Format scripts run automatically. Their Print,
+ShowPanel and SaveAs requests are ignored with a JavaScript console diagnostic; field values,
+alerts and other requests are retained. Explicit button and console scripts can still request
+printing (#4088).
 
 ## Not done here
 

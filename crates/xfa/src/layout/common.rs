@@ -1,0 +1,358 @@
+use super::items::{Action, BorderShape, Item, Rounded, Widget, WidgetBorder};
+use super::{DataNode, DataPath, HashMap, HashSet, Layout, MAX_DEPTH, Node, Rect, Script, Template, Ui, data_path, date_letters, iso_to_pattern};
+use crate::data::{data_date_letters, data_to_iso, fields_with_ids};
+
+/// The value of each field with an `id`, for the rich text that embeds it (floating fields,
+/// XFA 3.3 pp. 221–222, p. 1222), with its data path and its template default: the data's value
+/// as the field shows it (a multi-select list's picks on separate lines), else the default.
+pub(super) fn collect_values(tpl: &Template, data: Option<&DataNode>) -> HashMap<String, EmbedSource> {
+    let mut out = HashMap::new();
+    for (id, som, f) in fields_with_ids(tpl) {
+        let path = data_path(tpl, &som);
+        // A date shows in its picture clause, as the field does (p. 221): the display picture,
+        // else the one it is edited in.
+        let date = (f.ui == Ui::DateTimeEdit)
+            .then(|| f.display_picture.as_deref().or(f.picture.as_deref()).and_then(date_letters))
+            .flatten()
+            .map(|pattern| (pattern, data_date_letters(f)));
+        let mut src = EmbedSource { path, default: f.value.plain().unwrap_or_default(), value: String::new(), date };
+        src.value = src.shown(data_value(data, &src.path));
+        out.insert(id.to_string(), src);
+    }
+    out
+}
+
+/// What an embedded field shows: see [`collect_values`].
+pub(super) struct EmbedSource {
+    pub(super) path: DataPath,
+    pub(super) default: String,
+    /// The value of its first instance, as shown.
+    pub(super) value: String,
+    /// A date field's display pattern and data pattern.
+    date: Option<(String, Option<String>)>,
+}
+
+impl EmbedSource {
+    /// What the field shows for the data's value `data` (the default without one).
+    pub(super) fn shown(&self, data: Option<String>) -> String {
+        match (data, &self.date) {
+            (Some(v), Some((pattern, data_pattern))) => iso_to_pattern(&data_to_iso(&v, data_pattern.as_deref()), pattern),
+            (Some(v), None) => v,
+            (None, _) => self.default.clone(),
+        }
+    }
+}
+
+/// The names the template's fields, exclusion groups and the groups' member fields take as
+/// written ([`clean_name`]): a name the layout makes up for a repeated field (`Cell4` →
+/// `Cell4_2`) must not be one of these, or two fields would share it. (A group's radio buttons
+/// are the group's PDF field; a member that isn't one is a PDF field with its own name.)
+pub(super) fn collect_names(nodes: &[Node], out: &mut HashSet<String>, depth: usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    for n in nodes {
+        match n {
+            Node::Field(f) => {
+                if let Some(name) = &f.common.name {
+                    out.insert(clean_name(name));
+                }
+            }
+            Node::ExclGroup(g) => {
+                if let Some(name) = &g.common.name {
+                    out.insert(clean_name(name));
+                }
+                // Its members are drawn as fields with their own names (`draw_field`), so a
+                // repeat drawn before the group must not take one.
+                for f in &g.fields {
+                    if let Some(name) = &f.common.name {
+                        out.insert(clean_name(name));
+                    }
+                }
+            }
+            Node::Subform(s) => {
+                collect_names(&s.children, out, depth + 1);
+                if let Some(ps) = &s.page_set {
+                    for a in &ps.areas {
+                        collect_names(&a.items, out, depth + 1);
+                    }
+                }
+            }
+            Node::Area(a) => collect_names(&a.children, out, depth + 1),
+            Node::Draw(_) => {}
+        }
+    }
+}
+
+/// `path` with the instance numbers `scope` gives the same names, segment by segment from the
+/// root, up to where the two part: the instance of a repeating subform the text is laid out in.
+pub(super) fn instance_path(path: &DataPath, scope: &DataPath) -> DataPath {
+    let mut at = path.clone();
+    for (seg, (name, index)) in at.iter_mut().zip(scope) {
+        if seg.0 != *name {
+            break;
+        }
+        seg.1 = *index;
+    }
+    at
+}
+
+/// The value a field shows from `data` at `path`: unless it is blank, the data's wins.
+pub(super) fn data_value(data: Option<&DataNode>, path: &DataPath) -> Option<String> {
+    data.and_then(|d| d.value_at(path)).map(|t| t.trim().to_string()).filter(|t| !t.is_empty())
+}
+
+pub(super) fn clamp_opt(v: f64, min: Option<f64>, max: Option<f64>) -> f64 {
+    let mut v = v;
+    if let Some(m) = min {
+        v = v.max(m);
+    }
+    if let Some(m) = max
+        && m > 0.0
+    {
+        v = v.min(m);
+    }
+    v.max(0.0)
+}
+
+/// Does `node` flow (may be split across pages) rather than being placed as one block?
+pub(super) fn splittable(node: &Node) -> bool {
+    matches!(node, Node::Subform(s) if matches!(s.layout, Layout::Tb | Layout::Table) && s.common.h.is_none())
+}
+
+/// Top and bottom of an item a page break must not cut (text, a picture, a field); `None`
+/// for fills and lines, which are cut at the break.
+pub(super) fn solid_extent(item: &Item) -> Option<(f64, f64)> {
+    match item {
+        Item::Text(s) => Some((s.baseline - s.face.size * 0.8, s.baseline + s.face.size * 0.2)),
+        Item::Image { rect, .. } => Some((rect.y, rect.bottom())),
+        Item::Widget(w) => Some((w.rect.y, w.rect.bottom())),
+        Item::Turned(t) => Some(t.extent),
+        Item::Fill { .. } | Item::Line { .. } | Item::Rounded(_) => None,
+        Item::Only { item, .. } => solid_extent(item),
+    }
+}
+
+/// `item` as the part above `cut` and the part below: solid items go whole to the side their
+/// top is on, fills and lines crossing the cut are cut in two.
+pub(super) fn divide(item: Item, cut: f64) -> (Option<Item>, Option<Item>) {
+    if let Item::Only { views, item } = item {
+        // Each part shows where the whole did.
+        let wrap = |i: Item| Item::Only { views, item: Box::new(i) };
+        let (a, b) = divide(*item, cut);
+        return (a.map(wrap), b.map(wrap));
+    }
+    if let Some((top, _)) = solid_extent(&item) {
+        return if top < cut - 0.01 { (Some(item), None) } else { (None, Some(item)) };
+    }
+    match item {
+        Item::Fill { rect, color } => {
+            if rect.bottom() <= cut + 0.01 {
+                (Some(Item::Fill { rect, color }), None)
+            } else if rect.y >= cut - 0.01 {
+                (None, Some(Item::Fill { rect, color }))
+            } else {
+                let above = Rect::new(rect.x, rect.y, rect.w, cut - rect.y);
+                let below = Rect::new(rect.x, cut, rect.w, rect.bottom() - cut);
+                (Some(Item::Fill { rect: above, color }), Some(Item::Fill { rect: below, color }))
+            }
+        }
+        Item::Line { from, to, width, color, dashed } => {
+            let (lo, hi) = if from.1 <= to.1 { (from, to) } else { (to, from) };
+            if lo.1 >= cut {
+                (None, Some(Item::Line { from, to, width, color, dashed }))
+            } else if hi.1 <= cut {
+                (Some(Item::Line { from, to, width, color, dashed }), None)
+            } else {
+                // lo.1 < cut < hi.1, so the divisor is positive.
+                let t = (cut - lo.1) / (hi.1 - lo.1);
+                let mid = (lo.0 + (hi.0 - lo.0) * t, cut);
+                (Some(Item::Line { from: lo, to: mid, width, color, dashed }), Some(Item::Line { from: mid, to: hi, width, color, dashed }))
+            }
+        }
+        Item::Rounded(r) => {
+            if r.rect.bottom() <= cut + 0.01 {
+                (Some(Item::Rounded(r)), None)
+            } else if r.rect.y >= cut - 0.01 {
+                (None, Some(Item::Rounded(r)))
+            } else {
+                // Each part keeps the corners on its side, rounded no more than its own height
+                // allows, and is open where it was cut.
+                let [tl, tr, br, bl] = r.radii;
+                let above = Rect::new(r.rect.x, r.rect.y, r.rect.w, cut - r.rect.y);
+                let below = Rect::new(r.rect.x, cut, r.rect.w, r.rect.bottom() - cut);
+                let fit = |v: f64, h: f64| v.min(h.max(0.0));
+                let upper = Rounded { rect: above, radii: [fit(tl, above.h), fit(tr, above.h), 0.0, 0.0], open_bottom: true, ..(*r).clone() };
+                let lower = Rounded { rect: below, radii: [0.0, 0.0, fit(br, below.h), fit(bl, below.h)], open_top: true, ..*r };
+                (Some(Item::Rounded(Box::new(upper))), Some(Item::Rounded(Box::new(lower))))
+            }
+        }
+        other => (Some(other), None),
+    }
+}
+
+/// How much of a widget a page break must leave above it for the field to split there: a line of
+/// its text.
+pub(super) fn split_line(w: &Widget) -> f64 {
+    (w.face.size * 1.2).max(1.0)
+}
+
+/// The rest of an empty field's widget below a page break: its box and the look of its border.
+pub(super) type WidgetRest = (Rect, WidgetBorder);
+
+/// An empty field's widget cut at `cut`: the widget down to the cut, and the rest of its box below
+/// it to go on in the following content areas ([`widget_box`] draws each piece of it). A widget the
+/// cut doesn't cross stays whole on its side, as does one with no room above the cut for a line of
+/// its text: the second item is the widget when it all goes below.
+pub(super) fn split_widget(item: Item, cut: f64) -> (Option<Item>, Option<Item>, Option<WidgetRest>) {
+    let Item::Widget(mut w) = item else { return (Some(item), None, None) };
+    let line = split_line(&w);
+    if w.rect.bottom() <= cut + 0.01 {
+        return (Some(Item::Widget(w)), None, None);
+    }
+    if w.rect.y + line > cut {
+        return (None, Some(Item::Widget(w)), None);
+    }
+    let rest = Rect::new(w.rect.x, cut, w.rect.w, w.rect.bottom() - cut);
+    w.rect.h = cut - w.rect.y;
+    let border = w.border.clone();
+    (Some(Item::Widget(w)), None, Some((rest, border)))
+}
+
+/// One piece of a split widget's box at `rect`: its fill, and its border closed on every side (a
+/// border's default `break="close"`, XFA 3.3 pp. 629–630).
+pub(super) fn widget_box(rect: Rect, border: &WidgetBorder) -> Vec<Item> {
+    let mut items = Vec::new();
+    if let Some(color) = border.fill {
+        items.push(Item::Fill { rect, color });
+    }
+    if let Some(color) = border.color {
+        let width = border.width.max(0.0);
+        let i = width / 2.0;
+        let (x0, y0, x1, y1) = (rect.x + i, rect.y + i, rect.right() - i, rect.bottom() - i);
+        // The border's corners in drawing order: each edge joins two in a row.
+        let corners: &[(f64, f64)] = match border.shape {
+            BorderShape::Full => &[(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)],
+            BorderShape::Underline => &[(x0, y1), (x1, y1)],
+            BorderShape::None => &[],
+        };
+        items.extend(corners.windows(2).filter_map(|edge| match *edge {
+            [from, to] => Some(Item::Line { from, to, width, color, dashed: false }),
+            _ => None,
+        }));
+    }
+    items
+}
+
+/// `item` moved by (`dx`, `dy`).
+pub(super) fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
+    if let Item::Only { views, item: inner } = item {
+        return Item::Only { views, item: Box::new(moved(*inner, dx, dy)) };
+    }
+    match &mut item {
+        Item::Fill { rect, .. } | Item::Image { rect, .. } => {
+            rect.x += dx;
+            rect.y += dy;
+        }
+        Item::Rounded(r) => {
+            r.rect.x += dx;
+            r.rect.y += dy;
+        }
+        Item::Line { from, to, .. } => {
+            *from = (from.0 + dx, from.1 + dy);
+            *to = (to.0 + dx, to.1 + dy);
+        }
+        Item::Text(s) => {
+            s.x += dx;
+            s.baseline += dy;
+        }
+        Item::Widget(w) => {
+            w.rect.x += dx;
+            w.rect.y += dy;
+        }
+        Item::Turned(t) => {
+            t.about = (t.about.0 + dx, t.about.1 + dy);
+            t.extent = (t.extent.0 + dy, t.extent.1 + dy);
+            t.items = std::mem::take(&mut t.items).into_iter().map(|i| moved(i, dx, dy)).collect();
+        }
+        // Taken apart above.
+        Item::Only { .. } => {}
+    }
+    item
+}
+
+pub(super) fn is_row(node: &Node) -> bool {
+    matches!(node, Node::Subform(s) if s.layout == Layout::Row)
+}
+
+/// The Acrobat date pattern for an XFA picture clause such as `date{YYYY-MM-DD}`.
+pub(crate) fn date_pattern(picture: Option<&str>) -> String {
+    picture.and_then(date_letters).unwrap_or_else(|| "yyyy-mm-dd".into())
+}
+
+/// What scripts read as a field's `formattedValue` when its display picture is `picture`: the
+/// ISO date `raw` shown in a date picture (`date{YYYYMMDD}` turns `2026-10-20` into
+/// `20261020`; of several alternatives, the first). `None` for other kinds of picture, for a
+/// clause this can't read or show (month and weekday names) and for a value that isn't an ISO
+/// date: the raw value stands then.
+pub fn formatted_value(picture: &str, raw: &str) -> Option<String> {
+    let first = picture.split('|').next()?.trim();
+    let rest = first.strip_prefix("date")?;
+    if !rest.starts_with(['{', '(']) {
+        return None;
+    }
+    let pattern = date_pattern(Some(first));
+    // A picture with parts this can't show yet (month or weekday names, `MMM` or `EEE`) would
+    // leave them as letters: the raw value stands then.
+    let shows = |t: &String| !t.chars().all(|c| c.is_ascii_alphabetic()) || matches!(t.as_str(), "yyyy" | "yy" | "mm" | "m" | "dd" | "d");
+    if !crate::data::date_tokens(&pattern).iter().all(shows) {
+        return None;
+    }
+    // Only the ISO date's own shape (`2026-10-20`): `2026-1-2` is not one, and stands.
+    let b = raw.as_bytes();
+    let iso = b.len() == 10 && b.iter().enumerate().all(|(i, c)| if i == 4 || i == 7 { *c == b'-' } else { c.is_ascii_digit() });
+    if !iso {
+        return None;
+    }
+    let shown = iso_to_pattern(raw, &pattern);
+    (shown != raw).then_some(shown)
+}
+
+/// The native PDF action a button's click script amounts to (a reset, print, save or link),
+/// else the script itself to run; `None` without a click script.
+pub(super) fn button_action(scripts: &[Script]) -> Option<Action> {
+    let s = scripts.iter().find(|s| s.activity == "click")?;
+    let t = &s.text;
+    // Only a single-statement idiom becomes a native PDF action; anything else is run by the
+    // XFA scripting engine.
+    let one = t.trim().trim_end_matches(';');
+    let single = !one.contains(';') && !one.contains('\n');
+    if !single {
+        return (!t.trim().is_empty()).then(|| Action::Script(t.clone()));
+    }
+    if t.contains("resetData") {
+        Some(Action::Reset)
+    } else if t.contains("host.print") || t.contains("execMenuItem(\"Print\")") {
+        Some(Action::Print)
+    } else if t.contains("SaveAs") || t.contains("execMenuItem(\"Save\")") {
+        Some(Action::SaveAs)
+    } else if let Some(i) = t.find("launchURL(") {
+        let rest = &t[i + "launchURL(".len()..];
+        let q = rest.find(['"', '\''])?;
+        let quote = rest[q..].chars().next()?;
+        let body = &rest[q + 1..];
+        let end = body.find(quote)?;
+        Some(Action::Url(body[..end].to_string()))
+    } else if t.trim().is_empty() {
+        None
+    } else {
+        Some(Action::Script(t.clone()))
+    }
+}
+
+/// A PDF field name: no periods (they separate hierarchy levels), no control characters.
+pub(super) fn clean_name(name: &str) -> String {
+    let s: String = name.chars().filter(|c| !c.is_control()).map(|c| if c == '.' { '_' } else { c }).collect();
+    let s = s.trim().to_string();
+    if s.is_empty() { "field".into() } else { s }
+}

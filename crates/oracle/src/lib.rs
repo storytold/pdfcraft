@@ -23,6 +23,8 @@
 //! This crate is test scaffolding (`Class::Testkit` in `xtask/src/layers.rs`): a dev-dependency
 //! only, never compiled into the product.
 
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
 pub mod pixels;
 
 use std::fmt;

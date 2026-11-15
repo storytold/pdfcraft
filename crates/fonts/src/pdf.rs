@@ -1,8 +1,8 @@
 //! What content editing and redaction need from a PDF font: how to split a string into character
 //! codes, each code's advance width, the glyph height (ascent, descent), and what each code means
 //! (Unicode) — and back, which text the font can show. Widths come from the font dictionary
-//! (`/Widths`, `/W`, `/DW`, `/MissingWidth`); a standard-14 font with no `/Widths` uses the exact
-//! published metrics ([`crate::Std14`]).
+//! (`/Widths`, `/W`, `/DW`, `/MissingWidth`); a simple font with no `/Widths` uses its embedded
+//! sfnt program's advances, else the exact published standard-14 metrics ([`crate::Std14`]).
 //!
 //! Meanings come from `/ToUnicode`, else the encoding (`/Encoding` base and `/Differences` glyph
 //! names, ISO 32000-2 Annex D). A code may deliberately have **no** meaning: where the font's own
@@ -14,7 +14,7 @@
 use std::borrow::Cow;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
-use pdfcraft_cos::{Dict, Document, Object};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, Object, Stream};
 
 /// How the bytes of a string map to codes.
 #[derive(Clone, Debug, PartialEq)]
@@ -33,10 +33,13 @@ pub struct Metrics {
     widths: Vec<f64>,
     /// Composite fonts: CID → width, and CID ranges with one width.
     cid_widths: HashMap<u32, f64>,
-    cid_ranges: Vec<(u32, u32, f64)>,
+    cid_ranges: Spans<f64>,
     /// Code → CID for embedded non-identity CMaps (`cidrange` / `cidchar`).
-    cid_map: Vec<(u32, u32, u32)>,
+    cid_map: Spans<u32>,
     default: f64,
+    /// Composite fonts with an explicit `/DW`: `/W` may leave out the glyphs that have that
+    /// width (Chrome and Skia do), so a CID missing from `/W` is not a missing glyph.
+    explicit_default: bool,
     /// The standard-14 face to measure with when the dictionary carries no `/Widths`.
     std14: Option<crate::Std14>,
     /// Glyph units → text space (0.001, or `/FontMatrix[0]` for Type 3).
@@ -61,6 +64,17 @@ pub struct Metrics {
     code_len: usize,
     /// Valid single-character explicit mappings, preindexed once for large full CJK fonts.
     explicit_reverse: HashMap<char, u32>,
+    /// Subset CIDFontType2 only: one bit per CID (below 65 536) whose glyph has an outline in the
+    /// embedded program. See [`cids_with_outlines`].
+    outlined_cids: Vec<u64>,
+    /// A stream these metrics come from (a CMap, the program, `/CIDToGIDMap`, a Type 3 glyph
+    /// description) was left unread because the decode allowance [`Metrics::from_dict_within`]
+    /// was given was spent: what it would have decided (code lengths, CIDs, widths, meanings, a
+    /// Type 3 font's height) is a guess. It is set exactly when the allowance counted a refusal
+    /// during the read ([`DecodeBudget::refused`]), which callers that share it may refuse on; a
+    /// read that fails without one, such as an empty stream behind a filter nothing decodes,
+    /// doesn't set it, with or without anything left.
+    pub past_allowance: bool,
 }
 
 fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
@@ -71,6 +85,12 @@ fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
 
 fn dict(doc: &Document, o: Option<&Object>) -> Option<Dict> {
     o.and_then(|o| doc.resolve(o).as_dict().cloned())
+}
+
+/// Whether `font`'s `/Encoding` is the name Identity-H, given directly or through a reference,
+/// as [`Metrics::from_dict`] reads it (a Type 0 font's `/Encoding` may be indirect).
+fn identity_h(doc: &Document, font: &Dict) -> bool {
+    font.get(b"Encoding").is_some_and(|e| doc.resolve(e).as_name() == Some(b"Identity-H".as_slice()))
 }
 
 /// Whether `base_font` (subset tag allowed) names a legacy Indic font family that is laid out in
@@ -86,6 +106,18 @@ fn legacy_indic_font(base_font: &str) -> bool {
 /// A source PDF's sfnt program for an in-memory editor. Never a bundled font or an export
 /// fallback. Type 1/Type 3 programs cannot be consumed by an sfnt text renderer.
 pub fn embedded_sfnt(doc: &Document, font: &Dict) -> Option<Vec<u8>> {
+    // No total: one font's two programs, and the metrics read that may adapt one, are each
+    // bounded by that stream's own limit.
+    embedded_sfnt_within(doc, font, &mut DecodeBudget::new(usize::MAX, 0))
+}
+
+/// The largest embedded sfnt program read for the editor.
+const MAX_SFNT: usize = 16 << 20;
+
+/// [`embedded_sfnt`], decoding against `budget`, which an enumeration of a page's fonts shares:
+/// each program decoded is charged whether or not it turns out to be usable, and so are the
+/// streams of the metrics read that adapts a program without a Unicode cmap.
+pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudget) -> Option<Vec<u8>> {
     use skrifa::{MetadataProvider as _, raw::TableProvider as _};
     let descendant = dict(doc, font.get(b"DescendantFonts").and_then(|o| doc.resolve(o).as_array().and_then(|a| a.first()).cloned()).as_ref());
     let descriptor = dict(doc, descendant.as_ref().unwrap_or(font).get(b"FontDescriptor"))?;
@@ -93,30 +125,71 @@ pub fn embedded_sfnt(doc: &Document, font: &Dict) -> Option<Vec<u8>> {
         let Some(object) = descriptor.get(key) else { continue };
         let object = doc.resolve(object);
         let Object::Stream(stream) = object.as_ref() else { continue };
-        let Ok(mut bytes) = stream.decoded_within(16 << 20) else { continue };
+        // As in `Reads::decode`: each stage within the limit, the program, the last, too, read
+        // through a view of the stream; once the allowance is spent a program with data is refused
+        // before its parameters are resolved.
+        let Ok(mut bytes) = budget.decode_stages_within(doc, stream, MAX_SFNT) else { continue };
         let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { continue };
         if face.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default()).units_per_em == 0 {
             continue;
         }
-        if face.charmap().mappings().next().is_some() {
+        let own_cmap = face.charmap().mappings().next().is_some();
+        // A legacy THSarabunPSK subset may keep a Latin-only cmap beside its Thai glyphs, which
+        // only the PDF's verified maps reach (`composite_glyph_maps`); other programs keep theirs.
+        let base_font = font.name(b"BaseFont").map(String::from_utf8_lossy).unwrap_or_default();
+        if own_cmap && !base_font.rsplit('+').next().is_some_and(|f| f.starts_with("THSarabunPSK")) {
             return Some(bytes);
         }
-        // Some PDF generators keep a Mac format-6 code→glyph cmap. egui accepts Unicode
-        // format-4/12 cmaps. Combine the PDF's Unicode meanings with the source glyph IDs;
-        // only this in-memory copy gets a new cmap, never the working PDF or a font asset.
-        let Ok(cmap) = face.cmap() else { continue };
-        let metrics = Metrics::from_dict(doc, font);
-        if metrics.composite {
+        // A composite font's cmap is rebuilt only through Identity-H codes (`composite_glyph_maps`):
+        // with any other `/Encoding` nothing is, so its metrics aren't read, and a program with a
+        // cmap of its own is kept as it is, as when the rebuild finds nothing.
+        if font.name(b"Subtype") == Some(b"Type0") && !identity_h(doc, font) {
+            if own_cmap {
+                return Some(bytes);
+            }
+            continue;
+        }
+        // PDF subsets may remove the Unicode cmap entirely. Rebuild an editor-only
+        // cmap from ToUnicode and the actual CID-to-glyph map; source bytes stay unchanged.
+        // Metrics read past the allowance, its widths' read of the program again included,
+        // adapt no copy.
+        let metrics = Metrics::from_dict_within(doc, font, budget);
+        if metrics.past_allowance {
             continue;
         }
         let mut mappings = std::collections::BTreeMap::new();
-        for code in 0..=255 {
-            let Some(text) = metrics.unicode.text(code) else { continue };
-            let Some(ch) = only_char(&text) else { continue };
-            let Some(glyph) = cmap.map_codepoint(code).or_else(|| cmap.map_codepoint(code + 0xf000)) else { continue };
-            let glyph = glyph.to_u32();
-            if glyph > 0 {
-                mappings.entry(u32::from(ch)).or_insert(glyph);
+        if metrics.composite {
+            let refused = budget.refused();
+            if let Some((map, _)) = composite_glyph_maps(doc, font, &bytes, &metrics, budget) {
+                mappings = map;
+            } else if budget.refused() > refused {
+                // The map the cmap is rebuilt from was left unread for want of the allowance: no
+                // copy is listed, adapted or as it is, as for metrics read past it.
+                continue;
+            }
+            if own_cmap {
+                let charmap = face.charmap();
+                if mappings.keys().all(|&u| char::from_u32(u).is_some_and(|c| charmap.map(c).is_some())) {
+                    return Some(bytes);
+                }
+                // The program's own mappings stay; the PDF's fill only what they lack.
+                mappings.extend(charmap.mappings().filter(|(_, g)| g.to_u32() != 0).take(65_537).map(|(u, g)| (u, g.to_u32())));
+                let mut merged = bytes.clone();
+                let usable = append_editor_cmap(&mut merged, &mappings).is_some()
+                    && skrifa::FontRef::new(&merged).is_ok_and(|font| font.charmap().mappings().next().is_some());
+                return Some(if usable { merged } else { bytes });
+            }
+        } else if own_cmap {
+            return Some(bytes);
+        } else if let Ok(cmap) = face.cmap() {
+            for code in 0..=255 {
+                let Some(text) = metrics.unicode.text(code) else { continue };
+                let Some(ch) = only_char(&text) else { continue };
+                let Some(glyph) = cmap.map_codepoint(code).or_else(|| cmap.map_codepoint(code + 0xf000)) else { continue };
+                let glyph = glyph.to_u32();
+                if glyph > 0 {
+                    mappings.entry(u32::from(ch)).or_insert(glyph);
+                }
             }
         }
         if !mappings.is_empty()
@@ -129,14 +202,84 @@ pub fn embedded_sfnt(doc: &Document, font: &Dict) -> Option<Vec<u8>> {
     None
 }
 
-/// Replace an existing cmap directory entry with a bounded Unicode format-12 table.
+/// The CIDs (below 65 536) of a Type 0 font over an embedded TrueType program whose glyph has
+/// outline data, through `/CIDToGIDMap`; empty when the program or the map can't be read.
+/// Subsetters keep glyph ids and empty the glyphs they drop, so an empty glyph is a missing one.
+fn cids_with_outlines(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Vec<u64> {
+    use skrifa::raw::TableProvider as _;
+    let Some(descendant) = dict(doc, font.get(b"DescendantFonts").and_then(|o| doc.resolve(o).as_array().and_then(|a| a.first()).cloned()).as_ref())
+    else {
+        return Vec::new();
+    };
+    let Some(program) = dict(doc, descendant.get(b"FontDescriptor")).and_then(|d| d.get(b"FontFile2").cloned()) else { return Vec::new() };
+    let program = doc.resolve(&program);
+    let Object::Stream(stream) = program.as_ref() else { return Vec::new() };
+    let Some(bytes) = reads.decode(stream, MAX_SFNT) else { return Vec::new() };
+    let Some(loca) = skrifa::FontRef::from_index(&bytes, 0).ok().and_then(|face| face.loca(None).ok()) else { return Vec::new() };
+    let outlined = |gid: u32| loca.get_raw(gid as usize).zip(loca.get_raw(gid as usize + 1)).is_some_and(|(start, end)| end > start);
+    match descendant.get(b"CIDToGIDMap").map(|o| doc.resolve(o)).as_deref() {
+        None | Some(Object::Name(_)) => bit_set_below_64k((0..loca.len().min(0x1_0000) as u32).filter(|&gid| outlined(gid))),
+        Some(Object::Stream(map)) => {
+            let Some(map) = reads.decode(map, MAX_CID_TO_GID) else { return Vec::new() };
+            bit_set_below_64k(
+                map.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, gid)| outlined(u32::from(u16::from_be_bytes(**gid))))
+                    .map(|(cid, _)| cid as u32),
+            )
+        }
+        Some(_) => Vec::new(),
+    }
+}
+
+/// A simple font with no `/Widths` is drawn (and found by text search) with its embedded
+/// program's own advances, so measure with them too; a standard-14 guess from the name can be
+/// wider and leave the end of a line outside a redaction mark (#2130). The glyph is looked up
+/// the way the renderer does: the encoding's character in the Unicode cmap, else the code itself
+/// (as in a symbolic cmap), else `.notdef`. Only sfnt programs are read; others keep the guess.
+fn embedded_widths(doc: &Document, font: &Dict, m: &mut Metrics, reads: &mut Reads<'_>) {
+    use skrifa::instance::{LocationRef, Size};
+    use skrifa::{GlyphId, MetadataProvider as _, raw::TableProvider as _};
+    let Some(descriptor) = dict(doc, font.get(b"FontDescriptor")) else { return };
+    for key in [b"FontFile2".as_slice(), b"FontFile3".as_slice()] {
+        let Some(object) = descriptor.get(key) else { continue };
+        let object = doc.resolve(object);
+        let Object::Stream(stream) = object.as_ref() else { continue };
+        let Some(bytes) = reads.decode(stream, MAX_SFNT) else { continue };
+        let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { continue };
+        let upem = f64::from(face.metrics(Size::unscaled(), LocationRef::default()).units_per_em);
+        if upem == 0.0 {
+            continue;
+        }
+        let advances = face.glyph_metrics(Size::unscaled(), LocationRef::default());
+        let (charmap, cmap) = (face.charmap(), face.cmap().ok());
+        let found = |g: Option<GlyphId>| g.filter(|g| *g != GlyphId::NOTDEF);
+        m.widths = (0..=255u32)
+            .map(|code| {
+                let glyph = found(m.unicode.encoding.get(&code).and_then(|t| only_char(t)).and_then(|c| charmap.map(c)))
+                    .or_else(|| [0, 0xF000, 0xF100, 0xF200].into_iter().find_map(|o| found(cmap.as_ref()?.map_codepoint(code + o))));
+                // A subset holds only the glyphs it draws: 0 keeps `has_glyph` false for the rest.
+                match glyph {
+                    None if m.subset => 0.0,
+                    _ => advances.advance_width(glyph.unwrap_or(GlyphId::NOTDEF)).map_or(0.0, |w| f64::from(w) * 1000.0 / upem),
+                }
+            })
+            .collect();
+        m.first = 0;
+        return;
+    }
+}
+
+/// Add or replace an editor-only cmap with a bounded Unicode format-12 table.
 /// Checked ranges prevent damaged sfnt offsets from indexing outside the source program.
 fn append_editor_cmap(bytes: &mut Vec<u8>, mappings: &std::collections::BTreeMap<u32, u32>) -> Option<()> {
     if mappings.len() > 65536 {
         return None;
     }
     let count = u16::from_be_bytes(bytes.get(4..6)?.try_into().ok()?) as usize;
-    if count > 256 {
+    if count == 0 || count > 256 {
         return None;
     }
     let mut entry = None;
@@ -151,7 +294,10 @@ fn append_editor_cmap(bytes: &mut Vec<u8>, mappings: &std::collections::BTreeMap
             head = Some(u32::from_be_bytes(record.get(8..12)?.try_into().ok()?) as usize);
         }
     }
-    let entry = entry?;
+    let (entry, head) = match entry {
+        Some(entry) => (entry, head),
+        None => insert_editor_cmap_slot(bytes, count, head)?,
+    };
     let mut cmap = Vec::with_capacity(28 + mappings.len() * 12);
     cmap.extend_from_slice(&[0, 0, 0, 1, 0, 3, 0, 10, 0, 0, 0, 12, 0, 12, 0, 0]);
     cmap.extend_from_slice(&(16_u32 + u32::try_from(mappings.len()).ok()? * 12).to_be_bytes());
@@ -179,12 +325,59 @@ fn append_editor_cmap(bytes: &mut Vec<u8>, mappings: &std::collections::BTreeMap
     bytes.get_mut(entry + 8..entry + 12)?.copy_from_slice(&offset.to_be_bytes());
     bytes.get_mut(entry + 12..entry + 16)?.copy_from_slice(&u32::try_from(cmap.len()).ok()?.to_be_bytes());
     bytes.extend_from_slice(&cmap);
+    // SFNT directories are sorted by tag. Some readers tolerate the unsorted directory of
+    // a PDF subset, but shaping engines may binary-search it and otherwise miss the cmap.
+    // Adding a slot increased the directory count; include the new record in this sort.
+    let tables = usize::from(u16::from_be_bytes(bytes.get(4..6)?.try_into().ok()?));
+    let end = 12usize.checked_add(tables.checked_mul(16)?)?;
+    let mut records: Vec<[u8; 16]> = bytes.get(12..end)?.as_chunks::<16>().0.to_vec();
+    records.sort_by_key(|r| [r[0], r[1], r[2], r[3]]);
+    for (index, record) in records.iter().enumerate() {
+        let at = 12 + index * 16;
+        bytes.get_mut(at..at + 16)?.copy_from_slice(record);
+    }
     if let Some(head) = head {
         bytes.get_mut(head.checked_add(8)?..head.checked_add(12)?)?.fill(0);
         let adjustment = 0xb1b0afba_u32.wrapping_sub(checksum(bytes));
         bytes.get_mut(head + 8..head + 12)?.copy_from_slice(&adjustment.to_be_bytes());
     }
     Some(())
+}
+
+/// Reserve a new cmap directory slot, retaining every original table payload.
+fn insert_editor_cmap_slot(bytes: &mut Vec<u8>, mut count: usize, mut head: Option<usize>) -> Option<(usize, Option<usize>)> {
+    if count >= 256 {
+        return None;
+    }
+    let end = 12usize.checked_add(count.checked_mul(16)?)?;
+    bytes.get(..end)?;
+    // Keep all original table bytes, shifting them by one directory record.
+    for i in 0..count {
+        let at = 12 + i * 16;
+        let offset = u32::from_be_bytes(bytes.get(at + 8..at + 12)?.try_into().ok()?);
+        let len = u32::from_be_bytes(bytes.get(at + 12..at + 16)?.try_into().ok()?);
+        if (offset as usize) < end {
+            return None;
+        }
+        bytes.get(offset as usize..offset.checked_add(len)? as usize)?;
+    }
+    bytes.splice(end..end, [0; 16]);
+    for i in 0..count {
+        let at = 12 + i * 16;
+        let offset = u32::from_be_bytes(bytes.get(at + 8..at + 12)?.try_into().ok()?).checked_add(16)?;
+        bytes.get_mut(at + 8..at + 12)?.copy_from_slice(&offset.to_be_bytes());
+    }
+    head = head.and_then(|offset| offset.checked_add(16));
+    bytes.get_mut(end..end + 4)?.copy_from_slice(b"cmap");
+    count += 1;
+    let count = u16::try_from(count).ok()?;
+    let selector = count.ilog2() as u16;
+    let range = (1u16.checked_shl(u32::from(selector))?).checked_mul(16)?;
+    bytes.get_mut(4..6)?.copy_from_slice(&count.to_be_bytes());
+    bytes.get_mut(6..8)?.copy_from_slice(&range.to_be_bytes());
+    bytes.get_mut(8..10)?.copy_from_slice(&selector.to_be_bytes());
+    bytes.get_mut(10..12)?.copy_from_slice(&count.checked_mul(16)?.checked_sub(range)?.to_be_bytes());
+    Some((end, head))
 }
 
 fn descriptor_flags(doc: &Document, descriptor: &Dict) -> u32 {
@@ -199,6 +392,163 @@ const MAX_CMAP_ENTRIES: usize = 1 << 20;
 /// Most codespace or CID ranges kept from a CMap; Adobe's largest published CMaps have a few
 /// thousand.
 const MAX_CMAP_RANGES: usize = 1 << 16;
+/// Largest decoded Encoding or ToUnicode CMap stream read; real CMaps stay well under it, and a larger
+/// one is left unread (behind one filter not decoded past it; behind several, see `Reads::decode`).
+const MAX_CMAP_BYTES: usize = 16 << 20;
+/// Largest decoded `/CIDToGIDMap` stream read: two bytes for each CID below 65,536.
+const MAX_CID_TO_GID: usize = 1 << 17;
+
+/// The streams one reading of a font decodes, against the caller's allowance, and whether one was
+/// left unread because that allowance was spent.
+struct Reads<'a> {
+    doc: &'a Document,
+    budget: &'a mut DecodeBudget,
+    refused: bool,
+}
+
+impl<'a> Reads<'a> {
+    fn new(doc: &'a Document, budget: &'a mut DecodeBudget) -> Self {
+        Self { doc, budget, refused: false }
+    }
+
+    /// `stream` decoded within `max` and the allowance, its `/DecodeParms` read where they are given
+    /// by reference too, through a view of the stream that copies no more of its dictionary than
+    /// its filters and parameters; `None` when it can't be, noting when the allowance is why.
+    ///
+    /// Each of its filter stages is held to `max`, as a decode without an allowance holds it, and
+    /// the stages together to `max` for each of them ([`DecodeBudget::decode_stages_within`]): a
+    /// map of 65,536 CIDs behind ASCIIHex and Flate, its Flate data smaller than the map, makes
+    /// all of `MAX_CID_TO_GID` in its last stage, with the hex stage's output on top. So a stream
+    /// reads here when it reads without an allowance and what is left pays for it. A stream with a
+    /// stage past `max` is unread. When what is left is more than what the stages before that one
+    /// made and `max`, it is charged those two and isn't refused; otherwise, with more left than
+    /// the stages' total (behind one filter, `max`), it is charged that total and isn't refused;
+    /// with no more left than that total, it spends all of it and counts as refused. Only what
+    /// the allowance counts as refused ([`DecodeBudget::refused`]) is noted: a read that fails
+    /// without one, such as an empty stream behind a filter nothing decodes, fails the same with
+    /// more left, and callers that refuse on that count must agree with [`Metrics::past_allowance`].
+    fn decode(&mut self, stream: &Stream, max: usize) -> Option<Vec<u8>> {
+        let refused = self.budget.refused();
+        match self.budget.decode_stages_within(self.doc, stream, max) {
+            Ok(data) => Some(data),
+            Err(_) => {
+                self.refused |= self.budget.refused() > refused;
+                None
+            }
+        }
+    }
+}
+
+/// Most Type 3 glyph descriptions read for their `d1` box. A simple font shows at most 256 codes.
+const MAX_TYPE3_GLYPHS: usize = 256;
+/// Largest decoded Type 3 glyph description read for its `d1` box; a larger one is skipped.
+const MAX_TYPE3_GLYPH_BYTES: usize = 64 << 10;
+/// Decoded bytes all of one font's glyph descriptions may take together.
+const MAX_TYPE3_FONT_BYTES: usize = 4 << 20;
+/// Farthest a Type 3 glyph box reaches from the baseline, in text space per unit of font size. A
+/// bitmap font drawn in page units at `0.01 Tf` is a few thousand; past this a box is garbage, and
+/// clamping it keeps the run boxes built from it finite.
+const MAX_TYPE3_EXTENT: f64 = 1e6;
+
+/// The union of the boxes a Type 3 font's glyph descriptions declare with `d1` (ISO 32000-2
+/// §9.6.4, Table 111), in glyph space, and whether every description chosen was read; `None` when
+/// no glyph declares one (`d0` glyphs don't). The descriptions the encoding's `/Differences`
+/// names are chosen, since it "shall specify the complete character encoding" (Table 110); only a
+/// font without one has its first descriptions chosen. Reads at most [`MAX_TYPE3_GLYPHS`]
+/// descriptions within [`MAX_TYPE3_FONT_BYTES`], each charged to the reading's allowance too.
+fn type3_glyph_box(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Option<([f64; 4], bool)> {
+    let procs = dict(doc, font.get(b"CharProcs"))?;
+    let mut names: Vec<&[u8]> = Vec::new();
+    // Whether every glyph that can be drawn is read; if not, the union may be short of them.
+    let mut complete = true;
+    let encoding = dict(doc, font.get(b"Encoding"));
+    // A base encoding reaches glyphs `/Differences` doesn't name, which Type 3 doesn't provide for (its
+    // `/Differences` "shall specify the complete character encoding", Table 110): those boxes go unread.
+    if encoding.as_ref().is_some_and(|e| e.contains(b"BaseEncoding")) {
+        complete = false;
+    }
+    let diffs = encoding.as_ref().and_then(|e| e.get(b"Differences")).map(|d| doc.resolve(d));
+    for name in diffs.as_deref().and_then(Object::as_array).into_iter().flatten().filter_map(Object::as_name) {
+        if procs.get(name).is_none() || names.contains(&name) {
+            continue;
+        }
+        if names.len() >= MAX_TYPE3_GLYPHS {
+            complete = false;
+            break;
+        }
+        names.push(name);
+    }
+    let chosen: Vec<&Object> = if names.is_empty() {
+        complete = procs.len() <= MAX_TYPE3_GLYPHS;
+        procs.iter().take(MAX_TYPE3_GLYPHS).map(|(_, proc)| proc).collect()
+    } else {
+        names.iter().filter_map(|n| procs.get(n)).collect()
+    };
+    // What is left of the font's own total: the descriptions decode against the reading's
+    // allowance, which charges them, and each within what is left of this.
+    let mut left = MAX_TYPE3_FONT_BYTES;
+    let mut union: Option<[f64; 4]> = None;
+    for proc in chosen {
+        let Object::Stream(s) = &*doc.resolve(proc) else { continue };
+        // Once the reading's allowance is spent the rest go unread, before their parameters are
+        // resolved.
+        if reads.budget.refuses(s) {
+            reads.refused = true;
+            complete = false;
+            break;
+        }
+        let before = reads.budget.remaining();
+        let refused = reads.budget.refused();
+        let read = reads.budget.decode_with_damage(doc, s, MAX_TYPE3_GLYPH_BYTES.min(left)).map(|(data, _)| data);
+        left = left.saturating_sub(before.saturating_sub(reads.budget.remaining()));
+        let Ok(data) = read else {
+            // As in `Reads::decode`, only a refusal the allowance counts: a description that fails
+            // without one (an empty one nothing decodes, once the allowance is spent) leaves the
+            // rest to be read, or refused above.
+            if reads.budget.refused() > refused {
+                // The rest go unread too, for want of the reading's allowance.
+                reads.refused = true;
+                complete = false;
+                break;
+            }
+            if left == 0 {
+                // The rest go unread too.
+                complete = false;
+                break;
+            }
+            continue;
+        };
+        if let Some([llx, lly, urx, ury]) = d1_box(&data) {
+            let r = [llx.min(urx), lly.min(ury), llx.max(urx), lly.max(ury)];
+            union = Some(union.map_or(r, |u| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
+        }
+    }
+    union.map(|u| (u, complete))
+}
+
+/// The glyph box `llx lly urx ury` of a glyph description that begins with `wx wy llx lly urx ury
+/// d1`; `None` for `d0` or anything else first.
+fn d1_box(data: &[u8]) -> Option<[f64; 4]> {
+    let mut lexer = pdfcraft_cos::Lexer::new(data, 0);
+    let mut operands = [0.0; 6];
+    for slot in &mut operands {
+        lexer.skip_ws();
+        *slot = std::str::from_utf8(lexer.token()).ok()?.parse::<f64>().ok().filter(|v| v.is_finite())?;
+    }
+    lexer.skip_ws();
+    (lexer.token() == b"d1").then(|| [operands[2], operands[3], operands[4], operands[5]])
+}
+
+/// The lowest and highest text-space y of the glyph-space box `r` under a font matrix whose
+/// y column is `b`, `d`, `f` (§9.2.4): a flipped matrix (`d < 0`) turns the box over. `None`
+/// when the box has no height in text space or the numbers overflow; clamped to
+/// [`MAX_TYPE3_EXTENT`].
+fn text_y_extent(r: [f64; 4], b: f64, d: f64, f: f64) -> Option<(f64, f64)> {
+    let ys = [(r[0], r[1]), (r[2], r[1]), (r[0], r[3]), (r[2], r[3])].map(|(x, y)| b * x + d * y + f);
+    let lo = ys.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    (lo.is_finite() && hi.is_finite() && hi > lo).then_some((lo.max(-MAX_TYPE3_EXTENT), hi.min(MAX_TYPE3_EXTENT)))
+}
 
 /// Code → Unicode of a font. Explicit mappings and sequential ranges are kept as declared, so a range
 /// costs one record however many codes it covers; where two overlap, the one declared later wins.
@@ -471,6 +821,20 @@ fn number(t: &Tok) -> Option<u32> {
     }
 }
 
+/// The font's `/BaseFont` (a Type 3 font's descriptor `/FontName` when it has none), read without
+/// building its metrics, so it decodes no CMap.
+pub fn base_font_name(doc: &Document, font: &Dict) -> String {
+    font.name(b"BaseFont")
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+        .or_else(|| {
+            (font.name(b"Subtype") == Some(b"Type3"))
+                .then(|| dict(doc, font.get(b"FontDescriptor")))
+                .flatten()
+                .and_then(|d| d.name(b"FontName").map(|name| String::from_utf8_lossy(name).into_owned()))
+        })
+        .unwrap_or_default()
+}
+
 /// Codespace ranges and CID mappings from an embedded CMap stream, at most
 /// [`MAX_CMAP_RANGES`] of each (every glyph searches them).
 #[allow(clippy::type_complexity)]
@@ -522,9 +886,10 @@ impl Metrics {
             first: 0,
             widths: Vec::new(),
             cid_widths: HashMap::new(),
-            cid_ranges: Vec::new(),
-            cid_map: Vec::new(),
+            cid_ranges: Spans::default(),
+            cid_map: Spans::default(),
             default: 500.0,
+            explicit_default: false,
             std14: Some(crate::Std14::Helvetica),
             scale: 0.001,
             ascent: 0.9,
@@ -538,32 +903,45 @@ impl Metrics {
             visual_order: false,
             code_len: 1,
             explicit_reverse: (32..127u8).map(|c| (char::from(c), u32::from(c))).collect(),
+            outlined_cids: Vec::new(),
+            past_allowance: false,
         }
     }
 
+    /// The metrics of `font`. Each stream they come from decodes within its own limit (16 MiB for
+    /// a CMap or a program, 4 MiB for a Type 3 font's glyph descriptions together), and again on
+    /// every call: a caller that reads many fonts, or one font many times, shares an allowance
+    /// through [`Metrics::from_dict_within`].
     pub fn from_dict(doc: &Document, font: &Dict) -> Self {
-        let mut m = Self::read_metrics(doc, font);
-        let base = font
-            .name(b"BaseFont")
-            .map(|name| String::from_utf8_lossy(name).into_owned())
-            .or_else(|| {
-                (font.name(b"Subtype") == Some(b"Type3"))
-                    .then(|| dict(doc, font.get(b"FontDescriptor")))
-                    .flatten()
-                    .and_then(|d| d.name(b"FontName").map(|name| String::from_utf8_lossy(name).into_owned()))
-            })
-            .unwrap_or_default();
+        // No total, so nothing is refused: each stream stays within its own limit, as it always has.
+        Self::from_dict_within(doc, font, &mut DecodeBudget::new(usize::MAX, 0))
+    }
+
+    /// [`Metrics::from_dict`], decoding against `budget`, which the caller shares across the fonts
+    /// it reads (a page's, say): each stream pays for what it decodes, usable or not. A stream the
+    /// allowance can't pay for is left unread, and [`Metrics::past_allowance`] says so.
+    pub fn from_dict_within(doc: &Document, font: &Dict, budget: &mut DecodeBudget) -> Self {
+        let mut reads = Reads::new(doc, budget);
+        let mut m = Self::read_metrics(doc, font, &mut reads);
+        let base = base_font_name(doc, font);
         m.subset = base.len() > 7 && base.as_bytes()[6] == b'+' && base[..6].bytes().all(|b| b.is_ascii_uppercase());
         let (bold, italic) = style_from_name(&base);
         m.bold |= bold;
         m.italic |= italic;
         m.base_font = base;
+        if m.composite && m.subset {
+            m.outlined_cids = cids_with_outlines(doc, font, &mut reads);
+        }
         m.code_len = match &m.codes {
             Codes::One => 1,
             Codes::Two => 2,
             Codes::Ranges(r) => r.last().map_or(2, |x| x.0),
         };
-        m.unicode = unicode_map(doc, font, m.composite);
+        m.unicode = unicode_map(doc, font, m.composite, &mut reads);
+        if m.std14.is_some() {
+            embedded_widths(doc, font, &mut m, &mut reads);
+        }
+        m.past_allowance = reads.refused;
         let mut reverse = HashMap::new();
         for (&code, text) in m.unicode.explicit.iter().map(|(c, (_, t))| (c, t)).chain(m.unicode.encoding.iter()) {
             if let Some(ch) = only_char(text)
@@ -584,24 +962,26 @@ impl Metrics {
         m
     }
 
-    fn read_metrics(doc: &Document, font: &Dict) -> Self {
+    fn read_metrics(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Self {
         let mut m = Metrics::fallback();
         m.std14 = None;
         let subtype = font.name(b"Subtype").unwrap_or(b"Type1").to_vec();
         let descriptor;
+        // A Type 3 font measured from its glyph descriptions' `d1` boxes or its `/FontBBox` (see below).
+        let mut type3_measured = false;
         if subtype == b"Type0" {
             m.composite = true;
             m.default = 1000.0;
             m.codes = Codes::Two;
             if let Some(e) = font.get(b"Encoding").map(|e| doc.resolve(e))
                 && let Object::Stream(s) = &*e
-                && let Ok(data) = s.decoded()
+                && let Some(data) = reads.decode(s, MAX_CMAP_BYTES)
             {
                 let (spaces, cids) = parse_cmap(&data);
                 if !spaces.is_empty() {
                     m.codes = Codes::Ranges(spaces);
                 }
-                m.cid_map = cids;
+                m.cid_map = Spans::new(cids);
             }
             let desc = font
                 .get(b"DescendantFonts")
@@ -611,8 +991,10 @@ impl Metrics {
                 .unwrap_or_default();
             if let Some(dw) = desc.get(b"DW").and_then(|d| doc.resolve(d).as_f64()) {
                 m.default = dw;
+                m.explicit_default = true;
             }
             if let Some(w) = desc.get(b"W").map(|w| doc.resolve(w)).and_then(|w| w.as_array().cloned()) {
+                let mut ranges = Vec::new();
                 let mut i = 0;
                 while i < w.len() {
                     let Some(c0) = doc.resolve(&w[i]).as_f64().map(|v| v as u32) else { break };
@@ -628,14 +1010,17 @@ impl Metrics {
                             i += 2;
                         }
                         Some(c1) => {
-                            if let (Some(c1), Some(v)) = (c1.as_f64(), w.get(i + 2).and_then(|x| doc.resolve(x).as_f64())) {
-                                m.cid_ranges.push((c0, c1 as u32, v));
+                            if let (Some(c1), Some(v)) = (c1.as_f64(), w.get(i + 2).and_then(|x| doc.resolve(x).as_f64()))
+                                && ranges.len() < MAX_CMAP_ENTRIES
+                            {
+                                ranges.push((c0, c1 as u32, v));
                             }
                             i += 3;
                         }
                         None => break,
                     }
                 }
+                m.cid_ranges = Spans::new(ranges);
             }
             descriptor = dict(doc, desc.get(b"FontDescriptor"));
         } else {
@@ -644,13 +1029,28 @@ impl Metrics {
             descriptor = dict(doc, font.get(b"FontDescriptor"));
             m.default = descriptor.as_ref().and_then(|d| d.get(b"MissingWidth")).and_then(|w| doc.resolve(w).as_f64()).unwrap_or(0.0);
             if subtype == b"Type3" {
-                let fm = nums(doc, font.get(b"FontMatrix"));
-                if fm.len() == 6 {
-                    m.scale = fm[0];
-                    let bbox = nums(doc, font.get(b"FontBBox"));
-                    if bbox.len() == 4 && fm[3] != 0.0 {
-                        m.ascent = (bbox[3] * fm[3]).max(0.5);
-                        m.descent = (bbox[1] * fm[3]).min(-0.1);
+                if let [a, b, _, d, _, f] = nums(doc, font.get(b"FontMatrix"))[..] {
+                    m.scale = a;
+                    // The glyphs' own boxes first: a bitmap font's `/FontBBox` is often all zero
+                    // or one unit high, while each `d1` declares the box its glyph fills.
+                    // Each `d1` box "shall be correct" (Table 111), so their union is used as
+                    // declared, only widened to reach the baseline: a font of small glyphs gets a
+                    // small box. A `/FontBBox` is often one unit high, so it keeps the 0.5 / 0.1 em
+                    // minimum.
+                    // A union cut short by a limit may miss glyphs that are drawn, so a nonzero
+                    // `/FontBBox` comes first then; all zero, the partial union is still better
+                    // than no box. A box with no height in text space gives way to the next.
+                    let glyphs = type3_glyph_box(doc, font, reads);
+                    // All zero: no assumption about glyph sizes (Table 110).
+                    let bbox = <[f64; 4]>::try_from(nums(doc, font.get(b"FontBBox"))).ok().filter(|r| r.iter().any(|&v| v != 0.0));
+                    let union = |complete: bool| glyphs.filter(|g| g.1 == complete).map(|(r, _)| (r, 0.0, 0.0));
+                    let candidates = [union(true), bbox.map(|r| (r, 0.5, -0.1)), union(false)];
+                    if let Some(((lo, hi), min_ascent, max_descent)) =
+                        candidates.into_iter().flatten().find_map(|(r, up, down)| text_y_extent(r, b, d, f).map(|e| (e, up, down)))
+                    {
+                        m.ascent = hi.max(min_ascent);
+                        m.descent = lo.min(max_descent);
+                        type3_measured = true;
                     }
                 }
             } else if m.widths.is_empty() {
@@ -670,11 +1070,15 @@ impl Metrics {
             let ascent = d.get(b"Ascent").and_then(|v| doc.resolve(v).as_f64());
             let descent = d.get(b"Descent").and_then(|v| doc.resolve(v).as_f64());
             // Fonts often claim 0; never shrink the glyph box below a sensible minimum.
-            if ascent.is_some() || subtype != b"Type3" {
+            // A Type 3 font measured from its glyphs' `d1` boxes or its `/FontBBox` keeps those:
+            // they are in glyph space and go through its font matrix, while a descriptor's
+            // /Ascent and /Descent are optional for Type 3 (Table 120) and read here as 1000-unit
+            // values, whatever the matrix.
+            if (ascent.is_some() && !type3_measured) || subtype != b"Type3" {
                 let a = ascent.unwrap_or(0.0) / 1000.0;
                 m.ascent = if a > 0.3 { a.min(1.5) } else { 0.9 };
             }
-            if descent.is_some() || subtype != b"Type3" {
+            if (descent.is_some() && !type3_measured) || subtype != b"Type3" {
                 let de = descent.unwrap_or(0.0) / 1000.0;
                 m.descent = if de < -0.05 { de.max(-0.6) } else { -0.25 };
             }
@@ -706,14 +1110,14 @@ impl Metrics {
         if self.cid_map.is_empty() {
             return code;
         }
-        self.cid_map.iter().find(|(lo, hi, _)| code >= *lo && code <= *hi).map_or(0, |(lo, _, c)| c.saturating_add(code - lo))
+        self.cid_map.find(code).map_or(0, |(lo, _, c)| c.saturating_add(code.saturating_sub(*lo)))
     }
 
     /// The advance of `code` in text space per unit of font size.
     pub fn width(&self, code: u32) -> f64 {
         if self.composite {
             let cid = self.cid(code);
-            let w = self.cid_widths.get(&cid).copied().or_else(|| self.cid_ranges.iter().find(|(a, b, _)| cid >= *a && cid <= *b).map(|r| r.2));
+            let w = self.cid_widths.get(&cid).copied().or_else(|| self.cid_ranges.find(cid).map(|r| r.2));
             return w.unwrap_or(self.default) * self.scale;
         }
         if let Some(w) = code.checked_sub(self.first).and_then(|i| self.widths.get(i as usize)) {
@@ -722,12 +1126,23 @@ impl Metrics {
         match self.std14 {
             // A font with no /Widths is one of the standard 14; use its published metrics.
             // Codes the font's encoding leaves undefined fall back to /MissingWidth.
-            Some(f) => match u8::try_from(code).map(|c| f.width(c)).unwrap_or(0.0) {
+            Some(f) => match u8::try_from(self.std14_code(f, code)).map(|c| f.width(c)).unwrap_or(0.0) {
                 0.0 => self.default * self.scale,
                 w => w / 1000.0,
             },
             None => self.default * self.scale,
         }
+    }
+
+    /// Where the standard-14 table, indexed by WinAnsi, holds the glyph `code` draws in this font:
+    /// its encoding (base and `/Differences`) names the glyph, so a remapped code is measured as
+    /// the glyph it now shows (#2894). Symbol and ZapfDingbats are indexed by their own encodings,
+    /// and a glyph WinAnsi has no code for keeps the code itself.
+    fn std14_code(&self, face: crate::Std14, code: u32) -> u32 {
+        if matches!(face, crate::Std14::Symbol | crate::Std14::ZapfDingbats) {
+            return code;
+        }
+        self.unicode.encoding.get(&code).and_then(|t| only_char(t)).and_then(crate::win_ansi_byte).map_or(code, u32::from)
     }
 
     /// Word spacing applies to the single-byte code 32 (§9.3.3).
@@ -749,15 +1164,47 @@ impl Metrics {
     }
 
     /// Whether the font has a glyph for `code` (subset fonts lack the glyphs they don't use).
+    /// Only asked for codes the font's Unicode mapping gives: a subset's `ToUnicode` lists the
+    /// glyphs it kept, while its `/W` leaves out those of the default width (#1443).
     fn has_glyph(&self, code: u32) -> bool {
         if self.composite {
             let cid = self.cid(code);
-            return self.cid_widths.contains_key(&cid) || self.cid_ranges.iter().any(|(a, b, _)| cid >= *a && cid <= *b) || !self.subset;
+            // CID 0 is `.notdef` (an unmapped code lands there too), whatever ToUnicode says: Word
+            // maps it to a space and gives it a width, and typing with it draws boxes (#3223).
+            if cid == 0 {
+                return false;
+            }
+            // A CID /W leaves out takes /DW, and Skia (Chrome) leaves out every CID of that width: for
+            // those, only the subset's program says whether the glyph is there.
+            return self.cid_widths.contains_key(&cid)
+                || self.cid_ranges.find(cid).is_some()
+                || !self.subset
+                || self.outlined_cids.get(cid as usize / 64).is_some_and(|w| (*w >> (cid % 64)) & 1 == 1)
+                // No readable TrueType program to ask (e.g. CFF or missing): an explicit /DW
+                // still says /W may leave out glyphs of that width (#1443).
+                || (self.outlined_cids.is_empty() && self.explicit_default);
         }
         match code.checked_sub(self.first).and_then(|i| self.widths.get(i as usize)) {
-            Some(w) => *w > 0.0 || code == 32,
+            // A full font keeps its space whatever `/Widths` says; a subset that gives its space no width has no
+            // space glyph (pdfTeX writes 0 for the codes it never uses), and a typed space drawn as code 32 would
+            // glue the words together (#6131): the edit sets it as a positioning gap instead. Only when code 32
+            // is a space: another glyph a subset puts there keeps its code.
+            Some(w) => *w > 0.0 || (code == 32 && !(self.subset && self.text_of(code).is_some_and(|t| t.chars().all(char::is_whitespace)))),
             None => self.widths.is_empty() && !self.subset,
         }
+    }
+
+    /// Whether the embedded program draws an outline for `code`. Known (`Some`) only for a subset
+    /// Type 0 font over a readable TrueType program, where a dropped glyph is left empty; `None`
+    /// when the program can't tell, for example a simple or CFF font. [`Metrics::encode`] accepts
+    /// any code with a `/W` entry (#1443), so a caller that would rather use another subset of the
+    /// same face than draw nothing asks this too. An empty space glyph is normal.
+    pub fn has_outline(&self, code: u32) -> Option<bool> {
+        if !self.composite || self.outlined_cids.is_empty() {
+            return None;
+        }
+        let cid = self.cid(code);
+        Some(self.outlined_cids.get(cid as usize / 64).is_some_and(|w| (*w >> (cid % 64)) & 1 == 1))
     }
 
     /// Whether `code` shows exactly `c` and has a glyph for it.
@@ -766,8 +1213,14 @@ impl Metrics {
     }
 
     /// The bytes that show `text` in this font, or `None` if some character has no code or
-    /// no glyph in it (the caller then substitutes another font).
+    /// no glyph in it, or the metrics were read past their allowance (the caller then substitutes
+    /// another font). Empty text needs no verified glyph and always encodes.
     pub fn encode(&self, text: &str) -> Option<Vec<u8>> {
+        // A refused read cannot establish the mappings or glyphs needed to write new text.
+        // Empty text needs neither and remains usable for erasing existing text.
+        if self.past_allowance && !text.is_empty() {
+            return None;
+        }
         // The lowest code showing each wanted character. Explicit entries and the encoding are
         // checked one by one; each range is asked for the wanted characters it can show.
         let wanted: HashSet<char> = text.chars().collect();
@@ -794,9 +1247,13 @@ impl Metrics {
     }
 }
 
-/// The UTF-16 code units of CMap hex bytes.
+/// Most UTF-16 units kept from one ToUnicode destination: the CMap format allows destinations of up
+/// to 512 bytes, and every glyph a sequential range covers builds its text from the whole of one.
+const MAX_DESTINATION_UNITS: usize = 256;
+
+/// The UTF-16 code units of CMap hex bytes, at most [`MAX_DESTINATION_UNITS`] of them.
 fn code_units(b: &[u8]) -> Vec<u16> {
-    b.chunks(2).map(|c| u16::from_be_bytes([c[0], *c.get(1).unwrap_or(&0)])).collect()
+    b.chunks(2).take(MAX_DESTINATION_UNITS).map(|c| u16::from_be_bytes([c[0], *c.get(1).unwrap_or(&0)])).collect()
 }
 
 /// UTF-16BE (with surrogates) from CMap hex bytes.
@@ -843,16 +1300,69 @@ fn add_range(out: &mut Unicode, budget: &mut usize, seq: &mut u32, lo: u32, hi: 
     true
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Code span records read by CID and width lookups, for the tests that keep a lookup logarithmic.
+    static SPAN_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts one span record read (tests only).
+#[inline]
+fn count_span_reads() {
+    #[cfg(test)]
+    SPAN_READS.with(|c| c.set(c.get().saturating_add(1)));
+}
+
+/// Code spans `(lo, hi, value)` in declaration order, where the first-declared span covering a code
+/// wins, indexed so that a lookup is one binary search.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Spans<T> {
+    spans: Vec<(u32, u32, T)>,
+    /// The span covering each stretch of codes; see [`stretches`].
+    cover: Vec<(u64, Option<usize>)>,
+}
+
+impl<T> Spans<T> {
+    fn new(spans: Vec<(u32, u32, T)>) -> Self {
+        let bounds: Vec<(u32, u32)> = spans.iter().map(|s| (s.0, s.1)).collect();
+        Spans { cover: stretches(&bounds, false), spans }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.spans.is_empty()
+    }
+
+    /// The first-declared span covering `code`.
+    fn find(&self, code: u32) -> Option<&(u32, u32, T)> {
+        let step = self.cover.partition_point(|&(start, _)| {
+            count_span_reads();
+            start <= u64::from(code)
+        });
+        let &(_, record) = self.cover.get(step.checked_sub(1)?)?;
+        self.spans.get(record?)
+    }
+}
+
 /// For each stretch of codes, from its first code on, the latest-declared range covering it (`None`
 /// where no range does), sorted by code; a lookup is one binary search over it.
 fn cover_index(ranges: &[BfRange]) -> Vec<(u64, Option<usize>)> {
+    let spans: Vec<(u32, u32)> = ranges.iter().map(|r| (r.lo, r.hi)).collect();
+    stretches(&spans, true)
+}
+
+/// For each stretch of codes, from its first code on, the span `(lo, hi)` covering it (`None` where
+/// none does), sorted by code: the latest-declared one when `later_wins`, else the first-declared.
+/// At most `u32::MAX` spans are indexed.
+fn stretches(spans: &[(u32, u32)], later_wins: bool) -> Vec<(u64, Option<usize>)> {
+    // Heap keys, largest for the winning record; the mapping is its own inverse.
+    let key = |record: u32| if later_wins { record } else { !record };
     // Openings (first code, record) and closings (one past the last code), each in code order. The cover
     // can only change at one of their codes, so the sweep visits those codes in order.
-    let mut opens: Vec<(u32, u32)> = ranges.iter().enumerate().map(|(i, r)| (r.lo, i as u32)).collect();
+    let mut opens: Vec<(u32, u32)> = spans.iter().zip(0..u32::MAX).map(|(&(lo, _), i)| (lo, i)).collect();
     opens.sort_unstable();
-    let mut closes: Vec<u64> = ranges.iter().map(|r| u64::from(r.hi) + 1).collect();
+    let mut closes: Vec<u64> = spans.iter().take(opens.len()).map(|&(_, hi)| u64::from(hi) + 1).collect();
     closes.sort_unstable();
-    // Records that have opened and not yet closed; the top is the latest declared one.
+    // Keys of the records that have opened and not yet closed; the top is the winning one.
     let mut open: BinaryHeap<u32> = BinaryHeap::new();
     let mut cover: Vec<(u64, Option<usize>)> = Vec::new();
     let (mut next_open, mut next_close) = (0, 0);
@@ -866,16 +1376,16 @@ fn cover_index(ranges: &[BfRange]) -> Vec<(u64, Option<usize>)> {
         while let Some(&(lo, record)) = opens.get(next_open)
             && u64::from(lo) <= p
         {
-            open.push(record);
+            open.push(key(record));
             next_open += 1;
         }
         while closes.get(next_close).is_some_and(|&end| end <= p) {
             next_close += 1;
         }
-        while open.peek().is_some_and(|&top| ranges.get(top as usize).is_none_or(|r| u64::from(r.hi) < p)) {
+        while open.peek().is_some_and(|&top| spans.get(key(top) as usize).is_none_or(|&(_, hi)| u64::from(hi) < p)) {
             open.pop();
         }
-        let winner = open.peek().map(|&top| top as usize);
+        let winner = open.peek().map(|&top| key(top) as usize);
         if cover.last().map(|&(_, w)| w) != Some(winner) {
             cover.push((p, winner));
         }
@@ -1023,8 +1533,9 @@ fn glyph_component(part: &str) -> Option<String> {
     if let Ok(i) = crate::encodings::NAMES.binary_search_by(|(n, _)| (*n).cmp(part)) {
         return char::from_u32(crate::encodings::NAMES[i].1).map(String::from);
     }
-    // `from_str_radix` accepts a leading `+`, which is not a glyph name, so the digits are checked.
-    let hexish = |h: &str| !h.is_empty() && h.bytes().all(|b| b.is_ascii_hexdigit());
+    // `from_str_radix` accepts a leading `+` and lowercase digits, and the glyph list
+    // specification's digits are uppercase only (`uni20ac` names nothing), so they are checked.
+    let hexish = |h: &str| !h.is_empty() && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'F'));
     if let Some(hex) = part.strip_prefix("uni").filter(|h| h.len() >= 4 && h.len() % 4 == 0 && hexish(h)) {
         let mut s = String::new();
         for i in (0..hex.len()).step_by(4) {
@@ -1043,8 +1554,118 @@ pub fn glyph_unicode(name: &str) -> Option<char> {
     chars.next().filter(|_| chars.len() == 0)
 }
 
-/// Code → Unicode for a font: its ToUnicode CMap, else (simple fonts) its encoding.
-fn unicode_map(doc: &Document, font: &Dict, composite: bool) -> Unicode {
+/// What each code of an embedded TrueType font that isn't flagged non-symbolic and names no base
+/// encoding shows, by the `post` table name of the glyph its `cmap` selects (the way the renderer
+/// selects it: the code, then at 0xF000, 0xF100 and 0xF200). Such a font's codes need not be
+/// Standard or WinAnsi: FrameMaker files distilled with Distiller 3 number them in the Macintosh
+/// glyph order, 29 below ASCII, so `Solid` read as `6ROLG` and typing set the wrong glyphs (#3962).
+/// Codes without a glyph, and fonts whose `post` table names no glyphs, are left out (the latter
+/// to [`symbolic_mac_roman_texts`]). A code whose glyph has no name with a Unicode value reads
+/// as WinAnsi, as the renderer reads it (vendored hayro-interpret patch (79)), so the editor and
+/// extraction agree: `€` for code 0x80, which Standard leaves without a character.
+fn symbolic_glyph_texts(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Vec<(u32, String)> {
+    use skrifa::GlyphId;
+    use skrifa::raw::{FontData, FontRead as _, TableProvider as _, tables::cmap::PlatformId, tables::post::Post, types::Tag};
+    let Some(descriptor) = dict(doc, font.get(b"FontDescriptor")) else { return Vec::new() };
+    // Flag bit 6, Nonsymbolic (ISO 32000-2 Table 121).
+    if descriptor_flags(doc, &descriptor) & 32 != 0 {
+        return Vec::new();
+    }
+    let Some(object) = descriptor.get(b"FontFile2") else { return Vec::new() };
+    let object = doc.resolve(object);
+    let Object::Stream(stream) = object.as_ref() else { return Vec::new() };
+    let Some(bytes) = reads.decode(stream, MAX_SFNT) else { return Vec::new() };
+    let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { return Vec::new() };
+    let Ok(cmap) = face.cmap() else { return Vec::new() };
+    // A `post` version written with its 16-bit halves swapped (`00 00 00 02` for 2.0, as ScanSoft
+    // PDF Create! writes it) is read as the version it means, as the renderer reads it (#2946,
+    // vendored hayro-interpret patch (49)); otherwise its names would be lost here alone.
+    let repaired = face.table_data(Tag::new(b"post")).and_then(|data| match data.as_bytes() {
+        [0, 0, 0, n @ 1..=3, rest @ ..] => Some([&[0, *n, 0, 0], rest].concat()),
+        _ => None,
+    });
+    let post = match &repaired {
+        Some(bytes) => Post::read(FontData::new(bytes)),
+        None => face.post(),
+    };
+    let Ok(post) = post else { return Vec::new() };
+    // A font that names no glyphs (no `post` table of version 1.0, or one of version 2.0 with an
+    // empty name index) is left to `symbolic_mac_roman_texts` and the encoding's reading.
+    let names_glyphs = match post.version() {
+        skrifa::raw::types::Version16Dot16::VERSION_1_0 => true,
+        skrifa::raw::types::Version16Dot16::VERSION_2_0 => post.glyph_name_index().is_some_and(|index| !index.is_empty()),
+        _ => false,
+    };
+    if !names_glyphs {
+        return Vec::new();
+    }
+    let custom = post_custom_names(&post);
+    (0..=255u32)
+        .filter_map(|code| {
+            // The records in order, as the renderer's `map_code` reads a symbolic font: a Windows
+            // symbol or Unicode cmap with the code and the code at 0xF000, 0xF100 and 0xF200, a
+            // Macintosh or Unicode-platform one with the code alone; the first glyph found wins.
+            let glyph = cmap.encoding_records().iter().find_map(|record| {
+                let offsets: &[u32] = match (record.platform_id(), record.encoding_id()) {
+                    (PlatformId::Windows, 0 | 1) => &[0, 0xF000, 0xF100, 0xF200],
+                    (PlatformId::Macintosh | PlatformId::Unicode, 0) => &[0],
+                    _ => return None,
+                };
+                let subtable = record.subtable(cmap.offset_data()).ok()?;
+                offsets.iter().find_map(|o| subtable.map_codepoint(code + o).filter(|g| *g != GlyphId::NOTDEF))
+            })?;
+            let glyph = u16::try_from(glyph.to_u32()).ok()?;
+            let winansi = || {
+                let u = crate::encodings::WIN_ANSI.get(usize::try_from(code).ok()?).copied().filter(|u| *u != 0)?;
+                char::from_u32(u).map(String::from)
+            };
+            let text = post_name(&post, &custom, glyph).filter(|n| uppercase_hex_forms(n)).and_then(glyph_text);
+            Some((code, text.or_else(winansi)?))
+        })
+        .collect()
+}
+
+/// Whether the `uni` and `u` components of a glyph name spell their hex digits in uppercase, as
+/// the glyph list specification's forms do (ISO 32000-2 §9.10.2): `uni1eae` names nothing, so
+/// its glyph's code reads as WinAnsi, as the renderer reads it (vendored hayro-interpret patch
+/// (79)). A component that is a list name (`a`, `ecircumflex`) is read as such whatever its case.
+fn uppercase_hex_forms(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default();
+    stem.split('_').all(|part| {
+        // Outside the list, a component `glyph_text` reads is `u` or `uni` and hex digits, so a
+        // lowercase `a` to `f` in it is a lowercase digit.
+        crate::encodings::NAMES.binary_search_by(|(n, _)| (*n).cmp(part)).is_ok() || !part.bytes().any(|b| matches!(b, b'a'..=b'f'))
+    })
+}
+
+/// The names a version 2.0 `post` table spells out, in order, read once. `Post::glyph_name` walks
+/// this data from its start for each glyph it is asked about, which over a font program of up to
+/// 16 MiB, asked about 256 codes, is work an untrusted file can make large. Reading stops at the
+/// first name that can't be read, as each lookup would.
+fn post_custom_names<'a>(post: &skrifa::raw::tables::post::Post<'a>) -> Vec<&'a str> {
+    post.string_data().map(|names| names.iter().map_while(|name| name.ok().map(|n| n.as_str())).collect()).unwrap_or_default()
+}
+
+/// `glyph`'s name in `post`, as `Post::glyph_name` gives it, with the table's own names from
+/// [`post_custom_names`].
+fn post_name<'a>(post: &skrifa::raw::tables::post::Post<'a>, custom: &[&'a str], glyph: u16) -> Option<&'a str> {
+    use skrifa::raw::{tables::post::DEFAULT_GLYPH_NAMES, types::Version16Dot16};
+    match post.version() {
+        Version16Dot16::VERSION_1_0 => DEFAULT_GLYPH_NAMES.get(usize::from(glyph)).copied(),
+        Version16Dot16::VERSION_2_0 => {
+            let index = usize::from(post.glyph_name_index()?.get(usize::from(glyph))?.get());
+            match index.checked_sub(DEFAULT_GLYPH_NAMES.len()) {
+                None => DEFAULT_GLYPH_NAMES.get(index).copied(),
+                Some(i) => custom.get(i).copied(),
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Code → Unicode for a font: its ToUnicode CMap (for a composite font, also the name
+/// `/Identity-H` or `/Identity-V`, read as code = Unicode), else (simple fonts) its encoding.
+fn unicode_map(doc: &Document, font: &Dict, composite: bool, reads: &mut Reads<'_>) -> Unicode {
     let mut out = Unicode::default();
     if !composite {
         let enc = font.get(b"Encoding").map(|e| doc.resolve(e));
@@ -1084,6 +1705,14 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool) -> Unicode {
                 out.encoding.insert(code as u32, c.to_string());
             }
         }
+        // A font named as Symbol or ZapfDingbats keeps reporting nothing: its names may be as
+        // un-Latin as its codes (WordPerfect's WPTypographicSymbols calls its apostrophe `equal`).
+        // A font whose `post` table names its glyphs reads by those names; one that names none
+        // and keeps the Macintosh order reads as Mac OS Roman, over the WinAnsi fallback.
+        if base_name.is_none() && !symbolic_builtin {
+            out.encoding.extend(symbolic_glyph_texts(doc, font, reads));
+            out.encoding.extend(symbolic_mac_roman_texts(doc, font, reads));
+        }
         if let Some(Object::Dict(d)) = enc.as_deref()
             && let Some(diffs) = d.get(b"Differences").map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned())
         {
@@ -1106,545 +1735,115 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool) -> Unicode {
             }
         }
     }
-    if let Some(Object::Stream(s)) = font.get(b"ToUnicode").map(|t| doc.resolve(t)).as_deref()
-        && let Ok(data) = s.decoded()
-    {
-        parse_to_unicode(&data, &mut out);
+    match font.get(b"ToUnicode").map(|t| doc.resolve(t)).as_deref() {
+        Some(Object::Stream(s)) => {
+            // Reads resolves indirect parameters too, matching the redaction proof's text.
+            if let Some(data) = reads.decode(s, MAX_CMAP_BYTES) {
+                parse_to_unicode(&data, &mut out);
+            }
+        }
+        // `/ToUnicode /Identity-H` is not a stream, as ISO 32000-2 §9.10.3 requires, but CAD
+        // exporters (WSCAD among them) write it for composite fonts whose two-byte codes are the
+        // UTF-16 code units. Acrobat shows them as code = Unicode, and so does the renderer's
+        // text layer; without it the text could be seen but not edited or found. The same rule
+        // (code = Unicode, no controls or lone surrogates) is in the vendored renderer,
+        // `Type0Font::char_code_to_unicode` in vendor/hayro-interpret/src/font/cid.rs: keep both alike.
+        Some(Object::Name(n)) if composite && matches!(n.as_slice(), b"Identity-H" | b"Identity-V") => {
+            parse_to_unicode(&identity_to_unicode(), &mut out);
+        }
+        _ => {}
     }
     out
 }
 
-#[cfg(test)]
-mod tests {
-    use pdfcraft_cos::{Dict, Document, Object, Stream};
-
-    use super::*;
-
-    /// A font whose ranges cover a few low codes keeps tables that size, not a fixed 64k-entry one.
-    #[test]
-    fn low_code_tables_end_with_the_last_covered_code() {
-        // One range over codes 0x20..=0x21, then nothing.
-        let cover = [(0x20u64, Some(0usize)), (0x22, None)];
-        let owner = super::owners_below_64k(&cover);
-        assert_eq!(owner.len(), 0x22);
-        assert_eq!((owner[0x1F], owner[0x20], owner[0x21]), (u32::MAX, 0, 0));
-        assert!(super::owners_below_64k(&[(0x2_0000, Some(0))]).is_empty(), "no code below 65 536");
-        let bits = super::bit_set_below_64k([3u32, 130, 0x2_0000].into_iter());
-        assert_eq!(bits.len(), 3);
-        assert_eq!((bits[0], bits[2]), (1 << 3, 1 << 2));
-        assert!(super::bit_set_below_64k([0x1_0000u32].into_iter()).is_empty());
-    }
-
-    fn font(doc: &mut Document, entries: Vec<(&str, Object)>) -> Dict {
-        let mut d = Dict::new();
-        d.set(b"Type".to_vec(), Object::name("Font"));
-        for (k, v) in entries {
-            d.set(k.as_bytes().to_vec(), v);
+/// A ToUnicode CMap mapping each two-byte code to the same UTF-16 code unit, leaving out the
+/// surrogates (which are not characters on their own) and the controls (C0, DEL and C1, as the
+/// renderer's text layer does). No range crosses a last-byte boundary (§9.10.3).
+fn identity_to_unicode() -> Vec<u8> {
+    let mut ranges = vec![(0x20u32, 0x7Eu32), (0xA0, 0xFF)];
+    ranges.extend((0x01u32..=0xFF).filter(|h| !(0xD8..=0xDF).contains(h)).map(|h| (h << 8, (h << 8) | 0xFF)));
+    let mut cmap = String::from("1 begincodespacerange <0000> <FFFF> endcodespacerange\n");
+    // At most 100 entries per section (§9.7.5.2 limits for CMap files).
+    for chunk in ranges.chunks(100) {
+        cmap.push_str(&format!("{} beginbfrange\n", chunk.len()));
+        for (lo, hi) in chunk {
+            cmap.push_str(&format!("<{lo:04X}> <{hi:04X}> <{lo:04X}>\n"));
         }
-        let _ = doc;
-        d
+        cmap.push_str("endbfrange\n");
     }
-
-    #[test]
-    fn embedded_editor_fonts_are_validated_without_installing_or_exporting() {
-        use pdfcraft_cos::Stream;
-        let mut doc = Document::new_empty();
-        let bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
-        let program = doc.add(Object::Stream(Stream::flate(Dict::new(), bytes)));
-        let mut descriptor = Dict::new();
-        descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
-        let simple = font(&mut doc, vec![("FontDescriptor", Object::Dict(descriptor.clone()))]);
-        assert_eq!(embedded_sfnt(&doc, &simple).unwrap(), bytes);
-        let composite = font(&mut doc, vec![("DescendantFonts", Object::Array(vec![Object::Dict(simple.clone())]))]);
-        assert_eq!(embedded_sfnt(&doc, &composite).unwrap(), bytes);
-        let broken = doc.add(Object::Stream(Stream::flate(Dict::new(), b"broken font")));
-        descriptor.set(b"FontFile2".to_vec(), Object::Ref(broken));
-        let broken = font(&mut doc, vec![("FontDescriptor", Object::Dict(descriptor))]);
-        assert!(embedded_sfnt(&doc, &broken).is_none());
-        assert!(embedded_sfnt(&doc, &Dict::new()).is_none());
-    }
-
-    #[test]
-    fn mac_subset_cmap_uses_pdf_unicode_without_changing_source_program() {
-        use skrifa::{MetadataProvider as _, raw::TableProvider as _};
-        let original = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
-        let face = skrifa::FontRef::new(original).unwrap();
-        let expected = face.charmap().map('Ω').unwrap();
-        let mut subset = original.to_vec();
-        let count = u16::from_be_bytes(subset[4..6].try_into().unwrap()) as usize;
-        let entry = (0..count).map(|i| 12 + i * 16).find(|i| &subset[*i..*i + 4] == b"cmap").unwrap();
-        let mut cmap = vec![0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 12];
-        cmap.extend_from_slice(&[0, 6, 0, 12, 0, 0, 0, 65, 0, 1]);
-        cmap.extend_from_slice(&u16::try_from(expected.to_u32()).unwrap().to_be_bytes());
-        let offset = subset.len() as u32;
-        subset[entry + 8..entry + 12].copy_from_slice(&offset.to_be_bytes());
-        subset[entry + 12..entry + 16].copy_from_slice(&(cmap.len() as u32).to_be_bytes());
-        subset.extend_from_slice(&cmap);
-        let face = skrifa::FontRef::new(&subset).unwrap();
-        assert!(!face.charmap().has_map(), "egui cannot directly use Mac format 6");
-        assert_eq!(face.cmap().unwrap().map_codepoint(65_u32), Some(expected));
-        let mut doc = Document::new_empty();
-        let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &subset)));
-        let mut descriptor = Dict::new();
-        descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
-        let unicode = doc.add(Object::Stream(Stream::flate(Dict::new(), b"1 beginbfchar <41> <03A9> endbfchar")));
-        let source = font(&mut doc, vec![("FontDescriptor", Object::Dict(descriptor)), ("ToUnicode", Object::Ref(unicode))]);
-        let editor = embedded_sfnt(&doc, &source).unwrap();
-        let face = skrifa::FontRef::new(&editor).unwrap();
-        assert_eq!(face.charmap().map('Ω'), Some(expected), "Unicode selects the original glyph");
-        let Object::Stream(source) = doc.resolve(&Object::Ref(program)).as_ref().clone() else {
-            panic!("source stream");
-        };
-        assert_eq!(source.decoded().unwrap(), subset, "only an in-memory editor copy is adapted");
-        let mut broken = vec![0; 16];
-        assert!(append_editor_cmap(&mut broken, &std::collections::BTreeMap::from([(65, 1)])).is_none());
-    }
-
-    fn metrics_with_flags(flags: Option<Object>) -> Metrics {
-        let mut doc = Document::new_empty();
-        let mut descriptor = Dict::new();
-        if let Some(flags) = flags {
-            descriptor.set(b"Flags".to_vec(), flags);
-        }
-        let font = font(&mut doc, vec![("Subtype", Object::name("TrueType")), ("FontDescriptor", Object::Dict(descriptor))]);
-        Metrics::from_dict(&doc, &font)
-    }
-
-    #[test]
-    fn font_descriptor_flags_stay_within_the_u32_domain() {
-        let valid = metrics_with_flags(Some(Object::Int(64 | 262_144)));
-        assert!(valid.italic && valid.bold);
-
-        for flags in [Some(Object::Int(-1)), Some(Object::Int(4_294_967_296)), Some(Object::Bool(true)), None] {
-            let metrics = metrics_with_flags(flags);
-            assert!(!metrics.italic && !metrics.bold);
-        }
-    }
-
-    #[test]
-    fn type3_descriptor_names_the_font_without_changing_its_metrics() {
-        let mut doc = Document::new_empty();
-        let mut f = font(
-            &mut doc,
-            vec![
-                ("Subtype", Object::name("Type3")),
-                (
-                    "FontMatrix",
-                    Object::Array(vec![Object::Real(0.001), Object::Int(0), Object::Int(0), Object::Real(0.001), Object::Int(0), Object::Int(0)]),
-                ),
-                ("FontBBox", Object::Array(vec![Object::Int(0), Object::Int(-300), Object::Int(1000), Object::Int(1000)])),
-            ],
-        );
-        let before = Metrics::from_dict(&doc, &f);
-        let mut descriptor = Dict::new();
-        descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
-        descriptor.set(b"FontName".to_vec(), Object::name("ExampleMincho-Regular"));
-        descriptor.set(b"Flags".to_vec(), Object::Int(6));
-        descriptor.set(b"ItalicAngle".to_vec(), Object::Int(0));
-        let reference = doc.add(Object::Dict(descriptor));
-        f.set(b"FontDescriptor".to_vec(), Object::Ref(reference));
-        let after = Metrics::from_dict(&doc, &f);
-        assert_eq!(after.base_font, "ExampleMincho-Regular");
-        assert_eq!((after.ascent, after.descent, after.scale), (before.ascent, before.descent, before.scale));
-        assert!(!after.bold && !after.italic && !after.subset);
-        f.set(b"BaseFont".to_vec(), Object::name("ExplicitName"));
-        assert_eq!(Metrics::from_dict(&doc, &f).base_font, "ExplicitName", "an explicit BaseFont takes precedence");
-    }
-
-    #[test]
-    fn simple_fonts_decode_and_encode_through_their_encoding() {
-        let mut doc = Document::new_empty();
-        let f = font(
-            &mut doc,
-            vec![("Subtype", Object::name("Type1")), ("BaseFont", Object::name("Helvetica")), ("Encoding", Object::name("WinAnsiEncoding"))],
-        );
-        let m = Metrics::from_dict(&doc, &f);
-        assert_eq!(m.decode(b"Caf\xe9 \x80 \x93x\x94"), "Café € “x”");
-        assert_eq!(m.encode("Café €").as_deref(), Some(&b"Caf\xe9 \x80"[..]));
-        assert_eq!(m.encode("Ω"), None, "not in WinAnsi");
-        // Differences rename codes by glyph name.
-        let mut enc = Dict::new();
-        enc.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(65), Object::name("eacute"), Object::name("uni03A9")]));
-        let f = font(&mut doc, vec![("Subtype", Object::name("Type1")), ("BaseFont", Object::name("Custom")), ("Encoding", Object::Dict(enc))]);
-        let m = Metrics::from_dict(&doc, &f);
-        assert_eq!(m.decode(b"AB"), "éΩ");
-        assert_eq!(m.encode("Ω").as_deref(), Some(&b"B"[..]));
-    }
-
-    #[test]
-    fn subset_fonts_only_encode_the_glyphs_they_have() {
-        let mut doc = Document::new_empty();
-        // Widths for a, b only (97, 98); c (99) is 0.
-        let widths = Object::Array(vec![Object::Int(500), Object::Int(520), Object::Int(0)]);
-        let f = font(
-            &mut doc,
-            vec![
-                ("Subtype", Object::name("TrueType")),
-                ("BaseFont", Object::name("ABCDEF+Arial")),
-                ("FirstChar", Object::Int(97)),
-                ("Widths", widths),
-                ("Encoding", Object::name("WinAnsiEncoding")),
-            ],
-        );
-        let m = Metrics::from_dict(&doc, &f);
-        assert!(m.subset);
-        assert_eq!(m.encode("ab").as_deref(), Some(&b"ab"[..]));
-        assert_eq!(m.encode("abc"), None);
-    }
-
-    #[test]
-    fn composite_fonts_use_to_unicode() {
-        let mut doc = Document::new_empty();
-        let cmap = b"/CIDInit /ProcSet findresource begin 1 begincodespacerange <0000> <FFFF> endcodespacerange \
-            2 beginbfchar <0003> <0020> <0010> <00E9> endbfchar 1 beginbfrange <0024> <0026> <0041> endbfrange \
-            1 beginbfrange <0030> <0031> [<0048> <0069>] endbfrange end";
-        let tu = doc.add(Object::Stream(Stream::from_raw(Dict::new(), cmap.to_vec())));
-        let mut desc = Dict::new();
-        desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
-        desc.set(
-            b"W".to_vec(),
-            Object::Array(vec![
-                Object::Int(3),
-                Object::Array(vec![Object::Int(250)]),
-                Object::Int(16),
-                Object::Int(16),
-                Object::Int(500),
-                Object::Int(36),
-                Object::Int(49),
-                Object::Int(600),
-            ]),
-        );
-        let f = font(
-            &mut doc,
-            vec![
-                ("Subtype", Object::name("Type0")),
-                ("BaseFont", Object::name("QWERTY+Noto")),
-                ("Encoding", Object::name("Identity-H")),
-                ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
-                ("ToUnicode", Object::Ref(tu)),
-            ],
-        );
-        let m = Metrics::from_dict(&doc, &f);
-        assert_eq!(m.decode(&[0, 0x24, 0, 0x25, 0, 3, 0, 0x30, 0, 0x31, 0, 0x10]), "AB Hié");
-        assert_eq!(m.encode("Hi A").as_deref(), Some(&[0, 0x30, 0, 0x31, 0, 3, 0, 0x24][..]));
-        assert_eq!(m.encode("Z"), None);
-    }
-
-    /// A `/W` run that starts at the last CID stops there instead of overflowing onto CID 0.
-    #[test]
-    fn composite_width_run_past_the_last_cid_is_dropped() {
-        let widths = |first: i64| {
-            let mut doc = Document::new_empty();
-            let mut desc = Dict::new();
-            desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
-            desc.set(b"DW".to_vec(), Object::Int(1000));
-            desc.set(b"W".to_vec(), Object::Array(vec![Object::Int(first), Object::Array(vec![Object::Int(100), Object::Int(200)])]));
-            let f = font(
-                &mut doc,
-                vec![
-                    ("Subtype", Object::name("Type0")),
-                    ("Encoding", Object::name("Identity-H")),
-                    ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
-                ],
-            );
-            Metrics::from_dict(&doc, &f)
-        };
-        let ordinary = widths(0);
-        assert_eq!((ordinary.width(0), ordinary.width(1)), (0.1, 0.2));
-        let last = widths(i64::from(u32::MAX));
-        assert_eq!((last.width(0), last.width(u32::MAX)), (1.0, 0.1));
-    }
-
-    #[test]
-    fn glyph_names() {
-        assert_eq!(glyph_unicode("quotedblleft"), Some('“'));
-        assert_eq!(glyph_unicode("uni20AC"), Some('€'));
-        assert_eq!(glyph_unicode("u1F600"), Some('😀'));
-        assert_eq!(glyph_unicode("nonsense"), None);
-    }
-
-    fn to_unicode(cmap: &[u8]) -> HashMap<u32, String> {
-        let mut u = Unicode::default();
-        parse_to_unicode(cmap, &mut u);
-        let codes: Vec<u32> = u.explicit.keys().copied().chain(u.ranges.iter().flat_map(|r| r.lo..=r.hi)).collect();
-        codes.into_iter().filter_map(|c| u.text(c).map(|t| (c, t.into_owned()))).collect()
-    }
-
-    #[test]
-    fn cmap_tokens_need_no_space_between_them() {
-        // Hex strings, brackets and operators may touch; comments and literal strings are skipped.
-        let cmap = b"/CIDSystemInfo << /Registry (Adobe (x) \\) beginbfchar) >> def % beginbfchar <0001> <0058>\n\
-            2 beginbfchar<0003><0020><0010><00 E9>endbfchar \
-            1 beginbfrange<0024><0026><0041>endbfrange 1 beginbfrange<0030><0031>[<0048><0069>]endbfrange";
-        let map = to_unicode(cmap);
-        let mut got: Vec<_> = map.iter().map(|(c, u)| (*c, u.as_str())).collect();
-        got.sort_unstable();
-        assert_eq!(got, [(3, " "), (0x10, "é"), (0x24, "A"), (0x25, "B"), (0x26, "C"), (0x30, "H"), (0x31, "i")]);
-        let (spaces, cids) = parse_cmap(b"1 begincodespacerange<00><FF>endcodespacerange 1 begincidrange<20><7E>1 endcidrange");
-        assert_eq!(spaces, [(1, vec![0], vec![0xff])]);
-        assert_eq!(cids, [(0x20, 0x7e, 1)]);
-    }
-
-    #[test]
-    fn malformed_cmaps_never_panic() {
-        // Non-ASCII bytes inside hex strings once split a UTF-8 character and panicked.
-        for cmap in [
-            "1 beginbfchar <0é0> <0041> <AéB> <0042> endbfchar".as_bytes(),
-            "1 beginbfrange <0é0> <00é> <0041> endbfrange".as_bytes(),
-            b"1 beginbfchar <0001> <004",
-            b"1 beginbfchar <123> <0041> <0002> <zz> <0003> endbfchar",
-            b"1 beginbfrange <FFFF> <0001> [<0041>] endbfrange",
-            b"1 beginbfrange <0001> <0002> [<0041> (",
-            b"1 beginbfrange <0001>",
-            b"\xff\xfe beginbfchar \x80<\xc3\xa9> <0041> endbfchar %",
-        ] {
-            to_unicode(cmap);
-            parse_cmap(cmap);
-        }
-        // Code counters at the top of the range stop instead of overflowing.
-        let map = to_unicode(b"1 beginbfrange <FFFFFFFE> <FFFFFFFF> [<0041> <0042> <0043>] endbfrange");
-        assert_eq!(map.len(), 2);
-        assert_eq!(map.get(&u32::MAX).map(String::as_str), Some("B"));
-        // A malformed array entry keeps its place, so the next one maps the next code.
-        let map = to_unicode(b"1 beginbfrange <0001> <0003> [<0041> <zz> <0043>] endbfrange");
-        assert_eq!((map.get(&2), map.get(&3).map(String::as_str)), (None, Some("C")));
-        let mut m = Metrics::fallback();
-        (_, m.cid_map) = parse_cmap(b"1 begincidrange <0000> <FFFF> 4294967295 endcidrange");
-        assert_eq!(m.cid(5), u32::MAX);
-        let mut doc = Document::new_empty();
-        let mut enc = Dict::new();
-        enc.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(i64::MAX), Object::name("A"), Object::name("B")]));
-        let f = font(&mut doc, vec![("Subtype", Object::name("Type1")), ("Encoding", Object::Dict(enc))]);
-        assert_eq!(unicode_map(&doc, &f, false).text(u32::MAX).as_deref(), Some("B"));
-    }
-
-    #[test]
-    fn sequential_ranges_past_the_entry_cap_still_map() {
-        // 17 ranges of 65 536 codes: 1 114 112 codes from 0.4 KB of CMap, more than MAX_CMAP_ENTRIES
-        // (the first 16 ranges use up the whole cap). Each range maps its codes upward from 'A', so
-        // the last code of the last range, 0x100019, is 'A' + 0x19 = 'Z'.
-        let mut cmap = b"17 beginbfrange ".to_vec();
-        for k in 0..17u32 {
-            cmap.extend(format!("<{:08X}> <{:08X}> <0041> ", k << 16, (k << 16) | 0xffff).bytes());
-        }
-        cmap.extend(b"endbfrange");
-        let mut doc = Document::new_empty();
-        let tu = doc.add(Object::Stream(Stream::from_raw(Dict::new(), cmap)));
-        let f = font(
-            &mut doc,
-            vec![
-                ("Subtype", Object::name("Type0")),
-                ("BaseFont", Object::name("Wide")),
-                ("Encoding", Object::name("Identity-H")),
-                ("ToUnicode", Object::Ref(tu)),
-            ],
-        );
-        let m = Metrics::from_dict(&doc, &f);
-        assert_eq!(m.text_of(0x0010_0019).as_deref(), Some("Z"));
-    }
-
-    #[test]
-    fn a_cmap_adds_at_most_max_entries() {
-        // 200 ranges of 65 536 codes would be 13 million codes from 4 KB of stream: 200 records.
-        let mut cmap = b"200 beginbfrange ".to_vec();
-        for k in 0..200u32 {
-            cmap.extend(format!("<{:08X}> <{:08X}> <0041> ", k << 16, (k << 16) | 0xffff).bytes());
-        }
-        cmap.extend(b"endbfrange");
-        let mut u = Unicode::default();
-        parse_to_unicode(&cmap, &mut u);
-        assert_eq!((u.ranges.len(), u.explicit.len()), (200, 0));
-        // Explicit entries are what the budget counts: 250 of the 300 here are kept.
-        let mut many = b"300 beginbfchar ".to_vec();
-        for k in 0..300u32 {
-            many.extend(format!("<{k:04X}> <{:04X}> ", 0x4E00 + k).bytes());
-        }
-        many.extend(b"endbfchar");
-        let mut u = Unicode::default();
-        parse_to_unicode_within(&many, &mut u, 250);
-        assert_eq!((u.explicit.len(), u.text(249).is_some(), u.text(250).is_some()), (250, true, false));
-        let mut many = b"begincidrange ".to_vec();
-        for k in 0..MAX_CMAP_RANGES + 10 {
-            many.extend(format!("<{k:08X}> <{k:08X}> 1 ").bytes());
-        }
-        assert_eq!(parse_cmap(&many).1.len(), MAX_CMAP_RANGES);
-    }
-
-    #[test]
-    fn a_range_is_one_record_however_many_codes() {
-        let mut u = Unicode::default();
-        parse_to_unicode(b"1 beginbfrange <0000> <FFFF> <0041> endbfrange", &mut u);
-        assert_eq!((u.ranges.len(), u.explicit.len()), (1, 0));
-        assert_eq!(u.text(0xFFFF).as_deref(), Some("@"), "0x41 + 0xFFFF wraps to U+0040");
-    }
-
-    #[test]
-    fn sequential_ranges_count_against_the_budget() {
-        // Range k maps codes k and k + 1 and costs two, so a budget of 250 keeps ranges 0 to 124.
-        let mut cmap = Vec::new();
-        for k in 0..300u32 {
-            cmap.extend(format!("1 beginbfrange <{k:08X}> <{:08X}> <0041> endbfrange ", k + 1).bytes());
-        }
-        let mut u = Unicode::default();
-        parse_to_unicode_within(&cmap, &mut u, 250);
-        assert_eq!((u.ranges.len(), u.text(125).is_some(), u.text(126).is_none()), (125, true, true));
-    }
-
-    #[test]
-    fn explicit_and_range_mappings_override_the_encoding() {
-        let mut doc = Document::new_empty();
-        let cmap = b"1 beginbfchar <41> <0058> endbfchar 1 beginbfrange <42> <43> <0059> endbfrange";
-        let tu = doc.add(Object::Stream(Stream::from_raw(Dict::new(), cmap.to_vec())));
-        let f = font(
-            &mut doc,
-            vec![
-                ("Subtype", Object::name("Type1")),
-                ("BaseFont", Object::name("Custom")),
-                ("Encoding", Object::name("WinAnsiEncoding")),
-                ("ToUnicode", Object::Ref(tu)),
-            ],
-        );
-        let m = Metrics::from_dict(&doc, &f);
-        let shown: Vec<Option<String>> = (0x41..=0x44).map(|c| m.text_of(c).map(|t| t.into_owned())).collect();
-        assert_eq!(shown, [Some("X".to_string()), Some("Y".to_string()), Some("Z".to_string()), Some("D".to_string())]);
-    }
-
-    /// Deterministic input for the differential test below.
-    struct Gen(u64);
-
-    impl Gen {
-        fn below(&mut self, n: u32) -> u32 {
-            self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
-            ((self.0 >> 33) % u64::from(n)) as u32
-        }
-
-        /// A destination: a unit from a pool of edge cases, a surrogate pair, or a lone high surrogate.
-        fn units(&mut self) -> Vec<u16> {
-            const POOL: [u16; 12] = [0x41, 0x42, 0xE9, 0x0, 0xFFFD, 0xFFFE, 0xFFFF, 0x100, 0x3042, 0xD800, 0xDC00, 0xDFFF];
-            match self.below(6) {
-                0 => vec![0xD835, 0xDC00 + self.below(0x400) as u16],
-                1 => vec![0xD800, 0x41],
-                _ => vec![POOL[self.below(POOL.len() as u32) as usize]],
-            }
-        }
-    }
-
-    fn hex(units: &[u16]) -> String {
-        units.iter().map(|u| format!("{u:04X}")).collect()
-    }
-
-    #[test]
-    fn lookups_match_the_expanded_mappings() {
-        // Random ToUnicode CMaps; `expected` is what expanding their entries in order gives.
-        let mut g = Gen(0x2545_f491_4f6c_dd1d);
-        for _ in 0..300 {
-            let mut cmap = String::from("1 begincodespacerange <0000> <FFFF> endcodespacerange ");
-            let mut expected: HashMap<u32, String> = HashMap::new();
-            for _ in 0..1 + g.below(12) {
-                match g.below(3) {
-                    0 => {
-                        let (code, u) = (g.below(300), g.units());
-                        cmap += &format!("1 beginbfchar <{code:04X}> <{}> endbfchar ", hex(&u));
-                        expected.insert(code, String::from_utf16_lossy(&u));
-                    }
-                    1 => {
-                        let (lo, width, u) = (g.below(300), g.below(13), g.units());
-                        cmap += &format!("1 beginbfrange <{lo:04X}> <{:04X}> <{}> endbfrange ", lo + width, hex(&u));
-                        for k in 0..=width {
-                            let mut v = u.clone();
-                            if let Some(last) = v.last_mut() {
-                                *last = last.wrapping_add(k as u16);
-                            }
-                            expected.insert(lo + k, String::from_utf16_lossy(&v));
-                        }
-                    }
-                    _ => {
-                        let (lo, width) = (g.below(300), g.below(5));
-                        let dests: Vec<Vec<u16>> = (0..=width).map(|_| g.units()).collect();
-                        let list: Vec<String> = dests.iter().map(|d| format!("<{}>", hex(d))).collect();
-                        cmap += &format!("1 beginbfrange <{lo:04X}> <{:04X}> [{}] endbfrange ", lo + width, list.join(" "));
-                        for (k, d) in dests.iter().enumerate() {
-                            expected.insert(lo + k as u32, String::from_utf16_lossy(d));
-                        }
-                    }
-                }
-            }
-            let mut doc = Document::new_empty();
-            let tu = doc.add(Object::Stream(Stream::from_raw(Dict::new(), cmap.clone().into_bytes())));
-            let f = font(
-                &mut doc,
-                vec![
-                    ("Subtype", Object::name("Type0")),
-                    ("BaseFont", Object::name("Gen")),
-                    ("Encoding", Object::name("Identity-H")),
-                    ("ToUnicode", Object::Ref(tu)),
-                ],
-            );
-            let m = Metrics::from_dict(&doc, &f);
-            for code in 0..=320u32 {
-                let got = m.text_of(code).map(|t| t.into_owned());
-                assert_eq!(got, expected.get(&code).cloned(), "code {code:#06x} in {cmap}");
-            }
-            let mut reverse: HashMap<char, u32> = HashMap::new();
-            for (&code, text) in &expected {
-                if let Some(c) = only_char(text) {
-                    keep(&mut reverse, c, code);
-                }
-            }
-            let mut chars: Vec<char> = expected.values().flat_map(|t| t.chars()).chain(['A', '\u{FFFD}', '\u{0}', '\u{1D400}']).collect();
-            chars.sort_unstable();
-            chars.dedup();
-            for c in chars {
-                let want = reverse.get(&c).map(|code| code.to_be_bytes()[2..].to_vec());
-                assert_eq!(m.encode(&c.to_string()), want, "char {c:?} in {cmap}");
-            }
-        }
-    }
-
-    #[test]
-    fn fffd_lookups_skip_overridden_surrogates() {
-        // Each record maps every code to itself, so its surrogate offsets decode to U+FFFD. The last
-        // record overrides the surrogates with letters, so each lookup walks past them to U+FFFD itself.
-        let mut cmap = "1 beginbfrange <0000> <FFFF> <0000> endbfrange ".repeat(300);
-        cmap.push_str("1 beginbfrange <D800> <DFFF> <0041> endbfrange");
-        let mut doc = Document::new_empty();
-        let tu = doc.add(Object::Stream(Stream::from_raw(Dict::new(), cmap.into_bytes())));
-        let f = font(
-            &mut doc,
-            vec![
-                ("Subtype", Object::name("Type0")),
-                ("BaseFont", Object::name("Gen")),
-                ("Encoding", Object::name("Identity-H")),
-                ("ToUnicode", Object::Ref(tu)),
-            ],
-        );
-        let m = Metrics::from_dict(&doc, &f);
-        assert_eq!(m.encode("\u{FFFD}"), Some(vec![0xFF, 0xFD]));
-    }
-
-    #[test]
-    fn hostile_ranges_stay_bounded() {
-        // A range wider than 65 536 codes is ignored, a reversed one maps nothing, and a maximal
-        // one-code range maps just its own code.
-        let mut u = Unicode::default();
-        let cmap = b"1 beginbfrange <00000000> <FFFFFFFF> <0041> endbfrange \
-            1 beginbfrange <0005> <0001> <0041> endbfrange \
-            1 beginbfrange <FFFFFFFF> <FFFFFFFF> <FFFF> endbfrange";
-        parse_to_unicode(cmap, &mut u);
-        assert_eq!((u.ranges.len(), u.text(u32::MAX).as_deref()), (0, Some("\u{FFFF}")));
-    }
-
-    #[test]
-    fn low_codes_resolve_to_the_covering_range() {
-        let mut u = Unicode::default();
-        let cmap = b"1 beginbfrange <0005> <0007> <0041> endbfrange 1 beginbfrange <0064> <0065> <0042> endbfrange \
-            1 beginbfrange <0000FFFE> <00010001> <0043> endbfrange";
-        parse_to_unicode(cmap, &mut u);
-        let covered: Vec<u32> = (0..0x70).filter(|&c| u.covering(c).is_some()).collect();
-        assert_eq!(covered, [5, 6, 7, 100, 101]);
-        assert_eq!((u.covering(0xFFFF).is_some(), u.covering(0x1_0001).is_some(), u.covering(0x1_0002).is_none()), (true, true, true));
-    }
+    cmap.into_bytes()
 }
+
+/// What each code of an embedded TrueType font that isn't flagged non-symbolic, names no base
+/// encoding and doesn't name its glyphs shows when two things say the code is Mac OS Roman: its
+/// Macintosh Roman (1, 0) `cmap` subtable selects the glyph the code draws (ISO 32000-2 §9.6.5.4:
+/// single bytes "look up the associated glyph descriptions" there, and a (3, 0) subtable maps "the
+/// single-byte codes in the (1, 0) subtable" prepended with 0xF0), and the glyph sits where the
+/// standard Macintosh glyph order (the 258 names of a version 1.0 `post` table) puts that Mac OS
+/// Roman character. So code 0x88 drawn with glyph 106, `agrave`, is `à`, where Standard has
+/// nothing and WinAnsi `ˆ`, while a Windows subset in the same order whose codes are WinAnsi (0x92
+/// drawn with glyph 183, `quoteright`) keeps its reading. The glyph drawn is found the way the
+/// renderer finds it: the Windows (3, 0) and (3, 1) subtables first, with the code and the code at
+/// 0xF000, 0xF100 and 0xF200, then the Macintosh and Unicode-platform ones. The renderer's text
+/// layer reads the same codes the same way (vendored hayro-interpret patch (101)).
+fn symbolic_mac_roman_texts(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Vec<(u32, String)> {
+    use skrifa::GlyphId;
+    use skrifa::raw::{TableProvider as _, tables::cmap::PlatformId, tables::post::DEFAULT_GLYPH_NAMES, types::Tag};
+    let Some(descriptor) = dict(doc, font.get(b"FontDescriptor")) else { return Vec::new() };
+    // Flag bit 6, Nonsymbolic (ISO 32000-2 Table 121).
+    if descriptor_flags(doc, &descriptor) & 32 != 0 {
+        return Vec::new();
+    }
+    let Some(object) = descriptor.get(b"FontFile2") else { return Vec::new() };
+    let object = doc.resolve(object);
+    let Object::Stream(stream) = object.as_ref() else { return Vec::new() };
+    let Some(bytes) = reads.decode(stream, MAX_SFNT) else { return Vec::new() };
+    let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { return Vec::new() };
+    // A CFF program in `/FontFile2` selects its glyphs by name, not through the `cmap`. A `post`
+    // table of version 1.0 or 2.0 (also with its 16-bit halves swapped, as the renderer reads it)
+    // names the glyphs, and a font that names them needn't keep the order: a Wingdings subset
+    // draws code 0x83 with glyph 101, `Eacute` in the order, which it names `threesans`.
+    let named = face
+        .table_data(Tag::new(b"post"))
+        .is_some_and(|data| matches!(data.as_bytes().get(..4), Some([0, 1, 0, 0] | [0, 2, 0, 0] | [0, 0, 0, 1] | [0, 0, 0, 2])));
+    if face.cff().is_ok() || named {
+        return Vec::new();
+    }
+    let Ok(cmap) = face.cmap() else { return Vec::new() };
+    let records = cmap.encoding_records();
+    let lookup = |code: u32, windows: bool| {
+        records.iter().find_map(|record| {
+            let offsets: &[u32] = match (record.platform_id(), record.encoding_id()) {
+                (PlatformId::Windows, 0 | 1) if windows => &[0, 0xF000, 0xF100, 0xF200],
+                (PlatformId::Macintosh | PlatformId::Unicode, 0) if !windows => &[0],
+                _ => return None,
+            };
+            let subtable = record.subtable(cmap.offset_data()).ok()?;
+            offsets.iter().find_map(|o| subtable.map_codepoint(code + o).filter(|g| *g != GlyphId::NOTDEF))
+        })
+    };
+    (0..=255u32)
+        .filter_map(|code| {
+            let drawn = lookup(code, true).or_else(|| lookup(code, false))?;
+            let mac = records.iter().find_map(|record| {
+                (record.platform_id() == PlatformId::Macintosh && record.encoding_id() == 0)
+                    .then(|| record.subtable(cmap.offset_data()).ok()?.map_codepoint(code))
+                    .flatten()
+            })?;
+            if mac != drawn {
+                return None;
+            }
+            let c = char::from_u32(*crate::encodings::MAC_ROMAN.get(usize::try_from(code).ok()?)?).filter(|c| *c != '\0')?;
+            let standard = *DEFAULT_GLYPH_NAMES.get(usize::try_from(drawn.to_u32()).ok()?)?;
+            // Mac OS Roman 0xCA reads as a space, for the reason WinAnsi 0xA0 does (`MAC_ROMAN`).
+            let at_its_place = glyph_unicode(standard) == Some(c) || (code == 0xCA && standard == "nonbreakingspace");
+            at_its_place.then(|| (code, c.to_string()))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests;
 
 #[cfg(test)]
 mod encoding_tests {
@@ -1674,6 +1873,21 @@ mod encoding_tests {
         let mut enc = Dict::new();
         enc.set(b"Differences".to_vec(), Object::Array(items));
         Object::Dict(enc)
+    }
+
+    /// The glyph list specification's hex forms: `uni` and groups of exactly four uppercase
+    /// digits, `u` and four to six.
+    #[test]
+    fn glyph_names_take_uppercase_hex_in_whole_groups() {
+        assert_eq!(glyph_text("uni20ac"), None, "the specification's hex digits are uppercase");
+        assert_eq!(glyph_text("u1f600"), None);
+        assert_eq!(glyph_text("uni65"), None, "`uni` takes groups of exactly four digits");
+        assert_eq!(glyph_text("u65"), None, "`u` takes four to six digits");
+        assert_eq!(glyph_text("u0010FFFF"), None);
+        assert_eq!(glyph_text("uni0065").as_deref(), Some("e"));
+        assert_eq!(glyph_text("u0065").as_deref(), Some("e"), "`u` and four digits");
+        assert_eq!(glyph_text("u1F600").as_deref(), Some("\u{1f600}"), "`u` and five");
+        assert_eq!(glyph_text("u10FFFF").as_deref(), Some("\u{10ffff}"), "`u` and six, the last code point");
     }
 
     #[test]
@@ -1767,6 +1981,32 @@ mod encoding_tests {
         }
     }
 
+    /// The Annex D.2 alias codes read, through the whole decode path, as the ink they draw.
+    ///
+    /// This is the map `redact` matches its patterns on (`unicode_map`), so a code that decodes
+    /// to an invisible formatting character is a silent miss, not a cosmetic one: "well-known"
+    /// written with the 0xAD byte matched no search and no redaction pattern.
+    #[test]
+    fn the_alias_codes_decode_as_ordinary_ink_and_encode_back_to_the_low_code() {
+        let (doc, d) = simple("Helvetica", None, Some(Object::name("WinAnsiEncoding")));
+        let m = Metrics::from_dict(&doc, &d);
+        assert_eq!(m.decode(b"well\xadknown"), "well-known");
+        assert_eq!(m.decode(b"a\xa0b"), "a b");
+        assert_eq!(m.encode("well-known a b").as_deref(), Some(&b"well-known a b"[..]), "the low code is the one written");
+
+        let (doc, d) = simple("Helvetica", None, Some(Object::name("MacRomanEncoding")));
+        let m = Metrics::from_dict(&doc, &d);
+        assert_eq!(m.decode(b"a\xcab"), "a b");
+        assert_eq!(m.decode(b"a\xadb"), "a\u{2260}b", "MacRoman 0xAD is `notequal`, not a hyphen");
+        assert_eq!(m.encode("a b").as_deref(), Some(&b"a b"[..]));
+
+        // An explicit /Differences name still says what it says: this is a property of those
+        // codes in those tables, not of the glyph names.
+        let (doc, d) = simple("Helvetica", None, Some(differences(vec![Object::Int(0x41), Object::name("sfthyphen"), Object::name("nbspace")])));
+        let m = Metrics::from_dict(&doc, &d);
+        assert_eq!(m.decode(b"AB"), "\u{ad}\u{a0}");
+    }
+
     /// Pins a deliberate restraint, so it is not "fixed" into a regression: a great many ordinary
     /// Latin TrueType subsets set the `/FontDescriptor` symbolic flag and still rely on a Latin
     /// encoding. Suppressing the implicit table on the flag would lose real text on a large share
@@ -1778,4 +2018,24 @@ mod encoding_tests {
         assert_eq!(m.text_of(0x61).as_deref(), Some("a"));
         assert_eq!(m.decode(b"abc"), "abc");
     }
+
+    #[test]
+    fn unusable_programs_still_spend_the_decode_budget() {
+        // 128 resources naming one 1 MiB program that isn't a font: each decode is charged,
+        // so an enumeration stops decoding once the shared budget is spent.
+        let mut doc = Document::new_empty();
+        let program = doc.add(pdfcraft_cos::Stream::flate(Dict::new(), &vec![0; 1 << 20]));
+        let descriptor: Dict = [(b"FontFile2".to_vec(), Object::Ref(program))].into_iter().collect();
+        let descriptor = doc.add(descriptor);
+        let font: Dict = [(b"FontDescriptor".to_vec(), Object::Ref(descriptor))].into_iter().collect();
+        let mut budget = DecodeBudget::new(64 << 20, 0);
+        for _ in 0..128 {
+            assert!(embedded_sfnt_within(&doc, &font, &mut budget).is_none());
+        }
+        assert_eq!(budget.remaining(), 0);
+    }
 }
+
+mod thai;
+use thai::composite_glyph_maps;
+pub use thai::{ExistingThaiRun, LegacyThaiFont, recovered_thai_map};

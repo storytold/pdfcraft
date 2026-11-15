@@ -1,0 +1,53 @@
+[package]
+name = "vello_common"
+# When updating, also update the version in the workspace dependency in the root Cargo.toml
+version = "0.0.8"
+description = "Core data structures and utilities shared across the Vello rendering, including geometry processing and tiling logic."
+categories = ["rendering", "graphics"]
+keywords = ["2d", "vector-graphics"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+# There are no platform specific docs.
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+
+[dependencies]
+bytemuck = { workspace = true, features = ["derive"] }
+peniko = { workspace = true, features = ["bytemuck"] }
+fearless_simd = { workspace = true }
+hashbrown = { workspace = true, features = ["raw-entry"] }
+png = { workspace = true, optional = true }
+roxmltree = { version = "0.20.0", optional = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true, default-features = false }
+guillotiere = { workspace = true }
+libm = { version = "0.2.16", optional = true }
+log = { workspace = true }
+
+[features]
+# If adding new features, also document in `src/lib.rs`
+default = ["std", "png"]
+# Get floating point functions from the standard library (likely using your target's libc).
+std = ["peniko/std", "fearless_simd/std"]
+# Use floating point implementations from libm.
+libm = ["peniko/libm", "dep:libm", "fearless_simd/libm"]
+# Allow loading Pixmap from PNG, and drawing png glyphs.
+png = ["std", "dep:png"]
+# Add helpers for drawing a probe scene.
+probe = []
+# Enable multi-threaded rendering.
+multithreading = ["std"]
+# Development only features
+
+# Enable a simple version of SVG drawing.
+# This is only intended for development of Vello CPU itself,
+# and is likely to be removed/moved.
+pico_svg = ["dep:roxmltree"]
+
+[lints]
+workspace = true

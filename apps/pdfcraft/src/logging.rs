@@ -3,7 +3,7 @@
 //! Without a logger every `log::warn!`/`log::error!` in the workspace (a failed autosave, a page
 //! that would not render, a render worker that could not start, the panic hook's report) vanished.
 //! A launch from a desktop menu has no terminal, so the file is what a bug report can attach:
-//! `<settings dir>/logs/pdfcraft.log`, next to `app.ron` (see `settings_dir` in `main.rs`). Each
+//! `<data dir>/logs/pdfcraft.log` (the PdfCraft eframe storage directory, or portable data). Each
 //! start moves the previous log to `pdfcraft.1.log` (and that one to `.2`), so the log of a run
 //! that crashed survives the next launch.
 //!
@@ -90,7 +90,10 @@ fn matches(name: &str, target: &str) -> bool {
     }
 }
 
-/// `2026-10-08T07:59:17.728Z` (UTC, milliseconds). A clock before 1970 reads as the epoch.
+/// `2026-10-08T07:59:17.728Z` (UTC, milliseconds). A clock before 1970 reads as the epoch (the
+/// `duration_since` clamp); past the last date chrono can represent (year 262143) the proleptic
+/// Gregorian date is kept via the 400-year cycle rather than falling back to the epoch, so the
+/// output never changes for a value the old formatter accepted and logging never panics.
 pub fn timestamp(t: SystemTime) -> String {
     let since = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     let secs = since.as_secs();
@@ -99,20 +102,12 @@ pub fn timestamp(t: SystemTime) -> String {
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{:03}Z", rem / 3600, rem % 3600 / 60, rem % 60, since.subsec_millis())
 }
 
-/// Days since 1970-01-01 to a proleptic Gregorian (year, month, day) (Howard Hinnant's
-/// `civil_from_days`, unsigned because `timestamp` clamps at the epoch). `days` is at most
-/// `u64::MAX / 86_400`, so none of the arithmetic below can overflow.
-fn civil_from_days(days: u64) -> (u64, u64, u64) {
-    let z = days + 719_468;
-    let era = z / 146_097;
-    let doe = z % 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + u64::from(m <= 2);
-    (y, m, d)
+/// Days since 1970-01-01 → proleptic Gregorian (year, month, day): `pdfcraft_engine::civil_from_days`,
+/// which keeps the date past chrono's range by whole 400-year cycles. `days` is a `u64` second
+/// count over 86_400, at most about 2.1e14, so it always fits an `i64`.
+fn civil_from_days(days: u64) -> (i64, u32, u32) {
+    // The fallback is unreachable: `days` is at most `u64::MAX / 86_400`, far below `i64::MAX`.
+    pdfcraft_engine::civil_from_days(i64::try_from(days).unwrap_or(i64::MAX))
 }
 
 fn numbered(dir: &Path, n: usize) -> PathBuf {
@@ -337,6 +332,18 @@ mod tests {
         assert_eq!(timestamp(UNIX_EPOCH + Duration::from_secs(1_767_225_599)), "2025-12-31T23:59:59.000Z");
         // Before the epoch (a clock set wrong) clamps instead of panicking.
         assert_eq!(timestamp(UNIX_EPOCH - Duration::from_secs(5)), "1970-01-01T00:00:00.000Z");
+        // Past chrono's range (a clock set absurdly far ahead) keeps the proleptic Gregorian date
+        // the old formatter gave, rather than falling back to the epoch.
+        // Windows' SystemTime holds only up to about year 30828, so this is checked where it fits.
+        if let Some(far) = UNIX_EPOCH.checked_add(Duration::from_secs(10_000_000_000_000)) {
+            assert_eq!(timestamp(far), "318857-05-20T17:46:40.000Z");
+        }
+        // Windows' SystemTime can't hold u64::MAX / 2 seconds, so it is only checked where it exists.
+        if let Some(far) = UNIX_EPOCH.checked_add(Duration::from_secs(u64::MAX / 2)) {
+            assert_eq!(timestamp(far), "292277026596-12-04T15:30:07.000Z");
+        }
+        // Years past 9999 keep the plain zero-padded year (no `+`).
+        assert_eq!(timestamp(UNIX_EPOCH + Duration::from_secs(253_402_300_800)), "10000-01-01T00:00:00.000Z");
     }
 
     #[test]

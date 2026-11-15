@@ -1,25 +1,26 @@
 //! Clearing the pixels of an image under redaction regions. The image is decoded, every pixel
-//! whose centre maps into a region is set to zero (no ink for image masks), and the result is
-//! written as a new Flate image; the original object is untouched (other pages may use it).
-//! A JPEG (`/DCTDecode`) image — the one image a scanned page is made of — is decoded to samples
-//! and written back as a new JPEG, so only the region goes and the rest of the page survives.
-//! Images whose codec PdfCraft can't clear in place (JPX, JBIG2, CCITT, a CMYK or YCCK JPEG)
-//! return `None`, and the caller removes the whole image instead; that is fail-closed.
+//! whose footprint intersects a region is set to zero (no ink for image masks), and the result is
+//! written as a new image, Flate, or for a one-bit image of one component Group 4, or JBIG2 when it
+//! was JBIG2, whichever is smallest; the original object is untouched (other pages may use it).
+//! CCITT fax and JBIG2 images decode through `ImageBudget::decode`, but for Group 3 on
+//! bytes, which PdfCraft's renderer may draw as other rows, and a JBIG2 page of other rows than the
+//! image's. A plain `/DCTDecode` image — the one image a scanned page is made of — is decoded and
+//! stored again as a new JPEG with the covered pixels zeroed, so a mark on a scan clears what it
+//! covers instead of blanking the page (#2246); every JPEG is lossy, so the rest of the scan is
+//! recompressed. Images whose codec this can't clear in place (JPX, a JPEG in another colour
+//! space, CMYK and YCCK), and those, return `None`, and the caller removes the whole image
+//! instead; that is fail-closed.
 
-use image::{ColorType, ExtendedColorType, ImageFormat};
 use pdfcraft_content::{Matrix, overlaps};
-use pdfcraft_cos::{Document, Object, Stream};
+use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
 
-/// Most pixels an image may have to be cleared in place (larger ones are removed).
-const MAX_PIXELS: u64 = 64 << 20;
+/// Most pixels an image may have to be cleared in place (larger ones are removed), or to be stored
+/// again without shared `/JBIG2Globals` (see [`crate::globals::without_dictionary`]).
+pub(crate) const MAX_PIXELS: u64 = pdfcraft_cos::MAX_REDACTED_IMAGE_PIXELS;
 
-/// Quality of a re-encoded `/DCTDecode` image, which a JPEG can never copy losslessly: high
-/// enough that the scan reads as itself, and the same for every cleared image so the result does
-/// not depend on what the source happened to be.
-const JPEG_QUALITY: u8 = 90;
-
-fn components(doc: &Document, s: &Stream) -> Option<usize> {
-    let cs = doc.resolve(s.dict.get(b"ColorSpace")?);
+/// The components of image `s`'s colour space, through any references (`None` when unknown).
+pub(crate) fn components(doc: &Document, s: &Stream) -> Option<usize> {
+    let cs = crate::globals::followed(doc, s.dict.get(b"ColorSpace")?);
     let cs = &*cs;
     let name = match cs {
         Object::Name(n) => n.as_slice(),
@@ -31,9 +32,9 @@ fn components(doc: &Document, s: &Stream) -> Option<usize> {
         b"DeviceRGB" | b"RGB" | b"CalRGB" | b"Lab" => 3,
         b"DeviceCMYK" | b"CMYK" => 4,
         b"ICCBased" => {
-            // /N lives in the ICC profile stream.
-            match &*doc.resolve(cs.as_array()?.get(1)?) {
-                Object::Stream(icc) => icc.dict.int(b"N")? as usize,
+            // /N lives in the ICC profile stream, and shall be 1, 3 or 4 (ISO 32000-2 §8.6.5.5).
+            match &*crate::globals::followed(doc, cs.as_array()?.get(1)?) {
+                Object::Stream(icc) => usize::try_from(icc.dict.int(b"N")?).ok().filter(|n| matches!(n, 1 | 3 | 4))?,
                 _ => return None,
             }
         }
@@ -41,243 +42,298 @@ fn components(doc: &Document, s: &Stream) -> Option<usize> {
     })
 }
 
-/// The `/Filter` names in canonical form (so an abbreviation resolves to the same name), or `None`
-/// when the filter is one this module doesn't know — an unknown filter is never decoded here.
-fn filter_chain(s: &Stream) -> Option<Vec<Vec<u8>>> {
-    let canonical = |n: Option<&[u8]>| {
-        Some(
-            match n? {
-                b"FlateDecode" | b"Fl" => "FlateDecode",
-                b"LZWDecode" | b"LZW" => "LZWDecode",
-                b"ASCII85Decode" | b"A85" => "ASCII85Decode",
-                b"ASCIIHexDecode" | b"AHx" => "ASCIIHexDecode",
-                b"RunLengthDecode" | b"RL" => "RunLengthDecode",
-                b"DCTDecode" | b"DCT" => "DCTDecode",
-                _ => return None,
-            }
-            .as_bytes()
-            .to_vec(),
-        )
-    };
-    match s.dict.get(b"Filter") {
-        None => Some(Vec::new()),
-        Some(Object::Name(n)) => Some(vec![canonical(Some(n))?]),
-        Some(Object::Array(a)) => a.iter().map(|f| canonical(f.as_name())).collect(),
-        _ => None,
-    }
-}
-
-/// Is a pixel's sample row, at row `j` of `h`, anywhere near a region? The image is walked row by
-/// row, so the whole rows outside every region are skipped without touching a pixel.
-///
-/// A degenerate row (zero extent on either axis — a 90° rotation makes every row vertical, a
-/// flip makes them horizontal, skew can collapse one) must *not* be skipped: `overlaps` is
-/// strict in both axes, so a zero-width box would fail it and the mark would be silently ignored
-/// while the image survived untouched. When either axis of the transformed row is degenerate the
-/// conservative answer is "run the per-pixel test".
-fn row_hits(ctm: &Matrix, h: usize, j: usize, rects: &[[f64; 4]]) -> bool {
-    let v = 1.0 - (j as f64 + 0.5) / h as f64;
-    let (ax, ay) = ctm.apply(0.0, v);
-    let (bx, by) = ctm.apply(1.0, v);
-    let row = [ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)];
-    if (row[2] - row[0]).abs() < f64::EPSILON || (row[3] - row[1]).abs() < f64::EPSILON {
-        return true;
-    }
-    rects.iter().any(|r| overlaps(*r, [row[0], row[1] - 0.01, row[2], row[3] + 0.01], 0.0))
-}
-
-/// Is the pixel centre at sample `(i, j)` of a `w`×`h` image inside a region?
-fn pixel_hit(ctm: &Matrix, w: usize, h: usize, i: usize, j: usize, rects: &[[f64; 4]]) -> bool {
-    let (u, v) = ((i as f64 + 0.5) / w as f64, 1.0 - (j as f64 + 0.5) / h as f64);
-    let (x, y) = ctm.apply(u, v);
-    rects.iter().any(|r| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3])
-}
-
-/// `Ok(Some(copy))` with the covered pixels cleared, `Ok(None)` when no pixel centre is covered,
+/// `Ok(Some(copy))` with the covered pixels cleared, `Ok(None)` when no pixel intersects,
 /// `Err(())` when the image can't be cleared (the caller removes it).
 #[allow(clippy::result_unit_err)]
-pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]) -> Result<Option<Stream>, ()> {
-    let chain = filter_chain(s).ok_or(())?;
-    // A scanned page is one JPEG: clear its pixels in place rather than remove the only image on
-    // the page. JPEG is lossy, so the copy is re-encoded; every other codec is copied as raw
-    // samples, byte for byte.
-    let jpeg = matches!(chain.as_slice(), [f] if f == b"DCTDecode");
-    if !jpeg && !chain.iter().all(|f| f != b"DCTDecode") {
-        return Err(());
+pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], budget: &mut ImageBudget) -> Result<Option<Stream>, ()> {
+    decode_and_clear(doc, s, ctm, rects, budget).ok_or(())
+}
+
+fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], budget: &mut ImageBudget) -> Option<Option<Stream>> {
+    // Separate masks can retain the original image data.
+    if s.dict.contains(b"SMask") || s.dict.contains(b"Mask") {
+        return None;
     }
-    let (w, h) = (s.dict.int(b"Width").ok_or(())?, s.dict.int(b"Height").ok_or(())?);
+    let supported = |n: &[u8]| {
+        matches!(
+            n,
+            b"FlateDecode" | b"Fl" | b"LZWDecode" | b"LZW" | b"ASCII85Decode" | b"A85" | b"ASCIIHexDecode" | b"AHx" | b"RunLengthDecode" | b"RL"
+        )
+    };
+    // A CCITT fax or JBIG2 image (its last filter) decodes through `ImageBudget::decode`,
+    // after the filters before it, so a scan stored as Group 4 or JBIG2 is cleared like any other
+    // image.
+    let fax = |f: &Object| f.as_name().is_some_and(|n| matches!(n, b"CCITTFaxDecode" | b"CCF"));
+    let jbig2 = |f: &Object| f.as_name() == Some(b"JBIG2Decode".as_slice());
+    let readable = |f: &Object| f.as_name().is_some_and(supported);
+    // `/Crypt` was undone when the object was loaded (ISO 32000-2 §7.4.10), and decoding leaves it
+    // out wherever it stands.
+    let crypt = |f: &Object| f.as_name() == Some(b"Crypt".as_slice());
+    // A plain `/DCTDecode`, with no other filter around it, is the JPEG a scanned page is made of.
+    // A DCT image behind another filter is left to the fail-closed path below.
+    let dct = |f: &Object| f.as_name().is_some_and(|n| matches!(n, b"DCTDecode" | b"DCT"));
+    let is_dct = match s.dict.get(b"Filter") {
+        Some(f @ Object::Name(_)) => dct(f),
+        Some(Object::Array(a)) => a.len() == 1 && a.first().is_some_and(dct),
+        _ => false,
+    };
+    let (ok, is_fax, is_jbig2) = match s.dict.get(b"Filter") {
+        None => (true, false, false),
+        Some(f @ Object::Name(_)) => (readable(f) || crypt(f) || fax(f) || jbig2(f), fax(f), jbig2(f)),
+        Some(Object::Array(a)) => {
+            let chain: Vec<&Object> = a.iter().filter(|f| !crypt(f)).collect();
+            match chain.split_last() {
+                Some((last, before)) if fax(last) || jbig2(last) => (before.iter().all(|f| readable(f)), fax(last), jbig2(last)),
+                _ => (chain.iter().all(|f| readable(f)), false, false),
+            }
+        }
+        _ => (false, false, false),
+    };
+    if !ok && !is_dct {
+        return None;
+    }
+    // Group 3 on bytes is removed whole for now. The decoder reads it by its end-of-line codes
+    // when the data starts with one, but PdfCraft's renderer draws such rows (the fill ending
+    // each code on a byte) as other rows, so the pixels a mark covers on screen needn't be the
+    // ones cleared.
+    if is_fax && doc.fax_params(s).is_none_or(|p| p.k >= 0 && p.encoded_byte_align) {
+        return None;
+    }
+    let (w, h) = (s.dict.int(b"Width")?, s.dict.int(b"Height")?);
     if w <= 0 || h <= 0 || (w as u64) * (h as u64) > MAX_PIXELS {
-        return Err(());
+        return None;
     }
     let (w, h) = (w as usize, h as usize);
-    if jpeg { jpeg_clear(doc, s, ctm, rects, w, h).ok_or(()) } else { raw_clear(doc, s, ctm, rects, w, h).ok_or(()) }
-}
-
-/// A decoded JPEG: its 8-bit samples and the colour space they are in.
-struct Jpeg {
-    px: Vec<u8>,
-    space: ColorType,
-    ncomp: usize,
-}
-
-/// Does any region's rectangle intersect the image's transformed unit square? (Conservative:
-/// a mark that only clips the square's edge still counts — the per-pixel centre test may find
-/// no sample centre inside such a sliver, and an image the mark touches must not survive as-is.)
-fn image_touched(ctm: &Matrix, rects: &[[f64; 4]]) -> bool {
-    let corners = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)];
-    let mut box_ = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
-    for (u, v) in corners {
-        let (x, y) = ctm.apply(u, v);
-        box_[0] = box_[0].min(x);
-        box_[1] = box_[1].min(y);
-        box_[2] = box_[2].max(x);
-        box_[3] = box_[3].max(y);
+    if is_dct {
+        return dct_clear(doc, s, ctm, rects, w, h);
     }
-    rects.iter().any(|r| overlaps(*r, box_, 0.0))
-}
-
-fn jpeg_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], w: usize, h: usize) -> Option<Option<Stream>> {
-    let Jpeg { mut px, space, ncomp } = decode_jpeg(doc, s, w, h)?;
-    let mut cleared = 0usize;
-    for j in 0..h {
-        if !row_hits(ctm, h, j, rects) {
-            continue;
-        }
-        for i in 0..w {
-            if !pixel_hit(ctm, w, h, i, j, rects) {
-                continue;
-            }
-            cleared += 1;
-            let at = (j * w + i) * ncomp;
-            if let Some(sample) = px.get_mut(at..at + ncomp) {
-                sample.fill(0);
-            }
-        }
-    }
-    if cleared == 0 {
-        // A mark that intersects the image (its unit square) but clears no pixel centre — an
-        // edge-only overlap, or a mark thinner than one pixel footprint — must not leave the
-        // original untouched: the overlay hides it visually, but the samples survive. Fail
-        // closed; the caller removes the image whole. (A mark entirely outside the image is
-        // the legitimate `Ok(None)` case.)
-        if image_touched(ctm, rects) {
-            return None;
-        }
-        return Some(None);
-    }
-    let encoded = encode_jpeg(&px, w, h, space)?;
-    let mut dict = s.dict.clone();
-    dict.remove(b"Length");
-    dict.remove(b"DecodeParms");
-    // /SMask and /Mask still apply: the copy keeps the image's dimensions and colour space.
-    Some(Some(Stream::from_raw(dict, encoded)))
-}
-
-/// `/Decode` must be the identity mapping: any other one would show the cleared samples as white
-/// rather than black, or invert the rest of the scan, so such an image is removed whole instead.
-fn identity_decode(doc: &Document, s: &Stream, ncomp: usize) -> bool {
-    let Some(d) = s.dict.get(b"Decode") else { return true };
-    let v: Vec<f64> = doc.resolve(d).as_array().map(|a| a.iter().filter_map(|o| doc.resolve(o).as_f64()).collect()).unwrap_or_default();
-    v.len() == 2 * ncomp && v.as_chunks::<2>().0.iter().all(|&[lo, hi]| lo == 0.0 && hi == 1.0)
-}
-
-fn decode_jpeg(doc: &Document, s: &Stream, w: usize, h: usize) -> Option<Jpeg> {
-    // A JPEG carries its own dimensions and colour space; a dictionary that disagrees is not one
-    // this can safely clear.
-    if s.dict.get(b"BitsPerComponent").is_some_and(|b| b.as_int() != Some(8)) {
-        return None;
-    }
-    let space = match components(doc, s)? {
-        1 => ColorType::L8,
-        3 => ColorType::Rgb8,
-        _ => return None,
-    };
-    // `/Decode` must match the *image's* component count (one for DeviceGray, three for RGB):
-    // a gray scan with an identity `/Decode [0 1]` would otherwise fail the check and be
-    // removed whole — the very blanking this fix exists to prevent.
-    if !identity_decode(doc, s, if space == ColorType::L8 { 1 } else { 3 }) {
-        return None;
-    }
-    // The JPEG header is inspected *before* the sample allocation: a dictionary that declares a
-    // small image but carries a much larger JPEG must not be decoded first — the crate's
-    // `MAX_PIXELS` cap is enforced against the header, and only then are the samples decoded.
-    let reader = image::ImageReader::with_format(std::io::Cursor::new(s.raw.as_ref()), ImageFormat::Jpeg);
-    let (iw, ih) = reader.into_dimensions().ok()?;
-    if (iw as usize, ih as usize) != (w, h) {
-        return None;
-    }
-    let reader = image::ImageReader::with_format(std::io::Cursor::new(s.raw.as_ref()), ImageFormat::Jpeg);
-    let decoded = reader.decode().ok()?;
-    debug_assert_eq!((decoded.width() as usize, decoded.height() as usize), (w, h));
-    let (px, ncomp) = match space {
-        ColorType::L8 => (decoded.into_luma8().into_raw(), 1),
-        _ => (decoded.into_rgb8().into_raw(), 3),
-    };
-    (px.len() == w.checked_mul(h)?.checked_mul(ncomp)?).then_some(Jpeg { px, space, ncomp })
-}
-
-fn encode_jpeg(px: &[u8], w: usize, h: usize, space: ColorType) -> Option<Vec<u8>> {
-    let color = match space {
-        ColorType::L8 => ExtendedColorType::L8,
-        _ => ExtendedColorType::Rgb8,
-    };
-    let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY).encode(px, w as u32, h as u32, color).ok()?;
-    Some(out)
-}
-
-fn raw_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], w: usize, h: usize) -> Option<Option<Stream>> {
     let mask = matches!(s.dict.get(b"ImageMask"), Some(Object::Bool(true)));
     let (ncomp, bpc) = if mask { (1, 1) } else { (components(doc, s)?, s.dict.int(b"BitsPerComponent")? as usize) };
-    if !matches!(bpc, 1 | 2 | 4 | 8 | 16) {
+    // JBIG2 codes one-bit images of one component (ISO 32000-2 §7.4.7).
+    if !matches!(bpc, 1 | 2 | 4 | 8 | 16) || (is_jbig2 && (ncomp, bpc) != (1, 1)) {
         return None;
     }
-    let mut data = s.decoded().ok()?;
-    let row = (w * ncomp * bpc).div_ceil(8);
-    if data.len() < row * h {
+    // Every size comes from the file: multiply checked, so an overflowing product refuses the image
+    // instead of sizing the writes below.
+    let bits_per_pixel = ncomp.checked_mul(bpc)?;
+    let row = w.checked_mul(bits_per_pixel)?.div_ceil(8);
+    let bytes = row.checked_mul(h)?;
+    let row_bits = row.checked_mul(8)?;
+    bytes.checked_mul(8)?;
+    // Decode no further than the raster can need: a filter stage may legitimately produce up to
+    // three bytes for each of it and a PNG predictor's byte per row (ASCIIHex text under Flate,
+    // two digits a byte broken into lines or spaced), as the optimizer allows. A fax image's
+    // code, which the filters before its decoder produce, takes at most about a byte per pixel
+    // plus each row's end. Data past that can only be a decompression bomb; the image is then
+    // removed whole.
+    let allowance = if is_fax {
+        w.checked_mul(h)?.checked_add(h.checked_mul(4)?)?.checked_add(4096)?
+    } else {
+        bytes.checked_add(h)?.checked_mul(3)?.checked_add(4096)?
+    };
+    // Through the document, which reads `/DecodeParms` given by reference (`Stream::decoded*`
+    // alone would skip such a predictor, and the cleared bytes would then miss the covered pixels),
+    // and refuses a JBIG2 page of another size than the image: the renderer draws the whole page
+    // into the image, so the rows cleared wouldn't be the ones a mark covers on screen.
+    let mut data = budget.decode(doc, s, allowance).ok()?;
+    if data.len() < bytes {
         return None;
     }
-    data.truncate(row * h);
+    data.truncate(bytes);
     // Image masks: a sample of 0 paints unless /Decode is [1 0]; cleared samples must not paint.
     let clear_bit = if mask {
-        let inverted = s.dict.get(b"Decode").and_then(Object::as_array).and_then(|d| d.first()).and_then(Object::as_f64) == Some(1.0);
+        // The array, and its first number, given by reference too, through any references.
+        let decode = s.dict.get(b"Decode").map(|d| crate::globals::followed(doc, d));
+        let first = decode.as_deref().and_then(Object::as_array).and_then(|d| d.first()).map(|v| crate::globals::followed(doc, v));
+        let inverted = first.as_deref().and_then(Object::as_f64) == Some(1.0);
         !inverted
     } else {
         false
     };
-    let bits_per_pixel = ncomp * bpc;
     let mut cleared = 0usize;
     for j in 0..h {
-        // Image space: (0,0) is the bottom-left of the unit square; row 0 is the top.
-        if !row_hits(ctm, h, j, rects) {
+        // Image space has its origin at the bottom left; row 0 is at the top.
+        let v0 = 1.0 - (j + 1) as f64 / h as f64;
+        let v1 = 1.0 - j as f64 / h as f64;
+        let row_box = ctm.bbox([0.0, v0, 1.0, v1]);
+        if !rects.iter().any(|r| overlaps(*r, row_box, 0.0)) {
             continue;
         }
         for i in 0..w {
-            if !pixel_hit(ctm, w, h, i, j, rects) {
+            let u0 = i as f64 / w as f64;
+            let u1 = (i + 1) as f64 / w as f64;
+            // The bounding box may cover extra pixels for a rotated or skewed image; that
+            // conservative over-clear prevents a touched sample surviving in the file.
+            let pixel_box = ctm.bbox([u0, v0, u1, v1]);
+            if !rects.iter().any(|r| overlaps(*r, pixel_box, 0.0)) {
                 continue;
             }
             cleared += 1;
-            let start = j * row * 8 + i * bits_per_pixel;
+            // `bytes * 8` fits, and every bit index is below it, so this arithmetic can't overflow.
+            let start = j * row_bits + i * bits_per_pixel;
             for bit in start..start + bits_per_pixel {
                 let (byte, shift) = (bit / 8, 7 - bit % 8);
+                let b = data.get_mut(byte)?;
                 if clear_bit {
-                    data[byte] |= 1 << shift;
+                    *b |= 1 << shift;
                 } else {
-                    data[byte] &= !(1 << shift);
+                    *b &= !(1 << shift);
                 }
             }
         }
     }
     if cleared == 0 {
-        // Same fail-closed rule as the JPEG path: a mark that touches this image but whose
-        // rectangle covers no sample centre (an edge sliver) removes the image whole.
-        if image_touched(ctm, rects) {
-            return None;
-        }
         return Some(None);
     }
     let mut dict = s.dict.clone();
-    dict.remove(b"Length");
-    dict.remove(b"DecodeParms");
-    Some(Some(Stream::flate(dict, &data)))
+    for key in [b"Length".as_slice(), b"DecodeParms", b"DP", b"Alternates"] {
+        dict.remove(key);
+    }
+    if !data_elsewhere(doc, s) {
+        // Parameters for data in another file mean nothing without `/F`, but may name a dictionary.
+        dict.remove(b"FFilter");
+        dict.remove(b"FDecodeParms");
+    }
+    Some(Some(smallest(dict, &data, w, h, ncomp == 1 && bpc == 1, is_jbig2)))
+}
+
+/// Quality of the copy a cleared `/DCTDecode` image is stored as: a JPEG can never be copied
+/// losslessly, so the image is recompressed once, at one quality for every cleared scan so the
+/// result does not depend on what the source happened to use.
+const JPEG_QUALITY: u8 = 90;
+
+/// `Ok(Some(copy))` of `s`, a plain `/DCTDecode` image `w` × `h`, with the samples under every
+/// region zeroed (black) and the rest of the scan recompressed; `Ok(None)` when no region reaches
+/// a pixel; `None` when it can't be cleared in place (the caller removes the image whole).
+///
+/// A scanned page is one full-page JPEG (issue #2246), so removing the image under a mark blanks
+/// the page while the mark and the OCR layer stay. The copy keeps the image's dictionary — its
+/// dimensions, colour space and masks — and only its samples change.
+fn dct_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], w: usize, h: usize) -> Option<Option<Stream>> {
+    // An image mask's samples are bits its `/Decode` may invert, not one to three components.
+    if matches!(s.dict.get(b"ImageMask"), Some(Object::Bool(true))) {
+        return None;
+    }
+    if s.dict.get(b"BitsPerComponent").is_some_and(|b| b.as_int() != Some(8)) {
+        return None;
+    }
+    // One or three components only: a CMYK or YCCK JPEG's samples would be written back in a space
+    // its `/ColorSpace` doesn't name, so the cleared and kept pixels could paint somewhere else.
+    let ncomp = components(doc, s)?;
+    if !matches!(ncomp, 1 | 3) || !identity_decode(doc, s, ncomp) {
+        return None;
+    }
+    let (w32, h32) = (u32::try_from(w).ok()?, u32::try_from(h).ok()?);
+    // The header is read before the samples are allocated, so a dictionary that declares a small
+    // image can't make the decoder allocate a large one. A header that disagrees with the
+    // dictionary is not an image this can clear: a mark's pixels would be at other samples.
+    let read = |s: &Stream| image::ImageReader::with_format(std::io::Cursor::new(s.raw.clone()), image::ImageFormat::Jpeg);
+    if read(s).into_dimensions().ok()? != (w32, h32) {
+        return None;
+    }
+    let decoded = read(s).decode().ok()?;
+    if (decoded.width(), decoded.height()) != (w32, h32) {
+        return None;
+    }
+    let (mut data, space) = if ncomp == 1 {
+        (decoded.into_luma8().into_raw(), image::ExtendedColorType::L8)
+    } else {
+        (decoded.into_rgb8().into_raw(), image::ExtendedColorType::Rgb8)
+    };
+    if data.len() != w.checked_mul(h)?.checked_mul(ncomp)? {
+        return None;
+    }
+    let mut cleared = 0usize;
+    for j in 0..h {
+        // Image space has its origin at the bottom left; row 0 is at the top.
+        let v0 = 1.0 - (j + 1) as f64 / h as f64;
+        let v1 = 1.0 - j as f64 / h as f64;
+        let row_box = ctm.bbox([0.0, v0, 1.0, v1]);
+        if !rects.iter().any(|r| overlaps(*r, row_box, 0.0)) {
+            continue;
+        }
+        for i in 0..w {
+            let u0 = i as f64 / w as f64;
+            let u1 = (i + 1) as f64 / w as f64;
+            // As for raw samples: the box can be larger than the pixel for a rotated or skewed
+            // image, and that conservative over-clear keeps a touched sample out of the file.
+            let pixel_box = ctm.bbox([u0, v0, u1, v1]);
+            if !rects.iter().any(|r| overlaps(*r, pixel_box, 0.0)) {
+                continue;
+            }
+            cleared += 1;
+            let Some(at) = (j.checked_mul(w)?).checked_add(i)?.checked_mul(ncomp)? else { return None };
+            let Some(sample) = data.get_mut(at..at.checked_add(ncomp)?) else { return None };
+            sample.fill(0);
+        }
+    }
+    if cleared == 0 {
+        return Some(None);
+    }
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY).encode(&data, w32, h32, space).ok()?;
+    let mut dict = s.dict.clone();
+    for key in [b"Length".as_slice(), b"DecodeParms", b"DP", b"Alternates"] {
+        dict.remove(key);
+    }
+    // The copy's samples are 8 bits whatever the image's dictionary said (it may have said
+    // nothing): a JPEG is 8-bit samples unless it is a 12-bit one, which this decoder refuses.
+    dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    if !data_elsewhere(doc, s) {
+        dict.remove(b"FFilter");
+        dict.remove(b"FDecodeParms");
+    }
+    Some(Some(Stream::from_raw(dict, out)))
+}
+
+/// Whether `s`'s `/Decode` (through any references) is the identity, so that a zeroed sample is
+/// no ink: an inverted or scaled one would paint the cleared pixels, so such an image is removed
+/// whole instead.
+fn identity_decode(doc: &Document, s: &Stream, ncomp: usize) -> bool {
+    let Some(d) = s.dict.get(b"Decode") else { return true };
+    let Some(values) = crate::globals::followed(doc, d).as_array().map(<[Object]>::to_vec) else {
+        return false;
+    };
+    values.len() == ncomp.saturating_mul(2) && values.chunks_exact(2).all(|pair| pair.iter().map(|v| crate::globals::followed(doc, v).as_f64()).eq([Some(0.0), Some(1.0)]))
+}
+
+/// Whether `s`'s data is in another file, which a reader may draw instead of what is here: a `/F`
+/// that isn't null, through any references (a null entry is as if absent, and a reference to no
+/// object is null, ISO 32000-2 §7.3.7 and §7.3.10). A ring of references counts as a file.
+pub(crate) fn data_elsewhere(doc: &Document, s: &Stream) -> bool {
+    s.dict.get(b"F").is_some_and(|f| !matches!(&*crate::globals::followed(doc, f), Object::Null))
+}
+
+/// The cleared samples `data` of a `w` × `h` image as a stream with `dict`: Flate, or, for one bit
+/// of one component (`bilevel`, a scan as a rule, which Flate stores several times larger), CCITT
+/// Group 4, or JBIG2 when the image was JBIG2 (`jbig2`; JBIG2 is PDF 1.4, which such a file already
+/// is), whichever is smallest as stored, dictionary included (a tiny image can lose by Group 4's
+/// parameters). Both decode to `data`, cleared before it is coded, so nothing of the original's
+/// code is carried over; Group 4 or JBIG2 that can't code the rows (too wide) is left out.
+pub(crate) fn smallest(dict: Dict, data: &[u8], w: usize, h: usize, bilevel: bool, jbig2: bool) -> Stream {
+    let flate = Stream::flate(dict.clone(), data);
+    let Some((columns, rows)) = u32::try_from(w).ok().zip(u32::try_from(h).ok()).filter(|_| bilevel) else { return flate };
+    let g4 = pdfcraft_filters::encode_g4(data, columns, rows).ok().map(|coded| {
+        let mut dict = dict.clone();
+        let mut parms = Dict::new();
+        parms.set(b"K".to_vec(), Object::Int(-1));
+        parms.set(b"Columns".to_vec(), Object::Int(i64::from(columns)));
+        parms.set(b"Rows".to_vec(), Object::Int(i64::from(rows)));
+        dict.set(b"Filter".to_vec(), Object::name("CCITTFaxDecode"));
+        dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        Stream::from_raw(dict, coded)
+    });
+    let jbig = jbig2.then(|| pdfcraft_filters::encode_jbig2(data, columns, rows).ok()).flatten().map(|coded| {
+        let mut dict = dict.clone();
+        dict.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+        Stream::from_raw(dict, coded)
+    });
+    [g4, jbig].into_iter().flatten().fold(flate, |best, s| if stored_len(&s) < stored_len(&best) { s } else { best })
+}
+
+/// The bytes stream `s` takes in a file: its data and its dictionary as written.
+fn stored_len(s: &Stream) -> usize {
+    let mut dict = Vec::new();
+    pdfcraft_cos::serialize(&Object::Dict(s.dict.clone()), &mut dict);
+    dict.len().saturating_add(s.raw.len())
 }

@@ -144,6 +144,8 @@ pub struct ViewState {
 
     marked_text: RefCell<Retained<NSMutableAttributedString>>,
     accepts_first_mouse: bool,
+    /// PdfCraft patch: answers `mouseDownCanMoveWindow` (see there).
+    movable_by_window_background: bool,
 
     // Weak reference because the window keeps a strong reference to the view
     _ns_window: WeakId<WinitWindow>,
@@ -882,6 +884,17 @@ declare_class!(
             trace_scope!("acceptsFirstMouse:");
             self.ivars().accepts_first_mouse
         }
+
+        // PdfCraft patch: a press on this view never moves the window unless the window asked to
+        // be movable by its background. NSView answers YES when it isn't opaque, so with a
+        // transparent title bar and a full-size content view AppKit moved the window for any drag
+        // that started in the title-bar band, before the app saw it: tabs drawn there could not
+        // be dragged. Apps that draw their own title bar move the window with `drag_window`.
+        #[method(mouseDownCanMoveWindow)]
+        fn mouse_down_can_move_window(&self) -> bool {
+            trace_scope!("mouseDownCanMoveWindow");
+            self.ivars().movable_by_window_background
+        }
     }
 );
 
@@ -890,6 +903,7 @@ impl WinitView {
         app_delegate: &ApplicationDelegate,
         window: &WinitWindow,
         accepts_first_mouse: bool,
+        movable_by_window_background: bool,
         option_as_alt: OptionAsAlt,
     ) -> Retained<Self> {
         let mtm = MainThreadMarker::from(window);
@@ -911,6 +925,7 @@ impl WinitView {
             committed_in_key_down: Default::default(),
             marked_text: Default::default(),
             accepts_first_mouse,
+            movable_by_window_background,
             _ns_window: WeakId::new(&window.retain()),
             option_as_alt: Cell::new(option_as_alt),
         });

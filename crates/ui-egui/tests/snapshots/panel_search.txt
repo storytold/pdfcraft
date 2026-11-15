@@ -1,0 +1,11 @@
+Label = "Search"
+Button "Close" [off]
+Label = "What word or phrase would you like to search for?"
+TextInput "What word or phrase would you like to search for?" = "sample"
+CheckBox "Whole words only" [off]
+CheckBox "Case-sensitive" [off]
+Label = "2 instances"
+Label = "Page 1"
+Button "…Panel sample Draft notes…" [on]
+Label = "Page 2"
+Button "…Second page sample text…" [off]

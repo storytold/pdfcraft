@@ -2,7 +2,7 @@
 //!
 //! Verification only, on public data, so plain affine arithmetic over `crypto-bigint` is enough:
 //! no secret is involved, and a verification takes a few milliseconds. Checked against
-//! signatures made by OpenSSL (`tests/crypto.rs`).
+//! signatures made by OpenSSL (`tests/it/crypto.rs`).
 
 use rsa::BoxedUint;
 

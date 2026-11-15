@@ -97,21 +97,13 @@ impl FieldAction {
     }
 }
 
-fn texts(doc: &Document, o: &Object) -> Vec<String> {
-    match &*doc.resolve(o) {
-        Object::Array(a) => a.iter().filter_map(|x| doc.resolve(x).as_string().map(|s| s.to_text())).collect(),
-        Object::String(s) => vec![s.to_text()],
-        _ => Vec::new(),
-    }
-}
-
-fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef]) -> Option<FieldAction> {
+fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef], scripts: &mut pdfcraft_cos::DecodeBudget) -> Option<FieldAction> {
     let a = doc.resolve(o);
     let d = a.as_dict()?;
     Some(match d.name(b"S")? {
-        b"JavaScript" => FieldAction::JavaScript(crate::script(doc, o).unwrap_or_default()),
+        b"JavaScript" => FieldAction::JavaScript(crate::script(doc, o, scripts).unwrap_or_default()),
         b"URI" => FieldAction::Uri(d.get(b"URI").and_then(|u| doc.resolve(u).as_string().map(|s| s.to_text())).unwrap_or_default()),
-        b"ResetForm" => FieldAction::Reset(d.get(b"Fields").map(|f| texts(doc, f)).unwrap_or_default()),
+        b"ResetForm" => FieldAction::Reset(d.get(b"Fields").map(|f| crate::read::action_fields(doc, f)).unwrap_or_default()),
         b"Named" => FieldAction::Named(d.name(b"N").map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_default()),
         b"GoTo" => {
             let dest = d.get(b"D").map(|x| doc.resolve(x))?;
@@ -119,8 +111,8 @@ fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef]) -> Option<Fi
             FieldAction::GoTo(pages.iter().position(|p| *p == target)?)
         }
         b"Hide" => FieldAction::ShowHide {
-            fields: d.get(b"T").map(|t| texts(doc, t)).unwrap_or_default(),
-            hide: !matches!(d.get(b"H"), Some(Object::Bool(false))),
+            fields: d.get(b"T").map(|t| crate::read::action_fields(doc, t)).unwrap_or_default(),
+            hide: !d.get(b"H").is_some_and(|h| matches!(&*doc.resolve(h), Object::Bool(false))),
         },
         b"SubmitForm" => FieldAction::Submit(
             d.get(b"F")
@@ -136,6 +128,21 @@ fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef]) -> Option<Fi
     })
 }
 
+/// The JavaScript widget annotation `widget` runs for `trigger` (ISO 32000-2 Table 197: `/A`
+/// or `/AA /U` for Mouse Up, the other `/AA` entries for the rest): that action's, when it is a
+/// JavaScript action, then those of the actions chained after it with `/Next`, in the order
+/// they run (bounded as [`crate::document_action_scripts`] is). Reads only the widget's own
+/// dictionary, so a pointer moving over a large form costs nothing per field.
+pub fn widget_scripts(doc: &Document, widget: pdfcraft_cos::ObjRef, trigger: Trigger) -> Vec<String> {
+    let w = doc.get(widget);
+    let Some(wd) = w.as_dict() else { return Vec::new() };
+    let action = match trigger.key() {
+        None => wd.get(b"A").cloned().or_else(|| wd.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict()?.get(b"U").cloned())),
+        Some(k) => wd.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict()?.get(k).cloned()),
+    };
+    crate::scripting::chained_scripts(doc, action)
+}
+
 /// The actions of field `name` (its first widget), by trigger, in the tab's order.
 pub fn field_actions(doc: &Document, name: &str) -> Result<Vec<(Trigger, FieldAction)>, FormError> {
     let all = fields(doc);
@@ -145,17 +152,72 @@ pub fn field_actions(doc: &Document, name: &str) -> Result<Vec<(Trigger, FieldAc
     let wd = doc.get(w.obj).as_dict().cloned().unwrap_or_default();
     let aa = wd.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).unwrap_or_default();
     let mut out = Vec::new();
+    let mut scripts = crate::script_budget();
     for t in Trigger::ALL {
         let o = match t.key() {
             None => wd.get(b"A").cloned().or_else(|| aa.get(b"U").cloned()),
             Some(k) => aa.get(k).cloned(),
         };
         // An action chain (/Next) counts as its first action here.
-        if let Some(a) = o.and_then(|o| read(doc, &o, &pages)) {
+        if let Some(a) = o.and_then(|o| read(doc, &o, &pages, &mut scripts)) {
             out.push((t, a));
         }
     }
     Ok(out)
+}
+
+/// Most chained actions [`field_action_chains`] walks per trigger.
+const MAX_CHAIN: usize = 1000;
+
+/// How many actions follow `action` through `/Next` (a dictionary or an array of them, each with
+/// its own `/Next`), counting each object once.
+fn chained(doc: &Document, action: &Object) -> usize {
+    let mut seen = std::collections::HashSet::new();
+    if let Object::Ref(r) = action {
+        seen.insert(*r);
+    }
+    let mut stack: Vec<Object> = doc.resolve(action).as_dict().and_then(|d| d.get(b"Next").cloned()).into_iter().collect();
+    let mut count = 0;
+    while let Some(o) = stack.pop() {
+        if count >= MAX_CHAIN {
+            break;
+        }
+        if let Object::Ref(r) = &o
+            && !seen.insert(*r)
+        {
+            continue;
+        }
+        match &*doc.resolve(&o) {
+            Object::Array(items) => stack.extend(items.iter().cloned()),
+            Object::Dict(d) => {
+                count += 1;
+                stack.extend(d.get(b"Next").cloned());
+            }
+            _ => {}
+        }
+    }
+    count
+}
+
+/// For each trigger of field `name` (its first widget) whose action has others chained after it,
+/// how many there are.
+pub fn field_action_chains(doc: &Document, name: &str) -> Result<Vec<(Trigger, usize)>, FormError> {
+    let all = fields(doc);
+    let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    let Some(w) = f.widgets.first() else { return Ok(Vec::new()) };
+    let wd = doc.get(w.obj).as_dict().cloned().unwrap_or_default();
+    let aa = wd.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).unwrap_or_default();
+    Ok(Trigger::ALL
+        .into_iter()
+        .filter_map(|t| {
+            let o = match t.key() {
+                None => wd.get(b"A").cloned().or_else(|| aa.get(b"U").cloned()),
+                Some(k) => aa.get(k).cloned(),
+            }?;
+            let n = chained(doc, &o);
+            (n > 0).then_some((t, n))
+        })
+        .collect())
 }
 
 fn write(doc: &mut Document, a: &FieldAction, pages: &[pdfcraft_cos::ObjRef]) -> Result<Option<Object>, FormError> {
@@ -205,12 +267,59 @@ fn write(doc: &mut Document, a: &FieldAction, pages: &[pdfcraft_cos::ObjRef]) ->
     Ok(Some(Object::Ref(doc.add(Object::Dict(d)))))
 }
 
+/// Rewrite one trigger of a widget to `new` (`None` clears it), given the `old` value read from
+/// the widget. `aa` and `a_entry` are the widget's `/AA` dict and `/A` entry, updated in place.
+struct TriggerUpdate<'a> {
+    trigger: Trigger,
+    replacement: Option<&'a FieldAction>,
+    previous: Option<Object>,
+}
+
+fn replace_trigger(
+    doc: &mut Document,
+    pages: &[pdfcraft_cos::ObjRef],
+    scripts: &mut pdfcraft_cos::DecodeBudget,
+    update: TriggerUpdate<'_>,
+    aa: &mut Dict,
+    a_entry: &mut Option<Object>,
+) -> Result<(), FormError> {
+    let TriggerUpdate { trigger: t, replacement: new, previous: old } = update;
+    let old_action = old.as_ref().and_then(|o| read(doc, o, pages, scripts));
+    if new.is_some() && new == old_action.as_ref() {
+        return Ok(());
+    }
+    // The list shows a trigger's first action: replacing it keeps the ones chained after it.
+    let next = new.and(old).and_then(|o| doc.resolve(&o).as_dict().and_then(|d| d.get(b"Next").cloned()));
+    let obj = match new {
+        Some(a) => write(doc, a, pages)?,
+        None => None,
+    };
+    if let (Some(Object::Ref(r)), Some(next)) = (&obj, next) {
+        doc.update_dict(*r, |d| d.set(b"Next".to_vec(), next))?;
+    }
+    match t.key() {
+        None => {
+            *a_entry = obj;
+            aa.remove(b"U");
+        }
+        Some(k) => match obj {
+            Some(o) => aa.set(k.to_vec(), o),
+            None => {
+                aa.remove(k);
+            }
+        },
+    }
+    Ok(())
+}
+
 /// Replace field `name`'s actions (on every widget) with `actions`; triggers not listed lose
-/// theirs. `Other` actions are left as they are.
+/// theirs. `Other` actions, and actions that read the same as before, are left as they are (with
+/// their chain and the keys this module doesn't read); a replaced action keeps its chain.
 pub fn set_field_actions(doc: &mut Document, name: &str, actions: &[(Trigger, FieldAction)]) -> Result<(), FormError> {
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
     let pages = crate::page_refs(doc);
+    let mut scripts = crate::script_budget();
     for w in &f.widgets {
         let wd = doc.get(w.obj).as_dict().cloned().unwrap_or_default();
         let mut aa = wd.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).unwrap_or_default();
@@ -220,22 +329,11 @@ pub fn set_field_actions(doc: &mut Document, name: &str, actions: &[(Trigger, Fi
             if matches!(new, Some(FieldAction::Other(_))) {
                 continue;
             }
-            let obj = match new {
-                Some(a) => write(doc, a, &pages)?,
-                None => None,
+            let old = match t.key() {
+                None => wd.get(b"A").cloned().or_else(|| aa.get(b"U").cloned()),
+                Some(k) => aa.get(k).cloned(),
             };
-            match t.key() {
-                None => {
-                    a_entry = obj;
-                    aa.remove(b"U");
-                }
-                Some(k) => match obj {
-                    Some(o) => aa.set(k.to_vec(), o),
-                    None => {
-                        aa.remove(k);
-                    }
-                },
-            }
+            replace_trigger(doc, &pages, &mut scripts, TriggerUpdate { trigger: t, replacement: new, previous: old }, &mut aa, &mut a_entry)?;
         }
         doc.update_dict(w.obj, |d| {
             match &a_entry {
@@ -252,4 +350,100 @@ pub fn set_field_actions(doc: &mut Document, name: &str, actions: &[(Trigger, Fi
         })?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_and_hide_actions_resolve_hierarchical_widget_and_indirect_field_targets() {
+        let mut doc = Document::new_empty();
+        let rect = || Object::Array(vec![0.into(), 0.into(), 50.into(), 20.into()]);
+
+        // 1. Hierarchical child field `address.city` (merged field + widget).
+        let address = doc.add(Object::Null);
+        let mut city = Dict::new();
+        city.set(b"Parent".to_vec(), Object::Ref(address));
+        city.set(b"FT".to_vec(), Object::name("Tx"));
+        city.set(b"T".to_vec(), PdfString::text("city"));
+        city.set(b"Subtype".to_vec(), Object::name("Widget"));
+        city.set(b"Rect".to_vec(), rect());
+        let city = doc.add(Object::Dict(city));
+        let mut addr_dict = Dict::new();
+        addr_dict.set(b"T".to_vec(), PdfString::text("address"));
+        addr_dict.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(city)]));
+        doc.set(address, Object::Dict(addr_dict));
+
+        // 2. Separated field `phone` whose widget dictionary has `/Parent` instead of `/T`.
+        let phone = doc.add(Object::Null);
+        let mut phone_widget = Dict::new();
+        phone_widget.set(b"Subtype".to_vec(), Object::name("Widget"));
+        phone_widget.set(b"Parent".to_vec(), Object::Ref(phone));
+        phone_widget.set(b"Rect".to_vec(), rect());
+        let phone_widget = doc.add(Object::Dict(phone_widget));
+        let mut phone_dict = Dict::new();
+        phone_dict.set(b"FT".to_vec(), Object::name("Tx"));
+        phone_dict.set(b"T".to_vec(), PdfString::text("phone"));
+        phone_dict.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(phone_widget)]));
+        doc.set(phone, Object::Dict(phone_dict));
+
+        // 3. Indirect string target `"email"`.
+        let email_str = doc.add(Object::String(PdfString::text("email")));
+        let targets = Object::Array(vec![Object::Ref(city), Object::Ref(phone_widget), Object::Ref(email_str)]);
+
+        let mut reset_action = Dict::new();
+        reset_action.set(b"S".to_vec(), Object::name("ResetForm"));
+        reset_action.set(b"Fields".to_vec(), targets.clone());
+        let reset_action = doc.add(Object::Dict(reset_action));
+
+        let indirect_false = doc.add(Object::Bool(false));
+        let mut hide_action = Dict::new();
+        hide_action.set(b"S".to_vec(), Object::name("Hide"));
+        hide_action.set(b"T".to_vec(), targets);
+        hide_action.set(b"H".to_vec(), Object::Ref(indirect_false));
+        let hide_action = doc.add(Object::Dict(hide_action));
+
+        let mut aa = Dict::new();
+        aa.set(b"D".to_vec(), Object::Ref(hide_action));
+        let mut btn = Dict::new();
+        btn.set(b"FT".to_vec(), Object::name("Btn"));
+        btn.set(b"Ff".to_vec(), Object::Int(1 << 16));
+        btn.set(b"T".to_vec(), PdfString::text("btn"));
+        btn.set(b"Subtype".to_vec(), Object::name("Widget"));
+        btn.set(b"Rect".to_vec(), rect());
+        btn.set(b"A".to_vec(), Object::Ref(reset_action));
+        btn.set(b"AA".to_vec(), Object::Dict(aa));
+        let btn = doc.add(Object::Dict(btn));
+
+        let root = doc.root().unwrap();
+        let pages_ref = doc.get(root).as_dict().and_then(|d| d.reference(b"Pages")).unwrap();
+        let mut page_dict = Dict::new();
+        page_dict.set(b"Type".to_vec(), Object::name("Page"));
+        page_dict.set(b"Parent".to_vec(), Object::Ref(pages_ref));
+        page_dict.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+        page_dict.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(city), Object::Ref(phone_widget), Object::Ref(btn)]));
+        let page = doc.add(Object::Dict(page_dict));
+        doc.update_dict(pages_ref, |p| {
+            p.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+            p.set(b"Count".to_vec(), Object::Int(1));
+        })
+        .unwrap();
+        let mut form = Dict::new();
+        form.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(address), Object::Ref(phone), Object::Ref(btn)]));
+        doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(form))).unwrap();
+
+        let expected = vec!["address.city".to_string(), "phone".to_string(), "email".to_string()];
+        let btn_field = fields(&doc).into_iter().find(|f| f.name == "btn").unwrap();
+        assert_eq!(btn_field.button, Some(crate::af::ButtonAction::Reset { fields: expected.clone(), exclude: false }));
+
+        let acts = field_actions(&doc, "btn").unwrap();
+        assert_eq!(
+            acts,
+            vec![
+                (Trigger::MouseUp, FieldAction::Reset(expected.clone())),
+                (Trigger::MouseDown, FieldAction::ShowHide { fields: expected, hide: false }),
+            ]
+        );
+    }
 }

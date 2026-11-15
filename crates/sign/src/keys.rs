@@ -4,6 +4,8 @@
 //! (constant-time; ADR-0009: the `rsa` crate is never used for private keys there). ECDSA
 //! signing uses RustCrypto with deterministic nonces (RFC 6979).
 
+use zeroize::Zeroizing;
+
 use crate::SignError;
 use crate::der::{self, Tlv, tag};
 
@@ -278,6 +280,12 @@ fn pss_params(params: Option<&Tlv<'_>>) -> Result<(DigestAlg, PssParams), SignEr
     Ok((hash, PssParams { mgf, salt_len: Some(salt_len) }))
 }
 
+/// The length in bits of the RSA modulus `n` (big-endian; leading zero bytes don't count).
+fn rsa_bits(n: &[u8]) -> usize {
+    let n = n.iter().position(|b| *b != 0).and_then(|i| n.get(i..)).unwrap_or_default();
+    n.first().map_or(0, |b| n.len() * 8 - b.leading_zeros() as usize)
+}
+
 /// A public key from a `SubjectPublicKeyInfo`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PublicKey {
@@ -380,7 +388,7 @@ impl PublicKey {
     /// "RSA 2048-bit", "ECDSA P-256"…
     pub fn describe(&self) -> String {
         match self {
-            PublicKey::Rsa { n, .. } => format!("RSA {}-bit", n.len() * 8),
+            PublicKey::Rsa { n, .. } => format!("RSA {}-bit", rsa_bits(n)),
             PublicKey::P256(_) => "ECDSA P-256".into(),
             PublicKey::P384(_) => "ECDSA P-384".into(),
             PublicKey::P521(_) => "ECDSA P-521".into(),
@@ -441,10 +449,31 @@ impl PublicKey {
         self.verify_noting(scheme, alg, digest, sig, &mut Vec::new())
     }
 
-    /// [`PublicKey::verify`], noting in `notes` each encoding irregularity it tolerated. Only
-    /// meaningful when it returns `Ok(true)`: a signature that doesn't verify may leave notes
-    /// about how far it got.
+    /// [`PublicKey::verify`], noting in `notes` each encoding irregularity it tolerated, and a key
+    /// too small to rely on ([`PublicKey::weakness`]). Only meaningful when it returns `Ok(true)`:
+    /// a signature that doesn't verify may leave notes about how far it got.
     pub fn verify_noting(&self, scheme: Scheme, alg: DigestAlg, digest: &[u8], sig: &[u8], notes: &mut Vec<&'static str>) -> Result<bool, SignError> {
+        let verified = self.verify_scheme(scheme, alg, digest, sig, notes);
+        if let Ok(true) = verified
+            && let Some(weak) = self.weakness()
+        {
+            notes.push(weak);
+        }
+        verified
+    }
+
+    /// What to tell the user when a signature that still validates was made with this key, or
+    /// `None` for one that is fine, as [`DigestAlg::weakness`] does for hashes.
+    pub fn weakness(&self) -> Option<&'static str> {
+        match self {
+            PublicKey::Rsa { n, .. } if rsa_bits(n) < 2048 => Some(
+                "This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.",
+            ),
+            _ => None,
+        }
+    }
+
+    fn verify_scheme(&self, scheme: Scheme, alg: DigestAlg, digest: &[u8], sig: &[u8], notes: &mut Vec<&'static str>) -> Result<bool, SignError> {
         match (self, scheme) {
             (PublicKey::Unsupported { what, .. }, _) => Err(SignError::Unsupported(what.clone())),
             (PublicKey::Rsa { n, e }, Scheme::RsaPkcs1) => crate::rsa_pad::pkcs1_verify(n, e, alg, digest, sig, notes),
@@ -561,7 +590,7 @@ pub struct PrivateKey {
     inner: Inner,
     public: PublicKey,
     /// The PKCS#8 `PrivateKeyInfo` it came from (to write it back into a PKCS#12 file).
-    pkcs8: Vec<u8>,
+    pub(crate) pkcs8: Zeroizing<Vec<u8>>,
 }
 
 impl std::fmt::Debug for PrivateKey {
@@ -574,7 +603,7 @@ impl PrivateKey {
     /// A key held outside PdfCraft's memory (its public half is `public`). It can't be
     /// exported to a PKCS #12 file.
     pub fn external(public: PublicKey, key: std::sync::Arc<dyn ExternalKey>) -> PrivateKey {
-        PrivateKey { inner: Inner::External(key), public, pkcs8: Vec::new() }
+        PrivateKey { inner: Inner::External(key), public, pkcs8: Zeroizing::new(Vec::new()) }
     }
 
     /// Whether the key lives outside the app (and so can't be exported).
@@ -604,7 +633,7 @@ impl PrivateKey {
                 );
                 #[cfg(target_arch = "wasm32")]
                 let inner = Inner::Rsa;
-                Ok(PrivateKey { inner, public: PublicKey::Rsa { n, e }, pkcs8: info.to_vec() })
+                Ok(PrivateKey { inner, public: PublicKey::Rsa { n, e }, pkcs8: Zeroizing::new(info.to_vec()) })
             }
             oid::EC => {
                 // ECPrivateKey: version, privateKey OCTET STRING, [0] parameters, [1] publicKey.
@@ -623,12 +652,12 @@ impl PrivateKey {
                     oid::P256 => {
                         let k = p256::ecdsa::SigningKey::from_slice(d).map_err(|_| SignError::Malformed("P-256 key".into()))?;
                         let public = PublicKey::P256(k.verifying_key().to_sec1_point(false).as_bytes().to_vec());
-                        Ok(PrivateKey { inner: Inner::P256(k), public, pkcs8: info.to_vec() })
+                        Ok(PrivateKey { inner: Inner::P256(k), public, pkcs8: Zeroizing::new(info.to_vec()) })
                     }
                     oid::P384 => {
                         let k = p384::ecdsa::SigningKey::from_slice(d).map_err(|_| SignError::Malformed("P-384 key".into()))?;
                         let public = PublicKey::P384(k.verifying_key().to_sec1_point(false).as_bytes().to_vec());
-                        Ok(PrivateKey { inner: Inner::P384(k), public, pkcs8: info.to_vec() })
+                        Ok(PrivateKey { inner: Inner::P384(k), public, pkcs8: Zeroizing::new(info.to_vec()) })
                     }
                     other => Err(SignError::Unsupported(format!("elliptic curve {other}"))),
                 }
@@ -662,13 +691,15 @@ impl PrivateKey {
     /// A new P-256 key.
     pub fn generate_p256() -> Result<PrivateKey, SignError> {
         loop {
-            let mut d = [0u8; 32];
-            getrandom::fill(&mut d).map_err(|e| SignError::Crypto(format!("no randomness: {e}")))?;
-            if let Ok(k) = p256::ecdsa::SigningKey::from_slice(&d) {
+            let mut d = Zeroizing::new([0u8; 32]);
+            getrandom::fill(&mut *d).map_err(|e| SignError::Crypto(format!("no randomness: {e}")))?;
+            if let Ok(k) = p256::ecdsa::SigningKey::from_slice(&*d) {
                 let point = k.verifying_key().to_sec1_point(false).as_bytes().to_vec();
                 // PKCS#8 with an ECPrivateKey (RFC 5915) carrying the public key.
-                let ec = der::seq(&[&der::int(1), &der::octets(&d), &der::explicit(1, &der::bit_string(&point))]);
-                let info = der::seq(&[&der::int(0), &der::seq(&[&der::oid(oid::EC), &der::oid(oid::P256)]), &der::octets(&ec)]);
+                let d_octets = Zeroizing::new(der::octets(&*d));
+                let ec = Zeroizing::new(der::seq(&[&der::int(1), &d_octets, &der::explicit(1, &der::bit_string(&point))]));
+                let ec_octets = Zeroizing::new(der::octets(&ec));
+                let info = Zeroizing::new(der::seq(&[&der::int(0), &der::seq(&[&der::oid(oid::EC), &der::oid(oid::P256)]), &ec_octets]));
                 return PrivateKey::from_pkcs8(&info);
             }
         }

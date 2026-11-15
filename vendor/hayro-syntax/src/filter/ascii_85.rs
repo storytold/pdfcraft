@@ -4,7 +4,9 @@ use crate::reader::Reader;
 use crate::trivia::is_white_space_character;
 use alloc::vec::Vec;
 
-pub(crate) fn decode(data: &[u8]) -> Option<Vec<u8>> {
+/// PdfCraft patch: `limit` is the most bytes produced (see `filter::decode_limit`); each `z`
+/// expands one input byte to four.
+pub(crate) fn decode(data: &[u8], limit: usize) -> Option<Vec<u8>> {
     const POW_85: [u32; 5] = [52200625, 614125, 7225, 85, 1];
 
     let mut reader = Reader::new(data);
@@ -50,15 +52,21 @@ pub(crate) fn decode(data: &[u8]) -> Option<Vec<u8>> {
             .checked_add(digits[3].checked_mul(POW_85[3])?)?
             .checked_add(digits[4])?;
 
-        decoded.extend_from_slice(&value.to_be_bytes()[..output_len]);
+        let left = limit.saturating_sub(decoded.len());
+        decoded.extend_from_slice(&value.to_be_bytes()[..output_len.min(left)]);
         group.clear();
         Some(())
     };
 
-    let mut decoded = Vec::with_capacity(data.len() * 4 / 5);
+    let mut decoded = Vec::with_capacity((data.len() / 5 * 4).min(limit));
     let mut group = Vec::with_capacity(5);
 
     loop {
+        // PdfCraft patch: output cut at the limit is reported, never dropped silently.
+        if decoded.len() >= limit {
+            warn!("ASCII85 stream stopped at its decode limit of {limit} bytes");
+            return Some(decoded);
+        }
         let Some(b) = read_byte() else {
             // Be lenient and accept what we have (see PDFBOX-5910).
             flush_group(&mut group, &mut decoded)?;
@@ -76,7 +84,8 @@ pub(crate) fn decode(data: &[u8]) -> Option<Vec<u8>> {
             }
             b'z' => {
                 flush_group(&mut group, &mut decoded)?;
-                decoded.extend_from_slice(&[0, 0, 0, 0]);
+                let left = limit.saturating_sub(decoded.len());
+                decoded.extend(core::iter::repeat_n(0, left.min(4)));
             }
             b'~' => {
                 // Technically requires a '>', but there is a PDF where it isn't

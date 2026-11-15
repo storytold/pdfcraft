@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use pdfcraft_content::Matrix;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use pdfcraft_fonts::pdf::Metrics;
 use pdfcraft_model::Page;
@@ -36,8 +37,15 @@ struct Walker<'a> {
     visits: usize,
     /// Per page: the text each MCID shows (read once per page).
     texts: HashMap<usize, HashMap<i64, String>>,
+    /// What is left of [`MAX_TITLE_SOURCE_BYTES`].
+    title_left: usize,
     out: Vec<Heading>,
 }
+
+/// Bytes of `/ActualText`, `/Alt` and `/T` strings the headings of one document decode in all.
+/// Titles are cut to [`MAX_TITLE`] characters, but many headings can name one large string, and
+/// each would otherwise be decoded in full first.
+const MAX_TITLE_SOURCE_BYTES: usize = 32 << 20;
 
 /// The headings, in document order. Headings without text or a page are left out.
 pub fn headings(doc: &Document) -> Vec<Heading> {
@@ -51,6 +59,7 @@ pub fn headings(doc: &Document) -> Vec<Heading> {
         seen: HashSet::new(),
         visits: 0,
         texts: HashMap::new(),
+        title_left: MAX_TITLE_SOURCE_BYTES,
         out: Vec::new(),
     };
     if let Some(k) = root.get(b"K") {
@@ -130,15 +139,32 @@ impl Walker<'_> {
             self.marks(kids, pg, depth + 1, &mut marks);
         }
         let Some(page) = pg.or_else(|| marks.iter().find_map(|m| m.0)).and_then(|p| self.page_index.get(&p).copied()) else { return };
-        let doc = self.doc;
-        let attr = |key: &[u8]| d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text())).filter(|t| !t.trim().is_empty());
-        let title = match attr(b"ActualText") {
+        let title = match self.attr(d, b"ActualText") {
             Some(t) => Some(t),
-            None => self.marked_text(&marks, page).or_else(|| attr(b"Alt")).or_else(|| attr(b"T")),
+            None => match self.marked_text(&marks, page) {
+                Some(t) => Some(t),
+                None => self.attr(d, b"Alt").or_else(|| self.attr(d, b"T")),
+            },
         };
         let Some(title) = title else { return };
         let title: String = title.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_TITLE).collect();
         self.out.push(Heading { obj, level, title, page });
+    }
+
+    /// The non-blank text of the string `key` holds, charged against the title allowance by the
+    /// longer of its raw and decoded size (a string that does not fit is not decoded).
+    fn attr(&mut self, d: &Dict, key: &[u8]) -> Option<String> {
+        let o = self.doc.resolve(d.get(key)?);
+        let s = o.as_string()?;
+        // A text string decodes to at most three bytes per raw byte, so one whose worst case does
+        // not fit the remaining allowance is never decoded: the raw check alone let a string at
+        // the raw limit decode to three times it before the allowance was reduced.
+        if s.bytes.len().saturating_mul(3) > self.title_left {
+            return None;
+        }
+        let text = s.to_text();
+        self.title_left = self.title_left.saturating_sub(text.len().max(s.bytes.len()));
+        Some(text).filter(|t| !t.trim().is_empty())
     }
 
     /// The text the marked content shows (`page`: where marks without a page of their own are).
@@ -171,64 +197,201 @@ fn sub(doc: &Document, d: &Dict, key: &[u8]) -> Dict {
 }
 
 /// The text each marked-content id shows on a page (text drawn directly in the page content).
-fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
+///
+/// Word breaks come from where the glyphs are, as on the page: a glyph that starts on another
+/// line, more than 0.2 em past the end of the previous glyph of the same id, or back over more
+/// than an em from it, starts a new word (the em is the font size times |`Tz`|; see [`new_word`]).
+/// Text-positioning operators alone don't break words: producers that place every glyph with its
+/// own `Td` (Chromium) would otherwise read as "C h a p t e r".
+pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
     let res = sub(doc, page, b"Resources");
     let (fonts, props) = (sub(doc, &res, b"Font"), sub(doc, &res, b"Properties"));
-    let mut metrics: HashMap<Vec<u8>, Metrics> = HashMap::new();
-    let mut font: Option<Vec<u8>> = None;
+    let mut metrics: HashMap<Vec<u8>, std::rc::Rc<Metrics>> = HashMap::new();
+    // Built once per font object, however many resource names alias it.
+    let mut by_font: HashMap<ObjRef, std::rc::Rc<Metrics>> = HashMap::new();
+    // The id each open marked-content sequence is in: its own, else the enclosing one's.
     let mut stack: Vec<Option<i64>> = Vec::new();
     let mut out: HashMap<i64, String> = HashMap::new();
+    // Where each id's last glyph ended, in user space.
+    let mut ends: HashMap<i64, (f64, f64)> = HashMap::new();
+    let mut gs = TextState::default();
+    // With each saved state, the text and text line matrices: inside a text object `q`/`Q`
+    // save and restore them too (ISO 32000-2 §9.4.1, as corrected by the PDF Association's
+    // errata, issue 368), as the renderer does.
+    let mut saved: Vec<(TextState, Matrix, Matrix)> = Vec::new();
+    let mut unsaved = 0usize;
+    let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     for op in pdfcraft_content::parse(&page_content(doc, page)).ops {
-        let id = stack.iter().rev().find_map(|m| *m);
+        crate::count_mark_reads(1);
+        let id = stack.last().copied().flatten();
         match op.op.as_slice() {
-            b"BMC" => stack.push(None),
-            b"BDC" => stack.push(match op.operands.get(1) {
-                Some(Object::Dict(d)) => d.get(b"MCID").and_then(Object::as_int),
-                Some(Object::Name(n)) => {
-                    props.get(n).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().and_then(|d| d.get(b"MCID").and_then(Object::as_int)))
+            b"BMC" => stack.push(id),
+            b"BDC" => stack.push(
+                match op.operands.get(1) {
+                    Some(Object::Dict(d)) => d.get(b"MCID").and_then(Object::as_int),
+                    Some(Object::Name(n)) => {
+                        props.get(n).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().and_then(|d| d.get(b"MCID").and_then(Object::as_int)))
+                    }
+                    _ => None,
                 }
-                _ => None,
-            }),
+                .or(id),
+            ),
             b"EMC" => {
                 stack.pop();
             }
+            b"q" if saved.len() < MAX_SAVED => saved.push((gs.clone(), tm, tlm)),
+            b"q" => unsaved += 1,
+            b"Q" if unsaved > 0 => unsaved -= 1,
+            b"Q" => {
+                if let Some(saved) = saved.pop() {
+                    (gs, tm, tlm) = saved;
+                }
+            }
+            b"cm" => {
+                if let Some(m) = op.nums::<6>() {
+                    gs.ctm = Matrix(m).then(&gs.ctm);
+                }
+            }
             b"Tf" => {
-                font = op.name(0).map(<[u8]>::to_vec);
+                gs.size = op.num(1).unwrap_or(gs.size);
+                gs.font = op.name(0).map(<[u8]>::to_vec);
                 if let Some(name) = op.name(0)
                     && !metrics.contains_key(name)
-                    && let Some(f) = fonts.get(name).map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned())
                 {
-                    metrics.insert(name.to_vec(), Metrics::from_dict(doc, &f));
-                }
-            }
-            _ => {}
-        }
-        let (Some(id), Some(m)) = (id, font.as_ref().and_then(|f| metrics.get(f))) else { continue };
-        let text = out.entry(id).or_default();
-        if text.len() >= MAX_TITLE * 4 {
-            continue;
-        }
-        match op.op.as_slice() {
-            b"Tj" | b"'" | b"\"" => {
-                if op.op != b"Tj" {
-                    text.push(' ');
-                }
-                if let Some(s) = op.operands.iter().rev().find_map(Object::as_string) {
-                    text.push_str(&m.decode(&s.bytes));
-                }
-            }
-            b"TJ" => {
-                for item in op.operands.first().and_then(Object::as_array).into_iter().flatten() {
-                    match item {
-                        Object::String(s) => text.push_str(&m.decode(&s.bytes)),
-                        n if n.as_f64().is_some_and(|n| n < -200.0) => text.push(' '),
-                        _ => {}
+                    // Keyed by the object at the end of the reference chain, so names that reach one
+                    // font through different chains share its metrics (the hop limit is resolve's).
+                    let font = fonts.get(name).and_then(|o| {
+                        let (mut cur, mut last) = (o.clone(), None);
+                        for _ in 0..16 {
+                            let Object::Ref(r) = cur else { break };
+                            last = Some(r);
+                            cur = (*doc.get(r)).clone();
+                        }
+                        last
+                    });
+                    let built = match font.and_then(|r| by_font.get(&r)) {
+                        Some(m) => Some(m.clone()),
+                        None => {
+                            fonts.get(name).map(|f| doc.resolve(f)).and_then(|f| f.as_dict().map(|d| std::rc::Rc::new(Metrics::from_dict(doc, d))))
+                        }
+                    };
+                    if let Some(m) = built {
+                        if let Some(r) = font {
+                            by_font.insert(r, m.clone());
+                        }
+                        metrics.insert(name.to_vec(), m);
                     }
                 }
             }
-            b"Td" | b"TD" | b"T*" | b"Tm" => text.push(' '),
+            b"Tc" => gs.char_spacing = op.num(0).unwrap_or(0.0),
+            b"Tw" => gs.word_spacing = op.num(0).unwrap_or(0.0),
+            b"Tz" => gs.scale = op.num(0).unwrap_or(100.0) / 100.0,
+            b"TL" => gs.leading = op.num(0).unwrap_or(0.0),
+            b"BT" => (tm, tlm) = (Matrix::IDENTITY, Matrix::IDENTITY),
+            b"Td" | b"TD" => {
+                if let Some([x, y]) = op.nums::<2>() {
+                    if op.op == b"TD" {
+                        gs.leading = -y;
+                    }
+                    tlm = Matrix::translate(x, y).then(&tlm);
+                    tm = tlm;
+                }
+            }
+            b"Tm" => {
+                if let Some(m) = op.nums::<6>() {
+                    (tm, tlm) = (Matrix(m), Matrix(m));
+                }
+            }
+            b"T*" => {
+                tlm = Matrix::translate(0.0, -gs.leading).then(&tlm);
+                tm = tlm;
+            }
             _ => {}
+        }
+        let shows = matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"");
+        let Some(m) = gs.font.as_ref().and_then(|f| metrics.get(f)).filter(|_| shows) else { continue };
+        if op.op != b"Tj" && op.op != b"TJ" {
+            if op.op == b"\"" {
+                gs.word_spacing = op.num(0).unwrap_or(gs.word_spacing);
+                gs.char_spacing = op.num(1).unwrap_or(gs.char_spacing);
+            }
+            tlm = Matrix::translate(0.0, -gs.leading).then(&tlm);
+            tm = tlm;
+        }
+        let pieces: Vec<&Object> = match op.op.as_slice() {
+            // A surplus array (`[(A)] [(B)] TJ`) is malformed, but the operator still takes the
+            // one immediately before it, as the renderer and every other reader here do (#3569).
+            b"TJ" => op.operands.last().and_then(Object::as_array).map(|a| a.iter().collect()).unwrap_or_default(),
+            _ => op.operands.last().into_iter().collect(),
+        };
+        for piece in pieces {
+            let s = match piece {
+                Object::String(s) => s,
+                other => {
+                    // A TJ adjustment moves the next glyph; whether it breaks a word is decided there.
+                    let dx = -other.as_f64().unwrap_or(0.0) / 1000.0 * gs.size * gs.scale;
+                    tm = Matrix::translate(dx, 0.0).then(&tm);
+                    continue;
+                }
+            };
+            for (code, len) in m.codes(&s.bytes) {
+                let trm = tm.then(&gs.ctm);
+                // A glyph's text is only built while its id still takes more.
+                if let Some(id) = id
+                    && out.get(&id).is_none_or(|t| t.len() < MAX_TITLE * 4)
+                    && let Some(glyph) = m.text_of(code)
+                {
+                    let text = out.entry(id).or_default();
+                    let breaks = ends.get(&id).is_some_and(|end| new_word(&trm, *end, gs.size, gs.scale));
+                    if breaks && !text.is_empty() && !text.ends_with(' ') && !glyph.starts_with(' ') {
+                        text.push(' ');
+                    }
+                    text.push_str(&glyph);
+                }
+                let advance = m.width(code) * gs.size + gs.char_spacing + if m.is_space(code, len) { gs.word_spacing } else { 0.0 };
+                tm = Matrix::translate(advance * gs.scale, 0.0).then(&tm);
+                if let Some(id) = id {
+                    ends.insert(id, tm.then(&gs.ctm).apply(0.0, 0.0));
+                }
+            }
         }
     }
     out
+}
+
+/// How deep `q` nests before the text state stops being saved (a hostile stream can nest millions).
+const MAX_SAVED: usize = 256;
+
+/// The graphics state that places glyphs: the CTM, the font and the text state parameters.
+#[derive(Clone)]
+struct TextState {
+    ctm: Matrix,
+    font: Option<Vec<u8>>,
+    size: f64,
+    char_spacing: f64,
+    word_spacing: f64,
+    scale: f64,
+    leading: f64,
+}
+
+impl Default for TextState {
+    fn default() -> Self {
+        TextState { ctm: Matrix::IDENTITY, font: None, size: 0.0, char_spacing: 0.0, word_spacing: 0.0, scale: 1.0, leading: 0.0 }
+    }
+}
+
+/// Does a glyph drawn with text rendering matrix `trm` (text space → user space) start a new word
+/// after a glyph that ended at `end` (user space)? Yes on another line (more than half the absolute
+/// font size up or down), more than 0.2 horizontal em ahead, or back over more than a horizontal em.
+/// The horizontal em is the absolute value of font size times horizontal scale (`Tz`); "ahead" follows
+/// the glyph advance, backwards when the size or `Tz` is negative. `Tz` never scales the vertical threshold.
+fn new_word(trm: &Matrix, end: (f64, f64), font_size: f64, horizontal_scale: f64) -> bool {
+    let advance = font_size * horizontal_scale;
+    let em = advance.abs();
+    let start = trm.apply(0.0, 0.0);
+    let [a, b, c, d, _, _] = trm.0;
+    let Some(back) = Matrix([a, b, c, d, 0.0, 0.0]).invert() else { return true };
+    let (dx, dy) = back.apply(start.0 - end.0, start.1 - end.1);
+    let ahead = if advance < 0.0 { -dx } else { dx };
+    !(ahead.is_finite() && dy.is_finite()) || dy.abs() > font_size.abs() * 0.5 || ahead > em * 0.2 || ahead < -em
 }

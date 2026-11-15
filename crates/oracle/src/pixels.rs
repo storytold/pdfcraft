@@ -105,6 +105,10 @@ pub fn compare(a: Gray<'_>, b: Gray<'_>, tolerance: u8) -> Result<Diff, SizeMism
 
 /// Pixels of `a` with no pixel within `tolerance` anywhere in `b`'s surrounding 3x3.
 fn unmatched(a: Gray<'_>, b: Gray<'_>, tolerance: u8) -> usize {
+    // No pixels, nothing to match: a zero-width image of enormous height is not walked row by row.
+    if a.pixels.is_empty() {
+        return 0;
+    }
     let mut count = 0usize;
     for y in 0..a.height {
         for x in 0..a.width {
@@ -186,7 +190,7 @@ pub fn decode_pam_gray(bytes: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
         return None;
     }
     let mut out = Vec::with_capacity(width.checked_mul(height)?);
-    for px in data.get(..wanted)?.chunks_exact(4) {
+    for px in data.get(..wanted)?.as_chunks::<4>().0 {
         let (&r, &g, &b, &a) = (px.first()?, px.get(1)?, px.get(2)?, px.get(3)?);
         // Composite premultiplied RGB over white, in integer arithmetic that cannot overflow:
         // each term is at most 255, and the sum is at most 255.
@@ -201,11 +205,23 @@ pub fn decode_pam_gray(bytes: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    // `windows(0)` panics.
+    if needle.is_empty() {
+        return None;
+    }
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 #[cfg(test)]
 mod tests {
+    /// A zero-width image of enormous height has no pixels to walk.
+    #[test]
+    fn an_image_without_pixels_compares_at_once() {
+        let a = Gray { width: 0, height: usize::MAX, pixels: &[] };
+        let d = compare(a, a, 0).unwrap();
+        assert_eq!((d.differing, d.total), (0, 0));
+    }
+
     use super::*;
 
     fn gray(w: usize, h: usize, fill: u8) -> Vec<u8> {
@@ -402,6 +418,14 @@ mod tests {
         bytes.extend_from_slice(&[9; 8]);
         let (w, h, px) = decode_pgm(&bytes).expect("a commented P5 image");
         assert_eq!((w, h, px.len()), (4, 2, 8));
+    }
+
+    /// An empty needle is not found, rather than panicking in `windows(0)`.
+    #[test]
+    fn find_with_an_empty_needle_is_none() {
+        assert_eq!(find(b"abc", b""), None);
+        assert_eq!(find(b"", b""), None);
+        assert_eq!(find(b"abcabc", b"ca"), Some(2));
     }
 
     /// Malformed or hostile headers return `None` rather than panicking or inventing a size.

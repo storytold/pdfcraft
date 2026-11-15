@@ -11,5 +11,10 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+craft-xml = { workspace = true }
+pdfcraft-content = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-model = { workspace = true }
+
+[dev-dependencies]
+flate2 = { workspace = true }

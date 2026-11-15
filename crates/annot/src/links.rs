@@ -8,11 +8,75 @@ use crate::{AnnotError, annots, page_ref, page_refs, set_annots};
 /// Where a link goes.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LinkAction {
-    /// A page of this document (0-based), shown fitting the window (`/Fit`).
-    Page(usize),
+    /// A page of this document (0-based), shown at `zoom`.
+    Page {
+        page: usize,
+        zoom: LinkZoom,
+    },
     Uri(String),
     /// Something PdfCraft doesn't edit yet (named destination, JavaScript…): kept as is.
     Other(String),
+}
+
+/// How a go-to-page link shows its page: Acrobat's Go to a page view zoom, written as an
+/// explicit destination (ISO 32000-2 §12.3.2.2, Table 149). Positions are written `null`, so the
+/// reader keeps its position in that direction, as a new bookmark does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LinkZoom {
+    /// `/Fit`: the whole page in the window.
+    FitPage,
+    /// `/FitH null`: the page's width across the window.
+    FitWidth,
+    /// `/FitV null`: the page's height down the window.
+    FitHeight,
+    /// `/FitB`: the page's content (its bounding box) in the window.
+    FitVisible,
+    /// `/XYZ null null null`: the reader's zoom is kept.
+    Inherit,
+    /// `/XYZ null null z` with z = percent / 100; 100 is Actual Size. A new zoom is written
+    /// within 1–6400%; a link rewritten with the zoom it has keeps its own factor.
+    Percent(f64),
+}
+
+impl LinkZoom {
+    /// The zoom an explicit destination array (`[page /XYZ …]`, `[page /Fit]`, …) asks for. The
+    /// boxed variants read as their unboxed ones, and a `/FitR` rectangle or a missing or unknown
+    /// type as Fit Page, the view links had before they carried a zoom. A link whose page and zoom
+    /// are unchanged is not rewritten, so its position is kept; one given a new page keeps how its
+    /// zoom is written (`write_action`) but not its position.
+    fn of_dest(doc: &Document, dest: &[Object]) -> Self {
+        let kind = dest.get(1).map(|k| doc.resolve(k)).and_then(|k| k.as_name().map(<[u8]>::to_vec));
+        match kind.as_deref() {
+            Some(b"FitB") => LinkZoom::FitVisible,
+            Some(b"FitH" | b"FitBH") => LinkZoom::FitWidth,
+            Some(b"FitV" | b"FitBV") => LinkZoom::FitHeight,
+            Some(b"XYZ") => match dest.get(4).and_then(|z| doc.resolve(z).as_f64()) {
+                // Finite even for a factor near f64::MAX. A link given a new page with this zoom
+                // keeps the factor itself, however far outside 1–6400% (`write_action`).
+                Some(z) if z.is_finite() && z > 0.0 => LinkZoom::Percent((z * 100.0).min(f64::MAX)),
+                // A zoom of 0 or null keeps the reader's (Table 149).
+                _ => LinkZoom::Inherit,
+            },
+            _ => LinkZoom::FitPage,
+        }
+    }
+
+    /// The destination's elements after the page reference.
+    fn operands(self) -> Result<Vec<Object>, AnnotError> {
+        Ok(match self {
+            LinkZoom::FitPage => vec![Object::name("Fit")],
+            LinkZoom::FitWidth => vec![Object::name("FitH"), Object::Null],
+            LinkZoom::FitHeight => vec![Object::name("FitV"), Object::Null],
+            LinkZoom::FitVisible => vec![Object::name("FitB")],
+            LinkZoom::Inherit => vec![Object::name("XYZ"), Object::Null, Object::Null, Object::Null],
+            LinkZoom::Percent(p) => {
+                if !(p.is_finite() && p > 0.0) {
+                    return Err(AnnotError::Invalid("the link's zoom must be a positive percentage".into()));
+                }
+                vec![Object::name("XYZ"), Object::Null, Object::Null, Object::Real((p / 100.0).clamp(0.01, 64.0))]
+            }
+        })
+    }
 }
 
 /// Acrobat's Link Properties ▸ Appearance.
@@ -78,29 +142,45 @@ pub struct LinkItem {
     pub style: LinkStyle,
 }
 
+/// Bytes of web-address text one listing keeps, counted after conversion to UTF-8; past it a link
+/// lists as [`LinkAction::Other`].
+pub(crate) const MAX_URI_BYTES: usize = 16 << 20;
+
 fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
     o.map(|o| doc.resolve(o)).and_then(|a| a.as_array().map(|a| a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect())).unwrap_or_default()
 }
 
-fn action_of(doc: &Document, d: &Dict, pages: &[ObjRef]) -> LinkAction {
-    let dest_page = |dest: &Object| -> Option<usize> {
+fn action_of(doc: &Document, d: &Dict, pages: &[ObjRef], uri_budget: &mut usize) -> LinkAction {
+    let page_view = |dest: &Object| -> Option<LinkAction> {
         let a = doc.resolve(dest);
-        let first = a.as_array()?.first()?.clone();
-        match first {
-            Object::Ref(r) => pages.iter().position(|p| *p == r),
-            Object::Int(i) => usize::try_from(i).ok(),
+        let a = a.as_array()?;
+        let page = match a.first()? {
+            Object::Ref(r) => pages.iter().position(|p| p == r),
+            Object::Int(i) => usize::try_from(*i).ok(),
             _ => None,
-        }
+        }?;
+        Some(LinkAction::Page { page, zoom: LinkZoom::of_dest(doc, a) })
     };
     if let Some(dest) = d.get(b"Dest") {
-        return dest_page(dest).map_or_else(|| LinkAction::Other("named destination".into()), LinkAction::Page);
+        return page_view(dest).unwrap_or_else(|| LinkAction::Other("named destination".into()));
     }
     let Some(a) = d.get(b"A").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()) else { return LinkAction::Other("no action".into()) };
     match a.name(b"S") {
-        Some(b"URI") => LinkAction::Uri(
-            a.get(b"URI").and_then(|u| doc.resolve(u).as_string().map(|s| String::from_utf8_lossy(&s.bytes).into_owned())).unwrap_or_default(),
-        ),
-        Some(b"GoTo") => a.get(b"D").and_then(dest_page).map_or_else(|| LinkAction::Other("named destination".into()), LinkAction::Page),
+        Some(b"URI") => {
+            let uri = a.get(b"URI").map(|u| doc.resolve(u));
+            let bytes = uri.as_ref().and_then(|u| u.as_string()).map_or(&[][..], |s| &s.bytes[..]);
+            // The raw length first, so an address already over the budget is never converted; then the
+            // converted text, which is up to three times longer where the bytes are not UTF-8.
+            let text = (bytes.len() <= *uri_budget).then(|| String::from_utf8_lossy(bytes));
+            match text.and_then(|t| Some((uri_budget.checked_sub(t.len())?, t))) {
+                Some((left, text)) => {
+                    *uri_budget = left;
+                    LinkAction::Uri(text.into_owned())
+                }
+                None => LinkAction::Other("web address too long".into()),
+            }
+        }
+        Some(b"GoTo") => a.get(b"D").and_then(page_view).unwrap_or_else(|| LinkAction::Other("named destination".into())),
         Some(s) => LinkAction::Other(String::from_utf8_lossy(s).into_owned()),
         None => LinkAction::Other("no action".into()),
     }
@@ -133,8 +213,16 @@ fn style_of(doc: &Document, d: &Dict) -> LinkStyle {
 pub fn list(doc: &Document) -> Vec<LinkItem> {
     let Ok(pages) = page_refs(doc) else { return Vec::new() };
     let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut uri_budget = MAX_URI_BYTES;
     for (pi, p) in pages.iter().enumerate() {
         for (k, a) in annots(doc, *p).iter().enumerate() {
+            // One annotation object listed under several entries or pages is one link.
+            if let Some(r) = a.as_ref()
+                && !seen.insert(r)
+            {
+                continue;
+            }
             let Some(d) = doc.resolve(a).as_dict().cloned() else { continue };
             if d.name(b"Subtype") != Some(b"Link") {
                 continue;
@@ -148,7 +236,7 @@ pub fn list(doc: &Document) -> Vec<LinkItem> {
                 index: k,
                 obj: a.as_ref(),
                 rect: [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])],
-                action: action_of(doc, &d, &pages),
+                action: action_of(doc, &d, &pages, &mut uri_budget),
                 style: style_of(doc, &d),
             });
         }
@@ -178,12 +266,65 @@ fn write_style(d: &mut Dict, s: &LinkStyle) {
     d.set(b"H".to_vec(), Object::name(s.highlight.code()));
 }
 
+/// Bytes of `u` as a 7-bit ASCII URI string (§12.6.4.8).
+fn uri_bytes(u: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(u.len());
+    for &b in u.as_bytes() {
+        if (0x21..=0x7e).contains(&b) {
+            out.push(b);
+        } else {
+            out.extend_from_slice(format!("%{b:02X}").as_bytes());
+        }
+    }
+    out
+}
+
+/// The explicit destination array link `d` goes to now: its `/Dest`, or a GoTo action's `/D`.
+fn current_dest(doc: &Document, d: &Dict) -> Option<Vec<Object>> {
+    let dest = match d.get(b"Dest") {
+        Some(dest) => doc.resolve(dest),
+        None => {
+            let action = doc.resolve(d.get(b"A")?);
+            let go_to = action.as_dict().filter(|a| a.name(b"S") == Some(b"GoTo"))?;
+            doc.resolve(go_to.get(b"D")?)
+        }
+    };
+    dest.as_array().cloned()
+}
+
 fn write_action(doc: &Document, d: &mut Dict, a: &LinkAction) -> Result<(), AnnotError> {
     match a {
-        LinkAction::Page(p) => {
-            let target = page_ref(doc, *p)?;
+        LinkAction::Page { page, zoom } => {
+            let target = page_ref(doc, *page)?;
+            let mut operands = zoom.operands()?;
+            let current = current_dest(doc, d).filter(|c| LinkZoom::of_dest(doc, c) == *zoom);
+            if let Some(c) = current {
+                // The page and zoom the link has (`link_edit` naming its own page): the
+                // destination is left as it is, position on the page and GoTo form included.
+                let same_page = match c.first() {
+                    Some(Object::Ref(r)) => *r == target,
+                    Some(Object::Int(i)) => usize::try_from(*i).ok() == Some(*page),
+                    _ => false,
+                };
+                if same_page {
+                    return Ok(());
+                }
+                // A new page with the zoom the link has keeps how that zoom is written: a boxed
+                // fit (`/FitBH`, `/FitBV`) and its own `/XYZ` factor, even one outside the 1–6400%
+                // a new zoom is written within. Positions belong to the old page and are dropped.
+                let (slot, own) = match zoom {
+                    LinkZoom::Percent(_) => (operands.get_mut(3), c.get(4)),
+                    LinkZoom::FitWidth | LinkZoom::FitHeight => (operands.get_mut(0), c.get(1)),
+                    _ => (None, None),
+                };
+                if let (Some(slot), Some(own)) = (slot, own) {
+                    *slot = doc.resolve(own).as_ref().clone();
+                }
+            }
+            let mut dest = vec![Object::Ref(target)];
+            dest.extend(operands);
             d.remove(b"A");
-            d.set(b"Dest".to_vec(), Object::Array(vec![Object::Ref(target), Object::name("Fit")]));
+            d.set(b"Dest".to_vec(), Object::Array(dest));
         }
         LinkAction::Uri(u) => {
             let u = u.trim();
@@ -194,7 +335,7 @@ fn write_action(doc: &Document, d: &mut Dict, a: &LinkAction) -> Result<(), Anno
             let mut act = Dict::new();
             act.set(b"S".to_vec(), Object::name("URI"));
             // URIs are 7-bit ASCII strings (§12.6.4.8).
-            act.set(b"URI".to_vec(), PdfString::literal(u.as_bytes().to_vec()));
+            act.set(b"URI".to_vec(), PdfString::literal(uri_bytes(u)));
             d.set(b"A".to_vec(), Object::Dict(act));
         }
         LinkAction::Other(_) => {}
@@ -219,6 +360,16 @@ fn checked_rect(rect: [f64; 4]) -> Result<[f64; 4], AnnotError> {
 /// Add a link over `rect` (user space). Returns its index in the page's `/Annots`.
 pub fn add(doc: &mut Document, page: usize, rect: [f64; 4], action: &LinkAction, style: &LinkStyle) -> Result<usize, AnnotError> {
     let p = page_ref(doc, page)?;
+    let obj = new_link(doc, p, rect, action, style)?;
+    let mut list = annots(doc, p);
+    list.push(Object::Ref(obj));
+    let index = list.len() - 1;
+    set_annots(doc, p, list)?;
+    Ok(index)
+}
+
+/// A link annotation object for page `p`, not yet on the page's `/Annots`.
+fn new_link(doc: &mut Document, p: ObjRef, rect: [f64; 4], action: &LinkAction, style: &LinkStyle) -> Result<ObjRef, AnnotError> {
     let r = checked_rect(rect)?;
     if matches!(action, LinkAction::Other(_)) {
         return Err(AnnotError::Invalid("choose a page or a web address".into()));
@@ -231,12 +382,7 @@ pub fn add(doc: &mut Document, page: usize, rect: [f64; 4], action: &LinkAction,
     d.set(b"F".to_vec(), Object::Int(4));
     write_style(&mut d, style);
     write_action(doc, &mut d, action)?;
-    let obj = doc.add(Object::Dict(d));
-    let mut list = annots(doc, p);
-    list.push(Object::Ref(obj));
-    let index = list.len() - 1;
-    set_annots(doc, p, list)?;
-    Ok(index)
+    Ok(doc.add(Object::Dict(d)))
 }
 
 fn link_at(doc: &Document, page: usize, index: usize) -> Result<(ObjRef, ObjRef), AnnotError> {
@@ -279,7 +425,7 @@ pub fn delete(doc: &mut Document, page: usize, index: usize) -> Result<(), Annot
     let (p, _) = link_at(doc, page, index)?;
     let mut list = annots(doc, p);
     list.remove(index);
-    set_annots(doc, p, list)
+    Ok(set_annots(doc, p, list)?)
 }
 
 /// Remove every link on `pages` (all when `None`). Returns how many went.
@@ -357,10 +503,24 @@ fn email_at(chars: &[char], start: usize) -> Option<(usize, String)> {
     Some((end, format!("mailto:{address}")))
 }
 
+/// The longest web address [`find_urls`] reads, in characters (browsers and servers commonly
+/// stop near 2,000). Each address it might be is read this far at most, so text whose brackets
+/// never close (`https://a/(https://a/(…`, without a space) costs this much per address in it,
+/// not a pass over the rest of the page each.
+const MAX_URL_CHARS: usize = 2048;
+
 /// Find web addresses in text: `http(s)://…`, `www.…` and bare e-mail addresses become
 /// `mailto:`. Returns character ranges and the URI for each.
+///
+/// No other scheme is ever found, and a `www.` or e-mail address that is part of one written with
+/// another scheme (`ftp://www.example.com`, `smb://admin@example.org`) is not taken out of it:
+/// it would open with a scheme the text doesn't say. Brackets inside a web address belong to it
+/// when they pair up (`…/wiki/Mercury_(planet)`); an unpaired one ends it.
 pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
     let url_char = |c: char| !c.is_whitespace() && !"<>\"'()[]{}".contains(c);
+    // Characters found inside an address but not between words: a `www.` after one is part of
+    // a longer address, and so is an e-mail address after a slash.
+    let inside_address = |i: usize, set: &str| i > 0 && chars.get(i - 1).is_some_and(|c| set.contains(*c));
     // Case-insensitive prefix test that never steps past the end. Comparing against the original
     // characters keeps every offset in `chars`'s own index space: case-folding a copy can change
     // its length (U+0130 becomes "i" plus a combining dot), so a folded copy must never supply
@@ -371,10 +531,37 @@ pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
     let mut i = 0;
     while i < chars.len() {
         let boundary = i == 0 || chars.get(i - 1).is_some_and(|c| !c.is_alphanumeric());
-        if boundary && (starts_with(i, "http://") || starts_with(i, "https://") || starts_with(i, "www.")) {
+        let www = starts_with(i, "www.") && !inside_address(i, "/\\:@.-_~%+=&#");
+        if boundary && (starts_with(i, "http://") || starts_with(i, "https://") || www) {
             let mut j = i;
-            while chars.get(j).is_some_and(|c| url_char(*c)) {
+            // Brackets pair up inside the address: `depth` are open, the outermost at `opened`.
+            let (mut depth, mut opened) = (0usize, i);
+            let mut too_long = false;
+            loop {
+                if j.saturating_sub(i) >= MAX_URL_CHARS {
+                    too_long = true;
+                    break;
+                }
+                match chars.get(j) {
+                    Some('(') => {
+                        if depth == 0 {
+                            opened = j;
+                        }
+                        depth = depth.saturating_add(1);
+                    }
+                    Some(')') if depth > 0 => depth -= 1,
+                    Some(c) if url_char(*c) => {}
+                    _ => break,
+                }
                 j += 1;
+            }
+            // A bracket left open isn't the address's: it ends before it. A run of address
+            // characters longer than any address is none, and the search goes on after it.
+            if depth > 0 {
+                j = opened;
+            } else if too_long {
+                i = j;
+                continue;
             }
             // Trailing punctuation belongs to the sentence.
             while j > i && chars.get(j - 1).is_some_and(|c| ".,;:!?".contains(*c)) {
@@ -388,7 +575,10 @@ pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
                 continue;
             }
         }
-        if boundary && let Some((end, uri)) = email_at(chars, i) {
+        if boundary
+            && !inside_address(i, "/\\")
+            && let Some((end, uri)) = email_at(chars, i)
+        {
             out.push((i..end, uri));
             i = end;
             continue;
@@ -401,12 +591,40 @@ pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
 /// Create links for found URLs: `(page, quads, uri)` with quads in user space (one link per
 /// line rectangle). Returns how many links were added.
 pub fn add_many(doc: &mut Document, links: &[(usize, Vec<[f64; 4]>, String)], style: &LinkStyle) -> Result<usize, AnnotError> {
+    let pages = page_refs(doc)?;
+    // Check the whole batch first, so a bad entry fails it before any link object is created.
+    for (page, rects, uri) in links {
+        pages.get(*page).ok_or(AnnotError::NoSuchPage(*page))?;
+        if uri.trim().is_empty() {
+            return Err(AnnotError::Invalid("type the web address first".into()));
+        }
+        for r in rects {
+            checked_rect(*r)?;
+        }
+    }
+    // Each page's `/Annots` is extended once, with its new links in the order given.
+    let mut added: Vec<(ObjRef, Vec<Object>)> = Vec::new();
+    let mut slot: std::collections::HashMap<ObjRef, usize> = std::collections::HashMap::new();
     let mut n = 0;
     for (page, rects, uri) in links {
+        let p = pages.get(*page).copied().ok_or(AnnotError::NoSuchPage(*page))?;
+        let action = LinkAction::Uri(uri.clone());
         for r in rects {
-            add(doc, *page, *r, &LinkAction::Uri(uri.clone()), style)?;
+            let obj = new_link(doc, p, *r, &action, style)?;
+            let k = *slot.entry(p).or_insert_with(|| {
+                added.push((p, Vec::new()));
+                added.len() - 1
+            });
+            if let Some((_, list)) = added.get_mut(k) {
+                list.push(Object::Ref(obj));
+            }
             n += 1;
         }
+    }
+    for (p, new) in added {
+        let mut list = annots(doc, p);
+        list.extend(new);
+        set_annots(doc, p, list)?;
     }
     Ok(n)
 }
