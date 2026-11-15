@@ -6802,6 +6802,34 @@ fn a_curve_too_large_to_flatten_is_skipped_and_reported() {
     }
 }
 
+/// A curved clip too large to flatten clips everything away and is reported: flattening it asked
+/// for as much as a curve drawn that large (8.9 GB for one reaching 10^18), and skipping it would
+/// show what it hides. A rectangle clip that large still clips (lines cost one segment each), and
+/// so does an ordinary curve; what follows the clip's `Q` draws in every case. Vendored patch:
+/// hayro `MAX_CURVE_EXTENT` (32), in `push_clip_path_inner`.
+#[test]
+fn a_clip_too_large_to_flatten_clips_everything_and_is_reported() {
+    let cases = [
+        ("a clip curve reaching 10^12", "100 100 m 1000000000000 1000000000000 -1000000000000 1000000000000 100 100 c W n", false, true),
+        ("a clip rectangle reaching 10^18", "-1000000000000000000 -1000000000000000000 2000000000000000000 2000000000000000000 re W n", true, false),
+        ("an ordinary curved clip", "20 20 m 180 20 180 180 20 180 c W n", true, false),
+    ];
+    for (what, clip, painted, reported) in cases {
+        let content = format!("q {clip} 0 0 1 rg 0 0 200 200 re f Q 0 1 0 rg 0 190 10 10 re f");
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n",
+            content.len()
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{what}: {:?}", page.error);
+        let blue = page.rgba.as_chunks::<4>().0.iter().filter(|p| p[0] < 64 && p[1] < 64 && p[2] > 192).count();
+        assert_eq!(blue > 0, painted, "{what}: what the clip shows is painted");
+        assert_eq!(rgb_at(&page.rgba, 200, 5, 5), [0, 255, 0], "{what}: what follows the clip draws");
+        assert_eq!(page.warnings.contains(&RenderWarning::ContentTruncated), reported, "{what}: reported");
+    }
+}
+
 /// The page content budget counts what is held at once, not everything decoded: a form
 /// with 2 MiB of content painted three hundred times (600 MiB in all) draws every time.
 #[test]

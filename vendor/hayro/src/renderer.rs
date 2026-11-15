@@ -711,6 +711,21 @@ fn may_paint_canvas(
     width: u16,
     height: u16,
 ) -> bool {
+    let (points, curved) = control_box(path);
+    let grow = reach + DRAW_SLACK;
+    let device = transform
+        .transform_rect_bbox(points.inflate(grow, grow))
+        .inflate(2.0, 2.0);
+    // PdfCraft patch (32): see `MAX_CURVE_EXTENT`.
+    if unbounded_curve(device, curved) {
+        return false;
+    }
+    paints_canvas(device, width, height)
+}
+
+/// The box of `path`'s points and control points, which holds the whole path (a curve stays
+/// inside their hull), and whether the path has a curve.
+fn control_box(path: &BezPath) -> (Rect, bool) {
     let mut points = Rect::new(
         f64::INFINITY,
         f64::INFINITY,
@@ -736,16 +751,18 @@ fn may_paint_canvas(
             kurbo::PathEl::ClosePath => {}
         }
     }
-    let grow = reach + DRAW_SLACK;
-    let device = transform
-        .transform_rect_bbox(points.inflate(grow, grow))
-        .inflate(2.0, 2.0);
-    // PdfCraft patch (32): see `MAX_CURVE_EXTENT`.
-    if curved && (device.width() > MAX_CURVE_EXTENT || device.height() > MAX_CURVE_EXTENT) {
+    (points, curved)
+}
+
+/// PdfCraft patch (32): whether a path whose device-space box is `device` is a curve too large to
+/// flatten (see `MAX_CURVE_EXTENT`); the skip is noted for the page's warning.
+fn unbounded_curve(device: Rect, curved: bool) -> bool {
+    let unbounded =
+        curved && (device.width() > MAX_CURVE_EXTENT || device.height() > MAX_CURVE_EXTENT);
+    if unbounded {
         SKIPPED_UNBOUNDED_CURVE.with(|skipped| skipped.set(true));
-        return false;
     }
-    paints_canvas(device, width, height)
+    unbounded
 }
 
 /// PdfCraft patch (32): a curved path whose device-space box is wider or taller than this is not
@@ -1712,6 +1729,17 @@ impl Renderer {
 
     fn push_clip_path_inner(&mut self, clip_path: &BezPath, fill: FillRule) {
         let old_transform = *self.ctx.transform();
+
+        // PdfCraft patch (32): a curved clip too large to flatten (`MAX_CURVE_EXTENT`; the path
+        // is in device space here) clips everything away instead. What it would have shown is
+        // skipped and reported, and nothing it would have hidden is shown.
+        let refused = BezPath::new();
+        let (points, curved) = control_box(clip_path);
+        let clip_path = if unbounded_curve(points, curved) {
+            &refused
+        } else {
+            clip_path
+        };
 
         self.ctx.set_fill_rule(convert_fill_rule(fill));
         self.ctx.set_transform(Affine::IDENTITY);
