@@ -29,6 +29,18 @@ pub enum MaskType {
     Alpha,
 }
 
+std::thread_local! {
+    // PdfCraft patch: see `transfer_function_evals`.
+    static TRANSFER_FUNCTION_EVALS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+}
+
+/// PdfCraft patch: how many values this thread has evaluated through a soft-mask
+/// [`TransferFunction`], for diagnostics and tests. Precomputing a 256-entry lookup table
+/// evaluates it once per possible 8-bit sample value, not once per pixel.
+pub fn transfer_function_evals() -> u64 {
+    TRANSFER_FUNCTION_EVALS.with(core::cell::Cell::get)
+}
+
 /// A transfer function to apply to the opacity values of a mask.
 pub struct TransferFunction(Function);
 
@@ -39,6 +51,7 @@ impl TransferFunction {
     /// guaranteed to be between 0 and 1.
     #[inline]
     pub fn apply(&self, val: f32) -> f32 {
+        TRANSFER_FUNCTION_EVALS.with(|evals| evals.set(evals.get().saturating_add(1)));
         self.0
             .eval(smallvec![val])
             .and_then(|v| v.first().copied())

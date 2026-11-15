@@ -2938,18 +2938,26 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
     };
 
     if let Some(transfer_function) = mask.transfer_function() {
+        // PdfCraft patch: a mask's samples are u8, so precomputing all 256 possible
+        // transfer-function outputs avoids re-evaluating the PDF function per pixel.
+        let lut: [u8; 256] = core::array::from_fn(|i| {
+            (transfer_function.apply(f32::from(i as u8) / 255.0) * 255.0 + 0.5) as u8
+        });
+        let width = rendered_mask.width();
+        let height = rendered_mask.height();
         let mut map = Vec::new();
-
-        for y in 0..rendered_mask.height() {
-            for x in 0..rendered_mask.width() {
-                map.push(
-                    (transfer_function.apply(rendered_mask.sample(x, y) as f32 / 255.0) * 255.0
-                        + 0.5) as u8,
-                );
+        if let Some(len) = usize::from(width).checked_mul(usize::from(height))
+            && map.try_reserve_exact(len).is_ok()
+        {
+            for y in 0..height {
+                for x in 0..width {
+                    map.push(lut[usize::from(rendered_mask.sample(x, y))]);
+                }
             }
+            rendered_mask = Mask::from_parts(map, width, height);
+        } else {
+            log::warn!("Soft-mask transfer buffer could not be allocated; transfer function skipped");
         }
-
-        rendered_mask = Mask::from_parts(map, rendered_mask.width(), rendered_mask.height());
     }
 
     rendered_mask
