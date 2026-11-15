@@ -588,10 +588,15 @@ const MAX_HEADER_STEPS: usize = 4096;
 /// by the step count, not by the size of the stream. That matters: Optimize asks again for every
 /// group of fragments it tries, and the same image can be drawn many times.
 fn adobe_transform(data: &[u8]) -> Option<Option<u8>> {
+    jpeg_header_info(data).map(|(flag, _)| flag)
+}
+
+fn jpeg_header_info(data: &[u8]) -> Option<(Option<u8>, bool)> {
     if data.get(..2)? != [0xFF, 0xD8] {
         return None;
     }
     let mut flag = None;
+    let mut rgb_ids = false;
     let mut i = 2usize;
     // Reading past the end returns.
     for _ in 0..MAX_HEADER_STEPS {
@@ -606,7 +611,7 @@ fn adobe_transform(data: &[u8]) -> Option<Option<u8>> {
             // A fill byte before the marker.
             0xFF => i = i.checked_add(1)?,
             // The first scan (or the end): no header segments after it.
-            0xDA | 0xD9 => return Some(flag),
+            0xDA | 0xD9 => return Some((flag, rgb_ids)),
             // Markers without a segment: TEM, RSTn, SOI.
             0x01 | 0xD0..=0xD8 => i = i.checked_add(2)?,
             _ => {
@@ -619,6 +624,8 @@ fn adobe_transform(data: &[u8]) -> Option<Option<u8>> {
                 {
                     // Version, flags0 and flags1 (two bytes each), then the transform flag.
                     flag = Some(*rest.get(6)?);
+                } else if matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF) && segment.get(5) == Some(&3) {
+                    rgb_ids = [segment.get(6).copied(), segment.get(9).copied(), segment.get(12).copied()] == [Some(b'R'), Some(b'G'), Some(b'B')];
                 }
                 i = end;
             }
@@ -632,27 +639,21 @@ fn adobe_transform(data: &[u8]) -> Option<Option<u8>> {
 /// of components), is too large, or its decoder reads the samples otherwise (for example
 /// components named R, G and B, which decoders take as stored, while `ycc` says YCbCr).
 fn jpeg_samples(data: &[u8], w: usize, h: usize, n: usize, ycc: bool) -> Option<Vec<u8>> {
-    use zune_jpeg::zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
     if (w.checked_mul(h)? as u64) > MAX_PIXELS {
         return None;
     }
-    let options = DecoderOptions::default().set_strict_mode(false).set_max_width(usize::from(u16::MAX)).set_max_height(usize::from(u16::MAX));
-    let mut dec = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
-    dec.decode_headers().ok()?;
-    if dec.dimensions()? != (w, h) || usize::from(dec.info()?.components) != n {
+    if ycc && n == 3 && jpeg_header_info(data)?.1 {
         return None;
     }
-    let out = match (n, ycc, dec.input_colorspace()?) {
-        (1, _, ColorSpace::Luma) => ColorSpace::Luma,
-        (3, true, ColorSpace::YCbCr) => ColorSpace::RGB,
-        // As stored: no conversion either way. The decoder reports an Adobe marker's 0 as CMYK
-        // until it decodes, and then reads three such components as RGB.
-        (3, false, ColorSpace::YCbCr) => ColorSpace::YCbCr,
-        (3, false, ColorSpace::RGB | ColorSpace::CMYK) => ColorSpace::RGB,
-        _ => return None,
+    let mut limits = craft_jpeg::Limits::default();
+    limits.max_pixels = MAX_PIXELS;
+    let dec = craft_jpeg::decode(data, &limits, if ycc { Some(1) } else { Some(0) }).ok()?;
+    if (dec.width as usize, dec.height as usize) != (w, h) || usize::from(dec.components) != n {
+        return None;
+    }
+    let craft_jpeg::Samples::U8(px) = dec.samples else {
+        return None;
     };
-    dec.set_options(options.jpeg_set_out_colorspace(out));
-    let px = dec.decode().ok()?;
     (px.len() == w.checked_mul(h)?.checked_mul(n)?).then_some(px)
 }
 
@@ -681,11 +682,16 @@ fn scaled<P: image::Pixel<Subpixel = u8> + 'static>(img: &image::ImageBuffer<P, 
 }
 
 pub(crate) fn jpeg(px: &[u8], n: usize, w: u32, h: u32, quality: u8) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality.clamp(1, 100));
-    let ty = if n == 1 { image::ExtendedColorType::L8 } else { image::ExtendedColorType::Rgb8 };
-    enc.encode(px, w, h, ty).ok()?;
-    Some(out)
+    let layout = if n == 1 { craft_image_codecs::ChannelLayout::Gray } else { craft_image_codecs::ChannelLayout::Rgb };
+    let img = craft_image_codecs::Image::from_u8(w, h, layout, px.to_vec()).ok()?;
+    let opts = craft_image_codecs::EncodeOptions {
+        jpeg_quality: quality.clamp(1, 100),
+        jpeg_format: craft_image_codecs::JpegFormat::Optimized,
+        embed_icc: false,
+        embed_metadata: false,
+        ..Default::default()
+    };
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &opts).ok()
 }
 
 /// Whether [`pixels`] reads `s` as it is drawn: a codec it decodes, no decode array that

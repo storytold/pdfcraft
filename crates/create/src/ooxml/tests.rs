@@ -27,15 +27,9 @@ fn rels(items: &[(&str, &str, &str)]) -> String {
 }
 
 fn png(w: u32, h: u32) -> Vec<u8> {
-    let mut out = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut out, w, h);
-        enc.set_color(png::ColorType::Rgb);
-        enc.set_depth(png::BitDepth::Eight);
-        let mut wr = enc.write_header().unwrap();
-        wr.write_image_data(&vec![90u8; (w * h * 3) as usize]).unwrap();
-    }
-    out
+    let data = vec![90u8; (w * h * 3) as usize];
+    let img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgb, data).unwrap();
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()
 }
 
 fn reopen(doc: &Document) -> Document {
