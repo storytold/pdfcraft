@@ -148,7 +148,6 @@ pub fn export_data(doc: &Document, format: Format) -> String {
     }
 }
 
-/// The field values in a form data file (FDF or XFDF) or a filled-in PDF form, in file order.
 /// An FDF or PDF data file, opened. One whose `/Encrypt` is there but can't be read holds its
 /// values encrypted, with nothing to decrypt them: refused, not read as data.
 pub(crate) fn open_data_file(bytes: &[u8]) -> Result<Document, DataError> {
@@ -161,6 +160,7 @@ pub(crate) fn open_data_file(bytes: &[u8]) -> Result<Document, DataError> {
     Ok(doc)
 }
 
+/// The field values in a form data file (FDF or XFDF) or a filled-in PDF form, in file order.
 pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError> {
     if bytes.starts_with(b"%FDF") {
         let fdf = open_data_file(bytes)?;
