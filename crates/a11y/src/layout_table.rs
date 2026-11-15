@@ -5,7 +5,7 @@
 //! the cells, and drops the Table attributes (summary, scope, spans) they no longer have (#4105),
 //! whether attached directly (`/A`) or through a class (`/C` and the `/ClassMap`, #7412).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use pdfcraft_cos::{CosError, Dict, Document, ObjRef, Object};
 
@@ -60,8 +60,9 @@ struct Retag<'a> {
     class_map: Dict,
     /// What each class named on a converted element becomes.
     classes: HashMap<Vec<u8>, ClassChange>,
-    /// Classes without the Table attributes, to add to the class map.
-    new_classes: Vec<(Vec<u8>, Object)>,
+    /// Classes without the Table attributes, to add to the class map: by name, so a lookup is
+    /// indexed and they are written in the same order every time.
+    new_classes: BTreeMap<Vec<u8>, Object>,
     /// Indirect elements under the table still to look at.
     queue: Vec<ObjRef>,
     /// How many elements changed.
@@ -270,10 +271,10 @@ impl Retag<'_> {
             if n > 0 {
                 candidate.extend_from_slice(n.to_string().as_bytes());
             }
-            let pending = self.new_classes.iter().find(|(k, _)| *k == candidate).map(|(_, v)| v);
+            let pending = self.new_classes.get(&candidate);
             match pending.or_else(|| self.class_map.get(&candidate)) {
                 None => {
-                    self.new_classes.push((candidate.clone(), value));
+                    self.new_classes.insert(candidate.clone(), value);
                     return Ok(candidate);
                 }
                 Some(existing) if *existing == value => return Ok(candidate),
@@ -286,7 +287,7 @@ impl Retag<'_> {
 
 /// Add `classes` to the structure tree root's class map, where it is written: its own object, or
 /// inline in the structure tree root (itself an object, or inline in the catalog).
-fn add_classes(doc: &mut Document, classes: &[(Vec<u8>, Object)]) -> Result<(), LayoutTableError> {
+fn add_classes(doc: &mut Document, classes: &BTreeMap<Vec<u8>, Object>) -> Result<(), LayoutTableError> {
     if classes.is_empty() {
         return Ok(());
     }
@@ -323,7 +324,7 @@ pub fn layout_table_to_blocks(doc: &mut Document, table: ObjRef) -> Result<usize
     let root_map =
         |key: &[u8]| alt::tree_root(doc).and_then(|r| r.get(key).map(|o| doc.resolve(o))).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
     let (role_map, class_map) = (root_map(b"RoleMap"), root_map(b"ClassMap"));
-    let mut retag = Retag { doc: &*doc, role_map, class_map, classes: HashMap::new(), new_classes: Vec::new(), queue: Vec::new(), changed: 0 };
+    let mut retag = Retag { doc: &*doc, role_map, class_map, classes: HashMap::new(), new_classes: BTreeMap::new(), queue: Vec::new(), changed: 0 };
     if retag.standard(&element.dict).as_deref() != Some(b"Table".as_slice()) {
         return Err(LayoutTableError::NotATable);
     }
