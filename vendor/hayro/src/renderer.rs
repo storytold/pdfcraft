@@ -1031,13 +1031,24 @@ impl Renderer {
         // specification. If we are stroking text, we reduce the threshold as it will otherwise
         // lead to very bold-looking text at low resolutions.
         let min_factor = max_factor(self.ctx.transform());
-        let mut line_width = stroke_props.line_width.max(0.01);
-        let transformed_width = line_width * min_factor;
-
+        // PdfCraft patch (35): the minimum is applied in device space alone. Upstream first
+        // floored the width at 0.01 in user space, so under a large matrix a zero or tiny width
+        // came out far wider than a pixel (0.0012 under a 543× form matrix drew about 6 pt wide).
+        // ISO 32000-2 §8.4.3.2 gives the width in user space and makes 0 the thinnest line the
+        // device can draw. A NaN or negative width counts as 0. Where no device minimum applies
+        // (inside a pattern or a Type 3 glyph, or under a matrix that collapses or isn't finite),
+        // the 0.01 floor stays, so no stroke is drawn 0 or NaN wide.
+        let thinnest = threshold / min_factor;
         // Only enforce line width if not inside of pattern or type 3 glyph.
-        if transformed_width < threshold && !self.inside_pattern && !self.in_type3_glyph {
-            line_width /= transformed_width;
-            line_width *= threshold;
+        let device_minimum = !self.inside_pattern
+            && !self.in_type3_glyph
+            && thinnest.is_finite()
+            && thinnest > 0.0;
+        let mut line_width = stroke_props.line_width.max(0.0);
+        if !device_minimum {
+            line_width = line_width.max(0.01);
+        } else if line_width < thinnest {
+            line_width = thinnest;
         }
 
         // PdfCraft patch: a stroke far wider than the canvas looks the same as one a few canvases
