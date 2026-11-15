@@ -32,11 +32,10 @@ fn many_distinct_sizes_are_counted_in_constant_steps_each() {
     assert!(steps <= 2 * 3000, "{steps} steps");
 }
 
-/// The colour table is craft-rtf's now. Its writer keeps each lookup constant and counts them in
-/// its own test (storytold/craft-libs#1466, `many_distinct_fonts_and_colours_take_constant_steps_each`);
-/// this one still counts any lookup the mapping makes, and checks the last colour's slot.
+/// The step counter measures page-item and body-size lookups in the mapping; the last colour's
+/// slot checks the output. craft-rtf separately tests colour-table lookup complexity.
 #[test]
-fn many_distinct_colours_take_constant_steps_each() {
+fn many_distinct_colours_are_exported_with_bounded_page_mapping() {
     let pages = [varied_page(3000)];
     let mut out = String::new();
     let steps = lookup_steps(|| out = rtf(&pages));
