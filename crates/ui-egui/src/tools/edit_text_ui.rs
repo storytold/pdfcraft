@@ -261,36 +261,41 @@ fn narrow_double_click(ui: &egui::Ui, id: egui::Id, text: &str, output: &egui::t
     let narrowed: Option<[usize; 2]> = ui.ctx().data(|d| d.get_temp(marker));
     let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
     let sorted = |r: CCursorRange| r.sorted_cursors().map(|c| usize::from(c.index));
-    let selected = state.cursor.char_range();
-    let mut now = selected.map(sorted);
+    let ends = |r: CCursorRange| (usize::from(r.primary.index), usize::from(r.secondary.index));
+    let mut selected = state.cursor.char_range();
     let mut changed = false;
-    // egui keeps the word a double-click selected as the anchor of the next Shift-click, so the
-    // click extends from that word and never drops it. It cannot be set from outside and
-    // `set_char_range` clears it, so a selection narrowed here has none: egui's plain Shift-click
-    // would keep only the end the selection began at. Give the click the same result.
-    let shift_press = ui.input(|i| i.modifiers.shift) && output.response.is_pointer_button_down_on();
-    if let (true, Some([start, end]), Some(range)) = (shift_press, narrowed, selected)
-        && now != Some([start, end])
-    {
-        let [low, high] = sorted(range);
-        let fixed = if high == start && low < start {
-            // Extended backwards: the word stays selected, the pointer end stays where egui put it.
-            Some(CCursorRange { primary: range.primary, secondary: CCursor::new(end), h_pos: None })
-        } else if high < end {
-            // Pointer inside the word: the word stays selected.
-            Some(CCursorRange::two(CCursor::new(start), CCursor::new(end)))
+    let mut keep = narrowed;
+    let shift = ui.input(|i| i.modifiers.shift);
+    let down = output.response.is_pointer_button_down_on();
+    // egui keeps the word a double-click selected as the anchor of the next Shift-clicks, so each
+    // click extends from that word, in either direction, and never drops it. It cannot be set from
+    // outside and `set_char_range` clears it, so a selection narrowed here has none: egui's plain
+    // Shift-click would keep only the end the selection began at, which after the first extension
+    // is the word's far end. Give every click of the sequence the result egui gives: the pointer
+    // end is where egui put the primary cursor, the other end is the far end of the word.
+    if let (Some([start, end]), Some(range), true) = (narrowed, selected, down) {
+        if shift {
+            let pointer = usize::from(range.primary.index);
+            let fixed = if pointer < start {
+                CCursorRange { primary: range.primary, secondary: CCursor::new(end), h_pos: None }
+            } else if pointer > end {
+                CCursorRange { primary: range.primary, secondary: CCursor::new(start), h_pos: None }
+            } else {
+                CCursorRange::two(CCursor::new(start), CCursor::new(end))
+            };
+            if ends(fixed) != ends(range) {
+                state.cursor.set_char_range(Some(fixed));
+                selected = Some(fixed);
+                changed = true;
+            }
         } else {
-            None
-        };
-        if let Some(fixed) = fixed {
-            state.cursor.set_char_range(Some(fixed));
-            now = Some(sorted(fixed));
-            changed = true;
+            // A plain press starts a new selection.
+            keep = None;
         }
     }
     // With Shift held egui extends the selection instead; keep that range (egui's own check in
     // `pointer_interaction` is `double_clicked() && !shift`).
-    let double_click = output.response.double_clicked() && !ui.input(|i| i.modifiers.shift);
+    let double_click = output.response.double_clicked() && !shift;
     // Only over a glyph: a double-click on the space after "Take" is left to egui, though the
     // caret it hits ends the word before it.
     let target = double_click
@@ -300,14 +305,24 @@ fn narrow_double_click(ui: &egui::Ui, id: egui::Id, text: &str, output: &egui::t
         .filter(|&at| text.chars().nth(at).is_some_and(|c| !c.is_whitespace()))
         .and_then(|at| word_at_caret(text, at));
     if let Some(word) = target {
-        if now != Some([word.start, word.end]) {
+        if selected.map(sorted) != Some([word.start, word.end]) {
             let range = CCursorRange::two(CCursor::new(word.start), CCursor::new(word.end));
             state.cursor.set_char_range(Some(range));
             changed = true;
         }
-        ui.ctx().data_mut(|d| d.insert_temp(marker, [word.start, word.end]));
-    } else if narrowed.is_some() && now != narrowed {
-        ui.ctx().data_mut(|d| d.remove::<[usize; 2]>(marker));
+        keep = Some([word.start, word.end]);
+    }
+    // The anchor lasts while the selection still holds the word; typing or a new selection ends it.
+    let keep = keep.filter(|&[start, end]| selected.map(sorted).is_some_and(|[low, high]| low <= start && end <= high));
+    if keep != narrowed {
+        ui.ctx().data_mut(|d| match keep {
+            Some(word) => {
+                d.insert_temp(marker, word);
+            }
+            None => {
+                d.remove::<[usize; 2]>(marker);
+            }
+        });
     }
     if changed {
         egui::TextEdit::store_state(ui.ctx(), id, state);
@@ -1351,6 +1366,43 @@ mod tests {
         assert_eq!(live.click(calm, 2, egui::Modifiers::NONE).as_deref(), Some("calm"));
         let before = live.point(2, 0.5);
         assert_eq!(live.click(before, 1, shift).as_deref(), Some("ke a calm"));
+    }
+
+    /// Double-click char `word_at` of "Take a calm walk.", then Shift-click (`clicks` 1) or
+    /// Shift-double-click (2) each `(char, clicks)` in turn in the same box; the selected text after
+    /// each. `narrow` runs the correction; without it this is egui's own behaviour.
+    fn shift_sequence(narrow: bool, word_at: usize, steps: &[(usize, usize)]) -> Vec<String> {
+        let shift = egui::Modifiers { shift: true, ..Default::default() };
+        let mut live = LiveBox::new(narrow);
+        let at = live.point(word_at, 0.2);
+        let mut shown = vec![live.click(at, 2, egui::Modifiers::NONE).expect("a selection")];
+        for &(char_at, clicks) in steps {
+            let at = live.point(char_at, 0.5);
+            shown.push(live.click(at, clicks, shift).expect("a selection"));
+        }
+        shown
+    }
+
+    /// The word stays the anchor through a whole run of Shift-clicks: before it, after it, before
+    /// it again, in one box, as after egui's own double-click of "calm" ("a" narrowed from egui's
+    /// "Take a" against egui's own "calm", with the same pointer positions).
+    #[test]
+    fn shift_clicks_in_a_row_keep_extending_from_the_narrowed_word() {
+        let steps = [(2, 1), (14, 1), (0, 1), (14, 1)];
+        let narrowed = shift_sequence(true, 5, &steps);
+        assert_eq!(narrowed, ["a", "ke a", "a calm wa", "Take a", "a calm wa"]);
+        // egui's own, on a word it selects right: the same run around "calm" at 9.
+        let egui = shift_sequence(false, 9, &steps);
+        assert_eq!(egui, ["calm", "ke a calm", "calm wa", "Take a calm", "calm wa"]);
+    }
+
+    /// Shift-double-clicks in a row extend by words from the narrowed word, in both directions.
+    #[test]
+    fn shift_double_clicks_in_a_row_extend_by_words_from_the_narrowed_word() {
+        let narrowed = shift_sequence(true, 5, &[(2, 2), (14, 2), (0, 2)]);
+        let egui = shift_sequence(false, 9, &[(2, 2), (14, 2), (0, 2)]);
+        assert_eq!(narrowed, ["a", "Take a", "a calm walk", "Take a"]);
+        assert_eq!(egui, ["calm", "Take a calm", "calm walk", "Take a calm"]);
     }
 
     /// A double-click on the space after "Take" is left to egui, from either half of the space;
