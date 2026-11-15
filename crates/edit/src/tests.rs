@@ -7926,36 +7926,53 @@ fn justified_text_in_a_composite_font_fills_each_row_with_adjustments_after_its_
     assert!(flat.contains("/Span <</ActualText"), "the explicit spaces keep the logical text: {flat}");
 }
 
+/// The composite-font page the composite tests share: one page whose only font is a synthetic
+/// Type0 with two-byte codes for ASCII, so word spacing cannot reach its spaces.
+fn composite_page(content: &str) -> Document {
+    let mut doc = text_page(content);
+    let unicode = doc.add(Object::Stream(Stream::flate(
+        Dict::new(),
+        b"1 begincodespacerange <0000> <ffff> endcodespacerange 1 beginbfrange <0020> <007e> <0020> endbfrange",
+    )));
+    let font = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("Type0")),
+        (b"BaseFont".to_vec(), Object::name("SyntheticCID")),
+        (b"Encoding".to_vec(), Object::name("Identity-H")),
+        (b"ToUnicode".to_vec(), Object::Ref(unicode)),
+        (
+            b"DescendantFonts".to_vec(),
+            Object::Array(vec![Object::Dict(Dict::from_iter([
+                (b"Subtype".to_vec(), Object::name("CIDFontType2")),
+                (b"DW".to_vec(), Object::Int(500)),
+            ]))]),
+        ),
+    ]);
+    let p = pdfcraft_model::pages(&doc)[0].obj;
+    let font = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("Type0")),
+        (b"BaseFont".to_vec(), Object::name("SyntheticCID")),
+        (b"Encoding".to_vec(), Object::name("Identity-H")),
+        (b"ToUnicode".to_vec(), Object::Ref(unicode)),
+        (
+            b"DescendantFonts".to_vec(),
+            Object::Array(vec![Object::Dict(Dict::from_iter([
+                (b"Subtype".to_vec(), Object::name("CIDFontType2")),
+                (b"DW".to_vec(), Object::Int(500)),
+            ]))]),
+        ),
+    ]);
+    let resources = Dict::from_iter([(b"Font".to_vec(), Object::Dict(Dict::from_iter([(b"F1".to_vec(), Object::Dict(font.clone())), (b"F2".to_vec(), Object::Dict(font))])))]);
+    doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(resources))).unwrap();
+    doc
+}
+
 /// Review round 6 on #7343: the source's own word spacing (`Tw`) applies only to the single-byte
 /// code 32, so a composite font's spaces keep the source's spacing and take only the justification
 /// stretch, whatever the source's `Tw` says (#7213).
 #[test]
 fn a_composite_fonts_source_word_spacing_does_not_reach_its_spaces() {
-    fn composite_page(content: &str) -> Document {
-        let mut doc = text_page(content);
-        let unicode = doc.add(Object::Stream(Stream::flate(
-            Dict::new(),
-            b"1 begincodespacerange <0000> <ffff> endcodespacerange 4 beginbfchar <0020> <0020> <0061> <0061> <0062> <0062> <0063> <0063> <0064> <0064> endbfchar",
-        )));
-        let font = Dict::from_iter([
-            (b"Type".to_vec(), Object::name("Font")),
-            (b"Subtype".to_vec(), Object::name("Type0")),
-            (b"BaseFont".to_vec(), Object::name("SyntheticCID")),
-            (b"Encoding".to_vec(), Object::name("Identity-H")),
-            (b"ToUnicode".to_vec(), Object::Ref(unicode)),
-            (
-                b"DescendantFonts".to_vec(),
-                Object::Array(vec![Object::Dict(Dict::from_iter([
-                    (b"Subtype".to_vec(), Object::name("CIDFontType2")),
-                    (b"DW".to_vec(), Object::Int(500)),
-                ]))]),
-            ),
-        ]);
-        let p = pdfcraft_model::pages(&doc)[0].obj;
-        let resources = Dict::from_iter([(b"Font".to_vec(), Object::Dict(Dict::from_iter([(b"F1".to_vec(), Object::Dict(font))])))]);
-        doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(resources))).unwrap();
-        doc
-    }
     let hex = |s: &str| s.bytes().map(|b| format!("00{b:02x}")).collect::<String>();
     // A plain replacement keeps the line's own drawing: the source's `Tw` stays where it was and
     // no displacement restates it for the two-byte spaces.
@@ -7998,6 +8015,53 @@ fn a_composite_fonts_source_word_spacing_does_not_reach_its_spaces() {
     assert_eq!(plain_text, tw_text, "the rows read the same: {plain_text:?} vs {tw_text:?}");
     assert_eq!(without, with, "the source's `Tw` adds nothing to the spaces' stretch: {with:?}");
     assert!(!with.is_empty(), "the justified rows stretch on their two-byte spaces: {with:?} rows {plain_text:?} content {content}");
+}
+
+/// Review round 7 on #7343: a naturally justified styled paragraph — composite-font runs in
+/// several fonts, a source `Tw`, and rows that only reach their measure by stretched spaces —
+/// keeps its measure when a word is edited: the styled path stretches the row's two-byte spaces
+/// by the share of the measure left alone, never by the source's `Tw` (#7213).
+#[test]
+fn a_justified_styled_paragraphs_composite_spaces_take_the_stretch_alone() {
+    let hex = |s: &str| s.bytes().map(|b| format!("00{b:02x}")).collect::<String>();
+    // 5 pt glyphs, 5 pt spaces, 30 pt of justification after each space: rows 1 and 2 span
+    // 100..285, row 3 is short, so the paragraph reads as justified with its measure at 285.
+    let content = |tw: &str| {
+        let t = |s: &str| format!("<{}>", hex(s));
+        format!(
+            "BT {tw} Tw 15 TL 100 700 Td /F1 10 Tf 5 Tc {} Tj 0 Tc T* /F2 10 Tf 5 Tc {} Tj 0 Tc T* /F1 10 Tf {} Tj ET",
+            t("abcd efgh ijkl mnop"),
+            t("abcd efgh ijkl mnop"),
+            t("abcd")
+        )
+    };
+    let probe = |tw: f64| {
+        let mut doc = composite_page(&content(&format!("{tw}")));
+        let before = text::text_lines(&doc, 0).unwrap();
+        text::rewrite_block(&mut doc, 0, 0, Some("abcd efgh ijkl nopq\nabcd efgh ijkl mnop\nabcd"), &text::BlockStyle::default()).unwrap();
+        let doc = reopen(&doc);
+        (before, text::text_lines(&doc, 0).unwrap())
+    };
+    let rows = |lines: &[text::TextLine]| {
+        let mut rights: Vec<(f64, [f64; 4])> = lines.iter().map(|l| (l.rect[1], l.rect)).collect();
+        rights.sort_by(|a, b| b.0.total_cmp(&a.0));
+        rights
+    };
+    let (before, after) = probe(2.0);
+    // The source paragraph is justified: its first two rows reach one right edge and the last
+    // falls short of it.
+    assert_eq!(rows(&before).iter().map(|(b, r)| (b.round(), (r[0].round(), r[2].round()))).collect::<Vec<_>>(),
+        vec![(698.0, (100.0, 290.0)), (683.0, (100.0, 290.0)), (668.0, (100.0, 120.0))], "the source rows: {before:?}");
+    // The edit keeps the paragraph's shape: the edited row is redrawn composite, stretches back
+    // to the measure, and the rows around it keep their own geometry.
+    let edited = rows(&after).iter().filter(|(b, _)| *b == 697.5).map(|(_, r)| *r).collect::<Vec<_>>();
+    assert_eq!(edited, vec![[100.0, 697.5, 290.0, 709.0]], "the edited row stretches back to its measure: {after:?}");
+    assert_eq!(rows(&after), rows(&before), "the rewrite preserves every row's geometry: {after:?}");
+    // The source's `Tw` never joins the stretch: the same edit on a page without one lays the
+    // rows out identically.
+    let (plain_before, plain_after) = probe(0.0);
+    assert_eq!(rows(&plain_after), rows(&after), "the source's `Tw` adds nothing to the stretch: {plain_after:?}");
+    assert_eq!(rows(&plain_before), rows(&before), "the source rows read the same without the `Tw`");
 }
 
 #[test]
