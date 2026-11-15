@@ -151,7 +151,7 @@ impl Automation {
     }
     pub(crate) fn measurement_export(&self, a: &Args) -> Result<Value> {
         let all = self.doc(a)?.measurements().map_err(failed)?;
-        let csv = measure::csv(&all.measurements);
+        let csv = self.doc(a)?.measurement_csv(&all.measurements).map_err(failed)?;
         let target = self.resolve(a.str("out")?, true)?;
         crate::write_atomic(&target, csv.as_bytes())?;
         Ok(json!({"path":target,"count":all.measurements.len(),"unsupported":all.unsupported.len(),"truncated":all.truncated}))

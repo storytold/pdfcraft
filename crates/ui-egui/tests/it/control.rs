@@ -1614,7 +1614,9 @@ fn measurement_tools_draw_live_calibrate_save_and_export() {
     h.state_mut().export_dir_override = Some(dir.to_string_lossy().into());
     ok(&mut h, &c, "ui.command", json!({"id":"measure.export"}));
     h.run_steps(2);
-    assert!(std::fs::read_to_string(dir.join("measurements.csv")).unwrap().contains("m^2"));
+    let csv = std::fs::read_to_string(dir.join("measurements.csv")).unwrap();
+    assert!(csv.contains("m^2"));
+    assert!(csv.starts_with("Page,Index,Type,Value,Unit,Label,Author,Scale,MinX,MinY,MaxX,MaxY,Points\r\n"));
     h.state_mut().set_option("quick", "measure-calibrate").unwrap();
     click(&mut h, &c, 30.0, 50.0);
     click(&mut h, &c, 130.0, 50.0);

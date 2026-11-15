@@ -697,11 +697,14 @@ pub(crate) fn command(app: &mut PdfCraftApp, id: &str) {
 }
 fn export_csv(app: &mut PdfCraftApp) {
     let Some((_, id)) = app.active_ids() else { return };
-    let result = app.session.get(id).ok_or_else(|| "no such document".to_string()).and_then(|d| d.measurements());
+    let result = app.session.get(id).ok_or_else(|| "no such document".to_string()).and_then(|d| {
+        let listing = d.measurements()?;
+        let csv = d.measurement_csv(&listing.measurements)?;
+        Ok((listing, csv))
+    });
     match result {
         Err(e) => app.notify(&e),
-        Ok(listing) => {
-            let csv = measure::csv(&listing.measurements);
+        Ok((listing, csv)) => {
             if !listing.unsupported.is_empty() {
                 app.notify(crate::i18n::fmt(
                     tl!("{n} measurements use an unsupported format and are left out."),
