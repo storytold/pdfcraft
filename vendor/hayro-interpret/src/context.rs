@@ -128,6 +128,12 @@ pub(crate) fn charge_content(len: usize) {
     CONTENT_LEFT.with(|c| c.set(c.get().saturating_sub(len)));
 }
 
+/// PdfCraft patch (110): content was skipped because the device had no room left for it
+/// (`Device::out_of_room`), reported as the page's own budget running out is.
+pub(crate) fn mark_content_truncated() {
+    CONTENT_TRUNCATED.with(|truncated| truncated.set(true));
+}
+
 /// PdfCraft patch (18): whether content was skipped because the page's budget ran out.
 pub(crate) fn content_was_truncated() -> bool {
     CONTENT_TRUNCATED.with(core::cell::Cell::get)

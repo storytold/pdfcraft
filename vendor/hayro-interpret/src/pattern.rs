@@ -400,5 +400,10 @@ impl<'a, T: Device<'a>> Device<'a> for StencilPatternDevice<'a, '_, T> {
 
     fn pop_transparency_group(&mut self) {}
 
+    // PdfCraft patch (110): the device drawn into decides.
+    fn out_of_room(&self) -> bool {
+        self.inner.out_of_room()
+    }
+
     fn set_blend_mode(&mut self, _: BlendMode) {}
 }

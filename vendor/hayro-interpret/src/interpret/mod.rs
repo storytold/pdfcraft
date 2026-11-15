@@ -560,6 +560,11 @@ fn interpret_window<'a>(
         if context.settings.cancelled.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
             break;
         }
+        // PdfCraft patch (110): and when the device can't hold any more of the page.
+        if device.out_of_room() {
+            crate::context::mark_content_truncated();
+            break;
+        }
         match op {
             TypedInstruction::SaveState(_) => context.save_state(),
             // PdfCraft patch (68): in a form or an appearance stream, a `Q` with no `q` of that
@@ -1209,7 +1214,8 @@ fn interpret_content<'a>(
             .cancelled
             .as_ref()
             .is_some_and(|c| c.load(Ordering::Relaxed));
-        if !needs_more || cancelled || exhausted {
+        // PdfCraft patch (110): the rest of a page the device has no room for isn't read.
+        if !needs_more || cancelled || exhausted || device.out_of_room() {
             break;
         }
         // A window that is still incomplete at its end waits for more of the stream. It doubles

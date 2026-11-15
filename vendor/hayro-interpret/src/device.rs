@@ -132,6 +132,14 @@ pub trait Device<'a> {
     /// other than `DeviceCMYK` is about to be drawn. A device drawing an enclosing group in CMYK
     /// can no longer draw that group right, since this one blends in its own space.
     fn group_blends_outside_device_cmyk(&mut self) {}
+    /// PdfCraft patch (110): the device has no room left for anything more on this page (a
+    /// rasterizer whose coverage budget is spent leaves every later path out). The interpreter
+    /// then stops drawing, as if cancelled, and reports the page truncated
+    /// (`InterpreterWarning::ContentTruncated`): forms that draw the next form twice, twenty
+    /// deep, kept it interpreting millions of paths nothing would show.
+    fn out_of_room(&self) -> bool {
+        false
+    }
 }
 
 /// A device that discards all drawing operations.

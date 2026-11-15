@@ -391,6 +391,11 @@ impl<'a, T: Device<'a>> Device<'a> for Type3ShapeGlyphDevice<'a, '_, T> {
 
     fn pop_transparency_group(&mut self) {}
 
+    // PdfCraft patch (110): the device drawn into decides.
+    fn out_of_room(&self) -> bool {
+        self.inner.out_of_room()
+    }
+
     fn draw_image(&mut self, image: Image<'a, '_>, transform: Affine) {
         if let Image::Stencil(mut s) = image {
             s.paint = self.paint.clone();

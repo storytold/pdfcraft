@@ -1,6 +1,8 @@
 //! A page that paints the same content over and over runs out of rasterizer coverage: what is
 //! past it is left out and said to be, rather than panicking once a strip's alpha index no longer
-//! fits (PDFBOX-5415's map page drew one form 2^22 times and panicked at 7 GB).
+//! fits (PDFBOX-5415's map page drew one form 2^22 times and panicked at 7 GB). Every scene is
+//! kept to a coverage budget well below that index's limit, and drawing stops once it is spent
+//! (the same page then held 5.4 GB for 76 s; it now holds about 240 MB for 4 s).
 
 use super::*;
 use std::sync::Mutex;
@@ -17,14 +19,19 @@ fn doubling_forms(levels: usize) -> Vec<u8> {
 /// [`doubling_forms`] with the last form painting `leaf` instead, and the page painting `after`
 /// once the forms are done.
 fn doubling_forms_then(levels: usize, leaf: &str, after: &str) -> Vec<u8> {
+    doubling_forms_page(levels, leaf, &format!("/F0 Do {after}"), "/XObject << /F0 5 0 R >>")
+}
+
+/// A page with `content` and `resources` (inside its resource dictionary), and the forms of
+/// [`doubling_forms`] from object 5 (`F0`) on, the last one painting `leaf`.
+fn doubling_forms_page(levels: usize, leaf: &str, content: &str, resources: &str) -> Vec<u8> {
     let mut objs: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
         // Object 4 is the page's content; forms start at 5.
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /XObject << /F0 5 0 R >> >> >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << {resources} >> >>"),
         String::new(),
     ];
-    let content = format!("/F0 Do {after}");
     objs[3] = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
     for level in 0..=levels {
         let (body, resources) = if level == levels {
@@ -180,4 +187,164 @@ fn a_layer_clip_past_the_coverage_is_itself_left_out() {
     ctx.push_clip_layer(&Circle::new((50.0, 50.0), 40.0).to_path(0.1));
     assert!(ctx.coverage_full(), "the clip, past the limit, is left out and that is said");
     ctx.pop_layer();
+}
+
+/// A fill of a hundred stripes one unit wide across the 200 x 200 page, two units apart. Every
+/// tile of the canvas holds an edge of one, so one fill stores coverage for the whole canvas
+/// (40,000 values at 72 dpi).
+fn stripes() -> String {
+    let stripes: Vec<String> = (0..100).map(|i| format!("{}.5 0 1 200 re", i * 2)).collect();
+    format!("0 g {} f", stripes.join(" "))
+}
+
+/// Renders page 1 of `pdf` at 72 dpi with the default settings, returning the paths the
+/// renderer was asked to draw (`hayro::paths_drawn`), whether the page said content was left
+/// out, and the share of its pixels that are not white.
+fn render_counted(pdf: Vec<u8>) -> (u64, bool, f64) {
+    let parsed = Pdf::new(Arc::new(pdf)).unwrap();
+    let truncated = Arc::new(Mutex::new(false));
+    let seen = truncated.clone();
+    let settings = InterpreterSettings {
+        warning_sink: Arc::new(move |w| {
+            if matches!(w, InterpreterWarning::ContentTruncated) {
+                *seen.lock().unwrap() = true;
+            }
+        }),
+        ..Default::default()
+    };
+    let before = hayro::paths_drawn();
+    let pixmap = hayro::render(&parsed.pages()[0], &RenderCache::new(), &settings, &RenderSettings { bg_color: WHITE, ..Default::default() });
+    let drawn = hayro::paths_drawn() - before;
+    let cut = *truncated.lock().unwrap();
+    let px = pixmap.data_as_u8_slice().as_chunks::<4>().0;
+    let inked = px.iter().filter(|p| p[0] < 250).count() as f64 / px.len() as f64;
+    (drawn, cut, inked)
+}
+
+/// The leaves a page of forms drawing the next form twice, thirteen deep, paints: 2^13 fills of
+/// [`stripes`], each storing coverage for the whole canvas.
+const BOMB_LEAVES: u64 = 1 << 13;
+
+/// About how many fills of [`stripes`] the default coverage budget of a 200 x 200 canvas holds,
+/// at the 40,000 values each stores (vello_cpu patch 1 also keeps room for twice the canvas, so
+/// a couple fewer fit).
+fn stripes_within_the_budget() -> u64 {
+    let budget = hayro::coverage_budget(200, 200) as u64;
+    budget / 40_000
+}
+
+/// Forms that draw the next form twice (PDFBOX-5415 drew one twenty deep, under soft masks) fill
+/// the rasterizer's coverage long before the page's nested-paint budget runs out. Each path's
+/// coverage stays in memory until the page is rasterized, so the page grew to the 2^31 values a
+/// strip can index (5.4 GB, 76 s) before what came after was left out. The page now stops at its
+/// default coverage budget (hayro patch 33), and the interpreter stops drawing once the renderer
+/// has no room (hayro-interpret patch 110): the fills drawn are those the budget holds, not
+/// every leaf, what fitted is drawn, and the page says the rest was left out.
+#[test]
+fn forms_drawing_the_next_twice_stop_at_the_default_coverage_budget() {
+    assert_eq!(hayro::coverage_budget(200, 200), 1 << 26, "a small canvas gets the floor");
+    let held = stripes_within_the_budget();
+    assert!(held < BOMB_LEAVES / 4, "the page is past its budget: {held} of {BOMB_LEAVES} leaves fit");
+
+    let (drawn, cut, inked) = render_counted(doubling_forms_then(13, &stripes(), ""));
+    assert!(cut, "the page says content was left out");
+    assert!(drawn <= held + 1, "drawing stops at the budget: {drawn} paths drawn, {held} fit, {BOMB_LEAVES} leaves");
+    assert!(drawn + 2 >= held, "what the budget holds is drawn: {drawn} paths drawn, {held} fit");
+    assert!(inked > 0.4, "the stripes that fitted show: {inked}");
+}
+
+/// The same forms as a page's soft mask: the mask is drawn as a scene of its own, which has the
+/// same budget, and drawing it stops there too.
+#[test]
+fn forms_drawing_the_next_twice_in_a_soft_mask_stop_at_its_coverage_budget() {
+    let pdf =
+        doubling_forms_page(13, &stripes(), "/M gs 0 0 1 rg 0 0 200 200 re f", "/ExtGState << /M << /SMask << /S /Luminosity /G 5 0 R >> >> >>");
+    let held = stripes_within_the_budget();
+    let (drawn, cut, _) = render_counted(pdf);
+    assert!(cut, "the page says content was left out");
+    // The mask's fills, and the page's own fill under it.
+    assert!(drawn <= held + 2, "drawing the mask stops at its budget: {drawn} paths drawn, {held} fit, {BOMB_LEAVES} leaves");
+}
+
+/// Nested forms within the budget draw every leaf and say nothing was left out.
+#[test]
+fn nested_forms_within_the_budget_draw_every_leaf() {
+    let (drawn, cut, inked) = render_counted(doubling_forms(6));
+    assert!(!cut, "nothing is left out");
+    assert_eq!(drawn, 64, "every leaf is drawn");
+    assert!(inked > 0.1, "the circle shows: {inked}");
+    let (drawn, cut, _) = render_counted(doubling_forms_then(8, &stripes(), ""));
+    assert!(!cut, "256 canvas-wide fills fit");
+    assert_eq!(drawn, 256, "every leaf is drawn");
+}
+
+/// The coverage budget is the floor for a small canvas and grows with a large one.
+#[test]
+fn the_coverage_budget_grows_with_the_canvas() {
+    assert_eq!(hayro::coverage_budget(1, 1), 1 << 26);
+    assert_eq!(hayro::coverage_budget(2048, 2048), 1 << 26, "16 values a pixel is the floor here");
+    assert_eq!(hayro::coverage_budget(4096, 4096), 16 * 4096 * 4096);
+    assert!(hayro::coverage_budget(u16::MAX, u16::MAX) > 1 << 31, "vello_cpu keeps it to 2^31");
+}
+
+/// A device with room for `room` paths, counting those it is handed.
+struct Room {
+    room: usize,
+    paths: usize,
+}
+
+impl<'a> hayro::hayro_interpret::Device<'a> for Room {
+    fn set_soft_mask(&mut self, _: Option<hayro::hayro_interpret::SoftMask<'a>>) {}
+    fn set_blend_mode(&mut self, _: hayro::hayro_interpret::BlendMode) {}
+    fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &hayro::hayro_interpret::Paint<'a>, _: &hayro::hayro_interpret::PathDrawMode) {
+        self.paths += 1;
+    }
+    fn push_clip_path(&mut self, _: &hayro::hayro_interpret::ClipPath) {}
+    fn push_transparency_group(&mut self, _: f32, _: Option<hayro::hayro_interpret::SoftMask<'a>>, _: hayro::hayro_interpret::BlendMode) {}
+    fn draw_glyph(
+        &mut self,
+        _: &hayro::hayro_interpret::font::Glyph<'a>,
+        _: kurbo::Affine,
+        _: kurbo::Affine,
+        _: &hayro::hayro_interpret::Paint<'a>,
+        _: &hayro::hayro_interpret::GlyphDrawMode,
+    ) {
+    }
+    fn draw_image(&mut self, _: hayro::hayro_interpret::Image<'a, '_>, _: kurbo::Affine) {}
+    fn pop_clip_path(&mut self) {}
+    fn pop_transparency_group(&mut self) {}
+    fn out_of_room(&self) -> bool {
+        self.paths >= self.room
+    }
+}
+
+/// The interpreter stops drawing once its device has no room left (hayro-interpret patch 110),
+/// as it does when cancelled, and says content was left out: 2^12 leaves, room for 100.
+#[test]
+fn the_interpreter_stops_when_its_device_has_no_room() {
+    use hayro::hayro_interpret::{Context, InterpreterCache, interpret_page};
+    let pdf = Pdf::new(Arc::new(doubling_forms(12))).unwrap();
+    let page = &pdf.pages()[0];
+    let truncated = Arc::new(Mutex::new(false));
+    let seen = truncated.clone();
+    let settings = InterpreterSettings {
+        warning_sink: Arc::new(move |w| {
+            if matches!(w, InterpreterWarning::ContentTruncated) {
+                *seen.lock().unwrap() = true;
+            }
+        }),
+        ..Default::default()
+    };
+    let cache = InterpreterCache::new();
+    let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 200.0, 200.0), &cache, page.xref(), settings);
+    let mut device = Room { room: 100, paths: 0 };
+    interpret_page(page, &mut ctx, &mut device);
+    assert_eq!(device.paths, 100, "nothing is drawn past the device's room");
+    assert!(*truncated.lock().unwrap(), "the page says content was left out");
+
+    let mut ctx =
+        Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 200.0, 200.0), &cache, page.xref(), InterpreterSettings::default());
+    let mut device = Room { room: usize::MAX, paths: 0 };
+    interpret_page(page, &mut ctx, &mut device);
+    assert_eq!(device.paths, 1 << 12, "with room, every leaf is drawn");
 }
