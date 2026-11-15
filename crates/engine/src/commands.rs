@@ -293,7 +293,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("comment.polyline", "Draw connected lines", None, None, Annotate, "spline"),
     c("comment.cloud", "Draw a cloud", None, None, Annotate, "cloud"),
     c("comment.callout", "Add a callout", None, None, Annotate, "message-square-quote"),
-    c("comment.caret", "Insert text", None, None, Annotate, "text-cursor-input"),
+    c("comment.caret", "Insert text", None, None, Annotate, "message-square-text"),
     c("comment.replace", "Replace text", None, None, Annotate, "replace"),
     c("comment.attach", "Attach a file", None, None, Annotate, "paperclip"),
     c("comment.eraser", "Erase drawings", None, None, Annotate, "eraser"),

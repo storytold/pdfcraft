@@ -211,7 +211,7 @@ impl CommentTool {
             Self::PolyLine => "spline",
             Self::Cloud => "cloud",
             Self::Callout => "message-square-quote",
-            Self::Caret => "text-cursor-input",
+            Self::Caret => "message-square-text",
             Self::ReplaceText => "replace",
             Self::Attach => "paperclip",
             Self::Eraser => "eraser",
