@@ -545,6 +545,7 @@ pub(super) fn organize_grid(
     view.auto_scroll.paint(ui, viewport);
     // Pinch, or Ctrl/⌘ with the wheel, zooms the grid about the page under the pointer.
     let pinch = crate::motion::zoom_delta(ui.ctx());
+    let pointer = ui.input(|i| i.multi_touch().map(|m| m.center_pos).or_else(|| i.pointer.hover_pos())).filter(|p| viewport.contains(*p));
     if (pinch - 1.0).abs() > 0.001 && pointer.is_some() && !middle_gesture {
         view.grid_zoom_request = Some(view.grid_zoom * pinch);
     }

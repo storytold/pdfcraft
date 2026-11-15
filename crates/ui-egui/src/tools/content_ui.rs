@@ -378,9 +378,10 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], 
     }
     let items: Vec<(usize, &Added)> = on_page(added, page).into_iter().filter(|(_, a)| matches!(a.content, AddedContent::Text(_))).collect();
     let selected = view.content.selected.filter(|s| s.0 == page).and_then(|(_, si)| items.iter().find(|(i, _)| *i == si));
+    let grab_radius = crate::touch::handle_grab_radius(view.is_touch);
     if let Some((index, a)) = selected
         && let Some((_, left, top)) =
-            handles(screen_rect(xf, info, page, a.content.rect()).expand(1.0)).into_iter().find(|(c, ..)| c.distance(p) <= 6.0)
+            handles(screen_rect(xf, info, page, a.content.rect()).expand(1.0)).into_iter().find(|(c, ..)| c.distance(p) <= grab_radius)
     {
         let icon = if left == top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw };
         return Some(Hit::new(Owner::Added { index: *index, corner: Some((left, top)) }, Layer::Handle, icon));

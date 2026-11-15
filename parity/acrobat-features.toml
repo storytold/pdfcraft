@@ -1894,6 +1894,26 @@ tools = []
 evidence = ["crates/ui-egui/tests/perf.rs::scrolling_a_500_page_document_stays_within_the_frame_budget", "crates/ui-egui/tests/perf.rs::panels_with_hundreds_of_items_stay_within_the_frame_budget", "crates/render/src/raster/tests.rs::cut_content_marks_the_pages_text_incomplete", "crates/ui-egui/tests/it/view.rs::a_page_whose_content_was_cut_is_named_in_a_notice", "crates/automation/tests/it/automation.rs::text_extract_says_when_a_pages_content_was_cut"]
 notes = "UI work per frame ~6 ms scrolling 500 pages (comments panel with 500 cards ~6 ms, thumbnails ~2 ms); rendering is off-thread and tiled. A page cut at the renderer's limits is named in a notice, listed under active.cut_pages by ui.state, and its text_extract text carries truncated: true (#623)"
 
+[[feature]]
+id = "view.touch-mode"
+title = "Touch mode preference, touch panning/fling, pinch zoom and selection handles"
+area = "B"
+tier = "P1"
+milestone = "M3"
+status = "shipped"
+commands = []
+tools = []
+evidence = [
+  "crates/ui-egui/src/touch.rs::touch_mode_round_trips",
+  "crates/ui-egui/src/app/prefs.rs::touch_mode_setting_round_trips",
+  "crates/ui-egui/src/canvas/page_pointer/tests.rs::a_touch_tap_keeps_its_position_on_the_frame_it_lifts",
+  "crates/ui-egui/tests/it/touch.rs::preferences_choose_touch_mode_and_control_option_works",
+  "crates/ui-egui/tests/it/touch.rs::touch_drag_over_text_in_select_mode_pans_with_fling_and_selects_nothing",
+  "crates/ui-egui/tests/it/touch.rs::touch_long_press_selects_word_keeps_handles_after_lift_and_handle_drag_extends_selection",
+  "crates/ui-egui/tests/it/touch.rs::touch_drag_on_movable_comment_moves_comment_without_panning_page",
+]
+notes = "Preferences ▸ Documents and view sets Touch mode (Auto-detect, Always, Never), persisted in user settings and exposed via ui.set touch_mode (#1231). When active: single-finger drag pans the page canvas 1:1 with inertial fling on lift (stopped on next touch), two-finger pinch zooms anchored at the midpoint, long-press selects a word with draggable teardrop start/end handles that persist after lift, movable annotations/fields/objects claim drag without panning the page, and hit radii expand cleanly. Missing: cross-page drag with touch selection handles, physical touch-screen device verification outside automated harness suites."
+
 # ==================================================================================================
 # C. Content editing
 # ==================================================================================================

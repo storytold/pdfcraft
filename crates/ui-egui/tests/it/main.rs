@@ -95,6 +95,7 @@ mod status_layers;
 mod text_select;
 mod theme;
 mod theme_button;
+mod touch;
 mod trust_signer;
 mod ui;
 mod updates;

@@ -87,7 +87,8 @@ pub(super) fn reaches_points(tool: QuickTool) -> bool {
 
 /// The point of `a` (an end or a corner) whose handle is at `p` on screen.
 pub(super) fn point_handle(cx: &PageCx<'_>, a: &Annotation, p: Pos2) -> Option<usize> {
-    a.points.iter().position(|q| cx.to_screen([f64::from(q[0]), f64::from(q[1])]).distance(p) <= 7.0)
+    let radius = crate::touch::handle_grab_radius(cx.ptr.is_touch);
+    a.points.iter().position(|q| cx.to_screen([f64::from(q[0]), f64::from(q[1])]).distance(p) <= radius)
 }
 
 /// `to` held level or plumb with `last` while Shift is down (ortho, as in a CAD drawing): the

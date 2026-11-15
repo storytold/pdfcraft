@@ -67,6 +67,8 @@ pub use print_ui::{
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
 pub mod theme;
+pub mod touch;
+pub use touch::{TouchHandle, TouchMode};
 pub mod viewer_prefs;
 mod widgets;
 
@@ -387,6 +389,8 @@ pub struct PdfCraftApp {
     /// Preferences ▸ Invert middle-button drag: the middle button's pan or auto-scroll moves the
     /// view the other way. Off by default.
     pub invert_middle_drag: bool,
+    /// Preferences ▸ Touch mode: auto-detect, always, or never.
+    pub touch_mode: touch::TouchMode,
     /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.
     pub animation_effects: motion::AnimationEffects,
     /// Whether the system asked for no animations, and how the desktop app asks it.

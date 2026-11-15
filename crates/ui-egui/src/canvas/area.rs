@@ -256,9 +256,16 @@ pub(super) fn set_layers(app: &mut PdfCraftApp, index: usize, changes: &[(LayerO
 
 /// Where a pinch or ⌘-scroll zooms the view about: the pointer, wherever it is over the view. Not
 /// page input: it is read before the pages' widget exists, once `rect_contains_pointer` has found
-/// the view under the pointer.
+/// the view under the pointer. For touch gestures, this anchors directly at the midpoint between
+/// the user's fingers.
 pub(super) fn zoom_anchor(ui: &egui::Ui) -> Option<Pos2> {
-    ui.input(|i| i.pointer.hover_pos())
+    ui.input(|i| {
+        i.multi_touch()
+            .map(|m| m.center_pos)
+            .or_else(|| i.pointer.hover_pos())
+            .or_else(|| i.pointer.latest_pos())
+            .or_else(|| i.pointer.interact_pos())
+    })
 }
 
 /// The pointer and frame time that scroll the view while a comment is drawn. Not page input: it is
@@ -267,14 +274,21 @@ pub(super) fn drawing_edge_pointer(ui: &egui::Ui) -> (Option<Pos2>, f32) {
     ui.input(|i| (i.pointer.latest_pos(), i.stable_dt))
 }
 
-/// A press anywhere, or a key, stops the touchpad's glide (#531).
+/// A press anywhere, a touch down, or a key, stops the touchpad's glide (#531).
 pub(super) fn glide_interrupted(ui: &egui::Ui) -> bool {
-    ui.input(|i| i.pointer.any_pressed() || i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })))
+    ui.input(|i| {
+        i.pointer.any_pressed()
+            || i.events
+                .iter()
+                .any(|e| matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::Touch { phase: egui::TouchPhase::Start, .. }))
+    })
 }
 
 /// Full screen's click on the document, which turns the page: a primary click this frame with the
 /// view on top under it in `area`. Not page input: it is read before the pages' widget exists, and
 /// the turn waits until the pages have had the click.
 pub(super) fn presentation_click(ui: &egui::Ui, area: Rect) -> bool {
-    ui.rect_contains_pointer(area) && ui.input(|i| i.pointer.primary_clicked())
+    let in_area = ui.rect_contains_pointer(area)
+        || ui.input(|i| i.pointer.interact_pos().is_some_and(|p| area.contains(p)) || i.pointer.latest_pos().is_some_and(|p| area.contains(p)));
+    in_area && ui.input(|i| i.pointer.primary_clicked())
 }

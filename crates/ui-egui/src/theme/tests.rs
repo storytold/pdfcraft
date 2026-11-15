@@ -289,6 +289,13 @@ fn press_darkens_then_sinks() {
 }
 
 #[test]
+fn apply_sets_touch_friendly_interact_radius() {
+    let ctx = egui::Context::default();
+    apply(&ctx, ThemeKind::Light);
+    assert_eq!(ctx.global_style().interaction.interact_radius, 12.0);
+}
+
+#[test]
 fn text_is_readable_on_every_surface() {
     // #76: the faintest text (hints, zoom level, captions) was 3.3:1 in the light theme.
     for kind in [ThemeKind::Light, ThemeKind::Dark] {

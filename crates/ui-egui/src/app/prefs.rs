@@ -106,6 +106,7 @@ impl PdfCraftApp {
             "theme": self.theme_preference,
             "scroll_speed": self.scroll_speed,
             "invert_middle_drag": self.invert_middle_drag,
+            "touch_mode": self.touch_mode,
             "animation_effects": self.animation_effects,
             "default_mode": self.default_mode,
             "default_layout": canvas::display_token(self.view_defaults.layout, self.view_defaults.continuous),
@@ -296,6 +297,9 @@ impl PdfCraftApp {
         }
         if let Some(invert) = v["invert_middle_drag"].as_bool() {
             self.invert_middle_drag = invert;
+        }
+        if let Some(mode) = v["touch_mode"].as_str().and_then(touch::TouchMode::parse) {
+            self.touch_mode = mode;
         }
         if let Ok(effects) = serde_json::from_value::<motion::AnimationEffects>(v["animation_effects"].clone()) {
             self.animation_effects = effects;
@@ -572,5 +576,24 @@ impl PdfCraftApp {
             let certs = pems.iter().filter_map(|p| pdfcraft_engine::sign::x509::load_certificates(p.as_bytes()).ok()).flatten().collect();
             self.apply_trusted_certificates(certs);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn touch_mode_setting_round_trips() {
+        let mut app = PdfCraftApp { touch_mode: touch::TouchMode::Always, ..Default::default() };
+        let json = app.persist();
+        let mut restored = PdfCraftApp::default();
+        restored.restore(&json);
+        assert_eq!(restored.touch_mode, touch::TouchMode::Always);
+
+        app.touch_mode = touch::TouchMode::Never;
+        let json2 = app.persist();
+        restored.restore(&json2);
+        assert_eq!(restored.touch_mode, touch::TouchMode::Never);
     }
 }

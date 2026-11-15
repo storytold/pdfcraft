@@ -267,15 +267,11 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let on_comment = comments::page_input(ui, resp, &pcx, press, taken, view);
     let consumed = taken || on_comment;
     let hover = pointer.and_then(|p| claim_under(&hits, view, p, frame.env.unobstructed));
-    PageInput {
-        press,
-        text_drag: !view.router.keeps_drag(),
-        consumed,
-        area_tool,
-        hover,
-        released_over,
-        sign_tabs: tabs.into_iter().map(|(_, tab)| tab).collect(),
+    let keeps_drag = view.router.keeps_drag();
+    if keeps_drag {
+        frame.out.press_keeps_drag = true;
     }
+    PageInput { press, text_drag: !keeps_drag, consumed, area_tool, hover, released_over, sign_tabs: tabs.into_iter().map(|(_, tab)| tab).collect() }
 }
 
 /// The sign tabs on the slot's page, on empty fields a click would sign, each with the field it
@@ -613,7 +609,7 @@ impl PageHits<'_> {
         // on a document that can be changed.
         let (field_tool, prepare_allowed) = if context { (None, can_modify) } else { (field_tool, prepare_allowed) };
         let fields = if preparing {
-            crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p)
+            crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p, view.is_touch)
         } else if tool == QuickTool::Select {
             crate::forms_ui::hit(xf, info, page, doc, tabs, can_fill, p)
         } else {
@@ -671,11 +667,12 @@ fn text_link_hit(view: &DocView, info: &DocInfo, xf: &PageXform, page: usize, p:
 
 /// Text layer: find matches, selection, I-beam and drag-to-select.
 pub(super) fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot, input: &PageInput) {
-    let PageEnv { selects_text, tool, .. } = frame.env;
+    let PageEnv { selects_text, tool, touch_mode, .. } = frame.env;
     let PageSlot { i, r, xf } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
+    let touch_active = touch_mode.is_active(view.touch_ui || ptr.is_touch);
     if let Some(text) = view.texts.get(&i).cloned() {
-        paint_text_marks(ui, view, &text, i, xf, resp.dragged());
+        paint_text_marks(ui, view, &text, i, xf, resp.dragged(), touch_active);
         if selects_text
             && !input.consumed
             && let Some(p) = pointer.filter(|p| r.contains(*p))
@@ -683,13 +680,14 @@ pub(super) fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut Page
             // The I-beam drops where a press would go to a link, an address written as page text
             // included (#4207) (ruling E: the tools that select a link's text show it there).
             let over_link = input.hover.as_ref().is_some_and(|h| matches!(h.owner, Owner::Link { .. } | Owner::TextLink { .. }));
-            let pointer = TextPointer { page: i, xf, rect: r, tool, resp, ptr: ptr.clone(), pointer: p, over_link, text_drag: input.text_drag };
+            let pointer =
+                TextPointer { page: i, xf, rect: r, tool, resp, ptr: ptr.clone(), pointer: p, over_link, text_drag: input.text_drag, touch_active };
             text_pointer_input(ui, view, &text, pointer);
         }
     }
 }
 
-fn paint_text_marks(ui: &egui::Ui, view: &DocView, text: &PageText, page: usize, xf: PageXform, dragging: bool) {
+fn paint_text_marks(ui: &egui::Ui, view: &DocView, text: &PageText, page: usize, xf: PageXform, dragging: bool, touch_active: bool) {
     let painter = ui.painter();
     let to_screen = |g: [f32; 4]| xf.view_rect(g);
     if let Some(find) = &view.find {
@@ -722,6 +720,16 @@ fn paint_text_marks(ui: &egui::Ui, view: &DocView, text: &PageText, page: usize,
             let outline = Stroke::new(1.0, Color32::from_rgb(0x3A, 0x7B, 0xF0));
             painter.rect_stroke(to_screen(rect), CornerRadius::ZERO, outline, egui::StrokeKind::Middle);
         }
+        if let Span::Run { anchor, head } = selection.span
+            && (touch_active || view.touch_handle_dragging.is_some())
+        {
+            let first_idx = anchor.min(head);
+            let last_idx = anchor.max(head);
+            if let (Some(g_first), Some(g_last)) = (text.glyphs.get(first_idx), text.glyphs.get(last_idx)) {
+                let handles = crate::touch::SelectionHandleGeometry::from_glyphs(to_screen, g_first, g_last);
+                handles.paint(painter, Color32::from_rgb(0x3A, 0x7B, 0xF0));
+            }
+        }
     }
 }
 
@@ -737,6 +745,8 @@ struct TextPointer<'a> {
     over_link: bool,
     /// The press's drag is the page's text's ([`PageInput::text_drag`]).
     text_drag: bool,
+    /// Touch interactions (handles, long-press, touch panning) are active for this pointer.
+    touch_active: bool,
 }
 
 struct TextGesture<'a> {
@@ -753,18 +763,100 @@ struct TextGesture<'a> {
     over_link: bool,
     text_drag: bool,
     column: bool,
+    touch_active: bool,
 }
 
 fn text_pointer_input(ui: &mut egui::Ui, view: &mut DocView, text: &PageText, pointer: TextPointer<'_>) {
-    let TextPointer { page, xf, rect, tool, resp, ptr, pointer: screen_pointer, over_link, text_drag } = pointer;
+    let TextPointer { page, xf, rect, tool, resp, ptr, pointer: screen_pointer, over_link, text_drag, touch_active } = pointer;
     let (vx, vy) = xf.screen_to_view(screen_pointer);
     let over_text = text.glyph_at(vx, vy).is_some();
     let column = tool == QuickTool::ColumnSelect || ui.input(|input| input.modifiers.alt);
-    let gesture = TextGesture { page, xf, rect, tool, ptr, resp, pointer: screen_pointer, vx, vy, over_text, over_link, text_drag, column };
+    let is_touch = ptr.is_touch;
+
+    if touch_active
+        && let Some(selection) = view.selection.as_mut().filter(|s| s.page == page)
+        && let Span::Run { anchor, head } = &mut selection.span
+    {
+        let first_idx = (*anchor).min(*head);
+        let last_idx = (*anchor).max(*head);
+        if let (Some(g_first), Some(g_last)) = (text.glyphs.get(first_idx), text.glyphs.get(last_idx)) {
+            let to_screen = |g: [f32; 4]| xf.view_rect(g);
+            let geom = crate::touch::SelectionHandleGeometry::from_glyphs(to_screen, g_first, g_last);
+            if ptr.pressed().is_some() {
+                if let Some(hit) = geom.hit_test(screen_pointer) {
+                    *anchor = first_idx;
+                    *head = last_idx;
+                    view.touch_handle_dragging = Some(hit);
+                } else {
+                    view.touch_handle_dragging = None;
+                }
+            }
+        }
+    }
+
+    if let Some(handle) = view.touch_handle_dragging {
+        if resp.dragged_by(egui::PointerButton::Primary)
+            && let Some(selection) = view.selection.as_mut().filter(|s| s.page == page)
+            && let Span::Run { anchor, head } = &mut selection.span
+            && let Some(h) = text.nearest(vx, vy)
+        {
+            match handle {
+                crate::touch::TouchHandle::Start => *anchor = h,
+                crate::touch::TouchHandle::End => *head = h,
+            }
+            if *anchor > *head {
+                std::mem::swap(anchor, head);
+                view.touch_handle_dragging = Some(match handle {
+                    crate::touch::TouchHandle::Start => crate::touch::TouchHandle::End,
+                    crate::touch::TouchHandle::End => crate::touch::TouchHandle::Start,
+                });
+            }
+        }
+        if ptr.released.is_some() || resp.drag_stopped() || !ptr.any_down {
+            view.touch_handle_dragging = None;
+        }
+        return;
+    }
+
+    if is_touch && touch_active && text_drag {
+        let now = ui.input(|i| i.time);
+        if ptr.pressed().is_some() && rect.contains(screen_pointer) {
+            view.touch_press = Some((now, screen_pointer, page));
+            view.touch_long_pressed = false;
+        }
+        if let Some((start_time, start_pos, press_page)) = view.touch_press
+            && press_page == page
+        {
+            if screen_pointer.distance(start_pos) > crate::touch::TOUCH_PAN_SLOP {
+                view.touch_press = None;
+            } else if !view.touch_long_pressed
+                && (now - start_time) >= crate::touch::LONG_PRESS_SECS
+                && let Some(anchor) = text.nearest(vx, vy)
+                && let Some(glyph) = text.glyphs.get(anchor)
+            {
+                let dist = xf.view_rect(glyph.rect).distance_to_pos(screen_pointer);
+                if (over_text || dist <= crate::touch::TOUCH_HANDLE_GRAB_RADIUS)
+                    && let Some((first, last)) = click_unit(text, 2, anchor)
+                {
+                    view.touch_long_pressed = true;
+                    view.selection = Some(Selection::run(page, first, last));
+                }
+            }
+        }
+    }
+
+    let gesture =
+        TextGesture { page, xf, rect, tool, ptr, resp, pointer: screen_pointer, vx, vy, over_text, over_link, text_drag, column, touch_active };
     update_text_cursor(view, &gesture);
     update_selection_on_press(ui, view, text, &gesture);
     update_dragged_selection(view, text, &gesture);
     finish_text_pointer_gesture(ui, view, text, &gesture);
+    // Clear touch long-press state after finish_text_pointer_gesture so a release click keeps
+    // the long-pressed word selection instead of clearing it.
+    if is_touch && (gesture.ptr.released.is_some() || !gesture.ptr.any_down) {
+        view.touch_press = None;
+        view.touch_long_pressed = false;
+    }
 }
 
 fn update_text_cursor(view: &mut DocView, gesture: &TextGesture<'_>) {
@@ -795,7 +887,8 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
             view.selection = Some(Selection::run(gesture.page, first, last));
         }
     }
-    if gesture.ptr.drag_started && press_here && gesture.text_drag {
+    let touch_pans = gesture.ptr.is_touch && gesture.touch_active && gesture.tool == QuickTool::Select;
+    if gesture.ptr.drag_started && press_here && gesture.text_drag && !touch_pans {
         view.actions_dismissed = None;
         view.selection_drag = true;
         let origin = gesture.ptr.origin.unwrap_or(gesture.pointer);
@@ -817,6 +910,8 @@ fn selection_click_count(clicks: u32, tool: QuickTool) -> u32 {
 fn update_dragged_selection(view: &mut DocView, text: &PageText, gesture: &TextGesture<'_>) {
     let clicks = selection_click_count(view.clicks, gesture.tool);
     if gesture.resp.dragged_by(egui::PointerButton::Primary)
+        && (!gesture.ptr.is_touch || view.touch_handle_dragging.is_some())
+        && !view.touch_panning
         && let Some(selection) = view.selection.as_mut().filter(|selection| selection.page == gesture.page)
     {
         match &mut selection.span {
@@ -868,13 +963,17 @@ fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageTex
     {
         view.selection = Some(Selection::run(gesture.page, first, last));
     } else if gesture.resp.clicked() && view.clicks < 2 && gesture.text_drag {
-        let shift = ui.input(|input| input.modifiers.shift);
-        match (
-            view.selection.as_mut().filter(|selection| shift && selection.page == gesture.page).map(|selection| &mut selection.span),
-            text.nearest(gesture.vx, gesture.vy),
-        ) {
-            (Some(Span::Run { head, .. }), Some(hit)) => *head = hit,
-            _ => view.selection = None,
+        if gesture.ptr.is_touch && (view.touch_long_pressed || view.touch_handle_dragging.is_some()) {
+            // Keep the touch selection
+        } else {
+            let shift = ui.input(|input| input.modifiers.shift);
+            match (
+                view.selection.as_mut().filter(|selection| shift && selection.page == gesture.page).map(|selection| &mut selection.span),
+                text.nearest(gesture.vx, gesture.vy),
+            ) {
+                (Some(Span::Run { head, .. }), Some(hit)) => *head = hit,
+                _ => view.selection = None,
+            }
         }
     }
 }

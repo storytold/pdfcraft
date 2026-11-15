@@ -339,6 +339,7 @@ pub(crate) fn hit(
     allowed: bool,
     prep: &PrepareView,
     p: Pos2,
+    is_touch: bool,
 ) -> Option<Hit> {
     if tool.is_some() || !allowed || !xf.rect.contains(p) {
         return None;
@@ -348,7 +349,8 @@ pub(crate) fn hit(
         .as_ref()
         .and_then(|(n, wi)| form.iter().find(|f| &f.name == n)?.widgets.get(*wi).filter(|w| w.page == Some(page)))
         .map(|w| screen_rect(xf, info, page, w.rect));
-    if let Some((_, left, top)) = selected_rect.and_then(|r| handles(r).into_iter().find(|(c, ..)| c.distance(p) <= 6.0)) {
+    let grab_radius = crate::touch::handle_grab_radius(is_touch);
+    if let Some((_, left, top)) = selected_rect.and_then(|r| handles(r).into_iter().find(|(c, ..)| c.distance(p) <= grab_radius)) {
         let icon = if left == top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw };
         return Some(Hit::new(Owner::PrepareCorner { left, top }, Layer::Handle, icon));
     }
