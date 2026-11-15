@@ -820,17 +820,25 @@ fn update_dragged_selection(view: &mut DocView, text: &PageText, gesture: &TextG
         && let Some(selection) = view.selection.as_mut().filter(|selection| selection.page == gesture.page)
     {
         match &mut selection.span {
-            Span::Run { anchor, head } if clicks >= 2 => {
+            Span::Run { anchor, head, head_x } if clicks >= 2 => {
                 if let Some(hit) = text.nearest(gesture.vx, gesture.vy)
                     && let Some((first, last)) = click_unit(text, clicks, *anchor)
                 {
                     let (to_first, to_last) = click_unit(text, clicks, hit).unwrap_or((hit, hit));
-                    (*anchor, *head) = if to_first < first { (last, to_first) } else { (first, to_last.max(last)) };
+                    // A drag, so it selects table rows as a plain drag does, by whole units.
+                    // The page unit (four clicks) is the page's text in reading order.
+                    *head_x = Some(gesture.vx).filter(|x| x.is_finite() && clicks < 4);
+                    let in_order = if to_first < first { (last, to_first) } else { (first, to_last.max(last)) };
+                    // Rows take both units whole, from the earlier one's start to the later one's end.
+                    let by_rows = text.row_ends((first, last), (to_first, to_last));
+                    let rows = head_x.is_some() && text.visual_between(by_rows.0, by_rows.1, *head_x).is_some();
+                    (*anchor, *head) = if rows { by_rows } else { in_order };
                 }
             }
-            Span::Run { head, .. } => {
+            Span::Run { head, head_x, .. } => {
                 if let Some(hit) = text.nearest(gesture.vx, gesture.vy) {
                     *head = hit;
+                    *head_x = Some(gesture.vx).filter(|x| x.is_finite());
                 }
             }
             Span::Column { rect } => {
@@ -873,7 +881,10 @@ fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageTex
             view.selection.as_mut().filter(|selection| shift && selection.page == gesture.page).map(|selection| &mut selection.span),
             text.nearest(gesture.vx, gesture.vy),
         ) {
-            (Some(Span::Run { head, .. }), Some(hit)) => *head = hit,
+            (Some(Span::Run { head, head_x, .. }), Some(hit)) => {
+                *head = hit;
+                *head_x = Some(gesture.vx).filter(|x| x.is_finite());
+            }
             _ => view.selection = None,
         }
     }
