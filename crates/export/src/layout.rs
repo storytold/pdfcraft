@@ -535,10 +535,19 @@ pub(crate) fn tables(blocks: &[Block], rules: &[[f64; 4]]) -> (Vec<Table>, Vec<b
     };
     // Runs of consecutive multi-column rows are tables. Rows on either side of a run that
     // hold a single cell wide enough to span two columns (a header band, a totals row) join
-    // the table; other single-column rows (captions, following text) stay paragraphs.
+    // the table only when they sit as close to it as its own rows do; other single-column rows
+    // (captions, nearby paragraphs) stay paragraphs.
     let spans_run = |edges: &[f64], bi: usize| -> bool {
         let b = &blocks[bi];
         edges.iter().any(|e| (*e - b.rect[0]).abs() <= COL_TOL) && edges.iter().any(|e| *e > b.rect[0] + COL_TOL && *e < b.rect[2] - COL_TOL)
+    };
+    let row_y = |row: &[(usize, usize)]| -> (f64, f64) {
+        row.iter().filter_map(|&(_, bi)| blocks.get(bi)).fold((f64::MAX, f64::MIN), |(y0, y1), b| (y0.min(b.rect[1]), y1.max(b.rect[3])))
+    };
+    let row_gap = |upper: &[(usize, usize)], lower: &[(usize, usize)]| -> f64 {
+        let (u_y0, _) = row_y(upper);
+        let (_, l_y1) = row_y(lower);
+        (u_y0 - l_y1).max(0.0)
     };
     let run_edges = |run: &[Vec<(usize, usize)>]| -> Vec<f64> {
         let mut es: Vec<f64> =
@@ -574,12 +583,14 @@ pub(crate) fn tables(blocks: &[Block], rules: &[[f64; 4]]) -> (Vec<Table>, Vec<b
             i += 1;
         }
         let end = i; // run = rows[start..end]
+        let edges = run_edges(&rows[start..end]);
+        let max_gap = rows[start..end].windows(2).map(|w| row_gap(&w[0], &w[1])).fold(0.0_f64, f64::max) + COL_TOL;
         let mut pieces: Vec<Vec<(usize, usize)>> = Vec::new();
-        if start > 0 && rows[start - 1].len() == 1 && spans_run(&run_edges(&rows[start..end]), rows[start - 1][0].1) {
+        if start > 0 && rows[start - 1].len() == 1 && spans_run(&edges, rows[start - 1][0].1) && row_gap(&rows[start - 1], &rows[start]) <= max_gap {
             pieces.push(rows[start - 1].clone());
         }
         pieces.extend(rows[start..end].iter().cloned());
-        if end < rows.len() && rows[end].len() == 1 && spans_run(&run_edges(&rows[start..end]), rows[end][0].1) {
+        if end < rows.len() && rows[end].len() == 1 && spans_run(&edges, rows[end][0].1) && row_gap(&rows[end - 1], &rows[end]) <= max_gap {
             pieces.push(rows[end].clone());
         }
         flush(&mut pieces, &mut out, &mut consumed, &mut budget);
