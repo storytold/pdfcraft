@@ -6776,6 +6776,83 @@ fn a_form_that_reaches_itself_through_a_pattern_or_a_glyph_is_drawn_once() {
     }
 }
 
+/// `font` (a TrueType file) with the tables `replace` names put in place of its own: the table
+/// directory rewritten, the other tables copied as they are.
+fn with_tables(font: &[u8], replace: &[(&[u8; 4], &[u8])]) -> Vec<u8> {
+    let be16 = |at: usize| u16::from_be_bytes([font[at], font[at + 1]]) as usize;
+    let be32 = |at: usize| u32::from_be_bytes([font[at], font[at + 1], font[at + 2], font[at + 3]]) as usize;
+    let count = be16(4);
+    let tables: Vec<([u8; 4], &[u8])> = (0..count)
+        .map(|i| {
+            let record = 12 + 16 * i;
+            let tag: [u8; 4] = font[record..record + 4].try_into().unwrap();
+            let own = &font[be32(record + 8)..be32(record + 8) + be32(record + 12)];
+            (tag, replace.iter().find(|(t, _)| **t == tag).map_or(own, |(_, data)| *data))
+        })
+        .collect();
+    let mut out = font[..12].to_vec();
+    let mut offset = 12 + 16 * count;
+    for (tag, data) in &tables {
+        out.extend_from_slice(tag);
+        out.extend_from_slice(&[0; 4]);
+        out.extend_from_slice(&(offset as u32).to_be_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        offset += data.len().next_multiple_of(4);
+    }
+    for (_, data) in &tables {
+        out.extend_from_slice(data);
+        out.resize(out.len().next_multiple_of(4), 0);
+    }
+    out
+}
+
+/// A symbolic TrueType font whose `post` table names only standard glyphs reads by those names
+/// (#7406). Such a font selects its glyphs through its own `cmap`, so a code means nothing in
+/// WinAnsi, and hayro-interpret patch 79 reads the glyph's `post` name instead. A version 2.0
+/// table naming only standard Macintosh names has no strings of its own, and the reader dropped
+/// every name with them, so the codes read as WinAnsi. Here a repo font is given a symbolic
+/// `(1, 0)` cmap whose codes are not the characters, and such a `post` table. Vendored patch:
+/// hayro-interpret (112), in `OpenTypeFontBlob::glyph_names`.
+#[test]
+fn a_symbolic_truetype_font_named_with_standard_names_reads_as_its_glyph_names() {
+    use skrifa::MetadataProvider;
+    use skrifa::raw::TableProvider;
+    let font = include_bytes!("../../../../assets/fonts/DancingScript.ttf");
+    let face = skrifa::FontRef::new(font).unwrap();
+    let glyphs = face.maxp().unwrap().num_glyphs();
+    // Each character with its standard Macintosh name index, drawn with code 40 onwards.
+    let chars = [('S', 54u16), ('o', 82), ('l', 79), ('i', 76), ('d', 71)];
+    let gid = |c: char| face.charmap().map(c).unwrap().to_u32() as u16;
+    let mut post = vec![0, 2, 0, 0];
+    post.extend_from_slice(&[0; 28]);
+    post.extend_from_slice(&glyphs.to_be_bytes());
+    for glyph in 0..glyphs {
+        let index = chars.iter().find(|(c, _)| gid(*c) == glyph).map_or(0, |(_, index)| *index);
+        post.extend_from_slice(&index.to_be_bytes());
+    }
+    // A (1, 0) cmap in format 6: codes 40.. select the glyphs of `chars` in order.
+    let mut subtable = vec![0, 6, 0, (10 + 2 * chars.len()) as u8, 0, 0, 0, 40, 0, chars.len() as u8];
+    for (c, _) in chars {
+        subtable.extend_from_slice(&gid(c).to_be_bytes());
+    }
+    let mut cmap = vec![0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 12];
+    cmap.extend_from_slice(&subtable);
+    let program = with_tables(font, &[(b"post", &post), (b"cmap", &cmap)]);
+    let content = "BT /F1 24 Tf 20 100 Td <28292a2b2c> Tj ET";
+    let mut pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n5 0 obj << /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+DancingScript /FirstChar 40 /LastChar 44 /Widths [500 500 500 500 500] /FontDescriptor 6 0 R >> endobj\n6 0 obj << /Type /FontDescriptor /FontName /ABCDEF+DancingScript /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 7 0 R >> endobj\n7 0 obj << /Length {} >> stream\n",
+        content.len(),
+        program.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(&program);
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+    let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!(page.text.expect("text").plain_text().trim(), "Solid");
+}
+
 /// The page content budget counts what is held at once, not everything decoded: a form
 /// with 2 MiB of content painted three hundred times (600 MiB in all) draws every time.
 #[test]

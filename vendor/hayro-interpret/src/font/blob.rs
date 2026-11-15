@@ -367,13 +367,19 @@ impl OpenTypeFontBlob {
                 let Some(name_indices) = post.glyph_name_index() else {
                     return glyph_names;
                 };
-                let Some(string_data) = post.string_data() else {
-                    return glyph_names;
-                };
-                let custom_names = string_data
-                    .iter()
-                    .map(|entry| entry.ok().map(|name| name.as_str()))
-                    .collect::<Vec<_>>();
+                // PdfCraft patch (112): a table whose glyphs all have standard Macintosh names
+                // has no name strings of its own. read-fonts then gives no string data, and
+                // every name was dropped with it, where each index still names a standard glyph:
+                // a symbolic TrueType font named that way had no names for patch 79 to read, and its
+                // codes read as WinAnsi (#7406).
+                let custom_names = post
+                    .string_data()
+                    .map(|data| {
+                        data.iter()
+                            .map(|entry| entry.ok().map(|name| name.as_str()))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
 
                 for (gid, idx) in name_indices.iter().enumerate() {
                     let idx = idx.get() as usize;
