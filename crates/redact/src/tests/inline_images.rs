@@ -115,3 +115,17 @@ fn an_inline_image_that_cant_be_cleared_is_removed_whole() {
         assert!(!c.contains("BI") && !c.contains("Do"), "{label}: {c}");
     }
 }
+
+/// Dimensions whose product overflows (2^32 × 2^32) are refused, not multiplied into a panic: the
+/// partly covered image, inline or an XObject, is removed whole.
+#[test]
+fn an_image_whose_dimensions_overflow_is_removed_not_a_crash() {
+    let huge = "/W 4294967296 /H 4294967296 /CS /G /BPC 8";
+    let mut doc = one_page(format!("q 200 0 0 100 0 0 cm BI {huge} ID \x55 EI Q").as_bytes(), "", vec![]);
+    mark(&mut doc, 0, &[[10.0, 10.0, 70.0, 90.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
+    let dict = "/Type /XObject /Subtype /Image /Width 4294967296 /Height 4294967296 /ColorSpace /DeviceGray /BitsPerComponent 8";
+    let mut doc = one_page(b"q 200 0 0 100 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, [123])]);
+    mark(&mut doc, 0, &[[10.0, 10.0, 70.0, 90.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
+}

@@ -91,7 +91,8 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
         return None;
     }
     let (w, h) = (s.dict.int(b"Width")?, s.dict.int(b"Height")?);
-    if w <= 0 || h <= 0 || (w as u64) * (h as u64) > MAX_PIXELS {
+    // From the file: a product that overflows is past the limit too, not a panic.
+    if w <= 0 || h <= 0 || (w as u64).checked_mul(h as u64).is_none_or(|pixels| pixels > MAX_PIXELS) {
         return None;
     }
     let (w, h) = (w as usize, h as usize);
