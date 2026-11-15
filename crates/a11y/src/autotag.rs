@@ -111,6 +111,9 @@ fn page_fonts(doc: &Document, page: &Dict) -> Dict {
         .unwrap_or_default()
 }
 
+/// Marked-content tags the text editor writes inside a text object.
+const EDITOR_MARKS: [&[u8]; 3] = [b"Span", b"PCSoft", b"PCHard"];
+
 fn harmless_outside(op: &[u8]) -> bool {
     matches!(
         op,
@@ -233,6 +236,10 @@ fn plan_page(
     }
     let xobjects = page_xobjects(doc, &page.dict);
     let (mut start, mut has_text, mut spans, mut artifacts) = (None, false, Vec::new(), HashMap::new());
+    // Open marked-content sequences of the text editor inside the current text object: `/Span`
+    // keeps the /ActualText of text in a font without an encoding, `/PCSoft` and `/PCHard` mark
+    // wrapped lines. They stay in the stream, nested in the paragraph's own marked content.
+    let mut spans_open = 0usize;
     // Marked-content boundaries must enclose the whole path, not just its paint operator.
     let mut path = None;
     for (at, op) in parsed.ops.iter().enumerate() {
@@ -240,7 +247,8 @@ fn plan_page(
             return Err(unsupported(index, "painted content interrupts an unfinished path"));
         }
         match op.op.as_slice() {
-            b"BT" if start.is_none() => (start, has_text) = (Some(at), false),
+            b"BT" if start.is_none() => (start, has_text, spans_open) = (Some(at), false, 0),
+            b"ET" if spans_open > 0 => return Err(unsupported(index, "unterminated marked content in a text object")),
             b"ET" => {
                 let Some(first) = start.take() else { return Err(unsupported(index, "unmatched ET operator")) };
                 if has_text {
@@ -252,6 +260,8 @@ fn plan_page(
             }
             b"Tj" | b"TJ" | b"'" | b"\"" if start.is_some() => has_text = true,
             name if start.is_some() && harmless_inside(name) => {}
+            b"BDC" | b"BMC" if start.is_some() && op.name(0).is_some_and(|tag| EDITOR_MARKS.contains(&tag)) => spans_open += 1,
+            b"EMC" if start.is_some() && spans_open > 0 => spans_open -= 1,
             name if start.is_none() && harmless_outside(name) => match name {
                 b"m" | b"re" => {
                     path.get_or_insert(at);

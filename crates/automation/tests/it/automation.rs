@@ -551,6 +551,24 @@ fn autotag_apply_accepts_text_state_written_by_a_text_edit() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// #7416: a font without /Encoding makes the text edit wrap its text in `/Span <</ActualText>> BDC
+/// … EMC`; Auto-tag takes it, keeps it in the stream, and tags the paragraph around it.
+#[test]
+fn autotag_apply_accepts_actual_text_span_written_by_a_text_edit() {
+    let dir = workdir("autotag-after-edit-span");
+    std::fs::write(dir.join("one.pdf"), fixture(1)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "one.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "Fern stays green." }));
+    let applied = ok(&mut a, "accessibility_autotag_apply", json!({ "doc": doc }));
+    assert_eq!(applied["count"], 2, "Document plus the edited paragraph");
+    assert_eq!(applied["tags"][1]["type"], "P");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "tagged.pdf" }));
+    let re = ok(&mut a, "doc_open", json!({ "path": "tagged.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, re), ["Fern stays\ngreen."]);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// #7062: Apply tags short text larger than the body as headings, ranked across the pages, and
 /// the body text as paragraphs.
 #[test]
