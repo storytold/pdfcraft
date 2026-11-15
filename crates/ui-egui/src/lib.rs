@@ -92,6 +92,8 @@ mod frame_guard;
 mod hooks;
 mod persist;
 mod platform;
+#[cfg(not(target_arch = "wasm32"))]
+mod script_dialog;
 mod state;
 mod tools;
 mod workflows;
@@ -516,6 +518,9 @@ pub struct PdfCraftApp {
     pub pinned: folders_ui::PinnedFolders,
     /// The recent files restored from settings, checked off the UI thread (#5682).
     recent_check: persist::recent_check::RecentCheck,
+    /// Failures of the Reveal worker, taken each frame and shown as a notification.
+    #[cfg(not(target_arch = "wasm32"))]
+    reveal_errors: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     /// Tools pinned to Home, in user-defined order.
     pub pinned_tools: Vec<String>,
     /// Search query for the Pin a tool selection dialog.
@@ -655,6 +660,8 @@ pub struct PdfCraftApp {
     pub compare: Option<compare_ui::CompareState>,
     /// The JavaScript console and the Document JavaScripts draft.
     pub js_console: js_ui::JsConsole,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) script_pending: Option<script_dialog::Pending>,
     pub doc_js: js_ui::DocJsDraft,
     pub a11y: a11y_ui::A11yState,
     pub(crate) tags_state: tags_ui::State,
