@@ -1089,7 +1089,11 @@ fn decode_mask(
             width: ctx.width,
             height,
             interpolate: obj.interpolate,
-            one_bit: ctx.bits_per_component == 1,
+            // A stencil mask is 1-bit whatever a filter reports (ISO 32000-2 §8.9.6.2, Table 87:
+            // `/BitsPerComponent` shall be 1 when `/ImageMask` is true). A CCITT-encoded stencil
+            // expands to 8-bit grey rows but still carries one sample per bit, so it keeps the
+            // 1-bit path (its averaging when minified) instead of being picked.
+            one_bit: ctx.bits_per_component == 1 || obj.is_stencil_mask,
             scale_factors: ctx.scale_factors,
         },
     })

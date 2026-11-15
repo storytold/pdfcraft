@@ -141,3 +141,41 @@ fn a_one_bit_image_mask_glyph_keeps_its_stroke_when_minified() {
     assert!((64..=191).contains(&gray[0]), "the one-pixel stroke is lost: {gray:?}");
     assert_eq!(gray[5], 255, "the far end stays white: {gray:?}");
 }
+
+/// A CCITT-encoded stencil-mask glyph keeps the 1-bit path: a stencil mask is 1-bit whatever a
+/// filter reports (ISO 32000-2 §8.9.6.2, Table 87: `/BitsPerComponent` shall be 1 when
+/// `/ImageMask` is true), but the CCITT filter expands a non-indexed image to 8-bit grey rows and
+/// reports 8, which used to send the glyph to the nearest picking of #624 — where the stroke
+/// vanished (the fax-era fonts of PDFBOX-2573 and friends stayed broken).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_ccitt_stencil_mask_glyph_keeps_its_stroke_when_minified() {
+    // The same 10×1 row as the ASCIIHex test above — white 1, black 1 (the stroke), white 8 —
+    // coded one-dimensionally with T.4's terminating codes: 000111 010 10011, two bytes with
+    // two fill bits.
+    const STROKE_10X1: [u8; 2] = [0x1D, 0x4C];
+    let content = "BT /F1 1 Tf 0 0 Td (A) Tj ET";
+    let glyph = "10 0 d0 q 6 0 0 1 0 0 cm /Im0 Do Q";
+    let mut pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 6 1] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 6 1] /FontMatrix [1 0 0 1 0 0] /FirstChar 65 /LastChar 65 /Widths [6] /Encoding << /Differences [65 /a] >> /CharProcs << /a 6 0 R >> /Resources << /XObject << /Im0 7 0 R >> >> >> endobj\n\
+         6 0 obj << /Length {} >> stream\n{glyph}\nendstream endobj\n\
+         7 0 obj << /Type /XObject /Subtype /Image /Width 10 /Height 1 /ImageMask true /Filter /CCITTFaxDecode /DecodeParms << /K 0 /Columns 10 /Rows 1 >> /Length {} >> stream\n",
+        content.len(),
+        glyph.len(),
+        STROKE_10X1.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(&STROKE_10X1);
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+    let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.width, page.height), (6, 1));
+    let gray: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+    assert!((64..=191).contains(&gray[0]), "the one-pixel stroke is lost: {gray:?}");
+    assert_eq!(gray[5], 255, "the far end stays white: {gray:?}");
+}
