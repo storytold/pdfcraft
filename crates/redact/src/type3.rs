@@ -250,13 +250,13 @@ fn prune_font_forms(doc: &mut Document, font_res: &Dict) -> Result<(), CosError>
         let mut used = UsedInGlyphs::default();
         // Each Form's walk has the allowance of a page, as `prune_retired_properties` gives each
         // content it reads.
-        crate::interp::resource_ops(doc, &mut pdfcraft_cos::DecodeBudget::page(), &res, std::slice::from_ref(&data))?
-            .iter()
-            .for_each(|op| record_used(op, &mut used));
+        let read = crate::interp::resource_ops(doc, &mut pdfcraft_cos::DecodeBudget::page(), &res, std::slice::from_ref(&data))?;
+        read.ops.iter().for_each(|op| record_used(op, &mut used));
         // `rg`, `g` and `k` draw through these entries when the Form keeps them as its defaults,
         // and nothing cites them with `cs`/`CS`: pruning them would change the Form's colours.
         used.colorspaces.extend([b"DefaultRGB".to_vec(), b"DefaultGray".to_vec(), b"DefaultCMYK".to_vec()]);
         if prune_type3_font_resources(doc, &mut res, &used) {
+            crate::interp::may_remove(read.partial)?;
             doc.update_dict(form_ref, |d| d.set(b"Resources".to_vec(), Object::Dict(res.clone())))?;
         }
         pending.extend(res_dict(doc, &res, b"XObject").iter().filter_map(|(_, v)| v.as_ref()).map(|r| (r, depth + 1)));
@@ -709,7 +709,8 @@ pub(crate) fn prune_type3_from_resources(
     // nothing about the fonts.
     let type3 = fonts.iter().any(|(_, f)| is_type3(doc, f));
     let mut own = pdfcraft_cos::DecodeBudget::page();
-    let mut ops = crate::interp::resource_ops(doc, if type3 { &mut *budget } else { &mut own }, res, content)?;
+    let read = crate::interp::resource_ops(doc, if type3 { &mut *budget } else { &mut own }, res, content)?;
+    let (mut ops, mut partial) = (read.ops, read.partial);
     // So do those of a page's annotation appearances, and of soft mask groups, without resources of
     // their own. They are read only when there is a Type 3 font to keep, so other files are not
     // refused over them.
@@ -723,10 +724,11 @@ pub(crate) fn prune_type3_from_resources(
                 let Object::Stream(s) = &*doc.get(r) else { continue };
                 let data = budget.decode(&doc.with_direct_parms(s))?;
                 let more = crate::interp::resource_ops(doc, budget, res, std::slice::from_ref(&data))?;
-                if ops.len().saturating_add(more.len()) > 2_000_000 {
+                if ops.len().saturating_add(more.ops.len()) > 2_000_000 {
                     return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect annotation appearances".into() });
                 }
-                ops.extend(more);
+                partial |= more.partial;
+                ops.extend(more.ops);
             }
         }
         let known = ops.len();
@@ -761,6 +763,7 @@ pub(crate) fn prune_type3_from_resources(
             && is_type3(doc, font_obj)
             && !drawn_font_names.contains(&name)
         {
+            crate::interp::may_remove(partial)?;
             fonts.remove(&name);
             changed = true;
         }

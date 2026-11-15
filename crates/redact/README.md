@@ -145,12 +145,14 @@ can't check. The walk, the verification pass, the check of what pages sharing a 
 dictionary still draw, the cleanups of a rewritten page's and form's own resources (the XObjects
 replaced, fonts and properties) and the Type 3 font cleanup all read it so. A form without
 resources of its own inside such a form reads the page's properties, and the page keeps them. The
-cleanups of a page's and form's own resources read a form with resources of its own as far as they
-can, within an allowance of a page of their own, not following a form drawn inside itself again
-nor a chain deeper than the walk follows forms. One that doesn't decode isn't read, bytes the
-parser can't read in one are passed over, and past that allowance, 2,000,000 of such forms'
-operators or 65,536 scopes the rest aren't read, never failing the operation, so a name drawn only
-there can still be dropped, losing paint beside a mark; a name nothing draws is never kept,
+cleanups of a page's and form's own resources read a form with resources of its own within an
+allowance of a page of their own, not following a form drawn inside itself again nor a chain
+deeper than the walk follows forms, where the renderer draws nothing either. Where such a form
+can't all be read (it doesn't decode or runs past that allowance, the parser passes over bytes in
+it, or 2,000,000 of such forms' operators or 65,536 scopes are passed), a cleanup that would
+remove a name refuses the operation, since that form may still draw with it: removing it could
+lose paint beside a mark, and keeping an image or form the redaction replaced would keep what was
+redacted. A cleanup with nothing to remove goes on. A name nothing draws is never kept,
 except a property named by a form whose `/Resources` isn't a dictionary, which is kept as the page's. The
 Type 3 font cleanup's scan of the glyphs shown is the exception: it reads such forms in full, as
 before, and scans one again under another chain of names only where its scan looked a name up

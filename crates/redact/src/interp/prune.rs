@@ -7,23 +7,24 @@ use super::{
 /// longer draws, so a full-rewrite save stops reaching the original image or form it named. A
 /// name still drawn is kept: by a surviving `Do` (the same image shown again outside a mark), by
 /// a form without /Resources of its own, which draws through `xo` too, or by a form with resources
-/// of its own that draws it through its caller's names, read as far as it can be, never failing
-/// ([`resource_ops`]). Forms without /Resources that `content`, or other such forms, draw are read
-/// within `budget`, what is left of the page's allowance. Fails, as the cleanup of the fonts and
-/// properties these forms draw with does, when that can't be told: such a form doesn't decode (an
-/// image codec or a /Filter it can't run, say) or runs past `budget` (for the fonts' cleanup, an
-/// allowance of its own when no Type 3 font is listed), the walk passes 2,000,000 operators, or the
-/// parser can't read all of such a form or of `content`.
+/// of its own that draws it through its caller's names ([`resource_ops`]). Forms without /Resources
+/// that `content`, or other such forms, draw are read within `budget`, what is left of the page's
+/// allowance. Fails, as the cleanup of the fonts and properties these forms draw with does, when
+/// that can't be told: such a form doesn't decode (an image codec or a /Filter it can't run, say)
+/// or runs past `budget` (for the fonts' cleanup, an allowance of its own when no Type 3 font is
+/// listed), the walk passes 2,000,000 operators, or the parser can't read all of such a form or of
+/// `content`; or, with a name to drop, a form with resources of its own wasn't all read.
 /// Corrupt data in such a form is read, tolerantly, up to the damage, which may be nothing.
 pub(crate) fn prune(doc: &Document, budget: &mut DecodeBudget, xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) -> Result<(), CosError> {
     if replaced.is_empty() {
         return Ok(());
     }
     let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(xo.clone()))]);
-    let ops = resource_ops(doc, budget, &res, content)?;
-    let drawn: HashSet<&[u8]> = ops.iter().filter(|op| op.is("Do")).filter_map(Op::last_name).collect();
+    let read = resource_ops(doc, budget, &res, content)?;
+    let drawn: HashSet<&[u8]> = read.ops.iter().filter(|op| op.is("Do")).filter_map(Op::last_name).collect();
     for n in replaced {
         if !drawn.contains(n.as_slice()) {
+            may_remove(read.partial)?;
             xo.remove(n);
         }
     }
@@ -46,9 +47,9 @@ const MAX_SCOPE_LOOKUPS: usize = 1 << 20;
 /// form's scope, and the entries of each own `/XObject` read, are charged to `lookups`, what is
 /// left of the operation's [`MAX_SCOPE_LOOKUPS`]; the rest are bounded by what the forms and
 /// `contents` draw, as before. The flag says whether
-/// some of what is drawn could not be read (a form that will not decode, nesting past the limit,
-/// more than 65,536 scopes, or no look-ups left), so a name missing from the set may still be
-/// drawn. Operators are read one at a time, since only the `Do`s matter: no stream's are held
+/// some of what is drawn could not be read (a form that will not decode, bytes the parser can't
+/// read in one or in `contents`, nesting past the limit, more than 65,536 scopes, or no look-ups
+/// left), so a name missing from the set may still be drawn. Operators are read one at a time, since only the `Do`s matter: no stream's are held
 /// whole.
 fn names_content_draws(doc: &Document, contents: &[Vec<Vec<u8>>], xo: &Dict, lookups: &mut usize, kinds: &mut Kinds) -> (HashSet<Vec<u8>>, bool) {
     // The scopes names are looked up in: each the XObject names a form's own resources give as
@@ -77,14 +78,14 @@ fn names_content_draws(doc: &Document, contents: &[Vec<Vec<u8>>], xo: &Dict, loo
         let mut pending: Vec<(Option<ObjRef>, usize, usize)> = vec![(None, 0, 0)];
         while let Some((form, scope, depth)) = pending.pop() {
             let drawn_here = match form {
-                None => Rc::new(names.drawn_by(joined.data())),
+                None => Rc::new(names.drawn_by(joined.data(), &mut unknown)),
                 Some(r) => {
                     let drawn_here = names_of.entry(r).or_insert_with(|| {
                         let obj = doc.get(r);
                         let Object::Stream(s) = &*obj else { return Some(Rc::new(Vec::new())) };
                         #[cfg(test)]
                         SHARED_FORM_READS.with(|c| c.set(c.get() + 1));
-                        doc.with_direct_parms(s).decoded().ok().map(|data| Rc::new(names.drawn_by(&data)))
+                        doc.with_direct_parms(s).decoded().ok().map(|data| Rc::new(names.drawn_by(&data, &mut unknown)))
                     });
                     match drawn_here {
                         Some(drawn_here) => drawn_here.clone(),
@@ -190,10 +191,15 @@ impl Names<'_> {
         n
     }
 
-    /// The names `data`'s `Do` operators draw, each once.
-    fn drawn_by(&mut self, data: &[u8]) -> Vec<usize> {
+    /// The names `data`'s `Do` operators draw, each once, setting `unknown` where the parser can't
+    /// read all of `data`.
+    fn drawn_by(&mut self, data: &[u8], unknown: &mut bool) -> Vec<usize> {
         let mut seen = HashSet::new();
-        pdfcraft_content::ops(data).filter(|op| op.is("Do")).filter_map(|op| op.last_name().map(|n| self.id(n))).filter(|n| seen.insert(*n)).collect()
+        let mut read = pdfcraft_content::ops(data);
+        let drawn = read.by_ref().filter(|op| op.is("Do")).filter_map(|op| op.last_name().map(|n| self.id(n))).filter(|n| seen.insert(*n)).collect();
+        // Bytes the parser can't read may hold a `Do`.
+        *unknown |= read.skipped() > 0;
+        drawn
     }
 }
 
@@ -524,9 +530,12 @@ fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], c
         return Ok(false);
     }
     let mut used = HashSet::new();
+    let mut partial = false;
     for content in contents {
         // Each is one page's content or one form's, with the allowance of a page.
-        for op in resource_ops(doc, &mut DecodeBudget::page(), res, content)? {
+        let read = resource_ops(doc, &mut DecodeBudget::page(), res, content)?;
+        partial |= read.partial;
+        for op in read.ops {
             if matches!(op.op.as_slice(), b"BDC" | b"DP")
                 && let Some(name) = op.last_name()
             {
@@ -538,6 +547,7 @@ fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], c
     let mut pruned = false;
     for name in names {
         if !used.contains(name) {
+            may_remove(partial)?;
             pruned |= properties.remove(name).is_some();
         }
     }
@@ -669,17 +679,18 @@ pub(super) fn clip_out(rects: &[[f64; 4]], ctm: &Matrix, around: [f64; 4]) -> Op
 ///   of its operators, those naming an XObject (`Do`), font (`Tf`), graphics state (`gs`) or pattern
 ///   (`scn`, `SCN`) its own resources don't give as what that category holds. Its marked content's
 ///   properties are its own; those of a form without resources of its own inside it are the page's
-///   (ISO 32000-2 §7.8.3), and are kept. Such forms are read as far as they can be, once in each
-///   scope (the forms on the way with resources of their own: one drawn inside itself isn't
-///   followed again, and no more than [`MAX_DEPTH`] of them, nor 65,536 scopes), within an
-///   allowance of a page of their own and 2,000,000 of their operators read. One that doesn't decode
-///   isn't read, bytes the parser can't read in one are passed over, and past those limits the
-///   later ones aren't read; none of these fails the cleanup. Missing one of their names can lose
-///   paint, as not reading them did, but never keeps a name nothing draws.
+///   (ISO 32000-2 §7.8.3), and are kept. Such forms are read once in each scope (the forms on the
+///   way with resources of their own), not inside themselves again nor deeper than [`MAX_DEPTH`] of
+///   them, where the renderer draws nothing either (it draws no form inside itself, nor anything
+///   nested more than 50 deep), within an allowance of a page of their own, 2,000,000 of their
+///   operators and 65,536 scopes. One that doesn't decode isn't read, bytes the parser can't read
+///   in one are passed over, and past a limit the later ones aren't read: none of these fails the
+///   read, but each makes it [`Drawn::partial`], and a cleanup that would then remove a name fails
+///   ([`may_remove`]), as such a form may draw with it.
 ///
 /// Operators are read one at a time, and of forms with resources of their own only those kept are
 /// held, so the walk stops at one past a limit rather than holding them all.
-pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict, content: &[Vec<u8>]) -> Result<Vec<Op>, CosError> {
+pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict, content: &[Vec<u8>]) -> Result<Drawn, CosError> {
     const MAX_OPS: usize = 2_000_000;
     const MAX_SCOPES: usize = 1 << 16;
     let joined = Pieces::join(content);
@@ -704,6 +715,7 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
     let mut scoped_budget = DecodeBudget::page();
     let mut scoped_ops = 0usize;
     let mut scoped_open = true;
+    let mut partial = false;
     let mut cursor = 0;
     while let Some((name, scope)) = draws.get(cursor).cloned() {
         cursor += 1;
@@ -729,10 +741,14 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
             Some(_) if !scoped_open => continue,
             Some(own) => match scope_ids.get(&(scope, r)) {
                 Some(&child) => Some(child),
-                // A form drawn inside itself looks names up as it already does there, and the forms
-                // on the way are followed no deeper than the walk follows them.
-                None if scopes.len() >= MAX_SCOPES || on_chain(&scopes, scope, r) => continue,
+                // The renderer draws no form inside itself, and the forms on the way are followed no
+                // deeper than it nests forms (each of these is one level of its nesting, or more).
+                None if on_chain(&scopes, scope, r) => continue,
                 None if scope.and_then(|i| scopes.get(i)).is_some_and(|s| s.depth >= MAX_DEPTH) => continue,
+                None if scopes.len() >= MAX_SCOPES => {
+                    partial = true;
+                    continue;
+                }
                 None => {
                     let own = own_of.entry(r).or_insert_with(|| Rc::new(OwnResources::of(doc, own))).clone();
                     let depth = scope.and_then(|i| scopes.get(i)).map_or(1, |s| s.depth + 1);
@@ -768,12 +784,15 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
             continue;
         }
         let Ok(data) = scoped_budget.decode(&doc.with_direct_parms(s)) else {
+            partial = true;
             continue;
         };
-        for op in pdfcraft_content::ops(&data) {
+        let mut read = pdfcraft_content::ops(&data);
+        for op in read.by_ref() {
             scoped_ops += 1;
             if scoped_ops > MAX_OPS {
                 scoped_open = false;
+                partial = true;
                 break;
             }
             if op.is("Do")
@@ -786,8 +805,31 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
                 ops.push(op);
             }
         }
+        partial |= read.skipped() > 0;
     }
-    Ok(ops)
+    Ok(Drawn { ops, partial })
+}
+
+/// What content draws with a resource dictionary ([`resource_ops`]).
+pub(crate) struct Drawn {
+    /// The operators that look names up in it.
+    pub(crate) ops: Vec<Op>,
+    /// Whether a form with resources of its own that the content draws wasn't all read, so that it
+    /// may still draw a name `ops` doesn't.
+    pub(crate) partial: bool,
+}
+
+/// Before a cleanup removes a name what it read doesn't use: an error when that read was
+/// [`Drawn::partial`]. Removing the name could lose what an unread form draws with it, and keeping
+/// a replaced one would keep what was redacted, so the operation is refused.
+pub(crate) fn may_remove(partial: bool) -> Result<(), CosError> {
+    if partial {
+        return Err(CosError::Syntax {
+            offset: 0,
+            detail: "redaction could not fully read a form with resources of its own that may draw with what it would remove".into(),
+        });
+    }
+    Ok(())
 }
 
 /// The resource categories a form looks a name up in its caller's for, as [`resource_ops`] reads
@@ -894,13 +936,14 @@ pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &
         return Ok(Vec::new());
     }
     let mut retired = Vec::new();
-    let ops = resource_ops(doc, budget, res, content)?;
+    let read = resource_ops(doc, budget, res, content)?;
     let names: Vec<Vec<u8>> = properties.iter().map(|(n, _)| n.to_vec()).collect();
     for name in names {
-        if !ops.iter().any(|op| matches!(op.op.as_slice(), b"BDC" | b"DP") && op.last_name() == Some(&name))
-            && let Some(value) = properties.remove(&name)
-        {
-            retired.push(value);
+        if !read.ops.iter().any(|op| matches!(op.op.as_slice(), b"BDC" | b"DP") && op.last_name() == Some(&name)) {
+            may_remove(read.partial)?;
+            if let Some(value) = properties.remove(&name) {
+                retired.push(value);
+            }
         }
     }
     if properties.is_empty() {
@@ -912,11 +955,12 @@ pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &
 }
 
 pub(super) fn prune_form_resources(doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<(), CosError> {
-    let ops = resource_ops(doc, budget, res, content)?;
+    let read = resource_ops(doc, budget, res, content)?;
     let mut xo = res_dict(doc, res, b"XObject");
     let names: Vec<Vec<u8>> = xo.iter().map(|(n, _)| n.to_vec()).collect();
     for name in names {
-        if !ops.iter().any(|op| op.is("Do") && op.last_name() == Some(&name)) {
+        if !read.ops.iter().any(|op| op.is("Do") && op.last_name() == Some(&name)) {
+            may_remove(read.partial)?;
             xo.remove(&name);
         }
     }

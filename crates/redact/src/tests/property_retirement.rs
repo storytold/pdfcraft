@@ -78,6 +78,31 @@ fn surviving_form_own_resources_do_not_retain_unused_shared_descriptions() {
     }
 }
 
+/// The page shares its resources with a second page, which draws a form whose own resources give
+/// nothing and that can't all be read (a string left open): a form without resources inside it may
+/// name the description the first page's redaction retires, which the shared resources still give,
+/// so the redaction is refused rather than retire it there. Read in full, it is retired.
+#[test]
+fn a_description_a_page_sharing_the_resources_may_name_past_what_is_read_refuses_the_redaction() {
+    let run = |form: &[u8]| {
+        let mut doc = one_page(
+            SECRET,
+            "/Properties << /P0 7 0 R >> /XObject << /Fm 8 0 R >>",
+            vec![DESCRIPTION.to_vec(), stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << >>", form)],
+        );
+        let shared = doc.add(Object::Dict(resources(&doc, 0)));
+        doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Resources".to_vec(), Object::Ref(shared))).unwrap();
+        add_second_page(&mut doc, b"/Fm Do", Object::Ref(shared));
+        redact_first(&mut doc)
+    };
+    let out = run(b"( /G Do");
+    assert!(
+        matches!(&out, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. })) if detail.contains("may draw with what it would remove")),
+        "{out:?}"
+    );
+    assert_eq!(run(b"/G Do").map(|r| r.glyphs), Ok(6), "read in full");
+}
+
 #[test]
 fn unused_property_aliases_are_retired_by_value_not_resource_name() {
     for direct in [false, true] {

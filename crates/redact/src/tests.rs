@@ -3454,8 +3454,8 @@ fn what_content_draws_through_its_resources_is_read_up_to_two_million_operators(
 }
 
 /// Forms with resources of their own are read up to 2,000,000 of their operators between them; past
-/// that the later ones aren't read, and the read goes on. `/Small`, drawn after `/Big`, draws `/Im`
-/// through its caller's names, and counts only while `/Big` stays within them.
+/// that the later ones aren't read, and the read goes on, partial. `/Small`, drawn after `/Big`,
+/// draws `/Im` through its caller's names, and counts only while `/Big` stays within them.
 #[test]
 fn forms_with_resources_of_their_own_are_read_up_to_two_million_operators() {
     for (ops, read) in [(1_999_999, true), (2_000_000, false)] {
@@ -3468,7 +3468,38 @@ fn forms_with_resources_of_their_own_are_read_up_to_two_million_operators() {
         let forms = Dict::from_iter([(b"Big".to_vec(), Object::Ref(ObjRef::new(3, 0))), (b"Small".to_vec(), Object::Ref(ObjRef::new(4, 0)))]);
         let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(forms))]);
         let found = crate::interp::resource_ops(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &res, &[b"/Big Do /Small Do".to_vec()]).unwrap();
-        assert_eq!(found.iter().any(|op| op.last_name() == Some(b"Im".as_slice())), read, "/Big of {ops} operators");
+        assert_eq!(found.ops.iter().any(|op| op.last_name() == Some(b"Im".as_slice())), read, "/Big of {ops} operators");
+        assert_eq!(found.partial, !read, "/Big of {ops} operators");
+    }
+}
+
+/// Forms with resources of their own are read in up to 65,536 scopes; past that the later ones
+/// aren't read, and the read is partial. 255 forms each draw, through their own names, the same 256
+/// forms with resources of their own: a scope for each of the 255 and for each pair, 65,535; one
+/// more drawing none of the 256 makes 65,536, and one drawing one of them needs 65,537.
+#[test]
+fn forms_with_resources_of_their_own_are_read_in_up_to_65536_scopes() {
+    for (last_draws, partial) in [("", false), ("/S0 Do", true)] {
+        let names: String = (0..256).map(|i| format!("/S{i} {} 0 R ", 4 + i)).collect();
+        let draws: String = (0..256).map(|i| format!("/S{i} Do ")).collect();
+        let mut objs = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(),
+            format!("<< {names}>>").into_bytes(),
+        ];
+        for _ in 0..256 {
+            objs.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /ProcSet [/PDF] >>", b""));
+        }
+        for i in 0..256 {
+            let content = if i < 255 { draws.as_bytes() } else { last_draws.as_bytes() };
+            objs.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject 3 0 R >>", content));
+        }
+        let doc = pdf(objs);
+        let firsts: Dict = (0..256u32).map(|i| (format!("F{i}").into_bytes(), Object::Ref(ObjRef::new(260 + i, 0)))).collect();
+        let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(firsts))]);
+        let content: String = (0..256).map(|i| format!("/F{i} Do ")).collect();
+        let found = crate::interp::resource_ops(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &res, &[content.into_bytes()]).unwrap();
+        assert_eq!(found.partial, partial, "the last form drawing {last_draws:?}");
     }
 }
 

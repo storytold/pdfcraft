@@ -659,6 +659,41 @@ fn a_type3_font_only_an_appearance_without_resources_selects_stays_on_the_page()
     assert!(saved_first_page_lists_font(&doc, b"T4"), "the page no longer lists the font the appearance selects");
 }
 
+/// An appearance without /Resources draws, through the page's names, a form whose own resources
+/// give nothing and that can't all be read (a string left open), which may show `/T4`: the font's
+/// cleanup refuses the redaction rather than drop `/T4`. Read in full, the form keeps it.
+#[test]
+fn a_type3_font_an_appearance_may_show_past_what_is_read_refuses_the_redaction() {
+    let run = |before: &[u8]| {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R /Annots [8 0 R] >>".to_vec(),
+            stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET"),
+            b"<< /Font << /T3 6 0 R /T4 7 0 R >> /XObject << /Fm 16 0 R >> >>".to_vec(),
+            type3_abc(10),
+            type3_abc(13),
+            b"<< /Type /Annot /Subtype /FreeText /Rect [150 200 250 220] /P 3 0 R /DA (/T4 10 Tf 0 g) /AP << /N 9 0 R >> >>".to_vec(),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 100 20]", b"/Fm Do"),
+            stream("", b"% REDACTED_GLYPH_A"),
+            stream("", b"% UNUSED_GLYPH_B"),
+            stream("", b"% PAGE_GLYPH_C"),
+            stream("", b"% UNUSED_T4_GLYPH_A"),
+            stream("", b"% APPEARANCE_GLYPH_B"),
+            stream("", b"% UNUSED_T4_GLYPH_C"),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 100 20] /Resources << >>", [before, b"BT /T4 10 Tf 2 5 Td (B) Tj ET"].concat()),
+        ]);
+        mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+        let out = apply(&mut doc, None);
+        (out, saved_first_page_lists_font(&doc, b"T4"))
+    };
+    let (out, lists) = run(b"(");
+    assert!(refused_for(&out, "may draw with what it would remove"), "{out:?}");
+    assert!(lists);
+    let (out, lists) = run(b"");
+    assert_eq!((out.map(|r| r.glyphs), lists), (Ok(1), true), "read in full");
+}
+
 /// The same appearance, its content behind a predictor whose `/DecodeParms` are given by
 /// reference: the page's cleanup reads it through them, and keeps the font it selects.
 #[test]
@@ -1077,6 +1112,29 @@ fn a_type3_glyphs_form_keeps_what_a_form_inside_it_uses_through_its_names() {
     assert!(!full_save_holds(&doc, b"SECRET_GLYPH_A_PAYLOAD"));
     assert!(full_save_holds(&doc, b"GS0_KEPT_MARKER"), "/G's graphics state, given by /F, was dropped");
     assert!(full_save_holds(&doc, b"PATTERN_P0_KEPT"), "/G's pattern, given by /F, was dropped");
+}
+
+/// The same glyph form `/F`, its `/G` setting `/GS0` only after 2,000,000 operators, past what the
+/// cleanup of `/F`'s resources reads: it refuses the redaction rather than drop `/GS0`.
+#[test]
+fn a_type3_glyphs_form_refuses_to_drop_what_a_form_inside_it_may_use_past_what_is_read() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (AB) Tj ET"),
+        b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type3 /FontBBox [0 -200 1000 800] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 66 /Widths [500 500] /Encoding << /Differences [65 /A /B] >> /CharProcs << /A 7 0 R /B 8 0 R >> /Resources << /XObject << /F 9 0 R >> >> >>".to_vec(),
+        stream("", b"% SECRET_GLYPH_A_PAYLOAD"),
+        stream("", b"/F Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /ExtGState << /GS0 10 0 R >> /XObject << /G 11 0 R >> >>", b"/G Do"),
+        b"<< /Type /ExtGState /CA 0.5 /GS0_KEPT_MARKER 1 >>".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /ProcSet [/PDF] >>", [b"n ".repeat(2_000_000), b"/GS0 gs".to_vec()].concat()),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    let out = apply(&mut doc, None);
+    assert!(refused_for(&out, "may draw with what it would remove"), "{out:?}");
+    assert!(full_save_holds(&doc, b"GS0_KEPT_MARKER"));
 }
 
 /// Fifty forms with resources of their own draw one form `/F` that shows B with `/T3`. Where `/F`'s

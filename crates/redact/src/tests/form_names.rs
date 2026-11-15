@@ -1315,6 +1315,156 @@ fn an_image_a_form_draws_beside_the_mark_through_its_callers_names_stays() {
     assert_eq!(run(""), (1, true));
 }
 
+/// Whether `out` is the refusal of a cleanup that would remove a name a form it couldn't all read
+/// may draw with.
+fn refused_past_what_is_read(out: &Result<Report, RedactError>) -> bool {
+    matches!(out, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. })) if detail.contains("may draw with what it would remove"))
+}
+
+/// A form with resources of its own that give nothing, drawing `/Im` through its caller's names
+/// after `before`, and the entries `entries` in its dictionary.
+fn drawing_im_after(before: &[u8], entries: &str) -> Vec<u8> {
+    stream(
+        &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 100] /Resources << >> {entries}"),
+        [before, b"q 100 0 0 30 20 20 cm /Im Do Q"].concat(),
+    )
+}
+
+/// The page draws its image under the mark, and beside it a form whose own resources give nothing,
+/// which draws the same `/Im` through the page's names after what can't be read: 2,000,000
+/// operators, bytes the parser can't read (a string left open), or a filter that doesn't decode.
+/// Removing `/Im` would lose the image beside the mark, and keeping it would keep the image
+/// redacted, so the redaction is refused and the document saves as before. Read in full, the
+/// form keeps the image.
+#[test]
+fn an_image_a_form_beside_the_mark_may_draw_past_what_is_read_refuses_the_redaction() {
+    let run = |form: Vec<u8>| {
+        let image = stream("/Type /XObject /Subtype /Image /Width 6 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"SECRET_IMAGE_BYTES");
+        let mut doc = one_page(b"q 100 0 0 30 20 240 cm /Im Do Q /Fm Do", "/XObject << /Im 7 0 R /Fm 8 0 R >>", vec![image, form]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        let before = write_full(&doc, &SaveOptions::default()).unwrap();
+        let out = apply(&mut doc, None);
+        let unchanged = write_full(&doc, &SaveOptions::default()).unwrap() == before;
+        (out, unchanged)
+    };
+    for (label, form) in [
+        ("2,000,000 operators", drawing_im_after(&b"n ".repeat(2_000_000), "")),
+        ("a string left open", drawing_im_after(b"(", "")),
+        ("a filter that doesn't decode", drawing_im_after(b"", "/Filter /NoSuchFilter")),
+    ] {
+        let (out, unchanged) = run(form);
+        assert!(refused_past_what_is_read(&out), "{label}: {out:?}");
+        assert!(unchanged, "{label}");
+    }
+    let (out, _) = run(drawing_im_after(b"", ""));
+    assert_eq!(out.map(|r| r.images_removed), Ok(1), "read in full");
+}
+
+/// A form beside the mark that can't all be read changes nothing where no name would be removed:
+/// the page draws its image again beside the mark, so `/Im` stays and the redaction goes through.
+#[test]
+fn a_form_that_cant_all_be_read_refuses_only_a_removal() {
+    let image = stream("/Type /XObject /Subtype /Image /Width 6 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"SECRET_IMAGE_BYTES");
+    let mut doc = one_page(
+        b"q 100 0 0 30 20 240 cm /Im Do Q q 100 0 0 30 20 120 cm /Im Do Q /Fm Do",
+        "/XObject << /Im 7 0 R /Fm 8 0 R >>",
+        vec![image, drawing_im_after(b"(", "")],
+    );
+    mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
+    assert!(full_save_holds(&doc, b"SECRET_IMAGE_BYTES"), "drawn again beside the mark");
+}
+
+/// The page lists a property nothing it reads names, beside a form that can't all be read, which
+/// may draw a form without resources naming it: the redaction is refused rather than drop it.
+/// Read in full, the property goes.
+#[test]
+fn a_property_a_form_may_name_past_what_is_read_refuses_the_redaction() {
+    let run = |before: &[u8]| {
+        let layer = b"<< /Type /OCG /Name (PAGE_LAYER_NAME) >>".to_vec();
+        let mut doc = one_page(
+            b"BT /F1 10 Tf 20 250 Td (SECRET) Tj ET /Fm Do",
+            "/XObject << /Fm 7 0 R >> /Properties << /MC0 8 0 R >>",
+            vec![drawing_im_after(before, ""), layer],
+        );
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        apply(&mut doc, None)
+    };
+    let out = run(b"(");
+    assert!(refused_past_what_is_read(&out), "{out:?}");
+    assert_eq!(run(b"").map(|r| r.glyphs), Ok(6), "read in full");
+}
+
+/// The page lists a Type 3 font nothing it reads shows, beside a form that can't all be read,
+/// which may show it: the font's cleanup refuses the redaction rather than drop it.
+#[test]
+fn a_type3_font_a_form_may_show_past_what_is_read_refuses_the_redaction() {
+    let run = |before: &[u8]| {
+        let mut doc = one_page(b"BT /F1 10 Tf 20 250 Td (SECRET) Tj ET /Fm Do", "/XObject << /Fm 7 0 R >>", vec![drawing_im_after(before, "")]);
+        list_type3(&mut doc, ObjRef::new(3, 0));
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        apply(&mut doc, None)
+    };
+    let out = run(b"(");
+    assert!(refused_past_what_is_read(&out), "{out:?}");
+    assert_eq!(run(b"").map(|r| r.glyphs), Ok(6), "read in full");
+}
+
+/// Two pages share the `/Pages` node's resources, and the second draws a form (with resources of
+/// its own that give nothing, or none) that may draw `/Im` after a string left open: once the first
+/// page's redaction removes its own `/Im`, the check of what the second still draws can't tell, and
+/// the redaction is refused rather than unlink `/Im` there. Read in full, the second keeps it.
+#[test]
+fn an_image_a_page_sharing_the_resources_may_draw_past_what_is_read_refuses_the_redaction() {
+    let run = |form_res: &str, before: &[u8]| {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [6 0 R 7 0 R] /Count 2 /Resources << /XObject << /Im 5 0 R /Fm 3 0 R >> >> >>".to_vec(),
+            stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 100] {form_res}"), [before, b"q 100 0 0 30 20 20 cm /Im Do Q"].concat()),
+            stream("", b"q 100 0 0 30 20 240 cm /Im Do Q"),
+            stream("/Type /XObject /Subtype /Image /Width 6 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"SECRET_IMAGE_BYTES"),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 8 0 R >>".to_vec(),
+            stream("", b"/Fm Do"),
+        ]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        let out = apply(&mut doc, Some(&[0]));
+        (out, full_save_holds(&doc, b"SECRET_IMAGE_BYTES"))
+    };
+    for form_res in ["/Resources << >>", ""] {
+        let (out, holds) = run(form_res, b"(");
+        assert!(matches!(out, Err(RedactError::Residue(1))), "{form_res:?}: {out:?}");
+        assert!(holds, "{form_res:?}");
+        let (out, holds) = run(form_res, b"");
+        assert_eq!((out.map(|r| r.images_removed), holds), (Ok(1), true), "{form_res:?}, read in full");
+    }
+}
+
+/// A form the redaction rewrites draws a form beside the mark that can't all be read, which may draw
+/// `/X` through the rewritten form's names: the rewritten form's cleanup refuses the redaction
+/// rather than drop `/X`. The page draws the form again away from the mark, so its own cleanup keeps
+/// the form and removes nothing.
+#[test]
+fn an_image_a_nested_form_may_draw_past_what_is_read_refuses_the_redaction() {
+    let run = |inner: &[u8]| {
+        let outer = stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> /XObject << /X 8 0 R /G 9 0 R >> >>",
+            b"BT /F1 10 Tf 20 250 Td (SECRET) Tj ET /G Do",
+        );
+        let image = stream("/Type /XObject /Subtype /Image /Width 6 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"OUTSIDE_IMAGE_BYTES");
+        let inner = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100] /Resources << >>", [inner, b"q 100 0 0 30 20 20 cm /X Do Q"].concat());
+        let mut doc = one_page(b"/Fm Do q 1 0 0 1 0 -200 cm /Fm Do Q", "/XObject << /Fm 7 0 R >>", vec![outer, image, inner]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        let out = apply(&mut doc, None);
+        (out, full_save_holds(&doc, b"OUTSIDE_IMAGE_BYTES"))
+    };
+    let (out, holds) = run(b"(");
+    assert!(refused_past_what_is_read(&out), "{out:?}");
+    assert!(holds);
+    let (out, holds) = run(b"");
+    assert_eq!((out.map(|r| r.glyphs), holds), (Ok(6), true), "read in full");
+}
+
 /// A form the redaction rewrites draws, through its own `/XObject`, a form beside the mark whose
 /// own resources lack `/X`, which it draws through the rewritten form's names: the rewritten form
 /// keeps `/X`. Where that form's own `/X` is a form drawing nothing, the image goes.
@@ -1392,6 +1542,19 @@ fn forms_drawing_themselves_open_a_scope_each() {
         // The page's XObject and font cleanups each open one scope for each form.
         assert_eq!(crate::interp::CLEANUP_SCOPES.with(std::cell::Cell::get), 2 * forms);
     }
+}
+
+/// A form beside the mark with resources of its own draws itself through the page's `/Fa`, and
+/// nothing else: not following it inside itself, where the renderer draws nothing, leaves the read
+/// whole, so the page's image under the mark still goes.
+#[test]
+fn a_form_drawing_itself_leaves_the_cleanups_whole() {
+    let image = stream("/Type /XObject /Subtype /Image /Width 6 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"SECRET_IMAGE_BYTES");
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100] /Resources << /ProcSet [/PDF] >>", b"/Fa Do 0 0 10 10 re f");
+    let mut doc = one_page(b"q 100 0 0 30 20 240 cm /Im Do Q /Fa Do", "/XObject << /Im 7 0 R /Fa 8 0 R >>", vec![image, form]);
+    mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
+    assert!(!full_save_holds(&doc, b"SECRET_IMAGE_BYTES"));
 }
 
 /// Sixty forms beside the mark, each with resources of its own giving the next: the cleanups follow
