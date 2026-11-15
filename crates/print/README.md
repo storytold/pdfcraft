@@ -121,6 +121,8 @@ comment and form-field colours and re-encodable images to grey before submission
 (`pdfcraft_engine::spooler::spooler_copy`). This conversion leaves shadings, patterns, inline
 images and images it cannot re-encode unchanged; the driver is still asked for grayscale where
 it supports it. A driver without that option can therefore print those items in colour.
+If reading or writing the grayscale copy fails, PdfCraft leaves colour conversion to the driver;
+a driver without a grayscale option may refuse the job.
 The saved document is unchanged.
 
 Not yet: poster labels and PostScript output.
