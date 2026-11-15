@@ -172,8 +172,8 @@ The prompt channel and default menu renderer support interactive form scripts. #
 supply an anchored renderer through the UI menu callback when it adds link actions. Once
 the shared parser lands upstream, this integration can use it directly.
 
-`ScriptSession::run_host_task` gives timer and page actions access to the retained realm
-on its own worker.
+`ScriptSession::run` executes timer and page actions in the retained realm on its own
+worker.
 
 Document actions and widget triggers (ported from #344 by @DWAA1660) run through the same
 realm. On opening, the document scripts run, then the catalog `/OpenAction`'s JavaScript
