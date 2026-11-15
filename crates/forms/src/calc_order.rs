@@ -17,18 +17,24 @@ const MAX_LINKS: usize = 1 << 20;
 pub struct CalculatedField {
     /// The field's full name.
     pub name: String,
+    /// The field object. Two calculated fields can share a name in a malformed form; this tells
+    /// them apart.
+    pub obj: ObjRef,
     /// The fields its formula reads, each once, as the formula names them: a name also stands for
     /// the fields under it. A script's names built at run time (`getField("row" + i)`) aren't here.
     pub reads: Vec<String>,
     /// `/CO` lists it. A field it leaves out calculates after the listed ones.
     pub listed: bool,
-    /// What is wrong with its place in the order.
+    /// What is wrong with its formula or its place in the order.
     pub issues: Vec<CalculationIssue>,
 }
 
-/// Something wrong with a calculated field's place in the calculation order.
+/// Something wrong with a calculated field's formula or its place in the calculation order.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CalculationIssue {
+    /// It reads `field`, which the form doesn't have (a field deleted, renamed outside PdfCraft,
+    /// or mistyped), so the formula gets no value there.
+    MissingField { field: String },
     /// It reads `field`, which calculates after it, so it uses that field's previous value.
     RunsTooEarly { field: String },
     /// Its formula reads its own result: it reads `fields`, which read it back (itself, when it
@@ -37,6 +43,9 @@ pub enum CalculationIssue {
     /// `/CO` leaves it out. PdfCraft calculates it after the listed fields, but other PDF viewers
     /// may not calculate it at all.
     NotInOrder,
+    /// Its script also reads fields by names it builds at run time (`getField("row" + i)`). Those
+    /// aren't in `reads`, so the order isn't checked against them.
+    BuiltNames,
 }
 
 /// A form's calculation order and what is wrong with it.
@@ -152,11 +161,14 @@ pub fn calculation_order(doc: &Document, fields: &[Field]) -> CalculationOrder {
         .collect();
     let links = links(calculated.iter().map(|(f, _)| f.name.as_str()), &reads);
     let component = components(&links);
+    let mut all: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+    all.sort_unstable();
     let name = |k: usize| calculated.get(k).map(|(f, _)| f.name.clone()).unwrap_or_default();
     let mut out = Vec::with_capacity(calculated.len());
     for (k, ((f, listed), reads)) in calculated.iter().zip(reads).enumerate() {
         let own = component.get(k).copied();
-        let mut issues = Vec::new();
+        let mut issues: Vec<CalculationIssue> =
+            reads.iter().filter(|name| !found(&all, name)).map(|name| CalculationIssue::MissingField { field: name.clone() }).collect();
         let read = links.get(k).map(Vec::as_slice).unwrap_or_default();
         for &j in read {
             if j > k && component.get(j).copied() != own {
@@ -172,10 +184,23 @@ pub fn calculation_order(doc: &Document, fields: &[Field]) -> CalculationOrder {
         if !listed {
             issues.push(CalculationIssue::NotInOrder);
         }
-        out.push(CalculatedField { name: f.name.clone(), reads, listed: *listed, issues });
+        if f.actions.scripts.calculate.as_deref().is_some_and(crate::af::reads_built_names) {
+            issues.push(CalculationIssue::BuiltNames);
+        }
+        out.push(CalculatedField { name: f.name.clone(), obj: f.obj, reads, listed: *listed, issues });
     }
     let fixed = fixed_order(&links, &component);
     CalculationOrder { fields: out, extra, fixed }
+}
+
+/// Whether a formula's read `name` finds a field in `names` (sorted): the field of that name or a
+/// field under it (`row` for `row.1`), as [`links`], [`crate::recalculate`] and the scripts'
+/// `getField` look names up. Acrobat's widget names (`price.0`) aren't fields to any of them, so
+/// a read of one gets no value and is missing too.
+fn found(names: &[&str], name: &str) -> bool {
+    let prefix = format!("{name}.");
+    let under = names.partition_point(|n| *n < prefix.as_str());
+    names.binary_search(&name).is_ok() || names.get(under).is_some_and(|n| n.starts_with(&prefix))
 }
 
 /// For each calculated field (by its place in `names`), the places of the calculated fields it
@@ -381,6 +406,19 @@ mod tests {
         let names = ["row.1", "row", "row.10", "rows", "row-1", "total"];
         let reads = vec![vec![], vec![], vec![], vec![], vec![], vec!["row".to_owned(), "missing".to_owned(), "row".to_owned()]];
         assert_eq!(links(names.into_iter(), &reads)[5], [0, 1, 2], "row, row.1 and row.10; not rows or row-1");
+    }
+
+    #[test]
+    fn a_read_name_finds_a_field_or_a_group() {
+        let mut names = vec!["price", "row.1", "row.2", "rows", "total"];
+        names.sort_unstable();
+        for name in ["price", "row", "row.1", "rows"] {
+            assert!(found(&names, name), "{name}");
+        }
+        // A widget name finds nothing: recalculation and getField don't resolve it either.
+        for name in ["pric", "ro", "row.3", "price.", "price.0", "price.12", "total.0.1", ""] {
+            assert!(!found(&names, name), "{name}");
+        }
     }
 
     /// Two thousand formulas each reading a group of two thousand fields would be four million
