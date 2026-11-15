@@ -253,6 +253,11 @@ pub(crate) struct EditCtx {
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
+    /// The marks the edit's applied redactions took out (a batch's included), as they were when
+    /// each apply ran, for the renderer's check.
+    /// Each applied mark with the page object it was drawn on, which a later page move changes the
+    /// index of but not the identity.
+    pub(crate) redaction_marks: Vec<(pdfcraft_cos::ObjRef, pdfcraft_redact::Mark)>,
     /// What the edit's applied redactions left as it was that still holds the removed text.
     pub(crate) redaction_elsewhere: Option<pdfcraft_redact::Elsewhere>,
     /// What became of the PDF/A and PDF/UA identification when the edit's applied redactions
@@ -310,6 +315,7 @@ impl EditCtx {
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
+            redaction_marks: Vec::new(),
             redaction_elsewhere: None,
             redaction_identification: pdfcraft_redact::Identification::default(),
             prepared: None,
@@ -529,7 +535,17 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::insert_blank_page(doc, *at, *width, *height)?;
         }
         Edit::SetInfo { key, value } => pdfcraft_organize::set_info(doc, key, value)?,
-        Edit::DuplicatePages { pages, at } => pdfcraft_organize::duplicate_pages(doc, pages, *at)?,
+        Edit::DuplicatePages { pages, at } => {
+            // A copy of a page cannot be tied back to the marks an earlier redaction of this edit
+            // applied: text put back under a mark would sit on the copy, unchecked. Fail closed.
+            if !cx.redaction_marks.is_empty() {
+                return Err(EditError::Invalid(
+                    "a batch that applies redactions can't also copy pages: the copies can't be checked against the marks; the document was not changed"
+                        .into(),
+                ));
+            }
+            pdfcraft_organize::duplicate_pages(doc, pages, *at)?
+        }
         Edit::ReplacePages { pages, name, bytes, src_pages } => {
             let src = crate::sources::open_source_into(name, bytes, doc)?;
             pdfcraft_organize::replace_pages(doc, pages, &src, src_pages)?;
@@ -991,8 +1007,15 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::add_content(doc, *page, &content)?;
         }
         Edit::ApplyRedactions { pages } => {
+            let model = pdfcraft_model::pages(doc);
+            cx.redaction_marks.extend(
+                pdfcraft_redact::marks(doc)
+                    .into_iter()
+                    .filter(|m| pages.as_ref().is_none_or(|p| p.contains(&m.page)))
+                    .filter_map(|m| model.get(m.page).map(|p| (p.obj, m))),
+            );
             let report = pdfcraft_redact::apply(doc, pages.as_deref())?;
-            cx.redaction_overlays = report.overlays;
+            cx.redaction_overlays.extend(report.overlays);
             cx.redaction_elsewhere = Some(report.still_holding);
             cx.redaction_identification = report.identification;
         }

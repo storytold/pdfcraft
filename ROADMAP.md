@@ -12,6 +12,7 @@
 
 > **Last reviewed:** 2026-11-07 | **Last updated:** 2026-11-07 | **Change:** patch (M10: file-backed Windows PDF loading without whole-job buffering or per-chunk async waits; approved dependency chain retains #5006; physical output still unqualified; estimates unchanged)
 > **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M7 #2964: directly edit Thai source text inside supported Form XObjects; estimates unchanged)
+> **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** minor (M3, #5452: native Recent rows gain Reveal in Finder / File Explorer; estimates unchanged)
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** minor (M3/M4, #5330: Crop pages is directly available in the document quick toolbar; estimates unchanged)
