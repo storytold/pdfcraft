@@ -746,7 +746,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                         // own scroll area stays separate, after these.
                         let fixed_overhead = grip_size.x + cell + 24.0;
                         let scroll_max = (bounds.width() - fixed_overhead).max(cell);
-                        egui::ScrollArea::horizontal().max_height(cell).max_width(scroll_max).auto_shrink([true, true]).show(ui, |ui| {
+                        egui::ScrollArea::horizontal().id_salt("hotbar-core-controls").max_height(cell).max_width(scroll_max).auto_shrink([true, true]).show(ui, |ui| {
                             ui.with_layout(layout, |ui| {
                                 core_tool_buttons(ui, app, cell, popup_align, &t);
                                 active_tool_controls(ui, app, &t, false, cell);
@@ -755,7 +755,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                         if !bar.tools.is_empty() {
                             ui.separator();
                             let tools_scroll_max = (bounds.width() - cell - 50.0).max(cell);
-                            egui::ScrollArea::horizontal().max_height(cell).max_width(tools_scroll_max).show(ui, |ui| {
+                            egui::ScrollArea::horizontal().id_salt("hotbar-tools").max_height(cell).max_width(tools_scroll_max).show(ui, |ui| {
                                 ui.with_layout(layout, |ui| {
                                     tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
                                 });
