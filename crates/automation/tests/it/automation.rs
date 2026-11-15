@@ -947,7 +947,7 @@ fn open_inspect_render_and_find() {
     let Content::Png { data, width, height } = &png[0] else { panic!("expected an image") };
     assert_eq!((*width, *height), (200, 300));
     assert_eq!(&data[..8], b"\x89PNG\r\n\x1a\n");
-    let decoded = craft_image_codecs::decode(&data).unwrap();
+    let decoded = craft_image_codecs::decode(data).unwrap();
     assert_eq!(decoded.dimensions(), (200, 300));
 }
 

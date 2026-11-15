@@ -316,18 +316,14 @@ fn walk_rich_plain(node: &craft_xml::El, out: &mut String) {
     for n in &node.children {
         match n {
             craft_xml::Node::El(el) => {
-                if el.local() == "br" {
-                    out.push('\r');
-                } else if matches!(el.local(), "p" | "div" | "li") && !out.is_empty() && !out.ends_with('\r') {
+                if el.local() == "br" || (matches!(el.local(), "p" | "div" | "li") && !out.is_empty() && !out.ends_with('\r')) {
                     out.push('\r');
                 }
                 walk_rich_plain(el, out);
             }
-            craft_xml::Node::Text(t) => {
-                // Indentation between elements is not text.
-                if !(t.trim().is_empty() && t.contains('\n')) {
-                    out.push_str(&t.replace("\r\n", "\r").replace('\n', "\r"));
-                }
+            // Indentation between elements is not text.
+            craft_xml::Node::Text(t) if !(t.trim().is_empty() && t.contains('\n')) => {
+                out.push_str(&t.replace("\r\n", "\r").replace('\n', "\r"));
             }
             _ => {}
         }
@@ -1021,45 +1017,6 @@ fn read_rich_text(rich: &craft_xml::El, ns: &[(String, String)], has_contents: b
     if !has_contents {
         d.set(b"Contents".to_vec(), PdfString::text(&rich_plain(rich)));
     }
-}
-
-/// Whether start tag `tag` (from `<` up to its closing `>`) declares attribute `name` (white
-/// space may come before the `=`). Attribute values are skipped: `title=" xmlns:b='x'"` declares
-/// nothing.
-fn declares(tag: &str, name: &str) -> bool {
-    let mut quote = None;
-    let mut after_space = false;
-    for (i, c) in tag.char_indices() {
-        if let Some(q) = quote {
-            if c == q {
-                quote = None;
-            }
-            continue;
-        }
-        if c == '"' || c == '\'' {
-            quote = Some(c);
-        } else if after_space && tag.get(i..).and_then(|rest| rest.strip_prefix(name)).is_some_and(|a| a.trim_start().starts_with('=')) {
-            return true;
-        }
-        after_space = c.is_whitespace();
-    }
-    false
-}
-
-/// Where the start tag at the beginning of `markup` ends: its first `>` outside an attribute
-/// value (the end of `markup` when there is none).
-fn start_tag_end(markup: &str) -> usize {
-    let mut quote = None;
-    for (i, c) in markup.char_indices() {
-        match quote {
-            Some(q) if c == q => quote = None,
-            Some(_) => {}
-            None if c == '"' || c == '\'' => quote = Some(c),
-            None if c == '>' => return i,
-            None => {}
-        }
-    }
-    markup.len()
 }
 
 /// The one element `markup` (cut out of `rich`, a `<contents-richtext>`) as an XML

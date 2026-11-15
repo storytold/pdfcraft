@@ -143,7 +143,6 @@ pub(crate) fn decode_source(bytes: &[u8]) -> Result<DynamicImage, SignatureImage
             max_pixels: MAX_SOURCE_PIXELS,
             max_alloc: MAX_SOURCE_PIXELS * 4,
         },
-        ..Default::default()
     };
     let decoded = craft_image_codecs::decode_as_with(format, bytes, &opts).map_err(|e| match e {
         craft_image_codecs::CodecError::LimitExceeded(_) => SignatureImageError::Size,
