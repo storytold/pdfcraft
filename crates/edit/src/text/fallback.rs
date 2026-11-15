@@ -756,7 +756,35 @@ pub(super) fn source_character_advance(metrics: &Metrics, ch: char, size: f64, c
 
 pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, char_spacing: f64, word_spacing: f64) -> Result<Vec<Op>, EditError> {
     if let Some(bytes) = metrics.encode(text) {
-        return Ok(vec![Op::new("Tj", vec![Object::String(PdfString::literal(bytes))])]);
+        // Word spacing applies only to the single-byte code 32 (§9.3.3): a space the font shows
+        // any other way - a composite font's two-byte code - takes an explicit displacement, or
+        // the spacing would be lost on the drawn text (`source_width` measures it the same way).
+        let explicit = metrics.codes(&bytes).iter().any(|&(code, len)| !metrics.is_space(code, len) && metrics.text_of(code).as_deref() == Some(" "));
+        if !explicit {
+            return Ok(vec![Op::new("Tj", vec![Object::String(PdfString::literal(bytes))])]);
+        }
+        let mut array: Vec<Object> = Vec::new();
+        let mut chunk: Vec<u8> = Vec::new();
+        let mut cursor = 0;
+        for (code, len) in metrics.codes(&bytes) {
+            if !metrics.is_space(code, len) && metrics.text_of(code).as_deref() == Some(" ") {
+                if !chunk.is_empty() {
+                    array.push(Object::String(PdfString::literal(std::mem::take(&mut chunk))));
+                }
+                let adjustment = -1000.0 * (metrics.width(code) + (char_spacing + word_spacing) / size);
+                if !adjustment.is_finite() {
+                    return Err(EditError::Invalid("the source font's space advance is invalid".into()));
+                }
+                array.push(pdfcraft_content::num(adjustment));
+            } else {
+                chunk.extend_from_slice(&bytes[cursor..cursor + len]);
+            }
+            cursor += len;
+        }
+        if !chunk.is_empty() {
+            array.push(Object::String(PdfString::literal(chunk)));
+        }
+        return Ok(vec![Op::new("TJ", vec![Object::Array(array)])]);
     }
     let adjustment = -1000.0 * (space + (char_spacing + word_spacing) / size);
     if !adjustment.is_finite() {

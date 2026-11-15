@@ -1958,17 +1958,7 @@ pub(crate) fn rewrite_styled_block(
         let w = measured.get(row_index).copied().unwrap_or(0.0);
         // The row's own alignment, or the paragraph's.
         let asked = row_lines.get(row_index).and_then(|l| style.aligns.get(*l)).copied().flatten().or(style.align);
-        let align = asked.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
-        let original_rect = if continuation {
-            // A row that continues an earlier one sits on the paragraph's rest left edge, not on
-            // the first row's: a wrap keeps the hanging indent (#7213).
-            [rest_left, block.rect[1], measure_right.max(rest_left), block.rect[3]]
-        } else {
-            block.rows.get(source_row).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect)
-        };
         let natural = style.width.is_none() && asked.is_none();
-        let left = if natural { original_rect[0] } else { block.rect[0] };
-        let available = if natural { original_rect[2] - original_rect[0] } else { width };
         // Every space the row shows takes an equal share of the stretch, leading and trailing ones
         // included: the divisor must count the same spaces the emission and the advance do, or a
         // row with spaces outside its words would run past its measure (#7213).
@@ -1979,6 +1969,18 @@ pub(crate) fn rewrite_styled_block(
         // short last source row nonfinal, and that fragment stretches to the measure like any
         // interior row.
         let stretch = justified && natural && row_index.saturating_add(1) < rows.len() && space_count > 0;
+        // A row that stretches to its measure starts at its left edge: a centered start would push
+        // the stretched row past the measure (#7213).
+        let align = asked.unwrap_or(if centered && !stretch { crate::added::Align::Center } else { crate::added::Align::Left });
+        let original_rect = if continuation {
+            // A row that continues an earlier one sits on the paragraph's rest left edge, not on
+            // the first row's: a wrap keeps the hanging indent (#7213).
+            [rest_left, block.rect[1], measure_right.max(rest_left), block.rect[3]]
+        } else {
+            block.rows.get(source_row).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect)
+        };
+        let left = if natural { original_rect[0] } else { block.rect[0] };
+        let available = if natural { original_rect[2] - original_rect[0] } else { width };
         let justified_measure = (measure_right - left).max(available);
         let mut x = left
             + match align {

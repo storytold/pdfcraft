@@ -11632,10 +11632,10 @@ fn a_first_line_indent_wraps_at_its_own_measure() {
     let before = rows_of(&doc);
     let measure_right = before.iter().map(|(_, r)| r[2]).fold(f64::MIN, f64::max);
 
-    // One unbreakable long word pushes the first row over the measure its left edge leaves; it
-    // cannot wrap later than that, or its text would reach past the paragraph's right edge.
+    // A word wide enough to pass the first row's own measure but not the paragraph's: under a
+    // revert to the paragraph-wide first-row measure, the whole row would fit and not wrap.
     let mut draft_rows: Vec<String> = block.editor_text.split('\n').map(str::to_string).collect();
-    draft_rows[0].push_str(" eeeeeeeeeeeeeeeeeeeeeeee");
+    draft_rows[0].push_str(" eeee");
     text::rewrite_block(&mut doc, 0, index, Some(&draft_rows.join("\n")), &text::BlockStyle::default()).unwrap();
     let after = rows_of(&reopen(&doc));
     assert_eq!(after.len(), 4, "the long word is its own row: {after:?}");
@@ -11647,6 +11647,30 @@ fn a_first_line_indent_wraps_at_its_own_measure() {
     assert!((overflow[1] - (fragment[1] - 12.0)).abs() < 0.5, "the overflow sits a leading below: {overflow:?}");
     let end = after.iter().find(|(t, _)| t.starts_with("end")).unwrap_or_else(|| panic!("{after:?}")).1;
     assert!((end[1] - (at_first(&before, "end")[1] - 12.0)).abs() < 0.5, "the last row moves down too: {end:?}");
+}
+
+/// A rewritten justified row with a space outside its words still ends at its measure: the
+/// leading space takes its share of the stretch like the gaps between the words do (#7213).
+#[test]
+fn a_justified_row_with_a_leading_space_still_reaches_its_measure() {
+    let content = "BT /F1 10 Tf 12 TL 1 0 0 1 72 700 Tm (A. two three four five six) Tj 14 -12 Td (two three four five six) Tj 0 -12 Td (two three four five six) Tj 0 -12 Td (end) Tj ET";
+    let rows_of =
+        |doc: &Document| -> Vec<(String, [f64; 4])> { text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text.clone(), l.rect)).collect() };
+    let mut doc = text_page(content);
+    let index = text::text_blocks(&doc, 0).unwrap().iter().position(|b| b.text.contains("A.")).unwrap();
+    let block = text::text_blocks(&doc, 0).unwrap()[index].clone();
+    let before = rows_of(&doc);
+    let interior = before.iter().find(|(t, r)| t.starts_with("two") && (r[0] - 86.0).abs() < 0.5).map(|(_, r)| r[2]).unwrap();
+
+    // A leading space on the edited row: if only the words' gaps divided the stretch, the leading
+    // space would take a share too and the row would run past its measure.
+    let mut draft_rows: Vec<String> = block.editor_text.split('\n').map(str::to_string).collect();
+    draft_rows[1] = format!(" {}", &draft_rows[1]);
+    draft_rows[1] = draft_rows[1].replacen("three ", "", 1);
+    text::rewrite_block(&mut doc, 0, index, Some(&draft_rows.join("\n")), &text::BlockStyle::default()).unwrap();
+    let after = rows_of(&reopen(&doc));
+    let edited = after.iter().find(|(t, _)| t.trim_start() == "two four five six").unwrap_or_else(|| panic!("{:?}", after)).1;
+    assert!((edited[2] - interior).abs() < 0.5, "the row with a leading space reaches its measure: {:?} vs {interior}", edited);
 }
 
 fn at_first(before: &[(String, [f64; 4])], text: &str) -> [f64; 4] {
@@ -15731,3 +15755,4 @@ fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
     }
 }
 // round 3
+// round 4
