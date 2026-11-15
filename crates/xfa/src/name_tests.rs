@@ -164,6 +164,28 @@ fn unnamed_radio_groups_keep_their_names_when_rows_are_added_before_them() {
     );
 }
 
+/// An unnamed group under an unnamed root has no SOM path of its own or of a container's: its
+/// field records its first button's path, and its name is kept under that same path, so the name
+/// stays `group` however often the form is laid out again.
+#[test]
+fn an_unnamed_group_under_an_unnamed_root_keeps_its_name() {
+    let xdp = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform layout="tb">
+ <pageSet><pageArea name="p"><contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><medium short="612pt" long="792pt"/></pageArea></pageSet>
+ <exclGroup layout="lr-tb" w="7in"><field name="a" w="2in" h="0.3in"><ui><checkButton shape="round"/></ui><items><integer>1</integer></items></field><field name="b" w="2in" h="0.3in"><ui><checkButton shape="round"/></ui><items><integer>2</integer></items></field></exclGroup>
+</subform></template>
+</xdp:xdp>"#;
+    let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let first = [("group".to_string(), "a[0]".to_string())];
+    assert_eq!(radio_groups(&doc), first);
+    let tpl = crate::script::template_of(&doc).unwrap();
+    for pass in 1..=3 {
+        rerender(&mut doc, &tpl).unwrap();
+        assert_eq!(radio_groups(&doc), first, "laid out again {pass} times");
+    }
+}
+
 /// The radio groups of the AcroForm, in the order the layout wrote them: (name, SOM path).
 fn radio_groups(doc: &Document) -> Vec<(String, String)> {
     let root = doc.root().unwrap();

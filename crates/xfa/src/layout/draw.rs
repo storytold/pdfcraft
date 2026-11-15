@@ -379,7 +379,6 @@ impl Layouter<'_> {
         let selected: Option<String> =
             self.data.and_then(|d| d.text_at(&data_path(self.tpl, &ctx.som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
         let inner = rect.inset(&g.common.margin);
-        let group = self.unique_name(g.common.name.as_deref().unwrap_or("group"), g.common.name.is_none(), &ctx.som);
         let nodes: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
         // Each field is measured under the SOM index it is drawn at.
         let sibs = SomIndices::of(&nodes);
@@ -410,6 +409,20 @@ impl Layouter<'_> {
                 .collect(),
             _ => self.pack(&nodes, inner.w, &ctx, depth).0,
         };
+        // The SOM path the group's field records, and its name is kept under: the group's own,
+        // or, for an unnamed group under an unnamed root (no path at all), its first drawn
+        // button's, as the group's field has always recorded.
+        let group_som = if ctx.som.is_empty() {
+            placed
+                .iter()
+                .filter_map(|(i, _)| g.fields.get(*i).map(|f| (f, sibs.at(*i))))
+                .find(|(f, _)| self.views.and(f.common.views()).any())
+                .map(|(f, sib)| format!("{}[{sib}]", f.common.name.as_deref().unwrap_or("field")))
+                .unwrap_or_default()
+        } else {
+            ctx.som.clone()
+        };
+        let group = self.unique_name(g.common.name.as_deref().unwrap_or("group"), g.common.name.is_none(), &group_som);
         for (i, r) in placed {
             if let Some(f) = g.fields.get(i) {
                 // Each button shows where it and the group say ([`Common::views`]), as any field
@@ -432,7 +445,8 @@ impl Layouter<'_> {
                     f
                 };
                 let outer = std::mem::replace(&mut self.views, views);
-                let drawn = self.draw_field(f, Rect::new(inner.x + r.x, inner.y + r.y, r.w, r.h), &ctx, Some((&group, &on, tip, chosen)), sibs.at(i));
+                let button = super::field::RadioButton { group: &group, group_som: &group_som, on: &on, tip, chosen };
+                let drawn = self.draw_field(f, Rect::new(inner.x + r.x, inner.y + r.y, r.w, r.h), &ctx, Some(button), sibs.at(i));
                 self.views = outer;
                 drawn?;
             }

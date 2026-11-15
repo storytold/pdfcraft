@@ -5,18 +5,25 @@ use super::{
     XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
 };
 
+/// What [`Layouter::draw_field`] needs to draw a radio group's button.
+pub(super) struct RadioButton<'a> {
+    /// The group's field name.
+    pub(super) group: &'a str,
+    /// The SOM path the group's field records ([`WidgetKind::Radio::group_som`]).
+    pub(super) group_som: &'a str,
+    /// The button's on value.
+    pub(super) on: &'a str,
+    /// The tooltip, the button's or else the group's.
+    pub(super) tip: Option<String>,
+    /// Whether the group's data selects this button.
+    pub(super) chosen: bool,
+}
+
 impl Layouter<'_> {
     /// Draw field `f` at `rect`: its border (a button's is its widget's box), its caption, then its
     /// widget, or its value as plain text when it is non-interactive, a barcode, or a text field
     /// taller than its content area. `radio` is set for a group's radio button; `sib` is its SOM index.
-    pub(super) fn draw_field(
-        &mut self,
-        f: &Field,
-        rect: Rect,
-        ctx: &Ctx,
-        radio: Option<(&str, &str, Option<String>, bool)>,
-        sib: usize,
-    ) -> Result<(), XfaError> {
+    pub(super) fn draw_field(&mut self, f: &Field, rect: Rect, ctx: &Ctx, radio: Option<RadioButton<'_>>, sib: usize) -> Result<(), XfaError> {
         if let Some(b) = &f.common.border
             && f.ui != Ui::Button
         {
@@ -186,8 +193,13 @@ impl Layouter<'_> {
                 let r = Rect::new(x, y, s, s);
                 let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "1".into());
                 let (kind, tip, checked) = match radio {
-                    Some((group, on_value, tip, chosen)) => (
-                        WidgetKind::Radio { group: group.to_string(), on: on_value.to_string(), round: f.check_round },
+                    Some(RadioButton { group, group_som, on: on_value, tip, chosen }) => (
+                        WidgetKind::Radio {
+                            group: group.to_string(),
+                            group_som: group_som.to_string(),
+                            on: on_value.to_string(),
+                            round: f.check_round,
+                        },
                         tip.or_else(|| f.tooltip.clone()),
                         chosen,
                     ),

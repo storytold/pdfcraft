@@ -279,8 +279,8 @@ impl Emitter<'_> {
 
     /// The field of radio group `group`, which button `w` is a kid of: the one an earlier button
     /// made (required too when `w` must be chosen), or a new field of the form, with `w`'s text
-    /// look and the group's SOM path (the button's without its last step).
-    fn radio_group(&mut self, w: &Widget, group: &str) -> Result<ObjRef, XfaError> {
+    /// look and the SOM path `group_som` the layout drew the group at.
+    fn radio_group(&mut self, w: &Widget, group: &str, group_som: &str) -> Result<ObjRef, XfaError> {
         if let Some((p, _)) = self.radio_groups.get(group) {
             let p = *p;
             // A later button that must be chosen makes the group required too.
@@ -300,8 +300,7 @@ impl Emitter<'_> {
         g.set(b"V".to_vec(), Object::name("Off"));
         g.set(b"DA".to_vec(), Object::String(PdfString::literal(Self::da(&w.face))));
         g.set(b"Kids".to_vec(), Object::Array(Vec::new()));
-        let group_som = w.som.rsplit_once('.').map(|(g, _)| g.to_string()).unwrap_or_else(|| w.som.clone());
-        g.set(SOM_KEY.to_vec(), Object::String(PdfString::text(&group_som)));
+        g.set(SOM_KEY.to_vec(), Object::String(PdfString::text(group_som)));
         let p = self.doc.add(Object::Dict(g));
         self.radio_groups.insert(group.to_string(), (p, Vec::new()));
         self.fields.push(p);
@@ -462,9 +461,9 @@ impl Emitter<'_> {
                 d.set(b"AP".to_vec(), Object::Dict(ap));
                 d.set(b"PCItems".to_vec(), Object::Array(w.items.iter().map(|i| Object::String(PdfString::text(i))).collect()));
             }
-            WidgetKind::Radio { group, on, .. } => {
+            WidgetKind::Radio { group, group_som, on, .. } => {
                 top_level = false;
-                let parent = self.radio_group(w, group)?;
+                let parent = self.radio_group(w, group, group_som)?;
                 d.set(b"Parent".to_vec(), Object::Ref(parent));
                 // Appearance states are PDF names, so a space becomes an underscore. The datasets
                 // still hold the template's text (`/PCOn`); writing the name back would drop the selection.
