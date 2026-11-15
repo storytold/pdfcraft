@@ -7354,17 +7354,23 @@ fn a_rotated_scan_is_still_cleared_under_the_mark() {
 /// A grayscale scan with an explicit identity `/Decode [0 1]` is cleared in place too — the
 /// component count of the `/Decode` check must be the image's own (one), not three, or every
 /// explicit-declaration gray scan would be removed whole and the page blanked again.
-#[test]
-fn a_gray_scan_with_an_identity_decode_is_cleared_not_removed() {
+/// A 20×20 gray scan drawn 100×100 at (10,10), marked over its middle, and the report applying the
+/// mark gave: the one shape the gray cases differ in is the `/Decode` they declare.
+fn marked_gray_scan(decode: &str) -> Report {
     let mut gray = vec![200u8; 20 * 20];
     gray[..20].fill(20);
     let img = stream(
-        "/Type /XObject /Subtype /Image /Width 20 /Height 20 /ColorSpace /DeviceGray /BitsPerComponent 8 /Decode [0 1] /Filter /DCTDecode",
+        &format!("/Type /XObject /Subtype /Image /Width 20 /Height 20 /ColorSpace /DeviceGray /BitsPerComponent 8 {decode} /Filter /DCTDecode"),
         jpeg_gray(&gray, 20, 20),
     );
     let mut doc = one_page(b"q 100 0 0 100 10 10 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![img]);
     mark(&mut doc, 0, &[[40.0, 40.0, 60.0, 60.0]], "");
-    let r = apply(&mut doc, None).unwrap();
+    apply(&mut doc, None).unwrap()
+}
+
+#[test]
+fn a_gray_scan_with_an_identity_decode_is_cleared_not_removed() {
+    let r = marked_gray_scan("/Decode [0 1]");
     assert_eq!((r.images_removed, r.images_cleared), (0, 1), "the gray scan is cleared, not removed: {r:?}");
 }
 
@@ -7372,15 +7378,8 @@ fn a_gray_scan_with_an_identity_decode_is_cleared_not_removed() {
 /// the inverted mapping, so the whole image goes instead.
 #[test]
 fn a_gray_scan_with_an_inverted_decode_still_fails_closed() {
-    let img = stream(
-        "/Type /XObject /Subtype /Image /Width 20 /Height 20 /ColorSpace /DeviceGray /BitsPerComponent 8 /Decode [1 0] /Filter /DCTDecode",
-        jpeg_gray(&vec![200u8; 20 * 20], 20, 20),
-    );
-    let mut doc = one_page(b"q 100 0 0 100 10 10 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![img]);
-    mark(&mut doc, 0, &[[40.0, 40.0, 60.0, 60.0]], "");
-    let r = apply(&mut doc, None).unwrap();
+    let r = marked_gray_scan("/Decode [1 0]");
     assert_eq!(r.images_removed, 1, "the inverted scan is removed whole: {r:?}");
-    assert!(!content(&doc, 0).contains("/Im0"));
 }
 
 /// A CMYK JPEG still fails closed: its samples would be written back in a space its

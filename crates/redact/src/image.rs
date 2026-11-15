@@ -42,6 +42,34 @@ pub(crate) fn components(doc: &Document, s: &Stream) -> Option<usize> {
     })
 }
 
+/// Run `clear` for every sample whose conservative box a region reaches, row by row, and say how
+/// many there were. Image space has its origin at the bottom left and row 0 is at the top. The box
+/// may be larger than the pixel for a rotated or skewed image, and that conservative over-clear is
+/// what keeps a touched sample out of the file: raw samples and JPEG samples are cleared by the same
+/// walk so the two cannot drift apart.
+fn covered_pixels(ctm: &Matrix, rects: &[[f64; 4]], w: usize, h: usize, mut clear: impl FnMut(usize, usize) -> Option<()>) -> Option<usize> {
+    let mut cleared = 0usize;
+    for j in 0..h {
+        let v0 = 1.0 - (j + 1) as f64 / h as f64;
+        let v1 = 1.0 - j as f64 / h as f64;
+        let row_box = ctm.bbox([0.0, v0, 1.0, v1]);
+        if !rects.iter().any(|r| overlaps(*r, row_box, 0.0)) {
+            continue;
+        }
+        for i in 0..w {
+            let u0 = i as f64 / w as f64;
+            let u1 = (i + 1) as f64 / w as f64;
+            let pixel_box = ctm.bbox([u0, v0, u1, v1]);
+            if !rects.iter().any(|r| overlaps(*r, pixel_box, 0.0)) {
+                continue;
+            }
+            cleared += 1;
+            clear(i, j)?;
+        }
+    }
+    Some(cleared)
+}
+
 /// Whether `s`'s whole filter is a plain `/DCTDecode` — the JPEG a scanned page is made of. A DCT
 /// image behind another filter is left to the fail-closed path.
 fn plain_dct(s: &Stream) -> bool {
@@ -154,38 +182,20 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     } else {
         false
     };
-    let mut cleared = 0usize;
-    for j in 0..h {
-        // Image space has its origin at the bottom left; row 0 is at the top.
-        let v0 = 1.0 - (j + 1) as f64 / h as f64;
-        let v1 = 1.0 - j as f64 / h as f64;
-        let row_box = ctm.bbox([0.0, v0, 1.0, v1]);
-        if !rects.iter().any(|r| overlaps(*r, row_box, 0.0)) {
-            continue;
-        }
-        for i in 0..w {
-            let u0 = i as f64 / w as f64;
-            let u1 = (i + 1) as f64 / w as f64;
-            // The bounding box may cover extra pixels for a rotated or skewed image; that
-            // conservative over-clear prevents a touched sample surviving in the file.
-            let pixel_box = ctm.bbox([u0, v0, u1, v1]);
-            if !rects.iter().any(|r| overlaps(*r, pixel_box, 0.0)) {
-                continue;
-            }
-            cleared += 1;
-            // `bytes * 8` fits, and every bit index is below it, so this arithmetic can't overflow.
-            let start = j * row_bits + i * bits_per_pixel;
-            for bit in start..start + bits_per_pixel {
-                let (byte, shift) = (bit / 8, 7 - bit % 8);
-                let b = data.get_mut(byte)?;
-                if clear_bit {
-                    *b |= 1 << shift;
-                } else {
-                    *b &= !(1 << shift);
-                }
+    let cleared = covered_pixels(ctm, rects, w, h, |i, j| {
+        // `bytes * 8` fits, and every bit index is below it, so this arithmetic can't overflow.
+        let start = j * row_bits + i * bits_per_pixel;
+        for bit in start..start + bits_per_pixel {
+            let (byte, shift) = (bit / 8, 7 - bit % 8);
+            let b = data.get_mut(byte)?;
+            if clear_bit {
+                *b |= 1 << shift;
+            } else {
+                *b &= !(1 << shift);
             }
         }
-    }
+        Some(())
+    })?;
     if cleared == 0 {
         return Some(None);
     }
@@ -247,30 +257,12 @@ fn dct_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], w: us
     if data.len() != w.checked_mul(h)?.checked_mul(ncomp)? {
         return None;
     }
-    let mut cleared = 0usize;
-    for j in 0..h {
-        // Image space has its origin at the bottom left; row 0 is at the top.
-        let v0 = 1.0 - (j + 1) as f64 / h as f64;
-        let v1 = 1.0 - j as f64 / h as f64;
-        let row_box = ctm.bbox([0.0, v0, 1.0, v1]);
-        if !rects.iter().any(|r| overlaps(*r, row_box, 0.0)) {
-            continue;
-        }
-        for i in 0..w {
-            let u0 = i as f64 / w as f64;
-            let u1 = (i + 1) as f64 / w as f64;
-            // As for raw samples: the box can be larger than the pixel for a rotated or skewed
-            // image, and that conservative over-clear keeps a touched sample out of the file.
-            let pixel_box = ctm.bbox([u0, v0, u1, v1]);
-            if !rects.iter().any(|r| overlaps(*r, pixel_box, 0.0)) {
-                continue;
-            }
-            cleared += 1;
-            let at = (j.checked_mul(w)?).checked_add(i)?.checked_mul(ncomp)?;
-            let sample = data.get_mut(at..at.checked_add(ncomp)?)?;
-            sample.fill(0);
-        }
-    }
+    let cleared = covered_pixels(ctm, rects, w, h, |i, j| {
+        let at = (j.checked_mul(w)?).checked_add(i)?.checked_mul(ncomp)?;
+        let sample = data.get_mut(at..at.checked_add(ncomp)?)?;
+        sample.fill(0);
+        Some(())
+    })?;
     if cleared == 0 {
         return Some(None);
     }
