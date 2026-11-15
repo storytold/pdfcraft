@@ -16693,3 +16693,147 @@ fn more_aliases_than_the_rewrite_will_stage_keeps_the_image() {
     .unwrap();
     assert!(payload_after_delete(&mut doc, PRIVATE), "past the alias cap the image must stay");
 }
+
+/// An annotation appearance is walked through its dictionary, its states and its form streams, and
+/// any shape the census cannot read keeps the image: an appearance dictionary naming its own
+/// `/Resources`, and one whose states come back to it.
+#[test]
+fn annotation_appearances_are_walked_and_the_unreadable_ones_keep_the_image() {
+    // The readable shape first: a form appearance that draws the image, reached through a state
+    // dictionary and an array. The image is used, so deleting it from the page keeps it.
+    const PRIVATE: &[u8] = b"PRIVATE_APPEARANCE_IMAGE";
+    let (mut doc, _target) = private_page(PRIVATE);
+    let drawing = add_form(&mut doc, b"DrawsIm0", b"/Im0 Do", Dict::new());
+    let states = doc.add(Object::Dict(Dict::from_iter([(b"N".to_vec(), Object::Ref(drawing)), (b"On".to_vec(), Object::Ref(drawing))])));
+    let selected = doc.add(Object::Array(vec![Object::Ref(states)]));
+    let annot = doc.add(Object::Dict(Dict::from_iter([(b"AP".to_vec(), Object::Dict(Dict::from_iter([(b"N".to_vec(), Object::Ref(selected))])))])));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(annot)]))).unwrap();
+    assert!(payload_after_delete(&mut doc, PRIVATE), "an appearance that draws the image keeps it");
+
+    for (label, cycle) in [("an appearance dictionary naming its own /Resources", false), ("appearance states that come back to it", true)] {
+        const KEPT: &[u8] = b"PRIVATE_UNREADABLE_APPEARANCE_IMAGE";
+        let (mut doc, _target) = private_page(KEPT);
+        let state = if cycle {
+            let holder = doc.add(Object::Dict(Dict::new()));
+            doc.update_dict(holder, |d| d.set(b"On".to_vec(), Object::Ref(holder))).unwrap();
+            Object::Dict(Dict::from_iter([(b"On".to_vec(), Object::Ref(holder))]))
+        } else {
+            Object::Dict(Dict::from_iter([(b"Resources".to_vec(), Object::Dict(Dict::new()))]))
+        };
+        let annot = doc.add(Object::Dict(Dict::from_iter([(b"AP".to_vec(), Object::Dict(Dict::from_iter([(b"N".to_vec(), state)])))])));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(annot)]))).unwrap();
+        assert!(payload_after_delete(&mut doc, KEPT), "{label} must keep the image");
+    }
+}
+
+/// `/Alternates` arrays that name the deleted image are rewritten wherever the rewrite finds them,
+/// directly and through a reference, so an image nothing draws is still released; an entry whose
+/// `/Image` is not the deleted one stays.
+#[test]
+fn alternate_arrays_naming_the_image_are_rewritten_through_references() {
+    const PRIVATE: &[u8] = b"PRIVATE_ALTERNATE_IMAGE";
+    let (mut doc, target) = private_page(PRIVATE);
+    let other = doc.add(Object::Stream(identifiable_test_image(b"OTHER_IMAGE_BYTES")));
+    let kept_entry = Object::Dict(Dict::from_iter([(b"Image".to_vec(), Object::Ref(other))]));
+    let dropped_entry = Object::Dict(Dict::from_iter([(b"Image".to_vec(), Object::Ref(target))]));
+    // One array named directly by an orphan image, one given through a reference.
+    let orphan = doc.add(Object::Stream(Stream::from_raw(
+        Dict::from_iter([
+            (b"Type".to_vec(), Object::name("XObject")),
+            (b"Subtype".to_vec(), Object::name("Image")),
+            (b"Width".to_vec(), Object::Int(4)),
+            (b"Height".to_vec(), Object::Int(2)),
+            (b"ColorSpace".to_vec(), Object::name("DeviceGray")),
+            (b"BitsPerComponent".to_vec(), Object::Int(8)),
+            (b"Alternates".to_vec(), Object::Array(vec![kept_entry.clone(), dropped_entry])),
+        ]),
+        vec![0u8; 8],
+    )));
+    let indirect = doc.add(Object::Array(vec![kept_entry, Object::Dict(Dict::from_iter([(b"Image".to_vec(), Object::Ref(target))]))]));
+    let second = doc.add(Object::Stream(Stream::from_raw(
+        Dict::from_iter([
+            (b"Type".to_vec(), Object::name("XObject")),
+            (b"Subtype".to_vec(), Object::name("Image")),
+            (b"Width".to_vec(), Object::Int(4)),
+            (b"Height".to_vec(), Object::Int(2)),
+            (b"ColorSpace".to_vec(), Object::name("DeviceGray")),
+            (b"BitsPerComponent".to_vec(), Object::Int(8)),
+            (b"Alternates".to_vec(), Object::Ref(indirect)),
+        ]),
+        vec![0u8; 8],
+    )));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        resources.set(
+            b"Properties".to_vec(),
+            Object::Dict(Dict::from_iter([(b"L1".to_vec(), Object::Ref(orphan)), (b"L2".to_vec(), Object::Ref(second))])),
+        );
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    assert!(!payload_after_delete(&mut doc, PRIVATE), "nothing draws the image, so it goes");
+}
+
+/// A Type3 font's glyph programs are walked with the font's own scope, and one that is not a stream
+/// stops the walk: the image stays.
+#[test]
+fn type3_glyph_programs_are_walked_and_a_broken_one_keeps_the_image() {
+    const PRIVATE: &[u8] = b"PRIVATE_TYPE3_CHARPROC_IMAGE";
+    for (label, charproc) in [("a form that draws the image", None), ("a program that is not a stream", Some(Object::Int(1)))] {
+        let (mut doc, target) = private_page(PRIVATE);
+        let program = match charproc {
+            None => {
+                let form = add_form(&mut doc, b"Glyph", b"/Im0 Do", Dict::new());
+                Object::Ref(form)
+            }
+            Some(not_a_stream) => not_a_stream,
+        };
+        let mut charprocs = Dict::new();
+        charprocs.set(b"A".to_vec(), program);
+        let mut glyph_resources = Dict::new();
+        glyph_resources.set(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Im0".to_vec(), Object::Ref(target))])));
+        let mut font_dict = Dict::new();
+        for (key, value) in [
+            (&b"Type"[..], Object::name("Font")),
+            (b"Subtype", Object::name("Type3")),
+            (b"FontBBox", Object::Array([0, 0, 1000, 1000].map(Object::Int).to_vec())),
+            (b"FontMatrix", Object::Array(vec![Object::Int(1), Object::Int(0), Object::Int(0), Object::Int(1), Object::Int(0), Object::Int(0)])),
+            (b"FirstChar", Object::Int(65)),
+            (b"LastChar", Object::Int(65)),
+            (b"Widths", Object::Array(vec![Object::Int(1000)])),
+            (b"Encoding", Object::Dict(Dict::from_iter([(b"Differences".to_vec(), Object::Array(vec![Object::Int(65), Object::name("A")]))]))),
+            (b"CharProcs", Object::Dict(charprocs)),
+            (b"Resources", Object::Dict(glyph_resources)),
+        ] {
+            font_dict.set(key.to_vec(), value);
+        }
+        let font = doc.add(Object::Dict(font_dict));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| {
+            let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+            let mut fonts = resources.get(b"Font").and_then(Object::as_dict).cloned().unwrap_or_default();
+            fonts.set(b"F2".to_vec(), Object::Ref(font));
+            resources.set(b"Font".to_vec(), Object::Dict(fonts));
+            d.set(b"Resources".to_vec(), Object::Dict(resources));
+        })
+        .unwrap();
+        set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q BT /F2 10 Tf (A) Tj ET"]);
+        assert!(payload_after_delete(&mut doc, PRIVATE), "{label} must keep the image");
+    }
+}
+
+/// A second page whose `/Contents` is not a stream leaves the census unable to say what that page
+/// draws, so the image stays even though the page being edited is clean.
+#[test]
+fn another_page_with_contents_that_are_not_a_stream_keeps_the_image() {
+    const PRIVATE: &[u8] = b"PRIVATE_NON_STREAM_CONTENTS_IMAGE";
+    let (mut doc, _target) = private_page(PRIVATE);
+    add_blank_page(&mut doc, None);
+    let not_a_stream = doc.add(Object::Int(1));
+    let second = pdfcraft_model::pages(&doc)[1].obj;
+    doc.update_dict(second, |d| d.set(b"Contents".to_vec(), Object::Ref(not_a_stream))).unwrap();
+    assert!(payload_after_delete(&mut doc, PRIVATE), "a page with unreadable /Contents must keep the image");
+}
