@@ -720,11 +720,14 @@ pub(crate) fn source_space(doc: &Document, fonts: &Dict, metrics: &Metrics) -> f
 
 pub(crate) fn source_width(metrics: &Metrics, text: &str, size: f64, space: f64, char_spacing: f64, word_spacing: f64) -> f64 {
     if let Some(bytes) = metrics.encode(text) {
-        // PDF word spacing applies only to single-byte code 32, even for a Unicode space.
+        // Word spacing applies to the single-byte code 32 (§9.3.3); a space the font shows any
+        // other way - a composite font's two-byte code - is drawn with an explicit displacement
+        // carrying the same spacing (`source_show`), so it is measured with it here too.
+        let spaced = |&(code, len): &(u32, usize)| metrics.is_space(code, len) || metrics.text_of(code).as_deref() == Some(" ");
         return metrics
             .codes(&bytes)
             .iter()
-            .map(|(c, len)| metrics.width(*c) * size + char_spacing + if metrics.is_space(*c, *len) { word_spacing } else { 0.0 })
+            .map(|(c, len)| metrics.width(*c) * size + char_spacing + if spaced(&(*c, *len)) { word_spacing } else { 0.0 })
             .sum();
     }
     let words: f64 = text
@@ -755,6 +758,7 @@ pub(super) fn source_character_advance(metrics: &Metrics, ch: char, size: f64, c
 }
 
 pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, char_spacing: f64, word_spacing: f64) -> Result<Vec<Op>, EditError> {
+    let mut out = Vec::new();
     if let Some(bytes) = metrics.encode(text) {
         // Word spacing applies only to the single-byte code 32 (§9.3.3): a space the font shows
         // any other way - a composite font's two-byte code - takes an explicit displacement, or
@@ -784,20 +788,20 @@ pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, 
         if !chunk.is_empty() {
             array.push(Object::String(PdfString::literal(chunk)));
         }
-        return Ok(vec![Op::new("TJ", vec![Object::Array(array)])]);
-    }
-    let adjustment = -1000.0 * (space + (char_spacing + word_spacing) / size);
-    if !adjustment.is_finite() {
-        return Err(EditError::Invalid("the source font's space advance is invalid".into()));
-    }
-    let mut out = Vec::new();
-    for (i, word) in text.split(' ').enumerate() {
-        if i > 0 {
-            out.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(adjustment)])]));
+        out.push(Op::new("TJ", vec![Object::Array(array)]));
+    } else {
+        let adjustment = -1000.0 * (space + (char_spacing + word_spacing) / size);
+        if !adjustment.is_finite() {
+            return Err(EditError::Invalid("the source font's space advance is invalid".into()));
         }
-        if !word.is_empty() {
-            let bytes = metrics.encode(word).ok_or_else(|| EditError::Invalid("the source font cannot show the replacement text".into()))?;
-            out.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))]));
+        for (i, word) in text.split(' ').enumerate() {
+            if i > 0 {
+                out.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(adjustment)])]));
+            }
+            if !word.is_empty() {
+                let bytes = metrics.encode(word).ok_or_else(|| EditError::Invalid("the source font cannot show the replacement text".into()))?;
+                out.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))]));
+            }
         }
     }
     if out.iter().any(|op| op.is("Tj")) {

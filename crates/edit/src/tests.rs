@@ -11677,6 +11677,39 @@ fn at_first(before: &[(String, [f64; 4])], text: &str) -> [f64; 4] {
     before.iter().find(|(t, _)| t.starts_with(text)).unwrap_or_else(|| panic!("{before:?}")).1
 }
 
+/// Joining rows of the justified hanging-indent paragraph into one that wraps still hangs the
+/// wrapped rows at the indent: the wrap is a continuation of the draft row even though the draft
+/// no longer pairs with the source rows (#7213).
+#[test]
+fn a_wrap_in_a_joined_row_keeps_the_hanging_indent() {
+    let content = "BT /F1 10 Tf 12 TL 1 0 0 1 72 700 Tm (A. two three four five six) Tj 14 -12 Td (two three four five six) Tj 0 -12 Td (two three four five six) Tj 0 -12 Td (end) Tj ET";
+    let rows_of =
+        |doc: &Document| -> Vec<(String, [f64; 4])> { text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text.clone(), l.rect)).collect() };
+    let mut doc = text_page(content);
+    let index = text::text_blocks(&doc, 0).unwrap().iter().position(|b| b.text.contains("A.")).unwrap();
+    let block = text::text_blocks(&doc, 0).unwrap()[index].clone();
+    let before = rows_of(&doc);
+
+    // The last three source rows joined into one draft row with enough text to wrap four times:
+    // the draft no longer pairs with the source rows, and the last wrapped row has no source row
+    // left to take its rectangle from.
+    let mut words: Vec<String> = block.editor_text.split('\n').skip(1).flat_map(|r| r.split_whitespace().map(str::to_string)).collect();
+    words.push("end.".into());
+    words.extend(["and", "more", "words", "to", "wrap"].map(str::to_string));
+    let draft_rows = vec![block.editor_text.split('\n').next().unwrap().to_string(), words.join(" ")];
+    text::rewrite_block(&mut doc, 0, index, Some(&draft_rows.join("\n")), &text::BlockStyle::default()).unwrap();
+    let after = rows_of(&reopen(&doc));
+    assert_eq!(after.len(), 5, "the joined row wraps into four: {after:?}");
+    let hung = after.iter().filter(|(t, r)| !t.starts_with("A.") && (r[0] - 86.0).abs() < 0.5).count();
+    assert_eq!(hung, 4, "every wrapped row keeps the indent, not the source rows' own edges: {after:?}");
+    let mut baselines: Vec<f64> = after.iter().filter(|(t, _)| !t.starts_with("A.")).map(|(_, r)| r[1]).collect();
+    baselines.sort_by(|a, b| b.total_cmp(a));
+    for pair in baselines.windows(2) {
+        assert!((pair[0] - pair[1] - 12.0).abs() < 0.5, "the wrapped rows step a leading: {baselines:?}");
+    }
+    assert!((baselines[0] - at_first(&before, "two")[1]).abs() < 0.5, "the wrap starts at the joined row's own position: {baselines:?}");
+}
+
 /// An edit that wraps the short last row of a justified paragraph makes its first fragment
 /// nonfinal: the fragment stretches to the paragraph's measure like any interior row, instead of
 /// staying as ragged as the short row it came from (#7213).
@@ -15756,3 +15789,8 @@ fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
 }
 // round 3
 // round 4
+// round 5
+// r5b
+// r5c
+// r5d
+// r5e

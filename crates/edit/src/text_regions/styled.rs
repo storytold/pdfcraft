@@ -1934,8 +1934,10 @@ pub(crate) fn rewrite_styled_block(
     let measure_right = block.rows.iter().filter_map(|row| row_rect(row, lines)).map(|r| r[2]).fold(f64::MIN, f64::max);
     for (row_index, row) in rows.iter().enumerate() {
         let source_row = if paired { row_lines.get(row_index).copied().unwrap_or(row_index) } else { row_index };
-        let continuation =
-            paired && row_index > 0 && row_lines.get(row_index).zip(row_lines.get(row_index.saturating_sub(1))).is_some_and(|(a, b)| a == b);
+        // A soft wrap makes this output row continue the one before it, whatever the draft-row
+        // pairing: rows the wrapper inserted sit at the rest left edge even when the edit joined
+        // or split the source rows and `row_lines` no longer pairs them (#7213).
+        let continuation = row_index > 0 && row_soft.get(row_index).copied().unwrap_or(false);
         let anchor = if continuation { None } else { block.rows.get(source_row).and_then(|r| r.first()).and_then(|i| lines.get(*i)) };
         if style.line_spacing.is_none()
             && style.size.is_none()
