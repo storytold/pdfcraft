@@ -398,10 +398,10 @@ fn a_widget_rect_saved_back_as_integers_is_a_form_fill() {
     assert_eq!(verdict(&moved, signed.open(), Some(2)), Modification::Disallowed(vec![super::kind::PAGE_CONTENT]));
 }
 
-/// The AcroForm's `/Fields` written as an array object of its own is judged as an inline one is
-/// (#4817). A signing tool may append its field there and leave the AcroForm as it was: that is
-/// signing, not "other changes", and an earlier signature stays intact. A field taken out of the
-/// array is still refused, and a text field added is a form change.
+/// The AcroForm's `/Fields` written as an array object of its own (#4817). A signing tool may
+/// append its field there and leave the AcroForm as it was: that is signing, not "other
+/// changes", and an earlier signature stays intact. A field taken out of the array is still
+/// refused, and so is a text field added: the rule is for signers.
 #[test]
 fn a_fields_array_of_its_own_that_gains_a_signature_field_is_signing() {
     const SIG_DICT: &str = "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached /ByteRange [0 0 0 0] /Contents <00> >>";
@@ -432,7 +432,144 @@ fn a_fields_array_of_its_own_that_gains_a_signature_field_is_signing() {
         "the signed field taken out of the form"
     );
     let added_text = verdict(&later("[6 0 R 9 0 R]", text).open(), signed.open(), None);
-    assert!(matches!(&added_text, Modification::Allowed(a) if a.contains(&kind::FORM_FILL) && !a.contains(&kind::SIGNATURE)), "{added_text:?}");
+    assert!(matches!(&added_text, Modification::Disallowed(d) if d.contains(&kind::OTHER)), "{added_text:?}");
+}
+
+/// Only what a signer does to a `/Fields` array of its own passes: the signed entries kept as
+/// they were and in order, with new signature fields appended, each a single widget that joins
+/// no field of the signed form. Anything else is refused at every DocMDP level, such as:
+/// - an entry written in place taken out, rewritten or moved;
+/// - the order changed, or an entry listed twice;
+/// - an object that existed when signed appended, such as a widget no field listed, or the catalog;
+/// - an entry written in place appended, something that isn't a field, or a text field;
+/// - a new field with `/Kids`, which could take over a signed field;
+/// - a new field with a `/Parent`, which grafts it onto one;
+/// - a signature value that was there when signed, or one written in place;
+/// - an action on the new widget;
+/// - an object number something signed refers to, though it held nothing then: a signed entry
+///   that resolved to nothing filled in, or a new field or value at such a number (review of
+///   #4817).
+#[test]
+fn a_fields_array_of_its_own_only_accepts_new_signature_fields_appended() {
+    const SIG_DICT: &str = "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /ETSI.CAdES.detached /ByteRange [0 0 0 0] /Contents <00> >>";
+    const TIMESTAMP: &str = "<< /Type /DocTimeStamp /Filter /Adobe.PPKLite /SubFilter /ETSI.RFC3161 /ByteRange [0 0 0 0] /Contents <00> >>";
+    const LISTED: &str = "[6 0 R 13 0 R]";
+    const IN_PLACE: &str = "[<< /FT /Sig /T (Approval) /V 7 0 R >> 6 0 R 13 0 R]";
+    let capture = "<< /Type /Annot /Subtype /Widget /FT /Sig /T (ts) /Kids [13 0 R] /V 12 0 R /Rect [0 0 0 0] /F 2 >>";
+    let (page3, page4) = (page("/Annots [6 0 R]"), page("/Annots [13 0 R]"));
+    let signed = |fields: &str, extra: &[(u32, &str)]| {
+        let mut rows = vec![
+            (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >>")),
+            (2, Row::Obj(0, 0, PAGES)),
+            (3, Row::Obj(0, 0, &page3)),
+            (4, Row::Obj(0, 0, &page4)),
+            (5, Row::Obj(0, 0, "<< /Fields 8 0 R /SigFlags 3 >>")),
+            (6, Row::Obj(0, 0, "<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig1) /V 7 0 R /Rect [20 20 120 40] /P 3 0 R /F 4 >>")),
+            (7, Row::Obj(0, 0, SIG_DICT)),
+            (8, Row::Obj(0, 0, fields)),
+            (9, Row::Obj(0, 0, "<< /Type /Annot /Subtype /Widget /FT /Sig /T (unlisted) /Rect [0 0 100 40] >>")),
+            (13, Row::Obj(0, 0, "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 60 120 80] /P 4 0 R /F 4 >>")),
+        ];
+        rows.extend(extra.iter().map(|(n, body)| (*n, Row::Obj(0, 0, body))));
+        File::new().revision(&rows)
+    };
+    /// A name, the signed `/Fields`, the later one, and objects the later revision adds.
+    type Case<'a> = (&'a str, &'a str, &'a str, &'a [(u32, &'a str)]);
+    let widget = |extra: &str| format!("<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig2) /P 4 0 R /Rect [0 0 0 0] /F 2 {extra} >>");
+    let (grafted, reused, in_place_value) = (widget("/Parent 6 0 R /V 12 0 R"), widget("/V 7 0 R"), widget(&format!("/V {TIMESTAMP}")));
+    let (timestamp, timestamp2) = (widget("/V 12 0 R"), widget("/V 15 0 R"));
+    let with_action = widget("/V 12 0 R /AA << /PO << /S /URI /URI (https://example.com) >> >>");
+    let cases: [Case; 16] = [
+        ("in-place entry taken out", IN_PLACE, LISTED, &[]),
+        ("in-place entry rewritten", IN_PLACE, "[<< /FT /Sig /T (Other) /V 7 0 R >> 6 0 R 13 0 R]", &[]),
+        ("in-place entry moved", IN_PLACE, "[6 0 R << /FT /Sig /T (Approval) /V 7 0 R >> 13 0 R]", &[]),
+        ("order changed", LISTED, "[13 0 R 6 0 R]", &[]),
+        ("entry listed twice", LISTED, "[6 0 R 13 0 R 6 0 R]", &[]),
+        ("unlisted widget appended", LISTED, "[6 0 R 13 0 R 9 0 R]", &[]),
+        ("catalog appended", LISTED, "[6 0 R 13 0 R 1 0 R]", &[]),
+        ("in-place field appended", LISTED, "[6 0 R 13 0 R << /FT /Sig /T (sig2) /V 12 0 R >>]", &[(12, TIMESTAMP)]),
+        ("not a field appended", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, "<< /Type /Foo >>")]),
+        ("signed field captured", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, capture), (12, TIMESTAMP)]),
+        (
+            "text field appended",
+            LISTED,
+            "[6 0 R 13 0 R 11 0 R]",
+            &[(11, "<< /Type /Annot /Subtype /Widget /FT /Tx /T (t2) /P 4 0 R /Rect [20 100 120 120] /F 4 >>")],
+        ),
+        (
+            "field with a widget under it",
+            LISTED,
+            "[6 0 R 13 0 R 11 0 R]",
+            &[
+                (11, "<< /FT /Sig /T (group) /Kids [14 0 R] >>"),
+                (14, "<< /Type /Annot /Subtype /Widget /Parent 11 0 R /P 4 0 R /Rect [0 0 0 0] /F 2 >>"),
+            ],
+        ),
+        ("grafted onto a signed field", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, &grafted), (12, TIMESTAMP)]),
+        ("signed signature value reused", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, &reused)]),
+        ("signature value written in place", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, &in_place_value)]),
+        ("action on the new widget", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, &with_action), (12, TIMESTAMP)]),
+    ];
+    /// A name, the signed `/Fields`, objects the signed revision holds besides, the later
+    /// `/Fields`, and objects the later revision adds.
+    type Signed<'a> = (&'a str, &'a str, &'a [(u32, &'a str)], &'a str, &'a [(u32, &'a str)]);
+    let referred: [Signed; 3] = [
+        (
+            "signed entry that held nothing filled in",
+            "[6 0 R 13 0 R 11 0 R]",
+            &[],
+            "[6 0 R 13 0 R 11 0 R 14 0 R]",
+            &[(11, &timestamp), (12, TIMESTAMP), (14, &timestamp2), (15, TIMESTAMP)],
+        ),
+        (
+            "new field at a number something signed refers to",
+            LISTED,
+            &[(11, "null"), (16, "[11 0 R]")],
+            "[6 0 R 13 0 R 11 0 R]",
+            &[(11, &timestamp), (12, TIMESTAMP)],
+        ),
+        (
+            "new value at a number something signed refers to",
+            LISTED,
+            &[(12, "null"), (16, "[12 0 R]")],
+            "[6 0 R 13 0 R 11 0 R]",
+            &[(11, &timestamp), (12, TIMESTAMP)],
+        ),
+    ];
+    let runs = cases.iter().map(|(name, was, now, extra)| (*name, signed(was, &[]), *now, *extra));
+    let runs = runs.chain(referred.iter().map(|(name, was, before, now, extra)| (*name, signed(was, before), *now, *extra)));
+    let mut passed = Vec::new();
+    for (name, old, now, extra) in runs {
+        let mut rows = vec![(8, Row::Obj(0, 0, now))];
+        rows.extend(extra.iter().map(|(n, body)| (*n, Row::Obj(0, 0, body))));
+        let later = old.clone().revision(&rows);
+        for p in [None, Some(1), Some(2), Some(3)] {
+            let v = verdict(&later.open(), old.open(), p);
+            if !matches!(&v, Modification::Disallowed(d) if d.contains(&kind::OTHER)) {
+                passed.push(format!("{name}, P={p:?}: {v:?}"));
+            }
+        }
+    }
+    assert!(passed.is_empty(), "{passed:#?}");
+
+    // What a signer writes still passes: a signature on the page at P=2, and an invisible
+    // document timestamp even at P=1, also at a number that held null and nothing referred to.
+    let old = signed(LISTED, &[]);
+    let page4 = page("/Annots [13 0 R 11 0 R]");
+    let visible = "<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig2) /V 12 0 R /P 4 0 R /Rect [20 100 120 120] /F 4 >>";
+    let later = old.clone().revision(&[
+        (8, Row::Obj(0, 0, "[6 0 R 13 0 R 11 0 R]")),
+        (11, Row::Obj(0, 0, visible)),
+        (12, Row::Obj(0, 0, SIG_DICT)),
+        (4, Row::Obj(0, 0, &page4)),
+    ]);
+    assert_eq!(verdict(&later.open(), old.open(), Some(2)), Modification::Allowed(vec![kind::SIGNATURE]));
+    let appended = [(8, Row::Obj(0, 0, "[6 0 R 13 0 R 11 0 R]")), (11, Row::Obj(0, 0, &timestamp)), (12, Row::Obj(0, 0, TIMESTAMP))];
+    let later = old.clone().revision(&appended);
+    assert_eq!(verdict(&later.open(), old.open(), Some(1)), Modification::Allowed(vec![kind::SIGNATURE]));
+    let old = signed(LISTED, &[(11, "null")]);
+    let later = old.clone().revision(&appended);
+    assert_eq!(verdict(&later.open(), old.open(), Some(1)), Modification::Allowed(vec![kind::SIGNATURE]));
 }
 
 /// A `/Fields` array that a signed page also draws as its `/Contents` is page content, not a

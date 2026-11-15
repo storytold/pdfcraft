@@ -333,7 +333,7 @@ impl ChangedObjectClassifier<'_> {
                     && listed_only_as_fields(self.old, r.num)
                     && listed_only_as_fields(self.doc, r.num) =>
             {
-                Some(fields_kind(self.doc, self.old, before, Some(new)))
+                before.map(|b| appended_fields_kind(self.doc, self.old, b, new))
             }
             Object::Dict(dict) => self.dictionary_change(r, dict, before),
             Object::Stream(stream) => self.stream_change(r, stream, before),
@@ -704,23 +704,67 @@ fn acroform(doc: &Document) -> Option<Dict> {
 fn acroform_kind(doc: &Document, old: &Document, now: &Dict, before: Option<&Dict>) -> &'static str {
     let fallback = acroform(old).unwrap_or_default();
     let before = before.unwrap_or(&fallback);
-    let fields = fields_kind(doc, old, before.get(b"Fields"), now.get(b"Fields"));
-    if fields != kind::OTHER && !same_entries(now, before, &[b"Fields", b"SigFlags"]) {
-        return kind::FORM_FILL;
-    }
-    fields
-}
-
-/// A change of the form's `/Fields` from `was` to `now`, inline or an array object of its own.
-/// A field taken out of the form is refused: no DocMDP permission covers dropping a signed field.
-/// Signature fields added are signing, any other field added is a form change.
-fn fields_kind(doc: &Document, old: &Document, was: Option<&Object>, now: Option<&Object>) -> &'static str {
-    if lost_entries(doc, old, was, now) {
+    // A field taken out of the form: no DocMDP permission covers dropping a signed field.
+    if lost_entries(doc, old, before.get(b"Fields"), now.get(b"Fields")) {
         return kind::OTHER;
     }
-    let old_fields = refs(old, was);
-    let added: Vec<ObjRef> = refs(doc, now).into_iter().filter(|r| !old_fields.contains(r)).collect();
+    if !same_entries(now, before, &[b"Fields", b"SigFlags"]) {
+        return kind::FORM_FILL;
+    }
+    let old_fields = refs(old, before.get(b"Fields"));
+    let added: Vec<ObjRef> = refs(doc, now.get(b"Fields")).into_iter().filter(|r| !old_fields.contains(r)).collect();
     if added.is_empty() || added_annots(doc, &added) == kind::SIGNATURE { kind::SIGNATURE } else { kind::FORM_FILL }
+}
+
+/// A change of the signed AcroForm's `/Fields` when that is an array object of its own (#4817),
+/// judged by what a signer does to it. The signed entries stay as they were, in order, and each
+/// entry appended is a new signature field. That is signing; anything else is refused, since a
+/// reader can't tell it from tampering.
+fn appended_fields_kind(doc: &Document, old: &Document, was: &Object, now: &Object) -> &'static str {
+    const MAX_APPENDED: usize = 4096;
+    let (Some(was), Some(now)) = (was.as_array(), now.as_array()) else { return kind::OTHER };
+    let Some(appended) = now.get(was.len()..) else { return kind::OTHER };
+    if appended.is_empty() || appended.len() > MAX_APPENDED || !was.iter().zip(now).all(|(a, b)| same_object(a, b)) {
+        return kind::OTHER;
+    }
+    // A signed entry that resolved to nothing then must resolve to nothing now: the same
+    // reference would otherwise list a field the signature never saw.
+    if was.iter().filter_map(Object::as_ref).any(|r| !holds(old, r.num) && holds(doc, r.num)) {
+        return kind::OTHER;
+    }
+    // Numbers anything signed refers to, which a new object would give a meaning they lacked.
+    let Some(referred) = references(old).map(|found| found.into_iter().map(|r| r.num).collect::<HashSet<u32>>()) else {
+        return kind::OTHER;
+    };
+    let mut seen = HashSet::new();
+    for entry in appended {
+        // Written in place, listed twice, an object that was there when signed or that something
+        // signed refers to, or not a new signature field.
+        let Some(r) = entry.as_ref() else { return kind::OTHER };
+        if !seen.insert(r.num) || holds(old, r.num) || referred.contains(&r.num) || !new_signature_field(doc, old, &referred, r) {
+            return kind::OTHER;
+        }
+    }
+    kind::SIGNATURE
+}
+
+/// Whether object `num` holds something, not null, in `doc`.
+fn holds(doc: &Document, num: u32) -> bool {
+    doc.try_get(num).ok().is_some_and(|o| !matches!(*o, Object::Null))
+}
+
+/// Whether `r` is a signature field in a single widget, as a signer writes one. It has no `/Kids`
+/// and no `/Parent`, so it takes over or joins no field of the signed form, and no actions: a
+/// signer's widget has no use for them. Its value, if it has one, is a new object at a number
+/// nothing signed refers to (`referred`).
+fn new_signature_field(doc: &Document, old: &Document, referred: &HashSet<u32>, r: ObjRef) -> bool {
+    let field = doc.get(r);
+    let Some(d) = field.as_dict() else { return false };
+    let value_is_new = d.get(b"V").is_none_or(|v| v.as_ref().is_some_and(|v| !holds(old, v.num) && !referred.contains(&v.num)));
+    d.name(b"Subtype") == Some(b"Widget")
+        && d.name(b"FT") == Some(b"Sig")
+        && [&b"Kids"[..], b"Parent", b"AA", b"A"].iter().all(|k| d.get(k).is_none())
+        && value_is_new
 }
 
 /// Whether two page dictionaries are the same apart from `/Annots`. Dictionaries are compared
