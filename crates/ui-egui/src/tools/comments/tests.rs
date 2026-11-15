@@ -413,6 +413,31 @@ fn other_colour_opens_the_picker_inside_the_quick_bar_fill_popup() {
     assert!(h.state().style(CommentTool::Rectangle).fill.is_some());
 }
 
+/// The quick bar's controls take the toolbar's size: at 24 px and 64 px their hit areas are
+/// the size the hotbar passes, so they stay level with the icon buttons around them (#7312).
+#[test]
+fn quick_bar_controls_match_the_toolbar_size() {
+    use egui_kittest::kittest::Queryable;
+    for size in [24.0, 64.0] {
+        let mut h = egui_kittest::Harness::new_ui_state(
+            |ui, prefs: &mut CommentPrefs| {
+                let _ = quick_bar_controls(ui, CommentTool::Highlight, prefs, size);
+            },
+            CommentPrefs::default(),
+        );
+        h.run();
+        let colour = h.get_by_label("Colour").rect();
+        assert_eq!(colour.width(), size, "the colour swatch's box is {size} px wide");
+        assert_eq!(colour.height(), size, "the colour swatch's box is {size} px tall");
+        let pin = h.get_by_label("Keep tool selected").rect();
+        assert_eq!(pin.width(), size, "the pin button's box is {size} px wide");
+        assert_eq!(pin.height(), size, "the pin button's box is {size} px tall");
+        let opacity = h.get_by_label("Opacity").rect();
+        assert_eq!(opacity.width(), size, "the opacity button's box is {size} px wide");
+        assert_eq!(opacity.height(), size, "the opacity button's box is {size} px tall");
+    }
+}
+
 #[test]
 fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_menu() {
     use egui_kittest::kittest::Queryable;
