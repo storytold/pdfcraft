@@ -9790,7 +9790,7 @@ mod type3_proc_cache;
 mod failed_image_decodes;
 
 // A JBIG2 image past 2^28 pixels is drawn reduced, and one too large to draw is reported (vendored
-// hayro-jbig2 patch 19, hayro-syntax patch 52, hayro-interpret patch 113).
+// hayro-jbig2 patch 19, hayro-syntax patch 53, hayro-interpret patch 113).
 mod jbig2_past_full_size;
 
 // A page past its rasterizer coverage leaves the rest out and says so (vendored vello_cpu patch 1).

@@ -63,7 +63,7 @@ pub struct ImageDecodeParams {
     pub width: u32,
     /// The height of the image as indicated by the image dictionary.
     pub height: u32,
-    /// PdfCraft patch (52): whether the caller takes an image past 2^28 pixels at a reduced
+    /// PdfCraft patch (53): whether the caller takes an image past 2^28 pixels at a reduced
     /// size, which `ImageData` then reports, as for a JPX image decoded at a lower resolution.
     /// Only JBIG2 decodes so (up to [`crate::MAX_REDUCED_JBIG2_PIXELS`]), for a caller that draws
     /// the image rather than keeping its samples.

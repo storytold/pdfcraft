@@ -15,16 +15,16 @@ use core::iter;
 /// it to decode and a quarter for its page, and ordinary ones are far below that.
 pub const MAX_PAGE_JBIG2_WORK: u64 = 1 << 30;
 
-/// PdfCraft patch (52): the most pixels a JBIG2 image may have when its caller takes it at a
+/// PdfCraft patch (53): the most pixels a JBIG2 image may have when its caller takes it at a
 /// reduced size (`ImageDecodeParams::reduce_past_full_size`), 2^29: what hayro-jbig2 holds a page
 /// read so to. A 1,200 dpi scan of a newspaper page, 19,467 × 25,517, has 497 million.
 pub const MAX_REDUCED_JBIG2_PIXELS: u64 = hayro_jbig2::MAX_REDUCED_PAGE_PIXELS;
 
-/// PdfCraft patch (52): the most pixels an image decodes to at its full size, the renderer's
+/// PdfCraft patch (53): the most pixels an image decodes to at its full size, the renderer's
 /// `MAX_IMAGE_PIXELS` and hayro-interpret's `image_size_ok`.
 const FULL_SIZE_PIXELS: u64 = 1 << 28;
 
-/// PdfCraft patch (52): the most pixels a JBIG2 image past [`FULL_SIZE_PIXELS`] is reduced to,
+/// PdfCraft patch (53): the most pixels a JBIG2 image past [`FULL_SIZE_PIXELS`] is reduced to,
 /// 2^25: 32 MiB at its byte a pixel. That keeps the 497-million-pixel page above at a quarter of
 /// its 1,200 dpi, 300 dpi, sharp at a screen's sizes, and its decode to one kept copy, whatever
 /// size it is drawn at.
@@ -176,7 +176,7 @@ pub(crate) fn decode(
 
     charge_page_reading(data.len().saturating_add(globals.as_deref().map_or(0, <[u8]>::len)))?;
 
-    // PdfCraft patch (52): a caller that takes the image reduced may open a page past
+    // PdfCraft patch (53): a caller that takes the image reduced may open a page past
     // `FULL_SIZE_PIXELS`, up to `MAX_REDUCED_JBIG2_PIXELS`. The palette of an indexed image needs
     // its pixels' own values, which an average isn't, so such an image is held to the full size.
     let reduce = image_params.reduce_past_full_size && !image_params.is_indexed;
@@ -263,7 +263,7 @@ pub(crate) fn decode(
     })
 }
 
-/// PdfCraft patch (52): `image`, past [`FULL_SIZE_PIXELS`], decoded at a reduced size: each block
+/// PdfCraft patch (53): `image`, past [`FULL_SIZE_PIXELS`], decoded at a reduced size: each block
 /// of [`reduction_factor`] × that many pixels averaged into one 8-bit gray sample as it is read
 /// out, so the image never exists a byte a pixel. Only the decoder's page bitmap, a bit a pixel,
 /// is held at the full size (64 MiB at most).
@@ -284,7 +284,7 @@ fn decode_reduced(image: &hayro_jbig2::Image<'_>) -> Option<FilterResult<'static
     })
 }
 
-/// PdfCraft patch (52): the smallest whole factor that reduces an image of `width` × `height`
+/// PdfCraft patch (53): the smallest whole factor that reduces an image of `width` × `height`
 /// to [`MAX_REDUCED_OUTPUT_PIXELS`] or fewer, the same on both axes so the samples stay square.
 /// An image of 2^29 pixels takes 4, or a little more when a side doesn't divide evenly; 12 holds
 /// the largest page hayro-jbig2 allows at all, 65,535 a side, and 64 is past any.
@@ -294,7 +294,7 @@ fn reduction_factor(width: u32, height: u32) -> Option<u32> {
     })
 }
 
-/// PdfCraft patch (52): a [`hayro_jbig2::Decoder`] that averages the pixels it is given, a band of
+/// PdfCraft patch (53): a [`hayro_jbig2::Decoder`] that averages the pixels it is given, a band of
 /// `factor` rows at a time, into 8-bit gray samples (255 white, 0 black, as the full-size read
 /// gives them). It holds one sum a reduced column and the reduced image.
 struct Reducer {

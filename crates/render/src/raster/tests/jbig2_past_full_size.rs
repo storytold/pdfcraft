@@ -1,5 +1,5 @@
 //! A JBIG2 image past the bound on decoding an image at its full size (2^28 pixels) is drawn at a
-//! reduced size, up to 2^29 pixels (vendored hayro-jbig2 patch 19, hayro-syntax patch 52,
+//! reduced size, up to 2^29 pixels (vendored hayro-jbig2 patch 19, hayro-syntax patch 53,
 //! hayro-interpret patch 113): a page that is one 1,200 dpi newspaper scan of 19,467 × 25,517
 //! (PDFBOX-4598) drew blank. An image too large to draw at all is reported as content left out,
 //! where it was skipped with nothing said.
