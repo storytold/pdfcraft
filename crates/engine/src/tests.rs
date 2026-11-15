@@ -2529,6 +2529,80 @@ fn style_bookmarks_go_to_the_displayed_heading_top_on_turned_pages() {
     }
 }
 
+/// #7415: on a turned page the headings are read in displayed order (top to bottom), a heading
+/// set on two lines is one bookmark, and each goes to the top of its first displayed line. One
+/// layout (two headings and a two-line heading, written to the file out of order) on pages turned
+/// 0, 90, 180 and 270 degrees must give the same bookmarks at the same displayed tops.
+#[test]
+fn style_bookmarks_read_and_join_headings_as_displayed_on_turned_pages() {
+    // Displayed baselines (x, y from the top) on a 400 x 600 page, in an order that is not reading order.
+    let lines = [("Gamma Three", 50.0, 450.0), ("Beta Cont", 50.0, 274.0), ("Alpha One", 50.0, 100.0), ("Beta Two", 50.0, 250.0)];
+    // (rotation, media box, text matrix prefix, user position of a displayed (x, y)).
+    type Place = fn(f64, f64) -> (f64, f64);
+    let turns: [(i32, &str, &str, Place); 4] = [
+        (0, "0 0 400 600", "1 0 0 1", |x, y| (x, 600.0 - y)),
+        (90, "0 0 600 400", "0 1 -1 0", |x, y| (y, x)),
+        (180, "0 0 400 600", "-1 0 0 -1", |x, y| (400.0 - x, y)),
+        (270, "0 0 600 400", "0 -1 1 0", |x, y| (600.0 - y, 400.0 - x)),
+    ];
+    let mut pdf =
+        pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R 9 0 R] /Count 4 >>");
+    for (i, (rotate, media, prefix, place)) in turns.iter().enumerate() {
+        let content: String = lines
+            .iter()
+            .map(|(text, x, y)| {
+                let (ux, uy) = place(*x, *y);
+                format!("BT /F1 20 Tf {prefix} {ux} {uy} Tm ({text}) Tj ET\n")
+            })
+            .collect();
+        pdf = pdf
+            .obj(format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [{media}] /Rotate {rotate} /Resources << /Font << /F1 11 0 R >> >> /Contents {} 0 R >>",
+                4 + 2 * i
+            ))
+            .stream("", &content);
+    }
+    let bytes = pdf.obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>").build();
+    let mut s = Session::new();
+    let id = s.open("turned.pdf", None, Arc::new(bytes), None).unwrap();
+    let style = s.get(id).unwrap().text_styles()[0].style.clone();
+    s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![style] }).unwrap();
+    let doc = s.get(id).unwrap();
+    let kids = &doc.info.outline[0].children;
+    let titles: Vec<_> = kids.iter().map(|k| k.title.as_str()).collect();
+    let per_page = ["Alpha One", "Beta Two Beta Cont", "Gamma Three"];
+    assert_eq!(titles, per_page.repeat(4), "displayed order, the two-line heading joined");
+    // The displayed tops of the three bookmarks, from the upright page.
+    let tops: Vec<f32> = kids[..3]
+        .iter()
+        .map(|k| match k.view {
+            pdfcraft_render::DestView::Xyz { left: None, top: Some(t), .. } => doc.info.pages[0].crop[3] - t,
+            ref v => panic!("{v:?}"),
+        })
+        .collect();
+    assert!(tops[0] < tops[1] && tops[1] < tops[2], "{tops:?}");
+    for (i, kid) in kids.iter().enumerate() {
+        let (page, n) = (&doc.info.pages[i / 3], i % 3);
+        let [want_left, want_top] = page.xyz_for_view(None, Some(tops[n]));
+        let near = |got: Option<f32>, want: Option<f32>| match (got, want) {
+            (None, None) => true,
+            (Some(g), Some(w)) => (g - w).abs() < 1.0,
+            _ => false,
+        };
+        match kid.view {
+            pdfcraft_render::DestView::Xyz { left, top, .. } => {
+                assert!(
+                    near(left, want_left) && near(top, want_top),
+                    "rotate {} {}: got {left:?} {top:?}, want {want_left:?} {want_top:?}",
+                    page.rotation,
+                    kid.title
+                )
+            }
+            ref v => panic!("{v:?}"),
+        }
+    }
+}
+
 /// `style` at another size.
 fn pdfcraft_engine_style(style: &text_style_bookmarks::TextStyle, size: f64) -> text_style_bookmarks::TextStyle {
     text_style_bookmarks::TextStyle { size, ..style.clone() }

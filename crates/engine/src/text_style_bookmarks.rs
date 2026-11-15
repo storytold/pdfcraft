@@ -60,27 +60,29 @@ struct Line {
     page: usize,
     text: String,
     style: TextStyle,
-    /// Top, bottom, left and right of its box in user space.
+    /// Top, bottom, left and right of its box as displayed (after the page's `/Rotate`, y up), so
+    /// reading order and the join of a heading's lines are right on a turned page. Only
+    /// differences between these values are used: they are offset from points on the page.
     top: f64,
     bottom: f64,
     left: f64,
     right: f64,
-    /// The page's `/Rotate`, clockwise (0, 90, 180 or 270).
-    rotation: i64,
+    /// The `/XYZ` position `[left, top]` (user space) that puts the top of the line as displayed
+    /// at the top of the window. The box edge displayed on top depends on the rotation: the top
+    /// edge, the left edge (90), the bottom edge (180) or the right edge (270). On a page turned
+    /// a quarter it is a user-space x, so it is `left`, and `top` stays unspecified.
+    anchor: [Option<f64>; 2],
 }
 
-impl Line {
-    /// The `/XYZ` position `[left, top]` (user space) that puts the top of the heading as displayed
-    /// at the top of the window. The box edge that is displayed on top depends on the rotation:
-    /// the top edge, the left edge (90), the bottom edge (180) or the right edge (270). On a page
-    /// turned a quarter it is a user-space x, so it is `left`, and `top` stays unspecified.
-    fn anchor(&self) -> [Option<f64>; 2] {
-        match self.rotation {
-            90 => [Some(self.left), None],
-            180 => [None, Some(self.bottom)],
-            270 => [Some(self.right), None],
-            _ => [None, Some(self.top)],
-        }
+/// A box in user space `[x0, y0, x1, y1]` on a page turned `rotation` degrees clockwise → its
+/// displayed top, bottom, left and right (y up), and the `/XYZ` anchor of its displayed top.
+fn displayed(rotation: i64, [x0, y0, x1, y1]: [f64; 4]) -> ([f64; 4], [Option<f64>; 2]) {
+    let (xl, xh, yl, yh) = (x0.min(x1), x0.max(x1), y0.min(y1), y0.max(y1));
+    match rotation {
+        90 => ([-xl, -xh, yl, yh], [Some(xl), None]),
+        180 => ([-yl, -yh, -xh, -xl], [None, Some(yl)]),
+        270 => ([xh, xl, -yh, -yl], [Some(xh), None]),
+        _ => ([yh, yl, xl, xh], [None, Some(yh)]),
     }
 }
 
@@ -109,6 +111,7 @@ fn lines(doc: &Document) -> Vec<Line> {
                 let size = l.size;
                 let [x0, y0, x1, y1] = l.rect;
                 let ok = !text.is_empty() && size.is_finite() && size > 0.0 && [x0, y0, x1, y1].iter().all(|v| v.is_finite());
+                let ([top, bottom, left, right], anchor) = displayed(rotation, l.rect);
                 ok.then(|| Line {
                     page,
                     text,
@@ -118,11 +121,11 @@ fn lines(doc: &Document) -> Vec<Line> {
                         bold: l.bold,
                         italic: l.italic,
                     },
-                    top: y0.max(y1),
-                    bottom: y0.min(y1),
-                    left: x0.min(x1),
-                    right: x0.max(x1),
-                    rotation,
+                    top,
+                    bottom,
+                    left,
+                    right,
+                    anchor,
                 })
             })
             .collect();
@@ -210,7 +213,7 @@ pub fn headings(doc: &Document, levels: &[TextStyle]) -> Vec<OutlineEntry> {
             // The level counts from 1; the position in `levels` is at most its length, which a
             // caller keeps small (a few levels), so it fits a u8.
             let level = u8::try_from(level.saturating_add(1)).unwrap_or(u8::MAX);
-            let [left, top] = line.anchor();
+            let [left, top] = line.anchor;
             entries.push(OutlineEntry { level, title: line.text.chars().take(MAX_TITLE_CHARS).collect(), page: line.page, element: None, left, top });
         }
         open = Some((level, line.top, line.bottom, line.left, line.right));
