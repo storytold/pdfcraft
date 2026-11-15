@@ -66,9 +66,13 @@ impl Filter {
         f
     }
 
-    /// The level that applies to `target` (the most specific matching directive wins).
+    /// The level for `target`: longest literal prefix, with a module directive winning a wildcard tie.
     pub fn level_for(&self, target: &str) -> LevelFilter {
-        self.directives.iter().filter(|(name, _)| matches(name, target)).max_by_key(|(name, _)| name.len()).map_or(self.default, |(_, level)| *level)
+        self.directives
+            .iter()
+            .filter(|(name, _)| matches(name, target))
+            .max_by_key(|(name, _)| (name.strip_suffix('*').unwrap_or(name).len(), !name.ends_with('*')))
+            .map_or(self.default, |(_, level)| *level)
     }
 
     /// The most verbose level any target can reach (for `log::set_max_level`).
@@ -299,6 +303,37 @@ mod tests {
         // A trailing `*` is a plain prefix match.
         assert_eq!(Filter::parse("pdfcraft*=debug").level_for("pdfcraft_ui_egui::canvas"), LevelFilter::Debug);
         assert_eq!(Filter::parse("pdfcraft*=debug").level_for("eframe"), LevelFilter::Error);
+    }
+
+    #[test]
+    fn module_directives_beat_wildcards_with_the_same_prefix() {
+        for spec in ["info,pdfcraft*=warn,pdfcraft=debug", "info,pdfcraft=debug,pdfcraft*=warn"] {
+            let f = Filter::parse(spec);
+            assert_eq!(f.level_for("pdfcraft"), LevelFilter::Debug, "{spec}");
+            assert_eq!(f.level_for("pdfcraft::app"), LevelFilter::Debug, "{spec}");
+            assert_eq!(f.level_for("pdfcraft_ui_egui::app"), LevelFilter::Warn, "{spec}");
+            assert_eq!(f.level_for("other"), LevelFilter::Info, "{spec}");
+        }
+        let global = Filter::parse("info,*=warn,pdfcraft=debug");
+        assert_eq!(global.level_for("pdfcraft"), LevelFilter::Debug);
+        assert_eq!(global.level_for("other"), LevelFilter::Warn);
+        let f = Filter::parse("pdfcraft=trace,pdfcraft::app*=warn");
+        assert_eq!(f.level_for("pdfcraft::app"), LevelFilter::Warn);
+        assert_eq!(f.level_for("pdfcraft::app::keys"), LevelFilter::Warn);
+        assert_eq!(f.level_for("pdfcraft::apple"), LevelFilter::Warn);
+        assert_eq!(f.level_for("pdfcraft::other"), LevelFilter::Trace);
+    }
+
+    #[test]
+    fn equally_specific_directives_keep_the_last_value() {
+        for (spec, target, expected) in [
+            ("pdfcraft=info,pdfcraft=debug", "pdfcraft::app", LevelFilter::Debug),
+            ("pdfcraft=debug,pdfcraft=info", "pdfcraft::app", LevelFilter::Info),
+            ("pdfcraft*=info,pdfcraft*=debug", "pdfcraft_ui_egui", LevelFilter::Debug),
+            ("pdfcraft*=debug,pdfcraft*=info", "pdfcraft_ui_egui", LevelFilter::Info),
+        ] {
+            assert_eq!(Filter::parse(spec).level_for(target), expected, "{spec}");
+        }
     }
 
     #[test]
