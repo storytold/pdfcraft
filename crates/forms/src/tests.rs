@@ -3945,6 +3945,36 @@ fn a_pick_whose_validate_script_replaces_the_fields_items_selects_in_the_new_ite
     assert_eq!(doc.get(f.obj).as_dict().and_then(|d| d.get(b"I").cloned()), Some(Object::Array(vec![Object::Int(0)])));
 }
 
+/// A Validate script that changes the picked field but keeps its value keeps the option picked:
+/// the second of two options that share an export value when only a colour changes, and an option
+/// whose export value is empty when the items are reordered (not a cleared field).
+#[test]
+fn a_pick_keeps_its_option_when_its_validate_script_changes_the_field() {
+    struct Change(FieldChange);
+    impl Scripts for Change {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
+            ScriptResult { rc: true, value: value.into(), value_set: false, changes: vec![self.0.clone()], message: None }
+        }
+    }
+    let pair = |e: &str, d: &str| Object::Array(vec![Object::String(PdfString::text(e)), Object::String(PdfString::text(d))]);
+    let picked = |doc: &Document, obj| doc.get(obj).as_dict().and_then(|d| d.get(b"I").cloned());
+    let colour = FieldChange { name: "pick".into(), text_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]), ..Default::default() };
+    let none_first = vec![(String::new(), "None".to_string()), ("fr".to_string(), "France".to_string())];
+    let reorder = FieldChange { name: "pick".into(), options: Some(none_first), ..Default::default() };
+    for (items, change, after) in
+        [(vec![pair("x", "First"), pair("x", "Second")], colour, 1), (vec![pair("fr", "France"), pair("", "None")], reorder, 0)]
+    {
+        let mut doc = one_page();
+        let kind = NewField::Combo { options: vec!["a".into(), "b".into()], editable: false };
+        add_field(&mut doc, 0, [10.0, 10.0, 100.0, 30.0], &kind, Some("pick")).unwrap();
+        let obj = field(&fields(&doc), "pick").obj;
+        doc.update_dict(obj, |d| d.set(b"Opt".to_vec(), Object::Array(items))).unwrap();
+        set_field_script(&mut doc, "pick", "validate", Some("change();")).unwrap();
+        set_value_with(&mut doc, "pick", &FieldValue::ChoiceIndices(vec![1]), &mut Change(change)).unwrap();
+        assert_eq!(picked(&doc, obj), Some(Object::Array(vec![Object::Int(after)])));
+    }
+}
+
 #[test]
 fn validation_script_colour_is_used_when_the_field_redraws() {
     struct TestScripts;

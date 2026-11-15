@@ -426,34 +426,47 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             // Keystroke (on commit) and Validate run on a picked value as on typed text, and may
             // change or refuse it (#7383). A multiple selection is a list, which those scripts
             // don't take as one value, and an option number that isn't there is refused below.
-            // The scripts see the export value, however the pick names the option.
-            let export = |v: &str| option_named(f, v).and_then(|i| f.options.get(i)).map_or_else(|| v.to_owned(), |(e, _)| e.clone());
-            let picked_value = match value {
+            // The scripts see the export value, however the pick names the option; `picked_at` is
+            // the option picked, if the pick is one.
+            let named = |v: &str| {
+                let at = option_named(f, v);
+                (at.and_then(|i| f.options.get(i)).map_or_else(|| v.to_owned(), |(e, _)| e.clone()), at)
+            };
+            let picked = match value {
                 FieldValue::ChoiceIndices(v) => match v.as_slice() {
-                    [] => Some(String::new()),
-                    [i] => f.options.get(*i).map(|(e, _)| e.clone()),
+                    [] => Some((String::new(), None)),
+                    [i] => f.options.get(*i).map(|(e, _)| (e.clone(), Some(*i))),
                     _ => None,
                 },
-                FieldValue::Choice(v) if v.len() <= 1 => Some(v.first().map(|s| export(s)).unwrap_or_default()),
-                FieldValue::Text(t) => Some(export(t)),
+                FieldValue::Choice(v) if v.len() <= 1 => Some(v.first().map_or((String::new(), None), |s| named(s))),
+                FieldValue::Text(t) => Some(named(t)),
                 _ => None,
             };
             let (accepted, reread);
-            let (f, value) = match picked_value {
-                Some(current) if !resetting => {
+            let (f, value) = match picked {
+                Some((current, picked_at)) if !resetting => {
                     let (v, refresh_field) = scripting::accept(doc, f, &current, scripts)?;
-                    // A script that changed this field's own items: the pick is matched against
-                    // the items it has now, by its export value, not by a position in the old ones.
+                    let before = f;
+                    // A script that changed this field is read again, for what it changed.
                     let f = if refresh_field {
-                        reread = fields(doc).into_iter().find(|current| current.obj == f.obj);
-                        reread.as_ref().unwrap_or(f)
+                        reread = fields(doc).into_iter().find(|now| now.obj == before.obj);
+                        reread.as_ref().unwrap_or(before)
                     } else {
-                        f
+                        before
                     };
-                    if v == current && !refresh_field {
+                    if v != current {
+                        accepted = FieldValue::Text(v);
+                        (f, &accepted)
+                    } else if f.options == before.options {
                         (f, value)
                     } else {
-                        accepted = FieldValue::Text(v);
+                        // It changed the items, and kept the value: the option picked is found
+                        // among the new items (the same option, else one with its export value)
+                        // and picked by its place there, which keeps an empty export value or one
+                        // that two options share picked rather than cleared or the first.
+                        let old = picked_at.and_then(|i| before.options.get(i));
+                        let place = old.and_then(|o| f.options.iter().position(|n| n == o).or_else(|| f.options.iter().position(|(e, _)| *e == o.0)));
+                        accepted = place.map_or(FieldValue::Text(v), |j| FieldValue::ChoiceIndices(vec![j]));
                         (f, &accepted)
                     }
                 }
