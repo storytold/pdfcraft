@@ -92,6 +92,10 @@ pub enum EditNotice {
     /// turning it on could paint over something (`pdfcraft_edit::backdrops_left_off`). They look
     /// the same on white paper.
     BackdropsLeftOff { pages: Vec<usize> },
+    /// The same, after deleting an image behind the page content, bringing it to the top or making
+    /// it ordinary page content: the page's content changed after the image turned its white
+    /// backdrop off, or the image now draws before it.
+    ImageBackdropsLeftOff { pages: Vec<usize> },
     /// Applying redactions left these places as they were, and they still hold the removed text
     /// (bookmark titles, attachments, the comments that remain, XMP on other objects; see
     /// [`RedactionElsewhere`](crate::RedactionElsewhere)). Only when one is counted, or the text
@@ -118,6 +122,14 @@ impl std::fmt::Display for EditNotice {
                 write!(
                     f,
                     "{which} {} changed after the background was added, so {own} own white backdrop was not turned back on (it looks the same on white paper)",
+                    page_runs(pages)
+                )
+            }
+            EditNotice::ImageBackdropsLeftOff { pages } => {
+                let (which, own) = if pages.len() == 1 { ("page", "its") } else { ("pages", "their") };
+                write!(
+                    f,
+                    "{which} {} changed after an image was put behind the text, so {own} own white backdrop was not turned back on (it looks the same on white paper)",
                     page_runs(pages)
                 )
             }

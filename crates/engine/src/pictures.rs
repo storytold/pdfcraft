@@ -22,6 +22,14 @@ pub(crate) fn embed_image(
     pdfcraft_create::image_xobject(doc, name, bytes)
 }
 
+/// Refuse a file that [`Edit::ReplaceImage`](crate::Edit::ReplaceImage) would refuse: the same
+/// embedding, into a scratch document, so a caller that changes an image in several edits can
+/// check the new picture before the first one and leave nothing half done.
+pub fn check_picture(name: &str, bytes: &[u8]) -> Result<(), EditError> {
+    embed_image(&mut pdfcraft_cos::Document::new_empty(), name, bytes)?;
+    Ok(())
+}
+
 /// The largest box of `w`:`h` shape inside `rect`, centred in it: a stamp's picture keeps its
 /// shape in a box of any other shape. A box that is already that shape (to within rounding) is
 /// kept exactly, so callers that size it themselves get their box back. An empty or non-finite

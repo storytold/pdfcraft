@@ -2119,8 +2119,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.image"]
 tools = ["page_add_image"]
-evidence = ["crates/ui-egui/tests/it/content.rs::typing_moving_styling_and_deleting_added_content", "crates/ui-egui/tests/it/content.rs::a_picture_on_the_clipboard_is_pasted_onto_the_page", "crates/automation/tests/it/automation.rs::adding_content_through_tools", "crates/edit/src/tests.rs::added_text_and_images_are_page_content_that_stays_editable", "crates/engine/src/tests.rs::added_text_and_images_render_and_stay_editable"]
-notes = "PNG, JPEG, TIFF, GIF, BMP; centred at natural size or in a rect. ⌘V / Ctrl+V pastes a picture from the system clipboard onto the current page the same way (desktop only)"
+evidence = ["crates/ui-egui/tests/it/content.rs::typing_moving_styling_and_deleting_added_content", "crates/ui-egui/tests/it/content.rs::a_picture_on_the_clipboard_is_pasted_onto_the_page", "crates/automation/tests/it/automation.rs::adding_content_through_tools", "crates/edit/src/tests.rs::added_text_and_images_are_page_content_that_stays_editable", "crates/engine/src/tests.rs::added_text_and_images_render_and_stay_editable", "crates/edit/src/backdrop_tests.rs::an_image_behind_the_text_turns_the_backdrop_off_until_nothing_behind_needs_it", "crates/engine/src/tests.rs::images_behind_the_text_show_on_pages_that_paint_themselves_white", "crates/automation/tests/it/backdrop.rs::an_image_behind_the_text_shows_on_a_page_that_paints_its_own_white_backdrop", "crates/ui-egui/tests/it/content.rs::putting_an_image_behind_the_text_keeps_it_selected"]
+notes = "PNG, JPEG, TIFF, GIF, BMP; centred at natural size or in a rect. ⌘V / Ctrl+V pastes a picture from the system clipboard onto the current page the same way (desktop only). An added image can go behind the page's own text and images (Edit image ▸ Behind text and images; page_add_image / content_update `behind`), over its backgrounds; a white backdrop the page paints itself is turned off while something behind needs it (edit::backdrop), but a picture covering the page (a scan) still hides the image and the panel says so. Only images added with PdfCraft; added text always goes on top"
 
 [[feature]]
 id = "edit.cut-copy-paste-objects"
@@ -2233,7 +2233,7 @@ evidence = [
   "crates/automation/tests/it/automation.rs::arranging_page_images_through_tools",
   "crates/ui-egui/tests/it/editing.rs::duplicate_xobject_at_different_rects_arrange_and_delete_keeps_other_instance_through_menu",
 ]
-notes = "Image stacking order in content streams: Bring to Front, Send to Back, Bring Forward, Send Backward with undo/redo and persistence. Refuses arranging across shared marked content, unbalanced graphics/marked-content boundaries, or when clipping path transforms cannot be cleanly preserved. Stacking for arbitrary vector paths and inline images remains planned."
+notes = "Image stacking order in content streams: Bring to Front, Send to Back, Bring Forward, Send Backward with undo/redo and persistence. Refuses arranging across shared marked content, unbalanced graphics/marked-content boundaries, or when clipping path transforms cannot be cleanly preserved. Stacking for arbitrary vector paths and inline images remains planned. Images added with PdfCraft also go behind or in front of the whole page content (see edit.image-add)."
 
 [[feature]]
 id = "edit.align-distribute-objects"

@@ -901,9 +901,17 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             crate::ocr::layer::add_text(doc, *page, words)?;
         }
         Edit::EnhanceScan { images } => crate::scan_clean::write_back(doc, images)?,
-        Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
+        Edit::EditPageImage { page, index, change } => {
+            run_edit_page_image(doc, *page, *index, change)?;
+            // Deleting an added image behind the content here, or making it ordinary page content,
+            // may leave nothing that needs the page's own backdrop off.
+            pdfcraft_edit::settle_backdrop(doc, *page)?;
+        }
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
-        Edit::DeleteObjects { page, objects } => crate::object_clip::delete(doc, *page, objects, |doc, edit| run_edit(doc, edit, cx))?,
+        Edit::DeleteObjects { page, objects } => {
+            crate::object_clip::delete(doc, *page, objects, |doc, edit| run_edit(doc, edit, cx))?;
+            pdfcraft_edit::settle_backdrop(doc, *page)?;
+        }
         Edit::PasteObjects { page, clip, offset } => crate::object_clip::paste(doc, *page, clip, *offset)?,
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
@@ -960,7 +968,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::AddText { page, text } => {
             pdfcraft_edit::add_content(doc, *page, &AddedContent::Text(text.clone()))?;
         }
-        Edit::AddImage { page, rect, name, bytes } => {
+        Edit::AddImage { page, rect, name, bytes, behind } => {
             let (image, natural) = embed_image(doc, name, bytes)?;
             let rect = match rect {
                 Some(r) => *r,
@@ -972,7 +980,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     [(pw - w) / 2.0, (ph - h) / 2.0, (pw + w) / 2.0, (ph + h) / 2.0]
                 }
             };
-            pdfcraft_edit::add_content(doc, *page, &AddedContent::Image(pdfcraft_edit::AddedImage::new(rect, image)))?;
+            let item = pdfcraft_edit::AddedImage { behind: *behind, ..pdfcraft_edit::AddedImage::new(rect, image) };
+            pdfcraft_edit::add_content(doc, *page, &AddedContent::Image(item))?;
         }
         Edit::UpdateContent { page, index, content } => pdfcraft_edit::update_content(doc, *page, *index, content)?,
         Edit::DeleteContent { page, index } => pdfcraft_edit::delete_content(doc, *page, *index)?,

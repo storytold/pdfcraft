@@ -39,7 +39,7 @@ pub enum EditError {
 pub type Rgb = [f64; 3];
 
 pub mod backdrop;
-pub use backdrop::{Backdrop, backdrops_left_off, page_backdrop, page_backdrops};
+pub use backdrop::{Backdrop, backdrop_left_off, backdrops_left_off, page_backdrop, page_backdrops, settle_backdrop};
 pub use text::strip_subset_tag;
 mod background;
 pub use background::page_background;
@@ -91,7 +91,7 @@ use marks::{matrix_number, n};
 pub(crate) use place::undrawable;
 #[cfg(test)]
 use place::{ISOLATION_MAX_DEPTH, OLD_WRAP_CLOSE, WRAP_CLOSE, WRAP_OPEN, is_wrap_close, page_fonts, stream_bytes, stream_tag, tagged, wrapper_role};
-use place::{Reach, check, check_on_top, contents, draw_on_top, lift_on_top, page_list, place_tagged, revealed_under_paint};
+use place::{Reach, check, check_on_top, contents, draw_on_top, lift_on_top, page_list, place_object, place_tagged, revealed_under_paint};
 pub use place::{add_type3_fonts, stamp, stamp_with_fonts, undrawable_message};
 
 #[cfg(test)]

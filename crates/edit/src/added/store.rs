@@ -1,7 +1,7 @@
 use super::draw::{draw, params};
 use super::layout::{first_undrawable, is_thai, nums, shaped_arabic, thai_error};
 use super::types::{Added, AddedImage, AddedText, CHAR_SPACING_LIMIT, Family, Ink, MarkerScan, TAG};
-use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, align_from, check, contents, page_list, place_tagged};
+use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, align_from, check, contents, page_list, place_object};
 
 /// A text item's gray or CMYK ink. Items written before inks, and an ink out of range or not
 /// made only of numbers (a `/Gray` name, a `/CMYK` entry that isn't a number), have none: the
@@ -77,6 +77,7 @@ fn parse(doc: &Document, d: &Dict) -> Option<Content> {
                 flip_h: matches!(d.get(b"FlipH"), Some(Object::Bool(true))),
                 flip_v: matches!(d.get(b"FlipV"), Some(Object::Bool(true))),
                 crop: crop.try_into().unwrap_or([0.0; 4]),
+                behind: matches!(d.get(b"Behind"), Some(Object::Bool(true))),
             }))
         }
         _ => None,
@@ -222,7 +223,10 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
     }
     let taken = pres.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let (content, res) = draw(doc, c, view, &taken, obj.is_some())?;
-    if obj.is_none() {
+    // Behind the page, an item doesn't sit over its marked content; on top (new, or coming up
+    // from behind) it must be able to.
+    let behind = matches!(c, Content::Image(i) if i.behind);
+    if !behind && obj.is_none_or(|r| behind_item(doc, &Object::Ref(r))) {
         crate::check_on_top(doc, p)?;
     }
     for (k, v) in res.iter() {
@@ -240,22 +244,69 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
         added.set(b"UserUnit".to_vec(), Object::Real(user_unit));
     }
     sd.set(b"PCAdded".to_vec(), Object::Dict(added));
-    let stream = Stream::flate(sd, &content);
-    match obj {
+    let stream = Object::Stream(Stream::flate(sd, &content));
+    let r = match obj {
         Some(r) => {
-            doc.set(r, Object::Stream(stream));
-            Ok(r)
-        }
-        None => {
-            // place_tagged appends a new stream; recover its reference.
+            let was = behind_item(doc, &Object::Ref(r));
+            doc.set(r, stream);
+            if was == behind {
+                return Ok(r);
+            }
+            // Changing layer: take the item out of the list and put it where it now belongs.
             let p = page_list(doc).swap_remove(page);
-            place_tagged(doc, &p, TAG, content.clone(), false)?;
-            let p = page_list(doc).swap_remove(page);
-            let r = contents(doc, &p)?.last().and_then(Object::as_ref).ok_or_else(|| EditError::Invalid("could not add the content".into()))?;
-            doc.set(r, Object::Stream(stream));
-            Ok(r)
+            let list: Vec<Object> = contents(doc, &p)?.into_iter().filter(|o| o.as_ref() != Some(r)).collect();
+            doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), Object::Array(list)))?;
+            r
         }
+        None => doc.add(stream),
+    };
+    let p = page_list(doc).swap_remove(page);
+    if behind {
+        place_behind(doc, &p, r)?;
+    } else {
+        place_object(doc, &p, false, |_| r)?;
+        // Coming up from behind, the item may have been the last thing that needed the page's own
+        // backdrop off.
+        let p = page_list(doc).swap_remove(page);
+        restore_backdrop(doc, &p)?;
     }
+    Ok(r)
+}
+
+/// Is `o` an added item drawn under the page's own content ([`AddedImage::behind`])?
+pub(crate) fn behind_item(doc: &Document, o: &Object) -> bool {
+    let item = doc.resolve(o);
+    let Some(d) = item.as_dict().filter(|d| d.name(b"PCMark") == Some(TAG.as_bytes())) else { return false };
+    d.get(b"PCAdded").map(|p| doc.resolve(p)).is_some_and(|p| p.as_dict().is_some_and(|p| matches!(p.get(b"Behind"), Some(Object::Bool(true)))))
+}
+
+/// Put the added item `r` under the page's own content. A white backdrop the page paints itself
+/// would hide it, so that is turned off first (see [`crate::backdrop`]). The item goes over the
+/// backgrounds, the watermarks put behind the page and the items put there before it, so
+/// repeated additions keep their order; on a page with no content of its own, a watermark on top
+/// can't be told apart from one behind, so the item goes over that too.
+fn place_behind(doc: &mut Document, p: &pdfcraft_model::Page, r: ObjRef) -> Result<(), EditError> {
+    crate::backdrop::replace(doc, p)?;
+    // Read again: replacing the backdrop may have changed the list.
+    let mut list = contents(doc, p)?;
+    let under = |o: &Object| {
+        behind_item(doc, o) || crate::place::stream_tag(doc, o).is_some_and(|t| t == MarkKind::Background.tag() || t == MarkKind::Watermark.tag())
+    };
+    let at = list.iter().take_while(|o| under(o)).count();
+    list.insert(at, Object::Ref(r));
+    doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), Object::Array(list)))?;
+    Ok(())
+}
+
+/// Turn the page's own backdrop back on once nothing on it needs it off (see
+/// [`crate::backdrop::keeps_backdrop_off`]); where that isn't safe it stays off, and
+/// [`crate::backdrops_left_off`] names the page.
+fn restore_backdrop(doc: &mut Document, p: &pdfcraft_model::Page) -> Result<(), EditError> {
+    let list = contents(doc, p)?;
+    if !crate::backdrop::keeps_backdrop_off(doc, &list) {
+        crate::backdrop::restore(doc, p)?;
+    }
+    Ok(())
 }
 
 /// Every added item, page by page, in drawing order.
@@ -265,8 +316,9 @@ pub fn list_added(doc: &Document) -> Vec<Added> {
 
 /// Add an item to a page (0-based). Returns its index among the page's added items.
 pub fn add_content(doc: &mut Document, page: usize, c: &Content) -> Result<usize, EditError> {
-    write(doc, page, c, None)?;
-    Ok(list_added(doc).iter().filter(|a| a.page == page).count() - 1)
+    let r = write(doc, page, c, None)?;
+    // Not always the last: an image behind the page content comes before the items on top.
+    list_added(doc).iter().filter(|a| a.page == page).position(|a| a.obj == r).ok_or_else(|| EditError::Invalid("could not add the content".into()))
 }
 
 fn find(doc: &Document, page: usize, index: usize) -> Result<Added, EditError> {
@@ -302,12 +354,17 @@ pub fn delete_content(doc: &mut Document, page: usize, index: usize) -> Result<(
         drop_fonts(doc, &mut r, &fonts);
         r
     });
+    let was_behind = behind_item(doc, &Object::Ref(a.obj));
     doc.update_dict(p.obj, |d| {
         d.set(b"Contents".to_vec(), Object::Array(list));
         if let Some(r) = res {
             d.set(b"Resources".to_vec(), Object::Dict(r));
         }
     })?;
+    if was_behind {
+        let p = page_list(doc).swap_remove(page);
+        restore_backdrop(doc, &p)?;
+    }
     Ok(())
 }
 

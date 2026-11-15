@@ -1750,3 +1750,28 @@ fn escape_closing_a_dialog_over_added_text_being_typed_keeps_the_typing() {
     let added = added(&h).iter().any(|a| matches!(&a.content, pdfcraft_engine::AddedContent::Text(t) if t.text.contains("Reviewed")));
     assert!(open || added, "the typing stays");
 }
+
+/// Edit image ▸ Behind text and images moves the selected image under the page content, which
+/// moves it in the page's list of added items: the selection follows it.
+#[test]
+fn putting_an_image_behind_the_text_keeps_it_selected() {
+    let mut h = harness();
+    let png = |shade: u8| {
+        let img = craft_image_codecs::Image::from_u8(30, 20, craft_image_codecs::ChannelLayout::Rgb, vec![shade; 1800]).unwrap();
+        craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap()
+    };
+    h.state_mut().add_image("first.png".into(), png(90));
+    h.run_steps(3);
+    h.state_mut().add_image("second.png".into(), png(200));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].content.selected, Some((0, 1)));
+    let second = added(&h)[1].obj;
+    h.get_by_label("Behind text and images").click();
+    h.run_steps(3);
+    let a = added(&h);
+    assert_eq!(a[0].obj, second, "behind the page content, it comes first");
+    assert!(matches!(&a[0].content, pdfcraft_engine::AddedContent::Image(i) if i.behind));
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)), "and stays selected");
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Edit content"));
+}

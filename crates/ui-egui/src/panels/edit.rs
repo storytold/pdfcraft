@@ -338,15 +338,51 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let image = app.active_ids().and_then(|(i, id)| {
         let (page, index) = app.views[i].content.selected?;
         let doc = app.session.get(id)?;
-        match &doc.added().iter().filter(|a| a.page == page).nth(index)?.content {
-            pdfcraft_engine::AddedContent::Image(img) => Some((page, index, img.clone())),
+        let item = doc.added().iter().filter(|a| a.page == page).nth(index)?;
+        match &item.content {
+            pdfcraft_engine::AddedContent::Image(img) => Some((i, id, page, index, item.obj, img.clone())),
             _ => None,
         }
     });
-    if let Some((page, index, img)) = image {
-        match crate::content_ui::image_panel(ui, t, &img) {
+    if let Some((view, id, page, index, obj, img)) = image {
+        // Only an image behind the content needs to know, and then once per edit.
+        let hidden = img.behind
+            && app.session.get(id).is_some_and(|doc| {
+                let key = (id, doc.edit_generation(), page);
+                let cache = &mut app.views[view].content.hidden_behind;
+                match *cache {
+                    Some((d, g, p, hidden)) if (d, g, p) == key => hidden,
+                    _ => {
+                        let hidden = doc.page_backdrop(page).is_some();
+                        *cache = Some((id, key.1, page, hidden));
+                        hidden
+                    }
+                }
+            });
+        match crate::content_ui::image_panel(ui, t, &img, hidden) {
             Some(crate::content_ui::ImageAction::Update(content)) => {
-                app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content });
+                let layer_changed = matches!(&content, pdfcraft_engine::AddedContent::Image(i) if i.behind != img.behind);
+                if app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content }) && layer_changed {
+                    // Behind or in front of the page content, the item moves in the page's list of
+                    // added items and of images: keep it selected in both. The image controller,
+                    // which the panel follows, selects by the page's image order.
+                    let doc = app.session.get(id);
+                    let moved = doc.and_then(|d| d.added().iter().filter(|a| a.page == page).position(|a| a.obj == obj));
+                    let images = doc.map(|d| d.page_images(page)).unwrap_or_default();
+                    let mut same = images.iter().enumerate().filter(|(_, i)| i.object == Some(img.image)).map(|(k, _)| k);
+                    let image_index = match (same.next(), same.next()) {
+                        (Some(k), None) => Some(k),
+                        _ => None,
+                    };
+                    if let Some(v) = app.views.get_mut(view) {
+                        if let Some(index) = moved {
+                            v.content.selected = Some((page, index));
+                        }
+                        if let (Some(k), Some(s)) = (image_index, v.image_selection.as_mut().filter(|s| s.page == page)) {
+                            s.index = k;
+                        }
+                    }
+                }
             }
             Some(crate::content_ui::ImageAction::Replace) => app.replace_image_dialog(page, index),
             None => {}
