@@ -265,7 +265,8 @@ impl Automation {
         let target = self.resolve(a.str("path")?, true)?;
         write_atomic(&target, csv.as_bytes())?;
         // The header is read as CSV: a name with a comma, a quote or a line break is one column.
-        let columns = craft_csv::records(&csv, ',', '"', 1, usize::MAX).first().map_or(0, Vec::len);
+        // Files without fields leave an empty header line: no columns.
+        let columns = if csv.starts_with('\n') { 0 } else { craft_csv::records(&csv, ',', '"', 1, usize::MAX).first().map_or(0, Vec::len) };
         Ok(json!({ "path": target.to_string_lossy(), "rows": files.len(), "columns": columns }))
     }
 
