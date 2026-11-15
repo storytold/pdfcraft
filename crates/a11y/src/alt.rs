@@ -638,17 +638,20 @@ fn parent_tree_entries(doc: &Document, page: &Dict) -> Result<Vec<(i64, NumsAt)>
     let mut found = Vec::new();
     let mut seen = HashSet::new();
     let mut stack = vec![(root, 0)];
+    // Every node taken counts, inline ones and repeated references too.
+    let mut read = 0usize;
     while let Some((node, depth)) = stack.pop() {
         if depth > PARENT_TREE_DEPTH {
             return Err("the parent tree is too deep".into());
+        }
+        read = read.saturating_add(1);
+        if read > PARENT_TREE_NODES {
+            return Err("the parent tree has too many nodes".into());
         }
         let (at, node) = match node {
             Object::Ref(r) => {
                 if !seen.insert(r) {
                     continue;
-                }
-                if seen.len() > PARENT_TREE_NODES {
-                    return Err("the parent tree has too many nodes".into());
                 }
                 (Some(r), doc.get(r).as_ref().clone())
             }

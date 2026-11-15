@@ -1279,6 +1279,18 @@ fn marking_a_tag_as_an_artifact_refuses_a_parent_tree_it_cannot_update_before_ch
 }
 
 #[test]
+fn inline_parent_tree_nodes_count_toward_the_node_limit() {
+    use pdfcraft_cos::{Dict, ObjRef, Object};
+    // More inline kids than the walk reads: refused, like as many indirect ones.
+    let mut doc = figures_doc();
+    let kids = Object::Array(vec![Object::Dict(Dict::new()); 1_000_001]);
+    doc.set(ObjRef::new(9, 0), Object::Dict([(b"Kids".to_vec(), kids)].into_iter().collect::<Dict>()));
+    let contents = page_contents(&doc);
+    assert!(matches!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::ParentTree(_))));
+    assert_eq!(page_contents(&doc), contents);
+}
+
+#[test]
 fn mark_tag_artifact_finds_named_property_lists_and_indirect_mcrs() {
     use pdfcraft_cos::{Dict, ObjRef, Object};
     let mut doc = named_figures_doc();
