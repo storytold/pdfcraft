@@ -449,12 +449,17 @@ fn unix_fonts(files: &'static [&'static str]) -> Vec<PathBuf> {
 }
 
 fn unix_candidates(files: &[&str], installed: &[PathBuf]) -> Vec<PathBuf> {
-    let mut paths: Vec<_> =
-        ["/usr/share/fonts", "/usr/local/share/fonts"].iter().flat_map(|dir| files.iter().map(move |f| Path::new(dir).join(f))).collect();
-    // Fontconfig may point into /nix/store or a user's font directory. Keep the existing
-    // candidate names and their preference order; this does not select arbitrary fonts.
+    let mut paths: Vec<PathBuf> = Vec::new();
     for file in files {
         let name = Path::new(file).file_name();
+        for dir in ["/usr/share/fonts", "/usr/local/share/fonts"] {
+            paths.push(Path::new(dir).join(file));
+        }
+        // Fontconfig may point into /nix/store or a user's font directory. Keep the existing
+        // candidate names and their preference order; this does not select arbitrary fonts.
+        // Installed copies of a file are tried right after that file's hardcoded locations,
+        // before the next candidate name, so a per-user face stays ahead of the collection
+        // that follows it in `files`.
         for path in installed.iter().filter(|p| p.file_name() == name) {
             if !paths.contains(path) {
                 paths.push(path.clone());
@@ -519,9 +524,17 @@ mod tests {
         let noto = PathBuf::from("/custom/fonts/NotoSansArabic-Regular.ttf");
         let dejavu = PathBuf::from("/nix/store/font/share/fonts/truetype/DejaVuSans.ttf");
         let installed = [dejavu.clone(), PathBuf::from("/custom/fonts/SourceHanSans.ttf"), noto.clone(), dejavu.clone()];
-        let mut expected = unix_candidates(&names, &[]);
-        expected.extend([noto, dejavu]);
-        assert_eq!(unix_candidates(&names, &installed), expected);
+        assert_eq!(
+            unix_candidates(&names, &installed),
+            vec![
+                Path::new("/usr/share/fonts").join("noto/NotoSansArabic-Regular.ttf"),
+                Path::new("/usr/local/share/fonts").join("noto/NotoSansArabic-Regular.ttf"),
+                noto.clone(),
+                Path::new("/usr/share/fonts").join("truetype/dejavu/DejaVuSans.ttf"),
+                Path::new("/usr/local/share/fonts").join("truetype/dejavu/DejaVuSans.ttf"),
+                dejavu.clone(),
+            ]
+        );
     }
 
     #[test]
@@ -586,13 +599,16 @@ mod tests {
         // The Simplified Chinese OTF face must be tried before the multi-language
         // Noto Sans CJK collection, whose first face is Japanese; otherwise
         // Simplified interface text can take Japanese glyph shapes from the
-        // collection.
+        // collection. The per-user OTF candidate exists only when LOCALAPPDATA is
+        // set on Windows; without it there is no ordering problem to assert.
         let sc_otf = list.iter().position(|p| p.file_name().is_some_and(|n| n == "NotoSansCJKsc-Regular.otf"));
         let ttc = list.iter().position(|p| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc"));
-        assert!(
-            sc_otf.is_some_and(|i| ttc.map_or(true, |j| i < j)),
-            "Simplified Chinese candidates must try NotoSansCJKsc-Regular.otf before NotoSansCJK-Regular.ttc: {list:?}"
-        );
+        if let Some(i) = sc_otf {
+            assert!(
+                ttc.map_or(true, |j| i < j),
+                "Simplified Chinese candidates must try NotoSansCJKsc-Regular.otf before NotoSansCJK-Regular.ttc: {list:?}"
+            );
+        }
     }
 
     /// `script_fallback` honours the documented installed-font switch, under which it returns
@@ -810,5 +826,32 @@ mod tests {
         let pos = |name: &str| list.iter().position(|p| p.ends_with(name));
         assert!(pos("STHeiti Medium.ttc") < pos("PingFangUI.ttc"));
         assert!(pos("PingFangUI.ttc").is_some());
+    }
+
+    #[test]
+    fn hans_candidates_include_noto_sans_cjk_review_regression_1_review_regression_1() {
+        // `unix_candidates` appends installed paths per file after every hardcoded
+        // path, so an installed NotoSansCJKsc-Regular.otf lands after the hardcoded
+        // NotoSansCJK-Regular.ttc. That breaks the Simplified-before-collection
+        // ordering `han_candidates` relies on on Unix.
+        let files = &["NotoSansCJKsc-Regular.otf", "NotoSansCJK-Regular.ttc"];
+        let installed = &[PathBuf::from("/custom/fonts/NotoSansCJKsc-Regular.otf")];
+        let list = unix_candidates(files, installed);
+        let sc_otf: Vec<usize> = list
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJKsc-Regular.otf"))
+            .map(|(i, _)| i)
+            .collect();
+        let ttc: Vec<usize> = list
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc"))
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            sc_otf.iter().all(|i| ttc.iter().all(|j| i < j)),
+            "every NotoSansCJKsc-Regular.otf candidate must precede every NotoSansCJK-Regular.ttc candidate: {list:?}"
+        );
     }
 }
