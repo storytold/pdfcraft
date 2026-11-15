@@ -48,6 +48,7 @@ fn field(name: &str, page: usize, rect: [f64; 4]) -> FormField {
         kind: FormFieldKind::Signature,
         value: Vec::new(),
         default: Vec::new(),
+        default_unread: false,
         flags: 0,
         max_len: None,
         options: Vec::new(),
