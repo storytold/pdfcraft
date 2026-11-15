@@ -2532,22 +2532,47 @@ fn style_bookmarks_go_to_the_displayed_heading_top_on_turned_pages() {
 /// #7415: on a turned page the headings are read in displayed order (top to bottom), a heading
 /// set on two lines is one bookmark, and each goes to the top of its first displayed line. One
 /// layout (two headings and a two-line heading, written to the file out of order) on pages turned
-/// 0, 90, 180 and 270 degrees must give the same bookmarks at the same displayed tops.
+/// 0, 90, 180 and 270 degrees must give the same bookmarks at the same displayed tops, with and
+/// without a crop box whose origin is not the page's.
 #[test]
 fn style_bookmarks_read_and_join_headings_as_displayed_on_turned_pages() {
-    // Displayed baselines (x, y from the top) on a 400 x 600 page, in an order that is not reading order.
+    for cropped in [false, true] {
+        let (mut s, id) = turned_headings_session(cropped);
+        let style = s.get(id).unwrap().text_styles()[0].style.clone();
+        s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![style] }).unwrap();
+        check_turned_headings(&s, id, cropped);
+        // The destinations survive a save and reopen (`/XYZ left null` on the quarter turns).
+        let bytes = s.save_bytes(id).unwrap();
+        let mut s2 = Session::new();
+        let id2 = s2.open("saved.pdf", None, bytes, None).unwrap();
+        check_turned_headings(&s2, id2, cropped);
+    }
+}
+
+/// A document of four pages turned 0, 90, 180 and 270, each showing the same three headings at the
+/// same displayed places on a displayed page of 400 x 600 (or 600 x 600 with `cropped`, where
+/// the crop box does not start at the page's origin), written in an order that is not reading order.
+fn turned_headings_session(cropped: bool) -> (Session, DocId) {
+    // Displayed baselines (x, y from the top).
     let lines = [("Gamma Three", 50.0, 450.0), ("Beta Cont", 50.0, 274.0), ("Alpha One", 50.0, 100.0), ("Beta Two", 50.0, 250.0)];
-    // (rotation, media box, text matrix prefix, user position of a displayed (x, y)).
+    // (rotation, page boxes, text matrix prefix, user position of a displayed (x, y)).
     type Place = fn(f64, f64) -> (f64, f64);
-    let turns: [(i32, &str, &str, Place); 4] = [
-        (0, "0 0 400 600", "1 0 0 1", |x, y| (x, 600.0 - y)),
-        (90, "0 0 600 400", "0 1 -1 0", |x, y| (y, x)),
-        (180, "0 0 400 600", "-1 0 0 -1", |x, y| (400.0 - x, y)),
-        (270, "0 0 600 400", "0 -1 1 0", |x, y| (600.0 - y, 400.0 - x)),
+    let plain: [(i32, &str, &str, Place); 4] = [
+        (0, "/MediaBox [0 0 400 600]", "1 0 0 1", |x, y| (x, 600.0 - y)),
+        (90, "/MediaBox [0 0 600 400]", "0 1 -1 0", |x, y| (y, x)),
+        (180, "/MediaBox [0 0 400 600]", "-1 0 0 -1", |x, y| (400.0 - x, y)),
+        (270, "/MediaBox [0 0 600 400]", "0 -1 1 0", |x, y| (600.0 - y, 400.0 - x)),
+    ];
+    let boxes = "/MediaBox [0 0 700 700] /CropBox [50 40 650 640]";
+    let crop: [(i32, &str, &str, Place); 4] = [
+        (0, boxes, "1 0 0 1", |x, y| (50.0 + x, 640.0 - y)),
+        (90, boxes, "0 1 -1 0", |x, y| (50.0 + y, 40.0 + x)),
+        (180, boxes, "-1 0 0 -1", |x, y| (650.0 - x, 40.0 + y)),
+        (270, boxes, "0 -1 1 0", |x, y| (650.0 - y, 640.0 - x)),
     ];
     let mut pdf =
         pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R 9 0 R] /Count 4 >>");
-    for (i, (rotate, media, prefix, place)) in turns.iter().enumerate() {
+    for (i, (rotate, boxes, prefix, place)) in (if cropped { crop } else { plain }).iter().enumerate() {
         let content: String = lines
             .iter()
             .map(|(text, x, y)| {
@@ -2557,7 +2582,7 @@ fn style_bookmarks_read_and_join_headings_as_displayed_on_turned_pages() {
             .collect();
         pdf = pdf
             .obj(format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [{media}] /Rotate {rotate} /Resources << /Font << /F1 11 0 R >> >> /Contents {} 0 R >>",
+                "<< /Type /Page /Parent 2 0 R {boxes} /Rotate {rotate} /Resources << /Font << /F1 11 0 R >> >> /Contents {} 0 R >>",
                 4 + 2 * i
             ))
             .stream("", &content);
@@ -2565,22 +2590,25 @@ fn style_bookmarks_read_and_join_headings_as_displayed_on_turned_pages() {
     let bytes = pdf.obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>").build();
     let mut s = Session::new();
     let id = s.open("turned.pdf", None, Arc::new(bytes), None).unwrap();
-    let style = s.get(id).unwrap().text_styles()[0].style.clone();
-    s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![style] }).unwrap();
+    (s, id)
+}
+
+/// The bookmarks of [`turned_headings_session`] after "from text styles": displayed order, the
+/// two-line heading joined, each at the displayed top of its first line.
+fn check_turned_headings(s: &Session, id: DocId, cropped: bool) {
     let doc = s.get(id).unwrap();
     let kids = &doc.info.outline[0].children;
     let titles: Vec<_> = kids.iter().map(|k| k.title.as_str()).collect();
     let per_page = ["Alpha One", "Beta Two Beta Cont", "Gamma Three"];
-    assert_eq!(titles, per_page.repeat(4), "displayed order, the two-line heading joined");
-    // The displayed tops of the three bookmarks, from the upright page.
-    let tops: Vec<f32> = kids[..3]
-        .iter()
-        .map(|k| match k.view {
-            pdfcraft_render::DestView::Xyz { left: None, top: Some(t), .. } => doc.info.pages[0].crop[3] - t,
-            ref v => panic!("{v:?}"),
-        })
-        .collect();
-    assert!(tops[0] < tops[1] && tops[1] < tops[2], "{tops:?}");
+    assert_eq!(titles, per_page.repeat(4), "displayed order, the two-line heading joined (cropped: {cropped})");
+    // The displayed tops of the three headings, from the text of the upright page.
+    let cos = pdfcraft_cos::Document::open(doc.bytes.clone()).unwrap();
+    let upright = &doc.info.pages[0];
+    let mut found: Vec<_> =
+        pdfcraft_edit::text_lines(&cos, 0).unwrap().into_iter().map(|l| upright.user_to_view(0.0, l.rect[3].max(l.rect[1]) as f32)[1]).collect();
+    found.sort_by(f32::total_cmp);
+    // Alpha, Beta Two (the upper line of its heading), Gamma: three of the four lines.
+    let tops = [found[0], found[1], found[3]];
     for (i, kid) in kids.iter().enumerate() {
         let (page, n) = (&doc.info.pages[i / 3], i % 3);
         let [want_left, want_top] = page.xyz_for_view(None, Some(tops[n]));
@@ -2593,7 +2621,7 @@ fn style_bookmarks_read_and_join_headings_as_displayed_on_turned_pages() {
             pdfcraft_render::DestView::Xyz { left, top, .. } => {
                 assert!(
                     near(left, want_left) && near(top, want_top),
-                    "rotate {} {}: got {left:?} {top:?}, want {want_left:?} {want_top:?}",
+                    "rotate {} {} (cropped: {cropped}): got {left:?} {top:?}, want {want_left:?} {want_top:?}",
                     page.rotation,
                     kid.title
                 )
