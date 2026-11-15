@@ -52,8 +52,10 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   draws the whole page into the image, so the rows cleared wouldn't be the ones shown) or of more
   than one bit or component, and Group 3 on bytes (`/K` 0 or more, `/EncodedByteAlign`): PdfCraft's
   renderer draws some of its layouts (the fill ending each end-of-line code on a byte) as other
-  rows than the decoder reads, so a mark over what is shown needn't cover what is cleared; inline images under an area are removed. Images with separate `/SMask`
-  or `/Mask` data, and images whose data decodes to more than three times their declared raster
+  rows than the decoder reads, so a mark over what is shown needn't cover what is cleared; inline images under an area are removed. An image's `/SMask` and
+  `/Mask` stream are cleared under the same marks, each at its own resolution, and the copy points
+  at the cleared masks (a colour-key `/Mask` array has no samples and stays); a mask that can't be
+  cleared, or that has a mask of its own, removes the whole image. Images whose data decodes to more than three times their declared raster
   and a byte per row, plus 4 KiB (ASCIIHex text broken into lines under Flate is a little over
   twice; for a fax image's code, about a byte per pixel), are removed whole;
   cleared copies drop `/Alternates` so alternate pixels cannot survive;
