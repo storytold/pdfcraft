@@ -135,6 +135,35 @@ fn a_font_file3_open_type_program_with_true_type_outlines_draws_as_true_type() {
     assert!(file2 == reference, "/OpenType with a FontFile2 drew another face than its program");
 }
 
+/// A `FontFile3 /OpenType` program with TrueType outlines behind Flate and a PNG predictor
+/// (ISO 32000-2 §7.4.4.4), or behind two filters (§7.3.8.2), draws as TrueType: its sfnt tag is
+/// read from the decoded program, where the predictor gives nothing from the first four inflated
+/// bytes because a row is 16 bytes long.
+#[test]
+fn a_predicted_true_type_program_is_still_read_as_true_type() {
+    use flate2::{Compression, write::ZlibEncoder};
+    use std::io::Write;
+
+    let reference = pixels(font_page("TrueType", Some((TRUE_TYPE, "FontFile2", ""))));
+    let mut program = TRUE_TYPE.to_vec();
+    program.resize(TRUE_TYPE.len().div_ceil(16) * 16, 0);
+    let rows: Vec<u8> = program.chunks(16).flat_map(|row| std::iter::once(0).chain(row.iter().copied())).collect();
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&rows).unwrap();
+    let encoded = encoder.finish().unwrap();
+    let subtype = "OpenType /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 16 >>";
+    for font_subtype in ["OpenType", "TrueType"] {
+        let rgba = pixels(font_page(font_subtype, Some((&encoded, "FontFile3", subtype))));
+        assert!(rgba == reference, "/{font_subtype} with a predicted FontFile3 /OpenType drew another face than its program");
+    }
+    // A filter after another: four hex digits give two bytes of the zlib stream, too few to inflate.
+    let mut hex: Vec<u8> = encoded.iter().flat_map(|b| format!("{b:02X}").into_bytes()).collect();
+    hex.push(b'>');
+    let chain = "OpenType /Filter [/ASCIIHexDecode /FlateDecode] /DecodeParms [null << /Predictor 12 /Columns 16 >>]";
+    let rgba = pixels(font_page("OpenType", Some((&hex, "FontFile3", chain))));
+    assert!(rgba == reference, "a FontFile3 /OpenType behind two filters drew another face than its program");
+}
+
 /// A `/Subtype /OpenType` font with an unreadable CFF program, or with no program, still draws
 /// a stand-in rather than failing the page.
 #[test]

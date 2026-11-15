@@ -905,7 +905,10 @@ pub(crate) const TRUE_TYPE_SFNT_TAGS: [&[u8]; 3] = [&[0, 1, 0, 0], b"true", b"tt
 /// PdfCraft patch (111): whether a font descriptor embeds a CFF or Type 1 program rather than
 /// TrueType outlines: a `FontFile`, or a `FontFile3` (`Type1C`, or `OpenType` with a "CFF "
 /// table: ISO 32000-2 §9.9, Table 124) that doesn't begin with a TrueType sfnt tag. A
-/// `FontFile2` is TrueType. Decoding stops after the tag where the program's filters allow.
+/// `FontFile2` is TrueType. Decoding stops after the tag where the program's filters allow:
+/// each filter stops at four bytes, so when that leaves fewer than four (a PNG predictor that
+/// needs a whole row, or a filter after one whose output was cut short) the program is decoded
+/// again within the usual stream limit.
 fn embeds_cff_or_type1_program(dict: &Dict<'_>) -> bool {
     let Some(descriptor) = dict.get::<Dict<'_>>(FONT_DESC) else {
         return false;
@@ -918,7 +921,13 @@ fn embeds_cff_or_type1_program(dict: &Dict<'_>) -> bool {
     }
     descriptor
         .get::<Stream<'_>>(FONT_FILE3)
-        .and_then(|program| program.decoded_within(4).ok())
+        .and_then(|program| {
+            program
+                .decoded_within(4)
+                .ok()
+                .filter(|head| head.len() >= 4)
+                .or_else(|| program.decoded().ok())
+        })
         .is_some_and(|head| !TRUE_TYPE_SFNT_TAGS.iter().any(|tag| head.starts_with(tag)))
 }
 
