@@ -36,12 +36,20 @@ workspace and Save target stay selected. Click the downloaded file's tab to swit
   the server send `Content-Encoding: br`.
 - **Caching:** `Cache-Control: public, max-age=31536000, immutable` on the hashed `.wasm` and
   `.js` files, and `no-cache` on `index.html`.
-- **HTTPS:** the clipboard only works in a secure context, which means `https://`
-  or `http://localhost`.
-- **No special isolation headers:** PdfCraft doesn't use `SharedArrayBuffer`, so it doesn't
-  need `Cross-Origin-Opener-Policy` or `Cross-Origin-Embedder-Policy`. If your site already sends
-  COEP `require-corp`, also send `Cross-Origin-Resource-Policy: same-origin` (or `cross-origin`
-  when the files live on a CDN) on the app's files.
+- **HTTPS:** the clipboard only works in a secure context, such as `https://` or
+  `http://localhost`. When embedded, every ancestor page must also be a secure context;
+  an HTTPS iframe inside an ordinary HTTP page cannot use the clipboard.
+- **Opener isolation:** send `Cross-Origin-Opener-Policy: same-origin` (the sample `_headers`
+  and `.htaccess` do; Apache needs `mod_headers` for it). Pages opened from a document's links
+  then can't reach or navigate the PdfCraft tab. The app opens links with `noopener` already;
+  the header also cuts the opener for pages on another origin opened by any other means. A page
+  on the same origin that sends the same policy keeps its opener. The header has no effect
+  inside an iframe, so the embedding bridge below is unaffected, but a page on another origin
+  that opens PdfCraft with `window.open` loses its handle to that window.
+- **No cross-origin isolation:** PdfCraft doesn't use `SharedArrayBuffer`, so it doesn't need
+  `Cross-Origin-Embedder-Policy`. If your site already sends COEP `require-corp`, also send
+  `Cross-Origin-Resource-Policy: same-origin` (or `cross-origin` when the files live on a CDN) on
+  the app's files.
 
 nginx example:
 
@@ -50,8 +58,10 @@ location /pdfcraft/ {
     types { application/wasm wasm; text/javascript js; text/html html; }
     gzip on;
     gzip_types application/wasm text/javascript text/html;
+    add_header Cross-Origin-Opener-Policy "same-origin";
     location ~* \.(wasm|js)$ { add_header Cache-Control "public, max-age=31536000, immutable"; }
-    location ~* index\.html$ { add_header Cache-Control "no-cache"; }
+    # A location with its own add_header drops the outer ones, so the page repeats COOP.
+    location ~* index\.html$ { add_header Cache-Control "no-cache"; add_header Cross-Origin-Opener-Policy "same-origin"; }
 }
 ```
 
@@ -172,8 +182,10 @@ Opening a PDF, handing a saved or exported file to the page, the file name and t
 
 ## Renderer
 
-The web app selects eframe's **Glow (WebGL)** renderer. Startup errors are written to the
-browser console and reported to a connected host through `pdfcraft:failed`.
+The web app selects eframe's **Glow (WebGL)** renderer. Errors from `WebRunner::start` are
+written to the browser console and reported to a connected host through `pdfcraft:failed`.
+Downloading or initializing Wasm can fail before Rust starts, so those failures do not send
+`pdfcraft:failed`. Same-document hosts must also catch rejections from `init(...)`.
 
 The build uses WebAssembly SIMD (`.cargo/config.toml`), which reads a scanned page about 2.4
 times faster. Every current browser has it (Chrome and Edge 91, Firefox 89, Safari 16.4 and
