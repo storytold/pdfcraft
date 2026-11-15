@@ -37,7 +37,7 @@ craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.
 craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3", features = ["cos", "crypt", "filters"] }
 # The writer the RTF export maps onto (storytold/craft-libs#793), at storytold/craft-libs#1467:
 # its font and colour lookups take constant time, as PdfCraft's own writer did.
-craft-rtf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "74495a579ad1247a149229d5b4185467aaa33f00" }
+craft-rtf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "14b2ebb7c2dda180e026037395abbefe48109eb5" }
 craft-csv = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-xml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-image-codecs = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
