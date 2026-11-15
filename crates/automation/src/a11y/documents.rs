@@ -28,13 +28,28 @@ impl Automation {
         Ok(out)
     }
 
+    /// The level `pdfa_convert` makes: 2b unless `level` says 3b. Save as PDF/A doesn't make
+    /// PDF/A-4 files, so their levels are refused here rather than accepted and left unchanged.
     fn pdfa_level(&self, a: &Args) -> Result<pdfcraft_engine::pdfa::Level> {
         let l = a.opt_str("level")?.unwrap_or("2b");
-        pdfcraft_engine::pdfa::Level::from_id(l).ok_or_else(|| ToolError::InvalidArgs(format!("unknown PDF/A level {l:?} (2b or 3b)")))
+        pdfcraft_engine::pdfa::Level::from_id(l)
+            .filter(|level| level.part() != 4)
+            .ok_or_else(|| ToolError::InvalidArgs(format!("unknown PDF/A level {l:?} (2b or 3b)")))
+    }
+
+    /// The level `pdfa_verify` checks: `level` when given (2b, 3b, 4, 4e or 4f), else the level the
+    /// document declares when it is one of those, else 2b.
+    fn pdfa_verify_level(&self, a: &Args) -> Result<pdfcraft_engine::pdfa::Level> {
+        use pdfcraft_engine::pdfa::Level;
+        if let Some(l) = a.opt_str("level")? {
+            return Level::from_id(l).ok_or_else(|| ToolError::InvalidArgs(format!("unknown PDF/A level {l:?} (2b, 3b, 4, 4e or 4f)")));
+        }
+        let declared = self.doc(a)?.standards().pdfa;
+        Ok(declared.and_then(|(part, conformance)| Level::from_declared(part, &conformance)).unwrap_or(Level::A2b))
     }
 
     pub(crate) fn pdfa_verify(&self, a: &Args) -> Result<Value> {
-        let level = self.pdfa_level(a)?;
+        let level = self.pdfa_verify_level(a)?;
         let doc = self.doc(a)?;
         let issues: Vec<Value> = doc
             .pdfa_verify(level)

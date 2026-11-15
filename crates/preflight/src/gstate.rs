@@ -3,6 +3,7 @@
 //!
 //! - no transfer function: no `/TR` entry, and `/TR2` only as `/Default` (ISO 32000-1 10.4);
 //! - no `/HTP` (halftone phase) entry, a PDF 1.2 key ISO 32000-1 no longer defines;
+//!   PDF/A-4 asks the same of `/HTO`, the halftone origin PDF 2.0 put in its place;
 //! - halftones of type 1 or 5 only, without a `/HalftoneName` (ISO 32000-1 10.5.5); the halftones
 //!   a type 5 halftone holds for its colorants are checked the same way;
 //! - a halftone's `/TransferFunction` only where one is needed: a type 5 halftone's component for
@@ -44,6 +45,8 @@ pub(crate) struct Findings {
     pub(crate) transfer2: bool,
     /// A graphics state has an `/HTP`.
     pub(crate) phase: bool,
+    /// A graphics state has an `/HTO`, PDF 2.0's halftone origin (ISO 32000-2 Table 57).
+    pub(crate) origin: bool,
     /// Halftone types other than 1 and 5, in order.
     pub(crate) halftone_types: BTreeSet<i64>,
     /// A halftone's `/HalftoneType` is missing or isn't an integer.
@@ -179,6 +182,9 @@ impl Scan<'_> {
         }
         if self.present(gs, b"HTP").is_some() {
             self.findings.phase = true;
+        }
+        if self.present(gs, b"HTO").is_some() {
+            self.findings.origin = true;
         }
         if let Some(ht) = self.present(gs, b"HT")
             && let Some(ht) = ht.as_dict()

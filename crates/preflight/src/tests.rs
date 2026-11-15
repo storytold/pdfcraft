@@ -79,7 +79,9 @@ fn verify_reports_what_breaks_pdfa() {
 /// what this reads off the file; the sentences `convert` reports as fixed are not wordings.
 #[test]
 fn wordings_are_complete() {
-    let source = include_str!("lib.rs");
+    // PDF/A-4's own rules report through the same `issue` from `part4.rs`.
+    let source = [include_str!("lib.rs"), include_str!("part4.rs")].concat();
+    let source = source.as_str();
     let mut said = Vec::new();
     let mut rest = source;
     // `issue(` and `located_issue(`, written on one line or, when rustfmt breaks it, on several.

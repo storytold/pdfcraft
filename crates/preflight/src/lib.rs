@@ -1,7 +1,8 @@
 //! pdfcraft-preflight — Standards: PDF/A (L4).
 //!
 //! [`verify`] checks a document against the parts of ISO 19005-2/-3 (PDF/A-2b, PDF/A-3b) that can
-//! be decided from the object graph:
+//! be decided from the object graph, and against the same rules as ISO 19005-4 (PDF/A-4, 4e and
+//! 4f) words them, with that part's own (see `part4.rs`):
 //!
 //! - identification: XMP metadata with `pdfaid:part` and `pdfaid:conformance`, consistent with
 //!   the document information dictionary;
@@ -27,6 +28,7 @@ mod gstate;
 mod header;
 pub mod icc;
 mod limits;
+mod part4;
 mod spot;
 mod trailer;
 mod transparency;
@@ -37,10 +39,16 @@ mod xmp_types;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 /// The PDF/A part and conformance level.
+///
+/// The PDF/A-4 levels (ISO 19005-4: PDF/A-4, 4e and 4f) are verified only: [`convert`] changes
+/// nothing for them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
     A2b,
     A3b,
+    A4,
+    A4e,
+    A4f,
 }
 
 impl Level {
@@ -48,6 +56,7 @@ impl Level {
         match self {
             Level::A2b => 2,
             Level::A3b => 3,
+            Level::A4 | Level::A4e | Level::A4f => 4,
         }
     }
 
@@ -55,6 +64,9 @@ impl Level {
         match self {
             Level::A2b => "PDF/A-2b",
             Level::A3b => "PDF/A-3b",
+            Level::A4 => "PDF/A-4",
+            Level::A4e => "PDF/A-4e",
+            Level::A4f => "PDF/A-4f",
         }
     }
 
@@ -62,6 +74,22 @@ impl Level {
         match id.to_ascii_lowercase().replace(['/', '-', ' '], "").as_str() {
             "pdfa2b" | "a2b" | "2b" => Some(Level::A2b),
             "pdfa3b" | "a3b" | "3b" => Some(Level::A3b),
+            "pdfa4" | "a4" | "4" => Some(Level::A4),
+            "pdfa4e" | "a4e" | "4e" => Some(Level::A4e),
+            "pdfa4f" | "a4f" | "4f" => Some(Level::A4f),
+            _ => None,
+        }
+    }
+
+    /// The level a document declares, as [`declared`] reads it (`pdfaid:part` and the
+    /// `pdfaid:conformance` it upper-cases), when it is one [`verify`] checks.
+    pub fn from_declared(part: u8, conformance: &str) -> Option<Level> {
+        match (part, conformance) {
+            (2, "B") => Some(Level::A2b),
+            (3, "B") => Some(Level::A3b),
+            (4, "") => Some(Level::A4),
+            (4, "E") => Some(Level::A4e),
+            (4, "F") => Some(Level::A4f),
             _ => None,
         }
     }
@@ -78,7 +106,8 @@ impl Level {
 /// [`Issue::said`] does that.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Issue {
-    /// The ISO 19005-2 clause.
+    /// The ISO 19005 clause: as part 2 numbers it for PDF/A-2 and 3 (which number them alike), as
+    /// part 4 does for PDF/A-4.
     pub clause: &'static str,
     pub message: String,
     /// The problem as it is worded here, with `{}` or a named hole where the document's own name goes.
@@ -222,6 +251,47 @@ pub const WORDINGS: &[&str] = &[
     "PostScript XObjects aren't allowed",
     "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)",
     "An embedded file has no AFRelationship",
+    // PDF/A-4's own.
+    "The metadata has no pdfaid:rev",
+    "The metadata gives pdfaid:rev as {}, not 2020",
+    "The identification property {} isn't written with the prefix pdfaid",
+    "The file doesn't start with a %PDF-2.0 to %PDF-2.9 header line",
+    "The trailer names a document information dictionary (Info), but the catalog has no PieceInfo",
+    "The document information dictionary holds {}: only ModDate is allowed",
+    "The catalog gives the version {}, not 2.0 to 2.9",
+    "The document's additional actions (/AA) use the trigger {}, which PDF/A-4 doesn't allow",
+    "A page's additional actions use the trigger {}, which PDF/A-4 doesn't allow",
+    "A {} annotation's additional actions use a trigger PDF/A-4 doesn't allow",
+    "A graphics state uses the blend mode {}, which ISO 32000-2 doesn't define",
+    "A graphics state has a halftone origin (HTO)",
+    "A PDF/A-4f file needs embedded files listed in the catalog's name dictionary (EmbeddedFiles)",
+    "Embedded files must be PDF/A-1, PDF/A-2 or PDF/A-4 files themselves (use PDF/A-4f for others)",
+    "An embedded file's file specification lacks F or UF",
+    "An embedded file has no MIME type (Subtype)",
+    "A {} annotation's appearance dictionary holds more than N",
+    "A widget annotation has an action (A)",
+    "A form XObject has OPI information",
+    "A form XObject refers to another file (Ref)",
+    "The permissions dictionary holds {}: only UR3 and DocMDP are allowed",
+    "The form has an XFA form (XFA)",
+    "The catalog asks for its XFA form to be rendered (NeedsRendering)",
+    "The document has alternate presentations (AlternatePresentations)",
+    "The catalog has requirements (Requirements)",
+    "A page has presentation steps (PresSteps)",
+    "An optional content configuration has no Name",
+    "Two optional content configurations have the same Name",
+    "The metadata stream isn't marked /Type /Metadata /Subtype /XML",
+    "The XMP metadata isn't UTF-8",
+    "The XMP metadata isn't well-formed XML",
+    "The XMP packet header has a bytes or encoding attribute",
+    "An output intent names an external profile (DestOutputProfileRef)",
+    "The output intents have different destination profiles",
+    "Data follows the last end-of-file marker (%%EOF)",
+    "A 3D stream's Subtype isn't U3D or PRC",
+    "A button's normal appearance isn't a dictionary of appearance states",
+    "The PDF/A output intent's profile isn't an output or monitor profile of gray, RGB or CMYK",
+    "A stream uses the filter {}, which ISO 32000-2 doesn't define",
+    "A stream uses the Crypt filter with a crypt filter other than Identity",
 ];
 
 /// What a document declares (the Standards panel).
@@ -337,8 +407,13 @@ fn dict_of(o: &Object) -> Option<&Dict> {
 /// a null or missing profile describes no colour, so it doesn't stand in for a blending colour
 /// space (6.2.10).
 fn pdfa_intent_has_profile(doc: &Document) -> bool {
-    let cat = catalog(doc);
-    let list = cat.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
+    pdfa_intent_in(doc, &catalog(doc))
+}
+
+/// Whether the dictionary `holder` (the catalog, or a page) lists a PDF/A output intent with a
+/// profile stream.
+fn pdfa_intent_in(doc: &Document, holder: &Dict) -> bool {
+    let list = holder.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
     list.iter().any(|oi| {
         let oi = doc.resolve(oi);
         let Some(d) = oi.as_dict() else { return false };
@@ -357,8 +432,12 @@ const MAX_ICC_PROFILE: usize = 16 << 20;
 /// components (`/N`, else the ICC header's data colour space; `None` when neither says), or
 /// `None` when the document has no PDF/A output intent.
 fn pdfa_intent_profile(doc: &Document) -> Option<Option<i64>> {
-    let cat = catalog(doc);
-    let list = cat.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
+    pdfa_intent_profile_in(doc, &catalog(doc))
+}
+
+/// [`pdfa_intent_profile`] for the output intents of `holder`: the catalog, or a page.
+fn pdfa_intent_profile_in(doc: &Document, holder: &Dict) -> Option<Option<i64>> {
+    let list = holder.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
     list.iter().find_map(|oi| {
         let d = doc.resolve(oi).as_dict().cloned()?;
         if d.name(b"S") != Some(b"GTS_PDFA1") {
@@ -657,20 +736,29 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     };
     // Each problem is worded here and named by the document there: the wording goes on the list in
     // `WORDINGS` for an interface to translate, and the name goes in its `{}` as it stands.
+    // PDF/A-4 cites its own clause numbers, and Save as PDF/A doesn't make PDF/A-4 files, so nothing
+    // is fixable for it.
+    let part4 = level.part() == 4;
+    let cite = |clause: &'static str| if part4 { part4::clause(clause) } else { clause };
     let mut issue = |clause: &'static str, pattern: &'static str, value: Option<String>, page: Option<usize>, fixable: bool| {
+        let (clause, fixable) = (cite(clause), fixable && !part4);
         let message = fill(pattern, value.as_deref(), &[]);
         push(Issue { clause, message, pattern, value, values: Vec::new(), page, object: None, fixable });
     };
     // A problem in one indirect object, worded with named holes.
     let located_issue = |clause: &'static str, pattern: &'static str, values: Vec<(&'static str, String)>, object: ObjRef, fixable: bool| {
+        let (clause, fixable) = (cite(clause), fixable && !part4);
         let message = fill(pattern, None, &values);
         push(Issue { clause, message, pattern, value: None, values, page: None, object: Some(object), fixable });
     };
     check_identification(doc, level, &mut issue);
     let objs = objects(doc);
-    check_xmp_packets(&objs, &located_issue);
-    check_output_intent(doc, &objs, &mut issue);
-    check_catalog_actions(doc, &mut issue);
+    // PDF/A-4 dropped the value types and extension schemas of XMP properties.
+    if !part4 {
+        check_xmp_packets(&objs, &located_issue);
+    }
+    check_output_intent(doc, level, &objs, &mut issue);
+    check_catalog_actions(doc, level, &mut issue);
     // Pages: annotations and page actions.
     let pages = pdfcraft_model::pages(doc);
     // Each annotation's page: the first page that lists it.
@@ -688,16 +776,31 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     let page_of = |r: ObjRef| annot_pages.get(&r).copied();
     for (i, p) in pages.iter().enumerate() {
-        if p.dict.get(b"AA").is_some() {
-            issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true);
+        match p.dict.get(b"AA") {
+            Some(aa) if part4 => {
+                if let Some(trigger) = part4::forbidden_trigger(doc, aa) {
+                    issue("6.5.2", "A page's additional actions use the trigger {}, which PDF/A-4 doesn't allow", Some(trigger), Some(i), false);
+                }
+            }
+            Some(_) => issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true),
+            None => {}
+        }
+        if part4 {
+            part4::page(&p.dict, i, &mut issue);
         }
     }
-    check_transparency(doc, &pages, &mut issue);
+    check_transparency(doc, level, &pages, &mut issue);
     let drawing = drawing_fonts(doc, &objs);
     check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
-    check_limits(doc, &objs, &pages, &mut issue);
+    // PDF/A-4 has no implementation limits of its own: ISO 32000-2 sets none.
+    if !part4 {
+        check_limits(doc, &objs, &pages, &mut issue);
+    }
     check_spots(doc, &objs, &mut issue);
-    check_graphics_states(doc, &mut issue);
+    check_graphics_states(doc, level, &mut issue);
+    if level == Level::A4f {
+        part4::embedded_files_named(doc, &catalog(doc), &mut issue);
+    }
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
     let mut out = out.into_inner();
     let mut seen = std::collections::HashSet::new();
@@ -707,10 +810,11 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
 
 /// 6.1.2, 6.1.3 and 6.6: identification and metadata, the file header, the file identifier and
 /// encryption.
-fn check_identification(doc: &Document, level: Level, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+fn check_identification(doc: &Document, level: Level, issue: &mut dyn FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
     // 6.1.3 / 6.6: identification and metadata.
     match metadata(doc) {
         None => issue("6.6.2.1", "The document has no XMP metadata", None, None, true),
+        Some(x) if level.part() == 4 => part4::identification(&x, level, issue),
         Some(x) => {
             let part = xmp::identifier(&x, xmp::PDFA_ID, "part");
             let conf = xmp::identifier(&x, xmp::PDFA_ID, "conformance");
@@ -725,8 +829,10 @@ fn check_identification(doc: &Document, level: Level, issue: &mut impl FnMut(&'s
         }
     }
     // 6.1.2: the file header.
-    let header = header::check(doc);
-    if header.version {
+    let header = header::check(doc, level.part() == 4);
+    if header.version && level.part() == 4 {
+        issue("6.1.2", "The file doesn't start with a %PDF-2.0 to %PDF-2.9 header line", None, None, false);
+    } else if header.version {
         issue("6.1.2", "The file doesn't start with a %PDF-1.0 to %PDF-1.7 header line", None, None, true);
     }
     if header.comment {
@@ -742,6 +848,9 @@ fn check_identification(doc: &Document, level: Level, issue: &mut impl FnMut(&'s
     }
     if doc.trailer().get(b"Encrypt").is_some() {
         issue("6.1.3", "The document is encrypted", None, None, true);
+    }
+    if level.part() == 4 {
+        part4::document(doc, &catalog(doc), issue);
     }
 }
 
@@ -871,16 +980,38 @@ fn report_xmp_extension(
 /// 6.2.3 and 6.2.4.3: the output intent device colour needs.
 fn check_output_intent(
     doc: &Document,
+    level: Level,
     objs: &[(ObjRef, std::sync::Arc<Object>)],
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
     let used = uses_device_colour(doc, objs);
-    if used.incomplete {
+    // PDF/A-4 says what device colour needs under 6.2.4.3, and keeps 6.2.3 for the output intent
+    // itself.
+    let part4 = level.part() == 4;
+    if used.incomplete && part4 {
+        issue("6.2.4.3", "Some content could not be read for device colour", None, None, false);
+    } else if used.incomplete {
         issue("6.2.3", "Some content could not be read for device colour", None, None, false);
     }
-    match pdfa_intent_profile(doc) {
+    let mut intent = pdfa_intent_profile(doc);
+    // PDF/A-4 takes a page's own PDF/A output intent (ISO 32000-2 14.11.5) where the document has
+    // none. Device colour is judged for the document as a whole, so that holds when every page has
+    // one; pages whose profiles differ in their components leave the components unknown.
+    if intent.is_none() && part4 {
+        let pages = pdfcraft_model::pages(doc);
+        let profiles: Option<Vec<Option<i64>>> = pages.iter().map(|p| pdfa_intent_profile_in(doc, &p.dict)).collect();
+        if let Some(profiles) = profiles.filter(|p| !p.is_empty()) {
+            let first = profiles.first().copied().flatten();
+            intent = Some(if profiles.iter().all(|n| *n == first) { first } else { None });
+        }
+    }
+    match intent {
         None if used.any() => {
-            issue("6.2.3", "Device colour is used, but there is no PDF/A output intent", None, None, !used.cmyk);
+            if part4 {
+                issue("6.2.4.3", "Device colour is used, but there is no PDF/A output intent", None, None, false);
+            } else {
+                issue("6.2.3", "Device colour is used, but there is no PDF/A output intent", None, None, !used.cmyk);
+            }
             if used.cmyk {
                 issue("6.2.4.3", "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)", None, None, false);
             }
@@ -898,13 +1029,21 @@ fn check_output_intent(
     }
 }
 
-fn check_catalog_actions(doc: &Document, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
-    // 6.1.3 / 6.6.1: catalog actions.
+fn check_catalog_actions(doc: &Document, level: Level, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    // 6.1.3 / 6.6.1: catalog actions. PDF/A-4 allows JavaScript and some additional actions.
     let cat = catalog(doc);
-    if cat.get(b"AA").is_some() {
-        issue("6.5.2", "The document has additional actions (/AA)", None, None, true);
+    let part4 = level.part() == 4;
+    match cat.get(b"AA") {
+        Some(aa) if part4 => {
+            if let Some(trigger) = part4::forbidden_trigger(doc, aa) {
+                issue("6.5.2", "The document's additional actions (/AA) use the trigger {}, which PDF/A-4 doesn't allow", Some(trigger), None, false);
+            }
+        }
+        Some(_) => issue("6.5.2", "The document has additional actions (/AA)", None, None, true),
+        None => {}
     }
-    if let Some(names) = cat.get(b"Names").map(|n| doc.resolve(n))
+    if !part4
+        && let Some(names) = cat.get(b"Names").map(|n| doc.resolve(n))
         && names.as_dict().is_some_and(|n| n.get(b"JavaScript").is_some())
     {
         issue("6.5.1", "The document has document-level JavaScript", None, None, true);
@@ -934,6 +1073,7 @@ pub fn page_uses_transparency(doc: &Document, page: &Dict) -> bool {
 
 fn check_transparency(
     doc: &Document,
+    level: Level,
     pages: &[pdfcraft_model::Page],
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
@@ -945,9 +1085,16 @@ fn check_transparency(
     for (i, p) in pages.iter().enumerate() {
         let painting = transparency::page_painting(doc, &p.dict, &mut shared);
         for name in painting.unknown_blend_modes {
-            issue("6.2.10", "A graphics state uses the blend mode {}, which ISO 32000-1 doesn't define", Some(name), Some(i), false);
+            if level.part() == 4 {
+                issue("6.2.10", "A graphics state uses the blend mode {}, which ISO 32000-2 doesn't define", Some(name), Some(i), false);
+            } else {
+                issue("6.2.10", "A graphics state uses the blend mode {}, which ISO 32000-1 doesn't define", Some(name), Some(i), false);
+            }
         }
-        if painting.transparency && !intent && !transparency::page_names_blending_space(doc, &p.dict) {
+        // PDF 2.0 lets a page carry its own output intents (ISO 32000-2 14.11.5), and PDF/A-4 takes a
+        // PDF/A one there in place of the document's.
+        let page_intent = || level.part() == 4 && pdfa_intent_in(doc, &p.dict);
+        if painting.transparency && !intent && !page_intent() && !transparency::page_names_blending_space(doc, &p.dict) {
             let n = Some((i + 1).to_string());
             issue("6.2.10", "Page {} has transparency but no device-independent blending colour space or PDF/A output intent", n, Some(i), false);
         }
@@ -999,17 +1146,22 @@ fn check_spots(
     }
 }
 
-fn check_graphics_states(doc: &Document, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
-    // 6.2.5: the extended graphics state.
+fn check_graphics_states(doc: &Document, level: Level, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    // 6.2.5: the extended graphics state. PDF 2.0 names the halftone origin HTO, where earlier
+    // versions had the phase HTP (ISO 32000-2 8.4.5, Table 57); PDF/A-4 forbids HTO.
     let gs = gstate::check(doc);
+    if level.part() == 4 {
+        if gs.origin {
+            issue("6.2.5", "A graphics state has a halftone origin (HTO)", None, None, false);
+        }
+    } else if gs.phase {
+        issue("6.2.5", "A graphics state has a halftone phase (HTP)", None, None, false);
+    }
     if gs.transfer {
         issue("6.2.5", "A graphics state has a transfer function (TR)", None, None, false);
     }
     if gs.transfer2 {
         issue("6.2.5", "A graphics state has a transfer function (TR2) other than Default", None, None, false);
-    }
-    if gs.phase {
-        issue("6.2.5", "A graphics state has a halftone phase (HTP)", None, None, false);
     }
     for kind in gs.halftone_types {
         issue("6.2.5", "A halftone has type {}: only types 1 and 5 are allowed", Some(kind.to_string()), None, false);
@@ -1071,15 +1223,16 @@ fn check_one_object(
 ) {
     let ty = dict.name(b"Type");
     let subtype = dict.name(b"Subtype");
-    check_actions(doc, dict, issue);
+    check_actions(doc, level, dict, issue);
     let is_annot = matches!(object, Object::Dict(_)) && is_annotation(doc, dict, ty, subtype, page.is_some());
-    if is_annot && check_annotation(doc, dict, subtype, page, issue) {
+    if is_annot && check_annotation(doc, level, dict, subtype, page, issue) {
         // A forbidden annotation stops every later check for its object, as the scan did before
         // it was split into helpers: the rest of its own checks and the form field, font, stream
         // and embedded file below all came after that `continue`.
         return;
     }
-    if dict.get(b"FT").is_some() && dict.get(b"AA").is_some() && !is_annot {
+    // PDF/A-4 lets form fields have additional actions.
+    if dict.get(b"FT").is_some() && dict.get(b"AA").is_some() && !is_annot && level.part() != 4 {
         issue("6.5.2", "A form field has additional actions", None, None, true);
     }
     // A Type 0 font's descendant is checked through it.
@@ -1087,18 +1240,18 @@ fn check_one_object(
         check_font(doc, dict, issue);
     }
     if let Object::Stream(stream) = object {
-        check_stream(doc, stream, subtype, issue);
+        check_stream(doc, level, stream, subtype, issue);
     }
     if ty == Some(b"Filespec") && dict.get(b"EF").is_some() {
-        check_embedded_file(level, dict, issue);
+        check_embedded_file(doc, level, dict, issue);
     }
 }
 
-fn check_actions(doc: &Document, dict: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+fn check_actions(doc: &Document, level: Level, dict: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
     let own = (dict.get(b"S").is_some() && is_action(dict)).then_some(dict);
     let direct = [b"A".as_slice(), b"OpenAction"].map(|key| dict.get(key).and_then(|action| action.as_dict()));
     for action in [own].into_iter().chain(direct).flatten() {
-        if let Some(name) = chain_forbidden(doc, action) {
+        if let Some(name) = chain_forbidden_in(doc, action, level) {
             issue("6.5.1", "A {} action isn't allowed", Some(name), None, true);
         }
     }
@@ -1113,29 +1266,46 @@ fn is_annotation(doc: &Document, dict: &Dict, ty: Option<&[u8]>, subtype: Option
 
 fn check_annotation(
     doc: &Document,
+    level: Level,
     dict: &Dict,
     subtype: Option<&[u8]>,
     page: Option<usize>,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) -> bool {
+    let part4 = level.part() == 4;
     let name = subtype.map(|bytes| String::from_utf8_lossy(bytes).into_owned()).unwrap_or_default();
-    if subtype.is_some_and(|value| FORBIDDEN_ANNOTS.contains(&value)) {
+    let forbidden = |value: &[u8]| if part4 { part4::forbids_annotation(level, value) } else { FORBIDDEN_ANNOTS.contains(&value) };
+    if subtype.is_some_and(forbidden) {
         issue("6.3.1", "{} annotations aren't allowed", Some(name), page, true);
         return true;
     }
     let flags = dict.int(b"F").unwrap_or(0);
-    if subtype != Some(b"Popup") && (flags & 4 == 0 || flags & (1 | 2 | 32) != 0) {
+    // Invisible, Hidden and NoView, and for PDF/A-4 ToggleNoView too (ISO 32000-2 Table 167).
+    let hiding = if part4 { 1 | 2 | 32 | 256 } else { 1 | 2 | 32 };
+    if subtype != Some(b"Popup") && (flags & 4 == 0 || flags & hiding != 0) {
         issue("6.3.2", "A {} annotation isn't set to print, or is hidden", Some(name.clone()), page, true);
     }
-    check_annotation_appearance(doc, dict, subtype, &name, page, issue);
-    if dict.get(b"AA").is_some() {
-        issue("6.5.2", "A {} annotation has additional actions", Some(name), page, true);
+    check_annotation_appearance(doc, level, dict, subtype, &name, page, issue);
+    if part4 {
+        part4::annotation(doc, dict, subtype, &name, page, issue);
+    }
+    match dict.get(b"AA") {
+        // PDF/A-4 lets a widget have any additional actions, and other annotations those of pointer
+        // and focus.
+        Some(aa) if part4 => {
+            if subtype != Some(b"Widget") && part4::forbidden_trigger(doc, aa).is_some() {
+                issue("6.5.2", "A {} annotation's additional actions use a trigger PDF/A-4 doesn't allow", Some(name), page, false);
+            }
+        }
+        Some(_) => issue("6.5.2", "A {} annotation has additional actions", Some(name), page, true),
+        None => {}
     }
     false
 }
 
 fn check_annotation_appearance(
     doc: &Document,
+    level: Level,
     dict: &Dict,
     subtype: Option<&[u8]>,
     name: &str,
@@ -1147,7 +1317,8 @@ fn check_annotation_appearance(
         .map(|appearance| doc.resolve(appearance))
         .and_then(|appearance| appearance.as_dict().cloned())
         .is_some_and(|appearance| appearance.get(b"N").is_some());
-    if has_appearance || matches!(subtype, Some(b"Popup") | Some(b"Link")) {
+    // PDF 2.0's projection annotations need none in PDF/A-4 either.
+    if has_appearance || matches!(subtype, Some(b"Popup") | Some(b"Link")) || (level.part() == 4 && subtype == Some(b"Projection")) {
         return;
     }
     let zero_area = dict.get(b"Rect").map(|rect| doc.resolve(rect)).and_then(|rect| rect.as_array().cloned()).is_some_and(|values| {
@@ -1162,6 +1333,7 @@ fn check_annotation_appearance(
 /// Checks a stream's compression filters, external file keys, and image/PostScript subtype rules.
 fn check_stream(
     doc: &Document,
+    level: Level,
     stream: &pdfcraft_cos::Stream,
     subtype: Option<&[u8]>,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
@@ -1188,18 +1360,28 @@ fn check_stream(
             issue("6.2.8", "An image has alternates or OPI information", None, None, true);
         }
     }
-    if subtype == Some(b"PS") {
+    // ISO 32000-2 no longer defines PostScript XObjects, and PDF/A-4 says nothing of them.
+    if subtype == Some(b"PS") && level.part() != 4 {
         issue("6.2.9", "PostScript XObjects aren't allowed", None, None, false);
+    }
+    if level.part() == 4 {
+        part4::stream(doc, &stream.dict, subtype, &filters, issue);
     }
 }
 
-fn check_embedded_file(level: Level, dict: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+fn check_embedded_file(
+    doc: &Document,
+    level: Level,
+    dict: &Dict,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
     match level {
         Level::A2b => issue("6.8", "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)", None, None, false),
         Level::A3b if dict.get(b"AFRelationship").is_none() => {
             issue("6.8", "An embedded file has no AFRelationship", None, None, true);
         }
         Level::A3b => {}
+        Level::A4 | Level::A4e | Level::A4f => part4::embedded_file(doc, level, dict, issue),
     }
 }
 
@@ -1261,12 +1443,17 @@ const MAX_ACTION_CHAIN: usize = 1024;
 /// `/Next` (ISO 32000-2 12.6.2: a dictionary or an array of them, which may be an object of its
 /// own). An action `/Next` refers to is an object of its own, checked and removed as one.
 fn chain_forbidden(doc: &Document, a: &Dict) -> Option<String> {
+    chain_forbidden_in(doc, a, Level::A2b)
+}
+
+/// [`chain_forbidden`] with the actions `level` forbids, which for PDF/A-4 are fewer.
+fn chain_forbidden_in(doc: &Document, a: &Dict, level: Level) -> Option<String> {
     let mut read = 0;
     let mut seen = std::collections::HashSet::new();
     // Objects `/Next` refers to (an action, or an array of them), each read once and borrowed:
     // one array shared by many chains is not copied per chain.
     let mut held: Vec<std::sync::Arc<Object>> = Vec::new();
-    if let Some(s) = walk_chain(doc, a, &mut read, &mut seen, &mut held) {
+    if let Some(s) = walk_chain(doc, level, a, &mut read, &mut seen, &mut held) {
         return Some(s);
     }
     while let Some(o) = held.pop() {
@@ -1286,7 +1473,7 @@ fn chain_forbidden(doc: &Document, a: &Dict) -> Option<String> {
             _ => continue,
         };
         for d in dicts {
-            if let Some(s) = walk_chain(doc, d, &mut read, &mut seen, &mut held) {
+            if let Some(s) = walk_chain(doc, level, d, &mut read, &mut seen, &mut held) {
                 return Some(s);
             }
         }
@@ -1308,6 +1495,7 @@ fn hold_referenced(doc: &Document, list: &[Object], seen: &mut std::collections:
 /// an indirect `/Next`, or a reference inside a `/Next` array, names goes to `held`.
 fn walk_chain(
     doc: &Document,
+    level: Level,
     a: &Dict,
     read: &mut usize,
     seen: &mut std::collections::HashSet<ObjRef>,
@@ -1319,7 +1507,7 @@ fn walk_chain(
         if *read > MAX_ACTION_CHAIN {
             return Some("too deeply chained".into());
         }
-        if let Some(s) = action_forbidden(doc, d) {
+        if let Some(s) = action_forbidden(doc, level, d) {
             return Some(s);
         }
         match d.get(b"Next") {
@@ -1343,10 +1531,10 @@ fn walk_chain(
 /// The forbidden kind of the action `d` itself, if it is one: a forbidden type, or a Named
 /// action for anything but the four of [`NAMED_ACTIONS`]. The type and the name may each be given
 /// directly or by reference.
-fn action_forbidden(doc: &Document, d: &Dict) -> Option<String> {
+fn action_forbidden(doc: &Document, level: Level, d: &Dict) -> Option<String> {
     let s = doc.resolve(d.get(b"S")?);
     let s = s.as_name()?;
-    if FORBIDDEN_ACTIONS.contains(&s) {
+    if FORBIDDEN_ACTIONS.contains(&s) && !part4::allows_action(level, s) {
         return Some(String::from_utf8_lossy(s).into_owned());
     }
     let n = d.get(b"N").map(|n| doc.resolve(n));
@@ -1464,7 +1652,13 @@ fn convert_direct_page_annots(
 }
 
 /// Make `doc` conform to `level` as far as possible, then re-check it.
+///
+/// PDF/A-4 levels are verified only: for them nothing is changed, and the report holds what
+/// [`verify`] finds.
 pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos::CosError> {
+    if level.part() == 4 {
+        return Ok(Report { fixed: Vec::new(), remaining: verify(doc, level) });
+    }
     let mut fixed = Vec::new();
     if doc.trailer().get(b"Encrypt").is_some() {
         doc.remove_encryption();

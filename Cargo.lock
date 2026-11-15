@@ -4857,6 +4857,7 @@ dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-model",
+ "proptest",
 ]
 
 [[package]]

@@ -18,3 +18,4 @@ pdfcraft-model = { workspace = true }
 
 [dev-dependencies]
 flate2 = { workspace = true }
+proptest = { workspace = true }
