@@ -158,13 +158,15 @@ impl IndexWalk<'_> {
         if let Some(d) = resolved.as_dict().filter(|d| d.contains(b"S")) {
             let pg = d.get(b"Pg").and_then(Object::as_ref).or(pg);
             for k in list(self.src, d.get(b"K")) {
-                if let Object::Int(_) = k {
+                // A marked-content ID, written as an integer or as a reference to one (ISO
+                // 32000-2 §7.3.10: any object may be indirect).
+                let held = self.src.resolve(&k);
+                if held.as_int().is_some() {
                     if let Some(p) = pg {
                         reach.page(p);
                     }
                     continue;
                 }
-                let held = self.src.resolve(&k);
                 let item = held.as_dict().filter(|i| !i.contains(b"S"));
                 if let Some(i) = item.filter(|i| i.contains(b"Obj") || i.name(b"Type") == Some(b"OBJR")) {
                     // An annotation is on the page that lists it. Another object (an image, a
@@ -798,5 +800,49 @@ fn walk_value(
             Object::Stream(s)
         }
         other => other.clone(),
+    }
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+
+    /// A classic-xref PDF from object bodies (object i+1 = `bodies[i]`).
+    fn doc(bodies: &[&str]) -> Document {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, b) in bodies.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{b}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
+        Document::open(std::sync::Arc::new(out)).expect("opens")
+    }
+
+    /// Review on #7333: a marked-content ID written as a reference to an integer (`/K [7 0 R]`,
+    /// object 7 being `0`) is content on the element's page, as a direct one is. The index read it
+    /// as an element with nothing in it, and said the paragraph had no content on page 2, so a
+    /// part's walk would pass it over once the walk itself reads such IDs.
+    #[test]
+    fn an_indirect_marked_content_id_places_its_element_on_its_page() {
+        let src = doc(&[
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R /MarkInfo << /Marked true >> >>",
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+            "<< /Type /Page /Parent 2 0 R /StructParents 0 >>",
+            "<< /Type /StructTreeRoot /K 6 0 R >>",
+            "<< /Type /StructElem /S /P /P 5 0 R /Pg 4 0 R /K [7 0 R] >>",
+            "0",
+        ]);
+        let index = PageIndex::build(&src).expect("an index");
+        let r = |n| ObjRef::new(n, 0);
+        let on = |page: u32| HashMap::from([(r(page), r(page))]);
+        assert!(!index.misses(r(6), &on(4)), "the paragraph has content on page 2");
+        assert!(index.misses(r(6), &on(3)), "and none on page 1");
     }
 }
