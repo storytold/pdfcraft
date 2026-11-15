@@ -167,8 +167,7 @@ impl Automation {
         let recognizers = pdfcraft_engine::ocr::recognizers(&settings).map_err(failed)?;
         // Each file opens in its own session; it keeps this one's JavaScript preference.
         let javascript = self.session.javascript();
-        let mut out = Vec::new();
-        let (mut ok, mut skipped_files, mut words) = (0usize, 0usize, 0usize);
+        let mut batch = OcrBatchResult::default();
         for p in paths {
             let name = input_file_name(p);
             let result =
@@ -185,33 +184,9 @@ impl Automation {
                         )
                     },
                 );
-            match result {
-                Ok(r) => {
-                    let skipped_pages: Vec<usize> = r.pages.iter().filter(|p| p.skipped.is_some()).map(|p| p.page + 1).collect();
-                    if r.skipped() {
-                        // A file passed over by the skip-files option is its own bucket: its
-                        // original is left alone and nothing is written.
-                        skipped_files += 1;
-                        out.push(json!({ "path": p, "skipped": r.file_skipped, "skipped_pages": skipped_pages }));
-                        continue;
-                    }
-                    let target = child(&folder, &name);
-                    write_atomic(&target, &r.bytes)?;
-                    ok += 1;
-                    words += r.words();
-                    let mut entry = json!({ "path": p, "output": target.to_string_lossy(), "words": r.words(), "skipped_pages": skipped_pages });
-                    // The batch's low-confidence note: at or under the settings' threshold (60
-                    // by default), on 1-based sorted pages.
-                    let threshold = settings.low_confidence_threshold;
-                    if let Some((count, pages)) = pdfcraft_engine::ocr::low_confidence_pages(&r.pages, threshold) {
-                        entry["low_confidence"] = json!({ "count": count, "pages": pages, "threshold": threshold });
-                    }
-                    out.push(entry);
-                }
-                Err(e) => out.push(json!({ "path": p, "error": e })),
-            }
+            batch.record(p, &child(&folder, &name), result, settings.low_confidence_threshold)?;
         }
-        Ok(json!({ "files": out, "recognized": ok, "words": words, "skipped_files": skipped_files }))
+        Ok(json!({ "files": batch.files, "recognized": batch.recognized, "words": batch.words, "skipped_files": batch.skipped_files }))
     }
 
     pub(crate) fn ocr_recognize(&mut self, a: &Args) -> Result<Value> {
@@ -554,6 +529,64 @@ impl Automation {
     }
 }
 
+/// Keep file outcomes and their counters together, including pages that could not be read.
+#[derive(Default)]
+struct OcrBatchResult {
+    files: Vec<Value>,
+    recognized: usize,
+    skipped_files: usize,
+    words: usize,
+}
+
+impl OcrBatchResult {
+    fn record(
+        &mut self,
+        path: &str,
+        target: &std::path::Path,
+        result: std::result::Result<pdfcraft_engine::ocr::FileResult, String>,
+        threshold: f32,
+    ) -> Result<()> {
+        let r = match result {
+            Ok(r) => r,
+            Err(error) => {
+                self.files.push(json!({ "path": path, "error": error }));
+                return Ok(());
+            }
+        };
+        let skipped_pages: Vec<usize> = r.pages.iter().filter(|p| p.skipped.is_some()).map(|p| p.page + 1).collect();
+        let mut entry = json!({ "path": path, "skipped_pages": skipped_pages, "pages": Automation::ocr_pages_json(&r.pages, false) });
+        if r.skipped() {
+            // A deliberate file skip is not an OCR success and never creates an output.
+            self.skipped_files += 1;
+            entry["skipped"] = json!(r.file_skipped);
+        } else if r.pages.iter().all(|p| p.skipped.is_some()) {
+            // The engine also returns the original bytes when every page failed. Do not
+            // write that unchanged file or count it as recognized; keep each page's reason.
+            let text_only = !r.pages.is_empty()
+                && r.pages.iter().all(|p| matches!(p.skipped.as_deref(), Some("the page already contains text" | "the file already contains text")));
+            if text_only {
+                self.skipped_files += 1;
+                entry["skipped"] = json!("all pages already contain text");
+            } else {
+                entry["error"] = json!("no pages were recognized");
+            }
+        } else {
+            write_atomic(target, &r.bytes)?;
+            self.recognized += 1;
+            self.words += r.words();
+            entry["output"] = json!(target.to_string_lossy());
+            entry["words"] = json!(r.words());
+            // The batch's low-confidence note: at or under the settings' threshold (60
+            // by default), on 1-based sorted pages.
+            if let Some((count, pages)) = pdfcraft_engine::ocr::low_confidence_pages(&r.pages, threshold) {
+                entry["low_confidence"] = json!({ "count": count, "pages": pages, "threshold": threshold });
+            }
+        }
+        self.files.push(entry);
+        Ok(())
+    }
+}
+
 /// The file name an input is written under: its own file name, or `document.pdf` when it has none.
 fn input_file_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document.pdf".into())
@@ -583,6 +616,118 @@ fn shared_file_names(targets: &[std::path::PathBuf]) -> Vec<String> {
         }
     }
     groups.into_values().filter(|(count, _)| *count > 1).flat_map(|(_, spellings)| spellings).collect()
+}
+
+#[cfg(test)]
+mod batch_result_tests {
+    use super::*;
+    use pdfcraft_engine::ocr::{FileResult, OcrPage, PlacedWord};
+
+    fn page(page: usize, skipped: Option<&str>) -> OcrPage {
+        OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: skipped.map(str::to_owned), notes: Vec::new() }
+    }
+
+    fn file(pages: Vec<OcrPage>) -> FileResult {
+        FileResult { bytes: std::sync::Arc::new(b"original bytes".to_vec()), pages, file_skipped: None }
+    }
+
+    #[test]
+    fn failed_pages_do_not_write_a_copy_or_count_as_recognized() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("out.pdf");
+        let mut batch = OcrBatchResult::default();
+        let result = file(vec![page(0, Some("Tesseract failed to read rus")), page(1, Some("could not render page"))]);
+        batch.record("scan.pdf", &target, Ok(result), 60.0).unwrap();
+        assert_eq!((batch.recognized, batch.skipped_files, batch.words), (0, 0, 0));
+        assert!(!target.exists());
+        let entry = &batch.files[0];
+        assert_eq!(entry["error"], "no pages were recognized");
+        assert!(entry.get("output").is_none());
+        assert_eq!(entry["skipped_pages"], json!([1, 2]));
+        assert_eq!(
+            entry["pages"],
+            json!([
+                { "page": 1, "skipped": "Tesseract failed to read rus" },
+                { "page": 2, "skipped": "could not render page" }
+            ])
+        );
+    }
+
+    #[test]
+    fn partial_recognition_keeps_failure_reasons_and_text_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("out.pdf");
+        let mut recognized = page(1, None);
+        recognized.words.push(PlacedWord {
+            text: "read".into(),
+            origin: [0.0; 2],
+            across: [1.0, 0.0],
+            up: [0.0, 1.0],
+            confidence: Some(50.0),
+            source: "tesseract".into(),
+        });
+        recognized.notes.push("secondary recognizer failed".into());
+        let result = file(vec![page(0, Some("could not render page")), recognized, page(2, Some("the page already contains text"))]);
+        let mut batch = OcrBatchResult::default();
+        batch.record("scan.pdf", &target, Ok(result), 60.0).unwrap();
+        assert_eq!((batch.recognized, batch.skipped_files, batch.words), (1, 0, 1));
+        assert_eq!(std::fs::read(&target).unwrap(), b"original bytes");
+        let entry = &batch.files[0];
+        assert!(entry.get("error").is_none());
+        assert_eq!(entry["skipped_pages"], json!([1, 3]));
+        assert_eq!(entry["pages"][0]["skipped"], "could not render page");
+        assert_eq!(entry["pages"][1]["words"], 1);
+        assert_eq!(entry["pages"][1]["notes"], json!(["secondary recognizer failed"]));
+        assert!(entry["pages"][1].get("text").is_none());
+        assert_eq!(entry["pages"][2]["skipped"], "the page already contains text");
+        assert_eq!(entry["low_confidence"], json!({ "count": 1, "pages": [2], "threshold": 60.0 }));
+    }
+
+    #[test]
+    fn intentional_text_skips_stay_skips_without_an_output() {
+        let dir = tempfile::tempdir().unwrap();
+        for whole_file in [false, true] {
+            let target = dir.path().join("out.pdf");
+            let reason = if whole_file { "the file already contains text" } else { "the page already contains text" };
+            let mut result = file(vec![page(0, Some(reason)), page(1, Some(reason))]);
+            if whole_file {
+                result.file_skipped = Some(reason.into());
+            }
+            let mut batch = OcrBatchResult::default();
+            batch.record("typed.pdf", &target, Ok(result), 60.0).unwrap();
+            assert_eq!((batch.recognized, batch.skipped_files, batch.words), (0, 1, 0));
+            assert!(!target.exists());
+            let entry = &batch.files[0];
+            assert!(entry["skipped"].is_string());
+            assert!(entry.get("error").is_none());
+            assert_eq!(entry["pages"][0]["skipped"], reason);
+        }
+    }
+
+    #[test]
+    fn a_failed_scan_is_not_hidden_by_an_intentionally_skipped_text_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("out.pdf");
+        let result = file(vec![page(0, Some("the page already contains text")), page(1, Some("recognition failed"))]);
+        let mut batch = OcrBatchResult::default();
+        batch.record("mixed.pdf", &target, Ok(result), 60.0).unwrap();
+        assert_eq!((batch.recognized, batch.skipped_files), (0, 0));
+        assert!(!target.exists());
+        assert!(batch.files[0]["error"].is_string());
+        assert_eq!(batch.files[0]["pages"][1]["skipped"], "recognition failed");
+    }
+
+    #[test]
+    fn successful_recognition_with_no_words_is_still_a_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("out.pdf");
+        let mut batch = OcrBatchResult::default();
+        batch.record("blank.pdf", &target, Ok(file(vec![page(0, None)])), 60.0).unwrap();
+        assert_eq!((batch.recognized, batch.skipped_files, batch.words), (1, 0, 0));
+        assert!(target.exists());
+        assert_eq!(batch.files[0]["words"], 0);
+        assert!(batch.files[0].get("error").is_none());
+    }
 }
 
 #[cfg(test)]

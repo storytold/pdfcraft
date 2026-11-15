@@ -359,6 +359,13 @@ again before recognition, so installing or removing a pack does not require rest
 The UI refreshes its cached availability in the background. The mixed review dictionary
 uses `ocr-dictionary-en+ru.txt`.
 
+`ocr_recognize_files` counts a file as `recognized` only if at least one page completed
+OCR, even if it found no words. Files whose pages were all skipped produce no output:
+text-only skips count in `skipped_files`, while recognition failures return a per-file
+`error`. When page results are available, `pages` keeps 1-based page numbers and
+individual `skipped` reasons, including failures in a partly recognized file;
+`skipped_pages` remains the list of skipped page numbers.
+
 `ocr_words {doc, retain_review: true}` reads words without editing the document and returns
 `review`, plus pages and word boxes/confidences. Page and word positions are 1-based.
 `region` can restrict recognition to one named page, using displayed-page points. Without

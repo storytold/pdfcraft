@@ -9526,12 +9526,16 @@ fn ocr_recognize_files_with_distinct_names_runs_as_before() {
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "one/scan.pdf" }));
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "two/other.pdf" }));
+    // The fixture already has text: read it explicitly so this tests output names, not text-page skips.
+    let args = json!({ "paths": ["one/scan.pdf", "two/other.pdf"], "folder": "out", "skip_text_pages": false });
     if ok(&mut a, "ocr_status", json!({}))["available"] == true {
-        let r = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["one/scan.pdf", "two/other.pdf"], "folder": "out" }));
+        let r = ok(&mut a, "ocr_recognize_files", args);
+        assert_eq!(r["recognized"], 2, "{r}");
+        assert_eq!(r["skipped_files"], 0, "{r}");
         assert!(r["files"][0]["error"].is_null() && r["files"][1]["error"].is_null(), "{r}");
         assert!(dir.join("out/scan.pdf").is_file() && dir.join("out/other.pdf").is_file(), "{r}");
     } else {
-        let r = a.call("ocr_recognize_files", &json!({ "paths": ["one/scan.pdf", "two/other.pdf"], "folder": "out" }));
+        let r = a.call("ocr_recognize_files", &args);
         assert!(matches!(&r, Err(ToolError::Failed(m)) if m.contains("not installed")), "{r:?}");
     }
 }
