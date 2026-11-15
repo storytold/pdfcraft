@@ -67,12 +67,14 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
 - **annotations** whose rectangle overlaps (with their pop-ups and their replies, `/IRT`), and **form fields** with a
   widget under a mark. A widget under a mark whose field the form's reading doesn't have refuses
   the redaction and changes nothing: one the form's `/Fields` tree reaches through `/Kids`, or
-  that names a field (`/Parent`, `/T` or `/FT`), as a field whose type is given by reference, that
+  that names a field (`/Parent`, or `/T` or `/FT` on one given by reference), as a field whose type is given by reference, that
   nests too deep or that its parent's `/Kids` leaves out does (`RedactError::FieldNotRead`); and
   any while the reading left fields out, their text past its allowances
   (`RedactError::FormPastAllowance`). Removing the widget would keep the field and its value.
-  While fields are left out, a widget given by reference refuses the redaction even when the
-  reading has its field: a field left out may list it in `/Kids` too, and keep its value;
+  While fields are left out, any widget under a mark but one written in place with no `/Parent`
+  refuses the redaction, even when the reading has its field: a field left out may list it,
+  or another widget of that field, in `/Kids` too, and keep its value. On a form whose field text
+  passes the reading's allowances, form widgets aren't redacted;
 - the marks themselves, replaced by boxes in their fill colour (and overlay text) drawn into the
   page as a `/PCMark /Redaction` stream;
 - **metadata** that repeats the removed text (#2448): `/Info` entries containing it or wholly

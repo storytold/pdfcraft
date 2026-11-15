@@ -51,32 +51,45 @@ fn a_field_the_form_reading_leaves_out_refuses_the_redaction() {
 
 /// A widget two fields list in `/Kids`: `a`, which the form's reading has, and `b`, whose name is
 /// past the reading's allowance. Taking the widget with `a` would keep `b` and its value, so the
-/// redaction is refused while the reading left fields out.
+/// redaction is refused while the reading left fields out: when that widget is under the mark, and
+/// when another of `a`'s, written in place in `/Annots`, is.
 #[test]
 fn a_widget_a_field_left_out_also_lists_refuses_the_redaction() {
-    let mut doc = one_page(
-        b"",
-        "",
-        vec![
-            b"<< /FT /Tx /T (a) /V (A-VALUE) /Kids [9 0 R] >>".to_vec(),
-            b"<< /FT /Tx /T (b) /V (B-SECRET) /Kids [9 0 R] >>".to_vec(),
-            b"<< /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [10 50 100 70] /P 3 0 R >>".to_vec(),
-        ],
-    );
-    let (a, b, w) = (ObjRef::new(7, 0), ObjRef::new(8, 0), ObjRef::new(9, 0));
-    let root = doc.root().unwrap();
-    let form: Dict = [(b"Fields".to_vec(), Object::Array(vec![Object::Ref(a), Object::Ref(b)]))].into_iter().collect();
-    doc.update_dict(root, |d| d.set(b"AcroForm".to_vec(), Object::Dict(form))).unwrap();
-    let page = pdfcraft_model::pages(&doc).swap_remove(0).obj;
-    doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(w)]))).unwrap();
-    let long = Object::String(pdfcraft_cos::PdfString::literal(vec![b'n'; 256 << 20]));
-    doc.update_dict(b, |d| d.set(b"T".to_vec(), long)).unwrap();
-    let read = pdfcraft_forms::fields_with_adopted(&doc);
-    assert_eq!(read.items.iter().map(|f| (f.obj, f.widgets.iter().map(|w| w.obj).collect::<Vec<_>>())).collect::<Vec<_>>(), [(a, vec![w])]);
-    assert!(read.left_out > 0);
-    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
-    assert!(matches!(apply(&mut doc, None), Err(RedactError::FormPastAllowance(_))));
-    assert!(doc.get(b).as_dict().is_some_and(|d| d.contains(b"V")) && marks(&doc).len() == 1, "nothing changed");
+    for in_place in [false, true] {
+        let shared = if in_place { "[200 200 250 220]" } else { "[10 50 100 70]" };
+        let mut doc = one_page(
+            b"",
+            "",
+            vec![
+                b"<< /FT /Tx /T (a) /V (A-VALUE) /Kids [9 0 R] >>".to_vec(),
+                b"<< /FT /Tx /T (b) /V (B-SECRET) /Kids [9 0 R] >>".to_vec(),
+                format!("<< /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect {shared} /P 3 0 R >>").into_bytes(),
+            ],
+        );
+        let (a, b, w) = (ObjRef::new(7, 0), ObjRef::new(8, 0), ObjRef::new(9, 0));
+        let root = doc.root().unwrap();
+        let form: Dict = [(b"Fields".to_vec(), Object::Array(vec![Object::Ref(a), Object::Ref(b)]))].into_iter().collect();
+        doc.update_dict(root, |d| d.set(b"AcroForm".to_vec(), Object::Dict(form))).unwrap();
+        let mut annots = vec![Object::Ref(w)];
+        if in_place {
+            let mut own: Dict =
+                [(b"Type".to_vec(), Object::Name(b"Annot".to_vec())), (b"Subtype".to_vec(), Object::Name(b"Widget".to_vec()))].into_iter().collect();
+            own.set(b"Parent".to_vec(), Object::Ref(a));
+            own.set(b"Rect".to_vec(), Object::Array([10, 50, 100, 70].map(Object::Int).to_vec()));
+            annots.insert(0, Object::Dict(own));
+        }
+        let page = pdfcraft_model::pages(&doc).swap_remove(0).obj;
+        doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(annots))).unwrap();
+        let long = Object::String(pdfcraft_cos::PdfString::literal(vec![b'n'; 256 << 20]));
+        doc.update_dict(b, |d| d.set(b"T".to_vec(), long)).unwrap();
+        let read = pdfcraft_forms::fields_with_adopted(&doc);
+        let owned: Vec<(ObjRef, Vec<ObjRef>)> = read.items.iter().map(|f| (f.obj, f.widgets.iter().map(|w| w.obj).collect())).collect();
+        assert_eq!(owned, [(a, vec![w])], "in place: {in_place}");
+        assert!(read.left_out > 0);
+        mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+        assert!(matches!(apply(&mut doc, None), Err(RedactError::FormPastAllowance(_))), "in place: {in_place}");
+        assert!(doc.get(b).as_dict().is_some_and(|d| d.contains(b"V")) && marks(&doc).len() == 1, "nothing changed");
+    }
 }
 
 /// A widget under a mark whose field the form's reading doesn't have, its type given by reference

@@ -122,8 +122,8 @@ pub enum RedactError {
     )]
     SharedJbig2Budget,
     /// Fields whose text is past what one reading of the form takes are left out of it, and a
-    /// widget under a mark belongs to no field read, or is given by reference, which one of them
-    /// may list in `/Kids` too: it may be one of theirs, whose value would stay in the file.
+    /// widget under a mark (but one written in place with no `/Parent`) may be one of theirs, or
+    /// its field may share another widget with one of them, whose value would stay in the file.
     #[error(
         "{0} form field(s) hold more text than PdfCraft reads at once, and a widget under the marks may belong to one, so its value could stay in the file; nothing was redacted"
     )]
@@ -968,7 +968,8 @@ fn redact_page_content(
 }
 
 /// The field a widget under a mark (`d`, object `r` unless written in place) takes with it, when
-/// the form's reading has that field, or `None` for one that names no field.
+/// the form's reading has that field, or `None` for one that goes alone: written in place with no
+/// `/Parent`, or naming no field.
 fn widget_field(
     d: &Dict,
     r: Option<ObjRef>,
@@ -977,11 +978,17 @@ fn widget_field(
     left_out: usize,
     form_tree: &HashSet<ObjRef>,
 ) -> Result<Option<ObjRef>, RedactError> {
-    // A field the reading left out may list a widget in its `/Kids` beside the field the reading
-    // has, and would keep its value when that one goes with the widget: while the reading left
-    // fields out, a widget given by reference refuses the redaction, whoever the reading says owns
-    // it. One written in place can't be listed in `/Kids`.
-    if left_out > 0 && r.is_some() {
+    // One written in place with no `/Parent` leaves with all it holds, field keys and all: `/Fields`
+    // and `/Kids` list references, so no field can list it.
+    if r.is_none() && !d.contains(b"Parent") {
+        return Ok(None);
+    }
+    // A field the reading left out may list this widget in its `/Kids`, or another widget of the
+    // field the reading has, and would keep its value when that field goes with its widgets; and
+    // a widget of a field the reading doesn't have would go and leave the field and its value.
+    // While the reading left fields out, any other widget refuses the redaction, whoever the
+    // reading says owns it.
+    if left_out > 0 {
         return Err(RedactError::FormPastAllowance(left_out));
     }
     // A widget written in place has no reference of its own, so no entry in `widget_owner`: its
@@ -992,12 +999,8 @@ fn widget_field(
     };
     match owner {
         Some(field) => Ok(Some(field)),
-        // One written in place that names no field leaves with all it holds.
-        None if r.is_none() && !d.contains(b"Parent") => Ok(None),
         // A widget of a field the form's reading doesn't have would go and leave the field and
-        // its value: one the form's tree reaches or that names a field, or any while the reading
-        // left fields out.
-        None if left_out > 0 => Err(RedactError::FormPastAllowance(left_out)),
+        // its value: one the form's tree reaches or that names a field.
         None if r.is_some_and(|r| form_tree.contains(&r)) || d.contains(b"Parent") || d.contains(b"T") || d.contains(b"FT") => {
             Err(RedactError::FieldNotRead)
         }

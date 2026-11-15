@@ -55,8 +55,8 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   is left out of the reading whole, never read with part of it, as is one that would draw with a
   `/DA` that doesn't fit; its widgets go to a later field that lists them. `fields_with_adopted`
   counts the fields left out (`Fields::left_out`): opening the file records them as a repair, and
-  redaction refuses to remove a widget no field read owns, or then any given by reference, which
-  a field left out may list too. Clear form (`reset`) leaves a field
+  redaction then refuses to remove a widget, but one written in place with no `/Parent`: a
+  field left out may list it, or another widget of its field. Clear form (`reset`) leaves a field
   whose default the reading didn't reach as it is, rather than emptying it, looking for that
   default where the reading took it, down `/Kids` (`Field::default_unread`), and a script's reset
   does the same (`default_value_known`). A save still clears a password value past the

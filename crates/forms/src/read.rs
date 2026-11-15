@@ -713,8 +713,8 @@ pub struct Fields {
     pub adopted_page_fields: usize,
     /// How many terminal fields were left out because their text, or a field's above them, didn't
     /// fit the reading's allowances. More than none means `items` isn't the whole form: redaction
-    /// refuses to remove a widget under a mark that no field read owns, or any given by reference,
-    /// which a field left out may list too.
+    /// refuses to remove a widget under a mark, but one written in place with no `/Parent`: a
+    /// field left out may list it, or another widget of its field.
     pub left_out: usize,
 }
 

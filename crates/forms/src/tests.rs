@@ -9352,3 +9352,32 @@ fn a_page_script_names_no_field_where_its_name_was_read_in_part() {
     let mut text = crate::read::Allowance::new(crate::read::MAX_TEXT_BYTES);
     assert_eq!(crate::read::qualified_name(&doc, ObjRef::new(5, 0), &mut text), None, "the name isn't read in part");
 }
+
+/// A field `k` under `p` lists radio field `k` in its `/Kids` without being its `/Parent`. Named
+/// `k` (`p` untitled), it is the radio's twin and takes the value it is set to; named `p.k` it
+/// isn't, and neither is it when `p`'s name is past what is copied, which read without it would
+/// be `k`.
+#[test]
+fn a_radio_value_is_not_shared_with_a_field_named_in_part() {
+    let listing_value = |p_name: Option<Object>| {
+        let mut doc = document(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R] >> >>".into(), // 1
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),       // 2
+            "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),                         // 3
+            "<< /FT /Btn /Ff 49152 /T (k) /Kids [5 0 R] >>".into(),                           // 4
+            "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [10 50 30 70] /P 3 0 R /AS /Off /AP << /N << /on 8 0 R /Off 8 0 R >> >> >>".into(), // 5
+            "<< /Kids [7 0 R] >>".into(),                                                                  // 6
+            "<< /T (k) /Parent 6 0 R /Kids [4 0 R] >>".into(),                                             // 7
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length 0 >>\nstream\n\nendstream".into(), // 8
+        ]);
+        if let Some(t) = p_name {
+            doc.update_dict(ObjRef::new(6, 0), |d| d.set(b"T".to_vec(), t)).unwrap();
+        }
+        let set = set_value(&mut doc, "k", &FieldValue::Radio(Some("on".into())));
+        (set.is_ok(), doc.get(ObjRef::new(7, 0)).as_dict().and_then(|d| d.get(b"V").cloned()))
+    };
+    assert_eq!(listing_value(None), (true, Some(Object::Name(b"on".to_vec()))), "named `k`");
+    assert_eq!(listing_value(Some(Object::String(pdfcraft_cos::PdfString::literal(b"p".to_vec())))), (true, None), "named `p.k`");
+    let long = Object::String(pdfcraft_cos::PdfString::literal(vec![b'n'; crate::read::MAX_TEXT_BYTES]));
+    assert_eq!(listing_value(Some(long)).1, None, "named past what is copied");
+}
