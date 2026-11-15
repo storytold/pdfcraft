@@ -10040,12 +10040,15 @@ fn a_dropped_xfa_click_that_ran_away_still_turns_the_scripts_off() {
     use crate::js::InteractiveEvent;
     let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(
         r#"xfa.host.messageBox("Hello " + qty.rawValue);"#,
-        "function f() { for (var j = 0; j &lt; 99999; j++) {} } for (var k = 0; k &lt; 5000; k++) f();",
+        "xfa.host.messageBox(\"Go\"); function f() { for (var j = 0; j &lt; 99999; j++) {} } for (var k = 0; k &lt; 5000; k++) f();",
     );
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("runaway.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).expect("opens");
     let p = s.start_javascript_target(id, "", Some("hello"), None).unwrap();
+    // The script waits on its question until the other edit is in, so it cannot run away first.
+    let InteractiveEvent::Prompt(_, reply) = next_event(&p) else { panic!("asks first") };
     s.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("6".into()) }).unwrap();
+    reply.send(Some("1".into())).unwrap();
     let InteractiveEvent::Complete(out) = next_event(&p) else { panic!("finishes") };
     assert!(s.finish_javascript(p, out).is_err(), "the document changed");
     assert!(!s.get(id).unwrap().xfa_scripts_off());
@@ -10061,12 +10064,15 @@ fn a_click_kept_beside_one_that_ran_away_leaves_the_scripts_to_turn_off() {
     use crate::js::InteractiveEvent;
     let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(
         r#"xfa.host.messageBox("Hello " + qty.rawValue);"#,
-        "function f() { for (var j = 0; j &lt; 99999; j++) {} } for (var k = 0; k &lt; 5000; k++) f();",
+        "xfa.host.messageBox(\"Go\"); function f() { for (var j = 0; j &lt; 99999; j++) {} } for (var k = 0; k &lt; 5000; k++) f();",
     );
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("runaway.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&tpl)), None).expect("opens");
     let runaway = s.start_javascript_target(id, "", Some("hello"), None).unwrap();
+    // The runaway script waits on its question until the other click has begun.
+    let InteractiveEvent::Prompt(_, reply) = next_event(&runaway) else { panic!("asks first") };
     let kept = s.start_javascript_target(id, "", Some("addRow"), None).unwrap();
+    reply.send(Some("1".into())).unwrap();
     let InteractiveEvent::Complete(ran) = next_event(&runaway) else { panic!("finishes") };
     let InteractiveEvent::Complete(out) = next_event(&kept) else { panic!("finishes") };
     assert_eq!(s.finish_javascript(kept, out).unwrap().error, None);
