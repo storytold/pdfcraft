@@ -1,9 +1,14 @@
 use crate::CMapResolverFn;
-use crate::context::Context;
+use crate::context::{
+    Context, HeldContent, MAX_CACHED_TYPE3_PROCS, Type3Procs, content_left, hold_content,
+};
 use crate::device::Device;
 use crate::font::glyph_simulator::GlyphSimulator;
 use crate::font::true_type::{Width, read_encoding, read_widths};
-use crate::font::{Encoding, Glyph, Type3Glyph, UNITS_PER_EM, read_to_unicode};
+use crate::font::{
+    Encoding, Glyph, Type3Glyph, UNITS_PER_EM, numbered_glyph_name_at_its_code,
+    numbered_names_name_their_codes, read_to_unicode,
+};
 use crate::interpret::state::TextState;
 use crate::soft_mask::SoftMask;
 use crate::util::RectExt;
@@ -19,12 +24,18 @@ use hayro_syntax::object::dict::keys::{CHAR_PROCS, FONT_BBOX, FONT_MATRIX, RESOU
 use hayro_syntax::page::Resources;
 use kurbo::{Affine, BezPath, Rect};
 use skrifa::GlyphId;
+use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub(crate) struct Type3<'a> {
     widths: Vec<Width>,
     missing_width: f32,
+    /// PdfCraft patch (90): the width each code's glyph procedure gives with `d0`/`d1`, read
+    /// the first time the code is shown in a font without `/Widths`. One cell per code.
+    proc_widths: Vec<OnceCell<Option<f32>>>,
     encoding: Encoding,
     encodings: HashMap<u8, String>,
     dict: Dict<'a>,
@@ -33,7 +44,22 @@ pub(crate) struct Type3<'a> {
     font_bbox: Rect,
     matrix: Affine,
     to_unicode: Option<CMap>,
+    /// PdfCraft patch (87): glyph procedures already decoded, by glyph name, so a glyph shown
+    /// again and again (a Type 3 font used as a fill pattern draws one glyph hundreds of
+    /// thousands of times) isn't inflated again for every copy. Only procedures of at most
+    /// [`MAX_CACHED_PROC`] bytes are kept, and the fonts of one interpreter cache keep at most
+    /// `context::MAX_CACHED_TYPE3_PROCS` bytes together.
+    decoded_procs: RefCell<HashMap<String, Rc<[u8]>>>,
+    /// PdfCraft patch: whether the font's numbered glyph names all name their own codes
+    /// (`numbered_names_name_their_codes`), worked out on first use.
+    own_code_names: OnceLock<bool>,
 }
+
+/// PdfCraft patch (87): the largest decoded glyph procedure [`Type3`] keeps.
+const MAX_CACHED_PROC: usize = 64 << 10;
+/// PdfCraft patch (87): what a kept procedure costs the cache besides its bytes and its glyph
+/// name (the map entry and the shared allocation's counts), so many empty procedures count too.
+const CACHED_PROC_OVERHEAD: usize = 64;
 
 impl<'a> Type3<'a> {
     pub(crate) fn new(dict: &Dict<'a>, cmap_resolver: &CMapResolverFn) -> Option<Self> {
@@ -71,11 +97,55 @@ impl<'a> Type3<'a> {
             char_procs,
             widths,
             missing_width,
+            proc_widths: vec![OnceCell::new(); usize::from(u8::MAX) + 1],
             encodings,
             matrix,
             dict: dict.clone(),
             to_unicode,
+            decoded_procs: RefCell::new(HashMap::new()),
+            own_code_names: OnceLock::new(),
         })
+    }
+
+    /// PdfCraft patch (87): the decoded procedure of glyph `name`, held within the page's
+    /// content budget while the glyph is painted, whether it was decoded now or kept from an
+    /// earlier copy, so a page skips the same glyphs either way once the budget is spent. It is
+    /// decoded the first time and kept, when small enough and while `procs` has room, for the
+    /// next copies. Only a procedure decoded with more budget left than [`MAX_CACHED_PROC`] is
+    /// kept, so one the budget may have cut short isn't.
+    fn decoded_proc(
+        &self,
+        name: &str,
+        program: &Stream<'a>,
+        procs: &Type3Procs,
+    ) -> Option<(Rc<[u8]>, HeldContent)> {
+        let kept = self.decoded_procs.borrow().get(name).cloned();
+        if let Some(bytes) = kept {
+            let held = hold_content(bytes.len())?;
+            return Some((bytes, held));
+        }
+        let left = content_left();
+        // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
+        let decoded = crate::context::decode_content(program)?;
+        procs.decodes.set(procs.decodes.get().saturating_add(1));
+        let bytes: Rc<[u8]> = Rc::from(decoded.as_ref());
+        drop(decoded);
+        let held = hold_content(bytes.len())?;
+        let cost = bytes
+            .len()
+            .saturating_add(name.len())
+            .saturating_add(CACHED_PROC_OVERHEAD);
+        let total = procs.held.get().saturating_add(cost);
+        if left > MAX_CACHED_PROC
+            && bytes.len() <= MAX_CACHED_PROC
+            && total <= MAX_CACHED_TYPE3_PROCS
+        {
+            procs.held.set(total);
+            self.decoded_procs
+                .borrow_mut()
+                .insert(name.to_string(), bytes.clone());
+        }
+        Some((bytes, held))
     }
 
     pub(crate) fn map_code(&self, code: u8) -> GlyphId {
@@ -88,11 +158,51 @@ impl<'a> Type3<'a> {
     }
 
     pub(crate) fn glyph_width(&self, code: u8) -> f32 {
+        // PdfCraft patch (90): /Widths, /FirstChar and /LastChar are required for Type 3 fonts
+        // (Table 110), but a font without them gave every glyph no advance and its text was drawn on one spot. The glyph
+        // procedure's `d0`/`d1` operator states the glyph's width too (9.6.4), so such a font
+        // takes that width, as PDFium does. A font with /Widths is read as before: a code
+        // outside FirstChar..LastChar has width 0 (Table 110), as in Poppler and MuPDF.
         let w = match self.widths.get(code as usize).copied() {
             Some(Width::Value(w)) => w,
+            _ if self.widths.is_empty() => self.proc_width(code).unwrap_or(self.missing_width),
             _ => self.missing_width,
         };
         (w * self.matrix.as_coeffs()[0] as f32) * UNITS_PER_EM
+    }
+
+    /// PdfCraft patch (90): whether the font has no `/Widths` (or `/FirstChar`/`/LastChar`), so
+    /// that `glyph_width` falls back on the glyph procedures' `d0`/`d1` widths.
+    pub(crate) fn widths_missing(&self) -> bool {
+        self.widths.is_empty()
+    }
+
+    /// PdfCraft patch (90): the horizontal width `wx` that the glyph procedure for `code`
+    /// sets with `d0` or `d1`, in glyph space. `None` when the code has no procedure, the
+    /// procedure sets no width or its width isn't finite. A procedure the page's content
+    /// budget can't decode isn't remembered, so a later page may still read it.
+    fn proc_width(&self, code: u8) -> Option<f32> {
+        let cell = self.proc_widths.get(usize::from(code))?;
+        if let Some(width) = cell.get() {
+            return *width;
+        }
+        let name = self.glyph_simulator.glyph_to_string(self.map_code(code))?;
+        let program = self.char_procs.get(&name)?;
+        let decoded = crate::context::decode_content(program)?;
+        let mut iter = TypedIter::new(decoded.as_ref());
+        let mut width = None;
+        while let Some(op) = iter.next() {
+            match op {
+                TypedInstruction::ColorGlyph(d0) => width = Some(d0.0.as_f32()),
+                TypedInstruction::ShapeGlyph(d1) => width = Some(d1.0.as_f32()),
+                _ => continue,
+            }
+            break;
+        }
+        let width = width.filter(|w| w.is_finite());
+        // Setting can't fail here: the cell was empty above and nothing in between fills it.
+        let _ = cell.set(width);
+        width
     }
 
     pub(crate) fn char_code_to_unicode(&self, char_code: u32) -> Option<BfString> {
@@ -115,7 +225,28 @@ impl<'a> Type3<'a> {
                 name.and_then(crate::font::glyph_name_to_unicode)
                     .or_else(|| (0x20..0x7f).contains(&code).then_some(code as char))
                     .map(BfString::Char)
+                    // PdfCraft patch (100): above 126, a name that only numbers its glyph reads
+                    // as the code's Latin-1 character when the number is that code and every
+                    // numbered name in the font names its own code (`C174` at 174 reads `®`),
+                    // as in a Type 1 font.
+                    .or_else(|| {
+                        let own_codes = *self.own_code_names.get_or_init(|| {
+                            numbered_names_name_their_codes(
+                                (0..=u8::MAX).filter_map(|c| Some((c, self.code_to_name(c)?))),
+                            )
+                        });
+                        name.filter(|_| own_codes)
+                            .and_then(|name| numbered_glyph_name_at_its_code(name, code))
+                    })
             })
+    }
+
+    /// PdfCraft patch: the glyph name `/Encoding` gives a code, as `map_code` reads it.
+    fn code_to_name(&self, code: u8) -> Option<&str> {
+        self.encodings
+            .get(&code)
+            .map(String::as_str)
+            .or_else(|| self.encoding.map_code(code))
     }
 
     pub(crate) fn render_glyph(
@@ -144,9 +275,8 @@ impl<'a> Type3<'a> {
 
         let name = self.glyph_simulator.glyph_to_string(glyph.glyph_id)?;
         let program = self.char_procs.get(&name)?;
-        // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
-        let decoded = crate::context::decode_content(program)?;
-        let iter = TypedIter::new(decoded.as_ref());
+        let (decoded, _held) = self.decoded_proc(&name, program, &glyph.cache.type3_procs)?;
+        let iter = TypedIter::new(&decoded);
 
         let is_shape_glyph = {
             let mut iter = iter.clone();

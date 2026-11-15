@@ -8,7 +8,9 @@ static site in `pdfcraft-web-<version>/`:
 | `index.html` | The page. It loads everything through relative URLs. |
 | `pdfcraft-web-<hash>.js` | wasm-bindgen glue (generated, ES module) |
 | `pdfcraft-web-<hash>_bg.wasm` | The app, about 13 MB, or 5 MB with compression |
+| `pdfcraft-ocr-worker-<hash>.js`, `_bg.wasm`, `_loader.js` | The text recognition worker (about 3 MB), started only when OCR runs |
 | `_headers`, `.htaccess` | Sample header rules for Netlify/Cloudflare Pages and Apache |
+| `models/` | The text recognition (OCR) models, about 12 MB, with their licences (CC-BY-SA-4.0) |
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.
 
@@ -55,6 +57,26 @@ location /pdfcraft/ {
 
 Local test: `python3 -m http.server 8765` inside the folder, then open http://localhost:8765/.
 
+## Text recognition (OCR)
+
+Scan & OCR ▸ Recognize Text downloads `models/text-detection.onnx` and
+`models/text-recognition.onnx`, relative to the page, the first time it is opened in a visit.
+Keep `models/` beside `index.html`. The app loads only the files whose SHA-256 matches
+`ATTRIBUTION.toml`, so a wrong file fails like a missing one. Their file names carry no content
+hash, so the app asks the server before using a cached copy (`no-cache`): the server must answer
+that check correctly (an ETag, or a `Last-Modified` that changes whenever the file does). Without
+the models, everything else works and the Recognize Text dialog says the download failed.
+
+Pages are read in Web Workers (`pdfcraft-ocr-worker-<hash>_loader.js`, a module worker), so the
+app keeps responding, and two pages are read at once on a machine with three or more cores. Each
+worker needs about 600 MB while it reads; idle workers close after a minute. The workers need no
+special headers, but a `Content-Security-Policy` must allow them (`worker-src 'self'`, or
+`script-src 'self'`). Where they can't start, the app reads the pages itself, a page at a time,
+and doesn't respond while each page is read.
+
+From a source build, `trunk build --release` doesn't fetch the models. Add them with
+`cargo xtask models dist/web/models` (after the build, which replaces `dist/web`).
+
 ## Embedding in a page (iframe)
 
 ```html
@@ -78,6 +100,76 @@ Local test: `python3 -m http.server 8765` inside the folder, then open http://lo
   downloads) are blocked.
 - Don't send `X-Frame-Options: DENY` or a `frame-ancestors` CSP that excludes the embedding page.
 
+## Same-document host mode (no iframe)
+
+A host application can also run PdfCraft from its own document: it loads the wasm-bindgen module
+itself and gives PdfCraft one of its own canvases, so there is no iframe and no `?host=parent`.
+It opts in with `data-host="page"` on that canvas — the exact value `page` — and the canvas
+keeps the id the app looks up (`id="pdfcraft"`).
+
+The page and the app then talk with DOM `CustomEvent`s on the canvas instead of `postMessage`.
+The app dispatches the same messages it would post to a parent — `pdfcraft:ready`,
+`pdfcraft:save`, `pdfcraft:dirty`, `pdfcraft:failed` — with the message fields (without the
+`type`) as the event's `detail`, and it opens a file when the page dispatches a `pdfcraft:open`
+event with `detail: { name, bytes }`. Events do not bubble, so listen on the canvas itself.
+
+Add the listeners before `init`: the app announces itself with `pdfcraft:ready` while `init` is
+still running, and a file sent in reply would otherwise be missed.
+
+```js
+import init from "./pdfcraft-web-<hash>.js"; // the wasm-bindgen glue shipped with the app
+
+const canvas = document.getElementById("pdfcraft");
+canvas.dataset.host = "page";             // or <canvas id="pdfcraft" data-host="page">
+
+canvas.addEventListener("pdfcraft:ready", () => {
+  // The app is listening; hand it a document now, if you have one.
+  canvas.dispatchEvent(new CustomEvent("pdfcraft:open", {
+    detail: { name: "handout.pdf", bytes: pdfBytes },   // ArrayBuffer or Uint8Array
+  }));
+});
+canvas.addEventListener("pdfcraft:save", (event) => {
+  const { name, saveAs, bytes } = event.detail;         // bytes is an ArrayBuffer
+  // Store the file under `name`; `saveAs` is true for Save As. Report your own errors.
+});
+canvas.addEventListener("pdfcraft:dirty", (event) => {
+  unsaved = event.detail.dirty;                         // warn before leaving, as you like
+});
+canvas.addEventListener("pdfcraft:failed", (event) => {
+  showError(event.detail.error);                        // the app couldn't start
+});
+
+await init({ module_or_path: "./pdfcraft-web-<hash>_bg.wasm" });
+```
+
+- Saves are not downloads in this mode: the `bytes` in `pdfcraft:save` hold the saved PDF, and
+  the host decides where the file goes.
+- `?author=<name>` still signs the user's comments, as with `?host=parent`.
+- An unframed page that uses `?host=parent` keeps the normal app with downloads.
+  `data-host="page"` turns this mode on only when `?host=parent` is absent: if `?host=parent` is
+  present it takes precedence, so a same-origin framed page uses the parent bridge, while an
+  unframed or cross-origin page gets no bridge and keeps normal downloads.
+
+The messages and both transports are the shared contract of [`craft-web-host`](https://github.com/storytold/craft-libs/tree/main/crates/web-host) (storytold/craft-libs#420), the same for every Craft app: its README lists every message, including `saved`, with the compatibility notes. In `pdfcraft:ready`, `version` is the contract's (`"1"`) and `appVersion` is this app's release. PdfCraft reads bytes, so a host sends `bytes`, not a `File`.
+
+### Trust and limits
+
+- **Who is trusted.** In page host mode the page and PdfCraft share one document, so any script on the page can drive the app: open files in it and receive what it saves. Use this mode only for a page you control. The iframe mode (`?host=parent`) answers only the parent window, on the page's own origin.
+- **Files from the host are untrusted input.** An opened file goes through the same reading as one picked with File ▸ Open or dropped on the window, with the same format limits; before it is copied into the app's memory, its size is checked against the host open limit (512 MiB) and a larger file is refused, and a name is cut to 255 characters.
+- **The event and message names are the interface.** `pdfcraft:ready`, `pdfcraft:open`, `pdfcraft:save`, `pdfcraft:dirty` and `pdfcraft:failed`, and the fields they carry (the same as the `?host=parent` messages), stay stable; changing one is a breaking change.
+
+### Driving it from the page (`window.pdfcraft`)
+
+`?control` on the page's URL puts `window.pdfcraft` on the page, from [`craft-web-api`](https://github.com/storytold/craft-libs/tree/main/crates/web-api) (storytold/craft-libs#413), the same shape in every Craft app (`index.html?control`, which can be combined with other flags). It is opt-in because the control channel keeps the accessibility tree of every frame. The browser already exposes PdfCraft's canvas (`id="pdfcraft"`) as `window.pdfcraft`, so the functions are added to that element. `pdfcraft.request(method, params)` calls any method of the UI control channel the desktop app serves with `--control` (`ui.state`, `ui.inspect`, `ui.click`, `ui.key`, `ui.set`…; `ui.open` needs a file system, so on the web it answers with an error and a file is dropped on the page instead), and `execute(command, params)` (`ui.command`: a registry command id), `commands()` (`ui.commands`), `docInspect(params)` (`ui.state`), `uiInspect(params)` (`ui.inspect`) and `screenshot(params)` are shortcuts for the common ones. Each returns a Promise that resolves with the method's result and rejects with an `Error`; a call the app does not answer within 30 seconds rejects, and the app may still reach it later and run it (or reject it), as it does for a desktop client that timed out, so a timed-out call is not guaranteed to have been skipped. The API is installed after `pdfcraft:ready` is posted, and `window.pdfcraft` is the canvas element before that, so wait for a function rather than for the name: `await new Promise(r => { const t = setInterval(() => typeof pdfcraft.request === "function" && (clearInterval(t), r()), 50); })`.
+
+```js
+const state = await pdfcraft.docInspect();               // open documents, page, zoom, panels, dialog
+await pdfcraft.request("ui.set", { key: "show_page_edge_shadows", value: "false" });
+const { data } = await pdfcraft.screenshot();           // the window as PNG (base64)
+```
+
+Opening a PDF, handing a saved or exported file to the page, the file name and the unsaved flag stay with the host messages above.
+
 ## Renderer selection and fallback flags
 
 PdfCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls back to
@@ -92,3 +184,7 @@ PdfCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls
 For example: `<iframe src="https://example.com/pdfcraft/?webgl" ...>`.
 
 A browser with neither WebGPU nor WebGL2 gets a message in place of the app.
+
+The build uses WebAssembly SIMD (`.cargo/config.toml`), which reads a scanned page about 2.4
+times faster. Every current browser has it (Chrome and Edge 91, Firefox 89, Safari 16.4 and
+later). Older browsers can't load the app.
