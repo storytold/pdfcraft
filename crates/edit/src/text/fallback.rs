@@ -902,6 +902,8 @@ mod tests {
         let out = source_show(&m, "A B", 10.0, 0.33, 0.0, 0.0, 1.0, Some(-0.88)).unwrap();
         assert_eq!(out.len(), 3, "{out:?}");
         assert!(out[0].is("BDC") && out[2].is("EMC"), "the logical text keeps the space: {out:?}");
+        let properties = out[0].operands[1].as_dict().unwrap();
+        assert_eq!(properties.get(b"ActualText").and_then(|o| o.as_string()).map(|s| s.to_text()), Some("A B".to_string()), "{out:?}");
         assert!(out[1].is("TJ"), "{out:?}");
         // w1 −0.88 plus the 1 pt stretch over 10 pt: the pen moves 8.8 down and 1 further.
         let array = out[1].operands[0].as_array().unwrap();
