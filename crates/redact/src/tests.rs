@@ -7316,7 +7316,7 @@ fn a_scanned_page_keeps_its_image_and_loses_the_text_under_the_mark() {
     }
 
     // Saving and reopening keeps every bit of that.
-    let mut saved = reopen(&doc);
+    let saved = reopen(&doc);
     assert_eq!(page_image(&saved, 0).map(|(w, h, _)| (w, h)), Some((40, 40)));
     assert!(!content(&saved, 0).contains("0031"));
 }
