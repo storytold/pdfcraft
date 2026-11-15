@@ -10792,10 +10792,20 @@ fn measurements_bad_arguments_leave_document_and_history_unchanged() {
         ("measure_scale", json!({"doc":doc,"page":1,"points":[[0,0],[0,0]],"distance":10})),
         ("measure_snap", json!({"doc":doc,"page":1,"at":[1e100,0]})),
         ("measure_scale", json!({"doc":doc,"page":1,"units_per_point":1,"precision":8})),
+        // A page filter is a page number, not a clamp: 0 and past the end are mistakes.
+        ("measure_list", json!({"doc":doc,"page":0})),
+        ("measure_list", json!({"doc":doc,"page":-1})),
+        ("measure_list", json!({"doc":doc,"page":4})),
+        // Snapping cannot reach a negative distance, and a huge tolerance would collect every path.
+        ("measure_snap", json!({"doc":doc,"page":1,"at":[1,1],"tolerance":-1})),
+        ("measure_snap", json!({"doc":doc,"page":1,"at":[1,1],"tolerance":1e10})),
     ] {
         assert!(a.call(tool, &args).is_err(), "{tool} {args}");
         assert_eq!(ok(&mut a, "doc_list", json!({})), before);
     }
+    // The valid forms still read and snap.
+    assert_eq!(ok(&mut a, "measure_list", json!({"doc":doc,"page":1}))["count"], 0);
+    assert!(ok(&mut a, "measure_snap", json!({"doc":doc,"page":1,"at":[1,1],"tolerance":0}))["snap"].is_null());
     let _ = std::fs::remove_dir_all(dir);
 }
 
