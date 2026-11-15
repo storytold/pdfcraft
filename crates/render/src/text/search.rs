@@ -236,6 +236,14 @@ fn prefix_table(needle: &[char]) -> Vec<usize> {
     prefix
 }
 
+/// Whether `c`, the character before a line-end hyphen, ends a word: a letter, or the voiced or
+/// semi-voiced sound mark U+3099 or U+309A after one. Ignoring width writes ガ as カ and U+3099,
+/// and the halfwidth mark ﾞ as U+3099; the marks are not letters, so without them a word divided
+/// after ガ or ｶﾞ would match whole only where width counts.
+fn ends_a_word(c: char) -> bool {
+    c.is_alphabetic() || matches!(c, '\u{3099}' | '\u{309A}')
+}
+
 /// Whether glyph `i` ends its line with a hyphen that follows a letter of its word, and the next
 /// line starts with a letter. `texts` are the glyphs' folded texts; the invisible characters find
 /// skips are passed over on both sides.
@@ -254,7 +262,7 @@ fn divides(page: &PageText, texts: &[String], i: usize) -> bool {
         None => None,
     };
     let Some(next) = i.checked_add(1) else { return false };
-    before.is_some_and(char::is_alphabetic)
+    before.is_some_and(ends_a_word)
         && breaks_before(page, next)
         && texts.get(next).and_then(|t| t.chars().find(|&c| !is_invisible(c))).is_some_and(char::is_alphabetic)
 }

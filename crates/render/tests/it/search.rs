@@ -149,8 +149,9 @@ fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, ignore_
             } else {
                 None
             };
+            // A sound mark after the letter it voices ends the word too: folded, ガ is カ and U+3099.
             hyphen(last)
-                && before.is_some_and(char::is_alphabetic)
+                && before.is_some_and(|c| c.is_alphabetic() || matches!(c, '\u{3099}' | '\u{309A}'))
                 && i + 1 < n
                 && new_line(i + 1)
                 && visible(texts[i + 1].clone()).chars().next().is_some_and(char::is_alphabetic)
@@ -348,6 +349,24 @@ fn a_word_divided_by_a_line_end_hyphen_matches_whole_and_as_written() {
     assert!(lined(&["a", "-", "2", "0"], &[0, 0, 1, 1]).find("a20").is_empty(), "before a number");
     assert!(lined(&["1", "0", "-", "a", "b"], &[0, 0, 0, 1, 1]).find("10ab").is_empty(), "after a number");
     assert!(lined(&["a", "-"], &[0, 0]).find("a-").len() == 1, "at the end of the page");
+}
+
+/// A word divided after a voiced katakana matches whole whether width is ignored or not: folded,
+/// ガ is カ and the sound mark U+3099, which is not a letter but still ends the letter it voices.
+/// So does a halfwidth ｶﾞ, the mark a glyph of its own.
+#[test]
+fn a_word_divided_after_a_voiced_kana_matches_whole() {
+    let exact = FindOptions { ignore_width: false, ..FindOptions::default() };
+    for (glyphs, lines, query, hit) in [
+        (&["ガ", "-", "イ", "ド"][..], &[0, 0, 1, 1][..], "ガイド", 0..4),
+        (&["ガ-", "イ", "ド"][..], &[0, 1, 1][..], "ガイド", 0..3),
+        (&["ｶ", "ﾞ", "-", "ｲ", "ﾄ", "ﾞ"][..], &[0, 0, 0, 1, 1, 1][..], "ｶﾞｲﾄﾞ", 0..6),
+    ] {
+        let text = lined(glyphs, lines);
+        assert_eq!(text.find(query), vec![hit.clone()], "{glyphs:?}, width ignored");
+        assert_eq!(text.find_with_options(query, exact, usize::MAX), vec![hit], "{glyphs:?}, width counts");
+    }
+    assert_eq!(lined(&["ガ", "-", "イ", "ド"], &[0, 0, 1, 1]).find("ｶﾞｲﾄﾞ"), vec![0..4], "across widths");
 }
 
 #[test]
