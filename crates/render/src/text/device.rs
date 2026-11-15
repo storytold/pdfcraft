@@ -67,6 +67,10 @@ pub(super) struct TextDevice {
     /// The font of the last glyph asked, already in `recovery_fonts`: a run of glyphs of one
     /// font is counted without hashing each glyph's font again.
     last_recovery_font: Option<u128>,
+    /// When the page's text extraction started: past [`RECOVERY_DEADLINE`] the rules are no
+    /// longer asked, so recovering during the interpretation can't be what pushes the page past
+    /// the render pool's watchdog either.
+    started: Started,
     /// What is left of the page's dedupe work ([`MAX_REDRAW_WORK`]).
     pub(super) work_left: usize,
 }
@@ -162,8 +166,10 @@ thread_local! {
     pub(super) static REDRAW_TEXT_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Makes the recovery rules panic on this thread, to show the strict text survives them.
     pub(super) static PANIC_IN_RECOVERY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// How long the strict part of the pages read on this thread takes, in milliseconds, in
-    /// place of the clock.
+    /// Glyphs whose recovery rules were asked on this thread.
+    pub(super) static RECOVERY_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How long the pages read on this thread have taken since their extraction started, in
+    /// milliseconds, in place of the clock.
     pub(super) static STRICT_MILLIS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     /// A smaller dedupe work budget for the pages read on this thread.
     pub(super) static PAGE_WORK: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
@@ -354,6 +360,7 @@ impl TextDevice {
             recovery_failed: false,
             recovery_fonts: std::collections::HashSet::new(),
             last_recovery_font: None,
+            started: Started::now(),
             work_left: page_work(),
         }
     }
@@ -600,12 +607,13 @@ impl TextDevice {
     /// The strict text of `glyph`, what the recovery rules read for it, and its font's style
     /// (worked out once per font, the name shared by its glyphs) when they read something. A
     /// panic in the rules or a page past their budgets ([`MAX_RECOVERY_FONTS`],
-    /// [`MAX_RECOVERED_GLYPHS`]) stops recovering for the page and marks it failed.
+    /// [`MAX_RECOVERED_GLYPHS`], [`RECOVERY_DEADLINE`]) stops recovering for the page and marks
+    /// it failed.
     fn recover_glyph(
         &mut self,
         glyph: &Glyph<'_>,
     ) -> (Option<hayro::hayro_interpret::hayro_cmap::BfString>, Option<Recovery>, hayro::hayro_interpret::font::RecoveredFontStyle) {
-        let over_budget = self.filled.len().saturating_add(self.overrides.len()) >= recovered_glyphs() || {
+        let over_budget = self.filled.len().saturating_add(self.overrides.len()) >= recovered_glyphs() || self.started.past_recovery_deadline() || {
             // Outline and Type 3 fonts count alike: each runs the rules' font-level guards.
             let font = match glyph {
                 Glyph::Outline(g) => g.font_cache_key(),
@@ -622,6 +630,7 @@ impl TextDevice {
             let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 #[cfg(test)]
                 {
+                    RECOVERY_ASKED.with(|c| c.set(c.get().saturating_add(1)));
                     if PANIC_IN_RECOVERY.with(std::cell::Cell::get) {
                         panic!("recovery panics in this test");
                     }
@@ -980,6 +989,7 @@ fn extract_page_with(
     dev.page = initial.transform_rect_bbox(Rect::new(c.x0, c.y0, c.x1, c.y1));
     dev.filter = filter;
     dev.recover = recover;
+    dev.started = started;
     interpret_page(p, &mut ctx, &mut dev);
     // A replacement the content never closed ends with the page.
     dev.finish();
