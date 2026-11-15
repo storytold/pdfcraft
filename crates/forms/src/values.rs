@@ -426,28 +426,38 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             // Keystroke (on commit) and Validate run on a picked value as on typed text, and may
             // change or refuse it (#7383). A multiple selection is a list, which those scripts
             // don't take as one value, and an option number that isn't there is refused below.
+            // The scripts see the export value, however the pick names the option.
+            let export = |v: &str| option_named(f, v).and_then(|i| f.options.get(i)).map_or_else(|| v.to_owned(), |(e, _)| e.clone());
             let picked_value = match value {
                 FieldValue::ChoiceIndices(v) => match v.as_slice() {
                     [] => Some(String::new()),
                     [i] => f.options.get(*i).map(|(e, _)| e.clone()),
                     _ => None,
                 },
-                FieldValue::Choice(v) if v.len() <= 1 => Some(v.first().cloned().unwrap_or_default()),
-                FieldValue::Text(t) => Some(t.clone()),
+                FieldValue::Choice(v) if v.len() <= 1 => Some(v.first().map(|s| export(s)).unwrap_or_default()),
+                FieldValue::Text(t) => Some(export(t)),
                 _ => None,
             };
-            let accepted;
-            let value = match picked_value {
+            let (accepted, reread);
+            let (f, value) = match picked_value {
                 Some(current) if !resetting => {
-                    let (v, _) = scripting::accept(doc, f, &current, scripts)?;
-                    if v == current {
-                        value
+                    let (v, refresh_field) = scripting::accept(doc, f, &current, scripts)?;
+                    // A script that changed this field's own items: the pick is matched against
+                    // the items it has now, by its export value, not by a position in the old ones.
+                    let f = if refresh_field {
+                        reread = fields(doc).into_iter().find(|current| current.obj == f.obj);
+                        reread.as_ref().unwrap_or(f)
+                    } else {
+                        f
+                    };
+                    if v == current && !refresh_field {
+                        (f, value)
                     } else {
                         accepted = FieldValue::Text(v);
-                        &accepted
+                        (f, &accepted)
                     }
                 }
-                _ => value,
+                _ => (f, value),
             };
             // Each value as its export value and, when it is one of the options, that option's
             // position: two options can share an export value, and the position (`/I`) says

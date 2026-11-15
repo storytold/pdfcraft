@@ -3906,14 +3906,43 @@ fn picking_a_combo_option_runs_its_validate_script() {
     let mut doc = one_page();
     let kind = NewField::Combo { options: vec!["ca".into(), "fr".into(), "no".into()], editable: false };
     add_field(&mut doc, 0, [10.0, 10.0, 100.0, 30.0], &kind, Some("country")).unwrap();
+    let obj = field(&fields(&doc), "country").obj;
+    let pair = |e: &str, d: &str| Object::Array(vec![Object::String(PdfString::text(e)), Object::String(PdfString::text(d))]);
+    let opt = Object::Array(vec![pair("ca", "Canada"), pair("fr", "France"), pair("no", "Nowhere")]);
+    doc.update_dict(obj, |d| d.set(b"Opt".to_vec(), opt)).unwrap();
     set_field_script(&mut doc, "country", "validate", Some("check(event.value);")).unwrap();
     let mut seen = Seen(Vec::new());
     set_value_with(&mut doc, "country", &FieldValue::Choice(vec!["fr".into()]), &mut seen).unwrap();
+    set_value_with(&mut doc, "country", &FieldValue::Choice(vec!["France".into()]), &mut seen).unwrap();
     set_value_with(&mut doc, "country", &FieldValue::ChoiceIndices(vec![0]), &mut seen).unwrap();
-    assert_eq!(seen.0, [(FieldEvent::Validate, "fr".to_string()), (FieldEvent::Validate, "ca".to_string())]);
+    let validated = |v: &str| (FieldEvent::Validate, v.to_string());
+    assert_eq!(seen.0, [validated("fr"), validated("fr"), validated("ca")], "the script sees the export value, however the option is named");
     assert_eq!(field(&fields(&doc), "country").value, ["ca"]);
     assert_eq!(set_value_with(&mut doc, "country", &FieldValue::Choice(vec!["no".into()]), &mut seen), Err(FormError::Invalid("refused".into())));
     assert_eq!(field(&fields(&doc), "country").value, ["ca"], "a refused pick keeps the value it had");
+}
+
+/// A Validate script that replaces the picked field's own items: the pick is matched against the
+/// new items, so `/I` names the picked option's place in them, not its place in the old ones.
+#[test]
+fn a_pick_whose_validate_script_replaces_the_fields_items_selects_in_the_new_items() {
+    struct Reorder;
+    impl Scripts for Reorder {
+        fn run(&mut self, _event: FieldEvent, _script: &str, target: &Field, value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
+            let options = vec![("fr".to_string(), "fr".to_string()), ("zz".to_string(), "zz".to_string())];
+            let changes = vec![FieldChange { name: target.name.clone(), options: Some(options), ..Default::default() }];
+            ScriptResult { rc: true, value: value.into(), value_set: false, changes, message: None }
+        }
+    }
+    let mut doc = one_page();
+    let kind = NewField::Combo { options: vec!["ca".into(), "fr".into()], editable: false };
+    add_field(&mut doc, 0, [10.0, 10.0, 100.0, 30.0], &kind, Some("country")).unwrap();
+    set_field_script(&mut doc, "country", "validate", Some("this.setItems(['fr', 'zz']);")).unwrap();
+    set_value_with(&mut doc, "country", &FieldValue::ChoiceIndices(vec![1]), &mut Reorder).unwrap();
+    let f = field(&fields(&doc), "country").clone();
+    assert_eq!(f.options.iter().map(|(e, _)| e.as_str()).collect::<Vec<_>>(), ["fr", "zz"]);
+    assert_eq!(f.value, ["fr"]);
+    assert_eq!(doc.get(f.obj).as_dict().and_then(|d| d.get(b"I").cloned()), Some(Object::Array(vec![Object::Int(0)])));
 }
 
 #[test]
