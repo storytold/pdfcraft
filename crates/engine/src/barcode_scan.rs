@@ -1201,16 +1201,13 @@ impl Document {
             }
         }
 
-        let tw = target_width as usize;
-        let th = target_height as usize;
+        let modules_w = if min_x <= max_x { max_x - min_x + 1 } else { 1 };
+        let modules_h = if min_y <= max_y { max_y - min_y + 1 } else { 1 };
+        let tw = (target_width as usize).max(modules_w);
+        let th = (target_height as usize).max(modules_h);
         let mut rgba = vec![255u8; tw.saturating_mul(th).saturating_mul(4)];
 
         if min_x <= max_x && min_y <= max_y {
-            let modules_w = max_x - min_x + 1;
-            let modules_h = max_y - min_y + 1;
-            if modules_w > tw || modules_h > th {
-                return Err("barcode symbol resolution exceeds target raster dimensions".to_string());
-            }
             let cw = modules_w as f64;
             let ch = modules_h as f64;
 
@@ -1233,20 +1230,14 @@ impl Document {
             }
         }
 
-        encode_png_exact(target_width, target_height, &rgba)
+        encode_png_exact(tw as u32, th as u32, &rgba)
     }
 }
 
 /// Encode RGBA buffer into a PNG byte stream.
 fn encode_png_exact(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
-    let mut out = Vec::new();
-    let mut enc = png::Encoder::new(&mut out, width, height);
-    enc.set_color(png::ColorType::Rgba);
-    enc.set_depth(png::BitDepth::Eight);
-    let mut writer = enc.write_header().map_err(|e| e.to_string())?;
-    writer.write_image_data(rgba).map_err(|e| e.to_string())?;
-    writer.finish().map_err(|e| e.to_string())?;
-    Ok(out)
+    let img = craft_image_codecs::Image::from_u8(width, height, craft_image_codecs::ChannelLayout::Rgba, rgba.to_vec()).map_err(|e| e.to_string())?;
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1258,13 +1249,11 @@ mod tests {
         let text = "ES26270317";
         let png_bytes = Document::generate_replacement_code(CodeKind::Code39, text, 300, 100).expect("generate replacement code");
 
-        let decoder = png::Decoder::new(std::io::Cursor::new(&png_bytes));
-        let mut reader = decoder.read_info().expect("read png");
-        let mut buf = vec![0u8; reader.output_buffer_size().unwrap_or(500 * 500 * 4)];
-        let info = reader.next_frame(&mut buf).expect("read frame");
-        let rgba = &buf[..info.buffer_size()];
+        let img = craft_image_codecs::decode(&png_bytes).expect("read png");
+        let rgba_img = img.convert(craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::U8);
+        let rgba = rgba_img.data();
 
-        let codes = scan_rgba_buffer(info.width as usize, info.height as usize, rgba, 0);
+        let codes = scan_rgba_buffer(img.width() as usize, img.height() as usize, rgba, 0);
         assert!(!codes.is_empty(), "must scan generated code");
         assert_eq!(codes[0].text, text);
         assert_eq!(codes[0].kind, CodeKind::Code39);
@@ -1275,13 +1264,11 @@ mod tests {
         let text = "TEST128";
         let png_bytes = Document::generate_replacement_code(CodeKind::Code128, text, 300, 100).expect("generate code128");
 
-        let decoder = png::Decoder::new(std::io::Cursor::new(&png_bytes));
-        let mut reader = decoder.read_info().expect("read png");
-        let mut buf = vec![0u8; reader.output_buffer_size().unwrap_or(500 * 500 * 4)];
-        let info = reader.next_frame(&mut buf).expect("read frame");
-        let rgba = &buf[..info.buffer_size()];
+        let img = craft_image_codecs::decode(&png_bytes).expect("read png");
+        let rgba_img = img.convert(craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::U8);
+        let rgba = rgba_img.data();
 
-        let codes = scan_rgba_buffer(info.width as usize, info.height as usize, rgba, 0);
+        let codes = scan_rgba_buffer(img.width() as usize, img.height() as usize, rgba, 0);
         assert!(!codes.is_empty(), "must scan generated code128");
         assert_eq!(codes[0].text, text);
         assert_eq!(codes[0].kind, CodeKind::Code128);
@@ -1294,14 +1281,12 @@ mod tests {
         let png_bytes = matrix.to_png_bytes(6, 4).expect("to png");
         println!("Generated PNG: {} bytes", png_bytes.len());
 
-        let decoder = png::Decoder::new(std::io::Cursor::new(&png_bytes));
-        let mut reader = decoder.read_info().expect("read png header");
-        let mut buf = vec![0u8; reader.output_buffer_size().unwrap_or(500 * 500 * 4)];
-        let info = reader.next_frame(&mut buf).expect("read png frame");
-        println!("PNG frame: {}x{}", info.width, info.height);
-        let rgba = &buf[..info.buffer_size()];
+        let img = craft_image_codecs::decode(&png_bytes).expect("read png");
+        let rgba_img = img.convert(craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::U8);
+        let rgba = rgba_img.data();
+        println!("PNG frame: {}x{}", img.width(), img.height());
 
-        let scanned = scan_rgba_buffer(info.width as usize, info.height as usize, rgba, 0);
+        let scanned = scan_rgba_buffer(img.width() as usize, img.height() as usize, rgba, 0);
         println!("Scanned codes: {:?}", scanned.iter().map(|c| (&c.text, c.kind)).collect::<Vec<_>>());
         assert!(!scanned.is_empty(), "must detect generated QR code");
         assert_eq!(scanned[0].kind, CodeKind::QrCode);

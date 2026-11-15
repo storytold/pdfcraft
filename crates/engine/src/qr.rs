@@ -79,15 +79,10 @@ impl QrMatrix {
             }
         }
 
-        let mut out = Vec::new();
-        {
-            let mut encoder = png::Encoder::new(&mut out, img_side, img_side);
-            encoder.set_color(png::ColorType::Rgba);
-            encoder.set_depth(png::BitDepth::Eight);
-            let mut writer = encoder.write_header().map_err(|e| QrError::PngEncoding(e.to_string()))?;
-            writer.write_image_data(&rgba).map_err(|e| QrError::PngEncoding(e.to_string()))?;
-        }
-        Ok(out)
+        let img = craft_image_codecs::Image::from_u8(img_side, img_side, craft_image_codecs::ChannelLayout::Rgba, rgba)
+            .map_err(|e| QrError::PngEncoding(e.to_string()))?;
+        craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default())
+            .map_err(|e| QrError::PngEncoding(e.to_string()))
     }
 
     /// Generate PDF vector path stream operators (`re` ... `f`) within `rect: [x, y, x + w, y + h]`.
@@ -173,14 +168,12 @@ mod tests {
         let qr = QrCode::encode_text(payload).expect("encode QR");
         let png_bytes = qr.to_png_bytes(6, 4).expect("to png");
 
-        let decoder = png::Decoder::new(std::io::Cursor::new(&png_bytes));
-        let mut reader = decoder.read_info().expect("read png header");
-        let mut buf = vec![0u8; reader.output_buffer_size().unwrap_or(500 * 500 * 4)];
-        let info = reader.next_frame(&mut buf).expect("read png frame");
-        let rgba = &buf[..info.buffer_size()];
+        let img = craft_image_codecs::decode(&png_bytes).expect("read png header");
+        let rgba_img = img.convert(craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::U8);
+        let rgba = rgba_img.data();
 
-        let gray = crate::barcode_scan::GrayImage::from_rgba(info.width as usize, info.height as usize, rgba).expect("gray");
-        let results = rxing::helpers::detect_multiple_in_luma(gray.pixels, info.width, info.height).expect("detect");
+        let gray = crate::barcode_scan::GrayImage::from_rgba(img.width() as usize, img.height() as usize, rgba).expect("gray");
+        let results = rxing::helpers::detect_multiple_in_luma(gray.pixels, img.width(), img.height()).expect("detect");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].getText(), payload);
         assert_eq!(*results[0].getBarcodeFormat(), rxing::BarcodeFormat::QR_CODE);
