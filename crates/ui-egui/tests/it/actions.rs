@@ -146,10 +146,10 @@ fn test_action_spawn_non_wasm() {
     h.run_steps(2);
     // run_inline = false runs the action on a worker thread. A fixed number of steps does
     // not wait for it, so poll until the run reports completion before reading output (#3919).
-    let mut waited = 0;
-    while h.state().action_run.is_some() && waited < 500 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while h.state().action_run.is_some() && std::time::Instant::now() < deadline {
         h.run_steps(1);
-        waited += 1;
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert!(h.state().action_run.is_none(), "the action worker never reported completion");
     assert_eq!(h.state().toast.clone().unwrap().0, "Prepare for Distribution: 1 file done");
@@ -182,10 +182,10 @@ fn test_action_spawn_non_wasm_review_regression_1() {
     h.run_steps(2);
     // run_inline = false runs the action on a worker thread. A fixed number of steps does
     // not wait for it, so poll until the run reports completion before reading output (#3919).
-    let mut waited = 0;
-    while h.state().action_run.is_some() && waited < 500 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while h.state().action_run.is_some() && std::time::Instant::now() < deadline {
         h.run_steps(1);
-        waited += 1;
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert!(h.state().action_run.is_none(), "the action worker never reported completion");
     assert_eq!(h.state().toast.clone().unwrap().0, "Prepare for Distribution: 1 file done");
