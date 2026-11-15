@@ -711,10 +711,12 @@ fn may_paint_canvas(
     width: u16,
     height: u16,
 ) -> bool {
-    let (points, curved) = control_box(path);
-    // PdfCraft patch (32): see `MAX_CURVE_EXTENT`. Measured on the path itself: the padding
-    // below is in user units, and under a large scale it would make a small curve look huge.
-    if unbounded_curve(transform.transform_rect_bbox(points), curved) {
+    let (points, curved) = control_box(path, Affine::IDENTITY);
+    // PdfCraft patch (32): see `MAX_CURVE_EXTENT`. Measured on the path's own points mapped to
+    // the device, not on a box around them: under a shear a box's corners map far wider than
+    // the points do, and the padding below is in user units, which under a large scale would
+    // make a small curve look huge. Only a curve is measured: lines cost one segment each.
+    if curved && unbounded_curve(control_box(path, transform).0, curved) {
         return false;
     }
     let grow = reach + DRAW_SLACK;
@@ -724,9 +726,10 @@ fn may_paint_canvas(
     paints_canvas(device, width, height)
 }
 
-/// The box of `path`'s points and control points, which holds the whole path (a curve stays
-/// inside their hull), and whether the path has a curve.
-fn control_box(path: &BezPath) -> (Rect, bool) {
+/// The box of `path`'s points and control points mapped by `transform`, which holds the whole
+/// path (a curve stays inside their hull, and an affine map keeps it there), and whether the
+/// path has a curve.
+fn control_box(path: &BezPath, transform: Affine) -> (Rect, bool) {
     let mut points = Rect::new(
         f64::INFINITY,
         f64::INFINITY,
@@ -734,7 +737,7 @@ fn control_box(path: &BezPath) -> (Rect, bool) {
         f64::NEG_INFINITY,
     );
     let mut curved = false;
-    let mut add = |p: Point| points = points.union_pt(p);
+    let mut add = |p: Point| points = points.union_pt(transform * p);
     for el in path.elements() {
         match *el {
             kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => add(p),
@@ -1735,7 +1738,7 @@ impl Renderer {
         // is in device space here) clips everything away instead. What it would have shown is
         // skipped and reported, and nothing it would have hidden is shown.
         let refused = BezPath::new();
-        let (points, curved) = control_box(clip_path);
+        let (points, curved) = control_box(clip_path, Affine::IDENTITY);
         let clip_path = if unbounded_curve(points, curved) {
             &refused
         } else {

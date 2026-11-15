@@ -6778,8 +6778,9 @@ fn a_form_that_reaches_itself_through_a_pattern_or_a_glyph_is_drawn_once() {
 
 /// A curve too large to flatten is skipped and reported (#7381): flattening one cubic reaching
 /// 10^18 user units asked for 20 GB and aborted the process. A rectangle that large still paints
-/// (lines cost one segment each), and so does an ordinary curve. Vendored patch: hayro
-/// `MAX_CURVE_EXTENT` (32).
+/// (lines cost one segment each), and so does an ordinary curve. So does a small one drawn under a
+/// large scale, or under a shear that maps its huge user-space box far wider than the curve
+/// itself. Vendored patch: hayro `MAX_CURVE_EXTENT` (32).
 #[test]
 fn a_curve_too_large_to_flatten_is_skipped_and_reported() {
     let cases = [
@@ -6790,6 +6791,14 @@ fn a_curve_too_large_to_flatten_is_skipped_and_reported() {
         (
             "a small curve under a large scale",
             "1000000000000 0 0 1000000000000 0 0 cm 0.00000000002 0.00000000002 m 0.00000000018 0.00000000002 0.00000000018 0.00000000018 0.00000000002 0.00000000018 c f",
+            true,
+            false,
+        ),
+        // x' = 8x - 8y, y' = y / 2^20: the control points land within 256 × 224 units, while
+        // the corners of their user-space box land 1.9 × 10^9 apart.
+        (
+            "a small curve under a shear",
+            "8 0 -8 0.00000095367431640625 0 0 cm 33554432 33554432 m 33554464 33554432 268435488 268435456 268435456 268435456 c f",
             true,
             false,
         ),
