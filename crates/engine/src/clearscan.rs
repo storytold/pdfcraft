@@ -371,10 +371,15 @@ impl Session {
         let pages = resolve_pages(count, pages)?;
         let native = (0..count).map(|page| native_scale(doc, page)).collect();
         let cos = doc.editor.as_ref().map(|e| &e.cos).ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
+        let tagged_pages: std::collections::HashSet<usize> = if pages.is_empty() {
+            std::collections::HashSet::new()
+        } else {
+            pdfcraft_a11y::tags(cos).into_iter().filter_map(|tag| tag.page).collect()
+        };
         let mut skip_reasons = vec![None; count];
         for &page in &pages {
             if let Some(slot) = skip_reasons.get_mut(page) {
-                *slot = non_scan_reason(cos, page, doc.info.pages.get(page));
+                *slot = non_scan_reason(cos, page, doc.info.pages.get(page), tagged_pages.contains(&page));
             }
         }
         let geometries = pdfcraft_model::pages(cos)
@@ -507,10 +512,13 @@ fn page_has_text(renderer: &mut PageRenderer, page: usize) -> bool {
     shot.text.as_ref().is_some_and(|text| text.glyphs.iter().any(|glyph| !glyph.text.trim().is_empty()))
 }
 
-fn non_scan_reason(cos: &pdfcraft_cos::Document, page: usize, info: Option<&PageInfo>) -> Option<String> {
+fn non_scan_reason(cos: &pdfcraft_cos::Document, page: usize, info: Option<&PageInfo>, in_struct_tree: bool) -> Option<String> {
     let Ok(content) = pdfcraft_edit::page_scan_content(cos, page) else {
         return Some("the page contents could not be inspected".into());
     };
+    if content.has_tagged_content || in_struct_tree {
+        return Some("the page is tagged and replacing its contents would break its structure tree".into());
+    }
     if content.has_optional_content {
         return Some("the page uses optional content layers".into());
     }
@@ -1118,5 +1126,95 @@ mod tests {
         .expect("wrap in OC");
         let ocg_pdf = Arc::new(write_full(&cos, &SaveOptions::default()).expect("write ocg pdf"));
         assert_clearscan_skipped(ocg_pdf, "optional content layers");
+    }
+
+    #[test]
+    fn clearscan_skips_tagged_pages_and_preserves_structure_tree() {
+        use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_full};
+
+        let png = crate::export::encode_png(32, 32, &vec![250_u8; 32 * 32 * 4]).expect("png");
+        let session = Session::new();
+        let scan_bytes = session.create_from_images(&[("scan.png".into(), png)]).expect("scan");
+
+        // 1. Tagged scanned page with /StructTreeRoot, /ParentTree, /StructParents and /MCID 0.
+        let mut cos = Document::open(Arc::clone(&scan_bytes)).expect("open scan");
+        let page = pdfcraft_model::pages(&cos).swap_remove(0);
+        let root_ref = cos.trailer().reference(b"Root").expect("root");
+        let tree_ref = cos.add(Object::Null);
+        let doc_elem_ref = cos.add(Object::Null);
+        let fig_elem_ref = cos.add(Object::Null);
+        let parent_tree_ref = cos.add(Object::Null);
+
+        let mut fig_dict = Dict::new();
+        fig_dict.set(b"Type".to_vec(), Object::name("StructElem"));
+        fig_dict.set(b"S".to_vec(), Object::name("Figure"));
+        fig_dict.set(b"P".to_vec(), Object::Ref(doc_elem_ref));
+        fig_dict.set(b"Pg".to_vec(), Object::Ref(page.obj));
+        fig_dict.set(b"Alt".to_vec(), Object::String(pdfcraft_cos::PdfString::text("Scanned figure")));
+        fig_dict.set(b"K".to_vec(), Object::Int(0));
+        cos.set(fig_elem_ref, Object::Dict(fig_dict));
+
+        let mut doc_dict = Dict::new();
+        doc_dict.set(b"Type".to_vec(), Object::name("StructElem"));
+        doc_dict.set(b"S".to_vec(), Object::name("Document"));
+        doc_dict.set(b"P".to_vec(), Object::Ref(tree_ref));
+        doc_dict.set(b"K".to_vec(), Object::Array(vec![Object::Ref(fig_elem_ref)]));
+        cos.set(doc_elem_ref, Object::Dict(doc_dict));
+
+        let mut parent_tree = Dict::new();
+        parent_tree.set(b"Nums".to_vec(), Object::Array(vec![Object::Int(0), Object::Array(vec![Object::Ref(fig_elem_ref)])]));
+        cos.set(parent_tree_ref, Object::Dict(parent_tree));
+
+        let mut tree_dict = Dict::new();
+        tree_dict.set(b"Type".to_vec(), Object::name("StructTreeRoot"));
+        tree_dict.set(b"K".to_vec(), Object::Ref(doc_elem_ref));
+        tree_dict.set(b"ParentTree".to_vec(), Object::Ref(parent_tree_ref));
+        cos.set(tree_ref, Object::Dict(tree_dict));
+
+        cos.update_dict(root_ref, |c| {
+            let mut mark_info = Dict::new();
+            mark_info.set(b"Marked".to_vec(), Object::Bool(true));
+            c.set(b"MarkInfo".to_vec(), Object::Dict(mark_info));
+            c.set(b"StructTreeRoot".to_vec(), Object::Ref(tree_ref));
+        })
+        .expect("set StructTreeRoot");
+
+        let bdc = cos.add(Object::Stream(Stream::flate(Dict::new(), b"/Figure << /MCID 0 >> BDC\n")));
+        let emc = cos.add(Object::Stream(Stream::flate(Dict::new(), b"\nEMC\n")));
+        let orig_contents = page.dict.get(b"Contents").cloned().expect("contents");
+        cos.update_dict(page.obj, |p| {
+            p.set(b"StructParents".to_vec(), Object::Int(0));
+            p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(bdc), orig_contents, Object::Ref(emc)]));
+        })
+        .expect("wrap in MCID");
+
+        let tagged_pdf = Arc::new(write_full(&cos, &SaveOptions::default()).expect("write tagged pdf"));
+        assert_clearscan_skipped(Arc::clone(&tagged_pdf), "tagged");
+
+        let check_cos = Document::open(tagged_pdf).expect("reopen");
+        let after_page = pdfcraft_model::pages(&check_cos).swap_remove(0);
+        assert_eq!(after_page.dict.get(b"StructParents").and_then(Object::as_int), Some(0));
+        assert!(pdfcraft_edit::page_scan_content(&check_cos, 0).expect("scan content").has_tagged_content);
+        assert!(pdfcraft_a11y::tags(&check_cos).iter().any(|t| t.kind == "Figure" && t.page == Some(0)));
+
+        // 2. A scan page referenced by /Pg in /StructTreeRoot even without /StructParents or /MCID.
+        let mut cos2 = Document::open(scan_bytes).expect("open scan 2");
+        let page2 = pdfcraft_model::pages(&cos2).swap_remove(0);
+        let root2 = cos2.trailer().reference(b"Root").expect("root2");
+        let tree2 = cos2.add(Object::Null);
+        let elem2 = cos2.add(Object::Null);
+        let mut elem2_dict = Dict::new();
+        elem2_dict.set(b"Type".to_vec(), Object::name("StructElem"));
+        elem2_dict.set(b"S".to_vec(), Object::name("Figure"));
+        elem2_dict.set(b"P".to_vec(), Object::Ref(tree2));
+        elem2_dict.set(b"Pg".to_vec(), Object::Ref(page2.obj));
+        cos2.set(elem2, Object::Dict(elem2_dict));
+        let mut tree2_dict = Dict::new();
+        tree2_dict.set(b"Type".to_vec(), Object::name("StructTreeRoot"));
+        tree2_dict.set(b"K".to_vec(), Object::Ref(elem2));
+        cos2.set(tree2, Object::Dict(tree2_dict));
+        cos2.update_dict(root2, |c| c.set(b"StructTreeRoot".to_vec(), Object::Ref(tree2))).expect("set root2 tree");
+        let pg_only_pdf = Arc::new(write_full(&cos2, &SaveOptions::default()).expect("write pg-only pdf"));
+        assert_clearscan_skipped(pg_only_pdf, "tagged");
     }
 }
