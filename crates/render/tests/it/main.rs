@@ -2,6 +2,7 @@
 
 mod cid_cff_unusable_font_dict;
 mod cid_fallback_query;
+mod content_unclosed_array;
 mod euro_width;
 mod fill_stroke_knockout;
 mod indexed_lookup;
