@@ -17,10 +17,11 @@ pdfcraft-content = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-annot = { workspace = true }
 thiserror.workspace = true
-# JPEG decoding (zune-jpeg) and encoding, and bicubic resampling; already in the tree.
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
-# The same JPEG decoder, used directly to read samples untransformed (/ColorTransform 0).
-zune-jpeg = "0.5"
+# Bicubic resampling; zero codec features.
+image = { version = "0.25", default-features = false }
+# JPEG decoding and encoding via craft-libs.
+craft-jpeg = { workspace = true }
+craft-image-codecs = { workspace = true }
 
 # Lets other programs go first while a copy is being made.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

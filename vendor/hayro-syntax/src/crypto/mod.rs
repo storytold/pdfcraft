@@ -998,12 +998,27 @@ mod pdfcraft_password_tests {
     /// `user` and `owner` and whose file key is `key` (ISO 32000-2 Algorithms 8 and 9).
     #[cfg(feature = "std")]
     fn rev56_dict(revision: u8, user: &[u8], owner: &[u8], key: &[u8; 32]) -> Vec<u8> {
+        rev56_dict_wrapped(revision, user, owner, key, 32)
+    }
+
+    /// [`rev56_dict`] with `/OE` and `/UE` written as the first `wrapped` bytes of their
+    /// AES-256-CBC encryption with padding (32 as the standard has it, or 48 with the padding
+    /// block left in, as some writers leave it).
+    #[cfg(feature = "std")]
+    fn rev56_dict_wrapped(
+        revision: u8,
+        user: &[u8],
+        owner: &[u8],
+        key: &[u8; 32],
+        wrapped: usize,
+    ) -> Vec<u8> {
         let hash = |password: &[u8], salt: &[u8], u: Option<&[u8]>| {
             compute_hash_rev56(password, salt, u, revision).unwrap()
         };
         // AES-256 in CBC mode without padding: `encrypt_cbc` pads, which only adds a block.
-        let wrap =
-            |k: [u8; 32]| AES256Cipher::new(&k).unwrap().encrypt_cbc(key, &[0; 16])[..32].to_vec();
+        let wrap = |k: [u8; 32]| {
+            AES256Cipher::new(&k).unwrap().encrypt_cbc(key, &[0; 16])[..wrapped].to_vec()
+        };
         let (user_validation, user_key, owner_validation, owner_key) =
             ([1; 8], [2; 8], [3; 8], [4; 8]);
         let u = [
@@ -1070,6 +1085,25 @@ mod pdfcraft_password_tests {
         let user = rev56_dict(6, "caf\u{E9}".as_bytes(), b"owner", &key);
         assert_eq!(unlock(&user, "cafe\u{301}"), ok, "R6");
         assert_eq!(unlock(&user, "cafe"), wrong, "R6");
+    }
+
+    /// An R5 or R6 `/OE` and `/UE` of 48 bytes, the padding block of their encryption left in
+    /// (PDFBOX-5866; ISO 32000-2 Table 21 gives 32): their first 32 bytes are the encrypted file
+    /// key, as the document model reads them. The file was refused as invalid, with any password.
+    #[test]
+    #[cfg(feature = "std")]
+    fn an_oe_and_ue_of_48_bytes_unlock_with_their_first_32() {
+        let key = [7; 32];
+        for revision in [5, 6] {
+            let dict = rev56_dict_wrapped(revision, b"user", b"owner", &key, 48);
+            for pw in ["user", "owner"] {
+                assert_eq!(unlock(&dict, pw), Ok(key.to_vec()), "R{revision} {pw}");
+            }
+            assert_eq!(unlock(&dict, "nope"), Err(DecryptionError::PasswordProtected), "R{revision}");
+            // Shorter than 32 bytes is still malformed.
+            let short = rev56_dict_wrapped(revision, b"user", b"owner", &key, 16);
+            assert_eq!(unlock(&short, "user"), Err(DecryptionError::InvalidEncryption), "R{revision}");
+        }
     }
 
     #[test]
