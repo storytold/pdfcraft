@@ -5182,7 +5182,11 @@ fn extgstate_selected_type3_font_keeps_its_glyph_image_after_page_image_delete()
     assert!(glyph_content.contains("/GlyphImg Do"));
     let font_resources = font.as_dict().unwrap().get(b"Resources").map(|o| saved.resolve(o)).unwrap();
     let glyph_image = font_resources.as_dict().unwrap().get(b"XObject").map(|o| saved.resolve(o)).unwrap();
-    assert_eq!(glyph_image.as_dict().unwrap().get(b"GlyphImg").and_then(Object::as_ref), Some(target));
+    // A full save renumbers the objects it keeps, so the alias is followed to the payload rather
+    // than compared with the number the image had in the document being edited.
+    let kept = glyph_image.as_dict().unwrap().get(b"GlyphImg").and_then(Object::as_ref).expect("the glyph keeps its image alias");
+    let Object::Stream(kept) = &*saved.get(kept) else { panic!("the glyph's image alias points at a stream") };
+    assert!(kept.raw.windows(PRIVATE.len()).any(|w| w == PRIVATE), "the glyph keeps the image it draws");
 }
 
 #[test]
