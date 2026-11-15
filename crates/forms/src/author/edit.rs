@@ -163,6 +163,20 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
     if let Some(rotation) = props.rotation {
         check_rotation(&f, name, rotation)?;
     }
+    // So is a check style and its widget (#6682): a refused one must not leave a rename or lock
+    // behind.
+    if props.check_style.is_some() && !matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) {
+        return invalid("only check boxes and radio buttons have a check style");
+    }
+    if props.check_style.is_none() && props.check_style_widget.is_some() {
+        return invalid("check_style_widget changes one widget's check style; give check_style too");
+    }
+    if props.check_style.is_some()
+        && let Some(wi) = props.check_style_widget
+        && wi >= f.widgets.len()
+    {
+        return invalid(format!("{name} has no widget {}; it has {}", wi.saturating_add(1), f.widgets.len()));
+    }
     // A locked field only takes unlocking (Acrobat greys its properties out).
     if f.locked() && props.locked != Some(false) && *props != (FieldProps { locked: props.locked, ..FieldProps::default() }) {
         return invalid(format!("{name} is locked: unlock it first"));
@@ -235,18 +249,6 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
     }
     if props.options.as_ref().is_some_and(Vec::is_empty) && matches!(f.kind, FieldKind::Combo | FieldKind::List) {
         return invalid("a list needs at least one option");
-    }
-    if props.check_style.is_some() && !matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) {
-        return invalid("only check boxes and radio buttons have a check style");
-    }
-    if props.check_style.is_none() && props.check_style_widget.is_some() {
-        return invalid("check_style_widget changes one widget's check style; give check_style too");
-    }
-    if props.check_style.is_some()
-        && let Some(wi) = props.check_style_widget
-        && wi >= f.widgets.len()
-    {
-        return invalid(format!("{name} has no widget {}; it has {}", wi.saturating_add(1), f.widgets.len()));
     }
     let mut list_picked = None;
     let (sort_items, old_selection) = items_to_sort(doc, &f, props);

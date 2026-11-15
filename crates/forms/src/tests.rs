@@ -2663,6 +2663,17 @@ fn radio_buttons_keep_their_own_marks() {
     let doc2 = reopen(&doc);
     assert_eq!(styles(&doc2), [CheckStyle::Circle, CheckStyle::Star], "a rejected change writes nothing");
     assert_eq!(field(&fields(&doc2), "pick").tooltip, None, "not even its other properties");
+    let rename = FieldProps { name: Some("chosen".into()), ..one(2, CheckStyle::Cross) };
+    assert!(set_props(&mut doc, "pick", &rename).is_err());
+    assert!(fields(&doc).iter().any(|f| f.name == "pick"), "checked before the rename is written");
+    assert!(set_props(&mut doc, "pick", &FieldProps { locked: Some(true), ..one(2, CheckStyle::Cross) }).is_err());
+    assert!(!field(&fields(&doc), "pick").locked(), "and before the lock");
+    let text = add_field(&mut doc, 0, [50.0, 500.0, 150.0, 520.0], &NewField::Text { multiline: false }, None).unwrap();
+    let styled =
+        FieldProps { name: Some("styled".into()), check_style: Some(CheckStyle::Star), check_style_widget: Some(4), ..FieldProps::default() };
+    let err = set_props(&mut doc, &text, &styled).unwrap_err().to_string();
+    assert!(err.contains("only check boxes and radio buttons"), "the kind is the first problem: {err}");
+    assert!(fields(&doc).iter().any(|f| f.name == text), "a text field is not renamed by a refused style");
     set_props(&mut doc, "pick", &FieldProps { check_style: Some(CheckStyle::Square), ..FieldProps::default() }).unwrap();
     assert_eq!(styles(&reopen(&doc)), [CheckStyle::Square, CheckStyle::Square], "without a widget, every button changes");
 }

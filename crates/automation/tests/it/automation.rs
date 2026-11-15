@@ -5686,19 +5686,7 @@ fn form_fields_reports_the_marks_a_file_arrives_with() {
         "<< /CA (H) >>",
         "<< /Length 0 >>\nstream\n\nendstream",
     ];
-    let mut bytes = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, object) in objects.iter().enumerate() {
-        offsets.push(bytes.len());
-        bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
-    }
-    let xref = bytes.len();
-    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
-    for o in offsets {
-        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
-    std::fs::write(dir.join("marks.pdf"), bytes).unwrap();
+    std::fs::write(dir.join("marks.pdf"), pdf_of(&objects)).unwrap();
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "marks.pdf" }))["doc"].as_u64().unwrap();
     let fields = ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"].clone();
@@ -5708,6 +5696,27 @@ fn form_fields_reports_the_marks_a_file_arrives_with() {
     assert_eq!((&agree["check_style"], &agree["check_styles"]), (&json!("mixed"), &json!(["check", "star"])), "{agree}");
     let empty = named("empty");
     assert_eq!((empty.get("check_style"), empty.get("check_styles")), (None, None), "no widget, no mark: {empty}");
+}
+
+#[test]
+fn form_fields_reads_each_rows_own_marks_when_two_fields_share_a_name() {
+    // #6682 review: two field objects named agree, one a check and one a star. Each row reports
+    // its own widgets' mark, not the first field's.
+    let dir = workdir("same-name-marks");
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /Rect [20 300 36 316] /P 3 0 R /F 4 /AS /Off /MK << /CA (4) >> /AP << /N << /Yes 6 0 R /Off 6 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /Rect [50 300 66 316] /P 3 0 R /F 4 /AS /Off /MK << /CA (H) >> /AP << /N << /Yes 6 0 R /Off 6 0 R >> >> >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+    ];
+    std::fs::write(dir.join("twins.pdf"), pdf_of(&objects)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "twins.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"].clone();
+    let marks: Vec<_> = fields.as_array().unwrap().iter().filter(|f| f["name"] == "agree").map(|f| f["check_style"].clone()).collect();
+    assert_eq!(marks, [json!("check"), json!("star")], "{fields}");
 }
 
 #[test]

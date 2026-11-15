@@ -700,8 +700,14 @@ impl Document {
     /// Each widget's mark of a check box or radio button, in widget order, `None` for other
     /// fields. The widgets of one field can have different marks.
     pub fn field_check_styles(&self, name: &str) -> Option<Vec<CheckStyle>> {
+        self.check_styles_of(self.form.iter().find(|f| f.name == name)?.obj)
+    }
+
+    /// [`Self::field_check_styles`] of the field object `obj` in [`Self::form`], for when several
+    /// fields share a name. `None` when no field of this document is that object.
+    pub fn check_styles_of(&self, obj: pdfcraft_cos::ObjRef) -> Option<Vec<CheckStyle>> {
         let e = self.editor.as_ref()?;
-        let f = self.form.iter().find(|f| f.name == name)?;
+        let f = self.form.iter().find(|f| f.obj == obj)?;
         matches!(f.kind, FormFieldKind::CheckBox | FormFieldKind::Radio).then(|| pdfcraft_forms::check_styles(&e.cos, f))
     }
 

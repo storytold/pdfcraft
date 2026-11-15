@@ -327,8 +327,8 @@ impl Automation {
                     o.insert("tooltip".into(), json!(t));
                 }
                 // Each widget has its own mark (#6682): one style when they agree, else "mixed"
-                // and each widget's.
-                if let Some(styles) = doc.field_check_styles(&f.name)
+                // and each widget's. Read from this field, as another may share its name.
+                if let Some(styles) = doc.check_styles_of(f.obj)
                     && let Some(first) = styles.first()
                 {
                     let label = |s: &pdfcraft_engine::CheckStyle| s.label().to_lowercase();
