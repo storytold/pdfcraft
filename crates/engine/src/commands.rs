@@ -18,8 +18,10 @@ pub enum Needs {
     Nothing,
     /// A document is open.
     Document,
-    /// The open document's security allows page changes (insert, delete, rotate, extract…).
+    /// The open document's security allows page changes (insert, delete, rotate…).
     Assembly,
+    /// The open document's security allows taking pages out into new files (extract, split).
+    PageExtraction,
     /// The open document's security allows content and metadata changes.
     Modification,
     /// The open document's security allows adding and changing comments.
@@ -291,7 +293,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("comment.polyline", "Draw connected lines", None, None, Annotate, "spline"),
     c("comment.cloud", "Draw a cloud", None, None, Annotate, "cloud"),
     c("comment.callout", "Add a callout", None, None, Annotate, "message-square-quote"),
-    c("comment.caret", "Insert text", None, None, Annotate, "text-cursor-input"),
+    c("comment.caret", "Insert text", None, None, Annotate, "message-square-text"),
     c("comment.replace", "Replace text", None, None, Annotate, "replace"),
     c("comment.attach", "Attach a file", None, None, Annotate, "paperclip"),
     c("comment.eraser", "Erase drawings", None, None, Annotate, "eraser"),
@@ -416,8 +418,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.boxes", "Set page boxes…", PAGES, None, Assembly, "square-dashed-mouse-pointer"),
     c("page.insert", "Insert pages from file…", PAGES, None, Assembly, "file-input"),
     c("page.replace", "Replace pages…", PAGES, None, Assembly, "replace"),
-    c("page.extract", "Extract pages…", PAGES, None, Assembly, "file-output"),
-    c("page.split", "Split document…", PAGES, None, Assembly, "scissors"),
+    c("page.extract", "Extract pages…", PAGES, None, PageExtraction, "file-output"),
+    c("page.split", "Split document…", PAGES, None, PageExtraction, "scissors"),
     c("page.number", "Number pages…", PAGES, None, Assembly, "hash"),
     c("prepress.marks", "Add printer marks…", None, None, Modification, "ruler"),
     c("prepress.marks.remove", "Remove printer marks", None, None, Marks(crate::MarkKind::PrinterMarks), "ruler"),
@@ -449,6 +451,7 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
         Nothing => true,
         Document | TwoPageView => doc.is_some(),
         Assembly => doc.is_some_and(|d| d.allows_assembly()),
+        PageExtraction => doc.is_some_and(|d| d.allows_page_extraction()),
         Modification => doc.is_some_and(|d| d.allows_modification()),
         Annotate => doc.is_some_and(|d| d.allows_annotation()),
         Copying => doc.is_some_and(|d| d.allows_copying()),
