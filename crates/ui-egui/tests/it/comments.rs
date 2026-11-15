@@ -245,6 +245,39 @@ fn the_quick_bar_colour_changes_the_selected_comment() {
     assert_eq!(state.comment_prefs.style(CommentTool::Highlight).color, [0.0, 0.47, 0.84]);
 }
 
+/// #7159: the quick bar's Fill colour reaches the selected shape as its Colour does. It only set
+/// the fill of rectangles drawn afterwards, so a selected one kept its old fill.
+#[test]
+fn the_quick_bar_fill_changes_the_selected_shape() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    h.state_mut().comment_prefs.set_fill(CommentTool::Rectangle, Some([1.0, 0.0, 0.0]));
+    h.run_steps(2);
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    let fill = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).and_then(|doc| doc.comment_props(0, 0)).and_then(|p| p.fill)
+    };
+    assert_eq!(fill(&h), Some([1.0, 0.0, 0.0]));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the new rectangle is selected");
+
+    h.get_by_label("Fill colour").click();
+    h.run_steps(2);
+    h.get_by_label("Blue").click();
+    h.run_steps(3);
+    assert_eq!(fill(&h), Some([0.0, 0.47, 0.84]), "the selected rectangle takes the fill");
+    let undo = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_owned);
+    assert_eq!(undo(&h).as_deref(), Some("Change comment properties"), "one undo step");
+    assert_eq!(h.state().comment_prefs.style(CommentTool::Rectangle).fill, Some([0.0, 0.47, 0.84]), "and so do new ones");
+
+    h.get_by_label("Fill colour").click();
+    h.run_steps(2);
+    h.get_by_label("No fill").click();
+    h.run_steps(3);
+    assert_eq!(fill(&h), None, "No fill takes it away");
+}
+
 #[test]
 fn the_quick_bar_colour_changes_the_selected_arrow() {
     use pdfcraft_ui_egui::comments::CommentTool;
@@ -1454,8 +1487,10 @@ fn shapes_take_a_fill_colour_from_the_quick_bar_and_properties() {
         p.fill
     };
     assert_eq!(fill_of(&h, 0), Some([1.0, 0.5, 0.0]), "the new rectangle is filled");
-    // Quick bar ▸ Fill colour ▸ No fill: the next rectangle has none.
+    // Quick bar ▸ Fill colour ▸ No fill: the next rectangle has none. With nothing selected it sets
+    // only the tool's default; a selected rectangle would take it too (#7159).
     h.state_mut().set_option("quick", "square").unwrap();
+    h.state_mut().views[0].comments.clear_selection();
     h.run_steps(2);
     h.get_by_label("Fill colour").click();
     h.run_steps(2);
