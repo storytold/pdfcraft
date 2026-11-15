@@ -13,8 +13,8 @@
 //! subpaths whose four corners form an axis-aligned rectangle in user space (#1510) are
 //! considered when closed by a fill operator — other filled paths, shadings and patterns are
 //! not; a rectangle drawn with a translucent ExtGState (`/ca < 1`) is not flagged; opaque
-//! filled `/Square` annotations count as covers, but annotation rectangles are compared in
-//! unrotated user space, so pages with `/Rotate` may misalign;
+//! filled `/Square` annotations count as covers using their stored `/Rect`; their
+//! appearance streams and `NoRotate` placement are not interpreted;
 //! covers inside form XObjects are found, but only text drawn directly in the page content
 //! is checked under them, so text inside a form XObject is not audited.
 //!
