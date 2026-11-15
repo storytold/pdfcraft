@@ -396,7 +396,7 @@ impl Session {
         let current_keys = std::mem::replace(&mut editor.keys, keys);
         editor.redo.push((label.clone(), current, current_keys, scope));
         Self::adopt_keys(doc);
-        let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
+        let refreshed = guard(|| Self::refresh_restored(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             if let Some(ed) = doc.editor.as_mut()
                 && let Some((label, current, current_keys, scope)) = ed.redo.pop()
@@ -433,7 +433,7 @@ impl Session {
         let current_keys = std::mem::replace(&mut editor.keys, keys);
         editor.undo.push((label.clone(), current, current_keys, scope));
         Self::adopt_keys(doc);
-        let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
+        let refreshed = guard(|| Self::refresh_restored(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             if let Some(ed) = doc.editor.as_mut()
                 && let Some((label, current, current_keys, scope)) = ed.undo.pop()
@@ -474,6 +474,16 @@ impl Session {
             doc.password = e.keys.render.clone();
             doc.config.password = e.keys.render.as_deref().map(Arc::from);
         }
+    }
+
+    /// [`Self::refresh_scoped`] for a graph undo or redo just brought back. The history survives a
+    /// full save, which renumbers the objects, so the graph may name the layers by other numbers
+    /// than the open document's: the user's layer choices then follow their layers by name, as
+    /// after the save itself, and the layer list is read again whatever `scope` was.
+    fn refresh_restored(doc: &mut Document, scope: Scope) -> Result<(), EditError> {
+        let renumbered =
+            !doc.info.layers.is_empty() && doc.editor.as_ref().is_some_and(|e| layer_ids(&e.cos).iter().ne(doc.info.layers.iter().map(|l| &l.id)));
+        if renumbered { Self::refresh_renumbered(doc) } else { Self::refresh_scoped(doc, scope) }
     }
 
     /// Rebuild the working bytes and the view data that `scope` may have changed. Metadata edits
@@ -745,6 +755,22 @@ impl Session {
         doc.bytes = bytes;
         Ok(())
     }
+}
+
+/// The optional content groups `cos` lists as layers, in order (what the inspection reads: a group
+/// listed twice is one layer, and one that is not a dictionary is none).
+fn layer_ids(cos: &pdfcraft_cos::Document) -> Vec<(u32, u16)> {
+    let props =
+        cos.trailer().get(b"Root").map(|r| cos.resolve(r)).and_then(|r| r.as_dict().and_then(|r| r.get(b"OCProperties").map(|p| cos.resolve(p))));
+    let groups = props.as_deref().and_then(|p| p.as_dict()).and_then(|p| p.get(b"OCGs").map(|g| cos.resolve(g)));
+    let mut ids: Vec<(u32, u16)> = Vec::new();
+    for group in groups.as_deref().and_then(|g| g.as_array()).into_iter().flatten() {
+        let Some(id) = group.as_ref().map(|id| (id.num, id.generation)) else { continue };
+        if cos.resolve(group).as_dict().is_some() && !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids
 }
 
 /// Give `new`, the layers of a file whose objects were renumbered, the visibility the user chose on
