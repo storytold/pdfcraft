@@ -37,7 +37,9 @@ craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.
 # The document model at storytold/craft-libs#1493 (AES stream data cut short, the unlock refusal),
 # on the e2dc681a3 pin: only craft-pdf moves.
 craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "d5db2bbe8b70ed1469e0b5d05d92668e4c88f21c", features = ["cos", "crypt", "filters"] }
-craft-rtf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
+# The writer the RTF export maps onto (storytold/craft-libs#793), at storytold/craft-libs#1467:
+# its font and colour lookups take constant time, as PdfCraft's own writer did.
+craft-rtf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "f29e82f1a7a009e68312bd2e84adab72be23344d" }
 craft-csv = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-xml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-image-codecs = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
