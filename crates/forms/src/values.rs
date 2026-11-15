@@ -517,15 +517,17 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
 }
 
 /// Redraw a calculated value without running input validation or calculation again.
-pub(crate) fn redraw_calculated_values(doc: &mut Document, pending: &[(ObjRef, Vec<String>)], scripts: &mut dyn Scripts) -> Result<(), FormError> {
+pub(crate) fn redraw_calculated_values(doc: &mut Document, pending: &[ObjRef], scripts: &mut dyn Scripts) -> Result<(), FormError> {
     if pending.is_empty() {
         return Ok(());
     }
     // All pending values have been written. Format sees the final form, and appearance
     // writes do not cause another whole-form walk (including hidden rule storage).
     let all = fields(doc);
-    for (obj, values) in pending {
+    for obj in pending {
         let Some(f) = all.iter().find(|f| f.obj == *obj) else { continue };
+        // A later change in the batch may have overwritten the value that queued this redraw.
+        let values = &f.value;
         let mut no_scripts = NoScripts;
         let formatting: &mut dyn Scripts = if scripts.stopped() { &mut no_scripts } else { scripts };
         let shown = match (values.as_slice(), &f.actions.scripts.format) {

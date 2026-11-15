@@ -364,7 +364,7 @@ pub(crate) fn apply_changes(
                 tmp.actions = Default::default();
                 crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
                 if c.formatted {
-                    formatted.push((f.obj, v.clone()));
+                    formatted.push(f.obj);
                 }
             }
         }
@@ -380,10 +380,9 @@ pub(crate) fn apply_changes(
             doc.update_dict(f.obj, |d| d.set(b"Ff".to_vec(), Object::Int(ff as i64)))?;
         }
         let shown = c.display.map(|display| apply_display(doc, f, display)).transpose()?.unwrap_or(false);
-        if shown && !formatted.iter().any(|(obj, _)| *obj == f.obj) {
+        if shown && !formatted.contains(&f.obj) {
             // Hidden widgets defer layout; restore Format before the raw-value fallback.
-            let value = c.value.as_ref().filter(|_| !except_object.map_or(c.name == except, |obj| f.obj == obj)).unwrap_or(&f.value).clone();
-            formatted.push((f.obj, value));
+            formatted.push(f.obj);
         }
         if c.fill_color.is_some() || c.stroke_color.is_some() {
             protect_other_mk_owners(doc, f, &mk_owners)?;
