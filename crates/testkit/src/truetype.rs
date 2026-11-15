@@ -73,6 +73,24 @@ pub fn subset(num_glyphs: u16, drawn: &[u16], cmap: Cmap<'_>, post: Option<u32>)
 /// [`subset`] whose glyphs have their own advance widths, `widths(gid)` in units of 1000 per em
 /// (`None`: every glyph 600 wide, one metric for all, as [`subset`]).
 pub fn subset_with_widths(num_glyphs: u16, drawn: &[u16], cmap: Cmap<'_>, post: Option<u32>, widths: Option<&dyn Fn(u16) -> u16>) -> Vec<u8> {
+    build(num_glyphs, drawn, cmap, post.map(Post::Version), widths)
+}
+
+/// [`subset`] with a version 2.0 `post` table naming glyph `i` `names[i]`, each name the font's
+/// own (indices from 258); glyphs past the end of `names` are named `.notdef`.
+pub fn subset_named(num_glyphs: u16, drawn: &[u16], cmap: Cmap<'_>, names: &[&str]) -> Vec<u8> {
+    build(num_glyphs, drawn, cmap, Some(Post::Names(names)), None)
+}
+
+/// The `post` table of a [`subset`].
+enum Post<'a> {
+    /// That version, every glyph named `glyph` in a 2.0 one.
+    Version(u32),
+    /// Version 2.0 with these names.
+    Names(&'a [&'a str]),
+}
+
+fn build(num_glyphs: u16, drawn: &[u16], cmap: Cmap<'_>, post: Option<Post<'_>>, widths: Option<&dyn Fn(u16) -> u16>) -> Vec<u8> {
     let num_glyphs = num_glyphs.max(1);
     // One square: one contour of four on-curve points, two-byte coordinates.
     let mut square = Vec::new();
@@ -159,7 +177,24 @@ pub fn subset_with_widths(num_glyphs: u16, drawn: &[u16], cmap: Cmap<'_>, post: 
     tables.push((*b"hmtx", hmtx));
     tables.push((*b"loca", loca));
     tables.push((*b"maxp", maxp));
-    if let Some(version) = post {
+    if let Some(Post::Names(names)) = post {
+        let mut t = Vec::new();
+        be32(&mut t, 0x0002_0000);
+        t.resize(32, 0);
+        be16(&mut t, num_glyphs);
+        for i in 0..num_glyphs {
+            // Index 0 is `.notdef` among the standard Macintosh names.
+            let own = names.get(usize::from(i)).map_or(0, |_| 258u16.saturating_add(i));
+            be16(&mut t, own);
+        }
+        for name in names.iter().take(usize::from(num_glyphs)) {
+            // A Pascal string: at most 255 bytes.
+            let bytes = name.as_bytes().get(..255).unwrap_or(name.as_bytes());
+            t.push(u8::try_from(bytes.len()).unwrap_or(u8::MAX));
+            t.extend_from_slice(bytes);
+        }
+        tables.push((*b"post", t));
+    } else if let Some(Post::Version(version)) = post {
         let mut t = Vec::new();
         be32(&mut t, version);
         t.resize(32, 0);

@@ -1703,6 +1703,25 @@ fn adobe_small_capitals_read_as_their_letters_in_small_capitals() {
     }
 }
 
+/// Review on #6840: a symbolic TrueType font without `/Encoding` reads a code through the glyph
+/// its own `cmap` selects, by that glyph's `post` table name (`Asmall`, U+F761, in the strict
+/// text). The rules read the same name, not the StandardEncoding `A` that a code without an
+/// encoding otherwise falls back on, so rule M reads the small capitals.
+#[test]
+fn a_symbolic_truetype_fonts_own_glyph_names_reach_the_rules() {
+    let names = [".notdef", "Asmall", "Bsmall", "zerooldstyle"];
+    let program = pdfcraft_testkit::truetype::subset_named(4, &[1, 2, 3], Cmap::Symbolic(&[(1, 1), (2, 2), (3, 3)]), &names);
+    let (strict, recovered, plain) = layers(&parse(simple_truetype_page(program, &[1, 2, 3])));
+    assert_eq!(strict, plain);
+    assert_eq!(strict.plain_text(), "\u{F761}\u{F762}\u{F730}");
+    let r = recovered.expect("recovered");
+    assert_eq!(r.text.plain_text(), "ab0");
+    for k in 0..r.text.glyphs.len() {
+        assert_eq!(r.recovery_of(k).map(|x| x.rule), Some(RecoveryRule::AdobeSmallCaps), "glyph {k}");
+        assert_eq!(r.style_of(k).map(|s| s.small_caps), Some(k < 2), "glyph {k}");
+    }
+}
+
 /// Rule M reads the same code points from `/ToUnicode`, but only where the glyph's own name
 /// confirms the form (`a.sc`, `zero.oldstyle`), and only those the glyph list names as a small
 /// capital or an oldstyle figure of the very character at their Latin-1 offset: U+F6CE (`Grave`,

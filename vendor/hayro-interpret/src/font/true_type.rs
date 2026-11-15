@@ -203,7 +203,7 @@ impl TrueTypeFont {
         strict: Option<&BfString>,
     ) -> Option<Recovery> {
         let names = |c: u8| match &self.kind {
-            Kind::Embedded(e) => e.code_to_name(c),
+            Kind::Embedded(e) => e.recovery_name(c),
             Kind::Standard(s) => s.code_to_ps_name(c),
         };
         let code_glyph = |c: u8| (self.map_code(c), self.char_code_to_unicode(u32::from(c)));
@@ -288,6 +288,9 @@ struct EmbeddedKind {
     /// PdfCraft patch (101): whether the font may take the Mac OS Roman reading at all, worked out
     /// once when it is loaded (`EmbeddedKind::mac_roman_name`).
     mac_roman_eligible: bool,
+    /// PdfCraft patch (107): each glyph's `post` table name, for the recovery rules
+    /// (`EmbeddedKind::recovery_name`), worked out the first time they ask.
+    post_names: std::cell::OnceCell<HashMap<GlyphId, String>>,
 }
 
 impl EmbeddedKind {
@@ -353,6 +356,7 @@ impl EmbeddedKind {
             postscript_name,
             text_names,
             mac_roman_eligible: !names_base_encoding && !symbolic_builtin,
+            post_names: std::cell::OnceCell::new(),
         })
     }
 
@@ -415,6 +419,32 @@ impl EmbeddedKind {
             return None;
         }
         self.text_names.get(&glyph).map(String::as_str)
+    }
+
+    /// PdfCraft patch (107): the name the recovery rules read a code by. Where the strict text
+    /// comes from the `post` table name of the glyph the code selects (`symbolic_text`), that
+    /// name: code 65 drawing `Asmall` is `Asmall`, not the StandardEncoding `A` that
+    /// `code_to_name` falls back on for a font without an encoding. Otherwise `code_to_name`.
+    /// Strict extraction and glyph selection are unchanged.
+    fn recovery_name(&self, code: u8) -> Option<&str> {
+        if self.symbolic_text(code).is_some() {
+            let glyph = self.map_code(code);
+            let names = self.post_names.get_or_init(|| {
+                // A glyph with several names takes the first in byte order, whatever order the
+                // map iterates in.
+                let mut by_glyph: HashMap<GlyphId, String> = HashMap::new();
+                for (name, glyph) in &self.glyph_names {
+                    if by_glyph.get(glyph).is_none_or(|kept| name < kept) {
+                        by_glyph.insert(*glyph, name.clone());
+                    }
+                }
+                by_glyph
+            });
+            if let Some(name) = names.get(&glyph) {
+                return Some(name);
+            }
+        }
+        self.code_to_name(code)
     }
 
     fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
