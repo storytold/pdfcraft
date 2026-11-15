@@ -4513,8 +4513,8 @@ fn closing_a_pop_up_saves_its_typed_text() {
     assert_eq!((note.contents.as_deref(), note.popup.map(|p| p.open)), (Some("A note"), Some(true)), "one undo step for both");
 }
 
-/// The selection bar stays inside the pages' area: its place was worked out for a 520 pt bar,
-/// so longer labels (German here) pushed it over the side panel next to a selection on the right.
+/// The selection bar stays inside the pages' area, and opens above the selection it belongs to
+/// (German here, whose Replace text label is the bar's widest, next to a selection on the right).
 #[test]
 fn the_selection_bar_stays_inside_the_pages_area() {
     let mut h = harness(|app| app.set_option("language", "de").unwrap());
@@ -4529,9 +4529,9 @@ fn the_selection_bar_stays_inside_the_pages_area() {
     // The bar's whole area, frame included, not only its first and last buttons.
     let id = egui::Id::unique(("text-selection-actions", h.state().views[0].view_key()));
     let bar = h.ctx.memory(|m| m.area_rect(id)).expect("the selection bar is shown");
-    // The bar opens at the selection's left edge: past the area's right edge, without the clamp.
-    let anchor = h.state().views[0].glyph_screen_rect(0, last).unwrap().left();
-    assert!(anchor + bar.width() > viewport.right(), "selection at {anchor}, bar {} wide, area {viewport:?}", bar.width());
+    let selection = h.state().views[0].glyph_screen_rect(0, last).unwrap();
+    // The bar opens above the first selected line, so it never covers the next line being read.
+    assert!(bar.bottom() <= selection.top(), "bar {bar:?} above the selection {selection:?}");
     assert!(viewport.contains_rect(bar), "bar {bar:?} inside {viewport:?}");
 }
 
