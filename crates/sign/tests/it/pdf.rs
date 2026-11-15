@@ -1050,6 +1050,13 @@ fn embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid() {
         doc.get(root).as_dict().unwrap().get(b"DSS").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap();
     assert_eq!(dss_dict.name(b"Type"), Some(b"DSS".as_slice()));
     assert!(dss_dict.contains(b"Certs") && dss_dict.contains(b"OCSPs") && dss_dict.contains(b"CRLs") && dss_dict.contains(b"VRI"));
+    // A signature's /VRI entry points at the store's arrays instead of holding its own copy of each.
+    let vri = dss_dict.get(b"VRI").map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()).unwrap();
+    let entry = vri.iter().next().and_then(|(_, e)| e.as_dict().cloned()).unwrap();
+    for (vri_key, dss_key) in [(&b"Cert"[..], &b"Certs"[..]), (b"OCSP", b"OCSPs"), (b"CRL", b"CRLs")] {
+        assert!(matches!(entry.get(vri_key), Some(pdfcraft_cos::Object::Ref(_))));
+        assert_eq!(entry.get(vri_key), dss_dict.get(dss_key));
+    }
     // The earlier signature still validates; the DSS counts as a permitted change.
     let s = signatures(&doc, &ltv, &TrustStore::default()).into_iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
     assert_eq!(s.status, Status::Unknown);
