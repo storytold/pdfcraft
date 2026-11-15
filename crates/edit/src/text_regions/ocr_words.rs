@@ -138,6 +138,7 @@ fn stretch(phrase: &TextBlock, lines: &[TextLine], indices: &[usize]) -> Result<
         italic: first.italic,
         color: first.color,
         rotation: first.rotation(),
+        heading_level: phrase.heading_level,
         lines: indices.to_vec(),
         rows: vec![indices.to_vec()],
         invisible: true,

@@ -22,6 +22,14 @@ let html = report_html(&report, "file.pdf", "2026-10-02", "en", &in_english);  /
   declaration check, not validation of every ToUnicode entry or used glyph.
 - **Structure checks** read the structure tree through the role map; table regularity counts
   `ColSpan`/`RowSpan` attributes.
+- **Export paragraph levels** (`heading_levels`) map page/form MCIDs to H1–H6 or P through
+  RoleMap and nested spans. The engine passes these read-only results to the text reader;
+  missing or ambiguous marks keep the exporter's size heuristic when no enclosing role is
+  available. Traversal stops at depth
+  256 or 100,000 visits, without dropping the page's text.
+- **Role-map resolution** follows at most 12 aliases, borrowing direct names and sharing
+  cached indirect name objects. Non-name values are rejected without copying their payloads;
+  malformed or missing aliases keep the existing role and inherited export level.
 - The report is a self-contained HTML page. Fixes that edit the document (language, title, tab
   order) live in the engine (`Document::accessibility_fix`).
 

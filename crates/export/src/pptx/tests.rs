@@ -2,6 +2,7 @@ use super::*;
 use crate::Block;
 use crate::tests::part;
 
+/// Build a synthetic slide-export page with styled text and an image.
 fn sample_page() -> Page {
     Page {
         width: 720.0,
@@ -15,6 +16,7 @@ fn sample_page() -> Page {
                 italic: false,
                 color: [0.1, 0.2, 0.3],
                 rotation: 0.0,
+                heading_level: None,
                 space_around: [false; 2],
             },
             Block {
@@ -25,6 +27,7 @@ fn sample_page() -> Page {
                 italic: false,
                 color: [0.0; 3],
                 rotation: 0.0,
+                heading_level: None,
                 space_around: [false; 2],
             },
             Block {
@@ -35,6 +38,7 @@ fn sample_page() -> Page {
                 italic: true,
                 color: [0.0; 3],
                 rotation: 0.0,
+                heading_level: None,
                 space_around: [false; 2],
             },
         ],
@@ -150,6 +154,7 @@ fn assert_tags_balance(name: &str, xml: &str) {
     assert!(stack.is_empty(), "{name}: unclosed {stack:?}");
 }
 
+/// Validate slide package members and their cross-part relationships.
 #[test]
 fn pptx_package_parts_are_complete_and_consistent() {
     let cell = |t: &str, x: f64, y: f64| Block {
@@ -160,6 +165,7 @@ fn pptx_package_parts_are_complete_and_consistent() {
         italic: false,
         color: [0.0; 3],
         rotation: 0.0,
+        heading_level: None,
         space_around: [false; 2],
     };
     let table_page = Page {
@@ -253,6 +259,7 @@ fn pptx_package_parts_are_complete_and_consistent() {
     assert!(text("ppt/presentation.xml").contains("r:id=\"rIdSld2\""));
 }
 
+/// Keep nonfinite and extreme dimensions from overflowing slide coordinates.
 #[test]
 fn hostile_sizes_do_not_overflow_the_slide_position() {
     let huge = |text: &str, size: f64, y: f64| Block {
@@ -263,6 +270,7 @@ fn hostile_sizes_do_not_overflow_the_slide_position() {
         italic: false,
         color: [0.0; 3],
         rotation: 0.0,
+        heading_level: None,
         space_around: [false; 2],
     };
     let mut blocks = vec![huge("Title", f64::MAX, 500.0)];
@@ -325,6 +333,7 @@ fn pptx_slide_dimensions_and_clamping() {
     assert!(nan_pres.contains("<p:sldSz cx=\"9144000\" cy=\"6858000\"/>"), "{nan_pres}");
 }
 
+/// Keep a table's largest-font cell in the table instead of promoting it to the slide title.
 #[test]
 fn pptx_table_cell_with_largest_font_stays_in_table_and_not_in_title() {
     let cell = |t: &str, x: f64, y: f64, w: f64, sz: f64| Block {
@@ -335,6 +344,7 @@ fn pptx_table_cell_with_largest_font_stays_in_table_and_not_in_title() {
         italic: false,
         color: [0.0; 3],
         rotation: 0.0,
+        heading_level: None,
         space_around: [false; 2],
     };
     let p = Page {
@@ -350,6 +360,7 @@ fn pptx_table_cell_with_largest_font_stays_in_table_and_not_in_title() {
                 italic: false,
                 color: [0.0; 3],
                 rotation: 0.0,
+                heading_level: None,
                 space_around: [false; 2],
             },
             // Table where one cell has a very large number (e.g. 36 pt callout in the table)

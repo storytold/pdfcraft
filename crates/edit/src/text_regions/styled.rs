@@ -1,3 +1,4 @@
+use super::super::ContentScope;
 use super::super::interp::TextState;
 use super::grouping::{across, is_centred, row_rect};
 use super::{
@@ -1403,7 +1404,7 @@ fn paragraph_span(block: &TextBlock, lines: &[TextLine]) -> Option<(usize, Optio
 }
 
 /// The scope shared by every line of the paragraph, when each one is in the same marked region.
-fn shared_scope(block: &TextBlock, lines: &[TextLine]) -> Option<usize> {
+fn shared_scope(block: &TextBlock, lines: &[TextLine]) -> Option<ContentScope> {
     let mut scopes = block.lines.iter().filter_map(|i| lines.get(*i)).map(|line| line.scope);
     let first = scopes.next().flatten()?;
     scopes.all(|scope| scope == Some(first)).then_some(first)

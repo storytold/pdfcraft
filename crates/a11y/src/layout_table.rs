@@ -47,7 +47,8 @@ struct Retag<'a> {
 }
 
 impl Retag<'_> {
-    fn standard(&self, d: &Dict) -> Option<Vec<u8>> {
+    /// Resolve the table role while borrowing direct names and retaining indirect name objects.
+    fn standard<'a>(&'a self, d: &'a Dict) -> Option<alt::RoleName<'a>> {
         Some(alt::standard(self.doc, &self.role_map, d.name(b"S")?))
     }
 
@@ -79,7 +80,7 @@ impl Retag<'_> {
         // As written: a single child is often a reference to it, which must stay one.
         let kids = d.get(b"K").cloned();
         let has_tags = kids.as_ref().is_some_and(|k| self.has_tags(k, 0));
-        let Some(block) = block_type(&ty, has_tags, root) else { return Ok(None) };
+        let Some(block) = block_type(ty.as_ref(), has_tags, root) else { return Ok(None) };
         let mut out = d.clone();
         out.set(b"S".to_vec(), Object::name(block));
         self.drop_table_attributes(&mut out);
@@ -162,7 +163,7 @@ pub fn layout_table_to_blocks(doc: &mut Document, table: ObjRef) -> Result<usize
     };
     let role_map = alt::tree_root(doc).and_then(|r| r.get(b"RoleMap").map(|o| doc.resolve(o))).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
     let mut retag = Retag { doc: &*doc, role_map, queue: Vec::new(), changed: 0 };
-    if retag.standard(&element.dict).as_deref() != Some(b"Table".as_slice()) {
+    if retag.standard(&element.dict).as_ref().map(AsRef::as_ref) != Some(b"Table".as_slice()) {
         return Err(LayoutTableError::NotATable);
     }
     // Read everything first, then write: a refused table changes nothing.
