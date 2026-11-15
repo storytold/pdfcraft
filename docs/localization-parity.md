@@ -1,5 +1,6 @@
 # Localization parity
 
+> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-12 · **Change:** minor (Dutch (`nl`) offered from the craft-i18n catalog already pinned by `craft-i18n.rev`. The catalog was written to the 2,852-key union of 2026-11-02 and is not yet remeasured with `cargo xtask i18n-report` against the 2,897-string denominator. AI-assisted. Scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-03 · **Change:** minor (every catalog restated from `cargo xtask i18n-report` on `main` at `14ae839a`: 2,897 strings in the report's denominator; Hindi, Indonesian, Korean, Thai, Lao and Central Kurdish listed with their catalogs. Scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Per-language status of PdfCraft's interface against Acrobat Pro's. How translations work and how to
@@ -16,7 +17,9 @@ add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../R
   counts as missing in the others; a contextual one (such as `theme`/`Appearance`) is met by a
   plain translation of the same English, but a `@plural` one only by its own plural forms. The
   denominator still grows whenever the interface gains a string, so a catalog that was complete
-  falls behind without losing a translation, and every figure here carries its date. English is
+  falls behind without losing a translation, and every figure here carries its date. Dutch is the
+  exception in the second table: its row still quotes the 2,852-key union of 2026-11-02, because it
+  has not been remeasured with this report. English is
   built in.
 - **Catalogs:** the figures above were taken from the in-repo catalogs
   (`crates/ui-egui/src/i18n/<code>.tsv`), which have since moved to craft-i18n's `locales/<code>/`.
@@ -95,21 +98,24 @@ help/docs polish: their script work is done, and each catalog lacks 46 strings o
 | Central Kurdish (Sorani) | `ckb` | 2,754 (95.1%) | partial; right-to-left like Arabic | no |
 | Thai | `th` | 2,751 (95.0%) | partial | no |
 | Lao | `lo` | 2,504 (86.4%) | partial | no |
+| Dutch | `nl` | 2,852 entries of the 2026-11-02 key union; not yet remeasured against the 2,897-string report | partial; AI-assisted, Netherlands vocabulary, not yet reviewed line by line by a native speaker | yes |
 
-**23 other languages** ship (34 catalogs plus English = **35** interface languages in Preferences).
-Their presence does not imply a detailed linguistic or runtime review.
-Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is shipped here but not by Acrobat.
+**24 other languages** ship (35 catalogs plus English = **36** interface languages in Preferences).
+Their presence does not imply a detailed linguistic or runtime review. The Dutch count is from 2026-11-02, not a percentage of the 2,897-string report above.
+Acrobat languages PdfCraft lacks: Danish, Swedish, Hebrew. Vietnamese is shipped here but not by Acrobat.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | Dutch (`nl`) added from the pinned craft-i18n catalog. The row still quotes the 2,852-key union of 2026-11-02; it has not been remeasured with `cargo xtask i18n-report`. AI-assisted, not yet reviewed line by line by a native speaker. Scores and estimates unchanged |
 | 2026-11-03 | minor | Every catalog restated from `cargo xtask i18n-report` on `14ae839a` (of the 2,897 strings in the report's denominator), replacing the catalog-union measure, which had reached 2,895 keys and left rows "100%" that were 44 short (#5805). Hindi, Indonesian and Korean restated from 0 to their catalogs, and Thai, Lao and Central Kurdish added to the table. The ≈ 68% score is not re-scored |
 | 2026-10-25 | minor | Arabic current state corrected: catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build still has no Hans face and the release-pinned craft-fonts still has no Telugu face. Scores and estimates unchanged |
 | 2026-10-25 | minor | Added Persian (`fa`, 2,785 entries, all but 13 of the current 2,798-key union); right-to-left like Arabic and Kurdish, with logical entries reordered by egui 0.37's epaint; AI-assisted, not yet native-reviewed |
 | 2026-10-21 | minor | Brazilian Portuguese (`pt-br`) now covers all 2,674 distinct keys in the current catalog union; no help or engine/OS error-detail localization; twelve-language mean still rounds to ≈ 68% |
 | 2026-10-20 | minor | Spanish: the 143 keys the other catalogs had and `es.tsv` was missing; `es` now covers the whole 2,674-key union, like `lt` and `vi`. Restated Lithuanian against the current union (its 2,585 was measured on 2026-10-13) and said plainly in *How this was measured* that the union moves, so counts only compare within a date |
 | 2026-11-03 | minor | Turkish: 2,867 entries after translating the 288 keys the translation gaps report listed (AI-assisted); measured with the report, not against the 2,798-key union of 2026-10-25, which predates keys added since |
+| 2026-11-02 | minor | Added Dutch (`nl`, Nederlands, Netherlands vocabulary) covering the 2,852-key union measured the same day. One/other plurals. AI-assisted, not yet native-reviewed. Not one of the twelve key languages, so the mean is unchanged |
 | 2026-10-19 | minor | Removed the 2026-10-13 status line and the 14-language summary that concurrent merges left beside the current ones; the summary keeps the Italian and Norwegian Bokmål measurement dates |
 | 2026-10-16 | minor | Czech: 2,674 entries after adding the keys the other catalogs had (the engine's sentences, weekday heads, certificate fields, shared buttons) and unifying "tag" as *tag* (not *značka*, which is a redaction mark) |
 | 2026-10-13 | minor | Vietnamese (`vi`) catalog: 2,591 entries (100% of current key union + `theme`/`Appearance`); twelve-language mean ≈ 68%; native-speaker community review; registered with `plural_none` |
