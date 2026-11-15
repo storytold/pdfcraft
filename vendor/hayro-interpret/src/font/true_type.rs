@@ -5,6 +5,7 @@ use crate::font::{
     Encoding, FallbackFontQuery, FontFlags, glyph_name_to_text, glyph_name_to_unicode, read_to_unicode,
     strip_subset_prefix, unicode_from_name,
 };
+use crate::font::TRUE_TYPE_SFNT_TAGS;
 use crate::util::OptionLog;
 use crate::{CMapResolverFn, CacheKey, FontResolverFn};
 use hayro_cmap::{BfString, CMap};
@@ -249,9 +250,19 @@ impl EmbeddedKind {
 
         let (widths, missing_width) = read_widths(dict, &descriptor)?;
         let (encoding, differences) = read_encoding(dict);
+        // PdfCraft patch (111): without a `FontFile2`, a `FontFile3 /OpenType` program with
+        // TrueType outlines, which ISO 32000-2 §9.9, Table 124 allows in a TrueType font
+        // dictionary (and which a `/Subtype /OpenType` font with such a program is read as).
         let base_font = descriptor
             .get::<Stream<'_>>(FONT_FILE2)
             .and_then(|s| s.decoded().ok())
+            .or_else(|| {
+                descriptor
+                    .get::<Stream<'_>>(FONT_FILE3)
+                    .filter(|s| s.dict().get::<Name<'_>>(SUBTYPE).as_deref() == Some(OPEN_TYPE))
+                    .and_then(|s| s.decoded().ok())
+                    .filter(|d| TRUE_TYPE_SFNT_TAGS.iter().any(|tag| d.starts_with(tag)))
+            })
             .and_then(|d| OpenTypeFontBlob::new(Arc::new(d.to_vec()), 0))?;
 
         let glyph_names = base_font.glyph_names();

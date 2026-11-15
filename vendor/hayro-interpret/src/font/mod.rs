@@ -278,6 +278,14 @@ impl<'a> Font<'a> {
                 FontType::Type1(Rc::new(Type1Font::new(dict, font_resolver, cmap_resolver)?))
             }
             // PDFBOX-5463: PDF viewers seem to accept OpenType as well.
+            // PdfCraft patch (111): `/OpenType` isn't a font dictionary subtype (ISO 32000-2
+            // §9.6.2, Table 109), so the font is read by the program it embeds, as other readers
+            // do: a CFF one (Table 124: a `FontFile3` that isn't a TrueType-outline sfnt) or a
+            // Type 1 `FontFile` as a Type 1 font, anything else as TrueType. The five fonts of
+            // PDFBOX-5463 wrap CFF in `OTTO`, and the TrueType reader drew them in a stand-in.
+            OPEN_TYPE if embeds_cff_or_type1_program(dict) => {
+                FontType::Type1(Rc::new(Type1Font::new(dict, font_resolver, cmap_resolver)?))
+            }
             TRUE_TYPE | OPEN_TYPE => FontType::TrueType(Rc::new(TrueTypeFont::new(
                 dict,
                 font_resolver,
@@ -887,4 +895,78 @@ pub(crate) fn normalized_glyph_name(mut name: &str) -> &str {
     }
 
     name
+}
+
+/// PdfCraft patch (111): the sfnt tags of font programs with TrueType outlines (ISO/IEC
+/// 14496-22 §5.2: version 1.0 and the Apple `true` tag) and of font collections, which the
+/// TrueType reader handles as before. `OTTO` wraps CFF.
+pub(crate) const TRUE_TYPE_SFNT_TAGS: [&[u8]; 3] = [&[0, 1, 0, 0], b"true", b"ttcf"];
+
+/// PdfCraft patch (111): whether a font descriptor embeds a CFF or Type 1 program rather than
+/// TrueType outlines: a `FontFile`, or a `FontFile3` (`Type1C`, or `OpenType` with a "CFF "
+/// table: ISO 32000-2 §9.9, Table 124) that doesn't begin with a TrueType sfnt tag. A
+/// `FontFile2` is TrueType. Decoding stops after the tag where the program's filters allow.
+fn embeds_cff_or_type1_program(dict: &Dict<'_>) -> bool {
+    let Some(descriptor) = dict.get::<Dict<'_>>(FONT_DESC) else {
+        return false;
+    };
+    if descriptor.contains_key(FONT_FILE2) {
+        return false;
+    }
+    if descriptor.contains_key(FONT_FILE) {
+        return true;
+    }
+    descriptor
+        .get::<Stream<'_>>(FONT_FILE3)
+        .and_then(|program| program.decoded_within(4).ok())
+        .is_some_and(|head| !TRUE_TYPE_SFNT_TAGS.iter().any(|tag| head.starts_with(tag)))
+}
+
+#[cfg(test)]
+mod open_type_subtype_tests {
+    use super::embeds_cff_or_type1_program;
+    use hayro_syntax::Pdf;
+    use hayro_syntax::object::{Dict, ObjectIdentifier};
+
+    /// Whether the font dictionary (object 5, its descriptor's entries `descriptor`, object 7 a
+    /// stream of `stream_dict` holding `data`) is taken to embed a CFF or Type 1 program.
+    fn cff_or_type1(descriptor: &str, stream_dict: &str, data: &[u8]) -> bool {
+        let mut pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >> endobj\n\
+             5 0 obj << /Type /Font /Subtype /OpenType /FontDescriptor 6 0 R >> endobj\n\
+             6 0 obj << /Type /FontDescriptor {descriptor} >> endobj\n\
+             7 0 obj << {stream_dict} /Length {} >> stream\n",
+            data.len()
+        )
+        .into_bytes();
+        pdf.extend_from_slice(data);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let pdf = Pdf::new(pdf).unwrap();
+        let font = pdf.xref().get::<Dict<'_>>(ObjectIdentifier::new(5, 0)).unwrap();
+        embeds_cff_or_type1_program(&font)
+    }
+
+    #[test]
+    fn an_open_type_font_is_read_by_the_program_it_embeds() {
+        let open_type = "/Subtype /OpenType";
+        // CFF: an `OTTO` wrapper, bare CFF, a Type 1 `FontFile`.
+        assert!(cff_or_type1("/FontFile3 7 0 R", open_type, b"OTTO\0\x01\0\0"));
+        assert!(cff_or_type1("/FontFile3 7 0 R", "/Subtype /Type1C", b"\x01\0\x04\x02"));
+        assert!(cff_or_type1("/FontFile 7 0 R", "", b"%!PS-AdobeFont-1.0"));
+        // The tag is read after the stream's filters.
+        assert!(cff_or_type1("/FontFile3 7 0 R", "/Filter /ASCIIHexDecode", b"4F54544F00010000>"));
+        assert!(!cff_or_type1("/FontFile3 7 0 R", "/Filter /ASCIIHexDecode", b"0001000000050080>"));
+        // TrueType outlines, a collection, a `FontFile2`: TrueType, as before.
+        for head in [&b"\0\x01\0\0\0\x05"[..], b"true\0\x05", b"ttcf\0\x01"] {
+            assert!(!cff_or_type1("/FontFile3 7 0 R", open_type, head), "{head:?}");
+        }
+        assert!(!cff_or_type1("/FontFile2 7 0 R /FontFile3 7 0 R", open_type, b"OTTO"));
+        // No program, or a reference to none: TrueType (a stand-in), as before.
+        assert!(!cff_or_type1("", "", b""));
+        assert!(!cff_or_type1("/FontFile3 8 0 R", open_type, b"OTTO"));
+        // An empty program isn't TrueType: the Type 1 reader's stand-in draws.
+        assert!(cff_or_type1("/FontFile3 7 0 R", open_type, b""));
+    }
 }
