@@ -67,9 +67,11 @@ impl Automation {
         }
         let case_sensitive = a.opt_bool("case_sensitive")?.unwrap_or(false);
         let whole_words = a.opt_bool("whole_words")?.unwrap_or(false);
-        if (case_sensitive || whole_words) && a.get("find").is_none() && a.get("words").is_none() {
-            return Err(ToolError::InvalidArgs("case_sensitive and whole_words apply only to find or words".into()));
+        let ignore_width = a.opt_bool("ignore_width")?;
+        if (case_sensitive || whole_words || ignore_width.is_some()) && a.get("find").is_none() && a.get("words").is_none() {
+            return Err(ToolError::InvalidArgs("case_sensitive, whole_words and ignore_width apply only to find or words".into()));
         }
+        let opts = pdfcraft_render::text::FindOptions { case_sensitive, whole_words, ignore_width: ignore_width.unwrap_or(true) };
         if a.get("validate").is_some() && a.get("regex").is_none() {
             return Err(ToolError::InvalidArgs("validate applies only to regex".into()));
         }
@@ -148,7 +150,7 @@ impl Automation {
                     (None, None) => needles
                         .iter()
                         .enumerate()
-                        .flat_map(|(i, w)| text.find_opts(w, case_sensitive, whole_words).into_iter().map(move |h| (Some(i), h)))
+                        .flat_map(|(i, w)| text.find_with_options(w, opts, usize::MAX).into_iter().map(move |h| (Some(i), h)))
                         .collect(),
                 };
                 for (word, h) in hits {

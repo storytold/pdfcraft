@@ -98,8 +98,36 @@ impl DocView {
         }
     }
 
+    /// Whether find ignores character width here (Preferences ▸ Search).
+    pub(crate) fn find_ignore_width(&self) -> bool {
+        self.find_ignore_width
+    }
+
+    /// Set Preferences ▸ Search ▸ Ignore Asian character width for this view. A change searches
+    /// again, as changing a find option does: the find bar or Search panel reruns the query.
+    pub(crate) fn set_find_ignore_width(&mut self, ignore: bool) {
+        if self.find_ignore_width == ignore {
+            return;
+        }
+        self.find_ignore_width = ignore;
+        if let Some(f) = self.find.as_mut() {
+            f.case_query.clear();
+        }
+    }
+
+    /// The find options this view's search uses.
+    fn find_options(&self) -> Option<pdfcraft_render::text::FindOptions> {
+        let f = self.find.as_ref()?;
+        Some(pdfcraft_render::text::FindOptions {
+            case_sensitive: f.case_sensitive,
+            whole_words: f.whole_words,
+            ignore_width: self.find_ignore_width,
+        })
+    }
+
     /// Re-run the search on all pages whose text is known (after the query changed).
     pub fn rerun_find(&mut self) {
+        let Some(opts) = self.find_options() else { return };
         let Some(f) = self.find.as_mut() else { return };
         f.case_query = f.query.clone();
         f.matches.clear();
@@ -121,7 +149,7 @@ impl DocView {
         pages.sort();
         for &p in &pages {
             if let Some(text) = self.texts.get(&p) {
-                f.matches.extend(text.find_opts(&f.case_query, f.case_sensitive, f.whole_words).into_iter().map(|r| (p, r)));
+                f.matches.extend(text.find_with_options(&f.case_query, opts, usize::MAX).into_iter().map(|r| (p, r)));
             }
         }
         f.matches.sort_by_key(|(p, r)| (*p, r.start));
@@ -136,6 +164,7 @@ impl DocView {
     }
 
     pub(super) fn refresh_find_page(&mut self, page: usize) {
+        let Some(opts) = self.find_options() else { return };
         let (Some(f), Some(text)) = (self.find.as_mut(), self.texts.get(&page)) else { return };
         if f.case_query.trim().is_empty() {
             return;
@@ -146,7 +175,7 @@ impl DocView {
         // this arrival must not pull them back; the choice then becomes theirs to keep.
         let follow = f.follow_page(self.current);
         f.matches.retain(|(p, _)| *p != page);
-        f.matches.extend(text.find_opts(&f.case_query, f.case_sensitive, f.whole_words).into_iter().map(|r| (page, r)));
+        f.matches.extend(text.find_with_options(&f.case_query, opts, usize::MAX).into_iter().map(|r| (page, r)));
         f.matches.sort_by_key(|(p, r)| (*p, r.start));
         if let Follow::Active(from) = follow {
             f.current = f.first_at_or_after(from);

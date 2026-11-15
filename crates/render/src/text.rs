@@ -93,6 +93,33 @@ pub fn fold_case(s: &str) -> String {
     out
 }
 
+/// How find compares the query with the text, beyond its fixed rules (whitespace runs, ligatures,
+/// skipped invisible characters).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FindOptions {
+    /// Letter case counts (off: case folded).
+    pub case_sensitive: bool,
+    /// A match needs no letter or digit beside it, in a script that spaces its words.
+    pub whole_words: bool,
+    /// Halfwidth and fullwidth forms match the character at its ordinary width (ＡＢＣ and ABC, ｶﾞ
+    /// and ガ), as their Unicode `<wide>` and `<narrow>` decompositions say. On by default; off,
+    /// characters of different widths are different characters.
+    pub ignore_width: bool,
+}
+
+impl Default for FindOptions {
+    fn default() -> Self {
+        Self { case_sensitive: false, whole_words: false, ignore_width: true }
+    }
+}
+
+impl FindOptions {
+    /// Case and whole-word options as the find bar sets them, width ignored.
+    pub fn new(case_sensitive: bool, whole_words: bool) -> Self {
+        Self { case_sensitive, whole_words, ..Self::default() }
+    }
+}
+
 /// Byte ranges in `text` where `needle` occurs, with the find bar's rules ([`PageText::find_opts`]):
 /// case folded unless `case_sensitive`, halfwidth and fullwidth forms matching their ordinary
 /// width (ＡＢＣ and ABC, ｶﾞ and ガ), any run of whitespace matching one space, and with
@@ -100,7 +127,12 @@ pub fn fold_case(s: &str) -> String {
 /// and not overlapping. Find and replace matches a paragraph's text with it, so what the find bar
 /// highlights is what gets replaced.
 pub fn find_in_text(text: &str, needle: &str, case_sensitive: bool, whole_words: bool, limit: usize) -> Vec<std::ops::Range<usize>> {
-    search::find_in_text(text, needle, case_sensitive, whole_words, limit)
+    find_in_text_with(text, needle, FindOptions::new(case_sensitive, whole_words), limit)
+}
+
+/// [`find_in_text`] with every option given, width among them.
+pub fn find_in_text_with(text: &str, needle: &str, opts: FindOptions, limit: usize) -> Vec<std::ops::Range<usize>> {
+    search::find_in_text(text, needle, opts, limit)
 }
 
 /// The text of one page, in content order, with line structure.
@@ -161,7 +193,12 @@ impl PageText {
 
     /// Search with Acrobat's find options, returning at most `limit` glyph ranges.
     pub fn find_opts_limited(&self, needle: &str, case_sensitive: bool, whole_words: bool, limit: usize) -> Vec<std::ops::Range<usize>> {
-        search::find(self, needle, case_sensitive, whole_words, limit)
+        self.find_with_options(needle, FindOptions::new(case_sensitive, whole_words), limit)
+    }
+
+    /// Search with every option given, width among them, returning at most `limit` glyph ranges.
+    pub fn find_with_options(&self, needle: &str, opts: FindOptions, limit: usize) -> Vec<std::ops::Range<usize>> {
+        search::find(self, needle, opts, limit)
     }
 
     /// Glyph ranges of the matches a character matcher finds in the page text (words and lines

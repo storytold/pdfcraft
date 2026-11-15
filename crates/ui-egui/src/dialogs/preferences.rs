@@ -537,7 +537,14 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     });
     ui.add_space(12.0);
 
-    // Card 6: JavaScript
+    // Card 6: Search
+    let title_search = tl!("Search");
+    preference_card(ui, t, title_search, Some("search"), &mut ctx, |ui, ctx| {
+        card_search(ui, app, t, ctx);
+    });
+    ui.add_space(12.0);
+
+    // Card 7: JavaScript
     let title6 = "JavaScript";
     preference_card(ui, t, title6, Some("code-xml"), &mut ctx, |ui, ctx| {
         card_javascript(ui, app, t, ctx);
@@ -887,7 +894,18 @@ fn card_fill_and_sign(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx:
     date_format(ui, app, t, ctx);
 }
 
-/// Content for Card 6: JavaScript
+/// Content for Card 6: Search
+fn card_search(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
+    // The description names the forms in words: drawing kana needs the optional craft-fonts faces.
+    ctx.checkbox(ui, &mut app.ignore_asian_width, tl!("Ignore Asian character width"), t);
+    ctx.label_secondary(
+        ui,
+        tl!("Finds both half-width and full-width forms of the characters you search for, such as Latin letters, digits and katakana."),
+        t,
+    );
+}
+
+/// Content for Card 7: JavaScript
 fn card_javascript(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
     let mut on = app.session.javascript();
     if ctx.checkbox(ui, &mut on, tl!("Enable Acrobat JavaScript"), t).changed() {

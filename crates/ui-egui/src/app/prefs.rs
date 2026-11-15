@@ -106,6 +106,7 @@ impl PdfCraftApp {
             "theme": self.theme_preference,
             "scroll_speed": self.scroll_speed,
             "invert_middle_drag": self.invert_middle_drag,
+            "ignore_asian_width": self.ignore_asian_width,
             "animation_effects": self.animation_effects,
             "default_mode": self.default_mode,
             "default_layout": canvas::display_token(self.view_defaults.layout, self.view_defaults.continuous),
@@ -296,6 +297,9 @@ impl PdfCraftApp {
         }
         if let Some(invert) = v["invert_middle_drag"].as_bool() {
             self.invert_middle_drag = invert;
+        }
+        if let Some(ignore) = v["ignore_asian_width"].as_bool() {
+            self.ignore_asian_width = ignore;
         }
         if let Ok(effects) = serde_json::from_value::<motion::AnimationEffects>(v["animation_effects"].clone()) {
             self.animation_effects = effects;

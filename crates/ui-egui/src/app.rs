@@ -109,6 +109,7 @@ impl PdfCraftApp {
             desktop_theme_enabled: false,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             invert_middle_drag: false,
+            ignore_asian_width: true,
             animation_effects: motion::AnimationEffects::default(),
             motion: motion::Motion::default(),
             language: i18n::AUTO.to_string(),
@@ -761,7 +762,10 @@ impl PdfCraftApp {
         // Scrolling and group-drag previews are transient: never resume after changing tabs,
         // opening a modal/palette, or returning to a window that lost focus.
         let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
+        let ignore_width = self.ignore_asian_width;
         for (index, view) in self.views.iter_mut().enumerate() {
+            // Preferences ▸ Search, wherever it was changed from: a search in this view runs again.
+            view.set_find_ignore_width(ignore_width);
             let shut = blocked || self.active != Some(index);
             view.objects.set_input_blocked(shut);
             if shut {

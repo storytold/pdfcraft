@@ -137,3 +137,39 @@ fn text_find_matches_halfwidth_and_fullwidth_forms_from_their_ordinary_width() {
     assert_eq!(find(&mut a, "カ")["count"], 0, "the ｶ takes a sound mark: it is ガ");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `ignore_width: false` makes width significant in `text_find`, `text_replace` and `redact_mark`:
+/// "abc123" no longer finds "ＡＢＣ１２３", nor "ガイド" "ｶﾞｲﾄﾞ", while the page's own forms still
+/// find themselves; `true` is the default.
+#[test]
+fn ignore_width_false_makes_width_significant() {
+    let dir = tmp("width-exact");
+    std::fs::write(dir.join("width.pdf"), width_pdf()).unwrap();
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "width.pdf" }))["doc"].as_u64().unwrap();
+    let find =
+        |a: &mut Automation, q: &str, ignore: bool| ok(a, "text_find", json!({ "doc": doc, "query": q, "ignore_width": ignore }))["count"].clone();
+
+    assert_eq!(find(&mut a, "abc123", true), 1);
+    assert_eq!(find(&mut a, "abc123", false), 0);
+    assert_eq!(find(&mut a, "ガイド", false), 0);
+    assert_eq!(find(&mut a, "ｶﾞｲﾄﾞ", false), 1);
+    assert_eq!(find(&mut a, "ＡＢＣ１２３", false), 1);
+    assert_eq!(find(&mut a, "ｶ", false), 1, "as written, the base before its sound mark");
+    assert_eq!(find(&mut a, "ｶ", true), 0);
+
+    let replaced = |a: &mut Automation, ignore: bool| {
+        ok(a, "text_replace", json!({ "doc": doc, "find": "abc123", "replace": "x", "ignore_width": ignore }))["replaced"].clone()
+    };
+    assert_eq!(replaced(&mut a, false), 0, "no match where width counts");
+    assert_eq!(replaced(&mut a, true), 1);
+
+    let mark = |a: &mut Automation, ignore: bool| a.call("redact_mark", &json!({ "doc": doc, "find": "ガイド", "ignore_width": ignore })).is_ok();
+    assert!(!mark(&mut a, false), "nothing matched, so nothing was marked");
+    assert!(mark(&mut a, true));
+    assert!(
+        a.call("redact_mark", &json!({ "doc": doc, "pattern": "email", "ignore_width": false })).is_err(),
+        "ignore_width applies only to find or words"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -176,6 +176,18 @@ fn page_shadows_are_an_observable_app_wide_preference() {
 }
 
 #[test]
+fn ignore_asian_width_is_an_observable_app_wide_preference() {
+    let (mut h, c) = harness();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["ignore_asian_width"], true);
+    ok(&mut h, &c, "ui.set", json!({ "key": "ignore_asian_width", "value": "false" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["ignore_asian_width"], false);
+    assert!(call(&mut h, &c, "ui.set", json!({ "key": "ignore_asian_width", "value": "on" })).is_err());
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["ignore_asian_width"], false);
+    ok(&mut h, &c, "ui.set", json!({ "key": "ignore_asian_width", "value": true }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["ignore_asian_width"], true);
+}
+
+#[test]
 fn control_resize_reports_observed_dimensions_and_rejects_invalid_sizes() {
     let (mut h, c) = harness();
     for params in [

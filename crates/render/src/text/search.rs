@@ -9,7 +9,8 @@
 //! `<narrow>` compatibility decomposition names, and a voiced or semi-voiced katakana as its base
 //! and combining sound mark, in the page and in the query, so "ABC" finds "ＡＢＣ", "カナ" finds
 //! "ｶﾅ" and "ガ" finds "ｶﾞ" drawn as two glyphs, each way round; a hit never ends between a kana
-//! and its sound mark, so "カ" finds neither. An ideographic space (U+3000) is whitespace and
+//! and its sound mark, so "カ" finds neither. This width folding is on unless the search asks
+//! for width to count ([`FindOptions::ignore_width`]). An ideographic space (U+3000) is whitespace and
 //! reads as one space like any other. A word divided by a hyphen at the end of a line is also
 //! found whole: where a line ends in a hyphen between two letters, the text is searched a second
 //! time without the hyphen and the line break ("example" finds "exam-" + "ple") and a third time
@@ -18,7 +19,7 @@
 //! soft hyphen needs no second reading: it draws nothing, and a line that ends in one always runs
 //! on.
 use super::device::ligature_letters;
-use super::{PageText, fold_case};
+use super::{FindOptions, PageText, fold_case};
 use std::ops::Range;
 
 /// How a line ending in a hyphen between two letters is read.
@@ -43,13 +44,14 @@ fn breaks_before(page: &PageText, i: usize) -> bool {
     i.checked_sub(1).and_then(|previous| page.line_of.get(previous)).zip(page.line_of.get(i)).is_some_and(|(a, b)| a != b)
 }
 
-/// `s` as find compares it, in the page and in the query alike: ligatures as their letters, the
-/// halfwidth and fullwidth forms as their ordinary width ([`fold_width`]), and, unless
-/// `sensitive`, case folded. Each step works per character, so a glyph's text folds on its own
-/// and every folded character keeps the glyph it came from.
-fn search_fold(s: &str, sensitive: bool) -> String {
-    let s = fold_width(ligature_letters(s.to_owned()));
-    if sensitive { s } else { fold_case(&s) }
+/// `s` as find compares it, in the page and in the query alike: ligatures as their letters, with
+/// `ignore_width` the halfwidth and fullwidth forms as their ordinary width ([`fold_width`]), and,
+/// unless `case_sensitive`, case folded. Each step works per character, so a glyph's text folds
+/// on its own and every folded character keeps the glyph it came from.
+fn search_fold(s: &str, opts: FindOptions) -> String {
+    let s = ligature_letters(s.to_owned());
+    let s = if opts.ignore_width { fold_width(s) } else { s };
+    if opts.case_sensitive { s } else { fold_case(&s) }
 }
 
 /// The full-width katakana of the halfwidth katakana U+FF65..=U+FF9D, in order: each one's
@@ -136,11 +138,11 @@ fn fold_width(text: String) -> String {
     out
 }
 
-pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: bool, limit: usize) -> Vec<Range<usize>> {
+pub(super) fn find(page: &PageText, query: &str, opts: FindOptions, limit: usize) -> Vec<Range<usize>> {
     if limit == 0 {
         return Vec::new();
     }
-    let fold = |s: &str| search_fold(s, sensitive);
+    let fold = |s: &str| search_fold(s, opts);
     let query: String = fold(query).chars().filter(|&c| !is_invisible(c)).collect();
     let needle: Vec<char> = query.split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
     if needle.is_empty() {
@@ -153,7 +155,7 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
     let mut hits: Vec<(Range<usize>, usize)> = Vec::new();
     for (r, &reading) in readings.iter().enumerate() {
         let (chars, zero_width_space) = characters(page, &texts, &divided, reading);
-        let found = search(&chars, &zero_width_space, &needle, &prefix, whole_words, limit);
+        let found = search(&chars, &zero_width_space, &needle, &prefix, opts, limit);
         hits.extend(found.into_iter().map(|hit| (hit, r)));
     }
     if readings.len() == 1 {
@@ -185,11 +187,11 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
 /// [`super::find_in_text`]: the same search over a string (find and replace matches a paragraph's
 /// text with it), as the byte ranges of the characters each hit covers. Hyphenated line ends do
 /// not arise in a string, so there is the one reading.
-pub(super) fn find_in_text(text: &str, query: &str, sensitive: bool, whole_words: bool, limit: usize) -> Vec<Range<usize>> {
+pub(super) fn find_in_text(text: &str, query: &str, opts: FindOptions, limit: usize) -> Vec<Range<usize>> {
     if limit == 0 {
         return Vec::new();
     }
-    let fold = |s: &str| search_fold(s, sensitive);
+    let fold = |s: &str| search_fold(s, opts);
     let query: String = fold(query).chars().filter(|&c| !is_invisible(c)).collect();
     let needle: Vec<char> = query.split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
     if needle.is_empty() {
@@ -214,7 +216,7 @@ pub(super) fn find_in_text(text: &str, query: &str, sensitive: bool, whole_words
         }
     }
     let starts: Vec<usize> = text.char_indices().map(|(at, _)| at).chain(std::iter::once(text.len())).collect();
-    search(&chars, &zero_width_space, &needle, &prefix_table(&needle), whole_words, limit)
+    search(&chars, &zero_width_space, &needle, &prefix_table(&needle), opts, limit)
         .into_iter()
         .filter_map(|hit| Some(*starts.get(hit.start)?..*starts.get(hit.end)?))
         .collect()
@@ -330,9 +332,10 @@ fn search(
     zero_width_space: &[bool],
     needle: &[char],
     prefix: &[usize],
-    whole_words: bool,
+    opts: FindOptions,
     limit: usize,
 ) -> Vec<Range<usize>> {
+    let whole_words = opts.whole_words;
     if needle.len() > chars.len() {
         return Vec::new();
     }
@@ -357,7 +360,8 @@ fn search(
         let bounded = !whole_words || ((after_break(start) || !word(start.checked_sub(1))) && (after_break(end) || !word(Some(end))));
         // Nor does a hit end on a kana whose sound mark follows: カ is not found in ガ, which find
         // reads as カ and U+3099, any more than in ｶﾞ. A mark after anything else marks no kana.
-        let sound_mark = chars.get(end).is_some_and(|&(next, _)| matches!(next, '\u{3099}' | '\u{309A}'));
+        // Where width counts, ガ stays one character and find matches characters as written.
+        let sound_mark = opts.ignore_width && chars.get(end).is_some_and(|&(next, _)| matches!(next, '\u{3099}' | '\u{309A}'));
         let whole_kana = !(sound_mark && kana(end.checked_sub(1)));
         if bounded && whole_kana {
             if let Some((_, first)) = chars.get(start)

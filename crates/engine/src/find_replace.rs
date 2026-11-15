@@ -27,13 +27,29 @@ use crate::edit::check_permission;
 use crate::{Document, Edit, EditError, guard};
 
 /// What to look for and what to put in its place, with the find bar's options.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Replace {
     pub find: String,
     /// May be empty: the match is deleted.
     pub with: String,
     pub case_sensitive: bool,
     pub whole_words: bool,
+    /// Halfwidth and fullwidth forms match at their ordinary width (the default; the Search
+    /// preference "Ignore Asian character width").
+    pub ignore_width: bool,
+}
+
+impl Default for Replace {
+    fn default() -> Self {
+        Self { find: String::new(), with: String::new(), case_sensitive: false, whole_words: false, ignore_width: true }
+    }
+}
+
+impl Replace {
+    /// The find bar's options for this query.
+    pub fn options(&self) -> pdfcraft_render::text::FindOptions {
+        pdfcraft_render::text::FindOptions { case_sensitive: self.case_sensitive, whole_words: self.whole_words, ignore_width: self.ignore_width }
+    }
 }
 
 /// Which matches to replace.
@@ -54,7 +70,7 @@ impl Which {
     /// nothing, rather than passing it for a later match that is.
     pub fn first_in<'a>(texts: impl IntoIterator<Item = (usize, &'a pdfcraft_render::PageText)>, query: &Replace) -> Option<Which> {
         texts.into_iter().find_map(|(page, text)| {
-            let found = text.find_opts_limited(&query.find, query.case_sensitive, query.whole_words, 1).into_iter().next()?;
+            let found = text.find_with_options(&query.find, query.options(), 1).into_iter().next()?;
             let centre = |g: usize| text.glyphs.get(g).map(|g| [(g.rect[0] + g.rect[2]) / 2.0, (g.rect[1] + g.rect[3]) / 2.0]);
             Some(Which::At { page, start: centre(found.start)?, end: centre(found.end.saturating_sub(1))? })
         })
@@ -262,7 +278,7 @@ impl Document {
 }
 
 fn find(text: &str, query: &Replace, limit: usize) -> Vec<Range<usize>> {
-    pdfcraft_render::text::find_in_text(text, &query.find, query.case_sensitive, query.whole_words, limit)
+    pdfcraft_render::text::find_in_text_with(text, &query.find, query.options(), limit)
 }
 
 fn refused(out: &mut Replacement, count: usize, page: usize, why: String) {

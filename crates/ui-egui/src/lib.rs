@@ -387,6 +387,10 @@ pub struct PdfCraftApp {
     /// Preferences ▸ Invert middle-button drag: the middle button's pan or auto-scroll moves the
     /// view the other way. Off by default.
     pub invert_middle_drag: bool,
+    /// Preferences ▸ Search ▸ Ignore Asian character width: find (the find bar, the Search panel,
+    /// find and replace, Search & Redact) matches halfwidth and fullwidth forms at their ordinary
+    /// width, so ＡＢＣ finds ABC and ｶﾞ finds ガ. On by default.
+    pub ignore_asian_width: bool,
     /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.
     pub animation_effects: motion::AnimationEffects,
     /// Whether the system asked for no animations, and how the desktop app asks it.

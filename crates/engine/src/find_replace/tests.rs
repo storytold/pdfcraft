@@ -137,6 +137,24 @@ fn whole_words_and_case_follow_the_find_options() {
     assert_eq!(texts(&s, id, 0), ["dog Cats dog"]);
 }
 
+/// A fullwidth query replaces the ASCII it stands for while width is ignored (the default), and
+/// nothing once width counts: find and replace follows the Search preference as the find bar does.
+#[test]
+fn a_fullwidth_query_replaces_ascii_unless_width_counts() {
+    let content = "BT /F1 12 Tf 72 700 Td (cat Cats) Tj ET";
+    let count = |q: Replace| {
+        let (s, id) = open(pdf(content));
+        s.get(id).unwrap().plan_replace(&[0], &q, Which::All, None).unwrap().replaced
+    };
+    assert_eq!(count(query("ｃａｔ", "dog")), 2);
+    assert_eq!(count(Replace { ignore_width: false, ..query("ｃａｔ", "dog") }), 0);
+    assert_eq!(count(Replace { ignore_width: false, ..query("cat", "dog") }), 2, "ASCII still finds ASCII");
+    let (s, id) = open(pdf(content));
+    let text = page_text(&s, id, 0);
+    assert!(Which::first_in([(0, &text)], &query("ｃａｔ", "dog")).is_some());
+    assert!(Which::first_in([(0, &text)], &Replace { ignore_width: false, ..query("ｃａｔ", "dog") }).is_none());
+}
+
 #[test]
 fn a_match_spanning_two_paragraphs_is_skipped_and_counted() {
     let content = "BT /F1 12 Tf 72 700 Td (The first ends here) Tj ET BT /F1 12 Tf 72 500 Td (second starts there) Tj ET";
