@@ -1175,7 +1175,7 @@ fn a_later_copy_cancels_a_document_copy_still_reading() {
     app.views[0].select_all();
     assert!(app.copy_selected_text(0, &ctx) && app.document_copy.is_some());
     app.views[0].select_text(0, 0, 5);
-    app.views[0].selection = Some(Selection { page: 0, span: Span::Run { anchor: 0, head: 0, head_page: 1 } });
+    app.views[0].selection = Some(Selection { page: 0, span: Span::Run { anchor: 0, head: 0, head_page: 1, head_x: None } });
     assert!(app.copy_selected_text(0, &ctx) && app.document_copy.is_some(), "the selection's own copy");
 }
 
@@ -1295,7 +1295,7 @@ fn text_layers_keep_the_selection_page() {
     for p in 0..100 {
         v.texts.insert(p, Arc::new(text.clone()));
     }
-    v.selection = Some(Selection { page: 0, span: Span::Run { anchor: 0, head: 0, head_page: 40 } });
+    v.selection = Some(Selection { page: 0, span: Span::Run { anchor: 0, head: 0, head_page: 40, head_x: None } });
     let _ = v.prepare_render_queue(&info, 1.0);
     assert!((0..=40).all(|p| v.texts.contains_key(&p)), "the selection's pages are kept");
     assert_eq!(v.selected_text().map(|t| t.lines().count()), Some(41));
@@ -1335,10 +1335,10 @@ fn the_selection_bar_sits_where_the_drag_ended() {
     let texts: Vec<(usize, &Arc<PageText>)> = (1..=3).map(|p| (p, &text)).collect();
     let anchor = |s: Selection| super::selection::bar_anchor(&s, &texts).map(|(page, r)| (page, r[1]));
     // Backward: page 1, its top line (the first rectangle there).
-    let back = Selection { page: 3, span: Span::Run { anchor: 1, head: 0, head_page: 1 } };
+    let back = Selection { page: 3, span: Span::Run { anchor: 1, head: 0, head_page: 1, head_x: None } };
     assert_eq!(anchor(back), Some((1, 0.0)));
     // Forward: page 3, the last line selected there.
-    let forward = Selection { page: 1, span: Span::Run { anchor: 0, head: 3, head_page: 3 } };
+    let forward = Selection { page: 1, span: Span::Run { anchor: 0, head: 3, head_page: 3, head_x: None } };
     assert_eq!(anchor(forward), Some((3, 20.0)));
     // On one page, as before: the end of the selection, whichever way it was dragged.
     assert_eq!(anchor(Selection::run(2, 3, 0)), Some((2, 20.0)));
@@ -1347,13 +1347,13 @@ fn the_selection_bar_sits_where_the_drag_ended() {
 
 #[test]
 fn a_selection_across_pages_takes_the_rest_of_the_first_and_the_start_of_the_last() {
-    let s = Selection { page: 1, span: Span::Run { anchor: 2, head: 1, head_page: 3 } };
+    let s = Selection { page: 1, span: Span::Run { anchor: 2, head: 1, head_page: 3, head_x: None } };
     assert_eq!(s.pages(), 1..=3);
     assert!(s.spans_pages());
     let on = |s: &Selection| (0..5).map(|p| s.run_on(p, 5)).collect::<Vec<_>>();
     assert_eq!(on(&s), [None, Some(2..5), Some(0..5), Some(0..2), None]);
     // Anchored on the last page and dragged back: the same glyphs.
-    let back = Selection { page: 3, span: Span::Run { anchor: 1, head: 2, head_page: 1 } };
+    let back = Selection { page: 3, span: Span::Run { anchor: 1, head: 2, head_page: 1, head_x: None } };
     assert_eq!(on(&back), on(&s));
     assert_eq!(back.pages(), 1..=3);
     // On one page, as before: either way round, both ends included.
@@ -1368,17 +1368,17 @@ fn a_selection_across_pages_takes_the_rest_of_the_first_and_the_start_of_the_las
     assert!(column.rects_on(1, &t).is_empty() && column.text_on(1, &t).is_empty(), "nothing off its page");
     // Extending moves the head, onto another page too; a column selection has none to move.
     let mut ext = Selection::run(0, 3, 3);
-    ext.extend_to(2, 1);
-    assert_eq!(ext, Selection { page: 0, span: Span::Run { anchor: 3, head: 1, head_page: 2 } });
+    ext.extend_to_at(2, 1, None);
+    assert_eq!(ext, Selection { page: 0, span: Span::Run { anchor: 3, head: 1, head_page: 2, head_x: None } });
     let mut col = column;
-    col.extend_to(4, 0);
+    col.extend_to_at(4, 0, None);
     assert_eq!(col, column);
     // Hostile indices: no overflow, no inverted range.
-    let edge = Selection { page: usize::MAX, span: Span::Run { anchor: usize::MAX, head: usize::MAX, head_page: usize::MAX } };
+    let edge = Selection { page: usize::MAX, span: Span::Run { anchor: usize::MAX, head: usize::MAX, head_page: usize::MAX, head_x: None } };
     assert_eq!(edge.run_on(usize::MAX, 3), Some(usize::MAX..usize::MAX));
     assert_eq!(edge.text_on(usize::MAX, &t), "");
     // Glyph indices past a page's end (a stale selection) select only what is there.
-    let stale = Selection { page: 0, span: Span::Run { anchor: 3, head: 99, head_page: 1 } };
+    let stale = Selection { page: 0, span: Span::Run { anchor: 3, head: 99, head_page: 1, head_x: None } };
     assert_eq!(stale.text_on(0, &t), "de");
     assert_eq!(stale.text_on(1, &t), "abcde");
 }
@@ -1390,7 +1390,7 @@ fn a_selection_across_pages_copies_each_page_on_its_own_line_once_all_are_read()
     v.texts.insert(0, Arc::new(line_text("abc")));
     v.texts.insert(2, Arc::new(line_text("ghi")));
     v.texts.insert(3, Arc::new(line_text("jkl")));
-    v.selection = Some(Selection { page: 2, span: Span::Run { anchor: 0, head: 1, head_page: 0 } });
+    v.selection = Some(Selection { page: 2, span: Span::Run { anchor: 0, head: 1, head_page: 0, head_x: None } });
     assert_eq!(v.selected_text(), None, "page 2 is not read yet: no short copy");
     assert!(v.selection_quads(&info).is_empty(), "nor a short markup");
     v.texts.insert(1, Arc::new(line_text("def")));
@@ -1421,7 +1421,7 @@ fn copy_with_formatting_takes_a_selection_on_one_page_only() {
     // Glyphs past a stale selection's page end are left out.
     v.selection = Some(Selection::run(0, 1, 99));
     assert_eq!(v.selected_glyphs().map(|(_, _, glyphs)| glyphs), Some(vec![1, 2]));
-    v.selection = Some(Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 1 } });
+    v.selection = Some(Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 1, head_x: None } });
     assert!(v.selected_glyphs().is_none(), "across pages: plain text");
     assert_eq!(v.selected_text().as_deref(), Some("bc\nde"), "which has every page's part");
 }
@@ -2207,9 +2207,9 @@ fn many_open_documents_share_one_raster_allowance_and_close_releases_handles() {
 #[test]
 fn suspended_signature_preview_releases_layers_and_rebuilds_without_editing() {
     let ctx = egui::Context::default();
-    let mut png = std::io::Cursor::new(Vec::new());
-    image::RgbaImage::from_pixel(12, 4, image::Rgba([20, 30, 40, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
-    let image = pdfcraft_engine::SignatureImage::from_bytes(png.get_ref()).unwrap();
+    let img = craft_image_codecs::Image::from_u8(12, 4, craft_image_codecs::ChannelLayout::Rgba, [20, 30, 40, 255].repeat(48)).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
+    let image = pdfcraft_engine::SignatureImage::from_bytes(&png).unwrap();
     let mut session = pdfcraft_engine::Session::new();
     let blank = session.create_blank(300.0, 400.0, 1).unwrap();
     let id = session.open_new("signature-preview.pdf", blank).unwrap();
@@ -3360,7 +3360,7 @@ fn a_selection_across_pages_still_to_be_read_is_copied_once_read() {
     let mut app = PdfCraftApp::new();
     app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
     // From the second glyph of page 1 to the first of page 3, no page read yet.
-    app.views[0].selection = Some(Selection { page: 0, span: Span::Run { anchor: 1, head: 0, head_page: 2 } });
+    app.views[0].selection = Some(Selection { page: 0, span: Span::Run { anchor: 1, head: 0, head_page: 2, head_x: None } });
     let span = app.views[0].selection_waits_for_text().expect("waits for its pages");
     assert_eq!(span, TextSpan { start: (0, 1), end: (2, 0) });
     assert!(app.views[0].selected_text().is_none(), "nothing to copy on this thread yet");
@@ -3402,7 +3402,7 @@ fn redaction_refuses_a_selection_over_an_unreadable_page() {
     v.texts.insert(0, Arc::new(line_text("abc")));
     v.texts.insert(2, Arc::new(line_text("ghi")));
     v.text_failed.insert(1);
-    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2 } };
+    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None } };
     v.selection = Some(sel);
     assert!(v.selection_has_unreadable_page());
     assert_eq!(v.tool_marks(QuickTool::Redact, true, None, true, &info), ToolMarks::Unreadable);
@@ -3430,7 +3430,7 @@ fn a_marking_tool_waits_for_the_selections_pages() {
     let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
     v.texts.insert(0, Arc::new(line_text("abc")));
     v.texts.insert(2, Arc::new(line_text("ghi")));
-    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2 } };
+    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None } };
     v.selection = Some(sel);
     let tool = QuickTool::Comment(comments::CommentTool::Underline);
     assert_eq!(v.tool_marks(tool, true, Some(0), false, &info), ToolMarks::None, "page 2 is not read yet");
@@ -3469,7 +3469,7 @@ fn a_wait_ends_when_the_selection_changes() {
     let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
     v.texts.insert(0, Arc::new(line_text("abc")));
     v.texts.insert(2, Arc::new(line_text("ghi")));
-    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2 } };
+    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None } };
     v.selection = Some(sel);
     let tool = QuickTool::Comment(comments::CommentTool::Underline);
     assert_eq!(v.tool_marks(tool, true, Some(0), false, &info), ToolMarks::None, "page 2 is not read yet");
@@ -3490,7 +3490,7 @@ fn waiting_marks_are_dropped_when_their_pages_change() {
     app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
     let id = app.views[0].id;
     let info = |app: &PdfCraftApp| app.session.get(id).unwrap().info.clone();
-    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2 } };
+    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2, head_x: None } };
     let wait = |app: &mut PdfCraftApp| {
         let info = info(app);
         let v = &mut app.views[0];
@@ -3512,7 +3512,7 @@ fn waiting_marks_are_dropped_when_their_pages_change() {
     }
     // The old selection's glyph positions now name other pages: even made again, nothing is
     // marked unless the tool finishes it again.
-    v.selection = Some(Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 1 } });
+    v.selection = Some(Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 1, head_x: None } });
     assert_eq!(v.tool_marks(QuickTool::Redact, false, Some(0), true, &after), ToolMarks::None, "the wait went with the selection");
     let redactions = app.session.get(id).unwrap().redaction_marks();
     assert_eq!(redactions, 0);

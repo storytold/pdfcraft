@@ -834,12 +834,17 @@ fn update_dragged_selection(view: &mut DocView, text: &PageText, gesture: &TextG
         match selection.span {
             Span::Run { .. } if clicks >= 2 => {
                 if let Some(hit) = hit {
-                    extend_by_unit(view, &mut selection, text, clicks, (gesture.page, hit));
+                    if selection.page == gesture.page {
+                        // Same page: also select table rows by whole units, as a plain drag does.
+                        extend_by_unit_on_page(&mut selection, text, clicks, hit, gesture.vx);
+                    } else {
+                        extend_by_unit(view, &mut selection, text, clicks, (gesture.page, hit));
+                    }
                 }
             }
             Span::Run { .. } => {
                 if let Some(hit) = hit {
-                    selection.extend_to(gesture.page, hit);
+                    selection.extend_to_at(gesture.page, hit, Some(gesture.vx).filter(|x| x.is_finite()));
                 }
             }
             Span::Column { rect } => selection.span = Span::Column { rect: [rect[0], rect[1], gesture.vx, gesture.vy] },
@@ -877,7 +882,22 @@ fn extend_by_unit(view: &DocView, selection: &mut Selection, text: &PageText, cl
     } else {
         (first, to_last)
     };
-    selection.span = Span::Run { anchor, head, head_page: page };
+    selection.span = Span::Run { anchor, head, head_page: page, head_x: None };
+}
+
+/// After a multi-click, a same-page drag extends by its unit and, over a table, by visual rows
+/// (the rest of the first row, the rows between, the start of the last). The page unit (four
+/// clicks) is the page's text in reading order, so it has no `head_x`.
+fn extend_by_unit_on_page(selection: &mut Selection, text: &PageText, clicks: u32, hit: usize, vx: f32) {
+    let Span::Run { anchor, head, head_page, head_x } = &mut selection.span else { return };
+    let Some((first, last)) = click_unit(text, clicks, *anchor) else { return };
+    let (to_first, to_last) = click_unit(text, clicks, hit).unwrap_or((hit, hit));
+    *head_x = Some(vx).filter(|x| x.is_finite() && clicks < 4);
+    let in_order = if to_first < first { (last, to_first) } else { (first, to_last.max(last)) };
+    let by_rows = text.row_ends((first, last), (to_first, to_last));
+    let rows = head_x.is_some() && text.visual_between(by_rows.0, by_rows.1, *head_x).is_some();
+    (*anchor, *head) = if rows { by_rows } else { in_order };
+    *head_page = selection.page;
 }
 
 fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageText, gesture: &TextGesture<'_>) {
@@ -906,7 +926,9 @@ fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageTex
         let shift = ui.input(|input| input.modifiers.shift);
         match (view.selection.as_mut().filter(|selection| shift && matches!(selection.span, Span::Run { .. })), text.nearest(gesture.vx, gesture.vy))
         {
-            (Some(selection), Some(hit)) => selection.extend_to(gesture.page, hit),
+            (Some(selection), Some(hit)) => {
+                selection.extend_to_at(gesture.page, hit, Some(gesture.vx).filter(|x| x.is_finite()));
+            }
             _ => view.selection = None,
         }
     }

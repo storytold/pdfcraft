@@ -319,6 +319,9 @@ pub enum Request {
     Highlight(bool),
     /// `app.execMenuItem("SaveAs")` (XFA forms' Save buttons).
     SaveAs,
+    /// `app.openDoc(cPath)`: the path as the script gave it (relative to this document's
+    /// folder). A request only: the viewer asks the user before opening any file.
+    OpenDoc(String),
     /// `this.exportDataObject(cName, …, nLaunch)`: the attached file `name`, to open (`nLaunch`
     /// 1 or 2) or to save (0).
     OpenAttachment {

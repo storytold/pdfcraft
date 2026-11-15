@@ -14,8 +14,11 @@ pub(super) struct Selection {
 pub(super) enum Span {
     /// Reading order, from glyph `anchor` on the selection's page to glyph `head` on `head_page`
     /// (either may come first). Across pages it takes the rest of the first page, every page
-    /// between whole, and the last page up to its end, as Acrobat does.
-    Run { anchor: usize, head: usize, head_page: usize },
+    /// between whole, and the last page up to its end, as Acrobat does. `head_x` is where a
+    /// drag's pointer ended (page view space), which may lie well past the head glyph, as in the
+    /// empty end of a table row; `None` when the head came from a click or a command, and when
+    /// the selection runs across pages (table rows are one page).
+    Run { anchor: usize, head: usize, head_page: usize, head_x: Option<f32> },
     /// Column select (#740): the glyphs inside a rectangle in page view space, drawn from the
     /// corner the drag started at (`rect[0..2]`) to the pointer (`rect[2..4]`).
     Column { rect: [f32; 4] },
@@ -23,7 +26,19 @@ pub(super) enum Span {
 
 impl Selection {
     pub(super) fn run(page: usize, anchor: usize, head: usize) -> Self {
-        Self { page, span: Span::Run { anchor, head, head_page: page } }
+        Self { page, span: Span::Run { anchor, head, head_page: page, head_x: None } }
+    }
+
+    fn range(anchor: usize, head: usize) -> Range<usize> {
+        anchor.min(head)..anchor.max(head).saturating_add(1)
+    }
+
+    /// What a drag over table rows selects by rows, not reading order's detour down each column.
+    /// Only a same-page drag (also one after a double- or triple-click) or a ⇧-click has a
+    /// pointer end; a clicked word, line or page, Select all, a command's selection, and a
+    /// selection across pages keep reading order.
+    fn by_rows(text: &PageText, anchor: usize, head: usize, head_x: Option<f32>) -> Option<Vec<usize>> {
+        head_x.and_then(|x| text.visual_between(anchor, head, Some(x)))
     }
 
     /// The pages the selection covers, first to last.
@@ -56,7 +71,7 @@ impl Selection {
 
     /// A reading-order selection's ends in reading order; `None` for a column selection.
     pub(super) fn text_span(&self) -> Option<TextSpan> {
-        let Span::Run { anchor, head, head_page } = self.span else { return None };
+        let Span::Run { anchor, head, head_page, .. } = self.span else { return None };
         // (page, glyph) pairs compare in reading order.
         let (start, end) = if (self.page, anchor) <= (head_page, head) {
             ((self.page, anchor), (head_page, head))
@@ -70,6 +85,12 @@ impl Selection {
     /// markup quads).
     pub(super) fn rects_on(&self, page: usize, text: &PageText) -> Vec<[f32; 4]> {
         match self.span {
+            Span::Run { anchor, head, head_page, head_x } if page == self.page && head_page == self.page => {
+                match Self::by_rows(text, anchor, head, head_x) {
+                    Some(row) => text.glyph_rects(&row),
+                    None => self.run_on(page, text.glyphs.len()).map(|r| text.line_rects(r)).unwrap_or_default(),
+                }
+            }
             Span::Run { .. } => self.run_on(page, text.glyphs.len()).map(|r| text.line_rects(r)).unwrap_or_default(),
             Span::Column { rect } if page == self.page => text.glyph_rects(&text.glyphs_in(rect)),
             Span::Column { .. } => Vec::new(),
@@ -79,17 +100,26 @@ impl Selection {
     /// The text selected on `page`, as Copy puts it on the clipboard.
     pub(super) fn text_on(&self, page: usize, text: &PageText) -> String {
         match self.span {
+            Span::Run { anchor, head, head_page, head_x } if page == self.page && head_page == self.page => {
+                match Self::by_rows(text, anchor, head, head_x) {
+                    Some(row) => text.column_text(&row),
+                    None => self.run_on(page, text.glyphs.len()).map(|r| text.text_of(r)).unwrap_or_default(),
+                }
+            }
             Span::Run { .. } => self.run_on(page, text.glyphs.len()).map(|r| text.text_of(r)).unwrap_or_default(),
             Span::Column { rect } if page == self.page => text.column_text(&text.glyphs_in(rect)),
             Span::Column { .. } => String::new(),
         }
     }
 
-    /// Extend a reading-order selection to glyph `head` on `page`; a column selection, which has
-    /// no anchor glyph, stays as it is.
-    pub(super) fn extend_to(&mut self, page: usize, glyph: usize) {
-        if let Span::Run { head, head_page, .. } = &mut self.span {
+    /// Extend a reading-order selection to glyph `head` on `page`. `head_x` is the pointer's
+    /// page-view x, used to select table rows on the same page; it is dropped when the head
+    /// moves to another page.
+    pub(super) fn extend_to_at(&mut self, page: usize, glyph: usize, head_x: Option<f32>) {
+        if let Span::Run { head, head_page, head_x: x, .. } = &mut self.span {
+            let same_page = page == self.page;
             (*head, *head_page) = (glyph, page);
+            *x = head_x.filter(|_| same_page);
         }
     }
 }
@@ -293,8 +323,8 @@ impl DocView {
     }
 
     /// The selection's page, its text layer and the selected glyphs in copy order, for Copy with
-    /// formatting. `None` after Select All of the document and for a column selection, which
-    /// copy plain text (a column's rows and tab-separated cells are not paragraphs), and for a
+    /// formatting. `None` after Select All of the document, for a column selection or a table's
+    /// rows, which copy plain text (rows and tab-separated cells are not paragraphs), and for a
     /// selection across pages, whose formatted copy would hold one page of it: it copies plain
     /// text, every page's.
     pub(crate) fn selected_glyphs(&self) -> Option<(usize, Arc<PageText>, Vec<usize>)> {
@@ -303,10 +333,14 @@ impl DocView {
         }
         let s = self.selection.filter(|s| !s.spans_pages())?;
         let t = self.texts.get(&s.page)?;
-        let len = t.glyphs.len();
-        // A column selection has no reading-order run.
-        let run = s.run_on(s.page, len)?;
-        let glyphs = (run.start..run.end.min(len)).collect();
+        let glyphs = match s.span {
+            Span::Run { anchor, head, head_x, .. } if Selection::by_rows(t, anchor, head, head_x).is_none() => {
+                let r = Selection::range(anchor, head);
+                (r.start..r.end.min(t.glyphs.len())).collect()
+            }
+            // A table's rows, like a column, are tab-separated cells. Across pages is excluded above.
+            Span::Run { .. } | Span::Column { .. } => return None,
+        };
         Some((s.page, t.clone(), glyphs))
     }
 
