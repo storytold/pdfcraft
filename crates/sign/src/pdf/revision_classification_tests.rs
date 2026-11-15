@@ -397,3 +397,121 @@ fn a_widget_rect_saved_back_as_integers_is_a_form_fill() {
     let moved = save(Some(20.5));
     assert_eq!(verdict(&moved, signed.open(), Some(2)), Modification::Disallowed(vec![super::kind::PAGE_CONTENT]));
 }
+
+/// Append a revision indexed by a cross-reference stream: `plain` objects written on their own,
+/// `members` packed into one object stream numbered `stream`, the cross-reference stream as
+/// `stream + 1`. The file's size grows to cover both. Returns the file with this revision last.
+fn packed_revision(mut file: File, plain: &[(u32, &str)], members: &[(u32, &str)], stream: u32) -> File {
+    let xref_num = stream + 1;
+    file.size = file.size.max(xref_num + 1);
+    let mut rows: Vec<(u32, u8, u32, u16)> = Vec::new();
+    for (num, body) in plain {
+        rows.push((*num, 1, u32::try_from(file.bytes.len()).unwrap(), 0));
+        file.bytes.extend_from_slice(format!("{num} 0 obj\n{body}\nendobj\n").as_bytes());
+    }
+    let (mut header, mut data) = (String::new(), String::new());
+    for (index, (num, body)) in members.iter().enumerate() {
+        header.push_str(&format!("{num} {} ", data.len()));
+        data.push_str(body);
+        data.push('\n');
+        rows.push((*num, 2, stream, u16::try_from(index).unwrap()));
+    }
+    rows.push((stream, 1, u32::try_from(file.bytes.len()).unwrap(), 0));
+    let body = format!("{header}{data}");
+    file.bytes.extend_from_slice(
+        format!(
+            "{stream} 0 obj\n<< /Type /ObjStm /N {} /First {} /Length {} >>\nstream\n{body}\nendstream\nendobj\n",
+            members.len(),
+            header.len(),
+            body.len()
+        )
+        .as_bytes(),
+    );
+    let at = file.bytes.len();
+    rows.push((xref_num, 1, u32::try_from(at).unwrap(), 0));
+    if file.xref.is_none() {
+        rows.push((0, 0, 0, 65535));
+    }
+    rows.sort_by_key(|row| row.0);
+    let (mut index, mut table) = (String::new(), Vec::new());
+    for (num, kind, field, last) in &rows {
+        index.push_str(&format!("{num} 1 "));
+        table.push(*kind);
+        table.extend_from_slice(&field.to_be_bytes());
+        table.extend_from_slice(&last.to_be_bytes());
+    }
+    let prev = file.xref.map(|p| format!(" /Prev {p}")).unwrap_or_default();
+    file.bytes.extend_from_slice(
+        format!(
+            "{xref_num} 0 obj\n<< /Type /XRef /Size {} /Index [{index}] /W [1 4 2] /Root 1 0 R{prev} /Length {} >>\nstream\n",
+            file.size,
+            table.len()
+        )
+        .as_bytes(),
+    );
+    file.bytes.extend_from_slice(&table);
+    file.bytes.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{at}\n%%EOF\n").as_bytes());
+    file.xref = Some(at);
+    file
+}
+
+/// A signed form whose text field, object 4, is a member of an object stream that the field list
+/// and the page's /Annots reach as `4 {generation} R`.
+fn packed_field(generation: u16) -> File {
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 {generation} R] >> >>");
+    let page = page(&format!("/Annots [4 {generation} R]"));
+    packed_revision(File::new(), &[(1, &catalog), (2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"), (3, &page)], &[(4, TEXT_FIELD)], 5)
+}
+
+/// A form fill that writes a field signed inside an object stream on its own is still a form
+/// fill: the signed references reach the new object as they reached the old.
+#[test]
+fn a_packed_field_filled_on_its_own_is_a_form_fill() {
+    let signed = packed_field(0);
+    assert!(signed.open().accepts_any_generation(4));
+    let filled = TEXT_FIELD.replace("(Ann)", "(Bob)");
+    let now = signed.clone().revision(&[(4, Row::Obj(0, 0, &filled))]);
+    assert!(!now.open().accepts_any_generation(4));
+    assert_eq!(verdict(&now.open(), signed.open(), Some(2)), Modification::Allowed(vec![super::kind::FORM_FILL]));
+}
+
+/// A member of an object stream reached as `4 1 R` when signed (ISO 32000-2 §7.5.7 gives it
+/// generation 0, and readers follow the reference to it). Rewritten as `4 0 obj` with the same
+/// content, the signed references no longer reach it, and the field leaves the page: a change.
+#[test]
+fn a_packed_field_signed_through_another_generation_cannot_be_unpacked_away() {
+    let signed = packed_field(1);
+    assert!(signed.open().get(r(4, 1)).as_dict().is_some(), "the signed field is shown");
+    let now = signed.clone().revision(&[(4, Row::Obj(0, 0, TEXT_FIELD))]);
+    assert_eq!(*now.open().get(r(4, 1)), Object::Null);
+    for p in [Some(1), Some(2), Some(3), None] {
+        assert!(matches!(verdict(&now.open(), signed.open(), p), Modification::Disallowed(_)), "P={p:?}");
+    }
+    // Filled and written as `4 1 obj`, the generation every signed reference uses, it stays on
+    // the page: a form fill.
+    let filled = TEXT_FIELD.replace("(Ann)", "(Bob)");
+    let now = signed.clone().revision(&[(4, Row::Obj(1, 1, &filled))]);
+    assert_eq!(verdict(&now.open(), signed.open(), Some(2)), Modification::Allowed(vec![super::kind::FORM_FILL]));
+}
+
+/// The other way round: a field written on its own that the signed revision lists as `4 1 R`,
+/// a generation it doesn't have, is not on the page when signed. Packing it into an object
+/// stream later makes the reference reach it: a change, and packing it with every signed
+/// reference unchanged is none.
+#[test]
+fn packing_a_field_that_a_signed_reference_missed_is_a_change() {
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 1 R] >> >>")),
+        (2, Row::Obj(0, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")),
+        (3, Row::Obj(0, 0, &page("/Annots [4 1 R]"))),
+        (4, Row::Obj(0, 0, TEXT_FIELD)),
+    ]);
+    assert_eq!(*signed.open().get(r(4, 1)), Object::Null, "nothing reaches the field when signed");
+    let now = packed_revision(signed.clone(), &[], &[(4, TEXT_FIELD)], 5);
+    assert!(now.open().get(r(4, 1)).as_dict().is_some());
+    assert!(matches!(verdict(&now.open(), signed.open(), Some(3)), Modification::Disallowed(_)));
+    let signed = form("/Annots [5 0 R]");
+    let now = packed_revision(signed.clone(), &[], &[(5, TEXT_FIELD)], 7);
+    assert!(now.open().accepts_any_generation(5));
+    assert_eq!(verdict(&now.open(), signed.open(), Some(2)), Modification::Allowed(Vec::new()));
+}

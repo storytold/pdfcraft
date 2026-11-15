@@ -905,6 +905,42 @@ fn save_is_incremental_stamps_mod_date_and_rebases() {
     assert_eq!(reopened.revisions().len(), 3);
 }
 
+/// PDFBOX-3265: the page tree lists its last page as `2 1 R`, but object 2 is a member of an
+/// object stream, whose generation is 0 (ISO 32000-2 §7.5.7). The page shows, as in other readers,
+/// and Document Properties lists the reference among the repairs.
+#[test]
+fn a_page_in_an_object_stream_reached_by_another_generation_shows_and_is_listed_as_repaired() {
+    let mut bytes = b"%PDF-1.5\n".to_vec();
+    let mut offsets = Vec::new();
+    let page = "<< /Type /Page /Parent 1 0 R /MediaBox [0 0 200 100] >>";
+    for (num, body) in [(1, "<< /Type /Pages /Kids [3 0 R 2 1 R] /Count 2 >>"), (3, page), (4, "<< /Type /Catalog /Pages 1 0 R >>")] {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{num} 0 obj\n{body}\nendobj\n").as_bytes());
+    }
+    let members = format!("2 0 {page}");
+    let stream = bytes.len();
+    bytes.extend_from_slice(
+        format!("5 0 obj\n<< /Type /ObjStm /N 1 /First 4 /Length {} >>\nstream\n{members}\nendstream\nendobj\n", members.len()).as_bytes(),
+    );
+    let xref = bytes.len();
+    let rows = [(0u8, 0usize, 65535u16), (1, offsets[0], 0), (2, 5, 0), (1, offsets[1], 0), (1, offsets[2], 0), (1, stream, 0), (1, xref, 0)];
+    let mut table = Vec::new();
+    for (kind, field, last) in rows {
+        table.push(kind);
+        table.extend_from_slice(&u32::try_from(field).unwrap().to_be_bytes());
+        table.extend_from_slice(&last.to_be_bytes());
+    }
+    bytes.extend_from_slice(format!("6 0 obj\n<< /Type /XRef /Size 7 /W [1 4 2] /Root 4 0 R /Length {} >>\nstream\n", table.len()).as_bytes());
+    bytes.extend_from_slice(&table);
+    bytes.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("packed.pdf", None, Arc::new(bytes), None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), 2);
+    assert!(doc.repair_log().iter().any(|l| l.contains("2 1 R") && l.contains("object stream")), "{:?}", doc.repair_log());
+    assert!(!doc.dirty, "a repair is not an edit");
+}
+
 /// #1937: a file whose cross-reference data had to be rebuilt saved as its original bytes when
 /// nothing was edited, so the damage Document Properties reported as repaired was still in the
 /// file. Save writes the rebuilt file in full; reopened, it needs no repair.

@@ -767,9 +767,18 @@ impl Document {
         self.editor.as_ref().map_or_else(|| self.bytes.clone(), |e| e.saved.clone())
     }
 
-    /// Notes about damage repaired while opening (Document Properties ▸ Advanced, notices).
+    /// Notes about damage repaired while opening (Document Properties ▸ Advanced, notices), then
+    /// the references followed so far to an object-stream member by a generation it doesn't
+    /// have ([`pdfcraft_cos::Document::generation_aliases`]).
     pub fn repair_log(&self) -> Vec<String> {
-        self.editor.as_ref().map(|e| e.cos.repair_log().to_vec()).unwrap_or_default()
+        self.editor
+            .as_ref()
+            .map(|e| {
+                let mut log = e.cos.repair_log().to_vec();
+                log.extend(e.cos.generation_aliases());
+                log
+            })
+            .unwrap_or_default()
     }
 
     /// Objects of the file that could not be read and read as null, one line each (see

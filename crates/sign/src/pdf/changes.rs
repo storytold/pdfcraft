@@ -88,7 +88,8 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         // Past the bound the tree is not known in full: no change is judged against it.
         disallowed.push(kind::PAGES);
     }
-    // Every reference the signed revision makes, read only when a slot's generations narrowed.
+    // Every reference the signed revision makes, read only when the generations a slot accepts
+    // changed.
     let signed_references = OnceCell::new();
     let dss = dss_parts(doc, &old);
     // Stored at the same place in both (and not edited since): the same bytes, unchanged.
@@ -148,17 +149,22 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         // shows what that holds: the object compared below is not provably what is displayed.
         // No writer changes a signed object's generation. A damaged slot rewritten cleanly
         // accepts fewer: that is the same slot when nothing signed refers to it by a generation
-        // it gave up.
+        // it gave up. A member of an object stream accepts every generation, and the same object
+        // written on its own (a form fill) only its own, or the other way round: the same slot
+        // when every signed reference to it resolves, or fails to, as it did.
         let signed_generations = old.accepted_generations(num);
         let generations = doc.accepted_generations(num);
-        let narrowed_unreferenced = || {
+        let (signed_any, any) = (old.accepts_any_generation(num), doc.accepts_any_generation(num));
+        let same_for_signed_references = || {
             !generations.is_empty()
-                && generations.iter().all(|g| signed_generations.contains(g))
-                && signed_references.get_or_init(|| references(&old)).as_ref().is_some_and(|found: &HashSet<ObjRef>| {
-                    signed_generations.iter().filter(|g| !generations.contains(g)).all(|g| !found.contains(&ObjRef { num, generation: *g }))
+                && generations.iter().all(|g| signed_any || signed_generations.contains(g))
+                && signed_references.get_or_init(|| references(&old)).as_ref().is_some_and(|found: &HashMap<u32, HashSet<u16>>| {
+                    found
+                        .get(&num)
+                        .is_none_or(|used| used.iter().all(|g| (signed_any || signed_generations.contains(g)) == (any || generations.contains(g))))
                 })
         };
-        if !signed_generations.is_empty() && signed_generations != generations && !narrowed_unreferenced() {
+        if !signed_generations.is_empty() && (signed_generations != generations || signed_any != any) && !same_for_signed_references() {
             let what = if signed_role(num) { kind::PAGE_CONTENT } else { kind::OTHER };
             if !disallowed.contains(&what) {
                 disallowed.push(what);
@@ -605,17 +611,19 @@ fn annot_refs(doc: &Document, o: Option<&Object>, budget: &Cell<usize>) -> Optio
 
 /// Every indirect reference in `doc`'s objects and trailer. `None` (nothing can be shown
 /// unreferenced) when an object can't be read, or past a bound on references or nesting.
-fn references(doc: &Document) -> Option<HashSet<ObjRef>> {
+fn references(doc: &Document) -> Option<HashMap<u32, HashSet<u16>>> {
     const MAX_REFERENCES: usize = 1 << 22;
     const MAX_DEPTH: u8 = 64;
-    fn walk(o: &Object, depth: u8, found: &mut HashSet<ObjRef>) -> bool {
+    fn walk(o: &Object, depth: u8, found: &mut (HashMap<u32, HashSet<u16>>, usize)) -> bool {
         if depth > MAX_DEPTH {
             return false;
         }
         match o {
             Object::Ref(r) => {
-                found.insert(*r);
-                found.len() <= MAX_REFERENCES
+                if found.0.entry(r.num).or_default().insert(r.generation) {
+                    found.1 = found.1.saturating_add(1);
+                }
+                found.1 <= MAX_REFERENCES
             }
             Object::Dict(d) => d.iter().all(|(_, v)| walk(v, depth + 1, found)),
             Object::Stream(s) => s.dict.iter().all(|(_, v)| walk(v, depth + 1, found)),
@@ -623,13 +631,13 @@ fn references(doc: &Document) -> Option<HashSet<ObjRef>> {
             _ => true,
         }
     }
-    let mut found = HashSet::new();
+    let mut found = (HashMap::new(), 0);
     for num in doc.object_numbers() {
         if !walk(&*doc.try_get(num).ok()?, 0, &mut found) {
             return None;
         }
     }
-    doc.trailer().iter().all(|(_, v)| walk(v, 0, &mut found)).then_some(found)
+    doc.trailer().iter().all(|(_, v)| walk(v, 0, &mut found)).then_some(found.0)
 }
 
 fn refs(doc: &Document, o: Option<&Object>) -> Vec<ObjRef> {

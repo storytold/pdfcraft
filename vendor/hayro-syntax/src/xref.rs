@@ -768,11 +768,26 @@ impl XRef {
 
         let mut r = Reader::new(repr.data.get().as_ref());
 
-        let entry = *locked.xref_map.get(&id).or({
-            // An indirect reference to an undefined object shall not be considered an error by a PDF processor; it
-            // shall be treated as a reference to the null object.
-            None
-        })?;
+        // PdfCraft patch: (hayro-syntax (52)) a member of an object stream has generation 0
+        // (ISO 32000-2 7.5.7), so a reference to it by another generation can't name some other,
+        // deleted version of it that is still compressed. PDFium, MuPDF, Poppler and qpdf follow
+        // `n 1 R` to it, and so does the document model, which lists each one it follows: the
+        // object is read as `n 0`. A generation the table holds for the number is still read as
+        // that object. The table keeps no free entries, so a member that a newer revision frees
+        // stays readable here, through `n 0 R` as before and now through other generations too.
+        let (id, entry) = match locked.xref_map.get(&id) {
+            Some(entry) => (id, *entry),
+            None => {
+                let own = ObjectIdentifier::new(id.obj_number, 0);
+                match locked.xref_map.get(&own) {
+                    Some(entry @ EntryType::ObjStream(..)) if id.gen_number != 0 => (own, *entry),
+                    // An indirect reference to an undefined object shall not be considered an
+                    // error by a PDF processor; it shall be treated as a reference to the null
+                    // object.
+                    _ => return None,
+                }
+            }
+        };
         let repaired = locked.repaired;
         drop(locked);
 

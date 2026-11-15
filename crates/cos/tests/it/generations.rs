@@ -248,8 +248,11 @@ fn full_save_does_not_turn_stale_references_into_live_ones() {
     }
 }
 
+/// A full save writes the reused object as a member of an object stream, at generation 0, and
+/// the reference that was stale stays null: it is written as `null`, not as a reference that the
+/// member would now accept.
 #[test]
-fn compressed_objects_only_accept_generation_zero() {
+fn a_reused_object_saved_into_an_object_stream_keeps_its_stale_reference_null() {
     let doc = Document::open(reused_object()).unwrap();
     let saved = write_full(&doc, &SaveOptions::default()).unwrap();
     let back = Document::open(Arc::new(saved)).unwrap();
@@ -258,7 +261,132 @@ fn compressed_objects_only_accept_generation_zero() {
     assert_eq!(current.generation, 0);
     assert!(matches!(back.xref_entry(current.num), Some(XrefEntry::InStream { .. })));
     assert_eq!(*back.get(current), Object::Int(42));
-    assert_eq!(*back.get(ObjRef::new(current.num, 1)), Object::Null);
+    assert!(matches!(catalog.as_dict().unwrap().get(b"Stale"), Some(Object::Null)));
+}
+
+/// Two pages; the second, object 5, is a member of object stream 6 and the page tree lists it as
+/// `5 {kid_generation} R`. A cross-reference stream (object 7) indexes the file.
+fn packed_page_file(kid_generation: u16) -> Arc<Vec<u8>> {
+    let mut bytes = b"%PDF-1.5\n".to_vec();
+    let mut offsets = Vec::new();
+    let mut object = |bytes: &mut Vec<u8>, num: u32, body: &str| {
+        offsets.push((num, bytes.len()));
+        bytes.extend_from_slice(format!("{num} 0 obj\n{body}\nendobj\n").as_bytes());
+    };
+    let page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>";
+    object(&mut bytes, 1, "<< /Type /Catalog /Pages 2 0 R >>");
+    object(&mut bytes, 2, &format!("<< /Type /Pages /Kids [3 0 R 5 {kid_generation} R] /Count 2 >>"));
+    object(&mut bytes, 3, page);
+    object(&mut bytes, 4, "<< /Length 27 >>\nstream\n0 0 1 rg 20 20 160 160 re f\nendstream");
+    let members = format!("5 0 {page}");
+    object(&mut bytes, 6, &format!("<< /Type /ObjStm /N 1 /First 4 /Length {} >>\nstream\n{members}\nendstream", members.len()));
+    let xref = bytes.len();
+    let offset = |num: u32| offsets.iter().find(|(n, _)| *n == num).map(|(_, o)| *o).unwrap();
+    let rows: Vec<(u8, usize, u16)> =
+        vec![(0, 0, 65535), (1, offset(1), 0), (1, offset(2), 0), (1, offset(3), 0), (1, offset(4), 0), (2, 6, 0), (1, offset(6), 0), (1, xref, 0)];
+    let mut table = Vec::new();
+    for (kind, field, last) in rows {
+        table.push(kind);
+        table.extend_from_slice(&u32::try_from(field).unwrap().to_be_bytes());
+        table.extend_from_slice(&last.to_be_bytes());
+    }
+    bytes.extend_from_slice(format!("7 0 obj\n<< /Type /XRef /Size 8 /W [1 4 2] /Root 1 0 R /Length {} >>\nstream\n", table.len()).as_bytes());
+    bytes.extend_from_slice(&table);
+    bytes.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    Arc::new(bytes)
+}
+
+/// The pages the page tree of `doc` lists, each as read through its reference.
+fn kids(doc: &Document) -> Vec<Object> {
+    let root = doc.get(doc.root().unwrap());
+    let pages = doc.get(root.as_dict().unwrap().reference(b"Pages").unwrap());
+    let kids = pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap().to_vec();
+    kids.iter().map(|kid| (*doc.resolve(kid)).clone()).collect()
+}
+
+fn is_page(o: &Object) -> bool {
+    o.as_dict().is_some_and(|d| d.name(b"Type") == Some(&b"Page"[..]))
+}
+
+/// A member of an object stream has generation 0 (ISO 32000-2 §7.5.7), so `5 1 R` can name no
+/// other version of it: the model and the renderer both follow it there, as PDFium, MuPDF,
+/// Poppler and qpdf do (PDFBOX-3265's 24-page file lost its last page), and the model lists the
+/// reference among its repairs. A full save writes the reference at the object's generation.
+#[test]
+fn a_compressed_object_is_reached_by_any_generation_and_the_reference_is_listed() {
+    for kid_generation in [0, 1, 7] {
+        let bytes = packed_page_file(kid_generation);
+        let doc = Document::open(bytes.clone()).unwrap();
+        assert!(matches!(doc.xref_entry(5), Some(XrefEntry::InStream { .. })));
+        assert!(doc.accepts_any_generation(5) && !doc.accepts_any_generation(3));
+        assert_eq!(doc.accepted_generations(5), [0]);
+        assert!(doc.generation_aliases().is_empty(), "nothing followed yet");
+        let pages = kids(&doc);
+        assert!(pages.iter().all(is_page), "generation {kid_generation}: {pages:?}");
+        let listed = doc.generation_aliases();
+        if kid_generation == 0 {
+            assert!(listed.is_empty(), "{listed:?}");
+        } else {
+            assert_eq!(listed.len(), 1, "{listed:?}");
+            assert!(listed[0].contains(&format!("5 {kid_generation} R")) && listed[0].contains("§7.5.7"), "{listed:?}");
+        }
+        assert!(doc.repair_log().is_empty(), "open-time repairs are unchanged: {:?}", doc.repair_log());
+        // The renderer reads the same file the same way.
+        let oracle = hayro_syntax::Pdf::new(bytes.clone()).unwrap();
+        assert_eq!(oracle.pages().len(), 2, "generation {kid_generation}");
+        assert!(oracle.xref().get::<HayroDict<'_>>(ObjectIdentifier::new(5, i32::from(kid_generation))).is_some());
+        // A full save keeps both pages and writes the reference at the object's generation.
+        for object_streams in [false, true] {
+            let saved = write_full(&doc, &SaveOptions { object_streams, ..SaveOptions::default() }).unwrap();
+            let back = Document::open(Arc::new(saved)).unwrap();
+            let root = back.get(back.root().unwrap());
+            let tree = back.get(root.as_dict().unwrap().reference(b"Pages").unwrap());
+            let refs = tree.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap().to_vec();
+            assert_eq!(refs.len(), 2);
+            for kid in &refs {
+                let kid = kid.as_ref().unwrap();
+                assert_eq!(kid.generation, back.generation(kid.num), "packed={object_streams}");
+                assert!(is_page(&back.get(kid)), "packed={object_streams}");
+            }
+            assert!(back.generation_aliases().is_empty(), "packed={object_streams}");
+        }
+    }
+}
+
+/// A reference to an in-file object at a generation it doesn't have, to an unknown number or to
+/// a freed member still reads null: only members of object streams accept every generation.
+#[test]
+fn only_object_stream_members_accept_every_generation() {
+    let doc = Document::open(packed_page_file(1)).unwrap();
+    assert_eq!(*doc.get(ObjRef::new(3, 1)), Object::Null, "an in-file page");
+    assert_eq!(*doc.get(ObjRef::new(9, 1)), Object::Null, "an unknown number");
+    assert_eq!(*doc.get(ObjRef::new(0, 1)), Object::Null, "the free head of the list");
+    let mut freed = doc.clone();
+    freed.free(ObjRef::new(5, 0));
+    assert_eq!(*freed.get(ObjRef::new(5, 1)), Object::Null, "a freed member");
+    assert!(!freed.accepts_any_generation(5));
+    assert!(doc.generation_aliases().is_empty(), "nothing was followed: {:?}", doc.generation_aliases());
+}
+
+/// An edit of the member keeps both the generation it was reached by and 0, whichever reference
+/// it was made through, and so needs a full save, which writes one object for both.
+#[test]
+fn an_edited_compressed_object_keeps_the_generation_it_was_reached_by() {
+    for through in [1, 0] {
+        let doc = Document::open(packed_page_file(1)).unwrap();
+        assert_eq!(kids(&doc).len(), 2);
+        let mut edited = doc.clone();
+        edited.update_dict(ObjRef::new(5, through), |page| page.set(b"Rotate".to_vec(), Object::Int(90))).unwrap();
+        assert!(edited.full_save_required(), "through {through}");
+        for generation in [0, 1] {
+            let page = edited.get(ObjRef::new(5, generation));
+            assert_eq!(page.as_dict().and_then(|d| d.int(b"Rotate")), Some(90), "through {through}, read as 5 {generation} R");
+        }
+        let back = Document::open(Arc::new(write_full(&edited, &SaveOptions::default()).unwrap())).unwrap();
+        let pages = kids(&back);
+        assert!(pages.iter().all(is_page), "through {through}: {pages:?}");
+        assert_eq!(pages.iter().filter(|p| p.as_dict().and_then(|d| d.int(b"Rotate")) == Some(90)).count(), 1, "through {through}");
+    }
 }
 
 #[test]
@@ -483,7 +611,8 @@ fn accepted_generations_are_the_generations_get_resolves() {
         assert_eq!(doc.accepted_generations(num), expected, "object {num}");
         for generation in 0..8 {
             let live = !matches!(*doc.get(ObjRef::new(num, generation)), Object::Null);
-            assert_eq!(live, expected.contains(&generation), "object {num} generation {generation}");
+            let accepted = doc.accepts_any_generation(num) || expected.contains(&generation);
+            assert_eq!(live, accepted, "object {num} generation {generation}");
         }
     };
     let doc = Document::open(contradictory_entry(false)).unwrap();
@@ -507,4 +636,6 @@ fn accepted_generations_are_the_generations_get_resolves() {
     let packed = Document::open(Arc::new(write_full(&doc, &SaveOptions { object_streams: true, ..SaveOptions::default() }).unwrap())).unwrap();
     assert!(matches!(packed.xref_entry(member.num), Some(XrefEntry::InStream { .. })), "the member is in an object stream");
     agrees(&packed, member.num, &[0]);
+    assert!(packed.accepts_any_generation(member.num), "a member reads at every generation");
+    assert!(!doc.accepts_any_generation(member.num), "an unsaved object does not");
 }
