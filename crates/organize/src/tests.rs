@@ -14,6 +14,8 @@ fn page_rotation_resolves_inheritance_overrides_and_missing_pages() {
     assert_eq!(page_rotation(&doc, 1).unwrap(), 270);
     assert_eq!(page_rotation(&doc, 0).unwrap(), 90);
     assert_eq!(page_rotation(&doc, 3), Err(OrganizeError::NoSuchPage(3)));
+    // One walk gives each page's rotation, as the per-page call does.
+    assert_eq!(crate::page_rotations(&doc).unwrap(), [90, 270, 90]);
 }
 
 #[test]

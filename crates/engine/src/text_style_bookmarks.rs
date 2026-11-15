@@ -98,9 +98,10 @@ fn without_subset_tag(name: &str) -> &str {
 /// is only whitespace, or whose size can't be read, is left out.
 fn lines(doc: &Document) -> Vec<Line> {
     let pages = pdfcraft_organize::page_count(doc).unwrap_or(0).min(MAX_PAGES);
+    let rotations = pdfcraft_organize::page_rotations(doc).unwrap_or_default();
     let mut out = Vec::new();
     for page in 0..pages {
-        let rotation = pdfcraft_organize::page_rotation(doc, page).unwrap_or(0);
+        let rotation = rotations.get(page).copied().unwrap_or(0);
         let Ok(found) = pdfcraft_edit::text_lines(doc, page) else { continue };
         let mut on_page: Vec<Line> = found
             .into_iter()
