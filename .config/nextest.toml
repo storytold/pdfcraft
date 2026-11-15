@@ -1,3 +1,10 @@
 # Minimum cargo-nextest for this repository: GHSA-vc25-qg58-w57c is fixed in 0.9.150 and CI
 # installs exactly that version, so an older nextest refuses to run (exit 92 REQUIRED_VERSION_NOT_MET).
 nextest-version = "0.9.150"
+
+# These measurements require a quiet runner. Their in-process SERIAL mutex only
+# serializes cargo test; nextest gives each test its own process. Reserve all slots
+# so other tests cannot charge their CPU/render-worker time to a frame budget.
+[[profile.default.overrides]]
+filter = 'package(pdfcraft-ui-egui) & binary(perf)'
+threads-required = "num-test-threads"

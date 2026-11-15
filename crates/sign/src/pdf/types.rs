@@ -13,7 +13,7 @@ impl TrustStore {
 }
 
 /// Acrobat's three verdicts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Status {
     /// Intact, signed by a trusted identity, and any later changes are permitted.
     Valid,
@@ -41,7 +41,7 @@ pub mod kind {
     pub const PAGES: &str = "pages added or removed";
     pub const OTHER: &str = "other changes";
     /// Not a change but the reason there is nothing to compare: the signed revision itself could not
-    /// be read, so what came after it cannot be allowed.
+    /// be read, or does not hold the signature, so what came after it cannot be allowed.
     pub const UNREADABLE: &str = "the signed version could not be read";
 
     /// Every word above, for an interface to translate.
@@ -177,6 +177,8 @@ pub const WORDINGS: &[&str] = &[
     "The signature value does not match the signer's certificate: the signature is corrupt.",
     "The signature could not be checked ({}).",
     "The signature could not be verified ({}).",
+    // Whether the signature certifies the document.
+    "This signature carries certification permissions, but the document does not name it as its certification, so it is checked as an approval signature.",
     // What came after the signature.
     "This document has not been modified since this signature was applied.",
     "The document has been modified since this signature was applied, but the changes are permitted ({}).",
@@ -217,6 +219,8 @@ pub const WORDINGS: &[&str] = &[
     "The document has been altered since this timestamp was applied in ways it does not permit ({}).",
     "The timestamp token is valid and its authority is trusted.",
     "The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.",
+    // What the list itself could not read.
+    "This form has too many fields, or a field name too long, for PdfCraft to read them all. Any signature among the rest is not listed, so the document is treated as signed.",
     // The one line that stands for all of it.
     "Unsigned signature field",
     "Signature is valid",

@@ -15,29 +15,33 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, XrefEntry};
 
 mod attachments;
 mod boxes;
+mod comments;
 mod dedupe;
 mod import;
 mod labels;
 mod outline;
+mod outline_io;
 mod pdfx;
 mod prune;
 mod transition;
 pub mod view;
 mod xmp;
 
-pub use attachments::{add_attachment, attachment_keys, delete_attachment, mime_for_name};
+pub use attachments::{add_attachment, attachment_keys, delete_attachment, mime_for_name, set_attachment_description};
 pub use boxes::{BoxSpec, PageBox, page_boxes, set_page_box};
+pub use comments::import_comments;
 pub use dedupe::dedupe_resources;
 pub use import::{
     CombineOutcome, Combiner, FieldConflicts, ImportOutcome, Run, SplitBy, combine, combine_field_conflicts, combine_grouped, combine_grouped_with,
-    combine_selected, combine_selected_with, combine_with, extract_pages, field_name_conflicts, import_pages, import_pages_with, insert_file_pages,
-    page_as_form, split, split_ranges,
+    combine_selected, combine_selected_with, combine_with, extract_pages, field_name_conflicts, import_pages, import_pages_with, import_value,
+    insert_file_pages, page_as_form, reachable, split, split_ranges,
 };
 pub use labels::{LabelRange, LabelStyle, PageLabels, number_pages, page_label_ranges, page_labels, set_page_label_ranges};
 pub use outline::{
     Bookmark, BookmarkPage, OutlineEntry, OutlineError, add_bookmark, add_bookmark_at, add_bookmark_tree, bookmark_page, bookmarks, delete_bookmark,
     move_bookmark, rename_bookmark, set_bookmark_color, set_bookmark_open, set_bookmark_page, set_bookmark_style, top_level_bookmarks,
 };
+pub use outline_io::{MAX_IMPORT_BOOKMARKS, OutlineNode, OutlineTree, import_outline, outline_tree, unmapped, view_arity};
 pub use transition::{TRANSITION_DIRECTIONS, TRANSITION_STYLES, Transition, TransitionSpec, set_transition};
 pub use view::{InitialView, displays_doc_title, initial_view, set_initial_view};
 
@@ -681,7 +685,8 @@ pub fn has_info(doc: &Document, key: &str) -> bool {
 ///
 /// Documents with XMP metadata also carry Title, Author, Subject, Keywords, Creator and Producer
 /// in the XMP packet, and viewers that read XMP first show its value: the packet's property is
-/// changed (or removed) to match (see `xmp`).
+/// changed (or removed) to match, and a custom property is kept there as `pdfx:<key>` as Acrobat
+/// keeps it (see `xmp`).
 pub fn set_info(doc: &mut Document, key: &str, value: &str) -> Result<(), OrganizeError> {
     if !STANDARD_INFO_KEYS.contains(&key) {
         check_custom_key(key)?;
@@ -741,8 +746,11 @@ impl Standard {
 
 /// Remove what identifies the document as meeting `standard`: the `pdfaid:` XMP properties of
 /// ISO 19005, or ISO 15930's `GTS_PDFXVersion` and `GTS_PDFXConformance` in the document
-/// information and as `pdfxid:` XMP properties. Output intents and other metadata stay. Refused
-/// when the document declares nothing of the kind.
+/// information and as `pdfxid:` XMP properties, with the `pdfx:` copies that mirror those
+/// information entries as custom properties (see `xmp`; a packet that binds `pdfx` to another
+/// namespace keeps that namespace's properties). Output intents and other metadata stay. Refused,
+/// changing nothing, when the document declares nothing of the kind: a `pdfx:` copy alone is not a
+/// declaration.
 pub fn remove_standard_id(doc: &mut Document, standard: Standard) -> Result<(), OrganizeError> {
     let (props, info_keys): (&[&str], &[&str]) = match standard {
         Standard::PdfA => (&["pdfaid:part", "pdfaid:conformance", "pdfaid:amd", "pdfaid:rev"], &[]),
@@ -755,7 +763,12 @@ pub fn remove_standard_id(doc: &mut Document, standard: Standard) -> Result<(), 
             removed = true;
         }
     }
-    if removed { Ok(()) } else { Err(OrganizeError::Invalid(format!("the document doesn't declare {}", standard.label()))) }
+    if !removed {
+        return Err(OrganizeError::Invalid(format!("the document doesn't declare {}", standard.label())));
+    }
+    // The information entries' custom-property copies go with them.
+    xmp::remove_custom_properties(doc, info_keys)?;
+    Ok(())
 }
 
 #[cfg(test)]

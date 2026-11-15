@@ -8,14 +8,17 @@
 //! - `event`: `value`, `change`, `willCommit`, `rc`, `name`, `type`, `target`, `targetName`.
 //! - the document (`this`, also the global object): `getField`, `numFields`,
 //!   `getNthFieldName`, `numPages`, `pageNum`, `documentFileName`, `info`, `resetForm`,
-//!   `calculateNow`, `print`, `submitForm`, `mailDoc`.
+//!   `calculateNow`, `getPageBox`, `print`, `submitForm`, `mailDoc`, `exportDataObject`.
 //! - Field objects: `name`, `type`, `value`, `valueAsString`, `defaultValue`, `readonly`,
 //!   `required`, `display`, `hidden`, `numItems`, `getItemAt`, `currentValueIndices`,
 //!   `isBoxChecked`, `checkThisBox`, `exportValues`, `charLimit`, `textColor`, `fillColor`,
-//!   `setFocus`.
+//!   `setFocus`, `rect`, appearance properties, and normal button caption/icon methods.
 //! - `app` (`alert`, `beep`, `response`, `launchURL`, `execMenuItem`, `viewerType`, `viewerVersion`,
 //!   `platform`, `setTimeOut`), `util` (`printf`, `printd`, `printx`, `scand`), `console` (`println`,
 //!   `show`, `clear`), `display` and `color`.
+//!
+//! The native engine uses [`session::ScriptSession`] to preserve document globals across events.
+//! Stateless runners remain available for callers that need isolation per invocation.
 //!
 //! The engine is a sandbox: no file, network or timer access exists, and loops and recursion
 //! are bounded. Side effects (alerts, field changes, resets, printing, navigation) are returned
@@ -39,22 +42,26 @@ mod format;
 mod globals;
 mod host;
 mod model;
+mod nesting;
 mod run;
+mod source;
 
 #[cfg(test)]
 pub(crate) use format::PRINTD_SCANNED;
 use format::{printd, printf, printx, scand};
+pub use format::{set_date_names, with_english_printd};
 pub(crate) use globals::menu_item;
 use globals::platform;
 use host::{arg, as_number, error, function, s, text};
 pub use model::{
-    DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, DocInfo, Event, FieldState, FieldType, Limits, Outcome, Panel, Request,
+    DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, DocInfo, Event, FieldState, FieldType, Limits, Message, MessageButtons,
+    MessageIcon, Outcome, Panel, Request,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use run::SCRIPT_STACK;
 use run::refuse;
 pub(crate) use run::{CheckedCodeFromStrings, MAX_SCRIPT_BYTES};
-pub use run::{run, run_shared};
+pub use run::{run, run_shared, run_shared_calculations};
 
 pub mod formcalc;
 pub mod xfa;
@@ -62,3 +69,18 @@ pub mod xfa_session;
 
 #[cfg(test)]
 mod tests;
+
+mod geometry;
+pub use geometry::{rotate_rect, unrotate_rect};
+
+mod icons;
+mod ocg;
+pub use ocg::Layer;
+mod timers;
+pub use timers::{MAX_TIMERS, MIN_TIMER_MS, Timer};
+
+pub mod interaction;
+pub mod session;
+
+/// Maximum reset calls admitted by one document invocation, before argument conversion or field scans.
+pub const MAX_RESET_CALLS: usize = 64;

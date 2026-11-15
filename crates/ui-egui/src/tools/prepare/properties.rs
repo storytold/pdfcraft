@@ -161,17 +161,12 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     let l = ui.label(tl!("Rotation:"));
-                    let before = d.rotation;
+                    // The field keeps its place and size: the rotation turns its content (#4296).
                     craft_ui::ComboBox::from_id_salt("field-rotation")
                         .selected_text(format!("{}°", d.rotation))
                         .show_ui(ui, |ui| {
                             for r in [0, 90, 180, 270] {
-                                if ui.selectable_value(&mut d.rotation, r, format!("{r}°")).changed() && (before % 180 == 0) != (r % 180 == 0) {
-                                    // Keep the same center. set_props skips its own swap when the rect changed too.
-                                    let [x, y, w, h] = d.position;
-                                    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
-                                    d.position = [cx - h / 2.0, cy - w / 2.0, h, w];
-                                }
+                                ui.selectable_value(&mut d.rotation, r, format!("{r}°"));
                             }
                         })
                         .response
@@ -227,7 +222,10 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                 FormFieldKind::CheckBox | FormFieldKind::Radio => {
                     use pdfcraft_engine::field_flags as ff;
                     let on = d.on_state.clone();
-                    ui.label(crate::i18n::fmt(tl!("Export Value: {on}"), &[("on", &on)]));
+                    ui.horizontal(|ui| {
+                        let label = ui.label(tl!("Export value"));
+                        ui.text_edit_singleline(&mut d.export_value).labelled_by(label.id);
+                    });
                     let mut checked = !d.default.is_empty() && d.default == on;
                     let label =
                         if d.kind == FormFieldKind::CheckBox { tl!("Check box is checked by default") } else { tl!("Button is checked by default") };
