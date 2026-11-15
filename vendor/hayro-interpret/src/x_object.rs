@@ -767,6 +767,22 @@ impl<'a> ImageXObject<'a> {
             || dict.get::<Stream<'_>>(MASK).is_some_and(|s| uses_jpx(&s))
     }
 
+    /// PdfCraft patch (113): whether this image, past the bound on decoding an image at its full
+    /// size (`image_size_ok`), is decoded at a reduced size instead: a JBIG2 image of up to
+    /// `hayro_syntax::MAX_REDUCED_JBIG2_PIXELS`, its filter averaging each block of pixels into a
+    /// gray sample and reporting the size it reduced to, by which it is drawn over the same area
+    /// (as a JPX image decoded at a lower resolution is). Not an indexed one, whose palette needs
+    /// its pixels' own values. The reduced size depends on the image alone, not on the size it
+    /// is drawn at, so one decode serves every zoom. A 1,200 dpi scan of a newspaper page,
+    /// 19,467 × 25,517 (497 million pixels), drew blank.
+    fn reduces_past_full_size(&self) -> bool {
+        let pixels = u64::from(self.width) * u64::from(self.height);
+        pixels > 0
+            && pixels <= hayro_syntax::MAX_REDUCED_JBIG2_PIXELS
+            && uses_jbig2(&self.stream)
+            && !self.color_space.as_ref().is_some_and(|cs| cs.is_indexed())
+    }
+
     /// PdfCraft patch (82): whether this image has a soft mask (or `/Mask` image) larger than
     /// itself, which may be averaged down to the size the image is drawn at
     /// (`decoded_soft_mask`): the decoded raster holds it as its alpha, so it depends on that size,
@@ -948,17 +964,21 @@ fn decode_context<'a>(
 ) -> Option<DecodeContext<'a>> {
     // PdfCraft patch: images and masks over `MAX_IMAGE_PIXELS` are not decoded at all (the
     // renderer skips them anyway): a fuzzed `/W 4294967295` stencil mask allocated gigabytes here.
-    if !image_size_ok(obj.width, obj.height) {
+    // PdfCraft patch (113): except a JBIG2 image its filter decodes at a reduced size (see
+    // `reduces_past_full_size`).
+    let full_size = image_size_ok(obj.width, obj.height);
+    let reduced = !full_size && obj.reduces_past_full_size();
+    if !full_size && !reduced {
         // PdfCraft patch (73): a picture's JBIG2 mask of a size this bound refuses is one a limit
         // refused, as when the decoder refuses it (below), and its size is the stream's own.
         // `ImageXObject::new` refuses a size of 0, so this is past the bound.
         let limited = obj.masks_picture && uses_jbig2(&obj.stream);
         crate::cache::note_stream_limited(limited);
-        (obj.warning_sink)(if limited {
-            InterpreterWarning::ContentTruncated
-        } else {
-            InterpreterWarning::ImageDecodeFailure
-        });
+        // PdfCraft patch (113): any image refused here is content left out at one of the
+        // renderer's limits, and is reported so. Reported as a failed image, which the renderer
+        // doesn't show, a page that is one large scan (a 45,009 × 33,555 CCITT floor plan) drew
+        // blank with nothing said.
+        (obj.warning_sink)(InterpreterWarning::ContentTruncated);
         return None;
     }
     let dict = obj.stream.dict();
@@ -975,6 +995,7 @@ fn decode_context<'a>(
         target_dimension,
         width: obj.width,
         height: obj.height,
+        reduce_past_full_size: reduced,
     };
 
     // PdfCraft patch (73): what refused an image decoded before this one says nothing about it,
@@ -1704,7 +1725,8 @@ fn convert_each(cs: &ColorSpace, input: &[f32], n: usize, output: &mut [u8]) {
 }
 
 /// PdfCraft patch: whether an image or mask of `width` × `height` may be decoded (at most
-/// 2^28 pixels, the renderer's `MAX_IMAGE_PIXELS`).
+/// 2^28 pixels, the renderer's `MAX_IMAGE_PIXELS`). PdfCraft patch (113): at its full size; a JBIG2
+/// image past it may be decoded at a reduced one (`ImageXObject::reduces_past_full_size`).
 pub fn image_size_ok(width: u32, height: u32) -> bool {
     width > 0 && height > 0 && u64::from(width) * u64::from(height) <= 1 << 28
 }

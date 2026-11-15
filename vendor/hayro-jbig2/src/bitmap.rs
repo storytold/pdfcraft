@@ -19,6 +19,15 @@ pub(crate) const MAX_DIMENSION: u32 = u16::MAX as u32;
 /// pixels, decoded one by one.
 pub(crate) const MAX_PIXELS: u64 = 1 << 28;
 
+/// PdfCraft patch (19): the most pixels a page bitmap may have when its caller reads the page at
+/// a reduced size ([`crate::Image::new_embedded_for_reduction`]), never a byte a pixel: 2^29, a
+/// 64 MiB page. Only the page bitmap is held to this: every other bitmap, a region decoded apart
+/// from the page included, keeps [`MAX_PIXELS`]. So such a page draws when its regions decode
+/// straight into it, as a single region covering a blank page does (a scanned newspaper page at
+/// 1,200 dpi, 19,467 × 25,517). The decoding work still bounds it: reading the page out once and
+/// decoding its pixels once take about [`MAX_WORK`] at this size.
+pub const MAX_REDUCED_PAGE_PIXELS: u64 = 1 << 29;
+
 /// PdfCraft patch: the most cells a halftone grid may have, which still gives the largest page
 /// (see [`MAX_PIXELS`]) cells of 3 × 3, unrotated. Each cell takes a 4-byte value while the grid decodes, so
 /// the pixel bound alone let a 98-byte segment take 1 GiB; this one leaves 128 MiB.
@@ -68,11 +77,13 @@ pub(crate) const BITMAP_WORDS: usize = size_of::<Bitmap>() / size_of::<Word>();
 /// PdfCraft patch: refuse a page past the bounds on a bitmap (see `MAX_PIXELS`). A stream is held
 /// to this when it is opened as well as when its page bitmap is sized: a caller sizes its own
 /// output from the page header in between, and a 743-byte PDF's Indexed image asked for 137 GB.
-pub(crate) fn check_page_size(width: u32, height: u32) -> Result<()> {
+/// PdfCraft patch (19): past `max_pixels`, [`MAX_PIXELS`] or, for a page read at a reduced size,
+/// at most [`MAX_REDUCED_PAGE_PIXELS`].
+pub(crate) fn check_page_size(width: u32, height: u32, max_pixels: u64) -> Result<()> {
     if width > MAX_DIMENSION || height > MAX_DIMENSION {
         return Err(OverflowError::BitmapLimit.into());
     }
-    if u64::from(width) * u64::from(height) > MAX_PIXELS {
+    if u64::from(width) * u64::from(height) > max_pixels.min(MAX_REDUCED_PAGE_PIXELS) {
         return Err(OverflowError::BitmapLimit.into());
     }
     Ok(())
@@ -172,13 +183,15 @@ impl Bitmap {
         }
     }
 
+    /// PdfCraft patch (19): a page bitmap of up to `max_pixels` (see [`check_page_size`]).
     pub(crate) fn reinitialize(
         &mut self,
         width: u32,
         height: u32,
         default_pixel: bool,
+        max_pixels: u64,
     ) -> Result<()> {
-        check_page_size(width, height)?;
+        check_page_size(width, height, max_pixels)?;
 
         let stride = width.div_ceil(WORD_BITS);
         let default_word: Word = if default_pixel { !0 } else { 0 };

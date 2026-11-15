@@ -10,8 +10,8 @@ mod dct;
 mod jbig2;
 #[cfg(feature = "images")]
 pub use jbig2::{
-    MAX_PAGE_JBIG2_WORK, clear_jbig2_limited, jbig2_limited, jbig2_limited_by_stream,
-    page_jbig2_work_spent,
+    MAX_PAGE_JBIG2_WORK, MAX_REDUCED_JBIG2_PIXELS, clear_jbig2_limited, jbig2_limited,
+    jbig2_limited_by_stream, page_jbig2_work_spent,
 };
 #[cfg(all(feature = "images", feature = "std"))]
 pub use jbig2::set_page_jbig2_work;

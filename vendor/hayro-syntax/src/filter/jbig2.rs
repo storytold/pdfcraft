@@ -15,6 +15,21 @@ use core::iter;
 /// it to decode and a quarter for its page, and ordinary ones are far below that.
 pub const MAX_PAGE_JBIG2_WORK: u64 = 1 << 30;
 
+/// PdfCraft patch (52): the most pixels a JBIG2 image may have when its caller takes it at a
+/// reduced size (`ImageDecodeParams::reduce_past_full_size`), 2^29: what hayro-jbig2 holds a page
+/// read so to. A 1,200 dpi scan of a newspaper page, 19,467 × 25,517, has 497 million.
+pub const MAX_REDUCED_JBIG2_PIXELS: u64 = hayro_jbig2::MAX_REDUCED_PAGE_PIXELS;
+
+/// PdfCraft patch (52): the most pixels an image decodes to at its full size, the renderer's
+/// `MAX_IMAGE_PIXELS` and hayro-interpret's `image_size_ok`.
+const FULL_SIZE_PIXELS: u64 = 1 << 28;
+
+/// PdfCraft patch (52): the most pixels a JBIG2 image past [`FULL_SIZE_PIXELS`] is reduced to,
+/// 2^25: 32 MiB at its byte a pixel. That keeps the 497-million-pixel page above at a quarter of
+/// its 1,200 dpi, 300 dpi, sharp at a screen's sizes, and its decode to one kept copy, whatever
+/// size it is drawn at.
+const MAX_REDUCED_OUTPUT_PIXELS: u64 = 1 << 25;
+
 #[cfg(feature = "std")]
 std::thread_local! {
     // Unbounded until a page says otherwise: what isn't drawing a page has no page to run out on.
@@ -161,9 +176,20 @@ pub(crate) fn decode(
 
     charge_page_reading(data.len().saturating_add(globals.as_deref().map_or(0, <[u8]>::len)))?;
 
-    let image = hayro_jbig2::Image::new_embedded(data, globals.as_deref())
-        .inspect_err(|e| note_limited(Some(e)))
-        .ok()?;
+    // PdfCraft patch (52): a caller that takes the image reduced may open a page past
+    // `FULL_SIZE_PIXELS`, up to `MAX_REDUCED_JBIG2_PIXELS`. The palette of an indexed image needs
+    // its pixels' own values, which an average isn't, so such an image is held to the full size.
+    let reduce = image_params.reduce_past_full_size && !image_params.is_indexed;
+    let image = if reduce {
+        hayro_jbig2::Image::new_embedded_for_reduction(data, globals.as_deref())
+    } else {
+        hayro_jbig2::Image::new_embedded(data, globals.as_deref())
+    }
+    .inspect_err(|e| note_limited(Some(e)))
+    .ok()?;
+    if reduce && u64::from(image.width()) * u64::from(image.height()) > FULL_SIZE_PIXELS {
+        return decode_reduced(&image);
+    }
 
     // Whenever possible (if we don't have an indexed color space), we convert
     // the data as 8-bit instead of 1-bit, so that it can be easier converted
@@ -235,4 +261,136 @@ pub(crate) fn decode(
             height: image.height(),
         }),
     })
+}
+
+/// PdfCraft patch (52): `image`, past [`FULL_SIZE_PIXELS`], decoded at a reduced size: each block
+/// of [`reduction_factor`] × that many pixels averaged into one 8-bit gray sample as it is read
+/// out, so the image never exists a byte a pixel. Only the decoder's page bitmap, a bit a pixel,
+/// is held at the full size (64 MiB at most).
+fn decode_reduced(image: &hayro_jbig2::Image<'_>) -> Option<FilterResult<'static>> {
+    let factor = reduction_factor(image.width(), image.height())?;
+    let mut reducer = Reducer::new(image.width(), image.height(), factor)?;
+    decode_for_page(image, &mut reducer)?;
+    let (data, width, height) = reducer.finish()?;
+    Some(FilterResult {
+        data: Cow::Owned(data),
+        image_data: Some(ImageData {
+            alpha: None,
+            color_space: Some(ImageColorSpace::Gray),
+            bits_per_component: 8,
+            width,
+            height,
+        }),
+    })
+}
+
+/// PdfCraft patch (52): the smallest whole factor that reduces an image of `width` × `height`
+/// to [`MAX_REDUCED_OUTPUT_PIXELS`] or fewer, the same on both axes so the samples stay square.
+/// An image of 2^29 pixels takes 4, or a little more when a side doesn't divide evenly; 12 holds
+/// the largest page hayro-jbig2 allows at all, 65,535 a side, and 64 is past any.
+fn reduction_factor(width: u32, height: u32) -> Option<u32> {
+    (2..=64_u32).find(|&f| {
+        u64::from(width.div_ceil(f)) * u64::from(height.div_ceil(f)) <= MAX_REDUCED_OUTPUT_PIXELS
+    })
+}
+
+/// PdfCraft patch (52): a [`hayro_jbig2::Decoder`] that averages the pixels it is given, a band of
+/// `factor` rows at a time, into 8-bit gray samples (255 white, 0 black, as the full-size read
+/// gives them). It holds one sum a reduced column and the reduced image.
+struct Reducer {
+    /// The image's width in pixels.
+    width: u32,
+    factor: u32,
+    /// The black pixels of each reduced column in the current band.
+    black: Vec<u32>,
+    /// The column of the next pixel in its row.
+    x: u32,
+    /// The rows read into the current band.
+    rows: u32,
+    /// The reduced image, a byte a sample, `out_len` bytes once all rows are read.
+    out: Vec<u8>,
+    out_len: usize,
+    out_width: u32,
+    out_height: u32,
+}
+
+impl Reducer {
+    fn new(width: u32, height: u32, factor: u32) -> Option<Self> {
+        if width == 0 || height == 0 || factor == 0 {
+            return None;
+        }
+        let out_width = width.div_ceil(factor);
+        let out_height = height.div_ceil(factor);
+        let out_len = usize::try_from(u64::from(out_width) * u64::from(out_height)).ok()?;
+        let columns = usize::try_from(out_width).ok()?;
+        let mut black = Vec::new();
+        black.try_reserve_exact(columns).ok()?;
+        black.resize(columns, 0);
+        let mut out = Vec::new();
+        out.try_reserve_exact(out_len).ok()?;
+        Some(Self { width, factor, black, x: 0, rows: 0, out, out_len, out_width, out_height })
+    }
+
+    /// `count` pixels, all black or all white, from the current column on (what lies past the
+    /// image's width is dropped).
+    fn add(&mut self, black: bool, count: u32) {
+        let end = self.x.saturating_add(count).min(self.width);
+        if black {
+            let mut x = self.x;
+            while x < end {
+                let column = x / self.factor;
+                // `column < out_width`, so `(column + 1) · factor` is at most `width + factor`.
+                let column_end = column.saturating_add(1).saturating_mul(self.factor).min(end);
+                if let Some(sum) = self.black.get_mut(column as usize) {
+                    *sum = sum.saturating_add(column_end - x);
+                }
+                x = column_end;
+            }
+        }
+        self.x = self.x.saturating_add(count);
+    }
+
+    /// The band read so far, as a row of reduced samples: each the share of white in its block,
+    /// a block at the right or bottom edge counting only the pixels it has.
+    fn flush(&mut self) {
+        if self.rows == 0 {
+            return;
+        }
+        for (column, sum) in self.black.iter_mut().enumerate() {
+            // `column < out_width`, so `column · factor < width`; `area <= 64 · 64`.
+            let left = u32::try_from(column).unwrap_or(u32::MAX).saturating_mul(self.factor);
+            let area = self.width.saturating_sub(left).min(self.factor).saturating_mul(self.rows);
+            let white = area.saturating_sub(*sum);
+            let sample = if area == 0 { 255 } else { white.saturating_mul(255).saturating_add(area / 2) / area };
+            if self.out.len() < self.out_len {
+                self.out.push(u8::try_from(sample).unwrap_or(u8::MAX));
+            }
+            *sum = 0;
+        }
+        self.rows = 0;
+    }
+
+    /// The reduced image and its size, once every row has been read.
+    fn finish(mut self) -> Option<(Vec<u8>, u32, u32)> {
+        self.flush();
+        (self.out.len() == self.out_len).then_some((self.out, self.out_width, self.out_height))
+    }
+}
+
+impl hayro_jbig2::Decoder for Reducer {
+    fn push_pixel(&mut self, black: bool) {
+        self.add(black, 1);
+    }
+
+    fn push_pixel_chunk(&mut self, black: bool, chunk_count: u32) {
+        self.add(black, chunk_count.saturating_mul(8));
+    }
+
+    fn next_line(&mut self) {
+        self.x = 0;
+        self.rows = self.rows.saturating_add(1);
+        if self.rows >= self.factor {
+            self.flush();
+        }
+    }
 }

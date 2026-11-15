@@ -4663,8 +4663,9 @@ fn a_picture_whose_jbig2_mask_a_decoder_limit_refuses_is_not_drawn() {
 /// A JBIG2 image drawn on its own that a limit refuses, a stencil mask included, takes nothing else
 /// out, so it is a failed image, as it was before #6722: only a picture's mask refused by a limit
 /// is reported as content left out, with the picture it takes along (patch 73). Refused by the
-/// decoder's bound on a side or by the renderer's bound on pixels, each image's `/Width` and
-/// `/Height` those of its JBIG2 page.
+/// decoder's bound on a side, each image's `/Width` and `/Height` those of its JBIG2 page. Past the
+/// renderer's bound on pixels (65,535 squared, past even the 2^29 a JBIG2 image is drawn reduced up
+/// to), an image is too large to decode, which is content left out (patch 113).
 #[test]
 fn a_jbig2_image_drawn_on_its_own_that_a_limit_refuses_is_a_failed_image() {
     use hayro::hayro_interpret::font::Glyph;
@@ -4724,10 +4725,11 @@ fn a_jbig2_image_drawn_on_its_own_that_a_limit_refuses_is_a_failed_image() {
     let stencil = "/ImageMask true";
     let raster = "/BitsPerComponent 1 /ColorSpace /DeviceGray";
     let failed = ["ImageDecodeFailure"];
+    let left_out = ["ContentTruncated"];
     assert_eq!(warnings(stencil, (65536, 2)), failed, "a stencil mask past the decoder's bound on a side");
-    assert_eq!(warnings(stencil, (65535, 65535)), failed, "a stencil mask past the renderer's bound on pixels");
+    assert_eq!(warnings(stencil, (65535, 65535)), left_out, "a stencil mask past the renderer's bound on pixels");
     assert_eq!(warnings(raster, (65536, 2)), failed, "an image past the decoder's bound on a side");
-    assert_eq!(warnings(raster, (65535, 65535)), failed, "an image past the renderer's bound on pixels");
+    assert_eq!(warnings(raster, (65535, 65535)), left_out, "an image past the renderer's bound on pixels");
 }
 
 /// What refused one image says nothing of the next: after a picture one of the decoder's limits
@@ -9786,6 +9788,10 @@ mod type3_proc_cache;
 // A picture that doesn't decode is decoded once however often it is drawn (vendored
 // hayro-interpret patch 91).
 mod failed_image_decodes;
+
+// A JBIG2 image past 2^28 pixels is drawn reduced, and one too large to draw is reported (vendored
+// hayro-jbig2 patch 19, hayro-syntax patch 52, hayro-interpret patch 113).
+mod jbig2_past_full_size;
 
 // A page past its rasterizer coverage leaves the rest out and says so (vendored vello_cpu patch 1).
 mod coverage_budget;

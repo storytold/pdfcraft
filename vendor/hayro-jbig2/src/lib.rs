@@ -80,6 +80,7 @@ use crate::file::{
     parse_segments_sequential,
 };
 use bitmap::Bitmap;
+pub use bitmap::MAX_REDUCED_PAGE_PIXELS;
 use decode::CombinationOperator;
 use decode::generic;
 use decode::generic_refinement;
@@ -105,6 +106,8 @@ pub struct Image<'a> {
     height: u32,
     /// The height determined from `EndOfStripe` segments, if applicable.
     height_from_stripes: Option<u32>,
+    /// PdfCraft patch (19): the most pixels the page may have (see `bitmap::check_page_size`).
+    max_page_pixels: u64,
 }
 
 impl<'a> Image<'a> {
@@ -114,7 +117,7 @@ impl<'a> Image<'a> {
     /// as defined in Annex D.1 and D.2.
     pub fn new(data: &'a [u8]) -> Result<Self> {
         let file = parse_file(data)?;
-        Self::from_segments(file.segments)
+        Self::from_segments(file.segments, bitmap::MAX_PIXELS)
     }
 
     /// Parse an embedded JBIG2 image with optional global segments.
@@ -124,6 +127,17 @@ impl<'a> Image<'a> {
     /// is read past it, in the organization it declares, as Acrobat and PDFBox
     /// draw such streams; its segments still count together with the globals'.
     pub fn new_embedded(data: &'a [u8], globals: Option<&'a [u8]>) -> Result<Self> {
+        Self::new_embedded_up_to(data, globals, bitmap::MAX_PIXELS)
+    }
+
+    /// PdfCraft patch (19): [`Image::new_embedded`], for a caller that reads a page past 2^28
+    /// pixels at a reduced size, packing or averaging what its [`Decoder`] is given rather than
+    /// holding a byte a pixel: the page may have up to [`MAX_REDUCED_PAGE_PIXELS`] pixels.
+    pub fn new_embedded_for_reduction(data: &'a [u8], globals: Option<&'a [u8]>) -> Result<Self> {
+        Self::new_embedded_up_to(data, globals, MAX_REDUCED_PAGE_PIXELS)
+    }
+
+    fn new_embedded_up_to(data: &'a [u8], globals: Option<&'a [u8]>, max_page_pixels: u64) -> Result<Self> {
         let mut segments = Vec::new();
         let mut count = SegmentCount::default();
         if let Some(globals_data) = globals {
@@ -146,10 +160,10 @@ impl<'a> Image<'a> {
 
         segments.sort_by_key(|seg| seg.header.segment_number);
 
-        Self::from_segments(segments)
+        Self::from_segments(segments, max_page_pixels)
     }
 
-    fn from_segments(segments: Vec<segment::Segment<'a>>) -> Result<Self> {
+    fn from_segments(segments: Vec<segment::Segment<'a>>, max_page_pixels: u64) -> Result<Self> {
         // Pre-scan for stripe height from EndOfStripe segments.
         let height_from_stripes = segments
             .iter()
@@ -178,13 +192,14 @@ impl<'a> Image<'a> {
         if page_info.width == 0 || height == 0 {
             bail!(FormatError::EmptyPage);
         }
-        bitmap::check_page_size(page_info.width, height)?;
+        bitmap::check_page_size(page_info.width, height, max_page_pixels)?;
 
         Ok(Self {
             segments,
             width: page_info.width,
             height,
             height_from_stripes,
+            max_page_pixels,
         })
     }
 
@@ -211,7 +226,7 @@ impl<'a> Image<'a> {
     /// as it allows `hayro-jbig2` to reuse allocations during decoding.
     pub fn decode_with<D: Decoder>(&self, decoder: &mut D, ctx: &mut DecoderContext) -> Result<()> {
         let mut work_left = bitmap::MAX_WORK;
-        decode_segments(&self.segments, self.height_from_stripes, ctx, &mut work_left)?;
+        decode_segments(&self.segments, self.height_from_stripes, self.max_page_pixels, ctx, &mut work_left)?;
         emit_bitmap(&ctx.page_bitmap, decoder);
 
         Ok(())
@@ -233,7 +248,8 @@ impl<'a> Image<'a> {
         let allowed = bitmap::MAX_WORK.min(*work);
         let mut left = allowed;
         let mut ctx = DecoderContext::default();
-        let decoded = decode_segments(&self.segments, self.height_from_stripes, &mut ctx, &mut left);
+        let decoded =
+            decode_segments(&self.segments, self.height_from_stripes, self.max_page_pixels, &mut ctx, &mut left);
         let refused = decoded == Err(OverflowError::DecodingWork.into());
         *work = if refused && allowed < bitmap::MAX_WORK { 0 } else { *work - (allowed - left) };
         decoded?;
@@ -338,6 +354,7 @@ fn page_area(page: &Bitmap, region: &decode::RegionSegmentInfo) -> Result<Bitmap
 fn decode_segments(
     segments: &[segment::Segment<'_>],
     height_from_stripes: Option<u32>,
+    max_page_pixels: u64,
     decoder_ctx: &mut DecoderContext,
     work_left: &mut u64,
 ) -> Result<()> {
@@ -350,6 +367,7 @@ fn decode_segments(
         init_page(
             &mut reader,
             height_from_stripes,
+            max_page_pixels,
             &mut decoder_ctx.page_state,
             &mut decoder_ctx.page_bitmap,
         )?;
@@ -806,6 +824,7 @@ impl PageState {
 fn init_page(
     reader: &mut Reader<'_>,
     height_from_stripes: Option<u32>,
+    max_page_pixels: u64,
     page: &mut PageState,
     bitmap: &mut Bitmap,
 ) -> Result<()> {
@@ -823,7 +842,7 @@ fn init_page(
     // "Bit 2: Page default pixel value. This bit contains the initial value
     // for every pixel in the page, before any region segments are decoded
     // or drawn." (7.4.8.5)
-    bitmap.reinitialize(page_info.width, height, page_info.flags.default_pixel != 0)?;
+    bitmap.reinitialize(page_info.width, height, page_info.flags.default_pixel != 0, max_page_pixels)?;
 
     page.reset(page_info);
 
@@ -849,6 +868,23 @@ mod tests {
         assert!(Image::new_embedded(&stream(16385, 16384), None).is_err());
         assert!(Image::new_embedded(&stream(65536, 1), None).is_err(), "too wide, though few pixels");
         assert!(Image::new_embedded(&stream(1 << 20, 1 << 20), None).is_err());
+    }
+
+    /// PdfCraft patch (19): a caller that reads the page reduced may open a page of up to 2^29
+    /// pixels, and no more; every other caller is held to 2^28 as before.
+    #[test]
+    fn a_page_read_reduced_may_have_up_to_2_to_the_29_pixels() {
+        let stream = |width: u32, height: u32| {
+            let mut stream = vec![0, 0, 0, 0, 48, 0, 1, 0, 0, 0, 19];
+            stream.extend_from_slice(&width.to_be_bytes());
+            stream.extend_from_slice(&height.to_be_bytes());
+            stream.extend_from_slice(&[0; 11]); // resolution, flags, striping
+            stream
+        };
+        assert!(Image::new_embedded_for_reduction(&stream(32768, 16384), None).is_ok(), "2^29 pixels");
+        assert!(Image::new_embedded(&stream(32768, 16384), None).is_err(), "past 2^28 for a full-size read");
+        assert!(Image::new_embedded_for_reduction(&stream(32768, 16385), None).is_err(), "past 2^29");
+        assert!(Image::new_embedded_for_reduction(&stream(65536, 1), None).is_err(), "too wide still");
     }
 
     /// Segment `number` of `kind` on page 1, referring to `refers_to`.
@@ -1113,7 +1149,7 @@ mod tests {
     fn a_bitmap_of_1s_has_nothing_past_its_width() {
         assert_eq!(Bitmap::new_with(33, 2, 0, 0, true).unwrap().data, [!0, 1 << 31, !0, 1 << 31]);
         let mut page = Bitmap::new_with(40, 1, 0, 0, false).unwrap();
-        page.reinitialize(7, 2, true).unwrap();
+        page.reinitialize(7, 2, true, bitmap::MAX_PIXELS).unwrap();
         assert_eq!(page.data, [0xFE00_0000, 0xFE00_0000]);
         assert_eq!(Bitmap::new_with(64, 1, 0, 0, true).unwrap().data, [!0, !0], "words filled whole");
         assert!(Bitmap::new_with(0, 3, 0, 0, true).unwrap().data.is_empty(), "no width");
