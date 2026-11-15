@@ -19,7 +19,7 @@ pub(crate) mod flate {
 
     /// PdfCraft patch: `limit` is the most bytes inflated (see `filter::decode_limit`), and `rows`
     /// the `/Height` of the image the data is the samples of, if it is (see [`untagged_png_rows`]).
-    /// Also returns whether inflating stopped at `limit` (patch 47): told before the predictor is
+    /// Also returns whether inflating stopped at `limit` (patch 55): told before the predictor is
     /// undone, which leaves fewer bytes than were inflated.
     #[cfg(feature = "unsafe")]
     pub(crate) fn decode(
@@ -815,7 +815,7 @@ pub(crate) mod lzw {
 
     /// Decode a LZW-encoded stream. PdfCraft patch: `limit` is the most bytes produced (see
     /// `filter::decode_limit`); with a full table every 12-bit code can repeat an entry of
-    /// thousands of bytes. Also returns whether decoding stopped at `limit` (patch 47): told
+    /// thousands of bytes. Also returns whether decoding stopped at `limit` (patch 55): told
     /// before the predictor is undone, which leaves fewer bytes than were decoded.
     pub(crate) fn decode(data: &[u8], params: &Dict<'_>, limit: usize) -> Option<(Vec<u8>, bool)> {
         let params = PredictorParams::from_params(params);

@@ -231,7 +231,7 @@ impl<'a> Stream<'a> {
             .map(|(r, _)| r.data)
     }
 
-    /// PdfCraft patch (47): [`Self::decoded_within`], and whether it may be cut short: whether
+    /// PdfCraft patch (55): [`Self::decoded_within`], and whether it may be cut short: whether
     /// some filter of the chain stopped at its limit (`max`, or the filters' own cap
     /// [`crate::filter::MAX_DECODED_STREAM`]), the last or one before it. An output exactly at
     /// a limit counts as cut.
@@ -271,7 +271,7 @@ impl<'a> Stream<'a> {
         let count = filters_and_params.filters.len();
 
         let mut current: Option<FilterResult<'a>> = None;
-        // PdfCraft patch (47): whether a filter's output reached its limit.
+        // PdfCraft patch (55): whether a filter's output reached its limit.
         let mut cut = false;
 
         for (i, (filter, params)) in filters_and_params
