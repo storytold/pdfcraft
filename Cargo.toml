@@ -34,7 +34,9 @@ craft-zip = { git = "https://github.com/storytold/craft-libs", version = "0.1.0"
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "e2dc681a3", features = ["egui"] }
-craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3", features = ["cos", "crypt", "filters"] }
+# The document model at storytold/craft-libs#1494 (what decryption covers, an unreadable /Encrypt),
+# on the e2dc681a3 pin: only craft-pdf moves.
+craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "890ee5166eef89eb8ecb94917e4d2bb7129c4a53", features = ["cos", "crypt", "filters"] }
 craft-rtf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-csv = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-xml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
