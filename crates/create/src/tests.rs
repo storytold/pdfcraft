@@ -3144,3 +3144,16 @@ fn shared_pcx_rejects_zero_length_runs_and_oversized_planes() {
     let rgba = pcx_header(5, 8, 4, 1, 1, 1);
     assert!(super::pcx("rgba.pcx", &rgba).is_err(), "do not silently expand accepted layouts");
 }
+
+#[test]
+fn shared_pcx_keeps_version_four_rgb_and_palette_pixels() {
+    let mut rgb = pcx_header(4, 8, 3, 1, 1, 1);
+    rgb.extend_from_slice(&[10, 20, 30]);
+    assert!(super::is_image(&rgb));
+    assert_eq!(super::pcx("windows.pcx", &rgb).unwrap().data, [10, 20, 30]);
+    let mut palette = pcx_header(4, 1, 2, 1, 1, 1);
+    palette[25..28].copy_from_slice(&[4, 5, 6]);
+    palette.extend_from_slice(&[0x80, 0x80]);
+    assert_eq!(super::pcx("windows.pcx", &palette).unwrap().data, [4, 5, 6]);
+    assert!(from_images(&[("windows.pcx".into(), rgb)]).is_ok());
+}

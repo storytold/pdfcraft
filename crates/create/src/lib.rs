@@ -562,7 +562,11 @@ fn pcx(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     // is black/white and an indexed file without its VGA palette is interpreted as gray.
     // The shared reader owns all RLE, plane unpacking and palette application.
     let has_vga = bytes.len().checked_sub(769).is_some_and(|at| at >= 128 && bytes.get(at) == Some(&0x0C));
-    let normalize = (bits == 1 && planes == 1) || (bits == 8 && planes == 1 && !has_vga);
+    // The pinned decoder predates shared version-4 recognition. Its version byte is
+    // only a header acceptance check, not a switch for pixel or palette semantics.
+    // Keep this app's existing version-4 acceptance without replacing the shared pin.
+    let version_four = byte(1) == 4;
+    let normalize = version_four || (bits == 1 && planes == 1) || (bits == 8 && planes == 1 && !has_vga);
     let mut input = std::borrow::Cow::Borrowed(bytes);
     if normalize {
         // Normalization must not add an unbounded copy of hostile compressed input.
@@ -572,11 +576,18 @@ fn pcx(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
         let mut copy = Vec::new();
         copy.try_reserve_exact(bytes.len()).map_err(|_| bad("not enough memory for this image"))?;
         copy.extend_from_slice(bytes);
-        if bits == 1 {
+        if version_four && let Some(version) = copy.get_mut(1) {
+            *version = 5;
+        }
+        if bits == 1 && planes == 1 {
             if let Some(palette) = copy.get_mut(16..22) {
                 palette.copy_from_slice(&[0, 0, 0, 255, 255, 255]);
             }
-        } else if let Some(info) = copy.get_mut(68..70) {
+        } else if bits == 8
+            && planes == 1
+            && !has_vga
+            && let Some(info) = copy.get_mut(68..70)
+        {
             info.copy_from_slice(&2u16.to_le_bytes());
         }
         input = std::borrow::Cow::Owned(copy);
