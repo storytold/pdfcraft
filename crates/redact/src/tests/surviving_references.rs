@@ -49,6 +49,36 @@ fn a_field_the_form_reading_leaves_out_refuses_the_redaction() {
     assert_eq!(apply(&mut doc, None).unwrap().fields, 1, "read whole, the field goes");
 }
 
+/// A widget two fields list in `/Kids`: `a`, which the form's reading has, and `b`, whose name is
+/// past the reading's allowance. Taking the widget with `a` would keep `b` and its value, so the
+/// redaction is refused while the reading left fields out.
+#[test]
+fn a_widget_a_field_left_out_also_lists_refuses_the_redaction() {
+    let mut doc = one_page(
+        b"",
+        "",
+        vec![
+            b"<< /FT /Tx /T (a) /V (A-VALUE) /Kids [9 0 R] >>".to_vec(),
+            b"<< /FT /Tx /T (b) /V (B-SECRET) /Kids [9 0 R] >>".to_vec(),
+            b"<< /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [10 50 100 70] /P 3 0 R >>".to_vec(),
+        ],
+    );
+    let (a, b, w) = (ObjRef::new(7, 0), ObjRef::new(8, 0), ObjRef::new(9, 0));
+    let root = doc.root().unwrap();
+    let form: Dict = [(b"Fields".to_vec(), Object::Array(vec![Object::Ref(a), Object::Ref(b)]))].into_iter().collect();
+    doc.update_dict(root, |d| d.set(b"AcroForm".to_vec(), Object::Dict(form))).unwrap();
+    let page = pdfcraft_model::pages(&doc).swap_remove(0).obj;
+    doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(w)]))).unwrap();
+    let long = Object::String(pdfcraft_cos::PdfString::literal(vec![b'n'; 256 << 20]));
+    doc.update_dict(b, |d| d.set(b"T".to_vec(), long)).unwrap();
+    let read = pdfcraft_forms::fields_with_adopted(&doc);
+    assert_eq!(read.items.iter().map(|f| (f.obj, f.widgets.iter().map(|w| w.obj).collect::<Vec<_>>())).collect::<Vec<_>>(), [(a, vec![w])]);
+    assert!(read.left_out > 0);
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::FormPastAllowance(_))));
+    assert!(doc.get(b).as_dict().is_some_and(|d| d.contains(b"V")) && marks(&doc).len() == 1, "nothing changed");
+}
+
 /// A widget under a mark whose field the form's reading doesn't have, its type given by reference
 /// or the widget missing from its parent's `/Kids`, refuses the redaction: removing the widget
 /// would keep the field and its value. A widget that names no field just goes.
@@ -204,6 +234,24 @@ fn a_kids_array_nodes_share_is_read_once_by_the_form_tree() {
     assert_eq!(form_tree(&doc).len(), k + 1);
     let (entries, loads) = (TREE_ENTRIES.with(std::cell::Cell::get), TREE_LOADS.with(std::cell::Cell::get));
     assert_eq!((entries, loads), (k, 2), "the reference and the array, each once");
+}
+
+/// A root `/Fields` lists many times, its `/Kids` array written in it: redaction's walk of the
+/// form's tree reads the array once, not once for each time the root is listed.
+#[test]
+fn a_root_listed_many_times_is_read_once_by_the_form_tree() {
+    let (n, k) = (2000, 2000);
+    let listed = vec!["2 0 R"; n].join(" ");
+    let kids = (0..k).map(|i| format!("{} 0 R", i + 3)).collect::<Vec<_>>().join(" ");
+    let mut objs: Vec<Vec<u8>> = vec![
+        format!("<< /Type /Catalog /AcroForm << /Fields [{listed}] >> >>").into_bytes(),
+        format!("<< /FT /Tx /T (f) /Kids [{kids}] >>").into_bytes(),
+    ];
+    objs.extend((0..k).map(|_| b"<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] >>".to_vec()));
+    let doc = pdf(objs);
+    TREE_ENTRIES.with(|c| c.set(0));
+    assert_eq!(form_tree(&doc).len(), k + 1);
+    assert_eq!(TREE_ENTRIES.with(std::cell::Cell::get), k, "the root's /Kids, once");
 }
 
 /// A `/Kids` array behind references to references is reached as far as `Document::resolve`

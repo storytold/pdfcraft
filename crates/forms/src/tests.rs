@@ -9330,3 +9330,25 @@ fn page_scripts_are_the_pages_own_then_each_annotations_in_order() {
     assert_eq!(got, [(None, "close()"), (Some("anim"), "stop();")], "a URI action is not a script");
     assert!(page_scripts(&doc, 1, PageEvent::Open).is_empty(), "no such page");
 }
+
+/// A widget whose parent's name is past what is copied of names (256 MiB): its own part alone
+/// would name another field (`k`, which the page has too), so its page script runs without a
+/// field, as for a name not copied at all.
+#[test]
+fn a_page_script_names_no_field_where_its_name_was_read_in_part() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(), // 3
+        "<< /T (p) /Kids [5 0 R] >>".into(), // 4
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (k) /Parent 4 0 R /Rect [0 0 10 10] /P 3 0 R /AA << /PO << /S /JavaScript /JS (event.target.value = 1;) >> >> >>".into(), // 5
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (k) /Rect [0 20 10 30] /P 3 0 R >>".into(), // 6
+    ]);
+    let named = |doc: &Document| page_scripts(doc, 0, PageEvent::Open).into_iter().map(|s| s.field).collect::<Vec<_>>();
+    assert_eq!(named(&doc), [Some("p.k".to_string())]);
+    let long = Object::String(pdfcraft_cos::PdfString::literal(vec![b'n'; crate::read::MAX_TEXT_BYTES]));
+    doc.update_dict(ObjRef::new(4, 0), |f| f.set(b"T".to_vec(), long)).unwrap();
+    assert_eq!(named(&doc), [None]);
+    let mut text = crate::read::Allowance::new(crate::read::MAX_TEXT_BYTES);
+    assert_eq!(crate::read::qualified_name(&doc, ObjRef::new(5, 0), &mut text), None, "the name isn't read in part");
+}

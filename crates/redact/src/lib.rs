@@ -122,8 +122,8 @@ pub enum RedactError {
     )]
     SharedJbig2Budget,
     /// Fields whose text is past what one reading of the form takes are left out of it, and a
-    /// widget under a mark belongs to no field read: it may be one of theirs, whose value would
-    /// stay in the file.
+    /// widget under a mark belongs to no field read, or is given by reference, which one of them
+    /// may list in `/Kids` too: it may be one of theirs, whose value would stay in the file.
     #[error(
         "{0} form field(s) hold more text than PdfCraft reads at once, and a widget under the marks may belong to one, so its value could stay in the file; nothing was redacted"
     )]
@@ -977,6 +977,13 @@ fn widget_field(
     left_out: usize,
     form_tree: &HashSet<ObjRef>,
 ) -> Result<Option<ObjRef>, RedactError> {
+    // A field the reading left out may list a widget in its `/Kids` beside the field the reading
+    // has, and would keep its value when that one goes with the widget: while the reading left
+    // fields out, a widget given by reference refuses the redaction, whoever the reading says owns
+    // it. One written in place can't be listed in `/Kids`.
+    if left_out > 0 && r.is_some() {
+        return Err(RedactError::FormPastAllowance(left_out));
+    }
     // A widget written in place has no reference of its own, so no entry in `widget_owner`: its
     // `/Parent` is its field, when the form's reading has one there.
     let owner = match r {
@@ -1008,8 +1015,10 @@ fn form_tree(doc: &Document) -> HashSet<ObjRef> {
         let form = doc.resolve(catalog.as_dict()?.get(b"AcroForm")?);
         Some(refs(form.as_dict()?.get(b"Fields")?))
     });
-    let mut stack = fields.unwrap_or_default();
-    let mut tree: HashSet<ObjRef> = stack.iter().copied().collect();
+    // A root `/Fields` lists more than once is walked once: its `/Kids` array, when written in it,
+    // would be read again each time.
+    let mut tree = HashSet::new();
+    let mut stack: Vec<ObjRef> = fields.unwrap_or_default().into_iter().filter(|r| tree.insert(*r)).collect();
     // A `/Kids` array given by reference is read once: the references on the way to it, followed
     // as far as `Document::resolve` follows them, are noted once the walk reaches it, and a node
     // naming one of them loads nothing. A chain that ends nowhere notes only its first.

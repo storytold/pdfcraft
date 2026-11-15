@@ -144,11 +144,14 @@ fn action_field(doc: &Document, o: &Object, text: &mut Allowance) -> Option<Stri
 
 /// The fully qualified name of the field that `r` (a field or one of its widgets) belongs to,
 /// from the partial names (`/T`) up its `/Parent` chain, copied against `text`, which each step
-/// up the chain costs as an entry: a hide action can name one deep widget many times.
+/// up the chain costs as an entry: a hide action can name one deep widget many times. `None` once
+/// a part doesn't fit: the parts that do would name another field, as a reading leaves out a field
+/// whose name doesn't fit.
 pub(crate) fn qualified_name(doc: &Document, r: ObjRef, text: &mut Allowance) -> Option<String> {
     let mut parts = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut cur = Some(r);
+    let refusals = text.refusals();
     while let Some(c) = cur {
         if seen.len() > 64 || !seen.insert(c) {
             break;
@@ -161,6 +164,9 @@ pub(crate) fn qualified_name(doc: &Document, r: ObjRef, text: &mut Allowance) ->
         let d = obj.as_dict()?;
         if let Some(t) = d.get(b"T").and_then(|o| text.text(doc, o)) {
             parts.push(t);
+        }
+        if text.refusals() != refusals {
+            return None;
         }
         cur = parent_of(doc, d);
     }
@@ -707,7 +713,8 @@ pub struct Fields {
     pub adopted_page_fields: usize,
     /// How many terminal fields were left out because their text, or a field's above them, didn't
     /// fit the reading's allowances. More than none means `items` isn't the whole form: redaction
-    /// refuses to remove a widget under a mark that no field read owns.
+    /// refuses to remove a widget under a mark that no field read owns, or any given by reference,
+    /// which a field left out may list too.
     pub left_out: usize,
 }
 

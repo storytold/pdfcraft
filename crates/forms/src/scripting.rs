@@ -635,7 +635,8 @@ pub enum PageEvent {
 }
 
 /// A script a page runs as it opens or closes, with the field whose widget carries it (`None`:
-/// the page's own action, or an annotation that isn't a field's).
+/// the page's own action, an annotation that isn't a field's, or a widget whose name didn't fit
+/// what is copied of names, which would otherwise be read in part and name another field).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PageScript {
     pub field: Option<String>,
