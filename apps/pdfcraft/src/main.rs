@@ -75,6 +75,7 @@ Options:
   --control <file>            enable the UI control channel (pdfcraft-cli ui --control <file> …)
   --page N, --zoom 150, --layout continuous, --theme dark, …
                               view settings applied once the files are open
+  --                          treat all following arguments as file names
   -h, --help                  print this and exit
   --version                   print the version and exit
 
