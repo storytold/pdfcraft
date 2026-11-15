@@ -86,7 +86,8 @@ fn a_jbig2_soft_mask_past_the_full_size_bound_is_drawn_reduced() {
 /// floor plan of PDFBOX-3407 among them), a JBIG2 image past 2^29, an indexed JBIG2 image past
 /// 2^28, whose palette needs its pixels' own values, a colour-keyed one past 2^28, whose key
 /// ranges are in those values too, and one past 2^28 with a side past the JBIG2 decoder's 65,535,
-/// which it refuses at any size. Before, each was skipped as a failed image,
+/// which it refuses at any size, and one past 2^28 with a region past it, which the decoder refuses
+/// for that region. Before, each was skipped as a failed image,
 /// which the renderer doesn't report, and a page that was only that image came out white with
 /// nothing said.
 #[test]
@@ -96,6 +97,10 @@ fn images_too_large_to_decode_are_reported_as_content_left_out() {
     let jbig2 = "/BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode";
     let indexed = "/BitsPerComponent 1 /ColorSpace [/Indexed /DeviceGray 1 <00FF>] /Filter /JBIG2Decode";
     let colour_keyed = "/BitsPerComponent 1 /ColorSpace /DeviceGray /Mask [0 0] /Filter /JBIG2Decode";
+    // An intermediate generic region as large as the page: past 2^28 pixels, which only the page
+    // bitmap of an image read reduced may be, so the decoder refuses it.
+    let mut region_past_the_bitmap_bound = black_jbig2_page_of(16385, 16384);
+    jbig2_segment(&mut region_past_the_bitmap_bound, 1, 36, &[], &jbig2_white_region(16385, 16384));
     let cases = [
         ("a CCITT floor plan", (45009, 33555), fax, vec![0; 16]),
         ("a Flate image past 2^28", (16385, 16384), flate, vec![0; 16]),
@@ -103,6 +108,7 @@ fn images_too_large_to_decode_are_reported_as_content_left_out() {
         ("an indexed JBIG2 image past 2^28", (16385, 16384), indexed, black_jbig2_page_of(16385, 16384)),
         ("a colour-keyed JBIG2 image past 2^28", (16385, 16384), colour_keyed, black_jbig2_page_of(16385, 16384)),
         ("a JBIG2 image past 2^28 with a side past 65,535", (65536, 4097), jbig2, black_jbig2_page_of(65536, 4097)),
+        ("a JBIG2 image past 2^28 with a region the decoder refuses", (16385, 16384), jbig2, region_past_the_bitmap_bound),
     ];
     for (what, (width, height), entries, data) in cases {
         let content = format!("{DRAW_IN_THE_MIDDLE} 1 0 0 rg 0 0 10 10 re f");

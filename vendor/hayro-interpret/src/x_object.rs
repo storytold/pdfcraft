@@ -1017,8 +1017,13 @@ fn decode_context<'a>(
             // Reported so, the decoded-image cache (patch 91) keeps the failure only when the
             // limit is one the stream reaches by itself, whatever the page had left.
             let limited = obj.masks_picture && hayro_syntax::jbig2_limited();
-            let left_out =
-                (hayro_syntax::page_jbig2_work_spent() || limited) && uses_jbig2(&obj.stream);
+            // PdfCraft patch (113): so is an image past the full-size bound, decoded reduced,
+            // that one of the decoder's limits refuses (a region of it past 2^28 pixels, which
+            // only the page bitmap may be): it is too large to decode, which is content left
+            // out, and the page it covers would otherwise draw blank with nothing said.
+            let too_large = reduced && hayro_syntax::jbig2_limited();
+            let left_out = (hayro_syntax::page_jbig2_work_spent() || limited || too_large)
+                && uses_jbig2(&obj.stream);
             crate::cache::note_stream_limited(
                 left_out && obj.masks_picture && hayro_syntax::jbig2_limited_by_stream(),
             );
