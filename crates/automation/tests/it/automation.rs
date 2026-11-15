@@ -9670,9 +9670,27 @@ fn field_actions_through_tools() {
     assert_eq!(r["actions"][0], json!({ "trigger": "mouse_up", "javascript": "this.pageNum = 2;" }));
     assert_eq!(r["actions"][1], json!({ "trigger": "mouse_enter", "hide": ["Go"] }));
     assert_eq!(r["actions"][2], json!({ "trigger": "on_focus", "page": 3 }));
+    let before = ok(&mut a, "form_actions", json!({ "doc": doc, "field": "Go" }));
+    let generation = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().edit_generation();
+    for key in ["reset", "show", "hide"] {
+        for value in [json!(null), json!(false), json!("Go"), json!([false]), json!(["Go", false])] {
+            let mut action = json!({ "trigger": "mouse_up" });
+            action[key] = value;
+            assert!(matches!(a.call("form_set_actions", &json!({ "doc": doc, "field": "Go", "actions": [action] })), Err(ToolError::InvalidArgs(_))));
+            assert_eq!(ok(&mut a, "form_actions", json!({ "doc": doc, "field": "Go" })), before);
+            assert_eq!(a.session().get(pdfcraft_engine::DocId(doc)).unwrap().edit_generation(), generation);
+        }
+    }
     let run = ok(&mut a, "js_run", json!({ "doc": doc, "script": "this.pageNum = 2;", "field": "Go" }));
     assert_eq!(run["requests"][0]["page"], 3);
     assert!(a.call("form_set_actions", &json!({ "doc": doc, "field": "Go", "actions": [{ "trigger": "wave" }] })).is_err());
+    let actions = json!([
+        { "trigger": "mouse_up", "reset": [] },
+        { "trigger": "mouse_enter", "reset": ["Go"] },
+        { "trigger": "on_focus", "show": ["Go"] }
+    ]);
+    let accepted = ok(&mut a, "form_set_actions", json!({ "doc": doc, "field": "Go", "actions": actions }));
+    assert_eq!(accepted["actions"], actions);
 }
 
 #[test]
