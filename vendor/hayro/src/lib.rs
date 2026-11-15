@@ -165,7 +165,7 @@ pub struct RenderSettings {
     pub color_replacement: Option<ColorReplacement>,
     /// PdfCraft patch (31): the most coverage values the rasterizer keeps for the page; paths
     /// past it are left out, with `InterpreterWarning::ContentTruncated`. `None` keeps the
-    /// page's `coverage_budget` (patch 33), never more than a strip's index reaches (2^31).
+    /// page's `coverage_budget` (patch 34), never more than a strip's index reaches (2^31).
     pub max_coverage: Option<usize>,
 }
 

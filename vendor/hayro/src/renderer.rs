@@ -694,7 +694,7 @@ pub(crate) const COVERAGE_PER_PIXEL: usize = 16;
 
 /// PdfCraft patch (34): the coverage values a `width` × `height` scene may hold before later
 /// paths are left out (vello_cpu patch 1, never more than the 2^31 a strip indexes), and the
-/// interpreter stops drawing (`Device::out_of_room`, hayro-interpret patch 110).
+/// interpreter stops drawing (`Device::out_of_room`, hayro-interpret patch 112).
 #[doc(hidden)]
 pub fn coverage_budget(width: u16, height: u16) -> usize {
     usize::from(width)

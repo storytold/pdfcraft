@@ -9788,7 +9788,7 @@ mod type3_proc_cache;
 mod failed_image_decodes;
 
 // A page past its rasterizer coverage leaves the rest out and says so (vendored vello_cpu patch 1),
-// and stops drawing at its default coverage budget (hayro patch 33, hayro-interpret patch 110).
+// and stops drawing at its default coverage budget (hayro patch 34, hayro-interpret patch 112).
 mod coverage_budget;
 
 // A symbolic TrueType font draws through its (3, 0) cmap subtable first (#4156).

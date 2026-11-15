@@ -1171,6 +1171,11 @@ pub fn interpret<'a>(
         context.restore_state(device);
     }
     context.leave_stream(outer_floor);
+    // PdfCraft patch (112): a device left without room by the last operator (a tiling cell
+    // whose last fill its coverage budget refused) is caught by no check before a next one.
+    if device.out_of_room() {
+        crate::context::mark_content_truncated();
+    }
     // PdfCraft patch (18): say that content was skipped, so a truncated page isn't a clean render.
     if crate::context::content_was_truncated() {
         (context.settings.warning_sink)(InterpreterWarning::ContentTruncated);
@@ -1233,6 +1238,12 @@ fn interpret_content<'a>(
 
     while context.num_states() > num_states {
         context.restore_state(device);
+    }
+    // PdfCraft patch (112): a device without room stops the page with no operator left to see
+    // it (one full from the start, or left full by a window's last operator), and what it had
+    // no room for is content left out too.
+    if device.out_of_room() {
+        crate::context::mark_content_truncated();
     }
     // PdfCraft patch (18): say that content was skipped, so a truncated page isn't a clean render.
     if cut || content.truncated() || crate::context::content_was_truncated() {
