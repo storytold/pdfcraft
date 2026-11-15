@@ -1687,7 +1687,7 @@ fn png_of(w: u32, h: u32, color: TestPngColor, depth: TestPngDepth, data: &[u8],
         (TestPngColor::Grayscale | TestPngColor::Indexed, TestPngDepth::One) => (w as usize).div_ceil(8),
         (TestPngColor::Grayscale | TestPngColor::Indexed, TestPngDepth::Eight) => w as usize,
         (TestPngColor::Rgb, TestPngDepth::Eight) => w as usize * 3,
-        (TestPngColor::Rgb, TestPngDepth::One) => unreachable!(),
+        (TestPngColor::Rgb, TestPngDepth::One) => return Vec::new(),
     };
     let mut raw = Vec::with_capacity((1 + row_bytes) * h as usize);
     for row in data.chunks_exact(row_bytes) {
@@ -3072,4 +3072,88 @@ fn office_documents_are_their_own_kind() {
     // A PDF saved with a Word name is still a PDF; a ZIP that isn't named like Office is nothing.
     assert_eq!(source_kind("Report.docx", b"%PDF-1.7\n"), Some(SourceKind::Pdf));
     assert_eq!(source_kind("photos.zip", b"PK\x03\x04\x14\x00"), None);
+}
+
+#[test]
+fn flate_wrapped_jpeg_exports_with_and_without_a_soft_mask() {
+    for masked in [false, true] {
+        let jpeg = real_jpeg();
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |doc| {
+            let mut d = image_dict(4, 2, "DeviceGray", 8);
+            d.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("DCTDecode")]));
+            if masked {
+                let mask = Stream::from_raw(image_dict(4, 2, "DeviceGray", 8), vec![0, 255, 0, 255, 255, 0, 255, 0]);
+                d.set(b"SMask".to_vec(), Object::Ref(doc.add(Object::Stream(mask))));
+            }
+            Stream::from_raw(d, pdfcraft_filters::encode_flate(&jpeg))
+        });
+        let doc = reopen(&doc);
+        let out = crate::extract::extract_images(&doc, &[0], 0);
+        assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+        assert_eq!(out.images.len(), 1);
+        if masked {
+            assert_eq!(out.images[0].extension, "png");
+            assert_eq!(alphas(&exported_png_pixels(&out.images[0].data)), vec![0, 255, 0, 255, 255, 0, 255, 0]);
+        } else {
+            assert_eq!(out.images[0].extension, "jpg");
+            assert_eq!(out.images[0].data, jpeg);
+        }
+    }
+}
+
+#[test]
+fn flate_wrapped_jpeg_rejects_corruption_and_spent_budget() {
+    for corrupt in [false, true] {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |_| {
+            let mut d = image_dict(4, 2, "DeviceGray", 8);
+            d.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("DCTDecode")]));
+            let bytes = if corrupt { vec![1, 2, 3] } else { pdfcraft_filters::encode_flate(&real_jpeg()) };
+            Stream::from_raw(d, bytes)
+        });
+        let doc = reopen(&doc);
+        let mut budget = pdfcraft_cos::ImageBudget::with_work(if corrupt { u64::MAX } else { 0 });
+        let out = crate::extract::extract_images_within(&doc, &[0], 0, &mut budget, usize::MAX);
+        assert!(out.images.is_empty());
+        assert_eq!(out.skipped.len(), 1, "{:?}", out.skipped);
+    }
+}
+
+#[test]
+fn shared_pcx_keeps_monochrome_policy_and_resolution() {
+    let mut bytes = pcx_header(2, 1, 1, 2, 2, 1);
+    bytes[16..22].copy_from_slice(&[100, 20, 30, 10, 200, 40]);
+    bytes[12..14].copy_from_slice(&144u16.to_le_bytes());
+    bytes[14..16].copy_from_slice(&288u16.to_le_bytes());
+    bytes.extend_from_slice(&[0x80, 0]);
+    let image = super::pcx("legacy.pcx", &bytes).unwrap();
+    assert_eq!(image.data, [255, 255, 255, 0, 0, 0]);
+    assert_eq!(image.dpi, (144.0, 288.0));
+    bytes[12..14].fill(0);
+    assert_eq!(super::pcx("legacy.pcx", &bytes).unwrap().dpi, (72.0, 72.0));
+}
+
+#[test]
+fn shared_pcx_rejects_zero_length_runs_and_oversized_planes() {
+    let mut zero = pcx_header(5, 8, 3, 1, 1, 1);
+    zero.extend_from_slice(&[0xC0, 9, 1, 2, 3]);
+    assert!(super::pcx("zero.pcx", &zero).is_err());
+    let oversized = pcx_header(5, 8, 3, u16::MAX, 1, u16::MAX);
+    assert!(super::pcx("large.pcx", &oversized).is_err());
+    let rgba = pcx_header(5, 8, 4, 1, 1, 1);
+    assert!(super::pcx("rgba.pcx", &rgba).is_err(), "do not silently expand accepted layouts");
+}
+
+#[test]
+fn shared_pcx_keeps_version_four_rgb_and_palette_pixels() {
+    let mut rgb = pcx_header(4, 8, 3, 1, 1, 1);
+    rgb.extend_from_slice(&[10, 20, 30]);
+    assert!(super::is_image(&rgb));
+    assert_eq!(super::pcx("windows.pcx", &rgb).unwrap().data, [10, 20, 30]);
+    let mut palette = pcx_header(4, 1, 2, 1, 1, 1);
+    palette[25..28].copy_from_slice(&[4, 5, 6]);
+    palette.extend_from_slice(&[0x80, 0x80]);
+    assert_eq!(super::pcx("windows.pcx", &palette).unwrap().data, [4, 5, 6]);
+    assert!(from_images(&[("windows.pcx".into(), rgb)]).is_ok());
 }
