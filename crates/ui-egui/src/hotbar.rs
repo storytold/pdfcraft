@@ -740,12 +740,22 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                         });
                         settings_clicked |= settings_button(ui, cell, &mut picker_open);
                     } else {
-                        core_tool_buttons(ui, app, cell, popup_align, &t);
-                        active_tool_controls(ui, app, &t, false, cell);
+                        // The core and active controls scroll within the bar's width, so a
+                        // narrow floating bar keeps every control (and the settings gear)
+                        // reachable even when a tool adds several of them (#7312). The tools'
+                        // own scroll area stays separate, after these.
+                        let fixed_overhead = grip_size.x + cell + 24.0;
+                        let scroll_max = (bounds.width() - fixed_overhead).max(cell);
+                        egui::ScrollArea::horizontal().max_height(cell).max_width(scroll_max).auto_shrink([true, true]).show(ui, |ui| {
+                            ui.with_layout(layout, |ui| {
+                                core_tool_buttons(ui, app, cell, popup_align, &t);
+                                active_tool_controls(ui, app, &t, false, cell);
+                            });
+                        });
                         if !bar.tools.is_empty() {
                             ui.separator();
-                            let scroll_max = (bounds.width() - cell - 50.0).max(cell);
-                            egui::ScrollArea::horizontal().max_height(cell).max_width(scroll_max).show(ui, |ui| {
+                            let tools_scroll_max = (bounds.width() - cell - 50.0).max(cell);
+                            egui::ScrollArea::horizontal().max_height(cell).max_width(tools_scroll_max).show(ui, |ui| {
                                 ui.with_layout(layout, |ui| {
                                     tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
                                 });
