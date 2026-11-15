@@ -1244,7 +1244,7 @@ dependencies = [
 [[package]]
 name = "craft-codepage"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/storytold/craft-libs?rev=f29e82f1a7a009e68312bd2e84adab72be23344d#f29e82f1a7a009e68312bd2e84adab72be23344d"
 
 [[package]]
 name = "craft-csv"
@@ -1406,7 +1406,7 @@ dependencies = [
 [[package]]
 name = "craft-rtf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/storytold/craft-libs?rev=f29e82f1a7a009e68312bd2e84adab72be23344d#f29e82f1a7a009e68312bd2e84adab72be23344d"
 dependencies = [
  "craft-codepage",
  "encoding_rs",
@@ -5063,6 +5063,7 @@ dependencies = [
  "serde_json",
  "skrifa 0.44.0",
  "sys-locale",
+ "tempfile",
  "toml",
  "unicode-bidi",
  "wasm-bindgen",
