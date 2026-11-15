@@ -3961,18 +3961,54 @@ fn a_pick_keeps_its_option_when_its_validate_script_changes_the_field() {
     let colour = FieldChange { name: "pick".into(), text_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]), ..Default::default() };
     let none_first = vec![(String::new(), "None".to_string()), ("fr".to_string(), "France".to_string())];
     let reorder = FieldChange { name: "pick".into(), options: Some(none_first), ..Default::default() };
-    for (items, change, after) in
-        [(vec![pair("x", "First"), pair("x", "Second")], colour, 1), (vec![pair("fr", "France"), pair("", "None")], reorder, 0)]
-    {
+    let second = FieldValue::ChoiceIndices(vec![1]);
+    // Empty text clears the field, though an option exports nothing and the script moves it.
+    let cleared = FieldValue::Text(String::new());
+    for (items, change, pick, after) in [
+        (vec![pair("x", "First"), pair("x", "Second")], colour, &second, Some(1)),
+        (vec![pair("fr", "France"), pair("", "None")], reorder.clone(), &second, Some(0)),
+        (vec![pair("fr", "France"), pair("", "None")], reorder, &cleared, None),
+    ] {
         let mut doc = one_page();
         let kind = NewField::Combo { options: vec!["a".into(), "b".into()], editable: false };
         add_field(&mut doc, 0, [10.0, 10.0, 100.0, 30.0], &kind, Some("pick")).unwrap();
         let obj = field(&fields(&doc), "pick").obj;
         doc.update_dict(obj, |d| d.set(b"Opt".to_vec(), Object::Array(items))).unwrap();
         set_field_script(&mut doc, "pick", "validate", Some("change();")).unwrap();
-        set_value_with(&mut doc, "pick", &FieldValue::ChoiceIndices(vec![1]), &mut Change(change)).unwrap();
-        assert_eq!(picked(&doc, obj), Some(Object::Array(vec![Object::Int(after)])));
+        set_value_with(&mut doc, "pick", pick, &mut Change(change)).unwrap();
+        assert_eq!(picked(&doc, obj), after.map(|i| Object::Array(vec![Object::Int(i)])), "{pick:?}");
     }
+}
+
+/// A same-name twin of a field whose Validate script reorders its items is given the option
+/// picked: the first field's `/I` is positions in its new items, which is how the twin reads it.
+#[test]
+fn a_twin_gets_the_option_picked_when_the_validate_script_reorders_the_first_fields_items() {
+    struct Reverse;
+    impl Scripts for Reverse {
+        fn run(&mut self, _event: FieldEvent, _script: &str, target: &Field, value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
+            let options = vec![("b".to_string(), "B".to_string()), ("a".to_string(), "A".to_string())];
+            let changes = vec![FieldChange { name: target.name.clone(), object: Some(target.obj), options: Some(options), ..Default::default() }];
+            ScriptResult { rc: true, value: value.into(), value_set: false, changes, message: None }
+        }
+    }
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".into(),
+        "<< /Fields [6 0 R 7 0 R] /NeedAppearances true /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (dup) /Ff 0 /Opt [[(a) (A)] [(b) (B)]] /Rect [50 700 200 746] /P 3 0 R /AA << /V << /S /JavaScript /JS (reverse();) >> >> >>"
+            .into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (dup) /Ff 0 /Opt [[(a) (A)] [(b) (B)]] /Rect [50 600 200 646] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    set_value_with(&mut doc, "dup", &FieldValue::ChoiceIndices(vec![1]), &mut Reverse).unwrap();
+    let picked = |n| doc.get(pdfcraft_cos::ObjRef::new(n, 0)).as_dict().and_then(|d| d.get(b"I").cloned());
+    assert_eq!(picked(6), Some(Object::Array(vec![Object::Int(0)])), "b is first in the first field's new items");
+    assert_eq!(picked(7), Some(Object::Array(vec![Object::Int(1)])), "and still second in the twin's");
+    let all = fields(&doc);
+    assert!(all.iter().filter(|f| f.name == "dup").all(|f| f.value == ["b"]));
 }
 
 #[test]

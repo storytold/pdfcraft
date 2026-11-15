@@ -115,9 +115,11 @@ fn fill(doc: &mut Document, all: &[Field], named: &[usize], name: &str, value: &
     // the first one took after its scripts, without running them again.
     let twins: Vec<&Field> = named.iter().filter_map(|&i| all.get(i)).filter(|t| t.obj != f.obj && t.kind == f.kind).collect();
     if !twins.is_empty() {
-        let taken = fields(doc).into_iter().find(|x| x.obj == f.obj).map(|x| x.value).unwrap_or_default();
+        // Its items too are as its scripts left them: its `/I` is positions in those.
+        let now = fields(doc).into_iter().find(|x| x.obj == f.obj);
+        let (taken, options) = now.as_ref().map_or((&[][..], &f.options[..]), |x| (&x.value[..], &x.options[..]));
         for t in twins {
-            share_value(doc, (f.obj, &f.options), t, &taken, scripts)?;
+            share_value(doc, (f.obj, options), t, taken, scripts)?;
         }
     }
     // A field whose `/Kids` lists radio fields that don't name it as their `/Parent` has their
@@ -439,6 +441,8 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
                     _ => None,
                 },
                 FieldValue::Choice(v) if v.len() <= 1 => Some(v.first().map_or((String::new(), None), |s| named(s))),
+                // Empty text clears the field: it is not a pick of an option exporting nothing.
+                FieldValue::Text(t) if t.is_empty() => Some((String::new(), None)),
                 FieldValue::Text(t) => Some(named(t)),
                 _ => None,
             };
