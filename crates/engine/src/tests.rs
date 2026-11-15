@@ -15183,6 +15183,39 @@ fn mixed_widget_icons_are_normalized_with_history_and_save() {
         }
     }
 }
+/// #7409: a form-data file whose only known value the form refuses imports nothing, and says which
+/// field refused it; the document, its Undo and its Redo stay as they were. A file with other
+/// values that took still imports them, and the repair log names the field that refused.
+#[test]
+fn form_data_the_form_refuses_is_reported_and_leaves_the_document_alone() {
+    let (mut s, id) = session_with(1);
+    let combo = NewField::Combo { options: vec!["A".into(), "B".into()], editable: false };
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 250.0, 180.0, 272.0], kind: combo, name: Some("Choice".into()) }).unwrap();
+    let notes = NewField::Text { multiline: false };
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 210.0, 180.0, 232.0], kind: notes, name: Some("Notes".into()) }).unwrap();
+    let choose =
+        |s: &mut Session, v: &str| s.apply(id, Edit::SetFieldValue { name: "Choice".into(), value: FieldValue::Choice(vec![v.into()]) }).unwrap();
+    choose(&mut s, "A");
+    choose(&mut s, "B");
+    s.undo(id).unwrap();
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_default();
+    let import = |s: &mut Session, xml: &str| s.apply(id, Edit::ImportData { name: "data.xml".into(), bytes: Arc::new(xml.as_bytes().to_vec()) });
+    let (undo, redo) = (s.get(id).unwrap().can_undo().map(String::from), s.get(id).unwrap().can_redo().map(String::from));
+    assert!(redo.is_some());
+
+    let err = import(&mut s, "<fields><Choice>INVALID</Choice></fields>").unwrap_err();
+    assert!(err.to_string().contains("nothing was imported") && err.to_string().contains("\"Choice\""), "{err}");
+    let doc = s.get(id).unwrap();
+    assert_eq!((doc.can_undo().map(String::from), doc.can_redo().map(String::from)), (undo, redo), "no Import step, Redo kept");
+    assert_eq!(value(&s, "Choice"), vec!["A".to_string()]);
+
+    // Some values took: the file imports, and the refused field is named in the repair log.
+    import(&mut s, "<fields><Choice>INVALID</Choice><Notes>hello</Notes></fields>").unwrap();
+    assert_eq!((value(&s, "Choice"), value(&s, "Notes")), (vec!["A".to_string()], vec!["hello".to_string()]));
+    let log = s.get(id).unwrap().repair_log().to_vec();
+    assert!(log.iter().any(|l| l.contains("refused") && l.contains("\"Choice\"") && !l.contains("Notes")), "{log:?}");
+}
+
 /// A comment imported or pasted without the appearance its file carried (unreadable there) is
 /// said in the repair log, which the interface shows and the tools return.
 #[test]
