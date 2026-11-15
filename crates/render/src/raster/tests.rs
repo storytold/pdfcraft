@@ -6786,6 +6786,13 @@ fn a_curve_too_large_to_flatten_is_skipped_and_reported() {
         ("a curve reaching 10^12", "100 100 m 1000000000000 1000000000000 -1000000000000 1000000000000 100 100 c f", false, true),
         ("a rectangle reaching 10^18", "-1000000000000000000 -1000000000000000000 2000000000000000000 2000000000000000000 re f", true, false),
         ("an ordinary curve", "20 20 m 180 20 180 180 20 180 c f", true, false),
+        // 160 pixels across, drawn in user units 10^12 times smaller.
+        (
+            "a small curve under a large scale",
+            "1000000000000 0 0 1000000000000 0 0 cm 0.00000000002 0.00000000002 m 0.00000000018 0.00000000002 0.00000000018 0.00000000018 0.00000000002 0.00000000018 c f",
+            true,
+            false,
+        ),
     ];
     for (what, path, painted, reported) in cases {
         let content = format!("0 0 1 rg {path}");

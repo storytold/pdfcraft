@@ -712,14 +712,15 @@ fn may_paint_canvas(
     height: u16,
 ) -> bool {
     let (points, curved) = control_box(path);
+    // PdfCraft patch (32): see `MAX_CURVE_EXTENT`. Measured on the path itself: the padding
+    // below is in user units, and under a large scale it would make a small curve look huge.
+    if unbounded_curve(transform.transform_rect_bbox(points), curved) {
+        return false;
+    }
     let grow = reach + DRAW_SLACK;
     let device = transform
         .transform_rect_bbox(points.inflate(grow, grow))
         .inflate(2.0, 2.0);
-    // PdfCraft patch (32): see `MAX_CURVE_EXTENT`.
-    if unbounded_curve(device, curved) {
-        return false;
-    }
     paints_canvas(device, width, height)
 }
 
