@@ -6,6 +6,7 @@ mod chain;
 mod cms;
 mod crypto;
 mod encrypted_signing;
+mod malformed_contents;
 mod pdf;
 mod revision_classification;
 mod signed_structure;

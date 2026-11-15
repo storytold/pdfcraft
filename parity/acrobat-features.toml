@@ -6427,8 +6427,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.validate"]
 tools = ["sign_list"]
-evidence = ["crates/sign/tests/it/pdf.rs::signing_then_validating_with_and_without_trust", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/sign/tests/it/chain.rs::a_trusted_signer_whose_certificate_may_not_sign_is_not_valid"]
-notes = "The signer's key usage, extended key usage and critical extensions are checked; name constraints are not"
+evidence = ["crates/sign/tests/it/pdf.rs::signing_then_validating_with_and_without_trust", "crates/automation/tests/it/automation.rs::digital_ids_signing_and_validation_through_tools", "crates/sign/tests/it/chain.rs::a_trusted_signer_whose_certificate_may_not_sign_is_not_valid", "crates/sign/tests/it/malformed_contents.rs::a_signature_whose_contents_are_not_a_hex_string_is_listed_as_invalid_not_unsigned", "crates/sign/tests/it/malformed_contents.rs::an_unreadable_value_counts_as_a_signature_even_without_a_name", "crates/sign/tests/it/malformed_contents.rs::bytes_after_the_signed_revision_that_change_nothing_name_no_empty_list"]
+notes = "The signer's key usage, extended key usage and critical extensions are checked; name constraints are not. A field whose /V names a signature dictionary that can't be parsed (a /Contents with a non-hex digit or no closing bracket, ISO 32000-2 §7.3.4.3, §12.8.1 Table 255) is listed as an invalid signature with the parser's reason, not as an unsigned field, and can't be signed over; bytes after the signed revision that change no object are said to change nothing rather than listed as an empty set of permitted changes. A signature field whose own object can't be parsed is not listed"
 
 [[feature]]
 id = "sign.signatures-panel"

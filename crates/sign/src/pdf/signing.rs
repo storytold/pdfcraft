@@ -236,7 +236,8 @@ fn sign_inner(
     let (widget, rect, turn) = match existing {
         Some(f) => {
             let f = f?;
-            if f.signature(&doc).is_some() {
+            // A signature dictionary that can't be read is still the field's signature.
+            if f.signature(&doc).is_some() || f.unreadable_value(&doc).is_some() {
                 return Err(SignError::Pdf(format!("the field {:?} is already signed", f.name)));
             }
             if f.has_foreign_value(&doc) {
