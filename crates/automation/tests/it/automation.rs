@@ -2750,10 +2750,7 @@ fn verify_comment_errors(a: &mut Automation, doc: u64, id: &str) {
     let before = ok(a, "comment_list", json!({ "doc": doc }));
     let generation = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().edit_generation();
     for (page, index) in [(0, 1), (-1, 1), (1, 0), (1, -1), (i64::MIN, 1), (1, i64::MIN)] {
-        assert!(matches!(
-            a.call("comment_delete", &json!({ "doc": doc, "page": page, "index": index })),
-            Err(ToolError::InvalidArgs(_))
-        ));
+        assert!(matches!(a.call("comment_delete", &json!({ "doc": doc, "page": page, "index": index })), Err(ToolError::InvalidArgs(_))));
         assert_eq!(ok(a, "comment_list", json!({ "doc": doc })), before, "invalid positions must not delete another comment");
         assert_eq!(a.session().get(pdfcraft_engine::DocId(doc)).unwrap().edit_generation(), generation);
     }
