@@ -685,7 +685,12 @@ pub(super) fn worker(
                     if !set_busy_stage(&shared, id, BusyStage::Parsing) {
                         return;
                     }
-                    shared.recovery.prepare(pdf, &worker_settings(&config, &request_cancelled, &shared.recovery));
+                    // A panic in the survey leaves the document unprepared (the next request
+                    // surveys again) and this worker running, its slot cleared as usual; the
+                    // page's own extraction surveys again, and if that panics too the page keeps
+                    // its strict text (`extract_page_with`).
+                    let settings = worker_settings(&config, &request_cancelled, &shared.recovery);
+                    let _ = catch_unwind(AssertUnwindSafe(|| shared.recovery.prepare(pdf, &settings)));
                 }
                 let stage = if *shared_generation { BusyStage::SharedRender } else { BusyStage::Private };
                 if !set_busy_stage(&shared, id, stage) {

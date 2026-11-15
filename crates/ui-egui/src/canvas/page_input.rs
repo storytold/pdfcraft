@@ -830,8 +830,15 @@ fn update_dragged_selection(view: &mut DocView, text: &PageText, gesture: &TextG
                     && let Some((first, last)) = click_unit(text, clicks, *anchor)
                 {
                     let (to_first, to_last) = click_unit(text, clicks, hit).unwrap_or((hit, hit));
-                    let (anchor, head) = if to_first < first { (last, to_first) } else { (first, to_last.max(last)) };
-                    selection.set_run(anchor, head);
+                    // A drag, so it selects table rows as a plain drag does, by whole units.
+                    // The page unit (four clicks) is the page's text in reading order.
+                    let head_x = Some(gesture.vx).filter(|x| x.is_finite() && clicks < 4);
+                    let in_order = if to_first < first { (last, to_first) } else { (first, to_last.max(last)) };
+                    // Rows take both units whole, from the earlier one's start to the later one's end.
+                    let by_rows = text.row_ends((first, last), (to_first, to_last));
+                    let rows = head_x.is_some() && text.visual_between(by_rows.0, by_rows.1, head_x).is_some();
+                    let (anchor, head) = if rows { by_rows } else { in_order };
+                    selection.set_run(anchor, head, head_x);
                     // A drag by pages still covers the whole page.
                     selection.whole_page = clicks >= 4;
                 }
@@ -839,7 +846,7 @@ fn update_dragged_selection(view: &mut DocView, text: &PageText, gesture: &TextG
             Span::Run { anchor, .. } => {
                 if let Some(hit) = text.nearest(gesture.vx, gesture.vy) {
                     let anchor = *anchor;
-                    selection.set_run(anchor, hit);
+                    selection.set_run(anchor, hit, Some(gesture.vx).filter(|x| x.is_finite()));
                 }
             }
             Span::Column { rect } => {
@@ -878,7 +885,8 @@ fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageTex
         view.selection = Some(Selection::clicked(gesture.page, clicks, first, last));
     } else if gesture.resp.clicked() && view.clicks < 2 && gesture.text_drag {
         let shift = ui.input(|input| input.modifiers.shift);
-        let extended = shift && text.nearest(gesture.vx, gesture.vy).is_some_and(|hit| view.extend_selection(gesture.page, hit));
+        let head_x = Some(gesture.vx).filter(|x| x.is_finite());
+        let extended = shift && text.nearest(gesture.vx, gesture.vy).is_some_and(|hit| view.extend_selection(gesture.page, hit, head_x));
         if !extended {
             view.selection = None;
         }

@@ -241,6 +241,8 @@ fn a_redaction_from_a_selection_of_recovered_text_removes_it() {
     let mut r = pdfcraft_render::PageRenderer::new(bytes, Default::default());
     let out = r.render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::RecoveredText, ..Default::default() });
     assert!(out.error.is_none(), "{:?}", out.error);
+    let strict = out.text.as_ref().map(|t| t.plain_text());
+    assert!(strict.as_deref().is_some_and(|t| t.trim().is_empty()), "the strict layer reads nothing: {strict:?}");
     let left = out.recovered.map(|l| l.text.plain_text()).unwrap_or_default();
     assert!(left.trim().is_empty(), "the redacted glyphs are gone: {left:?}");
 }

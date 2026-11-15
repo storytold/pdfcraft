@@ -219,17 +219,17 @@ fn check(lines: Vec<Vec<Word>>, ops: Vec<Op>, arrives_at: usize) -> Result<(), T
             Op::Drag(a, b) => {
                 app.views[0].select_layer_text(0, at(a), at(a));
                 if let Some(s) = app.views[0].selection.as_mut() {
-                    s.set_run(at(a), at(b));
+                    s.set_run(at(a), at(b), None);
                 }
                 model = run(at(a), at(b));
             }
             Op::DragOn(b) | Op::Shift(b) => {
                 let extended = match op {
-                    Op::Shift(_) => app.views[0].extend_selection(0, at(b)),
+                    Op::Shift(_) => app.views[0].extend_selection(0, at(b), None),
                     _ => match app.views[0].selection.as_mut() {
                         Some(s) => match s.span {
                             selection::Span::Run { anchor, .. } => {
-                                s.set_run(anchor, at(b));
+                                s.set_run(anchor, at(b), None);
                                 true
                             }
                             selection::Span::Column { .. } => false,

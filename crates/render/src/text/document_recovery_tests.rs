@@ -101,6 +101,19 @@ fn a_documents_pages_read_the_same_in_any_order_and_on_any_thread() {
     assert_eq!(read, alone);
 }
 
+/// Review finding: a font decided while the document was unprepared is decided without its
+/// evidence, so the decision stays the page's even when the evidence arrives (another thread's
+/// survey finishing) while it is being made; a decision made with the evidence there is kept.
+#[test]
+fn a_decision_made_before_the_evidence_is_not_kept() {
+    let pdf = parse(numbered_names_pages(1));
+    let document = Arc::new(RecoveryDocument::new());
+    let kept = document.decide_for_tests(1, || document.prepare(&pdf, &settings(Some(document.clone()))));
+    assert!(document.prepared());
+    assert!(!kept, "decided before the evidence");
+    assert!(document.decide_for_tests(1, || {}), "decided with it");
+}
+
 /// A pool's workers share one recovery state: the font every page shows is decided once for the
 /// pool, whichever worker reads which page.
 #[cfg(not(target_arch = "wasm32"))]
@@ -164,6 +177,70 @@ fn surveyed(doc: &Doc) -> Arc<RecoveryDocument> {
     document
 }
 
+/// Review finding: a content stream cut at what is left of the survey's byte cap is not
+/// surveyed from its prefix: whatever the cap, the survey counts everything or gives up. Pages
+/// and forms, Flate-compressed (a decoder stops at the limit it is given) or not, with a PNG
+/// predictor (undone after inflating stops, it leaves fewer bytes than the limit) or not, and a
+/// page's content in one stream or several (a stream after the cap is reached is not left out).
+#[test]
+fn a_survey_never_counts_a_stream_cut_at_its_byte_cap() {
+    use super::cjk_fixture::Streams;
+    use hayro::hayro_interpret::font::test_hooks::set_survey_byte_cap;
+    let doc = Doc {
+        fonts: vec![Font::truetype("ABCDEF+Kai", 20)],
+        pages: vec![vec![Show::Text(0, vec![1, 2]), Show::Text(0, vec![3]), Show::Form(vec![Show::Text(0, vec![4, 5])], 1), Show::Text(0, vec![6])]],
+    };
+    let variants = [(false, None), (true, None), (true, Some(16))];
+    for (flate, png_columns) in variants {
+        for split in [false, true] {
+            let pdf = parse(doc.build_as(Streams { flate, split, png_columns, ..Streams::default() }));
+            let survey = |cap: Option<u64>| {
+                set_survey_byte_cap(cap);
+                let document = Arc::new(RecoveryDocument::needing_usage_for_tests());
+                let read = extract_page_recovering(&pdf, 0, &settings(Some(document.clone())));
+                set_survey_byte_cap(None);
+                assert!(read.is_some());
+                document
+            };
+            let full = survey(None).surveyed_fonts();
+            assert_eq!(full, vec![(vec![(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1)], None)]);
+            let mut counted = 0;
+            for cap in 0..400 {
+                let document = survey(Some(cap));
+                if document.survey_over_cap() {
+                    continue;
+                }
+                counted += 1;
+                assert_eq!(document.surveyed_fonts(), full, "flate {flate}, png {png_columns:?}, split {split}, cap {cap}");
+            }
+            assert!(counted > 0, "the document fits some cap below 400");
+        }
+    }
+}
+
+/// Review finding: a stream cut at the decoders' own cap (`MAX_DECODED_STREAM`, 256 MiB, far
+/// below the survey's byte cap) is not surveyed from its prefix either, when the cut is in a
+/// filter before the last: a page whose content is ASCIIHex under Flate, its text after 130 MiB
+/// of spaces, decodes through 260 MiB of hex. The survey gives up instead of counting nothing.
+#[test]
+fn a_survey_gives_up_on_a_stream_the_decoders_cut_short() {
+    use super::cjk_fixture::Streams;
+    let doc = Doc { fonts: vec![Font::truetype("ABCDEF+Kai", 20)], pages: vec![vec![Show::Text(0, vec![1, 2])]] };
+    let survey = |streams: Streams| {
+        let pdf = parse(doc.build_as(streams));
+        let document = RecoveryDocument::needing_usage_for_tests();
+        document.prepare(&pdf, &settings(None));
+        assert!(document.prepared());
+        document
+    };
+    // Below the cap, the same chain is surveyed in full.
+    let short = survey(Streams { hex_after: Some(1 << 20), ..Streams::default() });
+    assert!(!short.survey_over_cap());
+    assert_eq!(short.surveyed_fonts(), vec![(vec![(1, 1), (2, 1)], None)]);
+    let cut = survey(Streams { hex_after: Some(130 << 20), ..Streams::default() });
+    assert!(cut.survey_over_cap(), "{:?}", cut.surveyed_fonts());
+}
+
 /// The survey counts every code a page or a form it draws shows (a form drawn twice counts
 /// twice), in a Type 0 font through `Identity-H` with an embedded program and no `/ToUnicode`
 /// stream; by the glyph id the `/CIDToGIDMap` gives a TrueType program, by CID in a CFF one.
@@ -195,6 +272,29 @@ fn the_survey_counts_each_glyph_shown_across_the_document() {
     let before = recovery_counters();
     extract_page_recovering(&pdf, 1, &settings(Some(document.clone()))).unwrap();
     assert_eq!(recovery_counters().since(&before).survey_pages, 0);
+}
+
+/// Review finding: the survey reads text state as the interpreter does. A form draws in the
+/// font selected where it is drawn until it selects its own, and `q` and `Q` save and restore
+/// the font with the graphics state (a `Q` of a form with no `q` of its own restores nothing).
+#[test]
+fn the_survey_follows_the_font_through_forms_and_saved_states() {
+    let doc = Doc {
+        fonts: vec![Font::truetype("ABCDEF+Outer", 20), Font::truetype("ABCDEF+Inner", 20)],
+        pages: vec![vec![
+            // The form shows code 3 in the caller's font.
+            Show::Raw("/F0 10 Tf"),
+            Show::Form(vec![Show::Raw("BT 20 700 Td <0003> Tj ET")], 1),
+            // A font selected inside `q` … `Q` is gone after it.
+            Show::Raw("q /F1 10 Tf Q BT 20 600 Td <0004> Tj ET"),
+            // A form's unmatched `Q` doesn't restore the caller's saved font.
+            Show::Raw("q /F1 10 Tf"),
+            Show::Form(vec![Show::Raw("Q BT 20 500 Td <0005> Tj ET")], 1),
+            Show::Raw("Q"),
+        ]],
+    };
+    let document = surveyed(&doc);
+    assert_eq!(document.surveyed_fonts(), vec![(vec![(3, 1), (4, 1)], None), (vec![(5, 1)], None)]);
 }
 
 /// Fonts with the same `/BaseFont` after the subset tag, the same glyph count and the same kind
