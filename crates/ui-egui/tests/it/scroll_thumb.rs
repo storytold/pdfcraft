@@ -22,6 +22,8 @@ fn blank_pages(n: usize) -> Vec<u8> {
 /// length is measured in the rendered window, in the bar's middle column, with the pointer off it.
 #[test]
 fn a_long_documents_scroll_thumb_stays_long_enough_to_see_under_the_pointer() {
+    // Taken before the harness, so it is let go after the harness and its GPU device are dropped.
+    let _gpu = crate::gpu();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
@@ -59,7 +61,6 @@ fn a_long_documents_scroll_thumb_stays_long_enough_to_see_under_the_pointer() {
     h.run_steps(2);
     h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(x, viewport.top() + 2.0)));
     h.run_steps(20);
-    let _gpu = crate::gpu();
     let image = h.render().unwrap();
     // The longest run of thumb-dark pixels in the column, below where the pointer rests.
     let (mut run, mut longest) = (0u32, 0u32);
