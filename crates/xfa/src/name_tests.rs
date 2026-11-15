@@ -165,8 +165,9 @@ fn unnamed_radio_groups_keep_their_names_when_rows_are_added_before_them() {
 }
 
 /// An unnamed group under an unnamed root has no SOM path of its own or of a container's: its
-/// field records its first button's path, and its name is kept under that same path, so the name
-/// stays `group` however often the form is laid out again.
+/// field records its first button's path in the template, and its name is kept under that same
+/// path, so the name stays `group` however often the form is laid out again, and when that button
+/// is hidden.
 #[test]
 fn an_unnamed_group_under_an_unnamed_root_keeps_its_name() {
     let xdp = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
@@ -184,6 +185,15 @@ fn an_unnamed_group_under_an_unnamed_root_keeps_its_name() {
         rerender(&mut doc, &tpl).unwrap();
         assert_eq!(radio_groups(&doc), first, "laid out again {pass} times");
     }
+    // The first button is hidden (here by laying out the same form with it hidden): the group
+    // keeps its path, and so its name.
+    let hidden = xdp.replace(r#"<field name="a" w"#, r#"<field name="a" presence="hidden" w"#);
+    let hidden_tpl = crate::script::template_of(&Document::open(Arc::new(shell(&hidden))).unwrap()).unwrap();
+    rerender(&mut doc, &hidden_tpl).unwrap();
+    assert_eq!(radio_groups(&doc), first, "the group keeps its name with its first button hidden");
+    let (_, group) = crate::script::field_objects_by_som(&doc).get("a[0]").cloned().unwrap();
+    let kids = doc.get(group).as_dict().and_then(|g| g.get(b"Kids").map(|k| doc.resolve(k))).and_then(|k| k.as_array().map(Vec::len));
+    assert_eq!(kids, Some(1), "the first button is hidden");
 }
 
 /// The radio groups of the AcroForm, in the order the layout wrote them: (name, SOM path).
