@@ -94,6 +94,8 @@ pub use pdfcraft_organize::check_custom_key;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
 pub use pdfcraft_cos::{Algorithm, civil_from_days};
+#[cfg(not(target_arch = "wasm32"))]
+pub use pdfcraft_create::libreoffice_sandbox;
 pub use pdfcraft_create::{
     CONVERTIBLE, CreateError, IMAGE_EXTENSIONS, ImageResolution, OFFICE_EXTENSIONS, SourceKind, TEXT_EXTENSIONS, decode_text, source_kind,
 };

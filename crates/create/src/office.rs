@@ -56,7 +56,7 @@ pub fn office_to_pdf(name: &str, bytes: &[u8]) -> Result<Vec<u8>, CreateError> {
             "{name}: opening Word, Excel and PowerPoint files needs LibreOffice, which isn't installed (get it free from libreoffice.org)"
         ))
     })?;
-    native::convert_with(&program, name, bytes, TIMEOUT)
+    native::convert(&program, name, bytes)
 }
 
 /// Where LibreOffice is installed, if it is: `PDFCRAFT_SOFFICE`, then the `PATH`, then the
@@ -66,6 +66,16 @@ pub fn libreoffice() -> Option<std::path::PathBuf> {
     native::libreoffice()
 }
 
+/// The tool that keeps LibreOffice off the network while it converts (`bwrap`, `unshare` or
+/// `sandbox-exec`), by its file name. `None` when LibreOffice isn't installed or no such tool
+/// works on this machine: conversions then run with the profile's settings alone. The first
+/// call tries each tool on a small document of PdfCraft's own, which takes a few seconds.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn libreoffice_sandbox() -> Option<String> {
+    let sandbox = native::sandbox_for(&native::libreoffice()?)?;
+    Some(sandbox.program.file_name()?.to_string_lossy().into_owned())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::{CreateError, MAX_PDF, office_extension};
@@ -73,6 +83,7 @@ mod native {
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command, ExitStatus, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Mutex, PoisonError};
     use std::time::{Duration, Instant};
 
     /// The program names LibreOffice installs on the `PATH`.
@@ -137,7 +148,12 @@ mod native {
     /// linked content in Writer and Calc documents (sections, files, external data) never
     /// updated on load, so a document can't make LibreOffice fetch from the network or a share.
     /// The two `Link` settings number "Never" differently (Writer.xcs: 0 Always, 1 On request,
-    /// 2 Never; Calc.xcs: 0 Always, 1 Never, 2 On request). Impress has no such setting.
+    /// 2 Never; Calc.xcs: 0 Always, 1 Never, 2 On request). Impress has no such setting, and
+    /// a linked picture is fetched whatever these say, so web requests are also sent to a proxy
+    /// that isn't there (`Inet/Settings`: type 1 is "manual"; port 9 is the discard service,
+    /// which nothing listens on). LibreOffice doesn't use a proxy for this machine's own
+    /// addresses, and the settings are its own to honour: [`Sandbox`] is what takes the network
+    /// away.
     pub(super) const PROFILE_SETTINGS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 <item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="DisableMacrosExecution" oor:op="fuse"><value>true</value></prop></item>
@@ -145,6 +161,12 @@ mod native {
 <item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="BlockUntrustedRefererLinks" oor:op="fuse"><value>true</value></prop></item>
 <item oor:path="/org.openoffice.Office.Writer/Content/Update"><prop oor:name="Link" oor:op="fuse"><value>2</value></prop></item>
 <item oor:path="/org.openoffice.Office.Calc/Content/Update"><prop oor:name="Link" oor:op="fuse"><value>1</value></prop></item>
+<item oor:path="/org.openoffice.Inet/Settings"><prop oor:name="ooInetProxyType" oor:op="fuse"><value>1</value></prop></item>
+<item oor:path="/org.openoffice.Inet/Settings"><prop oor:name="ooInetHTTPProxyName" oor:op="fuse"><value>127.0.0.1</value></prop></item>
+<item oor:path="/org.openoffice.Inet/Settings"><prop oor:name="ooInetHTTPProxyPort" oor:op="fuse"><value>9</value></prop></item>
+<item oor:path="/org.openoffice.Inet/Settings"><prop oor:name="ooInetHTTPSProxyName" oor:op="fuse"><value>127.0.0.1</value></prop></item>
+<item oor:path="/org.openoffice.Inet/Settings"><prop oor:name="ooInetHTTPSProxyPort" oor:op="fuse"><value>9</value></prop></item>
+<item oor:path="/org.openoffice.Inet/Settings"><prop oor:name="ooInetNoProxy" oor:op="fuse"><value></value></prop></item>
 </oor:items>
 "#;
 
@@ -281,14 +303,124 @@ mod native {
         let _ = child.wait();
     }
 
-    /// Convert with the LibreOffice at `program`, giving up after `timeout`.
+    /// A program that runs another with no network: LibreOffice started through it can't reach
+    /// a web server, a share or this machine's own services, whatever the document links to.
+    /// The operating system enforces it, where the profile's settings are LibreOffice's own to
+    /// honour.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub(super) struct Sandbox {
+        pub(super) program: PathBuf,
+        /// What comes before the program to run.
+        pub(super) args: &'static [&'static str],
+    }
+
+    impl Sandbox {
+        /// `program` started inside the sandbox; its own arguments follow.
+        pub(super) fn command(&self, program: &Path) -> Command {
+            let mut command = Command::new(&self.program);
+            command.args(self.args).arg(program);
+            command
+        }
+    }
+
+    /// macOS: everything allowed but the network.
+    const SEATBELT_NO_NETWORK: &str = "(version 1)(allow default)(deny network*)";
+    /// The same, for a LibreOffice that can't start without its sockets in the file system:
+    /// those stay, and reach only this machine's own processes.
+    const SEATBELT_LOCAL_SOCKETS: &str = "(version 1)(allow default)(deny network*)(allow network-outbound (remote unix-socket))(allow network-bind (local unix-socket))(allow network-inbound (local unix-socket))";
+
+    /// The sandboxes `os` (as `std::env::consts::OS` names it) may have, the most contained
+    /// first, given where a program of a name is. Whether one works is for [`sandbox_for`] to
+    /// find out: user namespaces can be turned off, and a tool can be there but refused.
+    ///
+    /// - Linux: a network namespace of its own, holding only a loopback interface that is down.
+    ///   bubblewrap keeps the file system as it is (`--dev-bind / /`) and goes with its parent;
+    ///   util-linux's `unshare` does the same as the current user, or as root inside the
+    ///   namespace where it can't map the user.
+    /// - macOS: `sandbox-exec` with a profile that denies the network.
+    /// - Windows and the BSDs have no such tool to run: nothing here.
+    pub(super) fn sandboxes(os: &str, find: &dyn Fn(&str) -> Option<PathBuf>) -> Vec<Sandbox> {
+        let tools: &[(&str, &'static [&'static str])] = match os {
+            "linux" => &[
+                ("bwrap", &["--unshare-net", "--die-with-parent", "--dev-bind", "/", "/", "--"]),
+                ("unshare", &["--user", "--map-current-user", "--net", "--"]),
+                ("unshare", &["--user", "--map-root-user", "--net", "--"]),
+            ],
+            "macos" => &[("sandbox-exec", &["-p", SEATBELT_NO_NETWORK]), ("sandbox-exec", &["-p", SEATBELT_LOCAL_SOCKETS])],
+            _ => &[],
+        };
+        tools.iter().filter_map(|(name, args)| Some(Sandbox { program: find(name)?, args })).collect()
+    }
+
+    /// Where the sandbox tool `name` is: macOS's own copy of `sandbox-exec`, anything else on
+    /// the `PATH` (as LibreOffice itself is found).
+    pub(super) fn sandbox_tool(name: &str) -> Option<PathBuf> {
+        if name == "sandbox-exec" {
+            return Some(PathBuf::from("/usr/bin/sandbox-exec")).filter(|p| p.is_file());
+        }
+        std::env::split_paths(&std::env::var_os("PATH")?).map(|dir| dir.join(name)).find(|p| p.is_file())
+    }
+
+    /// A small document of PdfCraft's own, converted to find out whether a sandbox works.
+    const PROBE: &[u8] = b"{\\rtf1\\ansi{\\fonttbl\\f0\\fswiss Helvetica;}\\f0\\pard PdfCraft\\par}";
+
+    /// How long a sandbox gets to convert [`PROBE`]: a fresh profile costs a few seconds.
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// The first of `candidates` under which the LibreOffice at `program` converts [`PROBE`].
+    /// Only a real conversion tells: a tool can start and LibreOffice still fail inside it.
+    pub(super) fn working_sandbox(program: &Path, candidates: Vec<Sandbox>) -> Option<Sandbox> {
+        candidates
+            .into_iter()
+            .find(|sandbox| convert_in(program, "probe.rtf", PROBE, PROBE_TIMEOUT, MAX_PDF, Some(sandbox)).is_ok_and(|pdf| pdf.starts_with(b"%PDF-")))
+    }
+
+    /// The sandbox the LibreOffice at `program` converts in, found once per program (the
+    /// first conversion waits for it) and remembered: `None` when no candidate works here.
+    pub(super) fn sandbox_for(program: &Path) -> Option<Sandbox> {
+        static FOUND: Mutex<Option<(PathBuf, Option<Sandbox>)>> = Mutex::new(None);
+        // A panic while probing leaves nothing half-written: the last answer still holds.
+        let mut found = FOUND.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((known, sandbox)) = found.as_ref()
+            && known == program
+        {
+            return sandbox.clone();
+        }
+        let sandbox = working_sandbox(program, sandboxes(std::env::consts::OS, &sandbox_tool));
+        *found = Some((program.to_path_buf(), sandbox.clone()));
+        sandbox
+    }
+
+    /// Convert with the LibreOffice at `program`, off the network where this machine has a
+    /// sandbox for it ([`sandbox_for`]). Without one the conversion still runs, under the
+    /// profile's settings alone, as it did before there were sandboxes.
+    pub(super) fn convert(program: &Path, name: &str, bytes: &[u8]) -> Result<Vec<u8>, CreateError> {
+        convert_in(program, name, bytes, super::TIMEOUT, MAX_PDF, sandbox_for(program).as_ref())
+    }
+
+    /// Convert with the LibreOffice at `program`, giving up after `timeout`. No sandbox.
+    #[cfg(test)]
     pub(super) fn convert_with(program: &Path, name: &str, bytes: &[u8], timeout: Duration) -> Result<Vec<u8>, CreateError> {
         convert_capped(program, name, bytes, timeout, MAX_PDF)
     }
 
-    /// [`convert_with`] with the converted PDF's size limit given: the output folder is watched
-    /// while LibreOffice runs, and the finished file is checked again.
+    /// [`convert_with`] with the converted PDF's size limit given.
+    #[cfg(test)]
     pub(super) fn convert_capped(program: &Path, name: &str, bytes: &[u8], timeout: Duration, max_pdf: u64) -> Result<Vec<u8>, CreateError> {
+        convert_in(program, name, bytes, timeout, max_pdf, None)
+    }
+
+    /// Convert with the LibreOffice at `program`, started inside `sandbox` when there is one.
+    /// The output folder is watched while LibreOffice runs, so the PDF never grows past
+    /// `max_pdf`, and the finished file is checked again.
+    pub(super) fn convert_in(
+        program: &Path,
+        name: &str,
+        bytes: &[u8],
+        timeout: Duration,
+        max_pdf: u64,
+        sandbox: Option<&Sandbox>,
+    ) -> Result<Vec<u8>, CreateError> {
         let too_large = || format!("the converted PDF is larger than {} MB", max_pdf / (1024 * 1024));
         let failed = |why: String| CreateError::Office(format!("{name}: {why}"));
         let ext = office_extension(name).ok_or_else(|| failed("this isn't a Word, Excel or PowerPoint file".into()))?;
@@ -303,7 +435,7 @@ mod native {
             .and_then(|()| std::fs::create_dir(&out));
         prepared.map_err(|e| failed(format!("couldn't prepare the conversion: {e}")))?;
 
-        let mut command = Command::new(program);
+        let mut command = sandbox.map_or_else(|| Command::new(program), |sandbox| sandbox.command(program));
         command
             .arg(format!("-env:UserInstallation={}", file_url(&profile)))
             .args(["--headless", "--invisible", "--nologo", "--norestore", "--nodefault", "--nolockcheck", "--convert-to", "pdf", "--outdir"])
@@ -428,7 +560,107 @@ mod tests {
             // its default, "On request".
             assert!(settings.contains(&("/org.openoffice.Office.Writer/Content/Update", "Link", "2")), "{settings:?}");
             assert!(settings.contains(&("/org.openoffice.Office.Calc/Content/Update", "Link", "1")), "{settings:?}");
-            assert_eq!(settings.len(), 5, "{settings:?}");
+            // Web requests go to a proxy nothing listens on, with no host excepted.
+            let inet = "/org.openoffice.Inet/Settings";
+            for (name, value) in [("ooInetProxyType", "1"), ("ooInetHTTPProxyPort", "9"), ("ooInetHTTPSProxyPort", "9")] {
+                assert!(settings.contains(&(inet, name, value)), "{name}: {settings:?}");
+            }
+            for name in ["ooInetHTTPProxyName", "ooInetHTTPSProxyName"] {
+                assert!(settings.contains(&(inet, name, "127.0.0.1")), "{name}: {settings:?}");
+            }
+            assert!(settings.contains(&(inet, "ooInetNoProxy", "")), "{settings:?}");
+            assert_eq!(settings.len(), 11, "{settings:?}");
+        }
+
+        #[test]
+        fn each_system_offers_its_sandboxes_most_contained_first() {
+            let everywhere = |name: &str| Some(PathBuf::from("/tools").join(name));
+            let names = |os: &str, find: &dyn Fn(&str) -> Option<PathBuf>| -> Vec<(String, &'static str)> {
+                sandboxes(os, find).iter().map(|s| (s.program.to_string_lossy().replace('\\', "/"), s.args[0])).collect()
+            };
+            assert_eq!(
+                names("linux", &everywhere),
+                [("/tools/bwrap".to_string(), "--unshare-net"), ("/tools/unshare".to_string(), "--user"), ("/tools/unshare".to_string(), "--user")]
+            );
+            // Each Linux sandbox takes the network away, and the program to run comes last.
+            for sandbox in sandboxes("linux", &everywhere) {
+                assert!(sandbox.args.iter().any(|a| matches!(*a, "--unshare-net" | "--net")), "{sandbox:?}");
+                assert_eq!(sandbox.args.last(), Some(&"--"), "{sandbox:?}");
+            }
+            let mac = sandboxes("macos", &everywhere);
+            assert_eq!(mac.len(), 2);
+            assert!(mac.iter().all(|s| s.args[0] == "-p" && s.args[1].contains("(deny network*)")), "{mac:?}");
+            // A tool that isn't installed is left out; other systems have none.
+            assert_eq!(names("linux", &|name| (name == "unshare").then(|| PathBuf::from("/usr/bin/unshare"))).len(), 2);
+            assert!(sandboxes("linux", &|_| None).is_empty());
+            for os in ["windows", "freebsd", "openbsd", ""] {
+                assert!(sandboxes(os, &everywhere).is_empty(), "{os}");
+            }
+        }
+
+        #[test]
+        fn a_sandbox_starts_the_program_after_its_own_arguments() {
+            let sandbox = Sandbox { program: PathBuf::from("/usr/bin/unshare"), args: &["--user", "--net", "--"] };
+            let command = sandbox.command(Path::new("/opt/soffice"));
+            assert_eq!(command.get_program(), "/usr/bin/unshare");
+            assert_eq!(command.get_args().collect::<Vec<_>>(), ["--user", "--net", "--", "/opt/soffice"]);
+        }
+
+        /// The port the stand-in below connects to, and where it writes what happened.
+        const LISTENER_PORT: &str = "PDFCRAFT_TEST_OFFICE_LISTENER_PORT";
+
+        /// This test binary, run through `sandbox` (or directly) as the stand-in that connects
+        /// to `port`: what the stand-in wrote, `None` when it never ran (the sandbox tool isn't
+        /// usable on this machine).
+        fn connects_under(sandbox: Option<&Sandbox>, port: u16, dir: &Path) -> Option<String> {
+            let report = dir.join("report");
+            let _ = std::fs::remove_file(&report);
+            let exe = std::env::current_exe().unwrap();
+            let mut command = sandbox.map_or_else(|| std::process::Command::new(&exe), |sandbox| sandbox.command(&exe));
+            command.args(["--ignored", "--exact", "office::tests::native::connects_to_the_listener", "--nocapture"]);
+            command.env(LISTENER_PORT, port.to_string()).env(HEARTBEAT, &report);
+            command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+            assert!(matches!(run_limited(command, Duration::from_secs(60), None), Ok(Run::Exited(_))));
+            std::fs::read_to_string(&report).ok()
+        }
+
+        /// A program started through a sandbox can't reach a listener on this machine, which a
+        /// program started directly can: the sandbox is what stops a document's links, not
+        /// LibreOffice's settings. Needs no LibreOffice; a sandbox tool that can't run here
+        /// (none installed, or user namespaces turned off) is skipped.
+        #[test]
+        fn a_sandboxed_program_cannot_reach_a_listener() {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let work = WorkDir::new().unwrap();
+            assert_eq!(connects_under(None, port, &work.0).as_deref(), Some("connected"), "the stand-in reaches the listener on its own");
+            let mut ran = 0;
+            for sandbox in sandboxes(std::env::consts::OS, &sandbox_tool) {
+                match connects_under(Some(&sandbox), port, &work.0).as_deref() {
+                    None => eprintln!("skipped: {sandbox:?} doesn't run here"),
+                    Some(report) => {
+                        assert_eq!(report, "refused", "{sandbox:?} left the network reachable");
+                        ran += 1;
+                    }
+                }
+            }
+            if ran == 0 {
+                eprintln!("skipped: no sandbox tool runs on this machine");
+            }
+        }
+
+        /// The stand-in for a LibreOffice that fetches what a document links to (run only by
+        /// the test above).
+        #[test]
+        #[ignore]
+        fn connects_to_the_listener() {
+            let (Some(port), Some(report)) = (std::env::var(LISTENER_PORT).ok().and_then(|p| p.parse::<u16>().ok()), std::env::var_os(HEARTBEAT))
+            else {
+                return;
+            };
+            let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+            let reached = std::net::TcpStream::connect_timeout(&address, Duration::from_secs(5)).is_ok();
+            std::fs::write(report, if reached { "connected" } else { "refused" }).unwrap();
         }
 
         #[test]
@@ -594,6 +826,36 @@ mod tests {
             let rtf = b"{\\rtf1\\ansi{\\fonttbl\\f0\\fswiss Helvetica;}\\f0\\pard Hello from PdfCraft.\\par}";
             let pdf = convert_with(&program, "hello.rtf", rtf, super::super::TIMEOUT).unwrap();
             assert!(pdf.starts_with(b"%PDF-"));
+        }
+
+        /// With LibreOffice installed, each sandbox that works on this machine converts a
+        /// document, and the one conversions use is the first of them.
+        #[test]
+        fn libreoffice_converts_inside_the_sandbox_this_machine_has() {
+            let Some(program) = super::super::libreoffice() else {
+                eprintln!("skipped: LibreOffice isn't installed");
+                return;
+            };
+            let Some(sandbox) = sandbox_for(&program) else {
+                eprintln!("skipped: no sandbox works on this machine");
+                return;
+            };
+            let rtf = b"{\\rtf1\\ansi{\\fonttbl\\f0\\fswiss Helvetica;}\\f0\\pard Hello from PdfCraft.\\par}";
+            let pdf = convert_in(&program, "hello.rtf", rtf, super::super::TIMEOUT, 1 << 20, Some(&sandbox)).unwrap();
+            assert!(pdf.starts_with(b"%PDF-"));
+            assert_eq!(sandbox_for(&program), Some(sandbox.clone()), "found once and remembered");
+            assert_eq!(super::super::libreoffice_sandbox(), sandbox.program.file_name().map(|n| n.to_string_lossy().into_owned()));
+            assert_eq!(convert(&program, "hello.rtf", rtf).map(|pdf| pdf.starts_with(b"%PDF-")), Ok(true));
+        }
+
+        /// A sandbox LibreOffice can't convert in is passed over, and none at all is an answer.
+        #[test]
+        fn a_sandbox_that_cannot_convert_is_not_used() {
+            // This test binary stands in for LibreOffice: it makes no PDF, in or out of a sandbox.
+            let program = std::env::current_exe().unwrap();
+            let broken = Sandbox { program: std::env::temp_dir().join("pdfcraft-no-such-sandbox"), args: &["--"] };
+            assert_eq!(working_sandbox(&program, vec![broken]), None);
+            assert_eq!(working_sandbox(&program, Vec::new()), None);
         }
     }
 }
