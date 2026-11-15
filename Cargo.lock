@@ -1193,7 +1193,7 @@ dependencies = [
 [[package]]
 name = "craft-cms"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7bc5f2a4c8214b97394a5dcf60d01e9f5f5298c3#7bc5f2a4c8214b97394a5dcf60d01e9f5f5298c3"
+source = "git+https://github.com/storytold/craft-libs?rev=cab96afd08c3b68073340d2162657ccc989bd751#cab96afd08c3b68073340d2162657ccc989bd751"
 dependencies = [
  "md-5 0.10.6",
  "rayon",
@@ -4861,7 +4861,7 @@ dependencies = [
 name = "pdfcraft-preflight"
 version = "0.21.1"
 dependencies = [
- "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7bc5f2a4c8214b97394a5dcf60d01e9f5f5298c3)",
+ "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=cab96afd08c3b68073340d2162657ccc989bd751)",
  "craft-xml",
  "flate2",
  "pdfcraft-content",
