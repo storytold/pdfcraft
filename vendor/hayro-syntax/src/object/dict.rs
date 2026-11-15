@@ -193,7 +193,9 @@ impl Skippable for Dict<'_> {
             } else {
                 let Some(_) = r.skip::<Name<'_>>(is_content_stream) else {
                     // In case there is garbage in-between, be lenient and just try to skip it.
-                    r.skip::<Object<'_>>(is_content_stream)?;
+                    if r.skip::<Object<'_>>(is_content_stream).is_none() {
+                        skip_stray_delimiter(r)?;
+                    }
                     continue;
                 };
 
@@ -208,6 +210,21 @@ impl Skippable for Dict<'_> {
         })();
         r.leave_container();
         result
+    }
+}
+
+// PdfCraft patch (113): a closing delimiter or brace between dictionary entries
+// (`/Contents 4 0 R ) >>`) starts no object, so the garbage skip failed and took the
+// whole dictionary with it: a page dictionary holding one ended the page-tree walk
+// there. Step over that one byte as garbage instead. Each call consumes a byte, so the
+// entry loops still end.
+fn skip_stray_delimiter(r: &mut Reader<'_>) -> Option<()> {
+    match r.peek_byte()? {
+        b')' | b']' | b'{' | b'}' | b'>' => {
+            r.forward();
+            Some(())
+        }
+        _ => None,
     }
 }
 
@@ -425,7 +442,9 @@ where
                     // But only do this if we are parsing a proper dictionary as opposed to an
                     // inline dictionary.
                     repaired = true;
-                    r.read::<Object<'_>>(ctx)?;
+                    if r.read::<Object<'_>>(ctx).is_none() {
+                        skip_stray_delimiter(r)?;
+                    }
                     continue;
                 } else {
                     return None;
