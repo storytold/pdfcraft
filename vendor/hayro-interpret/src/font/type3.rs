@@ -257,6 +257,13 @@ impl<'a> Type3<'a> {
         paint: &Paint<'a>,
         device: &mut impl Device<'a>,
     ) -> Option<()> {
+        let name = self.glyph_simulator.glyph_to_string(glyph.glyph_id)?;
+        let program = self.char_procs.get(&name)?;
+        // PdfCraft patch (107): a procedure already being drawn is not drawn inside itself, and
+        // is refused before the glyph is charged to the page's nested-paint budget.
+        if crate::context::glyph_proc_drawing(program.obj_id()) {
+            return None;
+        }
         // PdfCraft patch: a glyph procedure may show text in this same font (through
         // inherited resources), recursing until the stack overflowed.
         if glyph.nesting_depth > crate::context::MAX_PAINT_NESTING
@@ -273,8 +280,6 @@ impl<'a> Type3<'a> {
         // (though the graphics state itself should be preserved).
         state.text_state = TextState::default();
 
-        let name = self.glyph_simulator.glyph_to_string(glyph.glyph_id)?;
-        let program = self.char_procs.get(&name)?;
         let (decoded, _held) = self.decoded_proc(&name, program, &glyph.cache.type3_procs)?;
         let iter = TypedIter::new(&decoded);
 
@@ -319,13 +324,10 @@ impl<'a> Type3<'a> {
             resources = Resources::from_parent(procs_resources, resources);
         }
 
-        // PdfCraft patch (107): a glyph procedure already being drawn is not drawn inside
-        // itself. One that shows its own glyph three times recursed down to the nesting limit,
-        // spending the page's whole nested-paint budget (30 s for a 2.6 KB fuzzed file).
+        // PdfCraft patch (107): the procedure is on the stack only while it draws, so an early
+        // return above can't leave it there.
         let proc_id = program.obj_id();
-        if !crate::context::enter_glyph_proc(proc_id) {
-            return None;
-        }
+        crate::context::enter_glyph_proc(proc_id);
         if is_shape_glyph {
             let mut device = Type3ShapeGlyphDevice::new(device, paint.clone());
             interpret(iter, &resources, &mut context, &mut device);

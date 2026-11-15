@@ -50,31 +50,33 @@ std::thread_local! {
         const { RefCell::new(Vec::new()) };
 }
 
-/// PdfCraft patch (107): begins drawing the Type 3 glyph procedure `id`; `false` when that
-/// procedure is already being drawn. A procedure that shows its own glyph describes nothing
-/// finite, and each level showing it more than once multiplies the work: three times per level
-/// made a 2.6 KB file take 30 s to draw before the nested-paint budget stopped it. The skip is
-/// reported as `InterpreterWarning::ContentTruncated`. A glyph built from other glyphs of the
-/// same font still draws: only the procedure itself is refused.
-pub(crate) fn enter_glyph_proc(id: hayro_syntax::object::ObjectIdentifier) -> bool {
+/// PdfCraft patch (107): whether the Type 3 glyph procedure `id` is already being drawn, in
+/// which case it is not drawn inside itself. A procedure that shows its own glyph describes
+/// nothing finite, and each level showing it more than once multiplies the work: three times
+/// per level made a 2.6 KB file take 30 s to draw before the nested-paint budget stopped it.
+/// The skip is reported as `InterpreterWarning::ContentTruncated`. A glyph built from other
+/// glyphs of the same font still draws: only the procedure itself is refused. Asked before the
+/// glyph is charged to the page's nested-paint budget, so the refused drawings don't spend it.
+pub(crate) fn glyph_proc_drawing(id: hayro_syntax::object::ObjectIdentifier) -> bool {
     // The stack is never borrowed across a call; if the borrow failed, the glyph draws,
     // bounded by the nesting limits as before this patch.
-    let entered = GLYPH_PROCS_DRAWING.with(|procs| {
-        let Ok(mut procs) = procs.try_borrow_mut() else {
-            return None;
-        };
-        if procs.contains(&id) {
-            return Some(false);
-        }
-        procs.push(id);
-        Some(true)
-    });
-    if entered == Some(false) {
+    let drawing =
+        GLYPH_PROCS_DRAWING.with(|procs| procs.try_borrow().is_ok_and(|procs| procs.contains(&id)));
+    if drawing {
         warn!("Type 3 glyph procedure shows itself; the inner drawing is skipped");
         CONTENT_TRUNCATED.with(|truncated| truncated.set(true));
-        return false;
     }
-    true
+    drawing
+}
+
+/// PdfCraft patch (107): begins drawing the glyph procedure `id`, which `glyph_proc_drawing`
+/// found not already being drawn.
+pub(crate) fn enter_glyph_proc(id: hayro_syntax::object::ObjectIdentifier) {
+    GLYPH_PROCS_DRAWING.with(|procs| {
+        if let Ok(mut procs) = procs.try_borrow_mut() {
+            procs.push(id);
+        }
+    });
 }
 
 /// PdfCraft patch (107): ends drawing a glyph procedure begun with `enter_glyph_proc`.
