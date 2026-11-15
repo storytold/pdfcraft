@@ -423,6 +423,32 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             if count > 1 && !(f.kind == FieldKind::List && f.has(flags::MULTI_SELECT)) {
                 return invalid(format!("{:?} takes a single value", f.name));
             }
+            // Keystroke (on commit) and Validate run on a picked value as on typed text, and may
+            // change or refuse it (#7383). A multiple selection is a list, which those scripts
+            // don't take as one value, and an option number that isn't there is refused below.
+            let picked_value = match value {
+                FieldValue::ChoiceIndices(v) => match v.as_slice() {
+                    [] => Some(String::new()),
+                    [i] => f.options.get(*i).map(|(e, _)| e.clone()),
+                    _ => None,
+                },
+                FieldValue::Choice(v) if v.len() <= 1 => Some(v.first().cloned().unwrap_or_default()),
+                FieldValue::Text(t) => Some(t.clone()),
+                _ => None,
+            };
+            let accepted;
+            let value = match picked_value {
+                Some(current) if !resetting => {
+                    let (v, _) = scripting::accept(doc, f, &current, scripts)?;
+                    if v == current {
+                        value
+                    } else {
+                        accepted = FieldValue::Text(v);
+                        &accepted
+                    }
+                }
+                _ => value,
+            };
             // Each value as its export value and, when it is one of the options, that option's
             // position: two options can share an export value, and the position (`/I`) says
             // which one is picked (ISO 32000-2 Table 234).

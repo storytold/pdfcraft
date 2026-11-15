@@ -3890,6 +3890,32 @@ fn an_export_value_wins_over_an_earlier_options_display_text() {
     }
 }
 
+/// Picking a combo box option runs its Validate script with the option's export value, as typing
+/// in a text field does, whether the pick names the option or gives its position; a refusal keeps
+/// the value it had (#7383).
+#[test]
+fn picking_a_combo_option_runs_its_validate_script() {
+    struct Seen(Vec<(FieldEvent, String)>);
+    impl Scripts for Seen {
+        fn run(&mut self, event: FieldEvent, _script: &str, _target: &Field, value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
+            self.0.push((event, value.into()));
+            let rc = value != "no";
+            ScriptResult { rc, value: value.into(), value_set: false, changes: Vec::new(), message: (!rc).then(|| "refused".into()) }
+        }
+    }
+    let mut doc = one_page();
+    let kind = NewField::Combo { options: vec!["ca".into(), "fr".into(), "no".into()], editable: false };
+    add_field(&mut doc, 0, [10.0, 10.0, 100.0, 30.0], &kind, Some("country")).unwrap();
+    set_field_script(&mut doc, "country", "validate", Some("check(event.value);")).unwrap();
+    let mut seen = Seen(Vec::new());
+    set_value_with(&mut doc, "country", &FieldValue::Choice(vec!["fr".into()]), &mut seen).unwrap();
+    set_value_with(&mut doc, "country", &FieldValue::ChoiceIndices(vec![0]), &mut seen).unwrap();
+    assert_eq!(seen.0, [(FieldEvent::Validate, "fr".to_string()), (FieldEvent::Validate, "ca".to_string())]);
+    assert_eq!(field(&fields(&doc), "country").value, ["ca"]);
+    assert_eq!(set_value_with(&mut doc, "country", &FieldValue::Choice(vec!["no".into()]), &mut seen), Err(FormError::Invalid("refused".into())));
+    assert_eq!(field(&fields(&doc), "country").value, ["ca"], "a refused pick keeps the value it had");
+}
+
 #[test]
 fn validation_script_colour_is_used_when_the_field_redraws() {
     struct TestScripts;
