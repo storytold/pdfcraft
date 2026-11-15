@@ -456,3 +456,20 @@ fn a_fields_array_that_is_also_page_contents_is_judged_as_page_content() {
     let verdict = verdict(&reordered.open(), signed.open(), None);
     assert!(matches!(&verdict, Modification::Disallowed(_)), "{verdict:?}");
 }
+
+/// A `/Fields` array that a signed page also uses as its `/MediaBox` is the page's geometry: a
+/// later revision rewriting it resizes the page, which no signing permits (review of #4817).
+#[test]
+fn a_fields_array_that_is_also_a_page_box_is_not_judged_as_fields() {
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, "<< /Type /Page /Parent 2 0 R /MediaBox 8 0 R >>")),
+        (4, Row::Obj(0, 0, &page(""))),
+        (5, Row::Obj(0, 0, "<< /Fields 8 0 R /SigFlags 3 >>")),
+        (8, Row::Obj(0, 0, "[0 0 300 300]")),
+    ]);
+    let resized = signed.clone().revision(&[(8, Row::Obj(0, 0, "[0 0 30 30]"))]);
+    let verdict = verdict(&resized.open(), signed.open(), None);
+    assert!(matches!(&verdict, Modification::Disallowed(_)), "{verdict:?}");
+}

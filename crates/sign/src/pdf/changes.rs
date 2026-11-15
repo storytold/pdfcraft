@@ -318,10 +318,16 @@ impl ChangedObjectClassifier<'_> {
             Object::Array(_) if before.is_some() && self.kids_arrays.contains(&r.num) => Some(kind::PAGES),
             Object::Array(_) if self.is_signed_annotation_array(r, before) => self.annotation_array_change(new, before),
             // The signed AcroForm's /Fields as an array object of its own: a writer that signs may
-            // append its field there and leave the AcroForm itself as it was (#4817). Not an array
-            // a signed page also draws as its /Contents: reordering it reorders the page, which
-            // no signing permits, and it is judged as page content below.
-            Object::Array(_) if before.is_some() && self.old_fields == Some(r.num) && !self.old_content.contains(&r.num) => {
+            // append its field there and leave the AcroForm itself as it was (#4817). Only when
+            // nothing else refers to the array, before or after: one a page also uses (as its
+            // /Contents, a page box) or anything else names is judged as before, since rewriting
+            // it changes more than the form's listing.
+            Object::Array(_)
+                if before.is_some()
+                    && self.old_fields == Some(r.num)
+                    && listed_only_as_fields(self.old, r.num)
+                    && listed_only_as_fields(self.doc, r.num) =>
+            {
                 Some(fields_kind(self.doc, self.old, before, Some(new)))
             }
             Object::Dict(dict) => self.dictionary_change(r, dict, before),
@@ -641,6 +647,40 @@ fn references(doc: &Document) -> Option<HashSet<ObjRef>> {
         }
     }
     doc.trailer().iter().all(|(_, v)| walk(v, 0, &mut found)).then_some(found)
+}
+
+/// Whether object `num` is referred to exactly once in `doc`, which for the signed AcroForm's
+/// `/Fields` array is that entry itself: nothing else uses the array. `false` when anything else
+/// does, or past the walk's bounds, so the array is then judged by the stricter general rule.
+fn listed_only_as_fields(doc: &Document, num: u32) -> bool {
+    const MAX_VISITS: usize = 1 << 22;
+    const MAX_DEPTH: u8 = 64;
+    fn walk(o: &Object, num: u32, depth: u8, refs: &mut usize, visits: &mut usize) -> bool {
+        *visits += 1;
+        if depth > MAX_DEPTH || *visits > MAX_VISITS {
+            return false;
+        }
+        match o {
+            Object::Ref(r) => {
+                if r.num == num {
+                    *refs += 1;
+                }
+                true
+            }
+            Object::Dict(d) => d.iter().all(|(_, v)| walk(v, num, depth + 1, refs, visits)),
+            Object::Stream(s) => s.dict.iter().all(|(_, v)| walk(v, num, depth + 1, refs, visits)),
+            Object::Array(a) => a.iter().all(|v| walk(v, num, depth + 1, refs, visits)),
+            _ => true,
+        }
+    }
+    let (mut refs, mut visits) = (0, 0);
+    for n in doc.object_numbers() {
+        let Ok(o) = doc.try_get(n) else { return false };
+        if !walk(&o, num, 0, &mut refs, &mut visits) {
+            return false;
+        }
+    }
+    doc.trailer().iter().all(|(_, v)| walk(v, num, 0, &mut refs, &mut visits)) && refs == 1
 }
 
 fn refs(doc: &Document, o: Option<&Object>) -> Vec<ObjRef> {
