@@ -5050,12 +5050,7 @@ fn duplicating_pages_from_the_pages_panel_menu_preserves_targets_and_undo() {
         (vec![], "Page 1", vec!["Page 1", "Page 1", "Page 2", "Page 3"], vec!["Page 1", "Page 1", "Page 2", "Page 3"]),
         (vec![], "Page 2", vec!["Page 1", "Page 2", "Page 2", "Page 3"], vec!["Page 1", "Page 2", "Page 2", "Page 3"]),
         (vec![], "Page 3", vec!["Page 1", "Page 2", "Page 3", "Page 3"], vec!["Page 1", "Page 2", "Page 3", "Page 3"]),
-        (
-            vec![0, 2],
-            "Page 3",
-            vec!["Page 1", "Page 3", "Page 1", "Page 2", "Page 3"],
-            vec!["Page 1", "Page 2", "Page 3", "Page 1", "Page 3"],
-        ),
+        (vec![0, 2], "Page 3", vec!["Page 1", "Page 3", "Page 1", "Page 2", "Page 3"], vec!["Page 1", "Page 2", "Page 3", "Page 1", "Page 3"]),
         (vec![0, 2], "Page 2", vec!["Page 1", "Page 2", "Page 2", "Page 3"], vec!["Page 1", "Page 2", "Page 2", "Page 3"]),
     ] {
         for (label, expected) in [("Duplicate & insert before", &before), ("Duplicate & insert after", &after)] {
@@ -5104,18 +5099,66 @@ fn the_pages_menu_duplicates_before_and_after_the_selection() {
     }
 }
 
-#[test]
-fn the_pages_panel_duplicate_menu_respects_assembly_permissions() {
-    let mut h = harness(3, |app| {
+fn restricted_pages_panel(changes: pdfcraft_engine::Changes) -> Harness<'static, PdfCraftApp> {
+    harness(3, move |app| {
         app.apply_edit(pdfcraft_engine::Edit::Protect(pdfcraft_engine::Protection {
             permissions_password: Some("owner".into()),
-            changes: pdfcraft_engine::Changes::None,
+            changes,
+            // Allow text extraction for page-order assertions without granting modification.
+            copy: changes == pdfcraft_engine::Changes::Pages,
             ..Default::default()
         }));
         let bytes = app.session.save_bytes(app.views[0].id).unwrap();
+        app.close_tab(0);
         app.open_bytes("restricted.pdf", None, bytes.as_ref().clone()).unwrap();
         app.set_option("panel", "pages").unwrap();
-    });
+    })
+}
+
+#[test]
+fn the_pages_panel_duplicate_menu_allows_assembly_without_modification() {
+    let original = ["Page 1", "Page 2", "Page 3"];
+    for (label, expected) in [
+        ("Duplicate & insert before", ["Page 1", "Page 3", "Page 1", "Page 2", "Page 3"]),
+        ("Duplicate & insert after", ["Page 1", "Page 2", "Page 3", "Page 1", "Page 3"]),
+    ] {
+        let mut h = restricted_pages_panel(pdfcraft_engine::Changes::Pages);
+        let app = h.state();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        assert!(doc.allows_assembly());
+        assert!(!doc.allows_modification());
+
+        h.state_mut().views[0].select_pages(&[0, 2]);
+        h.run_steps(2);
+        let at = panel_thumb(&h, "Page 1");
+        right_click_at(&mut h, at);
+        let item = h.get_by_label(label);
+        assert!(!item.accesskit_node().is_disabled(), "{label}");
+        item.click();
+        h.run_steps(4);
+        assert_eq!(page_texts(h.state()), expected, "thumbnail: {label}");
+        assert!(h.state_mut().execute("edit.undo"));
+        h.run_steps(3);
+        assert_eq!(page_texts(h.state()), original);
+
+        h.state_mut().views[0].select_pages(&[0, 2]);
+        support::open_menu(&mut h, "Edit");
+        support::menu_row(&h, "Pages").hover();
+        h.run_steps(3);
+        let item = support::menu_row(&h, label);
+        assert!(!item.accesskit_node().is_disabled(), "{label}");
+        item.click();
+        h.run_steps(4);
+        assert_eq!(page_texts(h.state()), expected, "top menu: {label}");
+        assert!(h.state_mut().execute("edit.undo"));
+        h.run_steps(3);
+        assert_eq!(page_texts(h.state()), original);
+    }
+}
+
+#[test]
+fn the_pages_panel_duplicate_menu_respects_assembly_permissions() {
+    let mut h = restricted_pages_panel(pdfcraft_engine::Changes::None);
     let at = panel_thumb(&h, "Page 1");
     right_click_at(&mut h, at);
     for label in ["Duplicate & insert before", "Duplicate & insert after", "Cut", "Replace pages…", "Delete pages"] {
