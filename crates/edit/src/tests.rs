@@ -8018,32 +8018,40 @@ fn a_composite_fonts_source_word_spacing_does_not_reach_its_spaces() {
 }
 
 /// Review round 7 on #7343: a naturally justified styled paragraph — composite-font runs in
-/// several fonts, a source `Tw`, and rows that only reach their measure by stretched spaces —
-/// keeps its measure when a word is edited: the styled path stretches the row's two-byte spaces
-/// by the share of the measure left alone, never by the source's `Tw` (#7213).
+/// several fonts on the edited row, a source `Tw`, and rows that only reach their measure by
+/// stretched spaces — keeps its measure when a word is edited: the row is redrawn run by run in
+/// its own fonts, the following run keeps its position, and the stretch is never the source's
+/// `Tw` (#7213).
 #[test]
 fn a_justified_styled_paragraphs_composite_spaces_take_the_stretch_alone() {
     let hex = |s: &str| s.bytes().map(|b| format!("00{b:02x}")).collect::<String>();
-    // 5 pt glyphs, 5 pt spaces, 30 pt of justification after each space: rows 1 and 2 span
-    // 100..285, row 3 is short, so the paragraph reads as justified with its measure at 285.
+    // 5 pt glyphs, 5 pt spaces: the edited row is two composite runs in different fonts whose
+    // stretched space reaches the measure at 300, row 2 is one composite run at the same measure
+    // and row 3 is short, so the paragraph reads as justified with its measure at 300.
     let content = |tw: &str| {
         let t = |s: &str| format!("<{}>", hex(s));
         format!(
-            "BT {tw} Tw 15 TL 100 700 Td /F1 10 Tf 5 Tc {} Tj 0 Tc T* /F2 10 Tf 5 Tc {} Tj 0 Tc T* /F1 10 Tf {} Tj ET",
-            t("abcd efgh ijkl mnop"),
-            t("abcd efgh ijkl mnop"),
+            "BT {tw} Tw 15 TL 100 700 Td /F1 10 Tf 5 Tc {} Tj 0 Tc [-1000] TJ /F2 10 Tf 5 Tc {} Tj 0 Tc T* /F2 10 Tf 5 Tc {} Tj 0 Tc T* /F1 10 Tf {} Tj ET",
+            t("abcd "),
+            t("efgh ijkl mnop"),
+            t("abcd efgh ijkl mnopq"),
             t("abcd")
         )
     };
     let probe = |tw: f64| {
         let mut doc = composite_page(&content(&format!("{tw}")));
         let before = text::text_lines(&doc, 0).unwrap();
-        text::rewrite_block(&mut doc, 0, 0, Some("abcd efgh ijkl nopq\nabcd efgh ijkl mnop\nabcd"), &text::BlockStyle::default()).unwrap();
+        text::rewrite_block(&mut doc, 0, 0, Some("abcd efgh ijkl nopq\nabcd efgh ijkl mnopq\nabcd"), &text::BlockStyle::default()).unwrap();
         let doc = reopen(&doc);
+        let bytes = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        // The edited row is redrawn with its following run in the font it was drawn with, next to
+        // the run the edit redrew.
+        assert!(bytes.matches("/F2").count() >= 2, "the edited row keeps its following run: {bytes}");
         (before, text::text_lines(&doc, 0).unwrap())
     };
     let rows = |lines: &[text::TextLine]| {
-        let mut rights: Vec<(f64, [f64; 4])> = lines.iter().map(|l| (l.rect[1], l.rect)).collect();
+        let mut rights: Vec<(f64, [f64; 4])> =
+            lines.iter().map(|l| (l.rect[1], [l.rect[0], l.rect[1], l.rect[2].round(), l.rect[3]])).collect();
         rights.sort_by(|a, b| b.0.total_cmp(&a.0));
         rights
     };
@@ -8051,16 +8059,20 @@ fn a_justified_styled_paragraphs_composite_spaces_take_the_stretch_alone() {
     // The source paragraph is justified: its first two rows reach one right edge and the last
     // falls short of it.
     assert_eq!(rows(&before).iter().map(|(b, r)| (b.round(), (r[0].round(), r[2].round()))).collect::<Vec<_>>(),
-        vec![(698.0, (100.0, 290.0)), (683.0, (100.0, 290.0)), (668.0, (100.0, 120.0))], "the source rows: {before:?}");
-    // The edit keeps the paragraph's shape: the edited row is redrawn composite, stretches back
-    // to the measure, and the rows around it keep their own geometry.
-    let edited = rows(&after).iter().filter(|(b, _)| *b == 697.5).map(|(_, r)| *r).collect::<Vec<_>>();
-    assert_eq!(edited, vec![[100.0, 697.5, 290.0, 709.0]], "the edited row stretches back to its measure: {after:?}");
+        vec![(698.0, (100.0, 300.0)), (683.0, (100.0, 300.0)), (668.0, (100.0, 120.0))], "the source rows: {before:?}");
+    // The edit keeps the paragraph's shape: the edited row is redrawn stretched back to the
+    // measure, and the rows around it keep their own geometry.
+    let edited = rows(&after).iter().filter(|(b, _)| *b == 697.5).map(|(_, r)| [r[0], r[1], r[2].round(), r[3]]).collect::<Vec<_>>();
+    assert_eq!(edited, vec![[100.0, 697.5, 300.0, 709.0]], "the edited row stretches back to its measure: {after:?}");
     assert_eq!(rows(&after), rows(&before), "the rewrite preserves every row's geometry: {after:?}");
+    // The following run still starts where the edited run and one stretched space put it.
+    let following = after.iter().find(|l| l.rect[1] == 697.5).unwrap().ink[1][0];
+    assert!((following - 152.6316).abs() < 0.01, "the following run keeps its position: {following} {after:?}");
     // The source's `Tw` never joins the stretch: the same edit on a page without one lays the
-    // rows out identically.
+    // rows and the runs inside them out identically.
     let (plain_before, plain_after) = probe(0.0);
-    assert_eq!(rows(&plain_after), rows(&after), "the source's `Tw` adds nothing to the stretch: {plain_after:?}");
+    let inks = |lines: &[text::TextLine]| lines.iter().map(|l| (l.rect[1], l.ink.clone())).collect::<Vec<_>>();
+    assert_eq!(inks(&plain_after), inks(&after), "the source's `Tw` adds nothing to the stretch: {plain_after:?}");
     assert_eq!(rows(&plain_before), rows(&before), "the source rows read the same without the `Tw`");
 }
 
