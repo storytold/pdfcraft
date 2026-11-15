@@ -43,6 +43,18 @@ pub(crate) fn scripts_off_notice() -> String {
     tl!("This form's scripts are turned off because one ran too long. Reopen the document to run them again.").to_string()
 }
 
+/// The toast's shape of the first document-script error: the JavaScript console keeps the whole
+/// text, so the notice names the script and its error within one short line.
+fn short_doc_error(error: &str) -> String {
+    const MAX: usize = 200;
+    if error.chars().count() <= MAX {
+        return error.to_string();
+    }
+    let mut short: String = error.chars().take(MAX).collect();
+    short.push('…');
+    short
+}
+
 impl PdfCraftApp {
     /// Act on what scripts produced in document `id`: alerts are shown, console output goes to
     /// the console, print and page requests are carried out, links wait for the user's permission
@@ -60,6 +72,14 @@ impl PdfCraftApp {
             v.scripts_off_noted = true;
             v.notice_dismissed = false;
             self.notify(scripts_off_notice());
+        }
+        // A document-level script failed or was skipped (today, one over the 256 KiB limit):
+        // say so where the user looks, not only in the JavaScript console. Field-script
+        // errors stay console-only. The console keeps the whole text; the toast names the
+        // first error, shortened.
+        if let Some(first) = out.doc_errors.first() {
+            let detail = short_doc_error(first);
+            self.notify_fmt("A document script couldn't run: {detail}", &[("detail", &detail)]);
         }
         if out.is_empty() {
             return;
@@ -527,6 +547,50 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
 pub(crate) use crate::dialogs::preferences::{
     PREFERENCES_BUTTON_ROW, PREFERENCES_MIN_SCROLL, date_language_picker_name, preferences_body, preferences_buttons, preferences_header,
 };
+
+#[cfg(test)]
+mod doc_error_notice_tests {
+    use super::*;
+
+    /// A native app with a visible synthetic blank document and no renderer.
+    fn app() -> (PdfCraftApp, DocId) {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+        app.open_bytes("synthetic.pdf", None, bytes.to_vec()).unwrap();
+        let id = app.active_ids().unwrap().1;
+        assert!(app.toast.is_none());
+        (app, id)
+    }
+
+    /// A document-level script that failed or was skipped (today, one over the 256 KiB
+    /// limit) shows a visible notice naming the script and its error; an ordinary
+    /// field-script error stays a JavaScript console line. The console keeps the error
+    /// either way, and an empty frame leaves the notice alone.
+    #[test]
+    fn a_failed_document_script_is_noticed_but_a_field_error_is_not() {
+        let (mut app, id) = app();
+        app.handle_js(id, JsOutput { errors: vec!["TypeError: can't access property".into()], ..Default::default() });
+        assert!(app.toast.is_none(), "a field-script error is console-only");
+        assert!(app.js_console.log.iter().any(|l| l.contains("can't access property")), "{:?}", app.js_console.log);
+        let detail = "document script 1: the script is too long (270 KiB; the limit is 256 KiB)";
+        app.handle_js(id, JsOutput { errors: vec![detail.into()], doc_errors: vec![detail.into()], ..Default::default() });
+        let toast = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(toast.contains("document script"), "{toast}");
+        assert!(toast.contains("too long"), "{toast}");
+        assert!(app.js_console.log.iter().any(|l| l.contains(detail)), "{:?}", app.js_console.log);
+        app.handle_js(id, JsOutput::default());
+        assert_eq!(app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default(), toast, "an empty frame repeats nothing");
+    }
+
+    #[test]
+    fn a_valid_document_shows_nothing() {
+        let (mut app, id) = app();
+        app.handle_js(id, JsOutput::default());
+        assert!(app.toast.is_none());
+        assert!(app.js_console.log.is_empty());
+    }
+}
 
 #[cfg(test)]
 mod tests {
