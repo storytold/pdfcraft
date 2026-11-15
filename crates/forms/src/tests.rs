@@ -2684,9 +2684,15 @@ fn check_box_widgets_read_their_own_marks_from_the_file() {
     let styles = |doc: &Document| check_styles(doc, field(&fields(doc), "agree"));
     assert_eq!(field(&fields(&doc), "agree").kind, FieldKind::CheckBox);
     assert_eq!(styles(&doc), [CheckStyle::Check, CheckStyle::Star], "the second widget's /MK is indirect");
+    let ap = |doc: &Document, wi: usize| doc.get(field(&fields(doc), "agree").widgets[wi].obj).as_dict().unwrap().get(b"AP").cloned();
+    let second = ap(&doc, 1);
     let first = FieldProps { check_style: Some(CheckStyle::Cross), check_style_widget: Some(0), ..FieldProps::default() };
     set_props(&mut doc, "agree", &first).unwrap();
+    assert_eq!(ap(&doc, 1), second, "the second widget keeps the appearance it came with");
     assert_eq!(styles(&reopen(&doc)), [CheckStyle::Cross, CheckStyle::Star], "only the first widget changes");
+    let stray = FieldProps { check_style_widget: Some(5), tooltip: Some("Agree".into()), ..FieldProps::default() };
+    assert!(set_props(&mut doc, "agree", &stray).is_err(), "a widget without a style is a mistake, not ignored");
+    assert_eq!(field(&fields(&doc), "agree").tooltip, None);
 }
 
 #[test]

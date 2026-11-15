@@ -239,6 +239,9 @@ fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, prop
     if props.check_style.is_some() && !matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) {
         return invalid("only check boxes and radio buttons have a check style");
     }
+    if props.check_style.is_none() && props.check_style_widget.is_some() {
+        return invalid("check_style_widget changes one widget's check style; give check_style too");
+    }
     if props.check_style.is_some()
         && let Some(wi) = props.check_style_widget
         && wi >= f.widgets.len()
@@ -610,9 +613,13 @@ fn apply_late_widget_props(doc: &mut Document, f: &Field, props: &FieldProps, ne
             doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
         }
     }
-    // A label-only edit must not replace another widget's custom appearances.
+    // A label-only edit, or one widget's mark alone (#6682), must not replace another widget's
+    // custom appearances.
     let only = props.caption.as_ref().filter(|_| *props == (FieldProps { caption: props.caption.clone(), ..Default::default() })).map(|(wi, _)| *wi);
-    Ok(only)
+    let mark_only = props
+        .check_style_widget
+        .filter(|_| *props == (FieldProps { check_style: props.check_style, check_style_widget: props.check_style_widget, ..Default::default() }));
+    Ok(only.or(mark_only))
 }
 
 /// Name field `old` `new` in each field's Calculate script that reads it
