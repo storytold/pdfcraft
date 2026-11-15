@@ -17,8 +17,10 @@ pub(super) struct Selection {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Span {
-    /// Reading order, between two glyph indices.
-    Run { anchor: usize, head: usize },
+    /// Reading order, between two glyph indices. `head_x` is where a drag's pointer ended (page
+    /// view space), which may lie well past the head glyph, as in the empty end of a table row;
+    /// `None` when the head came from a click or a command.
+    Run { anchor: usize, head: usize, head_x: Option<f32> },
     /// Column select (#740): the glyphs inside a rectangle in page view space, drawn from the
     /// corner the drag started at (`rect[0..2]`) to the pointer (`rect[2..4]`).
     Column { rect: [f32; 4] },
@@ -26,7 +28,7 @@ pub(super) enum Span {
 
 impl Selection {
     pub(super) fn run(page: usize, anchor: usize, head: usize) -> Self {
-        Self { page, span: Span::Run { anchor, head }, strict: None, whole_page: false }
+        Self { page, span: Span::Run { anchor, head, head_x: None }, strict: None, whole_page: false }
     }
 
     pub(super) fn column(page: usize, rect: [f32; 4]) -> Self {
@@ -40,10 +42,10 @@ impl Selection {
     }
 
     /// The run from `anchor` to `head` (indices into the selection layer), as the pointer makes
-    /// or extends it: everything in the run, not a strict range ([`Self::strict`]), and no
-    /// longer Select All's.
-    pub(super) fn set_run(&mut self, anchor: usize, head: usize) {
-        self.span = Span::Run { anchor, head };
+    /// or extends it, the pointer's end at `head_x` ([`Span::Run`]): everything in the run, not a
+    /// strict range ([`Self::strict`]), and no longer Select All's.
+    pub(super) fn set_run(&mut self, anchor: usize, head: usize, head_x: Option<f32>) {
+        self.span = Span::Run { anchor, head, head_x };
         self.strict = None;
         self.whole_page = false;
     }
@@ -52,10 +54,21 @@ impl Selection {
         anchor.min(head)..anchor.max(head).saturating_add(1)
     }
 
+    /// What a drag over table rows selects by rows, not reading order's detour down each column.
+    /// Only a drag (also one after a double- or triple-click) or a ⇧-click has a pointer end; a
+    /// clicked word, line or page, Select all and a command's selection keep reading order, which
+    /// is the text they stand for.
+    fn by_rows(text: &PageText, anchor: usize, head: usize, head_x: Option<f32>) -> Option<Vec<usize>> {
+        head_x.and_then(|x| text.visual_between(anchor, head, Some(x)))
+    }
+
     /// One rectangle per selected piece of a line, in view space (highlighting, markup quads).
     pub(super) fn rects(&self, text: &PageText) -> Vec<[f32; 4]> {
         match self.span {
-            Span::Run { anchor, head } => text.line_rects(Self::range(anchor, head)),
+            Span::Run { anchor, head, head_x } => match Self::by_rows(text, anchor, head, head_x) {
+                Some(row) => text.glyph_rects(&row),
+                None => text.line_rects(Self::range(anchor, head)),
+            },
             Span::Column { rect } => text.glyph_rects(&text.glyphs_in(rect)),
         }
     }
@@ -63,7 +76,10 @@ impl Selection {
     /// The selected text, as Copy puts it on the clipboard.
     pub(super) fn text(&self, text: &PageText) -> String {
         match self.span {
-            Span::Run { anchor, head } => text.text_of(Self::range(anchor, head)),
+            Span::Run { anchor, head, head_x } => match Self::by_rows(text, anchor, head, head_x) {
+                Some(row) => text.column_text(&row),
+                None => text.text_of(Self::range(anchor, head)),
+            },
             Span::Column { rect } => text.column_text(&text.glyphs_in(rect)),
         }
     }
@@ -87,9 +103,13 @@ fn exact_selection(page: usize, layer: &RecoveredText, from: usize, to: usize) -
     Some(Selection { strict: Some((lo, hi)), ..Selection::run(page, anchor, head) })
 }
 
-/// The glyphs of `layer` a run from `anchor` to `head` holds, in copy order: all of them, or with
+/// The glyphs of `layer` a run from `anchor` to `head` holds, in copy order: a table's rows when a
+/// drag ending at `head_x` crosses them ([`Selection::by_rows`]), else all of the run, or with
 /// `strict` only the strict glyphs in that strict range and the recovered glyphs between.
-fn run_glyphs(layer: &RecoveredText, anchor: usize, head: usize, strict: Option<(usize, usize)>) -> Vec<usize> {
+fn run_glyphs(layer: &RecoveredText, anchor: usize, head: usize, head_x: Option<f32>, strict: Option<(usize, usize)>) -> Vec<usize> {
+    if let Some(rows) = Selection::by_rows(&layer.text, anchor, head, head_x) {
+        return rows;
+    }
     Selection::range(anchor, head)
         .take(layer.text.glyphs.len())
         .filter(|&i| match (layer.strict_index_of(i), strict) {
@@ -124,7 +144,7 @@ impl DocView {
     /// some strict glyphs ([`Selection::strict`]).
     pub(super) fn selection_rects(&self, s: &Selection, text: &PageText) -> Vec<[f32; 4]> {
         match (s.span, s.strict, self.recovered_layer(s.page)) {
-            (Span::Run { anchor, head }, Some(_), Some(layer)) => text.glyph_rects(&run_glyphs(layer, anchor, head, s.strict)),
+            (Span::Run { anchor, head, head_x }, Some(_), Some(layer)) => text.glyph_rects(&run_glyphs(layer, anchor, head, head_x, s.strict)),
             _ => s.rects(text),
         }
     }
@@ -202,7 +222,7 @@ impl DocView {
     /// them), and a run over the whole strict page (Select All) takes the whole layer, recovered
     /// glyphs at its ends included.
     pub(super) fn move_selection_onto(&mut self, page: usize, layer: &RecoveredText) {
-        let Some(Selection { page: p, span: Span::Run { anchor, head }, whole_page: whole, .. }) = self.selection else { return };
+        let Some(Selection { page: p, span: Span::Run { anchor, head, head_x }, whole_page: whole, .. }) = self.selection else { return };
         if p != page {
             return;
         }
@@ -210,6 +230,11 @@ impl DocView {
             Some(last) if whole => Some(Selection { whole_page: true, ..Selection::run(page, 0, last) }),
             _ => exact_selection(page, layer, anchor, head).or(Some(Selection::run(page, layer_index(layer, anchor), layer_index(layer, head)))),
         };
+        // A drag's pointer end is a place on the page, the same on either layer: rows it
+        // selected stay rows there.
+        if let Some(Selection { span: Span::Run { head_x: moved, .. }, whole_page: false, .. }) = self.selection.as_mut() {
+            *moved = head_x;
+        }
     }
 
     /// Selected text, if any (⌘C).
@@ -225,7 +250,11 @@ impl DocView {
             // A run on the recovered layer copies the strict text of exactly the strict glyphs in
             // it: laid out together with the recovered glyphs, the layer may order them otherwise
             // than the strict layer does, so they need not be one strict range.
-            (Some(layer), Span::Run { anchor, head }) => t.text_of_glyphs(&layer.strict_glyphs(&run_glyphs(layer, anchor, head, s.strict))),
+            (Some(layer), Span::Run { anchor, head, head_x }) => {
+                let glyphs = layer.strict_glyphs(&run_glyphs(layer, anchor, head, head_x, s.strict));
+                // A table's rows, like a column, are tab-separated cells.
+                if Selection::by_rows(&layer.text, anchor, head, head_x).is_some() { t.column_text(&glyphs) } else { t.text_of_glyphs(&glyphs) }
+            }
             // A column takes the strict glyphs inside its rectangle, whichever layer it was drawn on.
             _ => s.text(t),
         };
@@ -248,10 +277,13 @@ impl DocView {
         let Some(t) = self.texts.get(&s.page) else { return false };
         let nonempty = |i: usize| t.glyphs.get(i).is_some_and(|g| !g.text.is_empty());
         match (self.recovered_layer(s.page), s.span) {
-            (Some(layer), Span::Run { anchor, head }) => {
-                run_glyphs(layer, anchor, head, s.strict).into_iter().any(|i| layer.strict_index_of(i).is_some_and(nonempty))
+            (Some(layer), Span::Run { anchor, head, head_x }) => {
+                run_glyphs(layer, anchor, head, head_x, s.strict).into_iter().any(|i| layer.strict_index_of(i).is_some_and(nonempty))
             }
-            (None, Span::Run { anchor, head }) => Selection::range(anchor, head).take(t.glyphs.len()).any(nonempty),
+            (None, Span::Run { anchor, head, head_x }) => match Selection::by_rows(t, anchor, head, head_x) {
+                Some(rows) => rows.into_iter().any(nonempty),
+                None => Selection::range(anchor, head).take(t.glyphs.len()).any(nonempty),
+            },
             (_, Span::Column { rect }) => t.glyphs_in(rect).into_iter().any(nonempty),
         }
     }
@@ -261,9 +293,9 @@ impl DocView {
         self.selected_layer_glyphs().is_some_and(|(_, layer, glyphs)| layer.any_recovered(&glyphs))
     }
 
-    /// The selection as glyphs of its page's recovered layer: a run's in copy order, a column's
-    /// inside its rectangle. `None` where the page has no recovered layer and after Select All
-    /// of the document.
+    /// The selection as glyphs of its page's recovered layer: a run's in copy order (a table's
+    /// rows as [`PageText::visual_between`] takes them), a column's inside its rectangle. `None`
+    /// where the page has no recovered layer and after Select All of the document.
     pub(super) fn selected_layer_glyphs(&self) -> Option<(Selection, Arc<RecoveredText>, Vec<usize>)> {
         if self.all_text {
             return None;
@@ -271,25 +303,30 @@ impl DocView {
         let s = self.selection?;
         let layer = self.recovered_layer(s.page)?;
         let glyphs = match s.span {
-            Span::Run { anchor, head } => run_glyphs(layer, anchor, head, s.strict),
+            Span::Run { anchor, head, head_x } => run_glyphs(layer, anchor, head, head_x, s.strict),
             Span::Column { rect } => layer.text.glyphs_in(rect),
         };
         Some((s, layer.clone(), glyphs))
     }
 
     /// The selection as glyphs of its page's recovered layer (a run's in copy order), when it
-    /// holds a glyph only that layer reads, for Copy with formatting, and whether it is a run
-    /// (a column copies plain text only). `None` where the page has no recovered layer, after
-    /// Select All of the document, and when nothing recovered is selected.
+    /// holds a glyph only that layer reads, for Copy with formatting, and whether it is a run in
+    /// reading order (a column and a table's rows copy plain text only). `None` where the page
+    /// has no recovered layer, after Select All of the document, and when nothing recovered is
+    /// selected.
     pub(crate) fn selected_recovered(&self) -> Option<(usize, Arc<RecoveredText>, Vec<usize>, bool)> {
         let (s, layer, glyphs) = self.selected_layer_glyphs()?;
-        layer.any_recovered(&glyphs).then_some((s.page, layer, glyphs, matches!(s.span, Span::Run { .. })))
+        let in_order = match s.span {
+            Span::Run { anchor, head, head_x } => Selection::by_rows(&layer.text, anchor, head, head_x).is_none(),
+            Span::Column { .. } => false,
+        };
+        layer.any_recovered(&glyphs).then_some((s.page, layer, glyphs, in_order))
     }
 
     /// The selection's page, its strict text layer and the selected strict glyphs in copy order,
     /// for Copy's HTML (on a page with a recovered layer, the strict glyphs the selection holds
-    /// there). `None` after Select All of the document and for a column selection, which copy
-    /// plain text (a column's rows and tab-separated cells are not paragraphs).
+    /// there). `None` after Select All of the document and for a column selection or a table's
+    /// rows, which copy plain text (rows and tab-separated cells are not paragraphs).
     pub(crate) fn selected_glyphs(&self) -> Option<(usize, Arc<PageText>, Vec<usize>)> {
         if self.all_text {
             return None;
@@ -297,9 +334,14 @@ impl DocView {
         let s = self.selection?;
         let t = self.texts.get(&s.page)?;
         let glyphs = match (s.span, self.recovered_layer(s.page)) {
-            (Span::Run { anchor, head }, Some(layer)) => layer.strict_glyphs(&run_glyphs(layer, anchor, head, s.strict)),
-            (Span::Run { anchor, head }, None) => Selection::range(anchor, head).take(t.glyphs.len()).collect(),
-            (Span::Column { .. }, _) => return None,
+            (Span::Run { anchor, head, head_x }, Some(layer)) if Selection::by_rows(&layer.text, anchor, head, head_x).is_none() => {
+                layer.strict_glyphs(&run_glyphs(layer, anchor, head, None, s.strict))
+            }
+            (Span::Run { anchor, head, head_x }, None) if Selection::by_rows(t, anchor, head, head_x).is_none() => {
+                Selection::range(anchor, head).take(t.glyphs.len()).collect()
+            }
+            // A table's rows, like a column, are tab-separated cells.
+            (Span::Run { .. } | Span::Column { .. }, _) => return None,
         };
         Some((s.page, t.clone(), glyphs))
     }
@@ -336,12 +378,12 @@ impl DocView {
     }
 
     /// Moves the end of the run selected on `page` to glyph `head` of its selection layer (a
-    /// drag, Shift+click): `false` without a run there.
-    pub(super) fn extend_selection(&mut self, page: usize, head: usize) -> bool {
+    /// drag, Shift+click), the pointer at `head_x` ([`Span::Run`]): `false` without a run there.
+    pub(super) fn extend_selection(&mut self, page: usize, head: usize, head_x: Option<f32>) -> bool {
         match self.selection.as_mut() {
             Some(s) if s.page == page => match s.span {
                 Span::Run { anchor, .. } => {
-                    s.set_run(anchor, head);
+                    s.set_run(anchor, head, head_x);
                     true
                 }
                 Span::Column { .. } => false,

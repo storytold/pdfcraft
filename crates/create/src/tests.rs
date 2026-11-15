@@ -3119,3 +3119,41 @@ fn flate_wrapped_jpeg_rejects_corruption_and_spent_budget() {
         assert_eq!(out.skipped.len(), 1, "{:?}", out.skipped);
     }
 }
+
+#[test]
+fn shared_pcx_keeps_monochrome_policy_and_resolution() {
+    let mut bytes = pcx_header(2, 1, 1, 2, 2, 1);
+    bytes[16..22].copy_from_slice(&[100, 20, 30, 10, 200, 40]);
+    bytes[12..14].copy_from_slice(&144u16.to_le_bytes());
+    bytes[14..16].copy_from_slice(&288u16.to_le_bytes());
+    bytes.extend_from_slice(&[0x80, 0]);
+    let image = super::pcx("legacy.pcx", &bytes).unwrap();
+    assert_eq!(image.data, [255, 255, 255, 0, 0, 0]);
+    assert_eq!(image.dpi, (144.0, 288.0));
+    bytes[12..14].fill(0);
+    assert_eq!(super::pcx("legacy.pcx", &bytes).unwrap().dpi, (72.0, 72.0));
+}
+
+#[test]
+fn shared_pcx_rejects_zero_length_runs_and_oversized_planes() {
+    let mut zero = pcx_header(5, 8, 3, 1, 1, 1);
+    zero.extend_from_slice(&[0xC0, 9, 1, 2, 3]);
+    assert!(super::pcx("zero.pcx", &zero).is_err());
+    let oversized = pcx_header(5, 8, 3, u16::MAX, 1, u16::MAX);
+    assert!(super::pcx("large.pcx", &oversized).is_err());
+    let rgba = pcx_header(5, 8, 4, 1, 1, 1);
+    assert!(super::pcx("rgba.pcx", &rgba).is_err(), "do not silently expand accepted layouts");
+}
+
+#[test]
+fn shared_pcx_keeps_version_four_rgb_and_palette_pixels() {
+    let mut rgb = pcx_header(4, 8, 3, 1, 1, 1);
+    rgb.extend_from_slice(&[10, 20, 30]);
+    assert!(super::is_image(&rgb));
+    assert_eq!(super::pcx("windows.pcx", &rgb).unwrap().data, [10, 20, 30]);
+    let mut palette = pcx_header(4, 1, 2, 1, 1, 1);
+    palette[25..28].copy_from_slice(&[4, 5, 6]);
+    palette.extend_from_slice(&[0x80, 0x80]);
+    assert_eq!(super::pcx("windows.pcx", &palette).unwrap().data, [4, 5, 6]);
+    assert!(from_images(&[("windows.pcx".into(), rgb)]).is_ok());
+}

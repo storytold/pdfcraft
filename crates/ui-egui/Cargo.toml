@@ -115,3 +115,6 @@ toml = "1"
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 # Only synthetic attribute fixtures use xattr; product reads/writes use rustix.
 xattr = "1.6"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tempfile = "3.27"
