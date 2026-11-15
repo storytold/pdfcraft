@@ -299,12 +299,12 @@ pub fn render_into<'a>(
     }
 
     // PdfCraft patch (32): a skip left over from another page is not this page's.
-    crate::renderer::take_skipped_unbounded_curve();
+    renderer::take_skipped_unbounded_curve();
     interpret_page(page, &mut state, &mut device);
     // PdfCraft patch (31): what the rasterizer left out once its coverage was full (a page that
     // paints the same content millions of times over) is content left out, said as such.
     // PdfCraft patch (32): so is a curve too large to flatten.
-    if device.ctx.coverage_full() | crate::renderer::take_skipped_unbounded_curve() {
+    if device.ctx.coverage_full() | renderer::take_skipped_unbounded_curve() {
         (interpreter_settings.warning_sink)(hayro_interpret::InterpreterWarning::ContentTruncated);
     }
 
