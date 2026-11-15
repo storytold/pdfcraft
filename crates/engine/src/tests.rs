@@ -2472,6 +2472,63 @@ fn headings_in_two_columns_are_two_bookmarks() {
     assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Untitled→0[Left heading→1,Right heading→1]"]);
 }
 
+/// #7415: a heading's bookmark goes to the top of the heading as displayed. The same heading is
+/// shown at the same place on four pages turned 0, 90, 180 and 270 degrees; on a quarter turn the
+/// displayed top is a user-space x, so it is the destination's `left` and `top` stays unspecified.
+#[test]
+fn style_bookmarks_go_to_the_displayed_heading_top_on_turned_pages() {
+    // (rotation, media box, text matrix): each shows "Birch Survey" at 90 pt from the left and
+    // 130 pt (baseline) from the top of a 400 x 600 displayed page.
+    let pages = [
+        (0, "0 0 400 600", "1 0 0 1 90 470"),
+        (90, "0 0 600 400", "0 1 -1 0 130 90"),
+        (180, "0 0 400 600", "-1 0 0 -1 310 130"),
+        (270, "0 0 600 400", "0 -1 1 0 470 310"),
+    ];
+    let mut pdf =
+        pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R 9 0 R] /Count 4 >>");
+    for (i, (rotate, media, tm)) in pages.iter().enumerate() {
+        let content = format!("BT /F1 20 Tf {tm} Tm (Birch Survey) Tj ET");
+        pdf = pdf
+            .obj(format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [{media}] /Rotate {rotate} /Resources << /Font << /F1 11 0 R >> >> /Contents {} 0 R >>",
+                4 + 2 * i
+            ))
+            .stream("", &content);
+    }
+    let bytes = pdf.obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>").build();
+    let mut s = Session::new();
+    let id = s.open("turned.pdf", None, Arc::new(bytes), None).unwrap();
+    let style = s.get(id).unwrap().text_styles()[0].style.clone();
+    s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![style] }).unwrap();
+    let doc = s.get(id).unwrap();
+    let kids = &doc.info.outline[0].children;
+    assert_eq!(kids.len(), 4);
+    // The displayed top of the heading, from the upright page.
+    let top_of_heading = {
+        let cos = pdfcraft_cos::Document::open(doc.bytes.clone()).unwrap();
+        let line = &pdfcraft_edit::text_lines(&cos, 0).unwrap()[0];
+        600.0 - line.rect[1].max(line.rect[3]) as f32
+    };
+    assert!((110.0..115.0).contains(&top_of_heading), "{top_of_heading}");
+    for (i, kid) in kids.iter().enumerate() {
+        let page = &doc.info.pages[i];
+        assert_eq!(page.rotation, pages[i].0);
+        let [want_left, want_top] = page.xyz_for_view(None, Some(top_of_heading));
+        match kid.view {
+            pdfcraft_render::DestView::Xyz { left, top, zoom: None } => {
+                let near = |got: Option<f32>, want: Option<f32>| match (got, want) {
+                    (None, None) => true,
+                    (Some(g), Some(w)) => (g - w).abs() < 1.0,
+                    _ => false,
+                };
+                assert!(near(left, want_left) && near(top, want_top), "rotate {}: got {left:?} {top:?}, want {want_left:?} {want_top:?}", pages[i].0);
+            }
+            ref v => panic!("{v:?}"),
+        }
+    }
+}
+
 /// `style` at another size.
 fn pdfcraft_engine_style(style: &text_style_bookmarks::TextStyle, size: f64) -> text_style_bookmarks::TextStyle {
     text_style_bookmarks::TextStyle { size, ..style.clone() }

@@ -65,6 +65,23 @@ struct Line {
     bottom: f64,
     left: f64,
     right: f64,
+    /// The page's `/Rotate`, clockwise (0, 90, 180 or 270).
+    rotation: i64,
+}
+
+impl Line {
+    /// The `/XYZ` position `[left, top]` (user space) that puts the top of the heading as displayed
+    /// at the top of the window. The box edge that is displayed on top depends on the rotation:
+    /// the top edge, the left edge (90), the bottom edge (180) or the right edge (270). On a page
+    /// turned a quarter it is a user-space x, so it is `left`, and `top` stays unspecified.
+    fn anchor(&self) -> [Option<f64>; 2] {
+        match self.rotation {
+            90 => [Some(self.left), None],
+            180 => [None, Some(self.bottom)],
+            270 => [Some(self.right), None],
+            _ => [None, Some(self.top)],
+        }
+    }
 }
 
 /// `name` without a subset tag: six capital letters and a `+` (ISO 32000-2 §9.9.2).
@@ -81,6 +98,7 @@ fn lines(doc: &Document) -> Vec<Line> {
     let pages = pdfcraft_organize::page_count(doc).unwrap_or(0).min(MAX_PAGES);
     let mut out = Vec::new();
     for page in 0..pages {
+        let rotation = pdfcraft_organize::page_rotation(doc, page).unwrap_or(0);
         let Ok(found) = pdfcraft_edit::text_lines(doc, page) else { continue };
         let mut on_page: Vec<Line> = found
             .into_iter()
@@ -104,6 +122,7 @@ fn lines(doc: &Document) -> Vec<Line> {
                     bottom: y0.min(y1),
                     left: x0.min(x1),
                     right: x0.max(x1),
+                    rotation,
                 })
             })
             .collect();
@@ -157,7 +176,7 @@ pub fn styles(doc: &Document) -> Vec<TextStyleUse> {
 /// The bookmarks for the lines in `levels`' styles: a line in `levels[0]`'s style is a level-1
 /// bookmark, `levels[1]`'s a level-2 one under the level-1 bookmark before it, and so on. A
 /// heading set on several lines (one after another in the same style, close below each other)
-/// is one bookmark. Each goes to the top of its heading.
+/// is one bookmark. Each goes to the top of its heading as displayed, also on a turned page.
 pub fn headings(doc: &Document, levels: &[TextStyle]) -> Vec<OutlineEntry> {
     let mut entries: Vec<OutlineEntry> = Vec::new();
     // The heading the previous line belonged to: its level, and the top, bottom, left and right
@@ -191,13 +210,8 @@ pub fn headings(doc: &Document, levels: &[TextStyle]) -> Vec<OutlineEntry> {
             // The level counts from 1; the position in `levels` is at most its length, which a
             // caller keeps small (a few levels), so it fits a u8.
             let level = u8::try_from(level.saturating_add(1)).unwrap_or(u8::MAX);
-            entries.push(OutlineEntry {
-                level,
-                title: line.text.chars().take(MAX_TITLE_CHARS).collect(),
-                page: line.page,
-                element: None,
-                top: Some(line.top),
-            });
+            let [left, top] = line.anchor();
+            entries.push(OutlineEntry { level, title: line.text.chars().take(MAX_TITLE_CHARS).collect(), page: line.page, element: None, left, top });
         }
         open = Some((level, line.top, line.bottom, line.left, line.right));
     }
