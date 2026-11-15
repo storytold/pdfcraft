@@ -1935,8 +1935,8 @@ fn low_resolution_printing_prints_pictures_of_at_most_150_dpi() {
     let low = s.open("low.pdf", None, bytes.clone(), None).unwrap();
     let width = f64::from(s.get(low).unwrap().info.pages[0].width);
     let actual = print::Settings { pages: vec![0], layout: print::Layout::Size(print::SizeMode::Actual), ..Default::default() };
-    for raster in [None, Some(print::Raster { dpi: 600.0, grayscale: false })] {
-        let printed = s.print_pdf(low, &print::Settings { raster, ..actual.clone() }).unwrap();
+    for raster in [None, Some(print::Raster { dpi: 600.0, grayscale: false, colour: None })] {
+        let printed = s.print_pdf(low, &print::Settings { raster: raster.clone(), ..actual.clone() }).unwrap();
         let mut s2 = Session::new();
         let id2 = s2.open("print.pdf", None, Arc::new(printed.clone()), None).unwrap();
         assert!(page_texts(&s2, id2).iter().all(|t| t.trim().is_empty()), "{raster:?}: no text is left");
@@ -3955,8 +3955,8 @@ fn printing_applies_the_print_auto_state() {
     }
     // Hidden in the panel, View entry (no Print recommendation) leaves the preview too.
     assert!(printed_blue[1] * 4 < printed_blue[0] * 3, "the preview follows the panel: {printed_blue:?} blue");
-    for raster in [None, Some(print::Raster { dpi: 72.0, grayscale: false })] {
-        let bytes = Arc::new(s.print_pdf(id, &print::Settings { pages: vec![0], raster, ..Default::default() }).unwrap());
+    for raster in [None, Some(print::Raster { dpi: 72.0, grayscale: false, colour: None })] {
+        let bytes = Arc::new(s.print_pdf(id, &print::Settings { pages: vec![0], raster: raster.clone(), ..Default::default() }).unwrap());
         let mut out = Session::new();
         let printed = out.open("print.pdf", None, bytes.clone(), None).unwrap();
         let (red, green, blue) = colours(&render_page(&out, printed));
@@ -4737,13 +4737,8 @@ fn flattening_fill_and_sign_keeps_other_comments_fields_and_undoes() {
     s.apply(id, fill_item(Shape::Signature { strokes: vec![vec![[10.0, 40.0], [40.0, 70.0], [70.0, 40.0]]] }, "")).unwrap();
     s.apply(id, fill_item(Shape::TypedSignature { rect: [90.0, 40.0, 150.0, 70.0], contours: vec![vec![[0.1, 0.2], [0.5, 0.9], [0.9, 0.2]]] }, ""))
         .unwrap();
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 8, 8);
-        enc.set_color(png::ColorType::Rgba);
-        let pixel = [40u8, 60, 80, 200];
-        enc.write_header().unwrap().write_image_data(&pixel.repeat(64)).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(8, 8, craft_image_codecs::ChannelLayout::Rgba, [40u8, 60, 80, 200].repeat(64)).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let image = SignatureImage::from_bytes(&png).unwrap();
     let info = s.get(id).unwrap().info.pages[0].clone();
     s.apply(id, image.edit(0, &info, [20.0, 120.0], false, "Ada").unwrap()).unwrap();
@@ -4843,10 +4838,11 @@ fn pages_export_as_png_jpeg_and_tiff() {
     let tif = ex.image(0, 144.0, ImageFormat::Tiff).unwrap();
     let decoded = image::load_from_memory_with_format(&tif, image::ImageFormat::Tiff).unwrap();
     assert_eq!((decoded.width(), decoded.height()), (400, 600));
-    let mut tags = tiff::decoder::Decoder::new(std::io::Cursor::new(&tif)).unwrap();
-    let compression = tags.get_tag_u32(tiff::tags::Tag::Compression).unwrap();
-    let predictor = tags.get_tag_u32(tiff::tags::Tag::Predictor).unwrap();
-    assert_eq!((compression, predictor), (5, 1), "LZW, without a predictor");
+    let tiff = craft_tiff::Tiff::parse(&tif).unwrap();
+    let ifd = &tiff.ifds[0];
+    let compression = ifd.u32(craft_tiff::tags::COMPRESSION).unwrap();
+    let predictor = ifd.u32(craft_tiff::tags::PREDICTOR).unwrap();
+    assert_eq!((compression, predictor), (5, 2), "LZW, with horizontal predictor");
 }
 
 /// Export ▸ Image draws several pages at once: each file is the one exporting that page alone
@@ -4915,14 +4911,11 @@ fn exporting_pages_at_once_stops_at_the_first_error() {
 
 /// A TIFF's resolution unit (2 = inch) and its horizontal and vertical resolution.
 fn tiff_resolution(bytes: &[u8]) -> (u32, f64, f64) {
-    use tiff::{decoder::ifd::Value, tags::Tag};
-    let mut d = tiff::decoder::Decoder::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut res = |tag| match d.get_tag(tag).unwrap() {
-        Value::Rational(n, d) => f64::from(n) / f64::from(d),
-        v => panic!("{tag:?} is {v:?}"),
-    };
-    let (x, y) = (res(Tag::XResolution), res(Tag::YResolution));
-    (d.get_tag_u32(Tag::ResolutionUnit).unwrap(), x, y)
+    let tiff = craft_tiff::Tiff::parse(bytes).unwrap();
+    let ifd = &tiff.ifds[0];
+    let x = ifd.f64(craft_tiff::tags::X_RESOLUTION).unwrap();
+    let y = ifd.f64(craft_tiff::tags::Y_RESOLUTION).unwrap();
+    (ifd.u32(craft_tiff::tags::RESOLUTION_UNIT).unwrap(), x, y)
 }
 
 /// An exported TIFF or JPEG says the resolution it was drawn at, so other programs show and print it
@@ -4939,7 +4932,7 @@ fn exported_pages_record_the_resolution_they_were_drawn_at() {
     // pHYs counts pixels per metre: 72 dpi would read back as 72.009, and a page made from the PNG
     // (doc_create from images) would come out 0.01% small.
     let png = ex.image(0, 72.0, ImageFormat::Png).unwrap();
-    assert!(png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap().info().pixel_dims.is_none(), "a PNG states no resolution");
+    assert!(craft_image_codecs::decode(&png).unwrap().meta.dpi.is_none(), "a PNG states no resolution");
 
     // A page too large for the renderer at the asked resolution says the one it was drawn at.
     let mut s = Session::new().with_clock(|| 1_700_000_000);
@@ -4959,13 +4952,8 @@ fn added_text_and_images_render_and_stay_editable() {
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Add text"));
     assert!(page_texts(&s, id)[0].contains("Added note"), "the renderer's extractor sees page content");
     // A PNG, centred at its natural size.
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 20, 10);
-        enc.set_color(png::ColorType::Rgb);
-        let mut w = enc.write_header().unwrap();
-        w.write_image_data(&[0u8; 600]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(20, 10, craft_image_codecs::ChannelLayout::Rgb, vec![0u8; 600]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     s.apply(id, Edit::AddImage { page: 0, rect: None, name: "dot.png".into(), bytes: Arc::new(png) }).unwrap();
     let d = s.get(id).unwrap();
     assert_eq!(d.added().len(), 2);
@@ -5007,13 +4995,9 @@ fn pasted_added_content_keeps_its_style_and_picture() {
     assert_eq!(doc.added()[1].content, moved, "every part of the style, in the new box");
 
     // An image, turned, flipped and cropped.
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 20, 10);
-        enc.set_color(png::ColorType::Rgb);
-        let px: Vec<u8> = (0..200).flat_map(|i| [(i % 256) as u8, 40, 200]).collect();
-        enc.write_header().unwrap().write_image_data(&px).unwrap();
-    }
+    let px: Vec<u8> = (0..200).flat_map(|i| [(i % 256) as u8, 40, 200]).collect();
+    let img = craft_image_codecs::Image::from_u8(20, 10, craft_image_codecs::ChannelLayout::Rgb, px).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 150.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
     let AddedContent::Image(mut img) = s.get(id).unwrap().added()[1].content.clone() else { panic!("the image is the page's second item") };
     (img.rotation, img.flip_h, img.crop) = (1, true, [0.1, 0.0, 0.2, 0.05]);
@@ -5043,12 +5027,8 @@ fn pasted_added_content_keeps_its_style_and_picture() {
     assert_eq!(again.image, first, "one picture object for both pastes");
     // The object holds another picture of the same size (another document's numbering, an undone
     // add): the file is embedded instead of drawing the wrong picture.
-    let mut other_png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut other_png, 20, 10);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[7u8; 600]).unwrap();
-    }
+    let other_img = craft_image_codecs::Image::from_u8(20, 10, craft_image_codecs::ChannelLayout::Rgb, vec![7u8; 600]).unwrap();
+    let other_png = craft_image_codecs::encode(&other_img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let other_file = Some(("other.png".to_string(), Arc::new(other_png)));
     s.apply(id, Edit::PasteContent { page: 0, content: AddedContent::Image(pasted.clone()), file: other_file }).unwrap();
     let AddedContent::Image(fresh) = s.get(id).unwrap().added()[3].content.clone() else { panic!("an image was pasted") };
@@ -5127,12 +5107,8 @@ fn added_images_rotate_flip_and_crop_as_drawn() {
             px.extend_from_slice(if x < 10 { &[255, 0, 0] } else { &[0, 0, 255] });
         }
     }
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 20, 10);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&px).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(20, 10, craft_image_codecs::ChannelLayout::Rgb, px).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     // A 100×100 box at (50, 100) on the 200×300 page.
     s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "rb.png".into(), bytes: Arc::new(png) }).unwrap();
@@ -5860,7 +5836,7 @@ fn assert_signature_artwork_survives_trust(mut cos: pdfcraft_cos::Document, expe
     }
     let mut settings = print::Settings { pages: vec![0], paper: (200.0, 200.0), ..Default::default() };
     let original_vector_print = printed_pixels(session.print_pdf(id, &settings).unwrap());
-    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false });
+    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false, colour: None });
     let original_raster_print = printed_pixels(session.print_pdf(id, &settings).unwrap());
     session.set_trusted_certificates(vec![anchor.clone()]);
     let doc = session.get(id).unwrap();
@@ -6225,7 +6201,7 @@ fn named_layer_states_reach_exports_and_both_print_modes() {
     assert!(text.contains("Signature valid") && !text.contains("Not Verified"), "{text:?}");
     let mut settings = print::Settings { pages: vec![0], paper: (400.0, 300.0), ..Default::default() };
     let (_, _, vector) = printed_pixels(s.print_pdf(id, &settings).unwrap());
-    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false });
+    settings.raster = Some(print::Raster { dpi: 72.0, grayscale: false, colour: None });
     let (_, _, raster) = printed_pixels(s.print_pdf(id, &settings).unwrap());
     for (mode, pixels) in [("vector", &vector), ("raster", &raster)] {
         assert!(pixels_near(pixels, VALID_GREEN) > 500, "{mode} print draws the valid state");
@@ -11340,7 +11316,7 @@ fn printing_as_image_sends_pictures_instead_of_pages() {
     let settings = print::Settings {
         pages: vec![1, 2, 1],
         layout: print::Layout::Size(print::SizeMode::Actual),
-        raster: Some(print::Raster { dpi: 100.0, grayscale: false }),
+        raster: Some(print::Raster { dpi: 100.0, grayscale: false, colour: None }),
         ..Default::default()
     };
     let bytes = s.print_pdf(id, &settings).unwrap();
@@ -11362,13 +11338,52 @@ fn printing_as_image_sends_pictures_instead_of_pages() {
     assert!((w as f64 - page_size.0 * 100.0 / 72.0).abs() <= 1.0, "{w} px for {} pt", page_size.0);
     assert!(images.iter().all(|d| d.name(b"ColorSpace") == Some(b"DeviceRGB")), "{images:?}");
     // Grayscale renders the pictures grey (the printer is not merely asked for monochrome).
-    let grey = s.print_pdf(id, &print::Settings { raster: Some(print::Raster { dpi: 72.0, grayscale: true }), ..settings.clone() }).unwrap();
+    let grey =
+        s.print_pdf(id, &print::Settings { raster: Some(print::Raster { dpi: 72.0, grayscale: true, colour: None }), ..settings.clone() }).unwrap();
     let mut s3 = Session::new();
     let id3 = s3.open("grey.pdf", None, Arc::new(grey), None).unwrap();
     let mut ex = crate::export::Exporter::new(s3.get(id3).unwrap());
     let png = ex.png(0, 36.0).unwrap();
     let img = image::load_from_memory(&png).unwrap().to_rgba8();
     assert!(img.pixels().all(|p| p[0] == p[1] && p[1] == p[2]), "every pixel grey");
+}
+
+/// #6269: with app-managed colour the printed pictures carry the printer profile's values, not
+/// sRGB's: a pure green page converted into a wider-gamut RGB profile gains red; without it the
+/// pictures stay sRGB.
+#[test]
+fn app_managed_colour_converts_the_printed_pictures() {
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>")
+        .stream("", "0 1 0 rg 0 0 100 100 re f")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("green.pdf", None, Arc::new(pdf), None).unwrap();
+    let wide = craft_cms::Builtin::AdobeRgbCompat.profile().to_bytes();
+    let colour = print::colour::ManagedColour {
+        profile: print::colour::PrinterProfile::from_bytes(&wide).unwrap(),
+        intent: print::colour::Intent::RelativeColorimetric,
+        black_point: true,
+    };
+    let middle = |colour: Option<print::colour::ManagedColour>| {
+        let settings = print::Settings {
+            pages: vec![0],
+            layout: print::Layout::Size(print::SizeMode::Actual),
+            raster: Some(print::Raster { dpi: 72.0, grayscale: false, colour }),
+            ..Default::default()
+        };
+        let mut out = Session::new();
+        let printed = out.open("print.pdf", None, Arc::new(s.print_pdf(id, &settings).unwrap()), None).unwrap();
+        let png = crate::export::Exporter::new(out.get(printed).unwrap()).png(0, 72.0).unwrap();
+        let img = image::load_from_memory(&png).unwrap().to_rgba8();
+        img.get_pixel(img.width() / 2, img.height() / 2).0
+    };
+    let srgb = middle(None);
+    assert!(srgb[0] < 10 && srgb[1] > 245, "sRGB green: {srgb:?}");
+    let converted = middle(Some(colour));
+    assert!(converted[0] > 100 && converted[1] > 240, "the profile's values for sRGB green: {converted:?}");
 }
 
 /// A one-page PDF: a JPEG logo (DCTDecode) at the top and a big text title below it.
@@ -12672,12 +12687,8 @@ fn a_page_truncated_for_forms_and_pictures_is_listed_once() {
 /// Moving an added image, then rotating it, must keep the moved position.
 #[test]
 fn added_image_move_then_rotate_keeps_position() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
     let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
@@ -12693,12 +12704,8 @@ fn added_image_move_then_rotate_keeps_position() {
 /// Transforming an added image, then rotating it, must keep the moved position.
 #[test]
 fn added_image_transform_then_rotate_keeps_position() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
     let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
@@ -12715,12 +12722,8 @@ fn added_image_transform_then_rotate_keeps_position() {
 /// Moving an added image, then rotating by degrees, must keep the moved position.
 #[test]
 fn added_image_move_then_rotate_by_keeps_position() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
     let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
@@ -12737,12 +12740,8 @@ fn added_image_move_then_rotate_by_keeps_position() {
 /// page image (dropping the PCAdded marker), so no empty shell remains in list_added.
 #[test]
 fn added_image_arrange_converts_to_ordinary_image() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p1.png".into(), bytes: Arc::new(png.clone()) }).unwrap();
     s.apply(id, Edit::AddImage { page: 0, rect: Some([100.0, 100.0, 200.0, 200.0]), name: "p2.png".into(), bytes: Arc::new(png) }).unwrap();
@@ -12755,12 +12754,8 @@ fn added_image_arrange_converts_to_ordinary_image() {
 
 #[test]
 fn added_image_crop_then_move_keeps_crop() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 100.0, 100.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
     s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop([30.0, 30.0, 70.0, 70.0]) }).unwrap();
@@ -12771,12 +12766,8 @@ fn added_image_crop_then_move_keeps_crop() {
 
 #[test]
 fn added_image_move_and_transform_on_rotated_and_user_unit_pages() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let png_bytes = Arc::new(png);
 
     let cases = [(90, 1.0), (180, 1.0), (270, 1.0), (0, 2.0), (90, 2.0)];
@@ -12849,14 +12840,9 @@ fn added_image_move_and_transform_on_rotated_and_user_unit_pages() {
 #[test]
 fn replace_on_added_image_replaces_xobject_and_undo_restores() {
     let make_png = |rgb: [u8; 3]| {
-        let mut png = Vec::new();
-        {
-            let mut enc = png::Encoder::new(&mut png, 2, 2);
-            enc.set_color(png::ColorType::Rgb);
-            let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]];
-            enc.write_header().unwrap().write_image_data(&data).unwrap();
-        }
-        Arc::new(png)
+        let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]].to_vec();
+        let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, data).unwrap();
+        Arc::new(craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap())
     };
     let png1 = make_png([255, 0, 0]);
     let png2 = make_png([0, 0, 255]);
@@ -12891,14 +12877,9 @@ fn replace_on_added_image_replaces_xobject_and_undo_restores() {
 #[test]
 fn mirroring_transform_on_added_image_flips_and_non_finite_is_refused() {
     let make_png = |rgb: [u8; 3]| {
-        let mut png = Vec::new();
-        {
-            let mut enc = png::Encoder::new(&mut png, 2, 2);
-            enc.set_color(png::ColorType::Rgb);
-            let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]];
-            enc.write_header().unwrap().write_image_data(&data).unwrap();
-        }
-        Arc::new(png)
+        let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]].to_vec();
+        let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, data).unwrap();
+        Arc::new(craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap())
     };
     let png1 = make_png([255, 0, 0]);
 
@@ -12951,14 +12932,9 @@ fn mirroring_transform_on_added_image_flips_and_non_finite_is_refused() {
 #[test]
 fn transform_on_added_image_folds_quarter_turns_and_promotes_non_axis_aligned() {
     let make_png = |rgb: [u8; 3]| {
-        let mut png = Vec::new();
-        {
-            let mut enc = png::Encoder::new(&mut png, 2, 2);
-            enc.set_color(png::ColorType::Rgb);
-            let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]];
-            enc.write_header().unwrap().write_image_data(&data).unwrap();
-        }
-        Arc::new(png)
+        let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]].to_vec();
+        let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, data).unwrap();
+        Arc::new(craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap())
     };
     let png1 = make_png([0, 128, 255]);
 
@@ -13024,13 +13000,8 @@ fn test_added_image_transform_reflections_with_rotation() {
                 px.extend_from_slice(&color);
             }
         }
-        let mut png = Vec::new();
-        {
-            let mut enc = png::Encoder::new(&mut png, 20, 20);
-            enc.set_color(png::ColorType::Rgb);
-            enc.write_header().unwrap().write_image_data(&px).unwrap();
-        }
-        Arc::new(png)
+        let img = craft_image_codecs::Image::from_u8(20, 20, craft_image_codecs::ChannelLayout::Rgb, px).unwrap();
+        Arc::new(craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap())
     };
 
     let colour_at = |s: &Session, id: DocId, x: u32, y_from_top: u32| -> [u8; 3] {
@@ -13181,7 +13152,7 @@ fn buttons_and_combs_left_to_the_viewer_are_displayed() {
     }
     assert_eq!(count(&shown, (95, 84, 97, 106), &blue), 0, "no line inside a cell");
     // Print as Image: the page as a picture, at 72 dpi so it is the size of the page here.
-    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false };
+    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false, colour: None };
     let pictures = crate::print_raster::rasterize(s.get(id).unwrap(), &[0], &raster, pdfcraft_print::Content::Document).unwrap();
     let printed = render(Arc::new(pictures));
     assert!(count(&printed, (24, 154, 56, 186), &red) > 60, "the check box prints");
@@ -13351,7 +13322,7 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
     let mut s = Session::new();
     let id = s.open("form.pdf", None, Arc::new(pdf(true)), None).unwrap();
     let shown = render(s.get(id).unwrap().display.clone());
-    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false };
+    let raster = pdfcraft_print::Raster { dpi: 72.0, grayscale: false, colour: None };
     let pictures = crate::print_raster::rasterize(s.get(id).unwrap(), &[0], &raster, pdfcraft_print::Content::Document).unwrap();
     let printed = render(Arc::new(pictures));
     for (page, how) in [(&shown, "shown"), (&printed, "printed")] {
@@ -13786,10 +13757,8 @@ fn original_image_edit_does_not_match_an_added_sibling_of_the_same_xobject() {
 
 #[test]
 fn image_transform_engine_refuses_singular_matrices_without_mutation() {
-    let mut png = Vec::new();
-    let mut enc = png::Encoder::new(&mut png, 1, 1);
-    enc.set_color(png::ColorType::Rgb);
-    enc.write_header().unwrap().write_image_data(&[100, 150, 200]).unwrap();
+    let img = craft_image_codecs::Image::from_u8(1, 1, craft_image_codecs::ChannelLayout::Rgb, vec![100, 150, 200]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let mut s = Session::new();
     let bytes = s.create_from_images(&[("pixel.png".into(), png)]).unwrap();
     let id = s.open("image.pdf", None, bytes, None).unwrap();
@@ -14142,12 +14111,8 @@ fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
 
 #[test]
 fn resizing_an_added_image_back_inside_the_page_keeps_its_identity() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([-30.0, -20.0, 70.0, 80.0]), name: "edge.png".into(), bytes: Arc::new(png) }).unwrap();
     let original = s.get(id).unwrap().added()[0].obj;
@@ -14209,7 +14174,8 @@ fn reset_order_session(reset: &str) -> (Session, DocId) {
     })
     .unwrap();
     let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
-    let mut s = Session::new();
+    // Callers compare two saves byte for byte, and each save stamps `/ModDate`: pin the clock.
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
     s.set_javascript(false);
     let id = s.open("reset-order.pdf", None, bytes, None).unwrap();
     s.apply(
@@ -14378,6 +14344,31 @@ fn a_budget_refusal_discards_pdf_edits_and_callback_globals() {
     assert!(matches!(s.apply(id, edit), Err(EditError::Invalid(_))));
     assert_eq!(s.save_bytes(id).unwrap(), before);
     assert_eq!(s.run_javascript(id, "typeof fromRejectedEdit;", None).unwrap().result.as_deref(), Some("undefined"));
+}
+
+/// A batch whose field scripts ran and that a redaction check then refuses leaves the script realm
+/// as it was, like the document: here the check that a deleted marked page can't be tied to the
+/// pages the batch added.
+#[test]
+fn a_batch_a_redaction_check_refuses_discards_callback_globals() {
+    let (mut s, id) = reset_order_session("");
+    let script = Some("var fromRefusedBatch = 1;".to_string());
+    s.apply(id, Edit::SetFieldScript { name: "qty".into(), event: "keystroke".into(), script }).unwrap();
+    let shape = Shape::Redact { quads: vec![pdfcraft_annot::rect_quad([10.0, 10.0, 60.0, 30.0])], overlay: String::new(), look: Default::default() };
+    let mark = NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "Ada".into() };
+    s.apply(id, Edit::AddAnnotation(mark)).unwrap();
+    s.set_javascript(true);
+    let before = s.save_bytes(id).unwrap();
+    let edits = vec![
+        Edit::SetFieldValue { name: "qty".into(), value: pdfcraft_forms::FieldValue::Text("10".into()) },
+        Edit::ApplyRedactions { pages: None },
+        Edit::InsertBlankPage { at: 1, width: 612.0, height: 792.0 },
+        Edit::DeletePages { pages: vec![0] },
+    ];
+    let refused = s.apply(id, Edit::Batch { label: "x".into(), edits });
+    assert!(matches!(&refused, Err(EditError::Invalid(m)) if m.contains("can't be verified")), "{refused:?}");
+    assert_eq!(s.save_bytes(id).unwrap(), before);
+    assert_eq!(s.run_javascript(id, "typeof fromRefusedBatch;", None).unwrap().result.as_deref(), Some("undefined"));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
