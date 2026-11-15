@@ -81,6 +81,8 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
     let old_form = old.root().and_then(|c| old.get(c).as_dict().and_then(|c| c.get(b"AcroForm").and_then(Object::as_ref))).map(|r| r.num);
     // Its /Fields, when that is an array object of its own (#4817).
     let old_fields = acroform(&old).and_then(|f| f.get(b"Fields").and_then(Object::as_ref)).map(|r| r.num);
+    // And the later revision's: the array must still be the form's /Fields, not moved elsewhere.
+    let new_fields = acroform(doc).and_then(|f| f.get(b"Fields").and_then(Object::as_ref)).map(|r| r.num);
     let signed_role = |num: u32| old_content.contains(&num) || signed_pages.contains(&num) || signed_resources.contains_key(&num);
     let (mut allowed, mut disallowed): (Vec<&'static str>, Vec<&'static str>) = (Vec::new(), Vec::new());
     if annots_unbounded {
@@ -135,6 +137,7 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         kids_arrays: &kids_arrays,
         old_form,
         old_fields,
+        new_fields,
         placed_annots: &placed_annots,
         annot_budget: &annot_budget,
         signed_resources: &signed_resources,
@@ -302,6 +305,7 @@ struct ChangedObjectClassifier<'a> {
     old_info: Option<u32>,
     old_form: Option<u32>,
     old_fields: Option<u32>,
+    new_fields: Option<u32>,
     dss: &'a HashSet<u32>,
 }
 
@@ -325,6 +329,7 @@ impl ChangedObjectClassifier<'_> {
             Object::Array(_)
                 if before.is_some()
                     && self.old_fields == Some(r.num)
+                    && self.new_fields == Some(r.num)
                     && listed_only_as_fields(self.old, r.num)
                     && listed_only_as_fields(self.doc, r.num) =>
             {
@@ -665,7 +670,8 @@ fn listed_only_as_fields(doc: &Document, num: u32) -> bool {
                 if r.num == num {
                     *refs += 1;
                 }
-                true
+                // A second reference already settles it.
+                *refs <= 1
             }
             Object::Dict(d) => d.iter().all(|(_, v)| walk(v, num, depth + 1, refs, visits)),
             Object::Stream(s) => s.dict.iter().all(|(_, v)| walk(v, num, depth + 1, refs, visits)),
@@ -1031,6 +1037,7 @@ mod tests {
             old_info: None,
             old_form: None,
             old_fields: None,
+            new_fields: None,
             dss: &none,
         };
         classifier.page_change_kind(d, before)

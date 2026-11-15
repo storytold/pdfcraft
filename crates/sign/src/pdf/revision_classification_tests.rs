@@ -473,3 +473,28 @@ fn a_fields_array_that_is_also_a_page_box_is_not_judged_as_fields() {
     let verdict = verdict(&resized.open(), signed.open(), None);
     assert!(matches!(&verdict, Modification::Disallowed(_)), "{verdict:?}");
 }
+
+/// The signed form's `/Fields` array moved to another role in the later revision is not judged
+/// as fields, even when it is still referred to only once: here the page lists it as its
+/// `/Annots`, with an inline full-page annotation added, and the form's `/Fields` is written
+/// inline (review of #4817).
+#[test]
+fn a_fields_array_moved_to_another_role_is_not_judged_as_fields() {
+    const WIDGET: &str = "<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig1) /Rect [20 20 120 40] /P 3 0 R /F 4 >>";
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [6 0 R]"))),
+        (4, Row::Obj(0, 0, &page(""))),
+        (5, Row::Obj(0, 0, "<< /Fields 8 0 R /SigFlags 3 >>")),
+        (6, Row::Obj(0, 0, WIDGET)),
+        (8, Row::Obj(0, 0, "[6 0 R]")),
+    ]);
+    let swapped = signed.clone().revision(&[
+        (3, Row::Obj(0, 0, &page("/Annots 8 0 R"))),
+        (5, Row::Obj(0, 0, "<< /Fields [6 0 R] /SigFlags 3 >>")),
+        (8, Row::Obj(0, 0, "[6 0 R << /Type /Annot /Subtype /Square /Rect [0 0 300 300] >>]")),
+    ]);
+    let verdict = verdict(&swapped.open(), signed.open(), Some(1));
+    assert!(matches!(&verdict, Modification::Disallowed(_)), "{verdict:?}");
+}
