@@ -166,7 +166,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             dialog_footer(ui, app, dialog, &mut req);
         }
     });
-    finish_dialog(app, dialog, modal.should_close(), &mut req);
+    finish_dialog(app, ctx, dialog, modal.should_close(), &mut req);
 }
 
 /// The dialog's content. Returns `false` when it has its own buttons and no footer is wanted.
@@ -1862,11 +1862,11 @@ fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: 
 }
 
 /// Acts on what the dialog asked for, once the modal is drawn.
-fn finish_dialog(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: &mut Pending) {
+fn finish_dialog(app: &mut PdfCraftApp, ctx: &egui::Context, dialog: Dialog, modal_closed: bool, req: &mut Pending) {
     finish_requests(app, dialog, modal_closed, req);
     finish_actions(app, req);
     finish_redactions_and_fields(app, req);
-    finish_edits(app, dialog, req);
+    finish_edits(app, ctx, dialog, req);
     finish_close(app, dialog, modal_closed, req);
 }
 
@@ -2131,18 +2131,23 @@ pub(crate) fn identification_note(id: &pdfcraft_engine::RedactionIdentification)
 }
 
 /// Edits built from the dialog's drafts.
-fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
+fn finish_edits(app: &mut PdfCraftApp, ctx: &egui::Context, dialog: Dialog, req: &mut Pending) {
     if req.props_now
         && let Some(d) = app.comment_props.take()
     {
         let mut edits = crate::comment_props::edits(&d);
-        match edits.len() {
-            0 => {}
-            1 => {
-                app.apply_edit(edits.remove(0));
-            }
-            _ => {
-                app.apply_edit(Edit::Batch { label: "Change comment properties".into(), edits });
+        let applied = match edits.len() {
+            0 => false,
+            1 => app.apply_edit(edits.remove(0)),
+            _ => app.apply_edit(Edit::Batch { label: "Change comment properties".into(), edits }),
+        };
+        if applied {
+            for (before, after) in [(d.original.color, d.edited.color), (d.original.fill, d.edited.fill)] {
+                if before != after
+                    && let Some(c) = after
+                {
+                    crate::comments::remember_custom_colour(ctx, c);
+                }
             }
         }
         // Make Properties Default: the look chosen here, even when it was already the comment's.

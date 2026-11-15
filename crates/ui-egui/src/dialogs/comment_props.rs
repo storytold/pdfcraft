@@ -5,7 +5,7 @@
 use egui::{Align, Layout};
 use pdfcraft_engine::{CommentProps, Edit, LineEnding, NoteIcon};
 
-use crate::comments::swatch_grid;
+use crate::comments::{ColourPickerDraft, draft_swatch_grid};
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
 
@@ -26,6 +26,8 @@ pub struct PropsDraft {
     /// Acrobat's Make Properties Default box: on OK, new comments of this kind take the edited
     /// colour, opacity and line width too.
     pub make_default: bool,
+    pub(crate) colour_picker: ColourPickerDraft,
+    pub(crate) fill_picker: ColourPickerDraft,
     /// The other selected comments, each with its own properties: OK makes the same changes to
     /// them where they apply (a colour to every one, a font size to text boxes, …).
     pub others: Vec<(usize, usize, CommentProps)>,
@@ -186,7 +188,17 @@ impl PdfCraftApp {
         let selection = self.views.get(i).map(|v| &v.comments).filter(|c| c.is_selected((page, index))).map(|c| c.selection()).unwrap_or_default();
         let others =
             selection.into_iter().filter(|k| *k != (page, index)).filter_map(|(pg, ix)| doc.comment_props(pg, ix).map(|c| (pg, ix, c))).collect();
-        self.comment_props = Some(PropsDraft { page, index, tab: PropsTab::Appearance, original: p.clone(), edited: p, make_default: false, others });
+        self.comment_props = Some(PropsDraft {
+            page,
+            index,
+            tab: PropsTab::Appearance,
+            original: p.clone(),
+            edited: p,
+            make_default: false,
+            colour_picker: ColourPickerDraft::default(),
+            fill_picker: ColourPickerDraft::default(),
+            others,
+        });
         self.dialog = Some(crate::Dialog::CommentProps);
     }
 }
@@ -365,7 +377,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                         ui.end_row();
                     }
                     ui.label(tl!("Colour"));
-                    if let Some(c) = swatch_grid(ui, e.color) {
+                    if let Some(c) = draft_swatch_grid(ui, e.color, &mut d.colour_picker) {
                         e.color = Some(c);
                     }
                     ui.end_row();
@@ -396,9 +408,17 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     }
                     if e.fillable {
                         ui.label(tl!("Fill colour"));
-                        if let Some(f) = crate::comments::fill_picker(ui, e.fill) {
-                            e.fill = f;
-                        }
+                        ui.push_id("fill-picker", |ui| {
+                            ui.vertical(|ui| {
+                                if ui.selectable_label(e.fill.is_none(), tl!("No fill")).clicked() {
+                                    e.fill = None;
+                                    d.fill_picker = ColourPickerDraft::default();
+                                }
+                                if let Some(c) = draft_swatch_grid(ui, e.fill, &mut d.fill_picker) {
+                                    e.fill = Some(c);
+                                }
+                            });
+                        });
                         ui.end_row();
                     }
                     if let Some(size) = e.font_size.as_mut() {
