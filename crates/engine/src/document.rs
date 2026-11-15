@@ -728,6 +728,11 @@ impl Document {
         self.editor.as_ref().and_then(|e| pdfcraft_organize::page_boxes(&e.cos).ok()).unwrap_or_default()
     }
 
+    /// Every page's `/UserUnit`: points per user-space unit, read as Acrobat reads it (1 when absent or invalid).
+    pub fn page_user_units(&self) -> Vec<f64> {
+        self.editor.as_ref().map(|e| pdfcraft_model::pages(&e.cos).iter().map(|p| p.user_unit(&e.cos)).collect()).unwrap_or_default()
+    }
+
     /// Current value of a document-information entry (Title, Author, …).
     pub fn info_value(&self, key: &str) -> Option<String> {
         self.editor.as_ref().and_then(|e| pdfcraft_organize::info(&e.cos, key))
