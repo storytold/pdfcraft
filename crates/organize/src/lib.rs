@@ -23,7 +23,9 @@ mod outline;
 mod outline_io;
 mod pdfx;
 mod prune;
+mod templates;
 mod transition;
+pub use templates::{Template, create_template, delete_script_pages, remove_template, set_template_hidden, spawn_template, templates};
 pub mod view;
 mod xmp;
 

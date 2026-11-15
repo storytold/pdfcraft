@@ -94,6 +94,13 @@ pub enum Edit {
         path: Vec<usize>,
         title: String,
     },
+    /// Property changes made through JavaScript's live bookmark objects.
+    ScriptBookmarks {
+        changes: Vec<pdfcraft_js::bookmarks::Change>,
+    },
+    ScriptPages {
+        changes: Vec<pdfcraft_js::templates::Change>,
+    },
     /// Delete a bookmark and the bookmarks under it.
     DeleteBookmark {
         path: Vec<usize>,

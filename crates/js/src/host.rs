@@ -6,11 +6,18 @@ use super::{
 };
 
 pub(crate) struct Host {
+    pub(crate) page_changes: Vec<crate::templates::Change>,
+    pub(crate) calculate: bool,
+    pub(crate) calculations_current: bool,
+    pub(crate) document_changes: Vec<crate::bookmarks::Change>,
+    pub(crate) tool_buttons: Vec<crate::viewer::ButtonChange>,
+    /// Dynamic compilation is charged before converting strings or entering Boa's parser.
+    pub(crate) compiled_units: usize,
     pub(crate) event_name: String,
     pub(crate) fields: Arc<Vec<FieldState>>,
     pub(crate) icons: Vec<(super::JsObject, u64)>,
     pub(crate) objects: std::collections::HashMap<(String, Option<u64>, u64), super::JsObject>,
-    pub(crate) field_keys: std::collections::HashSet<(String, Option<u64>, u64)>,
+    pub(crate) field_keys: std::collections::HashMap<(String, Option<u64>, u64), usize>,
     pub(crate) changed: BTreeSet<usize>,
     pub(crate) formatted: BTreeSet<usize>,
     pub(crate) alerts: Vec<Message>,
@@ -233,24 +240,37 @@ pub(crate) fn field_cache_key(name: &str, id: Option<u64>, token: u64) -> (Strin
 
 fn field_index(ctx: &Context, name: &FieldKey) -> JsResult<usize> {
     let n = name.0.to_std_string_escaped();
-    host(ctx)?
-        .borrow()
-        .fields
-        .iter()
-        .position(|f| name.1.map_or(f.name == n, |id| f.object_id == Some(id) && f.instance_id == name.2))
-        .ok_or_else(|| error(format!("no field named {n}")))
+    let key = field_cache_key(&n, name.1, name.2);
+    host(ctx)?.borrow().field_keys.get(&key).copied().ok_or_else(|| error(format!("no field named {n}")))
+}
+
+pub(crate) fn field_indices(fields: &[FieldState]) -> std::collections::HashMap<(String, Option<u64>, u64), usize> {
+    let mut indices = std::collections::HashMap::with_capacity(fields.len());
+    for (i, field) in fields.iter().enumerate() {
+        indices.entry(field_cache_key(&field.name, field.object_id, field.instance_id)).or_insert(i);
+    }
+    indices
 }
 
 pub(crate) fn read(ctx: &Context, name: &FieldKey) -> JsResult<FieldState> {
     let i = field_index(ctx, name)?;
-    Ok(host(ctx)?.borrow().fields[i].clone())
+    host(ctx)?.borrow().fields.get(i).cloned().ok_or_else(|| error("the field is no longer available"))
 }
 
 pub(crate) fn write(ctx: &Context, name: &FieldKey, change: impl FnOnce(&mut FieldState)) -> JsResult<()> {
     let i = field_index(ctx, name)?;
     let mut h = host(ctx)?.borrow_mut();
+    let old = h.fields.get(i).ok_or_else(|| error("the field is no longer available"))?;
+    let mut updated = old.clone();
+    change(&mut updated);
+    // Calculation scripts often repeat a tooltip/style/value assignment. A no-op must
+    // not copy a large form's whole shared snapshot (including hidden script storage).
+    if updated == *old {
+        return Ok(());
+    }
+    h.calculations_current = false;
     let field = Arc::make_mut(&mut h.fields).get_mut(i).ok_or_else(|| error("the field is no longer available"))?;
-    change(field);
+    *field = updated;
     h.changed.insert(i);
     Ok(())
 }

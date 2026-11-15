@@ -4621,6 +4621,7 @@ version = "0.21.1"
 dependencies = [
  "boa_engine",
  "chrono",
+ "serde_json",
 ]
 
 [[package]]

@@ -212,6 +212,9 @@ fn recalculate_values(
     scripts: &mut dyn Scripts,
     mut deferred: Option<&mut std::collections::HashSet<ObjRef>>,
 ) -> Result<usize, FormError> {
+    if !scripts.calculations_enabled() {
+        return Ok(0);
+    }
     let mut all = fields(doc);
     if !all.iter().any(calc_order::is_calculated) {
         return Ok(0);
@@ -220,7 +223,7 @@ fn recalculate_values(
     let order: Vec<ObjRef> = calc_order::run_order(doc, &all).0.into_iter().filter_map(|(i, _)| all.get(i)).map(|f| f.obj).collect();
     let mut changed = 0;
     for obj in order {
-        if scripts.stopped() {
+        if scripts.stopped() || !scripts.calculations_enabled() {
             break;
         }
         let Some(f) = all.iter().find(|f| f.obj == obj).cloned() else { continue };
@@ -514,8 +517,24 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
 }
 
 /// Redraw a calculated value without running input validation or calculation again.
-pub(crate) fn redraw_calculated_value(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    redraw(doc, f, values, scripts)
+pub(crate) fn redraw_calculated_values(doc: &mut Document, pending: &[(ObjRef, Vec<String>)], scripts: &mut dyn Scripts) -> Result<(), FormError> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    // All pending values have been written. Format sees the final form, and appearance
+    // writes do not cause another whole-form walk (including hidden rule storage).
+    let all = fields(doc);
+    for (obj, values) in pending {
+        let Some(f) = all.iter().find(|f| f.obj == *obj) else { continue };
+        let shown = match (values.as_slice(), &f.actions.scripts.format) {
+            ([one], Some(js)) if matches!(f.kind, FieldKind::Text | FieldKind::Combo) => {
+                Some(scripts.run(FieldEvent::Format, js, f, one, &all, doc).value)
+            }
+            _ => None,
+        };
+        redraw_shown(doc, f, values, scripts, shown)?;
+    }
+    Ok(())
 }
 
 /// A list box's first visible row (`/TI`) before and after scrolling so the `picked` positions of
@@ -660,12 +679,24 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
         [one] if matches!(f.kind, FieldKind::Text | FieldKind::Combo) => scripting::formatted(doc, f, one, scripts),
         _ => None,
     };
+    redraw_shown(doc, f, values, scripts, shown)
+}
+
+fn redraw_shown(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Scripts, shown: Option<String>) -> Result<(), FormError> {
     let in_place = f.kind == FieldKind::Text && f.has(flags::PASSWORD);
     let mut undrawn = false;
     // The Format script again with English month and weekday names, once, for widgets whose
     // fonts can't draw the date language's (#5303).
     let mut english: Option<Option<String>> = None;
     for w in &f.widgets {
+        // Hidden storage can contain megabytes of executable rules. Preserve its value and
+        // Format callbacks, but defer drawing until a widget is shown on a visible page.
+        if w.page.is_none() || doc.get(w.obj).as_dict().and_then(|d| d.int(b"F")).is_some_and(|flags| flags & 2 != 0) {
+            let mut ap = merged_appearance(doc, w.obj, &Dict::new());
+            ap.remove(b"N");
+            doc.update_dict(w.obj, |d| d.set(b"AP".to_vec(), Object::Dict(ap)))?;
+            continue;
+        }
         let (mut stream, missing) = match &shown {
             Some(s) => {
                 let drawn = appearance::field_appearance_drawn(doc, f, w, std::slice::from_ref(s), false);

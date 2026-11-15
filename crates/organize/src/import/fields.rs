@@ -122,7 +122,7 @@ fn plan_renames_under(
 
 /// The field names in use in `dst`: every name in its form, and every name hanging only off a
 /// page's widgets — a field the form never lists still owns its name.
-fn taken_field_names(dst: &Document) -> Result<std::collections::HashSet<String>, OrganizeError> {
+pub(super) fn taken_field_names(dst: &Document) -> Result<std::collections::HashSet<String>, OrganizeError> {
     let mut taken = std::collections::HashSet::new();
     let mut seen = std::collections::HashSet::new();
     for root in field_roots(dst)? {

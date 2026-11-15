@@ -4407,6 +4407,28 @@ fn name_tree_nodes_sharing_one_names_array_list_its_scripts_once() {
     assert_eq!(scripts, [("a".to_string(), js.clone()), ("b".to_string(), js)]);
 }
 
+#[test]
+fn writing_hidden_storage_does_not_generate_an_appearance() {
+    let mut doc = left_to_the_viewer(true);
+    let widget = field(&fields(&doc), "a").widgets[0].obj;
+    doc.update_dict(widget, |d| {
+        d.set(b"F".to_vec(), Object::Int(2));
+    })
+    .unwrap();
+    set_value(&mut doc, "a", &FieldValue::Text("stored rules".into())).unwrap();
+    assert_eq!(field(&fields(&doc), "a").value, ["stored rules"]);
+    let normal = |doc: &Document| {
+        doc.get(widget).as_dict().and_then(|d| d.get(b"AP")).and_then(|v| doc.resolve(v).as_dict().and_then(|d| d.get(b"N")).cloned())
+    };
+    assert!(normal(&doc).is_none(), "a hidden write must invalidate the old appearance without drawing storage");
+    doc.update_dict(widget, |d| {
+        d.set(b"F".to_vec(), Object::Int(4));
+    })
+    .unwrap();
+    let shown = with_field_appearances(&doc).unwrap();
+    assert!(normal(&shown).is_some(), "showing the widget must draw its current value");
+}
+
 /// #3470: a form whose writer left the appearances to the viewer. Field A has an empty one,
 /// B none, C its own (`(old C)`), D is a combo without one, E a check box with states, F a list
 /// box without one, and G only a down appearance (`/D`, no `/N`).
@@ -4534,6 +4556,26 @@ fn the_field_appearance_cache_redraws_only_what_changed() {
     assert_eq!(cache.builds(), drawn + 1, "only b is redrawn");
     assert!(ap(&copy, &field(&fields(&copy), "b").widgets[0]).contains("(Typed) Tj"), "and shows its new value");
     assert!(ap(&copy, &field(&fields(&copy), "a").widgets[0]).contains("(Value A) Tj"), "a reuses its drawing");
+}
+
+/// Hidden storage widgets can contain megabytes of script state and have nothing to draw.
+#[test]
+fn hidden_storage_fields_do_not_generate_display_appearances() {
+    let mut doc = left_to_the_viewer(true);
+    let widget = field(&fields(&doc), "a").widgets[0].obj;
+    doc.update_dict(widget, |d| {
+        d.set(b"F".to_vec(), Object::Int(2));
+    })
+    .unwrap();
+    let mut cache = FieldAppearanceCache::default();
+    with_field_appearances_cached(&doc, &mut cache).unwrap();
+    assert_eq!(cache.builds(), 5, "the hidden widget must not be laid out");
+    doc.update_dict(widget, |d| {
+        d.set(b"F".to_vec(), Object::Int(4));
+    })
+    .unwrap();
+    with_field_appearances_cached(&doc, &mut cache).unwrap();
+    assert_eq!(cache.builds(), 6, "showing the widget generates its appearance");
 }
 
 /// #3470: each kind of input a field's drawing depends on invalidates its cached appearance when
@@ -7563,4 +7605,39 @@ fn page_scripts_are_the_pages_own_then_each_annotations_in_order() {
     let got: Vec<(Option<&str>, &str)> = close.iter().map(|s| (s.field.as_deref(), s.script.trim())).collect();
     assert_eq!(got, [(None, "close()"), (Some("anim"), "stop();")], "a URI action is not a script");
     assert!(page_scripts(&doc, 1, PageEvent::Open).is_empty(), "no such page");
+}
+
+#[test]
+fn calculated_writeback_formats_against_one_final_snapshot() {
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] /DA (/Helv 10 Tf 0 g) >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>".into(),
+    ];
+    for name in ["one", "two", "three"] {
+        objects.push(format!(
+            "<< /FT /Tx /Subtype /Widget /T ({name}) /Rect [10 10 100 30] /P 3 0 R /AA << /F << /S /JavaScript /JS (event.value) >> >> >>"
+        ));
+    }
+    let mut doc = document(&objects);
+    let changes = ["one", "two", "three"]
+        .into_iter()
+        .map(|name| FieldChange {
+            name: name.into(),
+            value: Some(vec!["7".into()]),
+            formatted: true,
+            calculation_complete: true,
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    struct Formats;
+    impl Scripts for Formats {
+        fn run(&mut self, _: FieldEvent, _: &str, _: &Field, value: &str, all: &[Field], _: &Document) -> ScriptResult {
+            assert!(all.iter().all(|f| f.value == ["7"]), "Format sees all final calculated values");
+            ScriptResult { rc: true, value: value.into(), value_set: false, changes: vec![], message: None }
+        }
+    }
+    let reads = crate::read::form_reads_on_this_thread();
+    apply_script_changes(&mut doc, &changes, &mut Formats).unwrap();
+    assert!(crate::read::form_reads_on_this_thread() - reads <= 2);
 }
