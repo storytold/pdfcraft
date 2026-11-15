@@ -151,10 +151,48 @@ pub struct ClearScanOutput {
     pub placements: Vec<GlyphPlacement>,
 }
 
+/// Target PDF page geometry used to map ClearScan's deskewed image and glyph layer back into the
+/// original page's default user space, keeping the page's boxes, `/Rotate`, and `/UserUnit`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PageGeometry {
+    /// Cropped page rectangle `[x0, y0, x1, y1]` in the target page's default user space.
+    pub crop: [f64; 4],
+    /// Upright cropped display height in PDF points (after `/Rotate` and `/UserUnit`).
+    pub display_height: f64,
+    /// Affine matrix `[a, b, c, d, e, f]` mapping upright display points (origin bottom-left,
+    /// y-up) to the target page's default user space.
+    pub view_matrix: [f64; 6],
+}
+
 /// Run the pipeline. `recognize` reads the deskewed page; its boxes must use that frame.
-pub fn clearscan_image<R, P>(
+pub fn clearscan_image<R, P>(raster: ScanRaster<'_>, options: &ClearScanOptions, recognize: R, progress: P) -> Result<ClearScanOutput, OcrError>
+where
+    R: FnMut(&PreprocessedPage) -> Result<Vec<AnnotatedLine>, OcrError>,
+    P: FnMut(ClearScanStage),
+{
+    clearscan_inner(raster, options, None, recognize, progress)
+}
+
+/// Run the pipeline and wrap the output stream to place the deskewed page back into a target
+/// PDF page whose geometry (boxes, `/Rotate`, `/UserUnit`) stays unchanged.
+pub fn clearscan_image_with_geometry<R, P>(
     raster: ScanRaster<'_>,
     options: &ClearScanOptions,
+    geometry: PageGeometry,
+    recognize: R,
+    progress: P,
+) -> Result<ClearScanOutput, OcrError>
+where
+    R: FnMut(&PreprocessedPage) -> Result<Vec<AnnotatedLine>, OcrError>,
+    P: FnMut(ClearScanStage),
+{
+    clearscan_inner(raster, options, Some(geometry), recognize, progress)
+}
+
+fn clearscan_inner<R, P>(
+    raster: ScanRaster<'_>,
+    options: &ClearScanOptions,
+    geometry: Option<PageGeometry>,
     mut recognize: R,
     mut progress: P,
 ) -> Result<ClearScanOutput, OcrError>
@@ -179,7 +217,8 @@ where
     let (masters, skipped_clusters) = masters_of(&clustered, &aligned.matched, &lines, options)?;
     progress(ClearScanStage::Compose);
     let raster = deskewed_raster(&buf, src_w, src_h, raster.channels, &page)?;
-    compose(&raster, components.components(), &masters, &lines, ppp, options, skipped_clusters)
+    let frame = ComposeFrame { points_per_pixel: ppp, to_original: page.to_original, geometry };
+    compose(&raster, components.components(), &masters, &lines, frame, options, skipped_clusters)
 }
 
 /// [`clearscan_image`] with [`Ocr::recognize_page`] as the recognizer.
@@ -187,7 +226,21 @@ pub fn clearscan_recognized<P>(ocr: &Ocr, raster: ScanRaster<'_>, options: &Clea
 where
     P: FnMut(ClearScanStage),
 {
-    clearscan_image(raster, options, |page| ocr.recognize_page(page), progress)
+    clearscan_inner(raster, options, None, |page| ocr.recognize_page(page), progress)
+}
+
+/// [`clearscan_image_with_geometry`] with [`Ocr::recognize_page`] as the recognizer.
+pub fn clearscan_recognized_with_geometry<P>(
+    ocr: &Ocr,
+    raster: ScanRaster<'_>,
+    options: &ClearScanOptions,
+    geometry: PageGeometry,
+    progress: P,
+) -> Result<ClearScanOutput, OcrError>
+where
+    P: FnMut(ClearScanStage),
+{
+    clearscan_inner(raster, options, Some(geometry), |page| ocr.recognize_page(page), progress)
 }
 
 fn clearscan_err(detail: impl Into<String>) -> OcrError {
@@ -228,8 +281,9 @@ where
     }
     progress(ClearScanStage::Downsample);
     let (buf, new_w, new_h) = downsample(pixels, width, height, channels, factor)?;
-    // The page keeps its user-unit size: fewer pixels, each covering more of the page.
-    let ppp = points_per_pixel * f64::from(width) / f64::from(new_w);
+    // Each downsampled pixel covers `factor` source pixels in both axes; avoid stretching
+    // non-multiple dimensions by `width / new_w`.
+    let ppp = points_per_pixel * f64::from(factor);
     if !ppp.is_finite() || ppp <= 0.0 || ppp > MAX_USER {
         return Err(clearscan_err("downsampling made the page scale unusable"));
     }
@@ -468,15 +522,22 @@ struct Placed {
     text: String,
 }
 
+struct ComposeFrame {
+    points_per_pixel: f64,
+    to_original: crate::deskew::Affine,
+    geometry: Option<PageGeometry>,
+}
+
 fn compose(
     raster: &PageRaster,
     components: &[crate::components::Component],
     masters: &[Master],
     lines: &[AnnotatedLine],
-    points_per_pixel: f64,
+    frame: ComposeFrame,
     options: &ClearScanOptions,
     skipped_clusters: usize,
 ) -> Result<ClearScanOutput, OcrError> {
+    let points_per_pixel = frame.points_per_pixel;
     let height_px = f64::from(raster.height());
     // Paint out only ink a placed outline replaces. An unmatched mark, a cluster with no
     // prototype, and a glyph whose origin cannot be shown stay in the scan.
@@ -517,8 +578,12 @@ fn compose(
     });
     let width = f64::from(cleaned.raster().width()) * points_per_pixel;
     let height = height_px * points_per_pixel;
+    let placement = match frame.geometry {
+        Some(geom) => Some((geom.crop, clearscan_to_user_matrix(&geom, frame.to_original, height_px, points_per_pixel)?)),
+        None => None,
+    };
     let image = embed_background(&mut doc, &cleaned, encoding)?;
-    let pdf = write_page(&mut doc, &image, &font_ids, &placed, width, height)?;
+    let pdf = write_page(&mut doc, &image, &font_ids, &placed, width, height, placement)?;
     let text_out: String = placed.iter().map(|show| show.text.as_str()).collect();
     let placements: Vec<GlyphPlacement> = placed
         .iter()
@@ -637,6 +702,56 @@ fn byte(value: f64) -> u8 {
     if value.is_finite() { value.round().clamp(0.0, 255.0) as u8 } else { 255 }
 }
 
+fn clearscan_to_user_matrix(
+    geom: &PageGeometry,
+    to_original: crate::deskew::Affine,
+    deskewed_height_px: f64,
+    points_per_pixel: f64,
+) -> Result<[f64; 6], OcrError> {
+    let [cx0, cy0, cx1, cy1] = geom.crop;
+    let cw = cx1 - cx0;
+    let ch = cy1 - cy0;
+    if !cx0.is_finite()
+        || !cy0.is_finite()
+        || !cw.is_finite()
+        || !ch.is_finite()
+        || cw <= 0.0
+        || ch <= 0.0
+        || !geom.display_height.is_finite()
+        || geom.display_height <= 0.0
+        || !deskewed_height_px.is_finite()
+        || deskewed_height_px <= 0.0
+        || !points_per_pixel.is_finite()
+        || points_per_pixel <= 0.0
+        || geom.view_matrix.iter().any(|v| !v.is_finite())
+    {
+        return Err(clearscan_err("target page geometry is not valid"));
+    }
+    let ex = to_original.e + 0.5 - 0.5 * to_original.a - 0.5 * to_original.c;
+    let fy = to_original.f + 0.5 - 0.5 * to_original.b - 0.5 * to_original.d;
+    let m_disp = [
+        to_original.a,
+        -to_original.b,
+        -to_original.c,
+        to_original.d,
+        points_per_pixel * (to_original.c * deskewed_height_px + ex),
+        geom.display_height - points_per_pixel * (to_original.d * deskewed_height_px + fy),
+    ];
+    let v = geom.view_matrix;
+    let m_user = [
+        m_disp[0] * v[0] + m_disp[1] * v[2],
+        m_disp[0] * v[1] + m_disp[1] * v[3],
+        m_disp[2] * v[0] + m_disp[3] * v[2],
+        m_disp[2] * v[1] + m_disp[3] * v[3],
+        m_disp[4] * v[0] + m_disp[5] * v[2] + v[4],
+        m_disp[4] * v[1] + m_disp[5] * v[3] + v[5],
+    ];
+    if m_user.iter().any(|x| !x.is_finite()) {
+        return Err(clearscan_err("target page transform is not finite"));
+    }
+    Ok(m_user)
+}
+
 fn write_page(
     doc: &mut Document,
     image: &crate::background::BackgroundImage,
@@ -644,12 +759,24 @@ fn write_page(
     placed: &[Placed],
     width: f64,
     height: f64,
+    placement: Option<([f64; 4], [f64; 6])>,
 ) -> Result<Vec<u8>, OcrError> {
     let image_only =
         ClearScanLayer { image_name: "Im0", image_width: width, image_height: height, image_origin: [0.0, 0.0], font_name: "F1", glyphs: &[] };
-    let mut content = content_stream(&image_only)?;
+    let mut content = match placement {
+        Some(([cx0, cy0, cx1, cy1], [a, b, c, d, e, f])) => {
+            let cw = cx1 - cx0;
+            let ch = cy1 - cy0;
+            format!("q\n{cx0:.6} {cy0:.6} {cw:.6} {ch:.6} re W n\n{a:.6} {b:.6} {c:.6} {d:.6} {e:.6} {f:.6} cm\n").into_bytes()
+        }
+        None => Vec::new(),
+    };
+    content.extend(content_stream(&image_only)?);
     if !placed.is_empty() {
         content.extend(text_operators(placed));
+    }
+    if placement.is_some() {
+        content.extend_from_slice(b"\nQ\n");
     }
     let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), &content)));
     let pages = {
