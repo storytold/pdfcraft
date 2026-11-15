@@ -43,10 +43,10 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     let value_get = getter!(ctx, n, |f, c| value_of(&f, c));
     let default_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
-            let values = strings(&arg(args, 0), c)?;
+            let values = value_for(kind_of(c, name)?, strings(&arg(args, 0), c)?);
             charge(c, name, |f| text_bytes(&f.default), text_bytes(&values))?;
             write(c, name, |f| {
-                f.default = value_for(f.kind, values);
+                f.default = values;
                 f.default_known = true;
             })?;
             Ok(JsValue::undefined())

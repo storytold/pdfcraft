@@ -79,6 +79,72 @@ fn serialized_rules_restore_functions_and_regular_expressions() {
     let out = session.run(job, &[]);
     assert_eq!(out.error, None);
     assert_eq!(out.result.as_deref(), Some("true:4"));
+    for (source, expected) in [
+        ("{modifier(){return (()=>4)();}}", "4"),
+        ("{modifier(){return '=>';}}", "=>"),
+        ("{modifier:()=>4}", "4"),
+        ("{async modifier(){return (()=>4)();}}", "[object Promise]"),
+    ] {
+        let job = crate::session::Job {
+            script: format!("var rules=({source});var copy=eval(rules.toSource());String(copy.modifier())"),
+            event: Event::doc("Console"),
+            doc: doc(),
+            fields: Arc::new(vec![]),
+            doc_scripts: vec![].into(),
+            calculations: vec![],
+            timer: None,
+        };
+        let out = crate::session::ScriptSession::default().run(job, &[]);
+        assert_eq!(out.error, None, "{source}");
+        assert_eq!(out.result.as_deref(), Some(expected));
+    }
+}
+
+#[test]
+fn normalized_defaults_only_charge_retained_text() {
+    let fields = vec![FieldState::new("value", FieldType::Text, vec![])];
+    let out = run(
+        "var f=getField('value'),extra='x';for(var j=0;j<20;j++)extra+=extra;for(var i=0;i<80;i++)f.defaultValue=['x',extra];f.defaultValue",
+        &Event::doc("Console"),
+        &doc(),
+        &fields,
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("x"));
+}
+
+#[test]
+fn initializer_pages_reach_the_first_event() {
+    let job = crate::session::Job {
+        script: "numPages".into(),
+        event: Event::doc("Console"),
+        doc: doc(),
+        fields: Arc::new(vec![]),
+        doc_scripts: vec!["createTemplate('Notes',0);getTemplate('Notes').spawn(0,true,false);".into()].into(),
+        calculations: vec![],
+        timer: None,
+    };
+    let original = job.doc.num_pages;
+    let out = crate::session::ScriptSession::default().run(job, &[]);
+    assert_eq!(out.error, None);
+    assert_eq!(out.result, Some((original + 1).to_string()));
+}
+
+#[test]
+fn positional_spawn_uses_template_name_first() {
+    let doc = doc();
+    let out = run(
+        "createTemplate('Notes',0);spawnPageFromTemplate('Notes',1,true,false);numPages",
+        &Event::doc("Console"),
+        &doc,
+        &[],
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.result, Some((doc.num_pages + 1).to_string()));
 }
 
 #[test]

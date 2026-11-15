@@ -282,6 +282,27 @@ fn apply_default(doc: &mut Document, field: &Field, value: Option<&Vec<String>>)
     Ok(())
 }
 
+/// Apply widget visibility and report whether deferred text layout is now needed.
+fn apply_display(doc: &mut Document, field: &Field, display: i32) -> Result<bool, FormError> {
+    let mut shown = false;
+    for w in &field.widgets {
+        let old = doc.get(w.obj).as_dict().and_then(|d| d.int(b"F")).unwrap_or(0);
+        // Hidden 2, Print 4, NoView 32 (Table 167).
+        let base = old & !(2 | 4 | 32);
+        let new = match display {
+            1 => base | 2 | 4,
+            2 => base,
+            3 => base | 4 | 32,
+            _ => base | 4,
+        };
+        if new != old {
+            doc.update_dict(w.obj, |d| d.set(b"F".to_vec(), Object::Int(new)))?;
+            shown |= old & 2 != 0 && new & 2 == 0 && w.page.is_some();
+        }
+    }
+    Ok(shown && matches!(field.kind, FieldKind::Text | FieldKind::Combo))
+}
+
 pub(crate) fn apply_changes(
     doc: &mut Document,
     changes: &[FieldChange],
@@ -358,21 +379,11 @@ pub(crate) fn apply_changes(
         if ff != f.flags {
             doc.update_dict(f.obj, |d| d.set(b"Ff".to_vec(), Object::Int(ff as i64)))?;
         }
-        if let Some(display) = c.display {
-            for w in &f.widgets {
-                let old = doc.get(w.obj).as_dict().and_then(|d| d.int(b"F")).unwrap_or(0);
-                // Hidden 2, Print 4, NoView 32 (Table 167).
-                let base = old & !(2 | 4 | 32);
-                let new = match display {
-                    1 => base | 2 | 4,
-                    2 => base,
-                    3 => base | 4 | 32,
-                    _ => base | 4,
-                };
-                if new != old {
-                    doc.update_dict(w.obj, |d| d.set(b"F".to_vec(), Object::Int(new)))?;
-                }
-            }
+        let shown = c.display.map(|display| apply_display(doc, f, display)).transpose()?.unwrap_or(false);
+        if shown && !formatted.iter().any(|(obj, _)| *obj == f.obj) {
+            // Hidden widgets defer layout; restore Format before the raw-value fallback.
+            let value = c.value.as_ref().filter(|_| !except_object.map_or(c.name == except, |obj| f.obj == obj)).unwrap_or(&f.value).clone();
+            formatted.push((f.obj, value));
         }
         if c.fill_color.is_some() || c.stroke_color.is_some() {
             protect_other_mk_owners(doc, f, &mk_owners)?;

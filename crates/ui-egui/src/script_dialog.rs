@@ -134,7 +134,9 @@ fn custom_elements(
                             if response.changed() {
                                 values.insert(e.id.clone(), text.into());
                             }
-                            if response.lost_focus() {
+                            // Moving from an unchanged field into a popup must not resume the
+                            // script: its next dialog snapshot would close the open dropdown.
+                            if response.lost_focus() && values.get(&e.id).is_some_and(|value| *value != e.value) {
                                 *event = Some(e.id.clone());
                             }
                         }
@@ -162,9 +164,13 @@ fn custom_elements(
                                 .as_object()
                                 .and_then(|o| o.iter().find(|(_, v)| v.as_f64().is_some_and(|n| n > 0.0)))
                                 .map_or("", |(k, _)| k.as_str());
-                            craft_ui::ComboBox::from_id_salt("popup")
-                                .selected_text(label)
-                                .show_ui(ui, |ui| list_rows(ui, &value, &mut vec![], &mut chosen));
+                            let dialog_layer = ui.layer_id();
+                            craft_ui::ComboBox::from_id_salt("popup").selected_text(label).show_ui(ui, |ui| {
+                                // Keep the list above its modal even when the modal is raised
+                                // to retain input priority over other document dialogs.
+                                ui.ctx().set_sublayer(dialog_layer, ui.layer_id());
+                                list_rows(ui, &value, &mut vec![], &mut chosen);
+                            });
                         } else {
                             egui::ScrollArea::vertical()
                                 .id_salt("list")
@@ -234,6 +240,8 @@ fn dialog_image(value: &serde_json::Value) -> Option<egui::ColorImage> {
 }
 
 pub(crate) struct Pending {
+    #[cfg(not(target_arch = "wasm32"))]
+    token: std::sync::Arc<()>,
     run: PendingScript,
     prompt: Option<(Prompt, Sender<Option<String>>)>,
     text: String,
@@ -244,8 +252,17 @@ pub(crate) struct Pending {
     serial: u32,
     dialog_values: std::collections::BTreeMap<String, serde_json::Value>,
     progress: Option<pdfcraft_engine::js::Progress>,
+    file_read: Option<(u32, std::sync::mpsc::Receiver<Result<String, String>>)>,
 }
 impl Pending {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn accepts_file(&self, id: DocId, serial: u32, token: &std::sync::Arc<()>) -> bool {
+        std::sync::Arc::ptr_eq(&self.token, token)
+            && self.run.id == id
+            && self.serial == serial
+            && matches!(self.prompt, Some((Prompt::File, _)))
+            && self.file_read.is_none()
+    }
     /// Whether this invocation is waiting for an explicit user reply rather than worker execution.
     pub(crate) fn has_prompt(&self) -> bool {
         self.prompt.is_some()
@@ -341,6 +358,8 @@ impl PdfCraftApp {
         match start(&mut self.session) {
             Ok(run) => {
                 self.script_pending = Some(Pending {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    token: std::sync::Arc::new(()),
                     run,
                     prompt: None,
                     text: String::new(),
@@ -351,6 +370,7 @@ impl PdfCraftApp {
                     serial: 0,
                     dialog_values: Default::default(),
                     progress: None,
+                    file_read: None,
                 })
             }
             Err(e) => self.notify(e.to_string()),
@@ -370,6 +390,26 @@ impl PdfCraftApp {
         if !current {
             self.session.discard_javascript(&pending.run);
             return;
+        }
+        if let Some((serial, read)) = pending.file_read.as_ref() {
+            let serial = *serial;
+            let result = match read.try_recv() {
+                Ok(result) => Some(result),
+                Err(TryRecvError::Disconnected) => Some(Err("The selected-file reader stopped".into())),
+                Err(TryRecvError::Empty) => None,
+            };
+            if let Some(result) = result {
+                pending.file_read = None;
+                if serial == pending.serial && matches!(pending.prompt, Some((Prompt::File, _))) {
+                    match result {
+                        Ok(text) => reply_to_prompt(ctx, &mut pending, Some(text), false),
+                        Err(error) => {
+                            self.notify(error);
+                            reply_to_prompt(ctx, &mut pending, None, true);
+                        }
+                    }
+                }
+            }
         }
         if (pending.prompt.is_none() && pending.started.elapsed() > pending.run.timeout)
             || (pending.prompt.is_some() && pending.started.elapsed() > Duration::from_secs(300))
@@ -431,7 +471,11 @@ impl PdfCraftApp {
             }
         }
         // Input events wake egui immediately; idle prompts only need a coarse timeout check.
-        ctx.request_repaint_after(if pending.has_prompt() { Duration::from_secs(1) } else { Duration::from_millis(16) });
+        ctx.request_repaint_after(if pending.has_prompt() && pending.file_read.is_none() {
+            Duration::from_secs(1)
+        } else {
+            Duration::from_millis(16)
+        });
         self.script_pending = Some(pending);
     }
     /// Display the current typed prompt and send one answer/cancellation without replaying script side effects.
@@ -493,7 +537,7 @@ impl PdfCraftApp {
             match prompt {
                 Prompt::File => {
                     ui.label("Select a UTF-8 text file to share with this document's script.");
-                    choose_file = ui.button(tl!("Open")).clicked();
+                    choose_file = ui.add_enabled(pending.file_read.is_none(), egui::Button::new(tl!("Open"))).clicked();
                 }
                 Prompt::Dialog(dialog) => {
                     ui.label(&dialog.title);
@@ -573,19 +617,36 @@ impl PdfCraftApp {
         if choose_file {
             let id = pending.run.id;
             let serial = pending.serial;
+            let token = pending.token.clone();
             let ctx = ctx.clone();
             self.ask_one(crate::platform::pickers::Ask::File(rfd::AsyncFileDialog::new()), Some(id), move |app, path| {
-                use std::io::Read;
-                let mut text = String::new();
-                let result = std::fs::File::open(path).and_then(|f| f.take((8 << 20) + 1).read_to_string(&mut text));
-                let valid = result.is_ok() && text.len() <= 8 << 20;
-                if !valid {
-                    app.notify("Couldn't read the selected UTF-8 text file (limit: 8 MiB)");
-                }
-                if let Some(pending) =
-                    app.script_pending.as_mut().filter(|p| p.run.id == id && p.serial == serial && matches!(p.prompt, Some((Prompt::File, _))))
-                {
-                    reply_to_prompt(&ctx, pending, valid.then_some(text), !valid);
+                let Some(pending) = app.script_pending.as_mut().filter(|p| p.accepts_file(id, serial, &token)) else {
+                    return;
+                };
+                let (tx, rx) = std::sync::mpsc::channel();
+                let wake = ctx.clone();
+                let worker = std::thread::Builder::new().name("pdfcraft-script-file".into()).spawn(move || {
+                    use std::io::Read;
+                    let result = (|| {
+                        if !std::fs::metadata(&path)?.is_file() {
+                            return Err(std::io::Error::other("not a regular file"));
+                        }
+                        let mut text = String::new();
+                        std::fs::File::open(path)?.take((8 << 20) + 1).read_to_string(&mut text)?;
+                        if text.len() > 8 << 20 {
+                            return Err(std::io::Error::other("limit: 8 MiB"));
+                        }
+                        Ok(text)
+                    })()
+                    .map_err(|e| format!("Couldn't read the selected UTF-8 text file: {e}"));
+                    let _ = tx.send(result);
+                    wake.request_repaint();
+                });
+                if worker.is_ok() {
+                    pending.file_read = Some((serial, rx));
+                } else {
+                    reply_to_prompt(&ctx, pending, None, true);
+                    app.notify("Couldn't start the selected-file reader");
                 }
             });
         }
@@ -597,6 +658,97 @@ impl PdfCraftApp {
 #[cfg(test)]
 mod review_tests {
     use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn file_prompt_identity_and_completion_reject_stale_results() {
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+        app.open_bytes("synthetic.pdf", None, bytes.to_vec()).unwrap();
+        let id = app.active_ids().unwrap().1;
+        let ctx = egui::Context::default();
+        let mut old = None;
+        for _ in 0..2 {
+            app.start_ui_script(id, "util.readFileIntoStream();", None, None);
+            for _ in 0..300 {
+                app.poll_script_dialog(&ctx);
+                if app.script_pending.as_ref().is_some_and(Pending::has_prompt) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let p = app.script_pending.as_mut().unwrap();
+            assert!(p.accepts_file(id, p.serial, &p.token));
+            if let Some((serial, token)) = old.take() {
+                assert_eq!(serial, p.serial);
+                assert!(!p.accepts_file(id, serial, &token), "old picker cannot answer a new invocation");
+                let (tx, rx) = std::sync::mpsc::channel();
+                p.file_read = Some((serial.saturating_sub(1), rx));
+                // An unfinished read returns to the frame; no blocking receive.
+                app.poll_script_dialog(&ctx);
+                assert!(app.script_pending.as_ref().unwrap().has_prompt());
+                tx.send(Ok("stale".into())).unwrap();
+                app.poll_script_dialog(&ctx);
+                assert!(app.script_pending.as_ref().unwrap().has_prompt(), "stale completion is discarded");
+                assert!(app.script_pending.as_ref().unwrap().file_read.is_none());
+            } else {
+                old = Some((p.serial, p.token.clone()));
+                let p = app.script_pending.take().unwrap();
+                app.session.discard_javascript(&p.run);
+            }
+        }
+    }
+
+    #[test]
+    fn opening_a_dialog_dropdown_only_commits_changed_text() {
+        for edited in [false, true] {
+            let mut app = PdfCraftApp::new();
+            let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+            app.open_bytes("synthetic.pdf", None, bytes.to_vec()).unwrap();
+            let id = app.active_ids().unwrap().1;
+            app.start_ui_script(
+                id,
+                r#"app.execDialog({
+                    initialize: function(d) { d.load({text: '1', pick: {Fighter: 1, Wizard: -2}}); d.focus('text'); },
+                    description: {name: 'Choose class', elements: [
+                        {type: 'edit_text', item_id: 'text'},
+                        {type: 'popup', item_id: 'pick'}
+                    ]}
+                });"#,
+                None,
+                None,
+            );
+            let ctx = egui::Context::default();
+            for _ in 0..300 {
+                app.poll_script_dialog(&ctx);
+                if app.script_pending.as_ref().is_some_and(|p| p.has_prompt()) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(app.script_pending.as_ref().unwrap().has_prompt());
+            let mut h = Harness::builder()
+                .with_size(egui::vec2(800.0, 600.0))
+                .with_accessibility_check(false)
+                .build_ui_state(|ui, app: &mut PdfCraftApp| app.show_script_dialog(ui.ctx()), app);
+            h.run();
+            if edited {
+                h.get_by_role(egui::accesskit::Role::TextInput).type_text("2");
+                h.run();
+            }
+            // Harness clicks send actual pointer events, so the edit loses focus just as
+            // it does when a person opens the popup (an AccessKit action would not).
+            h.get_by_role(egui::accesskit::Role::ComboBox).click();
+            h.run();
+            assert_eq!(h.state().script_pending.as_ref().unwrap().has_prompt(), !edited);
+            if !edited {
+                h.get_by_label("Wizard").click();
+                h.run();
+                assert!(!h.state().script_pending.as_ref().unwrap().has_prompt(), "a selection still resumes the script");
+            }
+        }
+    }
+
     #[test]
     fn dialog_image_reads_argb_and_bounds_dimensions() {
         let image = dialog_image(&serde_json::json!({"width":1,"height":1,"argb":"80102030"})).unwrap();

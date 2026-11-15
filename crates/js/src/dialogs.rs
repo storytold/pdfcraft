@@ -165,14 +165,31 @@ fn patch(args: &[JsValue], data: &JsObject, bucket: &str, ctx: &mut Context) -> 
     let target = part(data, bucket, ctx)?;
     let ids = part(data, "ids", ctx)?;
     let mut budget = Budget { nodes: 4096, bytes: 16 << 20 };
-    for key in source.own_property_keys(ctx)? {
+    let keys = source.own_property_keys(ctx)?;
+    // Retained values share the conversion budget across calls. Exclude replacements
+    // first so writing the same large value again does not consume the limit twice.
+    for key in target.own_property_keys(ctx)? {
+        if !keys.contains(&key) {
+            if let Some(name) = key_string(&key) {
+                budget.bytes = budget.bytes.checked_sub(name.len()).ok_or_else(|| error("dialog value exceeds its limit"))?;
+            }
+            json(&target.get(key, ctx)?, ctx, 0, &mut budget)?;
+        }
+    }
+    let mut updates = Vec::new();
+    for key in keys {
         let Some(name) = key_string(&key) else { continue };
         if !ids.get(crate::JsString::from(name.as_str()), ctx)?.to_boolean() {
             continue;
         }
         let value = source.get(key.clone(), ctx)?;
+        budget.bytes = budget.bytes.checked_sub(name.len()).ok_or_else(|| error("dialog value exceeds its limit"))?;
         let value = json(&value, ctx, 0, &mut budget)?;
-        target.set(key, JsValue::from_json(&value, ctx)?, false, ctx)?;
+        updates.push((key, JsValue::from_json(&value, ctx)?));
+    }
+    // Validate the whole patch before retaining any of it.
+    for (key, value) in updates {
+        target.set(key, value, false, ctx)?;
     }
     Ok(JsValue::undefined())
 }
@@ -360,6 +377,31 @@ fn validate_json(value: &Value, depth: usize, count: &mut usize) -> JsResult<()>
     }
     Ok(())
 }
+/// Accepting an enabled radio also clears disabled peers. Direct disabled writes
+/// are validated separately, before these runtime-generated changes are added.
+fn radio_changes(elements: &[Element], values: &mut Map<String, Value>) {
+    fn selected(elements: &[Element], values: &Map<String, Value>, groups: &mut std::collections::BTreeMap<String, String>) {
+        for e in elements {
+            if e.kind == "radio" && values.get(&e.id).and_then(Value::as_bool) == Some(true) {
+                groups.insert(e.group.clone(), e.id.clone());
+            }
+            selected(&e.children, values, groups);
+        }
+    }
+    fn clear(elements: &[Element], groups: &std::collections::BTreeMap<String, String>, values: &mut Map<String, Value>) {
+        for e in elements {
+            if e.kind == "radio"
+                && let Some(id) = groups.get(&e.group)
+            {
+                values.insert(e.id.clone(), Value::Bool(&e.id == id));
+            }
+            clear(&e.children, groups, values);
+        }
+    }
+    let mut groups = std::collections::BTreeMap::new();
+    selected(elements, values, &mut groups);
+    clear(elements, &groups, values);
+}
 /// Synchronously run callbacks while each prompt suspends only the script worker.
 pub(crate) fn execute(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let depth = DEPTH.with(|n| {
@@ -413,7 +455,9 @@ pub(crate) fn execute(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRes
                         return Err(error("dialog reply changes a missing or disabled control"));
                     }
                 }
-                load(&JsValue::undefined(), &[JsValue::from_json(&Value::Object(values.clone()), ctx)?], &data, ctx)?;
+                let mut values = values.clone();
+                radio_changes(&model.elements, &mut values);
+                load(&JsValue::undefined(), &[JsValue::from_json(&Value::Object(values), ctx)?], &data, ctx)?;
             }
             if event == "ok" {
                 if callback(&descriptor, "validate", &dialog, ctx)?.as_boolean() == Some(false) {
@@ -453,6 +497,22 @@ mod tests {
             calculations: vec![],
             timer: None,
         }
+    }
+    #[test]
+    fn radio_selection_clears_disabled_peers_but_direct_writes_are_rejected() {
+        let script = "var chosen;app.execDialog({initialize:function(d){d.load({old:true});d.enable({old:false});},commit:function(d){chosen=d.store();},description:{elements:[{type:'radio',item_id:'old',group_id:'g'},{type:'radio',item_id:'new',group_id:'g'}]}});chosen.old+':'+chosen.new";
+        let out = ScriptSession::default().run(job(script), &[Some(r#"{"event":"ok","values":{"new":true}}"#.into())]);
+        assert_eq!(out.error, None);
+        assert_eq!(out.result.as_deref(), Some("false:true"));
+        let out = ScriptSession::default().run(job(script), &[Some(r#"{"event":"ok","values":{"old":false}}"#.into())]);
+        assert!(out.error.as_deref().is_some_and(|e| e.contains("disabled")));
+    }
+    #[test]
+    fn repeated_loads_bound_retained_values_and_reject_whole_patches() {
+        let script = "var kept;app.execDialog({initialize:function(d){var big='xxx';for(var i=0;i<21;i++)big+=big;d.load({one:big});d.load({two:big});d.load({one:big});try{d.load({small:'changed',three:big});}catch(e){kept=d.store();}d.end('cancel');},description:{elements:['one','two','three','small'].map(function(id){return {type:'edit_text',item_id:id};})}});kept.one.length+':'+kept.two.length+':'+kept.three+':'+kept.small";
+        let out = ScriptSession::default().run(job(script), &[]);
+        assert_eq!(out.error, None);
+        assert_eq!(out.result.as_deref(), Some("6291456:6291456::"));
     }
     #[test]
     fn dialog_callbacks_load_validate_commit_and_destroy_in_order() {

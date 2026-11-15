@@ -2,9 +2,13 @@
 use crate::{Dict, Document, ObjRef, Object, OrganizeError, PdfString, rebuild, walk};
 use std::collections::{HashMap, HashSet};
 #[derive(Clone, Debug, PartialEq)]
+/// A named page, retained even when absent from the visible page tree.
 pub struct Template {
+    /// Decoded name used to look up the template.
     pub name: String,
+    /// Original page object, including for hidden templates.
     pub page: ObjRef,
+    /// Zero-based visible page index, or `None` when hidden.
     pub visible_page: Option<usize>,
 }
 
@@ -54,6 +58,7 @@ fn entries(doc: &Document, kind: &[u8]) -> Vec<(String, ObjRef)> {
     }
     out
 }
+/// List valid named templates in decoded-name order; malformed entries are skipped.
 pub fn templates(doc: &Document) -> Vec<Template> {
     let pages: HashMap<_, _> = walk(doc).unwrap_or_default().into_iter().enumerate().map(|(i, (r, _))| (r, i)).collect();
     let mut out = std::collections::BTreeMap::new();
@@ -99,11 +104,13 @@ fn set_entry(doc: &mut Document, kind: &[u8], name: &str, page: Option<ObjRef>) 
             .map(|s| s.to_text())
             .ok_or_else(|| OrganizeError::Invalid("template name tree has a non-string key".into()))?;
         if key_text != name {
-            values.push((key_text, key.clone(), value.clone()));
+            let bytes = doc.resolve(key).as_string().map(|s| s.bytes.clone()).unwrap_or_default();
+            values.push((bytes, key.clone(), value.clone()));
         }
     }
     if let Some(page) = page {
-        values.push((name.to_string(), Object::String(PdfString::text(name)), Object::Ref(page)));
+        let key = PdfString::text(name);
+        values.push((key.bytes.clone(), Object::String(key), Object::Ref(page)));
     }
     if values.len() > 4096 {
         return Err(OrganizeError::Invalid("too many page templates".into()));
@@ -119,6 +126,9 @@ fn set_entry(doc: &mut Document, kind: &[u8], name: &str, page: Option<ObjRef>) 
     doc.update_dict(root, |d| d.set(b"Names".to_vec(), Object::Dict(names)))?;
     Ok(())
 }
+/// Name a zero-based visible page, replacing any existing template with this name.
+/// Refuses empty/oversized names, missing pages, and malformed or branched name trees.
+/// Like the other template writers, use a working clone to roll back on error.
 pub fn create_template(doc: &mut Document, name: &str, page: usize) -> Result<(), OrganizeError> {
     if name.is_empty() || name.len() > 4096 {
         return Err(OrganizeError::Invalid("a template name needs 1 through 4096 bytes".into()));
@@ -127,13 +137,15 @@ pub fn create_template(doc: &mut Document, name: &str, page: usize) -> Result<()
     set_entry(doc, b"Templates", name, None)?;
     set_entry(doc, b"Pages", name, Some(page))
 }
+/// Remove a name without deleting its page. Refuses missing names or unsupported name trees.
+/// Use a working clone for rollback if either name-tree update fails.
 pub fn remove_template(doc: &mut Document, name: &str) -> Result<(), OrganizeError> {
     named(doc, name)?;
     set_entry(doc, b"Templates", name, None)?;
     set_entry(doc, b"Pages", name, None)
 }
 /// Effective inherited page entries, bounded independently of the page tree walk.
-fn inherited(doc: &Document, page: ObjRef) -> Dict {
+pub(crate) fn inherited(doc: &Document, page: ObjRef) -> Dict {
     let mut out = Dict::new();
     let mut seen = HashSet::new();
     let mut next = Some(page);
@@ -154,6 +166,19 @@ fn inherited(doc: &Document, page: ObjRef) -> Dict {
     }
     out
 }
+/// Hide the template's visible page, or append its hidden page to the visible pages.
+/// Already matching visibility is a no-op. Refuses a missing name, hiding the last
+/// page, invalid page trees, or unsupported name trees.
+///
+/// This may change the page tree before a branched name tree is refused. Callers
+/// requiring rollback must clone and commit only on success:
+/// ```
+/// # fn update(doc: &mut pdfcraft_cos::Document) -> Result<(), pdfcraft_organize::OrganizeError> {
+/// let mut working = doc.clone();
+/// pdfcraft_organize::set_template_hidden(&mut working, "Notes", true)?;
+/// *doc = working;
+/// # Ok(()) }
+/// ```
 pub fn set_template_hidden(doc: &mut Document, name: &str, hidden: bool) -> Result<(), OrganizeError> {
     let template = named(doc, name)?;
     let mut pages = walk(doc)?;
@@ -189,6 +214,11 @@ pub fn set_template_hidden(doc: &mut Document, name: &str, hidden: bool) -> Resu
     }
     Ok(())
 }
+/// Insert a template copy before zero-based `at`, clamped to the page count (append).
+/// `rename` prefixes copied fields with `P{at}.{name}.`; a taken prefix is refused.
+/// Without renaming, widgets share the original fields. Overlay is unsupported.
+/// Missing names, invalid graphs and copy limits return errors; use a working clone
+/// to discard partial changes on failure.
 pub fn spawn_template(doc: &mut Document, name: &str, at: usize, rename: bool, overlay: bool) -> Result<ObjRef, OrganizeError> {
     if overlay {
         return Err(OrganizeError::Invalid("overlay template spawning is not supported; use bOverlay=false".into()));
@@ -198,6 +228,8 @@ pub fn spawn_template(doc: &mut Document, name: &str, at: usize, rename: bool, o
     crate::import::copy_template_page(doc, template.page, inherited(doc, template.page), at, rename.then(|| format!("P{at}.{name}.")))
 }
 /// Deleting a visible named template hides it; ordinary spawned pages are removed normally.
+/// Indices are zero-based; duplicates count once. Refuses missing indices or deleting
+/// all visible pages. Use a working clone for rollback on page/name-tree errors.
 pub fn delete_script_pages(doc: &mut Document, pages: &[usize]) -> Result<(), OrganizeError> {
     let all = walk(doc)?;
     crate::check(pages, all.len())?;
@@ -263,6 +295,74 @@ mod tests {
         let reopened = Document::open(Arc::new(saved)).unwrap();
         assert_eq!(crate::page_count(&reopened).unwrap(), 2);
         assert_eq!(templates(&reopened)[0].name, "Notes");
+    }
+    #[test]
+    fn later_spawns_keep_hidden_templates_inherited_page_attributes() {
+        let mut doc = fixture();
+        let first = spawn_template(&mut doc, "Notes", 1, true, false).unwrap();
+        let second = spawn_template(&mut doc, "Notes", 2, true, false).unwrap();
+        for page in [ObjRef::new(4, 0), first, second] {
+            let page = doc.get(page);
+            let page = page.as_dict().unwrap();
+            assert!(page.contains(b"MediaBox"));
+            assert!(page.contains(b"Resources"));
+        }
+    }
+    #[test]
+    fn renamed_template_copies_indirect_action_containers() {
+        let mut doc = fixture();
+        let mut action = Dict::new();
+        action.set(b"S".to_vec(), Object::name("ResetForm"));
+        action.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(5, 0))]));
+        let action = doc.add(Object::Dict(action));
+        let mut aa = Dict::new();
+        aa.set(b"U".to_vec(), Object::Ref(action));
+        let aa = doc.add(Object::Dict(aa));
+        doc.update_dict(ObjRef::new(5, 0), |d| d.set(b"AA".to_vec(), Object::Ref(aa))).unwrap();
+        let page = spawn_template(&mut doc, "Notes", 1, true, false).unwrap();
+        let widget = doc.resolve(doc.get(page).as_dict().unwrap().get(b"Annots").unwrap()).as_array().unwrap()[0].as_ref().unwrap();
+        let copied_aa = doc.get(widget).as_dict().unwrap().reference(b"AA").unwrap();
+        assert_ne!(copied_aa, aa);
+        let copied_action = doc.get(copied_aa).as_dict().unwrap().reference(b"U").unwrap();
+        assert_ne!(copied_action, action);
+        let fields = doc.get(copied_action).as_dict().unwrap().get(b"Fields").unwrap().as_array().unwrap().clone();
+        assert_eq!(fields, vec![Object::Ref(widget)]);
+        assert_eq!(doc.get(action).as_dict().unwrap().get(b"Fields").unwrap().as_array().unwrap(), &vec![Object::Ref(ObjRef::new(5, 0))]);
+    }
+    #[test]
+    fn template_name_tree_sorts_encoded_bytes_including_indirect_keys() {
+        let mut doc = fixture();
+        let encoded = PdfString::literal(vec![0xfe, 0xff, 0, b'A']);
+        let key = doc.add(Object::String(encoded.clone()));
+        let mut tree = Dict::new();
+        tree.set(b"Names".to_vec(), Object::Array(vec![Object::Ref(key), Object::Int(17)]));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |d| {
+            let mut names = Dict::new();
+            names.set(b"Pages".to_vec(), Object::Dict(tree));
+            d.set(b"Names".to_vec(), Object::Dict(names));
+        })
+        .unwrap();
+        create_template(&mut doc, "Z", 0).unwrap();
+        let root = doc.get(root);
+        let pairs = root
+            .as_dict()
+            .unwrap()
+            .get(b"Names")
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"Pages")
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"Names")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        let bytes: Vec<_> = pairs.as_chunks::<2>().0.iter().map(|p| doc.resolve(&p[0]).as_string().unwrap().bytes.clone()).collect();
+        assert!(bytes.windows(2).all(|p| p[0] < p[1]));
+        assert!(pairs.contains(&Object::Ref(key)));
     }
     #[test]
     fn editing_template_names_keeps_unrecognized_values() {

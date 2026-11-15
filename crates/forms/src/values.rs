@@ -526,13 +526,16 @@ pub(crate) fn redraw_calculated_values(doc: &mut Document, pending: &[(ObjRef, V
     let all = fields(doc);
     for (obj, values) in pending {
         let Some(f) = all.iter().find(|f| f.obj == *obj) else { continue };
+        let mut no_scripts = NoScripts;
+        let formatting: &mut dyn Scripts = if scripts.stopped() { &mut no_scripts } else { scripts };
         let shown = match (values.as_slice(), &f.actions.scripts.format) {
             ([one], Some(js)) if matches!(f.kind, FieldKind::Text | FieldKind::Combo) => {
-                Some(scripts.run(FieldEvent::Format, js, f, one, &all, doc).value)
+                Some(formatting.run(FieldEvent::Format, js, f, one, &all, doc).value)
             }
             _ => None,
         };
-        redraw_shown(doc, f, values, scripts, shown)?;
+        let formatting: &mut dyn Scripts = if formatting.stopped() { &mut no_scripts } else { formatting };
+        redraw_shown(doc, f, values, formatting, shown)?;
     }
     Ok(())
 }

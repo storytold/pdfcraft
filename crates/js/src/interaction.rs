@@ -38,6 +38,7 @@ pub struct Progress {
 thread_local! {
     static PROGRESS_CANCEL:RefCell<std::sync::Arc<std::sync::atomic::AtomicBool>>=RefCell::new(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
     static PROGRESS_COUNT:std::cell::Cell<usize>=const{std::cell::Cell::new(0)};
+    static PROGRESS_CLEARED:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};
 }
 pub(crate) fn cancelled() -> bool {
     PROGRESS_CANCEL.with(|c| c.borrow().load(std::sync::atomic::Ordering::Relaxed))
@@ -46,7 +47,7 @@ pub(crate) fn progress(text: String, value: f64, duration: f64, active: bool) {
     if !PROGRESS_COUNT.with(|n| {
         let old = n.get();
         n.set(old.saturating_add(1));
-        old < 64
+        old < 64 || (!active && PROGRESS_CLEARED.with(|cleared| !cleared.replace(true)))
     }) {
         return;
     }
@@ -56,6 +57,25 @@ pub(crate) fn progress(text: String, value: f64, duration: f64, active: bool) {
             let _ = tx.send(InteractiveEvent::Progress(Progress { text, value, duration, active, cancel }));
         }
     });
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[test]
+fn exhausted_progress_budget_still_clears_once_per_invocation() {
+    for _ in 0..2 {
+        let (tx, rx) = mpsc::channel();
+        set_host(Some(tx));
+        for _ in 0..70 {
+            progress(String::new(), 0.0, 1.0, true);
+        }
+        progress(String::new(), 0.0, 1.0, false);
+        progress(String::new(), 0.0, 1.0, true);
+        progress(String::new(), 0.0, 1.0, false);
+        set_host(None);
+        let events: Vec<_> = rx.try_iter().collect();
+        assert_eq!(events.len(), 65);
+        assert!(matches!(events.last(), Some(InteractiveEvent::Progress(p)) if !p.active));
+    }
 }
 thread_local! { static HOST:RefCell<Option<(Sender<InteractiveEvent>,usize)>>=const {RefCell::new(None)}; }
 /// Tell alert/menu helpers whether this worker has an interactive or deterministic reply channel.
@@ -67,6 +87,7 @@ pub(crate) fn has_host() -> bool {
 pub(crate) fn set_host(host: Option<Sender<InteractiveEvent>>) {
     PROGRESS_CANCEL.with(|c| *c.borrow_mut() = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
     PROGRESS_COUNT.with(|c| c.set(0));
+    PROGRESS_CLEARED.with(|c| c.set(false));
     HOST.with(|h| *h.borrow_mut() = host.map(|h| (h, 0)));
 }
 /// Charge one prompt to the invocation's budget: the channel to send it on, if the worker has one.

@@ -33,6 +33,9 @@ fn answers(host: &Automation, a: &Args) -> Result<Vec<Option<String>>> {
                 Value::Object(o) if o.len() == 1 && o.get("file").is_some_and(Value::is_string) => {
                     use std::io::Read;
                     let path = host.resolve(o.get("file").and_then(Value::as_str).unwrap_or_default(), false)?;
+                    if !std::fs::metadata(&path).map_err(failed)?.is_file() {
+                        return Err(failed(format!("{}: not a regular file", path.display())));
+                    }
                     let mut text = String::new();
                     let limit = file_budget.min(8 << 20);
                     std::fs::File::open(path).and_then(|f| f.take(limit + 1).read_to_string(&mut text)).map_err(failed)?;

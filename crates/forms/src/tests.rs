@@ -7641,3 +7641,74 @@ fn calculated_writeback_formats_against_one_final_snapshot() {
     apply_script_changes(&mut doc, &changes, &mut Formats).unwrap();
     assert!(crate::read::form_reads_on_this_thread() - reads <= 2);
 }
+
+#[test]
+fn calculated_formatting_stops_callbacks_and_draws_remaining_values() {
+    let mut doc = fixture();
+    for name in ["name", "zip"] {
+        set_field_script(&mut doc, name, "format", Some("format")).unwrap();
+    }
+    struct Stop(bool);
+    impl Scripts for Stop {
+        fn stopped(&self) -> bool {
+            self.0
+        }
+        fn run(&mut self, event: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field], _: &Document) -> ScriptResult {
+            assert!(!self.0, "no callback after stop");
+            assert_eq!(event, FieldEvent::Format);
+            self.0 = true;
+            ScriptResult { rc: true, value: format!("${value}"), value_set: false, changes: vec![], message: None }
+        }
+    }
+    let changes: Vec<_> = ["name", "zip"]
+        .into_iter()
+        .map(|name| FieldChange {
+            name: name.into(),
+            value: Some(vec!["7".into()]),
+            formatted: true,
+            calculation_complete: true,
+            ..Default::default()
+        })
+        .collect();
+    apply_script_changes(&mut doc, &changes, &mut Stop(false)).unwrap();
+    for name in ["name", "zip"] {
+        let all = fields(&doc);
+        let f = field(&all, name);
+        assert_eq!(f.value, ["7"]);
+        assert!(doc.get(f.widgets[0].obj).as_dict().unwrap().contains(b"AP"));
+    }
+}
+
+#[test]
+fn showing_hidden_calculated_values_regenerates_formatted_appearances() {
+    let mut doc = fixture();
+    set_field_script(&mut doc, "name", "format", Some("format")).unwrap();
+    let f = fields(&doc).into_iter().find(|f| f.name == "name").unwrap();
+    doc.update_dict(f.widgets[0].obj, |d| d.set(b"F".to_vec(), Object::Int(2))).unwrap();
+    struct Format(usize);
+    impl Scripts for Format {
+        fn run(&mut self, _: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field], _: &Document) -> ScriptResult {
+            self.0 += 1;
+            ScriptResult { rc: true, value: format!("${value}"), value_set: false, changes: vec![], message: None }
+        }
+    }
+    let mut scripts = Format(0);
+    apply_script_changes(
+        &mut doc,
+        &[FieldChange { name: "name".into(), value: Some(vec!["7".into()]), formatted: true, calculation_complete: true, ..Default::default() }],
+        &mut scripts,
+    )
+    .unwrap();
+    assert_eq!(scripts.0, 1);
+    let widget = doc.get(f.widgets[0].obj);
+    let ap = doc.resolve(widget.as_dict().unwrap().get(b"AP").unwrap());
+    assert!(!ap.as_dict().unwrap().contains(b"N"), "hidden layout is deferred");
+    apply_script_changes(&mut doc, &[FieldChange { name: "name".into(), display: Some(0), ..Default::default() }], &mut scripts).unwrap();
+    assert_eq!(scripts.0, 2, "showing the widget runs Format");
+    let widget = doc.get(f.widgets[0].obj);
+    let ap = doc.resolve(widget.as_dict().unwrap().get(b"AP").unwrap());
+    let normal = doc.resolve(ap.as_dict().unwrap().get(b"N").unwrap());
+    let Object::Stream(stream) = &*normal else { panic!("appearance stream") };
+    let bytes = stream.decoded().unwrap();
+    assert!(bytes.windows(2).any(|w| w == b"$7"), "formatted text is drawn");
+}

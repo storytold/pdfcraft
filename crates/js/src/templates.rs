@@ -298,7 +298,7 @@ fn spawn_named(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsV
     let (name, params) = if let Some(o) = first.as_object() {
         (o.get(js_string!("cTemplate"), ctx)?, vec![first])
     } else {
-        (arg(args, 1), vec![first, arg(args, 2), arg(args, 3)])
+        (first, vec![arg(args, 1), arg(args, 2), arg(args, 3)])
     };
     let name = text_with_budget(&name, ctx, 4096, "template name is too long")?;
     spawn(&JsValue::undefined(), &params, &crate::JsString::from(name), ctx)

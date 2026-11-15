@@ -55,7 +55,10 @@ impl Writer {
                 return Err(error("toSource: native functions can't be written"));
             }
             // Object methods stringify as `name(args) { ... }`, not an expression.
-            let source = if source.starts_with("function") || source.starts_with("async function") || source.contains("=>") {
+            // Parse only: a method is not a standalone expression, whereas an arrow or
+            // function is. Nested arrows and literal text must not classify its outer form.
+            let expression = format!("({source})");
+            let source = if boa_engine::Script::parse(boa_engine::Source::from_bytes(&expression), None, ctx).is_ok() {
                 source
             } else if let Some(method) = source.strip_prefix("async ") {
                 format!("async function {method}")

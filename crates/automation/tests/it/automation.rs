@@ -9606,7 +9606,11 @@ fn script_dialog_and_tool_button_commit_answers_without_replaying_callbacks() {
 
 #[test]
 fn selected_script_streams_are_confined_and_survive_save_reopen() {
-    let dir = workdir("script-streams");
+    let parent = workdir("script-streams");
+    let dir = parent.join("root");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("a.pdf"), fixture(3)).unwrap();
+    std::fs::write(parent.join("outside.js"), "readable but outside the root").unwrap();
     std::fs::write(dir.join("rules.js"), "({name:'Scout',bonus:function(n){return n+2;}})").unwrap();
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
@@ -9615,7 +9619,10 @@ fn selected_script_streams_are_confined_and_survive_save_reopen() {
     let out = ok(&mut a, "js_run", json!({"doc":doc,"script":script,"answers":[{"file":"rules.js"}]}));
     assert_eq!(out["error"], Value::Null);
     assert_eq!(out["result"], "20");
-    assert!(a.call("js_run", &json!({"doc":doc,"script":script,"answers":[{"file":"../outside.js"}]})).is_err());
+    let error = a.call("js_run", &json!({"doc":doc,"script":script,"answers":[{"file":"../outside.js"}]})).unwrap_err();
+    assert!(error.to_string().contains("outside the allowed directory"), "{error}");
+    let error = a.call("js_run", &json!({"doc":doc,"script":script,"answers":[{"file":"."}]})).unwrap_err();
+    assert!(error.to_string().contains("not a regular file"), "{error}");
     assert!(
         ok(&mut a, "js_run", json!({"doc":doc,"script":"util.readFileIntoStream('rules.js')"}))["error"]
             .as_str()

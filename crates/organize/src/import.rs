@@ -58,6 +58,63 @@ pub(crate) fn copy_template_page(
     // widgets and leave the spawned page without its renamed field graph.
     copied.extend(source.get(b"Annots").and_then(Object::as_ref));
     copied.extend(annotations.iter().filter_map(Object::as_ref));
+    // Action containers are mutable graphs too: sharing /AA would keep references
+    // to the original fields after a renamed spawn. Their immutable streams stay shared.
+    let mut actions = Vec::new();
+    for r in &copied {
+        if actions.len() >= 100_000 {
+            return Err(OrganizeError::Invalid("template action graph is too large".into()));
+        }
+        if let Some(d) = src.get(*r).as_dict() {
+            actions.extend([b"A".as_slice(), b"AA".as_slice()].into_iter().filter_map(|k| d.get(k).cloned()));
+        }
+    }
+    let mut seen = HashSet::new();
+    let mut steps = 0usize;
+    while let Some(value) = actions.pop() {
+        steps = steps.saturating_add(1);
+        if steps > 100_000 {
+            return Err(OrganizeError::Invalid("template action graph is too large".into()));
+        }
+        let resolved = if let Some(r) = value.as_ref() {
+            if copied.contains(&r) || !seen.insert(r) {
+                continue;
+            }
+            let value = src.get(r);
+            // A destination or field list can point outside the action graph.
+            // Keep those document objects shared; selected fields are already in `copied`.
+            if value.as_dict().is_some_and(|d| {
+                matches!(d.name(b"Type"), Some(b"Page" | b"Pages" | b"Template" | b"Catalog"))
+                    || d.contains(b"FT")
+                    || d.name(b"Subtype") == Some(b"Widget")
+                    || (d.contains(b"T") && d.contains(b"Kids"))
+            }) {
+                continue;
+            }
+            if matches!(&*value, Object::Dict(_) | Object::Array(_) | Object::Ref(_)) {
+                copied.insert(r);
+            }
+            value
+        } else {
+            std::sync::Arc::new(value)
+        };
+        match &*resolved {
+            Object::Ref(r) => actions.push(Object::Ref(*r)),
+            Object::Dict(d) => {
+                if actions.len().saturating_add(d.len()).saturating_add(steps) > 100_000 {
+                    return Err(OrganizeError::Invalid("template action graph is too large".into()));
+                }
+                actions.extend(d.iter().map(|(_, v)| v.clone()));
+            }
+            Object::Array(a) => {
+                if actions.len().saturating_add(a.len()).saturating_add(steps) > 100_000 {
+                    return Err(OrganizeError::Invalid("template action graph is too large".into()));
+                }
+                actions.extend(a.iter().cloned());
+            }
+            _ => {}
+        }
+    }
     let objects = src.object_numbers();
     if objects.len() > 1_000_000 {
         return Err(OrganizeError::Invalid("document has too many objects to spawn a template".into()));
@@ -155,6 +212,18 @@ pub(crate) fn copy_template_page(
         }
     }
     order.insert(at.min(order.len()), (new_page, Dict::new()));
+    // Rebuild removes inherited attributes from the old root. Hidden templates
+    // are outside `order`, but later spawns still need their effective attributes.
+    for template in crate::templates(dst).into_iter().filter(|t| t.visible_page.is_none()) {
+        let attrs = crate::templates::inherited(dst, template.page);
+        dst.update_dict(template.page, |d| {
+            for (key, value) in attrs.iter() {
+                if !d.contains(key) {
+                    d.set(key.clone(), value.clone());
+                }
+            }
+        })?;
+    }
     rebuild(dst, &order)?;
     Ok(new_page)
 }
