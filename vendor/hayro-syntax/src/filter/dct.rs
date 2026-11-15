@@ -17,7 +17,7 @@ pub(crate) fn decode(
         return None;
     }
 
-    // PdfCraft patch (55): the data is read from its start-of-image marker.
+    // PdfCraft patch (56): the data is read from its start-of-image marker.
     let data = from_start_of_image(data);
 
     // Some PDFs have weird JPEGs where the JPEG metadata is completely wrong
@@ -101,7 +101,7 @@ pub(crate) fn decode(
     })
 }
 
-/// PdfCraft patch (55): `data` from its first start-of-image marker (`FF D8` and the next
+/// PdfCraft patch (56): `data` from its first start-of-image marker (`FF D8` and the next
 /// marker's `FF`), or all of it when it has none.
 ///
 /// DCTDecode data is a JPEG interchange-format stream (ISO 32000-2 §7.4.8), which begins with
