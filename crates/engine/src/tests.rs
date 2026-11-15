@@ -3477,6 +3477,37 @@ fn importing_xfdf_or_fdf_data_recalculates_in_calculation_order() {
     assert_eq!(value("scaled"), vec!["50".to_string()]);
 }
 
+/// A built-in total that reads a field a custom Calculate script sets runs after that script
+/// when data is imported: the import's own built-in pass can't get the total right, so only the
+/// recalculation in the calculation order (ISO 32000-2 Table 224 /CO) does. The fields are made
+/// in reverse dependency order, and the order is then set explicitly.
+#[test]
+fn an_imported_value_reaches_a_built_in_total_through_a_custom_calculation() {
+    use form_scripts::{CalcOp, Calculate};
+    let (mut s, id) = session_with(1);
+    for (i, name) in ["total", "mid", "a"].into_iter().enumerate() {
+        let y = 250.0 - 40.0 * i as f64;
+        let kind = NewField::Text { multiline: false };
+        s.apply(id, Edit::AddField { page: 0, rect: [20.0, y, 180.0, y + 22.0], kind, name: Some(name.into()) }).unwrap();
+    }
+    let props = Box::new(FieldProps { calculate: Some(Calculate::Simple { op: CalcOp::Sum, fields: vec!["mid".into()] }), ..Default::default() });
+    s.apply(id, Edit::SetFieldProps { name: "total".into(), props }).unwrap();
+    let script = Some("event.value = Number(this.getField(\"a\").value) * 10;".to_string());
+    s.apply(id, Edit::SetFieldScript { name: "mid".into(), event: "calculate".into(), script }).unwrap();
+    s.apply(id, Edit::SetCalculationOrder { names: vec!["mid".into(), "total".into()] }).unwrap();
+    let values = |s: &Session| {
+        ["mid", "total"].map(|n| s.get(id).unwrap().form.iter().find(|f| f.name == n).and_then(|f| f.value.first().cloned()).unwrap_or_default())
+    };
+    assert_eq!(values(&s), ["0", "0"]);
+
+    let xfdf = br#"<?xml version="1.0" encoding="UTF-8"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><fields><field name="a"><value>2</value></field></fields></xfdf>"#;
+    s.apply(id, Edit::ImportData { name: "data.xfdf".into(), bytes: Arc::new(xfdf.to_vec()) }).unwrap();
+    assert_eq!(values(&s), ["20", "20"], "the total runs after the script it reads: {:?}", s.take_js_output(id));
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Import data.xfdf"));
+    s.undo(id).unwrap();
+    assert_eq!(values(&s), ["0", "0"]);
+}
+
 /// A Calculate script that never ends, run by imported data, is stopped by the script limits:
 /// the import is refused and the document stays as it was, as when the value is typed in.
 #[test]
