@@ -79,21 +79,17 @@ impl Document {
     /// RGBA pixels (width, height, pixels) for the clipboard. Soft masks become alpha.
     pub fn page_image_rgba(&self, page: usize, index: usize) -> Result<(u32, u32, Vec<u8>), String> {
         let (_, bytes) = self.page_image_copy_file(page, index)?;
-        let format = image::guess_format(&bytes).map_err(|e| e.to_string())?;
-        let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes.as_slice()), format);
-        let mut limits = image::Limits::default();
-        limits.max_alloc = Some(MAX_COPY_PIXELS * 4);
-        reader.limits(limits);
-        let decoder = reader.into_decoder().map_err(|e| e.to_string())?;
-        let (w, h) = image::ImageDecoder::dimensions(&decoder);
-        if w == 0 || h == 0 {
-            return Err("the image is empty".into());
-        }
-        if u64::from(w) * u64::from(h) > MAX_COPY_PIXELS {
-            return Err(format!("the image is too large to copy ({w} × {h} pixels); use Save Image As"));
-        }
-        let rgba = image::DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?.into_rgba8();
-        Ok((rgba.width(), rgba.height(), rgba.into_raw()))
+        let opts = craft_image_codecs::DecodeOptions {
+            limits: craft_image_codecs::Limits { max_pixels: MAX_COPY_PIXELS, max_alloc: MAX_COPY_PIXELS * 4, ..Default::default() },
+            ..Default::default()
+        };
+        let img = craft_image_codecs::decode_with(&bytes, &opts).map_err(|e| match e {
+            craft_image_codecs::CodecError::LimitExceeded(_) => "the image is too large to copy; use Save Image As".to_string(),
+            other => other.to_string(),
+        })?;
+        let (w, h) = (img.width(), img.height());
+        let raw = img.to_rgba8();
+        Ok((w, h, raw))
     }
 
     /// Edit ▸ Copy of an added image (`index` among `page`'s added items): its picture as a file
@@ -134,7 +130,7 @@ pub(crate) fn is_picture(cos: &Cos, image: ObjRef, file: &[u8]) -> bool {
         Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => size(s),
         _ => return false,
     };
-    let given = image::ImageReader::new(std::io::Cursor::new(file)).with_guessed_format().ok().and_then(|r| r.into_dimensions().ok());
+    let given = craft_image_codecs::probe_size(file).ok().or_else(|| craft_image_codecs::decode(file).ok().map(|img| (img.width(), img.height())));
     stored.is_some() && stored == given && picture_file(cos, image).is_ok_and(|(_, data)| data == file)
 }
 
