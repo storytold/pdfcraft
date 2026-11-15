@@ -86,38 +86,103 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
     let mut level: Option<&[Node]> = None;
     let segments = som_to_path(som);
     let page_area_index = page_area_index(tpl, &segments);
+    // `$record` in a reference: the data group of the root subform, as the data is written.
+    let record = tpl.root.common.name.as_deref();
     for (i, (name, index)) in segments.into_iter().enumerate() {
         // A page area's SOM index is the page made from it; see [`page_area_index`].
         let index = if i == 0 { page_area_index.unwrap_or(index) } else { index };
-        let (found, index) = match level {
-            None if i == 0 && tpl.root.common.name.as_deref() == Some(name.as_str()) => (Some(Container::Children(&tpl.root.children)), index),
-            None => (None, index),
+        // What the segment names, its data index, and the explicit data reference it binds by.
+        let (found, index, data_ref) = match level {
+            None if i == 0 && tpl.root.common.name.as_deref() == Some(name.as_str()) => (Some(Container::Children(&tpl.root.children)), index, None),
+            // Master-page objects are named under their page area, which is a data scope.
+            None if i == 0 => match tpl.root.page_set.as_ref().and_then(|ps| ps.areas.iter().find(|a| a.name.as_deref() == Some(name.as_str()))) {
+                Some(area) => (Some(Container::Children(&area.items)), index, None),
+                None => (None, index, None),
+            },
+            None => (None, index, None),
             Some(children) => match named_in(children, &name, index, 0) {
                 Some((siblings, node)) => {
                     let index = data_index(siblings, &name, index);
+                    let data_ref = node.common().data_ref.as_deref();
                     match node {
-                        Node::Subform(sf) if sf.unbound => (Some(Container::Area(&sf.children)), index),
-                        Node::Subform(sf) => (Some(Container::Children(&sf.children)), index),
-                        Node::Area(a) => (Some(Container::Area(&a.children)), index),
-                        _ => (None, index),
+                        Node::Subform(sf) if sf.unbound => (Some(Container::Area(&sf.children)), index, None),
+                        Node::Subform(sf) => (Some(Container::Children(&sf.children)), index, data_ref),
+                        Node::Area(a) => (Some(Container::Area(&a.children)), index, None),
+                        Node::Field(_) | Node::ExclGroup(_) => (None, index, data_ref),
+                        Node::Draw(_) => (None, index, None),
                     }
                 }
-                None => (None, index),
+                None => (None, index, None),
             },
         };
         match found {
             Some(Container::Area(children)) => level = Some(children),
             Some(Container::Children(children)) => {
                 level = Some(children);
-                out.push((name, index));
+                bind(&mut out, name, index, data_ref, record);
             }
             None => {
                 level = None;
-                out.push((name, index));
+                bind(&mut out, name, index, data_ref, record);
             }
         }
     }
     out
+}
+
+/// Extend `out`, the parent's data path, with the node the object `name[index]` binds to: the
+/// node its explicit data reference names, or else the one its name names. A reference this
+/// binding can't follow ([`resolve_ref`]) binds by name, so a value written there still has
+/// somewhere to go.
+fn bind(out: &mut DataPath, name: String, index: usize, data_ref: Option<&str>, record: Option<&str>) {
+    match data_ref.and_then(|r| resolve_ref(r, out, record)) {
+        Some(path) => *out = path,
+        None => out.push((name, index)),
+    }
+}
+
+/// The data path a `bind ref` SOM expression names, from the object's parent data node at
+/// `parent` (XFA 3.3, "Explicit Data References", p. 199): `$record.a.b` (`record` is the
+/// root subform's name, which names the record's data group), `$data.a.b`, `$.a.b` or `a.b`
+/// (relative to the parent), each segment with an optional `[n]`. Anything else (another DOM
+/// such as `$form`, `..`, `[*]`, predicates, functions) is `None`.
+fn resolve_ref(r: &str, parent: &DataPath, record: Option<&str>) -> Option<DataPath> {
+    let r = r.trim();
+    let after = |prefix: &str| r.strip_prefix(prefix).filter(|rest| rest.is_empty() || rest.starts_with('.'));
+    let (mut path, rest) = if let Some(rest) = after("$record") {
+        (vec![(record?.to_string(), 0)], rest)
+    } else if let Some(rest) = after("$data") {
+        (DataPath::new(), rest)
+    } else if let Some(rest) = after("$") {
+        (parent.clone(), rest)
+    } else if r.starts_with('$') || r.starts_with('!') {
+        return None;
+    } else {
+        (parent.clone(), r)
+    };
+    let rest = rest.strip_prefix('.').unwrap_or(rest);
+    if rest.is_empty() {
+        return Some(path);
+    }
+    for seg in rest.split('.') {
+        let (name, idx) = match seg.trim().split_once('[') {
+            Some((n, idx)) => (n.trim(), idx.strip_suffix(']')?.trim().parse::<usize>().ok()?),
+            None => (seg.trim(), 0),
+        };
+        if !ref_name(name) {
+            return None;
+        }
+        path.push((name.to_string(), idx.min(100_000)));
+        if path.len() > MAX_DEPTH {
+            return None;
+        }
+    }
+    Some(path)
+}
+
+/// Whether `name` is a plain element name in a `bind ref` (an empty one is part of a `..`).
+fn ref_name(name: &str) -> bool {
+    !name.is_empty() && !name.chars().any(|c| matches!(c, '(' | ')' | '#' | '$' | '!' | '"' | '\'' | '[' | ']' | '/' | '*') || c.is_whitespace())
 }
 
 /// For a SOM path that starts at a page area (`Area[n].…`), the index its first segment takes in

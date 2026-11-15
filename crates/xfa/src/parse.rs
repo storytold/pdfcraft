@@ -266,6 +266,11 @@ fn parse_common(n: XmlNode, warnings: &mut Vec<String>) -> Common {
         para: parse_para(child(n, "para")),
         col_span: n.attribute("colSpan").and_then(|c| c.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 64),
         traversal: parse_traversal(child(n, "traversal")),
+        data_ref: child(n, "bind")
+            .filter(|b| b.attribute("match").is_some_and(|m| m.trim() == "dataRef"))
+            .and_then(|b| b.attribute("ref"))
+            .map(|r| r.trim().to_string())
+            .filter(|r| !r.is_empty()),
     }
 }
 

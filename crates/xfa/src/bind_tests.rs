@@ -1,10 +1,15 @@
-//! Subforms with `<bind match="none"/>`: they "will not bind to any node in the XFA Data DOM"
-//! (XFA 3.3, "The bind element", *The match property*, p. 176), and are "treated like a
-//! nameless subform by the data binding process" while scripts still reach them by name
-//! ("Transparent Nodes", p. 194). So what they hold binds in the enclosing data scope.
+//! Explicit data binding (XFA 3.3, "The bind element", *The match property*, p. 176).
+//!
+//! - Subforms with `<bind match="none"/>` "will not bind to any node in the XFA Data DOM", and
+//!   are "treated like a nameless subform by the data binding process" while scripts still
+//!   reach them by name ("Transparent Nodes", p. 194). So what they hold binds in the
+//!   enclosing data scope.
+//! - Fields, exclusion groups and subforms with `<bind match="dataRef" ref="…"/>` bind to the
+//!   data node the SOM expression `ref` names ("Explicit Data References", p. 199); a subform's
+//!   children then bind by name under that node (p. 200).
 
 use super::*;
-use crate::layout::Item;
+use crate::layout::{Item, WidgetKind};
 use crate::model::Template;
 
 /// The widgets laid out on `page`, in order.
@@ -110,4 +115,141 @@ fn a_repeating_match_none_subform_takes_its_count_from_occur() {
     let form = layout_xml(&xml).unwrap();
     let rows = form.pages.iter().flat_map(|p| widgets(p)).filter(|w| w.som.ends_with(".amount[0]")).count();
     assert_eq!(rows, 2);
+}
+
+/// `<bind match="dataRef" ref="…"/>` on a field, an exclusion group or a subform binds it to
+/// the node the reference names, whatever the object is called and wherever it sits: `$.` and a
+/// bare name are relative to the parent's data node, `$record` is the form's record (the root
+/// data group), `$data` the data itself, and `[n]` an index. A subform bound this way is the
+/// data scope of its children, which bind by name under its node (XFA 3.3 pp. 199–200).
+#[test]
+fn explicit_data_references_bind_to_the_node_they_name() {
+    let r#ref = |r: &str| format!(r#"<bind match="dataRef" ref="{r}"/>"#);
+    let body = format!(
+        r#"<subform name="page1" layout="tb"><bind match="none"/>
+ <field name="a" {TEXT}{}</field>
+ <field name="b" {TEXT}{}</field>
+ <field name="c" {TEXT}{}</field>
+ <field name="d" {TEXT}{}</field>
+ <field name="e" {TEXT}{}</field>
+ <subform name="anything" layout="tb">{}<field name="street" {TEXT}</field></subform>
+ <exclGroup name="choice" layout="tb">{}
+  <field name="yes" w="0.3in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>Y</text></items></field>
+  <field name="no" w="0.3in" h="0.3in"><ui><checkButton shape="round"/></ui><items><text>N</text></items></field>
+ </exclGroup>
+</subform>"#,
+        r#ref("$.person.surname"),
+        r#ref("$record.person.first"),
+        r#ref("$data.form.ids.id[1]"),
+        r#ref("person.title"),
+        r#ref("$.ids.id"),
+        r#ref("$.person.address"),
+        r#ref("$.person.agrees"),
+    );
+    let data = "<person><surname>Smith</surname><first>Ann</first><title>Dr</title><address><street>Main Rd</street></address><agrees>N</agrees></person>\
+                <ids><id>A1</id><id>B2</id></ids>";
+    let xml = xdp(&body, data);
+    let (tpl, _) = parse(&xml).unwrap();
+    assert_eq!(path(&tpl, "form[0].page1[0].a[0]"), "form[0].person[0].surname[0]");
+    assert_eq!(path(&tpl, "form[0].page1[0].b[0]"), "form[0].person[0].first[0]");
+    assert_eq!(path(&tpl, "form[0].page1[0].c[0]"), "form[0].ids[0].id[1]");
+    assert_eq!(path(&tpl, "form[0].page1[0].d[0]"), "form[0].person[0].title[0]");
+    assert_eq!(path(&tpl, "form[0].page1[0].e[0]"), "form[0].ids[0].id[0]");
+    assert_eq!(path(&tpl, "form[0].page1[0].anything[0].street[0]"), "form[0].person[0].address[0].street[0]");
+    assert_eq!(path(&tpl, "form[0].page1[0].choice[0]"), "form[0].person[0].agrees[0]");
+    let form = layout_xml(&xml).unwrap();
+    for (tail, want) in [("a[0]", "Smith"), ("b[0]", "Ann"), ("c[0]", "B2"), ("d[0]", "Dr"), ("e[0]", "A1"), ("street[0]", "Main Rd")] {
+        assert_eq!(value_at(&form, &format!(".{tail}")).as_deref(), Some(want), "{tail}");
+    }
+    let on: Vec<&str> = form
+        .pages
+        .iter()
+        .flat_map(|p| widgets(p))
+        .filter(|w| w.value.is_some())
+        .filter_map(|w| match &w.kind {
+            WidgetKind::Radio { on, .. } => Some(on.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(on, ["N"], "the group takes the value its reference names");
+}
+
+/// A reference this binding can't follow (another DOM, or `..`, which searches the data) leaves
+/// the object to bind by name, so its value still has somewhere to go.
+#[test]
+fn a_reference_that_cant_be_followed_binds_by_name() {
+    let body = format!(
+        r#"<field name="x" {TEXT}<bind match="dataRef" ref="$form.other"/></field>
+<field name="y" {TEXT}<bind match="dataRef" ref="$..y"/></field>"#
+    );
+    let (tpl, _) = parse(&xdp(&body, "")).unwrap();
+    assert_eq!(path(&tpl, "form[0].x[0]"), "form[0].x[0]");
+    assert_eq!(path(&tpl, "form[0].y[0]"), "form[0].y[0]");
+}
+
+/// Designer copies of a subform keep its name, so the copies are told apart by their SOM index
+/// (`group[2]`), and each copy may hold different objects bound to different data nodes. The
+/// binding walk has to step into the copy the index names, not the first one of that name.
+#[test]
+fn explicit_bindings_follow_the_index_of_same_named_siblings() {
+    let body = format!(
+        r#"<subform name="page1" layout="tb"><bind match="none"/>
+  <subform name="group" layout="tb"><bind match="none"/>
+   <field name="altId" {TEXT}<bind match="dataRef" ref="$.person.altId"/></field>
+  </subform>
+  <subform name="group" layout="tb"><bind match="none"/>
+   <field name="other" {TEXT}<bind match="dataRef" ref="$.person.other"/></field>
+  </subform>
+  <subform name="group" layout="tb"><bind match="none"/>
+   <field name="value" {TEXT}<bind match="dataRef" ref="$.person.surname"/></field>
+  </subform>
+  <subform name="row" layout="tb"><bind match="none"/>
+   <field name="amount" {TEXT}<bind match="dataRef" ref="$.income.line[0].amount"/></field>
+  </subform>
+  <subform name="row" layout="tb"><bind match="none"/>
+   <field name="amount" {TEXT}<bind match="dataRef" ref="$.income.line[1].amount"/></field>
+  </subform>
+  <subform name="row" layout="tb"><bind match="none"/>
+   <field name="amount" {TEXT}<bind match="dataRef" ref="$.income.line[2].amount"/></field>
+  </subform>
+ </subform>"#
+    );
+    let xml = xdp(
+        &body,
+        "<person><altId/><other/><surname>Smith</surname></person><income><line><amount>100</amount></line><line><amount>200</amount></line></income>",
+    );
+    let form = layout_xml(&xml).unwrap();
+    assert_eq!(value_at(&form, "group[2].value[0]").as_deref(), Some("Smith"), "a field in the third copy binds by its own ref");
+    let amounts: Vec<Option<String>> =
+        form.pages.iter().flat_map(|p| widgets(p)).filter(|w| w.som.ends_with(".amount[0]")).map(|w| w.value.clone()).collect();
+    assert_eq!(amounts, [Some("100".to_string()), Some("200".to_string()), None], "each copied row reads its own line");
+    let (tpl, _) = parse(&xml).unwrap();
+    assert_eq!(path(&tpl, "form[0].page1[0].group[2].value[0]"), "form[0].person[0].surname[0]");
+    assert_eq!(path(&tpl, "form[0].page1[0].row[1].amount[0]"), "form[0].income[0].line[1].amount[0]");
+    assert_eq!(path(&tpl, "form[0].page1[0].row[2].amount[0]"), "form[0].income[0].line[2].amount[0]");
+}
+
+/// A field on a master page binds by its reference too, and `$record` there is still the
+/// form's record, not the page area it is drawn on: every page shows the one value.
+#[test]
+fn a_master_page_field_binds_by_its_reference() {
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="1in" w="7.5in" h="9in"/><medium short="8.5in" long="11in"/>
+  <field name="code" x="0.5in" y="0.2in" {TEXT}<bind match="dataRef" ref="$record.office.code"/></field>
+ </pageArea></pageSet>
+ <field name="body" {TEXT}</field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><office><code>K9</code></office></form></xfa:data></xfa:datasets>
+</xdp:xdp>"#
+    );
+    let (tpl, _) = parse(&xml).unwrap();
+    assert_eq!(path(&tpl, "front[0].code[0]"), "form[0].office[0].code[0]");
+    assert_eq!(path(&tpl, "front[1].code[0]"), "form[0].office[0].code[0]");
+    let form = layout_xml(&xml).unwrap();
+    assert_eq!(value_at(&form, "code[0]").as_deref(), Some("K9"));
 }

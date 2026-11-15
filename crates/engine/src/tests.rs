@@ -8218,6 +8218,46 @@ fn dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally() {
     assert_eq!(d2.form.iter().find(|f| f.name == "answer").unwrap().value, vec!["N".to_string()]);
 }
 
+/// Explicit data bindings hold through the engine: a field in a `match="none"` section and a
+/// field bound by `dataRef` open with the values their data nodes hold, and filling them in
+/// writes the values back to those nodes (not to groups named after the subforms), so Adobe's
+/// viewers read them where the form says they are.
+#[test]
+fn explicit_bindings_are_read_and_written_through_the_engine() {
+    let xdp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="section" layout="tb"><bind match="none"/>
+  <field name="color" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="value" w="2in" h="0.3in"><ui><textEdit/></ui><bind match="dataRef" ref="$.person.surname"/></field>
+ </subform>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><color>Teal</color><person><surname>Smith</surname></person></form></xfa:data></xfa:datasets>
+</xdp:xdp>"#;
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("bound.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let value =
+        |s: &Session, id, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_else(|| panic!("no {n}"));
+    assert_eq!(value(&s, id, "color"), ["Teal"]);
+    assert_eq!(value(&s, id, "value"), ["Smith"]);
+    s.apply(id, Edit::SetFieldValue { name: "color".into(), value: FieldValue::Text("Crimson".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "value".into(), value: FieldValue::Text("Jones".into()) }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).expect("a datasets packet");
+    let text = |p: &str| data.text_at(&pdfcraft_xfa::som_to_path(p)).map(str::to_string);
+    assert_eq!(text("form[0].color[0]").as_deref(), Some("Crimson"));
+    assert_eq!(text("form[0].person[0].surname[0]").as_deref(), Some("Jones"));
+    assert_eq!(text("form[0].section[0].color[0]"), None, "no group named after the section");
+    assert_eq!(text("form[0].section[0].value[0]"), None);
+    let id2 = s.open("saved.pdf", None, saved, None).unwrap();
+    assert_eq!(value(&s, id2, "color"), ["Crimson"]);
+    assert_eq!(value(&s, id2, "value"), ["Jones"]);
+}
+
 /// A signature box's XFA preSign script runs as one undoable step, showing its notice and
 /// changing the form; its postSign script runs too; a box without them runs nothing and changes
 /// nothing.

@@ -393,6 +393,9 @@ pub struct Common {
     /// scripts to read (see [`Props`]). Shared: the live form's instances of the object and
     /// copies of the template point at the same tree.
     pub props: std::sync::Arc<Props>,
+    /// `<bind match="dataRef" ref="…"/>`: the SOM expression naming the data node the object
+    /// binds to, in place of binding by name (XFA 3.3, "Explicit Data References", p. 199).
+    pub data_ref: Option<String>,
 }
 
 /// A container's or object's `<traversal>` links, as SOM references relative to it. Only the
