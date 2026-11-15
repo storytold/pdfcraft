@@ -24,7 +24,6 @@ use outline::OutlineFont;
 use skrifa::GlyphId;
 use std::borrow::Cow;
 use std::fmt::Debug;
-use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::Arc;
 
