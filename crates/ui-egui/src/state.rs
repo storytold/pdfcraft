@@ -263,17 +263,21 @@ pub struct PageClip {
 }
 
 /// One page of a whole-document copy: its text as read for display, to read, or not to try
-/// (reading it failed before).
+/// (reading it failed before). A selection's part of a page selected on its recovered layer is
+/// taken on the UI thread, as text (`Selected`).
 pub(crate) enum CopyPage {
     Read(std::sync::Arc<pdfcraft_render::PageText>),
+    Selected(String),
     ToRead,
     Skip,
 }
 
 /// What a whole-document copy needs, taken from the view on the UI thread: each page's text
-/// layer as far as it was read, and the document to read the others from.
+/// layer as far as it was read, and the document to read the others from. A copy of a text
+/// selection across pages whose pages are not all read yet is one too, limited to its `span`.
 pub(crate) struct DocumentCopyJob {
     pub(crate) pages: Vec<CopyPage>,
+    span: Option<crate::canvas::TextSpan>,
     bytes: std::sync::Arc<Vec<u8>>,
     password: Option<std::sync::Arc<str>>,
 }
@@ -287,7 +291,28 @@ impl DocumentCopyJob {
                 None => CopyPage::ToRead,
             })
             .collect();
-        DocumentCopyJob { pages, bytes: doc.bytes.clone(), password: doc.password.as_deref().map(std::sync::Arc::from) }
+        DocumentCopyJob { pages, span: None, bytes: doc.bytes.clone(), password: doc.password.as_deref().map(std::sync::Arc::from) }
+    }
+
+    /// A copy of the reading-order text `span` covers: its pages as [`Self::of`] takes them, every
+    /// other page skipped. A page selected on its recovered layer, whose glyph indices `span` is
+    /// in, gives its selected text as the view reads it ([`DocView::selected_layer_texts`]).
+    pub(crate) fn of_selection(v: &DocView, doc: &pdfcraft_engine::Document, span: crate::canvas::TextSpan) -> DocumentCopyJob {
+        let mut job = DocumentCopyJob::of(v, doc);
+        for (page, p) in job.pages.iter_mut().enumerate() {
+            if page < span.start.0 || page > span.end.0 {
+                *p = CopyPage::Skip;
+            }
+        }
+        for (page, text) in v.selected_layer_texts() {
+            if let Some(p) = job.pages.get_mut(page)
+                && !matches!(p, CopyPage::Skip)
+            {
+                *p = CopyPage::Selected(text);
+            }
+        }
+        job.span = Some(span);
+        job
     }
 
     /// The document's text in page order, a page per line run. Each page read here is let go
@@ -304,12 +329,19 @@ impl DocumentCopyJob {
                 out.push_str(&text);
             }
         };
+        // The glyphs taken from `page`: all of them, or the part a selection covers.
+        let span = self.span;
+        let part = |page: usize, t: &pdfcraft_render::PageText| match span {
+            Some(span) => span.on(page, t.glyphs.len()).map(|r| t.text_of(r)).unwrap_or_default(),
+            None => t.text_of(0..t.glyphs.len()),
+        };
         for (page, p) in self.pages.into_iter().enumerate() {
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 return None;
             }
             match p {
-                CopyPage::Read(t) => push(t.text_of(0..t.glyphs.len())),
+                CopyPage::Read(t) => push(part(page, &t)),
+                CopyPage::Selected(text) => push(text),
                 CopyPage::ToRead => {
                     let r = renderer.get_or_insert_with(|| {
                         let config = pdfcraft_render::RenderConfig { password: self.password.clone(), ..Default::default() };
@@ -324,7 +356,7 @@ impl DocumentCopyJob {
                         preview: false,
                     };
                     if let Some(t) = r.render(req).text {
-                        push(t.text_of(0..t.glyphs.len()));
+                        push(part(page, &t));
                     }
                 }
                 CopyPage::Skip => {}
