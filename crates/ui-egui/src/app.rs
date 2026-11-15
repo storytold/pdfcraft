@@ -144,6 +144,7 @@ impl PdfCraftApp {
             all_tools_query: String::new(),
             all_tools_tab: (None, false),
             recent: Vec::new(),
+            recent_query: String::new(),
             recent_limit: crate::RECENT_FILES_DEFAULT,
             reopen_last_session: false,
             restore_last_view: true,

@@ -115,6 +115,134 @@ fn home_removes_one_recent_file_or_clears_them_all() {
     assert!(h.query_by_label("Clear Recent Files").is_none(), "and goes away with nothing left to clear");
 }
 
+fn recent_search_input(h: &mut Harness<'static, PdfCraftApp>, events: impl IntoIterator<Item = egui::Event>) {
+    h.input_mut().events.extend(events);
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    h.run_steps(2);
+}
+
+fn recent_search_click(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    let pos = h.get_by_label(label).rect().center();
+    recent_search_input(
+        h,
+        [
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+        ],
+    );
+    recent_search_input(
+        h,
+        [egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+    );
+}
+
+fn recent_search_key(h: &mut Harness<'static, PdfCraftApp>, key: egui::Key, modifiers: egui::Modifiers) {
+    recent_search_input(h, [true, false].map(|pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers }));
+}
+
+fn replace_recent_search(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
+    recent_search_click(h, "Search recent files");
+    recent_search_key(h, egui::Key::A, egui::Modifiers { ctrl: true, command: true, ..Default::default() });
+    recent_search_key(h, egui::Key::Backspace, egui::Modifiers::NONE);
+    recent_search_input(h, [egui::Event::Text(text.into())]);
+}
+
+#[test]
+fn home_recent_search_filters_before_limiting_clears_and_opens_the_result() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-home-recent-search-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("Invoice-2025.pdf");
+    // Full writing gives the existing contributor-original fixture a valid xref.
+    let source = pdfcraft_cos::Document::open(std::sync::Arc::new(FIXTURE.to_vec())).unwrap();
+    let bytes = pdfcraft_cos::write_full(&source, &Default::default()).unwrap();
+    std::fs::write(&target, &bytes).unwrap();
+    let target_path = target.to_string_lossy().into_owned();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.recent_limit = 2;
+        for name in ["invoice-2026.pdf", "notes.pdf", "Invoice-2025.pdf"] {
+            let path = if name == "Invoice-2025.pdf" { target_path.clone() } else { format!("/synthetic/{name}") };
+            app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path, pages: 2, size: bytes.len() });
+        }
+        app
+    });
+    h.run_steps(4);
+    let original: Vec<_> = h.state().recent.iter().map(|r| (r.name.clone(), r.path.clone())).collect();
+    h.get_by_label("invoice-2026.pdf");
+    h.get_by_label("notes.pdf");
+    assert!(h.query_by_label("Invoice-2025.pdf").is_none());
+    replace_recent_search(&mut h, "INVOICE");
+    assert!(h.query_by_label("notes.pdf").is_none());
+    assert!(h.get_by_label("invoice-2026.pdf").rect().top() < h.get_by_label("Invoice-2025.pdf").rect().top());
+    assert!(!h.state().persist().contains("recent_query"));
+    if let Ok(dir) = std::env::var("PDFCRAFT_RECENT_SEARCH_SHOTS") {
+        let _gpu = crate::gpu();
+        h.render().unwrap().save(format!("{dir}/recent-search-matches.png")).unwrap();
+    }
+    replace_recent_search(&mut h, "missing-document");
+    h.get_by_label("No recent files match your search.");
+    assert!(h.query_by_label("invoice-2026.pdf").is_none());
+    if let Ok(dir) = std::env::var("PDFCRAFT_RECENT_SEARCH_SHOTS") {
+        let _gpu = crate::gpu();
+        h.render().unwrap().save(format!("{dir}/recent-search-empty.png")).unwrap();
+    }
+    recent_search_key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(h.state().recent_query.is_empty());
+    h.get_by_label("invoice-2026.pdf");
+    h.get_by_label("notes.pdf");
+    assert!(h.query_by_label("No recent files match your search.").is_none());
+    replace_recent_search(&mut h, "2025");
+    replace_recent_search(&mut h, "");
+    assert_eq!(h.state().recent.iter().map(|r| (r.name.clone(), r.path.clone())).collect::<Vec<_>>(), original);
+    assert!(h.get_by_label("invoice-2026.pdf").rect().top() < h.get_by_label("notes.pdf").rect().top());
+    replace_recent_search(&mut h, "2025");
+    recent_search_click(&mut h, "Invoice-2025.pdf");
+    support::wait_until(&mut h, "the filtered recent file opens", |app| app.views.len() == 1);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.name, "Invoice-2025.pdf");
+    assert_eq!(std::path::Path::new(doc.path.as_ref().unwrap()).canonicalize().unwrap(), target.canonicalize().unwrap());
+    assert_eq!(std::fs::read(&target).unwrap(), pdfcraft_cos::write_full(&source, &Default::default()).unwrap());
+    drop(h);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn home_recent_search_folds_normal_and_final_greek_sigma() {
+    let mut h = harness(|app| {
+        for name in ["οδηγός.pdf", "notes.pdf"] {
+            app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/synthetic/{name}"), pages: 1, size: 0 });
+        }
+    });
+    let mut found = Vec::new();
+    for query in ["Σ", "σ", "ς"] {
+        replace_recent_search(&mut h, query);
+        assert_eq!(h.state().recent_query, query, "the real text event reaches the field");
+        found.push(h.query_by_label("οδηγός.pdf").is_some());
+        assert!(h.query_by_label("notes.pdf").is_none());
+    }
+    assert_eq!(found, [true, true, true], "uppercase, normal and final sigma must all find the final-sigma filename");
+}
+
+#[test]
+fn home_recent_search_is_hidden_without_recent_files() {
+    let mut h = harness(|_| {});
+    assert!(h.query_by_label("Search recent files").is_none());
+    h.state_mut().recent.push(pdfcraft_ui_egui::RecentFile { name: "notes.pdf".into(), path: "/synthetic/notes.pdf".into(), pages: 1, size: 0 });
+    h.run_steps(2);
+    replace_recent_search(&mut h, "unmatched");
+    recent_search_click(&mut h, "Clear Recent Files");
+    assert!(h.state().recent.is_empty());
+    assert!(h.state().recent_query.is_empty());
+    assert!(h.query_by_label("Search recent files").is_none());
+    assert!(h.query_by_label("No recent files match your search.").is_none());
+    h.get_by_label_contains("Files you open in PdfCraft appear here");
+}
+
 #[test]
 fn every_catalog_tool_is_listed_after_view_more() {
     let mut h = harness(|_| {});
@@ -2166,8 +2294,7 @@ fn home_recent_context_menu_reveals_the_target_without_opening_or_removing_it() 
     assert_eq!(h.state().active, None);
     assert_eq!(h.state().recent.len(), 2, "reveal must not remove missing recent files");
     assert_eq!(h.state().recent[1].path, expected);
-    assert!(
-        h.state().toast.as_ref().is_some_and(|(text, _)| text.contains("The file no longer exists")),
-        "the selected path is checked and the existing reveal error is shown"
-    );
+    support::wait_until(&mut h, "the background reveal reports the missing file", |app| {
+        app.toast.as_ref().is_some_and(|(text, _)| text.contains("The file no longer exists"))
+    });
 }

@@ -3,6 +3,7 @@
 
 use egui::{Align2, CornerRadius, Rect, Sense, Stroke, vec2};
 use pdfcraft_engine::catalog;
+use pdfcraft_render::text::fold_case;
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, panels::human_size, widgets};
@@ -202,14 +203,35 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 });
                 ui.add_space(8.0);
                 if app.recent.is_empty() {
+                    app.recent_query.clear();
                     ui.label(egui::RichText::new(tl!("Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.")).color(t.text_muted));
+                } else {
+                    let label = tl!("Search recent files");
+                    let edit = ui.add(
+                        widgets::line(&mut app.recent_query)
+                            .id_salt("recent-search")
+                            .hint_text(label)
+                            .char_limit(256)
+                            .desired_width(ui.available_width().min(520.0)),
+                    );
+                    edit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, label));
+                    // These are the field's own keys, including Escape after TextEdit drops focus.
+                    if (edit.has_focus() || edit.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        app.recent_query.clear();
+                        egui::text_edit::TextEditState::default().store(ui.ctx(), edit.id);
+                    }
+                    ui.add_space(8.0);
                 }
             }
+            let query = fold_case(&app.recent_query);
+            let mut matched = false;
             let mut open = None;
             let mut remove = None;
             #[cfg(not(target_arch = "wasm32"))]
             let mut reveal = None;
-            for r in app.recent.iter().take(app.recent_limit) {
+            // Filter before limiting: an older retained file must still be searchable.
+            for r in app.recent.iter().filter(|r| query.is_empty() || fold_case(&r.name).contains(&query)).take(app.recent_limit) {
+                matched = true;
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &r.name));
                 #[cfg(not(target_arch = "wasm32"))]
@@ -276,6 +298,9 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 if theme::hand(resp).on_hover_text(&r.path).clicked() {
                     open = Some(r.path.clone());
                 }
+            }
+            if app.recent_limit > 0 && !app.recent.is_empty() && !matched {
+                ui.label(egui::RichText::new(tl!("No recent files match your search.")).color(t.text_muted));
             }
             if let Some(p) = open {
                 app.open_recent(&p);
