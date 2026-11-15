@@ -25,4 +25,10 @@ let html = report_html(&report, "file.pdf", "2026-10-02", "en", &in_english);  /
 - The report is a self-contained HTML page. Fixes that edit the document (language, title, tab
   order) live in the engine (`Document::accessibility_fix`).
 
-Not yet: autotagging, the Tags/Order/Content panels, the Reading Order tool (M12.1–M12.2).
+Basic automatic tagging and the Tags panel are available. `autotag_text` creates paragraph and
+heading tags in supported untagged PDFs; existing structure trees, AcroForms and page annotations
+are refused. Form fields use the separate `tag_form_fields` operation. The Tags panel supports
+inspection, property edits and sibling reordering. Automatic results require human review and
+do not establish accessibility compliance.
+
+Not yet: dedicated Order/Content panels and the Reading Order tool (M12.1–M12.2).
