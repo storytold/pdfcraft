@@ -28,6 +28,8 @@ use crate::grey::{GreyImage, MAX_PIXELS};
 
 /// The largest angle [`estimate_skew`] looks for, in degrees (the far end of a bad feed).
 pub const DEFAULT_MAX_SKEW_DEGREES: f64 = 15.0;
+/// Tilt below this angle in degrees is treated as level so rectification skips resampling.
+pub const MIN_SKEW_DEGREES: f64 = 0.1;
 /// The long side of the downscaled copy detection works on: enough resolution for 0.1°
 /// precision on a scan, a million-odd pixels of work whatever the page.
 const DETECTION_MAX_SIDE: u32 = 1024;
@@ -66,17 +68,11 @@ impl Affine {
         Some(Affine { a: ia, b: ib, c: ic, d: id, e: -(ia * self.e + ic * self.f), f: -(ib * self.e + id * self.f) })
     }
 
-    fn rotation_about(angle: f64, from_center: (f64, f64), to_center: (f64, f64)) -> Affine {
-        // p' = C_to + R(angle)·(p − C_from), R as the standard matrix [[cos, −sin],[sin, cos]].
+    fn similarity_about(angle: f64, scale: f64, from_center: (f64, f64), to_center: (f64, f64)) -> Affine {
+        // p' = C_to + scale * R(angle)·(p − C_from), R as the standard matrix [[cos, −sin],[sin, cos]].
         let (sin, cos) = angle.sin_cos();
-        Affine {
-            a: cos,
-            b: sin,
-            c: -sin,
-            d: cos,
-            e: to_center.0 - (cos * from_center.0 - sin * from_center.1),
-            f: to_center.1 - (sin * from_center.0 + cos * from_center.1),
-        }
+        let (a, b, c, d) = (scale * cos, scale * sin, -scale * sin, scale * cos);
+        Affine { a, b, c, d, e: to_center.0 - (a * from_center.0 + c * from_center.1), f: to_center.1 - (b * from_center.0 + d * from_center.1) }
     }
 }
 
@@ -234,12 +230,16 @@ pub fn estimate_skew(grey: &GreyImage, max_angle_degrees: f64) -> f64 {
     let (fine, _) = best_angle(&ink, down_w, down_h, coarse - 1.0_f64.to_radians(), coarse + 1.0_f64.to_radians(), fine_step);
     let score = |a: f64| projection_score(&ink, a, down_w, down_h);
     let (y_minus, y_zero, y_plus) = (score(fine - fine_step), score(fine), score(fine + fine_step));
-    (fine + parabolic_vertex(y_minus, y_zero, y_plus) * fine_step).clamp(-max, max)
+    let angle = (fine + parabolic_vertex(y_minus, y_zero, y_plus) * fine_step).clamp(-max, max);
+    if angle.abs() < MIN_SKEW_DEGREES.to_radians() {
+        return 0.0;
+    }
+    angle
 }
 
 /// The size a canvas needs to hold `grey` rotated by `angle` about its centre, with a margin
-/// for sampling at the edges, or `None` if the rotated page would exceed [`MAX_PIXELS`].
-fn rotated_size(width: u32, height: u32, angle: f64) -> Option<(u32, u32)> {
+/// for sampling at the edges, scaled down only if the expansion would exceed `max_pixels`.
+fn rotated_size(width: u32, height: u32, angle: f64, max_pixels: u64) -> Option<(u32, u32, f64)> {
     let (sin, cos) = angle.sin_cos();
     let corners = [(0.0, 0.0), (f64::from(width), 0.0), (0.0, f64::from(height)), (f64::from(width), f64::from(height))];
     let rotated: Vec<(f64, f64)> = corners.iter().map(|&(x, y)| (x * cos - y * sin, x * sin + y * cos)).collect();
@@ -254,12 +254,24 @@ fn rotated_size(width: u32, height: u32, angle: f64) -> Option<(u32, u32)> {
     }
     // Two pixels of margin keep bilinear samples at the new edges off the very last source
     // pixel, and round the size up to whole pixels.
-    let out_w = span_x as u64 + 2;
-    let out_h = span_y as u64 + 2;
-    if out_w.saturating_mul(out_h) > MAX_PIXELS || out_w > u32::MAX as u64 || out_h > u32::MAX as u64 {
+    let raw_w = span_x as u64 + 2;
+    let raw_h = span_y as u64 + 2;
+    if raw_w.saturating_mul(raw_h) <= max_pixels && raw_w <= u64::from(u32::MAX) && raw_h <= u64::from(u32::MAX) {
+        return Some((raw_w as u32, raw_h as u32, 1.0));
+    }
+    let mut scale = ((max_pixels as f64) / ((span_x + 2.0) * (span_y + 2.0))).sqrt().min(1.0);
+    if !scale.is_finite() || scale <= 0.0 {
         return None;
     }
-    Some((out_w as u32, out_h as u32))
+    for _ in 0..64 {
+        let out_w = (span_x * scale).ceil().max(1.0) as u64 + 2;
+        let out_h = (span_y * scale).ceil().max(1.0) as u64 + 2;
+        if out_w.saturating_mul(out_h) <= max_pixels && out_w <= u64::from(u32::MAX) && out_h <= u64::from(u32::MAX) {
+            return Some((out_w as u32, out_h as u32, scale));
+        }
+        scale *= 0.999;
+    }
+    None
 }
 
 /// Bilinear sample of `grey` at continuous `(x, y)`, paper white outside the image.
@@ -286,26 +298,42 @@ pub struct Deskewed {
     pub grey: GreyImage,
     pub angle_radians: f64,
     pub to_original: Affine,
+    /// Deskewed pixels per source pixel (`1.0` normally; `< 1.0` when rotation margin was capped to fit `MAX_PIXELS`).
+    pub scale: f64,
 }
 
 /// Rotate `grey` level by `angle_radians` (the opposite of the tilt: see [`estimate_skew`]).
 ///
-/// The canvas grows to keep every corner of the page, the outside is paper white, and the
-/// mapping back to the original raster is returned with the result. Fails, without
-/// allocating, when the rotated page would not fit [`MAX_PIXELS`].
+/// Tilt below [`MIN_SKEW_DEGREES`] skips resampling and margin expansion. Larger tilts grow the
+/// canvas to keep every corner, scaling down if needed so the rotated buffer still fits
+/// [`MAX_PIXELS`].
 pub fn rectify(grey: &GreyImage, angle_radians: f64) -> Result<Deskewed, String> {
+    rectify_within(grey, angle_radians, MAX_PIXELS)
+}
+
+pub(crate) fn rectify_within(grey: &GreyImage, angle_radians: f64, max_pixels: u64) -> Result<Deskewed, String> {
     let (width, height) = (grey.width(), grey.height());
     if width == 0 || height == 0 {
         return Err("the image is empty".into());
     }
+    if !angle_radians.is_finite() {
+        return Err("skew angle is not finite".into());
+    }
+    let src_pixels = u64::from(width).saturating_mul(u64::from(height));
+    if src_pixels > max_pixels {
+        return Err(format!("the image has {src_pixels} pixels; at most {max_pixels} are read"));
+    }
+    if angle_radians.abs() < MIN_SKEW_DEGREES.to_radians() {
+        return Ok(Deskewed { grey: grey.clone(), angle_radians: 0.0, to_original: Affine::IDENTITY, scale: 1.0 });
+    }
     let rotate_by = -angle_radians;
-    let (out_w, out_h) = rotated_size(width, height, rotate_by)
-        .ok_or_else(|| format!("rotating the page by {angle_radians:.3} radians would not fit {MAX_PIXELS} pixels"))?;
+    let (out_w, out_h, scale) = rotated_size(width, height, rotate_by, max_pixels)
+        .ok_or_else(|| format!("rotating the page by {angle_radians:.3} radians would not fit {max_pixels} pixels"))?;
     // Deskewed pixel p maps back to the original raster through the inverse of the rotation
-    // the content was given: p_original = C_in + R(angle)·(p − C_out).
+    // (and optional downscale) the content was given: p_original = C_in + (1/scale) * R(angle)·(p − C_out).
     let from_center = ((f64::from(width) - 1.0) / 2.0, (f64::from(height) - 1.0) / 2.0);
     let to_center = ((f64::from(out_w) - 1.0) / 2.0, (f64::from(out_h) - 1.0) / 2.0);
-    let to_original = Affine::rotation_about(angle_radians, to_center, from_center);
+    let to_original = Affine::similarity_about(angle_radians, 1.0 / scale, to_center, from_center);
     let mut data = vec![0_u8; out_w as usize * out_h as usize];
     for y in 0..out_h {
         for x in 0..out_w {
@@ -317,7 +345,7 @@ pub fn rectify(grey: &GreyImage, angle_radians: f64) -> Result<Deskewed, String>
         }
     }
     let rotated = GreyImage::new(out_w, out_h, data).ok_or("the rotated image does not fit its canvas")?;
-    Ok(Deskewed { grey: rotated, angle_radians, to_original })
+    Ok(Deskewed { grey: rotated, angle_radians, to_original, scale })
 }
 
 #[cfg(test)]
@@ -415,13 +443,36 @@ mod tests {
     }
 
     #[test]
-    fn the_canvas_grows_to_keep_the_page() {
+    fn the_canvas_grows_to_keep_the_page_unless_level() {
         let page = text_page(200, 100, 0.0);
         let level = rectify(&page, 0.0).unwrap();
-        assert_eq!((level.grey.width(), level.grey.height()), (202, 102), "the two margin pixels");
+        assert_eq!((level.grey.width(), level.grey.height()), (200, 100), "level pages skip resampling and margin");
+        assert_eq!(level.to_original, Affine::IDENTITY);
+        assert_eq!(level.scale, 1.0);
+        let tiny = rectify(&page, 0.08_f64.to_radians()).unwrap();
+        assert_eq!((tiny.grey.width(), tiny.grey.height()), (200, 100), "<0.1 deg dead band skips resampling");
+        assert_eq!(tiny.angle_radians, 0.0);
         let tilted = rectify(&page, 10.0_f64.to_radians()).unwrap();
         // The rotated 200×100 page spans 200·cos10° + 100·sin10° ≈ 214.3 wide, 133.2 tall.
         assert!(tilted.grey.width() >= 216 && tilted.grey.height() >= 134, "{:?}×{:?}", tilted.grey.width(), tilted.grey.height());
+    }
+
+    #[test]
+    fn estimate_skew_dead_band_zeros_tiny_tilt() {
+        let page = text_page(360, 260, 0.05_f64.to_radians());
+        assert_eq!(estimate_skew(&page, DEFAULT_MAX_SKEW_DEGREES), 0.0);
+    }
+
+    #[test]
+    fn large_tilted_page_caps_rectification_scale_instead_of_failing() {
+        let page = text_page(300, 200, 0.0);
+        // Source fits 60,000 px, whereas rotating by 10° with margin needs > 80,000 px.
+        let capped = rectify_within(&page, 10.0_f64.to_radians(), 60_000).expect("should scale to fit cap");
+        let pixels = u64::from(capped.grey.width()) * u64::from(capped.grey.height());
+        assert!(pixels <= 60_000, "rotated canvas exceeded cap: {pixels}");
+        assert!(capped.scale > 0.5 && capped.scale < 1.0, "expected downscale, got {}", capped.scale);
+        let (cx, cy) = capped.to_original.apply(f64::from(capped.grey.width() - 1) / 2.0, f64::from(capped.grey.height() - 1) / 2.0);
+        assert!((cx - 149.5).abs() < 0.5 && (cy - 99.5).abs() < 0.5, "centre went to ({cx}, {cy})");
     }
 
     /// Rotation about the centre with bilinear sampling keeps ink mass: the ink in the deskewed

@@ -19,7 +19,7 @@
 
 use crate::OcrError;
 use crate::binarize::{Binarization, Bitmap, SauvolaParams, binarize};
-use crate::deskew::{Affine, DEFAULT_MAX_SKEW_DEGREES, estimate_skew, rectify};
+use crate::deskew::{Affine, DEFAULT_MAX_SKEW_DEGREES, estimate_skew, rectify_within};
 use crate::grey::{GreyImage, to_grey};
 
 /// The knobs of [`preprocess`]. The defaults fit a 300 DPI text scan.
@@ -53,20 +53,40 @@ pub struct PreprocessedPage {
     pub to_original: Affine,
     /// Original raster pixel coordinates → deskewed pixel coordinates.
     pub from_original: Affine,
+    /// Deskewed pixels per source pixel (`1.0` normally; `< 1.0` when rotation margin was capped to fit `MAX_PIXELS`).
+    pub deskew_scale: f64,
 }
 
 /// Preprocess a page raster: `pixels` holds `width` × `height` pixels of `channels` (1, 3 or
 /// 4) bytes each, row-major from the top-left.
 pub fn preprocess(pixels: &[u8], width: u32, height: u32, channels: u32, options: &PreprocessedOptions) -> Result<PreprocessedPage, OcrError> {
+    preprocess_within(pixels, width, height, channels, options, crate::grey::MAX_PIXELS)
+}
+
+pub(crate) fn preprocess_within(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    channels: u32,
+    options: &PreprocessedOptions,
+    max_pixels: u64,
+) -> Result<PreprocessedPage, OcrError> {
     let grey = to_grey(pixels, width, height, channels).map_err(OcrError::Preprocess)?;
     let angle = estimate_skew(&grey, options.max_skew_degrees);
-    let deskewed = rectify(&grey, angle).map_err(OcrError::Preprocess)?;
+    let deskewed = rectify_within(&grey, angle, max_pixels).map_err(OcrError::Preprocess)?;
     let binary = binarize(&deskewed.grey, options.binarization, &options.sauvola);
     let to_original = deskewed.to_original;
     // A rotation is always invertible; the identity fallback only covers a degenerate map
     // that cannot arise, and fails soft as ever here.
     let from_original = to_original.inverse().unwrap_or(Affine::IDENTITY);
-    Ok(PreprocessedPage { grey: deskewed.grey, binary, angle_radians: angle, to_original, from_original })
+    Ok(PreprocessedPage {
+        grey: deskewed.grey,
+        binary,
+        angle_radians: deskewed.angle_radians,
+        to_original,
+        from_original,
+        deskew_scale: deskewed.scale,
+    })
 }
 
 #[cfg(test)]
@@ -171,7 +191,8 @@ mod tests {
         let page = preprocess(&pixels, 100, 60, 1, &PreprocessedOptions::default()).unwrap();
         assert_eq!(page.angle_radians, 0.0);
         assert_eq!(page.binary.ink_count(), 0);
-        assert_eq!((page.grey.width(), page.grey.height()), (102, 62), "only the margin");
+        assert_eq!((page.grey.width(), page.grey.height()), (100, 60), "level page skips rotation and margin");
+        assert_eq!(page.to_original, Affine::IDENTITY);
     }
 
     #[test]
@@ -186,9 +207,7 @@ mod tests {
     #[test]
     fn a_single_pixel_is_a_page() {
         let page = preprocess(&[128], 1, 1, 1, &PreprocessedOptions::default()).unwrap();
-        // On the margin canvas the lone grey pixel is the only dark class, so Otsu marks
-        // just it; nothing else is invented.
         assert!(page.binary.ink_count() <= 1, "{} ink pixels", page.binary.ink_count());
-        assert_eq!(page.to_original.apply(1.0, 1.0), (0.0, 0.0));
+        assert_eq!(page.to_original.apply(0.0, 0.0), (0.0, 0.0));
     }
 }

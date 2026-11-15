@@ -465,7 +465,17 @@ fn render_scale(dpi: f32, info: &PageInfo, native: Option<f32>) -> f32 {
     if !scale.is_finite() {
         return 1.0;
     }
-    scale.min(cap).max(0.05)
+    let capped = scale.min(cap).max(0.05);
+    // `device_pixels` rounds up, so a page right near `MAX_PIXELS` (e.g. A0/A1 at 300 dpi) can
+    // still exceed `MAX_PIXELS` by one row/column unless nudged inside the cap.
+    let mut eff = pdfcraft_render::effective_scale(info.width, info.height, capped);
+    while u64::from(pdfcraft_render::device_pixels(info.width, eff)).saturating_mul(u64::from(pdfcraft_render::device_pixels(info.height, eff)))
+        > pdfcraft_ocr::grey::MAX_PIXELS
+        && eff > 0.05
+    {
+        eff = (eff * 0.995).max(0.05);
+    }
+    eff
 }
 
 fn page_has_text(renderer: &mut PageRenderer, page: usize) -> bool {
@@ -902,5 +912,18 @@ mod tests {
                 && gcy <= f64::from(link_view_px[3]),
             "glyph 'H' center ({gcx:.2}, {gcy:.2}) landed outside link view rect {link_view_px:?}"
         );
+    }
+
+    #[test]
+    fn render_scale_keeps_large_a0_and_a1_pages_within_max_pixels() {
+        let mut session = Session::new();
+        for (i, (w, h)) in [(1684.0_f32, 2384.0_f32), (2384.0_f32, 3370.0_f32)].into_iter().enumerate() {
+            let blank = session.create_blank(f64::from(w), f64::from(h), 1).expect("blank");
+            let id = session.open(format!("large-{i}.pdf"), None, blank, None).expect("open");
+            let info = &session.get(id).expect("doc").info.pages[0];
+            let scale = render_scale(300.0, info, None);
+            let px = u64::from(pdfcraft_render::device_pixels(w, scale)) * u64::from(pdfcraft_render::device_pixels(h, scale));
+            assert!(px <= pdfcraft_ocr::grey::MAX_PIXELS, "{w}x{h} rendered {px} px > MAX_PIXELS");
+        }
     }
 }

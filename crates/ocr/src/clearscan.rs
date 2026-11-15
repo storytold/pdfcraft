@@ -24,7 +24,7 @@ use crate::background::{
 use crate::cluster::{ClusterParams, cluster};
 use crate::components::{AnalyzeOptions, analyze_page};
 use crate::grey::MAX_PIXELS;
-use crate::scan_prep::{PreprocessedOptions, PreprocessedPage, preprocess};
+use crate::scan_prep::{PreprocessedOptions, PreprocessedPage, preprocess_within};
 use crate::type3::{Type3Glyph, Type3Metrics, baseline_in_prototype, em_pixels, synthesize_type3};
 use crate::vectorize::{VectorizeParams, vectorize};
 
@@ -193,6 +193,21 @@ fn clearscan_inner<R, P>(
     raster: ScanRaster<'_>,
     options: &ClearScanOptions,
     geometry: Option<PageGeometry>,
+    recognize: R,
+    progress: P,
+) -> Result<ClearScanOutput, OcrError>
+where
+    R: FnMut(&PreprocessedPage) -> Result<Vec<AnnotatedLine>, OcrError>,
+    P: FnMut(ClearScanStage),
+{
+    clearscan_with_cap(raster, options, geometry, MAX_PIXELS, recognize, progress)
+}
+
+fn clearscan_with_cap<R, P>(
+    raster: ScanRaster<'_>,
+    options: &ClearScanOptions,
+    geometry: Option<PageGeometry>,
+    max_pixels: u64,
     mut recognize: R,
     mut progress: P,
 ) -> Result<ClearScanOutput, OcrError>
@@ -200,9 +215,16 @@ where
     R: FnMut(&PreprocessedPage) -> Result<Vec<AnnotatedLine>, OcrError>,
     P: FnMut(ClearScanStage),
 {
-    let (buf, src_w, src_h, ppp) = prepare_raster(&raster, options, &mut progress)?;
+    let (buf, src_w, src_h, source_ppp) = prepare_raster(&raster, options, &mut progress)?;
     progress(ClearScanStage::Preprocess);
-    let page = preprocess(&buf, src_w, src_h, raster.channels, &options.preprocess)?;
+    let page = preprocess_within(&buf, src_w, src_h, raster.channels, &options.preprocess, max_pixels)?;
+    if !page.deskew_scale.is_finite() || page.deskew_scale <= 0.0 {
+        return Err(clearscan_err("deskew scale is not valid"));
+    }
+    let deskew_ppp = source_ppp / page.deskew_scale;
+    if !deskew_ppp.is_finite() || deskew_ppp <= 0.0 || deskew_ppp > MAX_USER {
+        return Err(clearscan_err("deskewing made the page scale unusable"));
+    }
     progress(ClearScanStage::Recognize);
     let lines = recognize(&page)?;
     progress(ClearScanStage::Components);
@@ -217,7 +239,7 @@ where
     let (masters, skipped_clusters) = masters_of(&clustered, &aligned.matched, &lines, options)?;
     progress(ClearScanStage::Compose);
     let raster = deskewed_raster(&buf, src_w, src_h, raster.channels, &page)?;
-    let frame = ComposeFrame { points_per_pixel: ppp, to_original: page.to_original, geometry };
+    let frame = ComposeFrame { points_per_pixel: deskew_ppp, source_ppp, to_original: page.to_original, geometry };
     compose(&raster, components.components(), &masters, &lines, frame, options, skipped_clusters)
 }
 
@@ -524,6 +546,7 @@ struct Placed {
 
 struct ComposeFrame {
     points_per_pixel: f64,
+    source_ppp: f64,
     to_original: crate::deskew::Affine,
     geometry: Option<PageGeometry>,
 }
@@ -579,7 +602,7 @@ fn compose(
     let width = f64::from(cleaned.raster().width()) * points_per_pixel;
     let height = height_px * points_per_pixel;
     let placement = match frame.geometry {
-        Some(geom) => Some((geom.crop, clearscan_to_user_matrix(&geom, frame.to_original, height_px, points_per_pixel)?)),
+        Some(geom) => Some((geom.crop, clearscan_to_user_matrix(&geom, frame.to_original, height_px, points_per_pixel, frame.source_ppp)?)),
         None => None,
     };
     let image = embed_background(&mut doc, &cleaned, encoding)?;
@@ -643,6 +666,20 @@ fn deskewed_raster(pixels: &[u8], width: u32, height: u32, channels: u32, page: 
     let Some(out_len) = usize::try_from(len).ok() else {
         return Err(clearscan_err("the deskewed image is too large"));
     };
+    if page.angle_radians == 0.0 && dest_w == width && dest_h == height && page.to_original == crate::deskew::Affine::IDENTITY {
+        let mut data = Vec::with_capacity(out_len);
+        for chunk in pixels.chunks_exact(channels as usize) {
+            if channels == 4 {
+                let fade = u8::MAX - chunk[3];
+                data.push(chunk[0].saturating_add(fade));
+                data.push(chunk[1].saturating_add(fade));
+                data.push(chunk[2].saturating_add(fade));
+            } else {
+                data.extend_from_slice(&chunk[..3]);
+            }
+        }
+        return PageRaster::from_pixels(dest_w, dest_h, stored, &data);
+    }
     let mut data = vec![255_u8; out_len];
     for y in 0..dest_h {
         for x in 0..dest_w {
@@ -706,7 +743,8 @@ fn clearscan_to_user_matrix(
     geom: &PageGeometry,
     to_original: crate::deskew::Affine,
     deskewed_height_px: f64,
-    points_per_pixel: f64,
+    deskew_ppp: f64,
+    source_ppp: f64,
 ) -> Result<[f64; 6], OcrError> {
     let [cx0, cy0, cx1, cy1] = geom.crop;
     let cw = cx1 - cx0;
@@ -721,21 +759,24 @@ fn clearscan_to_user_matrix(
         || geom.display_height <= 0.0
         || !deskewed_height_px.is_finite()
         || deskewed_height_px <= 0.0
-        || !points_per_pixel.is_finite()
-        || points_per_pixel <= 0.0
+        || !deskew_ppp.is_finite()
+        || deskew_ppp <= 0.0
+        || !source_ppp.is_finite()
+        || source_ppp <= 0.0
         || geom.view_matrix.iter().any(|v| !v.is_finite())
     {
         return Err(clearscan_err("target page geometry is not valid"));
     }
+    let scale = source_ppp / deskew_ppp;
     let ex = to_original.e + 0.5 - 0.5 * to_original.a - 0.5 * to_original.c;
     let fy = to_original.f + 0.5 - 0.5 * to_original.b - 0.5 * to_original.d;
     let m_disp = [
-        to_original.a,
-        -to_original.b,
-        -to_original.c,
-        to_original.d,
-        points_per_pixel * (to_original.c * deskewed_height_px + ex),
-        geom.display_height - points_per_pixel * (to_original.d * deskewed_height_px + fy),
+        to_original.a * scale,
+        -to_original.b * scale,
+        -to_original.c * scale,
+        to_original.d * scale,
+        source_ppp * (to_original.c * deskewed_height_px + ex),
+        geom.display_height - source_ppp * (to_original.d * deskewed_height_px + fy),
     ];
     let v = geom.view_matrix;
     let m_user = [
@@ -1133,8 +1174,66 @@ mod tests {
             no_progress,
         )
         .expect("downsampled");
-        // Deskew adds a sampling margin. At downsample 2 each of those pixels is 2 user units.
+        // Deskew adds a sampling margin (when tilted). At downsample 2 each of those pixels is 2 user units.
         assert!((out.width - f64::from(width)).abs() < 16.0, "width {}", out.width);
         assert!(out.text.contains('H'), "{:?}", out.text);
+    }
+
+    #[test]
+    fn capped_rectification_carries_scale_through_compose() {
+        let (width, height) = (320_u32, 200_u32);
+        let mut pixels = vec![248_u8; (width * height) as usize];
+        // Draw tilted word-like bars at ~5° so estimate_skew finds >= 0.1° and rotation expansion
+        // exceeds the 64,000 px test cap (= 320 * 200).
+        let angle = 5.0_f64.to_radians();
+        let (sin, cos) = angle.sin_cos();
+        let mut put_block = |x0: i64, y0: i64, bw: i64, bh: i64| {
+            for dy in 0..bh {
+                for dx in 0..bw {
+                    let rx = (f64::from(x0 as i32 + dx as i32) - 160.0) * cos - (f64::from(y0 as i32 + dy as i32) - 100.0) * sin + 160.0;
+                    let ry = (f64::from(x0 as i32 + dx as i32) - 160.0) * sin + (f64::from(y0 as i32 + dy as i32) - 100.0) * cos + 100.0;
+                    let ix = rx.round() as i64;
+                    let iy = ry.round() as i64;
+                    if ix >= 0 && iy >= 0 && ix < i64::from(width) && iy < i64::from(height) {
+                        pixels[iy as usize * width as usize + ix as usize] = 10;
+                    }
+                }
+            }
+        };
+        for r in 0..5_i64 {
+            for c in 0..6_i64 {
+                if (r, c) == (0, 0) {
+                    // Draw a single connected 'H' on the top-left side.
+                    put_block(30, 30, 4, 18);
+                    put_block(44, 30, 4, 18);
+                    put_block(30, 37, 18, 4);
+                } else {
+                    put_block(30 + c * 46, 30 + r * 30, 26, 8);
+                }
+            }
+        }
+        let geom = PageGeometry {
+            crop: [0.0, 0.0, f64::from(width), f64::from(height)],
+            display_height: f64::from(height),
+            view_matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        };
+        let options = tuned(1, 10.0);
+        let cap = u64::from(width) * u64::from(height);
+        let out = clearscan_with_cap(
+            ScanRaster { pixels: &pixels, width, height, channels: 1, points_per_pixel: 1.0 },
+            &options,
+            Some(geom),
+            cap,
+            |page| {
+                assert!(page.deskew_scale < 1.0, "expected capped scale < 1.0, got {}", page.deskew_scale);
+                lines_for_left_ink(page)
+            },
+            no_progress,
+        )
+        .expect("capped rectification should succeed without exceeding pixel cap");
+        assert!(out.width >= f64::from(width) && out.height >= f64::from(height), "out {}x{}", out.width, out.height);
+        assert!(out.text.contains('H'), "{:?}", out.text);
+        let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(out.pdf)).expect("valid pdf");
+        assert!(doc.trailer().reference(b"Root").is_some());
     }
 }
