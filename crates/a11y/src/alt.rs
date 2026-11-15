@@ -634,10 +634,10 @@ enum NumsAt {
 /// can't be walked is refused before the caller edits the page.
 fn parent_tree_entries(doc: &Document, page: &Dict) -> Result<Vec<(i64, NumsAt)>, String> {
     let Some(key) = page.get(b"StructParents").and_then(|o| doc.resolve(o).as_int()) else { return Ok(Vec::new()) };
-    let Some(root) = tree_root(doc).and_then(|r| r.get(b"ParentTree").and_then(Object::as_ref)) else { return Ok(Vec::new()) };
+    let Some(root) = tree_root(doc).and_then(|r| r.get(b"ParentTree").cloned()) else { return Ok(Vec::new()) };
     let mut found = Vec::new();
     let mut seen = HashSet::new();
-    let mut stack = vec![(Object::Ref(root), 0)];
+    let mut stack = vec![(root, 0)];
     while let Some((node, depth)) = stack.pop() {
         if depth > PARENT_TREE_DEPTH {
             return Err("the parent tree is too deep".into());
@@ -662,7 +662,8 @@ fn parent_tree_entries(doc: &Document, page: &Dict) -> Result<Vec<(i64, NumsAt)>
             found.push(match (nums.as_ref(), at) {
                 (Some(array), _) => (key, NumsAt::Array(array)),
                 (None, Some(node)) => (key, NumsAt::Node(node)),
-                // A kid written inline: there is no object to write its entry back to.
+                // A node written inline (the root in the structure tree root, or a kid): there is
+                // no object of its own to write its entry back to.
                 (None, None) => return Err("a parent tree node that maps the page is not an indirect object".into()),
             });
         }

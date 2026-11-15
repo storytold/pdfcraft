@@ -1245,14 +1245,29 @@ fn marking_a_tag_as_an_artifact_clears_its_entry_in_a_parent_tree_with_kids() {
 
 #[test]
 fn marking_a_tag_as_an_artifact_refuses_a_parent_tree_it_cannot_update_before_changing_anything() {
-    use pdfcraft_cos::ObjRef;
-    // An inline kid that maps the page: there is no object to write its entry back to.
-    let (mut doc, _) = figures_doc_with_parent_tree("/Kids [<< /Limits [0 0] /Nums [0 [7 0 R 8 0 R]] >>]", &[]);
-    let (contents, tree) = (page_contents(&doc), doc.get(ObjRef::new(9, 0)).as_ref().clone());
-    assert!(matches!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::ParentTree(_))));
-    assert!(matches!(mark_decorative(&mut doc, ObjRef::new(7, 0)), Err(AltError::ParentTree(_))));
-    assert_eq!((page_contents(&doc), doc.get(ObjRef::new(9, 0)).as_ref().clone()), (contents, tree));
-    assert_eq!(tags(&doc).into_iter().map(|tag| tag.object.num).collect::<Vec<_>>(), [6, 7, 8]);
+    use pdfcraft_cos::{ObjRef, Object};
+    // A node written inline that maps the page has no object to write its entry back to: a kid,
+    // and the whole tree written inline in the structure tree root.
+    let (inline_kid, _) = figures_doc_with_parent_tree("/Kids [<< /Limits [0 0] /Nums [0 [7 0 R 8 0 R]] >>]", &[]);
+    let mut inline_root = figures_doc();
+    let tree = inline_root.get(ObjRef::new(9, 0)).as_ref().clone();
+    inline_root.update_dict(ObjRef::new(5, 0), |d| d.set(b"ParentTree".to_vec(), tree)).unwrap();
+    for (what, mut doc) in [("inline kid", inline_kid), ("inline root", inline_root)] {
+        let root = |doc: &Document| doc.get(ObjRef::new(5, 0)).as_ref().clone();
+        let (contents, tree, structure) = (page_contents(&doc), doc.get(ObjRef::new(9, 0)).as_ref().clone(), root(&doc));
+        assert!(matches!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::ParentTree(_))), "{what}");
+        assert!(matches!(mark_decorative(&mut doc, ObjRef::new(7, 0)), Err(AltError::ParentTree(_))), "{what}");
+        assert_eq!((page_contents(&doc), doc.get(ObjRef::new(9, 0)).as_ref().clone(), root(&doc)), (contents, tree, structure), "{what}");
+        assert_eq!(tags(&doc).into_iter().map(|tag| tag.object.num).collect::<Vec<_>>(), [6, 7, 8], "{what}");
+    }
+
+    // An inline root whose leaves are objects of their own is walked and cleared as usual.
+    let (mut doc, refs) = figures_doc_with_parent_tree("/Kids [{0}]", &["<< /Limits [0 0] /Nums [0 [7 0 R 8 0 R]] >>"]);
+    let tree = doc.get(ObjRef::new(9, 0)).as_ref().clone();
+    doc.update_dict(ObjRef::new(5, 0), |d| d.set(b"ParentTree".to_vec(), tree)).unwrap();
+    mark_tag_artifact(&mut doc, ObjRef::new(7, 0)).unwrap();
+    let nums = doc.get(refs[0]).as_dict().and_then(|d| d.get(b"Nums").cloned());
+    assert_eq!(nums, Some(Object::Array(vec![Object::Int(0), Object::Array(vec![Object::Null, Object::Ref(ObjRef::new(8, 0))])])));
 }
 
 #[test]
