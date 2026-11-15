@@ -772,15 +772,20 @@ impl<'a> ImageXObject<'a> {
     /// `hayro_syntax::MAX_REDUCED_JBIG2_PIXELS`, its filter averaging each block of pixels into a
     /// gray sample and reporting the size it reduced to, by which it is drawn over the same area
     /// (as a JPX image decoded at a lower resolution is). Not an indexed one, whose palette needs
-    /// its pixels' own values. The reduced size depends on the image alone, not on the size it
-    /// is drawn at, so one decode serves every zoom. A 1,200 dpi scan of a newspaper page,
-    /// 19,467 × 25,517 (497 million pixels), drew blank.
+    /// its pixels' own values, nor one with a colour-key `/Mask` array, whose key ranges are in
+    /// those values too (an average of keyed and unkeyed pixels can fall outside them). Not one
+    /// with a side past 65,535 either, which the JBIG2 decoder refuses at any size. The reduced
+    /// size depends on the image alone, not on the size it is drawn at, so one decode serves
+    /// every zoom. A 1,200 dpi scan of a newspaper page, 19,467 × 25,517 (497 million pixels),
+    /// drew blank.
     fn reduces_past_full_size(&self) -> bool {
         let pixels = u64::from(self.width) * u64::from(self.height);
         pixels > 0
             && pixels <= hayro_syntax::MAX_REDUCED_JBIG2_PIXELS
+            && self.width.max(self.height) <= u32::from(u16::MAX)
             && uses_jbig2(&self.stream)
             && !self.color_space.as_ref().is_some_and(|cs| cs.is_indexed())
+            && self.stream.dict().get::<SmallVec<[u16; 4]>>(MASK).is_none()
     }
 
     /// PdfCraft patch (82): whether this image has a soft mask (or `/Mask` image) larger than
