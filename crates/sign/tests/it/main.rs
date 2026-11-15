@@ -2,6 +2,7 @@
 
 mod algorithms;
 mod ber;
+mod certify_first;
 mod chain;
 mod cms;
 mod crypto;

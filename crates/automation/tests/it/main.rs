@@ -9,6 +9,7 @@ mod batch;
 mod batch_failures;
 mod batch_secrets;
 mod button_caption;
+mod certify_signed;
 mod document_actions;
 mod find_text;
 mod form_bulk;
