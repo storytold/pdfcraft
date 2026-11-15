@@ -488,6 +488,21 @@ impl Document {
         self.signatures.iter().any(|s| s.signed)
     }
 
+    /// The DocMDP permissions (`/P`, 1 to 3) of the document's signed certification: the
+    /// signature its catalog's `/Perms /DocMDP` named when it was signed (ISO 32000-2
+    /// §12.8.2.2.1). The strictest, should a damaged file have more than one; `None` without one.
+    pub fn certification(&self) -> Option<u8> {
+        self.signatures.iter().filter(|s| s.signed).filter_map(|s| s.certify).min()
+    }
+
+    /// Refuse `edit` when the document's certification doesn't permit it (Table 257): a
+    /// certification named from `/Perms /DocMDP` prevents those changes as well as detecting
+    /// them. [`crate::Session::apply`] checks every edit here before applying it, unless the
+    /// session makes such edits ([`crate::Session::with_certified_edits`]).
+    pub fn check_certification(&self, edit: &Edit) -> Result<(), EditError> {
+        self.certification().map_or(Ok(()), |level| crate::edit::check_certification(edit, level))
+    }
+
     /// Whether comments are hidden (Comments ▸ Hide all comments).
     pub fn comments_hidden(&self) -> bool {
         self.config.hide_comments

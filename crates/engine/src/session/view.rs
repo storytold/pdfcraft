@@ -25,6 +25,17 @@ impl Session {
         self
     }
 
+    /// Whether edits a document's certification doesn't permit are made (`true`) or refused with
+    /// [`EditError::Certified`](crate::EditError::Certified) (`false`, the default). A
+    /// certification named from the catalog's `/Perms /DocMDP` prevents those changes as well as
+    /// detecting them (ISO 32000-2 §12.8.2.2.1), so a caller with no one to ask (a script, an
+    /// automation tool) keeps the refusal. An interface whose user is told first and decides
+    /// (and then sees the certification's verdict change) may make them.
+    pub fn with_certified_edits(mut self, allowed: bool) -> Self {
+        self.certified_edits_allowed = allowed;
+        self
+    }
+
     /// A real clock for a host that has neither a clock nor a time zone of its own (a
     /// `wasm32-unknown-unknown` build: `now()` would be empty and `local_utc_offset()` is 0, so
     /// Fill & Sign stamps 1 Jan 1970 and `/ModDate` is never written). `clock` is the UTC time in

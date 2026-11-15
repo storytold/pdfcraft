@@ -176,6 +176,74 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
     }
 }
 
+/// Whether a certification with DocMDP permissions `level` allows an edit (ISO 32000-2
+/// §12.8.2.2.1, Table 257). A certification the catalog's `/Perms /DocMDP` names prevents the
+/// changes it does not permit, as well as detecting them: 1 permits none, 2 filling in forms (and
+/// signing, which is not an edit), 3 comments as well. Document information is metadata at every
+/// level, as signature validation judges it (every save rewrites `/ModDate`). Anything not named
+/// here is refused, so an edit added later fails closed.
+pub(crate) fn check_certification(edit: &Edit, level: u8) -> Result<(), EditError> {
+    let refuse = |what: &'static str| Err(EditError::Certified { level, what });
+    match edit {
+        Edit::Batch { edits, .. } => edits.iter().try_for_each(|e| check_certification(e, level)),
+        Edit::SetInfo { .. } => Ok(()),
+        Edit::SetFieldValue { .. }
+        | Edit::ResetForm { .. }
+        | Edit::SetFieldImage { .. }
+        | Edit::SetFieldImageTarget { .. }
+        | Edit::ApplyScriptChanges { .. }
+        | Edit::XfaEvent { .. } => {
+            if level >= 2 {
+                Ok(())
+            } else {
+                refuse("filling in form fields")
+            }
+        }
+        Edit::AddMeasurement(_)
+        | Edit::AddAnnotation(_)
+        | Edit::PasteComments { .. }
+        | Edit::AddCustomStamp { .. }
+        | Edit::AddModel3d { .. }
+        | Edit::DeleteAnnotation { .. }
+        | Edit::SetAnnotationContents { .. }
+        | Edit::ReplyToAnnotation { .. }
+        | Edit::SetAnnotationStatus { .. }
+        | Edit::MarkAnnotation { .. }
+        | Edit::ReplaceText { .. }
+        | Edit::EraseInk { .. }
+        | Edit::LockAnnotation { .. }
+        | Edit::MoveAnnotation { .. }
+        | Edit::ReshapeAnnotation { .. }
+        | Edit::SetAnnotationPopup { .. }
+        | Edit::ResizeAnnotation { .. }
+        | Edit::StyleAnnotation { .. }
+        | Edit::FillAnnotation { .. }
+        | Edit::PartOpacity { .. }
+        | Edit::FontSizeAnnotation { .. }
+        | Edit::BorderColorAnnotation { .. }
+        | Edit::BorderShapeAnnotation { .. }
+        | Edit::SetAnnotationInfo { .. }
+        | Edit::SetMeasurementScale { .. } => {
+            if level >= 3 {
+                Ok(())
+            } else {
+                refuse("comments")
+            }
+        }
+        Edit::RotatePages { .. }
+        | Edit::DeletePages { .. }
+        | Edit::MovePages { .. }
+        | Edit::ReversePages { .. }
+        | Edit::InsertBlankPage { .. }
+        | Edit::DuplicatePages { .. }
+        | Edit::ReplacePages { .. }
+        | Edit::SetPageBox { .. }
+        | Edit::InsertPagesFrom { .. }
+        | Edit::NumberPages { .. } => refuse("page changes"),
+        _ => refuse("changes to the document"),
+    }
+}
+
 /// What a comment import left out of comments it did import (an appearance it could not read),
 /// in the repair log as one line: said, not slipped in. The first five are named, each in at
 /// most [`SKIPPED_CHARS`] characters with control characters escaped (a name from the file

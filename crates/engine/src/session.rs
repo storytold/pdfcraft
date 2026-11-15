@@ -51,4 +51,7 @@ pub struct Session {
     /// What the XFA scripts' time limits are multiplied by (`None`: 1); see
     /// [`Session::with_xfa_time_scale`].
     pub(crate) xfa_time_scale: Option<u32>,
+    /// Make edits a document's certification doesn't permit instead of refusing them; see
+    /// [`Session::with_certified_edits`].
+    pub(crate) certified_edits_allowed: bool,
 }

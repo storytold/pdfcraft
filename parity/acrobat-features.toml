@@ -6330,9 +6330,9 @@ tier = "P1"
 milestone = "M9"
 status = "shipped"
 commands = ["sign.certify"]
-tools = ["sign_document"]
-evidence = ["crates/sign/tests/it/pdf.rs::later_changes_are_classified_under_the_signature_permissions"]
-notes = "DocMDP P=1/2/3 enforced when validating"
+tools = ["sign_document", "doc_info"]
+evidence = ["crates/sign/tests/it/pdf.rs::later_changes_are_classified_under_the_signature_permissions", "crates/engine/tests/it/certified_edits.rs::no_changes_allowed_refuses_every_edit_and_leaves_the_document_as_signed", "crates/engine/tests/it/certified_edits.rs::form_fill_and_signing_certification_allows_only_those", "crates/engine/tests/it/certified_edits.rs::comments_certification_allows_comments_and_form_fill_only", "crates/automation/tests/it/certified_documents.rs::a_no_changes_certification_refuses_comments_pages_and_form_fill"]
+notes = "DocMDP P=1/2/3 enforced when validating, and prevented when editing (ISO 32000-2 12.8.2.2.1): the automation tools refuse every edit a signed certification named from /Perms /DocMDP does not permit, before it changes anything (P=1 none; P=2 form fill; P=3 comments as well; document information is metadata at every level, as validation judges it). doc_info reports the level as certification. A new signature after a P=1 certification is not refused here (only edits are). The refusal is the engine's default (Session::with_certified_edits); the desktop app opts out and makes such edits at the user's request, with the certification's verdict then shown as changed."
 
 [[feature]]
 id = "sign.field-mdp"

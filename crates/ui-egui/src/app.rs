@@ -68,7 +68,9 @@ impl PdfCraftApp {
     pub fn new() -> Self {
         Self {
             panes: Default::default(),
-            session: Session::new(),
+            // The person making a change is here and sees the certification's verdict change, so
+            // edits a certification doesn't permit are theirs to make; headless callers refuse them.
+            session: Session::new().with_certified_edits(true),
             status_captions_lang: None,
             views: Vec::new(),
             closed_tabs: Vec::new(),

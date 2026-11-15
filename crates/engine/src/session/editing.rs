@@ -143,6 +143,7 @@ impl Session {
         let js_off = self.js_off;
         let highlight = self.field_highlight;
         let xfa_time_scale = self.xfa_time_scale.unwrap_or(1);
+        let certified_edits_allowed = self.certified_edits_allowed;
         let doc = self.doc_mut(id)?;
         // An edit must never read globals from a completed-but-unapplied button invocation.
         // Fork its realm before any edit-triggered calculation, even if the edit later fails.
@@ -164,10 +165,12 @@ impl Session {
         cx.today = today;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
+        let certified = if certified_edits_allowed { Ok(()) } else { doc.check_certification(&edit) };
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
         if let Some(p) = editor.cos.permissions() {
             check_permission(&edit, &p)?;
         }
+        certified?;
         let Some(edit) = prepare_ocr_text_edit(editor, &doc.info, edit) else {
             return Ok(None);
         };

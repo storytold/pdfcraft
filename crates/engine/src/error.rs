@@ -23,6 +23,10 @@ pub enum EditError {
     ReadOnly(String),
     #[error("the document's security settings don't allow {0}; open it with the owner password to make this change")]
     NotPermitted(&'static str),
+    /// A certification named by the catalog's `/Perms /DocMDP` doesn't permit the change (ISO
+    /// 32000-2 §12.8.2.2.1, Table 257): `level` is its DocMDP `/P`, `what` the kind of change.
+    #[error("{}", certified_message(*level, what))]
+    Certified { level: u8, what: &'static str },
     #[error("{0}")]
     Organize(#[from] pdfcraft_organize::OrganizeError),
     #[error("{0}")]
@@ -71,6 +75,17 @@ pub enum EditError {
     Signed,
     #[error("{0}")]
     Invalid(String),
+}
+
+/// The sentence for [`EditError::Certified`]: what the certification allows, and that `what`
+/// isn't among it.
+fn certified_message(level: u8, what: &str) -> String {
+    let allows = match level {
+        1 => "no changes",
+        2 => "only filling in forms and signing",
+        _ => "only filling in forms, signing and comments",
+    };
+    format!("the document is certified with {allows} allowed: {what} would invalidate the certification, so the document was not changed")
 }
 
 impl From<pdfcraft_sign::SignError> for EditError {

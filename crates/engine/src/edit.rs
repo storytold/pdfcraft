@@ -14,7 +14,7 @@ mod labels;
 mod run;
 
 pub use labels::{BATCH_LABELS, EDIT_LABELS};
-pub(crate) use run::{EditCtx, check_permission, run_edit};
+pub(crate) use run::{EditCtx, check_certification, check_permission, run_edit};
 
 /// Edits that can be applied to a document. Page indices are 0-based.
 #[derive(Clone, Debug, PartialEq)]
