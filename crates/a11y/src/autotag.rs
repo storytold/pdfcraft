@@ -124,6 +124,15 @@ fn harmless_outside(op: &[u8]) -> bool {
             | b"ri"
             | b"i"
             | b"gs"
+            // Text state is legal outside BT/ET and carries into the next text object; a text edit
+            // writes it there after its own text object.
+            | b"Tf"
+            | b"Tc"
+            | b"Tw"
+            | b"Tz"
+            | b"TL"
+            | b"Tr"
+            | b"Ts"
             | b"G"
             | b"g"
             | b"RG"

@@ -535,6 +535,22 @@ fn autotag_apply_writes_reviewable_tags_and_survives_save_reopen() {
     assert!(pages.iter().all(|page| page.dict.contains(b"StructParents")));
 }
 
+/// #7416: the text state a PDFCraft text edit writes after its text object (`0 Tc`, `0 Tw`,
+/// `100 Tz`, `0 TL`, `0 Ts`) is legal outside BT/ET and must not stop Auto-tag.
+#[test]
+fn autotag_apply_accepts_text_state_written_by_a_text_edit() {
+    let dir = workdir("autotag-after-edit");
+    let page = |text: &str| format!("BT /FR 12 Tf 1 0 0 1 40 180 Tm ({text}) Tj ET");
+    std::fs::write(dir.join("moss.pdf"), bold_and_regular_pdf(&page("Moss stays green."), &page("Quiet control page."))).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "moss.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "text_edit", json!({ "doc": doc, "page": 1, "paragraph": 1, "text": "Fern stays green." }));
+    let applied = ok(&mut a, "accessibility_autotag_apply", json!({ "doc": doc }));
+    assert_eq!(applied["count"], 3, "Document plus one paragraph per page");
+    assert_eq!(applied["tags"][1]["type"], "P");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// #7062: Apply tags short text larger than the body as headings, ranked across the pages, and
 /// the body text as paragraphs.
 #[test]
