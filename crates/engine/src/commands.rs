@@ -18,14 +18,18 @@ pub enum Needs {
     Nothing,
     /// A document is open.
     Document,
-    /// The open document's security allows page changes (insert, delete, rotate, extract…).
+    /// The open document's security allows page changes (insert, delete, rotate…).
     Assembly,
+    /// The open document's security allows taking pages out into new files (extract, split).
+    PageExtraction,
     /// The open document's security allows content and metadata changes.
     Modification,
     /// The open document's security allows adding and changing comments.
     Annotate,
     /// The open document's security allows copying text and images out of it.
     Copying,
+    /// The open document's security allows printing (low resolution counts).
+    Printing,
     /// The document has form fields and its security allows filling them in.
     FillForms,
     /// The document has comments and allows changes.
@@ -161,6 +165,8 @@ const HELP: Option<&str> = Some("Help");
 
 /// Every command, in menu order.
 pub const COMMANDS: &[CommandSpec] = &[
+    c("view.select_tool", "Select", None, None, Document, "mouse-pointer-2"),
+    c("view.hand_tool", "Hand", None, None, Document, "hand"),
     c("file.open", "Open…", FILE, Some(Shortcut::cmd("O")), Nothing, "folder-open"),
     c("file.open_recent", "Open Recent", FILE, None, Nothing, "clock"),
     // Shown at the foot of File ▸ Open Recent and on Home, not as its own File menu item.
@@ -188,12 +194,15 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("file.close", "Close file", FILE, Some(Shortcut::cmd("W")), Document, "x"),
     c("file.close_all", "Close all", FILE, Some(Shortcut::cmd_shift("W")), Document, "x"),
     c("file.revert", "Revert", FILE, None, Undo, "rotate-ccw"),
-    c("print.dialog", "Print…", FILE, Some(Shortcut::cmd("P")), Document, "printer"),
+    c("print.dialog", "Print…", FILE, Some(Shortcut::cmd("P")), Printing, "printer"),
     c("file.properties", "Document properties…", FILE, Some(Shortcut::cmd("D")), Document, "info"),
     c("file.word_count", "Word count…", FILE, None, Copying, "hash"),
     ct("edit.undo", "Undo", EDIT, Some(Shortcut::cmd("Z")), Undo, "undo-2"),
     ct("edit.redo", "Redo", EDIT, Some(Shortcut::cmd_shift("Z")), Redo, "redo-2"),
     c("edit.find", "Find…", EDIT, Some(Shortcut::cmd("F")), Document, "search"),
+    // Find and replace, in Edit text mode (the Find box's Replace row). Not ⌘H/Ctrl+H: macOS
+    // takes ⌘H to hide the app, and Ctrl+H is Read mode on Windows and Linux (as in Acrobat).
+    c("edit.replace", "Replace…", EDIT, Some(Shortcut::cmd_shift("H")), Modification, "replace"),
     c("edit.advanced_search", "Advanced search…", EDIT, Some(Shortcut::cmd_shift("F")), Document, "search"),
     c("view.palette", "Find tools and commands…", VIEW, Some(Shortcut::cmd("K")), Nothing, "search"),
     // Page display: View ▸ Page display and the rail's button list the base layouts as radios and
@@ -202,6 +211,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("view.layout.single", "Single page", None, None, Document, "file-text"),
     c("view.layout.two_up", "Two-page view", None, None, Document, "columns-2"),
     c("view.continuous", "Continuous scrolling", None, None, Document, "arrow-up-down"),
+    c("view.page_gaps", "Show gaps between pages", None, None, Document, "arrow-up-down"),
     c("view.layout.cover", "Show cover page in two-page view", None, None, TwoPageView, "bookmark"),
     // Acrobat's view modes, a page display and a zoom at once (the rail's Page display menu).
     c("view.fit_width_scrolling", "Fit to width scrolling", None, None, Document, "arrow-left-right"),
@@ -215,10 +225,27 @@ pub const COMMANDS: &[CommandSpec] = &[
     // Alt-drag for moving windows (several Linux window managers).
     // Copy events stay with the frontend so focused text inputs and page clipboard routing keep ownership.
     c("edit.copy", "Copy", EDIT, None, Copying, "copy"),
+    // Comments travel between documents as XFDF (M14): ⌘C with comments selected copies them,
+    // ⌘V pastes the copies onto the current page; the strip's Copy/Paste in the menus too.
+    c("comment.copy", "Copy comments", EDIT, None, Document, "copy"),
+    c("comment.paste", "Paste comments", EDIT, None, Annotate, "clipboard-paste"),
     c("edit.column_select", "Column select", EDIT, None, Document, "text-select"),
     c("edit.snapshot", "Take a snapshot", EDIT, None, Copying, "camera"),
     c("view.full_screen", "Full screen mode", VIEW, Some(Shortcut::cmd("L")), Document, "maximize"),
     c("view.read_mode", "Read mode", VIEW, Some(Shortcut { command: true, shift: false, mac_ctrl: true, key: "H" }), Document, "book-open"),
+    // Split view (Acrobat's Window ▸ Split): the current document in two panes, or back to one;
+    // a tab's right-click menu also splits right or down with any tab.
+    c("view.split", "Split", VIEW, Some(Shortcut::cmd("\\")), Document, "columns-2"),
+    // A document can hide the toolbars, menu and panels (ISO 32000-2 Table 147); this brings them
+    // back for its tab, and with nothing hidden hides them.
+    c(
+        "view.toggle_interface",
+        "Show or hide toolbars and panels",
+        VIEW,
+        Some(Shortcut { command: false, shift: false, mac_ctrl: false, key: "F8" }),
+        Document,
+        "panel-left",
+    ),
     // Browsers' tab keys (#1542): Ctrl+Tab on every platform, ⌃Tab rather than ⌘Tab on macOS,
     // where the system takes ⌘Tab. They follow the tabs' order on screen and wrap around, and
     // also run from Combine files, which has no document open.
@@ -228,7 +255,23 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("view.previous_view", "Previous view", None, Some(Shortcut::cmd("[")), Document, "chevron-left"),
     c("view.next_view", "Next view", None, Some(Shortcut::cmd("]")), Document, "chevron-right"),
     c("view.focus_page_input", "Go to page…", VIEW, Some(Shortcut::cmd_shift("N")), Document, "text-cursor-input"),
-    c("ui.dock.reset", "Reset panel layout", VIEW, None, Nothing, "settings"),
+    c(
+        "view.side_panel",
+        "Show or hide the side panel",
+        VIEW,
+        Some(Shortcut { command: false, shift: false, mac_ctrl: false, key: "F4" }),
+        Nothing,
+        "panel-right",
+    ),
+    c(
+        "view.tools_pane",
+        "Show or hide the Tools panel",
+        VIEW,
+        Some(Shortcut { command: false, shift: true, mac_ctrl: false, key: "F4" }),
+        Nothing,
+        "panel-left",
+    ),
+    c("ui.dock.reset", "Reset side panels", VIEW, None, Nothing, "settings"),
     c("view.theme", "Switch light / dark theme", None, None, Nothing, "moon"),
     c("view.theme.system", "Use system setting", None, None, Nothing, "settings"),
     c("view.theme.light", "Light gray", None, None, Nothing, "sun"),
@@ -240,6 +283,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("comment.underline", "Underline text", None, None, Annotate, "underline"),
     c("comment.strikeout", "Strikethrough text", None, None, Annotate, "strikethrough"),
     c("comment.squiggly", "Squiggly underline text", None, None, Annotate, "spline"),
+    c("comment.freehand_highlight", "Freehand-Highlight", None, None, Annotate, "highlighter"),
     c("comment.ink", "Draw freehand", None, None, Annotate, "pencil"),
     c("comment.line", "Draw a line", None, None, Annotate, "minus"),
     c("comment.arrow", "Draw an arrow", None, None, Annotate, "move-right"),
@@ -249,7 +293,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("comment.polyline", "Draw connected lines", None, None, Annotate, "spline"),
     c("comment.cloud", "Draw a cloud", None, None, Annotate, "cloud"),
     c("comment.callout", "Add a callout", None, None, Annotate, "message-square-quote"),
-    c("comment.caret", "Insert text", None, None, Annotate, "text-cursor-input"),
+    c("comment.caret", "Insert text", None, None, Annotate, "message-square-text"),
     c("comment.replace", "Replace text", None, None, Annotate, "replace"),
     c("comment.attach", "Attach a file", None, None, Annotate, "paperclip"),
     c("comment.eraser", "Erase drawings", None, None, Annotate, "eraser"),
@@ -275,9 +319,11 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("form.tab_order.row", "Tab order: by rows", None, None, HasFields, "rows-3"),
     c("form.tab_order.column", "Tab order: by columns", None, None, HasFields, "columns-3"),
     c("form.tab_order.structure", "Tab order: by document structure", None, None, HasFields, "list"),
+    c("form.calculation_order", "Calculation order", None, None, Document, "list-ordered"),
     c("edit.text", "Add text", None, None, Modification, "type"),
     c("edit.edit_text", "Edit text & images", None, None, Modification, "text-cursor-input"),
     c("edit.link", "Add or edit links", None, None, Modification, "link-2"),
+    c("edit.attach", "Attach a file…", EDIT, None, Modification, "paperclip"),
     c("edit.links_from_urls", "Create links from URLs", None, None, Modification, "link-2"),
     c("edit.remove_links", "Remove all links", None, None, Modification, "trash-2"),
     c("edit.bates", "Add Bates numbering…", None, None, Modification, "hash"),
@@ -292,6 +338,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("redact.sanitize", "Sanitize document…", None, None, Modification, "sparkles"),
     c("form.field.properties", "Field properties…", None, None, HasFields, "settings-2"),
     c("form.add.text", "Add a text field", None, None, Modification, "text-cursor-input"),
+    c("form.add.text_table", "Add text field table", None, None, Modification, "grid-3x3"),
     c("form.add.checkbox", "Add a checkbox", None, None, Modification, "check-circle-2"),
     c("form.add.radio", "Add a radio button", None, None, Modification, "circle"),
     c("form.add.combo", "Add a drop-down list", None, None, Modification, "chevron-down"),
@@ -330,7 +377,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("tools.document_js", "Document JavaScripts…", None, None, Modification, "file-code"),
     c("ocr.recognize", "Recognize text…", None, None, Modification, "scan-text"),
     c("ocr.enhance_camera", "Enhance camera image", None, None, Modification, "camera"),
+    c("ocr.enhance", "Enhance scanned file…", None, None, Modification, "sparkles"),
     c("ocr.recognize_batch", "Recognize text in multiple files…", None, None, Nothing, "files"),
+    c("ocr.correct", "Correct recognized text…", None, None, Document, "text-select"),
     c("a11y.check", "Check for accessibility…", None, None, Document, "accessibility"),
     c("a11y.find_untagged", "Find untagged content", None, None, Document, "search"),
     c("a11y.autotag", "Automatically tag PDF", None, None, Document, "tag"),
@@ -356,6 +405,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.organize", "Organize pages", PAGES, None, Document, "layout-grid"),
     c("bookmark.add", "New bookmark", PAGES, Some(Shortcut::cmd("B")), Assembly, "bookmark-plus"),
     c("bookmark.from_structure", "New bookmarks from structure", PAGES, None, Assembly, "list"),
+    // Bookmarks from the lines set in chosen text styles, for headings that aren't tagged (#1693).
+    c("bookmark.from_text_styles", "New bookmarks from text styles…", PAGES, None, Assembly, "list"),
     c("page.rotate", "Rotate pages clockwise", PAGES, None, Assembly, "rotate-cw"),
     c("page.rotate_ccw", "Rotate pages counterclockwise", PAGES, None, Assembly, "rotate-ccw"),
     c("page.delete", "Delete pages", PAGES, None, Assembly, "trash-2"),
@@ -367,9 +418,14 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.boxes", "Set page boxes…", PAGES, None, Assembly, "square-dashed-mouse-pointer"),
     c("page.insert", "Insert pages from file…", PAGES, None, Assembly, "file-input"),
     c("page.replace", "Replace pages…", PAGES, None, Assembly, "replace"),
-    c("page.extract", "Extract pages…", PAGES, None, Assembly, "file-output"),
-    c("page.split", "Split document…", PAGES, None, Assembly, "scissors"),
+    c("page.extract", "Extract pages…", PAGES, None, PageExtraction, "file-output"),
+    c("page.split", "Split document…", PAGES, None, PageExtraction, "scissors"),
     c("page.number", "Number pages…", PAGES, None, Assembly, "hash"),
+    c("prepress.marks", "Add printer marks…", None, None, Modification, "ruler"),
+    c("prepress.marks.remove", "Remove printer marks", None, None, Marks(crate::MarkKind::PrinterMarks), "ruler"),
+    c("prepress.convert_colors", "Convert colours…", None, None, Modification, "palette"),
+    c("prepress.hairlines", "Fix hairlines…", None, None, Modification, "minus"),
+    c("page.properties", "Page properties…", PAGES, None, Modification, "info"),
     c("help.shortcuts", "Keyboard shortcuts", HELP, None, Nothing, "circle-help"),
     c("help.discord", "Join the ArtCraft Discord", HELP, None, Nothing, "messages-square"),
     c("help.app_page", "PdfCraft web page", HELP, None, Nothing, "globe"),
@@ -395,9 +451,11 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
         Nothing => true,
         Document | TwoPageView => doc.is_some(),
         Assembly => doc.is_some_and(|d| d.allows_assembly()),
+        PageExtraction => doc.is_some_and(|d| d.allows_page_extraction()),
         Modification => doc.is_some_and(|d| d.allows_modification()),
         Annotate => doc.is_some_and(|d| d.allows_annotation()),
         Copying => doc.is_some_and(|d| d.allows_copying()),
+        Printing => doc.is_some_and(|d| d.allows_printing()),
         FillForms => doc.is_some_and(|d| d.allows_form_filling() && !d.form.is_empty()),
         Marks(k) => doc.is_some_and(|d| d.allows_modification() && d.marks().contains(&k)),
         HasComments => doc.is_some_and(|d| d.allows_modification() && !d.info.annotations.is_empty()),

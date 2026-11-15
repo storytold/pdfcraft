@@ -18,6 +18,13 @@ pub struct EncodedShadingPattern {
     pub(crate) shading_type: EncodedShadingType,
     pub(crate) opacity: f32,
     pub(crate) transfer_function: Option<ActiveTransferFunction>,
+    /// PdfCraft patch (35): where the shading can paint at all, in device space: for a mesh
+    /// (types 4–7), the pixels its triangles touched when it was encoded (empty when none
+    /// lies in the area); `None` for the shading types that paint everywhere (function-based,
+    /// axial, radial). The renderer samples a texture only there, and skips a mesh that
+    /// touches nothing: painted over the whole canvas, 310 one-triangle meshes on a plan cost
+    /// 310 full tiles per tile, and the watchdog gave the page up.
+    pub extent: Option<kurbo::Rect>,
 }
 
 impl EncodedShadingPattern {
@@ -50,6 +57,8 @@ impl ShadingPattern {
     /// Mesh shadings are sampled pixel by pixel, and only there (see `TriangleSampler`).
     pub fn encode_within(&self, area: Option<kurbo::Rect>) -> EncodedShadingPattern {
         let base_transform;
+        // PdfCraft patch (35): see `EncodedShadingPattern::extent`.
+        let mut extent = None;
 
         let shading_type = match self.shading.shading_type.as_ref() {
             ShadingType::FunctionBased {
@@ -81,6 +90,7 @@ impl ShadingPattern {
                 let full_transform = self.matrix;
                 let mut sampler = TriangleSampler::new(area);
                 sampler.sample(triangles, full_transform);
+                extent = Some(sampler.extent());
                 let samples = sampler.map;
 
                 base_transform = Affine::IDENTITY;
@@ -106,6 +116,7 @@ impl ShadingPattern {
                         break;
                     }
                 }
+                extent = Some(sampler.extent());
                 let samples = sampler.map;
 
                 base_transform = Affine::IDENTITY;
@@ -130,6 +141,7 @@ impl ShadingPattern {
                         break;
                     }
                 }
+                extent = Some(sampler.extent());
                 let samples = sampler.map;
 
                 base_transform = Affine::IDENTITY;
@@ -162,6 +174,9 @@ impl ShadingPattern {
             base_transform,
             opacity: self.opacity,
             transfer_function: self.transfer_function.clone(),
+            // A `/Background` is painted wherever the triangles aren't (pattern fills), so such
+            // a mesh has no extent to confine it to.
+            extent: if self.shading.background.is_some() { None } else { extent },
         }
     }
 }
@@ -211,7 +226,8 @@ fn encode_axial_shading(
 }
 
 /// PdfCraft patch: pixel visits one mesh shading may make, per pixel of the area it is drawn in
-/// and per triangle. Sampling walks each triangle's bounding box (rounded out to whole pixels),
+/// and per triangle. Sampling walks each triangle's bounding box (rounded out to whole pixels;
+/// patch 99: only the columns of each row the triangle can reach),
 /// so triangles far off the page (a fuzzed patch decoded onto ±40000) asked for 65536 × 65536
 /// samples, and many triangles covering the same pixels repeat the work. A triangle's box is
 /// about twice its area, and a sub-pixel triangle's box is at most 2 × 2 pixels.
@@ -249,6 +265,8 @@ struct TriangleSampler {
     map: FxHashMap<(u16, u16), ColorComponents>,
     area: kurbo::Rect,
     visits_left: u64,
+    /// PdfCraft patch (35): the pixels sampled so far, as `(x0, y0, x1, y1)` inclusive.
+    touched: Option<(u16, u16, u16, u16)>,
 }
 
 impl TriangleSampler {
@@ -263,6 +281,21 @@ impl TriangleSampler {
             map: FxHashMap::default(),
             area: area.unwrap_or(kurbo::Rect::new(0.0, 0.0, 65536.0, 65536.0)),
             visits_left,
+            touched: None,
+        }
+    }
+
+    /// PdfCraft patch (35): the device-space rectangle covering every pixel sampled so far
+    /// (whole pixels), or an empty rectangle when no triangle touched the area.
+    fn extent(&self) -> kurbo::Rect {
+        match self.touched {
+            Some((x0, y0, x1, y1)) => kurbo::Rect::new(
+                f64::from(x0),
+                f64::from(y0),
+                f64::from(x1) + 1.0,
+                f64::from(y1) + 1.0,
+            ),
+            None => kurbo::Rect::ZERO,
         }
     }
 
@@ -314,21 +347,116 @@ impl TriangleSampler {
         }
         self.visits_left = self.visits_left.saturating_add(MESH_VISITS_PER_TRIANGLE);
 
+        let (columns_start, columns_end) = (bbox.x0.floor() as u16, bbox.x1.ceil() as u16);
         for y in (bbox.y0.floor() as u16)..(bbox.y1.ceil() as u16) {
-            for x in (bbox.x0.floor() as u16)..(bbox.x1.ceil() as u16) {
-                if self.visits_left == 0 {
-                    warn!("mesh shading visit budget exceeded; the rest is not drawn");
+            // PdfCraft patch (99): only the columns where this row's sample points (the
+            // corner and the centre, at heights `y` and `y + 0.5`) can lie in the triangle,
+            // not the whole box. A thin triangle lying across the pixel grid has a box many
+            // times its area (the cells of a narrow curved band of patches, cut into a fixed
+            // 19 × 19 grid, are a few pixels long and a fraction of one wide, at every angle),
+            // and walking the box spent the visit budget before the last patches: painted
+            // through a path the size of its own box, a rainbow of tensor patches lost its
+            // inner bands. A box two columns wide or less is walked whole (no row of it is
+            // narrower by more than a column, which isn't worth finding), and a row with no
+            // column still costs a visit, so the walk stays within the budget however tall
+            // the triangle is.
+            let columns = if columns_end.saturating_sub(columns_start) <= 2 {
+                columns_start..columns_end
+            } else {
+                let top = f64::from(y);
+                match x_extent_between(&t, top - SPAN_SLACK, top + 0.5 + SPAN_SLACK) {
+                    // Pixel `x` samples at `x` and `x + 0.5`; the casts saturate.
+                    Some((lo, hi)) => {
+                        let start = (lo - 0.5 - SPAN_SLACK).floor() as u16;
+                        let end = ((hi + SPAN_SLACK).floor() as u16).saturating_add(1);
+                        columns_start.max(start)..columns_end.min(end)
+                    }
+                    None => 0..0,
+                }
+            };
+            if columns.is_empty() {
+                if !self.take_visit() {
                     return false;
                 }
-                self.visits_left -= 1;
-                let point = Point::new(x as f64, y as f64);
-                if t.contains_point(point) {
-                    self.map.insert((x, y), t.interpolate(point));
+                continue;
+            }
+            for x in columns {
+                if !self.take_visit() {
+                    return false;
+                }
+                let corner = Point::new(x as f64, y as f64);
+                let sampled = if t.contains_point(corner) {
+                    self.map.insert((x, y), t.interpolate(corner));
+                    true
+                } else if t.covers(Point::new(x as f64 + 0.5, y as f64 + 0.5)) {
+                    // PdfCraft patch (36): a pixel whose corner no triangle holds strictly (it
+                    // lies on an edge two triangles share, or on the mesh's side) still belongs
+                    // to the triangle that covers its centre, edges included. Testing only the
+                    // corner left a white seam along every shared edge. Such a pixel takes the
+                    // colour at its corner, as every other pixel does (where MuPDF's colours
+                    // agree), unless a triangle that holds the corner gives it one.
+                    self.map.entry((x, y)).or_insert_with(|| t.interpolate(corner));
+                    true
+                } else {
+                    false
+                };
+                if sampled {
+                    self.touched = Some(match self.touched {
+                        Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
+                        None => (x, y, x, y),
+                    });
                 }
             }
         }
         true
     }
+
+    /// Spend one visit; `false` (with a warning) when none is left.
+    fn take_visit(&mut self) -> bool {
+        if self.visits_left == 0 {
+            warn!("mesh shading visit budget exceeded; the rest is not drawn");
+            return false;
+        }
+        self.visits_left -= 1;
+        true
+    }
+}
+
+/// PdfCraft patch (99): how far past a row's sample points the triangle's extent is still
+/// walked, in pixels. A sample a little outside the triangle can still pass `covers`, whose
+/// tolerance is relative to the triangle's size (1e-9 of it, under 1e-4 pixel on a 65536-pixel
+/// canvas); this is wider than that and than the rounding of the extent itself. A triangle
+/// whose corners all but coincide (two of them 1e-13 pixel apart, its area 1e-14) can pass
+/// `covers` for points well outside it, through rounding in its barycentric division; the
+/// box walk took such points, the extent leaves them out.
+const SPAN_SLACK: f64 = 1e-3;
+
+/// PdfCraft patch (99): the least and greatest x of the part of `t` between the heights `y0`
+/// and `y1`, or `None` when no part of it is there: the ends of that part are the triangle's
+/// corners inside the band and the points where its edges cross the band's two lines.
+fn x_extent_between(t: &Triangle, y0: f64, y1: f64) -> Option<(f64, f64)> {
+    let corners = [t.p0.point, t.p1.point, t.p2.point];
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    let mut add = |x: f64| {
+        lo = lo.min(x);
+        hi = hi.max(x);
+    };
+    for (a, b) in corners.iter().zip(corners.iter().cycle().skip(1)) {
+        if (y0..=y1).contains(&a.y) {
+            add(a.x);
+        }
+        // A level edge lies along the band or misses it; its corners are taken above.
+        if a.y != b.y {
+            for line in [y0, y1] {
+                let s = (line - a.y) / (b.y - a.y);
+                if (0.0..=1.0).contains(&s) {
+                    add(a.x + s * (b.x - a.x));
+                }
+            }
+        }
+    }
+    // NaN corners add nothing (every comparison fails), so this is `None` for them.
+    (lo <= hi).then_some((lo, hi))
 }
 
 /// The triangle `v0`, `v1`, `v2` with its points mapped through `transform` (its colours as

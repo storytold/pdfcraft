@@ -3,7 +3,9 @@
 //! annotations use the measurement intents of line, polygon and polyline annotations (§12.5.6).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod number_format;
 pub mod snap;
+use number_format::{Formats, NumberFormat};
 use pdfcraft_annot::{Meta, NewAnnotation, Shape, Style};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 use serde::Serialize;
@@ -67,8 +69,17 @@ pub struct Scale {
     pub distance_factor: f64,
     pub area_factor: f64,
     pub area_unit: String,
+    /// Decimal places of a distance. With [`Scale::formats`], those of the last distance unit
+    /// when it shows decimals (0 otherwise); the formats, not this, label the readings.
     pub precision: u8,
     pub ratio: String,
+    /// The number format arrays of an imported scale whose units are compound (feet and inches)
+    /// or whose values show as fractions or cut off to whole units (ISO 32000-2 §12.9.2):
+    /// readings are labelled with them, and a measurement added with this scale writes them
+    /// back. `unit`, `area_unit` and the factors are their first units'. `None` for single-unit
+    /// decimal scales, which `unit`, `area_unit` and `precision` describe.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formats: Option<Formats>,
 }
 impl Default for Scale {
     fn default() -> Self {
@@ -81,6 +92,7 @@ impl Default for Scale {
             area_unit: "in^2".into(),
             precision: 2,
             ratio: "1 in = 1 in".into(),
+            formats: None,
         }
     }
 }
@@ -95,6 +107,7 @@ impl Scale {
             area_unit: format!("{unit}^2"),
             precision,
             ratio: format!("1 pt = {units_per_user_unit} {unit}"),
+            formats: None,
         };
         out.validate()?;
         Ok(out)
@@ -109,6 +122,19 @@ impl Scale {
             return Err(invalid("calibration needs two distinct points"));
         }
         Self::new(real_distance / length, unit, precision)
+    }
+    /// A scale as a plan writes it: `page` `page_unit` on the page is `real` `unit` in the real
+    /// world ("1 mm = 50 mm" at 1:50). `a` and `b` are the user-space ends of one display point,
+    /// as for [`Scale::calibrate`]. The page side is converted to points, so the stored factors
+    /// stay per user-space unit; the ratio string keeps the units as entered.
+    pub fn ratio(a: Point, b: Point, page: f64, page_unit: PageUnit, real: f64, unit: &str, precision: u8) -> Result<Self> {
+        if !page.is_finite() || page <= 0.0 || !real.is_finite() || real <= 0.0 {
+            return Err(invalid("both sides of a scale ratio must be finite and positive"));
+        }
+        let mut out = Self::calibrate(a, b, real / (page * page_unit.points()), unit, precision)?;
+        out.ratio = format!("{} {} = {} {unit}", ratio_number(page), page_unit.label(), ratio_number(real));
+        out.validate()?;
+        Ok(out)
     }
     pub fn validate(&self) -> Result<()> {
         for f in [self.x, self.y, self.distance_factor, self.area_factor] {
@@ -129,6 +155,15 @@ impl Scale {
         if self.ratio.len() > 256 || self.ratio.chars().any(char::is_control) {
             return Err(invalid("invalid scale ratio"));
         }
+        if let Some(formats) = &self.formats {
+            formats.validate().map_err(invalid)?;
+            if formats.y.is_some() {
+                let yf = self.y / formats.cyx;
+                if !yf.is_finite() || !(1e-12..=1e12).contains(&yf) {
+                    return Err(invalid("scale factors must be finite and between 1e-12 and 1e12"));
+                }
+            }
+        }
         Ok(())
     }
     pub fn dictionary(&self) -> Result<Dict> {
@@ -146,10 +181,34 @@ impl Scale {
             d.set(b"SS".to_vec(), PdfString::text(""));
             Object::Array(vec![Object::Dict(d)])
         };
+        // An imported array is written as read, its first unit given this scale's label and factor.
+        let imported = |formats: &[NumberFormat], unit: &str, factor: f64| {
+            let first = formats.first().map(|f| NumberFormat { unit: unit.into(), factor, ..f.clone() });
+            Object::Array(first.iter().chain(formats.iter().skip(1)).map(NumberFormat::dictionary).collect())
+        };
         let mut d = Dict::new();
         d.set(b"Type".to_vec(), Object::name("Measure"));
         d.set(b"Subtype".to_vec(), Object::name("RL"));
         d.set(b"R".to_vec(), PdfString::text(&self.ratio));
+        if let Some(f) = &self.formats {
+            d.set(b"X".to_vec(), imported(&f.x, &self.unit, self.x));
+            match &f.y {
+                // Y keeps its own units, and the CYX that converts them to X's.
+                Some(ys) => {
+                    let unit = ys.first().map_or(self.unit.as_str(), |f| f.unit.as_str());
+                    d.set(b"Y".to_vec(), imported(ys, unit, self.y / f.cyx));
+                    d.set(b"CYX".to_vec(), Object::Real(f.cyx));
+                }
+                None if self.x != self.y => {
+                    d.set(b"Y".to_vec(), imported(&f.x, &self.unit, self.y));
+                    d.set(b"CYX".to_vec(), Object::Real(1.0));
+                }
+                None => {}
+            }
+            d.set(b"D".to_vec(), imported(&f.distance, &self.unit, self.distance_factor));
+            d.set(b"A".to_vec(), imported(&f.area, &self.area_unit, self.area_factor));
+            return Ok(d);
+        }
         d.set(b"X".to_vec(), format(&self.unit, self.x));
         if self.x != self.y {
             d.set(b"Y".to_vec(), format(&self.unit, self.y));
@@ -159,48 +218,92 @@ impl Scale {
         d.set(b"A".to_vec(), format(&self.area_unit, self.area_factor));
         Ok(d)
     }
-    /// Single-unit decimal scales are editable. Compound/fractional and non-rectilinear
-    /// imports are refused explicitly; their dictionaries and appearance remain untouched.
+    /// Single-unit decimal scales are editable. Compound units (feet and inches), fractions and
+    /// values cut off to whole units read too, keeping their number format arrays in
+    /// [`Scale::formats`] (ISO 32000-2 §12.9.2). Non-rectilinear scales and formats that can't be
+    /// shown are refused explicitly; their dictionaries and appearance remain untouched.
     pub fn read(doc: &Document, object: &Object) -> Result<Self> {
         let o = doc.resolve(object);
         let d = o.as_dict().ok_or_else(|| invalid("invalid measure dictionary"))?;
-        if d.name(b"Subtype").is_some_and(|n| n != b"RL") {
+        if d.get(b"Subtype").map(|o| doc.resolve(o)).is_some_and(|o| !matches!(*o, Object::Null) && o.as_name() != Some(b"RL")) {
             return Err(invalid("only rectilinear measurement scales are supported"));
         }
-        let format = |key: &[u8]| -> Result<(String, f64, u8)> {
-            let a = doc.resolve(d.get(key).ok_or_else(|| invalid("measurement scale lacks a number format"))?);
-            let a = a.as_array().ok_or_else(|| invalid("invalid measurement number format"))?;
-            if a.len() != 1 {
-                return Err(invalid("compound measurement units are not supported yet"));
+        let format = |key: &[u8]| -> Result<Vec<NumberFormat>> {
+            let a = d.get(key).ok_or_else(|| invalid("measurement scale lacks a number format"))?;
+            number_format::read(doc, a).map_err(invalid)
+        };
+        // The unit and factor a number format array converts to first.
+        let first = |a: &[NumberFormat]| a.first().map(|f| (f.unit.clone(), f.factor)).ok_or_else(|| invalid("empty number format"));
+        let xs = format(b"X")?;
+        let (unit, x) = first(&xs)?;
+        let ys = if d.contains(b"Y") { Some(format(b"Y")?) } else { None };
+        let (y, cyx) = match &ys {
+            Some(ys) => {
+                let cyx = d.get(b"CYX").and_then(|o| doc.resolve(o).as_f64()).ok_or_else(|| invalid("Y scale requires CYX for lengths and areas"))?;
+                (first(ys)?.1 * cyx, cyx)
             }
-            let o = doc.resolve(a.first().ok_or_else(|| invalid("empty number format"))?);
-            let f = o.as_dict().ok_or_else(|| invalid("invalid number format dictionary"))?;
-            let precision = match f.name(b"F") {
-                Some(b"R") => 0,
-                None | Some(b"D") => {
-                    let denom = f.int(b"D").unwrap_or(100);
-                    (0..=6).find(|p| 10_i64.pow(*p) == denom).ok_or_else(|| invalid("unsupported measurement precision"))?
-                }
-                _ => return Err(invalid("fractional measurement formats are not supported yet")),
-            };
-            Ok((text(f, b"U"), f.get(b"C").and_then(Object::as_f64).ok_or_else(|| invalid("missing conversion factor"))?, precision as u8))
+            None => (x, 1.0),
         };
-        let (unit, x, _) = format(b"X")?;
-        let y = if d.contains(b"Y") {
-            let (_, y, _) = format(b"Y")?;
-            y * d.get(b"CYX").and_then(Object::as_f64).ok_or_else(|| invalid("Y scale requires CYX for lengths and areas"))?
-        } else {
-            x
-        };
-        let (distance_unit, distance_factor, precision) = format(b"D")?;
+        let distances = format(b"D")?;
+        let (distance_unit, distance_factor) = first(&distances)?;
         if unit != distance_unit {
             return Err(invalid("different coordinate and distance units are not supported yet"));
         }
-        let (area_unit, area_factor, _) = format(b"A")?;
-        let out = Self { x, y, unit, distance_factor, area_factor, area_unit, precision, ratio: text(d, b"R") };
+        let areas = format(b"A")?;
+        let (area_unit, area_factor) = first(&areas)?;
+        let plain = [&xs, &distances, &areas].into_iter().chain(ys.as_ref()).all(|a| number_format::plain_precision(a).is_some());
+        // The decimals a distance shows: of its only unit, or of its last one when compound.
+        let precision = number_format::plain_precision(&distances)
+            .or_else(|| {
+                distances
+                    .last()
+                    .filter(|f| f.remainder == number_format::Remainder::Decimal)
+                    .and_then(|f| u8::try_from(f.denominator.max(1).ilog10()).ok())
+            })
+            .unwrap_or(0);
+        let formats = (!plain).then_some(Formats { x: xs, y: ys, cyx, distance: distances, area: areas });
+        let out = Self { x, y, unit, distance_factor, area_factor, area_unit, precision, ratio: text(doc, d, b"R"), formats };
         out.validate()?;
         Ok(out)
     }
+}
+/// The unit of the page side of a scale ratio. The PDF keeps scales per user-space unit
+/// (ISO 32000-2 §12.9), so a ratio given in one of these is converted to points.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageUnit {
+    Pt,
+    In,
+    Mm,
+    Cm,
+}
+impl PageUnit {
+    pub const ALL: [Self; 4] = [Self::Pt, Self::In, Self::Mm, Self::Cm];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pt => "pt",
+            Self::In => "in",
+            Self::Mm => "mm",
+            Self::Cm => "cm",
+        }
+    }
+    pub fn from_label(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|u| u.label() == s.trim())
+    }
+    /// Points in one of this unit.
+    pub fn points(self) -> f64 {
+        match self {
+            Self::Pt => 1.0,
+            Self::In => 72.0,
+            Self::Mm => 72.0 / 25.4,
+            Self::Cm => 72.0 / 2.54,
+        }
+    }
+}
+/// A side of a scale ratio as people write it: at most six decimals, no trailing zeros.
+fn ratio_number(v: f64) -> String {
+    let fixed = format!("{v:.6}");
+    let short = fixed.trim_end_matches('0').trim_end_matches('.');
+    if short == "0" || short.len() > 24 { format!("{v:e}") } else { short.into() }
 }
 pub(crate) fn check_points(points: &[Point]) -> Result<()> {
     if points.len() > MAX_POINTS || points.iter().flatten().any(|v| !v.is_finite() || v.abs() > MAX_COORD) {
@@ -228,11 +331,18 @@ pub struct Reading {
 pub fn reading(kind: Kind, points: &[Point], scale: &Scale) -> Result<Reading> {
     check_points(points)?;
     scale.validate()?;
+    let points = if kind == Kind::Area { open_polygon(points) } else { points };
     let mut length = 0.0;
     for w in points.windows(2) {
         if let [a, b] = w {
             length += ((b[0] - a[0]) * scale.x).hypot((b[1] - a[1]) * scale.y);
         }
+    }
+    if kind == Kind::Area
+        && points.len() >= 3
+        && let (Some(a), Some(b)) = (points.last(), points.first())
+    {
+        length += ((b[0] - a[0]) * scale.x).hypot((b[1] - a[1]) * scale.y);
     }
     let area = if points.len() >= 3 {
         let origin = points.first().copied().unwrap_or_default();
@@ -256,10 +366,13 @@ pub fn reading(kind: Kind, points: &[Point], scale: &Scale) -> Result<Reading> {
     length *= scale.distance_factor;
     let value = if kind == Kind::Area { area } else { length };
     let unit = if kind == Kind::Area { scale.area_unit.clone() } else { scale.unit.clone() };
-    let label = format!("{value:.precision$} {unit}", precision = usize::from(scale.precision));
     if !value.is_finite() {
         return Err(invalid("measurement overflows its scale"));
     }
+    let label = match &scale.formats {
+        Some(f) => number_format::format(value, if kind == Kind::Area { &f.area } else { &f.distance }),
+        None => format!("{value:.precision$} {unit}", precision = usize::from(scale.precision)),
+    };
     Ok(Reading { kind, value, unit, label, delta_x: delta[0], delta_y: delta[1], angle: delta[1].atan2(delta[0]).to_degrees(), length, area })
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -289,7 +402,9 @@ fn validate_geometry(kind: Kind, points: &[Point]) -> Result<()> {
         Kind::Area if points.len() < 3 => return Err(invalid("area needs at least three points")),
         _ => {}
     }
-    if points.windows(2).any(|p| matches!(p,[a,b] if distance(*a,*b)<1e-6)) {
+    if points.windows(2).any(|p| matches!(p, [a, b] if distance(*a, *b) < 1e-6))
+        || (kind == Kind::Area && matches!((points.first(), points.last()), (Some(a), Some(b)) if distance(*a, *b) < 1e-6))
+    {
         return Err(invalid("adjacent measurement vertices must be distinct"));
     }
     if kind == Kind::Area {
@@ -306,8 +421,8 @@ fn validate_geometry(kind: Kind, points: &[Point]) -> Result<()> {
     }
     Ok(())
 }
-fn text(d: &Dict, k: &[u8]) -> String {
-    d.get(k).and_then(Object::as_string).map(PdfString::to_text).unwrap_or_default()
+fn text(doc: &Document, d: &Dict, k: &[u8]) -> String {
+    d.get(k).and_then(|o| doc.resolve(o).as_string().map(PdfString::to_text)).unwrap_or_default()
 }
 fn nums(v: impl IntoIterator<Item = f64>) -> Object {
     Object::Array(v.into_iter().map(Object::Real).collect())
@@ -397,12 +512,39 @@ pub struct Unsupported {
 pub struct Listing {
     pub measurements: Vec<Measurement>,
     pub unsupported: Vec<Unsupported>,
-    /// The annotation limit stopped enumeration early.
+    /// The annotation or retained-size limit stopped enumeration early.
     pub truncated: bool,
 }
 const MAX_ANNOTATIONS: usize = 100_000;
-fn read_measurement(doc: &Document, d: &Dict, kind: Kind, page: usize, index: usize) -> Result<Measurement> {
-    let scale = Scale::read(doc, d.get(b"Measure").ok_or_else(|| invalid("measurement has no scale"))?)?;
+/// Vertex pairs one listing compares for self-intersection in all: an area's boundary check
+/// is quadratic in its vertices, and many areas (or many annotations sharing one indirect vertex
+/// array) must not multiply that into a stall.
+const MAX_LISTED_WORK: usize = 50_000_000;
+/// Scales already read by one listing, by the indirect `/Measure` object: one scale shared by
+/// many annotations is read (and its ratio decoded) once, failures included.
+type Scales = std::collections::HashMap<ObjRef, std::result::Result<Scale, String>>;
+/// Points and text one listing keeps, as counted by [`retained`]: about a thousand
+/// measurements of [`MAX_POINTS`] points each.
+const MAX_LISTED_BYTES: usize = 32 << 20;
+/// The bytes a listed measurement keeps in points and text.
+fn retained(m: &Measurement) -> usize {
+    let s = &m.scale;
+    [m.id.len(), m.author.len(), m.label.len(), s.unit.len(), s.area_unit.len(), s.ratio.len(), s.formats.as_ref().map_or(0, Formats::held_bytes)]
+        .into_iter()
+        .fold(m.points.len().saturating_mul(std::mem::size_of::<Point>()), usize::saturating_add)
+}
+/// The scale a measurement annotation reads with, through the listing's cache: a scale given by
+/// reference is read once, and its error kept, however many annotations name it.
+fn scale_of(doc: &Document, d: &Dict, scales: &mut Scales) -> Result<Scale> {
+    let measure = d.get(b"Measure").ok_or_else(|| invalid("measurement has no scale"))?;
+    match measure.as_ref() {
+        Some(r) => scales.entry(r).or_insert_with(|| Scale::read(doc, measure).map_err(|e| e.to_string())).clone().map_err(|e| invalid(&e)),
+        None => Scale::read(doc, measure),
+    }
+}
+
+fn read_measurement(doc: &Document, d: &Dict, kind: Kind, page: usize, index: usize, scales: &mut Scales) -> Result<Measurement> {
+    let scale = scale_of(doc, d, scales)?;
     let key = if kind == Kind::Distance { &b"L"[..] } else { b"Vertices" };
     let o = doc.resolve(d.get(key).ok_or_else(|| invalid("measurement has no vertices"))?);
     let a = o.as_array().ok_or_else(|| invalid("invalid measurement vertices"))?;
@@ -413,13 +555,26 @@ fn read_measurement(doc: &Document, d: &Dict, kind: Kind, page: usize, index: us
     let points: Vec<Point> = v.as_chunks::<2>().0.to_vec();
     validate_geometry(kind, &points)?;
     let reading = reading(kind, &points, &scale)?;
-    Ok(Measurement { page, index, id: text(d, b"NM"), author: text(d, b"T"), label: text(d, b"PCMeasureLabel"), points, scale, reading })
+    Ok(Measurement {
+        page,
+        index,
+        id: text(doc, d, b"NM"),
+        author: text(doc, d, b"T"),
+        label: text(doc, d, b"PCMeasureLabel"),
+        points,
+        scale,
+        reading,
+    })
 }
 /// Every measurement annotation. One that can't be read is reported in `unsupported`
 /// rather than failing the whole list.
 pub fn list(doc: &Document) -> Listing {
     let mut out = Listing::default();
     let mut count = 0usize;
+    let mut kept = 0usize;
+    let mut work = 0usize;
+    let mut seen = std::collections::HashSet::new();
+    let mut scales = Scales::new();
     for (page, p) in pdfcraft_model::pages(doc).iter().enumerate() {
         let Some(o) = p.dict.get(b"Annots") else { continue };
         let o = doc.resolve(o);
@@ -430,22 +585,67 @@ pub fn list(doc: &Document) -> Listing {
                 out.truncated = true;
                 return out;
             }
+            // One annotation object under several entries or pages is one measurement.
+            if let Some(r) = a.as_ref()
+                && !seen.insert(r)
+            {
+                continue;
+            }
             let o = doc.resolve(a);
             let Some(d) = o.as_dict() else { continue };
-            let kind = match d.name(b"IT") {
+            let it = d.get(b"IT").map(|o| doc.resolve(o));
+            let kind = match it.as_deref().and_then(Object::as_name) {
                 Some(b"LineDimension") => Kind::Distance,
                 Some(b"PolyLineDimension") => Kind::Perimeter,
                 Some(b"PolygonDimension") => Kind::Area,
                 _ => continue,
             };
-            match read_measurement(doc, d, kind, page, index) {
-                Ok(m) => out.measurements.push(m),
+            // An area's boundary check compares every pair of edges: charge it before reading the
+            // vertices, so a listing stops at its work bound rather than at a stall. Other kinds
+            // read their vertices once.
+            let vertices = d.get(if kind == Kind::Distance { b"L".as_slice() } else { b"Vertices" }).map(|v| doc.resolve(v));
+            let n = vertices.as_deref().and_then(Object::as_array).map_or(0, |a| a.len() / 2).min(MAX_POINTS);
+            // An area's boundary check compares every pair of edges: charge it before reading the
+            // vertices, so a listing stops at its work bound rather than at a stall. The scale is
+            // resolved first, as `read_measurement` reads it: one that is rejected reads nothing at
+            // all, so it must not spend the work that later, valid measurements need.
+            if kind == Kind::Area {
+                if let Err(e) = scale_of(doc, d, &mut scales) {
+                    out.unsupported.push(Unsupported { page, index, reason: e.to_string() });
+                    continue;
+                }
+                work = work.saturating_add(n.saturating_mul(n));
+            } else {
+                work = work.saturating_add(n.max(1));
+            }
+            if work > MAX_LISTED_WORK {
+                out.truncated = true;
+                return out;
+            }
+            match read_measurement(doc, d, kind, page, index, &mut scales) {
+                Ok(m) => {
+                    kept = kept.saturating_add(retained(&m));
+                    if kept > MAX_LISTED_BYTES {
+                        out.truncated = true;
+                        return out;
+                    }
+                    out.measurements.push(m);
+                }
                 Err(e) => out.unsupported.push(Unsupported { page, index, reason: e.to_string() }),
             }
         }
     }
     out
 }
+/// Most viewports [`set_scale`] gives a page, and most [`scale_at`] reads.
+const MAX_VIEWPORTS: usize = 1024;
+
+#[cfg(test)]
+thread_local! {
+    /// Numbers read from viewport `/BBox` arrays.
+    pub(crate) static VIEWPORT_NUMBERS_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Last containing viewport wins, using the first point of the measurement (ISO 32000-2 §12.9).
 /// Outside every viewport the page measures true size in inches.
 pub fn scale_at(doc: &Document, page_index: usize, at: Point) -> Result<Scale> {
@@ -459,12 +659,17 @@ pub fn scale_at_or(doc: &Document, page_index: usize, at: Point, per_point: f64,
     if let Some(o) = p.dict.get(b"VP") {
         let o = doc.resolve(o);
         let arr = o.as_array().ok_or_else(|| invalid("invalid page viewports"))?;
-        for viewport in arr.iter().rev() {
+        // The last viewports win; a page holds at most MAX_VIEWPORTS of its own.
+        for viewport in arr.iter().rev().take(MAX_VIEWPORTS) {
             let o = doc.resolve(viewport);
             let Some(d) = o.as_dict() else { continue };
             if let Some(bbox) = d.get(b"BBox") {
                 let o = doc.resolve(bbox);
-                let b: Option<Vec<f64>> = o.as_array().and_then(|a| a.iter().map(|v| doc.resolve(v).as_f64()).collect());
+                let b: Option<Vec<f64>> = o.as_array().filter(|a| a.len() == 4).and_then(|a| {
+                    #[cfg(test)]
+                    VIEWPORT_NUMBERS_READ.with(|n| n.set(n.get() + a.len()));
+                    a.iter().map(|v| doc.resolve(v).as_f64()).collect()
+                });
                 if let Some(b) = b.filter(|b| b.len() == 4 && b.iter().all(|v| v.is_finite()))
                     && at[0] >= b[0].min(b[2])
                     && at[0] <= b[0].max(b[2])
@@ -490,7 +695,7 @@ pub fn set_scale(doc: &mut Document, page_index: usize, bbox: [f64; 4], name: &s
         Some(o) => doc.resolve(o).as_array().cloned().ok_or_else(|| invalid("invalid page viewports"))?,
         None => Vec::new(),
     };
-    if list.len() >= 1024 {
+    if list.len() >= MAX_VIEWPORTS {
         return Err(invalid("page has too many measurement viewports"));
     }
     let mut d = Dict::new();
