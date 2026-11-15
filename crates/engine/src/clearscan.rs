@@ -103,6 +103,7 @@ pub struct ClearScanJob {
     infos: Vec<PageInfo>,
     geometries: Vec<pdfcraft_ocr::clearscan::PageGeometry>,
     native: Vec<Option<f32>>,
+    skip_reasons: Vec<Option<String>>,
     /// Pages to read, 0-based, already checked.
     pub pages: Vec<usize>,
     settings: ClearScanSettings,
@@ -115,6 +116,7 @@ pub struct ClearScanCursor {
     infos: Vec<PageInfo>,
     geometries: Vec<pdfcraft_ocr::clearscan::PageGeometry>,
     native: Vec<Option<f32>>,
+    skip_reasons: Vec<Option<String>>,
     pages: Vec<usize>,
     settings: ClearScanSettings,
     scan_options: pdfcraft_ocr::clearscan::ClearScanOptions,
@@ -135,7 +137,7 @@ pub struct ClearScanBuilt {
 impl ClearScanJob {
     /// A run that advances one page per [`ClearScanCursor::step`].
     pub fn cursor(self) -> ClearScanCursor {
-        let ClearScanJob { bytes, password, infos, geometries, native, pages, settings } = self;
+        let ClearScanJob { bytes, password, infos, geometries, native, skip_reasons, pages, settings } = self;
         let config = RenderConfig { password: password.as_deref().map(Arc::from), hide_comments: true, ..Default::default() };
         let scan_options = scan_options(&settings);
         ClearScanCursor {
@@ -143,6 +145,7 @@ impl ClearScanJob {
             infos,
             geometries,
             native,
+            skip_reasons,
             pages,
             settings,
             scan_options,
@@ -204,6 +207,29 @@ impl ClearScanCursor {
         }
     }
 
+    fn skip_page(
+        &mut self,
+        page: usize,
+        done: usize,
+        total: usize,
+        reason: String,
+        progress: &mut impl FnMut(ClearScanProgress) -> bool,
+    ) -> PreparedStep {
+        let _ = progress(ClearScanProgress { page, done, total, stage: "skipped" });
+        self.report.push(ClearScanPage {
+            page,
+            text: String::new(),
+            glyphs: 0,
+            clusters: 0,
+            erased: 0,
+            bytes: 0,
+            skipped: Some(reason),
+            error: None,
+        });
+        let _ = progress(ClearScanProgress { page, done: done.saturating_add(1), total, stage: "done" });
+        PreparedStep::Advance(self.advance(false))
+    }
+
     fn prepare_step(&mut self, progress: &mut impl FnMut(ClearScanProgress) -> bool) -> PreparedStep {
         let Some(page) = self.pages.get(self.index).copied() else {
             return PreparedStep::Advance(Some(self.finish(false)));
@@ -218,19 +244,10 @@ impl ClearScanCursor {
             return PreparedStep::Advance(self.advance(false));
         };
         if self.settings.skip_text_pages && page_has_text(&mut self.renderer, page) {
-            let _ = progress(ClearScanProgress { page, done, total, stage: "skipped" });
-            self.report.push(ClearScanPage {
-                page,
-                text: String::new(),
-                glyphs: 0,
-                clusters: 0,
-                erased: 0,
-                bytes: 0,
-                skipped: Some("the page already contains text".into()),
-                error: None,
-            });
-            let _ = progress(ClearScanProgress { page, done: done.saturating_add(1), total, stage: "done" });
-            return PreparedStep::Advance(self.advance(false));
+            return self.skip_page(page, done, total, "the page already contains text".into(), progress);
+        }
+        if let Some(reason) = self.skip_reasons.get(page).and_then(|r| r.as_ref()).cloned() {
+            return self.skip_page(page, done, total, reason, progress);
         }
         let Some(geometry) = self.geometries.get(page).copied() else {
             self.report.push(failed_page(page, "page geometry is missing"));
@@ -354,6 +371,12 @@ impl Session {
         let pages = resolve_pages(count, pages)?;
         let native = (0..count).map(|page| native_scale(doc, page)).collect();
         let cos = doc.editor.as_ref().map(|e| &e.cos).ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
+        let mut skip_reasons = vec![None; count];
+        for &page in &pages {
+            if let Some(slot) = skip_reasons.get_mut(page) {
+                *slot = non_scan_reason(cos, page, doc.info.pages.get(page));
+            }
+        }
         let geometries = pdfcraft_model::pages(cos)
             .iter()
             .map(|p| {
@@ -367,6 +390,7 @@ impl Session {
             infos: doc.info.pages.clone(),
             geometries,
             native,
+            skip_reasons,
             pages,
             settings,
         })
@@ -481,6 +505,38 @@ fn render_scale(dpi: f32, info: &PageInfo, native: Option<f32>) -> f32 {
 fn page_has_text(renderer: &mut PageRenderer, page: usize) -> bool {
     let shot = renderer.render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() });
     shot.text.as_ref().is_some_and(|text| text.glyphs.iter().any(|glyph| !glyph.text.trim().is_empty()))
+}
+
+fn non_scan_reason(cos: &pdfcraft_cos::Document, page: usize, info: Option<&PageInfo>) -> Option<String> {
+    let Ok(content) = pdfcraft_edit::page_scan_content(cos, page) else {
+        return Some("the page contents could not be inspected".into());
+    };
+    if content.has_optional_content {
+        return Some("the page uses optional content layers".into());
+    }
+    let Ok(images) = pdfcraft_edit::page_images(cos, page) else {
+        return Some("the page contents could not be inspected".into());
+    };
+    if images.iter().any(|i| i.is_form) {
+        return Some("the page contains form artwork rather than a single scanned image".into());
+    }
+    let rasters: Vec<_> = images.iter().filter(|i| !i.is_form && i.width > 1 && i.height > 1).collect();
+    let Some(image) = rasters.first() else {
+        return Some("the page does not contain a scanned image".into());
+    };
+    if rasters.len() > 1 {
+        return Some("the page contains multiple images rather than a single scan".into());
+    }
+    if content.has_vector_or_inline {
+        return Some("the page contains vector graphics alongside the image".into());
+    }
+    let Some(info) = info else {
+        return Some("page geometry is missing".into());
+    };
+    if crate::scan_fields::image_crop_share(info, image).is_none_or(|s| s < crate::scan_fields::COVERED) {
+        return Some("the image covers less than half the page".into());
+    }
+    None
 }
 
 #[cfg(test)]
@@ -773,7 +829,33 @@ mod tests {
         let link_user_rect = rotated_bbox_in_user(view_m, angle, cx, cy, target_disp_rect);
         let bg_user_rect = rotated_bbox_in_user(view_m, angle, cx, cy, bg_disp_rect);
 
-        let stream_ref = cos.add(Object::Stream(Stream::flate(Dict::new(), content.as_bytes())));
+        // Rasterize the tilted fixture onto a flat 260x320 user-space page so the tested page is
+        // a real single-image scan wrapped in /CropBox, /Rotate 90 and /UserUnit 2.0.
+        let mut flat = pdfcraft_cos::Document::open(session.create_blank(260.0, 320.0, 1).expect("flat blank")).expect("open flat");
+        let flat_page = pdfcraft_model::pages(&flat)[0].obj;
+        let flat_stream = flat.add(Object::Stream(Stream::flate(Dict::new(), content.as_bytes())));
+        flat.update_dict(flat_page, |d| d.set(b"Contents".to_vec(), Object::Ref(flat_stream))).expect("set flat stream");
+        let flat_bytes = Arc::new(write_full(&flat, &SaveOptions::default()).expect("write flat"));
+        let mut flat_renderer = PageRenderer::new(flat_bytes, RenderConfig::default());
+        let raster = flat_renderer.render(RenderRequest { page: 0, scale: 2.0, ..Default::default() });
+        assert!(raster.error.is_none(), "{:?}", raster.error);
+        let mut rgb = Vec::with_capacity((raster.width as usize).saturating_mul(raster.height as usize).saturating_mul(3));
+        for px in raster.rgba.as_chunks::<4>().0 {
+            rgb.extend_from_slice(&px[..3]);
+        }
+        let mut img_dict = Dict::new();
+        img_dict.set(b"Type".to_vec(), Object::name("XObject"));
+        img_dict.set(b"Subtype".to_vec(), Object::name("Image"));
+        img_dict.set(b"Width".to_vec(), Object::Int(i64::from(raster.width)));
+        img_dict.set(b"Height".to_vec(), Object::Int(i64::from(raster.height)));
+        img_dict.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+        img_dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        let img_ref = cos.add(Object::Stream(Stream::flate(img_dict, &rgb)));
+        let mut xo_dict = Dict::new();
+        xo_dict.set(b"Im0".to_vec(), Object::Ref(img_ref));
+        let mut res_dict = Dict::new();
+        res_dict.set(b"XObject".to_vec(), Object::Dict(xo_dict));
+        let stream_ref = cos.add(Object::Stream(Stream::flate(Dict::new(), b"q 260 0 0 320 0 0 cm /Im0 Do Q\n")));
         let link_annot = cos.add(Object::Dict({
             let mut d = Dict::new();
             d.set(b"Type".to_vec(), Object::name("Annot"));
@@ -782,6 +864,7 @@ mod tests {
             d
         }));
         cos.update_dict(page_ref, |d| {
+            d.set(b"Resources".to_vec(), Object::Dict(res_dict));
             d.set(b"Contents".to_vec(), Object::Ref(stream_ref));
             d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link_annot)]));
         })
@@ -925,5 +1008,115 @@ mod tests {
             let px = u64::from(pdfcraft_render::device_pixels(w, scale)) * u64::from(pdfcraft_render::device_pixels(h, scale));
             assert!(px <= pdfcraft_ocr::grey::MAX_PIXELS, "{w}x{h} rendered {px} px > MAX_PIXELS");
         }
+    }
+
+    fn assert_clearscan_skipped(bytes: Arc<Vec<u8>>, expected_reason_substr: &str) {
+        let mut session = Session::new();
+        let id = session.open("non-scan.pdf", None, bytes, None).expect("open");
+        let mut stages = Vec::new();
+        let report = session
+            .clearscan_document(id, &[], ClearScanSettings::default(), |event| {
+                stages.push(event.stage);
+                true
+            })
+            .expect("skipping non-scan pages must not fail or require OCR models");
+        assert!(!report.cancelled);
+        assert_eq!(report.pages.len(), 1, "{report:?}");
+        let page = &report.pages[0];
+        let skipped = page.skipped.as_deref().expect("page should be skipped");
+        assert!(skipped.contains(expected_reason_substr), "expected {expected_reason_substr:?} in {skipped:?}");
+        assert!(page.error.is_none(), "{page:?}");
+        assert!(stages.contains(&"skipped"), "progress must report skipped stage: {stages:?}");
+        assert!(stages.contains(&"done"), "progress must report done stage: {stages:?}");
+        assert!(session.undo(id).is_err(), "skipped non-scan page must not create an edit");
+    }
+
+    #[test]
+    fn clearscan_skips_vector_art_and_hybrid_vector_pages() {
+        use pdfcraft_cos::{Document, Object, SaveOptions, Stream, write_full};
+
+        let session = Session::new();
+        let blank = session.create_blank(200.0, 200.0, 1).expect("blank");
+        let mut cos = Document::open(blank).expect("open blank");
+        let page_ref = pdfcraft_model::pages(&cos)[0].obj;
+        let vec_stream = cos.add(Object::Stream(Stream::flate(pdfcraft_cos::Dict::new(), b"0 0 1 rg 20 20 120 120 re f\n")));
+        cos.update_dict(page_ref, |d| d.set(b"Contents".to_vec(), Object::Ref(vec_stream))).expect("set vector contents");
+        let vec_pdf = Arc::new(write_full(&cos, &SaveOptions::default()).expect("write vector pdf"));
+        assert_clearscan_skipped(vec_pdf, "scanned image");
+
+        // A single full-page image paired with overlaid vector paths must also be skipped.
+        let png = crate::export::encode_png(32, 32, &vec![250_u8; 32 * 32 * 4]).expect("png");
+        let scan_bytes = session.create_from_images(&[("scan.png".into(), png)]).expect("scan pdf");
+        let mut cos2 = Document::open(scan_bytes).expect("open scan");
+        let page2 = pdfcraft_model::pages(&cos2).swap_remove(0);
+        let overlay = cos2.add(Object::Stream(Stream::flate(pdfcraft_cos::Dict::new(), b"1 0 0 RG 2 w 4 4 20 20 re S\n")));
+        let old_contents = page2.dict.get(b"Contents").cloned().expect("contents");
+        cos2.update_dict(page2.obj, |d| d.set(b"Contents".to_vec(), Object::Array(vec![old_contents, Object::Ref(overlay)])))
+            .expect("append vector overlay");
+        let hybrid_pdf = Arc::new(write_full(&cos2, &SaveOptions::default()).expect("write hybrid pdf"));
+        assert_clearscan_skipped(hybrid_pdf, "vector graphics");
+    }
+
+    #[test]
+    fn clearscan_skips_multi_image_small_image_and_ocg_pages() {
+        use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_full};
+
+        let png = Arc::new(crate::export::encode_png(32, 32, &vec![250_u8; 32 * 32 * 4]).expect("png"));
+
+        // 1. Multiple images on one page.
+        let mut session = Session::new();
+        let blank = session.create_blank(200.0, 200.0, 1).expect("blank");
+        let id = session.open("multi.pdf", None, blank, None).expect("open");
+        session
+            .apply(id, Edit::AddImage { page: 0, rect: Some([10.0, 10.0, 190.0, 95.0]), name: "top.png".into(), bytes: Arc::clone(&png) })
+            .expect("top image");
+        session
+            .apply(id, Edit::AddImage { page: 0, rect: Some([10.0, 105.0, 190.0, 190.0]), name: "bot.png".into(), bytes: Arc::clone(&png) })
+            .expect("bottom image");
+        let multi_pdf = session.save_bytes(id).expect("save multi");
+        assert_clearscan_skipped(multi_pdf, "multiple images");
+
+        // 2. One image covering less than half of the page.
+        let mut s_small = Session::new();
+        let blank2 = s_small.create_blank(200.0, 200.0, 1).expect("blank2");
+        let id2 = s_small.open("small.pdf", None, blank2, None).expect("open small");
+        s_small
+            .apply(id2, Edit::AddImage { page: 0, rect: Some([10.0, 10.0, 60.0, 60.0]), name: "logo.png".into(), bytes: Arc::clone(&png) })
+            .expect("small image");
+        let small_pdf = s_small.save_bytes(id2).expect("save small");
+        assert_clearscan_skipped(small_pdf, "less than half");
+
+        // 3. Single full-page image inside an optional content (OCG) layer.
+        let scan_bytes = s_small.create_from_images(&[("scan.png".into(), (*png).clone())]).expect("scan");
+        let mut cos = Document::open(scan_bytes).expect("open ocg base");
+        let mut ocg_dict = Dict::new();
+        ocg_dict.set(b"Type".to_vec(), Object::name("OCG"));
+        ocg_dict.set(b"Name".to_vec(), Object::String(pdfcraft_cos::PdfString::text("Hidden layer")));
+        let ocg_ref = cos.add(Object::Dict(ocg_dict));
+        let root_ref = cos.trailer().reference(b"Root").expect("root");
+        cos.update_dict(root_ref, |c| {
+            let mut d_cfg = Dict::new();
+            d_cfg.set(b"OFF".to_vec(), Object::Array(vec![Object::Ref(ocg_ref)]));
+            let mut props = Dict::new();
+            props.set(b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ocg_ref)]));
+            props.set(b"D".to_vec(), Object::Dict(d_cfg));
+            c.set(b"OCProperties".to_vec(), Object::Dict(props));
+        })
+        .expect("set OCProperties");
+        let page = pdfcraft_model::pages(&cos).swap_remove(0);
+        let mut res = page.dict.get(b"Resources").and_then(|o| cos.resolve(o).as_dict().cloned()).unwrap_or_default();
+        let mut prop_map = Dict::new();
+        prop_map.set(b"L1".to_vec(), Object::Ref(ocg_ref));
+        res.set(b"Properties".to_vec(), Object::Dict(prop_map));
+        let bdc = cos.add(Object::Stream(Stream::flate(Dict::new(), b"/OC /L1 BDC\n")));
+        let emc = cos.add(Object::Stream(Stream::flate(Dict::new(), b"\nEMC\n")));
+        let orig_contents = page.dict.get(b"Contents").cloned().expect("contents");
+        cos.update_dict(page.obj, |p| {
+            p.set(b"Resources".to_vec(), Object::Dict(res));
+            p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(bdc), orig_contents, Object::Ref(emc)]));
+        })
+        .expect("wrap in OC");
+        let ocg_pdf = Arc::new(write_full(&cos, &SaveOptions::default()).expect("write ocg pdf"));
+        assert_clearscan_skipped(ocg_pdf, "optional content layers");
     }
 }
