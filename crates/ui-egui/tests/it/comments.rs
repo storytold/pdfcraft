@@ -276,6 +276,14 @@ fn the_quick_bar_fill_changes_the_selected_shape() {
     h.get_by_label("No fill").click();
     h.run_steps(3);
     assert_eq!(fill(&h), None, "No fill takes it away");
+
+    // Each change is one undo step: undoing once each brings back the fill before it.
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(fill(&h), Some([0.0, 0.47, 0.84]), "one undo brings the blue back");
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(fill(&h), Some([1.0, 0.0, 0.0]), "a second brings the red back");
 }
 
 #[test]
