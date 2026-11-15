@@ -281,6 +281,10 @@ fn printing_landscape_sheets_tells_cups_to_turn_them() {
         app
     });
     h.run_steps(4);
+    h.state_mut().printer_source =
+        Some(Arc::new(|| vec![spool::Printer { name: "Test_Queue".into(), default: true, two_sided: None, description: String::new() }]));
+    h.state_mut().printer_papers_source = Some(Arc::new(|_| Vec::new()));
+    h.state_mut().default_paper_source = Some(Arc::new(|_| None));
     let jobs: Arc<Mutex<Vec<spool::Job>>> = Arc::default();
     let sent = Arc::clone(&jobs);
     h.state_mut().spooler = Some(Arc::new(move |_pdf: &[u8], job: &spool::Job| {
@@ -291,20 +295,20 @@ fn printing_landscape_sheets_tells_cups_to_turn_them() {
     let print = |h: &mut Harness<'static, PdfCraftApp>, choose: &dyn Fn(&mut pdfcraft_ui_egui::PrintDraft)| -> spool::Job {
         let before = jobs.lock().unwrap().len();
         assert!(h.state_mut().execute("print.dialog"));
-        h.run_steps(3);
-        h.state_mut().print_draft.printer = Some("Test_Queue".into());
-        h.run_steps(2);
+        settle(h);
+        assert_eq!(h.state().print_draft.printer.as_deref(), Some("Test_Queue"));
         choose(&mut h.state_mut().print_draft);
-        h.run_steps(1);
+        settle(h);
+        assert!(!h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).accesskit_node().is_disabled());
         h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
-        for _ in 0..400 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while (jobs.lock().unwrap().len() == before || h.state().progress_notice.is_some()) && std::time::Instant::now() < deadline {
             h.run_steps(1);
-            if jobs.lock().unwrap().len() > before {
-                break;
-            }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        jobs.lock().unwrap().last().cloned().expect("the job reached the spooler")
+        let job = jobs.lock().unwrap().get(before).cloned().expect("the new job reached the spooler");
+        assert!(h.state().progress_notice.is_none(), "the completed print job was acknowledged before reopening the dialog");
+        job
     };
     let orientation = |job: &spool::Job| job.options.iter().filter(|(k, _)| k == "orientation-requested").map(|(_, v)| v.clone()).collect::<Vec<_>>();
     // Fit on Letter with Auto orientation lays both pages out on landscape sheets.
@@ -1981,32 +1985,21 @@ fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
     let open = |h: &mut Harness<'static, PdfCraftApp>| {
         h.state_mut().dialog = None;
         assert!(h.state_mut().execute("print.dialog"));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while (h.state().print_draft.printers_loading || h.state().print_draft.papers_loading()) && std::time::Instant::now() < deadline {
-            h.run_steps(1);
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert!(!h.state().print_draft.printers_loading);
-        assert!(!h.state().print_draft.papers_loading());
-        h.run_steps(2);
+        settle(h);
     };
     let print = |h: &mut Harness<'static, PdfCraftApp>| -> Job {
         let before = jobs.lock().unwrap().len();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while h.state().print_draft.papers_loading() && std::time::Instant::now() < deadline {
-            h.run_steps(1);
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        h.run_steps(2);
+        settle(h);
+        assert!(!h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).accesskit_node().is_disabled());
         h.get_by(|n| n.label().as_deref() == Some("Print") && n.role() == Role::Button).click();
-        for _ in 0..400 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while (jobs.lock().unwrap().len() == before || h.state().progress_notice.is_some()) && std::time::Instant::now() < deadline {
             h.run_steps(1);
-            if jobs.lock().unwrap().len() > before {
-                break;
-            }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        jobs.lock().unwrap().last().cloned().expect("the job reached the spooler")
+        let job = jobs.lock().unwrap().get(before).cloned().expect("the new job reached the spooler");
+        assert!(h.state().progress_notice.is_none(), "the completed print job was acknowledged before reopening the dialog");
+        job
     };
     let setup = |h: &Harness<'static, PdfCraftApp>| {
         let d = &h.state().print_draft;
