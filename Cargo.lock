@@ -1193,6 +1193,15 @@ dependencies = [
 [[package]]
 name = "craft-cms"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=7bc5f2a4c8214b97394a5dcf60d01e9f5f5298c3#7bc5f2a4c8214b97394a5dcf60d01e9f5f5298c3"
+dependencies = [
+ "md-5 0.10.6",
+ "rayon",
+]
+
+[[package]]
+name = "craft-cms"
+version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
 dependencies = [
  "md-5 0.10.6",
@@ -4540,7 +4549,7 @@ name = "pdfcraft-automation"
 version = "0.21.1"
 dependencies = [
  "base64 0.23.1",
- "craft-cms",
+ "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "craft-image-codecs",
  "craft-prc",
  "flate2",
@@ -4655,7 +4664,7 @@ name = "pdfcraft-engine"
 version = "0.21.1"
 dependencies = [
  "chrono",
- "craft-cms",
+ "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "craft-docpath",
  "craft-image-codecs",
  "craft-tiff",
@@ -4852,6 +4861,7 @@ dependencies = [
 name = "pdfcraft-preflight"
 version = "0.21.1"
 dependencies = [
+ "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7bc5f2a4c8214b97394a5dcf60d01e9f5f5298c3)",
  "craft-xml",
  "flate2",
  "pdfcraft-content",
@@ -4863,7 +4873,7 @@ dependencies = [
 name = "pdfcraft-print"
 version = "0.21.1"
 dependencies = [
- "craft-cms",
+ "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "craft-print",
  "log",
  "pdfcraft-content",
