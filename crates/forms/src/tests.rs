@@ -1389,6 +1389,87 @@ fn arabic_and_hebrew_a_field_font_cannot_hold_are_shaped_right_to_left() {
     }
 }
 
+/// The fit check of a multi-line field uses the height the appearance draws with: shaped lines
+/// (stacked Thai marks, Arabic and Hebrew points) reach higher and lower than Helvetica's, so a
+/// box that holds a Latin line can be too low for them. `fits` and the drawn overflow agree at
+/// every height.
+#[test]
+fn a_multiline_fit_check_uses_the_shaped_height_the_appearance_draws() {
+    use pdfcraft_fonts::shaped_text::line_reach;
+
+    use crate::appearance::{text_box, value_overflow};
+    let mut taller = 0;
+    for value in ["กู้ฎู", "لِلّٰهِ", "שָׁלוֹם"] {
+        // Without the script's face nothing is shaped (and the value is refused).
+        let Some([lo, hi]) = line_reach(value) else { continue };
+        let reach = hi.max(0.85) - lo.min(-0.207);
+        let mut disagreed_with_helvetica = false;
+        for quarter in 0..60 {
+            let height = 12.0 + f64::from(quarter) * 0.25;
+            let objs: Vec<String> = vec![
+                "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+                "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+                "<< /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+                format!(
+                    "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /Ff 4096 /DA (/Helv 12 Tf 0 g) /Rect [50 400 350 {}] /P 3 0 R >>",
+                    400.0 + height
+                ),
+            ];
+            let mut doc = document(&objs);
+            let all = fields(&doc);
+            let f = field(&all, "note");
+            let fitted = text_box(&doc, f, &f.widgets[0]).fits(value);
+            set_value(&mut doc, "note", &FieldValue::Text(value.into())).unwrap();
+            let all = fields(&doc);
+            let f = field(&all, "note");
+            let cut = value_overflow(&doc, f, &f.widgets[0]);
+            assert_eq!(fitted, cut.is_none(), "{value} in {height}: {cut:?}");
+            // A plain line fits here by Helvetica's 1.057 em; the shaped one may not.
+            disagreed_with_helvetica |= !fitted && text_box(&doc, f, &f.widgets[0]).fits("plain");
+        }
+        if reach > 1.057 + 0.03 {
+            assert!(disagreed_with_helvetica, "{value}: reach {reach}");
+            taller += 1;
+        }
+    }
+    // With the faces built in, at least one of these is taller than a Helvetica line.
+    if pdfcraft_fonts::document_arabic_font().is_some() && pdfcraft_fonts::document_hebrew_font(false).is_some() {
+        assert!(taller > 0);
+    }
+}
+
+/// A single-line field holds its value as a whole, line breaks included, in the refusal as in
+/// the appearance: a font that has the letters but not the break doesn't draw the value, so a
+/// build without the script's face refuses it instead of storing text it draws as `?`.
+#[test]
+fn a_single_line_value_with_a_break_is_refused_as_the_appearance_decides_it() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".into(),
+        "<< /Fields [6 0 R 7 0 R] /DA (/Heb 0 Tf 0 g) /DR << /Font << /Heb 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /BaseEncoding /WinAnsiEncoding /Differences [224 /uni05D0] >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (one) /DA (/Heb 12 Tf 0 g) /V (old) /Rect [50 700 350 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (many) /Ff 4096 /DA (/Heb 12 Tf 0 g) /Rect [50 500 350 600] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let has_face = pdfcraft_fonts::document_hebrew_font(false).is_some();
+    // The font holds the letter, so each build keeps it, on one line or on several.
+    set_value(&mut doc, "one", &FieldValue::Text("\u{5d0}".into())).unwrap();
+    set_value(&mut doc, "many", &FieldValue::Text("\u{5d0}\n\u{5d0}".into())).unwrap();
+    assert!(undrawn_fields(&doc).is_empty());
+    let broken = set_value(&mut doc, "one", &FieldValue::Text("\u{5d0}\n\u{5d0}".into()));
+    if has_face {
+        broken.unwrap();
+        assert!(undrawn_fields(&doc).is_empty());
+    } else {
+        assert!(matches!(&broken, Err(FormError::Invalid(m)) if m.contains("Hebrew") && m.contains("CRAFT_FONTS_DIR")), "{broken:?}");
+        assert_eq!(field(&fields(&doc), "one").value, ["\u{5d0}"]);
+    }
+}
+
 /// A combo box draws its value as a text field does, so in a build without the script's face it
 /// refuses an option, or typed text, it could only draw as `?` (and keeps the value it had), as
 /// a text field refuses it. With the face, both are shaped.

@@ -157,15 +157,21 @@ impl TextBox {
         // The smallest an automatic size goes ([`auto_text_size_by`]).
         let size = self.size.unwrap_or(4.0);
         if self.multiline {
-            // As the appearance draws it: the first baseline is 0.85 em below the padded top and
-            // a line is drawn while its descent (0.207 em) stays inside the border, so the
-            // padding below the last line is not needed: `inner_h` plus 2 pt.
+            // As the appearance draws it: the first baseline is its ascent (0.85 em, or the
+            // higher reach of shaped marks) below the padded top, and a line is drawn while its
+            // descent (0.207 em, or the lower reach of shaped text) stays inside the border, so
+            // the padding below the last line is not needed: `inner_h` plus 2 pt.
             // Long words break by character, so a line is wider than the box only when it is a
             // single character wider than the box, which the appearance still cuts at the sides.
             let lines = wrapped(font, shaped, &shown, size, self.inner_w);
-            let above = lines.len().saturating_sub(1) as f64;
-            above * size * 1.15 + 1.057 * size <= self.inner_h + 2.0 + 0.01
-                && lines.iter().all(|(l, rtl)| line_width(l, *rtl, size) <= self.inner_w + 0.01)
+            let top = first_line_top(shaped, &lines);
+            let mut above = 0.0;
+            let inside = lines.iter().all(|(l, _)| {
+                let fits = (top + above + line_descent(shaped, l)) * size <= self.inner_h + 2.0 + 0.01;
+                above += 1.15;
+                fits
+            });
+            inside && lines.iter().all(|(l, rtl)| line_width(l, *rtl, size) <= self.inner_w + 0.01)
         } else {
             // A line break in a single-line value is drawn as a space.
             let line: String = shown.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect();
@@ -770,6 +776,24 @@ pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow>
     field_appearance_fit(doc, f, w, &f.value, true).2
 }
 
+/// How far a line's ink reaches below and above its baseline (em), where shaped text (Thai
+/// stacks, Arabic and Hebrew marks and descenders) reaches past the form font's (Helvetica's)
+/// -0.207 and 0.718; `None` when the line isn't `shaped` or has no such text.
+fn shaped_ink(shaped: bool, line: &str) -> Option<[f64; 2]> {
+    shaped.then(|| shaped_text::line_reach(line)).flatten().map(|[lo, hi]| [lo.min(-0.207), hi.max(0.718)])
+}
+
+/// How far a multi-line value's first line hangs below the padded top (em): by its ascent, higher
+/// for stacked marks.
+fn first_line_top(shaped: bool, lines: &[(String, bool)]) -> f64 {
+    lines.first().and_then(|(l, _)| shaped_ink(shaped, l)).map_or(0.85, |[_, hi]| hi.max(0.85))
+}
+
+/// How far a multi-line value's line reaches below its baseline (em).
+fn line_descent(shaped: bool, line: &str) -> f64 {
+    shaped_ink(shaped, line).map_or(0.207, |[lo, _]| -lo)
+}
+
 /// Whether the encoding holds `text`: each line of a `multiline` value, or all of it.
 fn holds(enc: &FontText, text: &str, multiline: bool) -> bool {
     if multiline { text.split(['\n', '\r']).all(|line| enc.can_encode(line)) } else { enc.can_encode(text) }
@@ -869,10 +893,12 @@ pub(crate) fn script_refusal(doc: &Document, f: &Field, text: &str) -> Option<St
     if f.has(flags::PASSWORD) || f.is_comb() || !shaped_text::has_shaped_script(text) {
         return None;
     }
+    // As the appearance decides it ([`shapes`]): a single-line value is held as a whole.
+    let multiline = f.kind == FieldKind::Text && f.has(flags::MULTILINE);
     let held = |w: &Widget| {
         let wd = doc.get(w.obj).as_dict().cloned().unwrap_or_default();
         let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
-        dr_font(doc, &da.font).is_some_and(|(_, enc)| matches!(enc, FontText::Simple(_)) && text.split(['\n', '\r']).all(|l| enc.can_encode(l)))
+        dr_font(doc, &da.font).is_some_and(|(_, enc)| matches!(enc, FontText::Simple(_)) && holds(&enc, text, multiline))
     };
     if f.widgets.iter().all(held) { None } else { shaped_text::shape_refusal(text) }
 }
@@ -926,10 +952,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     // Measured with the pieces that are drawn: a line in its paragraph's direction.
     let line_width = |line: &str, rtl: bool, size: f64| text_line_width(&enc, shaped, line, rtl, size);
     let width_of = |text: &str, size: f64| line_width(text, shaped && shaped_text::rtl_base(text), size);
-    // How far a line's ink reaches below and above its baseline (em), where shaped text (Thai
-    // stacks, Arabic and Hebrew marks and descenders) reaches past the form font's (Helvetica's)
-    // -0.207 and 0.718; `None` otherwise.
-    let shaped_ink = |line: &str| shaped.then(|| shaped_text::line_reach(line)).flatten().map(|[lo, hi]| [lo.min(-0.207), hi.max(0.718)]);
+    let shaped_ink = |line: &str| shaped_ink(shaped, line);
     let (mut c, bw) = frame(doc, &wd, width, height);
     let pad = 2.0 + bw;
     let inner_w = (width - 2.0 * pad).max(1.0);
@@ -980,14 +1003,14 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                 }
                 let lines = wrapped(&enc, shaped, &text, size, inner_w);
                 // The first line hangs from the top by its ascent: higher for stacked marks.
-                let mut y = height - pad - size * lines.first().and_then(|(l, _)| shaped_ink(l)).map_or(0.85, |[_, hi]| hi.max(0.85));
+                let mut y = height - pad - size * first_line_top(shaped, &lines);
                 // The lines whose descent stays inside the border; the rest are cut off.
                 let mut room = 0;
                 for (line, rtl) in &lines {
                     if y < -size {
                         break;
                     }
-                    let descent = shaped_ink(line).map_or(0.207, |[lo, _]| -lo);
+                    let descent = line_descent(shaped, line);
                     if y - descent * size >= bw - 0.01 {
                         room += 1;
                     }
