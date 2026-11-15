@@ -242,6 +242,12 @@ fn rect_less_rd(d: &Dict, rect: [f64; 4]) -> Option<[f64; 4]> {
 /// when `/RD` leaves no shape inside `/Rect` (Table 180: its sums "shall be less than" the width
 /// and height) or even the smaller bumps leave no room (a line wider than half the box).
 fn cloud_inner(d: &Dict, rect: [f64; 4], bump: f64, w: f64) -> Option<([f64; 4], f64)> {
+    cloud_round(rect, rd_of(d).map(|rd| less_rd(rect, &rd)), bump, w)
+}
+
+/// [`cloud_inner`] around `wanted`, the shape inside `rect` the bumps go round (`rect` less
+/// `/RD`), or the margin alone without one.
+fn cloud_round(rect: [f64; 4], wanted: Option<[f64; 4]>, bump: f64, w: f64) -> Option<([f64; 4], f64)> {
     let perimeter = 2.0 * ((rect[2] - rect[0]) + (rect[3] - rect[1]));
     let fit = (((rect[2] - rect[0]).min(rect[3] - rect[1]) / 4.0) - w / 2.0) / 1.5;
     let bump = bump.min(fit);
@@ -253,11 +259,8 @@ fn cloud_inner(d: &Dict, rect: [f64; 4], bump: f64, w: f64) -> Option<([f64; 4],
     // followed, one leaving less is not.
     let m = cloud_reach(perimeter, bump) + w / 2.0;
     let safe = [rect[0] + m, rect[1] + m, rect[2] - m, rect[3] - m];
-    let inner = match rd_of(d) {
-        Some(rd) => {
-            let r = less_rd(rect, &rd);
-            [r[0].max(safe[0]), r[1].max(safe[1]), r[2].min(safe[2]), r[3].min(safe[3])]
-        }
+    let inner = match wanted {
+        Some(r) => [r[0].max(safe[0]), r[1].max(safe[1]), r[2].min(safe[2]), r[3].min(safe[3])],
         None => safe,
     };
     (inner[2] - inner[0] >= 1.0 && inner[3] - inner[1] >= 1.0).then_some((inner, bump))
@@ -1519,11 +1522,13 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     let shape = crate::BorderShape::of(d);
     // A cloudy box: its background and border follow the cloud around the text, which keeps to
     // the cloud's inner rectangle. A callout's cloud goes round its text box too (Table 177
-    // `/RD`: border effects "shall be applied to the border of the inner rectangle"), which
-    // `cloud_inner` reads from `/RD` as for a box without a callout.
+    // `/RD`: border effects "shall be applied to the border of the inner rectangle"): the text
+    // box the `/CL` branch above reads from `/RD`, so the cloud, the text and the leader line
+    // agree when `/RD` differs at the top and the bottom.
     if let Some(intensity) = context.cloud {
         let cw = if bw > 0.0 { bw } else { 1.0 };
-        let (inner, bump) = cloud_inner(d, full, cloud_bump(cw, intensity), cw)?;
+        let bump = cloud_bump(cw, intensity);
+        let (inner, bump) = if d.contains(b"CL") { cloud_round(full, Some(rect), bump, cw) } else { cloud_inner(d, full, bump, cw) }?;
         let pts = [(inner[0], inner[1]), (inner[2], inner[1]), (inner[2], inner[3]), (inner[0], inner[3])];
         c.push_str(&format!("{}{}{} w 1 j\n{}", rg_stroke(line_color), rg(bg.unwrap_or([1.0; 3])), n(cw), dash(d)));
         c.push_str(&cloud_path(&pts, bump));

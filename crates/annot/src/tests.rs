@@ -3560,6 +3560,25 @@ fn a_cloudy_callout_is_drawn_with_its_callout_line() {
     assert!(e[0] >= 100.0 && e[1] >= 100.0 && e[2] <= 400.0 && e[3] <= 200.0, "inside /Rect: {e:?}");
 }
 
+/// A cloudy callout's cloud goes round the same text box as its leader line and text: `/RD`
+/// [110 20 10 80] is read left, bottom, right, top for a callout, so the text box is
+/// [210 120 390 220]. The cloud was built from `/RD` read left, top, right, bottom, round
+/// [210 180 390 280], away from the text box the leader line ends at.
+#[test]
+fn a_cloudy_callout_with_an_uneven_rd_goes_round_its_text_box() {
+    let ops = built(
+        "<< /Type /Annot /Subtype /FreeText /IT /FreeTextCallout /Rect [100 100 400 300] /RD [110 20 10 80] /C [1 1 0] \
+         /DA (/Helv 9 Tf 0 g) /Contents (Look here) /BS << /W 1 >> /BE << /S /C /I 1 >> /CL [120 290 150 250 210 170] >>",
+    )
+    .expect("the callout is drawn");
+    let cloud: Vec<&str> = ops.lines().skip_while(|l| !l.contains(" w 1 j")).take_while(|l| !l.ends_with('h')).collect();
+    assert!(cloud.contains(&"210 120 m"), "the bumps start at the text box's lower-left corner: {ops}");
+    let e = extent(&cloud.join("\n"));
+    assert!(e[0] <= 210.0 && e[1] <= 120.0 && e[2] >= 390.0 && e[3] >= 220.0, "round the text box: {e:?}");
+    assert!(e[0] >= 100.0 && e[1] >= 100.0 && e[2] <= 400.0 && e[3] <= 300.0, "inside /Rect: {e:?}");
+    assert!(e[3] < 240.0, "not round the box /RD read left, top, right, bottom leaves: {e:?}");
+}
+
 /// Table 180: `/RD` gives the differences between "the left, top, right, and bottom coordinates
 /// of Rect and those of the square or circle, respectively"; a cloudy square's bumps sit on that
 /// inner square.
