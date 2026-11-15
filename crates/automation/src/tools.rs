@@ -908,6 +908,9 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "page", "index"],
             )),
+        t("link_run_javascript", "Run a link's JavaScript", "Run the JavaScript action of link `index` on page `page` (1-based, from link_list: index is the link's place among the page's annotations), as clicking it does: event.type Link, event.name Mouse Up, event.target the document, this.pageNum the link's page, in the document's script realm. answers reply to its popup menus, response dialogs and alerts in order (null cancels a menu or response; missing answers do too); a menu with no items answers null without using one. Field changes and resetForm are one undoable step; a script that fails commits nothing and its requests are dropped. Returns alerts, console, requests (page, url, open_doc and others, never carried out), error and result.")
+            .destructive()
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 }, "answers": {"type":"array","maxItems":32,"items":{"type":["string","null"],"maxLength":4096}} }), &["doc", "page", "index"])),
         t("link_delete", "Delete a link", "Delete one link (page, index from link_list). Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 } }), &["doc", "page", "index"])),

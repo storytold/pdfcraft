@@ -35,6 +35,7 @@ pub(crate) enum Code {
     Function(JsObject),
 }
 
+#[derive(Clone)]
 struct Entry {
     /// The object `set*` returned, which `clear*` is given back.
     handle: JsObject,
@@ -44,7 +45,7 @@ struct Entry {
 }
 
 /// A realm's timers by id, in the order they were set (ids only grow).
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Timers {
     last: u32,
     table: BTreeMap<u32, Entry>,
@@ -64,6 +65,20 @@ pub(crate) fn report(ctx: &Context) -> Vec<Timer> {
     ctx.get_data::<Shared>()
         .map(|t| t.borrow().table.iter().map(|(id, e)| Timer { id: *id, period_ms: e.period_ms, repeat: e.repeat }).collect())
         .unwrap_or_default()
+}
+
+/// The realm's timers as they stand, to put back with [`restore`]; `None` in a one-off run.
+pub(crate) fn save(ctx: &Context) -> Option<Timers> {
+    ctx.get_data::<Shared>().map(|t| t.borrow().clone())
+}
+
+/// Put the realm's timers back as [`save`] found them: those set since go, those cleared since
+/// come back. Ids stay unused once given out.
+pub(crate) fn restore(ctx: &Context, saved: Timers) {
+    if let Some(timers) = ctx.get_data::<Shared>() {
+        let mut timers = timers.borrow_mut();
+        timers.table = saved.table;
+    }
 }
 
 /// What timer `id` runs now that it fell due; a `setTimeOut` timer is gone after this. `None`

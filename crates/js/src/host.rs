@@ -82,12 +82,13 @@ impl Host {
             Request::LaunchUrl(u) => Request::LaunchUrl(xfa::clip(u)),
             Request::Submit(u) => Request::Submit(xfa::clip(u)),
             Request::Focus(n) => Request::Focus(xfa::clip(n)),
+            Request::OpenDoc(p) => Request::OpenDoc(xfa::clip(p)),
             Request::FocusField { name, object_id } => Request::FocusField { name: xfa::clip(name), object_id },
             other => other,
         };
         let bytes = match &r {
             Request::Reset(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
-            Request::LaunchUrl(u) | Request::Submit(u) | Request::Focus(u) => u.len(),
+            Request::LaunchUrl(u) | Request::Submit(u) | Request::Focus(u) | Request::OpenDoc(u) => u.len(),
             Request::FocusField { name, .. } => name.len(),
             Request::OpenAttachment { name, .. } => name.len(),
             _ => 0,
