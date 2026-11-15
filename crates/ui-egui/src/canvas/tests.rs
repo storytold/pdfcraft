@@ -3193,3 +3193,80 @@ fn only_pixel_snapping_passes_for_fitting_the_view() {
         assert!(!fits_height(Rect::from_min_size(pos2(0.0, 0.0), vec2(1.0, 600.5)), 600.0, ppp));
     }
 }
+
+/// A one-field form on one page, for appearance-only Field Properties edits.
+fn appearance_edit_harness() -> egui_kittest::Harness<'static, PdfCraftApp> {
+    let objs: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 400] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>",
+        b"<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >>",
+        b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (notes) /DA (/Helv 10 Tf 0 g) /V (Ada) /Rect [50 300 350 330] /P 3 0 R /MK << >> /BS << /W 1 >> >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        bytes.extend_from_slice(o);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    egui_kittest::Harness::builder().with_size(vec2(900.0, 700.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, bytes.clone()).unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app
+    })
+}
+
+fn settle_rasters(h: &mut egui_kittest::Harness<'static, PdfCraftApp>) {
+    for _ in 0..400 {
+        h.step();
+        if !h.state().render_pending() && !h.state().views[0].page_out_of_date(0) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// An appearance-only field edit must make the page's raster stale, so the change is drawn at
+/// once rather than waiting for the next zoom or scroll to force a fresh raster. The form model
+/// (`Field`, `Widget`) carries no border, fill, width or style, so a change to any of them leaves
+/// the two form states equal and the page has to be marked changed from the edit itself.
+#[test]
+fn an_appearance_only_field_edit_makes_its_page_stale() {
+    use pdfcraft_engine::{Edit, FieldProps};
+    for (case, props) in [
+        (
+            "border colour",
+            FieldProps {
+                appearance: Some(pdfcraft_engine::FieldLookPatch {
+                    border: Some(Some([1.0, 0.0, 0.0])),
+                    ..pdfcraft_engine::FieldLookPatch::default()
+                }),
+                ..FieldProps::default()
+            },
+        ),
+        (
+            "line width",
+            FieldProps {
+                appearance: Some(pdfcraft_engine::FieldLookPatch { width: Some(3.0), ..pdfcraft_engine::FieldLookPatch::default() }),
+                ..FieldProps::default()
+            },
+        ),
+    ] {
+        let mut h = appearance_edit_harness();
+        settle_rasters(&mut h);
+        assert!(!h.state().views[0].page_out_of_date(0), "{case}: the page starts fresh");
+        assert!(h.state_mut().apply_edit(Edit::SetFieldProps { name: "notes".into(), props: Box::new(props) }), "{case}: applied");
+        assert!(h.state().views[0].page_out_of_date(0), "{case}: the page is redrawn without waiting for a zoom");
+    }
+}
