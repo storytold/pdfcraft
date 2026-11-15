@@ -90,6 +90,8 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         // fields, links and document metadata are untouched (see `refresh_content`).
         Edit::MoveObjects { .. }
         | Edit::DeleteObjects { .. }
+        | Edit::UpdateLineEndpoints { .. }
+        | Edit::SetLineProperties { .. }
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
         | Edit::PrepareText { .. }

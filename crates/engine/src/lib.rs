@@ -14,6 +14,7 @@
 
 pub mod actions;
 pub mod autotag;
+pub mod barcode_scan;
 mod bookmarks;
 pub mod build_info;
 pub mod camera;
@@ -49,6 +50,7 @@ mod pictures;
 pub mod print_raster;
 pub mod printcheck;
 mod protection;
+pub mod qr;
 mod rich_copy;
 pub mod scan_clean;
 mod scan_colours;
@@ -71,6 +73,8 @@ pub mod xfa;
 mod xfa_form;
 
 use std::sync::Arc;
+
+pub use barcode_scan::{CodeKind, ScannedCode};
 
 pub use links::{
     MAX_REMOTE_DOCUMENT_BYTES, RemoteDocumentPathError, read_remote_document, remote_document_path_is_absolute, resolve_remote_document_path,
@@ -104,7 +108,8 @@ pub use pdfcraft_edit::added::{
 pub use pdfcraft_edit::paragraph_align;
 pub use pdfcraft_edit::{
     Added, AddedImage, AddedText, Align as TextAlign, Background, ColourTarget, ColoursConverted, Content as AddedContent, ConvertColours,
-    Family as FontFamily, Hairlines, HairlinesFixed, HeaderFooter, Ink as TextInk, MarkKind, PrinterMarks, Watermark,
+    Family as FontFamily, Hairlines, HairlinesFixed, HeaderFooter, Ink as TextInk, LineSegment, MarkKind, PrinterMarks, Watermark,
+    set_line_properties, update_line_endpoints,
 };
 pub use pdfcraft_forms::{
     BorderStyle, CalculatedField, CalculationIssue, CalculationOrder, CheckStyle, Field as FormField, FieldAction, FieldChange, FieldFont,

@@ -714,15 +714,21 @@ impl PdfCraftApp {
             let flatten = job.printer.as_deref().is_some_and(spool::gdi_driver);
             let bytes = pdfcraft_engine::spooler::spooler_copy(bytes, &mut job, flatten);
             // The receiver may be gone (the app quit): nothing to report to then.
-            let result = match &spooler {
-                Some(submit) => submit(&bytes, &job),
-                None => spool::submit_with_progress(&bytes, &job, &mut |sent, sheets| {
-                    let _ = tx.send(JobNews::Sent(sent, sheets));
-                    repaint();
-                })
-                .map_err(|e| e.to_string()),
+            let spool_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                match &spooler {
+                    Some(submit) => submit(&bytes, &job),
+                    None => spool::submit_with_progress(&bytes, &job, &mut |sent, sheets| {
+                        let _ = tx.send(JobNews::Sent(sent, sheets));
+                        repaint();
+                    })
+                    .map_err(|e| e.to_string()),
+                }
+            }));
+            let done_news = match spool_result {
+                Ok(result) => JobNews::Done(result),
+                Err(_) => JobNews::Done(Err("printing failed: printer spooler or driver encountered a critical fault".into())),
             };
-            let _ = tx.send(JobNews::Done(result));
+            let _ = tx.send(done_news);
             repaint();
         });
         self.print_tasks.jobs.push(PrintJob { printer, sheets: None, news: rx });

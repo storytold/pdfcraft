@@ -5,7 +5,7 @@ impl Automation {
         let path = self.resolve(a.str("path")?, true)?;
         let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
         let format = pdfcraft_engine::compare::OfficeFormat::from_extension(&ext)
-            .ok_or_else(|| ToolError::InvalidArgs(format!("unsupported extension {ext:?} (docx, pptx, html, rtf or md)")))?;
+            .ok_or_else(|| ToolError::InvalidArgs(format!("unsupported extension {ext:?} (docx, xlsx, pptx, html, rtf or md)")))?;
         let html_mode = a.opt_str("html_mode")?.unwrap_or("rich");
         let format = match (format, html_mode) {
             (pdfcraft_engine::compare::OfficeFormat::Html, "rich") => pdfcraft_engine::compare::OfficeFormat::Html,

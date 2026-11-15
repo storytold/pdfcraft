@@ -1083,7 +1083,10 @@ impl PdfCraftApp {
             self.session.close(id);
         }
         self.active = match self.active {
-            _ if self.views.is_empty() => None,
+            _ if self.views.is_empty() => {
+                self.reading_bg.picker_open = false;
+                None
+            }
             Some(a) if a > index => Some(a - 1),
             // The tab after it in its strip comes forward (or the last).
             Some(a) if a == index => self.after_close(place, index),

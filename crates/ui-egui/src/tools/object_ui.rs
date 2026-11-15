@@ -393,7 +393,17 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, press: PagePress, vie
                     s.clear();
                 }
             } else if gesture.start.distance(gesture.now) > 3.0 && view.pending_edit.is_none() {
-                let (a, b) = (xf.screen_to_view(gesture.start), xf.screen_to_view(gesture.now));
+                let mut now = gesture.now;
+                if ui.input(|i| i.modifiers.shift) {
+                    let dx = (now.x - gesture.start.x).abs();
+                    let dy = (now.y - gesture.start.y).abs();
+                    if dx > dy {
+                        now.y = gesture.start.y;
+                    } else {
+                        now.x = gesture.start.x;
+                    }
+                }
+                let (a, b) = (xf.screen_to_view(gesture.start), xf.screen_to_view(now));
                 match doc.object_move_offset(page, [f64::from(b.0 - a.0), f64::from(b.1 - a.1)]) {
                     Ok(offset) => view.pending_edit = Some(s.move_by(page, offset)),
                     Err(_) => s.notice = Some(tl!("These objects could not be moved. Select them again and try a smaller move.").into()),
@@ -559,7 +569,17 @@ pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: 
     if selection.page != Some(page) {
         return;
     }
-    let delta = selection.gesture.filter(|g| !g.marquee).map_or(egui::Vec2::ZERO, |g| g.now - g.start);
+    let delta = selection.gesture.filter(|g| !g.marquee).map_or(egui::Vec2::ZERO, |g| {
+        let mut d = g.now - g.start;
+        if painter.ctx().input(|i| i.modifiers.shift) {
+            if d.x.abs() > d.y.abs() {
+                d.y = 0.0;
+            } else {
+                d.x = 0.0;
+            }
+        }
+        d
+    });
     let mut union = Rect::NOTHING;
     for object in &selection.selected {
         let rect = screen(xf, info, page, object).translate(delta);
