@@ -144,3 +144,47 @@ fn calrgb_8bit_images_convert_as_each_pixel_did() {
         }
     }
 }
+
+/// An 8-bit CalRGB image whose data stops short of its last row, under a colour-key `/Mask`,
+/// keeps the missing pixels transparent, as when each pixel was decoded to `f32`s: the key is
+/// matched against the samples there are, and the missing pixels' alpha is padded transparent.
+/// Matched against the zeros the 8-bit path pads the row with, they fell outside the key and
+/// were drawn black. Here a 2 × 1 image holds one white pixel, keyed out, and the page's red
+/// fill shows through both.
+#[test]
+fn a_short_colour_keyed_calrgb_row_keeps_its_missing_pixels_transparent() {
+    let image = (
+        format!("/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace {CAL_RGB} /BitsPerComponent 8 /Mask [255 255 255 255 255 255]"),
+        vec![255, 255, 255],
+    );
+    let content = "1 0 0 rg 0 0 20 10 re f q 20 0 0 10 0 0 cm /Im0 Do Q";
+    let page = render(pdf(20, 10, content, "/XObject << /Im0 5 0 R >>", &[image]));
+    assert_eq!(rgb_at(&page.rgba, 20, 5, 5), [255, 0, 0], "the keyed-out pixel shows the fill");
+    assert_eq!(rgb_at(&page.rgba, 20, 15, 5), [255, 0, 0], "the missing pixel shows the fill");
+}
+
+/// A mesh pattern filled with `f*` in a knockout group keeps its even-odd hole. The mesh is
+/// painted through its extent as a clip (hayro patch 33), which a shading in a knockout group
+/// pushes with the non-zero rule; the path was then filled with that rule too, and the inner of
+/// two rectangles drawn the same way round was painted over.
+#[test]
+fn an_even_odd_mesh_fill_in_a_knockout_group_keeps_its_hole() {
+    // Two red triangles over the 100 × 100 square: flag, x, y and colour for each vertex.
+    let vertex = |x: u8, y: u8| [0, x, y, 255, 0, 0];
+    let mesh: Vec<u8> = [(0, 0), (255, 0), (0, 255), (255, 0), (255, 255), (0, 255)].iter().flat_map(|&(x, y)| vertex(x, y)).collect();
+    let shading = (
+        "/ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 100 0 100 0 1 0 1 0 1]".to_string(),
+        mesh,
+    );
+    let group = "/Pattern cs /P0 scn 10 10 80 80 re 30 30 40 40 re f*";
+    let form = (
+        "/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Group << /S /Transparency /K true >> \
+         /Resources << /Pattern << /P0 << /PatternType 2 /Shading 5 0 R >> >> >>"
+            .to_string(),
+        group.as_bytes().to_vec(),
+    );
+    let page = render(pdf(100, 100, "/Fm Do", "/XObject << /Fm 6 0 R >>", &[shading, form]));
+    assert_eq!(rgb_at(&page.rgba, 100, 20, 50), [255, 0, 0], "the ring between the rectangles is painted");
+    assert_eq!(rgb_at(&page.rgba, 100, 50, 50), [255, 255, 255], "the inner rectangle is a hole");
+    assert_eq!(rgb_at(&page.rgba, 100, 5, 50), [255, 255, 255], "outside the outer rectangle is not painted");
+}

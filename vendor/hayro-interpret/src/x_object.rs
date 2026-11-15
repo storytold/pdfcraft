@@ -1124,6 +1124,7 @@ fn decode_raster(
         // we can prevent the round-trip from f32 back to u8 and just return
         // the raw decoded data, which will already be in
         // RGB8/gray-scale with values between 0 and 255.
+        let decoded_len = ctx.decoded.data.len();
         fix_image_length(
             ctx.decoded.data.to_mut(),
             ctx.width,
@@ -1151,6 +1152,11 @@ fn decode_raster(
             if image_conversion {
                 ctx.color_space
                     .convert_u8_image(&ctx.decoded.data, &mut output_buf)?;
+                // PdfCraft patch (110): a colour-key `/Mask` (`resolve_alpha`) reads the samples
+                // as decoded, as on the `f32` path: the padding above, zeros, would fall outside
+                // its ranges and draw the pixels of a short last row opaque black, where their
+                // alpha is padded transparent.
+                ctx.decoded.data.to_mut().truncate(decoded_len);
             } else {
                 ctx.color_space
                     .convert_u8(&ctx.decoded.data, &mut output_buf)?;

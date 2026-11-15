@@ -1874,7 +1874,12 @@ impl Renderer {
     fn knockout_shading(&mut self, paint: &Paint<'_>, path: &BezPath, is_stroke: bool, paint_it: bool) {
         let PaintSetup::Clip(clip) = self.paint_setup(&shape_of(paint), path, is_stroke) else { return };
         if let Some(clip) = clip.as_ref() {
+            // PdfCraft patch (33): the clip is pushed with its own rule, and the path is then
+            // filled with the rule its operator gave (`fill_path` set it): left at the clip's,
+            // an `f*` path in a knockout group lost its even-odd holes.
+            let fill_rule = *self.ctx.fill_rule();
             self.push_clip_path_inner(clip, FillRule::NonZero);
+            self.ctx.set_fill_rule(fill_rule);
         }
         self.ctx.set_blend_mode(peniko::BlendMode::new(Mix::Normal, Compose::DestOut));
         self.draw_shape(path, is_stroke);
