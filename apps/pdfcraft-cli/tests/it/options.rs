@@ -124,3 +124,86 @@ fn check_one_reports_an_unreadable_file_as_a_record() {
     assert_eq!(record["status"], "read-error");
     assert!(record["detail"].as_str().is_some_and(|d| d.contains("missing.pdf")), "{record}");
 }
+
+mod missing_value_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct ValueDir(PathBuf);
+
+    impl ValueDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            for _ in 0..128 {
+                let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+                let path = std::env::temp_dir().join(format!("pdfcraft-cli-missing-values-{}-{serial}", std::process::id()));
+                match std::fs::create_dir(&path) {
+                    Ok(()) => return Self(path),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("creating missing-value test directory: {error}"),
+                }
+            }
+            panic!("no unused missing-value test directory after 128 attempts");
+        }
+
+        fn write_pdf(&self) -> Vec<u8> {
+            let bytes = pdfcraft_engine::Session::new().create_from_text("Missing operand", "Keep this document").unwrap();
+            std::fs::write(self.0.join("input.pdf"), bytes.as_slice()).unwrap();
+            bytes.as_ref().clone()
+        }
+    }
+
+    impl Drop for ValueDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn render_refuses_a_missing_numeric_operand_instead_of_writing_with_defaults() {
+        let dir = ValueDir::new();
+        let bytes = dir.write_pdf();
+        let output = dir.0.join("page.png");
+        for flags in [vec!["--page"], vec!["--dpi"], vec!["--page", "1", "--page"], vec!["--dpi", "18", "--dpi"]] {
+            let option = flags.last().unwrap();
+            let out = Command::new(BIN).current_dir(&dir.0).args(["render", "input.pdf", "--out", "page.png"]).args(&flags).output().unwrap();
+            assert_eq!(out.status.code(), Some(1), "{flags:?}: {out:?}");
+            assert!(out.stdout.is_empty(), "{flags:?}: no render result may be printed");
+            assert_eq!(String::from_utf8(out.stderr).unwrap().trim(), format!("pdfcraft-cli: render: {option} needs a value"));
+            assert!(!output.exists(), "{flags:?}: no output may be written");
+            assert_eq!(std::fs::read(dir.0.join("input.pdf")).unwrap(), bytes);
+        }
+        // Omitting an option still uses its default; only a supplied option needs an operand.
+        let out = Command::new(BIN).current_dir(&dir.0).args(["render", "input.pdf", "--out", "page.png"]).output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert!(output.exists());
+    }
+
+    #[test]
+    fn commands_refuse_a_missing_operand_before_reading_or_scanning() {
+        let dir = ValueDir::new();
+        for (command, option) in [("info", "--password"), ("audit", "--password"), ("check-one", "--dpi"), ("check", "--dpi"), ("check", "--timeout")]
+        {
+            let out = Command::new(BIN).current_dir(&dir.0).args([command, "missing.pdf", option]).output().unwrap();
+            assert_eq!(out.status.code(), Some(1), "{command} {option}: {out:?}");
+            assert!(out.stdout.is_empty(), "{command} {option}: no file record may be printed");
+            assert_eq!(String::from_utf8(out.stderr).unwrap().trim(), format!("pdfcraft-cli: {command}: {option} needs a value"));
+        }
+        assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 0, "nothing may be written");
+    }
+
+    #[test]
+    fn supplied_string_operands_can_be_empty_or_look_like_options() {
+        let dir = ValueDir::new();
+        let bytes = dir.write_pdf();
+        for password in ["", "--page"] {
+            let out = Command::new(BIN).current_dir(&dir.0).args(["info", "input.pdf", "--password", password]).output().unwrap();
+            assert!(out.status.success(), "{password:?}: {out:?}");
+            assert!(out.stderr.is_empty(), "{password:?}: {out:?}");
+            let info: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert_eq!(info["pages"], 1);
+            assert_eq!(std::fs::read(dir.0.join("input.pdf")).unwrap(), bytes);
+        }
+    }
+}
