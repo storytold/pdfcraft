@@ -3088,20 +3088,19 @@ fn removing_security_asks_first() {
 }
 
 /// The first change to a signed document asks first (#2168): Cancel makes no change, Change
-/// anyway makes it, and the document's later changes are not asked about again. A certified
-/// document names what its certification allows.
+/// anyway makes it, and the document's later changes are not asked about again.
 #[test]
 fn the_first_change_to_a_signed_document_asks_first() {
     let mut h = harness(2, |app| {
         let id = app.active_ids().unwrap().1;
         let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
         let digital_id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
-        let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), certify: Some(2), ..Default::default() };
+        let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), ..Default::default() };
         let signed = app.session.sign(id, &digital_id, opts).expect("signs");
         app.session.mark_signed(id, signed, None).unwrap();
     });
     let id = h.state().active_ids().unwrap().1;
-    assert!(h.state().session.get(id).unwrap().signatures.iter().any(|s| s.signed && s.certify == Some(2)));
+    assert!(h.state().session.get(id).unwrap().signatures.iter().any(|s| s.signed && s.certify.is_none()));
     let rotation = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages[1].rotation;
     assert_eq!(rotation(&h), 0);
     let rotate = pdfcraft_engine::Edit::RotatePages { pages: vec![1], degrees: 90 };
@@ -3109,7 +3108,7 @@ fn the_first_change_to_a_signed_document_asks_first() {
     assert!(!h.state_mut().apply_edit(rotate.clone()), "the change waits for the answer");
     h.run_steps(2);
     assert_eq!(h.state().dialog, Some(Dialog::SignedEdit));
-    h.get_by_label_contains("filling in forms and signing are allowed");
+    h.get_by_label_contains("the signatures stay valid for the version they signed");
     h.get_by_label("Cancel").click();
     h.run_steps(2);
     assert_eq!(h.state().dialog, None);

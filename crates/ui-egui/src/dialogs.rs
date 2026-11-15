@@ -328,7 +328,7 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             }
         }
         Dialog::SignedEdit => {
-            if !dialog_signed_edit(ui, app, req) {
+            if !dialog_signed_edit(ui, req) {
                 return false;
             }
         }
@@ -1422,30 +1422,12 @@ fn dialog_overwrite_changed(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut 
 
 /// `Dialog::SignedEdit` content (#2168). Returns `false` when it has its own buttons and no footer
 /// is wanted.
-fn dialog_signed_edit(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
-    // The strictest certification among the signed signatures, if any.
-    let certify = app
-        .pending_signed_edit
-        .as_ref()
-        .map(|(id, _)| *id)
-        .or_else(|| app.active_ids().map(|(_, id)| id))
-        .and_then(|id| app.session.get(id))
-        .and_then(|d| d.signatures.iter().filter(|s| s.signed).filter_map(|s| s.certify).min());
+fn dialog_signed_edit(ui: &mut egui::Ui, req: &mut Pending) -> bool {
     ui.label(egui::RichText::new(tl!("Change a signed document?")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     ui.label(tl!(
         "This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing."
     ));
-    if let Some(p) = certify {
-        ui.add_space(6.0);
-        ui.label(match p {
-            1 => tl!("It is certified with no changes allowed: any change invalidates the certification."),
-            2 => tl!("It is certified: filling in forms and signing are allowed; other changes invalidate the certification."),
-            _ => {
-                tl!("It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.")
-            }
-        });
-    }
     ui.add_space(12.0);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         if widgets::pill_button(ui, tl!("Change anyway"), true).clicked() {

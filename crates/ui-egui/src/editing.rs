@@ -158,8 +158,8 @@ impl PdfCraftApp {
         let Some((i, id)) = self.active_ids() else { return false };
         // The first change to a signed document asks first (#2168): the signatures stay valid
         // for the version they signed, but viewers show that the document was changed after
-        // signing, and a certified document may allow only some changes. Once confirmed, the
-        // document's later changes are not asked about again. The edit waits for the answer.
+        // signing. Once confirmed, the document's later changes are not asked about again. The
+        // edit waits for the answer.
         if self.asks_before_changing(id) {
             self.pending_signed_edit = Some((id, edit));
             self.dialog = Some(crate::Dialog::SignedEdit);
