@@ -97,10 +97,7 @@ fn images_too_large_to_decode_are_reported_as_content_left_out() {
     let jbig2 = "/BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode";
     let indexed = "/BitsPerComponent 1 /ColorSpace [/Indexed /DeviceGray 1 <00FF>] /Filter /JBIG2Decode";
     let colour_keyed = "/BitsPerComponent 1 /ColorSpace /DeviceGray /Mask [0 0] /Filter /JBIG2Decode";
-    // An intermediate generic region as large as the page: past 2^28 pixels, which only the page
-    // bitmap of an image read reduced may be, so the decoder refuses it.
-    let mut region_past_the_bitmap_bound = black_jbig2_page_of(16385, 16384);
-    jbig2_segment(&mut region_past_the_bitmap_bound, 1, 36, &[], &jbig2_white_region(16385, 16384));
+    let region_past_the_bitmap_bound = jbig2_page_with_a_region_past_the_bitmap_bound();
     let cases = [
         ("a CCITT floor plan", (45009, 33555), fax, vec![0; 16]),
         ("a Flate image past 2^28", (16385, 16384), flate, vec![0; 16]),
@@ -117,6 +114,14 @@ fn images_too_large_to_decode_are_reported_as_content_left_out() {
         assert_eq!(pixel(&page, 50, 50), [255, 255, 255, 255], "{what}: not drawn");
         assert_eq!(pixel(&page, 5, 95), [255, 0, 0, 255], "{what}: the rest of the page is drawn");
     }
+}
+
+/// A 16,385 × 16,384 JBIG2 page with an intermediate generic region as large as itself: past 2^28
+/// pixels, which only the page bitmap of an image read reduced may be, so the decoder refuses it.
+fn jbig2_page_with_a_region_past_the_bitmap_bound() -> Vec<u8> {
+    let mut stream = black_jbig2_page_of(16385, 16384);
+    jbig2_segment(&mut stream, 1, 36, &[], &jbig2_white_region(16385, 16384));
+    stream
 }
 
 /// Counts what a page hands its device: raster images with their pixels and stencil masks with
@@ -255,20 +260,15 @@ fn a_reduced_jbig2_image_averages_each_block_of_pixels() {
     assert_eq!(pixel(&page, 70, 50), [0, 0, 0, 255], "black on its right");
 }
 
-/// A reduced JBIG2 image whose soft mask is larger than the image as decoded (5,462 × 5,462 here)
-/// but smaller than its full size has the mask averaged down to the size it is drawn at, so each
-/// size it is drawn at gets its own alpha. The mask was compared with the full size, so the image
-/// was cached once for every size, and the alpha averaged for a small draw was reused for a large
-/// one: the mask's 256-pixel bands, averaged to an even grey for the small draw (16 samples
-/// across), came out grey in the large one too.
-#[test]
-fn a_reduced_jbig2_image_keeps_a_soft_mask_for_each_size_it_is_drawn_at() {
-    let (width, height) = (16385, 16384);
-    // An 8,192 × 2 mask of 32 bands 256 pixels wide (32 bytes), opaque and transparent in turn.
-    let row: Vec<u8> = (0..32).flat_map(|band| [if band % 2 == 0 { 0xff } else { 0x00 }; 32]).collect();
+/// The red channel along row 85 of a page drawing the image of `stream` (`width` × `height` in its
+/// dictionary) under a `mask_width` × 2 soft mask of 32 bands, opaque and transparent in turn,
+/// 90 × 10 pt along the bottom (rows 80 to 90): alone, and after a 1 pt draw near the top.
+fn banded_mask_rows(width: u32, height: u32, stream: &[u8], mask_width: usize) -> (Vec<u8>, Vec<u8>) {
+    let band = mask_width / 8 / 32;
+    let row: Vec<u8> = (0..32).flat_map(|i| vec![if i % 2 == 0 { 0xff } else { 0x00 }; band]).collect();
     let mask = [row.clone(), row].concat();
     let mut objects = format!(
-        "6 0 obj << /Type /XObject /Subtype /Image /Width 8192 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Length {} >> stream
+        "6 0 obj << /Type /XObject /Subtype /Image /Width {mask_width} /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Length {} >> stream
 ",
         mask.len()
     )
@@ -280,15 +280,56 @@ endstream endobj
 ",
     );
     let entries = "/BitsPerComponent 1 /ColorSpace /DeviceGray /SMask 6 0 R /Filter /JBIG2Decode";
-    let stream = black_jbig2_page_of(width, height);
-    // 90 × 10 pt along the bottom (rows 80 to 90), alone and after a 1 pt draw near the top.
     let large = "q 90 0 0 10 5 10 cm /Im Do Q";
-    let alone = render_first_page(image_page(width, height, entries, &stream, large, &objects));
-    let after_small = render_first_page(image_page(width, height, entries, &stream, &format!("q 1 0 0 1 5 90 cm /Im Do Q {large}"), &objects));
+    let alone = render_first_page(image_page(width, height, entries, stream, large, &objects));
+    let after_small = render_first_page(image_page(width, height, entries, stream, &format!("q 1 0 0 1 5 90 cm /Im Do Q {large}"), &objects));
     assert!(after_small.warnings.is_empty(), "{:?}", after_small.warnings);
     let row = |page: &RenderedPage| (5..95).map(|x| pixel(page, x, 85)[0]).collect::<Vec<u8>>();
-    let (alone, after_small) = (row(&alone), row(&after_small));
+    let alone = row(&alone);
     let bands = alone.windows(2).filter(|w| w[0].abs_diff(w[1]) > 64).count();
     assert!(bands > 10, "drawn alone, the mask's bands show: {alone:?}");
+    (alone, row(&after_small))
+}
+
+/// A reduced JBIG2 image whose soft mask is larger than the image as decoded (5,462 × 5,462 here)
+/// but smaller than its full size has the mask averaged down to the size it is drawn at, so each
+/// size it is drawn at gets its own alpha. The mask was compared with the full size, so the image
+/// was cached once for every size, and the alpha averaged for a small draw was reused for a large
+/// one: the mask's 256-pixel bands, averaged to an even grey for the small draw (16 samples
+/// across), came out grey in the large one too.
+#[test]
+fn a_reduced_jbig2_image_keeps_a_soft_mask_for_each_size_it_is_drawn_at() {
+    let (alone, after_small) = banded_mask_rows(16385, 16384, &black_jbig2_page_of(16385, 16384), 8192);
     assert_eq!(after_small, alone, "drawn after a small draw, it keeps its own mask");
+}
+
+/// The same when the JBIG2 page is another size than the dictionary says: 8,193 × 32,768 under a
+/// dictionary of 16,385 × 16,384, so it decodes to 2,731 × 10,923, not the 5,462 × 5,462 the
+/// dictionary predicts. Its 4,096-pixel-wide mask is larger than the first and smaller than the
+/// second: it is kept whole, not averaged for one draw and reused for the next.
+#[test]
+fn a_reduced_jbig2_image_of_another_size_than_its_dictionary_keeps_its_soft_mask() {
+    let (alone, after_small) = banded_mask_rows(16385, 16384, &black_jbig2_page_of(8193, 32768), 4096);
+    assert_eq!(after_small, alone, "drawn after a small draw, it keeps its own mask");
+}
+
+/// A reduced JBIG2 image one of its own stream's limits refuses (a region past 2^28 pixels) is
+/// refused again whenever it is decoded, so its failure is kept: drawn three times, it is decoded
+/// once. Kept only for a failure the page's allowance caused, it was decoded at every draw, each
+/// time up to the region it is refused at.
+#[test]
+fn a_reduced_jbig2_image_its_stream_refuses_is_decoded_once() {
+    let (width, height) = (16385, 16384);
+    let content = "q 50 0 0 50 25 25 cm /Im Do Q q 20 0 0 20 0 0 cm /Im Do Q q 90 0 0 90 5 5 cm /Im Do Q";
+    let entries = "/BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode";
+    let pdf = image_page(width, height, entries, &jbig2_page_with_a_region_past_the_bitmap_bound(), content, b"");
+    let pdf = Pdf::new(Arc::new(pdf)).expect("parses");
+    let page = &pdf.pages()[0];
+    let cache = InterpreterCache::new();
+    let mut ctx =
+        Context::new(page.initial_transform(true).to_kurbo(), Rect::new(0.0, 0.0, 100.0, 100.0), &cache, page.xref(), InterpreterSettings::default());
+    let mut device = Draws::default();
+    interpret_page(page, &mut ctx, &mut device);
+    assert_eq!(device.0, 0, "not drawn");
+    assert_eq!(cache.decoded_image_decodes(), 1, "decoded once");
 }

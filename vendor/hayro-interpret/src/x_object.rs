@@ -1033,8 +1033,13 @@ fn decode_context<'a>(
             let too_large = reduced && hayro_syntax::jbig2_limited();
             let left_out = (hayro_syntax::page_jbig2_work_spent() || limited || too_large)
                 && uses_jbig2(&obj.stream);
+            // PdfCraft patch (113): so is a reduced image's, refused for a limit of its own
+            // stream (decoded again, it would be refused again), and not one the page's
+            // allowance refused.
             crate::cache::note_stream_limited(
-                left_out && obj.masks_picture && hayro_syntax::jbig2_limited_by_stream(),
+                left_out
+                    && (obj.masks_picture || too_large)
+                    && hayro_syntax::jbig2_limited_by_stream(),
             );
             (obj.warning_sink)(if left_out {
                 InterpreterWarning::ContentTruncated
@@ -1410,10 +1415,17 @@ fn resolve_alpha(
         .get::<Stream<'_>>(SMASK)
         .or_else(|| dict.get::<Stream<'_>>(MASK))
     {
+        // PdfCraft patch (113): the mask is averaged down to the drawn size only when the image's
+        // cache entry is keyed by that size (`decode_key`). A reduced JBIG2 image decodes to the
+        // size of its JBIG2 page, which its dictionary need not give, so its mask can be larger
+        // than it decoded to although `has_larger_mask` predicted otherwise: averaged for a small
+        // draw and kept under no size, that alpha was reused for a large draw. It is then kept
+        // whole instead.
+        let mask_target = if obj.decode_reads_target() || obj.has_larger_mask() { target_dimension } else { None };
         let obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
 
         // PdfCraft patch (82): averaged down when far larger than where it is drawn, and cached.
-        obj.decoded_soft_mask(target_dimension, (width, *height)).map(|decoded| decoded.luma)
+        obj.decoded_soft_mask(mask_target, (width, *height)).map(|decoded| decoded.luma)
     } else if let Some(color_key_mask) = dict.get::<SmallVec<[u16; 4]>>(MASK) {
         let mut mask_data = vec![];
 
