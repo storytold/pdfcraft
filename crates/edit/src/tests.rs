@@ -16455,3 +16455,241 @@ fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
         assert_eq!(rows(&doc), ["กข", "ค"], "matching U+{:04X}", u32::from(separator));
     }
 }
+
+/// The deleted image's payload survived a full save: the census could not prove it unused.
+fn payload_after_delete(doc: &mut Document, private: &[u8]) -> bool {
+    images::change_image(doc, 0, 0, &images::ImageChange::Delete).unwrap();
+    let bytes = write_full(doc, &SaveOptions::default()).unwrap();
+    bytes.windows(private.len()).any(|w| w == private)
+}
+
+/// A form `name` that draws what `body` says, in the page's own resource scope plus `xobjects`.
+fn add_form(doc: &mut Document, name: &[u8], body: &[u8], xobjects: Dict) -> ObjRef {
+    let mut dict = Dict::new();
+    dict.set(b"Type".to_vec(), Object::name("XObject"));
+    dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    dict.set(b"BBox".to_vec(), Object::Array([0, 0, 10, 10].map(Object::Int).to_vec()));
+    let mut resources = Dict::from_iter([(b"Font".to_vec(), Object::Dict(Dict::new()))]);
+    if !xobjects.is_empty() {
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+    }
+    dict.set(b"Resources".to_vec(), Object::Dict(resources));
+    let form = doc.add(Object::Stream(Stream::flate(dict, body)));
+    let page = pdfcraft_model::pages(doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        let mut names = resources.get(b"XObject").and_then(Object::as_dict).cloned().unwrap_or_default();
+        names.set(name.to_vec(), Object::Ref(form));
+        resources.set(b"XObject".to_vec(), Object::Dict(names));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    form
+}
+
+/// The image `private` a page draws as `/Im0`, with the object it is drawn through.
+fn private_page(private: &[u8]) -> (Document, ObjRef) {
+    let mut doc = image_page();
+    let target = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    doc.set(target, Object::Stream(identifiable_test_image(private)));
+    (doc, target)
+}
+
+/// The page's `/ExtGState` gains `name` with `entries`.
+fn add_extgstate(doc: &mut Document, name: &[u8], entries: Dict) {
+    let page = pdfcraft_model::pages(doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        let mut states = resources.get(b"ExtGState").and_then(Object::as_dict).cloned().unwrap_or_default();
+        states.set(name.to_vec(), Object::Dict(entries));
+        resources.set(b"ExtGState".to_vec(), Object::Dict(states));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+}
+
+/// A form that draws itself leaves the census no way to say what it reaches, so the deleted image's
+/// payload stays: the alias in the page's resources is kept rather than the object dropped.
+#[test]
+fn a_form_cycle_keeps_the_image_the_census_cannot_see_through() {
+    const PRIVATE: &[u8] = b"PRIVATE_FORM_CYCLE_IMAGE";
+    let (mut doc, _target) = private_page(PRIVATE);
+    let form = add_form(&mut doc, b"Loop", b"/Loop Do", Dict::new());
+    // Its own scope names it too, so the walk comes back to it.
+    doc.update_dict(form, |d| {
+        let resources = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Loop".to_vec(), Object::Ref(form))])))]);
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /Loop Do"]);
+    assert!(payload_after_delete(&mut doc, PRIVATE), "a cycle must keep the image");
+}
+
+/// A chain deeper than the census's depth limit stops the walk before it reaches the image, so the
+/// payload stays. The image really is drawn, at a depth the census refuses to guess about.
+#[test]
+fn a_form_chain_past_the_census_depth_limit_keeps_the_image() {
+    const PRIVATE: &[u8] = b"PRIVATE_DEEP_CHAIN_IMAGE";
+    let (mut doc, target) = private_page(PRIVATE);
+    let mut next: Option<ObjRef> = None;
+    for level in (0..70).rev() {
+        let body: Vec<u8> = if next.is_some() { format!("/D{level} Do").into_bytes() } else { b"/Im0 Do".to_vec() };
+        let names = match next {
+            Some(inner) => Dict::from_iter([(format!("D{level}").into_bytes(), Object::Ref(inner))]),
+            None => Dict::from_iter([(b"Im0".to_vec(), Object::Ref(target))]),
+        };
+        // The form is added under its own name at the page, and each one draws the next.
+        next = Some(add_form(&mut doc, format!("F{level}").into_bytes().as_slice(), &body, names));
+    }
+    set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /F0 Do"]);
+    assert!(payload_after_delete(&mut doc, PRIVATE), "a chain past the depth limit must keep the image");
+}
+
+/// Soft masks and alternates that are malformed (or name nothing) must not be read as "no consumer":
+/// the image stays. The benign spellings of "no mask" (null, /None, an array of nulls) still let the
+/// unused image go.
+#[test]
+fn malformed_soft_masks_and_alternates_keep_the_image_while_the_empty_spellings_do_not() {
+    for (label, entries, kept) in [
+        ("/SMask null", Dict::from_iter([(b"SMask".to_vec(), Object::Null)]), false),
+        ("/SMask /None", Dict::from_iter([(b"SMask".to_vec(), Object::name("None"))]), false),
+        ("/Mask [null null]", Dict::from_iter([(b"Mask".to_vec(), Object::Array(vec![Object::Null, Object::Null]))]), false),
+        ("/SMask a dictionary", Dict::from_iter([(b"SMask".to_vec(), Object::Dict(Dict::new()))]), true),
+        ("/Alternates a dictionary", Dict::from_iter([(b"Alternates".to_vec(), Object::Dict(Dict::new()))]), true),
+        ("/Alternates without /Image", Dict::from_iter([(b"Alternates".to_vec(), Object::Array(vec![Object::Dict(Dict::new())]))]), true),
+    ] {
+        const PRIVATE: &[u8] = b"PRIVATE_MASKED_CONSUMER_IMAGE";
+        let (mut doc, _target) = private_page(PRIVATE);
+        let mut image = Dict::new();
+        image.set(b"Type".to_vec(), Object::name("XObject"));
+        image.set(b"Subtype".to_vec(), Object::name("Image"));
+        image.set(b"Width".to_vec(), Object::Int(4));
+        image.set(b"Height".to_vec(), Object::Int(2));
+        image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        for (key, value) in entries.iter() {
+            image.set(key.clone(), value.clone());
+        }
+        let other = doc.add(Object::Stream(Stream::from_raw(image, vec![0u8; 8])));
+        add_form(&mut doc, b"Other", b"/OtherImage Do", Dict::from_iter([(b"OtherImage".to_vec(), Object::Ref(other))]));
+        set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /Other Do"]);
+        assert_eq!(payload_after_delete(&mut doc, PRIVATE), kept, "{label}");
+    }
+}
+
+/// `gs`, `Tf` and `scn` naming something the census cannot read leave the image alone; the states it
+/// can read (a Type3 font with glyph programs, a tiling pattern) are walked, and an unused image goes.
+#[test]
+fn resource_operators_the_census_cannot_read_keep_the_image() {
+    for (label, state, content) in [
+        (
+            "an ExtGState font that is not a pair",
+            Some((b"GS".to_vec(), Dict::from_iter([(b"Font".to_vec(), Object::Array(vec![Object::Int(0)]))]))),
+            "/GS gs",
+        ),
+        ("an ExtGState font that is not an array", Some((b"GS".to_vec(), Dict::from_iter([(b"Font".to_vec(), Object::name("F1"))]))), "/GS gs"),
+        ("an ExtGState soft mask that is not a dictionary", Some((b"GS".to_vec(), Dict::from_iter([(b"SMask".to_vec(), Object::Int(1))]))), "/GS gs"),
+        (
+            "a soft mask group that is not a form",
+            Some((b"GS".to_vec(), Dict::from_iter([(b"SMask".to_vec(), Object::Dict(Dict::from_iter([(b"G".to_vec(), Object::Int(1))])))]))),
+            "/GS gs",
+        ),
+    ] {
+        const PRIVATE: &[u8] = b"PRIVATE_UNREADABLE_OPERATOR_IMAGE";
+        let (mut doc, _target) = private_page(PRIVATE);
+        if let Some((name, entries)) = state {
+            add_extgstate(&mut doc, &name, entries);
+        }
+        set_image_content(&mut doc, 0, &[format!("q 200 0 0 100 100 100 cm /Im0 Do Q {content}").into_bytes().as_slice()]);
+        assert!(payload_after_delete(&mut doc, PRIVATE), "{label}");
+    }
+}
+
+/// A shading painted through `scn` draws no XObject, so it is no reason to keep the image: the
+/// census reads it as nothing to follow and the unused image still goes.
+#[test]
+fn a_shading_painted_through_scn_does_not_keep_the_image() {
+    const PRIVATE: &[u8] = b"PRIVATE_SHADING_PATTERN_IMAGE";
+    let (mut doc, _target) = private_page(PRIVATE);
+    let shading =
+        doc.add(Object::Dict(Dict::from_iter([(b"ShadingType".to_vec(), Object::Int(2)), (b"ColorSpace".to_vec(), Object::name("DeviceGray"))])));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        resources.set(b"Pattern".to_vec(), Object::Dict(Dict::from_iter([(b"P1".to_vec(), Object::Ref(shading))])));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /Pattern cs /P1 scn"]);
+    assert!(!payload_after_delete(&mut doc, PRIVATE), "a shading is no consumer, so the image goes");
+}
+
+/// An image XObject whose `/SMask` or `/Alternates` points at an object that is not one is not read
+/// as "nothing there": the image stays. An XObject that is not a stream at all does the same.
+#[test]
+fn a_page_drawing_something_that_is_not_an_xobject_keeps_the_image() {
+    const PRIVATE: &[u8] = b"PRIVATE_NOT_A_STREAM_IMAGE";
+    let (mut doc, _target) = private_page(PRIVATE);
+    let not_a_stream = doc.add(Object::Dict(Dict::from_iter([(b"Type".to_vec(), Object::name("Font"))])));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        let mut names = resources.get(b"XObject").and_then(Object::as_dict).cloned().unwrap_or_default();
+        names.set(b"Bad".to_vec(), Object::Ref(not_a_stream));
+        resources.set(b"XObject".to_vec(), Object::Dict(names));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    set_image_content(&mut doc, 0, &[b"q 200 0 0 100 100 100 cm /Im0 Do Q /Bad Do"]);
+    assert!(payload_after_delete(&mut doc, PRIVATE), "an unreadable XObject must keep the image");
+}
+
+/// `/Annots` that is not an array leaves the appearance walks unknown, so the image stays.
+#[test]
+fn annots_that_are_not_an_array_keep_the_image() {
+    const PRIVATE: &[u8] = b"PRIVATE_ANNOTS_IMAGE";
+    let (mut doc, _target) = private_page(PRIVATE);
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Int(1))).unwrap();
+    assert!(payload_after_delete(&mut doc, PRIVATE), "unreadable /Annots must keep the image");
+}
+
+/// The prune rewrites resource dictionaries it reaches through a reference, so a genuinely unused
+/// image still goes even when its alias sits in an indirect `/XObject` dictionary.
+#[test]
+fn an_indirect_xobject_dictionary_is_rewritten_so_an_unused_image_still_goes() {
+    const PRIVATE: &[u8] = b"PRIVATE_INDIRECT_DICT_IMAGE";
+    let (mut doc, target) = private_page(PRIVATE);
+    // An orphan dictionary, referenced by nothing the census reads, naming the image.
+    let orphan =
+        doc.add(Object::Dict(Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Unused".to_vec(), Object::Ref(target))])))])));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        resources.set(b"Properties".to_vec(), Object::Dict(Dict::from_iter([(b"L9".to_vec(), Object::Ref(orphan))])));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    assert!(!payload_after_delete(&mut doc, PRIVATE), "an unused indirect alias must be pruned");
+}
+
+/// More aliases than the rewrite will stage keeps the image: the census stops rather than rewrite a
+/// document it could not finish, and nothing of the edit's cleanup is applied.
+#[test]
+fn more_aliases_than_the_rewrite_will_stage_keeps_the_image() {
+    const PRIVATE: &[u8] = b"PRIVATE_MANY_ALIASES_IMAGE";
+    let (mut doc, target) = private_page(PRIVATE);
+    let mut aliases = Dict::new();
+    for index in 0..300 {
+        aliases.set(format!("Unused{index}").into_bytes(), Object::Ref(target));
+    }
+    let orphan = doc.add(Object::Dict(Dict::from_iter([(b"XObject".to_vec(), Object::Dict(aliases))])));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        let mut resources = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        resources.set(b"Properties".to_vec(), Object::Dict(Dict::from_iter([(b"L9".to_vec(), Object::Ref(orphan))])));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    assert!(payload_after_delete(&mut doc, PRIVATE), "past the alias cap the image must stay");
+}
