@@ -717,15 +717,18 @@ fn may_paint_canvas(
         f64::NEG_INFINITY,
         f64::NEG_INFINITY,
     );
+    let mut curved = false;
     let mut add = |p: Point| points = points.union_pt(p);
     for el in path.elements() {
         match *el {
             kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => add(p),
             kurbo::PathEl::QuadTo(c, p) => {
+                curved = true;
                 add(c);
                 add(p);
             }
             kurbo::PathEl::CurveTo(c1, c2, p) => {
+                curved = true;
                 add(c1);
                 add(c2);
                 add(p);
@@ -737,7 +740,32 @@ fn may_paint_canvas(
     let device = transform
         .transform_rect_bbox(points.inflate(grow, grow))
         .inflate(2.0, 2.0);
+    // PdfCraft patch (32): see `MAX_CURVE_EXTENT`.
+    if curved && (device.width() > MAX_CURVE_EXTENT || device.height() > MAX_CURVE_EXTENT) {
+        SKIPPED_UNBOUNDED_CURVE.with(|skipped| skipped.set(true));
+        return false;
+    }
     paints_canvas(device, width, height)
+}
+
+/// PdfCraft patch (32): a curved path whose device-space box is wider or taller than this is not
+/// drawn. Flattening a curve makes a number of points that grows with its size on the device, all
+/// of it held at once: one cubic reaching 10^18 user units asked for 20 GB, and the process
+/// aborted when the allocation failed (#7381). Lines cost one segment however long they are, so
+/// only curved paths are refused. No page reaches this: 10^9 pixels is a page 3 km wide at
+/// 300 dpi, or a large poster at thousands of times its size.
+const MAX_CURVE_EXTENT: f64 = 1e9;
+
+std::thread_local! {
+    /// PdfCraft patch (32): whether a curve past `MAX_CURVE_EXTENT` was skipped on this page;
+    /// `render_into` reports it as `InterpreterWarning::ContentTruncated`. Kept per thread, not
+    /// per renderer, so a skip inside a group, mask or pattern renderer reaches the page.
+    static SKIPPED_UNBOUNDED_CURVE: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
+/// PdfCraft patch (32): whether a curve past `MAX_CURVE_EXTENT` was skipped since the last call.
+pub(crate) fn take_skipped_unbounded_curve() -> bool {
+    SKIPPED_UNBOUNDED_CURVE.with(|skipped| skipped.replace(false))
 }
 
 /// PdfCraft patch: whether a `rect` drawn with `transform` can paint a pixel of a `width` ×
