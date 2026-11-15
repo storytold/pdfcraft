@@ -134,6 +134,7 @@ impl Edit {
     /// what Delete and Cut do to objects selected together. One object is deleted by its own
     /// edit, several by [`Edit::DeleteObjects`]; none is no edit.
     pub fn delete_objects(page: usize, mut targets: Vec<ObjectTarget>) -> Option<Edit> {
+        targets.retain(|t| t.kind != crate::ObjectKind::VectorLine);
         targets.sort();
         targets.dedup();
         match targets.as_slice() {
@@ -150,6 +151,7 @@ fn delete_one(page: usize, t: ObjectTarget) -> Edit {
         ObjectKind::Text => Edit::EditTextBlock { page, block: t.index, text: String::new(), style: crate::BlockStyle::default() },
         ObjectKind::Image => Edit::EditPageImage { page, index: t.index, change: crate::ImageEdit::Delete },
         ObjectKind::Added => Edit::DeleteContent { page, index: t.index },
+        ObjectKind::VectorLine => Edit::SetLineProperties { page, target: t, color: None, width: Some(0.0), dash: None },
     }
 }
 

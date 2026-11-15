@@ -47,7 +47,8 @@ mod rules;
 pub use rules::page_rules;
 pub mod objects;
 pub use objects::{
-    CopiedObjects, EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, copy_objects, editable_objects, move_objects, paste_objects,
+    CopiedObjects, EditableObject, LineSegment, MAX_MOVE_OBJECTS, MAX_PAGE_LINES, ObjectKind, ObjectTarget, copy_objects, editable_lines,
+    editable_objects, move_objects, paste_objects, set_line_properties, update_line_endpoints,
 };
 
 mod flatten;
