@@ -1985,8 +1985,13 @@ fn finish_requests(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, re
             req.resume_now = app.resume_after_signed_edit.take();
         }
     } else if dialog == Dialog::SignedEdit && (req.close || modal_closed) {
-        // Cancelled (or closed any other way): the change is not made, nor what waited on it.
-        app.pending_signed_edit = None;
+        // Cancelled (or closed any other way): the change is not made, nor what waited on it,
+        // and its selection across pages does not carry over to a later edit.
+        if let Some((id, _)) = app.pending_signed_edit.take() {
+            for view in app.views.iter_mut().filter(|v| v.id == id) {
+                view.marks_across_pages = None;
+            }
+        }
         app.resume_after_signed_edit = None;
     }
     if req.remove_security_now && app.apply_edit(Edit::RemoveProtection) {
