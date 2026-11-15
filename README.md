@@ -422,7 +422,7 @@ git clone https://github.com/storytold/craft-fonts ../craft-fonts
 git clone https://github.com/storytold/craft-i18n ../craft-i18n
 git -C ../craft-i18n checkout "$(cat craft-i18n.rev)" &&
 CRAFT_I18N_DIR="$(cd ../craft-i18n && pwd)" CRAFT_I18N_REQUIRED=1 \
-CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p pdfcraft -- some.pdf
+CRAFT_FONTS_DIR="$(pwd)/../craft-fonts" cargo run --release -p pdfcraft -- some.pdf
 ```
 
 Each [GitHub release](https://github.com/storytold/pdfcraft/releases) has ready-made builds for macOS,
