@@ -567,6 +567,17 @@ fn a_fields_array_of_its_own_only_accepts_new_signature_fields_appended() {
     let appended = [(8, Row::Obj(0, 0, "[6 0 R 13 0 R 11 0 R]")), (11, Row::Obj(0, 0, &timestamp)), (12, Row::Obj(0, 0, TIMESTAMP))];
     let later = old.clone().revision(&appended);
     assert_eq!(verdict(&later.open(), old.open(), Some(1)), Modification::Allowed(vec![kind::SIGNATURE]));
+    // An entry whose value is null, or a reference to nothing, is no entry (ISO 32000-1 §7.3.7,
+    // §7.3.10): the field is still a signer's.
+    for nulls in ["/Parent null /Kids null /AA null /A null", "/Parent 99 0 R"] {
+        let field = widget(&format!("/V 12 0 R {nulls}"));
+        let later =
+            old.clone().revision(&[(8, Row::Obj(0, 0, "[6 0 R 13 0 R 11 0 R]")), (11, Row::Obj(0, 0, &field)), (12, Row::Obj(0, 0, TIMESTAMP))]);
+        assert_eq!(verdict(&later.open(), old.open(), Some(1)), Modification::Allowed(vec![kind::SIGNATURE]), "{nulls}");
+    }
+    let empty = widget("/V null");
+    let later = old.clone().revision(&[(8, Row::Obj(0, 0, "[6 0 R 13 0 R 11 0 R]")), (11, Row::Obj(0, 0, &empty))]);
+    assert_eq!(verdict(&later.open(), old.open(), Some(2)), Modification::Allowed(vec![kind::SIGNATURE]));
     let old = signed(LISTED, &[(11, "null")]);
     let later = old.clone().revision(&appended);
     assert_eq!(verdict(&later.open(), old.open(), Some(1)), Modification::Allowed(vec![kind::SIGNATURE]));
