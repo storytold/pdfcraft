@@ -9788,7 +9788,7 @@ mod type3_proc_cache;
 // hayro-interpret patch 91).
 mod failed_image_decodes;
 
-// DCTDecode data is read from its start-of-image marker (vendored hayro-syntax patch 47,
+// DCTDecode data is read from its start-of-image marker (vendored hayro-syntax patch 55,
 // PDFBOX-5992), and an image that doesn't decode is reported.
 mod dct_leading_bytes;
 

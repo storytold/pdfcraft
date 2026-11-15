@@ -1,4 +1,4 @@
-//! DCTDecode data is read from its start-of-image marker (vendored hayro-syntax patch 47), and an
+//! DCTDecode data is read from its start-of-image marker (vendored hayro-syntax patch 55), and an
 //! image that can't be decoded is reported (`RenderWarning::ImageNotDecoded`).
 //!
 //! The barcode in PDFBOX-5992's `broken-2.pdf` is an inline JPEG written `ID` CR LF LF: one

@@ -30,12 +30,11 @@ mcp = ["dep:base64"]
 [dev-dependencies]
 # Synthetic printer profiles for the app-managed print colour tests.
 craft-cms = { workspace = true }
+craft-image-codecs = { workspace = true }
 pdfcraft-fonts = { workspace = true }
-png = "0.18"
 flate2.workspace = true
 pdfcraft-model = { workspace = true }
 pdfcraft-xfa = { workspace = true }
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 rustix = { version = "1", features = ["fs"] }
