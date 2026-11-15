@@ -318,6 +318,23 @@ pub(crate) fn page_refs(doc: &Document) -> Vec<ObjRef> {
     PageWalk::new(doc, pages).collect()
 }
 
+/// A page-tree node, read to walk the tree or for a page's entries. A long document's pages don't
+/// stay cached between two reads, so each read is a full parse of the page, and a page can carry
+/// tens of kilobytes of private data (InDesign's `/PieceInfo`, #5873). Tests count the reads
+/// ([`PAGE_NODES_READ`]).
+fn page_object(doc: &Document, node: ObjRef) -> std::sync::Arc<Object> {
+    #[cfg(test)]
+    PAGE_NODES_READ.with(|n| n.set(n.get() + 1));
+    doc.get(node)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Page-tree nodes read on this thread ([`page_object`]), so a test can count how often
+    /// reading the form reads each page.
+    pub(crate) static PAGE_NODES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Depth-first walk over the leaf pages under `top`. It keeps one cursor per open `/Kids` array,
 /// never one entry per child, so a child listed many times or shared between nodes is skipped by
 /// the seen check without being queued first (`pdfcraft_model::pages` walks the same way).
@@ -354,7 +371,7 @@ impl Iterator for PageWalk<'_> {
             if !self.seen.insert(node) {
                 continue;
             }
-            let obj = self.doc.get(node);
+            let obj = page_object(self.doc, node);
             let Some(d) = obj.as_dict() else { continue };
             match d.get(b"Kids").map(|k| self.doc.resolve(k)) {
                 Some(kids) if d.name(b"Type") != Some(b"Page") => self.pending.push((kids, 0)),
@@ -460,7 +477,7 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
     let mut by_parent: std::collections::HashMap<ObjRef, Vec<ObjRef>> = std::collections::HashMap::new();
     let pages = page_refs(doc);
     for (i, p) in pages.iter().enumerate() {
-        if let Some(a) = doc.get(*p).as_dict().and_then(|d| d.get(b"Annots").cloned()) {
+        if let Some(a) = page_object(doc, *p).as_dict().and_then(|d| d.get(b"Annots").cloned()) {
             for (k, e) in doc.resolve(&a).as_array().into_iter().flatten().enumerate() {
                 if let Some(r) = e.as_ref()
                     && let std::collections::hash_map::Entry::Vacant(slot) = page_of.entry(r)
@@ -535,7 +552,7 @@ fn adopt_page_fields(
     out: &mut Vec<Field>,
 ) {
     for p in pages {
-        let Some(a) = doc.get(*p).as_dict().and_then(|d| d.get(b"Annots").cloned()) else { continue };
+        let Some(a) = page_object(doc, *p).as_dict().and_then(|d| d.get(b"Annots").cloned()) else { continue };
         let annots = doc.resolve(&a);
         let Some(annots) = annots.as_array() else { continue };
         for e in annots {
