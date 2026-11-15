@@ -1186,6 +1186,75 @@ fn named_property_lists_are_found_and_marked_decorative_like_inline_ones() {
     assert!(props.contains(b"P0") && props.contains(b"P1") && props.contains(b"Other"), "resources are left as they were");
 }
 
+/// `figures_doc` with its parent tree split into leaves under `/Kids` (#7408). `leaves` are the
+/// leaf bodies; `{n}` in the root's `kids` names the n-th leaf.
+fn figures_doc_with_parent_tree(kids: &str, leaves: &[&str]) -> (Document, Vec<pdfcraft_cos::ObjRef>) {
+    use pdfcraft_cos::{ObjRef, Object};
+    let mut doc = figures_doc();
+    let refs: Vec<ObjRef> = leaves.iter().map(|_| doc.add(Object::Null)).collect();
+    let name = |s: &str| refs.iter().enumerate().fold(s.to_string(), |s, (i, r)| s.replace(&format!("{{{i}}}"), &format!("{} 0 R", r.num)));
+    let mut bodies = vec![name(&format!("<< {kids} >>"))];
+    bodies.extend(leaves.iter().map(|l| name(l)));
+    let parsed = pdf(&bodies, "");
+    doc.set(ObjRef::new(9, 0), parsed.get(ObjRef::new(1, 0)).as_ref().clone());
+    for (i, r) in refs.iter().enumerate() {
+        doc.set(*r, parsed.get(ObjRef::new(u32::try_from(i).unwrap() + 2, 0)).as_ref().clone());
+    }
+    (doc, refs)
+}
+
+fn page_contents(doc: &Document) -> Option<pdfcraft_cos::Object> {
+    doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned()
+}
+
+#[test]
+fn marking_a_tag_as_an_artifact_clears_its_entry_in_a_parent_tree_with_kids() {
+    use pdfcraft_cos::Object;
+    let nums = |doc: &Document, leaf: pdfcraft_cos::ObjRef| doc.get(leaf).as_dict().and_then(|d| d.get(b"Nums").cloned());
+    let target = Some(Object::Array(vec![Object::Int(0), Object::Array(vec![Object::Null, Object::Ref(pdfcraft_cos::ObjRef::new(8, 0))])]));
+    // The issue's layout (two leaves, the control on another key), and a leaf whose /Limits don't
+    // cover the key it holds: every leaf is read, so wrong limits don't hide the entry.
+    for limits in ["[0 0]", "[5 9]"] {
+        let leaves = [format!("<< /Limits {limits} /Nums [0 [7 0 R 8 0 R]] >>"), "<< /Limits [1 1] /Nums [1 [8 0 R]] >>".to_string()];
+        let leaves: Vec<&str> = leaves.iter().map(String::as_str).collect();
+        for decorative in [false, true] {
+            let (mut doc, refs) = figures_doc_with_parent_tree("/Kids [{0} {1}]", &leaves);
+            let control = nums(&doc, refs[1]);
+            if decorative {
+                mark_decorative(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)).unwrap();
+            } else {
+                mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)).unwrap();
+            }
+            assert_eq!(nums(&doc, refs[0]), target, "limits {limits}, decorative {decorative}");
+            assert_eq!(nums(&doc, refs[1]), control, "the other leaf is left as it was");
+            let r = check(&doc, &Options { rules: [Rule::TaggedContent].into(), pages: None });
+            assert_eq!(failed(&r), Vec::<Rule>::new(), "{:?}", r.results);
+        }
+    }
+
+    // A leaf's /Nums given by reference is cleared where it lives.
+    let (mut doc, refs) = figures_doc_with_parent_tree("/Kids [{0}]", &["<< /Limits [0 0] /Nums {1} >>", "[0 [7 0 R 8 0 R]]"]);
+    mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)).unwrap();
+    assert_eq!(Some(doc.get(refs[1]).as_ref().clone()), target);
+
+    // A cyclic tree is walked once per node and still cleared.
+    let (mut doc, refs) = figures_doc_with_parent_tree("/Kids [{0}]", &["<< /Kids [9 0 R {1}] >>", "<< /Limits [0 0] /Nums [0 [7 0 R 8 0 R]] >>"]);
+    mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)).unwrap();
+    assert_eq!(nums(&doc, refs[1]), target);
+}
+
+#[test]
+fn marking_a_tag_as_an_artifact_refuses_a_parent_tree_it_cannot_update_before_changing_anything() {
+    use pdfcraft_cos::ObjRef;
+    // An inline kid that maps the page: there is no object to write its entry back to.
+    let (mut doc, _) = figures_doc_with_parent_tree("/Kids [<< /Limits [0 0] /Nums [0 [7 0 R 8 0 R]] >>]", &[]);
+    let (contents, tree) = (page_contents(&doc), doc.get(ObjRef::new(9, 0)).as_ref().clone());
+    assert!(matches!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::ParentTree(_))));
+    assert!(matches!(mark_decorative(&mut doc, ObjRef::new(7, 0)), Err(AltError::ParentTree(_))));
+    assert_eq!((page_contents(&doc), doc.get(ObjRef::new(9, 0)).as_ref().clone()), (contents, tree));
+    assert_eq!(tags(&doc).into_iter().map(|tag| tag.object.num).collect::<Vec<_>>(), [6, 7, 8]);
+}
+
 #[test]
 fn mark_tag_artifact_finds_named_property_lists_and_indirect_mcrs() {
     use pdfcraft_cos::{Dict, ObjRef, Object};

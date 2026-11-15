@@ -27,6 +27,8 @@ pub enum AltError {
     TooLarge,
     #[error("the figure's content may be in a damaged or unreadable content stream, or after the damage, so nothing was changed")]
     Damaged,
+    #[error("couldn't update the parent tree: {0}")]
+    ParentTree(String),
     #[error("{0}")]
     Cos(#[from] pdfcraft_cos::CosError),
 }
@@ -521,14 +523,11 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
     let pages = pdfcraft_model::pages(doc);
     let pg = d.get(b"Pg").and_then(Object::as_ref).or_else(|| elements(doc).into_iter().find(|e| e.object == obj).and_then(|e| e.page));
     if let Some(page) = pg.and_then(|p| pages.iter().find(|x| x.obj == p)).filter(|_| !ids.is_empty()) {
+        let entries = parent_tree_entries(doc, &page.dict).map_err(AltError::ParentTree)?;
         let streams = decode_page_streams(doc, &page.dict).ok_or(AltError::TooLarge)?;
         match artifact_marked_content(doc, page, streams, &ids, false)? {
             // The parent tree no longer points those ids at the figure.
-            Marked::Done => {
-                if let Some(key) = page.dict.get(b"StructParents").and_then(|o| doc.resolve(o).as_int()) {
-                    clear_parent_tree(doc, key, obj)?;
-                }
-            }
+            Marked::Done => clear_parent_tree(doc, &entries, obj)?,
             Marked::NotFound => {}
             Marked::Damaged => return Err(AltError::Damaged),
         }
@@ -570,15 +569,15 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
     let page = pages.iter().find(|page| page.obj == page_ref).ok_or(ArtifactError::NoPage)?;
     let parent = element.dict.get(b"P").and_then(Object::as_ref).ok_or(ArtifactError::NoParent)?;
     let replacement = replacement_kids(doc, parent, obj)?;
+    // Found before anything changes: a parent tree that can't be walked refuses the edit.
+    let entries = parent_tree_entries(doc, &page.dict).map_err(ArtifactError::ParentTree)?;
     let streams = decode_page_streams(doc, &page.dict).ok_or(ArtifactError::TooLarge)?;
     match artifact_marked_content(doc, page, streams, &ids, true)? {
         Marked::Done => {}
         Marked::NotFound => return Err(ArtifactError::ContentNotFound),
         Marked::Damaged => return Err(ArtifactError::Damaged),
     }
-    if let Some(key) = page.dict.get(b"StructParents").and_then(|o| doc.resolve(o).as_int()) {
-        clear_parent_tree(doc, key, obj).map_err(|e| ArtifactError::ParentTree(e.to_string()))?;
-    }
+    clear_parent_tree(doc, &entries, obj).map_err(|e| ArtifactError::ParentTree(e.to_string()))?;
     doc.update_dict(parent, |p| p.set(b"K".to_vec(), replacement))?;
     // Keep the retired object valid if another object holds an out-of-tree reference to it.
     doc.update_dict(obj, |d| {
@@ -613,26 +612,99 @@ fn replacement_kids(doc: &Document, parent: ObjRef, obj: ObjRef) -> Result<Objec
     }
 }
 
-/// Replace `obj` by null in the page's parent-tree array (`key`), in a flat /Nums tree.
-fn clear_parent_tree(doc: &mut Document, key: i64, obj: ObjRef) -> Result<(), AltError> {
-    let Some(pt) = tree_root(doc).and_then(|r| r.get(b"ParentTree").and_then(Object::as_ref)) else { return Ok(()) };
-    let Some(nums) = doc.get(pt).as_dict().and_then(|d| d.get(b"Nums").and_then(|n| n.as_array().cloned())) else { return Ok(()) };
-    let mut nums = nums;
-    // Whole pairs only: a trailing key without a value maps nothing, so it is left as it is.
-    for [k, v] in nums.as_chunks_mut::<2>().0 {
-        if k.as_int() == Some(key) {
-            match &*v {
-                Object::Array(a) => *v = Object::Array(a.iter().map(|x| if x.as_ref() == Some(obj) { Object::Null } else { x.clone() }).collect()),
-                Object::Ref(r) => {
-                    if let Some(a) = doc.get(*r).as_array().cloned() {
-                        let a: Vec<Object> = a.iter().map(|x| if x.as_ref() == Some(obj) { Object::Null } else { x.clone() }).collect();
-                        doc.set(*r, Object::Array(a));
-                    }
+/// Deepest a parent tree is walked. A balanced number tree holding a million keys is a few
+/// levels deep; more than this is a damaged or hostile tree.
+const PARENT_TREE_DEPTH: usize = 64;
+/// Most parent-tree nodes read, as `elements` caps the structure elements it walks.
+const PARENT_TREE_NODES: usize = 1_000_000;
+
+/// Where a parent-tree `/Nums` array is written back.
+enum NumsAt {
+    /// The `/Nums` entry of this node.
+    Node(ObjRef),
+    /// This array object, which a node's `/Nums` refers to.
+    Array(ObjRef),
+}
+
+/// The page's parent-tree key (`/StructParents`) and every `/Nums` array of the parent tree (a
+/// number tree, ISO 32000-2 §7.9.7) that maps it. The root may hold `/Nums` itself or reach its
+/// leaves through `/Kids`. Every node is read, not only those whose `/Limits` cover the key, so
+/// wrong limits can't hide an entry; each node once, since a tree can be cyclic, and within
+/// [`PARENT_TREE_DEPTH`] and [`PARENT_TREE_NODES`]. Nothing is changed here, so a tree that
+/// can't be walked is refused before the caller edits the page.
+fn parent_tree_entries(doc: &Document, page: &Dict) -> Result<Vec<(i64, NumsAt)>, String> {
+    let Some(key) = page.get(b"StructParents").and_then(|o| doc.resolve(o).as_int()) else { return Ok(Vec::new()) };
+    let Some(root) = tree_root(doc).and_then(|r| r.get(b"ParentTree").and_then(Object::as_ref)) else { return Ok(Vec::new()) };
+    let mut found = Vec::new();
+    let mut seen = HashSet::new();
+    let mut stack = vec![(Object::Ref(root), 0)];
+    while let Some((node, depth)) = stack.pop() {
+        if depth > PARENT_TREE_DEPTH {
+            return Err("the parent tree is too deep".into());
+        }
+        let (at, dict) = match node {
+            Object::Ref(r) => {
+                if !seen.insert(r) {
+                    continue;
                 }
-                _ => {}
+                if seen.len() > PARENT_TREE_NODES {
+                    return Err("the parent tree has too many nodes".into());
+                }
+                (Some(r), doc.get(r).as_dict().cloned())
             }
+            Object::Dict(d) => (None, Some(d)),
+            _ => (None, None),
+        };
+        let Some(dict) = dict else { continue };
+        if let Some(nums) = dict.get(b"Nums")
+            && doc.resolve(nums).as_array().is_some_and(|a| a.as_chunks::<2>().0.iter().any(|[k, _]| k.as_int() == Some(key)))
+        {
+            found.push(match (nums.as_ref(), at) {
+                (Some(array), _) => (key, NumsAt::Array(array)),
+                (None, Some(node)) => (key, NumsAt::Node(node)),
+                // A kid written inline: there is no object to write its entry back to.
+                (None, None) => return Err("a parent tree node that maps the page is not an indirect object".into()),
+            });
+        }
+        if let Some(kids) = dict.get(b"Kids").map(|k| doc.resolve(k))
+            && let Some(kids) = kids.as_array()
+        {
+            stack.extend(kids.iter().rev().map(|kid| (kid.clone(), depth + 1)));
         }
     }
-    doc.update_dict(pt, |d| d.set(b"Nums".to_vec(), Object::Array(nums)))?;
+    Ok(found)
+}
+
+/// Replace `obj` by null in the page's parent-tree array, in each `/Nums` that
+/// [`parent_tree_entries`] found.
+fn clear_parent_tree(doc: &mut Document, entries: &[(i64, NumsAt)], obj: ObjRef) -> Result<(), pdfcraft_cos::CosError> {
+    for (key, at) in entries {
+        let nums = match at {
+            NumsAt::Node(node) => doc.get(*node).as_dict().and_then(|d| d.get(b"Nums").and_then(|n| n.as_array().cloned())),
+            NumsAt::Array(array) => doc.get(*array).as_array().cloned(),
+        };
+        let Some(mut nums) = nums else { continue };
+        // Whole pairs only: a trailing key without a value maps nothing, so it is left as it is.
+        for [k, v] in nums.as_chunks_mut::<2>().0 {
+            if k.as_int() == Some(*key) {
+                match &*v {
+                    Object::Array(a) => {
+                        *v = Object::Array(a.iter().map(|x| if x.as_ref() == Some(obj) { Object::Null } else { x.clone() }).collect())
+                    }
+                    Object::Ref(r) => {
+                        if let Some(a) = doc.get(*r).as_array().cloned() {
+                            let a: Vec<Object> = a.iter().map(|x| if x.as_ref() == Some(obj) { Object::Null } else { x.clone() }).collect();
+                            doc.set(*r, Object::Array(a));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        match at {
+            NumsAt::Node(node) => doc.update_dict(*node, |d| d.set(b"Nums".to_vec(), Object::Array(nums)))?,
+            NumsAt::Array(array) => doc.set(*array, Object::Array(nums)),
+        }
+    }
     Ok(())
 }
