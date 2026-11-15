@@ -7354,9 +7354,9 @@ fn a_rotated_scan_is_still_cleared_under_the_mark() {
 /// A grayscale scan with an explicit identity `/Decode [0 1]` is cleared in place too — the
 /// component count of the `/Decode` check must be the image's own (one), not three, or every
 /// explicit-declaration gray scan would be removed whole and the page blanked again.
-/// A 20×20 gray scan drawn 100×100 at (10,10), marked over its middle, and the report applying the
-/// mark gave: the one shape the gray cases differ in is the `/Decode` they declare.
-fn marked_gray_scan(decode: &str) -> Report {
+/// A 20×20 gray scan drawn 100×100 at (10,10), marked over its middle: the document and the report
+/// applying the mark gave. The one shape the gray cases differ in is the `/Decode` they declare.
+fn marked_gray_scan(decode: &str) -> (Document, Report) {
     let mut gray = vec![200u8; 20 * 20];
     gray[..20].fill(20);
     let img = stream(
@@ -7365,21 +7365,56 @@ fn marked_gray_scan(decode: &str) -> Report {
     );
     let mut doc = one_page(b"q 100 0 0 100 10 10 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![img]);
     mark(&mut doc, 0, &[[40.0, 40.0, 60.0, 60.0]], "");
-    apply(&mut doc, None).unwrap()
+    let report = apply(&mut doc, None).unwrap();
+    (doc, report)
 }
 
 #[test]
 fn a_gray_scan_with_an_identity_decode_is_cleared_not_removed() {
-    let r = marked_gray_scan("/Decode [0 1]");
+    let (doc, r) = marked_gray_scan("/Decode [0 1]");
     assert_eq!((r.images_removed, r.images_cleared), (0, 1), "the gray scan is cleared, not removed: {r:?}");
+    // The cleared copy is drawn under a fresh name, as every cleared image is.
+    assert!(content(&doc, 0).contains("PCRedacted"), "the cleared scan is still drawn: {}", content(&doc, 0));
+}
+
+/// The JPEG path spends the document's allowance, not just its own per-image cap: with no work left
+/// the scan is refused (the caller removes it, fail-closed), and one finite allowance cannot pay for
+/// the same clear twice — the second is refused and the refusal is counted. The work is shared across
+/// a run, not reset per image.
+#[test]
+fn a_jpeg_scan_clears_only_out_of_the_documents_allowance() {
+    let img = stream(
+        "/Type /XObject /Subtype /Image /Width 40 /Height 40 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode",
+        jpeg_white(40, 40),
+    );
+    let doc = one_page(b"q 100 0 0 100 10 10 cm /Im1 Do Q", "/XObject << /Im1 7 0 R >>", vec![img]);
+    let Object::Stream(s) = &*doc.get(ObjRef::new(7, 0)) else { panic!("object 7 is the image") };
+    // `clear` is handed the image's unit square through the transform it is drawn with, so a region
+    // in that space covers the left half here.
+    let left = [[0.0, 0.0, 0.5, 1.0]];
+    let clear_with = |budget: &mut pdfcraft_cos::ImageBudget| crate::image::clear(&doc, s, &pdfcraft_content::Matrix::IDENTITY, &left, budget);
+    assert!(matches!(clear_with(&mut pdfcraft_cos::ImageBudget::with_work(0)), Err(())), "no allowance left: the scan must fail closed, not clear");
+    assert!(matches!(clear_with(&mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)), Ok(Some(_))), "a whole allowance clears it");
+
+    // The smallest allowance that pays for one clear, found by doubling rather than by spelling out
+    // the crate's private pricing: exactly one clear fits in it, and only one.
+    let mut allowance = 1u64;
+    while !matches!(clear_with(&mut pdfcraft_cos::ImageBudget::with_work(allowance)), Ok(Some(_))) {
+        allowance = allowance.checked_mul(2).expect("a clear is paid for in a finite allowance");
+    }
+    let mut shared = pdfcraft_cos::ImageBudget::with_work(allowance);
+    assert!(matches!(clear_with(&mut shared), Ok(Some(_))), "one clear fits the allowance measured for it");
+    assert!(matches!(clear_with(&mut shared), Err(())), "the same allowance cannot pay for a second clear");
+    assert!(shared.refused() > 0, "the refused clear is counted, so a run can report it");
 }
 
 /// A gray scan with an *inverted* `/Decode [1 0]` still fails closed: the cleared copy would keep
 /// the inverted mapping, so the whole image goes instead.
 #[test]
 fn a_gray_scan_with_an_inverted_decode_still_fails_closed() {
-    let r = marked_gray_scan("/Decode [1 0]");
+    let (doc, r) = marked_gray_scan("/Decode [1 0]");
     assert_eq!(r.images_removed, 1, "the inverted scan is removed whole: {r:?}");
+    assert!(!content(&doc, 0).contains("/Im0"), "the removed scan is no longer drawn: {}", content(&doc, 0));
 }
 
 /// A CMYK JPEG still fails closed: its samples would be written back in a space its

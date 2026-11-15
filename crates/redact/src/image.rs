@@ -137,7 +137,7 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     }
     let (w, h) = (w as usize, h as usize);
     if is_dct {
-        return dct_clear(doc, s, ctm, rects, w, h);
+        return dct_clear(doc, s, ctm, rects, w, h, budget);
     }
     let mask = matches!(s.dict.get(b"ImageMask"), Some(Object::Bool(true)));
     let (ncomp, bpc) = if mask { (1, 1) } else { (components(doc, s)?, s.dict.int(b"BitsPerComponent")? as usize) };
@@ -223,7 +223,7 @@ const JPEG_QUALITY: u8 = 90;
 /// A scanned page is one full-page JPEG (issue #2246), so removing the image under a mark blanks
 /// the page while the mark and the OCR layer stay. The copy keeps the image's dictionary — its
 /// dimensions, colour space and masks — and only its samples change.
-fn dct_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], w: usize, h: usize) -> Option<Option<Stream>> {
+fn dct_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], w: usize, h: usize, budget: &mut ImageBudget) -> Option<Option<Stream>> {
     // An image mask's samples are bits its `/Decode` may invert, not one to three components.
     if matches!(s.dict.get(b"ImageMask"), Some(Object::Bool(true))) {
         return None;
@@ -238,6 +238,14 @@ fn dct_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], w: us
         return None;
     }
     let (w32, h32) = (u32::try_from(w).ok()?, u32::try_from(h).ok()?);
+    // The document's allowance pays for the JPEG's samples and the bytes that hold them, before its
+    // tables are parsed — the same charge `create` and `optimize` make for the same decode
+    // (`ImageBudget::pay_jpeg`). Without it a document of many scans would cost unbounded work here.
+    let samples = u64::try_from(w).ok()?.checked_mul(u64::try_from(h).ok()?)?.checked_mul(u64::try_from(ncomp).ok()?)?;
+    if !budget.pay_jpeg(samples, s.raw.as_ref()) {
+        return None;
+    }
+
     // The header is read before the samples are allocated, so a dictionary that declares a small
     // image can't make the decoder allocate a large one. A header that disagrees with the
     // dictionary is not an image this can clear: a mark's pixels would be at other samples.
