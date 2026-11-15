@@ -18,6 +18,7 @@ use kurbo::BezPath;
 use skrifa::attribute::Style;
 use skrifa::raw::TableProvider;
 use skrifa::raw::tables::cmap::PlatformId;
+use skrifa::raw::tables::post::DEFAULT_GLYPH_NAMES;
 use skrifa::{GlyphId, MetadataProvider};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -190,11 +191,23 @@ impl TrueTypeFont {
         }
 
         match &self.kind {
-            // PdfCraft patch (#3169): a name outside the glyph list reads by the glyph list
-            // specification's full mapping (`f_i`, `hyphen.case`).
-            Kind::Embedded(e) => e.code_to_unicode_name(code as u8).and_then(|name| {
-                glyph_name_to_unicode(name).map(BfString::Char).or_else(|| glyph_name_to_text(name))
-            }),
+            Kind::Embedded(e) => {
+                // PdfCraft patch (79): see `EmbeddedKind::symbolic_text`.
+                if let Some(text) = e.symbolic_text(code as u8) {
+                    let mut chars = text.chars();
+                    return Some(match (chars.next(), chars.next()) {
+                        (Some(c), None) => BfString::Char(c),
+                        _ => BfString::String(text.to_string()),
+                    });
+                }
+                // PdfCraft patch (#3169): a name outside the glyph list reads by the glyph list
+                // specification's full mapping (`f_i`, `hyphen.case`).
+                e.code_to_unicode_name(code as u8).and_then(|name| {
+                    glyph_name_to_unicode(name)
+                        .map(BfString::Char)
+                        .or_else(|| glyph_name_to_text(name))
+                })
+            }
             Kind::Standard(s) => s.char_code_to_unicode(code as u8).map(BfString::Char),
         }
 
@@ -220,6 +233,12 @@ struct EmbeddedKind {
     cached_mappings: RefCell<HashMap<u8, GlyphId>>,
     /// PostScript name from the PDF.
     postscript_name: Option<String>,
+    /// PdfCraft patch (79): the text each glyph's `post` table name stands for, for the names
+    /// that stand for any (`glyph_name_text`).
+    text_names: HashMap<GlyphId, String>,
+    /// PdfCraft patch (101): whether the font may take the Mac OS Roman reading at all, worked out
+    /// once when it is loaded (`EmbeddedKind::mac_roman_name`).
+    mac_roman_eligible: bool,
 }
 
 impl EmbeddedKind {
@@ -236,6 +255,10 @@ impl EmbeddedKind {
             .and_then(|d| OpenTypeFontBlob::new(Arc::new(d.to_vec()), 0))?;
 
         let glyph_names = base_font.glyph_names();
+        let text_names = glyph_names
+            .iter()
+            .filter_map(|(name, glyph)| Some((*glyph, glyph_name_text(name)?)))
+            .collect();
 
         let cff_font_blob = base_font
             .font_ref()
@@ -246,6 +269,27 @@ impl EmbeddedKind {
         let postscript_name = dict
             .get::<Name<'_>>(BASE_FONT)
             .map(|n| strip_subset_prefix(n.as_str()).to_string());
+
+        // PdfCraft patch (101): the font names no base encoding, not even one this reader doesn't
+        // know (which `read_encoding` reads as the built-in one), and isn't Symbol or ZapfDingbats,
+        // whose built-in encodings aren't Latin (ISO 32000-2 §9.6.6.1). Both as the editor's
+        // `unicode_map` decides them, Symbol and ZapfDingbats recognised by name as there.
+        let names_base_encoding = dict.get::<Name<'_>>(ENCODING).is_some()
+            || dict
+                .get::<Dict<'_>>(ENCODING)
+                .is_some_and(|d| d.get::<Name<'_>>(BASE_ENCODING).is_some());
+        let symbolic_builtin = dict.get::<Name<'_>>(BASE_FONT).is_some_and(|n| {
+            let name = n.as_str();
+            let flat: String = name
+                .rsplit('+')
+                .next()
+                .unwrap_or(name)
+                .chars()
+                .filter(char::is_ascii_alphanumeric)
+                .map(|c| c.to_ascii_lowercase())
+                .collect();
+            flat.contains("symbol") || flat.contains("zapf") || flat.contains("dingbat")
+        });
 
         Some(Self {
             base_font,
@@ -258,6 +302,8 @@ impl EmbeddedKind {
             encoding,
             cached_mappings: RefCell::new(HashMap::new()),
             postscript_name,
+            text_names,
+            mac_roman_eligible: !names_base_encoding && !symbolic_builtin,
         })
     }
 
@@ -291,10 +337,35 @@ impl EmbeddedKind {
             // `Encoding::text_alias`.
             .or_else(|| self.encoding.text_alias(code))
             .or_else(|| self.encoding.map_code(code))
+            // PdfCraft patch (101): see `EmbeddedKind::mac_roman_name`.
+            .or_else(|| self.mac_roman_name(code))
             // The last resort reads the code as WinAnsi whatever the font said, so it takes the
             // same aliasing.
             .or_else(|| Encoding::WinAnsi.text_alias(code))
             .or_else(|| win_ansi::get(code))
+    }
+
+    /// PdfCraft patch (79): a symbolic font without an encoding selects its glyphs through its
+    /// own `cmap`, so its codes need not mean anything in WinAnsi. FrameMaker files distilled
+    /// with Distiller 3 number them in the Macintosh glyph order, 29 below ASCII, and read as
+    /// WinAnsi `Solid` came out as `6ROLG` (#3962). The name the `post` table gives the glyph the
+    /// code selects says what it is, as MuPDF reads it, and as pdfcraft-fonts reads it for the
+    /// editor. `None` when the font is non-symbolic, has an encoding or a `/Differences` entry
+    /// for the code, selects no glyph for it, or names it with no text: the code is then read as
+    /// before.
+    fn symbolic_text(&self, code: u8) -> Option<&str> {
+        if self.is_non_symbolic()
+            || !matches!(self.encoding, Encoding::BuiltIn)
+            || self.differences.contains_key(&code)
+            || self.cff_blob.is_some()
+        {
+            return None;
+        }
+        let glyph = self.map_code(code);
+        if glyph == GlyphId::NOTDEF {
+            return None;
+        }
+        self.text_names.get(&glyph).map(String::as_str)
     }
 
     fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
@@ -400,6 +471,68 @@ impl EmbeddedKind {
         glyph
     }
 
+    /// PdfCraft patch (101): the Mac OS Roman glyph name a code of a symbolic font without an
+    /// encoding or glyph names reads as, when two things say the code is Mac OS Roman:
+    ///
+    /// - its Macintosh Roman (1, 0) `cmap` subtable selects the glyph the code draws. ISO
+    ///   32000-2 §9.6.5.4 has single bytes "look up the associated glyph descriptions" there, and
+    ///   has a (3, 0) subtable map "the single-byte codes in the (1, 0) subtable" prepended with
+    ///   0xF0;
+    /// - the glyph sits where the standard Macintosh glyph order (the 258 names of a version 1.0
+    ///   `post` table) puts that character. Fonts distilled from Macintosh originals keep that
+    ///   order and drop the names (`post` version 3.0): pdf.js's issue2017r.pdf draws code 0x88
+    ///   with glyph 106, `agrave`, Mac OS Roman 0x88.
+    ///
+    /// The second test is needed: Windows subsets in the same order carry a (1, 0) subtable too,
+    /// but their codes are WinAnsi (code 0x92 draws glyph 183, `quoteright`, not Mac OS Roman's
+    /// `iacute`), and reading every such code as Mac OS Roman turned "USDA’s" into "USDAís".
+    /// A font that names its glyphs in its `post` table needn't keep the order (a Wingdings subset
+    /// draws code 0x83 with glyph 101, `Eacute` in the order, which it names `threesans`).
+    /// `None` when the font is non-symbolic, names a base encoding (one this reader doesn't know
+    /// too), is Symbol or ZapfDingbats (whose
+    /// built-in encodings aren't Latin, ISO 32000-2 §9.6.6.1; recognised by name as the editor's
+    /// `unicode_map` recognises them), is a CFF program, names its glyphs, or either test fails
+    /// (SAS's AMT fonts carry a wrong (1, 0) table, #4156): the code then reads as before. Glyph
+    /// selection is unchanged.
+    fn mac_roman_name(&self, code: u8) -> Option<&'static str> {
+        if self.is_non_symbolic()
+            || !self.mac_roman_eligible
+            || !matches!(self.encoding, Encoding::BuiltIn)
+            || self.cff_blob.is_some()
+            || !self.glyph_names.is_empty()
+        {
+            return None;
+        }
+        let glyph = self.map_code(code);
+        if glyph == GlyphId::NOTDEF {
+            return None;
+        }
+        let cmap = self.base_font.font_ref().cmap().ok()?;
+        let mac = cmap.encoding_records().iter().find_map(|record| {
+            if record.platform_id() == PlatformId::Macintosh && record.encoding_id() == 0 {
+                record
+                    .subtable(cmap.offset_data())
+                    .ok()?
+                    .map_codepoint(code)
+            } else {
+                None
+            }
+        })?;
+        if mac != glyph {
+            return None;
+        }
+        let standard = match *DEFAULT_GLYPH_NAMES.get(usize::try_from(glyph.to_u32()).ok()?)? {
+            // The order's name for Mac OS Roman 0xCA; the tables here call it `nbspace`.
+            "nonbreakingspace" => "nbspace",
+            name => name,
+        };
+        let name = mac_os_roman::get(code).or_else(|| mac_roman::get(code))?;
+        if name != standard {
+            return None;
+        }
+        Encoding::MacRoman.text_alias(code).or(Some(name))
+    }
+
     fn glyph_width(&self, code: u8) -> f32 {
         match self.widths.get(code as usize).copied() {
             Some(Width::Value(w)) => w,
@@ -418,6 +551,38 @@ impl EmbeddedKind {
 pub(crate) enum Width {
     Value(f32),
     Missing,
+}
+
+/// PdfCraft patch (79): the text a glyph name stands for, by the rules of the Adobe Glyph List
+/// specification (ISO 32000-2 §9.10.2): drop any suffix from the first `.` (`a.ss01` is `a`),
+/// then each `_`-separated component is a list name, `uni` and groups of exactly four
+/// uppercase hex digits, or `u` and four to six. A value in the surrogate range or past
+/// U+10FFFF is no character. `None` when any component is none of these (`uni20ac`, `uni65`,
+/// `u65`). Each component gives at least one character, so the text is never empty.
+fn glyph_name_text(name: &str) -> Option<String> {
+    // An empty stem (`.notdef`) is no list name and no number, so it gives `None` below.
+    let stem = name.split('.').next()?;
+    // `from_str_radix` alone would also take a sign (`uni+041`) and lowercase digits, which the
+    // specification's forms don't have.
+    let hex = |h: &str| !h.is_empty() && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'F'));
+    let mut out = String::new();
+    for part in stem.split('_') {
+        if let Some(text) = glyph_names::get(part) {
+            out.push_str(text);
+        } else if let Some(digits) = part.strip_prefix("uni").filter(|h| hex(h)) {
+            // A group short of four digits isn't there to take, so `uni041` gives `None`.
+            for i in (0..digits.len()).step_by(4) {
+                let unit = digits.get(i..i.saturating_add(4))?;
+                out.push(char::from_u32(u32::from_str_radix(unit, 16).ok()?)?);
+            }
+        } else {
+            let digits = part
+                .strip_prefix('u')
+                .filter(|h| (4..=6).contains(&h.len()) && hex(h))?;
+            out.push(char::from_u32(u32::from_str_radix(digits, 16).ok()?)?);
+        }
+    }
+    Some(out)
 }
 
 pub(crate) fn read_widths(dict: &Dict<'_>, descriptor: &Dict<'_>) -> Option<(Vec<Width>, f32)> {
@@ -509,5 +674,55 @@ pub(crate) fn read_encoding(dict: &Dict<'_>) -> (Encoding, HashMap<u8, String>) 
             get_encoding_base(dict, Name::new_unescaped(ENCODING)),
             HashMap::new(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::glyph_name_text;
+
+    /// PdfCraft patch (79): glyph names read by the glyph list specification's rules.
+    #[test]
+    fn glyph_names_read_by_the_adobe_glyph_list_rules() {
+        for (name, expected) in [
+            ("a", "a"),
+            ("a.ss01", "a"),
+            ("less_equal.liga", "<="),
+            ("uni0041", "A"),
+            ("uni00410042", "AB"),
+            ("u0041", "A"),
+            ("u1F600", "\u{1F600}"),
+        ] {
+            assert_eq!(glyph_name_text(name).as_deref(), Some(expected), "{name}");
+        }
+        for name in [
+            "",
+            ".notdef",
+            ".alt",
+            "EMquad",
+            "uni041",
+            "uni00410",
+            "uni004G",
+            "uni+041",
+            "u+041",
+            "uniD800",
+            "u041",
+            "u0000041",
+            "u004G",
+            "a_EMquad",
+            // PdfCraft patch (79): the glyph list specification's hex digits are uppercase only.
+            "uni20ac",
+            "uni004100e9",
+            "u1f600",
+            "u20ac",
+            "a_uni20ac",
+            "uni65",
+            "u65",
+            "uni+065",
+            "uDFFF",
+            "u110000",
+        ] {
+            assert_eq!(glyph_name_text(name), None, "{name}");
+        }
     }
 }

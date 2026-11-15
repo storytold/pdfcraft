@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "name": "Document Properties: newer-edit",
+  "steps": [
+    {
+      "event": {"op": "open"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "type", "field": "Title", "value": "Stale"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "external_edit", "key": "Title", "value": "Newer"},
+      "expect": {"error": null, "properties_open": false, "draft": null, "document": {"title": "Newer", "undo": "Change Title", "redo": null}, "notice": "The document changed. Reopen Document Properties to edit the current version."}
+    },
+    {
+      "event": {"op": "open"},
+      "expect": {"error": null, "draft": {"title": "Newer"}}
+    },
+    {
+      "event": {"op": "click", "label": "Close"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "undo"},
+      "expect": {"error": null, "document": {"title": "Original", "undo": null}}
+    }
+  ]
+}

@@ -23,6 +23,45 @@ pub(crate) struct Hotbar {
     search: String,
     #[serde(skip)]
     picker_open: bool,
+    /// Where the Hotbar tools window stays while the Toolbar size slider is being adjusted.
+    #[serde(skip)]
+    picker_drag_pos: Option<egui::Pos2>,
+    /// The Toolbar size slider is being adjusted with the keyboard (until it loses focus).
+    #[serde(skip)]
+    keyboard_sizing: bool,
+    /// The pass the Hotbar tools window was last drawn on.
+    #[serde(skip)]
+    picker_shown: Option<u64>,
+}
+
+impl Hotbar {
+    /// The Hotbar tools window is over the pages: open, and drawn on the last pass. Read mode, full
+    /// screen, Organize and a document that hides the toolbars don't draw the hotbar, and a window
+    /// they hide holds no keys.
+    pub(crate) fn picker_over_pages(&self, ctx: &egui::Context) -> bool {
+        self.picker_open && self.picker_shown.is_some_and(|pass| pass.saturating_add(1) >= ctx.cumulative_pass_nr())
+    }
+
+    /// Closes the Hotbar tools window when the hotbar is `hidden` on this pass (Read mode or full
+    /// screen, which a native menu's click may have turned on just now), or the last pass didn't
+    /// draw it (Organize, or a document that hides the toolbars). Left open, it would hold the keys of the pass that hides it, and come
+    /// back over the pages on the pass that shows the hotbar again, after that pass's page keys
+    /// had been read without it.
+    pub(crate) fn close_hidden_picker(&mut self, ctx: &egui::Context, hidden: bool) {
+        if self.picker_open && (hidden || !self.picker_over_pages(ctx)) {
+            self.close_picker();
+        }
+    }
+
+    /// Closes the Hotbar tools window.
+    pub(crate) fn close_picker(&mut self) {
+        self.picker_open = false;
+        self.picker_shown = None;
+        // Closed on a pass that doesn't draw the hotbar, `show` can't end a size adjustment: the
+        // next opening would start at the held position.
+        self.picker_drag_pos = None;
+        self.keyboard_sizing = false;
+    }
 }
 
 impl Default for Hotbar {
@@ -38,6 +77,9 @@ impl Default for Hotbar {
             placed: false,
             search: String::new(),
             picker_open: false,
+            picker_drag_pos: None,
+            keyboard_sizing: false,
+            picker_shown: None,
         }
     }
 }
@@ -112,7 +154,7 @@ impl Hotbar {
 fn settings_button(ui: &mut egui::Ui, cell: f32, picker_open: &mut bool) -> bool {
     let settings = ui
         .push_id("hotbar-settings", |ui| {
-            icons::button(ui, "settings", cell, false, tl!("Hotbar settings")).on_hover_text(tl!("Hotbar settings / add tools"))
+            icons::labeled_button(ui, "settings", cell, false, tl!("Hotbar settings"), tl!("Hotbar settings / add tools"))
         })
         .inner;
     if settings.clicked() {
@@ -172,6 +214,12 @@ fn core_tool_buttons(ui: &mut egui::Ui, app: &mut PdfCraftApp, cell: f32, popup_
     if icons::button(ui, "hand", cell, app.quick_tool == QuickTool::Hand, tl!("Hand (H)")).clicked() {
         app.quick_tool = QuickTool::Hand;
     }
+    let may_crop = command("page.crop").is_some_and(|spec| app.command_enabled(spec));
+    ui.add_enabled_ui(may_crop, |ui| {
+        if icons::button(ui, "crop", cell, app.quick_tool == QuickTool::Crop, tl!("Crop pages")).clicked() {
+            app.execute("page.crop");
+        }
+    });
     // Comment ▸, Highlight ▸, Draw ▸ (Acrobat's comment toolbar groups). Clicking a
     // group selects its last-used tool; clicking it again opens the flyout.
     for g in 0..comments::GROUPS.len() {
@@ -323,6 +371,96 @@ fn selected_fill_text(app: &PdfCraftApp) -> Option<(usize, usize)> {
         .then_some((page, annotation))
 }
 
+/// Fill & Sign's Border controls for typed text: its width, colour and shape, for the selected
+/// text (`picked`), or for new text when none is selected. The label shows in a vertical bar, as the
+/// font size's does.
+fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: Option<(usize, usize)>, vertical: bool) {
+    // The selected text's own border (Comment Properties may have changed it
+    // since): the controls below show it and change only it. Without one they
+    // set what new text gets until PdfCraft quits; Make Current Properties
+    // Default on typed text keeps it.
+    let selected = picked.and_then(|(page, annotation)| {
+        let p = app.active_ids().and_then(|(_, id)| app.session.get(id))?.comment_props(page, annotation)?;
+        let own = crate::fill_sign::TextBorder { width: p.width.unwrap_or(0.0), color: p.border_color, shape: p.border_shape.unwrap_or_default() };
+        Some((page, annotation, own))
+    });
+    let was = selected.map_or(
+        crate::fill_sign::TextBorder { width: app.fill_text_border, color: app.fill_text_border_color, shape: app.fill_text_border_shape },
+        |(_, _, own)| own,
+    );
+    let mut border = was;
+    // A border around the text, in its colour; the text keeps its place.
+    let border_label = |w: f64| if w > 0.0 { format!("{w} pt") } else { tl!("None").to_string() };
+    let label = vertical.then(|| ui.label(tl!("Border:")));
+    let combo = craft_ui::ComboBox::from_id_salt("fill-text-border")
+        .selected_text(border_label(was.width))
+        .width(72.0)
+        .show_ui(ui, |ui| {
+            for w in crate::fill_sign::TEXT_BORDERS {
+                ui.selectable_value(&mut border.width, w, border_label(w));
+            }
+        })
+        .response;
+    match label {
+        Some(label) => {
+            combo.labelled_by(label.id);
+        }
+        None => {
+            combo.on_hover_text(tl!("Border:"));
+        }
+    }
+    // The border's own colour (the text's unless picked).
+    if was.width > 0.0
+        && let Some(color) = comments::border_colour_button(ui, was.color, [0.0; 3])
+    {
+        border.color = color;
+    }
+    // Its shape: an oval or a circle goes around the text, which keeps its place.
+    if was.width > 0.0 {
+        craft_ui::ComboBox::from_id_salt("fill-text-border-shape")
+            .selected_text(tl!(was.shape.name()))
+            .width(96.0)
+            .show_ui(ui, |ui| {
+                for shape in pdfcraft_engine::BorderShape::ALL {
+                    ui.selectable_value(&mut border.shape, shape, tl!(shape.name()));
+                }
+            })
+            .response
+            .on_hover_text(tl!("Border shape"));
+    }
+    // No border, no shape: an oval or a circle left without its line would
+    // keep its box grown around a shape that isn't drawn.
+    if border.width <= 0.0 {
+        border.shape = pdfcraft_engine::BorderShape::Rectangle;
+    }
+    match selected {
+        Some((page, index, _)) => {
+            // One undo step for what one choice changed (Border ▸ None takes a
+            // circle's line and its shape).
+            let mut edits = Vec::new();
+            if border.width != was.width {
+                edits.push(Edit::StyleAnnotation { page, index, color: None, opacity: None, width: Some(border.width), endings: None });
+            }
+            if border.color != was.color {
+                edits.push(Edit::BorderColorAnnotation { page, index, color: border.color });
+            }
+            if border.shape != was.shape {
+                edits.push(Edit::BorderShapeAnnotation { page, index, shape: border.shape });
+            }
+            if edits.len() > 1 {
+                app.apply_edit(Edit::Batch { label: "Change comment properties".into(), edits });
+            } else if let Some(edit) = edits.pop() {
+                app.apply_edit(edit);
+            }
+        }
+        None => {
+            app.fill_text_border = border.width;
+            app.fill_text_border_color = border.color;
+            app.fill_text_border_shape = border.shape;
+        }
+    }
+}
+
 /// Extra controls rendered below/beside the buttons when a comment or fill tool is active.
 fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, vertical: bool) {
     let current_fill = match app.quick_tool {
@@ -365,22 +503,40 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
         {
             app.apply_edit(Edit::FontSizeAnnotation { page, index, size });
         }
+        // After the text's own controls, so they keep their place in a bar that scrolls.
+        fill_text_border_controls(ui, app, selected_fill_text(app), vertical);
     }
     if let QuickTool::Comment(tool) = app.quick_tool {
         controls_divider(ui, t, vertical);
+        // Text boxes and callouts: the border's own colour, for new ones and the selected one
+        // this tool made (not a locked one). With one selected the button shows its colours
+        // (Comment Properties may have changed them), else the tool's.
+        if tool.has_border_color() {
+            let style = app.comment_prefs.style(tool);
+            let selected = app.active_ids().and_then(|(index, id)| {
+                let (page, annotation) = app.views.get(index)?.comments.selected?;
+                let doc = app.session.get(id)?;
+                let made = doc.allows_annotation()
+                    && doc.info.annotations.iter().any(|a| a.page == page && a.index == annotation && !a.locked && comments::made_by(a, tool));
+                made.then(|| (page, annotation, doc.comment_props(page, annotation)))
+            });
+            let (shown, text) = match selected.as_ref().and_then(|(.., p)| p.as_ref()) {
+                Some(p) => (p.border_color, p.color.unwrap_or(style.color)),
+                None => (style.border_color, style.color),
+            };
+            if let Some(color) = comments::border_colour_button(ui, shown, text) {
+                app.comment_prefs.set_border_color(tool, color);
+                if let Some((page, annotation, _)) = selected {
+                    app.apply_edit(Edit::BorderColorAnnotation { page, index: annotation, color });
+                }
+            }
+        }
+        // The selected comments this tool made take the colour too (locked ones keep theirs).
         if let Some(color) = comments::quick_bar_controls(ui, tool, &mut app.comment_prefs)
-            && let Some((index, id)) = app.active_ids()
-            && let Some((page, annotation)) = app.views.get(index).and_then(|view| view.comments.selected)
-            && app.session.get(id).is_some_and(|doc| {
-                doc.allows_annotation()
-                    && doc
-                        .info
-                        .annotations
-                        .iter()
-                        .any(|a| a.page == page && a.index == annotation && !a.is_reply() && !a.locked && comments::made_by(a, tool))
-            })
+            && let Some((_, id)) = app.active_ids()
+            && app.session.get(id).is_some_and(|doc| doc.allows_annotation())
         {
-            app.apply_edit(Edit::StyleAnnotation { page, index: annotation, color: Some(color), opacity: None, width: None, endings: None });
+            app.colour_selection(color, |a| comments::made_by(a, tool));
         }
     }
 }
@@ -429,13 +585,38 @@ fn segmented_dock_picker(ui: &mut egui::Ui, bar: &mut Hotbar, t: &Tokens) {
     }
 }
 
+/// The arrow keys the Toolbar size slider answers to while it has focus.
+const SIZE_SLIDER_KEYS: [egui::Key; 4] = [egui::Key::ArrowLeft, egui::Key::ArrowRight, egui::Key::ArrowUp, egui::Key::ArrowDown];
+
+/// Whether an arrow key was pressed this frame. Read it before the slider is added, because the
+/// slider consumes the keys it acts on.
+fn size_slider_key_pressed(ui: &egui::Ui) -> bool {
+    ui.input(|input| SIZE_SLIDER_KEYS.iter().any(|key| input.key_pressed(*key)))
+}
+
+/// Whether the Toolbar size slider is being adjusted, which keeps its picker from moving.
+///
+/// A pointer adjustment lasts while the button is held. A keyboard one starts with the first arrow
+/// key press that changes the value and lasts until the slider loses focus, so the picker does not
+/// jump between presses. `keyboard` carries that state from frame to frame. Focusing the slider, or
+/// releasing the pointer on it, does not count as a keyboard adjustment.
+fn size_slider_adjusting(slider: &egui::Response, key_pressed: bool, keyboard: &mut bool) -> bool {
+    let pointer = slider.is_pointer_button_down_on();
+    if pointer || !slider.has_focus() {
+        *keyboard = false;
+    } else if key_pressed && slider.changed() {
+        *keyboard = true;
+    }
+    pointer || *keyboard
+}
+
 /// Draw the unified floating or side-docked toolbar, combining quick actions, core tools, and custom shortcuts.
 pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let mut bar = std::mem::take(&mut app.hotbar);
     bar.normalize();
     let t = Tokens::get(&ctx);
-    let id = egui::Id::unique("quick-bar");
+    let id = app.panes.area_id("quick-bar");
     let full_side = bar.full_side && bar.dock.is_some();
     let bounds = if full_side { area } else { area.shrink(10.0) };
     if let Some(side) = bar.dock.clone() {
@@ -617,7 +798,11 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
     } else {
         bar_rect.top().clamp(screen.top(), (screen.bottom() - 480.0).max(screen.top()))
     };
-    let picker_pos = egui::pos2(picker_x.clamp(screen.left(), (screen.right() - outer_width).max(screen.left())), picker_y);
+    // Resizing the bar can move or flip its picker; hold the picker in place until the pointer is
+    // released, or, for the keyboard, until the slider loses focus.
+    let picker_pos =
+        bar.picker_drag_pos.unwrap_or_else(|| egui::pos2(picker_x.clamp(screen.left(), (screen.right() - outer_width).max(screen.left())), picker_y));
+    let mut sizing = false;
     let mut close_dialog = false;
     let picker_resp = egui::Window::new(tl!("Hotbar tools"))
         .id(picker_id)
@@ -659,7 +844,9 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                 ui.label(egui::RichText::new(tl!("Toolbar size")).size(12.5).color(t.text));
                 let slider_width = (ui.available_width() - 55.0).clamp(50.0, 140.0);
                 ui.spacing_mut().slider_width = slider_width;
-                ui.add(egui::Slider::new(&mut bar.button_size, 24.0..=64.0).show_value(false));
+                let key_pressed = size_slider_key_pressed(ui);
+                let slider = ui.add(egui::Slider::new(&mut bar.button_size, 24.0..=64.0).show_value(false));
+                sizing = size_slider_adjusting(&slider, key_pressed, &mut bar.keyboard_sizing);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(egui::RichText::new(format!("{:.0} px", bar.button_size)).size(12.0).color(t.text_muted));
                 });
@@ -752,11 +939,16 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
     if close_dialog {
         picker_open = false;
     }
+    if !picker_open {
+        bar.keyboard_sizing = false;
+    }
+    bar.picker_drag_pos = (picker_open && sizing).then_some(picker_pos);
     ctx.data_mut(|data| {
         data.insert_temp(id, shown.response.rect.size());
         data.insert_temp(egui::Id::unique("custom-hotbar"), shown.response.rect.size());
     });
     bar.picker_open = picker_open;
+    bar.picker_shown = picker_open.then(|| ctx.cumulative_pass_nr());
     app.hotbar = bar;
     if let Some(id) = run {
         app.execute(id);
@@ -766,6 +958,140 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    // Build a harness that draws the hotbar docked to `$side`, with its tools picker open.
+    macro_rules! hotbar_harness {
+        ($side:expr, $vertical:expr, $full_side:expr) => {{
+            let mut app = PdfCraftApp::new();
+            app.hotbar.place($side).unwrap();
+            app.hotbar.vertical = $vertical;
+            app.hotbar.full_side = $full_side;
+            app.hotbar.position = [0.5, 0.5];
+            app.hotbar.picker_open = true;
+            let mut fonts = false;
+            let mut harness = Harness::builder().with_size(vec2(1000.0, 900.0)).with_accessibility_check(false).build_ui_state(
+                move |ui, app: &mut PdfCraftApp| {
+                    if !fonts {
+                        ui.ctx().set_fonts(theme::font_definitions());
+                        fonts = true;
+                    }
+                    show(app, ui.max_rect(), None, ui);
+                },
+                app,
+            );
+            harness.run_steps(5);
+            harness
+        }};
+    }
+
+    // Drag the size slider from `$from` to `$to` and release, checking on every step that the picker
+    // (found through its slider) has not left `$pinned`.
+    macro_rules! drag_slider_pinned {
+        ($h:expr, $pinned:expr, $from:expr, $to:expr, $what:expr) => {{
+            let (from, to): (egui::Pos2, egui::Pos2) = ($from, $to);
+            $h.hover_at(from);
+            $h.run_steps(1);
+            $h.drag_at(from);
+            $h.run_steps(1);
+            for step in 1..=8 {
+                $h.hover_at(from + (to - from) * (step as f32 / 8.0));
+                $h.run_steps(2);
+                assert_eq!($h.get_by_role(egui::accesskit::Role::Slider).rect(), $pinned, "{}: picker moved during drag", $what);
+            }
+            $h.drop_at(to);
+            $h.run_steps(3);
+        }};
+    }
+
+    /// Dragging the Toolbar size slider with the pointer keeps the picker where it is, in both
+    /// directions and in every layout, and the picker takes its recalculated place after release.
+    #[test]
+    fn picker_stays_put_while_resizing_hotbar() {
+        for (side, vertical, full_side) in [
+            ("top", false, false),
+            ("bottom", false, false),
+            ("float", false, false),
+            ("top", false, true),
+            ("bottom", false, true),
+            ("left", true, false),
+            ("right", true, false),
+            ("float", true, false),
+            ("left", true, true),
+            ("right", true, true),
+        ] {
+            let what = format!("{side}, vertical={vertical}, strip={full_side}");
+            let mut h = hotbar_harness!(side, vertical, full_side);
+
+            // Drag the slider up to the largest size.
+            let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
+            drag_slider_pinned!(h, slider, slider.left_center() + vec2(slider.width() * 0.2, 0.0), slider.right_center() - vec2(2.0, 0.0), what);
+            assert!(h.state().hotbar.button_size > 60.0, "{what}: slider did not reach the upper end");
+            assert!(h.state().hotbar.picker_drag_pos.is_none(), "{what}: release must unpin the picker");
+            let resized = h.get_by_role(egui::accesskit::Role::Slider).rect();
+            assert_ne!(resized, slider, "{what}: picker should take its new place after release");
+            if !vertical && !full_side {
+                assert!(resized.left() < slider.left(), "{what}: picker should move to the left after release");
+            }
+
+            // And back down to the smallest.
+            drag_slider_pinned!(h, resized, resized.right_center() - vec2(2.0, 0.0), resized.left_center() + vec2(2.0, 0.0), what);
+            assert!(h.state().hotbar.button_size < 28.0, "{what}: slider did not reach the lower end");
+            assert!(h.state().hotbar.picker_drag_pos.is_none(), "{what}: release must unpin the picker");
+            let restored = h.get_by_role(egui::accesskit::Role::Slider).rect();
+            assert_ne!(restored, resized, "{what}: picker should take its new place after the reverse drag");
+            if !vertical && !full_side {
+                assert!(restored.left() > resized.left(), "{what}: picker should return to the right");
+            }
+        }
+    }
+
+    /// Adjusting the Toolbar size slider with the arrow keys also keeps the picker where it is, until
+    /// the slider loses focus.
+    #[test]
+    fn picker_stays_put_while_resizing_hotbar_with_keyboard() {
+        for (side, vertical, full_side) in [("top", false, false), ("float", false, false), ("bottom", false, true), ("left", true, false)] {
+            let what = format!("{side}, vertical={vertical}, strip={full_side}");
+            let mut h = hotbar_harness!(side, vertical, full_side);
+            let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
+            h.get_by_role(egui::accesskit::Role::Slider).focus();
+            h.run_steps(2);
+            assert!(h.state().hotbar.picker_drag_pos.is_none(), "{what}: focusing the slider alone must not pin the picker");
+
+            // The slider moves about a pixel per key press, so this crosses its whole travel.
+            for _ in 0..150 {
+                h.key_press(egui::Key::ArrowRight);
+                h.run_steps(1);
+                assert_eq!(h.get_by_role(egui::accesskit::Role::Slider).rect(), slider, "{what}: picker moved during keyboard resize");
+            }
+            assert!(h.state().hotbar.button_size > 60.0, "{what}: keys did not reach the upper end");
+            assert!(h.state().hotbar.picker_drag_pos.is_some(), "{what}: picker must stay pinned while the slider has focus");
+
+            // Moving focus away ends the adjustment.
+            h.key_press(egui::Key::Tab);
+            h.run_steps(3);
+            assert!(h.state().hotbar.picker_drag_pos.is_none(), "{what}: losing focus must unpin the picker");
+            assert_ne!(h.get_by_role(egui::accesskit::Role::Slider).rect(), slider, "{what}: picker should take its new place after focus leaves");
+        }
+    }
+
+    /// A picker closed while the hotbar isn't drawn (Read mode, full screen, Organize) ends a size
+    /// adjustment too, so it doesn't open again at the position it was held at.
+    #[test]
+    fn closing_the_picker_ends_a_size_adjustment() {
+        let mut h = hotbar_harness!("top", false, false);
+        h.get_by_role(egui::accesskit::Role::Slider).focus();
+        h.run_steps(2);
+        for _ in 0..20 {
+            h.key_press(egui::Key::ArrowRight);
+            h.run_steps(1);
+        }
+        assert!(h.state().hotbar.picker_drag_pos.is_some() && h.state().hotbar.keyboard_sizing, "pinned while the keys resize the bar");
+        // What `close_hidden_picker` does on a pass that hides the hotbar: `show` doesn't run.
+        h.state_mut().hotbar.close_picker();
+        assert!(h.state().hotbar.picker_drag_pos.is_none(), "closing ends the held position");
+        assert!(!h.state().hotbar.keyboard_sizing, "closing ends the keyboard adjustment");
+    }
 
     #[test]
     fn hotbar_validation_and_placement() {

@@ -164,7 +164,7 @@ fn edges_are_primary_finite_in_order_and_capped() {
 }
 
 /// The page modules: the per-page chain in `canvas::document_area` and what it calls.
-const PAGE_MODULES: [&str; 37] = [
+const PAGE_MODULES: [&str; 38] = [
     "canvas.rs",
     "canvas/page_input.rs",
     "canvas/area.rs",
@@ -182,6 +182,7 @@ const PAGE_MODULES: [&str; 37] = [
     "tools/comments/input.rs",
     "tools/comments/menu.rs",
     "tools/comments/paint.rs",
+    "tools/comments/popups.rs",
     "tools/comments/state.rs",
     "tools/forms_ui.rs",
     "tools/prepare.rs",
@@ -207,7 +208,7 @@ const PAGE_MODULES: [&str; 37] = [
 /// What a file that acts on the pages uses: the pointer, a tool's or the comments' page context,
 /// what a press is to a page, the router's hits and owners, or the router itself. Such a file is a
 /// page module. One that acts on the pages through the page view's response and a bare point alone
-/// uses none of them (`canvas/image_pick.rs`): PAGE_MODULES lists it by hand.
+/// would use none of them, and PAGE_MODULES would list it by hand.
 const PAGE_MODULE_MARKS: [&str; 6] = ["PagePointer", "PageToolContext", "PageCx", "PagePress", "page_router::", ".router."];
 
 /// The router's own files, which define what page modules use.
@@ -241,14 +242,17 @@ const RAW_READS: [&str; 21] = [
 
 /// Functions in the page modules that are not page input and read egui's pointer state
 /// themselves: (file, function, why).
-const NOT_PAGE_INPUT: [(&str, &str, &str); 10] = [
+const NOT_PAGE_INPUT: [(&str, &str, &str); 13] = [
     ("canvas/area.rs", "zoom_anchor", "a pinch zooms the whole view, and is read before the pages' widget exists"),
     ("canvas/area.rs", "drawing_edge_pointer", "scrolls the view at its edges, read before the pages' widget exists"),
     ("canvas/area.rs", "glide_interrupted", "a press anywhere stops the touchpad's glide"),
     ("canvas/area.rs", "presentation_click", "full screen's click to turn the page, read before the pages' widget exists"),
     ("canvas/bars.rs", "page_size_hint", "the page size hint sits in the view's corner, not on a page"),
     ("canvas/organize.rs", "organize_grid", "Organize Pages shows thumbnails, not pages"),
+    ("tools/comments/popups.rs", "popups", "the comment pop-up windows are Areas of their own over the page"),
     ("tools/forms_ui.rs", "overlay", "the field editor is an Area of its own over the page"),
+    ("tools/forms_ui.rs", "choice_list", "a drop-down's open list is an Area of its own over the page"),
+    ("tools/forms_ui.rs", "scroll_bar", "the scroll bar of a drop-down's open list, in its Area over the page"),
     ("tools/content_ui.rs", "editor", "the added-text editor is an Area of its own over the page"),
     ("tools/edit_text_ui.rs", "overlay", "the paragraph editor is an Area of its own over the page"),
     ("tools/fill_sign/scan.rs", "scan_tab", "the signature dialog's Scan tab"),
@@ -260,7 +264,11 @@ fn declares(line: &str) -> Option<&str> {
     let mut rest = line;
     loop {
         let before = rest;
-        for prefix in ["pub(crate) ", "pub(super) ", "pub ", "const ", "async ", "unsafe "] {
+        // `pub(crate)`, `pub(super)`, `pub(in crate::canvas)` and the like.
+        if let Some(scoped) = rest.strip_prefix("pub(") {
+            rest = scoped.split_once(") ").map_or(rest, |(_, after)| after);
+        }
+        for prefix in ["pub ", "const ", "async ", "unsafe "] {
             rest = rest.strip_prefix(prefix).unwrap_or(rest);
         }
         if rest == before {
@@ -271,14 +279,32 @@ fn declares(line: &str) -> Option<&str> {
     rest.find(|c: char| !(c.is_alphanumeric() || c == '_')).map(|end| &rest[..end])
 }
 
+/// egui's drag start, which counts every button: a right-button drag would start what a left one
+/// does. Page modules read `PagePointer::drag_started`, the primary button's, or ask for that button
+/// (`drag_started_by`).
+const ANY_BUTTON_DRAG: [&str; 1] = [".drag_started()"];
+
+/// Functions in the page modules that start a drag of a widget of their own, not of the pages:
+/// (file, function, why).
+const NOT_PAGE_DRAGS: [(&str, &str, &str); 3] = [
+    ("canvas/organize.rs", "drag_pages", "Organize Pages drags thumbnails, not pages"),
+    ("tools/fill_sign.rs", "signature_pad", "the signature dialog's drawing pad"),
+    ("tools/fill_sign/scan.rs", "scan_tab", "the signature dialog's Scan tab"),
+];
+
 /// Ways to set egui's cursor.
 const CURSOR_WRITES: [&str; 4] = ["set_cursor_icon(", ".cursor_icon = ", "on_hover_cursor(", "on_hover_and_drag_cursor("];
 
 /// Functions in the page modules that set a cursor other than the pages': (file, function, why).
-const NOT_PAGE_CURSOR: [(&str, &str, &str); 3] = [
+const NOT_PAGE_CURSOR: [(&str, &str, &str); 4] = [
     ("tools/fill_sign/scan.rs", "scan_tab", "the signature dialog's Scan tab"),
     ("tools/edit_text_ui.rs", "overlay", "the paragraph editor is an Area of its own over the page, drawn after the pages' cursor is set"),
     ("tools/calc_order_ui.rs", "panel", "the Calculation order panel, whose rows are dragged to reorder them"),
+    (
+        "tools/comments/popups.rs",
+        "popups",
+        "the comment pop-up windows are Areas of their own over the page; their title bars are dragged to move them",
+    ),
 ];
 
 /// Whether `line` uses `name`, and not a longer name that ends in it (a field, after its `.`, is
@@ -462,6 +488,14 @@ fn page_modules_read_the_pointer_only_through_page_pointer() {
             }
         }
     }
+    problems.extend(misuses(
+        &ANY_BUTTON_DRAG,
+        &NOT_PAGE_DRAGS,
+        "starts a drag with any button: a right-button drag would start what a left one does. Read \
+         `PagePointer::drag_started` (the primary button's) instead. A widget of its own, not the pages? Add the \
+         function to NOT_PAGE_DRAGS in src/canvas/page_pointer/tests.rs, with why.",
+        "starts no drag of its own any more: remove it from NOT_PAGE_DRAGS.",
+    ));
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
 
@@ -483,20 +517,22 @@ fn page_modules_claim_the_cursor_and_never_set_it() {
 }
 
 /// What decides, keeps or drops the press the pages hold.
-const ROUTER_WRITES: [&str; 8] = [
+const ROUTER_WRITES: [&str; 10] = [
     "router.begin(",
     "router.press(",
+    "router.drag_began(",
     "router.settle(",
     "router.cancel(",
     "PageRouter::begin(",
     "PageRouter::press(",
+    "PageRouter::drag_began(",
     "PageRouter::settle(",
     "PageRouter::cancel(",
 ];
 
 /// The functions that decide, keep or drop the press the pages hold: (file, function, why).
 const ROUTER_WRITERS: [(&str, &str, &str); 3] = [
-    ("canvas/page_input.rs", "page_tool_input", "the hits at the press point decide its owner, once per press"),
+    ("canvas/page_input.rs", "page_tool_input", "the hits at the press point decide its owner, once per press, and a declined drag lets it go"),
     ("canvas.rs", "draw_pages", "the press is over once the button is up and its release seen, and a new one drops the last owner"),
     ("canvas.rs", "cancel_pointer_gestures", "every pointer gesture's cancel: Escape, automation's cancel"),
 ];
@@ -523,11 +559,12 @@ fn hit_test_calls(line: &str) -> Vec<String> {
 
 /// The functions that call a hit test: (file, function, why). Hit tests are found by name (a
 /// function named `hit` or `…_hit`, called by path, bare or as a method). The comments' point test
-/// has a list of its own (`COMMENT_POINT_TESTERS`); the others by other names (added content's,
-/// Edit text's paragraphs', Redact's text test, the text layer's links) are not listed yet, and
-/// most are PR 4b's. `PageHits::hits` is the one: the hits
-/// at the press point decide its owner, and those under the pointer give its cursor, its tip, hover
-/// painting and a right-click.
+/// has a list of its own (`COMMENT_POINT_TESTERS`). Point tests by other names are not seen: what is
+/// left of them paints (a picture's hover outline), keeps a behaviour no hit stands for (added
+/// text's click with the tools that don't pick it up, crop mode's controls) or tells a tool that a
+/// press nobody holds began on its page (the text layer's `press_here`, redaction's). `PageHits::hits`
+/// is the one: the hits at the press point decide its owner, and those under the pointer give its
+/// cursor, its tip, hover painting and a right-click.
 const HIT_TESTERS: [(&str, &str, &str); 1] = [(
     "canvas/page_input.rs",
     "hits",
@@ -559,34 +596,50 @@ const PAGE_HITS_ASKERS: [(&str, &str, &str); 5] = [
 const COMMENT_POINT_TESTS: [&str; 2] = [".comment_at(", "PageCx::comment_at("];
 
 /// The functions that ask which comment lies under a point: (file, function, why).
-const COMMENT_POINT_TESTERS: [(&str, &str, &str); 3] = [
+const COMMENT_POINT_TESTERS: [(&str, &str, &str); 4] = [
     ("tools/comments/input.rs", "hit", "the comments' hit test"),
-    ("tools/comments/input.rs", "context_hit", "the comments' hit test for a right-click"),
+    (
+        "tools/comments/state.rs",
+        "click_target",
+        "the comments' hit tests' lookup: a group subordinate (`/RT /Group`, ISO 32000-2 §12.5.6.2) stands for its primary",
+    ),
+    ("tools/comments/state.rs", "picked", "which group subordinate a click selected its primary through, when the click is acted on"),
     ("tools/comments/paint.rs", "paint_page", "a redaction mark shows its fill under the pointer with every tool, as comments' tips show"),
 ];
 
 /// What reads who holds the press the pages hold.
-const ROUTER_READS: [&str; 6] =
-    ["router.press_for(", "router.owner(", "router.keeps_drag(", "PageRouter::press_for(", "PageRouter::owner(", "PageRouter::keeps_drag("];
+const ROUTER_READS: [&str; 4] = ["router.press_for(", "router.keeps_drag(", "PageRouter::press_for(", "PageRouter::keeps_drag("];
 
 /// The functions that read who holds the press: (file, function, why). The page view asks once per
-/// page and tells each module what the press is to its page (`PagePress`); the Edit text group, the
-/// text layer and link following still ask, until they are told too (PR 4b), and an unused entry
-/// fails the test.
-const ROUTER_READERS: [(&str, &str, &str); 8] = [
-    (
-        "canvas/page_input.rs",
-        "page_tool_input",
-        "the page view: what the press is to each page (`press_for`); Add text's paragraph and the pictures until 4b",
-    ),
-    ("canvas/page_input.rs", "update_selection_on_press", "the text layer selects no text under a press held by what keeps its drag (4b)"),
-    ("canvas/page_input.rs", "finish_text_pointer_gesture", "a click held by what keeps its drag leaves the text selection alone (4b)"),
-    ("canvas/page_input.rs", "page_overlays", "a click follows the link that holds its press (4b)"),
-    ("tools/content_ui.rs", "page_input", "added text and pictures, until they are told (4b)"),
-    ("tools/edit_text_ui.rs", "page_input", "Edit text's paragraphs, until they are told (4b)"),
-    ("tools/edit_text_ui/image.rs", "image_input", "Edit text's pictures, until they are told (4b)"),
-    ("tools/object_ui.rs", "input", "the objects selected together, until they are told (4b)"),
-];
+/// page and tells each module what the press is to its page (`PagePress`): modules never read the
+/// router, and outside `canvas` the compiler refuses them (its methods are `pub(in crate::canvas)`).
+/// An unused entry fails the test.
+const ROUTER_READERS: [(&str, &str, &str); 1] = [(
+    "canvas/page_input.rs",
+    "page_tool_input",
+    "the page view: what the press is to each page (`press_for`), and whether its drag is the text's (`keeps_drag`)",
+)];
+
+/// Words a page module's functions are not named with: a function that grabs or owns a press decides
+/// for itself whether the press is its own, which the page view tells it (`PagePress`).
+const PRESS_CLAIMING_WORDS: [&str; 2] = ["grabs", "owns"];
+
+/// The function `line` declares, when one of the words of its name is one of
+/// [`PRESS_CLAIMING_WORDS`].
+fn press_claiming_fn(line: &str) -> Vec<String> {
+    declares(line.trim_start())
+        .filter(|name| name.split('_').any(|word| PRESS_CLAIMING_WORDS.contains(&word)))
+        .map(str::to_owned)
+        .into_iter()
+        .collect()
+}
+
+/// Whether `line` takes the router whole (`let r = &view.router;`), which the checks by method
+/// name would not see through: anything but a method call on it.
+fn takes_the_router(line: &str) -> bool {
+    line.match_indices(".router")
+        .any(|(at, name)| line[at + name.len()..].chars().next().is_none_or(|c| c != '.' && !(c.is_alphanumeric() || c == '_')))
+}
 
 /// What ignores the press the pages hold until the button is up.
 const PRESS_IGNORES: [&str; 1] = ["press_cancelled = true"];
@@ -594,34 +647,6 @@ const PRESS_IGNORES: [&str; 1] = ["press_cancelled = true"];
 /// The one function that ignores a press until the button is up: (file, function, why).
 const PRESS_IGNORERS: [(&str, &str, &str); 1] =
     [("canvas/page_input.rs", "cancel_on_escape", "Escape abandons the gesture the press drives, whichever tool's")];
-
-/// The module hit tests, called by path: a press handler calls none of them (HIT_TESTERS says who
-/// may).
-const PAGE_HIT_CALLS: [&str; 12] = [
-    "link_ui::hit(",
-    "prepare::hit(",
-    "forms_ui::hit(",
-    "comments::hit(",
-    "comments::context_hit(",
-    "camera_ui::hit(",
-    "edit_text_ui::hit(",
-    "edit_text_ui::picture_hit(",
-    "edit_text_ui::picture_handle_hit(",
-    "edit_text_ui::crop_hit(",
-    "object_ui::hit(",
-    "content_ui::hit(",
-];
-
-/// Whether a press handler's `code` acts on the owner the router captured, and calls no hit test
-/// of its own to choose one.
-fn routed_press_handler(code: &str) -> bool {
-    let code = code.lines().filter(|line| !line.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
-    code.contains("router.owner(")
-        && !PAGE_HIT_CALLS.iter().any(|call| code.contains(call))
-        && !uses(&code, "hit(")
-        && !uses(&code, "body_hit(")
-        && !uses(&code, "handle_hit(")
-}
 
 /// Page modules act on a press only when the router says it is theirs. The hits at the press
 /// point decide its owner once, in one place, and a `Hit` comes only from a module's hit test,
@@ -653,7 +678,7 @@ fn page_modules_act_on_a_press_only_through_the_router() {
     // functions use it.
     let known: Vec<&str> = ROUTER_WRITES.iter().chain(ROUTER_READS.iter()).copied().collect();
     let unlisted = page_module_matches(|line| {
-        let router = uses(line, ".router.") || uses(line, "PageRouter::");
+        let router = uses(line, ".router.") || uses(line, "PageRouter::") || takes_the_router(line);
         if router && !known.iter().any(|name| uses(line, name)) { vec!["router".to_owned()] } else { Vec::new() }
     });
     problems.extend(
@@ -687,6 +712,13 @@ fn page_modules_act_on_a_press_only_through_the_router() {
          place that must ask? Add the function to PAGE_HITS_ASKERS in src/canvas/page_pointer/tests.rs, with why.",
         "no longer asks the page view's hits: remove it from PAGE_HITS_ASKERS.",
     ));
+    // A module is told what the press is to its page; none decides it for itself.
+    problems.extend(page_module_matches(press_claiming_fn).into_iter().map(|(file, _, n, name)| {
+        format!(
+            "src/{file}:{n}: `fn {name}` decides whether a press is its module's. The page view tells each module what the \
+             press is to its page (`PagePress`): act on that, in a function named for what it does."
+        )
+    }));
     problems.extend(misuses(
         &PRESS_IGNORES,
         &PRESS_IGNORERS,
@@ -694,19 +726,6 @@ fn page_modules_act_on_a_press_only_through_the_router() {
          `DocView::cancel_pointer_gestures` instead.",
         "no longer ignores a press: remove it from PRESS_IGNORERS.",
     ));
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    for (file, function) in [
-        ("tools/content_ui.rs", "page_input"),
-        ("tools/edit_text_ui.rs", "page_input"),
-        ("tools/edit_text_ui/image.rs", "image_input"),
-        ("tools/object_ui.rs", "input"),
-    ] {
-        let source = std::fs::read_to_string(src.join(file)).expect("page input module");
-        let body = source.lines().skip_while(|line| declares(line) != Some(function)).take_while(|line| *line != "}").collect::<Vec<_>>().join("\n");
-        if !routed_press_handler(&body) {
-            problems.push(format!("src/{file}: {function} must consume the captured router owner without repeating a hit test"));
-        }
-    }
     // A hit test is a function named `hit` or `…_hit`: one answer to "what of mine is here?",
     // which gives the module's cursor, its tip and its press.
     problems.extend(misuses_in(
@@ -720,14 +739,6 @@ fn page_modules_act_on_a_press_only_through_the_router() {
         "calls no hit test any more: remove it from HIT_TESTERS.",
     ));
     problems.extend(hit_test_aliases());
-    // An entry no page module calls any more no longer guards anything.
-    let called = page_module_uses(&PAGE_HIT_CALLS);
-    problems.extend(
-        PAGE_HIT_CALLS
-            .iter()
-            .filter(|call| !called.iter().any(|(_, _, _, name)| name == *call))
-            .map(|call| format!("no page module calls `{call}` any more: remove it from PAGE_HIT_CALLS.")),
-    );
     let builds = page_module_uses(&HIT_BUILDS);
     assert!(!builds.is_empty(), "no page module makes a `Hit` any more: update HIT_BUILDS");
     problems.extend(builds.into_iter().filter(|(_, function, _, _)| !function.as_deref().is_some_and(is_hit_test)).map(|(file, _, n, name)| {
@@ -758,6 +769,15 @@ fn the_page_guards_read_hit_tests_split_calls_and_aliases() {
     assert!(hit_test_calls("let all = self.hits(view, p, false);").is_empty());
     assert_eq!(declares("pub(crate) const fn crop_hit<'a>(view: &DocView) {"), Some("crop_hit"));
     assert_eq!(declares("let hit = 1;"), None);
+    assert_eq!(press_claiming_fn("    pub(crate) fn fill_grabs(view: &DocView) -> bool {"), ["fill_grabs"]);
+    assert_eq!(press_claiming_fn("fn owns_press() {"), ["owns_press"]);
+    assert_eq!(press_claiming_fn("    pub(in crate::canvas) fn link_grabs(view: &DocView) {"), ["link_grabs"]);
+    assert!(press_claiming_fn("fn dropdowns() {").is_empty(), "a word that ends in one");
+    assert_eq!(declares("pub(in crate::canvas) fn drag_began(&mut self) {"), Some("drag_began"));
+    assert!(takes_the_router("let r = &view.router;") && takes_the_router("keep(view.router, 1)"));
+    assert!(!takes_the_router("view.router.press_for(i)") && !takes_the_router("view.routers.len()"));
+    assert!(press_claiming_fn("fn holds(&self, page: usize) -> bool {").is_empty());
+    assert!(press_claiming_fn("let grabs = 1;").is_empty());
     let source = "impl PageHits<'_> {\n    fn at(&self) {\n        self\n            .hits(view, p, false)\n    }\n}\nfn after() {\n    // view.router.owner(0)\n    let _ = view\n        .router\n        .owner(0);\n}\n";
     assert_eq!(
         code_lines(source),
@@ -778,12 +798,119 @@ fn the_page_guards_read_hit_tests_split_calls_and_aliases() {
     assert_eq!(aliased_hit_tests(source), aliases);
 }
 
-#[test]
-fn the_page_press_guard_rejects_missing_owners_and_second_hit_tests() {
-    assert!(routed_press_handler("let owner = view.router.owner(page);"));
-    assert!(!routed_press_handler("// view.router.owner(page)\nlet owner = None;"));
-    assert!(!routed_press_handler("let owner = view.router.owner(page);\nlet again = cx.hit(origin);"));
-    for call in PAGE_HIT_CALLS {
-        assert!(!routed_press_handler(&format!("let owner = view.router.owner(page);\n{call}origin);")), "{call}");
+/// egui's raw key state: a key pressed, held, let go or taken, and the key, text and clipboard
+/// events themselves, however they are imported.
+const RAW_KEY_READS: [&str; 17] = [
+    "Event::Copy",
+    "Event::Cut",
+    "Event::Paste",
+    "Event::Text",
+    "Event::{",
+    "Event::*",
+    "Event as ",
+    "InputState::",
+    "key_pressed(",
+    "key_released(",
+    "key_down(",
+    "keys_down",
+    "num_presses(",
+    "consume_key(",
+    "consume_shortcut(",
+    "count_and_consume_key(",
+    "Event::Key",
+];
+
+/// Functions in the files the key guard scans ([`key_files`]) that read egui's keys themselves:
+/// a window's or a field's own keys, which `PageKeys` would hide, and the pages' reads that
+/// `PageKeys` can't make (chords that wait for the menu bar instead, Escape ending what the pages
+/// hold, any key stopping a glide, the clipboard's hand-off to text fields): (file, function, why).
+const NOT_PAGE_KEYS: [(&str, &str, &str); 17] = [
+    (
+        "app/clipboard.rs",
+        "clipboard_keys",
+        "the pages' clipboard: Copy, Cut and Paste (events and chords), which act only when `page_keys.over()` is false, \
+         and the pastes it hands on to text fields while something is over the pages",
+    ),
+    (
+        "app/keys.rs",
+        "select_all_keys",
+        "Select all, a chord that waits for a menu of the menu bar as the registered commands' do, and isn't called while something covers the pages",
+    ),
+    ("canvas/area.rs", "glide_interrupted", "any key stops the touchpad's glide"),
+    ("canvas/autoscroll.rs", "update_latched", "Escape ends the middle-button scroll, which holds the whole view"),
+    ("canvas/autoscroll.rs", "escape", "Escape ends the middle-button scroll, which holds the whole view"),
+    ("canvas/find.rs", "find_bar", "the Find field's own keys, while it has the focus"),
+    (
+        "canvas/navigation.rs",
+        "view_chords",
+        "the view's chords, which wait for a menu of the menu bar as the registered commands' do, and for whatever covers the pages",
+    ),
+    ("canvas/page_input.rs", "cancel_on_escape", "Escape cancels a press the pages hold, which goes on under a dialog opened during it"),
+    ("tools/calc_order_ui.rs", "panel", "the Calculation order panel's own Alt+arrows"),
+    ("tools/comments/composer.rs", "submit_key", "the comment field's own Enter, while it has the focus (the Comments panel's too)"),
+    ("tools/field_table_ui.rs", "show", "the Text field table window's own Escape"),
+    ("tools/field_table_ui.rs", "column_dividers", "the Text field table window's own arrows"),
+    ("tools/fill_sign.rs", "signature_pad", "the signature dialog's own ⌘Z"),
+    ("tools/forms_ui.rs", "combo_editor", "the combo box's own Enter, while its field has the focus"),
+    ("tools/prepare/properties.rs", "body", "the field properties' own Enter, while one of their fields has the focus"),
+    ("tools/redact_ui.rs", "search_body", "the redaction search field's own Enter, while it has the focus"),
+    ("tools/sign_ui/dialog.rs", "sign_as", "the signing dialog's own Enter"),
+];
+
+/// The files whose key reads the key guard checks, relative to `src`: every file under `canvas/`
+/// and `tools/` and the canvas's root, whether or not it is a page module yet, the app's own keys
+/// and clipboard, and the Pages panel's thumbnails; not their tests, and not `PageKeys` itself. A
+/// helper in another file that page code hands egui's input to isn't seen.
+fn key_files() -> Vec<String> {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = ["canvas.rs", "app/keys.rs", "app/clipboard.rs", "panels/pages.rs"].map(str::to_owned).to_vec();
+    let mut dirs = vec![src.join("canvas"), src.join("tools")];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).expect("source directory") {
+            let path = entry.expect("source entry").path();
+            let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            if stem == "tests" || stem.ends_with("_tests") {
+                continue;
+            }
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let file =
+                    path.strip_prefix(&src).expect("under src").components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+                if file != "canvas/page_keys.rs" {
+                    files.push(file);
+                }
+            }
+        }
     }
+    files.sort();
+    files
+}
+
+/// Page code reads keys only through `PageKeys`. The pages are drawn before the dialogs and the
+/// palette and read egui's keys first, so a raw read acts on what is selected or typed behind
+/// whatever is over them: Delete under a dialog deleted the comment selected behind it, and the
+/// Escape that closed one threw away the paragraph being typed.
+#[test]
+fn page_modules_read_keys_only_through_page_keys() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let files = key_files();
+    let mut found = Vec::new();
+    for file in &files {
+        let source = std::fs::read_to_string(src.join(file)).expect("source file").replace("\r\n", "\n");
+        for (n, function, text) in code_lines(&source) {
+            for name in RAW_KEY_READS.iter().filter(|name| uses(&text, name)) {
+                found.push((file.as_str(), function.map(str::to_owned), n, (*name).to_owned()));
+            }
+        }
+    }
+    let problems = misuses_in(
+        found,
+        &NOT_PAGE_KEYS,
+        "reads egui's keys in page code. Read them through `PageKeys` (src/canvas/page_keys.rs) instead: it has none \
+         while a dialog, the palette or a menu is over the pages, which read keys before those are drawn. Not the \
+         pages' keys? Add the function to NOT_PAGE_KEYS in src/canvas/page_pointer/tests.rs, with why.",
+        "reads no keys of its own any more: remove it from NOT_PAGE_KEYS.",
+    );
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
