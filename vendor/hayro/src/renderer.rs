@@ -664,11 +664,11 @@ pub fn offscreen_draws() -> OffscreenDraws {
 }
 
 thread_local! {
-    /// PdfCraft patch (33): see [`paths_drawn`].
+    /// PdfCraft patch (34): see [`paths_drawn`].
     static PATHS_DRAWN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// PdfCraft patch (33): the paths (not glyphs) the renders on this thread were asked to fill or
+/// PdfCraft patch (34): the paths (not glyphs) the renders on this thread were asked to fill or
 /// stroke, in every scene (the page, soft masks, tiling cells and the like), for tests that check
 /// how much of a page was drawn by counting rather than by timing it. The count only grows; a test takes
 /// the difference across a render.
@@ -677,7 +677,7 @@ pub fn paths_drawn() -> u64 {
     PATHS_DRAWN.try_with(std::cell::Cell::get).unwrap_or_default()
 }
 
-/// PdfCraft patch (33): coverage values a scene may hold however small its canvas. Every path's
+/// PdfCraft patch (34): coverage values a scene may hold however small its canvas. Every path's
 /// coverage stays in memory until the scene is rasterized, about three bytes a value with its
 /// strips and tile commands, so this keeps a scene to about 200 MB: forms that draw the next form
 /// twice, twenty deep (PDFBOX-5415), filled the 2^31 values a strip can index and peaked at
@@ -685,14 +685,14 @@ pub fn paths_drawn() -> u64 {
 /// 96 dpi, the most any used was 32.6 million, and half used under 44,000.
 pub(crate) const MIN_COVERAGE_BUDGET: usize = 1 << 26;
 
-/// PdfCraft patch (33): coverage values a scene may hold for each pixel of its canvas, when that
+/// PdfCraft patch (34): coverage values a scene may hold for each pixel of its canvas, when that
 /// is more than [`MIN_COVERAGE_BUDGET`]. The 5,157 pages used at most 17.9 a pixel (34 used
 /// over 2, half under 0.09), and each stayed under a third of its budget; the heaviest uses two
 /// fifths of it at 72 dpi. Coverage grows more slowly than the canvas: five of the heaviest a
 /// pixel, drawn again at 600 dpi, used at most 2.6.
 pub(crate) const COVERAGE_PER_PIXEL: usize = 16;
 
-/// PdfCraft patch (33): the coverage values a `width` × `height` scene may hold before later
+/// PdfCraft patch (34): the coverage values a `width` × `height` scene may hold before later
 /// paths are left out (vello_cpu patch 1, never more than the 2^31 a strip indexes), and the
 /// interpreter stops drawing (`Device::out_of_room`, hayro-interpret patch 110).
 #[doc(hidden)]
@@ -703,7 +703,7 @@ pub fn coverage_budget(width: u16, height: u16) -> usize {
         .max(MIN_COVERAGE_BUDGET)
 }
 
-/// PdfCraft patch (33): a render context for a `width` × `height` scene, kept to its
+/// PdfCraft patch (34): a render context for a `width` × `height` scene, kept to its
 /// [`coverage_budget`]. The page and every scene drawn apart from it (soft masks, image alpha
 /// masks, tiling cells, ink passes) are made here.
 fn budgeted_context(width: u16, height: u16, settings: RenderSettings) -> RenderContext {
@@ -2312,7 +2312,7 @@ impl Renderer {
 }
 
 impl<'a> Device<'a> for Renderer {
-    // PdfCraft patch (33): once a path was left out for want of coverage, every later one is
+    // PdfCraft patch (34): once a path was left out for want of coverage, every later one is
     // too (`room_for_path` asks room for a whole canvas), so nothing more would show.
     fn out_of_room(&self) -> bool {
         self.ctx.coverage_full()
@@ -2772,7 +2772,7 @@ impl<'a> Device<'a> for Renderer {
         paint: &Paint<'_>,
         draw_mode: &PathDrawMode,
     ) {
-        // PdfCraft patch (33): counted for `paths_drawn`.
+        // PdfCraft patch (34): counted for `paths_drawn`.
         let _ = PATHS_DRAWN.try_with(|n| n.set(n.get().saturating_add(1)));
         match draw_mode {
             PathDrawMode::Fill(f) => {
