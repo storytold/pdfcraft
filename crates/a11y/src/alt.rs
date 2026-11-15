@@ -642,7 +642,7 @@ fn parent_tree_entries(doc: &Document, page: &Dict) -> Result<Vec<(i64, NumsAt)>
         if depth > PARENT_TREE_DEPTH {
             return Err("the parent tree is too deep".into());
         }
-        let (at, dict) = match node {
+        let (at, node) = match node {
             Object::Ref(r) => {
                 if !seen.insert(r) {
                     continue;
@@ -650,12 +650,17 @@ fn parent_tree_entries(doc: &Document, page: &Dict) -> Result<Vec<(i64, NumsAt)>
                 if seen.len() > PARENT_TREE_NODES {
                     return Err("the parent tree has too many nodes".into());
                 }
-                (Some(r), doc.get(r).as_dict().cloned())
+                (Some(r), doc.get(r).as_ref().clone())
             }
-            Object::Dict(d) => (None, Some(d)),
-            _ => (None, None),
+            other => (None, other),
         };
-        let Some(dict) = dict else { continue };
+        let dict = match node {
+            Object::Dict(d) => d,
+            // A missing node holds no entry.
+            Object::Null => continue,
+            // Anything else may hold the page's entry where it can't be read or cleared.
+            _ => return Err("a parent tree node is not a dictionary".into()),
+        };
         if let Some(nums) = dict.get(b"Nums")
             && doc.resolve(nums).as_array().is_some_and(|a| a.as_chunks::<2>().0.iter().any(|[k, _]| k.as_int() == Some(key)))
         {
@@ -689,6 +694,8 @@ fn clear_parent_tree(doc: &mut Document, entries: &[(i64, NumsAt)], obj: ObjRef)
         for [k, v] in nums.as_chunks_mut::<2>().0 {
             if k.as_int() == Some(*key) {
                 match &*v {
+                    // The key mapped to the tag itself rather than to an array of MCIDs.
+                    Object::Ref(r) if *r == obj => *v = Object::Null,
                     Object::Array(a) => {
                         *v = Object::Array(a.iter().map(|x| if x.as_ref() == Some(obj) { Object::Null } else { x.clone() }).collect())
                     }

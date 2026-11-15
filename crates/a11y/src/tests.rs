@@ -1237,6 +1237,12 @@ fn marking_a_tag_as_an_artifact_clears_its_entry_in_a_parent_tree_with_kids() {
     mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)).unwrap();
     assert_eq!(Some(doc.get(refs[1]).as_ref().clone()), target);
 
+    // A key mapped to the tag itself rather than to an array, behind a missing kid that holds
+    // nothing, is cleared too.
+    let (mut doc, refs) = figures_doc_with_parent_tree("/Kids [null 99 0 R {0}]", &["<< /Limits [0 0] /Nums [0 7 0 R] >>"]);
+    mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)).unwrap();
+    assert_eq!(nums(&doc, refs[0]), Some(Object::Array(vec![Object::Int(0), Object::Null])));
+
     // A cyclic tree is walked once per node and still cleared.
     let (mut doc, refs) = figures_doc_with_parent_tree("/Kids [{0}]", &["<< /Kids [9 0 R {1}] >>", "<< /Limits [0 0] /Nums [0 [7 0 R 8 0 R]] >>"]);
     mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)).unwrap();
@@ -1252,7 +1258,9 @@ fn marking_a_tag_as_an_artifact_refuses_a_parent_tree_it_cannot_update_before_ch
     let mut inline_root = figures_doc();
     let tree = inline_root.get(ObjRef::new(9, 0)).as_ref().clone();
     inline_root.update_dict(ObjRef::new(5, 0), |d| d.set(b"ParentTree".to_vec(), tree)).unwrap();
-    for (what, mut doc) in [("inline kid", inline_kid), ("inline root", inline_root)] {
+    // A kid that isn't a node at all may hold the entry where it can't be read.
+    let (not_a_node, _) = figures_doc_with_parent_tree("/Kids [{0}]", &["[0 [7 0 R 8 0 R]]"]);
+    for (what, mut doc) in [("inline kid", inline_kid), ("inline root", inline_root), ("kid not a node", not_a_node)] {
         let root = |doc: &Document| doc.get(ObjRef::new(5, 0)).as_ref().clone();
         let (contents, tree, structure) = (page_contents(&doc), doc.get(ObjRef::new(9, 0)).as_ref().clone(), root(&doc));
         assert!(matches!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::ParentTree(_))), "{what}");
