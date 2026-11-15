@@ -71,7 +71,9 @@ impl BoxesDraft {
         if edits.len() == 1 {
             return edits.remove(0);
         }
-        Edit::Batch { label: "Set Page Boxes".into(), edits }
+        // Worded as the single edit is (`Edit::label`), so one undo step reads the same either way.
+        let label = if self.which == PageBox::Crop { "Crop pages" } else { "Set page boxes" };
+        Edit::Batch { label: label.into(), edits }
     }
 }
 
@@ -101,7 +103,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     let current = app.views[i].current;
     let Some(doc) = app.session.get(id) else { return (false, true) };
     let boxes = doc.page_boxes();
-    let page_unit = doc.page_user_units().get(current).copied().unwrap_or(1.0);
+    let page_unit = doc.page_user_unit(current);
     let count = boxes.len().max(1);
     let units = app.units;
     let d = &mut app.boxes_draft;
@@ -283,9 +285,11 @@ mod tests {
         let b = doc.page_boxes();
         assert_eq!(b[0][1], [36.0, 36.0, 396.0, 324.0]);
         assert_eq!(b[1][1], [18.0, 18.0, 414.0, 342.0]);
-        assert_eq!(doc.can_undo(), Some("Set Page Boxes"));
+        assert_eq!(doc.can_undo(), Some("Crop pages"));
         session.undo(id).unwrap();
-        assert_eq!(session.get(id).unwrap().page_boxes()[1][1], [0.0, 0.0, 432.0, 360.0], "one undo restores both pages");
+        let b = session.get(id).unwrap().page_boxes();
+        assert_eq!(b[0][1], [0.0, 0.0, 432.0, 360.0], "one undo restores page 1");
+        assert_eq!(b[1][1], [0.0, 0.0, 432.0, 360.0], "and page 2");
     }
 
     #[test]
