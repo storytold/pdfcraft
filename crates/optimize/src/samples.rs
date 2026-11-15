@@ -73,7 +73,7 @@ pub fn decode_samples(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> R
         None if is_ccitt(s) => false,
         None => return Err(NotDecoded::Filter),
     };
-    let n = d.get(b"ColorSpace").and_then(|cs| components(doc, cs)).ok_or(NotDecoded::ColourSpace)?;
+    let n = d.get(b"ColorSpace").and_then(|cs| colour_components(doc, cs)).ok_or(NotDecoded::ColourSpace)?;
     let bpc = d.get(b"BitsPerComponent").map(|v| doc.resolve(v)).and_then(|v| v.as_int()).unwrap_or(0);
     let bilevel = match bpc {
         8 => false,
@@ -110,6 +110,19 @@ pub fn decode_samples(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> R
     }
     let data = pixels(doc, s, n, budget).ok_or(NotDecoded::Corrupt)?;
     Ok(Samples { width, height, components: n, data, jpeg, bilevel: false, inverted: false })
+}
+
+/// The components of colour space `cs`, as [`components`] counts them. A family that takes no
+/// parameters may be written as its name alone or as an array of that one name (ISO 32000-2,
+/// 8.6.3), so `[/DeviceGray]` is `/DeviceGray` here.
+fn colour_components(doc: &Document, cs: &Object) -> Option<usize> {
+    if let Object::Array(a) = &*doc.resolve(cs)
+        && let [family] = a.as_slice()
+        && matches!(doc.resolve(family).as_name(), Some(b"DeviceGray" | b"DeviceRGB"))
+    {
+        return components(doc, family);
+    }
+    components(doc, cs)
 }
 
 /// Whether `s` is a JPEG 2000 image: `/JPXDecode` as its only filter.
@@ -177,7 +190,7 @@ fn jpx_samples(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<S
     if pixels > JPX_MAX_PIXELS || pixels.saturating_mul(n as u64) > JPX_MAX_SAMPLES {
         return Err(NotDecoded::JpxTooLarge);
     }
-    let named = d.get(b"ColorSpace").map(|cs| components(doc, cs));
+    let named = d.get(b"ColorSpace").map(|cs| colour_components(doc, cs));
     if named.is_some_and(|c| c != Some(n)) {
         return Err(NotDecoded::ColourSpace);
     }
@@ -477,6 +490,34 @@ mod tests {
         assert_eq!(back.dict.name(b"Filter"), Some(&b"FlateDecode"[..]));
         assert_eq!(back.dict.get(b"Interpolate"), Some(&Object::Bool(true)));
         assert_eq!(decode_samples(&doc(), &back, &mut ImageBudget::with_work(u64::MAX)).unwrap().data, px);
+    }
+
+    #[test]
+    fn a_device_colour_space_written_as_a_one_name_array_is_read() {
+        // `[/DeviceGray]` is `/DeviceGray` (ISO 32000-2, 8.6.3); scanners write both.
+        let read = |space: Object, bits: i64, raw: Vec<u8>| {
+            let s =
+                image(&[("Width", Object::Int(8)), ("Height", Object::Int(2)), ("ColorSpace", space), ("BitsPerComponent", Object::Int(bits))], raw);
+            let got = decode_samples(&doc(), &s, &mut ImageBudget::with_work(u64::MAX))?;
+            // Written back, the image keeps the colour space it had.
+            let back = encode_samples(&s, &got, 90).unwrap();
+            assert_eq!(back.dict.get(b"ColorSpace"), s.dict.get(b"ColorSpace"));
+            Ok::<_, NotDecoded>((got.components, got.bilevel, got.data))
+        };
+        let array = |name: &str| Object::Array(vec![Object::name(name)]);
+        let grey: Vec<u8> = (0..16).map(|i| i * 16).collect();
+        assert_eq!(read(array("DeviceGray"), 8, grey.clone()), Ok((1, false, grey.clone())));
+        assert_eq!(read(array("DeviceGray"), 8, grey.clone()), read(Object::name("DeviceGray"), 8, grey));
+        // One bit a pixel, as a fax scan is: the first row black, the second white.
+        let fax = read(array("DeviceGray"), 1, vec![0x00, 0xff]).unwrap();
+        assert_eq!((fax.0, fax.1), (1, true));
+        assert_eq!(fax.2, [[0u8; 8], [255u8; 8]].concat());
+        let rgb: Vec<u8> = (0..48).collect();
+        assert_eq!(read(array("DeviceRGB"), 8, rgb.clone()), Ok((3, false, rgb)));
+        // Only a family with no parameters, alone: anything else is what it was before.
+        assert_eq!(read(array("DeviceCMYK"), 8, vec![0; 64]), Err(NotDecoded::ColourSpace));
+        assert_eq!(read(Object::Array(vec![Object::name("DeviceGray"), Object::Int(1)]), 8, vec![0; 16]), Err(NotDecoded::ColourSpace));
+        assert_eq!(read(Object::Array(vec![]), 8, vec![0; 16]), Err(NotDecoded::ColourSpace));
     }
 
     #[test]
