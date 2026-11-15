@@ -551,10 +551,11 @@ fn autotag_apply_accepts_text_state_written_by_a_text_edit() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// #7416: a font without /Encoding makes the text edit wrap its text in `/Span <</ActualText>> BDC
-/// … EMC`; Auto-tag takes it, keeps it in the stream, and tags the paragraph around it.
+/// #7416: a wrapped edit in the repo font (Helvetica, no /Encoding) writes `/PCSoft BDC EMC` between
+/// its lines inside the text object; Auto-tag takes it, keeps it in the stream inside the
+/// paragraph's mark. (The `/Span` + `/ActualText` form is covered in the a11y tests.)
 #[test]
-fn autotag_apply_accepts_actual_text_span_written_by_a_text_edit() {
+fn autotag_apply_accepts_line_markers_written_by_a_text_edit() {
     let dir = workdir("autotag-after-edit-span");
     std::fs::write(dir.join("one.pdf"), fixture(1)).unwrap();
     let mut a = auto(&dir);
