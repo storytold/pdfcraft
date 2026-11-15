@@ -26,7 +26,7 @@ use crate::components::{AnalyzeOptions, analyze_page};
 use crate::grey::MAX_PIXELS;
 use crate::scan_prep::{PreprocessedOptions, PreprocessedPage, preprocess_within};
 use crate::type3::{Type3Glyph, Type3Metrics, baseline_in_prototype, em_pixels, synthesize_type3};
-use crate::vectorize::{VectorizeParams, vectorize};
+use crate::vectorize::{GlyphOutline, VectorizeParams, vectorize};
 
 /// Drawing glyphs in one simple Type 3 font. Matches the limit in [`crate::synthesize_type3`].
 const PER_FONT: usize = 255;
@@ -446,7 +446,10 @@ fn masters_of(
             skipped = skipped.saturating_add(1);
             continue;
         }
-        let outline = vectorize(prototype.binary(), &options.vectorize);
+        let vectorized = vectorize(prototype.binary(), &options.vectorize);
+        // A truncated outline dropped contours or holes; drop the partial path so searchability
+        // stays via an empty Type 3 glyph while `erase_regions` keeps the original scan ink.
+        let outline = if vectorized.truncated() { GlyphOutline::default() } else { vectorized };
         let mut shows = Vec::new();
         for &index in group.members() {
             let Some(glyph) = glyphs.get(index) else { continue };
@@ -634,12 +637,12 @@ fn show_origin(show: &Occurrence, height_px: f64, points_per_pixel: f64) -> Opti
     }
 }
 
-/// Ink regions of the occurrences that will be drawn. A master with no outline is not a
-/// replacement, so its scan ink stays.
+/// Ink regions of the occurrences that will be drawn. A master with no outline (including one
+/// whose truncated outline was cleared) is not a replacement, so its scan ink stays.
 fn erase_regions<'a>(masters: &'a [Master], height_px: f64, points_per_pixel: f64) -> Vec<InkRegion<'a>> {
     let mut regions = Vec::new();
     for master in masters {
-        if master.glyph.outline.contours().is_empty() {
+        if master.glyph.outline.contours().is_empty() || master.glyph.outline.truncated() {
             continue;
         }
         for show in &master.shows {
@@ -1235,5 +1238,45 @@ mod tests {
         assert!(out.text.contains('H'), "{:?}", out.text);
         let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(out.pdf)).expect("valid pdf");
         assert!(doc.trailer().reference(b"Root").is_some());
+    }
+
+    #[test]
+    fn truncated_outline_keeps_scan_ink_and_searchability() {
+        let (width, height) = (180_u32, 140_u32);
+        let mut pixels = vec![250_u8; (width * height) as usize];
+        // A hollow ring has two contours (outer + hole); max_contours = 1 truncates the hole.
+        for y in 40..68_usize {
+            for x in 30..54_usize {
+                if !(35..49).contains(&x) || !(45..63).contains(&y) {
+                    pixels[y * width as usize + x] = 0;
+                }
+            }
+        }
+        let mut options = tuned(1, 1.0);
+        options.vectorize.max_contours = 1;
+        let out = clearscan_image(
+            ScanRaster { pixels: &pixels, width, height, channels: 1, points_per_pixel: 1.0 },
+            &options,
+            lines_for_left_ink,
+            no_progress,
+        )
+        .expect("truncated outline should succeed");
+        assert_eq!(out.erased, 0, "truncated outline must not erase original scan ink");
+        assert_eq!(out.text, "H", "searchable text must remain present");
+
+        let mut renderer = PageRenderer::new(Arc::new(out.pdf), RenderConfig::default());
+        let text = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, scale: 1.0, ..RenderRequest::default() });
+        assert!(text.error.is_none(), "{:?}", text.error);
+        let found: String = text.text.iter().flat_map(|page| page.glyphs.iter().map(|glyph| glyph.text.as_str())).collect();
+        assert!(found.contains('H'), "extracted {found:?}");
+
+        let rendered = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..RenderRequest::default() });
+        assert!(rendered.error.is_none(), "{:?}", rendered.error);
+        let sample = |x: u32, y: u32| -> u8 {
+            let idx = (y as usize * rendered.width as usize + x as usize) * 4;
+            rendered.rgba[idx]
+        };
+        assert!(sample(42, 42) < 80, "stroke ink must stay visible, got {}", sample(42, 42));
+        assert!(sample(42, 54) > 200, "truncated outer must not fill the hole, got {}", sample(42, 54));
     }
 }

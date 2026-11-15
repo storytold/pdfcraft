@@ -138,7 +138,7 @@ impl VectorContour {
 }
 
 /// Every contour of one bitmap, in the order the raster scan met them.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct GlyphOutline {
     contours: Vec<VectorContour>,
     truncated: bool,
