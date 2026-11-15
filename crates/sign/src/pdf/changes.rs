@@ -760,8 +760,16 @@ fn holds(doc: &Document, num: u32) -> bool {
 fn new_signature_field(doc: &Document, old: &Document, referred: &HashSet<u32>, r: ObjRef) -> bool {
     let field = doc.get(r);
     let Some(d) = field.as_dict() else { return false };
-    // An entry whose value is null, or a reference to nothing, is no entry (ISO 32000-1 §7.3.7).
-    let entry = |key: &[u8]| d.get(key).filter(|o| !matches!(*doc.resolve(o), Object::Null));
+    // An entry whose value is null, or a reference to a number that holds nothing, is no entry
+    // (ISO 32000-1 §7.3.7). A reference by a generation its number doesn't have is still an
+    // entry: it is null here, but a reader that ignores generations reaches the object.
+    let entry = |key: &[u8]| {
+        d.get(key).filter(|o| match o {
+            Object::Null => false,
+            Object::Ref(r) => holds(doc, r.num),
+            _ => true,
+        })
+    };
     let value_is_new = entry(b"V").is_none_or(|v| v.as_ref().is_some_and(|v| !holds(old, v.num) && !referred.contains(&v.num)));
     d.name(b"Subtype") == Some(b"Widget")
         && d.name(b"FT") == Some(b"Sig")

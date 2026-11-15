@@ -479,7 +479,11 @@ fn a_fields_array_of_its_own_only_accepts_new_signature_fields_appended() {
     let (grafted, reused, in_place_value) = (widget("/Parent 6 0 R /V 12 0 R"), widget("/V 7 0 R"), widget(&format!("/V {TIMESTAMP}")));
     let (timestamp, timestamp2) = (widget("/V 12 0 R"), widget("/V 15 0 R"));
     let with_action = widget("/V 12 0 R /AA << /PO << /S /URI /URI (https://example.com) >> >>");
-    let cases: [Case; 16] = [
+    // References by a generation their number doesn't have: null to this reader, the signed
+    // object to one that ignores generations.
+    let (parent_gen, kids_gen) = (widget("/Parent 6 1 R /V 12 0 R"), widget("/Kids 31 1 R /V 12 0 R"));
+    let (actions_gen, value_gen) = (widget("/AA 30 1 R /V 12 0 R"), widget("/V 7 1 R"));
+    let cases: [Case; 20] = [
         ("in-place entry taken out", IN_PLACE, LISTED, &[]),
         ("in-place entry rewritten", IN_PLACE, "[<< /FT /Sig /T (Other) /V 7 0 R >> 6 0 R 13 0 R]", &[]),
         ("in-place entry moved", IN_PLACE, "[6 0 R << /FT /Sig /T (Approval) /V 7 0 R >> 13 0 R]", &[]),
@@ -509,6 +513,15 @@ fn a_fields_array_of_its_own_only_accepts_new_signature_fields_appended() {
         ("signed signature value reused", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, &reused)]),
         ("signature value written in place", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, &in_place_value)]),
         ("action on the new widget", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, &with_action), (12, TIMESTAMP)]),
+        ("parent by another generation", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, &parent_gen), (12, TIMESTAMP)]),
+        ("kids by another generation", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, &kids_gen), (12, TIMESTAMP), (31, "[13 0 R]")]),
+        (
+            "actions by another generation",
+            LISTED,
+            "[6 0 R 13 0 R 11 0 R]",
+            &[(11, &actions_gen), (12, TIMESTAMP), (30, "<< /PO << /S /URI /URI (https://example.com) >> >>")],
+        ),
+        ("signed value by another generation", LISTED, "[6 0 R 13 0 R 11 0 R]", &[(11, &value_gen)]),
     ];
     /// A name, the signed `/Fields`, objects the signed revision holds besides, the later
     /// `/Fields`, and objects the later revision adds.
