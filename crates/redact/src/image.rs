@@ -69,8 +69,11 @@ pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
         match &*crate::globals::followed(doc, entry) {
             // A mask covers the image's unit square at a resolution of its own, so it is cleared
             // through the same matrix. A mask with a mask of its own isn't one (§11.6.5.3): it,
-            // or anything it would keep, can't be told apart, so the image goes.
-            Object::Stream(m) if !MASKS.iter().any(|k| m.dict.contains(k)) => {
+            // or anything it would keep, can't be told apart, so the image goes. A null entry,
+            // directly or through a reference, is as if absent (§7.3.7).
+            Object::Stream(m)
+                if !MASKS.iter().any(|k| m.dict.get(k).is_some_and(|e| !matches!(&*crate::globals::followed(doc, e), Object::Null))) =>
+            {
                 if let Some(copy) = decode_and_clear(doc, m, ctm, rects, budget).ok_or(())? {
                     masks.push((key, copy));
                 }
