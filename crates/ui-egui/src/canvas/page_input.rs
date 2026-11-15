@@ -101,6 +101,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         tool,
         pcx: &pcx,
         form,
+        doc,
         can_fill,
         can_modify,
         editing_content,
@@ -486,6 +487,8 @@ struct PageHits<'a> {
     tool: QuickTool,
     pcx: &'a comments::PageCx<'a>,
     form: &'a [pdfcraft_engine::FormField],
+    /// Its document: what its scripts show while it is read (`Document::shown_by_scripts`).
+    doc: &'a pdfcraft_engine::Document,
     can_fill: bool,
     can_modify: bool,
     /// Edit a PDF is open: added text and pictures can be picked up.
@@ -576,6 +579,7 @@ impl PageHits<'_> {
             tool,
             pcx,
             form,
+            doc,
             can_fill,
             can_modify,
             editing_content,
@@ -611,7 +615,7 @@ impl PageHits<'_> {
         let fields = if preparing {
             crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p)
         } else if tool == QuickTool::Select {
-            crate::forms_ui::hit(xf, info, page, form, tabs, can_fill, p)
+            crate::forms_ui::hit(xf, info, page, doc, tabs, can_fill, p)
         } else {
             None
         };
@@ -816,17 +820,25 @@ fn update_dragged_selection(view: &mut DocView, text: &PageText, gesture: &TextG
         && let Some(selection) = view.selection.as_mut().filter(|selection| selection.page == gesture.page)
     {
         match &mut selection.span {
-            Span::Run { anchor, head } if clicks >= 2 => {
+            Span::Run { anchor, head, head_x } if clicks >= 2 => {
                 if let Some(hit) = text.nearest(gesture.vx, gesture.vy)
                     && let Some((first, last)) = click_unit(text, clicks, *anchor)
                 {
                     let (to_first, to_last) = click_unit(text, clicks, hit).unwrap_or((hit, hit));
-                    (*anchor, *head) = if to_first < first { (last, to_first) } else { (first, to_last.max(last)) };
+                    // A drag, so it selects table rows as a plain drag does, by whole units.
+                    // The page unit (four clicks) is the page's text in reading order.
+                    *head_x = Some(gesture.vx).filter(|x| x.is_finite() && clicks < 4);
+                    let in_order = if to_first < first { (last, to_first) } else { (first, to_last.max(last)) };
+                    // Rows take both units whole, from the earlier one's start to the later one's end.
+                    let by_rows = text.row_ends((first, last), (to_first, to_last));
+                    let rows = head_x.is_some() && text.visual_between(by_rows.0, by_rows.1, *head_x).is_some();
+                    (*anchor, *head) = if rows { by_rows } else { in_order };
                 }
             }
-            Span::Run { head, .. } => {
+            Span::Run { head, head_x, .. } => {
                 if let Some(hit) = text.nearest(gesture.vx, gesture.vy) {
                     *head = hit;
+                    *head_x = Some(gesture.vx).filter(|x| x.is_finite());
                 }
             }
             Span::Column { rect } => {
@@ -869,7 +881,10 @@ fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageTex
             view.selection.as_mut().filter(|selection| shift && selection.page == gesture.page).map(|selection| &mut selection.span),
             text.nearest(gesture.vx, gesture.vy),
         ) {
-            (Some(Span::Run { head, .. }), Some(hit)) => *head = hit,
+            (Some(Span::Run { head, head_x, .. }), Some(hit)) => {
+                *head = hit;
+                *head_x = Some(gesture.vx).filter(|x| x.is_finite());
+            }
             _ => view.selection = None,
         }
     }
@@ -880,6 +895,11 @@ fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageTex
 /// Turning the page (a click, a key) is handled apart and still works.
 pub(super) fn veiled(view: &DocView) -> bool {
     view.presentation.is_some() && !view.presenter.settled_on(view.current)
+}
+
+/// The page and index of `l` when clicking it runs a JavaScript action (#2081).
+fn javascript_link(l: &pdfcraft_render::Link) -> Option<(usize, usize)> {
+    matches!(l.target, LinkTarget::JavaScript(_)).then_some((l.page, l.index))
 }
 
 /// Everything drawn over the page after its text: pictures, comments, content, links, fields, marks
@@ -989,6 +1009,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         && let Some(l) = info.links.iter().find(|l| l.page == i && l.index == index)
     {
         frame.out.clicked_link = Some(l.target.clone());
+        frame.out.javascript_link = javascript_link(l);
     }
     // A web or email address written as plain text (#4207): the same click as a link annotation,
     // and the same check and confirmation on opening.
@@ -1068,7 +1089,9 @@ fn paint_field_highlights(painter: &egui::Painter, xf: &PageXform, info: &DocInf
     if !enabled {
         return;
     }
-    for field in form.iter() {
+    // A push button holds no value, so it is left as drawn (the frames and controls of a LaTeX
+    // `animate` animation are push buttons).
+    for field in form.iter().filter(|f| f.kind != pdfcraft_engine::FormFieldKind::PushButton) {
         let required = field.has(pdfcraft_engine::field_flags::REQUIRED);
         for widget in field.widgets.iter().filter(|widget| widget.page == Some(page) && !widget.hidden && !widget.read_only) {
             let rect = widget.rect;
