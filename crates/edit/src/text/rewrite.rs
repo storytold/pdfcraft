@@ -82,6 +82,8 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
             source_space(doc, &fonts_res, metrics),
             target.origin.state.char_spacing,
             target.origin.state.word_spacing,
+            0.0,
+            target.origin.state.vertical,
         )?),
         None => {
             let fallback_shown = crate::bidi::to_visual(&text);
@@ -147,6 +149,8 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
                                         space,
                                         target.origin.state.char_spacing,
                                         target.origin.state.word_spacing,
+                                        0.0,
+                                        target.origin.state.vertical,
                                     )?);
                                 }
                             } else {
@@ -674,6 +678,8 @@ struct LineWriter<'a> {
     aligns: &'a [Option<crate::added::Align>],
     /// Whether `Tw` reaches every shown space.
     word_spacing_reaches_spaces: bool,
+    /// The source font's `/DW2` w1 when its CMap writes vertically (§9.7.4.3).
+    vertical: Option<f64>,
     width: f64,
     scale: f64,
     k: f64,
@@ -776,14 +782,21 @@ impl LineWriter<'_> {
         // Partial reuse must reach show_piece: its missing spaces and glyphs belong to the fallback.
         if let Some(metrics) = self.source.filter(|m| self.partial_chars.is_none() && m.encode(" ").is_none()) {
             let indic_line = if metrics.visual_order { crate::indic::to_visual(&visual) } else { visual };
-            ops.extend(source_show(metrics, &indic_line, self.size, self.space, self.char_spacing, tw + stretch)?);
+            ops.extend(source_show(metrics, &indic_line, self.size, self.space, self.char_spacing, tw + stretch, stretch, self.vertical)?);
         } else {
             // Stretched without word spacing: shown up to and including each space, then moved on.
             let pieces: Vec<&str> = if stretch > 0.0 { visual.split_inclusive(' ').collect() } else { vec![visual.as_str()] };
             for piece in pieces {
+                let start = ops.len();
                 self.show_piece(piece, line, tw, cursor, ops)?;
                 if stretch > 0.0 && piece.ends_with(' ') {
                     ops.push(Op::new("TJ", vec![Object::Array(vec![n(-1000.0 * stretch / self.size)])]));
+                    // The space lives in the displacement, so the piece keeps it in its logical
+                    // text for copy and re-edit (#4514, #7213).
+                    let mut properties = Dict::new();
+                    properties.set(b"ActualText".to_vec(), Object::String(PdfString::text(&crate::bidi::to_logical(piece))));
+                    ops.insert(start, Op::new("BDC", vec![Object::name("Span"), Object::Dict(properties)]));
+                    ops.push(Op::new("EMC", Vec::new()));
                 }
             }
         }
@@ -802,7 +815,7 @@ impl LineWriter<'_> {
                     cursor.shown_font = self.source_name.to_owned();
                 }
                 let indic_piece = if metrics.visual_order { crate::indic::to_visual(run) } else { run.to_owned() };
-                ops.extend(source_show(metrics, &indic_piece, self.size, self.space, self.char_spacing, tw)?);
+                ops.extend(source_show(metrics, &indic_piece, self.size, self.space, self.char_spacing, tw, 0.0, self.vertical)?);
             } else {
                 for run in (self.encode)(run).ok_or_else(|| EditError::Invalid(format!("\"{line}\" can't be shown")))? {
                     if run.name != cursor.shown_font {
@@ -1121,6 +1134,7 @@ pub(crate) fn rewrite_block_from(
         align,
         aligns: &style.aligns,
         word_spacing_reaches_spaces,
+        vertical: o_state.vertical,
         width,
         scale: o_state.scale,
         k,

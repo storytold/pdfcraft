@@ -1767,7 +1767,7 @@ fn odd_arabic_text_never_panics() {
 
 /// One page with Helvetica (WinAnsi) and subsets of Arial: `/F2` and `/F3` are two subsets of the
 /// same font, as Word writes a font split across several resources, and `/F4` repeats Helvetica.
-fn text_page(content: &str) -> Document {
+pub(crate) fn text_page(content: &str) -> Document {
     let objs: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
@@ -7921,6 +7921,83 @@ fn justified_text_in_a_composite_font_fills_each_row_with_adjustments_after_its_
     assert!(ops.iter().all(|o| !o.is("Tf") || o.operands.first().and_then(|n| n.as_name()) == Some(b"F1".as_slice())), "{ops:?}");
     assert!(ops.iter().any(|o| o.is("TJ")), "{ops:?}");
     assert!(ops.iter().filter(|o| o.is("Tw")).all(|o| o.operands.first().and_then(|n| n.as_f64()) == Some(0.0)), "{ops:?}");
+    // The explicit displacements keep the row's logical text, so the spaces read back (#4514).
+    let flat = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(flat.contains("/Span <</ActualText"), "the explicit spaces keep the logical text: {flat}");
+}
+
+/// Review round 6 on #7343: the source's own word spacing (`Tw`) applies only to the single-byte
+/// code 32, so a composite font's spaces keep the source's spacing and take only the justification
+/// stretch, whatever the source's `Tw` says (#7213).
+#[test]
+fn a_composite_fonts_source_word_spacing_does_not_reach_its_spaces() {
+    fn composite_page(content: &str) -> Document {
+        let mut doc = text_page(content);
+        let unicode = doc.add(Object::Stream(Stream::flate(
+            Dict::new(),
+            b"1 begincodespacerange <0000> <ffff> endcodespacerange 4 beginbfchar <0020> <0020> <0061> <0061> <0062> <0062> <0063> <0063> <0064> <0064> endbfchar",
+        )));
+        let font = Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Font")),
+            (b"Subtype".to_vec(), Object::name("Type0")),
+            (b"BaseFont".to_vec(), Object::name("SyntheticCID")),
+            (b"Encoding".to_vec(), Object::name("Identity-H")),
+            (b"ToUnicode".to_vec(), Object::Ref(unicode)),
+            (
+                b"DescendantFonts".to_vec(),
+                Object::Array(vec![Object::Dict(Dict::from_iter([
+                    (b"Subtype".to_vec(), Object::name("CIDFontType2")),
+                    (b"DW".to_vec(), Object::Int(500)),
+                ]))]),
+            ),
+        ]);
+        let p = pdfcraft_model::pages(&doc)[0].obj;
+        let resources = Dict::from_iter([(b"Font".to_vec(), Object::Dict(Dict::from_iter([(b"F1".to_vec(), Object::Dict(font))])))]);
+        doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(resources))).unwrap();
+        doc
+    }
+    let hex = |s: &str| s.bytes().map(|b| format!("00{b:02x}")).collect::<String>();
+    // A plain replacement keeps the line's own drawing: the source's `Tw` stays where it was and
+    // no displacement restates it for the two-byte spaces.
+    let mut doc = composite_page(&format!("BT 2 Tw /F1 10 Tf 100 700 Td <{}> Tj ET", hex("ab cd")));
+    text::replace_line(&mut doc, 0, 0, "ab cd").unwrap();
+    let doc = reopen(&doc);
+    let flat = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(!flat.contains("] TJ"), "the source drawing is kept as it was: {flat}");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "ab cd", "{flat}");
+    // Justified across two runs, the spaces' stretch is the same whatever the source's `Tw` was,
+    // and the rows still read the same.
+    let justified = |tw: f64| {
+        let mut doc = composite_page(&format!(
+            "BT {tw} Tw /F1 10 Tf 12 TL 100 700 Td <{}> Tj T* <{}> Tj T* <{}> Tj T* <{}> Tj ET",
+            hex("a abc a abc a abc a abc a abc"),
+            hex("abc abc abc abc abc abc abc abc abc abc abc abc abc"),
+            hex("abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc"),
+            hex("cd")
+        ));
+        text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { align: Some(added::Align::Justify), ..Default::default() }).unwrap();
+        let doc = reopen(&doc);
+        let adjustments = pdfcraft_content::parse(&page_content_bytes(&doc, 0))
+            .ops
+            .into_iter()
+            .filter(|o| o.is("TJ"))
+            .map(|o| {
+                let mut out = Vec::new();
+                pdfcraft_content::write_op(&o, &mut out);
+                String::from_utf8_lossy(&out).into_owned()
+            })
+            .collect::<Vec<_>>();
+        (
+            adjustments,
+            text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>(),
+            String::from_utf8_lossy(&page_content_bytes(&doc, 0)).split_whitespace().collect::<Vec<_>>().join(" "),
+        )
+    };
+    let (without, plain_text, _) = justified(0.0);
+    let (with, tw_text, content) = justified(2.0);
+    assert_eq!(plain_text, tw_text, "the rows read the same: {plain_text:?} vs {tw_text:?}");
+    assert_eq!(without, with, "the source's `Tw` adds nothing to the spaces' stretch: {with:?}");
+    assert!(!with.is_empty(), "the justified rows stretch on their two-byte spaces: {with:?} rows {plain_text:?} content {content}");
 }
 
 #[test]
@@ -15794,3 +15871,4 @@ fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
 // r5c
 // r5d
 // r5e
+// r6a

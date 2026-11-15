@@ -2009,12 +2009,13 @@ pub(crate) fn rewrite_styled_block(
             if !shaped_runs.contains_key(&(row_index, pos)) {
                 state.scale *= calibration.get(&item.1).copied().unwrap_or(1.0);
             }
-            if stretch {
-                // Justified: the row's spaces take up what is left of its measure. The stretch
-                // goes through the text state's word spacing, as the source's own did; the state's
-                // scale is the one this run is drawn with, calibration included.
-                state.word_spacing += (justified_measure - w).max(0.0) / (space_count as f64 * state.scale * source.origin.k);
-            }
+            // Justified: the row's spaces take up what is left of its measure. The stretch goes
+            // through the text state's word spacing, as the source's own did; the state's scale is
+            // the one this run is drawn with, calibration included. A space the font shows any
+            // other way than the single-byte code 32 takes the stretch alone, through
+            // `source_show`'s explicit displacement: the source's own word spacing never reached it.
+            let stretch_share = if stretch { (justified_measure - w).max(0.0) / (space_count as f64 * state.scale * source.origin.k) } else { 0.0 };
+            state.word_spacing += stretch_share;
             if let Some([r, g, b]) = overrides.get(&item.1).and_then(|r| r.color).or(style.color) {
                 state.fill = vec![Op::new("rg", vec![n(r), n(g), n(b)])];
             }
@@ -2053,6 +2054,8 @@ pub(crate) fn rewrite_styled_block(
                     spaces.borrow().get(&item.2).copied().unwrap_or_else(|| source_space(doc, &fonts, m)),
                     state.char_spacing,
                     state.word_spacing,
+                    stretch_share,
+                    state.vertical,
                 )?);
                 block_ops.push(Op::new("ET", vec![]));
                 // `source_show` emits the stretched word spacing at each space of this run, so the
