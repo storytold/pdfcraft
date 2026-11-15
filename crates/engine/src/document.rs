@@ -497,8 +497,7 @@ impl Document {
 
     /// Refuse `edit` when the document's certification doesn't permit it (Table 257): a
     /// certification named from `/Perms /DocMDP` prevents those changes as well as detecting
-    /// them. [`crate::Session::apply`] checks every edit here before applying it, unless the
-    /// session makes such edits ([`crate::Session::with_certified_edits`]).
+    /// them. [`crate::Session::apply`] checks every edit here before applying it.
     pub fn check_certification(&self, edit: &Edit) -> Result<(), EditError> {
         self.certification().map_or(Ok(()), |level| crate::edit::check_certification(edit, level))
     }

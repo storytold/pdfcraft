@@ -149,17 +149,6 @@ fn document_information_and_undo_stay_available_under_a_certification() {
 }
 
 #[test]
-fn a_session_that_allows_certified_edits_makes_them() {
-    let mut s = Session::new().with_clock(|| 1_800_000_000).with_certified_edits(true);
-    let id = s.open("form.pdf", None, Arc::new(form()), None).unwrap();
-    let opts = SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), certify: Some(1), ..SignOptions::default() };
-    let signed = s.sign(id, &digital_id(), opts).unwrap();
-    s.mark_signed(id, signed, None).unwrap();
-    s.apply(id, rotate()).expect("made at the caller's request");
-    assert!(matches!(saved_verdict(&mut s, id), Modification::Disallowed(_)), "and validation reports it");
-}
-
-#[test]
 fn approval_signatures_restrict_nothing() {
     let (mut s, id) = certified(None);
     s.apply(id, comment()).expect("a comment");
