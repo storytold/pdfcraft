@@ -1,6 +1,6 @@
 use super::options::{
     COMBINE_OPTIONS, CONVERT_COLORS_OPTIONS, EXTRACT_OPTIONS, INFO_OPTIONS, RENDER_OPTIONS, SPLIT_OPTIONS, TEXT_OPTIONS, can_be_path_value, flag,
-    has_flag, needs_value, positional, validate_options,
+    has_flag, needs_value, positional, validate_options, value_of_flag,
 };
 use super::{Arc, CliError, ImageFormat, PageRenderer, Path, PathBuf, RenderConfig, RenderRequest, RequestKind, Write, inspect, stdout_line};
 
@@ -365,15 +365,15 @@ pub(crate) fn split(args: &[String]) -> Result<(), CliError> {
 pub(crate) fn convert_colors(args: &[String]) -> Result<(), CliError> {
     validate_options("convert-colors", args, CONVERT_COLORS_OPTIONS)?;
     let path = *positional(args, CONVERT_COLORS_OPTIONS).first().ok_or("convert-colors: missing file")?;
-    let out = flag(args, "--out").ok_or("convert-colors: missing --out")?;
-    let to = flag(args, "--to").unwrap_or("rgb");
+    let out = value_of_flag(args, CONVERT_COLORS_OPTIONS, "--out").ok_or("convert-colors: missing --out")?;
+    let to = value_of_flag(args, CONVERT_COLORS_OPTIONS, "--to").unwrap_or("rgb");
     if to != "rgb" {
         return Err(format!("convert-colors: unknown target space {to:?} (supported: rgb)").into());
     }
     let preserve_icc = !has_flag(args, CONVERT_COLORS_OPTIONS, "--no-preserve-icc");
     let options = pdfcraft_engine::print::ConvertColorsOptions { to_rgb: true, preserve_icc };
     let mut session = pdfcraft_engine::Session::new();
-    let id = session.open(path, None, read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
+    let id = session.open(path, None, read(path)?, value_of_flag(args, CONVERT_COLORS_OPTIONS, "--password")).map_err(|e| e.to_string())?;
     let (bytes, report) = session.convert_colors(id, &options).map_err(|e| e.to_string())?;
     write_pdf(Path::new(out), &bytes)?;
     stdout_line(format_args!("converted {} images (skipped {})", report.converted, report.skipped))
