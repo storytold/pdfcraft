@@ -11046,9 +11046,36 @@ fn a_recovered_page_tree_opens_unmodified_and_edits_the_pages_shown() {
     let doc = s.get(id).unwrap();
     assert_eq!(doc.info.pages.len(), 2);
     assert!(!doc.editor.as_ref().unwrap().cos.is_modified(), "the repair is a revision of the opened file, not an unsaved edit");
-    assert!(doc.repair_log().iter().any(|l| l.contains("page tree is missing")), "{:?}", doc.repair_log());
+    assert!(doc.repair_log().iter().any(|l| l.contains("page tree leads to no page")), "{:?}", doc.repair_log());
     s.apply(id, Edit::RotatePages { pages: vec![1], degrees: 90 }).unwrap();
     assert_eq!(s.get(id).unwrap().info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>(), [0, 90]);
+}
+
+/// A page tree whose root's only kid is the root (PDFBOX-4623 `loop_in_page_tree.pdf`) leads to no
+/// page, while the file's one page names that root as its `/Parent`. The renderer shows the page
+/// found by scanning (hayro-syntax patch 59) and the document model gathers it into a new page
+/// tree, both with the size and font the page inherits through `/Parent` (ISO 32000-2 §7.7.3.4),
+/// and the repair is noted.
+#[test]
+fn a_page_tree_that_leads_to_no_page_is_rebuilt_from_the_page_that_names_it() {
+    let content = "BT /F1 24 Tf 20 100 Td (Hello) Tj ET";
+    let bytes = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [2 0 R] /Count 1 /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ]);
+    let mut s = Session::new();
+    let id = s.open("loop.pdf", None, Arc::new(bytes), None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.iter().map(|p| (p.width, p.height)).collect::<Vec<_>>(), [(300.0, 200.0)]);
+    let cos = &doc.editor.as_ref().unwrap().cos;
+    assert_eq!(pdfcraft_organize::page_count(cos).unwrap(), 1, "the document model has the page the renderer shows");
+    assert!(!cos.is_modified(), "the repair is a revision of the opened file, not an unsaved edit");
+    assert!(doc.repair_log().iter().any(|l| l.contains("page tree leads to no page")), "{:?}", doc.repair_log());
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.iter().map(|p| (p.width, p.height, p.rotation)).collect::<Vec<_>>(), [(200.0, 300.0, 90)]);
 }
 
 #[test]

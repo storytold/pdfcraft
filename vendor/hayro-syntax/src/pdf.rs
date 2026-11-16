@@ -93,7 +93,9 @@ impl Pdf {
         };
         let xref = Arc::new(xref);
 
-        let pages = CachedPages::new(xref.clone()).ok_or(LoadPdfError::Invalid)?;
+        // PdfCraft patch: (hayro-syntax (59)) a page tree that leads to no page gives way to the
+        // page dictionaries found by scanning, as an unreadable one does.
+        let pages = CachedPages::new_or_scan(xref.clone()).ok_or(LoadPdfError::Invalid)?;
 
         Ok(Self {
             xref,

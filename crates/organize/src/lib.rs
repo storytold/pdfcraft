@@ -224,9 +224,38 @@ pub fn recover_page_tree(doc: &mut Document) -> Result<usize, OrganizeError> {
     found.sort();
     let root = doc.add(Dict::new());
     doc.update_dict(catalog, |d| d.set(b"Pages".to_vec(), Object::Ref(root)))?;
-    let order: Vec<(ObjRef, Dict)> = found.into_iter().map(|(_, r)| (r, Dict::new())).collect();
+    let order: Vec<(ObjRef, Dict)> = found.into_iter().map(|(_, r)| (r, inherited_through_parents(doc, r))).collect();
     rebuild(doc, &order)?;
     Ok(order.len())
+}
+
+/// What page `page` inherits from the nodes its `/Parent` entries lead to, nearest first (ISO
+/// 32000-2 §7.7.3.3 Table 31, §7.7.3.4), for a page gathered by [`recover_page_tree`]: a page the
+/// tree no longer reaches still names its parent, and its size and resources may be there. The
+/// renderer's scan reads the same chain (hayro-syntax patch 59). Stops at a node already seen, at
+/// one that is not a dictionary, and after 256 nodes, as that scan does.
+fn inherited_through_parents(doc: &Document, page: ObjRef) -> Dict {
+    let mut inherited = Dict::new();
+    let mut seen = std::collections::HashSet::from([page]);
+    let mut next = doc.get(page).as_dict().and_then(|d| d.reference(b"Parent"));
+    let mut depth = 0usize;
+    while let Some(node) = next {
+        if depth >= 256 || !seen.insert(node) {
+            break;
+        }
+        depth += 1;
+        let obj = doc.get(node);
+        let Some(d) = obj.as_dict() else { break };
+        for k in INHERITABLE {
+            if !inherited.contains(k)
+                && let Some(v) = d.get(k)
+            {
+                inherited.set(k.to_vec(), v.clone());
+            }
+        }
+        next = d.reference(b"Parent");
+    }
+    inherited
 }
 
 fn check(indices: &[usize], n: usize) -> Result<(), OrganizeError> {

@@ -19,6 +19,7 @@ use alloc::borrow::Cow;
 use alloc::boxed::Box;
 use alloc::collections::{BTreeSet, VecDeque};
 use crate::object::ObjectIdentifier;
+use crate::object::MaybeRef;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Deref;
@@ -45,6 +46,10 @@ impl PagesContext {
 pub struct Pages<'a> {
     pages: Vec<Page<'a>>,
     xref: &'a XRef,
+    /// PdfCraft patch: (hayro-syntax (59)) the walk of the page tree stopped short of some
+    /// `/Kids` entry that is not a dictionary (a reference to a missing object, say): the tree
+    /// names pages this walk did not reach, so an empty result is no sign that it has none.
+    incomplete: bool,
 }
 
 impl<'a> Pages<'a> {
@@ -59,6 +64,7 @@ impl<'a> Pages<'a> {
         // PdfCraft patch: guard against page-tree cycles (a `/Kids` entry pointing back up
         // the tree), which otherwise recurse until the stack overflows.
         let mut visited = BTreeSet::new();
+        let mut incomplete = false;
         resolve_pages(
             pages_dict,
             &mut pages,
@@ -66,9 +72,10 @@ impl<'a> Pages<'a> {
             Resources::new(Dict::empty(), None, ctx),
             &mut visited,
             0,
+            &mut incomplete,
         )?;
 
-        Some(Self { pages, xref })
+        Some(Self { pages, xref, incomplete })
     }
 
     /// Create a new `Pages` object by bruteforce-searching.
@@ -76,16 +83,28 @@ impl<'a> Pages<'a> {
     /// Of course this could result in the order of pages being messed up, but
     /// this is still better than nothing.
     pub(crate) fn new_brute_force(ctx: &ReaderContext<'a>, xref: &'a XRef) -> Option<Self> {
+        Self::scan(ctx, xref, false)
+    }
+
+    /// PdfCraft patch: (hayro-syntax (59)) as [`Self::new_brute_force`], taking only dictionaries
+    /// that say they are pages (`/Type /Page`, ISO 32000-2 §7.7.3.3 Table 31) and have content.
+    /// `new_brute_force` takes any dictionary with a `/Contents` entry, which annotations have
+    /// too (a text string, Table 166); the scans this patch adds run on files with no page tree
+    /// to check them against, so they take pages only.
+    pub(crate) fn new_brute_force_typed(ctx: &ReaderContext<'a>, xref: &'a XRef) -> Option<Self> {
+        Self::scan(ctx, xref, true)
+    }
+
+    fn scan(ctx: &ReaderContext<'a>, xref: &'a XRef, typed: bool) -> Option<Self> {
         let mut pages = vec![];
 
         for object in xref.objects() {
             if let Some(dict) = object.into_dict()
-                && let Some(page) = Page::new(
-                    &dict,
-                    &PagesContext::new(),
-                    Resources::new(Dict::empty(), None, ctx),
-                    true,
-                )
+                && (!typed || dict.get::<Name<'_>>(TYPE).is_some_and(|t| t.as_str() == "Page"))
+                && let Some(page) = {
+                    let (inherited, resources) = inherited_through_parents(&dict, ctx);
+                    Page::new(&dict, &inherited, resources, true)
+                }
             {
                 pages.push(page);
             }
@@ -95,7 +114,7 @@ impl<'a> Pages<'a> {
             return None;
         }
 
-        Some(Self { pages, xref })
+        Some(Self { pages, xref, incomplete: false })
     }
 
     /// Return the xref table (of the document the pages belong to).   
@@ -126,6 +145,7 @@ fn resolve_pages<'a>(
     resources: Resources<'a>,
     visited: &mut BTreeSet<ObjectIdentifier>,
     depth: usize,
+    incomplete: &mut bool,
 ) -> Option<()> {
     // PdfCraft patch: skip nodes already visited and absurdly deep trees.
     if depth > MAX_PAGE_TREE_DEPTH {
@@ -155,10 +175,14 @@ fn resolve_pages<'a>(
 
     let kids = pages_dict.get::<Array<'a>>(KIDS)?;
 
+    // PdfCraft patch: (hayro-syntax (59)) how many entries the walk took, to tell whether it
+    // stopped at one that is not a dictionary.
+    let mut taken = 0usize;
     for dict in kids.iter::<Dict<'_>>() {
+        taken = taken.saturating_add(1);
         match dict.get::<Name<'_>>(TYPE).as_deref() {
             Some(PAGES) => {
-                resolve_pages(&dict, entries, ctx.clone(), resources.clone(), visited, depth + 1);
+                resolve_pages(&dict, entries, ctx.clone(), resources.clone(), visited, depth + 1, incomplete);
             }
             // Let's be lenient and assume it's a `Page` in case it's `None` or something else
             // (see corpus test case 0083781).
@@ -169,8 +193,61 @@ fn resolve_pages<'a>(
             }
         }
     }
+    // The entry the walk stopped at, if it stopped early. One that refers back to a node already
+    // walked (an ancestor, read as a cycle) leads to no page this walk missed.
+    match kids.raw_iter().nth(taken) {
+        None => {}
+        Some(MaybeRef::Ref(r)) if visited.contains(&ObjectIdentifier::from(r)) => {}
+        Some(_) => *incomplete = true,
+    }
 
     Some(())
+}
+
+/// PdfCraft patch: (hayro-syntax (59)) what a page found by scanning inherits from the page tree
+/// nodes its `/Parent` entries lead to (ISO 32000-2 §7.7.3.3 Table 31 makes `/Parent` required,
+/// and §7.7.3.4 has `/Resources`, `/MediaBox`, `/CropBox` and `/Rotate` inherited from those
+/// ancestors), applied from the root down as [`resolve_pages`] applies them. A page whose tree
+/// leads no reader to it (PDFBOX-4623: the root's only kid is the root) still names its parent,
+/// and takes its size and fonts from there. The walk stops at a node already seen, at one that is
+/// not a dictionary, and after `MAX_PAGE_TREE_DEPTH` nodes.
+fn inherited_through_parents<'a>(page: &Dict<'a>, ctx: &ReaderContext<'a>) -> (PagesContext, Resources<'a>) {
+    let mut chain: Vec<Dict<'a>> = Vec::new();
+    let mut seen = BTreeSet::new();
+    if let Some(id) = page.obj_id() {
+        seen.insert(id);
+    }
+    let mut next = page.get::<Dict<'a>>(PARENT);
+    while let Some(node) = next {
+        if chain.len() >= MAX_PAGE_TREE_DEPTH {
+            break;
+        }
+        if let Some(id) = node.obj_id()
+            && !seen.insert(id)
+        {
+            break;
+        }
+        next = node.get::<Dict<'a>>(PARENT);
+        chain.push(node);
+    }
+    let mut inherited = PagesContext::new();
+    let mut resources = Resources::new(Dict::empty(), None, ctx);
+    for node in chain.iter().rev() {
+        if let Some(media_box) = node.get::<Rect>(MEDIA_BOX) {
+            inherited.media_box = Some(media_box);
+        }
+        if let Some(crop_box) = node.get::<Rect>(CROP_BOX) {
+            inherited.crop_box = Some(crop_box);
+        }
+        if let Some(rotate) = node.get::<i32>(ROTATE) {
+            inherited.rotate = Some(rotate);
+        }
+        resources = Resources::for_page(
+            node.contains_key(RESOURCES).then(|| node.get::<Dict<'_>>(RESOURCES).unwrap_or_default()),
+            resources,
+        );
+    }
+    (inherited, resources)
 }
 
 /// The rotation of the page.
@@ -875,6 +952,26 @@ pub(crate) mod cached {
 
     impl CachedPages {
         pub(crate) fn new(xref: Arc<XRef>) -> Option<Self> {
+            Self::build(xref, false)
+        }
+
+        /// PdfCraft patch: (hayro-syntax (59)) as [`Self::new`], and a page tree that leads to no
+        /// page (its `/Kids` are empty or loop back to itself) gives way to the page
+        /// dictionaries `Pages::new_brute_force_typed` finds, as one that cannot be read at all
+        /// does. ISO 32000-2 §7.7.3.1 has every page reached through the tree; PDFBOX-4623
+        /// `loop_in_page_tree.pdf` has a root whose only kid is itself, and its one page, which
+        /// names that root as its `/Parent`, was lost. When the scan finds no page either, the
+        /// empty tree stands.
+        ///
+        /// Not when the walk stopped at a `/Kids` entry it could not read: that tree names pages
+        /// the walk did not reach, and the document model, which steps over such an entry, finds
+        /// them in the tree's order. Not used while trying a table rebuilt over a cut-off update
+        /// (patch 43), whose empty tree means the older table is read instead.
+        pub(crate) fn new_or_scan(xref: Arc<XRef>) -> Option<Self> {
+            Self::build(xref, true)
+        }
+
+        fn build(xref: Arc<XRef>, scan_if_empty: bool) -> Option<Self> {
             // SAFETY:
             // - The XRef's location is stable in memory:
             //   - We wrapped it in a `Arc` (or `Rc` in `no_std`), which implements `StableDeref`.
@@ -889,6 +986,17 @@ pub(crate) mod cached {
                 .get_with(xref.trailer_data().pages_ref, &ctx)
                 .and_then(|p| Pages::new(&p, &ctx, xref_reference))
                 .or_else(|| Pages::new_brute_force(&ctx, xref_reference))?;
+            let pages = if scan_if_empty && pages.is_empty() && !pages.incomplete {
+                match Pages::new_brute_force_typed(&ctx, xref_reference) {
+                    Some(found) => {
+                        warn!("the page tree leads to no page; using the {} page objects found by scanning", found.len());
+                        found
+                    }
+                    None => pages,
+                }
+            } else {
+                pages
+            };
 
             Some(Self { pages, _xref: xref })
         }

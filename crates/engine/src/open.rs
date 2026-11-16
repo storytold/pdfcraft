@@ -261,10 +261,11 @@ impl Session {
             },
             (_, cos) => (bytes, info, cos),
         };
-        // The catalog leads to no page, but the reader found pages by scanning: gather the page
-        // objects into a page tree as one more revision, or page edits address none of them
-        // (#1656). Kept only when the reader then shows the same pages, and never on a signed
-        // document, where writing the repair could rewrite the file under its signatures.
+        // The catalog leads to no page (its `/Pages` is missing or lost, or the tree's `/Kids`
+        // reach no page), but the reader found pages by scanning: gather the page objects into a
+        // page tree as one more revision, or page edits address none of them (#1656). Kept only
+        // when the reader then shows the same pages, and never on a signed document, where
+        // writing the repair could rewrite the file under its signatures.
         let (bytes, info, cos) = match cos {
             Ok(Ok(cos)) if !info.pages.is_empty() && pdfcraft_organize::page_count(&cos).unwrap_or(0) == 0 => {
                 let mut work = cos.clone();
@@ -275,7 +276,10 @@ impl Session {
                 };
                 match rebuilt {
                     Some((b, i, mut c)) => {
-                        c.note_repair(format!("the page tree is missing; its {} pages were found by scanning the file", i.pages.len()));
+                        c.note_repair(format!(
+                            "the page tree leads to no page; the {} pages found by scanning the file were gathered into a new one",
+                            i.pages.len()
+                        ));
                         (b, i, Ok(Ok(c)))
                     }
                     None => (bytes, info, Ok(Ok(cos))),
