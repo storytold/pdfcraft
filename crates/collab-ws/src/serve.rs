@@ -41,6 +41,10 @@ pub struct Config {
     pub publication_backoff: Duration,
     /// The delay doubles per attempt up to this cap.
     pub publication_backoff_max: Duration,
+    /// Session tickets the cabinet has withdrawn (thread #18). Shared with the
+    /// control plane's revoke endpoint, so the sockets that endpoint closes are
+    /// the ones this transport opened.
+    pub revocations: Arc<crate::Revocations>,
 }
 
 impl Default for Config {
@@ -54,6 +58,7 @@ impl Default for Config {
             outbox: 256,
             publication_backoff: Duration::from_secs(1),
             publication_backoff_max: Duration::from_secs(60),
+            revocations: Arc::new(crate::Revocations::new()),
         }
     }
 }
@@ -68,6 +73,10 @@ pub struct WsServer<A: Adapter> {
 struct Shared<A: Adapter> {
     hub: Hub<A>,
     sinks: HashMap<ClientId, SyncSender<ServerMessage>>,
+    /// The session ticket each connected client presented. `revoke_session` closes
+    /// the sockets of one ticket, and a client's actor is not enough: two sockets
+    /// of the same person may be opened on two tickets.
+    sessions: HashMap<ClientId, String>,
     /// Commits that have written their base and wait for the cabinet call.
     /// The lock is released before they run (RFC §16, limitation 9).
     pending: Vec<Pending>,
@@ -204,6 +213,7 @@ impl<A: Adapter> WsServer<A> {
         let shared = Shared {
             hub,
             sinks: HashMap::new(),
+            sessions: HashMap::new(),
             pending: Vec::new(),
             forced_commits: 0,
             conflicts_resolved: 0,
@@ -447,6 +457,47 @@ impl<A: Adapter> WsServer<A> {
             }),
         }
     }
+
+    /// Withdraw a session ticket and close the sockets it opened (thread #18 on
+    /// PR #6622). Returns how many connections the revocation closed; `0` still
+    /// revokes the ticket, so a later `hello` with it is refused.
+    ///
+    /// The revocation outlives the sockets: `serve_inner` consults it before a
+    /// join, which is the only place a ticket is presented. A room whose last
+    /// connection this closed is committed like any other last leave, so a
+    /// revoked user's accepted work still reaches the cabinet.
+    pub fn revoke_session(&self, session_id: &str) -> Result<usize, TransportError> {
+        self.config.revocations.revoke(session_id);
+        let (closed, pending) = {
+            let mut shared = lock(&self.shared)?;
+            let ids: Vec<ClientId> = shared.sessions.iter().filter(|(_, session)| session.as_str() == session_id).map(|(id, _)| *id).collect();
+            let mut docs: Vec<DocKey> = Vec::new();
+            for id in &ids {
+                // Dropping the sink is what ends the socket: the pump thread's
+                // outbox disconnects, its loop returns, and it removes itself.
+                shared.sinks.remove(id);
+                shared.sessions.remove(id);
+                if let Some(doc) = shared.hub.client_doc(*id)
+                    && !docs.contains(&doc)
+                {
+                    docs.push(doc);
+                }
+                shared.hub.disconnect(*id);
+            }
+            let mut pending: Vec<Pending> = Vec::new();
+            for doc in docs {
+                if shared.hub.members(&doc) == 0
+                    && let Some(commit) = shared.hub.commit_if_dirty(&doc)
+                {
+                    pending.push(commit);
+                }
+            }
+            pending.extend(shared.take_pending());
+            (ids.len(), pending)
+        };
+        self.run_pending(pending);
+        Ok(closed)
+    }
 }
 
 impl<A: Adapter + Send + 'static> WsServer<A> {
@@ -556,6 +607,12 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
         if claims.file_id != hello.doc.as_str() {
             return reject(&mut ws, ErrorCode::Forbidden, "the session token is for another file");
         }
+        // A withdrawn ticket is refused here, before the room sees the join: the
+        // cabinet closed the session, and the token's `exp` cannot say that
+        // (thread #18 on PR #6622).
+        if self.config.revocations.is_revoked(&claims.session_id) {
+            return reject(&mut ws, ErrorCode::Auth, "the session was revoked; ask the cabinet for a new ticket");
+        }
         let actor = match ActorId::new(claims.subject.clone()) {
             Ok(actor) => actor,
             Err(e) => return reject(&mut ws, ErrorCode::Invalid, e.to_string()),
@@ -568,6 +625,7 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
             match shared.hub.connect(actor, claims.role, &hello, now_ms()) {
                 Ok(id) => {
                     shared.sinks.insert(id, sink);
+                    shared.sessions.insert(id, claims.session_id.clone());
                     shared.pump();
                     // A room resumed with a journal past the threshold is
                     // compacted as soon as somebody is there to keep the work
@@ -591,6 +649,7 @@ impl<A: Adapter + Send + 'static> WsServer<A> {
         let pending = {
             let mut shared = lock(&self.shared)?;
             shared.sinks.remove(&id);
+            shared.sessions.remove(&id);
             shared.hub.disconnect(id);
             if shared.hub.members(&doc) == 0 {
                 // Last participant out: the server commits so the cabinet has the work (RFC §8).
@@ -975,18 +1034,26 @@ mod tests {
                 file_id: "file-1".into(),
                 app: "pdfcraft".into(),
                 role,
-                session_id: "session-9".into(),
+                // One session id per token, so a revocation test can withdraw one
+                // connection's ticket without touching the others.
+                session_id: format!("session-9-{token}"),
                 expires_at: u64::MAX,
             })
         }
     }
 
     fn start() -> Result<super::ServerHandle, TransportError> {
+        Ok(start_server()?.1)
+    }
+
+    /// The shared server too, for the calls a handle does not expose (a revoke).
+    fn start_server() -> Result<(Arc<WsServer<Fake>>, super::ServerHandle), TransportError> {
         let doc = DocKey::new("file-1").map_err(|e| TransportError::Socket(e.to_string()))?;
         let mut hub = Hub::new(RoomConfig::default());
         hub.open_room(doc, Fake { epoch: 0 }).map_err(|e| TransportError::Socket(e.message))?;
-        let server = WsServer::new(hub, Arc::new(TestVerifier), Config { poll_interval: Duration::from_millis(2), ..Config::default() });
-        server.bind("127.0.0.1:0").map_err(TransportError::Io)
+        let server = Arc::new(WsServer::new(hub, Arc::new(TestVerifier), Config { poll_interval: Duration::from_millis(2), ..Config::default() }));
+        let handle = server.clone().bind_arc("127.0.0.1:0").map_err(TransportError::Io)?;
+        Ok((server, handle))
     }
 
     struct Client {
@@ -1076,6 +1143,31 @@ mod tests {
             ServerMessage::Error(e) => assert_eq!(e.code, ErrorCode::Auth),
             other => return Err(format!("expected an auth error, got {other:?}").into()),
         }
+        Ok(())
+    }
+
+    /// A session the cabinet closed stops working at once, not at its `exp`
+    /// (thread #18 on PR #6622).
+    #[test]
+    fn a_revoked_session_is_refused_and_its_sockets_are_closed() -> Result<(), Box<dyn std::error::Error>> {
+        let (server, handle) = start_server()?;
+        let mut live = Client::join(handle.local_addr(), "editor", "one")?;
+        assert!(matches!(live.next()?, ServerMessage::Welcome(_)));
+
+        assert_eq!(server.revoke_session("session-9-editor")?, 1, "the ticket's one live socket is closed");
+        assert!(live.next().is_err(), "the closed socket does not carry on");
+
+        // The ticket itself is withdrawn: a reconnect with it is refused before
+        // the room sees the join.
+        let mut again = Client::join(handle.local_addr(), "editor", "two")?;
+        match again.next()? {
+            ServerMessage::Error(e) => assert_eq!(e.code, ErrorCode::Auth, "{}", e.message),
+            other => return Err(format!("a revoked ticket joined: {other:?}").into()),
+        }
+
+        // Another ticket is untouched.
+        let mut other = Client::join(handle.local_addr(), "editor:2", "three")?;
+        assert!(matches!(other.next()?, ServerMessage::Welcome(_)));
         Ok(())
     }
 

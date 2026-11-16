@@ -7,10 +7,16 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-/// A request head bigger than this is not the cabinet talking.
+/// A request head bigger than this is not the cabinet talking. The budget is for
+/// the whole head — the request line and every header line — not for one line:
+/// a hundred small headers are as much of an attack as one huge one.
 const MAX_HEAD: usize = 16 * 1024;
+/// How long the whole head may take to arrive. A per-read timeout alone does not
+/// bound it: a peer that sends one byte just before every timeout keeps a read
+/// awake forever.
+const HEAD_TIMEOUT: Duration = Duration::from_secs(10);
 /// How much of a response body is read just to keep the connection clean.
 const DRAIN_LIMIT: u64 = 64 * 1024;
 
@@ -45,15 +51,19 @@ impl Request {
 /// Read one request from `stream`. `max_body` is the largest body accepted; a
 /// bigger `Content-Length` is refused before a single byte is buffered.
 pub fn read_request(stream: &mut TcpStream, max_body: usize) -> Result<Request, HttpError> {
-    stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| error(format!("could not set a read timeout: {e}")))?;
+    stream.set_read_timeout(Some(HEAD_TIMEOUT)).map_err(|e| error(format!("could not set a read timeout: {e}")))?;
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| error(format!("could not clone the stream: {e}")))?);
-    let line = read_head_line(&mut reader)?;
+    // One budget and one deadline for the whole head: every line spends from the
+    // same 16 KiB and the same ten seconds.
+    let mut budget = MAX_HEAD;
+    let deadline = Instant::now() + HEAD_TIMEOUT;
+    let line = read_head_line(&mut reader, "request", &mut budget, deadline)?;
     let mut parts = line.split_whitespace();
     let method = parts.next().ok_or_else(|| error("the request line has no method"))?.to_owned();
     let path = parts.next().ok_or_else(|| error("the request line has no path"))?.to_owned();
     let mut headers = Vec::new();
     loop {
-        let line = read_head_line(&mut reader)?;
+        let line = read_head_line(&mut reader, "request", &mut budget, deadline)?;
         if line.trim().is_empty() {
             break;
         }
@@ -80,11 +90,28 @@ pub fn read_request(stream: &mut TcpStream, max_body: usize) -> Result<Request, 
     Ok(Request { body, ..request })
 }
 
-fn read_head_line(reader: &mut impl BufRead) -> Result<String, HttpError> {
+/// Read one head line, spending at most `budget` bytes of the head as a whole and
+/// no more than `deadline` of wall-clock time. `what` names the head in the
+/// error ("request" or "response"): the message goes to a log and has to say
+/// which side was refused.
+fn read_head_line(reader: &mut impl BufRead, what: &str, budget: &mut usize, deadline: Instant) -> Result<String, HttpError> {
+    if *budget == 0 {
+        return Err(error(format!("the {what} head is larger than the {MAX_HEAD} byte limit")));
+    }
+    if Instant::now() >= deadline {
+        return Err(error(format!("the {what} head took longer than the {} second deadline", HEAD_TIMEOUT.as_secs())));
+    }
+    let allowed = *budget;
     let mut line = String::new();
-    let read = reader.take(MAX_HEAD as u64).read_line(&mut line).map_err(|e| error(format!("could not read the request head: {e}")))?;
+    let read = reader.take(allowed as u64).read_line(&mut line).map_err(|e| error(format!("could not read the {what} head: {e}")))?;
     if read == 0 {
-        return Err(error("the request head ended early"));
+        return Err(error(format!("the {what} head ended early")));
+    }
+    *budget = budget.saturating_sub(read);
+    // A line cut off at the budget is not a line the parser may see: refusing it
+    // here is what keeps a truncated header from being read as a complete one.
+    if *budget == 0 && !line.ends_with('\n') {
+        return Err(error(format!("the {what} head is larger than the {MAX_HEAD} byte limit")));
     }
     Ok(line)
 }
@@ -106,7 +133,14 @@ pub struct Endpoint {
 
 /// Parse an `http://` URL. `https://` is refused: this build has no TLS client,
 /// and a silent downgrade would send a session token in the clear.
+///
+/// Only visible ASCII is accepted. The path is interpolated into a request line
+/// verbatim, so a space would end the target and a CR or LF would start a header
+/// of the caller's choosing: a URL that carries either is refused, not escaped.
 pub fn parse_http_url(url: &str) -> Result<Endpoint, HttpError> {
+    if let Some(byte) = url.bytes().find(|byte| !(0x21..=0x7e).contains(byte)) {
+        return Err(error(format!("the URL carries {byte:#04x}, which a request line cannot: only visible ASCII is supported")));
+    }
     if let Some(rest) = url.strip_prefix("https://") {
         let _ = rest;
         return Err(error("TLS is not supported by this build; use an http:// URL behind the reverse proxy"));
@@ -174,7 +208,9 @@ impl Client {
         stream.write_all(body).map_err(|e| error(format!("could not send the body: {e}")))?;
         stream.flush().map_err(|e| error(format!("could not flush the request: {e}")))?;
         let mut reader = BufReader::new(stream.try_clone().map_err(|e| error(format!("could not clone the stream: {e}")))?);
-        let line = read_head_line(&mut reader)?;
+        let mut budget = MAX_HEAD;
+        let deadline = Instant::now() + self.timeout;
+        let line = read_head_line(&mut reader, "response", &mut budget, deadline)?;
         let mut parts = line.split_whitespace();
         let version = parts.next().ok_or_else(|| error("the response has no status line"))?;
         if !version.starts_with("HTTP/1.") {
@@ -184,7 +220,7 @@ impl Client {
         let code = code.parse::<u16>().map_err(|_| error("the status code is not a number"))?;
         let mut length = None;
         loop {
-            let line = read_head_line(&mut reader)?;
+            let line = read_head_line(&mut reader, "response", &mut budget, deadline)?;
             if line.trim().is_empty() {
                 break;
             }
@@ -238,8 +274,8 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::{Client, Endpoint, parse_http_url, read_request, respond};
-    use std::io::Read;
-    use std::net::TcpListener;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
     use std::time::Duration;
 
     #[test]
@@ -254,6 +290,53 @@ mod tests {
         assert!(parse_http_url("ftp://example.test/commit").is_err());
         assert!(parse_http_url("http://user:pass@example.test/").is_err());
         assert!(parse_http_url("http:///nohost").is_err());
+    }
+
+    /// A URL is pasted into a request line as it stands, so a space would end the
+    /// target early and a CRLF would start a header of the caller's choosing
+    /// (thread #10 on PR #6622).
+    #[test]
+    fn a_url_cannot_carry_a_space_a_line_break_or_a_control_character() {
+        for url in [
+            "http://127.0.0.1:8788/a b",
+            "http://127.0.0.1:8788/a\r\nX-Injected: 1",
+            "http://127.0.0.1:8788/a\n",
+            "http://127.0.0.1:8788/a\0",
+            "http://127.0.0.1:8788/\u{7f}",
+            "http://127.0.0.1:8788/caf\u{e9}",
+        ] {
+            assert!(parse_http_url(url).is_err(), "{url:?} must be refused before it reaches a request");
+        }
+        // The ordinary shapes still parse.
+        assert_eq!(parse_http_url("http://127.0.0.1:8788/file.pdf").expect("a plain URL").path, "/file.pdf");
+        assert_eq!(parse_http_url("http://cabinet.test/a/b?c=d").expect("a query is part of the target").path, "/a/b?c=d");
+    }
+
+    /// A hundred small headers are as much of an attack as one huge line: the
+    /// limit is the whole head, not one line (thread #9 on PR #6622).
+    #[test]
+    fn a_request_head_is_bounded_as_a_whole_not_line_by_line() -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else { return };
+            if stream.write_all(b"GET / HTTP/1.1\r\n").is_err() {
+                return;
+            }
+            for i in 0..64 {
+                let header = format!("X-Pad-{i}: {}\r\n", "a".repeat(1000));
+                if stream.write_all(header.as_bytes()).is_err() {
+                    return;
+                }
+            }
+            let _ = stream.flush();
+            // Hold the socket open: the reader has to refuse the head on its own.
+            std::thread::sleep(Duration::from_millis(300));
+        });
+        let mut stream = TcpStream::connect(address)?;
+        let error = read_request(&mut stream, 1 << 20).err().ok_or("a 64 KiB of small headers was accepted")?;
+        assert!(error.0.contains("head is larger than the"), "{error}");
+        Ok(())
     }
 
     /// A one-request server on loopback; returns its address and the request it

@@ -1,6 +1,6 @@
 //! The cabinet control plane: `POST /v1/sessions`,
-//! `POST /v1/sessions/{fileId}/commit` and
-//! `POST /v1/sessions/{fileId}/resolve` (RFC §8.2, §9).
+//! `POST /v1/sessions/{fileId}/commit`, `POST /v1/sessions/{fileId}/resolve`
+//! and `POST /v1/sessions/{fileId}/revoke` (RFC §8.2, §9).
 //!
 //! The cabinet calls the first before a user opens the editor. It names the
 //! file, presents a session JWT, and supplies the file either inline (base64) or
@@ -27,12 +27,18 @@
 //! publishes again on the next commit. A room that is not in conflict is
 //! refused, so a repeated call cannot move the marker twice.
 //!
+//! The fourth withdraws a session ticket the cabinet has closed: the sockets it
+//! opened are closed and a later `hello` with it is refused. A token's
+//! signature, expiry and file binding cannot say "closed early", which is what
+//! this endpoint adds.
+//!
 //! The listener is a plain HTTP/1.1 socket with a body limit and no keep-alive.
 //! It is off unless `--control` is given; directory provisioning stays as the
 //! dev mode.
 
-use crate::http::{self, Request};
+use crate::http::{self, Endpoint, Request};
 use crate::rooms::{self, RoomError, RoomsConfig, Seed};
+use pdfcraft_collab_proto::Role;
 use pdfcraft_collab_server::{Adapter, Published};
 use pdfcraft_collab_ws::{CommitNow, ResolveError, TransportError, Verifier, WsServer};
 use serde::Deserialize;
@@ -47,6 +53,15 @@ const MAX_BODY: usize = 384 << 20;
 
 pub struct ControlConfig {
     pub rooms: RoomsConfig,
+    /// The hosts a `url` source may name: `host` or `host:port`, compared as the
+    /// URL parser reads them. Empty means the daemon fetches no URL at all, and
+    /// the cabinet sends the bytes inline or seeds a directory instead.
+    ///
+    /// This is the allowlist thread #8 on PR #6622 asks for. Without it, a ticket
+    /// for any file makes the daemon `GET` whatever address the caller names —
+    /// a metadata service, an admin socket, another tenant's host — and the
+    /// answer is a `502` or a `201` the caller reads as an oracle.
+    pub source_allow: Vec<String>,
 }
 
 pub struct Control {
@@ -92,6 +107,17 @@ struct ResolveRequest {
     /// The etag of the cabinet's copy: `sha256:<hex>`.
     etag: String,
 }
+
+/// The session a revoke request withdraws, and the longest id the daemon keeps.
+#[derive(Debug, Deserialize)]
+struct RevokeRequest {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+}
+
+/// Long enough for a UUID or a cabinet's opaque id, short enough that a body of
+/// ids cannot grow the revocation set without bound.
+const MAX_SESSION_ID_BYTES: usize = 128;
 
 struct Reply {
     status: u16,
@@ -149,6 +175,12 @@ impl Control {
         if let Some(file_id) = path.strip_prefix("/v1/sessions/").and_then(|rest| rest.strip_suffix("/commit")) {
             return match request.method.as_str() {
                 "POST" if !file_id.is_empty() && !file_id.contains('/') => self.commit(file_id, request),
+                _ => Reply::error(404, "not_found", "no such control endpoint"),
+            };
+        }
+        if let Some(file_id) = path.strip_prefix("/v1/sessions/").and_then(|rest| rest.strip_suffix("/revoke")) {
+            return match request.method.as_str() {
+                "POST" if !file_id.is_empty() && !file_id.contains('/') => self.revoke(file_id, request),
                 _ => Reply::error(404, "not_found", "no such control endpoint"),
             };
         }
@@ -285,6 +317,11 @@ impl Control {
         if claims.file_id != request.file_id {
             return Reply::error(403, "forbidden", "the session token is for another file");
         }
+        if let Some(url) = &request.url
+            && let Err(reply) = self.source_url_allowed(url, claims.role)
+        {
+            return reply;
+        }
         let doc = match rooms::doc_key(&request.file_id) {
             Ok(doc) => doc,
             Err(e) => return Reply::error(400, "invalid", e),
@@ -361,6 +398,69 @@ impl Control {
         )
     }
 
+    /// `POST /v1/sessions/{fileId}/revoke`: withdraw a session ticket before its
+    /// `exp` (thread #18 on PR #6622).
+    ///
+    /// The transport verifies a ticket's signature, its expiry and the file it
+    /// names; those three cannot say "closed early". The cabinet closes a session
+    /// when the user is removed from a file, their rights drop or an
+    /// administrator ends the session, so without this call the old ticket keeps
+    /// a socket open until it expires. The caller presents a token for the same
+    /// file with a role that may write — a viewer or a commenter cannot end
+    /// somebody else's session — and the answer names how many live connections
+    /// the revocation closed.
+    fn revoke(&self, file_id: &str, request: &Request) -> Reply {
+        let token = match request.header("authorization").and_then(|value| value.strip_prefix("Bearer ")) {
+            Some(token) if !token.is_empty() => token,
+            _ => return Reply::error(401, "auth", "the request needs a service token: Authorization: Bearer <jwt>"),
+        };
+        let claims = match self.verifier.verify(token) {
+            Ok(claims) => claims,
+            Err(e) => return Reply::error(401, "auth", e.to_string()),
+        };
+        if claims.file_id != file_id {
+            return Reply::error(403, "forbidden", "the service token is for another file");
+        }
+        if !claims.role.can_structural() {
+            return Reply::error(403, "forbidden", "this role cannot revoke a session");
+        }
+        let body: RevokeRequest = match serde_json::from_slice(&request.body) {
+            Ok(body) => body,
+            Err(e) => return Reply::error(400, "invalid", format!("the body is not a revoke request: {e}")),
+        };
+        if body.session_id.is_empty()
+            || body.session_id.len() > MAX_SESSION_ID_BYTES
+            || !body.session_id.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+        {
+            return Reply::error(400, "invalid", "the session id is empty, too long, or carries a byte an id cannot");
+        }
+        match self.server.revoke_session(&body.session_id) {
+            Ok(closed) => Reply::json(200, serde_json::json!({ "fileId": file_id, "sessionId": body.session_id, "revoked": true, "closed": closed })),
+            Err(TransportError::Hub) => Reply::error(503, "unavailable", "the hub is unavailable"),
+            Err(e) => Reply::error(500, "internal", e.to_string()),
+        }
+    }
+
+    /// The checks a `url` source passes before the daemon opens a socket (thread
+    /// #8 on PR #6622): a role that may write, a URL the request line can carry,
+    /// and a host on the operator's allowlist. A `viewer` ticket is enough to join
+    /// a room, so it must not be enough to make the daemon fetch an address it
+    /// chooses.
+    fn source_url_allowed(&self, url: &str, role: Role) -> Result<(), Reply> {
+        if !role.can_structural() {
+            return Err(Reply::error(403, "forbidden", "this role cannot ask the daemon to fetch a URL source; send the bytes inline"));
+        }
+        let endpoint = http::parse_http_url(url).map_err(|e| Reply::error(400, "invalid", e.0))?;
+        if !self.config.source_allow.iter().any(|entry| host_allowed(entry, &endpoint)) {
+            return Err(Reply::error(
+                403,
+                "forbidden",
+                format!("the source host {}:{} is not on this daemon's --source-allow list", endpoint.host, endpoint.port),
+            ));
+        }
+        Ok(())
+    }
+
     /// Read the file the cabinet named: inline bytes or a URL. No source means
     /// "resume only".
     fn source(&self, request: &SessionRequest) -> Result<Option<Seed>, Reply> {
@@ -403,6 +503,29 @@ fn canonical_etag(etag: &str) -> Option<String> {
         return None;
     }
     Some(format!("sha256:{}", hex.to_ascii_lowercase()))
+}
+
+/// Does one `--source-allow` entry name the endpoint's host? An entry is a host
+/// (`pdf.cabinet.internal`), a host and a port (`pdf.cabinet.internal:8080`), or a
+/// bracketed IPv6 host with or without a port (`[fd00::1]`, `[fd00::1]:8080`).
+/// A bare IPv6 host matches as the URL parser prints it (`fd00::1`).
+fn host_allowed(entry: &str, endpoint: &Endpoint) -> bool {
+    let entry = entry.trim();
+    if entry.is_empty() {
+        return false;
+    }
+    let same_host = |host: &str| host.eq_ignore_ascii_case(&endpoint.host);
+    let plain = same_host(entry);
+    let with_port = entry
+        .rsplit_once(':')
+        .filter(|(host, _)| !host.is_empty() && !host.contains(':'))
+        .and_then(|(host, port)| port.parse::<u16>().ok().filter(|port| *port == endpoint.port).map(|_| host))
+        .is_some_and(same_host);
+    let bracketed = entry.strip_prefix('[').and_then(|rest| rest.split_once(']')).is_some_and(|(host, after)| match after.strip_prefix(':') {
+        None => same_host(host),
+        Some(port) => port.parse::<u16>() == Ok(endpoint.port) && same_host(host),
+    });
+    plain || with_port || bracketed
 }
 
 fn failure(error: RoomError) -> Reply {
@@ -532,11 +655,15 @@ mod tests {
     }
 
     fn control(name: &str, publisher: Option<Arc<Publisher>>) -> (Arc<Control>, std::path::PathBuf) {
+        control_allowing(name, publisher, Vec::new())
+    }
+
+    fn control_allowing(name: &str, publisher: Option<Arc<Publisher>>, source_allow: Vec<String>) -> (Arc<Control>, std::path::PathBuf) {
         let root = root(name);
         let rooms = RoomsConfig { data: root.join("data"), publisher, max_source_bytes: 8 << 20, http_timeout: Duration::from_secs(5) };
         let hub = Hub::new(RoomConfig::default());
         let server = Arc::new(WsServer::new(hub, Arc::new(TestVerifier), WsConfig::default()));
-        let control = Arc::new(Control::new(server, Arc::new(TestVerifier), ControlConfig { rooms }));
+        let control = Arc::new(Control::new(server, Arc::new(TestVerifier), ControlConfig { rooms, source_allow }));
         (control, root)
     }
 
@@ -549,6 +676,20 @@ mod tests {
         let encoded = body.to_string();
         let (status, reply) = client.post_json(&format!("http://{address}{path}"), token, &[], encoded.as_bytes()).map_err(|e| e.0)?;
         Ok((status, serde_json::from_slice(&reply).map_err(|e| e.to_string())?))
+    }
+
+    /// The next protocol message on a socket, skipping the transport's
+    /// ping/pong frames.
+    fn next_message(
+        socket: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
+    ) -> Result<pdfcraft_collab_proto::ServerMessage, Box<dyn std::error::Error>> {
+        loop {
+            match socket.read()? {
+                tungstenite::Message::Text(text) => return Ok(serde_json::from_str(text.as_str())?),
+                tungstenite::Message::Close(_) => return Err("the server closed the connection".into()),
+                _ => {}
+            }
+        }
     }
 
     /// A cabinet that answers one status to every commit callback.
@@ -676,11 +817,12 @@ mod tests {
     }
 
     #[test]
-    fn a_source_url_is_fetched_and_a_wrong_content_type_is_not_accepted() -> Result<(), Box<dyn std::error::Error>> {
+    fn a_source_url_is_fetched_from_an_allowed_host() -> Result<(), Box<dyn std::error::Error>> {
         use std::io::{Read, Write};
         use std::net::TcpListener;
         let listener = TcpListener::bind("127.0.0.1:0")?;
-        let url = format!("http://{}/file.pdf", listener.local_addr()?);
+        let host = listener.local_addr()?;
+        let url = format!("http://{host}/file.pdf");
         let pdf = fixture("served");
         let served = pdf.clone();
         std::thread::spawn(move || {
@@ -696,17 +838,119 @@ mod tests {
                 let _ = stream.write_all(&served);
             }
         });
-        let (control, root) = control("url", None);
+        let (control, root) = control_allowing("url", None, vec![host.to_string()]);
         let address = control.bind("127.0.0.1:0")?;
         let (status, reply) = post(address, serde_json::json!({"fileId": "file-1", "jwt": "good", "url": url}))?;
         assert_eq!(status, 201, "{reply}");
         assert_eq!(reply["etag"], rooms::etag_of(&pdf));
 
-        // A source that is not a PDF is refused before anything is opened.
+        // A host outside the allowlist is refused before a socket is opened, and
+        // a source that is not a PDF is refused after it is read.
         let (status, reply) = post(address, serde_json::json!({"fileId": "file-1", "jwt": "good", "url": "http://127.0.0.1:1/file.pdf"}))?;
-        assert_eq!(status, 502, "{reply}");
+        assert_eq!(status, 403, "{reply}");
         let (status, reply) = post(address, serde_json::json!({"fileId": "file-1", "jwt": "good", "bytes": rooms::base64_encode(b"not a pdf")}))?;
         assert_eq!(status, 400, "{reply}");
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// A ticket for a file must not turn the daemon into a fetcher for an address
+    /// the caller chooses: the role has to be one that may write, and the host
+    /// has to be on the operator's list (thread #8 on PR #6622).
+    #[test]
+    fn a_url_source_needs_a_writing_role_and_an_allowed_host() -> Result<(), Box<dyn std::error::Error>> {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let host = listener.local_addr()?;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let pdf = fixture("oracle");
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                counter.fetch_add(1, Ordering::SeqCst);
+                let mut head = [0u8; 2048];
+                let _ = stream.read(&mut head);
+                let _ =
+                    write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", pdf.len());
+                let _ = stream.write_all(&pdf);
+            }
+        });
+        let url = format!("http://{host}/file.pdf");
+        let request = |jwt: &str| serde_json::json!({"fileId": "file-1", "jwt": jwt, "url": url});
+
+        // No allowlist configured: the daemon fetches no URL at all.
+        let (denied, root) = control("source-allow-empty", None);
+        let address = denied.bind("127.0.0.1:0")?;
+        let (status, reply) = post(address, request("good"))?;
+        assert_eq!(status, 403, "{reply}");
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "the daemon opened no socket");
+
+        // An allowed host is not enough by itself: a viewer may join a room, so it
+        // may not make the daemon reach an address either.
+        let (allowed, root2) = control_allowing("source-allow", None, vec![host.to_string()]);
+        let address = allowed.bind("127.0.0.1:0")?;
+        let (status, reply) = post(address, request("viewer"))?;
+        assert_eq!(status, 403, "{reply}");
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "a viewer fetched nothing");
+
+        // An editor on an allowed host is the shape the cabinet uses.
+        let (status, reply) = post(address, request("good"))?;
+        assert_eq!(status, 201, "{reply}");
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&root2);
+        Ok(())
+    }
+
+    /// A session the cabinet closed is withdrawn at once, and only a writer may
+    /// withdraw one (thread #18 on PR #6622).
+    #[test]
+    fn an_operator_revokes_a_session_and_only_a_writer_may() -> Result<(), Box<dyn std::error::Error>> {
+        let (control, root) = control("revoke", None);
+        let address = control.bind("127.0.0.1:0")?;
+        let pdf = fixture("one");
+        let body = serde_json::json!({"fileId": "file-1", "jwt": "good", "bytes": rooms::base64_encode(&pdf)});
+        assert_eq!(post(address, body)?.0, 201);
+
+        // A live member of the session, opened on the same ticket the control
+        // plane is about to withdraw.
+        let ws = control.server.clone().bind_arc("127.0.0.1:0")?;
+        let hello = serde_json::json!({
+            "type": "hello", "v": 1, "app": "pdfcraft", "doc": "file-1", "jwt": "good",
+            "client": {"name": "cabinet", "version": "0"},
+        });
+        let join =
+            |jwt: &str| -> Result<tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>, Box<dyn std::error::Error>> {
+                let (mut socket, _) = tungstenite::connect(format!("ws://{}/", ws.local_addr()))?;
+                let mut frame = hello.clone();
+                frame["jwt"] = serde_json::json!(jwt);
+                socket.send(tungstenite::Message::text(frame.to_string()))?;
+                Ok(socket)
+            };
+        let mut live = join("good")?;
+        assert!(matches!(next_message(&mut live)?, pdfcraft_collab_proto::ServerMessage::Welcome(_)), "the socket is a member");
+
+        let revoke = serde_json::json!({ "sessionId": "session-9" });
+        let (status, reply) = post_to(address, "/v1/sessions/file-1/revoke", Some("viewer"), &revoke)?;
+        assert_eq!(status, 403, "a viewer cannot end a session: {reply}");
+        let (status, reply) = post_to(address, "/v1/sessions/file-1/revoke", Some("good-2"), &revoke)?;
+        assert_eq!(status, 403, "a token for another file cannot revoke this one: {reply}");
+
+        let (status, reply) = post_to(address, "/v1/sessions/file-1/revoke", Some("good"), &revoke)?;
+        assert_eq!(status, 200, "{reply}");
+        assert_eq!(reply["revoked"], true);
+        assert_eq!(reply["closed"], 1, "the live socket of that ticket was closed");
+
+        // The withdrawn ticket opens no new socket: the transport refuses it
+        // before the room sees the join.
+        let mut refused = join("good")?;
+        match next_message(&mut refused)? {
+            pdfcraft_collab_proto::ServerMessage::Error(e) => assert_eq!(e.code, pdfcraft_collab_proto::ErrorCode::Auth, "{}", e.message),
+            other => return Err(format!("a revoked ticket joined: {other:?}").into()),
+        }
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }
@@ -752,7 +996,7 @@ mod tests {
         // Second process: the control plane resumes from the journal.
         let hub = Hub::new(RoomConfig::default());
         let server = Arc::new(WsServer::new(hub, Arc::new(TestVerifier), WsConfig::default()));
-        let control = Arc::new(Control::new(server, Arc::new(TestVerifier), ControlConfig { rooms }));
+        let control = Arc::new(Control::new(server, Arc::new(TestVerifier), ControlConfig { rooms, source_allow: Vec::new() }));
         let address = control.bind("127.0.0.1:0")?;
         let (status, reply) = post(address, serde_json::json!({"fileId": "file-1", "jwt": "good", "etag": rooms::etag_of(&pdf)}))?;
         assert_eq!(status, 200, "{reply}");
@@ -808,7 +1052,7 @@ mod tests {
             RoomsConfig { data: root.join("data"), publisher: Some(publisher), max_source_bytes: 8 << 20, http_timeout: Duration::from_secs(5) };
         let hub = Hub::new(RoomConfig::default());
         let server = Arc::new(WsServer::new(hub, Arc::new(TestVerifier), WsConfig::default()));
-        let control = Arc::new(Control::new(server, Arc::new(TestVerifier), ControlConfig { rooms }));
+        let control = Arc::new(Control::new(server, Arc::new(TestVerifier), ControlConfig { rooms, source_allow: Vec::new() }));
         let address = control.bind("127.0.0.1:0")?;
         let pdf = fixture("one");
         let body = serde_json::json!({"fileId": "file-1", "jwt": "good", "bytes": rooms::base64_encode(&pdf)});
@@ -1061,7 +1305,7 @@ mod tests {
             RoomsConfig { data: root.join("data"), publisher: Some(publisher), max_source_bytes: 8 << 20, http_timeout: Duration::from_secs(5) };
         let hub = Hub::new(RoomConfig::default());
         let server = Arc::new(WsServer::new(hub, Arc::new(TestVerifier), WsConfig::default()));
-        let control = Arc::new(Control::new(server, Arc::new(TestVerifier), ControlConfig { rooms }));
+        let control = Arc::new(Control::new(server, Arc::new(TestVerifier), ControlConfig { rooms, source_allow: Vec::new() }));
         let address = control.bind("127.0.0.1:0")?;
         let pdf = fixture("one");
         let body = serde_json::json!({"fileId": "file-1", "jwt": "good", "etag": "tag-999", "version": 999, "bytes": rooms::base64_encode(&pdf)});
@@ -1124,7 +1368,7 @@ mod tests {
 
         let hub = Hub::new(RoomConfig::default());
         let server = Arc::new(WsServer::new(hub, Arc::new(TestVerifier), WsConfig::default()));
-        let control = Arc::new(Control::new(server, Arc::new(TestVerifier), ControlConfig { rooms }));
+        let control = Arc::new(Control::new(server, Arc::new(TestVerifier), ControlConfig { rooms, source_allow: Vec::new() }));
         let address = control.bind("127.0.0.1:0")?;
         let body = serde_json::json!({
             "fileId": "file-1", "jwt": "good", "etag": "tag-2", "version": 2,

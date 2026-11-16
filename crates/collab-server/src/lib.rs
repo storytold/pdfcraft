@@ -369,11 +369,27 @@ impl<A: Adapter> Room<A> {
         {
             return Err(server_error(ErrorCode::Limit, "the session has no free participant slot", false));
         }
+        // One person, one role. A ticket is verified per connection, but the room
+        // records a participant by actor, so the checks below (`apply`, `commit`)
+        // read that one record. Letting a second `hello` overwrite it would let a
+        // connection write with a role its own ticket never named — a viewer
+        // window whose actor also holds an editor window would inherit the editor
+        // role, and an editor window would lose it to a viewer's `hello`
+        // (thread #15 on PR #6622). A connection whose ticket names another role
+        // is refused instead, so every write is checked against the role its own
+        // token verified.
+        if self.participants.get(&actor).is_some_and(|participant| participant.role != role) {
+            return Err(server_error(
+                ErrorCode::Forbidden,
+                "this user is already in the session with another role; close that window and rejoin",
+                false,
+            ));
+        }
         let mut lease = Lease { id: format!("{}:{}", self.session_id, actor.as_str()), ttl_secs: 0 };
         if role.can_structural() && self.take_lease(&actor, now_ms) {
             lease.ttl_secs = self.config.lease_ttl_secs;
         }
-        self.participants.entry(actor.clone()).and_modify(|p| p.role = role).or_insert(Participant { role, last_presence_ms: None, color: None });
+        self.participants.entry(actor.clone()).or_insert(Participant { role, last_presence_ms: None, color: None });
         Ok(Welcome {
             v: pdfcraft_collab_proto::PROTOCOL_VERSION,
             session_id: self.session_id.clone(),
@@ -599,6 +615,13 @@ impl<A: Adapter> Room<A> {
         };
         if presence.actor_id != *actor {
             return Err(server_error(ErrorCode::Invalid, "presence names another actor", false));
+        }
+        // The hub re-broadcasts this body to every peer, and the panel draws the
+        // role it names: a viewer that could put `editor` on its own presence
+        // would be showing the other people a role no ticket verified
+        // (thread #17 on PR #6622).
+        if presence.role != participant.role {
+            return Err(server_error(ErrorCode::Forbidden, "presence names a role this session did not verify", false));
         }
         let min_gap = 1_000 / u64::from(self.config.limits.presence_hz.max(1));
         if let Some(last) = participant.last_presence_ms
@@ -1275,6 +1298,50 @@ mod tests {
         let base = room.resync(&editor, &pdfcraft_collab_proto::Resync { last_version: 0 })?;
         assert_eq!(base.mode, pdfcraft_collab_proto::SnapshotMode::Base);
         assert!(base.base.is_some());
+        Ok(())
+    }
+
+    /// One person joins once with one role: a second connection cannot bring a
+    /// different one, so no connection writes with a role its ticket did not
+    /// verify (thread #15 on PR #6622).
+    #[test]
+    fn a_second_connection_cannot_bring_another_role() -> Result<(), Box<dyn std::error::Error>> {
+        let mut room = room()?;
+        let hello = hello()?;
+        let someone = actor("someone")?;
+        room.hello(someone.clone(), Role::Viewer, &hello, 0)?;
+        let refused = room.hello(someone.clone(), Role::Editor, &hello, 0).err().ok_or("a viewer connection was raised to editor")?;
+        assert_eq!(refused.code, ErrorCode::Forbidden);
+        assert_eq!(room.participants(), 1, "the refused join took no second seat");
+        // The per-actor record stays the verified viewer role: the write is
+        // still refused, which is the whole point of the check.
+        let structural = op("s1", OpKind::Structural, ConflictClass::Structural, 0, 0)?;
+        assert!(matches!(room.apply(&someone, &structural, 0), Err(e) if e.code == ErrorCode::Forbidden));
+        // The same role reconnecting is what a ticket renewal looks like.
+        room.hello(someone.clone(), Role::Viewer, &hello, 0)?;
+        Ok(())
+    }
+
+    /// Presence is re-broadcast to every peer, so it may not claim a role the
+    /// session did not verify (thread #17 on PR #6622).
+    #[test]
+    fn presence_cannot_name_a_role_the_session_did_not_verify() -> Result<(), Box<dyn std::error::Error>> {
+        let mut room = room()?;
+        let hello = hello()?;
+        let viewer = actor("viewer")?;
+        room.hello(viewer.clone(), Role::Viewer, &hello, 0)?;
+        let frame = |role: Role| Presence {
+            actor_id: viewer.clone(),
+            role,
+            page: PageRef { index: 0, epoch: 0 },
+            viewport: Viewport { x: 0.0, y: 0.0, zoom: 1.0 },
+            cursor: None,
+            selection: None,
+            color: "#112233".into(),
+        };
+        let refused = room.presence(&viewer, &frame(Role::Editor), 1_000).err().ok_or("a viewer claimed the editor role")?;
+        assert_eq!(refused.code, ErrorCode::Forbidden);
+        assert!(room.presence(&viewer, &frame(Role::Viewer), 2_000)?, "the verified role is accepted");
         Ok(())
     }
 

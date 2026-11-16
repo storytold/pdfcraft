@@ -14,7 +14,8 @@ pdfcraft-collab-server \
   --jwt-secret-file /srv/collab/cabinet-jwt-secret --jwt-audience lzmkm --app pdfcraft \
   --listen 127.0.0.1:8787 --health 127.0.0.1:8788 --control 127.0.0.1:8789 \
   --callback-url http://cabinet.internal/v1/collab/commit \
-  [--max-source-bytes N] [--origin https://cabinet.example]
+  [--max-source-bytes N] [--origin https://cabinet.example] \
+  [--source-allow cabinet.internal] [--source-allow files.internal:8443]
 
 # dev: комнаты из каталога, без кабинета
 pdfcraft-collab-server --documents /srv/collab/documents --data /srv/collab/data [...]
@@ -24,7 +25,7 @@ pdfcraft-collab-server --documents /srv/collab/documents --data /srv/collab/data
 |---|---|---|
 | `--listen` | WebSocket-протокол (`hello` + session JWT) | JWT в первом сообщении |
 | `--health` | `GET /health`, `GET /metrics` | нет (для probes) |
-| `--control` | `POST /v1/sessions`, `POST /v1/sessions/{fileId}/commit`, `POST /v1/sessions/{fileId}/resolve` | JWT в `Authorization: Bearer` |
+| `--control` | `POST /v1/sessions`, `POST /v1/sessions/{fileId}/commit`, `POST /v1/sessions/{fileId}/resolve`, `POST /v1/sessions/{fileId}/revoke` | JWT в `Authorization: Bearer` |
 
 TLS внутри нет: оба HTTP-порта и WebSocket ожидаются за reverse proxy
 (`https://` в callback/URL источнике отклоняется явной ошибкой). Токены,
@@ -55,6 +56,11 @@ Claims: `aud` (обязателен, равен `--jwt-audience`), `sub` (неп
 ```
 
 вместо `bytes` допустим `"url": "http://…"`; `initialBytes` — синоним `bytes`.
+URL-источник открывается только для роли `owner`/`editor` (viewer в комнату
+входит, но заставить демон сходить по адресу не может) и только на хост из
+списка `--source-allow HOST[:PORT]` (повторяемый флаг) или
+`PDFCRAFT_COLLAB_SOURCE_ALLOW` (те же записи через запятую). Пустой список —
+`url` отклоняется с `403`, кабинет присылает файл инлайном.
 `etag` — **собственный тег кабинета** для этой копии (у этого кабинета — тег
 версии файла), не дайджест байтов; `version` — нумерация этой копии в
 кабинете, она уходит как `expectedVersion` следующей публикации. Без них
@@ -67,7 +73,7 @@ Claims: `aud` (обязателен, равен `--jwt-audience`), `sub` (неп
 |---|---|
 | `400` | битое тело, не-PDF, `fileId` вне `[A-Za-z0-9._-]{1,128}`, `etag` не совпал с присланными байтами, когда кабинет назвал их дайджестом |
 | `401` | токен не проверяется |
-| `403` | токен выписан на другой `fileId` |
+| `403` | токен выписан на другой `fileId`; роль не может писать и запрошен `url`; хост источника не в `--source-allow` |
 | `404` | комнаты нет и источника нет («только возобновление») |
 | `409` | у комнаты другой etag: файл изменился вне сессии. Исключение — тег кабинета указывает на байты, которые опубликовала эта комната (в `CABINET` записан их `sha256`): это наш собственный коммит, ответ на который не дошёл до маркера, и комната принимает тег вместо отказа |
 | `413` | файл больше `--max-source-bytes` (256 МиБ) |
@@ -183,6 +189,34 @@ Claims: `aud` (обязателен, равен `--jwt-audience`), `sub` (неп
 Публикация выполняется **вне** блокировки hub; второй коммит того же документа
 во время публикации получает `busy` (`retryable`), поэтому две версии не
 приходят в кабинет не по порядку.
+
+### 2.4. `POST /v1/sessions/{fileId}/revoke` — отозвать сессию до `exp`
+
+JWT проверяет подпись, срок и файл; «сессию закрыли» эти три поля сказать не
+могут. Когда кабинет убирает пользователя с файла, понижает ему роль или
+администратор завершает сессию, он вызывает revoke — иначе старый тикет
+держит сокет открытым до `exp`.
+Заголовок `Authorization: Bearer <service token>`: `fileId` токена обязан
+совпадать с путём, роль — `owner` или `editor` (viewer/commenter чужую сессию
+не закрывает). Тело:
+
+```json
+{"sessionId":"<sid из тикета>"}
+```
+
+Ответ `200`: `{"fileId","sessionId","revoked":true,"closed":<n>}`, где `closed`
+— сколько живых сокетов этой сессии закрыто (закрытие последнего участника
+коммитит комнату, как обычный уход). Тикет после этого не входит ни в одну
+комнату: транспорт отказывает `hello` с `auth` до того, как комната увидит
+join. Отзыв живёт в памяти процесса: после рестарта демона его нужно повторить
+(как и `conflict`, §3.1) — до `exp` тикета.
+
+| Код | `code` | Когда |
+|---|---|---|
+| `400` | `invalid` | битое тело, `sessionId` пуст, длиннее 128 байт или не печатный ASCII |
+| `401` | `auth` | токена нет или он не проверяется |
+| `403` | `forbidden` | токен на другой файл; роль не может писать |
+| `503` | `unavailable` | hub недоступен |
 
 ## 3.1. Перезапуск демона
 

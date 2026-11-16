@@ -58,6 +58,8 @@ struct Args {
     audience: String,
     app: String,
     origin: Option<String>,
+    /// The hosts a `url` source may name; empty means the daemon fetches none.
+    source_allow: Vec<String>,
 }
 
 impl Default for Args {
@@ -75,6 +77,7 @@ impl Default for Args {
             audience: "lzmkm".into(),
             app: "pdfcraft".into(),
             origin: None,
+            source_allow: Vec::new(),
         }
     }
 }
@@ -140,7 +143,13 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), String> {
-    let args = parse_args(std::env::args().skip(1))?;
+    let mut args = parse_args(std::env::args().skip(1))?;
+    // The allowlist is a deployment setting a compose file carries more easily in
+    // the environment than on the command line: `PDFCRAFT_COLLAB_SOURCE_ALLOW`
+    // holds the same comma-separated entries as repeated `--source-allow`.
+    if let Ok(list) = std::env::var("PDFCRAFT_COLLAB_SOURCE_ALLOW") {
+        args.source_allow.extend(list.split(',').map(str::trim).filter(|entry| !entry.is_empty()).map(str::to_owned));
+    }
     let environment_secret = std::env::var("PDFCRAFT_COLLAB_JWT_SECRET").ok();
     let auth = resolve_auth(args.jwt_key.as_deref(), args.jwt_secret_file.as_deref(), environment_secret.as_deref())?;
     let verifier: Arc<dyn Verifier> = match &auth {
@@ -163,6 +172,7 @@ fn run() -> Result<(), String> {
         max_source_bytes: args.max_source_bytes,
         http_timeout: Duration::from_secs(10),
     };
+    let source_allow = args.source_allow.clone();
 
     let mut hub = Hub::new(RoomConfig::default());
     let opened = match &args.documents {
@@ -188,7 +198,7 @@ fn run() -> Result<(), String> {
     let health = start_health(&args.health, server.clone())?;
     let control = match &args.control {
         Some(addr) => {
-            let control = Arc::new(Control::new(server.clone(), verifier, ControlConfig { rooms }));
+            let control = Arc::new(Control::new(server.clone(), verifier, ControlConfig { rooms, source_allow }));
             let bound = control.bind(addr)?;
             Some(bound)
         }
@@ -224,17 +234,21 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--jwt-audience" => parsed.audience = value()?,
             "--app" => parsed.app = value()?,
             "--origin" => parsed.origin = Some(value()?),
+            "--source-allow" => parsed.source_allow.push(value()?),
             "--help" | "-h" => {
                 println!(
                     "usage: pdfcraft-collab-server [--listen ADDR] [--health ADDR] [--control ADDR]\n\
                      \x20      [--documents DIR] [--data DIR] [--callback-url URL] [--max-source-bytes N]\n\
                      \x20      [--jwt-key FILE | --jwt-secret-file FILE] [--jwt-audience AUD]\n\
-                     \x20      [--app ID] [--origin URL]\n\n\
+                     \x20      [--app ID] [--origin URL] [--source-allow HOST[:PORT]]...\n\n\
                      --documents is the dev mode: one room per <fileId>.pdf, no cabinet.\n\
                      --jwt-key verifies RS256 tickets; --jwt-secret-file (or\n\
                      PDFCRAFT_COLLAB_JWT_SECRET) verifies HS256 tickets. Exactly one is\n\
                      required. The commit callback token is read from\n\
-                     PDFCRAFT_COLLAB_CALLBACK_TOKEN."
+                     PDFCRAFT_COLLAB_CALLBACK_TOKEN.\n\
+                     --source-allow names the hosts a URL source may point at (the same\n\
+                     entries can come from PDFCRAFT_COLLAB_SOURCE_ALLOW); without one the\n\
+                     cabinet sends the file inline."
                 );
                 std::process::exit(0);
             }

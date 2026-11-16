@@ -12,8 +12,10 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod revoke;
 pub mod serve;
 pub mod token;
 
+pub use revoke::Revocations;
 pub use serve::{CommitNow, Config, Metrics, PublicationRetries, ResolveError, ServerHandle, TransportError, WsServer};
 pub use token::{Claims, Hs256Verifier, JwtVerifier, MIN_HS256_SECRET_BYTES, TokenError, Verifier};
