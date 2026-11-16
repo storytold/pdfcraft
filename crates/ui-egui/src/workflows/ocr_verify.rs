@@ -967,19 +967,8 @@ impl OcrVerify {
         self.message = if is_region { tl!("Re-reading the region…").to_string() } else { tl!("Re-reading the page…").to_string() };
         let p = progress.clone();
         let work = move || {
-            let result = pdfcraft_engine::ocr::recognizers(&job.settings).and_then(|r| {
-                let found = job.run(&r, |_, _| !p.lock().map(|s| s.cancel).unwrap_or(false));
-                let words: Vec<PlacedWord> = found.into_iter().flat_map(|pg| pg.words).collect();
-                if words.is_empty() {
-                    Err(if is_region {
-                        "the region re-read found no text; the existing words are unchanged".into()
-                    } else {
-                        "the re-read found no text; the existing words are unchanged".into()
-                    })
-                } else {
-                    Ok(words)
-                }
-            });
+            let result = pdfcraft_engine::ocr::recognizers(&job.settings)
+                .and_then(|r| reread_words(job.run(&r, |_, _| !p.lock().map(|s| s.cancel).unwrap_or(false)), is_region));
             if let Ok(mut s) = p.lock() {
                 s.result = Some(result);
             }
@@ -1533,6 +1522,25 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
             n.exit = true;
         }
     });
+}
+
+/// The words a re-read found, or why the words under review stay as they are: the page
+/// could not be read (its reason is kept: a language pack removed since the reading, for one,
+/// which "found no text" would hide), or nothing was found.
+fn reread_words(found: Vec<OcrPage>, is_region: bool) -> Result<Vec<PlacedWord>, String> {
+    if let Some(why) = found.iter().find_map(|page| page.failure()) {
+        return Err(format!("{why}; the existing words are unchanged"));
+    }
+    let words: Vec<PlacedWord> = found.into_iter().flat_map(|page| page.words).collect();
+    if words.is_empty() {
+        Err(if is_region {
+            "the region re-read found no text; the existing words are unchanged".into()
+        } else {
+            "the re-read found no text; the existing words are unchanged".into()
+        })
+    } else {
+        Ok(words)
+    }
 }
 
 /// A language code's dropdown text: its name and its code ("English (en)").
@@ -3049,6 +3057,35 @@ mod tests {
         assert!(v.undo(), "failed undo keeps its operation for retry");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "external\noriginal\n");
         assert_eq!(v.review.dictionary, std::collections::BTreeSet::from(["external".into(), "original".into()]));
+    }
+
+    /// A re-read that failed says why (the reading's language pack was removed, say) and
+    /// leaves the words alone; only a re-read that ran and found nothing "found no text".
+    #[test]
+    fn a_failed_reread_keeps_its_reason() {
+        let page = |words: Vec<PlacedWord>, skipped: Option<&str>| OcrPage {
+            page: 0,
+            words,
+            already_on_page: 0,
+            skipped: skipped.map(String::from),
+            notes: Vec::new(),
+        };
+        let why = "tesseract failed: Error opening data file ara.traineddata";
+        assert_eq!(reread_words(vec![page(Vec::new(), Some(why))], false), Err(format!("{why}; the existing words are unchanged")));
+        assert_eq!(reread_words(vec![page(Vec::new(), Some(why))], true), Err(format!("{why}; the existing words are unchanged")));
+        assert_eq!(reread_words(vec![page(Vec::new(), None)], false), Err("the re-read found no text; the existing words are unchanged".into()));
+        assert_eq!(
+            reread_words(vec![page(Vec::new(), None)], true),
+            Err("the region re-read found no text; the existing words are unchanged".into())
+        );
+        // A page passed over for having text of its own is not a failure.
+        assert_eq!(
+            reread_words(vec![page(Vec::new(), Some(pdfcraft_engine::ocr::PAGE_HAS_TEXT))], false),
+            Err("the re-read found no text; the existing words are unchanged".into())
+        );
+        let word =
+            PlacedWord { text: "word".into(), origin: [1.0, 1.0], across: [9.0, 0.0], up: [0.0, 9.0], confidence: None, source: "tesseract".into() };
+        assert_eq!(reread_words(vec![page(vec![word.clone()], None)], false), Ok(vec![word]));
     }
 
     #[test]

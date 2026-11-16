@@ -987,7 +987,15 @@ impl PdfCraftApp {
             return;
         }
         let read = found.iter().filter(|p| p.skipped.is_none()).count();
-        let skipped = found.len() - read;
+        // A page that could not be read (a language pack that is not installed, for one) is
+        // not a page that "already had text": its reason is said, each one once.
+        let mut failures: Vec<String> = Vec::new();
+        for why in found.iter().filter_map(|p| p.failure()) {
+            if !failures.iter().any(|f| f == why) {
+                failures.push(why.to_string());
+            }
+        }
+        let skipped = found.iter().filter(|p| p.skipped.is_some() && p.failure().is_none()).count();
         // The guard refuses a result that no longer fits its document (the user edited, or
         // redacted, while the worker was out); its reason says so.
         match self.session.apply_ocr_checked(doc, &found, &guard) {
@@ -999,6 +1007,13 @@ impl PdfCraftApp {
                 }
                 // An automatic run that found nothing (a page that has text of its own) says nothing.
                 if automatic && words == 0 {
+                    return;
+                }
+                // Nothing was read and a page says why: that is the result, not "0 words".
+                if read == 0
+                    && let Some(why) = failures.first()
+                {
+                    self.notify_error(why.clone());
                     return;
                 }
                 let words_part = if words == 1 {
@@ -1020,6 +1035,10 @@ impl PdfCraftApp {
                 for note in found.iter().flat_map(|p| p.notes.iter()) {
                     msg.push_str("; ");
                     msg.push_str(note);
+                }
+                for why in &failures {
+                    msg.push_str("; ");
+                    msg.push_str(why);
                 }
                 self.notify(msg);
             }
@@ -1449,6 +1468,48 @@ mod tests {
         e.output_folder = Some("kept".into());
         e.apply_pref(&serde_json::json!({ "output_folder": "" }));
         assert_eq!(e.output_folder.as_deref(), Some("kept"), "an empty value is not a folder");
+    }
+
+    /// A page the engine could not read (the Arabic pack was removed after the choice was
+    /// saved, say) is reported with its reason; before, it was counted as a page that
+    /// "already had text" and the reason was lost. A page that does have text still says so.
+    #[test]
+    fn a_page_that_could_not_be_read_says_why() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("a.pdf", None, scan()).unwrap();
+        let id = app.active_ids().unwrap().1;
+        let why = "tesseract failed: Error opening data file ara.traineddata";
+        let word = pdfcraft_engine::ocr::PlacedWord {
+            text: "word".into(),
+            origin: [72.0, 700.0],
+            across: [60.0, 0.0],
+            up: [0.0, 12.0],
+            confidence: Some(95.0),
+            source: "tesseract".into(),
+        };
+        let page = |words: Vec<pdfcraft_engine::ocr::PlacedWord>, skipped: Option<&str>| OcrPage {
+            page: 0,
+            words,
+            already_on_page: 0,
+            skipped: skipped.map(String::from),
+            notes: Vec::new(),
+        };
+        let finish = |app: &mut PdfCraftApp, pages: Vec<OcrPage>| {
+            let guard = app.session.ocr_guard(id).unwrap();
+            let progress = Arc::new(Mutex::new(OcrProgress { total: pages.len(), done: pages.len(), result: Some(Ok(pages)), cancel: false }));
+            app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false, language: "ar".into() });
+            app.poll_ocr();
+            assert!(app.ocr_run.is_none(), "the run is over");
+            app.toast.take().map(|t| t.0).unwrap_or_default()
+        };
+        let failed = finish(&mut app, vec![page(Vec::new(), Some(why))]);
+        assert_eq!(failed, why, "the reason alone, not a count of words");
+        let has_text = finish(&mut app, vec![page(Vec::new(), Some(pdfcraft_engine::ocr::PAGE_HAS_TEXT))]);
+        assert!(has_text.contains("1 page already had text") && !has_text.contains("tesseract"), "{has_text}");
+        // Some pages read, one not: the count stands and the reason follows it.
+        let mixed = finish(&mut app, vec![page(vec![word], None), page(Vec::new(), Some(why))]);
+        assert!(mixed.starts_with("Recognized 1 word on 1 page") && mixed.ends_with(why) && !mixed.contains("already had text"), "{mixed}");
     }
 
     /// A Tesseract language (#7496) is kept with Tesseract chosen, through the preferences

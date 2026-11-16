@@ -213,6 +213,10 @@ impl Default for OcrSettings {
     }
 }
 
+/// Why [`OcrPage::skipped`] says a page was passed over for having text of its own (the
+/// skip-text option). Any other reason is a page that could not be read.
+pub const PAGE_HAS_TEXT: &str = "the page already contains text";
+
 /// What recognition found on one page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OcrPage {
@@ -228,6 +232,14 @@ pub struct OcrPage {
 }
 
 impl OcrPage {
+    /// Why the page could not be read, when it was skipped for anything but having text of
+    /// its own: the render or the recognition failed (a language pack that is not installed,
+    /// for one). The interface says this reason instead of counting the page as one that
+    /// "already had text".
+    pub fn failure(&self) -> Option<&str> {
+        self.skipped.as_deref().filter(|why| *why != PAGE_HAS_TEXT)
+    }
+
     pub fn text(&self) -> String {
         self.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ")
     }
@@ -866,7 +878,7 @@ impl OcrSteps {
             .map(|t| t.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect())
             .unwrap_or_default();
         if settings.skip_text_pages && !settings.force_ocr && !existing.is_empty() && has_own_text(r, page) {
-            return Err(skip("the page already contains text"));
+            return Err(skip(PAGE_HAS_TEXT));
         }
         // A scan is read at its own resolution (enlarging it only blurs the letters), at
         // most the chosen one.
@@ -1552,6 +1564,18 @@ mod tests {
         // is installed (and never start the probe for it).
         assert_eq!(document_languages(EngineChoice::Ocrs), LANGUAGES.to_vec());
         assert_eq!(document_languages(EngineChoice::Auto), LANGUAGES.to_vec());
+    }
+
+    /// A page skipped for having text is not a failure; a page skipped for any other reason
+    /// (the engine's error, a render error) is, and keeps its reason.
+    #[test]
+    fn a_page_that_could_not_be_read_is_told_from_one_that_has_text() {
+        let page =
+            |skipped: Option<&str>| OcrPage { page: 0, words: Vec::new(), already_on_page: 0, skipped: skipped.map(String::from), notes: Vec::new() };
+        assert_eq!(page(None).failure(), None);
+        assert_eq!(page(Some(PAGE_HAS_TEXT)).failure(), None);
+        let why = "tesseract failed: Error opening data file ara.traineddata";
+        assert_eq!(page(Some(why)).failure(), Some(why));
     }
 
     /// A language is only asked of an engine that can be asked for it: Tesseract's languages
