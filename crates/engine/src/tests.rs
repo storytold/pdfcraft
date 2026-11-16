@@ -12549,6 +12549,55 @@ fn a_reset_of_a_floating_field_bound_to_one_row_leaves_the_other_rows() {
     assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].row[1].amount[0]")), Some("none"));
 }
 
+/// A reset takes a floating field back to its default at the node each of its instances binds
+/// to: in every row for a reference relative to its row, and only in the row a subform around
+/// it is bound to by a reference.
+#[test]
+fn a_reset_of_a_floating_field_follows_each_instance_binding() {
+    let form = |body: &str| {
+        format!(
+            r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ {body}
+ <field name="clear" w="2in" h="0.3in"><ui><button/></ui>
+  <event activity="click"><script contentType="application/x-javascript">xfa.host.resetData();</script></event></field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><row><amount>10</amount></row><row><amount>20</amount></row></form></xfa:data></xfa:datasets>
+</xdp:xdp>
+"##
+        )
+    };
+    let floating = |bind: &str| {
+        format!(
+            r##"<field name="shown" id="amt" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui><value><text>none</text></value>{bind}</field>
+  <draw w="5in" h="0.4in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Amount: <span xfa:embed="#amt"/></p></body></exData></value></draw>"##
+        )
+    };
+    let amounts = |xdp: String| {
+        let mut s = Session::new();
+        let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&xdp)), None).expect("opens");
+        let o = s.run_javascript(id, "", Some("clear")).expect("clicks");
+        assert_eq!(o.error, None, "{o:?}");
+        let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+        let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).expect("a datasets packet");
+        ["form[0].row[0].amount[0]", "form[0].row[1].amount[0]"].map(|p| data.text_at(&pdfcraft_xfa::som_to_path(p)).map(str::to_string))
+    };
+    // Relative to its row, in a repeating row: every row.
+    let relative =
+        format!(r#"<subform name="row" layout="tb"><occur min="1" max="-1"/>{}</subform>"#, floating(r#"<bind match="dataRef" ref="$.amount"/>"#));
+    assert_eq!(amounts(form(&relative)), [Some("none".to_string()), Some("none".to_string())]);
+    // By name, under a subform bound to the second row: that row alone.
+    let bound = format!(
+        r#"<subform name="second" layout="tb"><bind match="dataRef" ref="$.row[1]"/>{}</subform>"#,
+        floating("").replace(r#"name="shown""#, r#"name="amount""#)
+    );
+    assert_eq!(amounts(form(&bound)), [Some("10".to_string()), Some("none".to_string())]);
+}
+
 /// An XFA button's click script may show the attachments panel; a text field's exit script
 /// asking the same is noted on the console and ignored.
 #[test]

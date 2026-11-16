@@ -840,14 +840,28 @@ impl<'a, 'b> Runner<'a, 'b> {
             if by_som.contains_key(&som) || !wanted(&som) {
                 continue;
             }
-            // Every row that holds it, not only the first; but a field bound by a reference has
-            // the one node the reference names, whatever the rows around it.
-            let paths = if pdfcraft_xfa::binds_by_ref(self.tpl, &som) {
-                vec![pdfcraft_xfa::data_path(self.tpl, &som)]
-            } else {
-                let names: Vec<String> = pdfcraft_xfa::data_path(self.tpl, &som).into_iter().map(|(name, _)| name).collect();
-                self.data.as_ref().map(|d| d.paths_named(&names, pdfcraft_xfa::MAX_FORM_NODES)).unwrap_or_default()
+            // Every instance of it, in every row that holds it, at the node that instance binds
+            // to: one per row by name or by a reference relative to its row, the one node an
+            // absolute reference names, the one row a subform around it is bound to.
+            let plain = plain_som(&som);
+            let instances: Vec<String> = {
+                let live = self.live();
+                let mut out = Vec::new();
+                let mut stack: Vec<&pdfcraft_xfa::FormNode> = vec![&live.root];
+                while let Some(n) = stack.pop() {
+                    if plain_som(&n.som) == plain {
+                        out.push(n.som.clone());
+                    }
+                    stack.extend(n.children.iter());
+                }
+                out
             };
+            let mut paths: Vec<pdfcraft_xfa::DataPath> = instances.iter().map(|s| pdfcraft_xfa::data_path(self.tpl, s)).collect();
+            if paths.is_empty() {
+                paths.push(pdfcraft_xfa::data_path(self.tpl, &som));
+            }
+            paths.sort();
+            paths.dedup();
             for path in paths {
                 if self.data.as_ref().and_then(|d| d.text_at(&path)).unwrap_or("") != default {
                     self.embedded_changed = true;

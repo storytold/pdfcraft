@@ -612,10 +612,3 @@ fn is_star_segment(seg: &str) -> bool {
 pub fn binds_elsewhere(tpl: &Template, som: &str) -> bool {
     matches!(template_object(tpl, som), Some(Node::Subform(sf)) if sf.data_name().is_none() || sf.common.data_ref.is_some())
 }
-
-/// Whether the object at `som` binds by an explicit data reference this binding follows
-/// ([`Common::follows_ref`]): its data node is the one the reference names, not one per
-/// instance of the subforms around it.
-pub fn binds_by_ref(tpl: &Template, som: &str) -> bool {
-    template_object(tpl, som).is_some_and(|n| n.common().follows_ref)
-}
