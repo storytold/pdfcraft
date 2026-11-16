@@ -9674,6 +9674,10 @@ fn merging_form_data_counts_a_quoted_header_as_one_column() {
         let r = ok(&mut a, "form_merge_data", json!({ "paths": [file], "path": out }));
         assert_eq!((r["rows"].as_u64(), r["columns"].as_u64()), (Some(1), Some(1)), "{file}: {r}");
     }
+    // A field with an empty name is one column, not the empty header of a file without fields.
+    std::fs::write(dir.join("noname.xfdf"), xfdf("")).unwrap();
+    let r = ok(&mut a, "form_merge_data", json!({ "paths": ["noname.xfdf"], "path": "noname.csv" }));
+    assert_eq!((r["rows"].as_u64(), r["columns"].as_u64()), (Some(1), Some(1)), "{r}");
     // Files without fields: no column.
     std::fs::write(dir.join("empty.xfdf"), r#"<?xml version="1.0" encoding="UTF-8"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><fields/></xfdf>"#)
         .unwrap();
