@@ -366,6 +366,8 @@ struct Master {
 }
 
 struct Occurrence {
+    line: usize,
+    word: usize,
     y_down: f64,
     origin_x: f64,
     text: String,
@@ -460,7 +462,10 @@ fn masters_of(
             if !origin_x.is_finite() {
                 continue;
             }
+            let (line, word) = word_ref(&glyph.role).unwrap_or((usize::MAX, usize::MAX));
             shows.push(Occurrence {
+                line,
+                word,
                 y_down: baseline_of(glyph, lines),
                 origin_x,
                 text: text.to_string(),
@@ -494,11 +499,87 @@ fn baseline_of(glyph: &ResolvedGlyph, lines: &[AnnotatedLine]) -> f64 {
 }
 
 fn line_index(role: &MatchRole) -> Option<usize> {
+    word_ref(role).map(|(line, _)| line)
+}
+
+fn word_ref(role: &MatchRole) -> Option<(usize, usize)> {
     match role {
-        MatchRole::Character { source, .. } | MatchRole::Fragment { source, .. } => Some(source.line),
-        MatchRole::Ligature { sources, .. } => sources.first().map(|source| source.line),
+        MatchRole::Character { source, .. } | MatchRole::Fragment { source, .. } => Some((source.line, source.word)),
+        MatchRole::Ligature { sources, .. } => sources.first().map(|s| (s.line, s.word)),
         MatchRole::Unmatched => None,
     }
+}
+
+/// Column-aware reading rank for each line in `lines` via recursive XY-cut (vertical gutter cut
+/// before horizontal band cut, then baseline y and left x).
+fn line_reading_ranks(lines: &[AnnotatedLine]) -> Vec<usize> {
+    let rects: Vec<[f32; 4]> = lines.iter().map(AnnotatedLine::rect).collect();
+    let indices: Vec<usize> = (0..lines.len()).collect();
+    let mut ordered = Vec::with_capacity(lines.len());
+    xy_order_lines(&indices, lines, &rects, 0, &mut ordered);
+    let mut ranks = vec![0_usize; lines.len()];
+    for (rank, &line_idx) in ordered.iter().enumerate() {
+        if let Some(slot) = ranks.get_mut(line_idx) {
+            *slot = rank;
+        }
+    }
+    ranks
+}
+
+fn xy_order_lines(indices: &[usize], lines: &[AnnotatedLine], rects: &[[f32; 4]], depth: u32, out: &mut Vec<usize>) {
+    if indices.len() <= 1 || depth >= 16 {
+        let mut leaf = indices.to_vec();
+        leaf.sort_by(|&a, &b| {
+            let ba = lines.get(a).map_or(0.0, |l| l.baseline);
+            let bb = lines.get(b).map_or(0.0, |l| l.baseline);
+            let xa = rects.get(a).map_or(0.0, |r| r[0]);
+            let xb = rects.get(b).map_or(0.0, |r| r[0]);
+            ba.total_cmp(&bb).then_with(|| xa.total_cmp(&xb)).then_with(|| a.cmp(&b))
+        });
+        out.extend(leaf);
+        return;
+    }
+    let mut by_x = indices.to_vec();
+    by_x.sort_by(|&a, &b| {
+        let xa = rects.get(a).map_or(0.0, |r| r[0]);
+        let xb = rects.get(b).map_or(0.0, |r| r[0]);
+        xa.total_cmp(&xb).then_with(|| a.cmp(&b))
+    });
+    let mut max_right = f32::NEG_INFINITY;
+    for split in 1..by_x.len() {
+        if let Some(&prev) = by_x.get(split - 1)
+            && let Some(r) = rects.get(prev)
+        {
+            max_right = max_right.max(r[2]);
+        }
+        let next_left = by_x.get(split).and_then(|&idx| rects.get(idx)).map_or(f32::NEG_INFINITY, |r| r[0]);
+        if max_right <= next_left {
+            xy_order_lines(&by_x[..split], lines, rects, depth + 1, out);
+            xy_order_lines(&by_x[split..], lines, rects, depth + 1, out);
+            return;
+        }
+    }
+    let mut by_y = indices.to_vec();
+    by_y.sort_by(|&a, &b| {
+        let ya = rects.get(a).map_or(0.0, |r| r[1]);
+        let yb = rects.get(b).map_or(0.0, |r| r[1]);
+        ya.total_cmp(&yb).then_with(|| a.cmp(&b))
+    });
+    let mut max_bottom = f32::NEG_INFINITY;
+    for split in 1..by_y.len() {
+        if let Some(&prev) = by_y.get(split - 1)
+            && let Some(r) = rects.get(prev)
+        {
+            max_bottom = max_bottom.max(r[3]);
+        }
+        let next_top = by_y.get(split).and_then(|&idx| rects.get(idx)).map_or(f32::NEG_INFINITY, |r| r[1]);
+        if max_bottom <= next_top {
+            xy_order_lines(&by_y[..split], lines, rects, depth + 1, out);
+            xy_order_lines(&by_y[split..], lines, rects, depth + 1, out);
+            return;
+        }
+    }
+    xy_order_lines(indices, lines, rects, 16, out);
 }
 
 fn page_metrics(lines: &[AnnotatedLine]) -> Type3Metrics {
@@ -542,6 +623,8 @@ struct Placed {
     code: u8,
     origin: [f64; 2],
     size: f64,
+    line: usize,
+    word: usize,
     y_down: f64,
     text: String,
 }
@@ -590,17 +673,29 @@ fn compose(
                 let Some(&code) = written.codes.get(glyph_index) else { continue };
                 for show in &master.shows {
                     let Some(origin) = show_origin(show, height_px, points_per_pixel) else { continue };
-                    placed.push(Placed { font: font_index, code, origin, size, y_down: show.y_down, text: show.text.clone() });
+                    placed.push(Placed {
+                        font: font_index,
+                        code,
+                        origin,
+                        size,
+                        line: show.line,
+                        word: show.word,
+                        y_down: show.y_down,
+                        text: show.text.clone(),
+                    });
                 }
             }
             font_ids.push(written.id);
         }
     }
+    let ranks = line_reading_ranks(lines);
     placed.sort_by(|a, b| {
-        a.y_down
-            .partial_cmp(&b.y_down)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.origin[0].partial_cmp(&b.origin[0]).unwrap_or(std::cmp::Ordering::Equal))
+        let ra = ranks.get(a.line).copied().unwrap_or(usize::MAX);
+        let rb = ranks.get(b.line).copied().unwrap_or(usize::MAX);
+        ra.cmp(&rb)
+            .then_with(|| a.word.cmp(&b.word))
+            .then_with(|| a.origin[0].partial_cmp(&b.origin[0]).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| a.y_down.partial_cmp(&b.y_down).unwrap_or(std::cmp::Ordering::Equal))
     });
     let width = f64::from(cleaned.raster().width()) * points_per_pixel;
     let height = height_px * points_per_pixel;
@@ -1320,5 +1415,37 @@ mod tests {
         // positions (centres at y = 70 and y = 110), rather than being shifted up by 10 px.
         assert!(sample(33, 75) < 80, "second stem lower half must stay dark at y=75, got {}", sample(33, 75));
         assert!(sample(33, 115) < 80, "third stem lower half must stay dark at y=115, got {}", sample(33, 115));
+    }
+
+    #[test]
+    fn two_columns_with_near_equal_baselines_do_not_interleave() {
+        let (width, height) = (220_u32, 140_u32);
+        // Left column: [20..26, 20..40] ('A') and [20..26, 70..90] ('B').
+        // Right column: [140..146, 21..41] ('C') and [140..146, 69..89] ('D').
+        let pixels = marked_page(width, height, &[[20, 20, 26, 40], [20, 70, 26, 90], [140, 21, 146, 41], [140, 69, 146, 89]]);
+        let out = clearscan_image(
+            ScanRaster { pixels: &pixels, width, height, channels: 1, points_per_pixel: 1.0 },
+            &tuned(1, 1.0),
+            |_| {
+                let mk = |ch: char, l: f32, t: f32, r: f32, b: f32| AnnotatedLine {
+                    words: vec![AnnotatedWord { text: ch.to_string(), rect: [l, t, r, b], chars: vec![CharBox { char: ch, rect: [l, t, r, b] }] }],
+                    baseline: b,
+                    x_height: (b - t) * 0.5,
+                    cap_height: b - t,
+                    descent: 0.0,
+                };
+                // Recognizer returns lines interleaved by y across the two columns.
+                Ok(vec![
+                    mk('A', 20.0, 20.0, 26.0, 40.0),
+                    mk('C', 140.0, 21.0, 146.0, 41.0),
+                    mk('D', 140.0, 69.0, 146.0, 89.0),
+                    mk('B', 20.0, 70.0, 26.0, 90.0),
+                ])
+            },
+            no_progress,
+        )
+        .expect("two columns");
+        let order: String = out.placements.iter().map(|p| p.text.as_str()).collect();
+        assert_eq!(order, "ABCD", "left column must read before right column without interleaving, got {order:?}");
     }
 }
