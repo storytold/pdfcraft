@@ -78,7 +78,9 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
         }
         // The comment eraser's click falls through to the eraser dispatch below — the
         // bundle stays pending, and nothing here consumes its input (see
-        // `places_the_bundle`).
+        // `places_the_bundle`). Which tool skips is the selected tool, not the input
+        // device: a mouse user with the eraser tool picked behaves like a pen's
+        // eraser end — both erase over the pending bundle and leave it alone.
     }
     let moving = moving_on(view, cx.page);
     let gestures = Gestures { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page, free };
@@ -514,6 +516,12 @@ impl Gestures<'_> {
             && pressed_here
             && let Some(o) = origin
         {
+            // A copied bundle hanging on the pointer (`Gesture::Place`, reachable
+            // here only through the eraser fall-through in `page_input`) goes aside
+            // for the stroke and comes back when the stroke ends. A stale one — the
+            // stroke was cancelled, or the bundle let go since — is dropped with the
+            // stroke's start.
+            cv.pending_place = if matches!(cv.gesture, Some(Gesture::Place { .. })) { cv.gesture.take() } else { None };
             cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
             cv.select(None);
         }
@@ -545,6 +553,13 @@ impl Gestures<'_> {
                 let now = ui.input(|i| i.time);
                 cv.settle(now, page, tool, &points);
                 view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
+            }
+            // Whatever the stroke pushed aside comes back: the stroke neither placed
+            // nor let go of it (see the stroke's start above). The gesture is `None`
+            // here — the stroke's own was cleared just above — so only a bundle the
+            // stroke stashed can restore anything.
+            if let Some(place) = cv.pending_place.take() {
+                cv.gesture = Some(place);
             }
         }
         // A quick press/release does not start an egui drag, but Acrobat's Draw tool treats

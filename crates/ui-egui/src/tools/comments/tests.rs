@@ -942,6 +942,77 @@ fn click_pass(ctx: &egui::Context, cx: &PageCx<'_>, down: bool, view: &mut DocVi
     .drop_without_applying_deltas();
 }
 
+/// One UI pass over `page_input` for a drag: the pointer at `at`, and the primary
+/// button's event if this pass carries one (`Some(true)` press, `Some(false)`
+/// release, `None` in between — the button stays as egui holds it). The pass's
+/// `Response` senses drags, as the page view's content widget does, so egui's drag
+/// state runs with the press and the release lands as `drag_stopped`.
+fn drag_pass(ctx: &egui::Context, cx: &PageCx<'_>, at: Pos2, press: Option<bool>, view: &mut DocView) {
+    let screen = Rect::from_min_size(Pos2::ZERO, vec2(600.0, 800.0));
+    let mut input = egui::RawInput { screen_rect: Some(screen), time: Some(1.0), ..Default::default() };
+    input.events.push(egui::Event::PointerMoved(at));
+    if let Some(pressed) = press {
+        input.events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    ctx.run_ui(input, |ui| {
+        let resp = ui.interact(screen, egui::Id::unique("page-under-test"), egui::Sense::click_and_drag());
+        page_input(ui, &resp, cx, crate::page_router::PagePress::Free, false, view);
+    })
+    .drop_without_applying_deltas();
+}
+
+/// A copied-comment bundle hangs on the pointer and the pen's eraser end DRAGS over
+/// the page: the stroke erases, and the bundle comes back when the stroke ends —
+/// starting an eraser stroke neither places nor lets go of what hangs on the pointer
+/// (#3650 review). Without the aside, `draw_shape` replaces the pending bundle with
+/// its own `Gesture::Draw` and the release clears it, losing the bundle.
+#[test]
+fn an_eraser_drag_over_the_pointer_leaves_the_pending_bundle_pending() {
+    let prefs = CommentPrefs::default();
+    let info = DocInfo {
+        pages: vec![PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+        ..Default::default()
+    };
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 };
+    let ctx = egui::Context::default();
+    let (a, b) = (pos2(150.0, 200.0), pos2(250.0, 200.0));
+    // egui hit-tests a pass against the widgets of the pass before it, so the same
+    // widget — drag-sensing, as the passes below create it — goes first (see the
+    // click test above).
+    let screen = Rect::from_min_size(Pos2::ZERO, vec2(600.0, 800.0));
+    let mut warm = egui::RawInput { screen_rect: Some(screen), time: Some(0.0), ..Default::default() };
+    warm.events.push(egui::Event::PointerMoved(a));
+    for _ in 0..2 {
+        ctx.run_ui(warm.clone(), |ui| {
+            ui.interact(screen, egui::Id::unique("page-under-test"), egui::Sense::click_and_drag());
+        })
+        .drop_without_applying_deltas();
+    }
+    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
+    view.comments.gesture = Some(Gesture::Place { xfdf: "<xfdf/>".into(), bounds: [10.0, 10.0, 60.0, 40.0], count: 2, outlines: Vec::new() });
+    let tool = QuickTool::Comment(CommentTool::Eraser);
+
+    // Press at a: the stroke starts (the bundle goes aside for it).
+    let ptr = PagePointer {
+        pos: Some(a),
+        origin: Some(a),
+        edges: vec![crate::page_pointer::Edge::Press(a)],
+        drag_started: true,
+        primary_down: true,
+        ..Default::default()
+    };
+    drag_pass(&ctx, &click_cx(&ptr, tool, &xf, &info, &prefs), a, Some(true), &mut view);
+    assert!(matches!(view.comments.gesture, Some(Gesture::Draw { .. })), "the eraser stroke runs");
+    // A move to b with the button still down, then the release at b: the stroke ends
+    // and its erase lands.
+    let ptr = PagePointer { pos: Some(b), origin: Some(a), primary_down: true, ..Default::default() };
+    drag_pass(&ctx, &click_cx(&ptr, tool, &xf, &info, &prefs), b, None, &mut view);
+    let ptr = PagePointer { pos: Some(b), edges: vec![crate::page_pointer::Edge::Release(b)], released: Some(b), ..Default::default() };
+    drag_pass(&ctx, &click_cx(&ptr, tool, &xf, &info, &prefs), b, Some(false), &mut view);
+    assert!(matches!(view.comments.gesture, Some(Gesture::Place { .. })), "the pending bundle comes back when the stroke ends");
+    assert!(!matches!(view.pending_edit, Some(Edit::PasteComments { .. })), "the stroke neither placed nor let go of the bundle");
+}
+
 /// A copied-comment bundle hangs on the pointer and the pen's eraser end clicks the
 /// page: the bundle is neither placed nor let go — it stays pending, because the
 /// eraser end erases ink and does not manage the bundle (`places_the_bundle`,

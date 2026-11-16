@@ -156,6 +156,11 @@ pub struct CommentView {
     /// the member clicked ([`Self::target`]).
     pub(crate) member: Option<((usize, usize), (usize, usize))>,
     pub gesture: Option<Gesture>,
+    /// The copied-comment bundle (`Gesture::Place`) an eraser stroke pushed aside:
+    /// the stroke replaces the gesture with `Gesture::Draw` while it runs, and this
+    /// brings the bundle back when the stroke ends, so erasing over the pointer with
+    /// a bundle pending loses nothing (#3650 review).
+    pub(crate) pending_place: Option<Gesture>,
     /// Drawings just released: shown from their points until the page raster that includes the
     /// committed annotation arrives, so the stroke never vanishes in between (#1858).
     pub(crate) settling: Vec<Settling>,
