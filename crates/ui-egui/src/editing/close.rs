@@ -25,11 +25,12 @@ impl PdfCraftApp {
         if self.asks_before_closing(index)
             && let Some(id) = self.views.get(index).map(|v| v.id)
         {
-            if self.has_twin(index) {
-                // The question is about this tab of the document (`asking_tab`).
-                self.active = Some(index);
-            }
             if self.close_request.is_none() {
+                self.asking_view_key = self.views.get(index).map(|v| v.view_key());
+                if self.has_twin(index) {
+                    // The question is about this tab of the document (`asking_tab`).
+                    self.active = Some(index);
+                }
                 self.close_request = Some(CloseRequest::Tab(id));
             } else if !self.pending_close_queue.contains(&id) {
                 self.pending_close_queue.push(id);
@@ -124,10 +125,15 @@ impl PdfCraftApp {
     /// Answer the save prompt: `Some(true)` save, `Some(false)` discard, `None` cancel.
     pub fn resolve_close(&mut self, ctx: &egui::Context, choice: Option<bool>) {
         let Some(req) = self.close_request.take() else { return };
+        let asking_key = self.asking_view_key.take();
         // The next question (another dirty document) starts on Save again.
         self.save_prompt_button = Default::default();
         let index = match req {
-            CloseRequest::Tab(id) => match self.asking_tab(id) {
+            CloseRequest::Tab(id) => match asking_key
+                .and_then(|k| self.tab_with_key(k))
+                .filter(|&i| self.views.get(i).is_some_and(|v| v.id == id))
+                .or_else(|| self.asking_tab(id))
+            {
                 Some(i) => i,
                 None => return, // already closed
             },
@@ -153,15 +159,18 @@ impl PdfCraftApp {
             None => {
                 self.pending_lock = None;
                 self.lock_remember = false;
+                self.asking_view_key = None;
                 self.pending_close_queue.clear();
             } // cancelled: nothing closes
             Some(false) => {
                 self.pending_lock = None;
                 self.lock_remember = false;
+                self.asking_view_key = None;
                 self.close_and_continue(ctx, index, req);
             }
             Some(true) => {
                 let Some(id) = self.views.get(index).map(|v| v.id) else { return };
+                let target_key = asking_key.or_else(|| self.views.get(index).map(|v| v.view_key()));
                 // Bring the document forward: what's typed in its form is committed and saved
                 // with it, and a field that rejects the value is shown where the user can fix it.
                 self.active = Some(index);
@@ -170,7 +179,11 @@ impl PdfCraftApp {
                 // document open.
                 let ctx = ctx.clone();
                 let started = self.save_then(index, SaveTarget::InPlace, move |app| {
-                    if let Some(i) = app.asking_tab(id) {
+                    let asking_idx = target_key
+                        .and_then(|k| app.tab_with_key(k))
+                        .filter(|&i| app.views.get(i).is_some_and(|v| v.id == id))
+                        .or_else(|| app.asking_tab(id));
+                    if let Some(i) = asking_idx {
                         app.close_and_continue(&ctx, i, req);
                     }
                 });
@@ -181,10 +194,14 @@ impl PdfCraftApp {
         }
     }
 
-    /// The tab a close question about document `id` is about: the active one when it shows `id`
-    /// (in split view two tabs can), else the document's first.
+    /// The tab a close question about document `id` is about: the recorded asking view if still
+    /// valid, else the active one when it shows `id` (in split view two tabs can), else the document's first.
     pub(crate) fn asking_tab(&self, id: pdfcraft_engine::DocId) -> Option<usize> {
-        self.active.filter(|&a| self.views.get(a).is_some_and(|v| v.id == id)).or_else(|| self.views.iter().position(|v| v.id == id))
+        self.asking_view_key
+            .and_then(|k| self.tab_with_key(k))
+            .filter(|&i| self.views.get(i).is_some_and(|v| v.id == id))
+            .or_else(|| self.active.filter(|&a| self.views.get(a).is_some_and(|v| v.id == id)))
+            .or_else(|| self.views.iter().position(|v| v.id == id))
     }
 
     /// Close tab `index` for a close request, then ask about the next dirty document, or quit.
@@ -223,6 +240,10 @@ impl PdfCraftApp {
                     }
                     if self.asks_before_closing(i) {
                         self.save_prompt_seen = false;
+                        self.asking_view_key = self.views.get(i).map(|v| v.view_key());
+                        if self.has_twin(i) {
+                            self.active = Some(i);
+                        }
                         self.close_request = Some(CloseRequest::Tab(next_id));
                         break;
                     } else {

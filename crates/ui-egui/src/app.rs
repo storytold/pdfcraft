@@ -207,6 +207,7 @@ impl PdfCraftApp {
             host_save: None,
             host_dirty: None,
             close_request: None,
+            asking_view_key: None,
             pending_close_queue: Vec::new(),
             save_prompt_button: Default::default(),
             save_prompt_seen: false,

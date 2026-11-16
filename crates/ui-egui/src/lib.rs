@@ -577,6 +577,8 @@ pub struct PdfCraftApp {
     pub host_dirty: Option<HostDirtyFn>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
     pub close_request: Option<CloseRequest>,
+    /// When a close prompt is asking about a specific tab, records its view key.
+    pub(crate) asking_view_key: Option<u64>,
     /// Documents waiting to be closed once the current close prompt is resolved.
     pub pending_close_queue: Vec<pdfcraft_engine::DocId>,
     /// The button of the "save changes?" question the keyboard has chosen; Save when it opens.

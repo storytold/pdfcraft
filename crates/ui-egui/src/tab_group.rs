@@ -600,4 +600,48 @@ mod tests {
         assert!(!app.lock_remember, "lock_remember reset on cancel");
         assert!(app.pending_close_queue.is_empty(), "pending_close_queue cleared on cancel");
     }
+
+    #[test]
+    fn queued_close_does_not_change_active_and_resolves_asking_view() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
+        // Create twin for doc2 (index 1) so it has twin at index 2
+        app.duplicate_tab(1);
+        assert_eq!(app.views.len(), 3);
+        assert!(app.has_twin(1));
+        assert!(app.has_twin(2));
+
+        // Mark doc1 dirty, and give twin 1 unsaved typing
+        app.active = Some(0);
+        assert!(app.apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edit1".into() }));
+        app.views[1].pending_edit = Some(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edit2".into() });
+        let twin1_key = app.views[1].view_key();
+
+        // Start close on doc1: doc1 is active and prompted
+        app.active = Some(0);
+        app.request_close_tab(0);
+        assert_eq!(app.active, Some(0));
+        assert!(app.close_request.is_some());
+
+        // Now request close on twin 1 while prompt for doc1 is already pending.
+        // It must NOT switch active away from doc1 to twin 1!
+        app.request_close_tab(1);
+        assert_eq!(app.active, Some(0), "active tab stays on doc1 while its prompt is pending");
+        assert_eq!(app.pending_close_queue.len(), 1);
+
+        // Resolve doc1 (Don't save): advances to twin 1
+        let ctx = egui::Context::default();
+        app.resolve_close(&ctx, Some(false));
+
+        // Now prompt is for doc2, and since twin 1 was asking and has a twin,
+        // it activated twin 1 and recorded its view key
+        assert_eq!(app.active, Some(0), "twin 1 is now at index 0 and active");
+        assert_eq!(app.asking_view_key, Some(twin1_key));
+
+        // Resolve twin 1 (Don't save): closes twin 1 specifically
+        app.resolve_close(&ctx, Some(false));
+        assert_eq!(app.views.len(), 1);
+        assert_ne!(app.views[0].view_key(), twin1_key, "twin 1 was closed; twin 2 remains open");
+    }
 }

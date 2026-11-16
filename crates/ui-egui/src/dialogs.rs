@@ -1924,6 +1924,7 @@ fn finish_requests(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, re
         // Cancelled or dismissed: nothing is saved.
         app.pending_lock = None;
         app.lock_remember = false;
+        app.asking_view_key = None;
         app.pending_close_queue.clear();
     }
 }
