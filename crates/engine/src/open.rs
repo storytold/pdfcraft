@@ -268,6 +268,10 @@ impl Session {
         // writing the repair could rewrite the file under its signatures.
         let (bytes, info, cos) = match cos {
             Ok(Ok(cos)) if !info.pages.is_empty() && pdfcraft_organize::page_count(&cos).unwrap_or(0) == 0 => {
+                // Whether the catalog's `/Pages` names a node that is there: the tree then exists
+                // and leads to no page, rather than being missing.
+                let tree_present =
+                    cos.root().and_then(|r| cos.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).is_some_and(|p| cos.get(p).as_dict().is_some());
                 let mut work = cos.clone();
                 let signed = || pdfcraft_sign::pdf::list(&cos, &bytes, &context.trust).iter().any(|s| s.signed);
                 let rebuilt = match pdfcraft_organize::recover_page_tree(&mut work) {
@@ -276,10 +280,12 @@ impl Session {
                 };
                 match rebuilt {
                     Some((b, i, mut c)) => {
-                        c.note_repair(format!(
-                            "the page tree leads to no page; the {} pages found by scanning the file were gathered into a new one",
-                            i.pages.len()
-                        ));
+                        let n = i.pages.len();
+                        c.note_repair(if tree_present {
+                            format!("the page tree leads to no page; the {n} pages found by scanning the file were gathered into a new one")
+                        } else {
+                            format!("the page tree is missing; its {n} pages were found by scanning the file")
+                        });
                         (b, i, Ok(Ok(c)))
                     }
                     None => (bytes, info, Ok(Ok(cos))),

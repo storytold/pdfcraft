@@ -11046,7 +11046,7 @@ fn a_recovered_page_tree_opens_unmodified_and_edits_the_pages_shown() {
     let doc = s.get(id).unwrap();
     assert_eq!(doc.info.pages.len(), 2);
     assert!(!doc.editor.as_ref().unwrap().cos.is_modified(), "the repair is a revision of the opened file, not an unsaved edit");
-    assert!(doc.repair_log().iter().any(|l| l.contains("page tree leads to no page")), "{:?}", doc.repair_log());
+    assert!(doc.repair_log().iter().any(|l| l.contains("page tree is missing")), "{:?}", doc.repair_log());
     s.apply(id, Edit::RotatePages { pages: vec![1], degrees: 90 }).unwrap();
     assert_eq!(s.get(id).unwrap().info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>(), [0, 90]);
 }
