@@ -1993,6 +1993,20 @@ fn padded_table_cells_do_not_share_an_edit_line() {
     assert_eq!(blocks, ["AB ", " CD"]);
 }
 
+/// #7086: the tighter edit cap applies across text objects only. Two differently styled runs
+/// in one BT block, 8 pt apart, stay one editable block as before.
+#[test]
+fn same_block_styled_runs_keep_their_wide_row() {
+    let w = |s: &str| pdfcraft_fonts::helvetica_width(s, 10.0);
+    let rhs = 72.0 + w("AB") + 8.0;
+    let content = format!(
+        "BT /F1 10 Tf 1 0 0 1 72 700 Tm (AB) Tj /F2 10 Tf 1 0 0 1 {rhs:.4} 700 Tm (ab) Tj ET"
+    );
+    let doc = text_page(&content);
+    let blocks: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.editor_text).collect();
+    assert_eq!(blocks, ["AB ab"], "one BT block keeps its 1.5 em row window");
+}
+
 /// #7086: padding spaces are an edit-path concern. Reading and export group with the boxes'
 /// gap, so two padded runs 10 pt apart stay one paragraph instead of splitting on the wider
 /// ink-to-ink gap.

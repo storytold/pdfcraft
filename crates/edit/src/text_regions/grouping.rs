@@ -278,7 +278,9 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 // Neighbouring lines share a row across about one word space; a wider gap is a
                 // table cell or a tab stop, which an edit must select on its own (#7086). Reading
                 // keeps the wider row it always grouped.
-                && gap < prev.size.max(line.size) * if mixed { 0.6 } else { 1.5 }
+                // The tighter edit cap is for joins across text objects (#7086). Runs inside one
+                // BT block keep the wider window they had, as the PR's same-BT joins do.
+                && gap < prev.size.max(line.size) * if mixed && prev.origin.bt_op != line.origin.bt_op { 0.6 } else { 1.5 }
                 // Separate same-style text objects that merely touch or overlap, with no space
                 // between them, are separate labels (for example a paragraph dragged against
                 // another, #594). Style runs and words separated by a space or gap still join.
