@@ -379,7 +379,7 @@ fn cmap(glyphs: &[BuiltGlyph]) -> String {
         entries.push(format!("<{code:02X}> <{hex}>\n", code = glyph.code));
     }
     let mut cmap = String::from(
-        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapType 2 def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n",
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n",
     );
     // A CMap block holds at most 100 entries.
     for block in entries.chunks(100) {
@@ -514,6 +514,11 @@ mod tests {
         let metrics = Metrics::from_dict(&doc, &font);
         assert_eq!(metrics.base_font, "ClearScan");
         assert_eq!(metrics.decode(&[1]), "A");
+        let to_unicode_obj = doc.get(font.reference(b"ToUnicode").expect("to_unicode"));
+        let Object::Stream(to_unicode_stream) = &*to_unicode_obj else { panic!("ToUnicode is not a stream") };
+        let cmap_source = String::from_utf8(to_unicode_stream.decoded().expect("decode cmap")).expect("utf-8 cmap");
+        assert!(cmap_source.contains("/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def"), "{cmap_source}");
+        assert!(cmap_source.contains("/CMapName /Adobe-Identity-UCS def"), "{cmap_source}");
         assert!((metrics.width(1) - 4.0 / 6.0).abs() < 1.0e-6, "advance {}", metrics.width(1));
         let descriptor = doc.dict(font.get(b"FontDescriptor").expect("descriptor")).expect("descriptor");
         assert!((number(&doc, &descriptor, b"Ascent") - 8.0 / 6.0 * 1000.0).abs() < 1.0e-6);
