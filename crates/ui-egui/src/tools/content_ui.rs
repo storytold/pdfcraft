@@ -1091,13 +1091,45 @@ impl crate::PdfCraftApp {
 
     /// Click an image field: pick a picture for it.
     pub fn choose_field_image(&mut self, name: &str) {
+        let Some((_, id)) = self.active_ids() else { return };
+        self.choose_field_image_target(id, name, None);
+    }
+    /// Keep the clicked document and field identity through the asynchronous image picker.
+    pub fn choose_field_image_target(&mut self, id: pdfcraft_engine::DocId, name: &str, identity: Option<u64>) {
+        if identity.is_some_and(|key| key >= 1u64 << 48) {
+            self.notify("The selected image field identity is invalid");
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             let name = name.to_string();
+            let Some(generation) = self.session.get(id).map(|d| d.edit_generation()) else { return };
             self.pick_image(tl!("Select Icon"), move |app, _, bytes| {
-                app.apply_edit(Edit::SetFieldImage { name, image: std::sync::Arc::new(bytes) });
+                if app.session.get(id).is_none_or(|d| d.edit_generation() != generation) {
+                    app.notify("The document changed while choosing the image; the picture was not applied");
+                    return;
+                }
+                let image = std::sync::Arc::new(bytes);
+                let edit = match identity {
+                    Some(key) => {
+                        Edit::SetFieldImageTarget { name, object: pdfcraft_cos::ObjRef { num: (key >> 16) as u32, generation: key as u16 }, image }
+                    }
+                    None => Edit::SetFieldImage { name, image },
+                };
+                match app.session.apply(id, edit) {
+                    Ok(_) => {
+                        if let Some(view) = app.views.iter_mut().find(|v| v.id == id)
+                            && let Some(doc) = app.session.get(id)
+                        {
+                            view.document_changed(&doc.info);
+                        }
+                    }
+                    Err(e) => app.notify(e.to_string()),
+                }
             });
         }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (id, identity);
         #[cfg(target_arch = "wasm32")]
         self.notify_fmt("{name}: choosing images arrives on the web with file pickers for images", &[("name", &name)]);
     }

@@ -4797,6 +4797,73 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
     }
 }
 
+/// A drawing whose /InkList lists one stroke array over and over is refused once its points
+/// pass the cap, counted as each stroke is resolved, before they are collected or scaled.
+#[test]
+fn ink_points_are_counted_as_strokes_resolve() {
+    let numbers: String = (0..2000).map(|k| format!(" {}", k % 100)).collect();
+    let refs = " 5 0 R".repeat(501);
+    let doc_with = |refs: &str| {
+        doc_of(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".into(),
+            format!("<< /Type /Annot /Subtype /Ink /Rect [0 0 100 100] /InkList [{refs}] >>"),
+            format!("[{numbers}]"),
+        ])
+    };
+    // 501 × 1,000 points is under the cap: the points are read (this bare drawing then has no
+    // appearance it can be redrawn with, which is another matter).
+    let mut doc = doc_with(&refs);
+    let under = set_rect(&mut doc, 0, 0, [0.0, 0.0, 50.0, 50.0], &meta(""));
+    assert!(!matches!(&under, Err(AnnotError::Invalid(m)) if m.contains("points")), "{under:?}");
+    // 1,001 × 1,000 points is over it.
+    let mut doc = doc_with(&" 5 0 R".repeat(1001));
+    match set_rect(&mut doc, 0, 0, [0.0, 0.0, 50.0, 50.0], &meta("")) {
+        Err(AnnotError::Invalid(m)) => assert!(m.contains("more than 1000000 points"), "{m}"),
+        other => panic!("refused: {other:?}"),
+    }
+    match erase_ink(&mut doc, 0, 0, &[[1.0, 1.0]], 1.0, &meta("")) {
+        Err(AnnotError::Invalid(m)) => assert!(m.contains("more than 1000000 points"), "{m}"),
+        other => panic!("refused: {other:?}"),
+    }
+}
+
+/// The eraser's densified samples have a total: a tiny eraser over long strokes is refused
+/// instead of interpolating millions of points.
+#[test]
+fn the_eraser_densifies_within_a_total() {
+    let zigzag: String = (0..2100).map(|k| format!(" {} {}", if k % 2 == 0 { 0 } else { 5000 }, k)).collect();
+    let mut doc = doc_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".into(),
+        format!("<< /Type /Annot /Subtype /Ink /Rect [0 0 5000 2100] /InkList [[{zigzag}]] >>"),
+    ]);
+    match erase_ink(&mut doc, 0, 0, &[[1.0, 1.0]], 0.01, &meta("")) {
+        Err(AnnotError::Invalid(m)) => assert!(m.contains("too large to erase"), "{m}"),
+        other => panic!("refused: {other:?}"),
+    }
+}
+
+/// Each stroke's final point is a sample too: 500,000 strokes of two points at 8 samples a segment
+/// are 4,000,000 densified samples and as many final points again, past the total.
+#[test]
+fn the_eraser_counts_each_strokes_final_point() {
+    let refs = " 5 0 R".repeat(500_000);
+    let mut doc = doc_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".into(),
+        format!("<< /Type /Annot /Subtype /Ink /Rect [0 0 100 100] /InkList [{refs}] >>"),
+        "[0 0 8 0]".into(),
+    ]);
+    match erase_ink(&mut doc, 0, 0, &[[1.0, 1.0]], 2.0, &meta("")) {
+        Err(AnnotError::Invalid(m)) => assert!(m.contains("too large to erase"), "{m}"),
+        other => panic!("refused: {other:?}"),
+    }
+}
+
 /// A 3D annotation is PDF 1.6 and a PRC model 1.7 (ISO 32000-2 §13.6): an older document's
 /// catalog says so, and a newer one is left as it is.
 #[test]
