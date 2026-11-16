@@ -414,6 +414,16 @@ impl Recogniser<'_> {
         let info = doc.trailer().get(b"Info").and_then(Object::as_ref).map(|r| r.num);
         let perms = old.root().and_then(|c| old.get(c).as_dict().and_then(|c| c.get(b"Perms").and_then(Object::as_ref))).map(|r| r.num);
         let no_role = |o: &Object| o.as_dict().is_none_or(|d| !has_role(d));
+        // A stream the signed revision referred to fills a reference that was signed: drawn
+        // whatever its /Type says, it is no file plumbing (review of #7041). Read only when a new
+        // stream calls itself plumbing; unreadable references claim none.
+        let mut signed_refs: Option<Option<HashSet<u32>>> = None;
+        let mut unsigned_number = |num: u32| {
+            signed_refs
+                .get_or_insert_with(|| super::changes::references(old).map(|found| found.into_iter().map(|r| r.num).collect()))
+                .as_ref()
+                .is_some_and(|refs| !refs.contains(&num))
+        };
         let mut found = Vec::new();
         for c in &self.seen.changes {
             let op = match (&c.before, &*c.now) {
@@ -424,7 +434,9 @@ impl Recogniser<'_> {
                 {
                     Some(Op::Housekeeping)
                 }
-                (None, Object::Stream(s)) if matches!(s.dict.name(b"Type"), Some(b"XRef" | b"ObjStm")) => Some(Op::Plumbing),
+                (None, Object::Stream(s)) if matches!(s.dict.name(b"Type"), Some(b"XRef" | b"ObjStm")) && unsigned_number(c.num) => {
+                    Some(Op::Plumbing)
+                }
                 (None, Object::Dict(d)) if Some(c.num) == info && !has_role(d) => Some(Op::NewInfo),
                 _ => None,
             };

@@ -2464,6 +2464,41 @@ fn a_form_xobject_relabelled_as_file_plumbing_is_still_judged() {
     }
 }
 
+#[test]
+fn a_stream_labelled_as_file_plumbing_cannot_fill_a_signed_reference() {
+    // A signed comment's appearance names object 40, which the signed revision does not have. A
+    // stream added there later is drawn whatever its /Type says, so labelling it /XRef or
+    // /ObjStm must not make it file plumbing (review of #7041).
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let unsigned = write_pdf(&[
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R 7 0 R] >>",
+        b"<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 250 Td (Contract text) Tj ET\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [10 10 290 200] /AP << /N 40 0 R >> >>",
+    ]);
+    for certify in LEVELS {
+        let signed = pdfcraft_sign::sign(&open(&unsigned), &id, &SignOptions { certify, ..opts() }).unwrap();
+        for label in ["XRef", "ObjStm"] {
+            let edited = edit_after(&signed, |doc| {
+                let mut d = pdfcraft_cos::Dict::new();
+                d.set(b"Type".to_vec(), Object::name(label));
+                d.set(b"Subtype".to_vec(), Object::name("Form"));
+                d.set(b"BBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(280), Object::Int(190)]));
+                let body = b"BT /F1 14 Tf 20 100 Td (Forged text) Tj ET".to_vec();
+                d.set(b"Length".to_vec(), Object::Int(body.len() as i64));
+                doc.set(pdfcraft_cos::ObjRef { num: 40, generation: 0 }, Object::Stream(pdfcraft_cos::Stream::from_raw(d, body)));
+            });
+            let s = signatures(&open(&edited), &edited, &trust).into_iter().find(|s| s.signed).unwrap();
+            assert_eq!(s.status, Status::Invalid, "{certify:?} /{label}: {:?}", s.modification);
+            assert!(matches!(&s.modification, Modification::Disallowed(_)), "{certify:?} /{label}: {:?}", s.modification);
+        }
+    }
+}
+
 /// `fixture()` with a document information dictionary (object 7) named by the trailer's `/Info`.
 fn fixture_with_info() -> Vec<u8> {
     let objs: Vec<&[u8]> = vec![
