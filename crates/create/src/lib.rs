@@ -1,4 +1,4 @@
-//! pdfcraft-create — create PDFs from nothing, images or text (L4). See the README.
+//! pdfcraft-create — create PDFs from nothing, images, text or (through LibreOffice) Office documents (L4). See the README.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -8,6 +8,11 @@ mod extract;
 mod text_font;
 mod upright_image;
 pub use extract::{ExtractedImage, ImageExport, extract_images, image_file, image_file_within};
+pub use upright_image::jpeg_exif_orientation;
+mod office;
+#[cfg(not(target_arch = "wasm32"))]
+pub use office::libreoffice;
+pub use office::{OFFICE_EXTENSIONS, is_office, office_to_pdf};
 use pdfcraft_fonts::wrap_with;
 use text_font::TextFont;
 
@@ -17,6 +22,9 @@ pub enum CreateError {
     Image(String, String),
     #[error("{0}")]
     Invalid(String),
+    /// An Office document LibreOffice couldn't convert, or LibreOffice isn't installed.
+    #[error("{0}")]
+    Office(String),
 }
 
 /// US Letter in points.
@@ -420,36 +428,30 @@ fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
 
 fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     let bad = |m: String| CreateError::Image(name.into(), m);
-    let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
-    dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-    let mut reader = dec.read_info().map_err(|e| bad(e.to_string()))?;
-    let dpi = match reader.info().pixel_dims {
-        Some(png::PixelDimensions { xppu, yppu, unit: png::Unit::Meter }) if xppu > 0 && yppu > 0 => (xppu as f64 * 0.0254, yppu as f64 * 0.0254),
-        _ => (72.0, 72.0),
+    let opts = craft_image_codecs::DecodeOptions {
+        keep_orientation: true,
+        limits: craft_image_codecs::Limits { max_alloc: MAX_DECODED_BYTES as u64, ..Default::default() },
     };
-    let icc = reader.info().icc_profile.as_ref().map(|p| p.to_vec());
-    // The decoded size comes from the header alone, so a file of a few bytes can claim any
-    // size: keep the ceiling, and ask for the memory fallibly (a failed allocation would abort
-    // the whole app, and no `catch_unwind` stops that).
-    // Flate expands at most 1032:1 and decoding at most 32:1 more (1-bit palette to RGBA), so a
-    // file cannot honestly hold more than that: refuse a header the bytes cannot back before
-    // zero-filling a buffer of its size. The slack keeps tiny real images out of the check.
-    let size = reader
-        .output_buffer_size()
-        .filter(|n| *n <= MAX_DECODED_BYTES && *n <= bytes.len().saturating_mul(PNG_MAX_EXPANSION).saturating_add(PNG_SLACK))
-        .ok_or_else(|| bad("image too large".into()))?;
-    let mut buf = Vec::new();
-    buf.try_reserve_exact(size).map_err(|_| bad("not enough memory for this image".into()))?;
-    buf.resize(size, 0);
-    let frame = reader.next_frame(&mut buf).map_err(|e| bad(e.to_string()))?;
-    let (w, h) = (frame.width, frame.height);
-    let data = &buf[..frame.buffer_size()];
-    let (channels, cs) = match frame.color_type {
-        png::ColorType::Grayscale => (1, "DeviceGray"),
-        png::ColorType::GrayscaleAlpha => (2, "DeviceGray"),
-        png::ColorType::Rgb => (3, "DeviceRGB"),
-        png::ColorType::Rgba => (4, "DeviceRGB"),
-        png::ColorType::Indexed => return Err(bad("unexpected palette output".into())),
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, bytes, &opts).map_err(|e| match e {
+        craft_image_codecs::CodecError::LimitExceeded(m) => bad(format!("image too large: {m}")),
+        other => bad(other.to_string()),
+    })?;
+    let dpi = img.meta.dpi.map(|(x, y)| (f64::from(x), f64::from(y))).filter(|&(x, y)| x > 0.0 && y > 0.0).unwrap_or((72.0, 72.0));
+    let icc = img.icc.clone();
+    let (w, h) = (img.width(), img.height());
+    let (channels, cs) = match img.layout() {
+        craft_image_codecs::ChannelLayout::Gray => (1, "DeviceGray"),
+        craft_image_codecs::ChannelLayout::GrayA => (2, "DeviceGray"),
+        craft_image_codecs::ChannelLayout::Rgb => (3, "DeviceRGB"),
+        craft_image_codecs::ChannelLayout::Rgba => (4, "DeviceRGB"),
+        _ => return Err(bad("unexpected palette output".into())),
+    };
+    let data: std::borrow::Cow<'_, [u8]> = if let Some(u8s) = img.as_u8() {
+        std::borrow::Cow::Borrowed(u8s)
+    } else if let Some(u16s) = img.to_u16_samples() {
+        std::borrow::Cow::Owned(u16s.into_iter().map(|v| (v >> 8) as u8).collect())
+    } else {
+        return Err(bad("expected 8-bit or 16-bit PNG samples".into()));
     };
     let has_alpha = channels == 2 || channels == 4;
     let colour_n = if has_alpha { channels - 1 } else { channels };
@@ -509,103 +511,26 @@ fn rgba_image(rgba: &[u8], (w, h): (u32, u32), dpi: (f64, f64)) -> Embedded {
     Embedded { dict: d, data: colour, filtered: false, smask, icc: None, px: (w, h), dpi }
 }
 
-/// BMP and GIF (the first frame), through the `image` decoders. Their resolution is not read:
+/// BMP and GIF (the first frame), through `craft-image-codecs`. Their resolution is not read:
 /// 72 dpi, as for images without one.
-fn decoded(name: &str, bytes: &[u8], format: image::ImageFormat) -> Result<Embedded, CreateError> {
+fn decoded(name: &str, bytes: &[u8], format: craft_image_codecs::Format) -> Result<Embedded, CreateError> {
     // A GIF's first frame is painted on a canvas the size of its logical screen, however small
     // the frame: a few bytes can ask for hundreds of MB.
-    if format == image::ImageFormat::Gif
+    if format == craft_image_codecs::Format::Gif
         && let Some(&[w0, w1, h0, h1]) = bytes.get(6..10)
         && u64::from(u16::from_le_bytes([w0, w1])) * u64::from(u16::from_le_bytes([h0, h1])) > MAX_GIF_PIXELS
     {
         return Err(CreateError::Image(name.into(), "the GIF's screen is larger than 4096×4096 pixels".into()));
     }
-    let img = image::load_from_memory_with_format(bytes, format).map_err(|e| CreateError::Image(name.into(), e.to_string()))?;
-    let rgba = img.into_rgba8();
-    Ok(rgba_image(rgba.as_raw(), rgba.dimensions(), (72.0, 72.0)))
+    let img = craft_image_codecs::decode_as_with(format, bytes, &craft_image_codecs::DecodeOptions::default())
+        .map_err(|e| CreateError::Image(name.into(), e.to_string()))?;
+    let dims = (img.width(), img.height());
+    let raw = img.to_rgba8();
+    Ok(rgba_image(&raw, dims, (72.0, 72.0)))
 }
 
 fn le16(b: &[u8], at: usize) -> Option<u16> {
     b.get(at..at + 2).map(|x| u16::from_le_bytes([x[0], x[1]]))
-}
-
-/// How a PCX image holds its pixels: bits per plane and planes.
-#[derive(Clone, Copy, PartialEq)]
-enum PcxLayout {
-    /// One byte per pixel per colour: each scanline has a red, a green and a blue row.
-    Rgb,
-    /// One byte per pixel, an index into the palette after the image (grey without one).
-    Indexed,
-    /// One bit per pixel in each of 1 to 4 planes, an index into the header's palette.
-    Bits(usize),
-}
-
-impl PcxLayout {
-    fn of(bits: u8, planes: usize) -> Option<PcxLayout> {
-        match (bits, planes) {
-            (8, 3) => Some(PcxLayout::Rgb),
-            (8, 1) => Some(PcxLayout::Indexed),
-            (1, 1..=4) => Some(PcxLayout::Bits(planes)),
-            _ => None,
-        }
-    }
-}
-
-/// The palette of a PCX image, and where its run-length coded scanlines end. An 8-bit image ends
-/// with a 0x0C byte and 256 colours; a one-plane bit image is black and white whatever its header
-/// holds; other bit images use the 16 colours at byte 16.
-fn pcx_palette(bytes: &[u8], layout: PcxLayout) -> (Vec<u8>, usize) {
-    match layout {
-        PcxLayout::Rgb => (Vec::new(), bytes.len()),
-        PcxLayout::Indexed => match bytes.len().checked_sub(769).filter(|at| *at >= 128 && bytes.get(*at) == Some(&0x0C)) {
-            Some(at) => (bytes.get(at + 1..).unwrap_or_default().to_vec(), at),
-            None => ((0..=255u8).flat_map(|v| [v, v, v]).collect(), bytes.len()),
-        },
-        PcxLayout::Bits(1) => (vec![0, 0, 0, 255, 255, 255], bytes.len()),
-        PcxLayout::Bits(_) => (bytes.get(16..64).unwrap_or_default().to_vec(), bytes.len()),
-    }
-}
-
-/// The `rows` scanlines of `line` bytes each, decoded. A run may cross from one plane's row into the
-/// next, but not out of its scanline.
-fn pcx_scanlines(mut body: &[u8], rows: usize, line: usize) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    out.try_reserve_exact(rows.checked_mul(line)?).ok()?;
-    for row in 1..=rows {
-        let end = row * line;
-        while out.len() < end {
-            let (&c, rest) = body.split_first()?;
-            body = rest;
-            if c < 0xC0 {
-                out.push(c);
-                continue;
-            }
-            let (&value, rest) = body.split_first()?;
-            body = rest;
-            let count = usize::from(c & 0x3F);
-            if count > end - out.len() {
-                return None;
-            }
-            out.resize(out.len() + count, value);
-        }
-    }
-    Some(out)
-}
-
-/// The RGB samples of the `w` pixels of scanline `row` (planes `stride` bytes apart).
-fn pcx_row(out: &mut Vec<u8>, row: &[u8], w: usize, stride: usize, layout: PcxLayout, palette: &[u8]) {
-    let at = |i: usize| row.get(i).copied().unwrap_or(0);
-    for x in 0..w {
-        let index = match layout {
-            PcxLayout::Rgb => {
-                out.extend([at(x), at(stride + x), at(2 * stride + x)]);
-                continue;
-            }
-            PcxLayout::Indexed => usize::from(at(x)),
-            PcxLayout::Bits(planes) => (0..planes).fold(0, |index, k| index | (usize::from(at(k * stride + x / 8) >> (7 - x % 8) & 1) << k)),
-        };
-        out.extend((0..3).map(|c| palette.get(index * 3 + c).copied().unwrap_or(0)));
-    }
 }
 
 /// A PCX image: a 128-byte header (size at 4-11, resolution at 12 and 14, plane count at 65, bytes
@@ -623,7 +548,9 @@ fn pcx(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     if planes == 0 || stride == 0 {
         return Err(bad("a damaged PCX header"));
     }
-    let layout = PcxLayout::of(bits, planes).ok_or_else(|| bad("this PCX plane layout is not supported"))?;
+    if !matches!((bits, planes), (8, 1 | 3) | (1, 1..=4)) {
+        return Err(bad("this PCX plane layout is not supported"));
+    }
     if stride < (w * usize::from(bits)).div_ceil(8) {
         return Err(bad("a damaged PCX header"));
     }
@@ -631,14 +558,51 @@ fn pcx(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     if line.saturating_mul(h) > MAX_DECODED_BYTES || w.saturating_mul(h).saturating_mul(3) > MAX_DECODED_BYTES {
         return Err(bad("unusual PCX image size"));
     }
-    let (palette, end) = pcx_palette(bytes, layout);
-    let body = bytes.get(128..end).unwrap_or_default();
-    let scanlines = pcx_scanlines(body, h, line).ok_or_else(|| bad("a damaged PCX body"))?;
-    let mut data = Vec::new();
-    data.try_reserve_exact(w * h * 3).map_err(|_| bad("not enough memory for this image"))?;
-    for row in scanlines.chunks_exact(line) {
-        pcx_row(&mut data, row, w, stride, layout, &palette);
+    // Preserve Create PDF's legacy palette policy, not a second pixel decoder: monochrome
+    // is black/white and an indexed file without its VGA palette is interpreted as gray.
+    // The shared reader owns all RLE, plane unpacking and palette application.
+    let has_vga = bytes.len().checked_sub(769).is_some_and(|at| at >= 128 && bytes.get(at) == Some(&0x0C));
+    // The pinned decoder predates shared version-4 recognition. Its version byte is
+    // only a header acceptance check, not a switch for pixel or palette semantics.
+    // Keep this app's existing version-4 acceptance without replacing the shared pin.
+    let version_four = byte(1) == 4;
+    let normalize = version_four || (bits == 1 && planes == 1) || (bits == 8 && planes == 1 && !has_vga);
+    let mut input = std::borrow::Cow::Borrowed(bytes);
+    if normalize {
+        // Normalization must not add an unbounded copy of hostile compressed input.
+        if bytes.len() > MAX_DECODED_BYTES {
+            return Err(bad("unusual PCX input size"));
+        }
+        let mut copy = Vec::new();
+        copy.try_reserve_exact(bytes.len()).map_err(|_| bad("not enough memory for this image"))?;
+        copy.extend_from_slice(bytes);
+        if version_four && let Some(version) = copy.get_mut(1) {
+            *version = 5;
+        }
+        if bits == 1 && planes == 1 {
+            if let Some(palette) = copy.get_mut(16..22) {
+                palette.copy_from_slice(&[0, 0, 0, 255, 255, 255]);
+            }
+        } else if bits == 8
+            && planes == 1
+            && !has_vga
+            && let Some(info) = copy.get_mut(68..70)
+        {
+            info.copy_from_slice(&2u16.to_le_bytes());
+        }
+        input = std::borrow::Cow::Owned(copy);
     }
+    let opts = craft_image_codecs::DecodeOptions {
+        limits: craft_image_codecs::Limits { max_alloc: MAX_DECODED_BYTES as u64, ..Default::default() },
+        ..Default::default()
+    };
+    let image = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Pcx, &input, &opts).map_err(|e| bad(&e.to_string()))?;
+    // The accepted layouts above are RGB8 in the pinned shared decoder. Refuse an unexpected
+    // contract rather than interpreting alpha or high-depth bytes as DeviceRGB samples.
+    if image.layout() != craft_image_codecs::ChannelLayout::Rgb || image.sample_type() != craft_image_codecs::SampleType::U8 {
+        return Err(bad("unexpected PCX pixel layout"));
+    }
+    let data = image.into_data();
     let dpi = (f64::from(word(12)), f64::from(word(14)));
     let dpi = if dpi.0 > 0.0 && dpi.1 > 0.0 { dpi } else { (72.0, 72.0) };
     let mut d = Dict::new();
@@ -655,15 +619,27 @@ const MAX_GIF_PIXELS: u64 = 1 << 24;
 /// twice over.
 const MAX_DECODED_BYTES: usize = 2 << 30;
 
-/// Most a PNG's decoded size can exceed its file size: Flate's 1032:1 times the 32:1 of
-/// expanding a 1-bit palette to RGBA, plus a fixed allowance for small files.
-const PNG_MAX_EXPANSION: usize = 1032 * 32;
-const PNG_SLACK: usize = 1 << 20;
-
 /// Most decoded bytes all the pages of one TIFF may take together: its pages stay in memory until
 /// they are embedded, and many small directories can share one compressed strip. Saturates to the
 /// whole address space on 32-bit targets (wasm32), where 4 GiB doesn't fit in `usize`.
 const MAX_DECODED_TOTAL: usize = MAX_DECODED_BYTES.saturating_mul(2);
+
+/// Returns whether the TIFF directory at `ifd_offset` is a 1-bit bilevel grayscale image.
+fn tiff_page_is_bilevel(bytes: &[u8], ifd_offset: u64) -> bool {
+    let order = match bytes.get(0..2) {
+        Some(b"II") => craft_tiff::ByteOrder::Little,
+        Some(b"MM") => craft_tiff::ByteOrder::Big,
+        _ => return false,
+    };
+    let bigtiff = order.read_u16(bytes, 2) == Some(43);
+    let Ok((ifd, _)) = craft_tiff::parse_ifd_at(bytes, ifd_offset, order, 0, bigtiff, &craft_tiff::ParseOptions::default()) else {
+        return false;
+    };
+    let Some(bits) = ifd.u64s(craft_tiff::tags::BITS_PER_SAMPLE) else {
+        return false;
+    };
+    bits.len() == 1 && bits[0] == 1
+}
 
 /// The first `wanted` pages of a TIFF (multi-page scans become multi-page PDFs).
 fn tiff_pages(name: &str, bytes: &[u8], wanted: usize) -> Result<Vec<Embedded>, CreateError> {
@@ -672,67 +648,70 @@ fn tiff_pages(name: &str, bytes: &[u8], wanted: usize) -> Result<Vec<Embedded>, 
 
 /// [`tiff_pages`], refused once the pages kept take more than `budget` bytes.
 fn tiff_pages_within(name: &str, bytes: &[u8], wanted: usize, budget: usize) -> Result<Vec<Embedded>, CreateError> {
-    use tiff::ColorType as C;
-    use tiff::decoder::{Decoder, DecodingResult, Limits};
-    use tiff::tags::Tag;
+    use craft_image_codecs::ChannelLayout as L;
     let bad = |m: String| CreateError::Image(name.into(), m);
-    // The tiff crate stops at 256 MiB of decoded pixels, below an ordinary poster scan (#665):
-    // 12000x16000 CMYK is 768 MiB. Raise it, but keep a ceiling so a tiny file claiming
-    // enormous dimensions can't ask for unbounded memory.
-    let mut limits = Limits::default();
-    limits.decoding_buffer_size = MAX_DECODED_BYTES;
-    let mut dec = Decoder::new(std::io::Cursor::new(bytes)).map_err(|e| bad(e.to_string()))?.with_limits(limits);
+    let info = craft_image_codecs::tiff_info(bytes).map_err(|e| bad(e.to_string()))?;
+    let opts = craft_image_codecs::DecodeOptions {
+        keep_orientation: true,
+        limits: craft_image_codecs::Limits { max_alloc: MAX_DECODED_BYTES as u64, ..Default::default() },
+    };
     let mut out = Vec::new();
     let mut kept = 0usize;
-    loop {
-        let (w, h) = dec.dimensions().map_err(|e| bad(e.to_string()))?;
-        let ct = dec.colortype().map_err(|e| bad(e.to_string()))?;
-        let unit = dec.get_tag_u32(Tag::ResolutionUnit).unwrap_or(2);
-        let res = |t: Tag, dec: &mut Decoder<std::io::Cursor<&[u8]>>| -> f64 {
-            // Resolutions are rationals.
-            let v = match dec.get_tag(t) {
-                Ok(tiff::decoder::ifd::Value::Rational(n, d)) if d != 0 => f64::from(n) / f64::from(d),
-                Ok(other) => other.into_f64().unwrap_or(72.0),
-                Err(_) => 72.0,
-            };
-            let v = if unit == 3 { v * 2.54 } else { v };
-            if v.is_finite() && v >= 1.0 { v } else { 72.0 }
+    for (idx, p) in info.pages.iter().enumerate() {
+        if out.len() >= wanted {
+            break;
+        }
+        if p.kind == craft_image_codecs::TiffPageKind::ReducedResolution {
+            continue;
+        }
+        let img = craft_image_codecs::decode_tiff_page(bytes, idx, &opts).map_err(|e| bad(e.to_string()))?;
+        let (w, h) = (img.width(), img.height());
+        let dpi = img.meta.dpi.map(|(x, y)| (f64::from(x), f64::from(y))).filter(|&(x, y)| x > 0.0 && y > 0.0).unwrap_or((72.0, 72.0));
+        let data_buf: std::borrow::Cow<'_, [u8]> = if let Some(u8s) = img.as_u8() {
+            std::borrow::Cow::Borrowed(u8s)
+        } else if let Some(u16s) = img.to_u16_samples() {
+            std::borrow::Cow::Owned(u16s.into_iter().map(|v| (v >> 8) as u8).collect())
+        } else {
+            return Err(bad("this TIFF sample format isn't supported".into()));
         };
-        let dpi = (res(Tag::XResolution, &mut dec), res(Tag::YResolution, &mut dec));
-        let data = match dec.read_image().map_err(|e| bad(e.to_string()))? {
-            DecodingResult::U8(v) => v,
-            // 16-bit samples: keep the high byte.
-            DecodingResult::U16(v) => v.iter().map(|x| (x >> 8) as u8).collect(),
-            _ => return Err(bad("this TIFF sample format isn't supported".into())),
-        };
-        let page = match ct {
-            C::Gray(1) => {
-                // Bilevel scans stay 1 bit per pixel (0 = black after the decoder's inversion).
+        let data = data_buf.as_ref();
+        let page = match img.layout() {
+            L::Gray if tiff_page_is_bilevel(bytes, p.ifd_offset) => {
+                // Bilevel scans stay 1 bit per pixel (0 = black).
+                let row_bytes = (w as usize).div_ceil(8);
+                let mut packed = vec![0u8; row_bytes.saturating_mul(h as usize)];
+                for y in 0..h as usize {
+                    for x in 0..w as usize {
+                        if data[y * w as usize + x] >= 128 {
+                            packed[y * row_bytes + (x >> 3)] |= 0x80 >> (x & 7);
+                        }
+                    }
+                }
                 let mut d = Dict::new();
                 d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
                 d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
-                Embedded { dict: d, data, filtered: false, smask: None, icc: None, px: (w, h), dpi }
+                Embedded { dict: d, data: packed, filtered: false, smask: None, icc: None, px: (w, h), dpi }
             }
-            C::Gray(8 | 16) => {
+            L::Gray => {
                 let mut d = Dict::new();
                 d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
                 d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
-                Embedded { dict: d, data, filtered: false, smask: None, icc: None, px: (w, h), dpi }
+                Embedded { dict: d, data: data.to_vec(), filtered: false, smask: None, icc: None, px: (w, h), dpi }
             }
-            C::RGB(8 | 16) => {
+            L::Rgb => {
                 let mut d = Dict::new();
                 d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
                 d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
-                Embedded { dict: d, data, filtered: false, smask: None, icc: None, px: (w, h), dpi }
+                Embedded { dict: d, data: data.to_vec(), filtered: false, smask: None, icc: None, px: (w, h), dpi }
             }
-            C::CMYK(8 | 16) => {
+            L::Cmyk => {
                 let mut d = Dict::new();
                 d.set(b"ColorSpace".to_vec(), Object::name("DeviceCMYK"));
                 d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
-                Embedded { dict: d, data, filtered: false, smask: None, icc: None, px: (w, h), dpi }
+                Embedded { dict: d, data: data.to_vec(), filtered: false, smask: None, icc: None, px: (w, h), dpi }
             }
-            C::RGBA(8 | 16) => rgba_image(&data, (w, h), dpi),
-            C::GrayA(8 | 16) => {
+            L::Rgba => rgba_image(data, (w, h), dpi),
+            L::GrayA => {
                 let rgba: Vec<u8> = data.as_chunks::<2>().0.iter().flat_map(|p| [p[0], p[0], p[0], p[1]]).collect();
                 rgba_image(&rgba, (w, h), dpi)
             }
@@ -743,10 +722,6 @@ fn tiff_pages_within(name: &str, bytes: &[u8], wanted: usize, budget: usize) -> 
             return Err(bad(format!("the TIFF's pages take more than {} MiB together", budget >> 20)));
         }
         out.push(page);
-        if out.len() >= wanted || !dec.more_images() {
-            break;
-        }
-        dec.next_image().map_err(|e| bad(e.to_string()))?;
     }
     Ok(out)
 }
@@ -757,9 +732,18 @@ pub enum SourceKind {
     Pdf,
     Image,
     Text,
+    /// A Word, Excel, PowerPoint or OpenDocument file, converted through LibreOffice.
+    Office,
 }
 
-/// File extensions Create converts to PDF (images and plain text).
+/// File extensions of the images Create converts to PDF.
+pub const IMAGE_EXTENSIONS: [&str; 11] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "pcx"];
+
+/// File extensions of the plain-text files Create converts to PDF.
+pub const TEXT_EXTENSIONS: [&str; 2] = ["txt", "text"];
+
+/// File extensions Create converts to PDF itself: [`IMAGE_EXTENSIONS`] and [`TEXT_EXTENSIONS`]
+/// (Office documents go through LibreOffice, [`OFFICE_EXTENSIONS`]).
 pub const CONVERTIBLE: [&str; 13] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "pcx", "txt", "text"];
 
 /// A PCX file: its manufacturer byte, a version (1 was never used), run-length coding and 1 or 8
@@ -792,8 +776,8 @@ fn is_image(bytes: &[u8]) -> bool {
             && bytes.get(14..18).and_then(|h| <[u8; 4]>::try_from(h).ok()).is_some_and(|h| matches!(u32::from_le_bytes(h), 12 | 40 | 52 | 56 | 108 | 124)))
 }
 
-/// Whether `bytes` named `name` is a PDF, an image Create can embed, or plain text (a `.txt` or
-/// `.text` file). `None` for anything else.
+/// Whether `bytes` named `name` is a PDF, an image Create can embed, plain text (a `.txt` or
+/// `.text` file) or an Office document ([`is_office`]). `None` for anything else.
 pub fn source_kind(name: &str, bytes: &[u8]) -> Option<SourceKind> {
     let head = bytes.get(..bytes.len().min(1024)).unwrap_or_default();
     if head.windows(5).any(|w| w == b"%PDF-") {
@@ -801,6 +785,9 @@ pub fn source_kind(name: &str, bytes: &[u8]) -> Option<SourceKind> {
     }
     if is_image(bytes) {
         return Some(SourceKind::Image);
+    }
+    if is_office(name, bytes) {
+        return Some(SourceKind::Office);
     }
     let lower = name.to_ascii_lowercase();
     (lower.ends_with(".txt") || lower.ends_with(".text")).then_some(SourceKind::Text)
@@ -816,9 +803,9 @@ fn embed(name: &str, bytes: &[u8], wanted: usize) -> Result<Vec<Embedded>, Creat
     } else if is_tiff(bytes) {
         tiff_pages(name, bytes, wanted)
     } else if bytes.starts_with(b"BM") {
-        Ok(vec![decoded(name, &pdfcraft_xfa::image::bmp_with_pixel_offset(bytes), image::ImageFormat::Bmp)?])
+        Ok(vec![decoded(name, &pdfcraft_xfa::image::bmp_with_pixel_offset(bytes), craft_image_codecs::Format::Bmp)?])
     } else if is_gif(bytes) {
-        Ok(vec![decoded(name, bytes, image::ImageFormat::Gif)?])
+        Ok(vec![decoded(name, bytes, craft_image_codecs::Format::Gif)?])
     } else if is_pcx(bytes) {
         Ok(vec![pcx(name, bytes)?])
     } else if bytes.starts_with(JP2_SIGNATURE) || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) {
