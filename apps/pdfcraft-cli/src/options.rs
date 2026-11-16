@@ -4,6 +4,21 @@ pub(crate) fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
 }
 
+/// Whether `name` appears as an option token in `args` (skipping values of `takes_value` options).
+pub(crate) fn has_flag(args: &[String], specs: &[OptionSpec], name: &str) -> bool {
+    let mut i = 0;
+    while let Some(a) = args.get(i) {
+        if a == name {
+            return true;
+        }
+        match specs.iter().find(|spec| spec.name == a.as_str()) {
+            Some(spec) if spec.takes_value => i += 2,
+            _ => i += 1,
+        }
+    }
+    false
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct OptionSpec {
     pub(crate) name: &'static str,
@@ -92,7 +107,7 @@ pub(crate) const EXTRACT_OPTIONS: &[OptionSpec] = &[
 pub(crate) const CONVERT_COLORS_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--out", takes_value: true },
     OptionSpec { name: "--to", takes_value: true },
-    OptionSpec { name: "--preserve-icc", takes_value: false },
+    OptionSpec { name: "--no-preserve-icc", takes_value: false },
     OptionSpec { name: "--password", takes_value: true },
 ];
 

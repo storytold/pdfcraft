@@ -1,6 +1,6 @@
 use super::options::{
     COMBINE_OPTIONS, CONVERT_COLORS_OPTIONS, EXTRACT_OPTIONS, INFO_OPTIONS, RENDER_OPTIONS, SPLIT_OPTIONS, TEXT_OPTIONS, can_be_path_value, flag,
-    needs_value, positional, validate_options,
+    has_flag, needs_value, positional, validate_options,
 };
 use super::{Arc, CliError, ImageFormat, PageRenderer, Path, PathBuf, RenderConfig, RenderRequest, RequestKind, Write, inspect, stdout_line};
 
@@ -370,7 +370,7 @@ pub(crate) fn convert_colors(args: &[String]) -> Result<(), CliError> {
     if to != "rgb" {
         return Err(format!("convert-colors: unknown target space {to:?} (supported: rgb)").into());
     }
-    let preserve_icc = !args.iter().any(|a| a == "--no-preserve-icc");
+    let preserve_icc = !has_flag(args, CONVERT_COLORS_OPTIONS, "--no-preserve-icc");
     let options = pdfcraft_engine::print::ConvertColorsOptions { to_rgb: true, preserve_icc };
     let mut session = pdfcraft_engine::Session::new();
     let id = session.open(path, None, read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;

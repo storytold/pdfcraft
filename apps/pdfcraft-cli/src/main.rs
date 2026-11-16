@@ -80,7 +80,7 @@ pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--m
 pdfcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
 pdfcraft-cli extract <in.pdf> --pages 1,3,5-8 --out out.pdf    (pages and ranges, in the order given)
 pdfcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
-pdfcraft-cli convert-colors <in.pdf> --out out.pdf [--to rgb] [--preserve-icc]
+pdfcraft-cli convert-colors <in.pdf> --out out.pdf [--to rgb] [--no-preserve-icc]
                                                           convert image colours (DeviceCMYK to DeviceRGB)
 pdfcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
 pdfcraft-cli audit  <file.pdf> [--password PW]            find faux redactions (fails when found)
