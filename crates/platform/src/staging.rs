@@ -132,7 +132,8 @@ pub fn staging_suffixes() -> impl Iterator<Item = u64> {
 /// (`sync_all`); parent-directory durability after a power loss is not promised. On Unix a file
 /// that is replaced keeps its permissions and group, so a private file stays private; a new file gets the
 /// usual mode for a new file. On Windows a replaced file stays hidden or system if it was, and
-/// plain if it was plain. On Windows and macOS a replaced file keeps its creation date, where
+/// plain if it was plain, even where a server hides the dot-named staging file (#5001, #4593, #6029, #6119).
+/// On Windows and macOS a replaced file keeps its creation date, where
 /// the volume stores one.
 /// On macOS, accessible extended attributes of an existing regular destination are copied
 /// before flushing; a copy failure refuses the save rather than losing metadata (#2658).
@@ -185,7 +186,28 @@ pub fn write_atomically_with(
             keep_created(&file, created);
             sync_staged(&file, sync_all)?;
         }
-        std::fs::rename(&tmp, path)
+        let rename_result = std::fs::rename(&tmp, path);
+        #[cfg(windows)]
+        if rename_result.is_ok()
+            && let Some(keep) = &keep
+        {
+            // Restore attributes only if the saved file's hidden or system bits differ from the
+            // replaced file's (#5001, #4593, #6029, #6119). Samba/NAS servers mark dot-named
+            // staging files hidden and persist that flag through the rename; on local disks, the
+            // staging file already has the right KEPT_ATTRIBUTES. Restoring unconditionally would
+            // overwrite the newly written file's entire attribute word with the old file's,
+            // incorrectly wiping the archive bit (which backup tools need) or retaining offline/index
+            // flags. On servers where attributes differ, restoring permissions is a safe trade to keep
+            // the file visible. When saving a new file (`keep` is None), no baseline exists.
+            use std::os::windows::fs::MetadataExt as _;
+            let saved = std::fs::symlink_metadata(path).map(|m| m.file_attributes() & KEPT_ATTRIBUTES);
+            if saved.is_ok_and(|a| a != (keep.file_attributes() & KEPT_ATTRIBUTES))
+                && let Err(e) = std::fs::set_permissions(path, keep.permissions())
+            {
+                log::warn!("could not restore replaced file attributes on {}: {e}", path.display());
+            }
+        }
+        rename_result
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
@@ -198,7 +220,7 @@ pub fn write_atomically_with(
 /// Provenance is managed by macOS for the new file, not writable document metadata.
 #[cfg(target_os = "macos")]
 fn preserve_target_xattrs(path: &Path, staged: &std::fs::File) -> std::io::Result<()> {
-    use rustix::fs::{Mode, OFlags, XattrFlags, fgetxattr, flistxattr, fsetxattr, open};
+    use rustix::fs::{Mode, OFlags, XattrFlags, fgetxattr, fgetxattr_query, flistxattr, fsetxattr, open};
     use rustix::io::Errno;
 
     // A new destination has nothing to retain. Replacing a symlink has always replaced the
@@ -235,12 +257,13 @@ fn preserve_target_xattrs(path: &Path, staged: &std::fs::File) -> std::io::Resul
             continue;
         }
         let name = std::ffi::CString::new(name).map_err(|_| std::io::Error::other("invalid extended attribute name"))?;
-        let size = fgetxattr(&source, &name, &mut [] as &mut [u8])?;
+        // rustix treats an empty read buffer as reading zero bytes, not a size query.
+        let size = fgetxattr_query(&source, &name)?;
         if size > MAX_VALUE_BYTES || size > MAX_TOTAL_BYTES.saturating_sub(total) {
             return Err(std::io::Error::other("extended attributes exceed the 16 MiB per-value or 64 MiB total limit"));
         }
         // Resource forks may return a prefix instead of ERANGE on growth; check the size again.
-        let value = read_xattr_value(size, |buffer| Ok(fgetxattr(&source, &name, buffer)?))?;
+        let value = read_xattr_value(size, |buffer| Ok(fgetxattr(&source, &name, buffer)?), || Ok(fgetxattr_query(&source, &name)?))?;
         fsetxattr(staged, &name, &value, XattrFlags::empty())?;
         total = total.saturating_add(value.len());
     }
@@ -249,10 +272,14 @@ fn preserve_target_xattrs(path: &Path, staged: &std::fs::File) -> std::io::Resul
 
 /// Read an already size-bounded attribute, refusing a partial result or a changed post-read size.
 #[cfg(target_os = "macos")]
-fn read_xattr_value(size: usize, mut read: impl FnMut(&mut [u8]) -> std::io::Result<usize>) -> std::io::Result<Vec<u8>> {
+fn read_xattr_value(
+    size: usize,
+    read: impl FnOnce(&mut [u8]) -> std::io::Result<usize>,
+    query_size: impl FnOnce() -> std::io::Result<usize>,
+) -> std::io::Result<Vec<u8>> {
     let mut value = vec![0u8; size.max(1)];
     let len = read(value.as_mut_slice())?;
-    let after = read(&mut [])?;
+    let after = query_size()?;
     if len != size || after != size {
         return Err(std::io::Error::other("extended attribute changed size while saving"));
     }

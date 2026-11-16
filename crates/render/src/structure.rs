@@ -166,6 +166,8 @@ impl Structure for LazyStructure {
     fn encrypted(&self) -> bool {
         self.source.security().is_some() || self.trailer.has(b"Encrypt")
     }
+    /// The object `id`, read from the lazy source and converted once, then kept; a failed
+    /// conversion marks the structure so the caller can fall back to the eager loader.
     fn get_object(&self, id: ObjectId) -> Result<&Object> {
         let missing = || Error::ObjectNotFound(id);
         let slot = self.objects.binary_search_by_key(&id.0, |(n, _)| *n).ok().and_then(|i| self.objects.get(i)).ok_or_else(missing)?;
@@ -185,8 +187,15 @@ impl Structure for LazyStructure {
     }
 }
 
+/// Nesting `convert` accepts: the same as `pdfcraft_cos`'s parser (each array or dictionary
+/// one level), so every object cos parsed converts. A lower limit would turn deep but valid
+/// nesting into a lazy-reader failure and force the eager lopdf fallback.
+const CONVERT_DEPTH: usize = 128;
+
+/// Convert a cos dictionary to lopdf's, without `/PieceInfo`. `depth` is the nesting level of
+/// the dictionary itself; its values sit one level deeper.
 fn convert_dict(dict: &pdfcraft_cos::Dict, depth: usize) -> Result<Dictionary> {
-    if depth > 100 {
+    if depth > CONVERT_DEPTH {
         return Err(Error::RecursionLimit);
     }
     dict.iter()
@@ -203,8 +212,10 @@ fn convert_dict(dict: &pdfcraft_cos::Dict, depth: usize) -> Result<Dictionary> {
 /// untouched; this is the read-only view inspection walks.
 const PRIVATE_DATA: &[u8] = b"PieceInfo";
 
+/// Convert a cos object to lopdf's, failing past [`CONVERT_DEPTH`] levels of arrays and
+/// dictionaries.
 fn convert(object: &CosObject, depth: usize) -> Result<Object> {
-    if depth > 100 {
+    if depth > CONVERT_DEPTH {
         return Err(Error::RecursionLimit);
     }
     Ok(match object {
@@ -218,8 +229,8 @@ fn convert(object: &CosObject, depth: usize) -> Result<Object> {
         }
         CosObject::Ref(value) => Object::Reference((value.num, value.generation)),
         CosObject::Array(value) => Object::Array(value.iter().map(|o| convert(o, depth + 1)).collect::<Result<_>>()?),
-        CosObject::Dict(value) => Object::Dictionary(convert_dict(value, depth + 1)?),
-        CosObject::Stream(value) => Object::Stream(lopdf::Stream::new(convert_dict(&value.dict, depth + 1)?, value.raw.to_vec())),
+        CosObject::Dict(value) => Object::Dictionary(convert_dict(value, depth)?),
+        CosObject::Stream(value) => Object::Stream(lopdf::Stream::new(convert_dict(&value.dict, depth)?, value.raw.to_vec())),
     })
 }
 

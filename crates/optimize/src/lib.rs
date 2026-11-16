@@ -15,7 +15,8 @@
 //!   that use only palette entries 0 and 1, packed to one bit) above a threshold are averaged down to a
 //!   target resolution when grey, image masks or indexed, halftones and dithers aside (see the README), and
 //!   are stored as CCITT Group 4 or lossless JBIG2, or 1-bit
-//!   Flate once resampled or packed, when that is smaller.
+//!   Flate once resampled or packed, when that is smaller. So are pictures' stencil and one-bit soft
+//!   masks, at their size.
 //! - **Discard objects:** page thumbnails, alternate images, document tags (structure tree),
 //!   print settings, form submission, import and reset actions.
 //! - **Clean up:** drop images and forms that pages list but never draw (such as a deleted
@@ -159,7 +160,8 @@ pub enum MonoCompression {
 
 /// How black-and-white images (1-bit, CCITT fax among them; and eight-bit grey and RGB of only black
 /// and white, and indexed images that use only palette entries 0 and 1, packed to one bit), and
-/// image masks, are resampled and stored.
+/// image masks, are resampled and stored. Pictures' stencil and one-bit soft masks are stored the
+/// same way, at their size.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MonoSettings {
     /// Average images whose effective resolution is above `above_ppi` down to `target_ppi`.
@@ -206,7 +208,7 @@ pub struct Settings {
     pub merge_fragments: bool,
     pub color: ImageSettings,
     pub gray: ImageSettings,
-    /// Black-and-white images, and image masks.
+    /// Black-and-white images, image masks, and pictures' one-bit masks.
     pub mono: MonoSettings,
     pub discard_thumbnails: bool,
     pub discard_alternate_images: bool,
@@ -314,6 +316,7 @@ pub struct Report {
     /// Images merged from fragments, and how many fragments went into them.
     pub merged_images: usize,
     pub fragments_merged: usize,
+    /// Images the image step read: those the pages draw, and their pictures' one-bit masks.
     pub images: usize,
     pub images_resampled: usize,
     pub images_recompressed: usize,

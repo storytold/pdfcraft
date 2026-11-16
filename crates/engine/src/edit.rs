@@ -6,8 +6,8 @@ use crate::{
     AddedContent, AddedText, Background, BorderShape, BoxSpec, EditError, FieldProps, FieldValue, FillMark, Hairlines, HeaderFooter, Hidden,
     ImageEdit, InitialView, Label, LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget,
     PageBox, PrinterMarks, Protection, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image,
-    decode_data_file, embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster,
-    open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+    decode_data_file, embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, strip_xfa,
+    unrestricted, xfa, xfa_after_data_change,
 };
 
 mod labels;
@@ -338,6 +338,12 @@ pub enum Edit {
         name: String,
         image: Arc<Vec<u8>>,
     },
+    /// Set the picture of one exact push-button field; legacy name-only calls remain available.
+    SetFieldImageTarget {
+        name: String,
+        object: pdfcraft_cos::ObjRef,
+        image: Arc<Vec<u8>>,
+    },
     /// Duplicate a field onto other pages (same field, shared value).
     DuplicateField {
         name: String,
@@ -452,8 +458,8 @@ pub enum Edit {
     RemoveStandardId {
         standard: Standard,
     },
-    /// What a script (button or console) changed in form fields: values, read-only, required
-    /// and visibility.
+    /// What a script (button or console) changed in form fields: values, appearance colours,
+    /// read-only, required and visibility.
     ApplyScriptChanges {
         changes: Vec<pdfcraft_forms::FieldChange>,
     },
