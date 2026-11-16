@@ -1608,7 +1608,7 @@ fn files_for_combine_are_made_into_pdfs_and_pdfs_pass_through() {
 
 fn protected(user: &str, owner: &str, permissions: i32) -> Arc<Vec<u8>> {
     let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(2))).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes256,
         user_password: user,
         owner_password: owner,
@@ -1631,7 +1631,7 @@ fn protected_with_changes(algorithm: pdfcraft_cos::Algorithm, changes: Changes) 
 fn protected_pages(pages: usize, algorithm: pdfcraft_cos::Algorithm, changes: Changes, seed: u8) -> Arc<Vec<u8>> {
     let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(pages))).unwrap();
     let protection = Protection { permissions_password: Some("boss".into()), changes, algorithm, ..Protection::default() };
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm,
         user_password: "",
         owner_password: "boss",
@@ -1796,7 +1796,7 @@ fn pages_under_the_same_protection_are_inserted_without_page_extraction() {
 fn page_extraction_needs_the_copy_permission_on_every_revision() {
     for algorithm in [pdfcraft_cos::Algorithm::Rc4_40, pdfcraft_cos::Algorithm::Aes256] {
         let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(2))).unwrap();
-        doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
             algorithm,
             user_password: "",
             owner_password: "boss",
@@ -1992,7 +1992,7 @@ fn print_content_pdf() -> Vec<u8> {
 #[test]
 fn low_resolution_printing_prints_only_the_chosen_content() {
     let mut cos = pdfcraft_cos::Document::open(Arc::new(print_content_pdf())).unwrap();
-    cos.set_encryption(&pdfcraft_cos::NewEncryption {
+    cos.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes256,
         user_password: "",
         owner_password: "owner",
@@ -2148,7 +2148,7 @@ fn combining_protected_files_is_refused_clearly() {
 fn owner_password_of_older_revisions_opens_the_viewer_too() {
     for alg in [pdfcraft_cos::Algorithm::Rc4_128, pdfcraft_cos::Algorithm::Aes128] {
         let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
-        doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
             algorithm: alg,
             user_password: "u",
             owner_password: "o",
@@ -2172,7 +2172,7 @@ fn owner_password_of_older_revisions_opens_the_viewer_too() {
 fn render_password_for_recovers_the_user_password_of_older_revisions() {
     for alg in [pdfcraft_cos::Algorithm::Rc4_40, pdfcraft_cos::Algorithm::Rc4_128, pdfcraft_cos::Algorithm::Aes128, pdfcraft_cos::Algorithm::Aes256] {
         let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
-        doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
             algorithm: alg,
             user_password: "u",
             owner_password: "o",
@@ -2431,7 +2431,7 @@ fn bookmarks_from_text_styles_refuse_one_style_for_two_levels() {
 #[test]
 fn bookmarks_from_text_styles_need_copying_permission() {
     let mut doc = pdfcraft_cos::Document::open(Arc::new(styled_headings_fixture())).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes256,
         user_password: "",
         owner_password: "owner",
@@ -2586,7 +2586,7 @@ fn converting_colours_of_comments_needs_the_comment_permission() {
         encrypt_metadata: true,
         seed: [7; 32],
     };
-    cos.set_encryption(&params).unwrap();
+    cos.set_encryption_legacy(&params).unwrap();
     let bytes = pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap();
     let mut s = Session::new();
     let id = s.open("locked.pdf", None, Arc::new(bytes), None).unwrap();
@@ -2608,7 +2608,7 @@ fn comment_permission_is_enforced() {
         encrypt_metadata: true,
         seed: [7; 32],
     };
-    cos.set_encryption(&params).unwrap();
+    cos.set_encryption_legacy(&params).unwrap();
     let bytes = pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap();
     let mut s = Session::new();
     let id = s.open("locked.pdf", None, Arc::new(bytes), None).unwrap();
@@ -5636,7 +5636,7 @@ fn signed_documents_round_trip_behind_a_user_password() {
     let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
     // After the test certificate's start date (2026-10-02).
     let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes128,
         user_password: "user",
         owner_password: "owner",
@@ -5960,7 +5960,7 @@ fn real_layered_signatures_round_trip_behind_a_user_password() {
     let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
     let date = "D:20261002120000+01'00'";
     let mut doc = pdfcraft_cos::Document::open(Arc::new(layered_signable_fixture())).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes128,
         user_password: "user",
         owner_password: "owner",
@@ -6123,7 +6123,7 @@ fn named_layer_signatures_show_their_state_through_trust_save_and_reopen() {
 fn named_layer_signatures_round_trip_behind_a_user_password() {
     let (id, anchor) = test_identity();
     let mut doc = pdfcraft_cos::Document::open(Arc::new(named_layer_signable_fixture())).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes128,
         user_password: "user",
         owner_password: "owner",
@@ -6914,7 +6914,7 @@ fn javascript_invalid_field_colour_array_is_refused_without_partial_changes() {
 fn javascript_field_colours_respect_document_fill_permissions() {
     let mut plain = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
     plain
-        .set_encryption(&pdfcraft_cos::NewEncryption {
+        .set_encryption_legacy(&pdfcraft_cos::NewEncryption {
             algorithm: pdfcraft_cos::Algorithm::Aes256,
             user_password: "",
             owner_password: "owner",
@@ -10408,7 +10408,7 @@ fn legacy_passwords_with_turkish_characters_open() {
         encrypt_metadata: true,
         seed: [7; 32],
     };
-    cos.set_encryption(&params).unwrap();
+    cos.set_encryption_legacy(&params).unwrap();
     let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap());
     let mut s = Session::new();
     // The renderer used to try only the UTF-8 bytes, and the owner fallback handed it the
@@ -10472,7 +10472,7 @@ fn aes256_files_whose_passwords_saslprep_changes_open_as_typed() {
             encrypt_metadata: true,
             seed: [7; 32],
         };
-        cos.set_encryption(&params).unwrap();
+        cos.set_encryption_legacy(&params).unwrap();
         let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap());
         let mut s = Session::new();
         // pdfcraft-cos accepts the password as typed (it applies SASLprep); the renderer used to
@@ -13197,7 +13197,7 @@ fn importing_a_pdf_copies_its_comments() {
     // A PDF that needs a password is refused with that reason, with or without bytes before its header.
     let mut locked = pdfcraft_cos::Document::open(Arc::new(review)).unwrap();
     locked
-        .set_encryption(&pdfcraft_cos::NewEncryption {
+        .set_encryption_legacy(&pdfcraft_cos::NewEncryption {
             algorithm: pdfcraft_cos::Algorithm::Aes256,
             user_password: "u",
             owner_password: "o",
