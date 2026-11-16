@@ -13,6 +13,37 @@ pub enum CloseRequest {
     All,
 }
 
+/// An entry in the close queue: a document and optionally the specific view requested.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QueuedClose {
+    pub id: pdfcraft_engine::DocId,
+    pub view_key: Option<u64>,
+}
+
+impl QueuedClose {
+    pub fn new(id: pdfcraft_engine::DocId, view_key: Option<u64>) -> Self {
+        Self { id, view_key }
+    }
+}
+
+impl From<pdfcraft_engine::DocId> for QueuedClose {
+    fn from(id: pdfcraft_engine::DocId) -> Self {
+        Self { id, view_key: None }
+    }
+}
+
+impl From<(pdfcraft_engine::DocId, u64)> for QueuedClose {
+    fn from((id, view_key): (pdfcraft_engine::DocId, u64)) -> Self {
+        Self { id, view_key: Some(view_key) }
+    }
+}
+
+impl From<(pdfcraft_engine::DocId, Option<u64>)> for QueuedClose {
+    fn from((id, view_key): (pdfcraft_engine::DocId, Option<u64>)) -> Self {
+        Self { id, view_key }
+    }
+}
+
 impl PdfCraftApp {
     /// Close a tab, asking first if it has unsaved changes. A document under OCR review stays
     /// open until the review is accepted or rejected.
@@ -23,17 +54,20 @@ impl PdfCraftApp {
         // Text typed into a field counts as an unsaved change. Another tab of the document (split
         // view) keeps the document's changes open, so closing this one asks only about its own.
         if self.asks_before_closing(index)
-            && let Some(id) = self.views.get(index).map(|v| v.id)
+            && let Some((id, view_key)) = self.views.get(index).map(|v| (v.id, v.view_key()))
         {
             if self.close_request.is_none() {
-                self.asking_view_key = self.views.get(index).map(|v| v.view_key());
+                self.asking_view_key = Some(view_key);
                 if self.has_twin(index) {
                     // The question is about this tab of the document (`asking_tab`).
                     self.active = Some(index);
                 }
                 self.close_request = Some(CloseRequest::Tab(id));
-            } else if !self.pending_close_queue.contains(&id) {
-                self.pending_close_queue.push(id);
+            } else {
+                let entry = QueuedClose { id, view_key: Some(view_key) };
+                if !self.pending_close_queue.contains(&entry) {
+                    self.pending_close_queue.push(entry);
+                }
             }
         } else {
             self.close_tab(index);
@@ -232,23 +266,38 @@ impl PdfCraftApp {
             }
         } else if self.close_request.is_none() {
             while !self.pending_close_queue.is_empty() {
-                let next_id = self.pending_close_queue.remove(0);
-                if let Some(i) = self.asking_tab(next_id) {
+                let entry = self.pending_close_queue.remove(0);
+                let resolved = entry.view_key.and_then(|k| self.tab_with_key(k)).filter(|&i| self.views.get(i).is_some_and(|v| v.id == entry.id));
+                let asking_tab = match resolved {
+                    Some(i) => {
+                        self.asking_view_key = entry.view_key;
+                        Some(i)
+                    }
+                    None => {
+                        let i = self.asking_tab(entry.id);
+                        self.asking_view_key = i.and_then(|idx| self.views.get(idx)).map(|v| v.view_key());
+                        i
+                    }
+                };
+                if let Some(i) = asking_tab {
                     if self.hold_close_for_ocr_review(i) {
+                        self.asking_view_key = None;
                         self.pending_close_queue.clear();
                         break;
                     }
                     if self.asks_before_closing(i) {
                         self.save_prompt_seen = false;
-                        self.asking_view_key = self.views.get(i).map(|v| v.view_key());
                         if self.has_twin(i) {
                             self.active = Some(i);
                         }
-                        self.close_request = Some(CloseRequest::Tab(next_id));
+                        self.close_request = Some(CloseRequest::Tab(entry.id));
                         break;
                     } else {
+                        self.asking_view_key = None;
                         self.close_tab(i);
                     }
+                } else {
+                    self.asking_view_key = None;
                 }
             }
         }

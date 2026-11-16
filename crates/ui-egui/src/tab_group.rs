@@ -588,7 +588,7 @@ mod tests {
 
         // Set up pending_lock and pending_close_queue
         app.close_request = Some(crate::CloseRequest::Tab(id1));
-        app.pending_close_queue = vec![id2];
+        app.pending_close_queue = vec![id2.into()];
         app.pending_lock = Some(crate::editing::PendingLock { id: id1, target: crate::SaveTarget::InPlace, after: Box::new(|_| {}) });
         app.lock_remember = true;
 
@@ -643,5 +643,76 @@ mod tests {
         app.resolve_close(&ctx, Some(false));
         assert_eq!(app.views.len(), 1);
         assert_ne!(app.views[0].view_key(), twin1_key, "twin 1 was closed; twin 2 remains open");
+    }
+
+    #[test]
+    fn queued_close_retains_view_key_and_resolves_or_falls_back() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.duplicate_tab(1);
+        assert_eq!(app.views.len(), 3);
+
+        app.active = Some(0);
+        assert!(app.apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edit1".into() }));
+        app.views[1].pending_edit = Some(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edit2".into() });
+        app.views[2].pending_edit = Some(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edit3".into() });
+
+        let twin1_key = app.views[1].view_key();
+        let twin2_key = app.views[2].view_key();
+        let doc2_id = app.views[1].id;
+
+        // Prompt doc1
+        app.active = Some(0);
+        app.request_close_tab(0);
+        assert!(app.close_request.is_some());
+
+        // Queue twin 1
+        app.request_close_tab(1);
+        assert_eq!(app.pending_close_queue.len(), 1);
+        assert_eq!(app.pending_close_queue[0], crate::QueuedClose { id: doc2_id, view_key: Some(twin1_key) });
+
+        // Duplicate request for twin 1 is ignored
+        app.request_close_tab(1);
+        assert_eq!(app.pending_close_queue.len(), 1);
+
+        // Queue twin 2 (different view_key for same doc) is retained
+        app.request_close_tab(2);
+        assert_eq!(app.pending_close_queue.len(), 2);
+        assert_eq!(app.pending_close_queue[1], crate::QueuedClose { id: doc2_id, view_key: Some(twin2_key) });
+
+        // Resolve doc1 -> drains to twin 1
+        let ctx = egui::Context::default();
+        app.resolve_close(&ctx, Some(false));
+        assert_eq!(app.asking_view_key, Some(twin1_key));
+        assert_eq!(app.pending_close_queue.len(), 1);
+
+        // Resolve twin 1 -> drains to twin 2
+        app.resolve_close(&ctx, Some(false));
+        assert_eq!(app.asking_view_key, Some(twin2_key));
+        assert_eq!(app.pending_close_queue.len(), 0);
+
+        // Resolve twin 2 -> closes twin 2
+        app.resolve_close(&ctx, Some(false));
+        assert_eq!(app.views.len(), 0);
+
+        // Also test fallback when view key does not resolve or document ID mismatches
+        app.open_bytes("doc3.pdf", None, FIXTURE.to_vec()).unwrap();
+        let doc3_id = app.views[0].id;
+        let doc3_key = app.views[0].view_key();
+        app.views[0].pending_edit = Some(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edit3".into() });
+
+        app.open_bytes("doc4.pdf", None, FIXTURE.to_vec()).unwrap();
+        let doc4_id = app.views[1].id;
+
+        // Queue an entry for doc3 with nonexistent view key (999999)
+        app.pending_close_queue = vec![crate::QueuedClose { id: doc3_id, view_key: Some(999999) }];
+        // Closing clean doc4 triggers draining the queue
+        app.close_and_continue(&ctx, 1, crate::CloseRequest::Tab(doc4_id));
+
+        // doc4 closed; queue drained; 999999 could not be resolved, so it fell back to asking_tab(doc3_id)
+        assert_eq!(app.views.len(), 1);
+        assert_eq!(app.asking_view_key, Some(doc3_key));
+        assert_eq!(app.close_request, Some(crate::CloseRequest::Tab(doc3_id)));
     }
 }

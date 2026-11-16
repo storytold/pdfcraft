@@ -3264,7 +3264,7 @@ mod tests {
         let ctx = egui::Context::default();
         let b = app.views[1].id;
         let c = app.views[2].id;
-        app.pending_close_queue = vec![a, c];
+        app.pending_close_queue = vec![a.into(), c.into()];
         app.close_and_continue(&ctx, 1, crate::CloseRequest::Tab(b));
         // b was closed; when draining the queue, a is held by ocr review
         assert_eq!(app.views.len(), 2);
