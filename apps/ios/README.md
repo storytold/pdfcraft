@@ -3,21 +3,24 @@
 This branch contains an experimental iOS/iPadOS integration of the open-source PdfCraft engine.
 The goal is to evaluate a native mobile architecture using the existing PdfCraft Rust core with a Swift/SwiftUI interface.
 This project is not an official ArtCraft mobile release and does not imply endorsement by ArtCraft.
-The implementation is intended for technical evaluation and potential upstream contribution.
+The implementation is submitted for technical evaluation in
+[storytold/pdfcraft#7549](https://github.com/storytold/pdfcraft/pull/7549).
 The app is configured as a universal iPhone and iPad app; its current native workflow is tested
 on both Simulator device families. This does not claim complete feature parity with desktop PdfCraft.
 
-Blackout Secure sponsors this fork experiment on `blackout-secure-ios-poc`.
+[Blackout Secure](https://blackoutsecure.app) contributed this experiment.
 The installed app displays **PdfCraft**, using the same lion artwork as macOS.
-The development target/executable remains **PdfCraftMobilePOC**, bundle ID
-`com.blackoutsecure.pdfcraft.poc`.
+The development target/executable remains **PdfCraftMobilePOC**. Its unregistered
+POC bundle identifier is defined once in [project settings](project.yml), not an
+authorized production Apple identifier.
 This is not a production release or an Adobe application, and contains no copied Adobe
 code, graphics, fonts, or UI assets.
 
-## Fork-only language exception
+## Upstream language-policy proposal
 
-The fork owner explicitly approved a small Swift/SwiftUI Apple-platform shell, despite the
-upstream Rust-only native-app policy. This exception is limited to this experiment.
+The contributor explicitly approved a small Swift/SwiftUI Apple-platform experiment,
+despite the upstream Rust-only native-app policy. The proposed exception is tracked in
+[storytold/craft-contrib#63](https://github.com/storytold/craft-contrib/pull/63).
 It is **not** upstream approval and does not change the synchronized house rules in
 [AGENTS.md](../../AGENTS.md). Upstream adoption requires maintainer agreement.
 
@@ -26,7 +29,7 @@ It is **not** upstream approval and does not change the synchronized house rules
 The suite-wide direction is under discussion in
 [RFC-0039](https://github.com/storytold/craft-contrib/pull/60). That proposal currently
 favors an egui-based Mobile Mode, Android first, with iOS later. This SwiftUI shell is a
-separate, fork-only iPhone/iPad proof of concept and is evidence for that discussion, not
+separate iPhone/iPad proof of concept and is evidence for that discussion, not
 an approved suite architecture or a claim of full feature parity. Do not copy this shell
 or its Rust bridge into other Craft apps without the required maintainer decisions.
 
@@ -35,7 +38,14 @@ Related upstream work is tracked in the
 the [draft native mobile host](https://github.com/storytold/pdfcraft/pull/1119),
 the [shared `craft-mobile` proposal](https://github.com/storytold/craft-libs/pull/632),
 and the [shared-crate candidate inventory](https://github.com/storytold/craft-libs/issues/115).
-These proposals use different approaches and remain separate from this fork experiment.
+These proposals use different approaches and remain separate from this experiment.
+The Tauri/WASM host in #1119 covers Android and more editor functionality; this
+Rust-raster/native-view experiment does not replace it or claim its language coverage.
+Earlier UniFFI/scaffold alternatives
+[#5617](https://github.com/storytold/pdfcraft/pull/5617) and
+[#2740](https://github.com/storytold/pdfcraft/pull/2740) are closed. The Android suite
+[#5437](https://github.com/storytold/pdfcraft/pull/5437) was explicitly declined for
+current upstream Android scope. Those decisions are not reversed by this POC.
 
 PDF parsing, rendering, text extraction, page rotation, validation, serialization, resource limits, and
 document ownership stay in Rust. Swift is limited to native views, accessibility labels,
@@ -58,6 +68,11 @@ with an explicit whitelist of compatible fields from
 [the canonical macOS template](../../packaging/macos/Info.plist.in). Display name,
 development region, copyright and version/build fields are inherited, not maintained
 as separate iOS copies. Missing shared fields stop generation with an error.
+The [isolated Apple tests](../../scripts/test-apple-build.sh) exercise inheritance,
+XML escaping, prerelease version mapping, desktop-field exclusion and explicit
+missing-field/tool-version failures. Aggregate Simulator tests run them once before
+the native suites; the native test command also compares compiled identity/version
+metadata with its desktop/generated sources.
 [Project settings](project.yml) consume that generated metadata.
 Generation also reuses [packaging's shared setup](../../packaging/env.sh) for
 the workspace version (or `PDFCRAFT_VERSION`) and `PDFCRAFT_BUILD_SHA`. The numeric
@@ -245,7 +260,7 @@ Only open the Xcode IDE for account/signing/provisioning or Apple-specific inspe
 that cannot reasonably be done through VS Code and CLI tools.
 The run script boots the selected Simulator and installs/launches the app; it does not
 keep a terminal watcher running. Stop the app with
-`xcrun simctl terminate <simulator-uuid> com.blackoutsecure.pdfcraft.poc`, and shut down
+`xcrun simctl terminate <simulator-uuid> <bundle-id-from-built-Info.plist>`, and shut down
 an otherwise unused Simulator with `xcrun simctl shutdown <simulator-uuid>`.
 
 ## First vertical slice

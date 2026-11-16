@@ -1,6 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 source_root="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
+assert_equal() {
+    if [[ "$1" != "$2" ]]; then
+        printf 'Expected <%s>, got <%s>.\n' "$2" "$1" >&2
+        exit 1
+    fi
+}
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/pdfcraft-apple-tests.XXXXXX")"
 fixture="$(cd "$fixture" && pwd)"
 trap 'rm -rf -- "$fixture"' EXIT
@@ -11,6 +17,10 @@ mkdir -p "$root/packaging/macos"
 cp "$source_root/packaging/env.sh" "$root/packaging/"
 cp "$source_root/packaging/macos/package.sh" "$root/packaging/macos/actual-package.sh"
 cp "$source_root/scripts/test-ios.sh" "$root/scripts/actual-test-ios.sh"
+cp "$source_root/scripts/generate-ios-project.sh" "$root/scripts/actual-generate-ios-project.sh"
+mkdir -p "$root/apps/ios/Config"
+cp "$source_root/apps/ios/Config/Info.plist" "$root/apps/ios/Config/"
+cp "$source_root/apps/ios/project.yml" "$root/apps/ios/"
 cp "$source_root/packaging/macos/Info.plist.in" "$root/packaging/macos/"
 printf '[workspace.package]\nversion = "0.21.1"\n' >"$root/Cargo.toml"
 export PATH="$fixture/bin:$PATH" TEST_LOG="$fixture/commands" TEST_OUTPUT="$fixture/out"
@@ -34,7 +44,7 @@ bash "$root/scripts/build-ios-rust.sh" aarch64-apple-ios-sim
 if grep -F -- --release "$TEST_LOG"; then echo "Debug unexpectedly used Release." >&2; exit 1; fi
 bash "$root/scripts/build-ios-rust.sh" aarch64-apple-ios release
 grep -F -- '--release --target aarch64-apple-ios' "$TEST_LOG"
-[[ -s "$root/target/ios/Generated/PdfCraftMobile.swift" ]]
+test -s "$root/target/ios/Generated/PdfCraftMobile.swift"
 if TEST_CARGO_FAILURE=1 bash "$root/scripts/build-ios-rust.sh" aarch64-apple-ios release; then
     echo "Cargo failure was swallowed." >&2; exit 1
 fi
@@ -50,6 +60,10 @@ SH
 cat >"$root/scripts/test-ios.sh" <<'SH'
 #!/bin/bash
 printf 'test-device %s\n' "$1" >>"$TEST_LOG"
+SH
+cat >"$root/scripts/test-apple-build.sh" <<'SH'
+#!/bin/bash
+printf 'test-build-contract\n' >>"$TEST_LOG"
 SH
 cat >"$root/packaging/macos/package.sh" <<'SH'
 #!/bin/bash
@@ -88,29 +102,31 @@ chmod +x "$fixture/bin/"*
 bash "$root/scripts/build-apple.sh" build all Release
 grep -F 'rust aarch64-apple-ios-sim release' "$TEST_LOG"
 grep -F 'rust aarch64-apple-ios release' "$TEST_LOG"
-[[ "$(grep -c -- '-configuration Release' "$TEST_LOG")" = 2 ]]
+assert_equal "$(grep -c -- '-configuration Release' "$TEST_LOG")" 2
 : >"$TEST_LOG"
 CARGO_TARGET_DIR='relative target' bash "$root/scripts/build-apple.sh" build ios-device Debug
 grep -F "RUST_LIBRARY_ROOT=$root/relative target" "$TEST_LOG"
 mkdir -p "$root/target/ios/DerivedData/Build/Products/Debug-iphonesimulator/PdfCraftMobilePOC.app"
 cp "$root/packaging/macos/Info.plist.in" \
     "$root/target/ios/DerivedData/Build/Products/Debug-iphonesimulator/PdfCraftMobilePOC.app/Info.plist"
+cp "$root/packaging/macos/Info.plist.in" "$root/target/ios/Info.plist"
 : >"$TEST_LOG"
 CARGO_TARGET_DIR='relative target' bash "$root/scripts/actual-test-ios.sh" phone
-[[ "$(grep -cF "RUST_LIBRARY_ROOT=$root/relative target" "$TEST_LOG")" = 2 ]]
+assert_equal "$(grep -cF "RUST_LIBRARY_ROOT=$root/relative target" "$TEST_LOG")" 2
 MACOS_SIGN_IDENTITY=never-use-an-inherited-identity bash "$root/scripts/build-apple.sh" package all Debug
 grep -F 'mac-package identity=- --arch aarch64 --profile debug --skip-build' "$TEST_LOG"
-[[ -s "$root/target/apple/Debug/macos/PdfCraft.app.zip" ]]
-[[ -s "$root/target/apple/Debug/macos/PdfCraft.app/Contents/Info.plist" ]]
-[[ -s "$root/target/apple/Debug/ios-simulator/PdfCraftMobilePOC.app.zip" ]]
-[[ -s "$root/target/apple/Debug/ios-device/PdfCraftMobilePOC.xcarchive/Products/Applications/PdfCraftMobilePOC.app/Info.plist" ]]
+test -s "$root/target/apple/Debug/macos/PdfCraft.app.zip"
+test -s "$root/target/apple/Debug/macos/PdfCraft.app/Contents/Info.plist"
+test -s "$root/target/apple/Debug/ios-simulator/PdfCraftMobilePOC.app.zip"
+test -s "$root/target/apple/Debug/ios-device/PdfCraftMobilePOC.xcarchive/Products/Applications/PdfCraftMobilePOC.app/Info.plist"
 if TEST_ARCHIVE_PLATFORM=iPhoneSimulator bash "$root/scripts/build-apple.sh" package ios-device Debug; then
     echo "A Simulator archive was accepted as an iOS-device archive." >&2; exit 1
 fi
 : >"$TEST_LOG"
 CRAFT_IPHONE_SIMULATOR_UDID=phone CRAFT_IPAD_SIMULATOR_UDID=tablet \
     bash "$root/scripts/build-apple.sh" test ios-simulator Debug
-[[ "$(grep 'test-device' "$TEST_LOG")" = "$(printf 'test-device phone\ntest-device tablet')" ]]
+assert_equal "$(grep 'test-device' "$TEST_LOG")" "$(printf 'test-device phone\ntest-device tablet')"
+assert_equal "$(grep -c 'test-build-contract' "$TEST_LOG")" 1
 for arguments in 'test ios-device Debug' 'test all Release' 'build invalid Debug' 'build all invalid'; do
     # These are fixed test cases, not commands evaluated from environment input.
     read -r phase platform configuration <<<"$arguments"
@@ -134,7 +150,59 @@ for profile in debug release; do
     result=0
     MACOS_SIGN_IDENTITY=- bash "$root/packaging/macos/actual-package.sh" \
         --arch aarch64 --profile "$profile" --skip-build || result=$?
-    [[ "$result" = 78 ]]
+    assert_equal "$result" 78
     grep -F "/aarch64-apple-darwin/$profile/pdfcraft" "$TEST_LOG"
 done
-echo "Apple build contract, profile, failure, unsigned packaging and sequential-device regressions passed."
+
+cat >"$fixture/bin/xcodegen" <<'SH'
+#!/bin/bash
+if [[ "$1" = --version ]]; then
+    printf 'Version: %s\n' "${TEST_XCODEGEN_VERSION:-2.46.0}"
+    exit 0
+fi
+printf 'metadata-name=%s\nmetadata-language=%s\nmetadata-version=%s\n' \
+    "${PDFCRAFT_APP_DISPLAY_NAME-unset}" "${PDFCRAFT_APP_LANGUAGE-unset}" \
+    "${PDFCRAFT_IOS_SHORT_VERSION-unset}" >>"$TEST_LOG"
+SH
+chmod +x "$fixture/bin/xcodegen"
+metadata="$root/target/ios/Info.plist"
+desktop="$root/packaging/macos/Info.plist.in"
+plutil -replace CFBundleDisplayName -string 'Craft & Tools <POC>' "$desktop"
+plutil -replace CFBundleDevelopmentRegion -string fr "$desktop"
+plutil -replace NSHumanReadableCopyright -string 'Copyright & <contributors>' "$desktop"
+export PDFCRAFT_VERSION=1.2.3-beta+metadata PDFCRAFT_BUILD_SHA=synthetic-build-sha
+: >"$TEST_LOG"
+bash "$root/scripts/actual-generate-ios-project.sh"
+for key in CFBundleDisplayName CFBundleDevelopmentRegion NSHumanReadableCopyright; do
+    assert_equal "$(plutil -extract "$key" raw -o - "$metadata")" "$(plutil -extract "$key" raw -o - "$desktop")"
+done
+assert_equal "$(plutil -extract CFBundleShortVersionString raw -o - "$metadata")" 1.2.3
+assert_equal "$(plutil -extract PdfCraftVersion raw -o - "$metadata")" "$PDFCRAFT_VERSION"
+assert_equal "$(plutil -extract PdfCraftBuildCommit raw -o - "$metadata")" "$PDFCRAFT_BUILD_SHA"
+assert_equal "$(plutil -extract UIFileSharingEnabled raw -o - "$metadata")" true
+grep -Fx 'metadata-name=Craft & Tools <POC>' "$TEST_LOG"
+grep -Fx 'metadata-language=fr' "$TEST_LOG"
+grep -Fx 'metadata-version=1.2.3' "$TEST_LOG"
+for key in CFBundleIdentifier CFBundleLocalizations CFBundleVersion CFBundleIconFile \
+    CFBundleExecutable CFBundleDocumentTypes LSMinimumSystemVersion NSHighResolutionCapable; do
+    if plutil -extract "$key" raw -o - "$metadata" >/dev/null 2>&1; then
+        echo "Desktop-only or Xcode-owned $key leaked into generated iOS metadata." >&2
+        exit 1
+    fi
+done
+if PDFCRAFT_VERSION=not-a-version bash "$root/scripts/actual-generate-ios-project.sh"; then
+    echo "An invalid iOS marketing version was accepted." >&2; exit 1
+fi
+if TEST_XCODEGEN_VERSION=0.0.0 bash "$root/scripts/actual-generate-ios-project.sh"; then
+    echo "An unvalidated XcodeGen version was accepted." >&2; exit 1
+fi
+for key in CFBundleDisplayName CFBundleDevelopmentRegion NSHumanReadableCopyright \
+    CFBundleShortVersionString PdfCraftVersion PdfCraftBuildCommit; do
+    cp "$desktop" "$fixture/desktop.plist"
+    plutil -remove "$key" "$desktop"
+    if bash "$root/scripts/actual-generate-ios-project.sh"; then
+        echo "Missing required desktop metadata $key was accepted." >&2; exit 1
+    fi
+    cp "$fixture/desktop.plist" "$desktop"
+done
+echo "Apple build, profile, failure, packaging, device sequencing and metadata regressions passed."

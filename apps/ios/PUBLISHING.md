@@ -1,12 +1,13 @@
 # iPhone/iPad POC gaps and Apple publishing
 
-Status, 2026-11-16: **unofficial fork POC**. No Apple account enrollment, certificate
+Status, 2026-11-16: **upstream POC proposal, not an official release**. No Apple account enrollment, certificate
 import, signing/upload, tester invitation, review submission or release is enabled.
 The [Apple platform review](../../docs/apple-platform-review.md) is the central
 ownership, build/package, readiness and UX-impact record; do not maintain a second
 copy of that matrix here.
 
-Related: [mobile request](https://github.com/storytold/pdfcraft/issues/2085),
+Related: [implementation POC](https://github.com/storytold/pdfcraft/pull/7549),
+[mobile request](https://github.com/storytold/pdfcraft/issues/2085),
 [Mac Store tracking](https://github.com/storytold/pdfcraft/issues/7540),
 [shared CI issue](https://github.com/storytold/craft-common-actions/issues/259),
 [shared workflow POC](https://github.com/storytold/craft-common-actions/pull/260),
@@ -36,8 +37,8 @@ semantics and iPhone+iPad evidence before exposing its controls.
 | Distribution | No official identity, production Store build counter, signed hardware, privacy audit, TestFlight or App Review result |
 
 The existing Home/tools/search/pins, appearance, artwork and shared metadata work
-is part of this implementation branch, rather than only the older published
-`55f13eaf0` baseline. Check the PR's source SHA and exact validation results.
+is part of the upstream implementation proposal. Check the PR's source SHA and
+exact validation results rather than treating older POC snapshots as current.
 
 ## Authorized Apple account setup
 
@@ -47,7 +48,7 @@ limited and does not provide TestFlight/App Store distribution.
 If needed, Storytold's authorized legal entity should enroll as an organization.
 The Account Holder owns eligibility, D-U-N-S/legal/seller information, agreements,
 payment/fee waiver and team access. Do not accidentally use a contributor/fork
-seller identity or assume the fork bundle ID is Storytold's production ID.
+seller identity or assume the unregistered POC bundle ID is an authorized production ID.
 
 1. Register the authorized app identifier/capabilities and appropriate signing
    identity/profile in Apple Developer **Certificates, Identifiers & Profiles**.

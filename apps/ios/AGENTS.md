@@ -1,7 +1,8 @@
 # Desktop-first iPhone and iPad workflow
 
 These rules supplement the repository-root AGENTS.md. The Swift shell remains the
-fork-only exception described in README.md, not an accepted upstream architecture.
+isolated experiment described in README.md, proposed upstream but not an accepted
+upstream language-policy exception.
 
 ## Before changing a mobile workflow
 
@@ -42,7 +43,8 @@ fork-only exception described in README.md, not an accepted upstream architectur
   Regenerate the mobile icon with `../../packaging/ios-icon.swift` when the macOS
   artwork changes; update its attribution hash. Generate the project through
   `../../scripts/generate-ios-project.sh` so workspace version/build metadata stays
-  aligned. Preserve the fork bundle ID and POC identity; do not copy desktop-only
+  aligned. Keep the unregistered POC bundle ID defined once in project.yml and read
+  the compiled identifier in launch commands; do not copy desktop-only
   handlers, translation claims or production signing identities.
 - Show only working mobile capabilities. Do not add inert Edit/Convert/E-Sign tabs,
   copied community branding, placeholder tools or claims of desktop feature parity.

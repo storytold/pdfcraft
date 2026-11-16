@@ -9,6 +9,7 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     TARGETED_DEVICE_FAMILY: "1,2"
+    PDFCRAFT_APP_BUNDLE_ID: io.github.storytold.pdfcraft.poc
     GENERATE_INFOPLIST_FILE: YES
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
@@ -35,7 +36,7 @@ targets:
         excludes: ["*.h"]
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.blackoutsecure.pdfcraft.poc
+        PRODUCT_BUNDLE_IDENTIFIER: "$(PDFCRAFT_APP_BUNDLE_ID)"
         SWIFT_OBJC_BRIDGING_HEADER: PdfCraftMobilePOC/Bridge.h
         INFOPLIST_FILE: ../../target/ios/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -54,7 +55,7 @@ targets:
       - target: PdfCraftMobilePOC
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.blackoutsecure.pdfcraft.poc.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: "$(PDFCRAFT_APP_BUNDLE_ID).uitests"
         TEST_TARGET_NAME: PdfCraftMobilePOC
   PdfCraftMobilePOCTests:
     type: bundle.unit-test
@@ -64,7 +65,7 @@ targets:
       - target: PdfCraftMobilePOC
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.blackoutsecure.pdfcraft.poc.tests
+        PRODUCT_BUNDLE_IDENTIFIER: "$(PDFCRAFT_APP_BUNDLE_ID).tests"
         HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../../target/ios/Generated"
 schemes:
   PdfCraftMobilePOC:

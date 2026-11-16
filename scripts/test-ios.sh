@@ -22,6 +22,14 @@ for key in CFBundleDisplayName CFBundleDevelopmentRegion NSHumanReadableCopyrigh
         exit 1
     fi
 done
+for key in CFBundleShortVersionString PdfCraftVersion PdfCraftBuildCommit; do
+    expected="$(plutil -extract "$key" raw -o - target/ios/Info.plist)"
+    actual="$(plutil -extract "$key" raw -o - target/ios/DerivedData/Build/Products/Debug-iphonesimulator/PdfCraftMobilePOC.app/Info.plist)"
+    if [[ "$actual" != "$expected" ]]; then
+        echo "iOS bundle $key differs from the generated build metadata." >&2
+        exit 1
+    fi
+done
 xcodebuild -quiet -project apps/ios/PdfCraftMobilePOC.xcodeproj -scheme PdfCraftMobilePOC \
     -destination "platform=iOS Simulator,id=$device" -derivedDataPath target/ios/DerivedData \
     -parallel-testing-enabled NO -test-timeouts-enabled YES -maximum-test-execution-time-allowance 300 \

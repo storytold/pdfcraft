@@ -83,6 +83,7 @@ for current in "${platforms[@]}"; do
         build:ios-*) build_ios "$current" build ;;
         test:macos) cargo test --locked -j "${CARGO_BUILD_JOBS:-2}" -p pdfcraft-platform --lib ;;
         test:ios-simulator)
+            bash scripts/test-apple-build.sh
             # Bindings and DerivedData are shared locally; do not run the families concurrently.
             bash scripts/test-ios.sh "$CRAFT_IPHONE_SIMULATOR_UDID"
             bash scripts/test-ios.sh "$CRAFT_IPAD_SIMULATOR_UDID"

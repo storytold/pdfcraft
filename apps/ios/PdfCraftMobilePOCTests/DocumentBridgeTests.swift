@@ -9,6 +9,7 @@ final class DocumentBridgeTests: XCTestCase {
         let url = try XCTUnwrap(Bundle.main.url(forResource: "Info", withExtension: "plist"))
         let info = try XCTUnwrap(PropertyListSerialization.propertyList(
             from: Data(contentsOf: url), format: nil) as? [String: Any])
+        XCTAssertEqual(try XCTUnwrap(info["UIDeviceFamily"] as? [Int]).sorted(), [1, 2])
         let resources = try FileManager.default.contentsOfDirectory(
             at: Bundle.main.bundleURL, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "png" }

@@ -1,6 +1,6 @@
 # Apple platform reuse, POCs and distribution readiness
 
-Review date: 2026-11-16. **Unofficial fork proof of concept, not suite policy or
+Review date: 2026-11-16. **Upstream proof-of-concept proposal, not suite policy or
 Apple certification.** The current desktop package is **not Mac App Store ready**.
 The mobile app is not ready for TestFlight/App Review merely because it runs in
 Simulator or can be archived without signing.
@@ -13,16 +13,21 @@ Simulator or can be archived without signing.
 | Mobile limits/session adapter and supported operations | App-local [Rust adapter](../crates/mobile/src/lib.rs) | Calls existing automation; do not move PDF commands into a generic host |
 | OS Files scopes, coordination, share/export and native views | [iOS shell](../apps/ios/README.md) | Native iPad sidebar/iPhone sheets; one supported-tool list; no full desktop catalogue copy |
 | App-neutral formats/protocols/native host primitives | `craft-libs` | [existing host proposal](https://github.com/storytold/craft-libs/pull/632), [boundary evidence](https://github.com/storytold/craft-libs/pull/1909), [inventory](https://github.com/storytold/craft-libs/issues/115) |
-| Shared runner/toolchain/device/artifact orchestration | `craft-common-actions` | [existing issue](https://github.com/storytold/craft-common-actions/issues/259), [updated draft POC](https://github.com/storytold/craft-common-actions/pull/260) |
+| Shared runner/toolchain/device/artifact orchestration | `craft-common-actions` | [existing issue](https://github.com/storytold/craft-common-actions/issues/259), [proposed POC](https://github.com/storytold/craft-common-actions/pull/260) |
 | App product names, capabilities, archive commands and domain tests | This app | [aggregate driver](../scripts/build-apple.sh) delegates to existing build/test/packaging scripts |
 | Suite policy and exception approval | `craft-contrib` | [RFC-0039](https://github.com/storytold/craft-contrib/pull/60), [shared-library-first RFC](https://github.com/storytold/craft-contrib/pull/62), [existing-crate migration RFC](https://github.com/storytold/craft-contrib/pull/56) |
 
 The shared-library-first and migration RFCs already exist; do not propose duplicate
 general rules. The separately proposed Apple policies address a real missing
 Swift-host exception and distinct Apple distribution/readiness gates.
-They are published together as draft
+They are published together for review in
 [storytold/craft-contrib#63](https://github.com/storytold/craft-contrib/pull/63)
 (provisional RFC-0041/0042), not adopted policy.
+The app implementation is submitted in
+[storytold/pdfcraft#7549](https://github.com/storytold/pdfcraft/pull/7549).
+The [mobile guide](../apps/ios/README.md#relationship-to-the-suite-proposal)
+compares the open Tauri/egui alternatives and the relevant closed mobile proposals;
+none is silently superseded or described as accepted.
 
 ### Do not duplicate the other host proposal
 
@@ -56,7 +61,8 @@ Use `bash scripts/build-apple.sh --help` for the positional interface:
   The iOS POC currently requires an Apple Silicon Mac with installed Xcode SDKs,
   XcodeGen 2.46.0 and the Rust iOS target libraries. Desktop-only builds support the
   host architecture; this does not certify universal desktop or Intel Simulator.
-- `test all` runs the 32 desktop-platform unit tests, then the existing full
+- `test all` runs the 32 desktop-platform unit tests, isolated build/metadata
+  regressions, then the existing full
   [iOS test command](../scripts/test-ios.sh) sequentially on each selected family.
   It is an Apple POC test set, not every test in this large workspace. Native tests
   currently require Debug. An unsigned device build is not physical-device testing.
@@ -107,7 +113,7 @@ decides acceptance. These are engineering findings, not legal certification.
 | Privacy/required-reason API | **Blocked for submission**: shell uses `@AppStorage` preferences; no privacy manifest is currently bundled | Audit app and transitive SDK API use; declare accurate reasons and disclosures, including app-local UserDefaults use; do not guess a universal “no data collected” answer |
 | Functional completeness/metadata, 2.1/2.3/4 | A narrow working POC; [unsupported controls](../apps/ios/PUBLISHING.md) stay hidden | Accurate feature descriptions, original screenshots, accessibility and lifecycle evidence; disclaimer does not bypass completeness |
 | Beta distribution, 2.2 | **Public Store submission blocked for this evaluation build** | Use authorized TestFlight for eligible pre-release testing; mature the app for public distribution rather than merely renaming the POC |
-| Signing/team/store identity | Fork identifier, build counter `1`, no authorized distribution proof | Owner-created production identity, monotonic build number, matching capabilities/profiles, archive/export validation |
+| Signing/team/store identity | Unregistered upstream POC identifier, build counter `1`, no authorized distribution proof | Owner-created production identity, monotonic build number, matching capabilities/profiles, archive/export validation |
 | Legal/privacy/export compliance | Licences and icon provenance are tracked; full Store audit unverified | Public privacy/support URLs, age/trader/legal answers, SDK manifests, authorized branding and cryptography/export-compliance assessment |
 
 Do not “fix” these blockers by enabling sandboxing blindly or disabling desktop

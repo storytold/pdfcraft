@@ -71,6 +71,7 @@ final class WorkflowTests: XCTestCase {
         app.buttons["Read text on page 2"].tap()
         XCTAssertTrue(app.staticTexts["page-text-2"].waitForExistence(timeout: 20), app.debugDescription)
         XCTAssertEqual(app.staticTexts["page-text-2"].label, "PdfCraft second page\nSecond page only")
+        attachScreenshot(app, named: "Embedded page text")
         app.buttons["Done"].tap()
         app.buttons["Rotate page 2 clockwise"].tap()
         let rotated = NSPredicate { _, _ in second.exists && second.frame.width > second.frame.height }
@@ -129,6 +130,7 @@ final class WorkflowTests: XCTestCase {
         if UIDevice.current.userInterfaceIdiom == .pad {
             XCTAssertTrue(app.descendants(matching: .any)["workspace-sidebar"].firstMatch.exists)
         }
+        attachScreenshot(app, named: "Desktop-aligned native Home")
         let appearance = app.buttons["Appearance"]
         let previousAppearance = appearance.value as? String ?? "System"
         appearance.tap()
@@ -220,6 +222,7 @@ final class WorkflowTests: XCTestCase {
         openDocument("copy-2", in: app)
         XCTAssertTrue(image.waitForExistence(timeout: 30), app.debugDescription)
         XCTAssertGreaterThan(image.frame.width, image.frame.height)
+        attachScreenshot(app, named: "Reopened rotated export")
 
         shareAndCopy(in: app)
     }
