@@ -229,8 +229,9 @@ pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
 /// [`sig_fields`], and whether the walk read the whole form. It did not when a cap stopped it, a
 /// field that is or holds a signature field was passed over for its name, a signature had no named
 /// field to be listed under (a signed field without a usable /T, or a kid without one claiming a
-/// signature its field doesn't have), or the form or its `/Fields` was there but of the wrong type:
-/// a field it did not read may be signed, or claim one of the widgets listed.
+/// signature its field doesn't have), or the form or its `/Fields` was there but of the wrong type
+/// (a `/Fields` that is one field dictionary is read as a list of that field): a field it did not
+/// read may be signed, or claim one of the widgets listed.
 ///
 /// Kids share their parent's name instead of each copying it. A kid with no /T but kids of its own
 /// is a field all the same, which adds nothing to the names below it. A widget is listed under every field
@@ -251,10 +252,17 @@ pub(crate) fn walk_sig_fields(doc: &Document) -> (Vec<Field>, bool) {
     let unnamed: Rc<str> = Rc::from("");
     let mut stack: Vec<(Object, Rc<str>, bool)> = Vec::new();
     let fields = doc.resolve(top);
-    if !matches!(*fields, Object::Null | Object::Array(_)) {
-        return (out, false);
-    }
-    for (i, f) in fields.as_array().into_iter().flatten().enumerate() {
+    // `/Fields` is an array (ISO 32000-2 Table 224). One that is a field dictionary itself, as some
+    // writers leave it, is read as a list of that one field: its tree is walked like any other,
+    // where passing it over would leave every field of the form unread.
+    let single = fields.as_dict().is_some().then(|| [top.clone()]);
+    let list: &[Object] = match (&*fields, &single) {
+        (Object::Array(a), _) => a,
+        (_, Some(one)) => one,
+        (Object::Null, _) => &[],
+        _ => return (out, false),
+    };
+    for (i, f) in list.iter().enumerate() {
         if !take(&mut entries_left) {
             whole = false;
             break;

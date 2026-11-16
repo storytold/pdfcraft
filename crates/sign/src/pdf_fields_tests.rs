@@ -365,13 +365,15 @@ fn a_signed_field_without_a_name_cuts_the_walk_short() {
 }
 
 /// A form that is there but of the wrong type, an `/AcroForm` that isn't a dictionary or a
-/// `/Fields` that isn't an array, may hold any field, signed ones too: the walk counts as cut
-/// short. A form that isn't there, or is null, holds none.
+/// `/Fields` that is neither an array nor a field, may hold any field, signed ones too: the walk
+/// counts as cut short. A form that isn't there, or is null, holds none. A `/Fields` that is one
+/// field dictionary is read as a list of that field (see
+/// [`a_fields_entry_that_is_one_field_is_read_as_a_list_of_it`]).
 #[test]
 fn a_form_of_the_wrong_type_cuts_the_walk_short() {
     for (form, whole) in [
         ("/AcroForm [3 0 R]", false),
-        ("/AcroForm << /Fields 3 0 R >>", false),
+        ("/AcroForm << /Fields 3 0 R >>", true),
         ("/AcroForm << /Fields (3 0 R) >>", false),
         ("/AcroForm << /Fields null >>", true),
         ("/AcroForm << /Fields 9 0 R >>", true),
@@ -386,6 +388,28 @@ fn a_form_of_the_wrong_type_cuts_the_walk_short() {
             .build();
         assert_eq!(walk_sig_fields(&Document::open(Arc::new(pdf)).unwrap()).1, whole, "{form}");
     }
+}
+
+/// A `/Fields` entry that is one field dictionary instead of an array of them (written so by some
+/// static XFA forms): its tree is walked as the form, so a signature in it is listed and a form
+/// with none is read whole, not taken to hide one.
+#[test]
+fn a_fields_entry_that_is_one_field_is_read_as_a_list_of_it() {
+    let doc = |fields: &str, objects: &[&str]| {
+        let pdf = Pdf::new()
+            .obj(format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields {fields} >> >>"))
+            .obj("<< /Type /Pages /Kids [] /Count 0 >>")
+            .objs(objects);
+        Document::open(Arc::new(pdf.build())).unwrap()
+    };
+    let field = ["<< /T (top) /Kids [5 0 R] >>", "<< /Type /Sig >>", "<< /T (s) /FT /Sig /V 4 0 R >>"];
+    for fields in ["3 0 R", "<< /T (top) /Kids [5 0 R] >>"] {
+        let (listed, whole) = walk_sig_fields(&doc(fields, &field));
+        assert!(whole, "{fields}");
+        assert_eq!(listed.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["top.s"], "{fields}");
+    }
+    let (listed, whole) = walk_sig_fields(&doc("3 0 R", &["<< /T (top) /Kids [4 0 R] >>", "<< /T (name) /FT /Tx >>"]));
+    assert!(listed.is_empty() && whole);
 }
 
 /// A kid with no /T is not always a widget. One with kids of its own is a field node, walked and

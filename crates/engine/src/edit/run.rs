@@ -1086,7 +1086,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             // An XFA form's fields baked into the pages: the XFA goes too, or Adobe's viewers
             // would lay the form out again from its template over the baked pages. A dynamic
             // form that was never laid out keeps its XFA: without it only placeholders remain.
-            let shape = (*fields).then(|| pdfcraft_xfa::xfa_shape(doc)).flatten();
+            let shape = (*fields).then(|| crate::xfa_form::xfa_shape(doc)).flatten();
             let n = pdfcraft_model::pages(doc).len();
             pdfcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), *comments, *fields)?;
             match shape {
@@ -1096,7 +1096,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
         }
         Edit::XfaToStatic => {
-            let Some(shape) = pdfcraft_xfa::xfa_shape(doc) else {
+            let Some(shape) = crate::xfa_form::xfa_shape(doc) else {
                 return Err(EditError::Invalid("this document is not an XFA form".into()));
             };
             if !shape.strippable() {
