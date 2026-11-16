@@ -3258,6 +3258,23 @@ mod tests {
         assert_eq!(app.views.len(), 2, "after Reject the document closes");
     }
 
+    #[test]
+    fn queued_tab_held_by_ocr_stops_close_and_continue() {
+        let (mut app, a) = reviewing_the_first_of_three();
+        let ctx = egui::Context::default();
+        let b = app.views[1].id;
+        let c = app.views[2].id;
+        app.pending_close_queue = vec![a, c];
+        app.close_and_continue(&ctx, 1, crate::CloseRequest::Tab(b));
+        // b was closed; when draining the queue, a is held by ocr review
+        assert_eq!(app.views.len(), 2);
+        assert_eq!(app.views[0].id, a);
+        assert_eq!(app.views[1].id, c);
+        assert!(app.pending_close_queue.is_empty(), "remaining queue cleared on ocr hold");
+        assert_eq!(app.active, Some(0), "held document comes to front");
+        assert!(app.ocr_verify.open);
+    }
+
     /// Run OCR on another document while a review is held leaves the review alone and says why.
     #[test]
     fn a_run_on_another_document_keeps_the_review() {

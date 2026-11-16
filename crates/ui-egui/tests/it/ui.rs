@@ -1922,6 +1922,7 @@ fn tab_dragging_between_grouped_tabs_adopts_group() {
     let gid = h.state_mut().create_tab_group("Work".into(), pdfcraft_ui_egui::TabGroupColor::Green);
     h.state_mut().add_tab_to_group(0, gid);
     h.state_mut().add_tab_to_group(1, gid);
+    h.run_steps(3);
 
     // doc 0 and 1 are in group, doc 2 is ungrouped
     assert_eq!(h.state().views[0].group, Some(gid));

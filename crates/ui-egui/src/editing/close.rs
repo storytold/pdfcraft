@@ -168,7 +168,7 @@ impl PdfCraftApp {
                         app.close_and_continue(&ctx, i, req);
                     }
                 });
-                if !started {
+                if !started && self.pending_lock.is_none() {
                     self.pending_close_queue.clear();
                 }
             }
@@ -211,6 +211,10 @@ impl PdfCraftApp {
             while !self.pending_close_queue.is_empty() {
                 let next_id = self.pending_close_queue.remove(0);
                 if let Some(i) = self.asking_tab(next_id) {
+                    if self.hold_close_for_ocr_review(i) {
+                        self.pending_close_queue.clear();
+                        break;
+                    }
                     if self.asks_before_closing(i) {
                         self.save_prompt_seen = false;
                         self.close_request = Some(CloseRequest::Tab(next_id));
