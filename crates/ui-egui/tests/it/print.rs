@@ -2069,3 +2069,146 @@ fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
     open(&mut gone);
     assert_eq!(setup(&gone), office);
 }
+
+fn will_print_counter_pdf() -> Vec<u8> {
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R /AA << /WP 6 0 R >> /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".to_owned(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (counter) /V (0) /Rect [20 250 180 270] /P 3 0 R /F 4 >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_owned(),
+        "<< /S /JavaScript /JS (var f = getField\\('counter'\\); var c = (Number(f.value) || 0) + 1; f.value = c.toString\\(\\);) >>".to_owned(),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    bytes
+}
+
+#[test]
+fn will_print_script_running_on_label_print_invokes_once_and_completes() {
+    let bytes = will_print_counter_pdf();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("will_print.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.state_mut().print_draft.handling = pdfcraft_ui_egui::PrintHandling::Label;
+    h.run_steps(2);
+
+    let out = std::env::temp_dir().join(format!("pdfcraft-print-willprint-{}.pdf", std::process::id()));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().print_draft.printer = None;
+    h.run_steps(1);
+
+    // Initial value is 0.
+    let id = h.state().views[0].id;
+    let initial_val = h.state().session.get(id).unwrap().form.iter().find(|f| f.name == "counter").unwrap().value.join(",");
+    assert_eq!(initial_val, "0");
+
+    // Print now via Save as PDF button: WillPrint runs and increments counter to 1, crops are computed synchronously, and print succeeds.
+    h.get_by_label("Save as PDF").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+
+    // Counter must be exactly "1" (invoked exactly once, not twice or looping).
+    let final_val = h.state().session.get(id).unwrap().form.iter().find(|f| f.name == "counter").unwrap().value.join(",");
+    assert_eq!(final_val, "1", "WillPrint must be invoked exactly once");
+
+    let saved = std::fs::read(&out).expect("file saved");
+    assert!(!saved.is_empty());
+    let _ = std::fs::remove_file(out);
+}
+
+fn two_page_ink_pdf() -> Vec<u8> {
+    let content = "0 0 0 rg 20 20 50 50 re f";
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 /MediaBox [0 0 200 300] >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /Resources << >> /Contents 4 0 R >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Page /Parent 2 0 R /Resources << >> /Contents 6 0 R >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    bytes
+}
+
+#[test]
+fn cancelling_subset_label_crop_resets_completed_marker_on_reentry() {
+    let bytes = two_page_ink_pdf();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("two_page.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+
+    // Switch to Label mode: calculates crops for [0, 1].
+    h.state_mut().print_draft.set_handling(pdfcraft_ui_egui::PrintHandling::Label);
+    h.run_steps(1);
+
+    // Wait until background calculation completes for [0, 1].
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while h.state().print_draft.crop_pages.as_ref() != Some(&vec![0, 1]) && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().print_draft.crop_pages, Some(vec![0, 1]));
+    assert!(h.state().print_draft.crops[0].is_some());
+    assert!(h.state().print_draft.crops[1].is_some());
+
+    // Switch selection to page 0 only.
+    h.state_mut().print_draft.which = pdfcraft_ui_egui::PrintWhich::Range;
+    h.state_mut().print_draft.range = "1".into();
+    // Running 1 step triggers read_label_crops for [0], clearing crops[1] and resetting crop_pages.
+    h.run_steps(1);
+    assert_eq!(h.state().print_draft.crops[1], None, "page 1 crop cleared for new selection");
+
+    // Cancel by leaving Label before the new calculation completes.
+    h.state_mut().print_draft.set_handling(pdfcraft_ui_egui::PrintHandling::Size);
+    h.run_steps(1);
+    assert_eq!(h.state().print_draft.crop_pages, None, "completed crop marker must be reset");
+
+    // Return to Label mode with [0, 1] selected.
+    h.state_mut().print_draft.which = pdfcraft_ui_egui::PrintWhich::All;
+    h.state_mut().print_draft.set_handling(pdfcraft_ui_egui::PrintHandling::Label);
+    h.run_steps(1);
+
+    // Wait for the re-entry crop calculation to complete.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while h.state().print_draft.crop_pages.as_ref() != Some(&vec![0, 1]) && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().print_draft.crop_pages, Some(vec![0, 1]));
+    assert!(h.state().print_draft.crops[0].is_some());
+    assert!(h.state().print_draft.crops[1].is_some(), "page 1 crop must be recomputed upon re-entry");
+}

@@ -297,6 +297,7 @@ impl PdfCraftApp {
             if self.print_draft.crops.len() != doc.info.pages.len() {
                 self.print_draft.crops.resize(doc.info.pages.len(), None);
             }
+            self.print_draft.crop_pages = None;
             for (i, slot) in self.print_draft.crops.iter_mut().enumerate() {
                 if pages.binary_search(&i).is_err() {
                     *slot = None;
@@ -372,35 +373,47 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let up = self.session.print_text_up(id, &pages);
-            let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
-            let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
-            self.print_draft.crops = doc
-                .info
-                .pages
-                .iter()
-                .enumerate()
-                .map(|(page, p)| {
-                    let (w, h) = (f64::from(p.width), f64::from(p.height));
-                    if pages.binary_search(&page).is_err() || w <= 0.0 || h <= 0.0 {
-                        return None;
-                    }
-                    let out = r.render(pdfcraft_render::RenderRequest {
-                        page,
-                        kind: pdfcraft_render::RequestKind::Pixels,
-                        tile: None,
-                        scale: (1000.0 / w.max(h) as f32).clamp(0.1, 4.0),
-                        tag: 0,
-                        preview: false,
-                    });
-                    let [u0, v0, u1, v1] = crate::zoom_snap::ink_bounds(out.width as usize, out.height as usize, &out.rgba)?;
-                    let pad = 1.5;
-                    let rect = [f64::from(u0) * w - pad, (1.0 - f64::from(v1)) * h - pad, f64::from(u1) * w + pad, (1.0 - f64::from(v0)) * h + pad];
-                    Some(print::Crop { rect, text_up: up.get(page).copied().unwrap_or(false) })
-                })
-                .collect();
-            self.print_draft.crop_pages = Some(pages);
+            self.compute_label_crops_sync(id);
         }
+    }
+
+    /// Calculate label crops synchronously.
+    pub(crate) fn compute_label_crops_sync(&mut self, id: pdfcraft_engine::DocId) {
+        let Some(doc) = self.session.get(id) else { return };
+        let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
+        let mut pages = self.print_draft.settings(doc.info.pages.len(), &labels).map(|s| s.pages).unwrap_or_default();
+        pages.sort_unstable();
+        pages.dedup();
+        pages.truncate(LABEL_CROP_PAGES);
+
+        let up = self.session.print_text_up(id, &pages);
+        let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
+        self.print_draft.crops = doc
+            .info
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(page, p)| {
+                let (w, h) = (f64::from(p.width), f64::from(p.height));
+                if pages.binary_search(&page).is_err() || w <= 0.0 || h <= 0.0 {
+                    return None;
+                }
+                let out = r.render(pdfcraft_render::RenderRequest {
+                    page,
+                    kind: pdfcraft_render::RequestKind::Pixels,
+                    tile: None,
+                    scale: (1000.0 / w.max(h) as f32).clamp(0.1, 4.0),
+                    tag: 0,
+                    preview: false,
+                });
+                let [u0, v0, u1, v1] = crate::zoom_snap::ink_bounds(out.width as usize, out.height as usize, &out.rgba)?;
+                let pad = 1.5;
+                let rect = [f64::from(u0) * w - pad, (1.0 - f64::from(v1)) * h - pad, f64::from(u1) * w + pad, (1.0 - f64::from(v0)) * h + pad];
+                Some(print::Crop { rect, text_up: up.get(page).copied().unwrap_or(false) })
+            })
+            .collect();
+        self.print_draft.crop_pages = Some(pages);
     }
 
     /// Read the printer list in the background off the GUI thread; `poll_print` picks it up.
@@ -772,19 +785,15 @@ impl PdfCraftApp {
                 }
                 self.print_draft.crops.clear();
                 self.print_draft.crop_pages = None;
-                self.read_label_crops(id);
+                self.compute_label_crops_sync(id);
             }
         }
         let Some(doc) = self.session.get(id) else { return false };
         #[cfg(not(target_arch = "wasm32"))]
-        if self.print_draft.handling == Handling::Label && self.print_tasks.label_crops.is_some() {
-            return false;
-        }
-        #[cfg(not(target_arch = "wasm32"))]
         if self.print_draft.handling == Handling::Label
             && let Some((pages, rx)) = self.print_tasks.label_crops.take()
         {
-            while let Ok((page, crop)) = rx.try_recv() {
+            while let Ok((page, crop)) = rx.recv() {
                 if page < self.print_draft.crops.len() {
                     self.print_draft.crops[page] = crop;
                 }
