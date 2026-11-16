@@ -41,13 +41,15 @@ fn clear_shifted_page_comment_state(view: &mut crate::DocView, shifted_from: usi
 }
 
 /// Keeps the pages (or comment) the user acted on selected, where they now are. `annots_before`
-/// is the page's annotations before a delete or a paste of comments (empty for other edits).
+/// is the page's annotations before a delete or a paste of comments (empty for other edits);
+/// `across_pages`, for markup on a text selection across pages, the page that selection ends on.
 fn select_after_edit(
     view: &mut crate::DocView,
     edit: &Edit,
     info: &pdfcraft_render::DocInfo,
     annots_before: &[pdfcraft_render::Annotation],
     quick_tool: crate::QuickTool,
+    across_pages: Option<usize>,
 ) {
     match edit {
         Edit::MovePages { pages, to } => {
@@ -96,6 +98,18 @@ fn select_after_edit(
                 && view.comments.editing.is_none()
             {
                 view.comments.open_editor(a.page, n, String::new());
+            }
+        }
+        // Markup on a text selection across pages (marked so when it was made,
+        // [`crate::DocView::selection_marks_edit`]; other batches of comments, such as Redact's
+        // page range or search, are not) is followed up as one markup is: on the page the
+        // selection ends, where the drag finished and is on screen, its comment selected and, for
+        // a highlight, its note open. One level: the batch holds only `AddAnnotation`s.
+        Edit::Batch { edits, .. } if across_pages.is_some() && edits.iter().all(|e| matches!(e, Edit::AddAnnotation(_))) => {
+            // The selection's pages are in page order: dragged back up, it ends on the first.
+            let on_head = edits.iter().find(|e| matches!(e, Edit::AddAnnotation(a) if Some(a.page) == across_pages));
+            if let Some(head) = on_head.or(edits.last()) {
+                select_after_edit(view, head, info, &[], quick_tool, None);
             }
         }
         // A group moved together stays selected (its positions don't change), so it
@@ -156,6 +170,8 @@ impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
+        // Taken whatever happens to this edit, so it never carries over to another.
+        let across_pages = std::mem::take(&mut self.views[i].marks_across_pages).filter(|_| annotated_pages(&edit).is_some());
         let label = edit.label();
         let target_arrange_image = match &edit {
             Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
@@ -230,7 +246,13 @@ impl PdfCraftApp {
                 if signatures_before.is_some_and(|before| crate::canvas::signature_states_changed(&before, &doc.signatures)) {
                     signatures_changed_after_edit(view, &edit, info, &annots_before, form_edit.map(|(_, u)| u), one_page);
                 } else if let Some(page) = one_page {
+                    // Comment and content edits change one page: keep every other raster.
                     one_page_changed(view, &edit, page, &annots_before, info);
+                } else if let Some(pages) = annotated_pages(&edit) {
+                    // Markup on a selection across pages adds one comment on each of them: those
+                    // pages' rasters, then the comments once, however many pages.
+                    pages.into_iter().for_each(|page| view.page_changed(page));
+                    view.comments.document_changed(info);
                 } else if let Some((changed_pages, unbaked)) = form_edit {
                     view.forms.unbaked.extend(unbaked);
                     for page in changed_pages {
@@ -240,7 +262,7 @@ impl PdfCraftApp {
                 } else {
                     view.document_changed(info);
                 }
-                if matches!(edit, Edit::AddAnnotation(_)) {
+                if matches!(edit, Edit::AddAnnotation(_)) || across_pages.is_some() {
                     view.comments.comment_added();
                 }
                 // A deletion moves the pop-ups' state with its comments (`annotation_deleted`).
@@ -248,7 +270,7 @@ impl PdfCraftApp {
                     view.comments.popups_after_edit(&popups_before, &info.annotations);
                 }
                 // Keep the pages the user acted on selected, where they now are.
-                select_after_edit(view, &edit, info, &annots_before, self.quick_tool);
+                select_after_edit(view, &edit, info, &annots_before, self.quick_tool, across_pages);
                 if let (Some((target, ambiguous_before)), Edit::EditPageImage { page, .. }) = (target_arrange_image, &edit) {
                     let page_images = doc.page_images(*page);
                     re_resolve_image_selection(view, *page, &target, ambiguous_before, &page_images);
@@ -1237,6 +1259,20 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::SetAnnotationInfo { page, .. } => Some(*page),
         _ => None,
     }
+}
+
+/// The pages of a batch that only adds annotations (markup on a text selection across pages),
+/// each of which changes only its own page; `None` for anything else.
+fn annotated_pages(edit: &Edit) -> Option<Vec<usize>> {
+    let Edit::Batch { edits, .. } = edit else { return None };
+    let pages: Vec<usize> = edits
+        .iter()
+        .map(|e| match e {
+            Edit::AddAnnotation(a) => Some(a.page),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    (!pages.is_empty()).then_some(pages)
 }
 
 /// Whether `edit` is a form-related modification.
