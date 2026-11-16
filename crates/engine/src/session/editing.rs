@@ -36,6 +36,35 @@ fn prepare_ocr_text_edit(editor: &mut crate::history::Editor, info: &pdfcraft_re
     })
 }
 
+/// Whether `edit` changes which pages the document has, or their order, size or rotation, by
+/// the pages' places as shown ([`crate::document::Document::check_page_tree`]).
+fn edits_pages(edit: &Edit) -> bool {
+    match edit {
+        Edit::RotatePages { .. }
+        | Edit::DeletePages { .. }
+        | Edit::MovePages { .. }
+        | Edit::ReversePages { .. }
+        | Edit::InsertBlankPage { .. }
+        | Edit::DuplicatePages { .. }
+        | Edit::ReplacePages { .. }
+        | Edit::SetPageBox { .. }
+        | Edit::InsertPagesFrom { .. } => true,
+        Edit::Batch { edits, .. } => edits.iter().any(edits_pages),
+        _ => false,
+    }
+}
+
+/// How many pages `edit` leaves of the `shown` ones, for the page edits whose result needs no
+/// other document to tell: a rotation, page box, move or reversal keeps them all, and a deletion
+/// takes the distinct pages it names. `None` for any other edit.
+fn pages_after(edit: &Edit, shown: usize) -> Option<usize> {
+    match edit {
+        Edit::RotatePages { .. } | Edit::SetPageBox { .. } | Edit::MovePages { .. } | Edit::ReversePages { .. } => Some(shown),
+        Edit::DeletePages { pages } => shown.checked_sub(pages.iter().filter(|p| **p < shown).collect::<std::collections::HashSet<_>>().len()),
+        _ => None,
+    }
+}
+
 /// Whether the edit, or any edit inside a batch, deletes pages.
 fn deletes_pages(edit: &Edit) -> bool {
     match edit {
@@ -164,6 +193,10 @@ impl Session {
         cx.today = today;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
+        if edits_pages(&edit) {
+            doc.check_page_tree()?;
+        }
+        let password = doc.password.clone();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
         if let Some(p) = editor.cos.permissions() {
             check_permission(&edit, &p)?;
@@ -327,6 +360,20 @@ impl Session {
         if signed && ((rewrites(&next) && !rewrites(&editor.cos)) || (next.is_modified() && next.revisions().is_empty())) {
             discard_edit_callbacks(&cx);
             return Err(EditError::SignedRewrite(edit.label().to_string()));
+        }
+        // A damaged page tree the editor walks like the viewer can still be written so that the
+        // viewer reads another number of pages from it (a page that loses its place in the tree):
+        // the page edit is refused before it is kept.
+        if let Some(expected) = pages_after(&edit, cx.pages) {
+            let written = write_incremental(&next, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()));
+            let written = written.inspect_err(|_| discard_edit_callbacks(&cx))?;
+            if pdfcraft_render::check_pages(Arc::new(written), password.as_deref(), expected).is_err() {
+                discard_edit_callbacks(&cx);
+                return Err(EditError::Invalid(format!(
+                    "{} isn't possible here: this document's page tree is damaged, and the change would leave it showing other than {expected} page(s) (nothing was changed)",
+                    edit.label()
+                )));
+            }
         }
         let mut notices = edit_notices(&edit, &editor.cos, &next);
         // Places applied redactions left that still hold the removed text, and what became of
@@ -760,4 +807,21 @@ fn edit_notices(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfcraft_cos:
         }
     }
     notices
+}
+
+#[cfg(test)]
+mod page_count_tests {
+    use super::{Edit, pages_after};
+
+    /// The page edits whose page count is checked after the edit, and what they leave: rotating,
+    /// boxes, moving and reversing keep every page; deleting takes the distinct pages that exist.
+    #[test]
+    fn page_edits_say_how_many_pages_they_leave() {
+        let rotate = Edit::RotatePages { pages: vec![0, 1], degrees: 90 };
+        assert_eq!(pages_after(&rotate, 13), Some(13));
+        assert_eq!(pages_after(&Edit::MovePages { pages: vec![2], to: 0 }, 13), Some(13));
+        assert_eq!(pages_after(&Edit::ReversePages { pages: vec![0, 1, 2] }, 13), Some(13));
+        assert_eq!(pages_after(&Edit::DeletePages { pages: vec![12, 12, 3, 40] }, 13), Some(11), "twice and past the end count once and not at all");
+        assert_eq!(pages_after(&Edit::SetInfo { key: "Title".into(), value: "t".into() }, 13), None);
+    }
 }

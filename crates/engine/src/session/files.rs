@@ -514,8 +514,11 @@ impl Session {
         self.split(id, &pdfcraft_organize::SplitBy::Before(cuts))
     }
 
+    /// The document's object model, for copying its pages out: refused when its page tree is not
+    /// the one shown ([`crate::document::Document::check_page_tree`]).
     fn cos(&self, id: DocId) -> Result<&pdfcraft_cos::Document, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        doc.check_page_tree()?;
         doc.editor.as_ref().map(|e| &e.cos).ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))
     }
 

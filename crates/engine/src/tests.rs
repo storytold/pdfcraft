@@ -15461,3 +15461,30 @@ fn inline_conversions_refuse_office_documents_without_running_libreoffice() {
     assert_eq!(s.convert_to_pdf_inline("notes.txt", &Arc::new(b"hello".to_vec())).unwrap().0, SourceKind::Text);
     assert!(s.as_pdf_inline("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
 }
+
+/// A page tree the viewer reads one way and the object model another (here a page listed twice in
+/// `/Kids`: shown twice, walked once). A page edit, Extract and Split name pages as they are shown
+/// and act on the tree the editor walks, so each would act on another page or leave one out: they
+/// are refused, with nothing changed. Other edits go on.
+#[test]
+fn page_changes_are_refused_when_the_page_tree_shown_is_not_the_one_walked() {
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R 3 0 R] /Count 2 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>")
+        .build();
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("twice.pdf", None, Arc::new(pdf), None).expect("opens");
+    let d = s.get(id).unwrap();
+    assert_eq!((d.info.pages.len(), pdfcraft_model::pages(&d.editor.as_ref().unwrap().cos).len()), (2, 1), "the fixture still diverges");
+    let damaged = |r: Result<String, EditError>| match r {
+        Err(e) => assert!(e.to_string().contains("page tree is damaged: it shows 2 page(s), but its page tree leads to 1"), "{e}"),
+        Ok(what) => panic!("{what} went ahead"),
+    };
+    damaged(s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).map(|_| "rotate".into()));
+    damaged(s.apply(id, Edit::DeletePages { pages: vec![1] }).map(|_| "delete".into()));
+    damaged(s.extract(id, &[0]).map(|_| "extract".into()));
+    damaged(s.split(id, &pdfcraft_organize::SplitBy::PageCount(1)).map(|_| "split".into()));
+    assert!(s.get(id).unwrap().can_undo().is_none(), "nothing was changed");
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Still editable".into() }).expect("other edits go on");
+}

@@ -61,6 +61,10 @@ pub struct OptimizeJob {
     settings: optimize::Settings,
     discard: Vec<Hidden>,
     opts: SaveOptions,
+    /// The pages shown, and the password the document was opened with: the copy must show them
+    /// all, or a page was lost on the way.
+    shown: usize,
+    password: Option<String>,
 }
 
 impl Session {
@@ -81,6 +85,8 @@ impl Session {
                 object_streams: settings.effective_object_streams(),
                 ..SaveOptions::default()
             },
+            shown: doc.info.pages.len(),
+            password: doc.password.clone(),
         })
     }
 }
@@ -94,7 +100,7 @@ impl OptimizeJob {
     }
 
     fn work(self, progress: &mut dyn FnMut(OptimizeStage) -> bool) -> Result<Optimized, EditError> {
-        let OptimizeJob { mut cos, settings, discard, opts } = self;
+        let OptimizeJob { mut cos, settings, discard, opts, shown, password } = self;
         // Like every file written, without the values of Password-flag fields (#3926, #3944).
         pdfcraft_forms::clear_password_values(&mut cos).map_err(|e| EditError::Write(e.to_string()))?;
         pdfcraft_xfa::clear_password_values(&mut cos).map_err(|e| EditError::Write(e.to_string()))?;
@@ -135,7 +141,9 @@ impl OptimizeJob {
         let all: Vec<pdfcraft_cos::ObjRef> = cos.object_numbers().into_iter().map(|n| pdfcraft_cos::ObjRef::new(n, cos.generation(n))).collect();
         let merged = pdfcraft_organize::dedupe_resources(&mut cos, &all, false);
         step(OptimizeStage::Writing)?;
-        let bytes = write_full(&cos, &opts).map_err(|e| EditError::Write(e.to_string()))?;
-        Ok((Arc::new(bytes), OptimizeReport { optimize: report, merged, discarded }))
+        let bytes = Arc::new(write_full(&cos, &opts).map_err(|e| EditError::Write(e.to_string()))?);
+        // A damaged page tree can be rewritten so that it reads with a page fewer.
+        pdfcraft_render::check_pages(bytes.clone(), password.as_deref(), shown).map_err(|e| EditError::Reopen(e.to_string()))?;
+        Ok((bytes, OptimizeReport { optimize: report, merged, discarded }))
     }
 }
