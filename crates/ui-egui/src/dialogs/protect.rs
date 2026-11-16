@@ -1,6 +1,9 @@
 //! Protect Using Password (Acrobat's simplified dialog, screenshot 13b), with the classic
 //! Password Security settings behind "Advanced Options" (compatibility, what to encrypt,
 //! printing, changes, copying, screen readers). Execution plan M8.1.
+//!
+//! Advanced Options can also set the other password so an open password and a permissions
+//! password can be configured together.
 
 use egui::{Align, Color32, Layout};
 use pdfcraft_engine::{Changes, Edit, Printing, Protection};
@@ -16,12 +19,27 @@ pub struct ProtectDraft {
     pub password: String,
     pub confirm: String,
     pub advanced: bool,
+    /// Advanced Options: also set the other password — a permissions password when the password
+    /// above is for Viewing, an open password when it is for Editing.
+    pub both: bool,
+    /// The other password and its confirmation (used only with `both`).
+    pub second: String,
+    pub second_confirm: String,
     pub protection: Protection,
 }
 
 impl Default for ProtectDraft {
     fn default() -> Self {
-        Self { viewing: true, password: String::new(), confirm: String::new(), advanced: false, protection: Protection::default() }
+        Self {
+            viewing: true,
+            password: String::new(),
+            confirm: String::new(),
+            advanced: false,
+            both: false,
+            second: String::new(),
+            second_confirm: String::new(),
+            protection: Protection::default(),
+        }
     }
 }
 
@@ -30,6 +48,8 @@ impl Drop for ProtectDraft {
         use zeroize::Zeroize as _;
         self.password.zeroize();
         self.confirm.zeroize();
+        self.second.zeroize();
+        self.second_confirm.zeroize();
         if let Some(pw) = &mut self.protection.open_password {
             pw.zeroize();
         }
@@ -42,27 +62,51 @@ impl Drop for ProtectDraft {
 impl ProtectDraft {
     /// Why Apply is disabled, if it is.
     pub fn problem(&self) -> Option<&'static str> {
+        let ascii_only = |pw: &str| self.protection.algorithm != pdfcraft_engine::Algorithm::Aes256 && !pw.chars().all(|c| (' '..='~').contains(&c));
         if self.password.is_empty() {
             Some("Type a password.")
         } else if self.password != self.confirm {
             Some("The passwords don't match.")
-        } else if self.protection.algorithm != pdfcraft_engine::Algorithm::Aes256 && !self.password.chars().all(|c| (' '..='~').contains(&c)) {
+        } else if ascii_only(&self.password) || (self.both && ascii_only(&self.second)) {
             Some("This compatibility level supports only plain ASCII passwords.")
+        } else if self.both && self.second.is_empty() {
+            Some(if self.viewing { "Type a permissions password." } else { "Type a document open password." })
+        } else if self.both && self.second != self.second_confirm {
+            Some(if self.viewing { "The permissions passwords don't match." } else { "The document open passwords don't match." })
+        } else if self.both && self.same_to_the_file(&self.second, "") {
+            Some("The second password is made only of characters that passwords ignore, such as soft hyphens.")
+        } else if self.both && self.same_to_the_file(&self.second, &self.password) {
+            Some("The document open password and the permissions password must be different.")
         } else {
             None
         }
     }
 
+    /// Whether the file would take `a` and `b` as one password: encryption keys on a password as
+    /// [`pdfcraft_cos::effective_password`] gives it (128-bit AES and RC4 keep its first 32
+    /// bytes, 256-bit AES its SASLprep), and the engine refuses two that come out the same. Checked
+    /// here so Apply stays disabled and nothing typed is lost.
+    fn same_to_the_file(&self, a: &str, b: &str) -> bool {
+        let algorithm = self.protection.algorithm;
+        pdfcraft_cos::effective_password(algorithm, a) == pdfcraft_cos::effective_password(algorithm, b)
+    }
+
+    /// Whether the edit restricts printing, changes and copying (a permissions password is set).
+    pub fn restricts(&self) -> bool {
+        !self.viewing || self.both
+    }
+
     /// The edit Apply makes.
     pub fn edit(&self) -> Edit {
         let mut p = self.protection.clone();
-        if self.viewing {
-            p.open_password = Some(self.password.clone());
-            p.permissions_password = None;
-        } else {
-            p.open_password = None;
-            p.permissions_password = Some(self.password.clone());
-        }
+        let (open, permissions) = match (self.viewing, self.both) {
+            (true, false) => (Some(self.password.clone()), None),
+            (false, false) => (None, Some(self.password.clone())),
+            (true, true) => (Some(self.password.clone()), Some(self.second.clone())),
+            (false, true) => (Some(self.second.clone()), Some(self.password.clone())),
+        };
+        p.open_password = open;
+        p.permissions_password = permissions;
         Edit::Protect(p)
     }
 }
@@ -148,6 +192,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         d.advanced = !d.advanced;
     }
     if d.advanced {
+        let restricts = d.restricts();
         let p = &mut d.protection;
         egui::Grid::new("protect-advanced").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             ui.label(tl!("Compatibility"));
@@ -173,14 +218,33 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 });
             });
             ui.end_row();
-            if !d.viewing {
+            ui.label("");
+            ui.add(widgets::checkbox(
+                &mut d.both,
+                tl!(if d.viewing { "Restrict editing and printing of the document" } else { "Require a password to open the document" }),
+            ));
+            ui.end_row();
+            if d.both {
+                let (first, second) = if d.viewing {
+                    ("Change Permissions Password", "Re-type Permissions Password")
+                } else {
+                    ("Document Open Password", "Re-type Document Open Password")
+                };
+                field(ui, first, &mut d.second, "protect-pw3");
+                ui.end_row();
+                field(ui, second, &mut d.second_confirm, "protect-confirm2");
+                ui.end_row();
+            }
+            if restricts {
                 ui.label(tl!("Printing allowed"));
                 let opts =
                     [(Printing::None, tl!("None")), (Printing::Low, tl!("Low Resolution (150 dpi)")), (Printing::High, tl!("High Resolution"))];
                 let cur = opts.iter().find(|(o, _)| *o == p.printing).map_or(tl!("High Resolution"), |(_, l)| *l);
                 craft_ui::ComboBox::from_id_salt("protect-print").width(300.0).selected_text(cur).show_ui(ui, |ui| {
                     for (o, l) in opts {
-                        ui.selectable_value(&mut p.printing, o, l);
+                        ui.add_enabled_ui(p.algorithm != A::Rc4_40 || o != Printing::Low, |ui| {
+                            ui.selectable_value(&mut p.printing, o, l);
+                        });
                     }
                 });
                 ui.end_row();
@@ -210,6 +274,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         if p.algorithm == A::Rc4_40 || p.algorithm == A::Rc4_128 {
             p.encrypt_metadata = true;
         }
+        if p.algorithm == A::Rc4_40 && p.printing == Printing::Low {
+            p.printing = Printing::None;
+        }
     }
     ui.add_space(8.0);
     if let Some(problem) = d.problem().filter(|_| !d.password.is_empty() || !d.confirm.is_empty()) {
@@ -217,7 +284,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.label(egui::RichText::new(tl!(problem)).color(t.text_muted).font(theme::regular(12.0)));
     }
     ui.label(
-        egui::RichText::new(if d.viewing {
+        egui::RichText::new(if d.both {
+            tl!("The document needs its open password to open, and its permissions password to change the restrictions. Both are applied when you save.")
+        } else if d.viewing {
             tl!("Anyone opening the document will need this password. It's applied when you save.")
         } else {
             tl!("The document opens without a password; this password is needed to change the restrictions. It's applied when you save.")
@@ -261,6 +330,40 @@ mod tests {
             Edit::Protect(p) => assert_eq!((p.open_password, p.permissions_password.as_deref()), (None, Some("abc"))),
             other => panic!("{other:?}"),
         }
+        // Advanced Options can set the other password too.
+        d.both = true;
+        assert_eq!(d.problem(), Some("Type a document open password."));
+        d.second = "open".into();
+        d.second_confirm = "opem".into();
+        assert_eq!(d.problem(), Some("The document open passwords don't match."));
+        d.second_confirm = "open".into();
+        assert_eq!(d.problem(), None);
+        match d.edit() {
+            Edit::Protect(p) => assert_eq!((p.open_password.as_deref(), p.permissions_password.as_deref()), (Some("open"), Some("abc"))),
+            other => panic!("{other:?}"),
+        }
+        d.viewing = true;
+        assert_eq!(d.problem(), None);
+        match d.edit() {
+            Edit::Protect(p) => assert_eq!((p.open_password.as_deref(), p.permissions_password.as_deref()), (Some("abc"), Some("open"))),
+            other => panic!("{other:?}"),
+        }
+        d.second = "abc".into();
+        d.second_confirm = "abc".into();
+        assert_eq!(d.problem(), Some("The document open password and the permissions password must be different."));
+        // 128-bit AES keeps a password's first 32 bytes: two that differ only after them are one
+        // password to the file, which the engine refuses, so Apply stays disabled.
+        let a32 = "a".repeat(32);
+        d.protection.algorithm = pdfcraft_engine::Algorithm::Aes128;
+        (d.password, d.confirm) = (format!("{a32}1"), format!("{a32}1"));
+        (d.second, d.second_confirm) = (format!("{a32}2"), format!("{a32}2"));
+        assert_eq!(d.problem(), Some("The document open password and the permissions password must be different."));
+        d.protection.algorithm = pdfcraft_engine::Algorithm::Aes256;
+        assert_eq!(d.problem(), None, "256-bit AES keeps them apart");
+        // Soft hyphens (U+00AD) are dropped by SASLprep, resulting in an empty effective password.
+        d.second = "\u{00AD}".into();
+        d.second_confirm = "\u{00AD}".into();
+        assert_eq!(d.problem(), Some("The second password is made only of characters that passwords ignore, such as soft hyphens."));
         assert_eq!(strength("abc").0, "Weak");
         assert_eq!(strength("Abcdefg1").0, "Medium");
         assert_eq!(strength("Correct-Horse-9").0, "Strong");
