@@ -16,9 +16,9 @@ pub struct PendingOverwrite {
 /// A save held back by [`Dialog::LockSignatures`](crate::Dialog::LockSignatures) (#2149).
 pub struct PendingLock {
     pub id: pdfcraft_engine::DocId,
-    target: SaveTarget,
+    pub(crate) target: SaveTarget,
     /// What was to run once the document is written (close its tab, quit).
-    after: Box<dyn FnOnce(&mut PdfCraftApp) + Send>,
+    pub(crate) after: Box<dyn FnOnce(&mut PdfCraftApp) + Send>,
 }
 
 /// Where Save writes.
@@ -223,6 +223,7 @@ impl PdfCraftApp {
     pub(crate) fn answer_lock_signatures(&mut self, lock: bool, remember: bool) {
         let Some(p) = self.pending_lock.take() else { return };
         if lock && !self.flatten_fill_sign_on_save && !self.flatten_fill_sign_in(p.id) {
+            self.pending_close_queue.clear();
             return;
         }
         self.lock_answered = Some(p.id);
@@ -234,7 +235,12 @@ impl PdfCraftApp {
             }
         }
         if let Some(index) = self.views.iter().position(|v| v.id == p.id) {
-            self.save_then(index, p.target, p.after);
+            let started = self.save_then(index, p.target, p.after);
+            if !started && self.pending_lock.is_none() {
+                self.pending_close_queue.clear();
+            }
+        } else {
+            self.pending_close_queue.clear();
         }
     }
 

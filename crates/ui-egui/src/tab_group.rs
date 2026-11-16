@@ -577,4 +577,27 @@ mod tests {
         assert_eq!(app.views.len(), 1);
         assert_eq!(app.session.get(app.views[0].id).unwrap().name, "doc1.pdf");
     }
+
+    #[test]
+    fn cancel_and_discard_resets_pending_lock_and_clears_queue() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
+        let id1 = app.views[0].id;
+        let id2 = app.views[1].id;
+
+        // Set up pending_lock and pending_close_queue
+        app.close_request = Some(crate::CloseRequest::Tab(id1));
+        app.pending_close_queue = vec![id2];
+        app.pending_lock = Some(crate::editing::PendingLock { id: id1, target: crate::SaveTarget::InPlace, after: Box::new(|_| {}) });
+        app.lock_remember = true;
+
+        let ctx = egui::Context::default();
+        // Cancel the close prompt
+        app.resolve_close(&ctx, None);
+
+        assert!(app.pending_lock.is_none(), "pending_lock reset on cancel");
+        assert!(!app.lock_remember, "lock_remember reset on cancel");
+        assert!(app.pending_close_queue.is_empty(), "pending_close_queue cleared on cancel");
+    }
 }

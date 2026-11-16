@@ -151,9 +151,15 @@ impl PdfCraftApp {
         }
         match choice {
             None => {
+                self.pending_lock = None;
+                self.lock_remember = false;
                 self.pending_close_queue.clear();
             } // cancelled: nothing closes
-            Some(false) => self.close_and_continue(ctx, index, req),
+            Some(false) => {
+                self.pending_lock = None;
+                self.lock_remember = false;
+                self.close_and_continue(ctx, index, req);
+            }
             Some(true) => {
                 let Some(id) = self.views.get(index).map(|v| v.id) else { return };
                 // Bring the document forward: what's typed in its form is committed and saved
