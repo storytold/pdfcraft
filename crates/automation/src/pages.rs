@@ -81,10 +81,22 @@ impl Automation {
         let scale = (dpi / 72.0) as f32;
         let block = a.opt_int("hide_text_block")?;
         let added = a.opt_int("hide_added_text")?;
-        if block.is_some() && added.is_some() {
-            return Err(ToolError::InvalidArgs("choose only one of hide_text_block and hide_added_text".into()));
+        let invisible = a.opt_str("show_invisible_text")?.map(super::comments::parse_color).transpose()?;
+        if [block.is_some(), added.is_some(), invisible.is_some()].iter().filter(|set| **set).count() > 1 {
+            return Err(ToolError::InvalidArgs("choose only one of hide_text_block, hide_added_text and show_invisible_text".into()));
         }
-        let out = if let Some(block) = block {
+        let request = RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag: 0, preview: false };
+        let out = if let Some(rgb) = invisible {
+            // A one-off renderer: the cached one draws the document as it is shown.
+            let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
+            let config = self
+                .session
+                .render_config(id)
+                .unwrap_or_else(|| RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() });
+            let channel = |c: f64| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let config = RenderConfig { invisible_text: Some(rgb.map(channel)), ..config };
+            PageRenderer::new(doc.display.clone(), config).render(request)
+        } else if let Some(block) = block {
             if block < 1 {
                 return Err(ToolError::InvalidArgs("hide_text_block must be a positive paragraph index from text_paragraphs".into()));
             }
@@ -99,7 +111,7 @@ impl Automation {
                 .ok_or_else(|| ToolError::InvalidArgs("hide_added_text must be a positive added text index from object_list".into()))?;
             self.doc(a)?.added_text_preview(page, index).map_err(failed)?.render_background(scale).map_err(failed)?
         } else {
-            self.renderer(id)?.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag: 0, preview: false })
+            self.renderer(id)?.render(request)
         };
         if let Some(e) = out.error {
             return Err(failed(format!("page {} could not be rendered: {e}", page + 1)));
