@@ -142,7 +142,10 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   the same `[*]` reference take its instances in turn, each counting as one: a repeating subform
   followed by another object with the same `[*]` reference can overlap it). Same-named objects
   that `match="none"` subforms hold take successive data nodes in the enclosing scope; areas
-  and nameless subforms keep their own numbering. Refs with `..` or signed indexes, global
+  and nameless subforms keep their own numbering, so a field in an area inside such a subform
+  doesn't move a same-named field after it. A repeating subform before such a subform counts as
+  one object however many instances the data gives it, as these numbers come from the template
+  alone. Refs with `..` or signed indexes, global
   binding, `match="none"` on a field or on the root subform, and data descriptions are not
   followed (a data description is kept as written, not checked). The instances of a repeating
   subform marked `match="none"`, or bound by a reference, can't be added or removed by scripts

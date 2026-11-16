@@ -466,3 +466,37 @@ fn the_root_takes_the_first_instance_of_its_star_reference() {
     let (tpl, _) = parse(&xml).unwrap();
     assert_eq!(path(&tpl, "form[0].inner[0].x[0]"), "item[1].x[0]");
 }
+
+/// `$record` is the root subform's data node: when the root binds by a reference, the node
+/// that reference names, not a group named after the root.
+#[test]
+fn record_is_the_node_the_root_binds_to() {
+    let xml = xdp(&format!(r#"<field name="x" {TEXT}<bind match="dataRef" ref="$record.code"/></field>"#), "")
+        .replace(r#"<subform name="form" layout="tb">"#, r#"<subform name="form" layout="tb"><bind match="dataRef" ref="$data.actual"/>"#);
+    let (tpl, _) = parse(&xml).unwrap();
+    assert_eq!(path(&tpl, "form[0].x[0]"), "actual[0].code[0]");
+}
+
+/// Master-page objects with the same `[*]` reference take its instances in turn, as content
+/// objects do.
+#[test]
+fn master_page_objects_take_the_instances_of_a_star_reference_in_turn() {
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="1in" w="7.5in" h="9in"/><medium short="8.5in" long="11in"/>
+  <field name="a" x="0.5in" y="0.2in" {TEXT}<bind match="dataRef" ref="$record.codes.code[*]"/></field>
+  <field name="b" x="3in" y="0.2in" {TEXT}<bind match="dataRef" ref="$record.codes.code[*]"/></field>
+ </pageArea></pageSet>
+ <field name="body" {TEXT}</field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><codes><code>K1</code><code>K2</code></codes></form></xfa:data></xfa:datasets>
+</xdp:xdp>"#
+    );
+    let (tpl, _) = parse(&xml).unwrap();
+    assert_eq!(path(&tpl, "front[0].a[0]"), "form[0].codes[0].code[0]");
+    assert_eq!(path(&tpl, "front[0].b[0]"), "form[0].codes[0].code[1]");
+}

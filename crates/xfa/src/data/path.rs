@@ -90,7 +90,8 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
     let segments = som_to_path(som);
     let page_area_index = page_area_index(tpl, &segments);
     // `$record` in a reference: the data group of the root subform, as the data is written.
-    let record = tpl.root.common.name.as_deref();
+    let record = record_path(tpl);
+    let record = record.as_ref();
     // The `match="none"` subforms passed through since the last data scope ([`data_index`]).
     let mut through: Vec<Step> = Vec::new();
     for (i, (name, index)) in segments.into_iter().enumerate() {
@@ -147,7 +148,7 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
 /// node its explicit data reference names (with the instance its `[*]` takes), or else the one
 /// its name names. A reference this binding can't follow ([`resolve_ref`]) binds by name, so a
 /// value written there still has somewhere to go.
-fn bind(out: &mut DataPath, name: String, index: usize, data_ref: Option<(&str, usize)>, record: Option<&str>) {
+fn bind(out: &mut DataPath, name: String, index: usize, data_ref: Option<(&str, usize)>, record: Option<&DataPath>) {
     match data_ref.and_then(|(r, star)| resolve_ref(r, out, record, star)) {
         Some(path) => *out = path,
         None => out.push((name, index)),
@@ -161,11 +162,11 @@ fn bind(out: &mut DataPath, name: String, index: usize, data_ref: Option<(&str, 
 /// instance `star`: the object's `star_ordinal` plus its own instance number when it is a
 /// repeating subform. Anything else (another DOM such as `$form`, `..`, signed indexes,
 /// predicates, functions) is `None`.
-fn resolve_ref(r: &str, parent: &DataPath, record: Option<&str>, star: usize) -> Option<DataPath> {
+fn resolve_ref(r: &str, parent: &DataPath, record: Option<&DataPath>, star: usize) -> Option<DataPath> {
     let r = r.trim();
     let after = |prefix: &str| r.strip_prefix(prefix).filter(|rest| rest.is_empty() || rest.starts_with('.'));
     let (mut path, rest) = if let Some(rest) = after("$record") {
-        (vec![(record?.to_string(), 0)], rest)
+        (record?.clone(), rest)
     } else if let Some(rest) = after("$data") {
         (DataPath::new(), rest)
     } else if let Some(rest) = after("$") {
@@ -211,8 +212,8 @@ pub(crate) fn data_instances(tpl: &Template, data: &DataNode, sf: &Subform, pare
     }
     let parent = data_path(tpl, parent_som);
     if let Some(r) = sf.common.data_ref.as_deref().filter(|r| r.trim().rsplit('.').next().is_some_and(is_star_segment)) {
-        let record = tpl.root.common.name.as_deref();
-        if let Some(mut path) = resolve_ref(r, &parent, record, sf.common.star_ordinal)
+        let record = record_path(tpl);
+        if let Some(mut path) = resolve_ref(r, &parent, record.as_ref(), sf.common.star_ordinal)
             && let Some((name, first)) = path.pop()
         {
             return data.count(&path, &name).saturating_sub(first);
@@ -225,7 +226,8 @@ pub(crate) fn data_instances(tpl: &Template, data: &DataNode, sf: &Subform, pare
 /// objects before it, in the form's order, whose reference matches the same nodes: "one more
 /// instance of the object matching the `*`" (XFA 3.3 p. 199). A relative reference matches
 /// nodes under its container's data node, so the same reference in two scopes counts apart; an
-/// absolute one matches the same nodes wherever it is. Master-page objects are left at 0.
+/// absolute one matches the same nodes wherever it is. Master-page objects are numbered too, before
+/// the content, as the page set comes first in the template.
 pub(crate) fn number_star_refs(tpl: &mut Template) {
     fn has_star(c: &Common) -> bool {
         c.name.is_some() && c.data_ref.as_deref().is_some_and(|r| r.split('.').any(is_star_segment))
@@ -242,7 +244,7 @@ pub(crate) fn number_star_refs(tpl: &mut Template) {
                 // binding can't follow is grouped by its text in its container's scope.
                 let parent = data_path(tpl, som);
                 let r = c.data_ref.clone().unwrap_or_default();
-                let key = match resolve_ref(&r, &parent, tpl.root.common.name.as_deref(), STAR_OPEN) {
+                let key = match resolve_ref(&r, &parent, record_path(tpl).as_ref(), STAR_OPEN) {
                     Some(matched) => (matched, String::new()),
                     None => (parent, r),
                 };
@@ -297,17 +299,26 @@ pub(crate) fn number_star_refs(tpl: &mut Template) {
         // before anything inside it does.
         if has_star(&tpl.root.common) {
             let r = tpl.root.common.data_ref.clone().unwrap_or_default();
-            let key = match resolve_ref(&r, &DataPath::new(), tpl.root.common.name.as_deref(), STAR_OPEN) {
+            let key = match resolve_ref(&r, &DataPath::new(), record_path(tpl).as_ref(), STAR_OPEN) {
                 Some(matched) => (matched, String::new()),
                 None => (DataPath::new(), r),
             };
             seen.insert(key, 1);
         }
+        // The page set comes first in the template, so master-page objects before the content.
+        for area in tpl.root.page_set.iter().flat_map(|ps| ps.areas.iter()) {
+            let som = area.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default();
+            walk(tpl, &area.items, &som, &mut seen, &mut numbers, 1);
+        }
         walk(tpl, &tpl.root.children, &root, &mut seen, &mut numbers, 1);
         if numbers.is_empty() || numbers == last {
             return;
         }
-        assign(&mut tpl.root.children, &mut numbers.clone().into_iter(), 1);
+        let mut handed = numbers.clone().into_iter();
+        for area in tpl.root.page_set.iter_mut().flat_map(|ps| ps.areas.iter_mut()) {
+            assign(&mut area.items, &mut handed, 1);
+        }
+        assign(&mut tpl.root.children, &mut handed, 1);
         last = numbers;
     }
 }
@@ -505,11 +516,11 @@ pub(crate) fn mark_bindings(tpl: &mut Template) {
                 Node::ExclGroup(g) => &mut g.common,
                 Node::Draw(d) => &mut d.common,
             };
-            c.follows_ref = c.data_ref.as_deref().is_some_and(|r| resolve_ref(r, &DataPath::new(), Some("record"), 0).is_some());
+            c.follows_ref = c.data_ref.as_deref().is_some_and(followable);
         }
     }
     let root = &mut tpl.root;
-    root.common.follows_ref = root.common.data_ref.as_deref().is_some_and(|r| resolve_ref(r, &DataPath::new(), Some("record"), 0).is_some());
+    root.common.follows_ref = root.common.data_ref.as_deref().is_some_and(followable);
     mark(&mut root.children, 1);
     if let Some(ps) = root.page_set.as_mut() {
         for area in &mut ps.areas {
@@ -599,6 +610,21 @@ pub(super) fn path_som(path: &DataPath) -> String {
     path.iter().map(|(n, i)| format!("{n}[{i}]")).collect::<Vec<_>>().join(".")
 }
 
+/// The record `$record` names in a reference: the root subform's data node, the one its own
+/// reference names when it has one this binding follows, else the group named after it.
+fn record_path(tpl: &Template) -> Option<DataPath> {
+    let by_name = tpl.root.common.name.clone().map(|n| vec![(n, 0)]);
+    match tpl.root.common.data_ref.as_deref() {
+        Some(r) => resolve_ref(r, &DataPath::new(), by_name.as_ref(), 0).or(by_name),
+        None => by_name,
+    }
+}
+
+/// Whether [`resolve_ref`] follows this reference at all, wherever the object sits.
+fn followable(r: &str) -> bool {
+    resolve_ref(r, &DataPath::new(), Some(&vec![("record".to_string(), 0)]), 0).is_some()
+}
+
 /// Whether a segment of a `bind ref` takes the next instance: `name[*]`, spaces allowed inside
 /// the brackets, as [`resolve_ref`] reads it.
 fn is_star_segment(seg: &str) -> bool {
@@ -611,4 +637,14 @@ fn is_star_segment(seg: &str) -> bool {
 /// instances by name would change some other node. `false` for objects the template lacks.
 pub fn binds_elsewhere(tpl: &Template, som: &str) -> bool {
     matches!(template_object(tpl, som), Some(Node::Subform(sf)) if sf.data_name().is_none() || sf.common.data_ref.is_some())
+}
+
+/// Whether the objects at SOM paths `a` and `b` are instances of the same template object: the
+/// instances of one repeating subform's field are, the same-named fields of two copies of a
+/// subform (`part[0]`, `part[1]`) are not. `false` when the template has neither.
+pub fn same_template_object(tpl: &Template, a: &str, b: &str) -> bool {
+    match (template_object(tpl, a), template_object(tpl, b)) {
+        (Some(x), Some(y)) => std::ptr::eq(x, y),
+        _ => false,
+    }
 }

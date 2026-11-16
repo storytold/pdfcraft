@@ -842,14 +842,17 @@ impl<'a, 'b> Runner<'a, 'b> {
             }
             // Every instance of it, in every row that holds it, at the node that instance binds
             // to: one per row by name or by a reference relative to its row, the one node an
-            // absolute reference names, the one row a subform around it is bound to.
+            // absolute reference names, the one row a subform around it is bound to. Only its own
+            // instances: a same-named field in another copy of a subform is another object.
             let plain = plain_som(&som);
             let instances: Vec<String> = {
+                // A copy of the shared reference: `live()` borrows `self` mutably.
+                let tpl = self.tpl;
                 let live = self.live();
                 let mut out = Vec::new();
                 let mut stack: Vec<&pdfcraft_xfa::FormNode> = vec![&live.root];
                 while let Some(n) = stack.pop() {
-                    if plain_som(&n.som) == plain {
+                    if plain_som(&n.som) == plain && pdfcraft_xfa::same_template_object(tpl, &n.som, &som) {
                         out.push(n.som.clone());
                     }
                     stack.extend(n.children.iter());
