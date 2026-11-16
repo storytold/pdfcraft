@@ -358,6 +358,18 @@ fn graphics_states_have_no_halftone_origin() {
     passes(&state("/HTP [0 0]"), Level::A4);
     assert!(issues(&state("/HTP [0 0]"), Level::A2b).iter().any(|i| i.message.contains("(HTP)")));
     reports(&state("/BM /Foo"), Level::A4, "6.2.9", "which ISO 32000-2 doesn't define");
+    // A type 5 halftone's Gray, Red, Green and Blue components may have a transfer function (ISO
+    // 32000-2 Table 128, pdf-association pdf-issues #314); Cyan, Magenta, Yellow and Black may not.
+    let ht = |colorant: &str| {
+        state(&format!(
+            "/HT << /Type /Halftone /HalftoneType 5 /Default {screen} /{colorant} {screen} >>",
+            screen = "<< /Type /Halftone /HalftoneType 1 /Frequency 90 /Angle 45 /SpotFunction /Round /TransferFunction /Identity >>"
+        ))
+    };
+    for c in ["Red", "Green", "Blue", "Gray"] {
+        passes(&ht(c), Level::A4);
+    }
+    reports(&ht("Cyan"), Level::A4, "6.2.5", "for Cyan, Magenta, Yellow or Black, has a transfer function");
 }
 
 /// An sRGB profile stream object.
@@ -449,6 +461,73 @@ fn a_page_groups_blending_space_covers_device_colour_of_as_many_components() {
     let covered = drawn(rgb, "/CS [/ICCBased 6 0 R]", vec![srgb_profile()]);
     let found = verify(&open(bytes(&covered)), Level::A2b);
     assert!(found.iter().any(|i| i.message == "Device colour is used, but there is no PDF/A output intent"), "{found:#?}");
+}
+
+/// PDF/A-4 6.2.4.3 inside a form: an isolated transparency group XObject with a colour space of
+/// its own blends what it paints in that space (ISO 32000-2 11.6.6, Table 145 `/CS`, Annex P), so
+/// device colour of as many components drawn inside it is covered, whatever the output intent and
+/// the page's group. The shape of veraPDF's 6-2-4-3-t04-pass-e and -i.
+#[test]
+fn a_form_groups_own_blending_space_covers_device_colour_drawn_inside_it() {
+    let rgb = "1 0 0 rg 0 0 10 10 re f";
+    let cmyk = "0 0 0 1 k 0 0 10 10 re f";
+    let form = |dict: &str, content: &str| stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 10 10] {dict}"), content.as_bytes());
+    // An output intent with profile 6 for `n` components, and a page group in that device space;
+    // the page draws form 7 with `group`, `resources` and `inside`; group profile 8 has
+    // `group_n` components; `more` from 9 on.
+    let drawn = |n: u8, group_n: u8, group: &str, resources: &str, inside: &str, more: Vec<Vec<u8>>| {
+        let profile = |n: u8| if n == 4 { profile_of(4, b"CMYK") } else { srgb_profile() };
+        let (id, device) = if n == 4 { ("CMYK", "/DeviceCMYK") } else { ("sRGB", "/DeviceRGB") };
+        let mut objects =
+            vec![profile(n), form(&format!("/Group << /S /Transparency {group} >> /Resources << {resources} >>"), inside), profile(group_n)];
+        objects.extend(more);
+        File {
+            catalog: format!("/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier ({id}) /DestOutputProfile 6 0 R >>]"),
+            page: format!("/Group << /S /Transparency /CS {device} >>"),
+            resources: "/XObject << /X0 7 0 R >>",
+            content: "/X0 Do",
+            more: objects,
+            ..File::default()
+        }
+    };
+    let not_rgb = "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile";
+    let not_cmyk = "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile";
+    let icc = "/I true /CS [/ICCBased 8 0 R]";
+    // RGB inside an RGB group, beside a CMYK output intent (t04-pass-e), and the other way round
+    // (t04-pass-i).
+    passes(&drawn(4, 3, icc, "", rgb, Vec::new()), Level::A4);
+    let cal = "/I true /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>]";
+    passes(&drawn(4, 3, cal, "/ColorSpace << /C /DeviceRGB >>", "/C cs 1 0 0 sc 0 0 10 10 re f", Vec::new()), Level::A4);
+    passes(&drawn(3, 4, icc, "", cmyk, Vec::new()), Level::A4);
+    // A form inside the group, and an image only the group draws, are painted in its space too.
+    let nested = form("/Resources << >>", rgb);
+    passes(&drawn(4, 3, icc, "/XObject << /Y 9 0 R >>", "/Y Do", vec![nested.clone()]), Level::A4);
+    let image = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceRGB", b"\xff\0\0");
+    passes(&drawn(4, 3, icc, "/XObject << /Im 9 0 R >>", "/Im Do", vec![image]), Level::A4);
+    for group in [
+        // Not isolated, so the page's space; isolated without a space; a device space.
+        "/CS [/ICCBased 8 0 R]",
+        "/I true",
+        "/I true /CS /DeviceRGB",
+    ] {
+        reports(&drawn(4, 3, group, "", rgb, Vec::new()), Level::A4, "6.2.4.3", not_rgb);
+    }
+    // An RGB space doesn't cover DeviceCMYK, nor a CMYK one DeviceRGB.
+    reports(&drawn(3, 3, icc, "", cmyk, Vec::new()), Level::A4, "6.2.4.3", not_cmyk);
+    reports(&drawn(4, 4, icc, "", rgb, Vec::new()), Level::A4, "6.2.4.3", not_rgb);
+    // The group's space doesn't reach a form the page also draws outside it.
+    let both = File {
+        resources: "/XObject << /X0 7 0 R /Y 9 0 R >>",
+        content: "/X0 Do /Y Do",
+        ..drawn(4, 3, icc, "/XObject << /Y 9 0 R >>", "/Y Do", vec![nested.clone()])
+    };
+    reports(&both, Level::A4, "6.2.4.3", not_rgb);
+    // Forms that draw each other inside the group end, and are left uncovered.
+    let cycle = vec![form("/Resources << /XObject << /Z 10 0 R >> >>", rgb), form("/Resources << /XObject << /Y 9 0 R >> >>", "/Y Do")];
+    reports(&drawn(4, 3, icc, "/XObject << /Y 9 0 R >>", "/Y Do", cycle), Level::A4, "6.2.4.3", not_rgb);
+    // PDF/A-2 6.2.4.3 has no such allowance.
+    let found = verify(&open(bytes(&drawn(4, 3, icc, "", rgb, Vec::new()))), Level::A2b);
+    assert!(found.iter().any(|i| i.message == not_rgb), "{found:#?}");
 }
 
 #[test]

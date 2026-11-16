@@ -1907,12 +1907,18 @@ fn extended_graphics_states_are_checked() {
     assert_eq!(gs("/A << /HT << /Frequency 60 >> >>"), untyped);
     assert_eq!(gs("/A << /HT << /HalftoneType 1.0 >> >>"), untyped);
     assert!(gs("/A << /HT << /HalftoneType 1 /HalftoneName null >> >>").is_empty());
-    // Transfer functions in halftones: only, and always, for a non-primary colorant.
-    let in_halftone = "A halftone has a transfer function, which only a non-primary colorant's halftone may have";
+    // Transfer functions in halftones: always for a non-primary colorant, never for every colorant
+    // or for Cyan, Magenta, Yellow or Black.
+    let in_halftone = "A halftone for every colorant, or for Cyan, Magenta, Yellow or Black, has a transfer function";
     assert_eq!(gs("/A << /HT << /HalftoneType 1 /TransferFunction 4 0 R >> >>"), [in_halftone]);
-    assert_eq!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Cyan << /HalftoneType 1 /TransferFunction /Identity >> >> >>"), [in_halftone]);
-    // The primary components are those of DeviceGray, DeviceRGB and DeviceCMYK (ISO 32000-1 10.5.5.6).
-    assert_eq!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Gray << /HalftoneType 1 /TransferFunction /Identity >> >> >>"), [in_halftone]);
+    // A component per colorant: Cyan, Magenta, Yellow and Black may not have one; the other primary
+    // components, those of DeviceGray and DeviceRGB (ISO 32000-1 10.5.5.6), may or not (ISO
+    // 32000-1 Table 130, pdf-association pdf-issues #314).
+    let component = |c: &str| format!("/A << /HT << /HalftoneType 5 /Default 5 0 R /{c} << /HalftoneType 1 /TransferFunction /Identity >> >> >>");
+    let flagged: Vec<bool> =
+        ["Cyan", "Magenta", "Yellow", "Black", "Gray", "Red", "Green", "Blue"].map(|c| gs(&component(c)) == [in_halftone]).into();
+    assert_eq!(flagged, [true, true, true, true, false, false, false, false]);
+    assert!(gs(&component("Red")).is_empty());
     assert_eq!(
         gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Spot 5 0 R /Red 5 0 R /Gray 5 0 R >> >>"),
         ["The halftone for the colorant Spot has no transfer function"]

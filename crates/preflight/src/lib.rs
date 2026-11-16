@@ -227,7 +227,7 @@ pub const WORDINGS: &[&str] = &[
     "A halftone has type {}: only types 1 and 5 are allowed",
     "A halftone's HalftoneType is missing or isn't an integer",
     "A halftone has a HalftoneName",
-    "A halftone has a transfer function, which only a non-primary colorant's halftone may have",
+    "A halftone for every colorant, or for Cyan, Magenta, Yellow or Black, has a transfer function",
     "The halftone for the colorant {} has no transfer function",
     "A graphics state has the rendering intent {}, which isn't a standard one",
     "A graphics state has a rendering intent that isn't a name",
@@ -1095,10 +1095,31 @@ fn check_output_intent(
     objs: &[(ObjRef, std::sync::Arc<Object>)],
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
-    let mut used = uses_device_colour(doc, objs);
     // PDF/A-4 says what device colour needs under 6.2.4.3, and keeps 6.2.3 for the output intent
     // itself.
     let part4 = level.part() == 4;
+    // PDF/A-4 also accepts DeviceRGB or DeviceCMYK drawn inside an isolated transparency group
+    // whose own colour space is a device-independent one of as many components.
+    let covered = if part4 { part4::group_blending_components(doc, objs) } else { Default::default() };
+    let mut used = if covered.is_empty() {
+        uses_device_colour(doc, objs)
+    } else {
+        // The objects outside such a group, then those inside an RGB one and inside a CMYK one,
+        // each read on their own. The three sets don't share an object, so no stream is decoded
+        // twice, but each has its own decoding budget: at most three times MAX_COLOUR_DECODED.
+        let within = |n: Option<i64>| -> Vec<_> { objs.iter().filter(|(r, _)| covered.get(&r.num).copied() == n).cloned().collect() };
+        let mut used = uses_device_colour(doc, &within(None));
+        for n in [3, 4] {
+            let inside = uses_device_colour(doc, &within(Some(n)));
+            used.gray |= inside.gray;
+            used.rgb |= inside.rgb && n != 3;
+            used.cmyk |= inside.cmyk && n != 4;
+            used.default_rgb |= inside.default_rgb;
+            used.default_cmyk |= inside.default_cmyk;
+            used.incomplete |= inside.incomplete;
+        }
+        used
+    };
     // PDF/A-4 also accepts DeviceRGB or DeviceCMYK drawn in a device-independent blending space of
     // as many components: here, every page's transparency group colour space.
     let pages = if part4 { pdfcraft_model::pages(doc) } else { Vec::new() };
@@ -1293,7 +1314,7 @@ fn check_graphics_states(doc: &Document, level: Level, issue: &mut impl FnMut(&'
         issue("6.2.5", "A halftone has a HalftoneName", None, None, false);
     }
     if gs.halftone_transfer {
-        issue("6.2.5", "A halftone has a transfer function, which only a non-primary colorant's halftone may have", None, None, false);
+        issue("6.2.5", "A halftone for every colorant, or for Cyan, Magenta, Yellow or Black, has a transfer function", None, None, false);
     }
     for colorant in gs.missing_transfer {
         issue("6.2.5", "The halftone for the colorant {} has no transfer function", Some(colorant), None, false);

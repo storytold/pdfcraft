@@ -517,7 +517,7 @@ fn is_mime_type(name: &[u8]) -> bool {
 /// device space of as many components inside it is taken as that space (11.7.2). Device colour is
 /// judged for the document as a whole here, so the allowance holds only when every page has a
 /// transparency group with a CalRGB or an ICCBased RGB space (3), or with an ICCBased CMYK one (4),
-/// the same number for all of them. A group of a form XObject inside a page isn't looked at.
+/// the same number for all of them. A form XObject's own group is [`group_blending_components`].
 pub(crate) fn page_blending_components(doc: &Document, pages: &[pdfcraft_model::Page]) -> Option<i64> {
     let mut found = None;
     for p in pages {
@@ -529,6 +529,112 @@ pub(crate) fn page_blending_components(doc: &Document, pages: &[pdfcraft_model::
         }
         found = Some(n);
     }
+    found
+}
+
+/// How far [`group_blending_components`] follows references back towards a page, and how deep it
+/// reads into one object's direct objects for the references it holds.
+const MAX_GROUP_DEPTH: usize = 32;
+
+/// 6.2.4.3: the objects whose device colour an isolated transparency group of their own makes
+/// device-independent for PDF/A-4, each with the components of that group's space (3 or 4), by
+/// object number.
+///
+/// An isolated transparency group XObject (`/I true`) with a group colour space (`/CS`) composites
+/// everything painted inside it in that space, and a device space of as many components is taken
+/// as it (ISO 32000-2 11.4.7, Table 145 `/CS`, 11.6.6 and Annex P). That holds for the form's own
+/// content and resources, and for anything they alone refer to: an object belongs to a group's
+/// space when every object referring to it does, and anything else referring to it (a page, an
+/// annotation, a structure element) leaves it out. A non-isolated group, or one without `/CS`,
+/// takes its parent's space, so it is judged by what refers to it in the same way; an isolated
+/// group whose `/CS` isn't a device-independent RGB or CMYK space covers nothing inside it.
+pub(crate) fn group_blending_components(
+    doc: &Document,
+    objs: &[(pdfcraft_cos::ObjRef, std::sync::Arc<Object>)],
+) -> std::collections::HashMap<u32, i64> {
+    use std::collections::{HashMap, HashSet};
+    let mut own: HashMap<u32, Option<i64>> = HashMap::new();
+    for (r, o) in objs {
+        let Object::Stream(s) = &**o else { continue };
+        if s.dict.name(b"Subtype") != Some(b"Form") {
+            continue;
+        }
+        let Some(group) = s.dict.get(b"Group").map(|g| doc.resolve(g)) else { continue };
+        let Some(group) = group.as_dict().filter(|g| g.name(b"S") == Some(b"Transparency")) else { continue };
+        if matches!(group.get(b"I").map(|i| doc.resolve(i)).as_deref(), Some(Object::Bool(true)))
+            && let Some(cs) = group.get(b"CS")
+        {
+            own.insert(r.num, cie_components(doc, cs));
+        }
+    }
+    if !own.values().any(Option::is_some) {
+        return HashMap::new();
+    }
+    // Who refers to each object.
+    let mut referrers: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (r, o) in objs {
+        let mut found = HashSet::new();
+        let mut stack: Vec<(&Object, usize)> = match &**o {
+            Object::Stream(s) => s.dict.iter().map(|(_, x)| (x, 1)).collect(),
+            other => vec![(other, 0)],
+        };
+        while let Some((v, depth)) = stack.pop() {
+            match v {
+                Object::Ref(t) if t.num != r.num => {
+                    found.insert(t.num);
+                }
+                Object::Array(a) if depth < MAX_GROUP_DEPTH => stack.extend(a.iter().map(|x| (x, depth + 1))),
+                Object::Dict(d) if depth < MAX_GROUP_DEPTH => stack.extend(d.iter().map(|(_, x)| (x, depth + 1))),
+                _ => {}
+            }
+        }
+        for t in found {
+            referrers.entry(t).or_default().push(r.num);
+        }
+    }
+    let mut known: HashMap<u32, Option<i64>> = HashMap::new();
+    let mut out = HashMap::new();
+    for (r, _) in objs {
+        let mut open = HashSet::new();
+        if let Some(n) = covered_by_group(r.num, 0, &own, &referrers, &mut known, &mut open) {
+            out.insert(r.num, n);
+        }
+    }
+    out
+}
+
+/// The components of the group space object `num` is painted in, when it is always the same
+/// device-independent RGB or CMYK one: see [`group_blending_components`]. `open` holds the objects
+/// being worked out further up, which a cycle back to them leaves uncovered.
+fn covered_by_group(
+    num: u32,
+    depth: usize,
+    own: &std::collections::HashMap<u32, Option<i64>>,
+    referrers: &std::collections::HashMap<u32, Vec<u32>>,
+    known: &mut std::collections::HashMap<u32, Option<i64>>,
+    open: &mut std::collections::HashSet<u32>,
+) -> Option<i64> {
+    if let Some(n) = own.get(&num) {
+        return *n;
+    }
+    if let Some(n) = known.get(&num) {
+        return *n;
+    }
+    if depth >= MAX_GROUP_DEPTH || !open.insert(num) {
+        return None;
+    }
+    let mut found = None;
+    for &p in referrers.get(&num).map(Vec::as_slice).unwrap_or_default() {
+        match covered_by_group(p, depth + 1, own, referrers, known, open) {
+            Some(n) if found.is_none_or(|f| f == n) => found = Some(n),
+            _ => {
+                found = None;
+                break;
+            }
+        }
+    }
+    open.remove(&num);
+    known.insert(num, found);
     found
 }
 
