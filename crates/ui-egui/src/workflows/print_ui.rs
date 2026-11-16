@@ -185,6 +185,23 @@ impl Drop for WakeOnExit {
     }
 }
 
+/// Label pages to crop: at most [`LABEL_CROP_PAGES`] of the printed pages, sorted and deduplicated.
+fn label_crop_pages(draft: &PrintDraft, doc: &pdfcraft_engine::Document) -> Vec<usize> {
+    let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
+    let mut pages = draft.settings(doc.info.pages.len(), &labels).map(|s| s.pages).unwrap_or_default();
+    pages.sort_unstable();
+    pages.dedup();
+    pages.truncate(LABEL_CROP_PAGES);
+    pages
+}
+
+/// Build a [`print::Crop`] with margin padding from ink bounds in relative [0..1] coordinates.
+fn crop_from_ink_bounds([u0, v0, u1, v1]: [f32; 4], w: f64, h: f64, text_up: bool) -> print::Crop {
+    let pad = 1.5;
+    let rect = [f64::from(u0) * w - pad, (1.0 - f64::from(v1)) * h - pad, f64::from(u1) * w + pad, (1.0 - f64::from(v0)) * h + pad];
+    print::Crop { rect, text_up }
+}
+
 impl PdfCraftApp {
     /// Open the Print dialog, preselecting the default printer and reading papers in the background.
     pub fn open_print(&mut self) {
@@ -279,11 +296,11 @@ impl PdfCraftApp {
     /// most [`LABEL_CROP_PAGES`] of them (the rest print whole); read again when they change.
     pub(crate) fn read_label_crops(&mut self, id: pdfcraft_engine::DocId) {
         let Some(doc) = self.session.get(id) else { return };
-        let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-        let mut pages = self.print_draft.settings(doc.info.pages.len(), &labels).map(|s| s.pages).unwrap_or_default();
-        pages.sort_unstable();
-        pages.dedup();
-        pages.truncate(LABEL_CROP_PAGES);
+        let pages = label_crop_pages(&self.print_draft, doc);
+        if pages.is_empty() {
+            self.print_draft.crop_pages = Some(pages);
+            return;
+        }
         if self.print_draft.crop_pages.as_ref() == Some(&pages) {
             return;
         }
@@ -347,12 +364,8 @@ impl PdfCraftApp {
                         tag: 0,
                         preview: false,
                     });
-                    let crop = crate::zoom_snap::ink_bounds(out.width as usize, out.height as usize, &out.rgba).map(|[u0, v0, u1, v1]| {
-                        let pad = 1.5;
-                        let rect =
-                            [f64::from(u0) * w - pad, (1.0 - f64::from(v1)) * h - pad, f64::from(u1) * w + pad, (1.0 - f64::from(v0)) * h + pad];
-                        print::Crop { rect, text_up: up_flags.get(&page).copied().unwrap_or(false) }
-                    });
+                    let crop = crate::zoom_snap::ink_bounds(out.width as usize, out.height as usize, &out.rgba)
+                        .map(|bounds| crop_from_ink_bounds(bounds, w, h, up_flags.get(&page).copied().unwrap_or(false)));
                     if tx.send((page, crop)).is_err() {
                         // Receiver dropped (dialog closed, mode changed, or new task started)
                         break;
@@ -380,11 +393,12 @@ impl PdfCraftApp {
     /// Calculate label crops synchronously.
     pub(crate) fn compute_label_crops_sync(&mut self, id: pdfcraft_engine::DocId) {
         let Some(doc) = self.session.get(id) else { return };
-        let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-        let mut pages = self.print_draft.settings(doc.info.pages.len(), &labels).map(|s| s.pages).unwrap_or_default();
-        pages.sort_unstable();
-        pages.dedup();
-        pages.truncate(LABEL_CROP_PAGES);
+        let pages = label_crop_pages(&self.print_draft, doc);
+        if pages.is_empty() {
+            self.print_draft.crops.clear();
+            self.print_draft.crop_pages = Some(pages);
+            return;
+        }
 
         let up = self.session.print_text_up(id, &pages);
         let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
@@ -407,10 +421,8 @@ impl PdfCraftApp {
                     tag: 0,
                     preview: false,
                 });
-                let [u0, v0, u1, v1] = crate::zoom_snap::ink_bounds(out.width as usize, out.height as usize, &out.rgba)?;
-                let pad = 1.5;
-                let rect = [f64::from(u0) * w - pad, (1.0 - f64::from(v1)) * h - pad, f64::from(u1) * w + pad, (1.0 - f64::from(v0)) * h + pad];
-                Some(print::Crop { rect, text_up: up.get(page).copied().unwrap_or(false) })
+                let bounds = crate::zoom_snap::ink_bounds(out.width as usize, out.height as usize, &out.rgba)?;
+                Some(crop_from_ink_bounds(bounds, w, h, up.get(page).copied().unwrap_or(false)))
             })
             .collect();
         self.print_draft.crop_pages = Some(pages);

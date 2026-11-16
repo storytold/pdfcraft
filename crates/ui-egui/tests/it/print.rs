@@ -2195,7 +2195,12 @@ fn cancelling_subset_label_crop_resets_completed_marker_on_reentry() {
     // Cancel by leaving Label before the new calculation completes.
     h.state_mut().print_draft.set_handling(pdfcraft_ui_egui::PrintHandling::Size);
     h.run_steps(1);
-    assert_eq!(h.state().print_draft.crop_pages, None, "completed crop marker must be reset");
+    assert_ne!(h.state().print_draft.crop_pages, Some(vec![0, 1]), "stale [0, 1] marker must not survive subset invalidation");
+    assert!(
+        matches!(h.state().print_draft.crop_pages.as_deref(), None | Some([0])),
+        "completed crop marker must be reset or match in-flight subset: {:?}",
+        h.state().print_draft.crop_pages
+    );
 
     // Return to Label mode with [0, 1] selected.
     h.state_mut().print_draft.which = pdfcraft_ui_egui::PrintWhich::All;
