@@ -14863,6 +14863,7 @@ fn doc_convert_colors_converts_device_cmyk_jpeg_to_rgb() {
             && s.dict.name(b"Subtype") == Some(b"Image")
         {
             assert_eq!(s.dict.name(b"ColorSpace"), Some(b"DeviceRGB".as_slice()));
+            assert_eq!(s.dict.name(b"Filter"), Some(b"DCTDecode".as_slice()));
             found_rgb = true;
         }
     }
