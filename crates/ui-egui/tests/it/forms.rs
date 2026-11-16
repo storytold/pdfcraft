@@ -1947,6 +1947,31 @@ fn an_editable_combo_box_takes_a_typed_value() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A page dragged out of the window while a combo box is still being typed in takes the typed
+/// value with it, as Extract Pages does.
+#[cfg(windows)]
+#[test]
+fn a_page_dragged_out_while_typing_in_a_combo_box_takes_the_typed_value() {
+    let dir = scratch("drag-out-typing");
+    let mut h = combo_harness();
+    h.state_mut().drag_root_override = Some(dir.clone());
+    click_field(&mut h, "fruit", 0);
+    h.event(egui::Event::Text("Cherry".into()));
+    h.run_steps(2);
+    assert!(h.state().views[0].forms.focus.is_some(), "still typing");
+    // A page drag from the Pages panel, held outside the window.
+    h.state_mut().views[0].panel_drag = Some(vec![0]);
+    let outside = egui::pos2(-300.0, 450.0);
+    h.hover_at(outside);
+    h.event(egui::Event::PointerButton { pos: outside, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+    let offered = h.state().dragged_out.clone().expect("the drag out offered a file");
+    assert!(offered.starts_with(&dir), "under the test's own folder");
+    assert_eq!(saved_value(&offered, "fruit"), ["Cherry"], "the offered file has the typed value");
+    assert_eq!(value(&h, "fruit"), ["Cherry"], "and so does the document");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #4296: an editable combo box turned a quarter (`/MK /R` 90, ISO 32000-2 Table 192) is typed
 /// into as a turned text field is: a click near the field's top puts the caret at the end of the
 /// text, where the text running up the field ends, not at its start.

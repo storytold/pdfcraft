@@ -308,6 +308,9 @@ struct PendingDestination {
 pub struct PdfCraftApp {
     /// The file the last drag of pages out of the window offered.
     pub dragged_out: Option<std::path::PathBuf>,
+    /// The folder drags of pages out of the window write their files under, in place of the
+    /// system's temporary folder (tests).
+    pub drag_root_override: Option<std::path::PathBuf>,
     /// Split view (`panes`); which pane shows each tab is its view's.
     pub panes: panes::Panes,
     /// Tools side and pane widths; which panes are open is `left_open` and `right`.

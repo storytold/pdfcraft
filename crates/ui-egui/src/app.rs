@@ -315,6 +315,7 @@ impl PdfCraftApp {
             dialog_epoch: 0,
             ctx: None,
             dragged_out: None,
+            drag_root_override: None,
             #[cfg(not(target_arch = "wasm32"))]
             window_state: Default::default(),
             styled: false,
