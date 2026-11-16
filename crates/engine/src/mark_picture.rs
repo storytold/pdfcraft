@@ -98,13 +98,8 @@ mod tests {
 
     fn png(w: u32, h: u32, px: impl Fn(u32, u32) -> [u8; 4]) -> Vec<u8> {
         let data: Vec<u8> = (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).flat_map(|(x, y)| px(x, y)).collect();
-        let mut out = Vec::new();
-        {
-            let mut enc = png::Encoder::new(&mut out, w, h);
-            enc.set_color(png::ColorType::Rgba);
-            enc.write_header().unwrap().write_image_data(&data).unwrap();
-        }
-        out
+        let img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgba, data).unwrap();
+        craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &Default::default()).unwrap()
     }
 
     fn file(name: &str, bytes: Vec<u8>, page: usize) -> MarkFile {
