@@ -4773,6 +4773,30 @@ fn hidden_information_is_counted_and_removed() {
     assert!(shown, "the field's value stays visible as page content");
 }
 
+/// The same document, its annotations' `/Subtype`s given by reference: Remove Hidden Information
+/// counts them as it does given directly, and removes them.
+#[test]
+fn annotations_given_their_subtype_by_reference_are_counted_and_removed_alike() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let direct = hidden_fixture();
+    let mut indirect = hidden_fixture();
+    for n in 15..=19 {
+        let r = ObjRef::new(n, 0);
+        let subtype = indirect.get(r).as_dict().and_then(|d| d.get(b"Subtype").cloned()).unwrap();
+        let held = indirect.add(subtype);
+        indirect.update_dict(r, |d| d.set(b"Subtype".to_vec(), Object::Ref(held))).unwrap();
+    }
+    let categories = [Hidden::Attachments, Hidden::Comments, Hidden::LinksActionsScripts];
+    let count = |doc: &Document| -> Vec<(Hidden, usize)> { scan(doc).into_iter().filter(|(h, _)| categories.contains(h)).collect() };
+    assert_eq!(count(&indirect), count(&direct));
+    let mut direct = direct;
+    assert_eq!(remove_hidden(&mut indirect, &categories).unwrap(), remove_hidden(&mut direct, &categories).unwrap());
+    let annotations = |doc: &Document| annots_of(doc, &pdfcraft_model::pages(doc)[0].dict).len();
+    assert_eq!((annotations(&indirect), annotations(&direct)), (1, 1), "the widget stays, its action gone");
+    let widget = indirect.get(ObjRef::new(17, 0)).as_dict().cloned().unwrap();
+    assert!(!widget.contains(b"A"));
+}
+
 /// A one-page document whose catalog names an outline root (object 5). `items` are the outline
 /// items, objects 6 onward.
 fn outlined_document(items: Vec<Vec<u8>>) -> Document {

@@ -190,3 +190,21 @@ fn the_references_on_the_way_to_a_redacted_form_go_with_it() {
     assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(10));
     assert!(!saved_holds(&doc, b"FORMSECRET"));
 }
+
+/// A redaction mark given its `/Subtype` by reference is a mark, and its own appearance, overlay
+/// text and all, is exempt from the proof's check of what is left under it, as given directly.
+#[test]
+fn the_proof_exempts_a_mark_given_its_subtype_by_reference() {
+    for by_reference in [false, true] {
+        let mut doc = page(b"BT /F1 10 Tf 20 20 Td (Elsewhere) Tj ET", "/Font << /F1 5 0 R >>", vec![HELVETICA.to_vec()]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "WITHHELD");
+        if by_reference {
+            let held = doc.add(Object::name("Redact"));
+            let annot = annots_of(&doc, &pdfcraft_model::pages(&doc)[0].dict)[0].as_ref().unwrap();
+            doc.update_dict(annot, |d| d.set(b"Subtype".to_vec(), Object::Ref(held))).unwrap();
+        }
+        assert_eq!(crate::marks(&doc).len(), 1, "by reference: {by_reference}");
+        let proof = crate::tests_verify::prove_unapplied(&mut doc);
+        assert!(proof.passed(), "by reference: {by_reference}: {}", proof.to_text());
+    }
+}

@@ -146,7 +146,7 @@ fn attachments(doc: &Document, hit: &dyn Fn(Option<&Object>) -> bool) -> usize {
     for page in pdfcraft_model::pages(doc) {
         for a in crate::annots_of(doc, &page.dict) {
             let Some(a) = doc.resolve(&a).as_dict().cloned() else { continue };
-            if a.name(b"Subtype") == Some(b"FileAttachment".as_slice()) {
+            if crate::subtype(doc, &a).as_deref() == Some(b"FileAttachment".as_slice()) {
                 n += usize::from(file(a.get(b"FS")));
             }
         }
@@ -167,7 +167,7 @@ fn comments(doc: &Document, search: &Search, hit: &dyn Fn(Option<&Object>) -> bo
                 continue;
             }
             let Some(a) = doc.resolve(&a).as_dict().cloned() else { continue };
-            if matches!(a.name(b"Subtype"), Some(b"Widget" | b"Popup")) {
+            if matches!(crate::subtype(doc, &a).as_deref(), Some(b"Widget" | b"Popup")) {
                 continue;
             }
             // Rich text is XHTML: its text is searched, not its markup. A rich text stream that

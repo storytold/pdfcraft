@@ -339,7 +339,7 @@ fn res_dict(doc: &Document, res: &Dict, key: &[u8]) -> Dict {
 /// predefined CMap name ending in `-V` (Identity-V and the like), or an embedded CMap stream
 /// whose `/WMode` is 1 (ISO 32000-2 §9.7.5).
 fn is_vertical(doc: &Document, font: &Dict) -> bool {
-    if crate::name_entry(doc, font, b"Subtype").as_deref() != Some(b"Type0".as_slice()) {
+    if crate::subtype(doc, font).as_deref() != Some(b"Type0".as_slice()) {
         return false;
     }
     match font.get(b"Encoding").map(|e| doc.resolve(e)).as_deref() {
@@ -1124,7 +1124,7 @@ fn xobject(
     let Object::Stream(s) = &*obj else { return None };
     // What a removal or a cleaned copy makes go: the stream, and the references on the way to it.
     let gone: Vec<ObjRef> = on_the_way.into_iter().chain([r]).collect();
-    match crate::name_entry(doc, &s.dict, b"Subtype").as_deref() {
+    match crate::subtype(doc, &s.dict).as_deref() {
         _ if s.dict.get(b"OC").is_some_and(|oc| scope.xobject_layer_hidden(doc, r, oc)) => {
             // Verify mode must count hidden XObjects too: scan uses that count to decide
             // whether the HiddenLayers pass is necessary.
@@ -1371,6 +1371,5 @@ fn extgstate_type3_inherits(doc: &Document, ext_gstates: &Dict, name: &[u8]) -> 
 /// A Type 3 font whose glyph descriptions use the resources of whatever shows them: no
 /// `/Resources`, or `/Resources null`, which is the same thing.
 fn type3_without_resources(doc: &Document, font: &Dict) -> bool {
-    crate::name_entry(doc, font, b"Subtype").as_deref() == Some(b"Type3")
-        && font.get(b"Resources").is_none_or(|r| matches!(&*doc.resolve(r), Object::Null))
+    crate::subtype(doc, font).as_deref() == Some(b"Type3") && font.get(b"Resources").is_none_or(|r| matches!(&*doc.resolve(r), Object::Null))
 }

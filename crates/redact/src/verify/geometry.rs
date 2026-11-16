@@ -75,7 +75,7 @@ impl Geo<'_> {
             let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
             // A redaction mark's appearance outlines the marked area on purpose (and applying
             // removes the mark whole): it is exempt like the boxes drawn over the regions.
-            if d.name(b"Subtype") == Some(b"Redact") {
+            if crate::subtype(doc, &d).as_deref() == Some(b"Redact") {
                 continue;
             }
             let Some(ap) = d.get(b"AP").and_then(|x| doc.resolve(x).as_dict().cloned()) else { continue };
@@ -191,7 +191,7 @@ impl Geo<'_> {
                     let Some(entry) = op.last_name().and_then(|n| xobjects.get(n)) else { continue };
                     let obj = self.doc.resolve(entry);
                     let Object::Stream(s) = &*obj else { continue };
-                    match crate::name_entry(self.doc, &s.dict, b"Subtype").as_deref() {
+                    match crate::subtype(self.doc, &s.dict).as_deref() {
                         Some(b"Image") => {
                             for i in self.touching(gs.ctm.bbox([0.0, 0.0, 1.0, 1.0])) {
                                 let Some(region) = self.regions.get(i) else { continue };
@@ -308,7 +308,7 @@ impl Geo<'_> {
         }
         for (_, f) in res_dict(doc, res, b"Font").iter() {
             let Some(font) = doc.resolve(f).as_dict().cloned() else { continue };
-            if crate::name_entry(doc, &font, b"Subtype").as_deref() != Some(b"Type3") {
+            if crate::subtype(doc, &font).as_deref() != Some(b"Type3") {
                 continue;
             }
             if let Some(procs) = font.get(b"CharProcs").and_then(|c| doc.resolve(c).as_dict().cloned()) {
@@ -346,7 +346,7 @@ impl Geo<'_> {
                 b"Do" => {
                     let Some(entry) = op.last_name().and_then(|n| xobjects.get(n)) else { continue };
                     let Object::Stream(x) = &*self.doc.resolve(entry) else { continue };
-                    match crate::name_entry(self.doc, &x.dict, b"Subtype").as_deref() {
+                    match crate::subtype(self.doc, &x.dict).as_deref() {
                         Some(b"Image") => return Ok(true),
                         Some(b"Form") => {
                             if let Some(r) = entry.as_ref()
