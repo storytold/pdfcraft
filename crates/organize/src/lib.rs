@@ -431,6 +431,7 @@ fn prune_tree_slot(doc: &mut Document, slot: &Object, gone: &[ObjRef], dead: &mu
     // depth. Visit each indirect node once, even when cyclic or shared. Unlike the depth-limited
     // outline::name_tree lookup, deletion must inspect every reachable node to remove references
     // to freed pages. Both walks use seen sets to stop cycles.
+    let before = dead.len();
     let mut seen = std::collections::HashSet::new();
     while let Some(r) = stack.pop() {
         if !seen.insert(r) {
@@ -441,7 +442,157 @@ fn prune_tree_slot(doc: &mut Document, slot: &Object, gone: &[ObjRef], dead: &mu
             doc.update_dict(r, |d| *d = node)?;
         }
     }
-    Ok(inline)
+    if dead.len() == before {
+        return Ok(inline);
+    }
+    // Names went: nodes left empty leave the tree, and the others' /Limits follow what is left.
+    match (slot, inline) {
+        (Object::Ref(r), _) => {
+            if let Some(mut root) = doc.get(*r).as_dict().cloned()
+                && tidy_tree(doc, &mut root)?
+            {
+                doc.update_dict(*r, |d| *d = root)?;
+            }
+            Ok(None)
+        }
+        (_, Some(mut root)) => {
+            tidy_tree(doc, &mut root)?;
+            Ok(Some(root))
+        }
+        (_, None) => match slot {
+            Object::Dict(d) => {
+                let mut root = d.clone();
+                Ok(tidy_tree(doc, &mut root)?.then_some(root))
+            }
+            _ => Ok(None),
+        },
+    }
+}
+
+/// What a name-tree node holds once pruned: no names, names from `.0` to `.1` (its first and
+/// last keys), or something this walk can't read (left as it is).
+#[derive(Clone)]
+enum Span {
+    Empty,
+    Keys(Object, Object),
+    Unknown,
+}
+
+/// After names were pruned from a name tree: take the intermediate and leaf nodes left without
+/// names out of their parent's /Kids, and set every other node's /Limits to its first and last
+/// key (ISO 32000-2 §7.9.6, Table 36: /Limits is required in intermediate and leaf nodes, and a
+/// node has /Kids or /Names). The root gets no /Limits; a root left with no kids gets an empty
+/// /Names. Iterative, each indirect node visited once, nesting bounded. True when `root` changed.
+fn tidy_tree(doc: &mut Document, root: &mut Dict) -> Result<bool, OrganizeError> {
+    const MAX_DEPTH: usize = 256;
+    let kids_of = |doc: &Document, d: &Dict| -> Option<Vec<Object>> { d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) };
+    let Some(root_kids) = kids_of(doc, root) else { return Ok(false) };
+    let mut span: std::collections::HashMap<ObjRef, Span> = std::collections::HashMap::new();
+    let mut visiting = std::collections::HashSet::new();
+    // (node, its kids were queued, depth)
+    let mut stack: Vec<(ObjRef, bool, usize)> = root_kids.iter().rev().filter_map(Object::as_ref).map(|r| (r, false, 1)).collect();
+    while let Some((r, queued, depth)) = stack.pop() {
+        if span.contains_key(&r) {
+            continue;
+        }
+        let Some(mut node) = doc.get(r).as_dict().cloned() else {
+            span.insert(r, Span::Unknown);
+            continue;
+        };
+        if let Some(kids) = kids_of(doc, &node) {
+            if !queued {
+                if depth >= MAX_DEPTH || !visiting.insert(r) {
+                    span.insert(r, Span::Unknown);
+                    continue;
+                }
+                stack.push((r, true, depth));
+                let pending: Vec<ObjRef> = kids.iter().rev().filter_map(Object::as_ref).filter(|k| !span.contains_key(k)).collect();
+                for k in pending {
+                    // A kid on the way down to it again is a cycle: left as it is.
+                    if visiting.contains(&k) {
+                        span.insert(k, Span::Unknown);
+                    } else {
+                        stack.push((k, false, depth + 1));
+                    }
+                }
+                continue;
+            }
+            visiting.remove(&r);
+            let (left, own) = combine_spans(&kids, &span);
+            let mut changed = left.len() != kids.len();
+            if changed {
+                node.set(b"Kids".to_vec(), Object::Array(left));
+            }
+            if let Span::Keys(lo, hi) = &own {
+                changed |= set_limits(&mut node, lo, hi);
+            }
+            if changed {
+                doc.update_dict(r, |d| *d = node)?;
+            }
+            span.insert(r, own);
+        } else {
+            let names = node.get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_array().cloned());
+            let own = match names {
+                None => Span::Unknown,
+                Some(n) if n.len() < 2 => Span::Empty,
+                Some(n) => match (n.first(), n.len().checked_sub(2).and_then(|i| n.get(i))) {
+                    (Some(lo), Some(hi)) => Span::Keys(lo.clone(), hi.clone()),
+                    _ => Span::Unknown,
+                },
+            };
+            if let Span::Keys(lo, hi) = &own
+                && set_limits(&mut node, lo, hi)
+            {
+                doc.update_dict(r, |d| *d = node)?;
+            }
+            span.insert(r, own);
+        }
+    }
+    let (left, _) = combine_spans(&root_kids, &span);
+    if left.len() == root_kids.len() {
+        return Ok(false);
+    }
+    if left.is_empty() {
+        root.remove(b"Kids");
+        root.set(b"Names".to_vec(), Object::Array(Vec::new()));
+    } else {
+        root.set(b"Kids".to_vec(), Object::Array(left));
+    }
+    Ok(true)
+}
+
+/// The kids of a node that still hold names (or that can't be read, which stay), and the span
+/// they cover together.
+fn combine_spans(kids: &[Object], span: &std::collections::HashMap<ObjRef, Span>) -> (Vec<Object>, Span) {
+    let mut left = Vec::with_capacity(kids.len());
+    let (mut lo, mut hi, mut unknown) = (None, None, false);
+    for kid in kids {
+        match kid.as_ref().and_then(|k| span.get(&k)).cloned().unwrap_or(Span::Unknown) {
+            Span::Empty => continue,
+            Span::Keys(first, last) => {
+                lo.get_or_insert(first);
+                hi = Some(last);
+            }
+            Span::Unknown => unknown = true,
+        }
+        left.push(kid.clone());
+    }
+    let own = match (lo, hi) {
+        (Some(lo), Some(hi)) if !unknown => Span::Keys(lo, hi),
+        _ if left.is_empty() => Span::Empty,
+        _ => Span::Unknown,
+    };
+    (left, own)
+}
+
+/// Set `node`'s /Limits to `[lo hi]`. True when that changed it.
+fn set_limits(node: &mut Dict, lo: &Object, hi: &Object) -> bool {
+    let limits = Object::Array(vec![lo.clone(), hi.clone()]);
+    if node.get(b"Limits") == Some(&limits) {
+        return false;
+    }
+    node.set(b"Limits".to_vec(), limits);
+    true
 }
 
 /// Drop the /Names pairs going to a `gone` page, and queue /Kids for the iterative walk.

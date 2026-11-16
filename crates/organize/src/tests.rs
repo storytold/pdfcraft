@@ -4982,3 +4982,63 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
     assert_eq!(source_bookmarks(&all), [("Chapter one".to_string(), vec!["Section".to_string()])]);
     assert!(attachments(&all));
 }
+
+/// A /Dests name tree with two leaves, the second naming only the page that is deleted, and a
+/// third whose first name goes: the empty leaf leaves the tree, and the others' /Limits are
+/// their first and last remaining names again (ISO 32000-2 §7.9.6). The root gets no /Limits.
+#[test]
+fn deleting_a_page_drops_empty_name_tree_leaves_and_fixes_limits() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Names << /Dests 6 0 R >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 200 200] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R >>".into(),                             // 3
+        "<< /Type /Page /Parent 2 0 R >>".into(),                             // 4
+        "<< /Type /Page /Parent 2 0 R >>".into(),                             // 5
+        "<< /Kids [7 0 R 8 0 R 9 0 R] >>".into(),                             // 6
+        "<< /Limits [(a) (b)] /Names [(a) [3 0 R /Fit] (b) [4 0 R /Fit]] >>".into(), // 7
+        "<< /Limits [(c) (d)] /Names [(c) [5 0 R /Fit] (d) [5 0 R /XYZ 0 0 0]] >>".into(), // 8
+        "<< /Limits [(e) (g)] /Names [(e) [5 0 R /Fit] (f) [3 0 R /Fit] (g) [4 0 R /Fit]] >>".into(), // 9
+    ];
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    delete_pages(&mut doc, &[2]).unwrap();
+    let doc = save_and_reopen(&doc);
+    let names = catalog(&doc).get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_dict().cloned()).unwrap();
+    let root = doc.resolve(names.get(b"Dests").unwrap()).as_dict().cloned().unwrap();
+    assert!(!root.contains(b"Limits"), "the root has no /Limits");
+    let kids = root.get(b"Kids").and_then(Object::as_array).cloned().unwrap();
+    assert_eq!(kids, [Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(9, 0))], "the emptied leaf is gone");
+    let limits = |n: u32| {
+        let d = doc.get(ObjRef::new(n, 0)).as_dict().cloned().unwrap();
+        d.get(b"Limits").and_then(Object::as_array).unwrap().iter().map(|k| k.as_string().unwrap().to_text()).collect::<Vec<_>>()
+    };
+    assert_eq!(limits(7), ["a", "b"], "an untouched leaf keeps its limits");
+    assert_eq!(limits(9), ["f", "g"], "a leaf that lost its first name starts at its new first name");
+
+    // Deleting the first two pages empties the first leaf and shrinks the last to one name.
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    delete_pages(&mut doc, &[0, 1]).unwrap();
+    let doc = save_and_reopen(&doc);
+    let names = catalog(&doc).get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_dict().cloned()).unwrap();
+    let root = doc.resolve(names.get(b"Dests").unwrap()).as_dict().cloned().unwrap();
+    let kids = root.get(b"Kids").and_then(Object::as_array).cloned().unwrap();
+    assert_eq!(kids, [Object::Ref(ObjRef::new(8, 0)), Object::Ref(ObjRef::new(9, 0))]);
+    let leaf9 = doc.get(ObjRef::new(9, 0)).as_dict().cloned().unwrap();
+    assert_eq!(leaf9.get(b"Names").and_then(Object::as_array).map(Vec::len), Some(2), "only (e) is left");
+    assert_eq!(limits_of(&doc, 9), ["e", "e"]);
+
+    // A tree whose every name opens the deleted page keeps an empty root, not empty leaves.
+    let mut b = b;
+    b[5] = "<< /Kids [8 0 R] >>".into();
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    delete_pages(&mut doc, &[2]).unwrap();
+    let doc = save_and_reopen(&doc);
+    let names = catalog(&doc).get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_dict().cloned()).unwrap();
+    let root = doc.resolve(names.get(b"Dests").unwrap()).as_dict().cloned().unwrap();
+    assert!(!root.contains(b"Kids"), "{root:?}");
+    assert_eq!(root.get(b"Names").and_then(Object::as_array).map(Vec::len), Some(0));
+}
+
+fn limits_of(doc: &Document, n: u32) -> Vec<String> {
+    let d = doc.get(ObjRef::new(n, 0)).as_dict().cloned().unwrap();
+    d.get(b"Limits").and_then(Object::as_array).unwrap().iter().map(|k| k.as_string().unwrap().to_text()).collect()
+}
