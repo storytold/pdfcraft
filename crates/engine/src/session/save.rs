@@ -132,7 +132,7 @@ impl Session {
     }
 
     /// File ▸ Revert: back to the last saved version (or the file as opened). Undo history is
-    /// cleared, as in Acrobat.
+    /// cleared, as in Acrobat, and the document's opening scripts run again.
     pub fn revert(&mut self, id: DocId) -> Result<(), EditError> {
         self.invalidate_javascript(id);
         let doc = self.doc_mut(id)?;
@@ -156,7 +156,11 @@ impl Session {
         // The changes whose exits ran are gone with the rest: skip no exit.
         doc.xfa_exited.clear();
         doc.generation += 1;
-        Self::refresh(doc).inspect_err(|_| Self::show_released(doc))
+        Self::refresh(doc).inspect_err(|_| Self::show_released(doc))?;
+        // Reverting reopens the saved file, in a fresh realm: its opening scripts run again,
+        // as they do on opening it (#269).
+        self.run_open_scripts(id);
+        Ok(())
     }
 
     /// The document's file changed on disk (a LaTeX or Typst build rewrote it, #431): open
