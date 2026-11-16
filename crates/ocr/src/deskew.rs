@@ -163,9 +163,9 @@ fn projection_score(ink: &[InkPixel], a: f64, width: u32, height: u32) -> f64 {
     if span.is_finite() && span <= f64::EPSILON {
         return 0.0;
     }
-    // One bin per unit of r; a bin's width is 1 by construction and the count is bounded by
-    // the span, itself bounded by the (downscaled) image diagonal.
-    let bins = (span + 2.0) as usize;
+    // One bin per unit of r; linear splatting across adjacent bins avoids step quantization
+    // so parabolic refinement and resampled rasters read smoothly.
+    let bins = (span + 3.0) as usize;
     let mut counts = vec![0.0_f64; bins];
     let (sin, cos) = a.sin_cos();
     for InkPixel(x, y, weight) in ink {
@@ -173,11 +173,16 @@ fn projection_score(ink: &[InkPixel], a: f64, width: u32, height: u32) -> f64 {
         if !r.is_finite() {
             continue;
         }
-        let bin = r.floor() as i64;
-        if let Ok(index) = usize::try_from(bin)
-            && let Some(count) = counts.get_mut(index)
-        {
-            *count += weight;
+        let floored = r.floor();
+        let frac = (r - floored).clamp(0.0, 1.0);
+        let bin = floored as i64;
+        if let Ok(index) = usize::try_from(bin) {
+            if let Some(count) = counts.get_mut(index) {
+                *count += weight * (1.0 - frac);
+            }
+            if let Some(next) = counts.get_mut(index.saturating_add(1)) {
+                *next += weight * frac;
+            }
         }
     }
     counts.iter().map(|c| c * c).sum()
@@ -439,7 +444,7 @@ mod tests {
         let found = estimate_skew(&page, DEFAULT_MAX_SKEW_DEGREES);
         let deskewed = rectify(&page, found).unwrap();
         let again = estimate_skew(&deskewed.grey, DEFAULT_MAX_SKEW_DEGREES);
-        assert!(again.abs() < 0.05, "still tilted by {again}");
+        assert!(again.abs() < 0.003, "still tilted by {again} rad ({:.3}°)", again.to_degrees());
     }
 
     #[test]
