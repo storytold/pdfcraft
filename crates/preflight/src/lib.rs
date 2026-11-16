@@ -578,7 +578,8 @@ const MAX_FONT_CONTENT_DECODED: usize = 1 << 30;
 /// form deeper than that is read on its own, from the start state.
 const MAX_FORM_DEPTH: usize = 12;
 
-/// How many `q` saves [`Fonts::read`] keeps; past them a `q` and its `Q` change nothing.
+/// How many `q` saves [`Fonts::read`] keeps. A `Q` past them restores a state that wasn't kept:
+/// every font that could be current then counts as drawing.
 const MAX_SAVED_STATES: usize = 256;
 
 /// The fonts the document draws with. PDF/A asks that every font "used for rendering" be embedded
@@ -600,7 +601,8 @@ const MAX_SAVED_STATES: usize = 256;
 /// a default appearance string (`/DA`) name: an appearance stream that does draw with it shows
 /// text with it in its own content. Where the answer isn't certain the font counts: one current
 /// at a `Do` that can't be followed, one named by content without resources of its own (in every
-/// resource dictionary), and every font of content that can't be decoded.
+/// resource dictionary), every font of content that can't be decoded, and every font that could be
+/// current after a `Q` whose saved state [`MAX_SAVED_STATES`] didn't keep.
 fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> std::collections::HashSet<ObjRef> {
     let mut fonts = Fonts {
         doc,
@@ -615,10 +617,15 @@ fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> s
     // Pages whose `/Contents` and `/Resources` entry (a reference, or a dictionary as written) are
     // the same are read once: a stream that many pages share costs its decoding once.
     let mut pages_read = std::collections::HashSet::new();
+    // Each page `/Resources` entry as written, numbered: pages with the same one share its number.
+    let mut page_resources = std::collections::HashMap::new();
     for p in pdfcraft_model::pages(doc) {
         let contents = page_contents(doc, &p.dict);
         page_streams.extend(contents.iter().copied());
-        if !pages_read.insert((contents.clone(), format!("{:?}", p.dict.get(b"Resources")))) {
+        let written = format!("{:?}", p.dict.get(b"Resources"));
+        let next = page_resources.len();
+        let holder = Holder::Page(*page_resources.entry(written).or_insert(next));
+        if !pages_read.insert((contents.clone(), holder)) {
             continue;
         }
         // A page's streams are one stream split only between tokens (ISO 32000-2 7.8.2), so an
@@ -637,7 +644,7 @@ fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> s
             }
         }
         match joined {
-            Some(data) => fonts.read(&data, Some(&p.dict), TextState::default(), 0),
+            Some(data) => fonts.read(&data, Some((&p.dict, holder)), TextState::default(), 0),
             None => fonts.out.extend(resource_fonts(doc, &p.dict).into_iter().map(|(_, r)| r)),
         }
     }
@@ -657,7 +664,7 @@ fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> s
         }
         let own = s.dict.get(b"Resources").is_some().then_some(&s.dict);
         match fonts.budget.decode(s) {
-            Ok(data) => fonts.read(&data, own, TextState::default(), 0),
+            Ok(data) => fonts.read(&data, own.map(|d| (d, Holder::Stream(*r))), TextState::default(), 0),
             Err(_) => fonts.unread(own),
         }
     }
@@ -687,6 +694,14 @@ enum Selector {
 /// A resource name content selects a font by, and how.
 type Selection = (Selector, Vec<u8>);
 
+/// Which resource dictionary content is read with: a page's `/Resources` entry as written, numbered
+/// as [`drawing_fonts`] meets it, or the one in the dictionary of a content stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Holder {
+    Page(usize),
+    Stream(ObjRef),
+}
+
 /// The font text is shown with.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Current {
@@ -715,27 +730,43 @@ struct Fonts<'a> {
     anywhere: std::collections::HashSet<Selection>,
     /// Content without resources of its own couldn't be read.
     every_font: bool,
-    /// The forms read where content draws them, each with the state it was drawn in: a form drawn
-    /// again in the same state finds nothing new.
-    entered: std::collections::HashSet<(ObjRef, TextState)>,
+    /// The forms read where content draws them, each with the state it was drawn in and, for a form
+    /// without resources of its own, the resource dictionary it takes from the content drawing it:
+    /// a form drawn again in the same state with the same resources finds nothing new.
+    entered: std::collections::HashSet<(ObjRef, TextState, Option<Holder>)>,
     /// The forms read where content draws them, which aren't read again on their own.
     reached: std::collections::HashSet<ObjRef>,
 }
 
 impl Fonts<'_> {
-    /// Reads the content `data`, whose resource dictionary `holder` holds (`/Resources`), or which
-    /// has none known, from the state `start`, `depth` forms deep.
-    fn read(&mut self, data: &[u8], holder: Option<&Dict>, start: TextState, depth: usize) {
+    /// Reads the content `data` with the resource dictionary `holder` holds (`/Resources`) and
+    /// which one it is, or with none known, from the state `start`, `depth` forms deep.
+    fn read(&mut self, data: &[u8], holder: Option<(&Dict, Holder)>, start: TextState, depth: usize) {
+        let (which, holder) = (holder.map(|(_, w)| w), holder.map(|(h, _)| h));
         let fonts = holder.map(|h| resource_fonts(self.doc, h));
+        let start_font = start.font.clone();
         let mut state = start;
         let mut saved: Vec<TextState> = Vec::new();
-        // `q`s past MAX_SAVED_STATES, whose `Q`s restore nothing.
+        // `q`s past MAX_SAVED_STATES, whose `Q`s restore a state that wasn't kept.
         let mut unsaved = 0usize;
+        // Whether such a `Q` has been read.
+        let mut lost = false;
         for op in pdfcraft_content::ops(data) {
             match op.op.as_slice() {
                 b"q" if saved.len() < MAX_SAVED_STATES => saved.push(state.clone()),
                 b"q" => unsaved = unsaved.saturating_add(1),
-                b"Q" if unsaved > 0 => unsaved -= 1,
+                // The font and mode it restores aren't known: the mode is taken as visible, and
+                // every font that could be current then counts, those of these resources and the
+                // one the content started with.
+                b"Q" if unsaved > 0 => {
+                    unsaved -= 1;
+                    state.invisible = false;
+                    if !lost {
+                        lost = true;
+                        self.unread(holder);
+                        self.shows(&TextState { font: start_font.clone(), invisible: false });
+                    }
+                }
                 b"Q" => {
                     if let Some(s) = saved.pop() {
                         state = s;
@@ -776,7 +807,7 @@ impl Fonts<'_> {
                 b"Tj" | b"TJ" | b"'" | b"\"" => self.shows(&state),
                 b"Do" => {
                     if let Some(name) = op.last_name() {
-                        self.draw(name, holder, &state, depth);
+                        self.draw(name, holder.zip(which), &state, depth);
                     }
                 }
                 _ => {}
@@ -812,7 +843,8 @@ impl Fonts<'_> {
     /// `/name Do` in `state`, in content whose resource dictionary `holder` holds: a form XObject
     /// is read in that state, with its own resources or, without them, those of the content
     /// drawing it (ISO 32000-2 7.8.3). What can't be followed may show text with the current font.
-    fn draw(&mut self, name: &[u8], holder: Option<&Dict>, state: &TextState, depth: usize) {
+    fn draw(&mut self, name: &[u8], holder: Option<(&Dict, Holder)>, state: &TextState, depth: usize) {
+        let (which, holder) = (holder.map(|(_, w)| w), holder.map(|(h, _)| h));
         let doc = self.doc;
         let target = holder
             .and_then(|h| h.get(b"Resources"))
@@ -834,17 +866,18 @@ impl Fonts<'_> {
             self.shows(state);
             return;
         }
-        if !self.entered.insert((r, state.clone())) {
+        let own = s.dict.get(b"Resources").is_some();
+        let inherited = if own { None } else { which };
+        if !self.entered.insert((r, state.clone(), inherited)) {
             return;
         }
         self.reached.insert(r);
-        let own = s.dict.get(b"Resources").is_some();
-        let resources = if own { Some(&s.dict) } else { holder };
+        let resources = if own { Some((&s.dict, Holder::Stream(r))) } else { holder.zip(which) };
         match self.budget.decode(s) {
             Ok(data) => self.read(&data, resources, state.clone(), depth.saturating_add(1)),
             Err(_) => {
                 self.shows(state);
-                self.unread(resources);
+                self.unread(resources.map(|(h, _)| h));
             }
         }
     }

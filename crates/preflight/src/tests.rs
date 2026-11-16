@@ -1909,6 +1909,62 @@ endstream",
     );
 }
 
+/// Past the saved states [`Fonts::read`] keeps, a `Q` restores a state that wasn't kept, so the
+/// mode and font it brings back aren't known (ISO 32000-2 8.4.2): the text after it counts as
+/// visible, and every font that could be current then draws.
+#[test]
+fn a_restore_past_the_kept_saves_counts_its_fonts() {
+    let fonts = |content: &str| -> Vec<String> {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> >> >>".to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len() + 1),
+        ];
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        let doc = build(&objects, "");
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect()
+    };
+    let deep = "q ".repeat(MAX_SAVED_STATES);
+    let helvetica = || vec!["The font Helvetica isn't embedded".to_string()];
+    // The renderer brings back mode 0 here; the walk doesn't know it, and counts the font.
+    assert_eq!(fonts(&format!("BT /F1 10 Tf {deep} q 3 Tr Q (x) Tj ET")), helvetica());
+    // Within the kept saves the mode is still followed.
+    let shallow = "q ".repeat(MAX_SAVED_STATES - 1);
+    assert!(fonts(&format!("BT /F1 10 Tf 3 Tr {shallow} q 0 Tr Q (x) Tj ET")).is_empty());
+}
+
+/// A form XObject without resources of its own takes those of the content drawing it (ISO 32000-2
+/// 7.8.3), so one form drawn on two pages, in the same state, can show a different font on each.
+#[test]
+fn a_form_without_resources_is_read_with_each_drawer_s_resources() {
+    // `/X0` draws text itself, or draws `/X1`, which has no resources of its own either.
+    let found = |x0: &str, x1: &str| -> Vec<String> {
+        let xobjects = "/XObject << /X0 8 0 R /X1 9 0 R >>";
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".to_owned(),
+            format!("<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources << /Font << /F1 5 0 R >> {xobjects} >> >>"),
+            format!("<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources << /Font << /F1 6 0 R >> {xobjects} >> >>"),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".to_owned(),
+            "<< /Length 7 >>\nstream\n/X0 Do\nendstream".to_owned(),
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length {} >>\nstream\n{x0}\nendstream", x0.len() + 1),
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length {} >>\nstream\n{x1}\nendstream", x1.len() + 1),
+        ];
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        let doc = build(&objects, "");
+        let mut found: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect();
+        found.sort();
+        found
+    };
+    let text = "BT /F1 10 Tf (x) Tj ET";
+    for (x0, x1) in [(text, "0 0 1 1 re f"), ("/X1 Do", text)] {
+        assert_eq!(found(x0, x1), ["The font Courier isn't embedded", "The font Helvetica isn't embedded"], "{x0}");
+    }
+}
+
 /// PDF/A-2 6.1.2: the file starts with `%PDF-1.0` to `%PDF-1.7` and an end-of-line marker, then a
 /// comment of `%` and four bytes above 127; Save as PDF/A rewrites a header that doesn't.
 #[test]
