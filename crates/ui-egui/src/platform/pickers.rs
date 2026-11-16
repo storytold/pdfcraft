@@ -502,6 +502,10 @@ mod tests {
         app.reduce_file_size();
         assert!(app.optimize_run.is_none() && app.progress_notice.is_none(), "nothing runs until the answer is in");
         assert!(app.pickers.pending(), "the question is out");
+        assert!(!out.exists(), "no copy is written before the answer");
+        // The first answer is already queued; any second question would use this wrong path.
+        let unasked = dir.join("not asked.pdf");
+        app.pick_override = Some(vec![unasked.to_string_lossy().into_owned()]);
         app.process_picked();
         // A tiny optimization may finish during the initial poll, before the test observes it.
         // Check the destination in either state; the saved copy is verified below in both cases.
@@ -511,7 +515,6 @@ mod tests {
             assert!(out.is_file(), "a completed optimization saved the chosen destination");
         }
         // Nothing more is asked at the end: the copy is simply there.
-        app.pick_override = Some(vec![dir.join("not asked.pdf").to_string_lossy().into_owned()]);
         let start = std::time::Instant::now();
         while app.optimize_run.is_some() && start.elapsed() < std::time::Duration::from_secs(30) {
             app.poll_optimize();
@@ -519,6 +522,7 @@ mod tests {
         }
         assert!(app.optimize_run.is_none(), "optimization finishes");
         assert!(!app.pickers.pending(), "it doesn't ask again");
+        assert!(!unasked.exists(), "the queued destination is retained");
         let written = std::fs::read(&out).unwrap_or_default();
         let mut again = pdfcraft_engine::Session::new();
         let id = again.open("notes (reduced).pdf", None, Arc::new(written), None).unwrap();
