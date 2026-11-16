@@ -87,8 +87,8 @@ and colour whose channels match, is Flate DeviceGray. A flat tint is Flate Devic
 page whose colour varies like a photograph is JPEG. There is no JBIG2 encoder in this
 tree (the usual one is AGPL), so a monochrome scan stays Flate.
 
-The content stream draws that image, then fills the Type 3 glyphs in black at each
-occurrence's baseline.
+The content stream draws that image, then fills the Type 3 glyphs at each
+occurrence's baseline (black for dark neutral ink, or the occurrence's sampled ink colour).
 
 ## Clean-room
 

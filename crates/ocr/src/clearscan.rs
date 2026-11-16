@@ -623,6 +623,7 @@ struct Placed {
     code: u8,
     origin: [f64; 2],
     size: f64,
+    color: [u8; 3],
     line: usize,
     word: usize,
     y_down: f64,
@@ -673,11 +674,13 @@ fn compose(
                 let Some(&code) = written.codes.get(glyph_index) else { continue };
                 for show in &master.shows {
                     let Some(origin) = show_origin(show, height_px, points_per_pixel) else { continue };
+                    let color = sample_ink_color(raster, show.bounds, show.mask.as_ref(), frame.page_mask);
                     placed.push(Placed {
                         font: font_index,
                         code,
                         origin,
                         size,
+                        color,
                         line: show.line,
                         word: show.word,
                         y_down: show.y_down,
@@ -958,14 +961,76 @@ fn font_name(index: usize) -> Result<String, OcrError> {
     Ok(format!("F{number}"))
 }
 
+fn sample_ink_color(raster: &PageRaster, bounds: [u32; 4], mask: Option<&crate::binarize::Bitmap>, page_mask: &crate::binarize::Bitmap) -> [u8; 3] {
+    if raster.channels() != 3 {
+        return [0, 0, 0];
+    }
+    let [left, top, right, bottom] = bounds;
+    let right = right.min(raster.width());
+    let bottom = bottom.min(raster.height());
+    if right <= left || bottom <= top {
+        return [0, 0, 0];
+    }
+    let matched = mask.filter(|m| m.width() == right - left && m.height() == bottom - top);
+    let mut rs = Vec::new();
+    let mut gs = Vec::new();
+    let mut bs = Vec::new();
+    for y in top..bottom {
+        for x in left..right {
+            let is_ink = match matched {
+                Some(m) => m.is_ink(i64::from(x - left), i64::from(y - top)),
+                None => page_mask.is_ink(i64::from(x), i64::from(y)),
+            };
+            if !is_ink {
+                continue;
+            }
+            if let Some(&[r, g, b]) = raster.pixel(x, y).and_then(|px| px.first_chunk::<3>()) {
+                rs.push(r);
+                gs.push(g);
+                bs.push(b);
+            }
+        }
+    }
+    if rs.is_empty() {
+        return [0, 0, 0];
+    }
+    rs.sort_unstable();
+    gs.sort_unstable();
+    bs.sort_unstable();
+    let mid = rs.len() / 2;
+    let (r, g, b) = (rs[mid], gs[mid], bs[mid]);
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    // Dark neutral ink stays crisp black (`0 g`).
+    if max <= 96 && max.saturating_sub(min) <= 24 { [0, 0, 0] } else { [r, g, b] }
+}
+
 /// The text block from the background writer, for a page that switches fonts. That writer
 /// names one font; past 255 shapes the page uses `F1`, `F2`, and so on, so the block is
-/// written here. The operators stay `q 0 g BT 0 Tr`, then `Tf`, `Tm`, and `Tj`.
+/// written here. The operators start `q 0 g BT 0 Tr`, switching fill colour when an
+/// occurrence has coloured ink, then `Tf`, `Tm`, and `Tj`.
 fn text_operators(placed: &[Placed]) -> Vec<u8> {
     let mut out = String::from("q\n0 g\nBT\n0 Tr\n");
     let mut current_font: Option<usize> = None;
     let mut current_size: Option<f64> = None;
+    let mut current_color = [0_u8, 0, 0];
     for glyph in placed {
+        if glyph.color != current_color {
+            if glyph.color == [0, 0, 0] {
+                out.push_str("0 g\n");
+            } else if glyph.color[0] == glyph.color[1] && glyph.color[1] == glyph.color[2] {
+                out.push_str(&crate::pdf_num(f64::from(glyph.color[0]) / 255.0));
+                out.push_str(" g\n");
+            } else {
+                out.push_str(&crate::pdf_num(f64::from(glyph.color[0]) / 255.0));
+                out.push(' ');
+                out.push_str(&crate::pdf_num(f64::from(glyph.color[1]) / 255.0));
+                out.push(' ');
+                out.push_str(&crate::pdf_num(f64::from(glyph.color[2]) / 255.0));
+                out.push_str(" rg\n");
+            }
+            current_color = glyph.color;
+        }
         let switched = current_font != Some(glyph.font) || current_size.is_none_or(|size| (size - glyph.size).abs() > 1.0e-4);
         if switched {
             let name = format!("F{}", glyph.font.saturating_add(1));
@@ -1447,5 +1512,32 @@ mod tests {
         .expect("two columns");
         let order: String = out.placements.iter().map(|p| p.text.as_str()).collect();
         assert_eq!(order, "ABCD", "left column must read before right column without interleaving, got {order:?}");
+    }
+
+    #[test]
+    fn coloured_lettering_keeps_its_ink_colour_when_redrawn() {
+        let (width, height) = (180_u32, 140_u32);
+        let mut pixels = vec![250_u8; (width * height * 3) as usize];
+        // Draw a red stem [30..36, 40..68] on the left so lines_for_left_ink recognizes 'H'.
+        for y in 40..68_usize {
+            for x in 30..36_usize {
+                let idx = (y * width as usize + x) * 3;
+                pixels[idx..idx + 3].copy_from_slice(&[200, 20, 20]);
+            }
+        }
+        let out = clearscan_image(
+            ScanRaster { pixels: &pixels, width, height, channels: 3, points_per_pixel: 1.0 },
+            &tuned(1, 1.0),
+            lines_for_left_ink,
+            no_progress,
+        )
+        .expect("coloured lettering");
+        assert_eq!(out.text, "H");
+        let mut renderer = PageRenderer::new(Arc::new(out.pdf), RenderConfig::default());
+        let rendered = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..RenderRequest::default() });
+        assert!(rendered.error.is_none(), "{:?}", rendered.error);
+        let idx = (54_usize * rendered.width as usize + 33) * 4;
+        let [r, g, b, _] = rendered.rgba[idx..idx + 4] else { panic!("pixel") };
+        assert!(r > 150 && g < 60 && b < 60, "expected red glyph fill, got rgb=({r}, {g}, {b})");
     }
 }
