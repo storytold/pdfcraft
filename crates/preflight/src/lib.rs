@@ -593,8 +593,9 @@ const MAX_SAVED_STATES: usize = 256;
 ///
 /// The content read from the start is a page's `/Contents`, its streams joined as one (7.8.2), with
 /// the page's resources, and any form XObject, tiling pattern, appearance stream or Type 3 glyph
-/// procedure that no content read draws, with its own. Such content starts with no known font and
-/// a visible mode: what it inherits from where it is drawn isn't known.
+/// procedure that no content read draws, or that content draws past [`MAX_FORM_DEPTH`], with its
+/// own. Such content starts with no known font and a visible mode: what it inherits from where it
+/// is drawn isn't known.
 ///
 /// A font that a resource dictionary lists but no content shows text with draws nothing, nor does
 /// one that only the interactive form's default resources (`/AcroForm /DR`, ISO 32000-2 12.7.3) or
@@ -612,6 +613,8 @@ fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> s
         every_font: false,
         entered: std::collections::HashSet::new(),
         reached: std::collections::HashSet::new(),
+        cut: std::collections::HashSet::new(),
+        cut_order: Vec::new(),
     };
     let mut page_streams = std::collections::HashSet::new();
     // Pages whose `/Contents` and `/Resources` entry (a reference, or a dictionary as written) are
@@ -657,15 +660,28 @@ fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> s
         }
         procs
     };
+    // The content read on its own, each stream once.
+    let mut alone = std::collections::HashSet::new();
     for (r, o) in objs {
         let Object::Stream(s) = &**o else { continue };
-        if page_streams.contains(r) || fonts.reached.contains(r) || !(is_content(&s.dict) || glyph_procs.contains(r)) {
+        let drawn = fonts.reached.contains(r) && !fonts.cut.contains(r);
+        if page_streams.contains(r) || drawn || !(is_content(&s.dict) || glyph_procs.contains(r)) {
             continue;
         }
-        let own = s.dict.get(b"Resources").is_some().then_some(&s.dict);
-        match fonts.budget.decode(s) {
-            Ok(data) => fonts.read(&data, own.map(|d| (d, Holder::Stream(*r))), TextState::default(), 0),
-            Err(_) => fonts.unread(own),
+        alone.insert(*r);
+        fonts.read_alone(*r, s);
+    }
+    // Reading on its own goes `MAX_FORM_DEPTH` forms deep too, and can cut off a form the pass
+    // above had already passed over as drawn: those are read now, in the order they were cut, until
+    // none is left.
+    let mut next = 0;
+    while let Some(&r) = fonts.cut_order.get(next) {
+        next += 1;
+        if page_streams.contains(&r) || !alone.insert(r) {
+            continue;
+        }
+        if let Object::Stream(s) = &*doc.resolve(&Object::Ref(r)) {
+            fonts.read_alone(r, s);
         }
     }
     let Fonts { mut out, anywhere, every_font, .. } = fonts;
@@ -734,8 +750,14 @@ struct Fonts<'a> {
     /// without resources of its own, the resource dictionary it takes from the content drawing it:
     /// a form drawn again in the same state with the same resources finds nothing new.
     entered: std::collections::HashSet<(ObjRef, TextState, Option<Holder>)>,
-    /// The forms read where content draws them, which aren't read again on their own.
+    /// The forms read where content draws them, which aren't read again on their own unless
+    /// [`Fonts::cut`] holds them.
     reached: std::collections::HashSet<ObjRef>,
+    /// The forms some content draws past [`MAX_FORM_DEPTH`], which are read on their own even when
+    /// read where other content draws them: that reading may have found less, in another state.
+    cut: std::collections::HashSet<ObjRef>,
+    /// [`Fonts::cut`] in the order the forms were first cut off.
+    cut_order: Vec<ObjRef>,
 }
 
 impl Fonts<'_> {
@@ -815,6 +837,16 @@ impl Fonts<'_> {
         }
     }
 
+    /// Reads the content stream `s`, the object `r`, on its own: from the start state, with its own
+    /// resources or none known.
+    fn read_alone(&mut self, r: ObjRef, s: &Stream) {
+        let own = s.dict.get(b"Resources").is_some().then_some(&s.dict);
+        match self.budget.decode(s) {
+            Ok(data) => self.read(&data, own.map(|d| (d, Holder::Stream(r))), TextState::default(), 0),
+            Err(_) => self.unread(own),
+        }
+    }
+
     /// Text shown in `state`: its font draws, unless the mode is 3.
     fn shows(&mut self, state: &TextState) {
         if state.invisible {
@@ -864,6 +896,9 @@ impl Fonts<'_> {
         }
         if depth >= MAX_FORM_DEPTH {
             self.shows(state);
+            if self.cut.insert(r) {
+                self.cut_order.push(r);
+            }
             return;
         }
         let own = s.dict.get(b"Resources").is_some();

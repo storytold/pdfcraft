@@ -1965,6 +1965,50 @@ fn a_form_without_resources_is_read_with_each_drawer_s_resources() {
     }
 }
 
+/// A form drawn past [`MAX_FORM_DEPTH`] is read on its own, even when other content drew it too:
+/// there it may have been drawn in mode 3, which neither fills nor strokes (ISO 32000-2 9.3.6), so
+/// its font was never found drawing.
+#[test]
+fn a_form_cut_off_by_the_depth_limit_is_read_on_its_own() {
+    // Object 5 is the form `/C`, which shows text in Courier from its own resources; 6 is `/P`,
+    // which draws `/C`; 7 on are the wrappers `/W1` to `/W11`, each drawing the next and the last
+    // drawing `/P`, so that `/P` is read `MAX_FORM_DEPTH` forms deep. The page draws `/C` in mode
+    // 3, then the chain either itself or through `/X`, a form no content draws and so read on its
+    // own, after `/C` has been passed over as drawn.
+    let found = |through_x: bool| -> Vec<String> {
+        let wrappers = MAX_FORM_DEPTH - 1;
+        let form = |content: &str, more: &str| {
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {more} /Length {} >>\nstream\n{content}\nendstream", content.len() + 1)
+        };
+        let mut names = vec!["/C 5 0 R".to_owned(), "/P 6 0 R".to_owned()];
+        names.extend((1..=wrappers).map(|i| format!("/W{i} {} 0 R", i + 6)));
+        let all = format!("/XObject << {} >>", names.join(" "));
+        let (page_content, page_resources) =
+            if through_x { ("3 Tr /C Do", "/XObject << /C 5 0 R >>") } else { ("3 Tr /C Do 0 Tr /W1 Do /P Do", all.as_str()) };
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << {page_resources} >> >>"),
+            format!("<< /Length {} >>\nstream\n{page_content}\nendstream", page_content.len() + 1),
+            form("BT /F2 10 Tf (x) Tj ET", "/Resources << /Font << /F2 99 0 R >> >>"),
+            form("/C Do", ""),
+        ];
+        objects.extend((1..=wrappers).map(|i| form(&if i == wrappers { "/P Do".to_owned() } else { format!("/W{} Do", i + 1) }, "")));
+        let font = objects.len() + 1;
+        objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".to_owned());
+        if through_x {
+            objects.push(form("/W1 Do /P Do", &format!("/Resources << {all} >>")));
+        }
+        let objects: Vec<String> = objects.into_iter().map(|o| o.replace("99 0 R", &format!("{font} 0 R"))).collect();
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        let doc = build(&objects, "");
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect()
+    };
+    for through_x in [false, true] {
+        assert_eq!(found(through_x), ["The font Courier isn't embedded"], "through /X: {through_x}");
+    }
+}
+
 /// PDF/A-2 6.1.2: the file starts with `%PDF-1.0` to `%PDF-1.7` and an end-of-line marker, then a
 /// comment of `%` and four bytes above 127; Save as PDF/A rewrites a header that doesn't.
 #[test]
