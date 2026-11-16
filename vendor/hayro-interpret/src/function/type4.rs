@@ -71,6 +71,7 @@ impl Type4 {
             0,
         )?;
 
+        // PdfCraft patch (115): the top `/Range`-many values (see `Clamper::top_outputs`).
         let mut out: SmallVec<_> = self
             .clamper
             .top_outputs(arg_stack.items())?
