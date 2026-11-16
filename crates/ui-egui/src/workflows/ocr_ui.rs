@@ -349,6 +349,16 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     });
                     ui.end_row();
                 });
+                if d.language == "tr" && d.engine == EngineChoice::Ocrs {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(tl!(
+                            "The built-in engine reads unaccented Latin only; switch Engine to Automatic or Tesseract for Turkish characters."
+                        ))
+                        .small()
+                        .color(t.text_muted),
+                    );
+                }
                 ui.add_space(4.0);
                 ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
                     .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));

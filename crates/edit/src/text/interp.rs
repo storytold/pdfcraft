@@ -12,6 +12,8 @@ pub(super) struct TextState {
     pub(super) leading: f64,
     pub(crate) rise: f64,
     pub(crate) fill: Vec<Op>,
+    /// The resolved colour space for `cs` + `sc`/`scn`, captured where `cs` ran.
+    pub(crate) fill_space: Option<Rc<crate::colour::Space>>,
     /// The text rendering mode (`Tr`); 3 is invisible text, as in an OCR layer over a scan.
     pub(crate) render_mode: i64,
     /// The stroke colour operators, the line width and the ExtGStates selected (see [`Ts`]):
@@ -36,6 +38,7 @@ impl TextState {
             leading: 0.0,
             rise: 0.0,
             fill: Vec::new(),
+            fill_space: None,
             render_mode: 0,
             stroke: Vec::new(),
             line_width: None,
@@ -54,6 +57,7 @@ impl TextState {
             leading: ts.leading,
             rise: ts.rise,
             fill: ts.fill.clone(),
+            fill_space: ts.fill_space.clone(),
             render_mode: ts.render_mode,
             stroke: ts.stroke.clone(),
             line_width: ts.line_width,
@@ -353,6 +357,8 @@ pub(super) struct Ts {
     pub(super) clip: Option<Clip>,
     /// The operators that set the current fill colour (`g`, `rg`, `k`, or `cs` + `sc`/`scn`).
     pub(super) fill: Vec<Op>,
+    /// The resolved colour space for `cs` + `sc`/`scn`, captured where `cs` ran.
+    pub(super) fill_space: Option<Rc<crate::colour::Space>>,
     pub(super) font: Option<(Vec<u8>, Rc<Metrics>)>,
     /// The Japanese or Hebrew fallback face the font subsets, when the font is one (see [`is_type3_fallback`]).
     pub(super) face: Option<String>,
@@ -639,6 +645,7 @@ impl Carry {
             ctm: Matrix::IDENTITY,
             clip: None,
             fill: Vec::new(),
+            fill_space: None,
             font: None,
             face: None,
             size: 0.0,
@@ -985,9 +992,11 @@ pub(super) fn interpret(
     // `Some(properties)`: read `/ActualText`, looking named property lists up in `properties`.
     logical_text: Option<&Dict>,
 ) -> Result<Vec<Shown>, EditError> {
-    let (mut held_fonts, mut held_states, none) = (None, None, Dict::new());
+    let (mut held_fonts, mut held_states, mut held_cs, none) = (None, None, None, Dict::new());
     let fonts_res = super::resource_dict(doc, resources, b"Font", &mut held_fonts).unwrap_or(&none);
     let states = super::resource_dict(doc, resources, b"ExtGState", &mut held_states).unwrap_or(&none);
+    let cs_res = super::resource_dict(doc, resources, b"ColorSpace", &mut held_cs).unwrap_or(&none);
+    let mut space_cache: HashMap<Vec<u8>, Rc<crate::colour::Space>> = HashMap::new();
     let mut out: Vec<Shown> = Vec::new();
     let mut by_font: HashMap<pdfcraft_cos::ObjRef, CachedFont> = HashMap::new();
     let mut ts = carry.ts.clone();
@@ -1102,7 +1111,34 @@ pub(super) fn interpret(
                 bt += 1;
                 at_bt = (i, ts.clone());
             }
-            b"g" | b"rg" | b"k" | b"cs" => ts.fill = vec![op.clone()],
+            b"g" | b"rg" | b"k" => {
+                ts.fill = vec![op.clone()];
+                ts.fill_space = None;
+            }
+            b"cs" => {
+                ts.fill = vec![op.clone()];
+                ts.fill_space = op.operands.first().and_then(|operand| {
+                    let resolved = doc.resolve(operand);
+                    match &*resolved {
+                        Object::Name(n) => {
+                            if let Some(space) = space_cache.get(n.as_slice()) {
+                                return Some(Rc::clone(space));
+                            }
+                            let known = matches!(
+                                n.as_slice(),
+                                b"DeviceGray" | b"G" | b"CalGray" | b"DeviceRGB" | b"RGB" | b"CalRGB" | b"DeviceCMYK" | b"CMYK" | b"Pattern"
+                            ) || cs_res.get(n).is_some();
+                            known.then(|| {
+                                let space = Rc::new(crate::colour::space_of(doc, operand, cs_res, 0));
+                                space_cache.insert(n.clone(), Rc::clone(&space));
+                                space
+                            })
+                        }
+                        Object::Array(_) => Some(Rc::new(crate::colour::space_of(doc, operand, cs_res, 0))),
+                        _ => None,
+                    }
+                });
+            }
             b"sc" | b"scn" => {
                 ts.fill.retain(|o| o.is("cs"));
                 ts.fill.push(op.clone());
