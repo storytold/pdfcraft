@@ -30,11 +30,16 @@ struct Client {
 struct RoomEntry<A: Adapter> {
     room: Room<A>,
     members: Vec<ClientId>,
+    /// Which room this is under the document's name: bumped on every open, so a
+    /// commit prepared for a closed room cannot be recorded against its
+    /// replacement (thread on PR #6622).
+    generation: u64,
 }
 
 /// One process's rooms and connected clients.
 pub struct Hub<A: Adapter> {
     next: u64,
+    next_generation: u64,
     config: RoomConfig,
     clients: HashMap<ClientId, Client>,
     rooms: HashMap<DocKey, RoomEntry<A>>,
@@ -47,6 +52,9 @@ pub struct Hub<A: Adapter> {
 /// That is what keeps a slow cabinet from freezing the other documents.
 pub struct Pending {
     doc: DocKey,
+    /// The room generation the commit was prepared in. [`Hub::finish`] drops an
+    /// outcome whose room is gone instead of applying it to a replacement.
+    generation: u64,
     /// Who asked for the commit. `None` for the server-initiated commit when
     /// the last participant leaves: there is nobody to answer.
     client: Option<ClientId>,
@@ -67,7 +75,7 @@ impl Pending {
 
 impl<A: Adapter> Hub<A> {
     pub fn new(config: RoomConfig) -> Self {
-        Self { next: 1, config, clients: HashMap::new(), rooms: HashMap::new() }
+        Self { next: 1, next_generation: 1, config, clients: HashMap::new(), rooms: HashMap::new() }
     }
 
     /// Open the authoritative document for `doc`. A room outlives its members
@@ -86,7 +94,9 @@ impl<A: Adapter> Hub<A> {
         let session = SessionId::new(format!("session-{}", self.next)).map_err(|e| error(ErrorCode::Invalid, e.to_string(), false))?;
         self.next = self.next.saturating_add(1);
         let room = Room::resume(session, doc.clone(), adapter, version, epoch, self.config.clone());
-        self.rooms.insert(doc, RoomEntry { room, members: Vec::new() });
+        let generation = self.next_generation;
+        self.next_generation = self.next_generation.saturating_add(1);
+        self.rooms.insert(doc, RoomEntry { room, members: Vec::new(), generation });
         Ok(())
     }
 
@@ -166,7 +176,7 @@ impl<A: Adapter> Hub<A> {
                 None
             }
             ClientMessage::Commit(req) => match entry.room.commit(&actor, req.expected_version) {
-                Ok(commit) => Some(Pending { doc: doc.clone(), client: Some(id), commit }),
+                Ok(commit) => Some(Pending { doc: doc.clone(), generation: entry.generation, client: Some(id), commit }),
                 Err(e) => {
                     deliver(&mut self.clients, id, ServerMessage::Error(e));
                     None
@@ -191,9 +201,17 @@ impl<A: Adapter> Hub<A> {
     /// publication failed. A retryable failure comes back as the publication
     /// the caller has to queue: the room stays `publishing` until it is
     /// resolved, so a newer base cannot overtake it.
+    ///
+    /// An outcome whose room was closed and reopened under the same name while
+    /// the publication ran is dropped: it describes a base the replacement room
+    /// never wrote, and recording it there would mark unpublished work clean
+    /// and release a guard it does not own (thread on PR #6622).
     pub fn finish(&mut self, pending: Pending, outcome: PublishOutcome) -> Option<Box<dyn Publication>> {
-        let Pending { doc, client, commit } = pending;
+        let Pending { doc, generation, client, commit } = pending;
         let entry = self.rooms.get_mut(&doc)?;
+        if entry.generation != generation {
+            return None;
+        }
         let answer = match entry.room.finish(commit, outcome) {
             Ok(result) => ServerMessage::CommitResult(result),
             Err(e) => ServerMessage::Error(e),
@@ -275,7 +293,7 @@ impl<A: Adapter> Hub<A> {
             return None;
         }
         match entry.room.commit_now() {
-            Ok(commit) => Some(Pending { doc: doc.clone(), client: None, commit }),
+            Ok(commit) => Some(Pending { doc: doc.clone(), generation: entry.generation, client: None, commit }),
             // Nobody to answer: a failed commit leaves the room dirty and the
             // next commit (or the next last-client-leave) retries it.
             Err(_) => None,
@@ -295,7 +313,7 @@ impl<A: Adapter> Hub<A> {
             return None;
         }
         match entry.room.commit_now() {
-            Ok(commit) => Some(Pending { doc: doc.clone(), client: None, commit }),
+            Ok(commit) => Some(Pending { doc: doc.clone(), generation: entry.generation, client: None, commit }),
             Err(_) => None,
         }
     }
@@ -575,6 +593,70 @@ mod tests {
         // A new ticket for the same person joins the new room as a new client.
         let again = join(&mut hub, &doc, "editor", Role::Editor)?;
         assert_ne!(again, editor);
+        Ok(())
+    }
+
+    /// A commit prepared in a closed room must not be recorded against the room
+    /// that replaces it under the same name: the outcome describes a base the
+    /// replacement never wrote (thread on PR #6622).
+    #[test]
+    fn a_publication_that_outlives_its_room_does_not_touch_the_replacement() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut hub, doc) = hub()?;
+        let editor = join(&mut hub, &doc, "editor", Role::Editor)?;
+        let add = op("add", ConflictClass::Merge, Target::Page(PageRef { index: 0, epoch: 0 }), 0, 0)?;
+        hub.send(editor, ClientMessage::Op(add), 0)?;
+        let _ = hub.receive(editor);
+        let mut pending = hub
+            .send(editor, ClientMessage::Commit(pdfcraft_collab_proto::CommitRequest { expected_version: 1, message: None }), 0)?
+            .ok_or("a commit is pending publication")?;
+
+        // The room is closed while its publication runs, and a replacement opens
+        // under the same document name with its own, unpublished head.
+        assert_eq!(hub.close_room(&doc), vec![editor]);
+        hub.open_room(doc.clone(), Fake { epoch: 0 })?;
+        let again = join(&mut hub, &doc, "editor", Role::Editor)?;
+        let newer = op("newer", ConflictClass::Merge, Target::Page(PageRef { index: 0, epoch: 0 }), 0, 0)?;
+        hub.send(again, ClientMessage::Op(newer), 0)?;
+        let _ = hub.receive(again);
+        assert!(hub.room(&doc).ok_or("the replacement")?.is_dirty());
+
+        let outcome = pending.publish();
+        assert!(hub.finish(pending, outcome).is_none(), "nothing to retry for a room that is gone");
+        assert!(hub.room(&doc).ok_or("the replacement")?.is_dirty(), "the stale outcome does not mark the replacement's unpublished work clean");
+        assert!(hub.commit_if_dirty(&doc).is_some(), "the replacement's head is still owed to the cabinet");
+        Ok(())
+    }
+
+    /// A publication carries the base it was written for. An edit accepted while
+    /// it runs is not in that base, so recording the outcome leaves the room
+    /// dirty and the transport's follow-up commits the newer head (thread on
+    /// PR #6622).
+    #[test]
+    fn an_in_flight_publication_does_not_clear_work_it_never_carried() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut hub, doc) = hub()?;
+        let editor = join(&mut hub, &doc, "editor", Role::Editor)?;
+        let first = op("first", ConflictClass::Merge, Target::Page(PageRef { index: 0, epoch: 0 }), 0, 0)?;
+        hub.send(editor, ClientMessage::Op(first), 0)?;
+        let _ = hub.receive(editor);
+        let mut pending = hub
+            .send(editor, ClientMessage::Commit(pdfcraft_collab_proto::CommitRequest { expected_version: 1, message: None }), 0)?
+            .ok_or("a commit is pending publication")?;
+
+        // An edit arrives while the publication runs, then the last client
+        // leaves: the last-leave commit is refused `busy` and schedules nothing.
+        let second = op("second", ConflictClass::Merge, Target::Page(PageRef { index: 0, epoch: 0 }), 1, 0)?;
+        hub.send(editor, ClientMessage::Op(second), 0)?;
+        let _ = hub.receive(editor);
+        assert!(hub.commit_if_dirty(&doc).is_none(), "a publication is in flight, so nothing is written twice");
+
+        let outcome = pending.publish();
+        assert!(hub.finish(pending, outcome).is_none());
+        assert!(hub.room(&doc).ok_or("the room")?.is_dirty(), "the published base carried version 1 only, so the room still owes version 2");
+        let mut next = hub.commit_if_dirty(&doc).ok_or("the deferred head is not lost")?;
+        assert_eq!(next.doc(), &doc);
+        let outcome = next.publish();
+        assert!(hub.finish(next, outcome).is_none());
+        assert!(!hub.room(&doc).ok_or("the room")?.is_dirty(), "the follow-up commit carried the newer head");
         Ok(())
     }
 }

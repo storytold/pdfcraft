@@ -205,6 +205,21 @@ fn validate_id(value: &str, field: &'static str) -> Result<(), ProtocolError> {
     Ok(())
 }
 
+/// A form-field name is an address, not an identifier: it is the fully
+/// qualified `/T` chain (`form.section.field`), so it is bounded by
+/// [`MAX_FIELD_NAME_BYTES`] like a presence caret's field, not by
+/// [`MAX_ID_BYTES`]. A shorter bound would refuse `field.set_value` on a form
+/// whose names the engine and the cabinet already accept (thread on PR #6622).
+fn validate_field_name(value: &str) -> Result<(), ProtocolError> {
+    if value.trim().is_empty() {
+        return Err(ProtocolError::Empty("field name"));
+    }
+    if value.len() > MAX_FIELD_NAME_BYTES {
+        return Err(ProtocolError::TooLong { field: "field name", len: value.len(), max: MAX_FIELD_NAME_BYTES });
+    }
+    Ok(())
+}
+
 /// The acting user's role for one session (ADR-0008).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -396,7 +411,7 @@ impl Target {
                 }
                 Ok(())
             }
-            Target::Field { name } => validate_id(name, "field name"),
+            Target::Field { name } => validate_field_name(name),
             Target::Attachment { key } => validate_id(key, "attachment key"),
             Target::Bookmark { path, .. } => {
                 if path.len() > MAX_BOOKMARK_DEPTH {
@@ -1097,6 +1112,26 @@ mod tests {
         };
         assert_eq!(off_page.validate(), Err(ProtocolError::PageIndex(MAX_PAGE_INDEX + 1)));
         Ok(())
+    }
+
+    /// A form-field name is the fully qualified `/T` chain, so `field.set_value`
+    /// takes the same bound a presence caret does, not the identifier bound
+    /// (thread on PR #6622): a name between the two used to be refused by the
+    /// protocol while the document itself accepted it.
+    #[test]
+    fn a_field_name_is_bounded_like_a_caret_not_like_an_identifier() {
+        let qualified = "form.section.".to_string() + &"field".repeat(30);
+        assert!(qualified.len() > MAX_ID_BYTES && qualified.len() <= MAX_FIELD_NAME_BYTES, "the fixture sits between the two bounds");
+        assert_eq!(Target::Field { name: qualified.clone() }.validate(), Ok(()));
+
+        // An empty name is still no address at all.
+        assert_eq!(Target::Field { name: "  ".into() }.validate(), Err(ProtocolError::Empty("field name")));
+
+        let too_long = "f".repeat(MAX_FIELD_NAME_BYTES + 1);
+        assert!(matches!(
+            Target::Field { name: too_long }.validate(),
+            Err(ProtocolError::TooLong { field: "field name", max: MAX_FIELD_NAME_BYTES, .. })
+        ));
     }
 
     #[test]
