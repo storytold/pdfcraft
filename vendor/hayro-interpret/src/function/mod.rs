@@ -95,8 +95,10 @@ impl Function {
 
     /// Evaluate the function with the given input.
     pub fn eval(&self, input: Values) -> Option<Values> {
-        if let FunctionType::Type4(t4) = self.0.as_ref() {
-            return t4.eval(input);
+        match self.0.as_ref() {
+            FunctionType::Type0(t0) => return t0.eval(input),
+            FunctionType::Type4(t4) => return t4.eval(input),
+            FunctionType::Type2(_) | FunctionType::Type3(_) => {}
         }
 
         let mut out = Values::new();
@@ -108,8 +110,8 @@ impl Function {
     pub(crate) fn eval_into(&self, input: &[f32], out: &mut Values) -> Option<()> {
         out.clear();
         match self.0.as_ref() {
-            FunctionType::Type0(t0) => {
-                *out = t0.eval(Values::from_slice(input))?;
+            FunctionType::Type0(_) => {
+                *out = self.eval(Values::from_slice(input))?;
                 Some(())
             }
             FunctionType::Type2(t2) => {
