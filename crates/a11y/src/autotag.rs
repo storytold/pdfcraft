@@ -1,13 +1,16 @@
 //! Create a valid, reviewable structure tree for untagged PDFs.
 //!
-//! Each text object becomes a paragraph, which can then be retagged with the existing
-//! tag-property tool after human review. Painted paths, shadings and images outside text objects
+//! Each text object becomes a paragraph, or a heading when its size or weight sets it apart from
+//! the body text ([`crate::autotag_roles`]); either can be retagged with the existing tag-property
+//! tool after human review. Painted paths, shadings and images outside text objects
 //! are wrapped in `/Artifact BMC … EMC` so the resulting page passes the tagged-content check.
 
 use std::collections::{HashMap, HashSet};
 
 use pdfcraft_content::{Op, Pieces, serialize_ops};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
+
+use crate::autotag_roles::{self, Evidence};
 
 const MAX_PAGES: usize = 1_000;
 const MAX_PAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -22,6 +25,7 @@ const MAX_TEXT_OBJECTS: usize = 4_096;
 pub struct AutoTagResult {
     pub pages: usize,
     pub paragraphs: usize,
+    pub headings: usize,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -44,6 +48,7 @@ struct Plan {
     page: ObjRef,
     ops: Vec<Op>,
     spans: Vec<(usize, usize)>,
+    evidence: Vec<Evidence>,
     artifacts: HashMap<usize, usize>,
 }
 
@@ -94,6 +99,14 @@ fn page_xobjects(doc: &Document, page: &Dict) -> Dict {
     page.get(b"Resources")
         .map(|r| doc.resolve(r))
         .and_then(|r| r.as_dict().and_then(|r| r.get(b"XObject").map(|x| doc.resolve(x))))
+        .and_then(|x| x.as_dict().cloned())
+        .unwrap_or_default()
+}
+
+fn page_fonts(doc: &Document, page: &Dict) -> Dict {
+    page.get(b"Resources")
+        .map(|r| doc.resolve(r))
+        .and_then(|r| r.as_dict().and_then(|r| r.get(b"Font").map(|x| doc.resolve(x))))
         .and_then(|x| x.as_dict().cloned())
         .unwrap_or_default()
 }
@@ -183,7 +196,13 @@ fn harmless_inside(op: &[u8]) -> bool {
 
 /// `totals` is the decoded bytes and operators of the pages planned so far, bounded by
 /// `MAX_TOTAL_BYTES` and `MAX_TOTAL_OPERATORS`.
-fn plan_page(doc: &Document, page: &pdfcraft_model::Page, index: usize, totals: &mut (usize, usize)) -> Result<Plan, AutoTagError> {
+fn plan_page(
+    doc: &Document,
+    page: &pdfcraft_model::Page,
+    index: usize,
+    totals: &mut (usize, usize),
+    fonts: &mut autotag_roles::Fonts,
+) -> Result<Plan, AutoTagError> {
     if page.dict.contains(b"StructParents") {
         return Err(unsupported(index, "page already has a structure parent key"));
     }
@@ -248,7 +267,9 @@ fn plan_page(doc: &Document, page: &pdfcraft_model::Page, index: usize, totals: 
     if path.is_some() {
         return Err(unsupported(index, "unterminated path object"));
     }
-    Ok(Plan { page: page.obj, ops: parsed.ops, spans, artifacts })
+    let resources = page_fonts(doc, &page.dict);
+    let evidence = autotag_roles::evidence(doc, fonts, &resources, &parsed.ops, &spans);
+    Ok(Plan { page: page.obj, ops: parsed.ops, spans, evidence, artifacts })
 }
 
 fn plan(doc: &Document) -> Result<Vec<Plan>, AutoTagError> {
@@ -268,8 +289,9 @@ fn plan(doc: &Document) -> Result<Vec<Plan>, AutoTagError> {
     let mut out = Vec::with_capacity(pages.len());
     let mut total = 0usize;
     let mut totals = (0usize, 0usize);
+    let mut fonts = autotag_roles::Fonts::default();
     for (index, page) in pages.iter().enumerate() {
-        let planned = plan_page(doc, page, index, &mut totals)?;
+        let planned = plan_page(doc, page, index, &mut totals, &mut fonts)?;
         total = total.saturating_add(planned.spans.len());
         out.push(planned);
     }
@@ -279,16 +301,21 @@ fn plan(doc: &Document) -> Result<Vec<Plan>, AutoTagError> {
     Ok(out)
 }
 
-fn mark_ops(ops: Vec<Op>, starts: &HashMap<usize, usize>, ends: &HashSet<usize>, artifacts: &HashMap<usize, usize>) -> Result<Vec<Op>, AutoTagError> {
+fn mark_ops(
+    ops: Vec<Op>,
+    starts: &HashMap<usize, (usize, &'static str)>,
+    ends: &HashSet<usize>,
+    artifacts: &HashMap<usize, usize>,
+) -> Result<Vec<Op>, AutoTagError> {
     let artifact_ends: HashSet<usize> = artifacts.values().copied().collect();
     let extra = starts.len().saturating_add(artifacts.len()).saturating_mul(2);
     let mut marked = Vec::with_capacity(ops.len().saturating_add(extra));
     for (at, op) in ops.into_iter().enumerate() {
         let is_artifact = artifacts.contains_key(&at);
-        if let Some(mcid) = starts.get(&at) {
+        if let Some(&(mcid, role)) = starts.get(&at) {
             let mut properties = Dict::new();
-            properties.set(b"MCID".to_vec(), Object::Int(i64::try_from(*mcid).map_err(|_| AutoTagError::TooManyPages)?));
-            marked.push(Op::new("BDC", vec![Object::name("P"), Object::Dict(properties)]));
+            properties.set(b"MCID".to_vec(), Object::Int(i64::try_from(mcid).map_err(|_| AutoTagError::TooManyPages)?));
+            marked.push(Op::new("BDC", vec![Object::name(role), Object::Dict(properties)]));
         } else if is_artifact {
             marked.push(Op::new("BMC", vec![Object::name("Artifact")]));
         }
@@ -334,16 +361,18 @@ fn write_structure(
     Ok(())
 }
 
-/// Tag every text object in an untagged PDF as a paragraph and mark painted paths, shadings and
+/// Tag every text object in an untagged PDF as a paragraph or a heading and mark painted paths, shadings and
 /// images outside text objects as artifacts. The full structure tree, parent tree and
 /// marked-content IDs are written together. Unsupported operators are refused before any
-/// mutation. On success the caller can use tag-property edits to assign reviewed heading roles.
+/// mutation. On success the caller can use tag-property edits to correct the roles after review.
 pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
     let plans = plan(doc)?;
+    let all: Vec<Evidence> = plans.iter().flat_map(|p| p.evidence.iter().copied()).collect();
+    let mut roles = autotag_roles::roles(&all).into_iter();
     let mut next = doc.clone();
     let catalog = next.root().ok_or(AutoTagError::NoCatalog)?;
     let (root, document) = (next.add(Object::Null), next.add(Object::Null));
-    let (mut children, mut numbers, mut tagged_pages, mut paragraphs) = (Vec::new(), Vec::new(), 0usize, 0usize);
+    let (mut children, mut numbers, mut tagged_pages, mut paragraphs, mut headings) = (Vec::new(), Vec::new(), 0usize, 0usize, 0usize);
     for page in plans {
         if page.spans.is_empty() && page.artifacts.is_empty() {
             continue;
@@ -353,18 +382,23 @@ pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
             let key = i64::try_from(tagged_pages).map_err(|_| AutoTagError::TooManyPages)?;
             let mut parents = Vec::with_capacity(page.spans.len());
             for (mcid, (first, last)) in page.spans.iter().enumerate() {
+                let role = roles.next().unwrap_or("P");
                 let mut element = Dict::new();
                 element.set(b"Type".to_vec(), Object::name("StructElem"));
-                element.set(b"S".to_vec(), Object::name("P"));
+                element.set(b"S".to_vec(), Object::name(role));
                 element.set(b"P".to_vec(), Object::Ref(document));
                 element.set(b"Pg".to_vec(), Object::Ref(page.page));
                 element.set(b"K".to_vec(), Object::Int(i64::try_from(mcid).map_err(|_| AutoTagError::TooManyPages)?));
                 let reference = next.add(element);
                 parents.push(Object::Ref(reference));
                 children.push(Object::Ref(reference));
-                starts.insert(*first, mcid);
+                starts.insert(*first, (mcid, role));
                 ends.insert(*last);
-                paragraphs = paragraphs.saturating_add(1);
+                if role == "P" {
+                    paragraphs = paragraphs.saturating_add(1);
+                } else {
+                    headings = headings.saturating_add(1);
+                }
             }
             next.update_dict(page.page, |d| d.set(b"StructParents".to_vec(), Object::Int(key)))?;
             numbers.extend([Object::Int(key), Object::Array(parents)]);
@@ -376,5 +410,5 @@ pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
     }
     write_structure(&mut next, catalog, root, document, children, numbers, tagged_pages)?;
     *doc = next;
-    Ok(AutoTagResult { pages: tagged_pages, paragraphs })
+    Ok(AutoTagResult { pages: tagged_pages, paragraphs, headings })
 }

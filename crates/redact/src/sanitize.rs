@@ -479,12 +479,13 @@ fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
         o.and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
     };
     let all = refs(oc.get(b"OCGs"));
-    let (on, off) = (refs(d.get(b"ON")), refs(d.get(b"OFF")));
-    let mut hidden: Vec<ObjRef> = if d.name(b"BaseState") == Some(b"OFF") {
-        all.iter().copied().filter(|g| !on.contains(g)).collect()
-    } else {
-        off.into_iter().filter(|g| all.contains(g)).collect()
-    };
+    // sets: the lists are the document's, and a filter over every group would scan them each time
+    let (on, off): (std::collections::HashSet<ObjRef>, std::collections::HashSet<ObjRef>) =
+        (refs(d.get(b"ON")).into_iter().collect(), refs(d.get(b"OFF")).into_iter().collect());
+    // The default state is /BaseState, then /ON turns groups on and /OFF turns them off, so a
+    // group both lists name ends up off (§8.11.4.3, Table 101) — the viewer reads it the same way.
+    let base_off = d.get(b"BaseState").map(|b| crate::resolve_chain(doc, b)).is_some_and(|b| b.as_name() == Some(b"OFF".as_slice()));
+    let mut hidden: Vec<ObjRef> = all.iter().copied().filter(|g| off.contains(g) || (base_off && !on.contains(g))).collect();
     // Each rule, layer list and layer is read once, however often the rules name them: many rules
     // can share one long list.
     let known: std::collections::HashSet<ObjRef> = all.iter().copied().collect();
