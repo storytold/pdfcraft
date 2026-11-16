@@ -177,6 +177,25 @@ pub fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: 
     Some(out)
 }
 
+/// Whether image dictionary `d` carries a non-default `/Decode` array for an `n`-component
+/// DeviceGray (`n = 1`) or DeviceRGB (`n = 3`) image.
+fn has_non_default_decode(doc: &Document, d: &Dict, n: usize) -> bool {
+    let Some(raw) = d.get(b"Decode") else { return false };
+    let resolved = doc.resolve(raw);
+    let Some(arr) = resolved.as_array() else { return true };
+    if arr.len() != n * 2 {
+        return true;
+    }
+    for pair in arr.chunks_exact(2) {
+        let Some(d0) = doc.resolve(&pair[0]).as_f64() else { return true };
+        let Some(d1) = doc.resolve(&pair[1]).as_f64() else { return true };
+        if (d0 - 0.0).abs() > 1e-6 || (d1 - 1.0).abs() > 1e-6 {
+            return true;
+        }
+    }
+    false
+}
+
 /// Checks if an image stream dictionary is a potential scan candidate for adaptive binarization.
 fn scan_candidate_shape(doc: &Document, d: &Dict) -> Option<(usize, usize, usize)> {
     if d.name(b"Subtype") != Some(b"Image") {
@@ -201,19 +220,31 @@ fn scan_candidate_shape(doc: &Document, d: &Dict) -> Option<(usize, usize, usize
         b"DeviceRGB" => 3,
         _ => return None,
     };
+    if has_non_default_decode(doc, d, n) {
+        return None;
+    }
     let w = usize::try_from(d.int(b"Width")?).ok()?;
     let h = usize::try_from(d.int(b"Height")?).ok()?;
     Some((w, h, n))
 }
 
+/// Largest OCR JPEG, in pixels, that the decoder will open.
+const MAX_OCR_JPEG_PIXELS: usize = 1 << 26;
+
 /// Decodes JPEG data into uncompressed pixel samples.
 fn decode_jpeg_samples(data: &[u8], w: usize, h: usize, n: usize) -> Option<Vec<u8>> {
+    if w.checked_mul(h)? > MAX_OCR_JPEG_PIXELS {
+        return None;
+    }
     let options = zune_jpeg::zune_core::options::DecoderOptions::default()
         .set_strict_mode(false)
         .set_max_width(usize::from(u16::MAX))
         .set_max_height(usize::from(u16::MAX));
     let mut dec = zune_jpeg::JpegDecoder::new_with_options(zune_jpeg::zune_core::bytestream::ZCursor::new(data), options);
     dec.decode_headers().ok()?;
+    if dec.dimensions()? != (w, h) {
+        return None;
+    }
     let colorspace = match n {
         1 => zune_jpeg::zune_core::colorspace::ColorSpace::Luma,
         3 => zune_jpeg::zune_core::colorspace::ColorSpace::RGB,
@@ -221,7 +252,8 @@ fn decode_jpeg_samples(data: &[u8], w: usize, h: usize, n: usize) -> Option<Vec<
     };
     dec.set_options(options.jpeg_set_out_colorspace(colorspace));
     let px = dec.decode().ok()?;
-    if px.len() >= w.checked_mul(h)?.checked_mul(n)? { Some(px) } else { None }
+    let expected = w.checked_mul(h)?.checked_mul(n)?;
+    if px.len() == expected { Some(px) } else { None }
 }
 
 /// Scans all image objects in `doc` and applies adaptive binarization to near-bilevel scans.
@@ -231,10 +263,18 @@ pub fn adaptive_compress_scans(doc: &mut Document, options: AdaptiveCompressOpti
     }
 
     let mut report = AdaptiveCompressReport::default();
+    let soft_mask_refs: HashSet<u32> = doc
+        .scan_objects()
+        .filter_map(|(_, obj)| match &*obj {
+            Object::Stream(s) => s.dict.reference(b"SMask").map(|r| r.num),
+            _ => None,
+        })
+        .collect();
+
     let candidates: Vec<ObjRef> = doc
         .scan_objects()
         .filter_map(|(r, obj)| match &*obj {
-            Object::Stream(s) => scan_candidate_shape(doc, &s.dict).map(|_| r),
+            Object::Stream(s) if !soft_mask_refs.contains(&r.num) => scan_candidate_shape(doc, &s.dict).map(|_| r),
             _ => None,
         })
         .collect();
