@@ -2041,8 +2041,10 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
             merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, delete_payload())
         }
         "annotation.reply" => {
-            let nm = text(op, "nm")?.to_owned();
-            let page = page_target(op)?;
+            // A reply is addressed by its annotation target, like any other
+            // change to a comment: `page_target` only knows page addresses and
+            // recorded no inverse at all (thread #2 on PR #6622).
+            let (page, nm) = annotation_target(op)?;
             merge_op(doc, op_id, base, epoch, Target::Annotation { page, nm }, delete_payload())
         }
         "annotation.set_contents" => {
@@ -2136,7 +2138,12 @@ pub fn inverse_for(document: &Document, op: &Op, op_id: OpId) -> Result<Option<O
         "page.move" => {
             let page = page_target(op)?;
             let to = op.payload.get("to").and_then(Value::as_u64).and_then(|to| usize::try_from(to).ok()).ok_or(ProjectionError::Missing("to"))?;
-            structural_op(doc, op_id, base, epoch, Target::Page(PageRef { index: to as u32, epoch }), move_payload(page.index as usize))
+            // A move to the page count is an append: the engine puts the page at
+            // the last index, so the undo has to address that index rather than a
+            // page that does not exist (thread #4 on PR #6622).
+            let count = document.info.pages.len();
+            let effective = to.min(count.saturating_sub(1));
+            structural_op(doc, op_id, base, epoch, Target::Page(PageRef { index: effective as u32, epoch }), move_payload(page.index as usize))
         }
         // A deletion, a replacement and a split keep what they removed on the
         // server (the split's part is the accepted operation's `bytes`), so
@@ -2597,8 +2604,8 @@ fn field_text(document: &Document, name: &str, value: &FieldValue) -> Result<Str
 #[cfg(test)]
 mod tests {
     use super::{
-        ProjectionError, add_note_payload, apply, edit_for, inverse_after, merge_op, new_annotation_name, ops_for_edit, reply_payload,
-        rotate_payload, set_contents_payload,
+        ProjectionError, add_note_payload, apply, edit_for, inverse_after, inverse_for, merge_op, move_payload, new_annotation_name, ops_for_edit,
+        reply_payload, rotate_payload, set_contents_payload, structural_op,
     };
     use pdfcraft_collab_proto::{ActorId, Applied, DocKey, Op, OpId, PageRef, Target};
     use pdfcraft_engine::{BookmarkDest, Edit, LabelStyle, LinkAction, LinkStyle, LinkZoom, Session};
@@ -3421,6 +3428,40 @@ mod tests {
         let document = session.get(id).ok_or("gone")?;
         let back = document.info.annotations.iter().find(|a| a.name.as_deref() == Some("root")).ok_or("the comment did not come back")?;
         assert_eq!(back.contents.as_deref(), Some("hello"));
+        Ok(())
+    }
+
+    /// A reply's inverse addresses the reply itself. `page_target` knows page
+    /// addresses only, so the reply recorded no inverse and its undo was lost
+    /// (thread #2 on PR #6622).
+    #[test]
+    fn a_replys_inverse_deletes_the_reply_by_name() -> Result<(), Box<dyn std::error::Error>> {
+        let (session, id) = open()?;
+        let document = session.get(id).ok_or("open")?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let reply =
+            merge_op(doc()?, OpId::new("r1")?, 1, 0, Target::Annotation { page, nm: "reply-1".into() }, reply_payload("reply-1", "agreed", "Ada"));
+        let inverse = inverse_for(document, &reply, OpId::new("u1")?)?.ok_or("a reply has an inverse")?;
+        assert_eq!(inverse.target, Target::Annotation { page, nm: "reply-1".into() });
+        assert_eq!(inverse.payload["action"], "annotation.delete");
+        Ok(())
+    }
+
+    /// A move to the page count is an append: the engine puts the page last, so
+    /// the undo has to address the last page rather than one past it (thread #4
+    /// on PR #6622).
+    #[test]
+    fn the_inverse_of_a_move_to_the_end_addresses_the_last_page() -> Result<(), Box<dyn std::error::Error>> {
+        let (session, id) = open()?;
+        let document = session.get(id).ok_or("open")?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let count = document.info.pages.len();
+        assert_eq!(count, 2, "the fixture has two pages");
+        let moved = structural_op(doc()?, OpId::new("m1")?, 1, 0, Target::Page(page), move_payload(count));
+        let inverse = inverse_for(document, &moved, OpId::new("u1")?)?.ok_or("a move has an inverse")?;
+        assert_eq!(inverse.target, Target::Page(PageRef { index: 1, epoch: 0 }), "the undo addresses the page the move made last");
+        assert_eq!(inverse.payload["action"], "page.move");
+        assert_eq!(inverse.payload["to"], serde_json::json!(0), "and puts it back where it came from");
         Ok(())
     }
 

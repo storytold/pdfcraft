@@ -94,7 +94,13 @@ impl AnnotationInput {
     }
 
     /// The body of an `annotation.add` operation addressed to `nm` (ADR-0002).
+    ///
+    /// The same checks the receiver makes run before the body is built: a
+    /// comment over [`MAX_TEXT_BYTES`] and a non-finite geometry would otherwise
+    /// be accepted here and refused on every other replica (thread #1 on
+    /// PR #6622).
     pub fn to_payload(&self, nm: &str) -> Result<Value, WireError> {
+        self.validate()?;
         let shape = ShapeWire::try_from(&self.shape)?;
         let mut payload = Map::new();
         payload.insert("action".into(), json!("annotation.add"));
@@ -137,8 +143,15 @@ impl AnnotationInput {
     }
 
     /// Reject geometry and style that would produce a different annotation on
-    /// another replica (NaN, out-of-range opacity, runaway stroke counts).
+    /// another replica (NaN, out-of-range opacity, runaway stroke counts), and a
+    /// text the frame cannot carry.
     pub fn validate(&self) -> Result<(), WireError> {
+        if self.contents.len() > MAX_TEXT_BYTES {
+            return Err(WireError::TooMany { what: "text bytes", count: self.contents.len(), max: MAX_TEXT_BYTES });
+        }
+        if self.author.len() > MAX_AUTHOR_BYTES {
+            return Err(WireError::TooMany { what: "text bytes", count: self.author.len(), max: MAX_AUTHOR_BYTES });
+        }
         check_style(&self.style)?;
         check_shape(&self.shape)
     }
@@ -189,6 +202,16 @@ fn check_point(point: [f64; 2], field: &'static str) -> Result<(), WireError> {
     Ok(())
 }
 
+/// A text box's or a typewriter's size. `serde_json` writes a non-finite `f64`
+/// as `null`, which every receiver refuses as malformed, so the sender refuses
+/// it before the body exists (thread #1 on PR #6622).
+fn check_font_size(size: f64) -> Result<(), WireError> {
+    if !size.is_finite() || size <= 0.0 {
+        return Err(WireError::Invalid { field: "font size", why: "expected a positive, finite number".into() });
+    }
+    Ok(())
+}
+
 fn check_quad(quad: [f64; 8]) -> Result<(), WireError> {
     for value in quad {
         finite(value, "quad")?;
@@ -225,7 +248,11 @@ fn check_shape(shape: &Shape) -> Result<(), WireError> {
             }
             quads.iter().try_for_each(|quad| check_quad(*quad))
         }
-        Shape::Rectangle { rect } | Shape::Oval { rect } | Shape::TextBox { rect, .. } | Shape::Typewriter { rect, .. } => check_rect(*rect, "rect"),
+        Shape::Rectangle { rect } | Shape::Oval { rect } => check_rect(*rect, "rect"),
+        Shape::TextBox { rect, font_size } | Shape::Typewriter { rect, font_size } => {
+            check_rect(*rect, "rect")?;
+            check_font_size(*font_size)
+        }
         Shape::Stamp { rect, by, .. } => {
             check_rect(*rect, "rect")?;
             if let Some(by) = by

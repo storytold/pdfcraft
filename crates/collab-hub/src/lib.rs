@@ -21,6 +21,10 @@ struct Client {
     actor: ActorId,
     doc: DocKey,
     inbox: VecDeque<ServerMessage>,
+    /// The room this connection belonged to was closed: it may still drain the
+    /// terminal answer, but it may not send, so a stale socket cannot write to a
+    /// room opened later under the same name (thread #11 on PR #6622).
+    closed: bool,
 }
 
 struct RoomEntry<A: Adapter> {
@@ -86,8 +90,20 @@ impl<A: Adapter> Hub<A> {
         Ok(())
     }
 
-    pub fn close_room(&mut self, doc: &DocKey) -> bool {
-        self.rooms.remove(doc).is_some()
+    /// Close a room and every connection of it. Each member gets the terminal
+    /// answer first, so its socket can say why it ends, and is then marked
+    /// closed; the ids come back for the transport to shut their sockets down.
+    /// A closed connection cannot send, so a stale socket can never write to a
+    /// room opened later under the same document (thread #11 on PR #6622).
+    pub fn close_room(&mut self, doc: &DocKey) -> Vec<ClientId> {
+        let Some(entry) = self.rooms.remove(doc) else { return Vec::new() };
+        for id in &entry.members {
+            deliver(&mut self.clients, *id, ServerMessage::Error(error(ErrorCode::Invalid, "no such document session", false)));
+            if let Some(client) = self.clients.get_mut(id) {
+                client.closed = true;
+            }
+        }
+        entry.members
     }
 
     /// Join a room. The caller has already verified the JWT and passes its
@@ -100,7 +116,7 @@ impl<A: Adapter> Hub<A> {
         let welcome = entry.room.hello(actor.clone(), role, hello, now_ms)?;
         let id = self.next;
         self.next = self.next.saturating_add(1);
-        self.clients.insert(id, Client { actor, doc, inbox: VecDeque::from([ServerMessage::Welcome(welcome)]) });
+        self.clients.insert(id, Client { actor, doc, inbox: VecDeque::from([ServerMessage::Welcome(welcome)]), closed: false });
         if let Some(entry) = self.rooms.get_mut(&hello.doc) {
             entry.members.push(id);
         }
@@ -117,6 +133,9 @@ impl<A: Adapter> Hub<A> {
     pub fn send(&mut self, id: ClientId, message: ClientMessage, now_ms: u64) -> Result<Option<Pending>, ServerError> {
         let (actor, doc) = {
             let client = self.clients.get(&id).ok_or_else(|| error(ErrorCode::Forbidden, "not connected", false))?;
+            if client.closed {
+                return Err(error(ErrorCode::Forbidden, "not connected", false));
+            }
             (client.actor.clone(), client.doc.clone())
         };
         let Some(entry) = self.rooms.get_mut(&doc) else {
@@ -521,6 +540,41 @@ mod tests {
         let outcome = pending.publish();
         assert!(hub.finish(pending, outcome).is_none(), "a successful publication leaves nothing to retry");
         assert!(hub.forced_commit(&doc, 0).is_none(), "the base now contains both operations");
+        Ok(())
+    }
+
+    /// Closing a room answers its clients and closes them: a socket left open by
+    /// a closed room cannot write to a replacement room under the same name
+    /// (thread #11 on PR #6622).
+    #[test]
+    fn closing_a_room_answers_every_client_and_stops_them_writing() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut hub, doc) = hub()?;
+        let editor = join(&mut hub, &doc, "editor", Role::Editor)?;
+        let commenter = join(&mut hub, &doc, "commenter", Role::Commenter)?;
+
+        assert_eq!(hub.close_room(&doc), vec![editor, commenter]);
+        for id in [editor, commenter] {
+            assert!(
+                matches!(hub.receive(id).as_slice(), [ServerMessage::Error(e)] if e.code == ErrorCode::Invalid),
+                "the client is told why its session ended"
+            );
+        }
+        assert_eq!(hub.members(&doc), 0);
+        assert!(hub.room(&doc).is_none(), "the room is gone");
+
+        let add = op("add", ConflictClass::Merge, Target::Page(PageRef { index: 0, epoch: 0 }), 0, 0)?;
+        assert!(
+            matches!(hub.send(editor, ClientMessage::Op(add.clone()), 0), Err(e) if e.code == ErrorCode::Forbidden),
+            "a closed connection is not connected"
+        );
+        hub.open_room(doc.clone(), Fake { epoch: 0 })?;
+        assert!(
+            matches!(hub.send(editor, ClientMessage::Op(add), 0), Err(e) if e.code == ErrorCode::Forbidden),
+            "and reopening the document does not revive it"
+        );
+        // A new ticket for the same person joins the new room as a new client.
+        let again = join(&mut hub, &doc, "editor", Role::Editor)?;
+        assert_ne!(again, editor);
         Ok(())
     }
 }

@@ -141,6 +141,10 @@ pub struct PdfAdapter {
     /// they are re-applied), so it is not written next to the journal.
     copies: Vec<DeletedCopy>,
     next_copy: u64,
+    /// True while the room replays its journal after a restart: the bodies a
+    /// restore carries are then the ones this server accepted before, not a
+    /// client's request (thread #13 on PR #6622).
+    replaying: bool,
 }
 
 /// What a delete kept so its inverse can put it back (RFC §6, ADR-0010). The
@@ -169,6 +173,27 @@ enum DeletedKind {
 /// ADR-0010 asks for. The number lives in `collab-proto` so the client refuses
 /// the same page for the same reason.
 pub const MAX_RESTORE_PAGE_BYTES: usize = pdfcraft_collab_proto::MAX_PAGE_COPY_BYTES;
+
+/// The two limits a `page.restore` meets before it changes the document: the
+/// copy's own bound (the raw page, [`MAX_RESTORE_PAGE_BYTES`]) and one frame
+/// ([`pdfcraft_collab_proto::MAX_MESSAGE_BYTES`], which the base64 body makes
+/// about a third larger). Measuring the raw copy against the frame bound
+/// refused a page above ~120 KiB that the delete had kept a copy of, so its
+/// undo was lost (thread #14 on PR #6622).
+fn check_restore_budget(raw: usize, payload: &Value) -> Result<(), AdapterError> {
+    if raw > MAX_RESTORE_PAGE_BYTES {
+        return Err(AdapterError::new(ErrorCode::Limit, format!("the page is {raw} bytes; a copy holds at most {MAX_RESTORE_PAGE_BYTES}"), false));
+    }
+    let frame = serde_json::to_vec(payload).map_or(usize::MAX, |bytes| bytes.len());
+    if frame > pdfcraft_collab_proto::MAX_MESSAGE_BYTES {
+        return Err(AdapterError::new(
+            ErrorCode::Limit,
+            format!("the restore is {frame} bytes on the wire; one message holds at most {}", pdfcraft_collab_proto::MAX_MESSAGE_BYTES),
+            false,
+        ));
+    }
+    Ok(())
+}
 
 /// How many deletions keep a copy, and how many bytes they may hold together.
 const MAX_COPIES: usize = 64;
@@ -200,7 +225,7 @@ impl PdfAdapter {
                 false,
             ));
         }
-        Ok(Self { session, id, epoch: 0, store: None, last_commit: None, known: HashMap::new(), copies: Vec::new(), next_copy: 0 })
+        Ok(Self { session, id, epoch: 0, store: None, last_commit: None, known: HashMap::new(), copies: Vec::new(), next_copy: 0, replaying: false })
     }
 
     pub fn session(&self) -> &Session {
@@ -722,8 +747,13 @@ impl PdfAdapter {
     fn restore_annotation(&mut self, page: usize, name: &str, payload: &Value) -> Result<(Value, Option<String>), AdapterError> {
         // An accepted restore carries the body (and the parent's `/NM`), so
         // replaying the journal needs no copy; a client's request carries only
-        // the token.
+        // the token. A body on a live request is refused: it would let a
+        // commenter create any comment, with any author, under a name of its
+        // choosing (thread #13 on PR #6622).
         let (body, parent) = match payload.get("body") {
+            Some(_) if !self.replaying => {
+                return Err(AdapterError::new(ErrorCode::Invalid, "a restore from a client names a copy, not a body", false));
+            }
             Some(body) => {
                 let parent = payload.get("parent").and_then(Value::as_str).map(str::to_owned);
                 (body.clone(), parent)
@@ -848,10 +878,10 @@ impl PdfAdapter {
         let at = at.min(self.document_or_error()?.info.pages.len());
         payload["bytes"] = json!(base64_encode(bytes.as_slice()));
         payload["at"] = json!(at);
-        // The operation is broadcast and journaled: it has to fit one frame.
-        if serde_json::to_vec(payload).map_or(usize::MAX, |bytes| bytes.len()) > MAX_RESTORE_PAGE_BYTES {
-            return Err(AdapterError::new(ErrorCode::Limit, "the deleted page is too large to restore in one operation", false));
-        }
+        // The operation is broadcast and journaled: the copy is bounded by the
+        // raw page limit, the message by the frame budget (thread #14 on
+        // PR #6622).
+        check_restore_budget(bytes.len(), payload)?;
         self.apply_edit(Edit::InsertPagesFrom {
             name: "restore-page.pdf".into(),
             bytes: Arc::new(bytes),
@@ -1189,6 +1219,10 @@ impl PdfAdapter {
 }
 
 impl Adapter for PdfAdapter {
+    fn set_replaying(&mut self, replaying: bool) {
+        self.replaying = replaying;
+    }
+
     fn apply(&mut self, actor: &ActorId, op: &Op) -> Result<ApplyOutcome, AdapterError> {
         // The broadcast operation is the authoritative intent: the author comes
         // from the verified token, not from the client (ADR-0008 §7), and a name
@@ -1526,7 +1560,7 @@ fn fixture_with_padding(n: usize, padded: Option<(usize, usize)>) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_AUTHOR, MAX_RESTORE_PAGE_BYTES, PdfAdapter, PopupState, base64_encode, fixture, fixture_with_padding};
+    use super::{DEFAULT_AUTHOR, MAX_RESTORE_PAGE_BYTES, PdfAdapter, PopupState, base64_encode, check_restore_budget, fixture, fixture_with_padding};
     use pdfcraft_collab_proto::{
         ActorId, ClientInfo, CommitResult, ConflictClass, DocKey, ErrorCode, Hello, Op, OpId, OpKind, PageRef, Role, SessionId, Target,
     };
@@ -1763,6 +1797,67 @@ mod tests {
         assert_eq!(outcome.op.payload["author"], "user-7");
         let document = adapter.document().ok_or("the document is gone")?;
         assert_eq!(document.info.annotations[0].author.as_deref(), Some("user-7"));
+        Ok(())
+    }
+
+    /// A restore's body is the server's record of what it accepted, never a
+    /// client's request: a commenter could otherwise create any comment under a
+    /// name of its choosing (thread #13 on PR #6622).
+    #[test]
+    fn a_restore_body_is_trusted_only_on_replay() -> Result<(), Box<dyn std::error::Error>> {
+        let mut adapter = PdfAdapter::open("fixture.pdf", fixture(1).into())?;
+        let actor = ActorId::new("editor")?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let forged = op(
+            "r1",
+            ConflictClass::Merge,
+            Target::Annotation { page, nm: "forged".into() },
+            0,
+            0,
+            json!({
+                "action": "annotation.restore",
+                "body": {"action": "annotation.add", "at": [40.0, 250.0], "contents": "forged", "author": "Ada", "nm": "forged"},
+            }),
+        )?;
+        let refused = adapter.apply(&actor, &forged).err().ok_or("a client's restore body was accepted")?;
+        assert_eq!(refused.code, ErrorCode::Invalid);
+        assert!(!adapter.document().ok_or("gone")?.info.annotations.iter().any(|a| a.name.as_deref() == Some("forged")), "nothing was created");
+
+        // The journal replay trusts the body: it is the one this server accepted.
+        adapter.set_replaying(true);
+        let replayed = adapter.apply(&actor, &forged);
+        adapter.set_replaying(false);
+        replayed?;
+        let back = adapter
+            .document()
+            .ok_or("gone")?
+            .info
+            .annotations
+            .iter()
+            .find(|a| a.name.as_deref() == Some("forged"))
+            .ok_or("the replayed restore added no comment")?;
+        assert_eq!(back.contents.as_deref(), Some("forged"));
+        Ok(())
+    }
+
+    /// The copy limit is the raw page; the frame budget is the base64 message.
+    /// Measuring the raw copy against the frame bound lost the undo of a page
+    /// between ~120 and 160 KiB (thread #14 on PR #6622).
+    #[test]
+    fn a_page_restore_is_bounded_by_the_copy_and_by_one_frame() -> Result<(), Box<dyn std::error::Error>> {
+        let raw = 130 * 1024;
+        assert!(raw < MAX_RESTORE_PAGE_BYTES, "the page is inside the copy limit");
+        let encoded = "A".repeat(raw.div_ceil(3) * 4);
+        let payload = json!({"action": "page.restore", "at": 0, "bytes": encoded});
+        let frame = serde_json::to_vec(&payload).map(|bytes| bytes.len()).unwrap_or(0);
+        assert!(frame > MAX_RESTORE_PAGE_BYTES, "the base64 body alone passes the copy bound");
+        assert!(check_restore_budget(raw, &payload).is_ok(), "the page fits the copy limit and one frame");
+
+        let refused = check_restore_budget(MAX_RESTORE_PAGE_BYTES + 1, &payload).err().ok_or("a page over the copy limit was accepted")?;
+        assert_eq!(refused.code, ErrorCode::Limit);
+        let huge = json!({"action": "page.restore", "at": 0, "bytes": "A".repeat(pdfcraft_collab_proto::MAX_MESSAGE_BYTES)});
+        let refused = check_restore_budget(1, &huge).err().ok_or("a message over the frame budget was accepted")?;
+        assert_eq!(refused.code, ErrorCode::Limit);
         Ok(())
     }
 

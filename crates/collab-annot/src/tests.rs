@@ -142,6 +142,32 @@ fn invalid_geometry_and_style_are_refused() {
     assert!(matches!(ShapeWire::try_from(&long_stroke), Err(WireError::TooMany { what: "points in a stroke", .. })));
 }
 
+/// A text box's size is checked before the body is built: a non-finite one
+/// would serialize as `null` and be refused by every receiver, and an oversized
+/// comment would be refused after the panel had already cleared its draft
+/// (thread #1 on PR #6622).
+#[test]
+fn a_text_box_needs_a_finite_font_size_and_a_comment_its_wire_length() -> Result<(), BoxError> {
+    let nan = AnnotationInput::new(Shape::TextBox { rect: [10.0, 10.0, 100.0, 40.0], font_size: f64::NAN });
+    assert!(matches!(nan.to_payload("tb-1"), Err(WireError::Invalid { field: "font size", .. })));
+    let infinite = AnnotationInput::new(Shape::Typewriter { rect: [10.0, 10.0, 100.0, 40.0], font_size: f64::INFINITY });
+    assert!(matches!(infinite.validate(), Err(WireError::Invalid { field: "font size", .. })));
+    let off = AnnotationInput::new(Shape::Typewriter { rect: [10.0, 10.0, 100.0, 40.0], font_size: 0.0 });
+    assert!(matches!(off.validate(), Err(WireError::Invalid { field: "font size", .. })));
+
+    let mut long = AnnotationInput::new(Shape::Note { at: [10.0, 10.0], icon: NoteIcon::Comment });
+    long.contents = "x".repeat(super::MAX_TEXT_BYTES + 1);
+    assert!(matches!(long.to_payload("n-1"), Err(WireError::TooMany { what: "text bytes", .. })));
+    // The same text read back is refused by the receiver too, so the two paths
+    // agree on the limit.
+    let payload = json!({
+        "shape": {"kind": "note", "at": [10.0, 10.0]},
+        "contents": "x".repeat(super::MAX_TEXT_BYTES + 1),
+    });
+    assert!(matches!(AnnotationInput::from_payload(&payload), Err(WireError::TooMany { what: "text bytes", .. })));
+    Ok(())
+}
+
 #[test]
 fn style_fields_ignore_unknown_keys_and_keep_the_known_ones() -> Result<(), BoxError> {
     let fields: StyleFields = serde_json::from_value(json!({"color": [1.0, 0.0, 0.0], "width": 3.0, "future": true}))?;

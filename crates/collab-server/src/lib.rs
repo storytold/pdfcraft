@@ -87,6 +87,14 @@ pub trait Adapter {
     }
     /// The current base bytes, when the journal no longer covers a resync.
     fn base(&self) -> Option<BlobRef>;
+    /// True while [`Room::replay`] re-applies the journal after a restart. The
+    /// operation's body is then the one this server accepted before, not a
+    /// client's request, so an adapter that trusts a body only on that path (a
+    /// restore carries what it deleted) can tell the two apart (thread #13 on
+    /// PR #6622).
+    fn set_replaying(&mut self, replaying: bool) {
+        let _ = replaying;
+    }
     /// What the cabinet holds for this file, as last agreed (RFC §8). `None`
     /// means "unknown": external-change checks are skipped rather than guessed,
     /// which is what a room seeded before the marker existed needs.
@@ -568,10 +576,10 @@ impl<A: Adapter> Room<A> {
             return Err(server_error(ErrorCode::Invalid, "a journal entry belongs to another document", false));
         }
         let class = op.class;
-        let outcome = self
-            .adapter
-            .apply(&actor, &op)
-            .map_err(|e| server_error(ErrorCode::Invalid, format!("replaying version {version}: {}", e.message), false))?;
+        self.adapter.set_replaying(true);
+        let outcome = self.adapter.apply(&actor, &op);
+        self.adapter.set_replaying(false);
+        let outcome = outcome.map_err(|e| server_error(ErrorCode::Invalid, format!("replaying version {version}: {}", e.message), false))?;
         if (class == ConflictClass::Structural && outcome.epoch <= self.epoch) || outcome.epoch < self.epoch {
             return Err(server_error(ErrorCode::Invalid, format!("replaying version {version} breaks the epoch"), false));
         }

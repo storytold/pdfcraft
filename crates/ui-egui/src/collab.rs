@@ -422,6 +422,10 @@ struct HistoryGroup {
     label: String,
     originals: Vec<Op>,
     inverses: Vec<Option<Op>>,
+    /// What redo sends once this group has been undone: the operations that were
+    /// applied, kept apart from `originals`, which after an undo holds the
+    /// inverses in flight (thread #7 on PR #6622).
+    forward: Vec<Op>,
 }
 
 /// The history label of the Split dialog's operation. A split with this label
@@ -1018,7 +1022,15 @@ impl PdfCraftApp {
             }
             Event::Rejected(rejected) => {
                 for group in collab.history.iter_mut().chain(collab.redo.iter_mut()) {
-                    group.originals.retain(|op| op.op_id != rejected.op_id);
+                    // An inverse is paired with its original by index, so the two
+                    // entries leave together: a leftover inverse would be sent by
+                    // the next undo and force a resync (thread #20 on PR #6622).
+                    let Some(index) = group.originals.iter().position(|op| op.op_id == rejected.op_id) else { continue };
+                    group.originals.remove(index);
+                    if index < group.inverses.len() {
+                        group.inverses.remove(index);
+                    }
+                    group.forward.retain(|op| op.op_id != rejected.op_id);
                 }
                 collab.history.retain(|group| !group.originals.is_empty());
                 collab.redo.retain(|group| !group.originals.is_empty());
@@ -1329,7 +1341,7 @@ impl PdfCraftApp {
                 return Some(false);
             }
         }
-        collab.history.push(HistoryGroup { label: edit.label().to_string(), originals: ops, inverses });
+        collab.history.push(HistoryGroup { label: edit.label().to_string(), originals: ops, inverses, forward: Vec::new() });
         collab.redo.clear();
         Some(true)
     }
@@ -1410,7 +1422,7 @@ impl PdfCraftApp {
             return Some(false);
         }
         let group_op = first.op_id.clone();
-        collab.history.push(HistoryGroup { label: COMBINE_LABEL.to_string(), originals: ops, inverses });
+        collab.history.push(HistoryGroup { label: COMBINE_LABEL.to_string(), originals: ops, inverses, forward: Vec::new() });
         collab.redo.clear();
         collab.combine = Some(CombineBatch {
             pending: queue,
@@ -1466,7 +1478,7 @@ impl PdfCraftApp {
             collab.error = Some("The collaboration session is closed".into());
             return Some(false);
         }
-        collab.history.push(HistoryGroup { label: label.to_string(), originals: vec![op], inverses: vec![inverse] });
+        collab.history.push(HistoryGroup { label: label.to_string(), originals: vec![op], inverses: vec![inverse], forward: Vec::new() });
         collab.redo.clear();
         Some(true)
     }
@@ -1494,7 +1506,7 @@ impl PdfCraftApp {
             collab.status = if undo { "Nothing to undo".into() } else { "Nothing to redo".into() };
             return true;
         };
-        let ops = if undo {
+        let forwarding = if undo {
             // A group's inverses run in reverse: a confirmation's parts joined
             // in order, so the last one leaves first and the positions of the
             // parts before it are still the ones they joined at.
@@ -1504,15 +1516,23 @@ impl PdfCraftApp {
                 collab.history.push(group);
                 return true;
             }
+            // Redo sends the operations that were applied, not the inverses this
+            // undo sends: keeping them here is what makes a redo restore the
+            // state the undo left (thread #7 on PR #6622).
+            let forward = std::mem::take(&mut group.forward);
+            let forward = if forward.is_empty() { group.originals.clone() } else { forward };
+            group.forward = forward;
             available
-        } else {
+        } else if group.forward.is_empty() {
             group.originals.clone()
+        } else {
+            group.forward.clone()
         };
         // A structural group (a Combine confirmation's splits) cannot go out in
         // one burst: each is accepted only at the head the previous one left.
         // The rest wait in a sequence and are addressed when their turn comes.
-        let mut queue: std::collections::VecDeque<Op> = std::collections::VecDeque::with_capacity(ops.len());
-        for mut op in ops {
+        let mut queue: std::collections::VecDeque<Op> = std::collections::VecDeque::with_capacity(forwarding.len());
+        for mut op in forwarding {
             let Some(id) = collab.next_op_id() else { break };
             op.op_id = id;
             queue.push_back(op);
@@ -1535,6 +1555,7 @@ impl PdfCraftApp {
         if undo {
             collab.redo.push(group);
         } else {
+            group.forward.clear();
             collab.history.push(group);
         }
         collab.sequence = Some(OpSequence { pending: queue, in_flight: Some(first) });
@@ -1656,11 +1677,11 @@ fn color_of_hex(color: &str) -> egui::Color32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActorId, BTreeMap, CollabUi, DocId, DocKey, Duration, Event, FieldCaretRef, Instant, Op, OpId, PRESENCE_TTL, PageRef, ParticipantSelection,
-        PdfCraftApp, Presence, RemoteSelectionKind, Role, Seen, Sink, doc_key_from_token, keeps_page_addresses, local_selection, rect_of_quads,
-        role_from_name, role_name, text_selection, visible_selection,
+        ActorId, BTreeMap, CollabUi, DocId, DocKey, Duration, Event, FieldCaretRef, HistoryGroup, Instant, Op, OpId, PRESENCE_TTL, PageRef,
+        ParticipantSelection, PdfCraftApp, Presence, RemoteSelectionKind, Role, Seen, Sink, doc_key_from_token, keeps_page_addresses,
+        local_selection, rect_of_quads, role_from_name, role_name, text_selection, visible_selection,
     };
-    use pdfcraft_collab_proto::{FieldCaret, Selection, Target, Viewport};
+    use pdfcraft_collab_proto::{ErrorCode, FieldCaret, Rejected, Selection, Target, Viewport};
 
     fn presence(selection: Option<Selection>) -> Result<Presence, Box<dyn std::error::Error>> {
         Ok(Presence {
@@ -2516,6 +2537,78 @@ mod tests {
         let other = app.session.open_new("other.pdf", fixture(2).into()).expect("a second document");
         assert_eq!(app.collab_split_pages(other, 0, 1), None);
         assert!(ops.lock().expect("the queue").is_empty());
+    }
+
+    /// Undo sends the inverses; redo sends what the undo took back, not the same
+    /// inverses again (thread #7 on PR #6622).
+    #[test]
+    fn a_redo_sends_the_operation_the_undo_took_back() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("t.pdf", None, fixture(2)).expect("the fixture opens");
+        let id = app.active_ids().map(|(_, id)| id).expect("a document");
+        let ops = session_on(&mut app, id);
+
+        assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+        let sent = ops.lock().expect("the queue").clone();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].payload["degrees"], serde_json::json!(90), "the turn goes out as it was made");
+
+        ops.lock().expect("the queue").clear();
+        assert!(app.collab_history_step(true), "the session owns the undo");
+        let undone = ops.lock().expect("the queue").clone();
+        assert_eq!(undone.len(), 1);
+        assert_eq!(undone[0].payload["degrees"], serde_json::json!(270), "the undo turns the page back");
+
+        // The room accepted the undo, so the sequence is over and redo may run.
+        let ctx = egui::Context::default();
+        app.collab_event(Event::Applied { applied: accepted(&undone[0], 2, 1, serde_json::json!({})), own: true }, &ctx);
+
+        ops.lock().expect("the queue").clear();
+        assert!(app.collab_history_step(false), "the session owns the redo");
+        let redone = ops.lock().expect("the queue").clone();
+        assert_eq!(redone.len(), 1);
+        assert_eq!(redone[0].payload["action"], "page.rotate");
+        assert_eq!(redone[0].payload["degrees"], serde_json::json!(90), "redo restores the state the undo left, not the inverse again");
+    }
+
+    /// An operation the room refuses takes its inverse with it: the two vectors
+    /// stay paired, so the next undo does not send something the server never
+    /// accepted (thread #20 on PR #6622).
+    #[test]
+    fn a_rejected_operation_takes_its_inverse_with_it() -> Result<(), Box<dyn std::error::Error>> {
+        use pdfcraft_collab_client_pdf::{add_note_payload, delete_payload, merge_op};
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("t.pdf", None, fixture(2)).expect("the fixture opens");
+        let id = app.active_ids().map(|(_, id)| id).expect("a document");
+        let ops = session_on(&mut app, id);
+        let doc = DocKey::new("file-1")?;
+        let page = PageRef { index: 0, epoch: 0 };
+        let target = Target::Page(page);
+        let one = merge_op(doc.clone(), OpId::new("a1")?, 0, 0, target.clone(), add_note_payload("n1", [1.0, 1.0], "one", "ada"));
+        let two = merge_op(doc.clone(), OpId::new("a2")?, 0, 0, target, add_note_payload("n2", [2.0, 2.0], "two", "ada"));
+        let undo_one = merge_op(doc.clone(), OpId::new("u1")?, 0, 0, Target::Annotation { page, nm: "n1".into() }, delete_payload());
+        let undo_two = merge_op(doc, OpId::new("u2")?, 0, 0, Target::Annotation { page, nm: "n2".into() }, delete_payload());
+        app.collab.as_mut().expect("a session").history.push(HistoryGroup {
+            label: "Add comments".into(),
+            originals: vec![one, two.clone()],
+            inverses: vec![Some(undo_one), Some(undo_two)],
+            forward: Vec::new(),
+        });
+
+        let ctx = egui::Context::default();
+        let rejected = Rejected { op_id: two.op_id.clone(), code: ErrorCode::Forbidden, retryable: false, hint: None, message: "no".into() };
+        app.collab_event(Event::Rejected(rejected), &ctx);
+        {
+            let collab = app.collab.as_ref().expect("a session");
+            assert_eq!(collab.history.len(), 1);
+            assert_eq!(collab.history[0].originals.len(), 1);
+            assert_eq!(collab.history[0].inverses.len(), 1, "the refused comment's inverse left with the comment");
+        }
+        assert!(app.collab_history_step(true), "the session owns the undo");
+        let sent = ops.lock().expect("the queue").clone();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].target, Target::Annotation { page, nm: "n1".into() }, "only the comment the room accepted is undone");
+        Ok(())
     }
 
     /// The room's accepted form of an operation: the intent with what the

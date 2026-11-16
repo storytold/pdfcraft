@@ -25,8 +25,15 @@ use serde::Deserialize;
 /// one here could only be a mistake.
 pub const MIN_HS256_SECRET_BYTES: usize = 16;
 
-/// The claims a connection needs. Only the fields the transport enforces are
-/// kept; `iss`, `iat` and `ver` are validated by the signature and `exp`.
+/// The claims a connection needs.
+///
+/// Only the fields the transport enforces are kept. The verifier checks the
+/// signature, the `exp` claim (with 30 s of leeway) and the `aud` audience, and
+/// requires `exp`, `sub` and `aud` to be present; the application and the file
+/// are then matched here. **`iss`, `iat` and `ver` are not read**: their policy
+/// is the cabinet's, which sets them when it issues the ticket, so an
+/// integrator must not assume this server validates them (thread #19 on
+/// PR #6622).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Claims {
     /// The cabinet user id. Becomes the session actor.
