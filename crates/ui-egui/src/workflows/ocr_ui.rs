@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
 use pdfcraft_engine::DocId;
-use pdfcraft_engine::ocr::{EngineChoice, LANGUAGES, MergeStrategy, OcrPage, OcrSettings, OutputMode};
+use pdfcraft_engine::ocr::{EngineChoice, MergeStrategy, OcrPage, OcrSettings, OutputMode};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
@@ -80,11 +80,21 @@ impl Default for OcrDraft {
 }
 
 impl OcrDraft {
+    /// Keep the language one the chosen engine can be asked for: Tesseract's languages need
+    /// Tesseract chosen, so changing the engine away from it goes back to English.
+    pub(crate) fn keep_language_readable(&mut self) {
+        let readable = pdfcraft_engine::ocr::language_for(self.engine, &self.language);
+        if readable != self.language {
+            self.language = readable.to_string();
+        }
+    }
+
     /// The recognition settings these choices make.
     pub fn settings(&self) -> OcrSettings {
         OcrSettings {
             dpi: self.dpi as f32,
-            language: self.language.clone(),
+            // Only a language the chosen engine can be asked for reaches a run.
+            language: pdfcraft_engine::ocr::language_for(self.engine, &self.language).to_string(),
             engine: self.engine,
             strategy: self.strategy,
             auto_rotate: self.auto_rotate,
@@ -102,12 +112,14 @@ impl OcrDraft {
     /// Restore from the preferences JSON (`ocr` object); unknown or malformed values keep the
     /// defaults, like every other restored setting.
     pub fn apply_pref(&mut self, v: &serde_json::Value) {
-        if let Some(l) = v["language"].as_str().filter(|l| LANGUAGES.iter().any(|x| x.0 == *l)) {
+        if let Some(l) = v["language"].as_str().filter(|l| pdfcraft_engine::ocr::language_name(l).is_some()) {
             self.language = l.to_string();
         }
         if let Some(e) = v["engine"].as_str() {
             self.engine = EngineChoice::parse(e);
         }
+        // A Tesseract language saved with another engine (a hand-edited file) reads as English.
+        self.keep_language_readable();
         if let Some(s) = v["strategy"].as_str() {
             self.strategy = match s.trim().to_ascii_lowercase().as_str() {
                 "confidence" | "confidence-weighted" | "confidence_weighted" => MergeStrategy::ConfidenceWeighted,
@@ -283,10 +295,12 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             group(ui, "Settings", &mut |ui| {
                 egui::Grid::new("ocr-settings").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
                     ui.label(tl!("Document language"));
-                    let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
+                    // The built-in languages, and with Tesseract chosen the allow-listed ones
+                    // whose pack is installed (#7496).
+                    let name = pdfcraft_engine::ocr::language_name(&d.language).unwrap_or("English");
                     craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).show_ui(ui, |ui| {
-                        for (code, name) in LANGUAGES {
-                            ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
+                        for (code, name) in pdfcraft_engine::ocr::document_languages(d.engine) {
+                            ui.selectable_value(&mut d.language, code.to_string(), tl!(name));
                         }
                     });
                     ui.end_row();
@@ -303,6 +317,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                             ui.selectable_value(&mut d.engine, choice, tl!(name));
                         }
                     });
+                    d.keep_language_readable();
                     ui.end_row();
                     ui.label(tl!("Combine engines"));
                     let strategy_name = match d.strategy {
@@ -1423,6 +1438,37 @@ mod tests {
         e.output_folder = Some("kept".into());
         e.apply_pref(&serde_json::json!({ "output_folder": "" }));
         assert_eq!(e.output_folder.as_deref(), Some("kept"), "an empty value is not a folder");
+    }
+
+    /// A Tesseract language (#7496) is kept with Tesseract chosen, through the preferences
+    /// round trip and into the run's settings; with another engine, or when the engine is
+    /// changed away from Tesseract, the language goes back to English; an unknown code never
+    /// replaces the saved choice.
+    #[test]
+    fn a_tesseract_language_stays_with_the_tesseract_engine() {
+        let mut d = OcrDraft::default();
+        d.apply_pref(&serde_json::json!({ "engine": "tesseract", "language": "ar" }));
+        assert_eq!((d.engine, d.language.as_str()), (EngineChoice::Tesseract, "ar"));
+        assert_eq!(d.settings().language, "ar");
+        let mut r = OcrDraft::default();
+        r.apply_pref(&d.to_pref());
+        assert_eq!((r.engine, r.language.as_str()), (EngineChoice::Tesseract, "ar"), "the choice survives a restart");
+
+        // The engine is changed in the dialog: the built-in engine cannot be asked for Arabic.
+        d.engine = EngineChoice::Auto;
+        assert_eq!(d.settings().language, "en", "a run never asks the built-in engine for it");
+        d.keep_language_readable();
+        assert_eq!(d.language, "en");
+
+        for other in ["ocrs", "auto"] {
+            let mut e = OcrDraft::default();
+            e.apply_pref(&serde_json::json!({ "engine": other, "language": "ar" }));
+            assert_eq!(e.language, "en", "{other}");
+        }
+        let mut bogus = OcrDraft::default();
+        bogus.apply_pref(&serde_json::json!({ "engine": "tesseract", "language": "ar" }));
+        bogus.apply_pref(&serde_json::json!({ "language": "klingon" }));
+        assert_eq!(bogus.language, "ar", "an unknown code keeps what was there");
     }
 
     /// "Automatic" saved without a strategy reads the way Automatic reads by default (the

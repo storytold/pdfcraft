@@ -6743,8 +6743,8 @@ milestone = "M10"
 status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text", "crates/ocr/src/tesseract.rs::language_table_maps_and_falls_back"]
-notes = "The choice feeds both engines: ocrs reads only unaccented Latin (its model table holds English); tesseract maps 12 allow-listed codes (the language enum comes from the engine's own table) but only as far as the installed language packs cover. Recognition quality beyond the tested English set is unproven."
+evidence = ["crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text", "crates/ocr/src/tesseract.rs::language_table_maps_and_falls_back", "crates/ocr/src/tesseract.rs::offered_languages_are_the_installed_allow_listed_ones", "crates/engine/src/ocr.rs::document_languages_add_the_installed_tesseract_ones", "crates/ui-egui/tests/it/ocr.rs::tesseract_languages_are_offered_as_document_languages", "crates/engine/src/ocr.rs::searchable_layer_round_trips_right_to_left_words"]
+notes = "The choice feeds both engines: ocrs reads only unaccented Latin (its model table holds English); tesseract maps 12 allow-listed codes but only as far as the installed language packs cover. With Tesseract chosen, the Document language list (the dialog and the OCR Verify toolbar) offers the allow-listed languages whose pack the installed program reports (#7496); they need Tesseract chosen, because the built-in engine reads first under Automatic, and changing the engine goes back to English. Right-to-left words (Arabic) are written to the searchable layer in visual order, so they read back, search and copy in reading order. Missing: the tools' `language` enum still holds the built-in table only (#7463); the editable output does not shape Arabic; recognition quality beyond the tested English set is unproven."
 
 [[feature]]
 id = "ocr.searchable-image"

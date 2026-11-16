@@ -30,6 +30,53 @@ pub(crate) fn validate_words<'a>(words: impl IntoIterator<Item = &'a PlacedWord>
     Ok(count)
 }
 
+/// A right-to-left letter (Hebrew, Arabic and the other right-to-left blocks), by the same
+/// rule the text extractor uses. The Arabic-Indic digits lie in those blocks but are numbers.
+fn is_rtl_letter(c: char) -> bool {
+    matches!(c as u32, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF) && !is_arabic_digit(c)
+}
+
+fn is_arabic_digit(c: char) -> bool {
+    matches!(c, '\u{0660}'..='\u{0669}' | '\u{06F0}'..='\u{06F9}')
+}
+
+/// A character that keeps its left-to-right order inside right-to-left text: a digit or a
+/// letter of a left-to-right script.
+fn keeps_order(c: char) -> bool {
+    is_arabic_digit(c) || (c.is_alphanumeric() && !is_rtl_letter(c))
+}
+
+/// The word's characters in the order they are drawn, left to right. A recognized word holds
+/// its text in logical order (the order it is read and typed in), but a PDF shows text in
+/// visual order, and that is what every extractor expects, this one included: for a
+/// right-to-left word the first letter is the rightmost. So a word with a right-to-left
+/// letter is drawn back to front, except that a number or a left-to-right word inside it
+/// (with a single separator between two of its characters, as in 12.5 or 2026/11) keeps its
+/// own order. Without this an Arabic or Hebrew word read back, searched or copied comes out
+/// reversed. A word with no right-to-left letter is drawn as it is.
+fn visual_order(text: &str) -> Vec<char> {
+    let chars: Vec<char> = text.chars().collect();
+    if !chars.iter().copied().any(is_rtl_letter) {
+        return chars;
+    }
+    // Runs in logical order: a left-to-right run stays whole, anything else is one character.
+    let mut runs: Vec<Vec<char>> = Vec::new();
+    let mut in_run = false;
+    let mut rest = chars.iter().copied().peekable();
+    while let Some(c) = rest.next() {
+        let separator = in_run && matches!(c, '.' | ',' | ':' | '/' | '-' | '\u{066B}' | '\u{066C}') && rest.peek().copied().is_some_and(keeps_order);
+        if in_run && (keeps_order(c) || separator) {
+            if let Some(run) = runs.last_mut() {
+                run.push(c);
+            }
+        } else {
+            in_run = keeps_order(c);
+            runs.push(vec![c]);
+        }
+    }
+    runs.into_iter().rev().flatten().collect()
+}
+
 pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) -> Result<(), EditError> {
     validate_words(words)?;
     // Keep the existing Latin layout, including Helvetica's proportional advance widths.
@@ -101,7 +148,8 @@ pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) ->
     // rendering mode cannot leak into later content streams on the page.
     let mut content = String::from("/OCR BMC\nq\nBT\n3 Tr\n");
     for w in words {
-        let count = w.text.chars().count();
+        let glyphs = visual_order(&w.text);
+        let count = glyphs.len();
         if count == 0 || w.up[0].hypot(w.up[1]) <= 0.0 || w.across[0].hypot(w.across[1]) <= 0.0 {
             continue;
         }
@@ -123,8 +171,8 @@ pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) ->
                 w.origin[1] + at * w.across[1] + 0.2 * w.up[1]
             ));
         };
-        for (i, ch) in w.text.chars().enumerate() {
-            let Some(&(font, code)) = codes.get(&ch) else { continue };
+        for (i, ch) in glyphs.iter().enumerate() {
+            let Some(&(font, code)) = codes.get(ch) else { continue };
             if let Some(previous) = font_index
                 && previous != font
             {
@@ -142,4 +190,42 @@ pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) ->
     content.push_str("ET\nQ\nEMC\n");
     pdfcraft_edit::stamp(doc, page, "OCR", content.into_bytes())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::visual_order;
+
+    fn drawn(text: &str) -> String {
+        visual_order(text).into_iter().collect()
+    }
+
+    /// Right-to-left words are drawn back to front; numbers and left-to-right words inside
+    /// them keep their order; everything else is untouched.
+    #[test]
+    fn right_to_left_words_are_drawn_in_visual_order() {
+        assert_eq!(drawn("بسم"), "مسب");
+        assert_eq!(drawn("שלום"), "םולש");
+        assert_eq!(drawn("برفضه."), ".هضفرب", "the full stop ends the word: it is drawn at its left");
+        // Unchanged: no right-to-left letter.
+        for same in ["", "Contract", "2026", "12.5%", "日本語", "٢٠٢٦", "naïve"] {
+            assert_eq!(drawn(same), same);
+        }
+        // A number inside right-to-left text reads left to right, separators included.
+        assert_eq!(drawn("م2026"), "2026م");
+        assert_eq!(drawn("2026م"), "م2026");
+        assert_eq!(drawn("رقم12.5"), "12.5مقر");
+        assert_eq!(drawn("١٢٣٤هـ"), "ـه١٢٣٤");
+        // So does a left-to-right word, and a separator that ends one is not part of it.
+        assert_eq!(drawn("ملفPDF"), "PDFفلم");
+        assert_eq!(drawn("ال-PDF"), "PDF-لا");
+        assert_eq!(drawn("12-ب"), "ب-12");
+        // A mark stays with its letter once the extractor turns the word back round.
+        let marked = drawn("بَ");
+        assert_eq!(marked.chars().rev().collect::<String>(), "بَ");
+        // Drawing twice is not the identity in general, but the length never changes.
+        for text in ["بسم الله", "a", "ب", "12ب34", "ב1.2.3ג"] {
+            assert_eq!(visual_order(text).len(), text.chars().count(), "{text}");
+        }
+    }
 }

@@ -621,6 +621,78 @@ pub fn engine_unavailable_reason(engine: EngineChoice) -> Option<String> {
     }
 }
 
+/// Every document language some engine can be asked for: the built-in engine's table, then
+/// Tesseract's allow-list (not on the web, which has no Tesseract). A saved choice is checked
+/// against this; what can be chosen right now is [`document_languages`].
+pub fn all_languages() -> Vec<(&'static str, &'static str)> {
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut out: Vec<(&'static str, &'static str)> = LANGUAGES.to_vec();
+    #[cfg(not(target_arch = "wasm32"))]
+    for entry in pdfcraft_ocr::tesseract::LANGUAGE_NAMES {
+        if !out.iter().any(|l| l.0 == entry.0) {
+            out.push(*entry);
+        }
+    }
+    out
+}
+
+/// The English name of a document language code from [`all_languages`] (the interface
+/// translates it); `None` for a code no engine knows.
+pub fn language_name(code: &str) -> Option<&'static str> {
+    all_languages().into_iter().find(|l| l.0 == code).map(|l| l.1)
+}
+
+/// The language a run with `engine` is asked for: `language` when that engine can be asked
+/// for it, else English. The built-in engine's languages go with every choice; Tesseract's
+/// allow-listed ones only with Tesseract chosen, because the built-in engine (which reads
+/// first under Automatic) would read such a page as Latin letters. Never starts a process:
+/// whether the language pack is installed is [`document_languages`]' question, and a run
+/// that asks for a missing pack fails with Tesseract's own message.
+pub fn language_for(engine: EngineChoice, language: &str) -> &'static str {
+    if let Some(l) = LANGUAGES.iter().find(|l| l.0 == language) {
+        return l.0;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if engine == EngineChoice::Tesseract
+        && let Some(l) = pdfcraft_ocr::tesseract::LANGUAGE_NAMES.iter().find(|l| l.0 == language)
+    {
+        return l.0;
+    }
+    let _ = engine;
+    "en"
+}
+
+/// What the Document language dropdown offers for `engine` right now: the built-in engine's
+/// languages, and with Tesseract chosen also the allow-listed languages whose pack the
+/// installed program reports (#7496). Called on the UI thread every frame, so it never waits
+/// on a process: until the background probe lands (see [`engine_probe_running`]) only the
+/// built-in languages are listed.
+pub fn document_languages(engine: EngineChoice) -> Vec<(&'static str, &'static str)> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if engine == EngineChoice::Tesseract {
+        let configured = std::env::var_os("PDFCRAFT_TESSERACT").map(|v| v.to_string_lossy().into_owned());
+        if let Probe::Known(Some(tesseract)) = tesseract_engine_now(configured.as_deref()) {
+            let installed: Vec<String> = tesseract.languages().into_iter().map(|(code, _)| code).collect();
+            return languages_with(&installed);
+        }
+    }
+    let _ = engine;
+    LANGUAGES.to_vec()
+}
+
+/// [`document_languages`] for a Tesseract that reports the packs `installed`: the built-in
+/// languages first, then the installed allow-listed ones not already listed.
+#[cfg(not(target_arch = "wasm32"))]
+fn languages_with(installed: &[String]) -> Vec<(&'static str, &'static str)> {
+    let mut out: Vec<(&'static str, &'static str)> = LANGUAGES.to_vec();
+    for entry in pdfcraft_ocr::tesseract::offered_languages(installed) {
+        if !out.iter().any(|l| l.0 == entry.0) {
+            out.push(entry);
+        }
+    }
+    out
+}
+
 /// Why Tesseract cannot be chosen yet: its probe is still running in the background.
 #[cfg(not(target_arch = "wasm32"))]
 fn tesseract_checking() -> String {
@@ -1466,6 +1538,43 @@ mod tests {
         assert_eq!(tesseract.program.as_deref(), Some("not/a/program"));
     }
 
+    /// The Document language list (#7496): with Tesseract chosen it holds the built-in
+    /// languages and then the allow-listed ones whose pack is installed; a pack that is
+    /// installed but not allow-listed is not offered, and no language is listed twice.
+    #[test]
+    fn document_languages_add_the_installed_tesseract_ones() {
+        let installed = |codes: &[&str]| codes.iter().map(|c| (*c).to_string()).collect::<Vec<_>>();
+        assert_eq!(languages_with(&installed(&["ara", "eng", "osd", "script\\Arabic"])), vec![("en", "English"), ("ar", "Arabic")]);
+        assert_eq!(languages_with(&installed(&["rus", "deu"])), vec![("en", "English"), ("de", "German"), ("ru", "Russian")]);
+        assert_eq!(languages_with(&installed(&["slv", "osd"])), LANGUAGES.to_vec(), "not allow-listed: not offered");
+        assert_eq!(languages_with(&[]), LANGUAGES.to_vec());
+        // Only Tesseract adds languages: the other choices list the built-in table whatever
+        // is installed (and never start the probe for it).
+        assert_eq!(document_languages(EngineChoice::Ocrs), LANGUAGES.to_vec());
+        assert_eq!(document_languages(EngineChoice::Auto), LANGUAGES.to_vec());
+    }
+
+    /// A language is only asked of an engine that can be asked for it: Tesseract's languages
+    /// need Tesseract chosen, and anything unknown reads as English, as before.
+    #[test]
+    fn a_tesseract_language_needs_tesseract_chosen() {
+        assert_eq!(language_for(EngineChoice::Tesseract, "ar"), "ar");
+        assert_eq!(language_for(EngineChoice::Tesseract, "en"), "en");
+        assert_eq!(language_for(EngineChoice::Auto, "ar"), "en", "the built-in engine reads first under Automatic");
+        assert_eq!(language_for(EngineChoice::Ocrs, "ar"), "en");
+        assert_eq!(language_for(EngineChoice::Ocrs, "en"), "en");
+        for bogus in ["", "ara", "AR", " ar", "klingon", "ar;rm"] {
+            assert_eq!(language_for(EngineChoice::Tesseract, bogus), "en", "{bogus:?}");
+        }
+        assert_eq!(language_name("ar"), Some("Arabic"));
+        assert_eq!(language_name("en"), Some("English"));
+        assert_eq!(language_name("klingon"), None);
+        let all = all_languages();
+        assert_eq!(all.first(), Some(&("en", "English")));
+        assert_eq!(all.iter().filter(|l| l.0 == "en").count(), 1, "English is listed once");
+        assert_eq!(all.len(), pdfcraft_ocr::tesseract::LANGUAGE_CODES.len());
+    }
+
     /// What the interface sees of the cache: a fresh answer as is, an expired failed probe as
     /// the best known answer (shown while it is retried, so the choice does not flicker), and
     /// nothing for a location nobody asked about.
@@ -2031,6 +2140,39 @@ mod tests {
         s.apply(id, Edit::AddOcrText { page: 0, words: vec![word] }).unwrap();
         let text = crate::tests::page_texts(&s, id)[0].clone();
         assert!(text.contains("日本語"), "{text}");
+    }
+
+    /// Right-to-left words (Arabic through Tesseract, #7496) are read back as they were
+    /// recognized: the layer draws them in visual order, which is what this extractor and
+    /// every other one turns back into reading order. Drawn in logical order, each word came
+    /// back reversed ("مسب" for "بسم") and no search found it. A number on the line keeps its
+    /// digits in order.
+    #[test]
+    fn searchable_layer_round_trips_right_to_left_words() {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("src.pdf", None, Arc::new(fixture(1)), None).unwrap();
+        // One line, as a scan shows it: the first word is the rightmost.
+        let line = [("تاريخ", 150.0, 30.0), ("الجلسة", 110.0, 35.0), ("2026", 80.0, 25.0), ("رقم", 55.0, 20.0)];
+        let words: Vec<PlacedWord> = line
+            .iter()
+            .map(|(text, x, width)| PlacedWord {
+                text: (*text).to_string(),
+                origin: [*x, 250.0],
+                across: [*width, 0.0],
+                up: [0.0, 10.0],
+                confidence: None,
+                source: "tesseract".into(),
+            })
+            .collect();
+        s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+        let text = crate::tests::page_texts(&s, id)[0].clone();
+        for (word, _, _) in line {
+            assert!(text.contains(word), "{word} in {text}");
+        }
+        assert!(text.contains("تاريخ الجلسة 2026 رقم"), "{text}");
+        let saved = s.save_bytes(id).unwrap();
+        let reopened = s.open("searchable.pdf", None, saved, None).unwrap();
+        assert!(crate::tests::page_texts(&s, reopened)[0].contains("تاريخ الجلسة 2026 رقم"));
     }
 
     /// The fontless searchable layer retains its original pixels, handles multiple code
