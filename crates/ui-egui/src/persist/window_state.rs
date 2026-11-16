@@ -88,8 +88,9 @@ impl WindowState {
 
     /// Once the window's size is known: a shown window at egui's floor in both directions came
     /// from settings stored while it was minimized (before this fix), so give it a usable size. A
-    /// shown window larger than its monitor (not maximized or full screen, which fit by
-    /// definition) is fitted to it ([`fit_to_monitor`]), at start and on coming back from either.
+    /// shown window larger than its monitor is fitted to it ([`fit_to_monitor`]). Both are checked
+    /// at start and on coming back from maximized or full screen, and neither while the window is
+    /// either: it fits by definition, and its size to return to is checked when it comes back.
     ///
     /// Call this from a drawn pass (`App::ui`), not `App::logic`. On Wayland a resize the app asks
     /// for brings no resize event, and eframe only tells the painter about one after a drawn pass.
@@ -117,12 +118,19 @@ impl WindowState {
             return;
         }
         self.checked = true;
+        if filling {
+            // Nothing to fix while it fills the monitor, and a resize now would do harm: a window
+            // that starts maximized can report its floor size on the first frame, before Windows
+            // shows it maximized, and resized then it opened maximized but squeezed into the
+            // screen's corner (#7131). Its size to return to is checked when it comes back.
+            return;
+        }
         if rect.width() <= EGUI_FLOOR + 0.5 && rect.height() <= EGUI_FLOOR + 0.5 {
             // The stored settings are the broken ones: never put them back.
             self.shown = None;
             let size = monitor.map_or(USABLE, |m| USABLE.min(m * 0.9));
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-        } else if !filling {
+        } else {
             // The monitor can be unknown for a while (Wayland, a surface on no output yet): a
             // window that cannot be measured yet is checked again on the next frame.
             let Some(monitor) = monitor else {
@@ -426,6 +434,37 @@ mod tests {
         assert!(frame(&mut state, small, false, false).is_empty());
         assert!(frame(&mut state, filling, true, false).is_empty());
         assert!(frame(&mut state, small, false, false).is_empty());
+    }
+
+    /// A window saved maximized with a size at egui's floor reports that size, maximized, on its
+    /// first frame (Windows shows it maximized later). Resized then, it opened maximized but
+    /// squeezed into the screen's corner, and restored down to the floor (#7131). It gets its
+    /// usable size when it comes back from maximized or full screen instead.
+    #[test]
+    fn a_window_maximized_at_eguis_floor_is_sized_when_restored() {
+        let run = |state: &mut WindowState, inner: egui::Vec2, maximized: bool, fullscreen: bool| {
+            let ctx = egui::Context::default();
+            let mut input = egui::RawInput::default();
+            let info = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+            info.outer_rect = Some(egui::Rect::from_min_size(egui::pos2(-8.0, -8.0), inner + egui::vec2(16.0, 16.0)));
+            info.inner_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, inner));
+            info.minimized = Some(false);
+            info.maximized = Some(maximized);
+            info.fullscreen = Some(fullscreen);
+            info.monitor_size = Some(LAPTOP);
+            let out = ctx.run_logic(&input, |ctx| state.repair(ctx));
+            out.viewport_commands.get(&egui::ViewportId::ROOT).cloned().unwrap_or_default()
+        };
+        let floor = egui::Vec2::splat(EGUI_FLOOR);
+        let usable = [egui::ViewportCommand::InnerSize(USABLE.min(LAPTOP * 0.9))];
+        for (maximized, fullscreen) in [(true, false), (false, true)] {
+            let mut state = WindowState { shown: Some(MINIMIZED.into()), ..WindowState::default() };
+            assert!(run(&mut state, floor, maximized, fullscreen).is_empty(), "not resized while filling the monitor");
+            assert!(run(&mut state, LAPTOP, maximized, fullscreen).is_empty(), "shown filling the monitor");
+            assert_eq!(run(&mut state, floor, false, false), usable, "restored down to the floor");
+            assert!(state.shown.is_none(), "the broken settings are not put back");
+            assert!(run(&mut state, USABLE.min(LAPTOP * 0.9), false, false).is_empty(), "once for each return");
+        }
     }
 
     /// Windows reports a minimized window as not maximized: back from the taskbar, a maximized
