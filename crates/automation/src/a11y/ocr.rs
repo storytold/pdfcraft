@@ -549,7 +549,10 @@ impl Automation {
         let before_bytes = doc.bytes.len();
         let path = self.resolve(a.str("path")?, true)?;
         let binarize = a.opt_bool("binarize_scans")?.unwrap_or(true);
-        let max_pixels = a.opt_int("max_pixels")?.and_then(|v| u64::try_from(v).ok()).unwrap_or(80_000_000);
+        let max_pixels = match a.opt_int("max_pixels")? {
+            Some(v) => u64::try_from(v).map_err(|_| ToolError::InvalidArgs("max_pixels must be a non-negative integer".into()))?,
+            None => 80_000_000,
+        };
         let options = pdfcraft_engine::ocr::AdaptiveCompressOptions { binarize_scans: binarize, max_pixels };
         let (bytes, report) = self.session.adaptive_compress_scans(id, &options).map_err(failed)?;
         write_atomic(&path, &bytes)?;

@@ -1,6 +1,6 @@
 use super::options::{
     ADAPTIVE_COMPRESS_OPTIONS, COMBINE_OPTIONS, EXTRACT_OPTIONS, INFO_OPTIONS, RENDER_OPTIONS, SPLIT_OPTIONS, TEXT_OPTIONS, can_be_path_value, flag,
-    needs_value, positional, validate_options,
+    has_flag, needs_value, positional, validate_options,
 };
 use super::{Arc, CliError, ImageFormat, PageRenderer, Path, PathBuf, RenderConfig, RenderRequest, RequestKind, Write, inspect, stdout_line};
 
@@ -464,14 +464,17 @@ pub(crate) fn adaptive_compress(args: &[String]) -> Result<(), CliError> {
     validate_options("adaptive-compress", args, ADAPTIVE_COMPRESS_OPTIONS)?;
     let path = *positional(args, ADAPTIVE_COMPRESS_OPTIONS).first().ok_or("adaptive-compress: missing file")?;
     let out = flag(args, "--out").ok_or("adaptive-compress: missing --out")?;
-    let binarize_scans = !args.iter().any(|a| a == "--no-binarize");
-    let max_pixels = flag(args, "--max-pixels").and_then(|v| v.parse::<u64>().ok()).unwrap_or(80_000_000);
+    let binarize_scans = !has_flag(args, ADAPTIVE_COMPRESS_OPTIONS, "--no-binarize");
+    let max_pixels = match flag(args, "--max-pixels") {
+        Some(v) => v.parse::<u64>().map_err(|_| format!("adaptive-compress: --max-pixels expects a non-negative integer, got {v:?}"))?,
+        None => 80_000_000,
+    };
     let options = pdfcraft_engine::ocr::AdaptiveCompressOptions { binarize_scans, max_pixels };
     let mut session = pdfcraft_engine::Session::new();
     let id = session.open(path, None, read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
     let (bytes, report) = session.adaptive_compress_scans(id, &options).map_err(|e| e.to_string())?;
     write_pdf(Path::new(out), &bytes)?;
-    if args.iter().any(|a| a == "--json") {
+    if has_flag(args, ADAPTIVE_COMPRESS_OPTIONS, "--json") {
         stdout_line(format_args!("{{\"compressed\":{},\"skipped\":{}}}", report.compressed, report.skipped))
     } else {
         stdout_line(format_args!("compressed {} scan images (skipped {})", report.compressed, report.skipped))
