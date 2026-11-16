@@ -3545,8 +3545,8 @@ fn forms_with_resources_of_their_own_are_read_in_up_to_65536_scopes() {
 /// only the last two, as names or null, and keeping one operator 1,000 times, handed on once.
 /// Drawing 1,000 such names, or one of 4,096 bytes, each taking again costs them, and past
 /// 2,000,000 the read is partial; so for drawing five forms without resources, each holding six
-/// marks (malformed, dictionaries alone) that name nothing, each taken again in each of 65,280
-/// scopes at one for each mark.
+/// different marks that name nothing (malformed: no operand, or dictionaries alone), each read in
+/// one of 65,280 scopes and taken again in each of the others at one for each mark.
 #[test]
 fn a_form_taken_again_costs_the_names_it_hands_on() {
     let long = "X".repeat(4096);

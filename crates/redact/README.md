@@ -184,7 +184,7 @@ surviving paint uses it. A form the walk leaves as it is, because it reaches no 
 all it did: the patterns it selects through the names it is drawn with count as used, and where
 it, or a form inside it, sets a Type 3 font without resources of its own (by `Tf` or a graphics
 state's `/Font`), or what draws it has set one, whose glyphs paint through those names, the page
-keeps every pattern it selected, as for such a font the walk meets. Such a form is read for them only where those names
+keeps every pattern it selected, as where the walk shows a glyph of such a font. Such a form is read for them only where those names
 give a pattern, once for each chain of forms it is drawn in, and no more than 4,096 times on a
 page, within an allowance of a page for forms without resources of their own and another, with
 2,000,000 operators, for forms with them; where it can't all be read (it doesn't decode, the

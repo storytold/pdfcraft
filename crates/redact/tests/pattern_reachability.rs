@@ -220,7 +220,8 @@ fn a_type3_font_with_null_resources_keeps_the_page_pattern() {
 /// `Tf`, outside a text object or inside one ended before the form, by the page's ExtGState, to a
 /// form with resources of its own that don't give a font, and by a form the walk enters. And where
 /// another form clear of the mark, showing nothing, is drawn after the one showing the glyph, with
-/// the font still set or after the page sets another.
+/// the page's font still set, or after that form set the font itself and the page then set
+/// another.
 #[test]
 fn a_type3_glyph_in_a_form_clear_of_the_mark_keeps_the_page_pattern() {
     let clear = "/Type /XObject /Subtype /Form /BBox [290 220 350 280]";
