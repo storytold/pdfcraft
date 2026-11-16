@@ -15461,3 +15461,40 @@ fn inline_conversions_refuse_office_documents_without_running_libreoffice() {
     assert_eq!(s.convert_to_pdf_inline("notes.txt", &Arc::new(b"hello".to_vec())).unwrap().0, SourceKind::Text);
     assert!(s.as_pdf_inline("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
 }
+
+/// A file encrypted with revision 4 whose crypt filter names AESV3 (AES-256) with a 16-byte
+/// key: PdfCraft opens it, but a rewrite puts its objects in an object stream encrypted in a
+/// way no reader can open again. Optimize checks its copy like a save, so it refuses rather
+/// than write a file that doesn't reopen. User password empty, owner password "o".
+fn r4_aesv3_encrypted() -> Vec<u8> {
+    pdfcraft_testkit::Pdf::new()
+        .version("1.6")
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>")
+        .obj("<< /Type /Page /Parent 2 0 R >>")
+        .obj(concat!(
+            "<< /Filter /Standard /V 4 /R 4 /Length 128 /P -4 ",
+            "/O <77b8fb098022d3ab34237ea5643c08710ea5123fc5f88bf993a68cca5f12b40f> ",
+            "/U <217a5274f4997a9a14068dc1a7a60fb300000000000000000000000000000000> ",
+            "/CF << /StdCF << /CFM /AESV3 /Length 16 /AuthEvent /DocOpen >> >> /StmF /StdCF /StrF /StdCF >>"
+        ))
+        .trailer_entry("/Encrypt 4 0 R /ID [<00112233445566778899aabbccddeeff> <00112233445566778899aabbccddeeff>]")
+        .build()
+}
+
+#[test]
+fn optimize_refuses_a_copy_that_does_not_reopen() {
+    let mut s = Session::new();
+    let id = s.open("r4-aesv3.pdf", None, Arc::new(r4_aesv3_encrypted()), None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 1, "the original opens");
+    let optimized = s.optimized_bytes(id, &optimize::Settings::default(), &[]);
+    assert!(matches!(optimized, Err(EditError::Reopen(_))), "{:?}", optimized.map(|(b, _)| b.len()));
+    assert!(matches!(s.reduced_bytes(id), Err(EditError::Reopen(_))));
+    // A save of the same document is refused the same way.
+    let full = s.save_full_bytes(id).unwrap();
+    assert!(matches!(s.check_save(id, &full), Err(EditError::Reopen(_))));
+    // Printing it to a PDF is a new, unencrypted file, which reopens.
+    let settings = print::Settings { pages: vec![0], ..Default::default() };
+    let printed = s.print_pdf(id, &settings).unwrap();
+    assert_eq!(pdfcraft_organize::page_count(&pdfcraft_cos::Document::open(Arc::new(printed)).unwrap()).unwrap(), 1);
+}

@@ -14761,3 +14761,47 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
     assert_eq!(page_text(&mut a, reopened), [new, old]);
     assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
 }
+
+/// Encrypted with revision 4, whose crypt filter names AESV3 with a 16-byte key: it opens, but a
+/// rewrite can't be read again (empty user password, owner password "o"). Optimize and Reduce
+/// File Size refuse it as a save does, and leave no file behind; printing to a PDF still works.
+#[test]
+fn optimizing_refuses_a_copy_that_does_not_reopen_through_tools() {
+    const R4_AESV3: &str = r"%PDF-1.6
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R >>
+endobj
+4 0 obj
+<< /Filter /Standard /V 4 /R 4 /Length 128 /P -4 /O <77b8fb098022d3ab34237ea5643c08710ea5123fc5f88bf993a68cca5f12b40f> /U <217a5274f4997a9a14068dc1a7a60fb300000000000000000000000000000000> /CF << /StdCF << /CFM /AESV3 /Length 16 /AuthEvent /DocOpen >> >> /StmF /StdCF /StrF /StdCF >>
+endobj
+xref
+0 5
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000139 00000 n 
+0000000186 00000 n 
+trailer
+<< /Size 5 /Root 1 0 R /Encrypt 4 0 R /ID [<00112233445566778899aabbccddeeff> <00112233445566778899aabbccddeeff>] >>
+startxref
+485
+%%EOF
+";
+    let dir = workdir("optimize-reopen-check");
+    std::fs::write(dir.join("r4.pdf"), R4_AESV3).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "r4.pdf" }))["doc"].as_u64().unwrap();
+    for tool in ["doc_optimize", "doc_reduce"] {
+        let e = err(&mut a, tool, json!({ "doc": doc, "path": "out.pdf" })).to_string();
+        assert!(e.contains("could not be reopened"), "{tool}: {e}");
+        assert!(!dir.join("out.pdf").exists(), "{tool} wrote a file that does not reopen");
+    }
+    ok(&mut a, "doc_print", json!({ "doc": doc, "path": "printed.pdf" }));
+    ok(&mut a, "doc_open", json!({ "path": "printed.pdf" }));
+}
