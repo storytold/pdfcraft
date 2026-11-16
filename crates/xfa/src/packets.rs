@@ -117,6 +117,22 @@ fn to_text(bytes: &[u8]) -> String {
     }
 }
 
+/// The text of the datasets packet when `/XFA` is an array naming a template and a datasets packet, read as
+/// [`read_packets`] reads each packet. `None` otherwise, or when the packet can't be decoded.
+pub(crate) fn datasets_packet_text(doc: &Document) -> Option<String> {
+    let catalog = doc.get(doc.root()?);
+    let acro = doc.resolve(catalog.as_dict()?.get(b"AcroForm")?);
+    let xfa = doc.resolve(acro.as_dict()?.get(b"XFA")?);
+    let Object::Array(items) = &*xfa else { return None };
+    let named =
+        |name: &str| (0..items.len().saturating_sub(1)).find(|&i| items.get(i).and_then(|n| n.as_string()).is_some_and(|s| s.to_text() == name));
+    named("template")?;
+    let s = doc.resolve(items.get(named("datasets")? + 1)?);
+    let Object::Stream(s) = &*s else { return None };
+    let bytes = pdfcraft_cos::DecodeBudget::new(MAX_DECODE_WORK, 0).decode_within(s, MAX_XDP).ok()?;
+    Some(to_text(&bytes))
+}
+
 /// Read the XFA packets, if the document has any.
 pub fn read_packets(doc: &Document) -> Result<Option<Packets>, XfaError> {
     let Some(root) = doc.root() else { return Ok(None) };
