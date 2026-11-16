@@ -2163,16 +2163,8 @@ fn render_warnings_are_kept_per_page_until_the_page_changes() {
     let request = RenderRequest { page: 0, kind: RequestKind::Pixels, tag: 7, ..Default::default() };
     let text_request = RenderRequest { page: 0, kind: RequestKind::Text, tag: TEXT_TAG, ..Default::default() };
     v.last_queue = vec![request, text_request];
-    let result = |request, warnings| RenderedPage {
-        request,
-        width: 0,
-        height: 0,
-        rgba: Default::default(),
-        error: None,
-        text: None,
-        warnings,
-        millis: 0,
-    };
+    let result =
+        |request, warnings| RenderedPage { request, width: 0, height: 0, rgba: Default::default(), error: None, text: None, warnings, millis: 0 };
     v.receive_result(&ctx, result(request, vec![RenderWarning::ColourFallback, RenderWarning::ContentTruncated]));
     assert!(v.cut_pages.contains(&0), "content truncation keeps its own bar");
     assert_eq!(v.warned_pages.get(&0), Some(&vec![RenderWarning::ColourFallback]), "the other warning is kept");
