@@ -812,9 +812,13 @@ fn read_encoding(object: &Object<'_>, cmap_resolver: &CMapResolverFn) -> Option<
                 hayro_cmap::CMapName::IdentityH => Some(CMap::identity_h()),
                 hayro_cmap::CMapName::IdentityV => Some(CMap::identity_v()),
                 _ => {
-                    let data = (cmap_resolver)(cmap_type)?;
                     let resolver = cmap_resolver.clone();
-                    CMap::parse(data, move |n| (resolver)(n))
+                    match (cmap_resolver)(cmap_type) {
+                        Some(data) => CMap::parse(data, move |n| (resolver)(n)),
+                        // PdfCraft patch (116): a CID CMap of an Adobe collection.
+                        None => collection_cmap(n.deref())
+                            .and_then(|text| CMap::parse(text.as_bytes(), move |n| (resolver)(n))),
+                    }
                 }
             }
         }
@@ -825,6 +829,55 @@ fn read_encoding(object: &Object<'_>, cmap_resolver: &CMapResolverFn) -> Option<
         }
         _ => None,
     }
+}
+
+/// PdfCraft patch (116): the number of CIDs in each supplement of the Adobe character
+/// collections, as the CID CMaps Adobe publishes with them state it (`/CIDCount` in
+/// `Adobe-<Ordering>-<Supplement>`, adobe-type-tools/cmap-resources, BSD-3-Clause).
+const COLLECTION_CID_COUNTS: &[(&str, &[u32])] = &[
+    ("Japan1", &[8284, 8359, 8720, 9354, 15444, 20317, 23058, 23060]),
+    ("GB1", &[7717, 9897, 22127, 22353, 29064, 30284, 30572]),
+    ("CNS1", &[14099, 17408, 17601, 18846, 18965, 19088, 19156, 19179]),
+    ("Korea1", &[9333, 18155, 18352]),
+    ("KR", &[3059, 4637, 11451, 11731, 11878, 12235, 14238, 18858, 22480, 22897]),
+    ("Manga1", &[18032]),
+    ("Japan2", &[6068]),
+];
+
+/// PdfCraft patch (116): the CID CMap Adobe publishes for a supplement of one of its character
+/// collections (`Adobe-Japan1-2` and the like) as CMap source text, or `None` for any other
+/// name.
+///
+/// Such a CMap is horizontal, takes two-byte codes and maps each code below the supplement's
+/// CID count to the CID of the same number. ISO 32000-2 §9.7.5.2 doesn't list these names in
+/// Table 116, so a font that names one without embedding it breaks the rule; the whole font
+/// was then dropped for the Helvetica substitute, which drew `Hello world` as `)FMMPXPSME`
+/// and left the font's `/ToUnicode` unread. PDFium, Poppler and Ghostscript read the name as
+/// this CMap and draw the text with the embedded font. Codes from the CID count up map to
+/// CID 0, the `.notdef` glyph, as Adobe's CMap leaves them unmapped.
+fn collection_cmap(name: &[u8]) -> Option<String> {
+    let name = std::str::from_utf8(name).ok()?;
+    let (ordering, supplement) = name.strip_prefix("Adobe-")?.rsplit_once('-')?;
+    // Adobe writes the supplement without leading zeros.
+    if supplement.is_empty()
+        || !supplement.bytes().all(|b| b.is_ascii_digit())
+        || (supplement.len() > 1 && supplement.starts_with('0'))
+    {
+        return None;
+    }
+    let supplement: usize = supplement.parse().ok()?;
+    let (_, counts) = COLLECTION_CID_COUNTS.iter().find(|(o, _)| *o == ordering)?;
+    let count = *counts.get(supplement)?;
+    let last = count.checked_sub(1)?;
+    Some(format!(
+        "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n\
+         /CIDSystemInfo << /Registry (Adobe) /Ordering ({ordering}) /Supplement {supplement} >> def\n\
+         /CMapName /{name} def /CMapType 1 def /WMode 0 def\n\
+         1 begincodespacerange <0000> <FFFF> endcodespacerange\n\
+         1 begincidrange <0000> <{last:04X}> 0 endcidrange\n\
+         1 beginnotdefrange <{count:04X}> <FFFF> 0 endnotdefrange\n\
+         endcmap CMapName currentdict /CMap defineresource pop end end\n"
+    ))
 }
 
 /// PdfCraft patch test (ported from craft-libs): a /W2 run whose first CID is past `MAX_CID`
