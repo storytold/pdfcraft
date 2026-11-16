@@ -415,10 +415,19 @@ impl Certificate {
 
     /// Whether `key` verifies this certificate's signature.
     pub fn signed_by(&self, key: &PublicKey) -> bool {
+        self.signed_by_cached(key, &mut None)
+    }
+
+    /// [`Self::signed_by`] keeping the digest of the signed part in `digest`, so checking one
+    /// certificate against many candidate keys hashes it once.
+    fn signed_by_cached(&self, key: &PublicKey, digest: &mut Option<Vec<u8>>) -> bool {
         let Ok(alg) = Tlv::parse_all(&self.sig_alg) else { return false };
         match keys::signature_algorithm(&alg) {
             Ok((scheme @ keys::Scheme::Ed25519, _)) => key.verify_message(scheme, &self.tbs, &self.signature).unwrap_or(false),
-            Ok((scheme, Some(digest))) => key.verify(scheme, digest, &digest.digest(&[&self.tbs]), &self.signature).unwrap_or(false),
+            Ok((scheme, Some(d))) => {
+                let hash = digest.get_or_insert_with(|| d.digest(&[&self.tbs]));
+                key.verify(scheme, d, hash, &self.signature).unwrap_or(false)
+            }
             _ => false,
         }
     }
@@ -533,7 +542,8 @@ pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at:
         // CA certificates between `last` and the leaf: what a candidate's pathLenConstraint limits.
         let below = chain.len() - 1;
         let mut found = None;
-        for c in pool.iter().filter(|c| c.subject.raw == last.issuer.raw && !chain.contains(c) && last.signed_by(&c.public_key)) {
+        let mut digest = None;
+        for c in pool.iter().filter(|c| c.subject.raw == last.issuer.raw && !chain.contains(c) && last.signed_by_cached(&c.public_key, &mut digest)) {
             // Each reason is a whole sentence, not a phrase stitched into one: a language puts the
             // two names where it needs them.
             let why = if !c.may_issue() {
