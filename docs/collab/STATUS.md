@@ -19,6 +19,13 @@
   in "The six open security findings of #6622". "The ninth merge of `origin/main`"
   below has this merge's evidence, the corrections to earlier records and the
   remainder.
+- **The tip gate's two red tests are the gate host's missing language catalogs,
+  not the branch.** Clean `origin/main` `207a50ef1` under the same environment
+  reproduces both (`rc=101` each, same names, same `file:line`, same messages),
+  and the tip is green with `CRAFT_FONTS_DIR`/`CRAFT_I18N_DIR` set. Section "The
+  tip gate's two red tests are the gate's environment, not the branch" below;
+  control log `.craft/logs/control-pdfcraft-main-207a50ef1.log`, measured
+  2026-11-16T14:39–14:48Z. No code, test or workflow changed for them.
 - **The head `6a6fd7d87` is delivered — the earlier header of this file said it
   was not.** Measured 2026-11-16T09:52Z: PR #6622's `headRefOid` and the fork
   `copoka/pdfcraft`'s branch tip both read `6a6fd7d87` (`gh pr view 6622 --json
@@ -594,6 +601,95 @@ the earlier gates); it is out of the scope of this gate and was not touched.
    and a rule for operations a client sends between batches. It waits for the
    owner's decision and the RFC, as "The ten advisory findings" records; a local
    convention here would be a private protocol.
+
+## The tip gate's two red tests are the gate's environment, not the branch (2026-11-16)
+
+The gate on the tip `4fcca26e9e609ed2d83a565fdda635059c8862aa`
+(`.craft/logs/gate-pdfcraft-tip-4fcca26e9.log`, header `HEAD 4fcca26e9… dirty=0`
+at 2026-11-16T11:13:47Z) ended `test rc=101` with **exactly two failed tests**,
+and both are main's files, byte-identical on `origin/main` (`git diff --stat
+origin/main HEAD -- crates/ui-egui/src/bidi/tests.rs
+crates/ui-egui/tests/it/comments.rs crates/ui-egui/src/i18n.rs
+crates/ui-egui/build.rs craft-i18n.rev` is empty):
+
+| Test | Panic, the same at the tip and on `origin/main` |
+|---|---|
+| `bidi::tests::arabic_ui_labels_use_an_explicit_paragraph_direction` | `crates/ui-egui/src/bidi/tests.rs:289:69`: `registered language` |
+| `comments::the_selection_bar_stays_inside_the_pages_area` | `crates/ui-egui/tests/it/comments.rs:4520:64`: `called Result::unwrap() on an Err value: "language must be one of auto, en"` |
+
+### Control on clean `origin/main` — red there too
+
+A detached worktree of the build host's clone at `origin/main`
+`207a50ef133a99d051d94ad655a9d1cf40745199`
+(`/home/markin/build/pdfcraft/mainctl-207a50ef1`, `git status --porcelain` 0
+lines) ran the same two commands under the environment the failing gate ran
+under — `CRAFT_FONTS_DIR=/home/markin/build/fonts-37827adc`, `CRAFT_I18N_DIR`
+unset, as the sweep's own record of that run states
+(`.craft/reports/20261116-1146-pr-sweep.md`, "Урок прохода") — at
+2026-11-16T14:39:30Z. **Both are red on main, with the same test names, the same
+`file:line` and the same messages**: `BIDI_RC=101`, `BAR_RC=101`. The log is
+`.craft/logs/control-pdfcraft-main-207a50ef1.log` (its `### PHASE-2` block).
+
+So the two reds are **not a regression of this branch**, and nothing in the 22
+`ui-egui` files it touches is the cause: they are red on the commit the branch
+merges, with the same output. `origin/main` had moved to `207a50ef1` by then — 23
+commits above the `75a6ce50c` the ninth merge took — so with this record the
+branch reads **164 ahead and 23 behind** `origin/main`; that does not change the
+tip's tree, which is the one measured here.
+
+### What they are: a missing build input, not code
+
+`Lang::from_code` (`crates/ui-egui/src/i18n.rs:202`) returns a language only when
+its catalogs are embedded, and `build.rs` embeds them from `CRAFT_I18N_DIR`;
+`has_catalogs()` (`i18n.rs:337`) says it in words — "English alone in a build
+without craft-i18n". Without the catalogs `ar` and `de` are not registered, so
+`Lang::from_code("ar").expect("registered language")` panics and
+`set_option("language", "de")` is refused with `language must be one of auto,
+en`. The `bidi` test's first line returns early when
+`pdfcraft_fonts::ui_arabic_fonts()` is empty, which is why a run with neither
+variable set shows one red, not two: `bidi` passes as `1 passed` (skipped),
+`comments` still fails `rc=101`. The branch does not touch that path — the only
+`crates/ui-egui/Cargo.toml` change adds the default-off `collab` feature.
+
+### The matrix, measured 2026-11-16T14:39–14:48Z on the build host
+
+| # | tree | `CRAFT_FONTS_DIR` | `CRAFT_I18N_DIR` | `bidi::…arabic_ui_labels…` | `comments::…selection_bar…` |
+|---|---|---|---|---|---|
+| 1 | main `207a50ef1` | unset | unset | pass (skipped: no Arabic face) | **FAIL `rc=101`** |
+| 2 | main `207a50ef1` | `/home/markin/build/fonts-37827adc` | unset | **FAIL `rc=101`** | **FAIL `rc=101`** |
+| 3 | main `207a50ef1` | `$HOME/craft-fonts` | `$HOME/craft-i18n` | pass `rc=0` | pass `rc=0` |
+| 4 | tip `4fcca26e9` | `$HOME/craft-fonts` | `$HOME/craft-i18n` | pass `rc=0` | pass `rc=0` |
+| 5 | tip `4fcca26e9` | `/home/markin/build/fonts-37827adc` | unset | **FAIL `rc=101`** | **FAIL `rc=101`** |
+
+Rows 4 and 5 are one tree: the tip is green with the documented build inputs and
+red without them, exactly as main is (rows 3 and 2). The same two names also pass
+in the whole-workspace run with the right environment —
+`.craft/logs/gate2-pdfcraft-4fcca26e9.log` (2026-11-16T11:39:08Z,
+`HEAD 4fcca26e9… dirty=0`, `STEP test rc=0`, 10108 passed / 0 failed / 22
+ignored). `$HOME/craft-i18n` on the host read
+`1e515422afdda2f317af430c1f9d68a5f83935b4` for these runs while the repository
+pins `866aff71dd63d8369eb100b9c432b5af1400c22a` (`craft-i18n.rev`); the
+difference is catalog content, not which languages exist — both register `ar` and
+`de`.
+
+**Nothing was changed for them**: no code, no test, no workflow. The gate recipe
+needs both variables, which the accepted gates since 2026-11-16T09:00Z already
+set. Nothing was pushed, no review thread was resolved and the PR was not
+approved by this pass.
+
+### A gotcha that cost one re-run
+
+The control worktree was built into the *same* `CARGO_TARGET_DIR` as the tip
+(`/home/markin/build/pdfcraft/upstream/target`). After the main-tree build cargo
+at the tip linked main's stale `pdfcraft-engine`/`pdfcraft-organize` rlibs and
+refused to compile `pdfcraft-ui-egui` — 22 errors of the shape `no
+BookmarkDest in the root`, `field shortcut of struct CommandSpec is private`,
+`Edit::UpdateBookmark` suggested as `RenameBookmark` — a false "the tip does not
+compile". `touch`ing every `.rs`, `Cargo.toml` and `build.rs` under `crates/
+vendor/ apps/ xtask/` and re-running built the tip's own crates and both tests
+passed (rows 4 and 5; `### PHASE-4b`/`PHASE-5b` in the control log). **Do not
+share one `CARGO_TARGET_DIR` between two checkouts of this workspace**: give a
+control worktree its own target directory, or force the rebuild as above.
 
 ## The six open security findings of #6622 (2026-11-16)
 
