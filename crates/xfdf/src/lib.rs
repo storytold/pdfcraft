@@ -2,8 +2,10 @@
 //!
 //! - **XFDF** (ISO 19444-1, Acrobat's "Export all to data file" / "Import comments", and form
 //!   data): comments with their geometry, colours, flags, authors, dates, replies, pop-ups,
-//!   ink, quadrilaterals, line ends and callouts; field values, nested by name.
-//! - **FDF** (ISO 32000-2 §12.7.8): fields and comments in PDF syntax.
+//!   ink, quadrilaterals, line ends, callouts, formatting (rich text, default style, border
+//!   style and dashes, rotation, justification, fringe, line leaders) and a stamp's appearance;
+//!   field values, nested by name.
+//! - **FDF** (ISO 32000-2 §12.7.8): fields and comments in PDF syntax, with their appearances.
 //! - Form data as **XML**, **CSV** and **tab-delimited text** (Acrobat's Export data formats).
 //!
 //! Import merges: a comment whose name (`/NM`) already exists on its page replaces it; field
@@ -18,24 +20,27 @@ use std::io::Write as _;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 use pdfcraft_forms::{FieldKind, FieldValue};
 
+mod appearance;
 mod common;
 mod fdf;
 mod xfdf;
 
 #[cfg(test)]
 use common::{MAX_DEPTH, MAX_XML_DEPTH, arr, nums_of, parse_hex, text_of, xml_nesting_depth};
-use common::{check_form_xml_depth, esc, parse_form_xml, walk_xfdf, xml_name};
+use common::{check_form_xml_depth, el_text, esc, parse_form_xml, walk_xfdf, xml_name};
 pub use fdf::export_fdf;
 use fdf::{ImportBudget, fdf_body, import_fdf, walk_fdf};
 #[cfg(test)]
 use fdf::{MAX_FDF_BYTES, MAX_FDF_OBJECTS};
-pub use xfdf::export_xfdf;
 #[cfg(test)]
 use xfdf::{LOCKED, find_by_name};
+pub use xfdf::{Outline, comment_count, comment_outlines, comments_bounds, export_xfdf, export_xfdf_comments, import_comments, is_xfdf_comments};
 use xfdf::{apply_values, import_xfdf};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_format;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum DataError {
@@ -85,6 +90,9 @@ pub struct Report {
     pub fields: usize,
     /// Field values the form refused (format, validation, unknown options).
     pub rejected: Vec<String>,
+    /// What the import left out of a comment it did import, each as "name: why" (an appearance
+    /// it could not read: the comment is drawn from its other entries instead).
+    pub skipped: Vec<String>,
 }
 
 /// Form data as XML, CSV or tab-delimited text (Acrobat's Export data formats).
@@ -115,7 +123,13 @@ pub fn export_data(doc: &Document, format: Format) -> String {
             // A formula-like cell gets a leading `'`, as in `merge_csv`; import takes it off again.
             let q = |s: &str| {
                 let s = if csv_guarded(s) { format!("'{s}") } else { s.to_string() };
-                if s.contains([',', '"', '\n', '\r', '\t']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
+                if s.contains('\t') {
+                    format!("\"{}\"", s.replace('"', "\"\""))
+                } else {
+                    let mut out = String::new();
+                    craft_csv::push_field(&mut out, &s, ',');
+                    out
+                }
             };
             format!(
                 "{}\n{}\n",
@@ -164,13 +178,12 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
     let text = String::from_utf8_lossy(bytes);
     let t = text.trim_start_matches('\u{feff}').trim_start();
     check_form_xml_depth(t)?;
-    let xml = parse_form_xml(t).map_err(|_| DataError::UnknownFormat)?;
-    let root = xml.root_element();
-    if root.tag_name().name() != "xfdf" {
+    let root = parse_form_xml(t).map_err(|_| DataError::UnknownFormat)?;
+    if root.local() != "xfdf" {
         return Err(DataError::UnknownFormat);
     }
     let mut values = Vec::new();
-    if let Some(fields) = root.children().find(|c| c.has_tag_name("fields")) {
+    if let Some(fields) = root.child(craft_xml::Local("fields")) {
         walk_xfdf(fields, "", &mut values, 0)?;
     }
     Ok(values)
@@ -194,7 +207,13 @@ pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
     let literal = |s: &str| if runs_as_formula(s) { format!("'{s}") } else { s.to_string() };
     let q = |s: &str| {
         let s = literal(s);
-        if s.contains([',', '"', '\n', '\r', '\t']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
+        if s.contains('\t') {
+            format!("\"{}\"", s.replace('"', "\"\""))
+        } else {
+            let mut out = String::new();
+            craft_csv::push_field(&mut out, &s, ',');
+            out
+        }
     };
     let mut out = columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(",");
     out.push('\n');
@@ -263,15 +282,12 @@ fn import_table(doc: &mut Document, text: &str) -> Result<Report, DataError> {
     let t = text.trim_start_matches('\u{feff}');
     let values: Vec<(String, Vec<String>)> = if t.trim_start().starts_with('<') {
         check_form_xml_depth(t)?;
-        let xml = parse_form_xml(t).map_err(|e| DataError::Malformed(e.to_string()))?;
-        xml.root_element()
-            .children()
-            .filter(|c| c.is_element())
+        let root = parse_form_xml(t).map_err(|e| DataError::Malformed(e.to_string()))?;
+        root.elements()
             .map(|c| {
-                let name =
-                    c.attributes().find(|a| a.name() == "original").map(|a| a.value().to_string()).unwrap_or_else(|| c.tag_name().name().to_string());
+                let name = c.attr_local("original").map(str::to_owned).unwrap_or_else(|| c.local().to_string());
                 // Comments and processing instructions do not end a field's character data.
-                (name, vec![c.children().filter(|node| node.is_text()).filter_map(|node| node.text()).collect()])
+                (name, vec![el_text(c)])
             })
             .collect()
     } else if has_tab_delimiter(t) {
@@ -330,8 +346,15 @@ fn tab_delimited(t: &str) -> Result<Vec<(String, Vec<String>)>, DataError> {
 }
 
 /// Import comments and/or field values from XFDF, FDF, XML, CSV or tab-delimited text
-/// (detected from the content).
+/// (detected from the content). All or nothing: on an error `doc` is left as it was.
 pub fn import(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
+    let mut work = doc.clone();
+    let report = import_into(&mut work, bytes)?;
+    *doc = work;
+    Ok(report)
+}
+
+fn import_into(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
     let report = if bytes.starts_with(b"%FDF") {
         import_fdf(doc, bytes)?
     } else {

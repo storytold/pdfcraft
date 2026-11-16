@@ -3,7 +3,7 @@
 Layer L4 (may use `edit`): verification tooling, the faux-redaction audit.
 
 ```rust
-let findings: Vec<Finding> = audit_redactions(&doc)?;  // page, kind, rect, covered_text
+let findings: Vec<AuditFinding> = audit_redactions(&doc)?;  // page, kind, rect, covered_text
 ```
 
 It reports two kinds of finding:
