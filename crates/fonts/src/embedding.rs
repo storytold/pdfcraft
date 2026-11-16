@@ -60,11 +60,18 @@ pub fn validate_document_input(bytes: &[u8]) -> Result<(), String> {
         return Err("Adobe-authored font assets are excluded by the project's asset policy".into());
     }
     let license: String = f.localized_strings(StringId::LICENSE_DESCRIPTION).map(|s| s.to_string()).collect();
+    // Proposed external-document-input policy, split from #3528 for maintainer decision.
+    // This is a declaration check, not proof of the font's provenance or licence.
+    let font_exception = license.contains("GNU General Public License")
+        && license.contains("As a special exception")
+        && license.contains("embed this font")
+        && license.contains("does not by itself cause the resulting document");
     if !["SIL OPEN FONT", "SIL Open Font", "Apache License", "Ubuntu Font Licence", "Bitstream Vera", "MIT License"]
         .iter()
         .any(|l| license.contains(l))
+        && !font_exception
     {
-        return Err("select an openly licensed font whose name table declares its licence (OFL, Apache, Ubuntu, Bitstream Vera or MIT)".into());
+        return Err("select an openly licensed font whose name table declares its licence (OFL, Apache, Ubuntu, Bitstream Vera, MIT or GPL with a font-embedding exception)".into());
     }
     Ok(())
 }
@@ -340,6 +347,14 @@ fn same_resource(doc: &Document, fonts: &Dict, name: &str, programs: &mut Progra
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proposed_document_input_policy_accepts_external_font_embedding_exception() {
+        let Some(path) = std::env::var_os("PDFCRAFT_TEST_THAI_FONT") else { return };
+        let bytes = std::fs::read(path).unwrap();
+        // External fixture only; no font asset is committed by this policy proposal.
+        validate_document_input(&bytes).unwrap();
+    }
     use crate::pdf::Metrics;
 
     #[test]
