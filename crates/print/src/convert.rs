@@ -168,23 +168,29 @@ fn has_cmyk_output_intents(doc: &Document) -> bool {
 /// Cap the Form XObject walk against deeply nested form trees.
 const MAX_FORM_DEPTH: usize = 32;
 
+/// Cap the total Form XObject visits across one page's traversal. A DAG of shared
+/// forms can fan out exponentially; when exhausted, return `true` conservatively so
+/// the document-wide skip fires.
+const MAX_FORM_VISITS: usize = 4096;
+
 /// Whether any page, or any Form XObject reachable from a page, defines
 /// `/DefaultCMYK` or `/DefaultRGB` in its `/Resources /ColorSpace` dictionary.
 fn pages_have_default_colour_spaces(doc: &Document) -> bool {
     for p in pdfcraft_model::pages(doc) {
         let mut path: HashSet<ObjRef> = HashSet::new();
-        if form_tree_has_defaults(doc, &p.dict, 0, &mut path) {
+        let mut visits = 0usize;
+        if form_tree_has_defaults(doc, &p.dict, 0, &mut path, &mut visits) {
             return true;
         }
     }
     false
 }
 
-/// Conservative at the depth limit: when `MAX_FORM_DEPTH` is exceeded without
-/// completing the walk, returns `true`, because a default could exist further down.
-/// The visited set is per-path (`path`), so a form referenced again at a shallower
-/// depth is still walked there.
-fn form_tree_has_defaults(doc: &Document, dict: &Dict, depth: usize, path: &mut HashSet<ObjRef>) -> bool {
+/// Conservative at the depth and visit limits: when `MAX_FORM_DEPTH` or `MAX_FORM_VISITS`
+/// is exceeded without completing the walk, returns `true`, because a default could exist
+/// further down. The visited set is per-path (`path`), so a form referenced again at a
+/// shallower depth is still walked there.
+fn form_tree_has_defaults(doc: &Document, dict: &Dict, depth: usize, path: &mut HashSet<ObjRef>, visits: &mut usize) -> bool {
     if depth > MAX_FORM_DEPTH {
         return true;
     }
@@ -203,8 +209,13 @@ fn form_tree_has_defaults(doc: &Document, dict: &Dict, depth: usize, path: &mut 
         if !path.insert(*r) {
             continue;
         }
+        *visits += 1;
+        if *visits > MAX_FORM_VISITS {
+            path.remove(r);
+            return true;
+        }
         let found = match &*doc.get(*r) {
-            Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form") => form_tree_has_defaults(doc, &s.dict, depth + 1, path),
+            Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form") => form_tree_has_defaults(doc, &s.dict, depth + 1, path, visits),
             _ => false,
         };
         path.remove(r);
@@ -396,9 +407,9 @@ mod tests {
         let form = doc.add(Object::Stream(Stream::from_raw(form_dict, vec![])));
 
         // Direct test: empty page resources return false, while the form's resources return true.
-        assert!(!form_tree_has_defaults(&doc, &Dict::new(), 0, &mut HashSet::new()));
+        assert!(!form_tree_has_defaults(&doc, &Dict::new(), 0, &mut HashSet::new(), &mut 0));
         let Object::Stream(s) = &*doc.get(form) else { panic!() };
-        assert!(form_tree_has_defaults(&doc, &s.dict, 0, &mut HashSet::new()));
+        assert!(form_tree_has_defaults(&doc, &s.dict, 0, &mut HashSet::new(), &mut 0));
 
         // Page referencing the form via /XObject also detects the form-local default.
         let mut xobj = Dict::new();
@@ -407,7 +418,7 @@ mod tests {
         page_res.set(b"XObject".to_vec(), Object::Dict(xobj));
         let mut page_dict = Dict::new();
         page_dict.set(b"Resources".to_vec(), Object::Dict(page_res));
-        assert!(form_tree_has_defaults(&doc, &page_dict, 0, &mut HashSet::new()));
+        assert!(form_tree_has_defaults(&doc, &page_dict, 0, &mut HashSet::new(), &mut 0));
     }
 
     #[test]
@@ -440,6 +451,47 @@ mod tests {
         let mut page = Dict::new();
         page.set(b"Resources".to_vec(), Object::Dict(page_res));
 
-        assert!(form_tree_has_defaults(&doc, &page, 0, &mut HashSet::new()));
+        assert!(form_tree_has_defaults(&doc, &page, 0, &mut HashSet::new(), &mut 0));
+    }
+
+    #[test]
+    fn shared_forms_terminate_within_visit_budget() {
+        let mut doc = Document::new_empty();
+
+        // A chain of forms where each form names the next one twice, with no defaults.
+        // Without a visit budget, walking this is 2^depth visits.
+        const DEPTH: usize = MAX_FORM_DEPTH;
+        let mut child: Option<ObjRef> = None;
+        for _ in 0..DEPTH {
+            let mut xobjects = Dict::new();
+            if let Some(c) = child {
+                xobjects.set(b"A".to_vec(), Object::Ref(c));
+                xobjects.set(b"B".to_vec(), Object::Ref(c));
+            }
+            let mut res = Dict::new();
+            res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+
+            let mut form = Dict::new();
+            form.set(b"Subtype".to_vec(), Object::name("Form"));
+            form.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+            form.set(b"Resources".to_vec(), Object::Dict(res));
+            child = Some(doc.add(Object::Stream(Stream::from_raw(form, vec![]))));
+        }
+
+        let mut page_res = Dict::new();
+        let mut xobjects = Dict::new();
+        xobjects.set(b"F".to_vec(), Object::Ref(child.unwrap()));
+        page_res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let mut page = Dict::new();
+        page.set(b"Resources".to_vec(), Object::Dict(page_res));
+        let page_ref = doc.add(Object::Dict(page));
+
+        let Object::Dict(pd) = &*doc.get(page_ref) else { panic!() };
+        let mut path: HashSet<ObjRef> = HashSet::new();
+        let mut visits = 0usize;
+        let start = std::time::Instant::now();
+        assert!(form_tree_has_defaults(&doc, pd, 0, &mut path, &mut visits));
+        assert!(start.elapsed().as_secs() < 5, "traversal exceeded budget window");
+        assert!(visits <= MAX_FORM_VISITS + 1);
     }
 }
