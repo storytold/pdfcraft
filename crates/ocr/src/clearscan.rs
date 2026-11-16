@@ -708,7 +708,7 @@ fn compose(
     };
     let image = embed_background(&mut doc, &cleaned, encoding)?;
     let pdf = write_page(&mut doc, &image, &font_ids, &placed, width, height, placement)?;
-    let text_out: String = placed.iter().map(|show| show.text.as_str()).collect();
+    let text_out = joined_placed_text(&placed);
     let placements: Vec<GlyphPlacement> = placed
         .iter()
         .map(|show| GlyphPlacement {
@@ -721,6 +721,28 @@ fn compose(
         .collect();
     let glyphs = placements.len();
     Ok(ClearScanOutput { pdf, text: text_out, glyphs, clusters: masters.len(), skipped_clusters, erased, width, height, placements })
+}
+
+/// Reconstruct plain text from sorted placements, inserting a space between words on the same
+/// line and a newline between lines.
+fn joined_placed_text(placed: &[Placed]) -> String {
+    let mut out = String::new();
+    let mut prev: Option<(usize, usize)> = None;
+    for show in placed {
+        if show.text.is_empty() {
+            continue;
+        }
+        if let Some((prev_line, prev_word)) = prev {
+            if show.line != prev_line {
+                out.push('\n');
+            } else if show.word != prev_word {
+                out.push(' ');
+            }
+        }
+        out.push_str(&show.text);
+        prev = Some((show.line, show.word));
+    }
+    out
 }
 
 /// The baseline origin in user space, when the page can show it. [`compose`] places a glyph
@@ -1539,5 +1561,56 @@ mod tests {
         let idx = (54_usize * rendered.width as usize + 33) * 4;
         let [r, g, b, _] = rendered.rgba[idx..idx + 4] else { panic!("pixel") };
         assert!(r > 150 && g < 60 && b < 60, "expected red glyph fill, got rgb=({r}, {g}, {b})");
+    }
+
+    #[test]
+    fn word_spaces_and_line_breaks_appear_in_output_text_and_extracted_page_text() {
+        let (width, height) = (200_u32, 140_u32);
+        // Line 0: word 0 ("HI" at x=20..24, 28..32) and word 1 ("TO" at x=70..74, 78..82), y=20..40.
+        // Line 1: word 0 ("GO" at x=20..24, 28..32), y=80..100.
+        let pixels = marked_page(
+            width,
+            height,
+            &[[20, 20, 24, 40], [28, 20, 32, 40], [70, 20, 74, 40], [78, 20, 82, 40], [20, 80, 24, 100], [28, 80, 32, 100]],
+        );
+        let out = clearscan_image(
+            ScanRaster { pixels: &pixels, width, height, channels: 1, points_per_pixel: 1.0 },
+            &tuned(1, 1.0),
+            |_| {
+                let word = |w: &str, c0: (char, f32, f32), c1: (char, f32, f32), t: f32, b: f32| AnnotatedWord {
+                    text: w.into(),
+                    rect: [c0.1, t, c1.2, b],
+                    chars: vec![CharBox { char: c0.0, rect: [c0.1, t, c0.2, b] }, CharBox { char: c1.0, rect: [c1.1, t, c1.2, b] }],
+                };
+                Ok(vec![
+                    AnnotatedLine {
+                        words: vec![
+                            word("HI", ('H', 20.0, 24.0), ('I', 28.0, 32.0), 20.0, 40.0),
+                            word("TO", ('T', 70.0, 74.0), ('O', 78.0, 82.0), 20.0, 40.0),
+                        ],
+                        baseline: 40.0,
+                        x_height: 10.0,
+                        cap_height: 20.0,
+                        descent: 0.0,
+                    },
+                    AnnotatedLine {
+                        words: vec![word("GO", ('G', 20.0, 24.0), ('O', 28.0, 32.0), 80.0, 100.0)],
+                        baseline: 100.0,
+                        x_height: 10.0,
+                        cap_height: 20.0,
+                        descent: 0.0,
+                    },
+                ])
+            },
+            no_progress,
+        )
+        .expect("word spaces and line breaks");
+        assert_eq!(out.text, "HI TO\nGO");
+
+        let mut renderer = PageRenderer::new(Arc::new(out.pdf), RenderConfig::default());
+        let text = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, scale: 1.0, ..RenderRequest::default() });
+        assert!(text.error.is_none(), "{:?}", text.error);
+        let plain = text.text.as_ref().map(|page| page.plain_text()).unwrap_or_default();
+        assert_eq!(plain, "HI TO\nGO");
     }
 }
