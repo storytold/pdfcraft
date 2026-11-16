@@ -711,11 +711,7 @@ impl Automation {
             "form_fields" => self.form_fields(&a)?,
             "form_fill" => self.form_fill(&a)?,
             "form_focus" => self.form_focus(&a)?,
-            "form_set_image" => {
-                let path = self.resolve(a.str("path")?, false)?;
-                let bytes = read_input(&path)?;
-                self.apply(&a, Edit::SetFieldImage { name: a.str("field")?.to_owned(), image: Arc::new(bytes) })?
-            }
+            "form_set_image" => self.form_set_image(&a)?,
             "form_reset" => self.form_reset(&a)?,
             "form_add_field" => self.form_add_field(&a)?,
             "form_add_field_table" => self.form_add_field_table(&a)?,
@@ -730,12 +726,15 @@ impl Automation {
             "redact_clear" => self.redact_clear(&a)?,
             "doc_hidden_info" => self.doc_hidden_info(&a)?,
             "printers" => self.printers()?,
+            "print_color_profiles" => self.print_color_profiles()?,
             "printer_options" => self.printer_options(&a)?,
+            "printer_papers" => self.printer_papers(&a)?,
             "link_list" => self.link_list(&a)?,
             "link_open" => self.link_open(&a)?,
             "link_add" => self.link_add(&a)?,
             "link_edit" => self.link_edit(&a)?,
             "link_delete" => self.link_delete(&a)?,
+            "link_run_javascript" => self.link_run_javascript(&a)?,
             "links_from_urls" => self.links_from_urls(&a)?,
             "links_remove" => self.links_remove(&a)?,
             "object_list" => self.object_list(&a)?,
@@ -838,6 +837,9 @@ impl Automation {
             "accessibility_autotag_form_fields" => self.accessibility_autotag_form_fields(&a)?,
             "ocr_recognize" => self.ocr_recognize(&a)?,
             "js_run" => self.js_run(&a)?,
+            "js_event" => self.js_event(&a)?,
+            "js_page" => self.js_page(&a)?,
+            "js_advance" => self.js_advance(&a)?,
             "js_document_scripts" => self.js_document_scripts(&a)?,
             "js_set_document_script" => self.js_set_document_script(&a)?,
             "js_enabled" => self.js_enabled(&a)?,

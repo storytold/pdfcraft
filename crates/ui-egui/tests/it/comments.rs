@@ -614,8 +614,72 @@ fn selected_text_comment_action_opens_note_composer() {
     h.run_steps(3);
     h.get_by_label("Add comment").click();
     h.run_steps(2);
-    assert!(matches!(h.state().views[0].comments.composer.as_ref().map(|c| &c.kind), Some(pdfcraft_ui_egui::comments::ComposerKind::Note)));
+    assert!(matches!(
+        h.state().views[0].comments.composer.as_ref().map(|c| &c.kind),
+        Some(pdfcraft_ui_egui::comments::ComposerKind::TextNote { .. })
+    ));
+    h.get_by_label("Add comment");
+    assert!(h.query_by_label("Sticky note").is_none());
     assert!(h.state().views[0].selected_text().is_none());
+}
+
+#[test]
+fn selection_note_replaced_by_sticky_note_posts_at_the_new_anchor() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.run_steps(3);
+    h.get_by_label("Add comment").click();
+    h.run_steps(2);
+    h.state_mut().set_option("quick", "note").unwrap();
+    click_pt(&mut h, (250.0, 180.0));
+    let anchor = h.state().views[0].comments.composer.as_ref().unwrap().at;
+    field(&h, "Add a comment").type_text("New sticky note");
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].subtype, "Text");
+    assert_eq!(c[0].contents.as_deref(), Some("New sticky note"));
+    assert!(c[0].quads.is_empty());
+    assert!((anchor[0] - 250.0).abs() < 1.0 && (anchor[1] - 180.0).abs() < 1.0);
+    assert!((f64::from(c[0].rect[0]) - anchor[0]).abs() < 1.0 && (f64::from(c[0].rect[3]) - anchor[1]).abs() < 1.0, "{:?}", c[0].rect);
+}
+
+#[test]
+fn selection_note_posts_highlight_and_hovers_author_and_comment() {
+    let _gpu = std::env::var_os("PDFCRAFT_SHOTS").map(|_| crate::gpu());
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    let selected = h.state().views[0].selected_text().unwrap();
+    h.run_steps(3);
+    h.get_by_label("Add comment").click();
+    h.run_steps(2);
+    field(&h, "Add a comment").type_text("Check these words");
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    crate::support::settle(&mut h);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].subtype, "Highlight");
+    assert_eq!(c[0].contents.as_deref(), Some("Check these words"));
+    assert!(!c[0].quads.is_empty());
+    let hover = format!("{}\nCheck these words", c[0].author.as_deref().expect("comment has an author"));
+    h.state_mut().set_option("panel", "none").unwrap();
+    h.state_mut().views[0].comments.selected = None;
+    h.hover_at(pos2(0.0, 0.0));
+    h.run_steps(3);
+    assert!(h.query_by_label(&hover).is_none());
+    let r = c[0].rect;
+    let p = at(&h, (r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    h.hover_at(p);
+    h.run_steps(3);
+    h.get_by_label(&hover);
+    assert!(h.query_by_label_contains(&selected).is_none(), "hover omits the selected text");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/selection-comment-hover.png")).unwrap();
+    }
 }
 
 #[test]
@@ -1061,6 +1125,58 @@ fn arrow_keys_nudge_the_selected_comment() {
     h.run_steps(3);
     assert_eq!(comments(&h)[0].rect, rect, "the comment stays");
     assert_eq!(h.state().views[0].current, 1, "and the view goes to the next page");
+}
+
+#[test]
+fn arrow_keys_nudge_all_selected_comments_as_one_undo_step() {
+    use egui::Key;
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    drag_pt(&mut h, (30.0, 110.0), (80.0, 70.0));
+    drag_pt(&mut h, (130.0, 110.0), (180.0, 70.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    let before: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    assert_eq!(before.len(), 2);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().views[0].comments.also = vec![(0, 1)];
+    h.key_press(Key::ArrowRight);
+    h.run_steps(3);
+    let moved: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    for (old, new) in before.iter().zip(&moved) {
+        assert!(new[0] > old[0], "each selected comment moves: {before:?} -> {moved:?}");
+    }
+    h.state_mut().undo();
+    h.run_steps(2);
+    let undone: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    assert_eq!(undone, before, "one undo restores the whole selection");
+}
+
+#[test]
+fn arrow_nudge_skips_locked_comments_and_duplicate_selection_entries() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0)), ((180.0, 20.0), (220.0, 60.0))] {
+        drag_pt(&mut h, a, b);
+    }
+    h.state_mut().set_option("quick", "select").unwrap();
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 1, locked: true }));
+    h.run_steps(2);
+    let before = comments(&h);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.state_mut().views[0].comments.also = vec![(0, 1), (0, 2), (0, 2), (0, 0)];
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    let after = comments(&h);
+    let left = |list: &[Annotation], i: usize| list.iter().find(|a| a.index == i).expect("comment still exists").rect[0];
+    let primary_delta = left(&after, 0) - left(&before, 0);
+    let secondary_delta = left(&after, 2) - left(&before, 2);
+    assert!(primary_delta > 0.0, "primary comment moves");
+    assert!((secondary_delta - primary_delta).abs() < 0.01, "duplicate entries must not move the second comment twice");
+    assert_eq!(left(&after, 1), left(&before, 1), "locked comment stays in place");
+    h.state_mut().undo();
+    h.run_steps(2);
+    let undone = comments(&h);
+    for i in 0..3 {
+        assert_eq!(left(&undone, i), left(&before, i), "one undo restores comment {i}");
+    }
 }
 
 /// #3632: with a comment selected, Alt+← / Alt+→ still go back and forward through the view
@@ -3100,6 +3216,36 @@ fn hover_markup_at(h: &mut Harness<'static, PdfCraftApp>, x: f32, y: f32) {
 }
 
 #[test]
+fn imported_commented_markup_keeps_author_at_rotated_zoomed_page_edges() {
+    let _gpu = std::env::var_os("PDFCRAFT_SHOTS").map(|_| crate::gpu());
+    for subtype in ["Highlight", "Underline", "StrikeOut", "Squiggly"] {
+        for (page_rotation, view_rotation) in [(0, 0), (90, 0), (0, 90), (90, 90)] {
+            for zoom in ["50", "125"] {
+                let pdf = String::from_utf8(markup_hover_fixture(subtype, page_rotation, "", ""))
+                    .unwrap()
+                    .replace("/Rect [20 105 250 165]", "/Rect [270 180 300 200]")
+                    .replace(
+                        "/QuadPoints [120 165 250 165 120 145 250 145 20 125 100 125 20 105 100 105]",
+                        "/QuadPoints [270 200 300 200 270 180 300 180]",
+                    );
+                let mut h = markup_hover_harness(pdf.into_bytes(), view_rotation);
+                h.state_mut().set_option("zoom", zoom).unwrap();
+                h.run_steps(4);
+                support::settle(&mut h);
+                hover_markup_at(&mut h, 285.0, 190.0);
+                h.get_by_label("Ada\nFirst multiline comment");
+                if subtype == "Highlight"
+                    && matches!((page_rotation, view_rotation, zoom), (0, 0, "50") | (90, 90, "125"))
+                    && let Ok(dir) = std::env::var("PDFCRAFT_SHOTS")
+                {
+                    h.render().unwrap().save(format!("{dir}/edge-comment-{page_rotation}-{view_rotation}-{zoom}.png")).unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn multiline_markup_hover_stays_on_marked_lines() {
     // #3541: /Rect encloses both lines, including text before/after the selection and the gap.
     for subtype in ["Highlight", "Underline", "StrikeOut", "Squiggly"] {
@@ -4547,14 +4693,18 @@ fn hotbar_picker_searches_translated_tool_labels() {
     if crate::support::skip_without_catalogs("hotbar_picker_searches_translated_tool_labels") {
         return;
     }
+    use pdfcraft_ui_egui::i18n::{Lang, tr};
+    let french = Lang::from_code("fr").unwrap();
     let mut h = harness(|app| {
         app.set_option("language", "fr").unwrap();
     });
-    h.get_by_label("Hotbar settings").click();
+    // The button and the search field are in French too, in the catalog's words.
+    h.get_by_label(tr(french, "Hotbar settings")).click();
     h.run_steps(3);
-    field(&h, "Search all tools…").click();
+    let search = tr(french, "Search all tools…");
+    field(&h, search).click();
     h.run_steps(2);
-    field(&h, "Search all tools…").type_text("Dessiner");
+    field(&h, search).type_text("Dessiner");
     h.run_steps(3);
     h.get_by_role_and_label(Role::CheckBox, "Dessiner à main levée").click();
     h.run_steps(3);
@@ -5986,4 +6136,29 @@ fn properties_dialog_makes_the_text_box_font_size_default() {
         post_text(&mut fresh, "Third");
         assert_eq!(font_size_of_last(&fresh).font_size, Some(size), "{quick}: the default font size persisted");
     }
+}
+
+#[test]
+fn ctrl_selected_lines_nudge_together_and_undo() {
+    let mut h = harness(|app| app.set_option("quick", "line").unwrap());
+    for y in [40.0, 80.0, 120.0] {
+        drag_pt(&mut h, (40.0, y), (160.0, y));
+    }
+    assert_eq!(comments(&h).len(), 3);
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    click_pt(&mut h, (100.0, 40.0));
+    click_pt_with(&mut h, (100.0, 80.0), egui::Modifiers::COMMAND);
+    click_pt_with(&mut h, (100.0, 120.0), egui::Modifiers::COMMAND);
+    assert_eq!(h.state().views[0].comments.selection().len(), 3);
+    let before: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    let moved: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
+    for (old, new) in before.iter().zip(&moved) {
+        assert!(new[0] > old[0], "each selected line moves: {before:?} -> {moved:?}");
+    }
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(comments(&h).iter().map(|a| a.rect).collect::<Vec<_>>(), before);
 }

@@ -446,6 +446,8 @@ fn place(shot: &OcrShot, lines: Result<Vec<Line>, String>) -> OcrPage {
 pub struct Batch {
     files: VecDeque<(String, Vec<u8>)>,
     settings: OcrSettings,
+    /// The app session's JavaScript preference, for each file's own session.
+    javascript: bool,
     current: Option<(String, Box<FileJob>, Pages)>,
     total: usize,
     pub ok: usize,
@@ -459,11 +461,12 @@ pub struct Batch {
 }
 
 impl Batch {
-    pub fn new(files: Vec<(String, Vec<u8>)>, settings: OcrSettings) -> Batch {
+    pub fn new(files: Vec<(String, Vec<u8>)>, settings: OcrSettings, javascript: bool) -> Batch {
         let total = files.len();
         Batch {
             files: files.into(),
             settings,
+            javascript,
             current: None,
             total,
             ok: 0,
@@ -489,7 +492,7 @@ impl Batch {
                 self.files.clear();
             }
             let Some((name, bytes)) = self.files.pop_front() else { return true };
-            match FileJob::open(&name, Arc::new(bytes), None, self.settings.clone()) {
+            match FileJob::open(&name, Arc::new(bytes), None, self.settings.clone(), self.javascript) {
                 Ok(Opened::Skipped(_)) => self.skipped += 1,
                 Ok(Opened::Read(mut file)) => match file.job.take() {
                     Some(job) => self.current = Some((name, file, Pages::new(job.steps()))),

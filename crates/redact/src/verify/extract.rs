@@ -16,7 +16,7 @@ pub(super) fn carries_glyphs(op: &pdfcraft_content::Op) -> bool {
     let nonempty = |o: &Object| o.as_string().is_some_and(|s| !s.bytes.is_empty());
     match op.op.as_slice() {
         b"Tj" | b"'" | b"\"" => op.operands.last().is_some_and(nonempty),
-        b"TJ" => op.operands.first().and_then(Object::as_array).is_some_and(|a| a.iter().any(nonempty)),
+        b"TJ" => op.back(0).and_then(Object::as_array).is_some_and(|a| a.iter().any(nonempty)),
         _ => false,
     }
 }
@@ -396,17 +396,38 @@ pub(super) fn push_squashed(into: &mut String, s: &str) {
     into.extend(s.chars().filter(|c| !c.is_whitespace() && *c != '\u{feff}'));
 }
 
-/// A form's or pattern's `/Matrix`: absent is the identity, present but malformed is an error
-/// (guessing the identity would put its content in the wrong place).
-pub(super) fn matrix_of(doc: &Document, dict: &Dict) -> Result<Matrix, ()> {
-    match dict.get(b"Matrix") {
-        None => Ok(Matrix::IDENTITY),
-        Some(m) => {
-            let m = doc.resolve(m);
-            let items: Vec<Object> = m.as_array().ok_or(())?.iter().map(|x| (*doc.resolve(x)).clone()).collect();
-            Matrix::from_operands(&items).filter(|m| m.0.iter().all(|v| v.is_finite())).ok_or(())
+/// A form's or an annotation appearance's `/Matrix`, the array and each entry direct or by reference: absent or null
+/// is the identity, present but malformed is an error (guessing the identity would put its content in the
+/// wrong place). A reference to a reference is malformed here: readers disagree on following it
+/// (Poppler doesn't, the app's renderer does), so where the content draws can't be told. The
+/// redaction walk reads a form's with it too.
+pub(crate) fn matrix_of(doc: &Document, dict: &Dict) -> Result<Matrix, ()> {
+    let Some(m) = dict.get(b"Matrix") else { return Ok(Matrix::IDENTITY) };
+    // Each reference is followed one hop. The array is read in place when written directly, and
+    // its length checked before any entry is read: the walk reads it at every `Do`, and an array of
+    // any length would be copied each time.
+    let held;
+    let m = match m {
+        Object::Ref(r) => {
+            held = doc.get(*r);
+            &*held
         }
+        direct => direct,
+    };
+    // A null value is no entry (ISO 32000-2 §7.3.9), whether given directly or by reference.
+    if matches!(m, Object::Null) {
+        return Ok(Matrix::IDENTITY);
     }
+    let items = m.as_array().filter(|a| a.len() == 6).ok_or(())?;
+    let mut values = [0.0; 6];
+    for (value, item) in values.iter_mut().zip(items) {
+        let n = match item {
+            Object::Ref(r) => doc.get(*r).as_f64(),
+            direct => direct.as_f64(),
+        };
+        *value = n.filter(|n| n.is_finite()).ok_or(())?;
+    }
+    Ok(Matrix(values))
 }
 
 /// A form's `/BBox` as `[x0 y0 x1 y1]`: absent is `None`, present but malformed is an error.
@@ -552,7 +573,7 @@ impl Extractor<'_> {
         let o = op.op.as_slice();
         // Strings and TJ adjustments, in order.
         let items: Vec<&Object> = match o {
-            b"TJ" => op.operands.first().and_then(Object::as_array).map(|a| a.iter().collect()).unwrap_or_default(),
+            b"TJ" => op.back(0).and_then(Object::as_array).map(|a| a.iter().collect()).unwrap_or_default(),
             _ => op.operands.last().into_iter().collect(),
         };
         let mut any_text = false;
@@ -637,14 +658,15 @@ impl Extractor<'_> {
                     tm = Matrix::IDENTITY;
                     tlm = Matrix::IDENTITY;
                 }
-                b"Tc" => gs.tc = op.num(0).unwrap_or(0.0),
-                b"Tw" => gs.tw = op.num(0).unwrap_or(0.0),
-                b"Tz" => gs.th = op.num(0).unwrap_or(100.0) / 100.0,
-                b"TL" => gs.tl = op.num(0).unwrap_or(0.0),
-                b"Ts" => gs.rise = op.num(0).unwrap_or(0.0),
+                // Operands are read from the end, as the renderer reads them.
+                b"Tc" => gs.tc = op.num_back(0).unwrap_or(0.0),
+                b"Tw" => gs.tw = op.num_back(0).unwrap_or(0.0),
+                b"Tz" => gs.th = op.num_back(0).unwrap_or(100.0) / 100.0,
+                b"TL" => gs.tl = op.num_back(0).unwrap_or(0.0),
+                b"Ts" => gs.rise = op.num_back(0).unwrap_or(0.0),
                 b"Tf" => {
-                    gs.font = op.name(0).map(<[u8]>::to_vec).unwrap_or_default();
-                    gs.size = op.num(1).unwrap_or(0.0);
+                    gs.font = op.name_back(1).map(<[u8]>::to_vec).unwrap_or_default();
+                    gs.size = op.num_back(0).unwrap_or(0.0);
                 }
                 b"Td" | b"TD" => {
                     if let Some([x, y]) = op.nums::<2>() {
@@ -671,7 +693,7 @@ impl Extractor<'_> {
                         tm = tlm;
                     }
                     if o == b"\""
-                        && let (Some(aw), Some(ac)) = (op.num(0), op.num(1))
+                        && let (Some(aw), Some(ac)) = (op.num_back(2), op.num_back(1))
                     {
                         (gs.tw, gs.tc) = (aw, ac);
                     }
@@ -686,7 +708,7 @@ impl Extractor<'_> {
                     self.show_text(font, &op, &gs, &mut tm, placed);
                 }
                 b"Do" => {
-                    let Some(name) = op.name(0) else { continue };
+                    let Some(name) = op.last_name() else { continue };
                     let Some(entry) = xobjects.get(name) else { continue };
                     if let Object::Stream(s) = &*doc.resolve(entry)
                         && s.dict.name(b"Subtype") == Some(b"Form")
