@@ -144,7 +144,7 @@ fn free_text_formatting_is_exported_as_xfdf_elements_and_attributes() {
         assert!(xml.contains(want), "missing {want} in\n{xml}");
     }
     // What it writes is XML the reader accepts.
-    assert!(roxmltree::Document::parse(&xml).is_ok());
+    assert!(common::parse_form_xml(&xml).is_ok());
 }
 
 #[test]
@@ -1002,7 +1002,10 @@ fn rich_text_keeps_the_namespaces_it_inherits() {
     assert!(common::parse_form_xml(&rc).is_ok(), "{rc}");
     let out = export_xfdf(&dst, true, false, "dst.pdf");
     assert!(
-        out.contains(r#"<contents-richtext><body xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/" xmlns="http://www.w3.org/1999/xhtml" xfa:spec"#),
+        out.contains(r#"<contents-richtext><body "#)
+            && out.contains(r#"xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/""#)
+            && out.contains(r#"xmlns="http://www.w3.org/1999/xhtml""#)
+            && out.contains(r#"xfa:spec="2.0.2""#),
         "{out}"
     );
 }
@@ -1175,7 +1178,7 @@ fn rich_text_keeps_an_inherited_default_namespace() {
     import(&mut dst, xml.as_bytes()).unwrap();
     let rc = text(&dst, &named(&dst, "d"), b"RC").unwrap();
     let parsed = common::parse_form_xml(&rc).unwrap();
-    assert_eq!(parsed.root_element().tag_name().namespace(), Some("http://www.w3.org/1999/xhtml"), "{rc}");
+    assert_eq!(parsed.ns_decls().find(|(p, _)| *p == parsed.prefix()).map(|(_, u)| u), Some("http://www.w3.org/1999/xhtml"), "{rc}");
     let rc = text(&dst, &named(&dst, "w"), b"RC").unwrap();
     assert!(common::parse_form_xml(&rc).is_ok(), "{rc}");
     assert!(!rc.contains(r#"xmlns:a="urn:a""#), "{rc}");
@@ -1196,13 +1199,13 @@ fn rich_text_namespaces_come_from_attributes_and_the_scope() {
     import(&mut dst, xml.as_bytes()).unwrap();
     let rc = text(&dst, &named(&dst, "v"), b"RC").unwrap();
     let parsed = common::parse_form_xml(&rc).unwrap_or_else(|e| panic!("{e}: {rc}"));
-    assert!(parsed.root_element().attributes().any(|a| a.namespace() == Some("urn:b")), "{rc}");
+    assert!(parsed.ns_decls().any(|(p, u)| p == "b" && u == "urn:b") && parsed.attr("b:x").is_some(), "{rc}");
     let rc = text(&dst, &named(&dst, "g"), b"RC").unwrap();
     assert!(common::parse_form_xml(&rc).is_ok(), "a `>` in a value does not end the start tag: {rc}");
     let rc = text(&dst, &named(&dst, "p"), b"RC").unwrap();
     let parsed = common::parse_form_xml(&rc).unwrap();
-    let p = parsed.descendants().find(|n| n.has_tag_name("p")).unwrap();
-    assert_eq!(p.tag_name().namespace(), Some("http://www.w3.org/1999/xhtml"), "{rc}");
+    let p = parsed.descendants().find(|n| n.local() == "p").unwrap();
+    assert_eq!(parsed.ns_decls().find(|(k, _)| *k == p.prefix()).map(|(_, u)| u), Some("http://www.w3.org/1999/xhtml"), "{rc}");
 }
 
 /// A redaction mark whose /Rect has no area shows its quads all the same: the /Rect grows to hold
