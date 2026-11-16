@@ -2256,6 +2256,7 @@ impl Renderer {
 }
 
 impl<'a> Device<'a> for Renderer {
+    /// Draw a stencil mask or raster image onto the current canvas with `transform`.
     fn draw_image(&mut self, image: hayro_interpret::Image<'a, '_>, mut transform: Affine) {
         // PdfCraft patch (27): an image's pixels are converted to RGB before they reach the
         // device, so an ink pass has no tints for them; the group is drawn as before.
@@ -2279,11 +2280,35 @@ impl<'a> Device<'a> for Renderer {
         match image {
             hayro_interpret::Image::Stencil(s) => {
                 s.with_stencil(
-                    |stencil, paint| {
+                    |mut stencil, paint| {
                         transform *= Affine::scale_non_uniform(
                             stencil.scale_factors.0 as f64,
                             stencil.scale_factors.1 as f64,
                         );
+
+                        // PdfCraft patch (#4800): a stencil mask (`/ImageMask true`) inside a Type 3
+                        // glyph shrunk by nearest-neighbour keeps one sample in N and drops every
+                        // stroke thinner than N mask pixels (non-glyph stencils use area averaging
+                        // via `area_shrink_premultiplied`). Enabling interpolation lets Type 3 glyph
+                        // stencils use #624's high-quality bicubic resampling with a padded frame.
+                        let (x, y) = x_y_advances(&transform);
+                        if self.in_type3_glyph
+                            && matches!(paint, Paint::Color(_))
+                            && (x.length() < 1.0 || y.length() < 1.0)
+                            && image_resampling_size(
+                                stencil.width,
+                                stencil.height,
+                                4,
+                                stencil.data.len().saturating_mul(4),
+                                x.length() as f32,
+                                y.length() as f32,
+                                MAX_IMAGE_PIXELS,
+                                true,
+                            )
+                            .is_some()
+                        {
+                            stencil.interpolate = true;
+                        }
 
                         // PdfCraft patch: a stencil mask is line art in disguise, so its solid
                         // paint goes through the reading-colours mapping (line-art gate) like
