@@ -2677,7 +2677,7 @@ fn protected(alg: pdfcraft_cos::Algorithm, permissions: i32) -> Vec<u8> {
 /// `fixture()` protected with the user password `user` and an owner password, then saved.
 fn protected_with(alg: pdfcraft_cos::Algorithm, user: &str, permissions: i32) -> Vec<u8> {
     let mut doc = open(&fixture());
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: alg,
         user_password: user,
         owner_password: "owner",
@@ -3003,12 +3003,7 @@ fn wordings_are_complete() {
     let source = source.as_str();
     // The modules below `pdf` word whole sentences too: how a signature value had to be read, and
     // what a certificate does not allow.
-    let elsewhere = [
-        include_str!("../../src/x509.rs"),
-        include_str!("../../src/cms.rs"),
-        include_str!("../../src/keys.rs"),
-        include_str!("../../src/rsa_pad.rs"),
-    ];
+    let elsewhere = [include_str!("../../src/x509.rs"), include_str!("../../src/cms.rs"), include_str!("../../src/keys.rs")];
     /// A sentence said to the user, as opposed to an OID, a name or a tag: it reads as English.
     fn is_sentence(s: &str) -> bool {
         s.len() > 24 && s.ends_with('.') && s.contains(' ') && s.starts_with(|c: char| c.is_ascii_uppercase())
@@ -3041,6 +3036,15 @@ fn wordings_are_complete() {
         out
     }
     let mut said = after(source, &["Detail::plain(", "Detail::of("]);
+    // These existing diagnostics now come from pinned craft-pkcs7 instead of local source.
+    // Keep their translation coverage; crypto.rs exercises the corresponding tolerated forms.
+    said.extend([
+        "The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.",
+        "The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.",
+        "The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.",
+        "The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.",
+    ]);
+
     let at_hand = ["Detail::plain(", "Detail::of(", ".push(", "Some("];
     said.extend(elsewhere.iter().flat_map(|s| after(s, &at_hand)).filter(|s| is_sentence(s)));
     let summary = source.split("pub fn summary").nth(1).and_then(|s| s.split("\n    }").next()).unwrap_or_default();
