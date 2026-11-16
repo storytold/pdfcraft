@@ -255,10 +255,11 @@ fn plan_page(
     // around or inside the paragraph's own marked content, and must be balanced: `open` counts the
     // sequences now open, `base` those open at the current BT, which an EMC inside it may not close.
     let (mut open, mut base) = (0usize, 0usize);
-    // Marked-content boundaries must enclose the whole path, not just its paint operator. The path's
-    // first operator and the marked content open there: a mark opened or closed inside the path
-    // would cross the artifact wrapper added around it.
-    let mut path: Option<(usize, usize)> = None;
+    // Marked-content boundaries must enclose the whole path, not just its paint operator. `events`
+    // counts every mark opened or closed so far and the path keeps its value at the first operator:
+    // any mark opened or closed inside the path (even one that leaves `open` as it was, such as a
+    // close followed by another open) would cross the artifact wrapper added around it.
+    let (mut events, mut path): (usize, Option<(usize, usize)>) = (0, None);
     for (at, op) in parsed.ops.iter().enumerate() {
         if path.is_some() && matches!(op.op.as_slice(), b"BT" | b"Do" | b"BI" | b"sh") {
             return Err(unsupported(index, "painted content interrupts an unfinished path"));
@@ -277,11 +278,11 @@ fn plan_page(
             }
             b"Tj" | b"TJ" | b"'" | b"\"" if start.is_some() => has_text = true,
             name if start.is_some() && harmless_inside(name) => {}
-            b"BDC" | b"BMC" if editor_mark(op) => open += 1,
-            b"EMC" if open > if start.is_some() { base } else { 0 } => open -= 1,
+            b"BDC" | b"BMC" if editor_mark(op) => (open, events) = (open + 1, events + 1),
+            b"EMC" if open > if start.is_some() { base } else { 0 } => (open, events) = (open - 1, events + 1),
             name if start.is_none() && harmless_outside(name) => match name {
                 b"m" | b"re" => {
-                    path.get_or_insert((at, open));
+                    path.get_or_insert((at, events));
                 }
                 b"n" => path = None,
                 _ => {}
@@ -289,7 +290,7 @@ fn plan_page(
             _ if start.is_none() && painted_outside(doc, &xobjects, op) => {
                 let first = if matches!(op.op.as_slice(), b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s") {
                     match path.take() {
-                        Some((_, opened)) if opened != open => return Err(unsupported(index, "marked content opens or closes inside a path")),
+                        Some((_, seen)) if seen != events => return Err(unsupported(index, "marked content opens or closes inside a path")),
                         Some((first, _)) => first,
                         None => at,
                     }

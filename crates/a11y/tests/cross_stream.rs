@@ -310,6 +310,7 @@ fn autotag_refuses_marked_content_it_cannot_nest() {
         ("a span never closed", "/Span <</ActualText (a)>> BDC BT /F1 12 Tf 72 700 Td (a) Tj ET"),
         ("a span opened inside a path", "0 0 m /Span BMC 10 10 l S BT /F1 12 Tf 72 700 Td (a) Tj ET EMC"),
         ("a span closed inside a path", "/Span BMC 0 0 m EMC 10 10 l S BT /F1 12 Tf 72 700 Td (a) Tj ET"),
+        ("a mark closed and another opened inside a path", "/P BMC 0 0 m EMC /Span BMC 10 10 l S BT /F1 12 Tf 72 700 Td (a) Tj ET EMC"),
         ("another writer's span with an MCID", "/Span <</MCID 0>> BDC BT /F1 12 Tf 72 700 Td (a) Tj ET EMC"),
     ] {
         let mut doc = one_stream(content);
