@@ -1,20 +1,23 @@
 # PdfCraft collaboration — status and handoff
 
 - Branch: `feature/realtime-collaboration` (upstream `storytold/pdfcraft`).
-- **Local head, measured 2026-11-16T05:05Z: the code commit is `1de96e28c`,
-  one commit above `84ea8456c` (the docs record of the seventh merge below), and
-  this record is one docs commit above it.** The record deliberately does not
-  pin its own hash — it changes every amend; read it with `git log -1`. At that
-  measurement the branch was 159 commits ahead of `origin/main` `e191b0ea6`, 0
-  behind, tree clean, and `git merge-tree --write-tree origin/main HEAD` exited
-  0 (tree `3fee51a5e`). `1de96e28c` closes the six open security findings the
-  review of PR #6622 left — threads #8, #9, #10, #15, #17, #18, all six read at
-  the code of `84ea8456c` and all six open there. The table, the fixes and the
-  gate are in "The six open security findings of #6622" below. **Nothing was
-  pushed**, `origin/main` was not merged again, no ADR was published: PR #6622
-  still carries `a1cc8382d` and reads `CONFLICTING`/`DIRTY` against
-  `d749fd806`, and the fix reaches it only when the owner or `pr-agent` pushes
-  this line — which is what clears the DIRTY.
+- **Local head, measured 2026-11-16T02:15Z: the code commits are `069fa0442`
+  (nine of the ten advisory findings of the review of #6622) on top of
+  `1de96e28c` (the six security findings), which sits one commit above
+  `84ea8456c` (the docs record of the seventh merge below); this record is one
+  docs commit above `069fa0442`.** The record deliberately does not pin its own
+  hash — it changes every amend; read it with `git log -1`. At that measurement
+  the branch was 160 commits ahead of `origin/main` `e191b0ea6`, 0 behind, tree
+  clean. `069fa0442` closes nine of the ten advisory threads (#1, #2, #4, #7,
+  #11, #13, #14, #19, #20) and defers #16 with its reason; the table, the fixes
+  and the gate are in "The ten advisory findings of #6622" below. `1de96e28c`
+  closed the six open security findings the same review left — threads #8, #9,
+  #10, #15, #17, #18, all six read at the code of `84ea8456c` and all six open
+  there; its table and gate are in "The six open security findings of #6622".
+  **Nothing was pushed**, `origin/main` was not merged again, no ADR was
+  published: PR #6622 still carries `a1cc8382d` and reads
+  `CONFLICTING`/`DIRTY` against `d749fd806`, and the fix reaches it only when
+  the owner or `pr-agent` pushes this line.
 - **The seventh merge of `origin/main`, and the one that clears the PR's
   `DIRTY`: `e6bd1eee3` (2026-11-16) merges `e191b0ea6` ("M3: select text across
   pages (view.text-select)", 2026-11-15T22:55:35+01:00), the tip at the fetch.**
@@ -537,7 +540,108 @@ At that measurement PR #6622 still read `headRefOid` `a1cc8382d`
 local head **exits 0** (tree `3fee51a5e`) against `origin/main` `e191b0ea6`, so
 pushing this line is what clears it.
 
+## The ten advisory findings of #6622 (2026-11-16)
+
+Measured 2026-11-16T02:05Z on `860bd4cbb` (the docs record of the six security
+fixes; tree clean, `git rev-list --left-right --count origin/main...HEAD`
+`0 158` against `origin/main` `e191b0ea6`). The ten threads CodeRabbit left open
+after the security pass (#1, #2, #4, #7, #11, #13, #14, #16, #19, #20) were read
+at the code of that head, each at the file and line the review names — not at
+its diff hunk. Nine were still open and are fixed in **`069fa0442`**, one local
+commit above `860bd4cbb`; each fix carries a regression test in the crate it
+touches. **#16 is deferred**, with the reason in the table: it needs a wire
+change, not a local fix.
+
+| # | Finding (path at the review) | Verdict at `860bd4cbb` | `069fa0442` | Regression test |
+|---|---|---|---|---|
+| 1 | `collab-annot/src/lib.rs:144` — a comment over 64 KiB passes the outgoing conversion and is refused on the server after the panel cleared the draft; a non-finite text-box size serializes as `null` | **open** — `to_payload` built the body without any check (`:97`), and `check_shape` checked the rect but not `font_size` (`:228`); the panel took the draft before the length was known (`panels/comments_panel.rs:688`) | `collab-annot:102` `to_payload` runs `validate`, which now refuses an oversized text/author (`:148`); `check_shape` routes TextBox/Typewriter through `check_font_size` (`:208`); `panels/comments_panel.rs:684` `save_inline_edit` checks the draft and keeps it with a notice (`MAX_COMMENT_TEXT_BYTES` at `:29`) | `a_text_box_needs_a_finite_font_size_and_a_comment_its_wire_length` (`collab-annot/src/tests.rs:150`), `a_comment_over_the_wire_limit_keeps_its_draft` (`ui-egui/src/tools/comments/tests.rs:916`) |
+| 2 | `collab-client-pdf/src/lib.rs:2045` — the reply inverse calls `page_target` on an annotation target, so no inverse is recorded | **open** — `page_target(op)` in the `annotation.reply` arm | `collab-client-pdf:2043` reads `annotation_target(op)`, so the inverse is a delete addressed to the reply's `/NM` | `a_replys_inverse_deletes_the_reply_by_name` (`collab-client-pdf:3438`) |
+| 4 | `collab-client-pdf/src/lib.rs:2140` — the `page.move` inverse uses `payload.to`; a move to `page_count` is applied last, so the undo addresses a page that does not exist | **open** — `Target::Page(PageRef { index: to, … })` | `collab-client-pdf:2143` clamps `to` to `page_count - 1` | `the_inverse_of_a_move_to_the_end_addresses_the_last_page` (`collab-client-pdf:3454`) |
+| 7 | `ui-egui/src/collab.rs:407` — undo overwrites `group.originals` with the inverses it sent, so redo re-sends them and the server refuses | **open** — `group.originals = all` with `all` = the inverses; redo read `group.originals` | `ui-egui/src/collab.rs:1521` keeps the pre-undo operations in `HistoryGroup::forward` (`:427`) and redo sends those, clearing `forward` once in flight | `a_redo_sends_the_operation_the_undo_took_back` (`ui-egui/src/collab.rs:2545`) |
+| 11 | `collab-hub/src/lib.rs:90` — `close_room` removes the entry only; members keep their sockets and get "no such document session" on the next send, and a stale socket can write to a room reopened under the same name | **open** — `self.rooms.remove(doc).is_some()` | `collab-hub:98` answers every member, marks the connection `closed` and returns the ids for the transport; `send` refuses a closed connection (`:136`) | `closing_a_room_answers_every_client_and_stops_them_writing` (`collab-hub:550`) |
+| 13 | `collab-pdf/src/lib.rs:731` — `restore_annotation` prefers a client-supplied `body`, and `Room::replay` calls the same `apply`, so the live path cannot tell them apart | **open** — `payload.get("body")` accepted on any path | `collab-pdf:747` takes a body only while replaying (adapter flag set by `Room::replay` via `Adapter::set_replaying`, `collab-server:95`); a live body is refused `invalid`. `PdfAdapter::set_replaying` at `collab-pdf:1222` | `a_restore_body_is_trusted_only_on_replay` (`collab-pdf:1807`) |
+| 14 | `collab-pdf/src/lib.rs:853` — the restore check measures the whole JSON frame against `MAX_RESTORE_PAGE_BYTES` (160 KiB raw), so a page above ~120 KiB gets a copy token but its undo is refused | **open** — `serde_json::to_vec(payload).len() > MAX_RESTORE_PAGE_BYTES` | `collab-pdf:183` `check_restore_budget`: raw page against `MAX_RESTORE_PAGE_BYTES`, encoded payload against `MAX_MESSAGE_BYTES` | `a_page_restore_is_bounded_by_the_copy_and_by_one_frame` (`collab-pdf:1847`) |
+| 16 | `collab-server/src/lib.rs:591` — `resync` returns the whole tail as one `Snapshot`; nothing checks `encoded_len` on the send path | **open, deferred** — the tail is one frame (`:614`) | none | — |
+| 19 | `collab-ws/src/token.rs:29` — the `Claims` doc says `iss`, `iat` and `ver` are validated, while `decode_raw` requires only `exp`, `sub`, `aud` | **open** — the doc sentence | `collab-ws/src/token.rs:29`: the doc names the enforced claims (signature, `exp` + 30 s leeway, `aud`, required `exp`/`sub`/`aud`) and says `iss`/`iat`/`ver` are the cabinet's policy | none (documentation only) |
+| 20 | `ui-egui/src/collab.rs:205` — `Event::Rejected` drops the op from `originals` but leaves its inverse in `inverses`, which Undo then sends | **open** — `retain` on `originals` only | `ui-egui/src/collab.rs:1027` removes the original and the inverse at the same index (and from `forward`) | `a_rejected_operation_takes_its_inverse_with_it` (`ui-egui/src/collab.rs:2578`) |
+
+**Why #16 is deferred.** A bounded tail is a wire change: `Snapshot`
+(`collab-proto:624`) carries one `tail`, and the client treats a snapshot as
+"caught up" (`ui-egui/src/collab.rs`, `Event::Snapshot` — it replaces history and
+applies the tail in order). Delivering a tail in batches needs a continuation
+field in `collab-proto`, an order-preserving apply loop on every client
+(including the web host-bridge), and a rule for operations a client sends
+between batches. That is a protocol decision for the owner and the RFC, not an
+advisory fix; this pass records it rather than shipping a private convention.
+The current bound it works against: `journal_len` operations with no size check
+on the send path, whose default is well above one 256 KiB frame.
+
+The commit is **10 files, +429/−39** (nine files of the feature and
+`docs/collab/STATUS.md` is not in that count); the `Adapter` trait gained one
+default method (`set_replaying`) so no other adapter changes. Two behaviour
+changes a reviewer has to know:
+- **a `annotation.restore` that carries `body` is refused on the live path.**
+  The app never sends one (it sends `copy`), so no client changes; a third-party
+  client that sent a body was writing a comment the server never held.
+- **`Hub::close_room` returns `Vec<ClientId>` instead of `bool`.** Only the
+  transport consumes it, and it was unused in-tree; an empty vector means "no
+  such room".
+
+### Gate on the advisory fixes (2026-11-16)
+
+Host `agents` through `scripts/remote-build.sh`; the log is
+`.craft/logs/gate-pdfcraft-adv-860bd4cbb.log` (the head before the fix, with the
+fix in the tree at run time).
+
+| Step | Result |
+|---|---|
+| `cargo metadata --locked` | **exit 0** (the same three `unused patch` warnings for the egui fork as before) |
+| `cargo fmt --all -- --check` | **exit 0** |
+| `cargo clippy -j 8 -p pdfcraft-collab-annot -p pdfcraft-collab-client-pdf -p pdfcraft-collab-hub -p pdfcraft-collab-pdf -p pdfcraft-collab-server -p pdfcraft-collab-ws -p pdfcraft-ui-egui --all-targets --no-deps -- -D warnings` | **exit 0** |
+| `cargo test -j 6` on the same crates | **exit 0 — 3216 passed, 0 failed, 5 ignored**: 24 collab-annot + 50 collab-client-pdf + 7 collab-hub + 73 collab-pdf + 35 collab-server + 18 collab-ws unit + 36 collab-ws e2e + 1026 ui-egui unit + 1 flatpak + 1928 ui-egui `it` + 6 ocr + 7 page_shadows + 4 perf + 1 play |
+| `cargo check -j 8 --workspace --all-targets` (the new default trait method compiles in every crate, the daemon and the web crate included) | **exit 0** |
+| `cargo test -j 6 -p pdfcraft-collab-daemon` (the replay path #13 touches) | **exit 0 — 48 passed, 0 failed**: 43 daemon unit + `conflict_resolve` + `crash_recovery` + `publication_retry` + 2 `restore_publication` |
+
+The ui-egui suites need the release environment on this host: with
+`CRAFT_I18N_DIR` unset one `it` test refuses a `de` language
+(`comments::the_selection_bar_stays_inside_the_pages_area`), and with it set but
+`CRAFT_FONTS_DIR` unset another panics in epaint's font lookup
+(`signing::the_signature_labels_follow_the_interface_language`). Both pass with
+`CRAFT_I18N_DIR=/tmp/craft-i18n-575cfdef` and
+`CRAFT_FONTS_DIR=/home/markin/craft-fonts`, which is what the logged gate uses;
+neither is related to this commit.
+
+### The ten threads, answered in place (2026-11-16T02:2xZ)
+
+Each reply carries the `fixed in 069fa0442 at <file>:<line>` form and names the
+test that proves it, or `deferred: <reason>` for #16. The commit is local, so
+every reply says so.
+
+| # | Reply |
+|---|---|
+| 1 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581380397 |
+| 2 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581380535 |
+| 4 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581380772 |
+| 7 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581380971 |
+| 11 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581381144 |
+| 13 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581381292 |
+| 14 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581381472 |
+| 16 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581381652 (deferred) |
+| 19 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581381777 |
+| 20 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581381934 |
+
+Nothing was pushed: at the measurement (2026-11-16T02:14Z) PR #6622 still read
+`headRefOid` `a1cc8382d`, `mergeable: CONFLICTING`, `mergeStateStatus: DIRTY`,
+`baseRefOid` `d749fd806` — the PR carries `a1cc8382d`, not this line, and
+`git merge-tree --write-tree origin/main HEAD` on the local head is not part of
+this pass. `origin/main` was not merged again, no ADR was published and no file
+outside these ten findings was touched.
+
 ## Open review threads
+
+> **Verdicts in this section are as of `91a382205`** (the measurement below).
+> The nine fixes of 2026-11-16 in `069fa0442` and the deferral of #16 are in
+> "The ten advisory findings of #6622" above.
 
 Measured 2026-11-13T12:46Z on head `91a382205` (`gh pr view 6622 --json
 headRefOid` and `git rev-parse HEAD` both read `91a38220510d`; tree clean, and
@@ -600,10 +704,11 @@ fork/feature/realtime-collaboration...HEAD`), the PR staying `MERGEABLE` /
 `UNSTABLE` with the five runs on `a1cc8382d` `completed/action_required`.
 **The six security findings of this table (#8, #9, #10, #15, #17, #18) were
 re-checked at `84ea8456c` and fixed in `1de96e28c` on 2026-11-16** — the section
-above has the table, the fixes and the gate. Ten items stay open (#1, #2, #4,
-#7, #11, #13, #14, #16, #19, #20); they are advisory findings, not a merge gate
-of their own: the maintainer's review decides, and the fix reaches the PR only
-when the owner or `pr-agent` pushes `1de96e28c`.
+above has the table, the fixes and the gate. Ten items stayed open (#1, #2, #4,
+#7, #11, #13, #14, #16, #19, #20); they were advisory findings, not a merge gate
+of their own. **Superseded on 2026-11-16:** "The ten advisory findings of #6622"
+below closes nine of them in `069fa0442` and defers #16 with its reason; the fix
+reaches the PR only when the owner or `pr-agent` pushes that commit.
 
 ## 1. What is built
 
