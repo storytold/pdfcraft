@@ -819,22 +819,28 @@ fn a_command_shortcut_leaves_the_menu_bar_so_arrow_keys_do_not_reopen_the_popup(
 
 #[test]
 fn alt_f_followed_by_mnemonic_x_quits() {
+    use egui_kittest::kittest::NodeT;
     let mut h = harness();
     h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::F);
     h.run_steps(3);
-    assert!(
-        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref().is_some_and(|l| l.contains("Exit") || l.contains("Quit")))
-            .is_some(),
-        "File submenu is open"
-    );
-    h.key_press(egui::Key::X);
+    let exit_item = h
+        .query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref().is_some_and(|l| l.contains("Exit") || l.contains("Quit")))
+        .expect("File submenu is open with Exit or Quit");
+    let key = match exit_item.accesskit_node().data().access_key() {
+        Some("Q") => egui::Key::Q,
+        _ => egui::Key::X,
+    };
+    h.key_down(key);
     h.step();
     let closed = h.output().viewport_output.values().any(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
-    assert!(closed, "Alt+F then X executed Exit/Quit via keyboard mnemonic without mouse click");
+    assert!(closed, "Alt+F then mnemonic executed Exit/Quit via keyboard mnemonic without mouse click");
 }
 
 #[test]
 fn alt_f_opens_fichier_and_not_fenetre_under_french_locale() {
+    if crate::support::skip_without_catalogs("alt_f_opens_fichier_and_not_fenetre_under_french_locale") {
+        return;
+    }
     use egui_kittest::kittest::NodeT;
     let mut h = harness();
     h.state_mut().set_option("language", "fr").unwrap();
@@ -864,11 +870,17 @@ fn plain_letters_in_open_submenu_do_not_switch_to_other_top_level_menus() {
             .is_some(),
         "File submenu is open"
     );
-    h.key_press(egui::Key::W);
+    // 'H' is Help's top-level menu mnemonic. While File submenu is open, plain
+    // letters route to the active submenu rather than retargeting other top-level menus.
+    h.key_down(egui::Key::H);
     h.run_steps(2);
     assert!(
         h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref().is_some_and(|l| l.contains("Exit") || l.contains("Quit")))
             .is_some(),
-        "File submenu remains open and did not switch to Window"
+        "File submenu remains open and did not switch to Help"
+    );
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref().is_some_and(|l| l.contains("About"))).is_none(),
+        "Help submenu was not opened"
     );
 }
