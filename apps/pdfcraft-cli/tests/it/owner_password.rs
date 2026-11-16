@@ -104,14 +104,12 @@ fn text_accepts_the_owner_password() {
 /// Asserts that `data` is a PNG of the fixture's 200×300 pt page at `dpi` with the text drawn:
 /// a blank page of the right size fails too.
 fn assert_rendered_page(data: &[u8], dpi: u32, what: &str) {
-    let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap_or_else(|e| panic!("{what}: {e}"));
-    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
-    let frame = reader.next_frame(&mut buf).unwrap();
-    assert_eq!((frame.width, frame.height), (200 * dpi / 72, 300 * dpi / 72), "{what}");
+    let image = craft_image_codecs::decode(data).unwrap_or_else(|e| panic!("{what}: {e}"));
+    assert_eq!((image.width(), image.height()), (200 * dpi / 72, 300 * dpi / 72), "{what}");
     // A rendered page is opaque, so `render` writes it as 8-bit RGB (`pdfcraft_engine::export::encode_png`).
-    assert_eq!((frame.color_type, frame.bit_depth), (png::ColorType::Rgb, png::BitDepth::Eight), "{what}");
+    assert_eq!((image.layout(), image.sample_type()), (craft_image_codecs::ChannelLayout::Rgb, craft_image_codecs::SampleType::U8), "{what}");
     // Pixels with every colour channel below half intensity: ink, not white paper.
-    let inked = buf[..frame.buffer_size()].as_chunks::<3>().0.iter().filter(|px| px.iter().all(|c| *c < 128)).count();
+    let inked = image.data().as_chunks::<3>().0.iter().filter(|px| px.iter().all(|c| *c < 128)).count();
     assert!(inked > 100, "{what}: only {inked} inked pixels, the page is blank");
 }
 
