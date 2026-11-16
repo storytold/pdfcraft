@@ -11959,3 +11959,30 @@ fn cmyk_function_shading_matches_background_domain_and_opacity_paths() {
     let half_cyan = rgb_at(&page.rgba, 200, 115, 85);
     assert!(half_cyan[0] > bg_cyan[0] && half_cyan[0] < 255, "half-alpha cyan {half_cyan:?} vs opaque {bg_cyan:?}");
 }
+
+#[test]
+fn separation_row_shading_preserves_sample_boundaries_when_tint_transform_is_short() {
+    // Separation space over /DeviceRGB whose constant tint transform returns 1 value `[1]`
+    // instead of 3. Batched scanline conversion must preserve per-sample `[0, 0, 0]` output
+    // boundaries so every pixel matches scalar evaluation (`[255, 0, 0]`) instead of merging
+    // subsequent samples into `[255, 255, 0]` and trailing black.
+    let content = "q 0 0 100 100 re W n /Sh0 sh Q\n";
+    let pdf = format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Shading << /Sh0 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}endstream endobj\n\
+5 0 obj << /ShadingType 2 /ColorSpace [/Separation /Spot /DeviceRGB 6 0 R] /Coords [0 0 100 0] /Domain [0 1] /Function 7 0 R /Extend [true true] >> endobj\n\
+6 0 obj << /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [1] /N 1 >> endobj\n\
+7 0 obj << /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [1] /N 1 >> endobj\n\
+trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len()
+    )
+    .into_bytes();
+
+    let page = render_first_page(pdf);
+    for x in [1, 10, 50, 90] {
+        assert_eq!(rgb_at(&page.rgba, 100, x, 50), [255, 0, 0], "pixel at x={x} should stay red");
+    }
+}

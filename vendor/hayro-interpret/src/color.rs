@@ -467,6 +467,19 @@ impl ColorSpace {
             .unwrap_or(AlphaColor::BLACK)
     }
 
+    /// Whether `convert_f32` maps each `num_components()` sample strictly to 3 RGB bytes without
+    /// altering sample boundaries (unchecked tint transforms in `Separation`/`DeviceN` may return
+    /// a different component count than the alternate space expects).
+    fn preserves_sample_boundaries(&self) -> bool {
+        match self.0.as_ref() {
+            ColorSpaceType::Separation(s) => s.is_all,
+            ColorSpaceType::DeviceN(_) => false,
+            ColorSpaceType::Indexed(i) => i.base.preserves_sample_boundaries(),
+            ColorSpaceType::Pattern(p) => p.preserves_sample_boundaries(),
+            _ => true,
+        }
+    }
+
     /// Convert a contiguous slice of colour-space samples into packed RGB8 bytes, reusing
     /// `u8_scratch` when the colour space converts directly from 8-bit samples.
     pub(crate) fn convert_rgb8_batch(
@@ -481,6 +494,20 @@ impl ColorSpace {
             if self.convert_u8(u8_scratch, output).is_some() {
                 return Some(());
             }
+        }
+
+        if !self.preserves_sample_boundaries() {
+            let n_comp = usize::from(self.num_components());
+            if n_comp == 0 {
+                return None;
+            }
+            output.fill(0);
+            for (sample, rgb) in input.chunks_exact(n_comp).zip(output.chunks_exact_mut(3)) {
+                if self.convert_f32(sample, rgb, false).is_none() {
+                    rgb.fill(0);
+                }
+            }
+            return Some(());
         }
 
         self.convert_f32(input, output, false)
