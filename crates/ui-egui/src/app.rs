@@ -177,6 +177,8 @@ impl PdfCraftApp {
             open_prepare_gate: None,
             pinned: Default::default(),
             recent_check: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            reveal_errors: Default::default(),
             pinned_tools: Vec::new(),
             pin_tool_search: String::new(),
             toast: None,
@@ -452,7 +454,6 @@ impl PdfCraftApp {
             _ => false,
         }
     }
-
     /// Whether something over the pages has the keyboard: what covers them
     /// ([`Self::covers_pages`]), the hotbar's tools window, a popup, a menu of the menu bar, or the
     /// bar holding the keyboard (Alt, F10).
@@ -697,6 +698,7 @@ impl PdfCraftApp {
                 worker.set_context(ctx);
             }
             self.poll_pending_opens();
+            self.show_reveal_errors();
             self.poll_pending_destinations();
         }
         self.check_restored_recent();
@@ -811,6 +813,7 @@ impl PdfCraftApp {
             let out = self.session.take_js_output(id);
             self.handle_js(id, out);
         }
+        self.script_tick(ctx);
         if let Some(mut control) = self.control.take() {
             control.tick(ctx, self);
             self.control = Some(control);
@@ -1095,7 +1098,6 @@ impl PdfCraftApp {
                         self.undo_in(idx);
                     }
                 }
-
                 if self.close_request == Some(crate::CloseRequest::Tab(doc_id)) {
                     if let Some(choice) = crate::dialogs::save_prompt_key(child_ui.ctx(), &mut self.save_prompt_button) {
                         self.resolve_close(child_ui.ctx(), choice);

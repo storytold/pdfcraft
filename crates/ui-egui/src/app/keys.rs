@@ -15,6 +15,7 @@ impl PdfCraftApp {
                 CloseRequest::Tab(id) => self.views.iter().find(|v| v.id == id).is_some_and(|v| v.detached),
                 CloseRequest::Quit | CloseRequest::All => false,
             };
+            // A detached window draws its own save prompt. The main window must not answer it.
             if !is_detached_tab {
                 // These dialogs are drawn after the save prompt and own the keyboard while open.
                 // Don't let Escape or Return resolve unsaved work underneath one.

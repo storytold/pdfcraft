@@ -63,7 +63,7 @@
 ## Spec Review (Goldfish & AST Drift Audit)
 
 ### 1. [BLOCKER] Active Tab Desynchronization & Concurrent Viewport Mutation
-**Spec Requirement:** "Viewport ID Management: Every detached view must be assigned its own distinct viewport ID." / Issue #5348  
+**Spec Requirement:** "Viewport ID Management: Every detached view must be assigned its own distinct viewport ID." / Issue #5348
 **Offending Code:** [`crates/ui-egui/src/app/files.rs#L661-L666`](crates/ui-egui/src/app/files.rs#L661-L666) & [`crates/ui-egui/src/editing/close.rs#L104`](crates/ui-egui/src/editing/close.rs#L104)
 ```rust
 self.active = match self.active {
@@ -76,11 +76,11 @@ self.active = match self.active {
 ```rust
 self.active = Some(index);
 ```
-**Problem:** `close_tab` and `resolve_close` update `self.active` without filtering out `v.detached`. Closing an attached tab can point `self.active` directly to a detached tab. When this happens, `canvas::document_area` renders the identical `DocView` simultaneously inside the main window's `CentralPanel` and inside the child viewport, causing double event processing and state desynchronization.  
+**Problem:** `close_tab` and `resolve_close` update `self.active` without filtering out `v.detached`. Closing an attached tab can point `self.active` directly to a detached tab. When this happens, `canvas::document_area` renders the identical `DocView` simultaneously inside the main window's `CentralPanel` and inside the child viewport, causing double event processing and state desynchronization.
 **Fix:** Ensure `self.active` selects only non-detached views in `close_tab` and `close_and_continue`.
 
 ### 2. [BLOCKER] Child Viewport Unsaved-Close Broken & Missing CancelClose
-**Spec Requirement:** "Window Closure Behavior: When a detached window is closed, the app must either re-attach the tab to the main window or cleanly close the document—always prompting if there are unsaved changes."  
+**Spec Requirement:** "Window Closure Behavior: When a detached window is closed, the app must either re-attach the tab to the main window or cleanly close the document—always prompting if there are unsaved changes."
 **Offending Code:** [`crates/ui-egui/src/app.rs#L667-L698`](crates/ui-egui/src/app.rs#L667-L698)
 ```rust
 ctx.show_viewport_immediate(viewport_id, builder, |child_ui, _class| {
@@ -92,29 +92,29 @@ ctx.show_viewport_immediate(viewport_id, builder, |child_ui, _class| {
 });
 if reattach { ... } else if close { self.request_close_tab(idx); }
 ```
-**Problem:** No `egui::ViewportCommand::CancelClose` is sent to `viewport_id`. For dirty documents, `request_close_tab` assigns `self.close_request`, displaying the modal on the main window (`dialogs::show(self, &ctx)`) rather than the detached window. Next frame, because `self.views[idx]` remains open and detached, `show_viewport_immediate` re-spawns the child window while the save prompt sits disconnected on the root window.  
+**Problem:** No `egui::ViewportCommand::CancelClose` is sent to `viewport_id`. For dirty documents, `request_close_tab` assigns `self.close_request`, displaying the modal on the main window (`dialogs::show(self, &ctx)`) rather than the detached window. Next frame, because `self.views[idx]` remains open and detached, `show_viewport_immediate` re-spawns the child window while the save prompt sits disconnected on the root window.
 **Fix:** Intercept `close_requested` on the child viewport, issue `CancelClose` if dirty, and present the save prompt within the target window.
 
 ### 3. [MAJOR] Missing Platform Guard for WASM
-**Spec Requirement:** "Platform Reality Check: ... WASM does not support multiple viewports. Document verified platforms."  
+**Spec Requirement:** "Platform Reality Check: ... WASM does not support multiple viewports. Document verified platforms."
 **Offending Code:** [`crates/ui-egui/src/chrome.rs#L172-L175`](crates/ui-egui/src/chrome.rs#L172-L175) & [`crates/ui-egui/src/app.rs#L647`](crates/ui-egui/src/app.rs#L647)
 ```rust
 if ui.button(tl!("Move to New Window")).clicked() {
     action = Some(crate::tab_context::Action::Detach(id));
 ```
-**Problem:** Tear-off drag detection, tab context menu items, and `show_detached_windows` lack `#[cfg(not(target_arch = "wasm32"))]` guards. Calling multi-viewport functions in web targets causes runtime failures.  
+**Problem:** Tear-off drag detection, tab context menu items, and `show_detached_windows` lack `#[cfg(not(target_arch = "wasm32"))]` guards. Calling multi-viewport functions in web targets causes runtime failures.
 **Fix:** Gate multi-window capabilities behind `#[cfg(not(target_arch = "wasm32"))]`.
 
 ### 4. [MAJOR] Missing Drag Re-Docking & Incomplete Test Suite
-**Spec Requirement:** "Re-docking / dragging a detached window back into the main tab group." and Author Action Items 2, 3, 4.  
-**Offending Code:** [`crates/ui-egui/src/app.rs#L680-L684`](crates/ui-egui/src/app.rs#L680-L684)  
-**Problem:** Spec-defined drag-docking back into the tab strip is omitted; only a button exists. Additionally, required tests for detaching the sole tab, closing detached tabs with unsaved changes, and re-docking were not added to `crates/ui-egui/tests/it/ui.rs`.  
+**Spec Requirement:** "Re-docking / dragging a detached window back into the main tab group." and Author Action Items 2, 3, 4.
+**Offending Code:** [`crates/ui-egui/src/app.rs#L680-L684`](crates/ui-egui/src/app.rs#L680-L684)
+**Problem:** Spec-defined drag-docking back into the tab strip is omitted; only a button exists. Additionally, required tests for detaching the sole tab, closing detached tabs with unsaved changes, and re-docking were not added to `crates/ui-egui/tests/it/ui.rs`.
 **Fix:** Implement drag re-docking or document deviation, and provide missing integration tests.
 
 ### 5. [NIT] Sole Tab Detachment Unguarded
-**Spec Requirement:** "Detaching the sole/last remaining tab: Establishing clear behavior (refused or handled)."  
-**Offending Code:** [`crates/ui-egui/src/app.rs#L283-L290`](crates/ui-egui/src/app.rs#L283-L290)  
-**Problem:** Detaching the last remaining tab clears `self.active`, abruptly sending the primary window back to the Home screen while leaving an orphaned child viewport.  
+**Spec Requirement:** "Detaching the sole/last remaining tab: Establishing clear behavior (refused or handled)."
+**Offending Code:** [`crates/ui-egui/src/app.rs#L283-L290`](crates/ui-egui/src/app.rs#L283-L290)
+**Problem:** Detaching the last remaining tab clears `self.active`, abruptly sending the primary window back to the Home screen while leaving an orphaned child viewport.
 **Fix:** Disallow detaching the last remaining tab or explicitly handle the primary window empty state.
 
 ---

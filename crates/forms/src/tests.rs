@@ -5601,6 +5601,75 @@ fn a_page_widget_inheriting_password_flag_beyond_depth_32_is_recognized() {
     assert!(!has_password_values(&doc));
 }
 
+/// A field reachable both near the top of the tree and at the end of a long branch: the field
+/// walk reaches it near the top and reads the password field below it, so the quick check must
+/// not stop at the long branch's depth limit and conclude there is none. The password field's
+/// widget is on the page but names no `/Parent`, so the page widgets alone don't find it either.
+#[test]
+fn a_password_field_past_the_depth_limit_on_one_branch_is_still_found() {
+    let chain = 64;
+    let x = 6 + chain; // the shared field
+    let y = x + 1; // the password field
+    let w = y + 1; // its widget
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [{w} 0 R] >>"),
+        "<< /Fields [5 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        format!("<< /T (short) /Kids [{x} 0 R] >>"),
+    ];
+    for d in 0..chain {
+        let next = if d + 1 == chain { x } else { 7 + d };
+        objs.push(format!("<< /T (n{d}) /Kids [{next} 0 R] >>"));
+    }
+    objs.push(format!("<< /T (shared) /Kids [{y} 0 R] >>"));
+    objs.push(format!("<< /FT /Tx /T (pin) /Ff 8192 /V (deepsecret) /Kids [{w} 0 R] >>"));
+    objs.push("<< /Type /Annot /Subtype /Widget /Rect [50 600 150 620] /P 3 0 R >>".into());
+    let mut doc = document(&objs);
+    assert!(fields(&doc).iter().any(|f| f.has(flags::PASSWORD)), "the field walk reads the password field");
+    assert!(has_password_flag(&doc));
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+}
+
+/// A password field below an unlisted field whose other widget is on the page: the field walk
+/// adopts the whole unlisted field from that widget, so the quick check looks below it too.
+#[test]
+fn a_password_field_below_an_adopted_page_field_is_found() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /T (grp) /Kids [6 0 R 7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Parent 5 0 R /Rect [50 700 150 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (pin) /Ff 8192 /V (secret8) /Parent 5 0 R /Rect [0 0 0 0] >>".into(),
+    ]);
+    assert!(fields(&doc).iter().any(|f| f.has(flags::PASSWORD)), "the field walk adopts the password field");
+    assert!(has_password_flag(&doc));
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+}
+
+/// A nameless widget listed in `/Fields` and on no page, whose `/Parent` is an unlisted password
+/// field: the field walk adopts the parent, so the quick check follows the entry's `/Parent` too.
+#[test]
+fn a_password_parent_of_a_nameless_fields_entry_is_found() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /T (pin) /FT /Tx /Ff 8192 /V (secret8) /Kids [6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [0 0 0 0] >>".into(),
+    ]);
+    assert!(fields(&doc).iter().any(|f| f.has(flags::PASSWORD) && f.value.iter().any(|v| v == "secret8")), "the field walk reads the parent");
+    assert!(has_password_flag(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+}
+
 /// #4018: a value that doesn't fit its box at the field's font size is reported (it is drawn cut
 /// at the box). An auto-sized field shrinks to fit, and a short or empty value fits.
 #[test]
@@ -6029,7 +6098,8 @@ fn set_values_reads_the_form_once_not_per_value() {
     let before = form_reads();
     assert!(set_values(&mut doc, &again).unwrap().iter().all(Result::is_ok));
     let reads = form_reads() - before;
-    assert_eq!(reads, 3, "one to fill, one when f0 comes again, one to recalculate");
+    // Filling starts from the reading the check above made, nothing having changed since.
+    assert_eq!(reads, 2, "one when f0 comes again, one to recalculate");
 }
 
 /// Redrawing every field of a large form reads the form once, not once per field: a laid out XFA
@@ -6058,6 +6128,45 @@ fn redraw_fields_reads_the_form_once_however_many_fields_it_holds() {
         assert!((1..n).all(|i| has_ap(&format!("f{i}"))), "{n} fields");
         assert!(ap(&doc, &field(&all, &format!("f{}", n - 1)).widgets[0]).contains(&format!("(v{})", n - 1)));
     }
+}
+
+/// The fields of a document that has not changed since they were last read are not read again,
+/// and any change, a clone's state or another document reads afresh: a form edit reads them in
+/// several steps, most with nothing changed in between.
+#[test]
+fn fields_are_read_again_only_after_the_document_changes() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 10 Tf 0 g) >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (old) /Rect [50 10 250 30] /P 3 0 R >>".into(),
+    ];
+    let value = |doc: &Document| field(&fields(doc), "name").value.clone();
+    let mut doc = document(&objs);
+    let before = form_reads();
+    assert_eq!(value(&doc), ["old"]);
+    assert_eq!(value(&doc), ["old"]);
+    assert_eq!(fields_with_adopted(&doc).items, fields(&doc));
+    assert_eq!(form_reads() - before, 1, "nothing changed: read once");
+    let unchanged = doc.clone();
+    doc.update_dict(ObjRef::new(5, 0), |d| d.set(b"V".to_vec(), Object::String(PdfString::text("new")))).unwrap();
+    let before = form_reads();
+    assert_eq!(value(&doc), ["new"], "an edit is read");
+    assert_eq!(value(&unchanged), ["old"], "a copy kept from before it is read as it is");
+    assert_eq!(value(&doc), ["new"]);
+    assert_eq!(form_reads() - before, 3);
+    // An object another field's value refers to counts as a change too.
+    let r = doc.add(Object::String(PdfString::text("indirect")));
+    doc.update_dict(ObjRef::new(5, 0), |d| d.set(b"V".to_vec(), Object::Ref(r))).unwrap();
+    assert_eq!(value(&doc), ["indirect"]);
+    doc.set(r, Object::String(PdfString::text("changed in place")));
+    assert_eq!(value(&doc), ["changed in place"]);
+    // Another document with the same bytes is read, not given this one's fields.
+    let other = document(&objs);
+    let before = form_reads();
+    assert_eq!(value(&other), ["old"]);
+    assert_eq!(form_reads() - before, 1);
 }
 
 /// A radio group `size` with the buttons Small (on), Medium and Large, a per-widget `/Opt`, and
@@ -6802,6 +6911,64 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
     }
 }
 
+/// A widget reached from `/Fields` as an unnamed kid of a plain field, whose own `/Parent` is an
+/// unlisted password field: the quick check must still read that `/Parent` chain.
+#[test]
+fn a_page_widget_seen_under_fields_still_has_its_parent_chain_checked() {
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /T (grp) /Kids [6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [50 700 150 720] /P 3 0 R >>".into(),
+        "<< /FT /Tx /T (pin) /Ff 8192 /V (secret9) /Kids [6 0 R] >>".into(),
+    ]);
+    assert!(has_password_flag(&doc));
+}
+
+/// A radio button that is read-only on its own (its own `/Ff`) can't be picked, and a selected one
+/// can't be switched away from, though the group as a whole is writable.
+#[test]
+fn a_read_only_radio_button_is_neither_picked_nor_left() {
+    let lock = |doc: &mut Document, num: u32| doc.update_dict(pdfcraft_cos::ObjRef::new(num, 0), |d| d.set(b"Ff".to_vec(), Object::Int(1))).unwrap();
+    let mut doc = radio_group_form();
+    lock(&mut doc, 7); // Medium
+    assert!(matches!(set_value(&mut doc, "size", &FieldValue::Radio(Some("M".into()))), Err(FormError::ReadOnly(_))));
+    set_value(&mut doc, "size", &FieldValue::Radio(Some("L".into()))).expect("an unlocked button is picked");
+    // Small (selected) locked: the group stays on it.
+    let mut doc = radio_group_form();
+    lock(&mut doc, 6);
+    assert!(matches!(set_value(&mut doc, "size", &FieldValue::Radio(Some("L".into()))), Err(FormError::ReadOnly(_))));
+    assert_eq!(field(&fields(&doc), "size").value, ["S"]);
+}
+
+/// The group's `/V` names its selection even when the button's `/AS` says nothing: a read-only
+/// button that `/V` selects is not switched away from either.
+#[test]
+fn a_read_only_radio_button_selected_by_the_group_value_is_not_left() {
+    let mut doc = radio_group_form();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        d.set(b"Ff".to_vec(), Object::Int(1));
+        d.set(b"AS".to_vec(), Object::name("Off"));
+    })
+    .unwrap();
+    assert!(matches!(set_value(&mut doc, "size", &FieldValue::Radio(Some("L".into()))), Err(FormError::ReadOnly(_))));
+    assert_eq!(field(&fields(&doc), "size").value, ["S"]);
+}
+
+/// Clearing the form skips a group held by a read-only button and still clears the rest.
+#[test]
+fn clearing_the_form_goes_on_past_a_group_held_by_a_read_only_button() {
+    let mut doc = radio_group_form();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| d.set(b"Ff".to_vec(), Object::Int(1))).unwrap();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(9, 0), |d| d.set(b"DV".to_vec(), pdfcraft_cos::PdfString::text("Bob"))).unwrap();
+    assert_eq!(reset(&mut doc, None).unwrap(), 1);
+    let all = fields(&doc);
+    assert_eq!(field(&all, "size").value, ["S"]);
+    assert_eq!(field(&all, "name").value, ["Bob"]);
+}
+
 #[test]
 /// Cosmetic field updates skip calculations, while a value write still triggers the chain.
 fn script_cosmetic_mutations_do_not_run_the_calculation_chain() {
@@ -6935,6 +7102,26 @@ fn radio_buttons_without_as_sharing_the_value_show_one_on() {
     // One that has `/AS` naming the state is the one on.
     let doc = radio_without_as(49152, "/AS /Yes");
     assert_eq!(on_widgets(&doc, "r").0, [false, true, false]);
+}
+
+/// Two buttons share the on state `Yes`; the first is on by its `/AS` and the second is read-only
+/// and off. `/V` is `Yes` for both, but only the first is selected: picking another option switches
+/// the first off, which is allowed, and the read-only one never changes.
+#[test]
+fn a_read_only_button_sharing_the_on_state_of_the_selected_one_does_not_block() {
+    let mut doc = radio_without_as(49152, "/Ff 1 /AS /Off");
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| d.set(b"AS".to_vec(), Object::name("Yes"))).unwrap();
+    set_value(&mut doc, "r", &FieldValue::Radio(Some("No".into()))).expect("the writable selected button may be switched off");
+    assert_eq!(on_widgets(&doc, "r").0, [false, false, true]);
+}
+
+/// Selecting another button through `FieldValue::Widget` can't switch a read-only selected one off.
+#[test]
+fn a_read_only_selected_radio_button_is_not_left_by_picking_a_widget() {
+    let mut doc = radio_group_form();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| d.set(b"Ff".to_vec(), Object::Int(1))).unwrap();
+    assert!(matches!(set_value(&mut doc, "size", &FieldValue::Widget(2)), Err(FormError::ReadOnly(_))));
+    assert_eq!(field(&fields(&doc), "size").value, ["S"]);
 }
 
 /// Table 227, ReadOnly: a processor "shall not allow a user to change the value". A button whose own
@@ -7348,4 +7535,32 @@ fn simple_calculation_counts_the_first_value_of_a_multiple_selection_list() {
     assert_eq!(field(&fields(&doc), "picks").value, ["4", "6"]);
     recalculate(&mut doc).unwrap();
     assert_eq!(field(&fields(&doc), "total").value, ["4"]);
+}
+
+/// A page with open and close actions of its own (one script a stream), an animation's widget
+/// with page actions (one of them not a script), buttons acting on mouse down, and a screen
+/// annotation with a page-open action.
+fn page_actions_fixture() -> Document {
+    document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /AA << /O << /S /JavaScript /JS (page_open\\(\\);) >> /C << /S /JavaScript /JS 7 0 R >> >> /Annots [4 0 R 5 0 R 6 0 R 8 0 R] >>".into(), // 3
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (anim) /Rect [0 0 100 100] /P 3 0 R /AA << /PO << /S /JavaScript /JS (start\\(\\);) >> /PV << /S /JavaScript /JS (start\\(\\);) >> /PC << /S /JavaScript /JS (stop\\(\\);) >> /PI << /S /URI /URI (https://example.com) >> >> >>".into(), // 4
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (step) /Rect [0 0 10 10] /P 3 0 R /AA << /D << /S /JavaScript /JS (step\\(\\);) >> >> >>".into(), // 5
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (both) /Rect [20 0 30 10] /P 3 0 R /AA << /D << /S /JavaScript /JS (down\\(\\);) >> /U << /S /JavaScript /JS (up\\(\\);) >> >> >>".into(), // 6
+        "<< /Length 7 >>\nstream\nclose()\nendstream".into(), // 7
+        "<< /Type /Annot /Subtype /Screen /Rect [0 0 1 1] /AA << /PO << /S /JavaScript /JS (screen\\(\\);) >> >> >>".into(), // 8
+    ])
+}
+
+#[test]
+fn page_scripts_are_the_pages_own_then_each_annotations_in_order() {
+    let doc = page_actions_fixture();
+    let open = page_scripts(&doc, 0, PageEvent::Open);
+    let got: Vec<(Option<&str>, &str)> = open.iter().map(|s| (s.field.as_deref(), s.script.as_str())).collect();
+    assert_eq!(got, [(None, "page_open();"), (Some("anim"), "start();"), (Some("anim"), "start();"), (None, "screen();")]);
+    let close = page_scripts(&doc, 0, PageEvent::Close);
+    let got: Vec<(Option<&str>, &str)> = close.iter().map(|s| (s.field.as_deref(), s.script.trim())).collect();
+    assert_eq!(got, [(None, "close()"), (Some("anim"), "stop();")], "a URI action is not a script");
+    assert!(page_scripts(&doc, 1, PageEvent::Open).is_empty(), "no such page");
 }
