@@ -11,6 +11,8 @@
 //! - Calibrated document context (`/OutputIntents` with CMYK destinations)
 //! - Inherited page-level default color spaces (`/DefaultCMYK` or `/DefaultRGB`)
 
+use std::collections::HashSet;
+
 use image::codecs::jpeg::JpegEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
@@ -163,14 +165,45 @@ fn has_cmyk_output_intents(doc: &Document) -> bool {
     false
 }
 
-/// Whether any page defines `/DefaultCMYK` or `/DefaultRGB` in its `/Resources /ColorSpace` dictionary.
+/// Cap the Form XObject walk against deeply nested form trees.
+const MAX_FORM_DEPTH: usize = 32;
+
+/// Whether any page, or any Form XObject reachable from a page, defines
+/// `/DefaultCMYK` or `/DefaultRGB` in its `/Resources /ColorSpace` dictionary.
 fn pages_have_default_colour_spaces(doc: &Document) -> bool {
+    let mut seen: HashSet<ObjRef> = HashSet::new();
     for p in pdfcraft_model::pages(doc) {
-        let Some(res_obj) = p.dict.get(b"Resources").map(|r| doc.resolve(r)) else { continue };
-        let Some(res) = res_obj.as_dict() else { continue };
-        let Some(cs_obj) = res.get(b"ColorSpace").map(|cs| doc.resolve(cs)) else { continue };
-        let Some(cs_dict) = cs_obj.as_dict() else { continue };
-        if cs_dict.contains(b"DefaultCMYK") || cs_dict.contains(b"DefaultRGB") {
+        if form_tree_has_defaults(doc, &p.dict, 0, &mut seen) {
+            return true;
+        }
+    }
+    false
+}
+
+fn form_tree_has_defaults(doc: &Document, dict: &Dict, depth: usize, seen: &mut HashSet<ObjRef>) -> bool {
+    if depth > MAX_FORM_DEPTH {
+        return false;
+    }
+    let Some(res_obj) = dict.get(b"Resources").map(|r| doc.resolve(r)) else { return false };
+    let Some(res) = res_obj.as_dict() else { return false };
+    if let Some(cs_obj) = res.get(b"ColorSpace").map(|cs| doc.resolve(cs))
+        && let Some(cs_dict) = cs_obj.as_dict()
+        && (cs_dict.contains(b"DefaultCMYK") || cs_dict.contains(b"DefaultRGB"))
+    {
+        return true;
+    }
+    let Some(xobj_obj) = res.get(b"XObject").map(|x| doc.resolve(x)) else { return false };
+    let Some(xobj) = xobj_obj.as_dict() else { return false };
+    for (_, val) in xobj.iter() {
+        let Object::Ref(r) = val else { continue };
+        if !seen.insert(*r) {
+            continue;
+        }
+        let Object::Stream(s) = &*doc.get(*r) else { continue };
+        if s.dict.name(b"Subtype") != Some(b"Form") {
+            continue;
+        }
+        if form_tree_has_defaults(doc, &s.dict, depth + 1, seen) {
             return true;
         }
     }
@@ -340,5 +373,35 @@ mod tests {
         assert_eq!(report.skipped, 1);
         let Object::Stream(s) = &*doc.get(r) else { panic!() };
         assert_eq!(s.dict.get(b"ColorSpace").unwrap().as_name(), Some(b"DeviceCMYK".as_slice()));
+    }
+
+    #[test]
+    fn form_local_default_colour_space_skips_conversion() {
+        let mut doc = Document::new_empty();
+
+        // A form with a form-local /DefaultCMYK in its resources.
+        let mut form_res = Dict::new();
+        let mut form_cs = Dict::new();
+        form_cs.set(b"DefaultCMYK".to_vec(), Object::name("DeviceCMYK"));
+        form_res.set(b"ColorSpace".to_vec(), Object::Dict(form_cs));
+        let mut form_dict = Dict::new();
+        form_dict.set(b"Subtype".to_vec(), Object::name("Form"));
+        form_dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+        form_dict.set(b"Resources".to_vec(), Object::Dict(form_res));
+        let form = doc.add(Object::Stream(Stream::from_raw(form_dict, vec![])));
+
+        // Direct test: empty page resources return false, while the form's resources return true.
+        assert!(!form_tree_has_defaults(&doc, &Dict::new(), 0, &mut HashSet::new()));
+        let Object::Stream(s) = &*doc.get(form) else { panic!() };
+        assert!(form_tree_has_defaults(&doc, &s.dict, 0, &mut HashSet::new()));
+
+        // Page referencing the form via /XObject also detects the form-local default.
+        let mut xobj = Dict::new();
+        xobj.set(b"Fm0".to_vec(), Object::Ref(form));
+        let mut page_res = Dict::new();
+        page_res.set(b"XObject".to_vec(), Object::Dict(xobj));
+        let mut page_dict = Dict::new();
+        page_dict.set(b"Resources".to_vec(), Object::Dict(page_res));
+        assert!(form_tree_has_defaults(&doc, &page_dict, 0, &mut HashSet::new()));
     }
 }

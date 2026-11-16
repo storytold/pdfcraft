@@ -314,6 +314,9 @@ impl Session {
     /// Converts uncalibrated DeviceCMYK raster images to DeviceRGB.
     pub fn convert_colors(&self, id: DocId, options: &print::ConvertColorsOptions) -> Result<(Arc<Vec<u8>>, print::ConvertColorsReport), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        if doc.is_signed() {
+            return Err(EditError::Signed);
+        }
         if !doc.allows_modification() {
             return Err(EditError::NotPermitted("converting colors"));
         }
