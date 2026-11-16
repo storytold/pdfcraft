@@ -204,6 +204,9 @@ pub const WORDINGS: &[&str] = &[
     "A graphics state has a rendering intent that isn't a name",
     "The form asks viewers to make appearances (NeedAppearances)",
     "Some content could not be read for device colour",
+    // Permissions and signatures.
+    "The permissions dictionary holds {}: only UR3 and DocMDP are allowed",
+    "With DocMDP permissions, a signature reference dictionary holds {}",
     // Pages, actions, annotations and fields.
     "Page {} has additional actions",
     "A {} action isn't allowed",
@@ -671,6 +674,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     check_xmp_packets(&objs, &located_issue);
     check_output_intent(doc, &objs, &mut issue);
     check_catalog_actions(doc, &mut issue);
+    check_permissions(doc, level, &objs, &mut issue);
     // Pages: annotations and page actions.
     let pages = pdfcraft_model::pages(doc);
     // Each annotation's page: the first page that lists it.
@@ -895,6 +899,69 @@ fn check_output_intent(
             }
         }
         None => {}
+    }
+}
+
+/// The keys a permissions dictionary may hold (ISO 32000-2 12.8.6, Table 263).
+const PERMISSIONS: &[&[u8]] = &[b"UR3", b"DocMDP"];
+
+/// The signature reference entries PDF/A forbids when the document has DocMDP permissions: the
+/// object digest entries of ISO 32000-1 12.8.1, Table 253.
+const DIGEST_ENTRIES: &[&[u8]] = &[b"DigestLocation", b"DigestMethod", b"DigestValue"];
+
+/// 6.1.12: the catalog's permissions dictionary holds no keys but `UR3` and `DocMDP`, and when it
+/// holds `DocMDP` no signature's reference dictionaries hold `DigestLocation`, `DigestMethod` or
+/// `DigestValue`. The signatures are the dictionaries of type `Sig` among the document's objects,
+/// those the permissions dictionary holds and the values of signature fields, held directly or by
+/// reference. PDF/A-4 numbers its own permissions rule differently (ISO 19005-4 6.1.11), so this
+/// one is for PDF/A-2 and PDF/A-3.
+fn check_permissions(
+    doc: &Document,
+    level: Level,
+    objs: &[(ObjRef, std::sync::Arc<Object>)],
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    if level.part() > 3 {
+        return;
+    }
+    let Some(perms) = catalog(doc).get(b"Perms").map(|p| doc.resolve(p)) else { return };
+    let Some(perms) = perms.as_dict() else { return };
+    let others: Vec<String> =
+        perms.iter().map(|(k, _)| k).filter(|k| !PERMISSIONS.contains(&k.as_slice())).map(|k| String::from_utf8_lossy(k).into_owned()).collect();
+    if !others.is_empty() {
+        issue("6.1.12", "The permissions dictionary holds {}: only UR3 and DocMDP are allowed", Some(others.join(", ")), None, false);
+    }
+    if perms.get(b"DocMDP").is_none() {
+        return;
+    }
+    let is_signature = |d: &Dict| d.name(b"Type") == Some(b"Sig");
+    let mut signatures: Vec<std::sync::Arc<Object>> = perms.iter().map(|(_, v)| doc.resolve(v)).collect();
+    for (_, o) in objs {
+        let Some(d) = dict_of(o) else { continue };
+        if is_signature(d) {
+            signatures.push(o.clone());
+        } else if d.name(b"FT") == Some(b"Sig")
+            && let Some(v) = d.get(b"V")
+        {
+            signatures.push(doc.resolve(v));
+        }
+    }
+    let mut found: Vec<&[u8]> = Vec::new();
+    for signature in &signatures {
+        let Some(references) = signature.as_dict().and_then(|s| s.get(b"Reference")).map(|r| doc.resolve(r)) else { continue };
+        for reference in references.as_array().into_iter().flatten() {
+            let reference = doc.resolve(reference);
+            let Some(reference) = reference.as_dict() else { continue };
+            for key in DIGEST_ENTRIES {
+                if reference.get(key).is_some() && !found.contains(key) {
+                    found.push(key);
+                }
+            }
+        }
+    }
+    if !found.is_empty() {
+        let keys: Vec<String> = found.iter().map(|k| String::from_utf8_lossy(k).into_owned()).collect();
+        issue("6.1.12", "With DocMDP permissions, a signature reference dictionary holds {}", Some(keys.join(", ")), None, false);
     }
 }
 

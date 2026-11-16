@@ -2367,3 +2367,52 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// What `verify` says under ISO 19005-2 6.1.12.
+fn permissions_said(doc: &Document) -> Vec<String> {
+    verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.12").map(|i| i.message).collect()
+}
+
+/// A one-page document whose catalog holds `perms` and a signature field (object 4) whose value is
+/// `signature`, followed by `extra` objects from object 6 on.
+fn signed(perms: &str, signature: &str, extra: &[&str]) -> Document {
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /SigFlags 3 >> {perms} >>");
+    let mut objs = vec![
+        catalog.as_str(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /FT /Sig /T (Signature1) /V 5 0 R >>",
+        signature,
+    ];
+    objs.extend_from_slice(extra);
+    build(&objs, "")
+}
+
+#[test]
+fn permissions_hold_ur3_and_docmdp_and_docmdp_forbids_digests_clause_6_1_12() {
+    let sig = |reference: &str| format!("<< /Type /Sig /Filter /Adobe.PPKLite /ByteRange [0 0 0 0] /Contents <00> {reference} >>");
+    let docmdp_ref = |extra: &str| format!("/Reference [<< /Type /SigRef /TransformMethod /DocMDP {extra} >>]");
+    // PDFBOX-5076: DocMDP permissions and a DigestMethod in the certifying signature's reference.
+    let doc = signed("/Perms << /DocMDP 5 0 R >>", &sig(&docmdp_ref("/DigestMethod /SHA1")), &[]);
+    assert_eq!(permissions_said(&doc), ["With DocMDP permissions, a signature reference dictionary holds DigestMethod"]);
+    let doc = signed("/Perms << /DocMDP 5 0 R >>", &sig(&docmdp_ref("/DigestLocation [0 1] /DigestValue (x)")), &[]);
+    assert_eq!(permissions_said(&doc), ["With DocMDP permissions, a signature reference dictionary holds DigestLocation, DigestValue"]);
+    // A reference held by reference, on a signature that only the field holds.
+    let doc = signed(
+        "/Perms << /DocMDP 6 0 R >>",
+        &sig("/Reference [7 0 R]"),
+        &[&sig(""), "<< /Type /SigRef /TransformMethod /FieldMDP /DigestValue (x) >>"],
+    );
+    assert_eq!(permissions_said(&doc), ["With DocMDP permissions, a signature reference dictionary holds DigestValue"]);
+    // A signature without `/Type` (it is optional, Table 255), found as a signature field's value.
+    let untyped = "<< /Filter /Adobe.PPKLite /Reference [<< /TransformMethod /FieldMDP /DigestMethod /SHA256 >>] >>";
+    let doc = signed("/Perms << /DocMDP 6 0 R >>", untyped, &[&sig("")]);
+    assert_eq!(permissions_said(&doc), ["With DocMDP permissions, a signature reference dictionary holds DigestMethod"]);
+    // Without DocMDP, digests are allowed; without them, DocMDP is.
+    assert!(permissions_said(&signed("/Perms << /UR3 5 0 R >>", &sig(&docmdp_ref("/DigestMethod /SHA1")), &[])).is_empty());
+    assert!(permissions_said(&signed("", &sig(&docmdp_ref("/DigestMethod /SHA1")), &[])).is_empty());
+    assert!(permissions_said(&signed("/Perms << /DocMDP 5 0 R >>", &sig(&docmdp_ref("")), &[])).is_empty());
+    // Other keys in the permissions dictionary.
+    let doc = signed("/Perms << /UR 5 0 R /DocMDP 5 0 R /Other 1 >>", &sig(""), &[]);
+    assert_eq!(permissions_said(&doc), ["The permissions dictionary holds UR, Other: only UR3 and DocMDP are allowed"]);
+}
