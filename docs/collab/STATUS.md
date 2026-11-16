@@ -1,6 +1,20 @@
 # PdfCraft collaboration — status and handoff
 
 - Branch: `feature/realtime-collaboration` (upstream `storytold/pdfcraft`).
+- **Local head, measured 2026-11-16T05:05Z: the code commit is `1de96e28c`,
+  one commit above `84ea8456c` (the docs record of the seventh merge below), and
+  this record is one docs commit above it.** The record deliberately does not
+  pin its own hash — it changes every amend; read it with `git log -1`. At that
+  measurement the branch was 159 commits ahead of `origin/main` `e191b0ea6`, 0
+  behind, tree clean, and `git merge-tree --write-tree origin/main HEAD` exited
+  0 (tree `3fee51a5e`). `1de96e28c` closes the six open security findings the
+  review of PR #6622 left — threads #8, #9, #10, #15, #17, #18, all six read at
+  the code of `84ea8456c` and all six open there. The table, the fixes and the
+  gate are in "The six open security findings of #6622" below. **Nothing was
+  pushed**, `origin/main` was not merged again, no ADR was published: PR #6622
+  still carries `a1cc8382d` and reads `CONFLICTING`/`DIRTY` against
+  `d749fd806`, and the fix reaches it only when the owner or `pr-agent` pushes
+  this line — which is what clears the DIRTY.
 - **The seventh merge of `origin/main`, and the one that clears the PR's
   `DIRTY`: `e6bd1eee3` (2026-11-16) merges `e191b0ea6` ("M3: select text across
   pages (view.text-select)", 2026-11-15T22:55:35+01:00), the tip at the fetch.**
@@ -449,6 +463,80 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4), re-addressed across
   daemon: `docs/collab/server.md`
 - Task and acceptance criteria: `../../TASK.md` in the cabinet-office checkout
 
+## The six open security findings of #6622 (2026-11-16)
+
+Measured 2026-11-16T04:10Z on `84ea8456c`, the docs record of the seventh
+`origin/main` merge (`e191b0ea6`): tree clean, `git rev-list --left-right
+--count origin/main...HEAD` `0 157`, and six of the review threads below were
+still security findings nobody had re-checked after the seven merges. Each was
+read at its code on that head — not at its diff hunk — and all six were open.
+All six are fixed in **`1de96e28c`**, one local commit above `84ea8456c`.
+
+| # | Finding | Open at `84ea8456c`? | Fix, all in `1de96e28c` | Regression test |
+|---|---|---|---|---|
+| 8 | SSRF: `POST /v1/sessions` with `url` makes the daemon fetch an address the caller names, before any role check | **open** — `session()` verified the JWT and the file binding, then `source()` → `Client::get(url)` (`control.rs:285-292`, `:373-375`) | `control.rs:449` `source_url_allowed`: a `url` source needs `role.can_structural()`, a URL a request line can carry, and a host on `--source-allow HOST[:PORT]` or `PDFCRAFT_COLLAB_SOURCE_ALLOW` (empty = no URL source; `host_allowed` at `:512`) | `a_url_source_needs_a_writing_role_and_an_allowed_host` (`control.rs:861`) — a counting origin sees **0** sockets for a host outside the list and for a viewer, **1** for an allowlisted editor; the old URL test is rewritten to run with an allowlist (`control.rs:790`) |
+| 9 | `read_head_line` caps one line; the head as a whole has no budget, and only a per-read 10 s timeout | **open** — a fresh `take(MAX_HEAD)` per line (`http.rs:85`), no aggregate limit in `read_request` | `http.rs:15` `MAX_HEAD` + `:97` `read_head_line(reader, what, &mut budget, deadline)`: one 16 KiB budget and one `HEAD_TIMEOUT` deadline for the whole head, request and response alike; a line cut at the budget is refused rather than parsed | `a_request_head_is_bounded_as_a_whole_not_line_by_line` (`http.rs:318`) — 64 headers of 1 KiB |
+| 10 | `parse_http_url` accepts spaces and CR/LF, and `get` interpolates the path into the request line | **open** — `parse_http_url` (`http.rs:109`) split on `/` and kept every byte | `http.rs:140`: only visible ASCII (`0x21..=0x7e`) is accepted, so a space, a CR/LF, a NUL or a non-ASCII byte is refused with the byte named | `a_url_cannot_carry_a_space_a_line_break_or_a_control_character` (`http.rs:299`) |
+| 15 | `hello` overwrites `participants[actor].role`, and `apply`/`commit` read that one role, so an actor's connections share the last one | **open** — `and_modify(|p| p.role = role)` (`collab-server:376`) | `crates/collab-server/src/lib.rs:381`: a `hello` whose verified role differs from the participant's is refused `403`, so every check runs against the role the connection's own ticket verified | `a_second_connection_cannot_bring_another_role` (`collab-server:1305`) |
+| 17 | `presence` checks `actor_id` but not `presence.role`, and the hub re-broadcasts the body | **open** — `presence()` validated size, rate and actor only (`collab-server:602`) | `collab-server:623`: `presence.role` must equal the verified role, else `403` | `presence_cannot_name_a_role_the_session_did_not_verify` (`collab-server:1328`) |
+| 18 | signature, expiry and file binding are checked; `claims.session_id` is never checked against revocation, and there is no revoke path | **open** — `serve_inner` went from `verify` straight to `hub.connect` (`serve.rs:548-568`) | new `crates/collab-ws/src/revoke.rs` (`Revocations`, carried in `Config`); `serve.rs:613` refuses a `hello` on a revoked session; `serve.rs:469` `revoke_session` closes that ticket's sockets and commits the room on the last leave; `POST /v1/sessions/{fileId}/revoke` (`control.rs:412`) needs a writing token for the file | `a_revoked_session_is_refused_and_its_sockets_are_closed` (`serve.rs:1152`), `a_session_is_revoked_once_and_forever` (`revoke.rs:56`), `an_operator_revokes_a_session_and_only_a_writer_may` (`control.rs:911`) |
+
+The commit is **8 files, +642/−36**: `control.rs`, `http.rs` and `main.rs` in
+the daemon, `collab-server/src/lib.rs`, `collab-ws/src/lib.rs`, the new
+`collab-ws/src/revoke.rs`, `collab-ws/src/serve.rs`, and `docs/collab/server.md`
+(§2.4, the allowlist, the flag table); `INTEGRATION.md` §«Сервер» is outside this
+repository and is not in that count. Eight tests are new and one existing URL
+test is rewritten to run with an allowlist. Two behaviour changes a reviewer has
+to know:
+- **a `url` source is refused unless `--source-allow` names its host.** A
+  deployment that used URL sources must add the flag (or send the bytes inline,
+  which is what this cabinet does); the URL is also refused unless the ticket's
+  role may write.
+- **two windows of one person in one room must carry the same role.** A second
+  ticket naming another role is refused with a message that says so — this is
+  what makes the per-actor role equal to every connection's own verified role.
+  The app already takes `collab.role` from `Welcome` (`ui-egui/src/collab.rs:960`),
+  so its presence and its writes always carry the verified role.
+
+### Gate on the fix (2026-11-16)
+
+Host `agents` through `scripts/remote-build.sh`; the log is
+`.craft/logs/gate-pdfcraft-sec-84ea8456cb.log` (the head before the fix, with the
+fix commit re-run at its end).
+
+| Step | Result |
+|---|---|
+| `cargo metadata --locked` | **exit 0** (the same three `unused patch` warnings for the egui fork as before) |
+| `cargo fmt --all -- --check` | **exit 0** |
+| `cargo clippy -j 8 -p pdfcraft-collab-ws -p pdfcraft-collab-server -p pdfcraft-collab-daemon --all-targets --no-deps -- -D warnings` | **exit 0** |
+| `cargo test -j 4 -p pdfcraft-collab-ws -p pdfcraft-collab-server -p pdfcraft-collab-daemon -p pdfcraft-collab-hub -p pdfcraft-collab-pdf -p pdfcraft-collab-session` | **exit 0 — 220 passed, 0 failed**: 43 daemon unit + 5 daemon integration + 71 collab-pdf + 36 e2e + 35 collab-server + 18 collab-ws + 6 hub + 6 session |
+| `cargo clippy --workspace --all-targets -- -D warnings` (the `xtask ci` step; recorded, not used as this pass's gate) | **RED, and not this branch's**: `crates/xfdf/src/xfdf.rs:326`, `clippy::collapsible_match` under clippy 1.99.0. The branch does not touch that file (`git diff origin/main HEAD -- crates/xfdf` is empty; its last commit is main's `7d44e6541`), so the workspace lint is red on main's own tree at this toolchain, and a fix here would be an unrelated change inside a feature PR |
+
+The full workspace suite (`cargo xtask ci`) was **not** run in this pass: the
+sweep owns it, and its workspace `clippy` step is red for the reason above.
+
+### The six threads, answered in place (2026-11-16T04:5xZ)
+
+Each reply carries the `fixed in 1de96e28c at <file>:<line>` form and names the
+test that proves it; the commit is local, so the replies say so.
+
+| # | Reply |
+|---|---|
+| 8 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581193771 |
+| 9 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581193933 |
+| 10 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581194136 |
+| 15 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581194319 |
+| 17 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581194469 |
+| 18 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581194675 |
+
+At that measurement PR #6622 still read `headRefOid` `a1cc8382d`
+(`git ls-remote fork …` the same), `mergeable: CONFLICTING`,
+`mergeStateStatus: DIRTY`, `baseRefOid` `d749fd806`, `reviewDecision` empty,
+`updatedAt` 2026-11-16T01:31:14Z — the PR is DIRTY because it carries
+`a1cc8382d`, not this line: `git merge-tree --write-tree origin/main HEAD` on the
+local head **exits 0** (tree `3fee51a5e`) against `origin/main` `e191b0ea6`, so
+pushing this line is what clears it.
+
 ## Open review threads
 
 Measured 2026-11-13T12:46Z on head `91a382205` (`gh pr view 6622 --json
@@ -481,17 +569,17 @@ not move.
 | 5 | `crates/ui-egui/src/collab.rs:1083` | **withdrawn by the bot** — `PdfAdapter::commit` sets `conflict: false` unconditionally (`collab-pdf:1386`) and a cabinet 409 reaches the client as `ServerMessage::Error` (`collab-client:340`), so `Event::Committed` never carries `conflict: true` with this server; only a foreign server could misreport, which is defensive. The thread is resolved. |
 | 6 | `crates/ui-egui/src/collab.rs:1085` | **fixed in `d0af73f354`** at `crates/ui-egui/src/collab.rs:1093` — `Disconnected` clears `connected`; the three edit entry points return `Some(false)` with "Waiting for the collaboration session" (`:1251`, `:1372`, `:1443`), and a failed enqueue is reported. Residual (the bot's follow-up, confirmed): after a snapshot `crates/collab-session/src/driver.rs:299` re-enqueues only merge operations and drops pending structural ones without an event. |
 | 7 | `crates/ui-egui/src/collab.rs` (outdated line) | **open** — undo overwrites `group.originals` with the inverses it sent (`:1534`), so redo re-sends them and the server refuses. Plan: keep the pre-undo originals in the redo group. |
-| 8 | `apps/pdfcraft-collab-server/src/control.rs:375` | **open** — `session()` checks only the JWT and the file binding (`:284-289`) and fetches `request.url` before any role check, so any ticket holder can make the daemon GET an internal address. Plan: cabinet role for a URL source plus a destination allowlist. |
-| 9 | `apps/pdfcraft-collab-server/src/http.rs:62` | **open** — `read_head_line` caps one line, but `read_request` has no aggregate head budget and only a per-read 10 s timeout (`:47,56,85`). Plan: one `MAX_HEAD` budget for the whole head and one deadline. |
-| 10 | `apps/pdfcraft-collab-server/src/http.rs:215` | **open** — `parse_http_url` accepts spaces and CR/LF, and `get` interpolates the path into the request line. Plan: reject control characters and spaces before the request. |
+| 8 | `apps/pdfcraft-collab-server/src/control.rs:375` | **fixed in `1de96e28c`** at `control.rs:449` — `source_url_allowed` refuses a `url` source for a role that cannot write and for a host that is not on `--source-allow` / `PDFCRAFT_COLLAB_SOURCE_ALLOW` (an empty list refuses every URL source), so the daemon opens no socket for an address the caller chose; `host_allowed` (`:512`) matches `host`, `host:port` and bracketed IPv6. Test `a_url_source_needs_a_writing_role_and_an_allowed_host` (`:861`) counts the requests the origin sees: 0 for a foreign host, 0 for a viewer, 1 for an allowlisted editor. |
+| 9 | `apps/pdfcraft-collab-server/src/http.rs:62` | **fixed in `1de96e28c`** at `http.rs:97` — one 16 KiB `MAX_HEAD` budget and one deadline for the whole head (request and response alike); a line cut at the budget is refused, not parsed. Test `a_request_head_is_bounded_as_a_whole_not_line_by_line` (`:318`). |
+| 10 | `apps/pdfcraft-collab-server/src/http.rs:215` | **fixed in `1de96e28c`** at `http.rs:140` — `parse_http_url` accepts only visible ASCII, so a space, a CR/LF, a NUL or a non-ASCII byte is refused with the byte named before any request is built. Test `a_url_cannot_carry_a_space_a_line_break_or_a_control_character` (`:299`). |
 | 11 | `crates/collab-hub/src/lib.rs:90` | **open** — `close_room` only removes the entry; members keep their sink and their sockets, and get `no such document session` on the next send. Plan: terminal error to every member and drop the client entries. |
 | 12 | `crates/collab-hub/src/lib.rs` (outdated line) | **fixed in `24f519a91`** at `crates/collab-hub/src/lib.rs:212` — the actor's seat is kept while another client of the same actor and document is still connected. |
 | 13 | `crates/collab-pdf/src/lib.rs:731` | **open** — `restore_annotation` prefers a client-supplied `body` (`:723`), and `Room::replay` calls the same `apply` (`collab-server:555`), so the live path cannot tell them apart. Plan: a replay/trusted flag; `body` only there, `copy` token live. |
 | 14 | `crates/collab-pdf/src/lib.rs:853` | **open** — the restore check measures the whole JSON frame (base64 body) against `MAX_RESTORE_PAGE_BYTES` = 160 KiB raw (`proto:102`), so a page above ~120 KiB raw fits the copy limit yet its undo is refused. Plan: raw limit for the copy, `MAX_MESSAGE_BYTES` for the frame. |
-| 15 | `crates/collab-server/src/lib.rs:376` | **open** — `hello` overwrites `participants[actor].role`, and `apply`/`commit` read that one role (`:443`, `:627`), so an actor's connections share the last role. Plan: the verified role per connection. |
+| 15 | `crates/collab-server/src/lib.rs:376` | **fixed in `1de96e28c`** at `collab-server:381` — a second `hello` whose verified role differs from the participant's is refused `403`, so the per-actor role is the role every connection's own ticket verified (`apply`/`commit`/`presence` then read that one). Test `a_second_connection_cannot_bring_another_role` (`:1305`). |
 | 16 | `crates/collab-server/src/lib.rs:591` | **open** — `resync` returns the whole tail as one `Snapshot` (`:589-591`); nothing checks `encoded_len` on the send path. Plan: frame-sized batches with a continuation, applied in order. |
-| 17 | `crates/collab-server/src/lib.rs:602` | **open** — `presence` checks `actor_id` but not `presence.role`, and the hub re-broadcasts the body, so a viewer can claim `Editor`. Plan: compare with the participant's role and refuse. |
-| 18 | `crates/collab-ws/src/serve.rs:552` | **open** — the transport verifies signature, expiry and file binding but never `claims.session_id` against revocation state, and the daemon has no revoke path. Plan: consult revocation before `hub.connect`. |
+| 17 | `crates/collab-server/src/lib.rs:602` | **fixed in `1de96e28c`** at `collab-server:623` — `presence` refuses a frame whose `role` is not the session's verified role, so the re-broadcast body cannot claim `Editor` for a viewer. Test `presence_cannot_name_a_role_the_session_did_not_verify` (`:1328`). |
+| 18 | `crates/collab-ws/src/serve.rs:552` | **fixed in `1de96e28c`** — the revocation set is `crates/collab-ws/src/revoke.rs:16` (carried in `Config`); `serve.rs:613` refuses a `hello` on a revoked session before `hub.connect`, `serve.rs:469` `revoke_session` closes that ticket's live sockets, and `POST /v1/sessions/{fileId}/revoke` (`control.rs:412`) is the daemon's revoke path. Tests `a_revoked_session_is_refused_and_its_sockets_are_closed` (`serve.rs:1152`), `a_session_is_revoked_once_and_forever` (`revoke.rs:56`), `an_operator_revokes_a_session_and_only_a_writer_may` (`control.rs:911`). |
 | 19 | `crates/collab-ws/src/token.rs:29` | **open** — the `Claims` doc says `iss`, `iat` and `ver` are "validated by the signature and `exp`", while `decode_raw` requires only `exp`, `sub`, `aud`. Plan: reword; the cabinet enforces its own policy. |
 | 20 | `crates/ui-egui/src/collab.rs` (outdated line) | **open** — `Event::Rejected` drops the op from `originals` but leaves its inverse in `inverses` (`:1020-1024`), which Undo then flattens and sends. Plan: keep the two vectors paired and drop both entries. |
 
@@ -504,16 +592,18 @@ each, did not mark any open finding as addressed, and resolved two threads — #
 (after withdrawing the finding, see the table) and #12 (verified fix). GitHub
 reads **58 of the 61 threads unresolved**. Three threads got a second answer
 correcting the first one after that follow-up (#3, #5, #6), and this table
-carries the corrected verdict. This record is one docs commit above
-`a1cc8382d` (`fc0523151`) and
-is local, so the fork reads `a1cc8382d` and this clone is `0 1`
-against it (`git rev-list --left-right --count
-fork/feature/realtime-collaboration...HEAD`); the PR stays `MERGEABLE` /
-`UNSTABLE`, with the
-five runs on `a1cc8382d` `completed/action_required`. The seventeen open items
-are advisory
-findings, not a merge gate of their own: the maintainer's review decides, and a
-fix now would need a push, which would reset the five approvals.
+carries the corrected verdict. This record began as one docs commit above
+`a1cc8382d` (`fc0523151`) and is local; the fork reads `1de96e28c`'s ancestors
+(`a1cc8382d`) and this clone is above it
+(`git rev-list --left-right --count
+fork/feature/realtime-collaboration...HEAD`), the PR staying `MERGEABLE` /
+`UNSTABLE` with the five runs on `a1cc8382d` `completed/action_required`.
+**The six security findings of this table (#8, #9, #10, #15, #17, #18) were
+re-checked at `84ea8456c` and fixed in `1de96e28c` on 2026-11-16** — the section
+above has the table, the fixes and the gate. Ten items stay open (#1, #2, #4,
+#7, #11, #13, #14, #16, #19, #20); they are advisory findings, not a merge gate
+of their own: the maintainer's review decides, and the fix reaches the PR only
+when the owner or `pr-agent` pushes `1de96e28c`.
 
 ## 1. What is built
 
@@ -526,11 +616,11 @@ fix now would need a push, which would reset the five approvals.
 | `crates/collab-outline` | Typed wire form of an outline item's destination (a page and a point, a Table 149 view, a named destination, or nowhere), of the look an update or an add names (`ItemLook`: colour as three numbers from 0 to 1 or `null` for the default black, bold, italic, open state) and of the subtree copy a delete carries, with their bounds: title and name length, depth, node count, copy size, colour channels, view types and their values; the tree the from-structure/from-text-styles generators build in a replica |
 | `crates/collab-link` | Typed wire form of a link: its area (a rectangle, or the quads of a text area), its target (a page of this document with a view, a named destination, a page of another file, or a web address) and its look, with the bounds of every number and string; a list of them is a page's whole link list |
 | `crates/collab-annot` | Typed wire form of a shared annotation: `shape` (kind, geometry) + `style` (colour, opacity, width, endings, fill) + text, with the v1 subset and its limits; the final style of an existing comment (`StyleUpdate` for `annotation.update`), its font size (`FontSizeUpdate`), its author/subject/icon (`InfoUpdate`), its parts (`PartsUpdate`), its move (`MoveUpdate`) and its geometry (`GeometryUpdate`) and their before/expect CAS; the review-state names of a status reply |
-| `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256/HS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot, the control plane's `resolve_conflict` and its counter (which publishes the refused base), the publication queue and its recovery of restored publications |
+| `crates/collab-ws` | Blocking WebSocket transport: `hello` + RS256/HS256 JWT, `Origin`, frame limits, per-connection outbox/backpressure, `/metrics` snapshot, the control plane's `resolve_conflict` and its counter (which publishes the refused base), the publication queue and its recovery of restored publications, and the revocation set a withdrawn ticket is refused against (`Revocations`, `revoke_session`) |
 | `crates/collab-client` | Client state machine: pending ops (≤8), version/epoch, gap → resync, retryable rejection → resync then resend, reconnect |
 | `crates/collab-client-pdf` | Projection: `Op` → engine `Edit` (apply with `Session::apply_remote`), `Edit` → `Op` (a bookmark edit — title, destination, colour, style or open state — is one `outline.item.update` addressed by the item key this replica's list gives it; a whole-outline `ImportBookmarks` with `replace` is one `outline.replace`; the structure and text-style generators build their tree here and send the same operation; a link edit is addressed by the page's whole list), inverse operations for undo, including the outline, named destination and link operations, whose inverses are built from the accepted operation |
 | `crates/collab-session` | One protocol driver (`driver::Session`: hello/welcome, version and epoch, resync and retry, lease heartbeat, presence) behind a `Transport` trait with two implementations: `native` (a blocking socket on a worker thread, reconnect with backoff) and `web` (the browser's `WebSocket`, whose callbacks queue frames and which the frame loop steps). `Sink` is the object-safe face the UI holds |
-| `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions`, `POST /v1/sessions/{fileId}/commit` (the host's Save: the room builds the document and publishes it, answering `{version, cabinet:{version,etag}}`) and `POST /v1/sessions/{fileId}/resolve`, commit callback to the cabinet with an idempotency key (its `{version, etag}` answer is adopted), the background publication queue with a backoff, the start-up recovery of unpublished bases from the store, `/health`, `/metrics` (`pdfcraft_collab_forced_commits_total`, `pdfcraft_collab_publication_retries_total`, `pdfcraft_collab_publications_restored_total`, `pdfcraft_collab_publications_after_resolve_total`, `pdfcraft_collab_conflicts_resolved_total`) |
+| `apps/pdfcraft-collab-server` | Daemon (package `pdfcraft-collab-daemon`, binary `pdfcraft-collab-server`): dev mode from a directory, control plane `POST /v1/sessions` (a `url` source only for a writing role and a host on `--source-allow`), `POST /v1/sessions/{fileId}/commit` (the host's Save: the room builds the document and publishes it, answering `{version, cabinet:{version,etag}}`), `POST /v1/sessions/{fileId}/resolve` and `POST /v1/sessions/{fileId}/revoke`, commit callback to the cabinet with an idempotency key (its `{version, etag}` answer is adopted), the background publication queue with a backoff, the start-up recovery of unpublished bases from the store, `/health`, `/metrics` (`pdfcraft_collab_forced_commits_total`, `pdfcraft_collab_publication_retries_total`, `pdfcraft_collab_publications_restored_total`, `pdfcraft_collab_publications_after_resolve_total`, `pdfcraft_collab_conflicts_resolved_total`) |
 | `crates/ui-egui/src/collab.rs` | App wiring behind `collab`, native and wasm: start from the environment (desktop) or from the host page, apply events, send edits, participants window, presence with cursors, selections and TTL, commit, inverse undo, host reports, Save in a hosted session routed to the cabinet's commit (`commit_instead_of_save`), and the Split/Combine dialogs' `page.split`/`page.combine` inside a session. Holds `Box<dyn Sink>`, never a native `Handle` |
 | `crates/ui-egui/src/dialogs/named_dests_ui.rs` | Bookmarks ▸ Named destinations…: the document's names with the page and view each opens, and add/update/delete as engine edits (`SetNamedDestination`/`DeleteNamedDestination`), so a session sends `dest.add`/`dest.update`/`dest.delete` and the dialog never writes the document itself |
 | `crates/automation/src/named_dests.rs` | Headless parity for named destinations: `destinations` (name → page and view), `destination_set` (add or move a name, with the Table 149 type and its values checked before the write) and `destination_delete` |
@@ -789,6 +879,19 @@ too and that crate has no such feature (§4, D4 item 1).
     marker and the session continues; foreign bytes stay `409`. An operator's
     `resolve` carries no bytes, so it cannot prove adoption and keeps the
     refusal; a marker written before the field existed does the same.
+28. **One person, one role, one session ticket.** The room records a participant
+    by actor and checks `apply`/`commit`/`presence` against that record, so a
+    second `hello` naming another role is refused (`403`) instead of overwriting
+    it: every check then runs against the role the connection's own ticket
+    verified, and a viewer window cannot inherit an editor's role from the same
+    person's other window (`1de96e28c`, threads #15 and #17). The app takes its
+    role from `Welcome` (`ui-egui/src/collab.rs:960`), so its presence and its
+    writes carry that same role. A ticket the cabinet closes early is withdrawn
+    with `POST /v1/sessions/{fileId}/revoke`: the transport refuses a `hello` on
+    it and closes the sockets it opened — the signature, the expiry and the file
+    binding cannot say "closed early" (thread #18). A `url` source is a
+    privileged fetch: a writing role and a host on `--source-allow`, or the
+    cabinet sends the bytes inline (thread #8).
 
 ## 3. Running it
 
@@ -802,7 +905,8 @@ cargo run -p pdfcraft-collab-daemon --release -- \
   --listen 127.0.0.1:8787 --health 127.0.0.1:8788 \
   --control 127.0.0.1:8789 \
   --callback-url http://cabinet.internal/v1/collab/commit \
-  [--max-source-bytes N] [--origin https://cabinet.example] [--app pdfcraft]
+  [--max-source-bytes N] [--origin https://cabinet.example] [--app pdfcraft] \
+  [--source-allow cabinet.internal] [--source-allow files.internal:8443]
 
 # dev: rooms from a directory, no cabinet
 cargo run -p pdfcraft-collab-daemon --release -- \
@@ -852,6 +956,19 @@ cargo run -p pdfcraft-collab-daemon --release -- \
   `503` hub unavailable. Every refusal leaves the room unchanged. On success the
   `conflict` flag is gone (`/health`, `/metrics`), the marker adopts
   `{expectedVersion, etag}`, and the next commit publishes with it.
+- `POST /v1/sessions/{fileId}/revoke` (`--control`, loopback,
+  `Authorization: Bearer <service token>`, `owner`/`editor`, `fileId` must match
+  the path): `{"sessionId":"<the ticket's sid>"}` → `200`
+  `{"fileId","sessionId","revoked":true,"closed":N}`; `401` no/bad token, `403`
+  another file or a role that cannot write, `400` an empty, oversized or
+  non-printable id, `503` hub unavailable. The ticket's live sockets are closed
+  (a last leave commits the room) and a later `hello` with it is refused `401`.
+  The set is in memory: a restart forgets it, so revoke again until `exp`.
+- A `url` source in `POST /v1/sessions` is fetched only for `owner`/`editor` and
+  only when its host is named by `--source-allow HOST[:PORT]` (repeatable) or
+  `PDFCRAFT_COLLAB_SOURCE_ALLOW` (comma-separated); with no entry the daemon
+  fetches nothing (`403`) and the cabinet sends the bytes inline. A URL with a
+  space, a CR/LF or another non-printable byte is refused before any request.
 - Commit callback: `POST --callback-url` with
   `{fileId, bytes(base64), sha256, version, expectedVersion, idempotencyKey}`,
   where `expectedVersion` is the **etag** of the cabinet's copy (a string,
@@ -5013,7 +5130,11 @@ Ordered by the risk they pose to production.
 7. **No TLS in the daemon.** WSS, the control plane and the callback are
    expected to sit behind a reverse proxy; `https://` source URLs and callback
    URLs are refused with a clear error. No per-IP throttling, no session
-   TTL/eviction besides the lease TTL.
+   TTL/eviction besides the lease TTL. A session the cabinet closes early is
+   withdrawn through `POST /v1/sessions/{fileId}/revoke` (`1de96e28c`, §4); the
+   revocation set lives in memory, so a daemon restart forgets it and the cabinet
+   must revoke again until the ticket's `exp`, and nothing prunes the set.
+   A `url` source is off unless `--source-allow` names its host.
 8. **Large-document budget.** 500 pages are tested functionally; the 100k-page
    inspection cost and batching remote applies are not measured. The control
    plane caps a file at `--max-source-bytes` (256 MiB) but nothing else.
@@ -5053,6 +5174,19 @@ Ordered by the risk they pose to production.
 ## 6. Next session: plan
 
 Work in this order unless the owner says otherwise.
+
+**First, the push.** Measured 2026-11-16T04:35Z: this clone's HEAD is a docs
+record above `1de96e28c`, which closes the six open security findings of the
+review (§"The six open security findings of #6622"); the branch is 158 commits
+ahead of `origin/main` `e191b0ea6`, 0 behind, the tree clean, and **nothing was
+pushed by the agent**. PR #6622 keeps the head its last push set until the owner
+or `pr-agent` pushes this line; only after that do the six replies in the
+threads point at a commit the PR carries, and only then do the five workflow
+runs on the new head need approving. The remaining review threads are the ten
+listed in "Open review threads" (#1, #2, #4, #7, #11, #13, #14, #16, #19, #20).
+Note that the workspace `clippy` step is red on main's `crates/xfdf/src/xfdf.rs:326`
+under clippy 1.99 (§ gate above): that is not this branch's, and a fix belongs
+in its own change.
 
 **Deliver first.** Measured 2026-11-12T23:35Z (`git`, `git ls-remote fork`,
 `gh pr view 6622`): **PR #6622 carries the branch's tip**, and at that moment
