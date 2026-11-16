@@ -1,4 +1,5 @@
-//! PDF/A-2 and -3 6.1.9 (PDF/A-4 6.1.8): how an indirect object is written in the file.
+//! PDF/A-2 and -3 6.1.9 (PDF/A-4 6.1.8): how an indirect object is written in the file, and 6.1.7.1
+//! (PDF/A-4 6.1.6.1): how a stream's data is.
 //!
 //! ISO 19005-2/-3 6.1.9 and ISO 19005-4 6.1.8 narrow the syntax of ISO 32000-2 7.3.10:
 //!
@@ -7,17 +8,27 @@
 //! - the object number is preceded by an end-of-line marker, and `obj` is followed by one;
 //! - `endobj` is preceded by an end-of-line marker and followed by one.
 //!
-//! The white-space characters are those of ISO 32000-2 Table 1, and an end-of-line marker is CR or
-//! LF (7.2.3).
+//! ISO 19005-2/-3 6.1.7.1 and ISO 19005-4 6.1.6.1 narrow those of 7.3.8.1 for a stream:
+//!
+//! - the `stream` keyword is followed by CR LF or by LF alone, not by CR alone or white space first;
+//! - `endstream` is preceded by an end-of-line marker;
+//! - `/Length` is the number of bytes from just past the marker after `stream` to the marker before
+//!   `endstream`. With CR LF before `endstream`, a `/Length` that also counts the CR is taken as
+//!   matching, as readers take it.
+//!
+//! The white-space characters are those of ISO 32000-2 Table 1, and an end-of-line marker is CR,
+//! LF or CR LF (7.2.3).
 //!
 //! The objects read are those the cross-reference sections place in the file itself, at the
 //! offset given there (counted from the file's start, or from a `%PDF-` header that doesn't start
-//! it), or past white space at that offset. An object in an object stream has no such syntax, and one not found at its offset is left
-//! out, since where it is written isn't known. An object's `endobj` is looked for between its
-//! header and the next object the cross-reference sections place, after the end of its stream
-//! data when it is a stream, so each byte of the file is searched at most once.
+//! it), or past white space at that offset. An object in an object stream has no such syntax, and
+//! one not found at its offset is left out, since where it is written isn't known. A stream's
+//! dictionary is read as written, and its `endstream` is where `/Length` puts it or, when `/Length`
+//! is wrong, the first one past the data the document reads. An object's `endobj` is looked for
+//! between its header and the next object the cross-reference sections place, after `endstream`
+//! when it is a stream, so each byte of the file is searched at most once.
 
-use pdfcraft_cos::{Document, ObjRef, Object, XrefEntry, is_whitespace};
+use pdfcraft_cos::{Document, Lexer, ObjRef, Object, XrefEntry, is_whitespace};
 
 /// The ways an object can break the rule, each reported once with the first object that does.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -30,6 +41,12 @@ pub(crate) struct Findings {
     pub(crate) after_obj: Option<u32>,
     /// `endobj` isn't preceded, or isn't followed, by an end-of-line marker.
     pub(crate) around_endobj: Option<u32>,
+    /// 6.1.7.1: the `stream` keyword isn't followed by CR LF or by LF alone.
+    pub(crate) after_stream: Option<u32>,
+    /// 6.1.7.1: a stream's `/Length` doesn't give the bytes of its data.
+    pub(crate) length: Option<u32>,
+    /// 6.1.7.1: `endstream` isn't preceded by an end-of-line marker.
+    pub(crate) before_endstream: Option<u32>,
 }
 
 /// How much white space before an object number an offset may point at, as readers allow.
@@ -73,6 +90,10 @@ pub(crate) fn check(doc: &Document) -> Findings {
     let mut out = Findings::default();
     for (i, &(at, num)) in placed.iter().enumerate() {
         let end = placed.get(i.saturating_add(1)).map_or(data.len(), |&(next, _)| next);
+        // An object with an unsaved edit is written again when the file is saved.
+        if doc.is_edited(num) {
+            continue;
+        }
         let note = |slot: &mut Option<u32>| {
             slot.get_or_insert(num);
         };
@@ -102,19 +123,18 @@ pub(crate) fn check(doc: &Document) -> Findings {
         // Where to look for `endobj`: past the stream data, when the object is a stream.
         let mut from = body;
         if let Object::Stream(s) = &*doc.get(ObjRef::new(num, doc.generation(num)))
-            && let Some(keyword) = stream_keyword(data, body, end)
+            && let Some(layout) = stream_layout(doc, data, body, end, s.raw.len())
         {
-            let start = keyword.saturating_add(6);
-            let start = start.saturating_add(match data.get(start..start.saturating_add(2)) {
-                Some(b"\r\n") => 2,
-                Some([b'\r' | b'\n', ..]) => 1,
-                _ => 0,
-            });
-            // The stream data never holds `endstream` itself, so the search starts just inside it.
-            let past = start.saturating_add(s.raw.len()).saturating_sub(b"endstream".len()).max(start);
-            if let Some(e) = find(data, b"endstream", past.min(end), end) {
-                from = e.saturating_add(b"endstream".len());
+            if !layout.keyword_eol {
+                note(&mut out.after_stream);
             }
+            if !layout.length_matches {
+                note(&mut out.length);
+            }
+            if !layout.eol_before_endstream {
+                note(&mut out.before_endstream);
+            }
+            from = layout.endstream.saturating_add(b"endstream".len());
         }
         let Some(endobj) = find(data, b"endobj", from.min(end), end) else { continue };
         let before = endobj.checked_sub(1).and_then(|p| data.get(p));
@@ -127,13 +147,87 @@ pub(crate) fn check(doc: &Document) -> Findings {
     out
 }
 
-/// Where the `stream` keyword after an object's dictionary is: the first `stream` in
-/// `from..to` that is followed by an end-of-line marker and isn't the end of `endstream`.
-fn stream_keyword(data: &[u8], from: usize, to: usize) -> Option<usize> {
+/// How a stream is laid out in the file around its data.
+struct StreamLayout {
+    /// The `stream` keyword is followed by CR LF or by LF alone.
+    keyword_eol: bool,
+    /// `/Length` gives the bytes from just past that end-of-line marker to the one before
+    /// `endstream`.
+    length_matches: bool,
+    /// `endstream` is preceded by an end-of-line marker.
+    eol_before_endstream: bool,
+    /// Where `endstream` is.
+    endstream: usize,
+}
+
+/// How the stream whose object body starts at `body` is laid out, read from the file's bytes up to
+/// `end`, the next object. `raw_len` is how long the document reads its data to be, which finds
+/// `endstream` when `/Length` doesn't. `None` when the dictionary, the `stream` keyword or
+/// `endstream` isn't there to read.
+fn stream_layout(doc: &Document, data: &[u8], body: usize, end: usize, raw_len: usize) -> Option<StreamLayout> {
+    // The dictionary as written: the document's own copy has `/Length` set to what it read.
+    let mut lx = Lexer::new(data.get(..end)?, body);
+    let Ok(Object::Dict(dict)) = lx.object() else { return None };
+    if !lx.eat_keyword(b"stream") {
+        return None;
+    }
+    let keyword_end = lx.pos;
+    // Spaces or tabs before the end-of-line marker are read past, as the document reads them, but
+    // break the rule.
+    let marker = keyword_end.saturating_add(data.get(keyword_end..end)?.iter().take_while(|&&b| matches!(b, b' ' | b'\t')).count());
+    let spaced = marker > keyword_end;
+    let (start, keyword_eol) = match (data.get(marker), data.get(marker.saturating_add(1))) {
+        (Some(b'\r'), Some(b'\n')) => (marker.saturating_add(2), !spaced),
+        (Some(b'\n'), _) => (marker.saturating_add(1), !spaced),
+        (Some(b'\r'), _) => (marker.saturating_add(1), false),
+        _ => (keyword_end, false),
+    };
+    let declared = match dict.get(b"Length") {
+        Some(Object::Int(n)) => Some(*n),
+        Some(Object::Ref(r)) => match &*doc.get(*r) {
+            Object::Int(n) => Some(*n),
+            _ => None,
+        },
+        _ => None,
+    };
+    // Where `/Length` puts the end of the data, when an end-of-line marker and `endstream`, or
+    // `endstream` alone, follow it there; and how long that marker is.
+    let by_length = declared.and_then(|l| usize::try_from(l).ok()).and_then(|l| start.checked_add(l)).filter(|&p| p <= end).and_then(|p| {
+        let rest = data.get(p..end)?;
+        let eol = match rest {
+            [b'\r', b'\n', ..] => 2,
+            [b'\r' | b'\n', ..] => 1,
+            _ => 0,
+        };
+        let e = p.saturating_add(eol);
+        endstream_at(data, e).then_some((e, eol))
+    });
+    let (endstream, length_matches) = match by_length {
+        // `endstream` right at the end of the data: `/Length` counted the marker before it, if
+        // there is one, unless the data is empty and that marker is the one after `stream`.
+        Some((e, 0)) => (e, e == start || !is_eol(e.checked_sub(1).and_then(|p| data.get(p)))),
+        Some((e, _)) => (e, true),
+        None => {
+            // The stream data never holds `endstream` itself, so the search starts just inside it.
+            let past = start.saturating_add(raw_len).saturating_sub(b"endstream".len()).max(start);
+            (find_endstream(data, past.min(end), end)?, false)
+        }
+    };
+    let eol_before_endstream = is_eol(endstream.checked_sub(1).and_then(|p| data.get(p)));
+    Some(StreamLayout { keyword_eol, length_matches, eol_before_endstream, endstream })
+}
+
+/// Whether a whole `endstream` token starts at `at`: `endstreamer` is stream data (7.2.3).
+fn endstream_at(data: &[u8], at: usize) -> bool {
+    data.get(at..).is_some_and(|d| d.starts_with(b"endstream"))
+        && !data.get(at.saturating_add(b"endstream".len())).is_some_and(|&b| !is_whitespace(b) && !b"()<>[]{}/%".contains(&b))
+}
+
+/// The first whole `endstream` token in `from..to`.
+fn find_endstream(data: &[u8], from: usize, to: usize) -> Option<usize> {
     let mut at = from;
-    while let Some(k) = find(data, b"stream", at, to) {
-        let ends_endstream = k >= 3 && data.get(k.saturating_sub(3)..k) == Some(b"end".as_slice());
-        if !ends_endstream && is_eol(data.get(k.saturating_add(6))) {
+    while let Some(k) = find(data, b"endstream", at, to) {
+        if endstream_at(data, k) {
             return Some(k);
         }
         at = k.saturating_add(1);

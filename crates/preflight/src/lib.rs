@@ -223,6 +223,9 @@ pub const WORDINGS: &[&str] = &[
     "Object {} doesn't separate its object number, generation number and obj keyword by single white-space characters",
     "The obj keyword of object {} isn't followed by an end-of-line marker",
     "The endobj keyword of object {} isn't both preceded and followed by an end-of-line marker",
+    "The stream keyword of object {} isn't followed by CR LF or by LF alone",
+    "The Length of stream object {} doesn't match the bytes of its data",
+    "The endstream keyword of object {} isn't preceded by an end-of-line marker",
     "An image has alternates or OPI information",
     "PostScript XObjects aren't allowed",
     "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)",
@@ -711,8 +714,9 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     out
 }
 
-/// 6.1.9: how indirect objects are written in the file. Each problem is named once, with the first
-/// object that has it. Rewriting the file would fix them, which `convert` doesn't do.
+/// 6.1.9 and 6.1.7.1: how indirect objects and stream data are written in the file. Each problem is
+/// named once, with the first object that has it. Rewriting the file would fix them, which `convert`
+/// doesn't do.
 fn check_object_syntax(doc: &Document, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
     let found = indirect::check(doc);
     if let Some(n) = found.before_header {
@@ -732,6 +736,15 @@ fn check_object_syntax(doc: &Document, issue: &mut impl FnMut(&'static str, &'st
     }
     if let Some(n) = found.around_endobj {
         issue("6.1.9", "The endobj keyword of object {} isn't both preceded and followed by an end-of-line marker", Some(n.to_string()), None, false);
+    }
+    if let Some(n) = found.after_stream {
+        issue("6.1.7.1", "The stream keyword of object {} isn't followed by CR LF or by LF alone", Some(n.to_string()), None, false);
+    }
+    if let Some(n) = found.length {
+        issue("6.1.7.1", "The Length of stream object {} doesn't match the bytes of its data", Some(n.to_string()), None, false);
+    }
+    if let Some(n) = found.before_endstream {
+        issue("6.1.7.1", "The endstream keyword of object {} isn't preceded by an end-of-line marker", Some(n.to_string()), None, false);
     }
 }
 

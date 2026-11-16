@@ -28,7 +28,7 @@ fn messy() -> Document {
             "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript << /Names [(x) 9 0 R] >> >> /AA << /WC 9 0 R >> >>",
             "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
             "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im 8 0 R >> >> /Annots [6 0 R 7 0 R] >>",
-            "<< /Length 44 >>\nstream\n1 0 0 rg BT /F1 12 Tf 10 10 Td (Hi) Tj ET /Im Do\nendstream",
+            "<< /Length 48 >>\nstream\n1 0 0 rg BT /F1 12 Tf 10 10 Td (Hi) Tj ET /Im Do\nendstream",
             "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
             "<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /P 3 0 R /AP << /N 10 0 R >> >>",
             "<< /Type /Annot /Subtype /Link /Rect [40 10 80 30] /P 3 0 R /F 4 /A 9 0 R >>",
@@ -2456,4 +2456,70 @@ fn indirect_objects_are_written_as_pdfa_asks_clause_6_1_9() {
     // None of them is fixable.
     let issues = verify(&laid_out(&[(" ", CATALOG), ("\n", PAGES), ("\n", PAGE)]), Level::A2b);
     assert!(issues.iter().filter(|i| i.clause == "6.1.9").all(|i| !i.fixable));
+}
+
+fn stream_syntax(streams: &[&str]) -> Vec<String> {
+    let mut layout = vec![("\n", CATALOG), ("\n", PAGES), ("\n", PAGE)];
+    layout.extend(streams.iter().map(|s| ("\n", *s)));
+    verify(&laid_out(&layout), Level::A2b).into_iter().filter(|i| i.clause == "6.1.7.1").map(|i| i.message).collect()
+}
+
+#[test]
+fn streams_are_written_as_pdfa_asks_clause_6_1_7_1() {
+    let none = Vec::<String>::new();
+    let one = |data: &str| stream_syntax(&[&format!("4 0 obj\n{data}\nendobj")]);
+    assert_eq!(one("<< /Length 5 >>\nstream\nHELLO\nendstream"), none);
+    assert_eq!(one("<< /Length 5 >>\nstream\r\nHELLO\r\nendstream"), none);
+    assert_eq!(one("<< /Length 5 >>\r\nstream\nHELLO\rendstream"), none);
+    // Data that holds the bytes `endstream`, where /Length says it goes on.
+    assert_eq!(one("<< /Length 11 >>\nstream\nAendstreamB\nendstream"), none);
+    // Empty data: the marker after `stream` is the one before `endstream`.
+    assert_eq!(one("<< /Length 0 >>\nstream\nendstream"), none);
+    assert_eq!(one("<< /Length 0 >>\nstream\r\nendstream"), none);
+
+    // After `stream`: CR LF or LF alone.
+    let keyword = ["The stream keyword of object 4 isn't followed by CR LF or by LF alone"];
+    assert_eq!(one("<< /Length 5 >>\nstream\rHELLO\nendstream"), keyword);
+    assert_eq!(one("<< /Length 5 >>\nstream \nHELLO\nendstream"), keyword);
+    assert_eq!(one("<< /Length 5 >>\nstream\t\r\nHELLO\nendstream"), keyword);
+    // Before `endstream`: an end-of-line marker.
+    assert_eq!(one("<< /Length 5 >>\nstream\nHELLOendstream"), ["The endstream keyword of object 4 isn't preceded by an end-of-line marker"]);
+    assert_eq!(one("<< /Length 6 >>\nstream\nHELLO endstream"), ["The endstream keyword of object 4 isn't preceded by an end-of-line marker"]);
+
+    // /Length: the bytes up to the end-of-line marker before `endstream`, or up to its LF when it is
+    // CR LF.
+    let length = ["The Length of stream object 4 doesn't match the bytes of its data"];
+    assert_eq!(one("<< /Length 6 >>\nstream\r\nHELLO\r\nendstream"), none);
+    assert_eq!(one("<< /Length 7 >>\nstream\r\nHELLO\r\nendstream"), length);
+    assert_eq!(one("<< /Length 6 >>\nstream\nHELLO\nendstream"), length);
+    assert_eq!(one("<< /Length 3 >>\nstream\nHELLO\nendstream"), length);
+    assert_eq!(one("<< /Length 99 >>\nstream\nHELLO\nendstream"), length);
+    assert_eq!(one("<< /Length -1 >>\nstream\nHELLO\nendstream"), length);
+    assert_eq!(one("<< >>\nstream\nHELLO\nendstream"), length);
+    assert_eq!(one("<< /Length 1 >>\nstream\nAendstreamB\nendstream"), length);
+    // An indirect /Length is resolved.
+    let indirect = |n: &str| stream_syntax(&["4 0 obj\n<< /Length 5 0 R >>\nstream\nHELLO\nendstream\nendobj", &format!("5 0 obj\n{n}\nendobj")]);
+    assert_eq!(indirect("5"), none);
+    assert_eq!(indirect("4"), length);
+    // A wrong /Length with a space after `stream` and none before `endstream`: all three.
+    assert_eq!(one("<< /Length 2 >>\nstream \nHELLOendstream").len(), 3);
+
+    // Each problem is named once, with the first object that has it, and none is fixable.
+    let twice =
+        stream_syntax(&["4 0 obj\n<< /Length 9 >>\nstream\nHELLO\nendstream\nendobj", "5 0 obj\n<< /Length 9 >>\nstream\nHELLO\nendstream\nendobj"]);
+    assert_eq!(twice, length);
+    let file = laid_out(&[("\n", CATALOG), ("\n", PAGES), ("\n", PAGE), ("\n", "4 0 obj\n<< /Length 5 >>\nstream\rHELLOendstream\nendobj")]);
+    let issues: Vec<_> = verify(&file, Level::A2b).into_iter().filter(|i| i.clause == "6.1.7.1").collect();
+    assert_eq!(issues.len(), 2);
+    assert!(issues.iter().all(|i| !i.fixable));
+    // An object with an unsaved edit is written again on saving, so its old bytes aren't read.
+    let mut file = file;
+    let edited = file.get(ObjRef::new(4, 0)).as_ref().clone();
+    file.set(ObjRef::new(4, 0), edited);
+    assert!(verify(&file, Level::A2b).iter().all(|i| i.clause != "6.1.7.1"));
+    // The indirect object rule still reads past such a stream to its `endobj`.
+    assert_eq!(
+        syntax(&[("\n", CATALOG), ("\n", PAGES), ("\n", PAGE), ("\n", "4 0 obj\n<< /Length 9 >>\nstream \nx endobj\nendstream\nendobj")]),
+        none
+    );
 }
