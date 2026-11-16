@@ -1050,6 +1050,13 @@ fn embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid() {
         doc.get(root).as_dict().unwrap().get(b"DSS").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap();
     assert_eq!(dss_dict.name(b"Type"), Some(b"DSS".as_slice()));
     assert!(dss_dict.contains(b"Certs") && dss_dict.contains(b"OCSPs") && dss_dict.contains(b"CRLs") && dss_dict.contains(b"VRI"));
+    // A signature's /VRI entry points at the store's arrays instead of holding its own copy of each.
+    let vri = dss_dict.get(b"VRI").map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()).unwrap();
+    let entry = vri.iter().next().and_then(|(_, e)| e.as_dict().cloned()).unwrap();
+    for (vri_key, dss_key) in [(&b"Cert"[..], &b"Certs"[..]), (b"OCSP", b"OCSPs"), (b"CRL", b"CRLs")] {
+        assert!(matches!(entry.get(vri_key), Some(pdfcraft_cos::Object::Ref(_))));
+        assert_eq!(entry.get(vri_key), dss_dict.get(dss_key));
+    }
     // The earlier signature still validates; the DSS counts as a permitted change.
     let s = signatures(&doc, &ltv, &TrustStore::default()).into_iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
     assert_eq!(s.status, Status::Unknown);
@@ -2996,12 +3003,7 @@ fn wordings_are_complete() {
     let source = source.as_str();
     // The modules below `pdf` word whole sentences too: how a signature value had to be read, and
     // what a certificate does not allow.
-    let elsewhere = [
-        include_str!("../../src/x509.rs"),
-        include_str!("../../src/cms.rs"),
-        include_str!("../../src/keys.rs"),
-        include_str!("../../src/rsa_pad.rs"),
-    ];
+    let elsewhere = [include_str!("../../src/x509.rs"), include_str!("../../src/cms.rs"), include_str!("../../src/keys.rs")];
     /// A sentence said to the user, as opposed to an OID, a name or a tag: it reads as English.
     fn is_sentence(s: &str) -> bool {
         s.len() > 24 && s.ends_with('.') && s.contains(' ') && s.starts_with(|c: char| c.is_ascii_uppercase())
@@ -3034,6 +3036,15 @@ fn wordings_are_complete() {
         out
     }
     let mut said = after(source, &["Detail::plain(", "Detail::of("]);
+    // These existing diagnostics now come from pinned craft-pkcs7 instead of local source.
+    // Keep their translation coverage; crypto.rs exercises the corresponding tolerated forms.
+    said.extend([
+        "The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.",
+        "The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.",
+        "The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.",
+        "The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.",
+    ]);
+
     let at_hand = ["Detail::plain(", "Detail::of(", ".push(", "Some("];
     said.extend(elsewhere.iter().flat_map(|s| after(s, &at_hand)).filter(|s| is_sentence(s)));
     let summary = source.split("pub fn summary").nth(1).and_then(|s| s.split("\n    }").next()).unwrap_or_default();

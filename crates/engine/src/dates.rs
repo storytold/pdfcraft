@@ -323,6 +323,15 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         days_short: ["ned.", "pon.", "tor.", "sre.", "čet.", "pet.", "sob."],
     },
     DateLanguage {
+        code: "bs",
+        name: "Bosanski",
+        months: ["januar", "februar", "mart", "april", "maj", "juni", "juli", "august", "septembar", "oktobar", "novembar", "decembar"],
+        months_with_day: None,
+        months_short: ["jan.", "feb.", "mar.", "apr.", "maj", "jun.", "jul.", "aug.", "sep.", "okt.", "nov.", "dec."],
+        days: ["nedjelja", "ponedjeljak", "utorak", "srijeda", "četvrtak", "petak", "subota"],
+        days_short: ["ned.", "pon.", "uto.", "sri.", "čet.", "pet.", "sub."],
+    },
+    DateLanguage {
         code: "el",
         name: "Ελληνικά",
         months: [
