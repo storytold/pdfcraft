@@ -69,6 +69,23 @@ pub fn validate_document_input(bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether OS/2 `fsType` allows embedding the outlines in a document that stays editable.
+/// Bits 1 to 3 should be exclusive, but fonts in the wild set several (the TeX Gyre faces carry
+/// 0x000C: Preview & Print plus Editable). The OpenType specification resolves that in favour of
+/// the least restrictive bit (OS/2 versions 0 to 2) and gives Restricted only to the value 2
+/// alone, so an Editable bit wins over Preview & Print or Restricted. Bitmap-only (0x0200)
+/// still refuses: there are no outlines to embed.
+fn permits_editable_embedding(fs_type: u16) -> bool {
+    const RESTRICTED: u16 = 0x0002;
+    const PREVIEW_AND_PRINT: u16 = 0x0004;
+    const EDITABLE: u16 = 0x0008;
+    const BITMAP_ONLY: u16 = 0x0200;
+    if fs_type & BITMAP_ONLY != 0 {
+        return false;
+    }
+    fs_type & EDITABLE != 0 || fs_type & (RESTRICTED | PREVIEW_AND_PRINT) == 0
+}
+
 /// Validate before allocating any PDF objects, so an invalid font cannot partly mutate a doc.
 pub fn validate(bytes: &[u8]) -> Result<(), String> {
     if bytes.len() > 16 << 20 {
@@ -81,7 +98,7 @@ pub fn validate(bytes: &[u8]) -> Result<(), String> {
     if (font.glyf().is_err() && font.cff().is_err()) || font.head().is_err() || font.hhea().is_err() || font.hmtx().is_err() {
         return Err("the selected font has no usable TrueType/CFF outlines and metrics".into());
     }
-    if font.os2().is_ok_and(|t| t.fs_type() & (0x0002 | 0x0004 | 0x0200) != 0) {
+    if font.os2().is_ok_and(|t| !permits_editable_embedding(t.fs_type())) {
         return Err("this font's embedding permissions prohibit editable outline embedding".into());
     }
     let m = font.metrics(Size::unscaled(), LocationRef::default());
@@ -341,6 +358,37 @@ fn same_resource(doc: &Document, fonts: &Dict, name: &str, programs: &mut Progra
 mod tests {
     use super::*;
     use crate::pdf::Metrics;
+
+    /// Offset of a table in an sfnt, from its table directory.
+    fn table(bytes: &[u8], tag: &[u8; 4]) -> usize {
+        let count = usize::from(u16::from_be_bytes([bytes[4], bytes[5]]));
+        (0..count)
+            .map(|i| 12 + 16 * i)
+            .find(|&r| &bytes[r..r + 4] == tag)
+            .map(|r| u32::from_be_bytes(bytes[r + 8..r + 12].try_into().unwrap()) as usize)
+            .unwrap()
+    }
+
+    /// The bundled Inter with its OS/2 `fsType` replaced.
+    fn inter_with_fs_type(fs_type: u16) -> Vec<u8> {
+        let mut bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+        let os2 = table(&bytes, b"OS/2");
+        bytes[os2 + 8..os2 + 10].copy_from_slice(&fs_type.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn several_embedding_bits_resolve_to_the_least_restrictive() {
+        // The TeX Gyre faces: Preview & Print and Editable.
+        assert!(validate(&inter_with_fs_type(0x000C)).is_ok());
+        assert!(validate(&inter_with_fs_type(0x000A)).is_ok(), "Editable over Restricted");
+        assert!(validate(&inter_with_fs_type(0x0000)).is_ok(), "Installable");
+        assert!(validate(&inter_with_fs_type(0x0008)).is_ok());
+        assert!(validate(&inter_with_fs_type(0x0108)).is_ok(), "no subsetting: the full program is embedded anyway");
+        for refused in [0x0002, 0x0004, 0x0006, 0x0208, 0x0200] {
+            assert!(validate(&inter_with_fs_type(refused)).is_err(), "{refused:#06x}");
+        }
+    }
 
     #[test]
     fn full_unicode_embedding_keeps_outlines_advances_and_roundtrip_codes() {
