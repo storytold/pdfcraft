@@ -2795,7 +2795,7 @@ status = "shipped"
 commands = ["page.insert"]
 tools = ["page_insert_file"]
 evidence = ["crates/organize/src/tests.rs::inserting_pages_from_another_file_is_an_incremental_edit", "crates/organize/src/tests.rs::inserting_a_file_brings_its_bookmarks_under_one_named_after_it", "crates/automation/tests/it/automation.rs::inserting_a_file_brings_its_bookmarks", "crates/ui-egui/tests/it/editing.rs::inserting_a_file_goes_after_the_selection_and_undoes", "crates/ui-egui/tests/it/editing.rs::plus_between_pages_inserts_picked_files_there_in_order"]
-notes = "After the selection (toolbar, File menu) or at any gap of the page grid (a + between pages and at both ends); several files at once, in order; images and .txt files are converted first; the inserted pages end up selected. The file's bookmarks come along, collapsed under one named after the file, placed among the document's bookmarks where the pages went (as Combine does per file). The page_insert_file tool takes PDFs only. Missing: choosing which pages of the file to insert in the app; the file's tags (structure tree) are not merged."
+notes = "After the selection (toolbar, File menu) or at any gap of the page grid (a + between pages and at both ends); several files at once, in order; images, .txt and Office documents are converted first (Office conversion is reported); the inserted pages end up selected. The file's bookmarks come along, collapsed under one named after the file, placed among the document's bookmarks where the pages went (as Combine does per file). The page_insert_file tool accepts the same inputs, returning Office conversion notes (#2871). Missing: choosing which pages of the file to insert in the app; the file's tags (structure tree) are not merged."
 
 [[feature]]
 id = "organize.insert-from-clipboard"
@@ -7136,13 +7136,13 @@ notes = ""
 
 [[feature]]
 id = "create.from-office"
-title = "Create PDF from Office documents (LibreOffice sidecar)"
+title = "Create PDF from Office documents"
 area = "J"
 tier = "P2"
 milestone = "M10"
 status = "partial"
-commands = ["file.open"]
-tools = ["doc_create_multiple", "doc_combine"]
+commands = ["create.file", "create.multiple", "file.open"]
+tools = ["doc_create", "doc_open", "page_insert_file", "doc_combine", "doc_create_multiple"]
 evidence = [
     "crates/create/src/office.rs::office_files_are_recognised_by_extension_and_signature",
     "crates/create/src/office.rs::other_files_are_not_office_documents",
@@ -7151,14 +7151,23 @@ evidence = [
     "crates/create/src/office.rs::libreoffice_converts_a_document_when_installed",
     "crates/create/src/office.rs::the_profile_turns_off_macros_and_never_updates_links",
     "crates/create/src/office.rs::a_timeout_stops_the_processes_the_converter_started",
+    "crates/create/src/ooxml/tests.rs::word_paragraphs_styles_lists_tables_images_and_page_numbers",
+    "crates/create/src/ooxml/tests.rs::powerpoint_slides_with_inherited_placeholders_bullets_shapes_and_pictures",
+    "crates/create/src/ooxml/tests.rs::excel_sheets_with_formats_fills_borders_and_merges",
+    "crates/create/src/ooxml/tests.rs::turkish_and_central_european_letters_are_drawn_not_escaped",
     "crates/automation/tests/it/office.rs::office_documents_convert_separately_with_their_text",
     "crates/automation/tests/it/office.rs::office_documents_combine_in_order_with_a_bookmark_each",
+    "crates/automation/tests/it/automation.rs::docx_open_insert_combine_and_root_confinement",
+    "crates/automation/tests/it/automation.rs::creating_pdfs_from_word_and_powerpoint_natively",
     "crates/engine/src/tests.rs::office_documents_convert_through_libreoffice_or_explain_why_not",
-    "crates/engine/src/tests.rs::inline_conversions_refuse_office_documents_without_running_libreoffice",
+    "crates/engine/src/tests.rs::office_documents_go_to_libreoffice_or_the_native_converter",
+    "crates/engine/src/tests.rs::inline_conversions_never_run_libreoffice",
+    "crates/engine/src/tests.rs::docx_converts_combines_and_inserts_without_changing_the_source",
     "crates/ui-egui/src/platform/open_worker/tests.rs::file_open_converts_an_office_document_on_the_worker",
     "crates/ui-egui/src/platform/open_worker/tests.rs::the_open_picker_defaults_to_pdf_and_offers_images_office_text_and_all_files",
+    "crates/ui-egui/tests/it/create.rs::docx_opens_inserts_and_combines_as_pdf_pages",
 ]
-notes = "File ▸ Open (desktop) opens Word, Excel, PowerPoint, OpenDocument and RTF files (Office documents filter; PDF stays the default) as new, unsaved PDFs, converted on the open worker by an installed LibreOffice run headless in a private temporary folder with a fresh profile (macros disabled, untrusted links blocked, Writer and Calc linked content never updated) and stopped after 120 s. Found through PDFCRAFT_SOFFICE, the PATH, or the usual install folders; without it the user is told LibreOffice is needed. The automation tools that convert files (doc_create_multiple, doc_combine, batch convert) take Office documents too. Not yet: Insert pages, Combine files and Create ▸ Multiple files in the app refuse Office documents (they convert on the frame thread) and point to File ▸ Open; no Create ▸ From Office command or conversion settings; Visio and Publisher; the web build; layout fidelity is LibreOffice's, not measured against Acrobat; Impress has no link-update setting and the process's network access isn't sandboxed (synthetic linked sections, pictures and cell references made no connection with LibreOffice 26.8.1); the real-conversion tests skip where LibreOffice isn't installed, CI included."
+notes = "File ▸ Open (desktop) opens Word, Excel, PowerPoint, OpenDocument and RTF files (Office documents filter; PDF stays the default) as new, unsaved PDFs, converted on the open worker by an installed LibreOffice run headless in a private temporary folder with a fresh profile (macros disabled, untrusted links blocked, Writer and Calc linked content never updated) and stopped after 120 s, found through PDFCRAFT_SOFFICE, the PATH, or the usual install folders. Without LibreOffice (and on the web), Word, PowerPoint and Excel files (docx/pptx/xlsx and their macro and template variants) are converted natively instead, as they are in Insert pages, Combine files and Create from multiple files, which can't wait for LibreOffice on the frame thread; the native converter's notes on what it approximated are shown, and returned by the automation tools (doc_open, doc_create, page_insert_file, doc_combine, doc_create_multiple). Native import: Word styles, lists, tables, images, sections, headers/footers with page fields, footnotes; PowerPoint slides with master/layout inheritance, theme colours, shapes, pictures, groups, tables; Excel sheets with number formats, fills, borders, merges; Turkish, Central European, Baltic and Romanian letters drawn from the standard-14 faces through a second encoding. Missing: no Create ▸ From Office command or conversion settings; Visio and Publisher; legacy .doc/.ppt/.xls, OpenDocument and RTF need LibreOffice (refused in Insert pages, Combine files and Create from multiple files); natively, embedded fonts (Greek, Cyrillic, CJK and other scripts, and ď ľ ť ģ Đ đ, become [U+XXXX], and line breaks can differ), charts and SmartArt (outlined boxes in Word and PowerPoint), EMF/WMF/SVG images, multi-column sections, Excel charts, print areas and sheet pictures, password-protected files; LibreOffice's layout is not measured against Acrobat; Impress has no link-update setting and the process's network access isn't sandboxed (synthetic linked sections, pictures and cell references made no connection with LibreOffice 26.8.1); the real LibreOffice tests skip where it isn't installed, CI included."
 
 [[feature]]
 id = "create.create-multiple"

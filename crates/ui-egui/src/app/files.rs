@@ -257,14 +257,30 @@ impl PdfCraftApp {
                 Some(Err(error)) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
                 None => {}
             },
-            open_worker::ResultKind::Converted(created) => match self.open_converted_pdf(&pending.name, created) {
-                Ok(()) => {
-                    if let Some(command) = pending.then {
-                        self.execute(command);
+            open_worker::ResultKind::Converted(created) => {
+                let (created, report) = match created {
+                    Ok((pdf, report)) => (Ok(pdf), report),
+                    Err(error) => (Err(error), None),
+                };
+                match self.open_converted_pdf(&pending.name, created) {
+                    Ok(()) => {
+                        // A launch layout applies to the converted document as to a PDF.
+                        if let Some((layout, continuous)) = pending.display_override
+                            && let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
+                        {
+                            view.set_display(layout, continuous);
+                            self.launch_display_target = Some(view.id);
+                        }
+                        if let Some(note) = report.as_ref().and_then(|report| crate::office_note(&pending.name, report)) {
+                            self.notify(note);
+                        }
+                        if let Some(command) = pending.then {
+                            self.execute(command);
+                        }
                     }
+                    Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
                 }
-                Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
-            },
+            }
             open_worker::ResultKind::Prepared { bytes, result } => match *result {
                 Ok(prepared) => match self.finish_open(&pending.name, pending.path.clone(), bytes.len(), prepared, pending.activate) {
                     Ok(id) => {
@@ -1018,13 +1034,17 @@ impl PdfCraftApp {
     }
 
     /// The File ▸ Open picker's file types, in order; the first, PDF, is the default. Images, text
-    /// and (on the desktop, through LibreOffice) Office documents open as new, unsaved PDFs.
+    /// and Office documents (through LibreOffice on the desktop where it is installed, natively
+    /// for Word, PowerPoint and Excel files otherwise) open as new, unsaved PDFs.
     /// No "All files" in the browser or on macOS, whose panel merges every type into one list
     /// rather than offering a choice.
     pub(crate) fn open_filters() -> Vec<(String, Vec<&'static str>)> {
         let mut filters = vec![("PDF".to_string(), vec!["pdf"]), (tl!("Images").to_string(), pdfcraft_engine::IMAGE_EXTENSIONS.to_vec())];
+        // The web build has no LibreOffice: only the Office files it converts natively.
         #[cfg(not(target_arch = "wasm32"))]
         filters.push((tl!("Office documents").to_string(), pdfcraft_engine::OFFICE_EXTENSIONS.to_vec()));
+        #[cfg(target_arch = "wasm32")]
+        filters.push((tl!("Office documents").to_string(), pdfcraft_engine::OOXML_EXTENSIONS.to_vec()));
         filters.push((tl!("Text").to_string(), pdfcraft_engine::TEXT_EXTENSIONS.to_vec()));
         #[cfg(not(any(target_arch = "wasm32", target_os = "macos")))]
         filters.push((tl!("All files").to_string(), vec!["*"]));

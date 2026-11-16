@@ -95,7 +95,8 @@ pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnific
 
 pub use pdfcraft_cos::{Algorithm, civil_from_days};
 pub use pdfcraft_create::{
-    CONVERTIBLE, CreateError, IMAGE_EXTENSIONS, ImageResolution, OFFICE_EXTENSIONS, SourceKind, TEXT_EXTENSIONS, decode_text, source_kind,
+    CONVERTIBLE, CreateError, IMAGE_EXTENSIONS, ImageResolution, OFFICE_EXTENSIONS, OOXML_EXTENSIONS, OfficeKind, OfficeReport, SourceKind,
+    TEXT_EXTENSIONS, decode_text, is_ooxml, source_kind,
 };
 pub use pdfcraft_edit::added::{
     CHAR_SPACING_LIMIT as ADDED_CHAR_SPACING_LIMIT, paste_place as added_paste_place, paste_rect as added_paste_rect, text_rect as added_text_rect,
@@ -170,7 +171,7 @@ use pictures::{embed_image, fit_picture, mark_source, model_poster};
 use protection::unrestricted;
 pub use protection::{Changes, Printing, Protection, SecuritySummary};
 pub use session::Session;
-pub use sources::{CombineSource, Combined, combine_source_check, office_to_pdf, source_page_count};
+pub use sources::{CombineSource, Combined, Converted, combine_source_check, office_to_pdf, source_page_count};
 use sources::{open_source, open_source_with};
 #[cfg(test)]
 use test_hooks::{

@@ -25,6 +25,14 @@ impl Session {
         self
     }
 
+    /// Convert Office documents without LibreOffice even where it is installed: Word, PowerPoint
+    /// and Excel files natively, with the report of what was approximated, and other Office
+    /// formats refused. Tests use it to get the same conversion on every machine.
+    pub fn without_libreoffice(mut self) -> Self {
+        self.no_libreoffice = true;
+        self
+    }
+
     /// A real clock for a host that has neither a clock nor a time zone of its own (a
     /// `wasm32-unknown-unknown` build: `now()` would be empty and `local_utc_offset()` is 0, so
     /// Fill & Sign stamps 1 Jan 1970 and `/ModDate` is never written). `clock` is the UTC time in

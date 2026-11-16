@@ -263,6 +263,11 @@ pub(crate) fn security(d: &Document) -> Value {
     }
 }
 
+/// What converting a Word, PowerPoint or Excel file approximated, for a tool's result.
+pub(crate) fn office_report(report: &pdfcraft_engine::OfficeReport) -> Value {
+    json!({ "kind": report.kind.label(), "pages": report.pages, "escaped": report.escaped, "notes": report.notes, "notice": report.notice() })
+}
+
 /// What every tool that changes a document returns.
 pub(crate) fn summary(d: &Document) -> Value {
     json!({

@@ -152,6 +152,12 @@ impl Automation {
         self
     }
 
+    /// Convert Office documents without LibreOffice (tests). See [`Session::without_libreoffice`].
+    pub fn without_libreoffice(mut self) -> Self {
+        self.session = std::mem::take(&mut self.session).without_libreoffice();
+        self
+    }
+
     /// Multiply the time XFA form scripts may take (tests). See [`Session::with_xfa_time_scale`].
     pub fn with_xfa_time_scale(mut self, factor: u32) -> Self {
         self.session = std::mem::take(&mut self.session).with_xfa_time_scale(factor);
