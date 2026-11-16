@@ -73,6 +73,10 @@ XML escaping, prerelease version mapping, desktop-field exclusion and explicit
 missing-field/tool-version failures. Aggregate Simulator tests run them once before
 the native suites; the native test command also compares compiled identity/version
 metadata with its desktop/generated sources.
+When using `CRAFT_FONTS_DIR`, project generation reuses packaging's
+`copy_font_licences` helper to stage the embedded fonts' OFL notices as app resources.
+Use the same input for Rust compilation and project generation. Regeneration
+removes stale generated notices when that input changes or is unset.
 [Project settings](project.yml) consume that generated metadata.
 Generation also reuses [packaging's shared setup](../../packaging/env.sh) for
 the workspace version (or `PDFCRAFT_VERSION`) and `PDFCRAFT_BUILD_SHA`. The numeric
@@ -483,8 +487,11 @@ semantics, the bridge API and the visible native workflows were unchanged.
   Text requests extract only one page and return at most **256 KiB of UTF-8 text**,
   cut only at a Unicode scalar boundary and explicitly marked incomplete. This bounds
   the Swift payload after extraction, not the engine's extraction memory or CPU usage.
-  At most eight staged export copies are retained per session; close/reopen starts a new
-  session. Repeated shares reuse a current copy.
+  At most eight active export copies are retained per session, not eight lifetime
+  attempts. Files completion/cancellation and Share dismissal release the corresponding
+  private copy; document actions stay disabled until that cleanup finishes. Active
+  copies are never recycled to make room. Rust callers must call `release_copy` after
+  consumers finish, or drop the session to clean the workspace.
 - These are input/raster bounds, **not** a hard whole-process memory or CPU sandbox.
   Parser/decompression/font complexity and extreme documents can still exceed device
   budgets. There is no claim of hostile-document certification.
@@ -495,7 +502,9 @@ semantics, the bridge API and the visible native workflows were unchanged.
   Force-kill cleanup is left to OS temporary-storage lifecycle; no crash-recovery or
   guaranteed immediate secure erase is implemented.
 - Engine errors are surfaced to the user. No catch turns a failed open/render/save into
-  a successful empty document. A panic-disconnected session must be closed/reopened.
+  a successful empty document. Terminal worker failures invalidate the cached bridge
+  session, including failures during the initial open, so a new import can recover.
+  Ordinary document errors preserve the healthy worker and current document.
 - Raster pages have controls/labels for accessibility; **Read Text** provides selectable
   text and VoiceOver access in a separate sheet, not a position-aligned text overlay.
   There is no custom read-aloud player or OCR. Reading order and Unicode fidelity depend

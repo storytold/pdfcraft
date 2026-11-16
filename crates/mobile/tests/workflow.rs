@@ -119,6 +119,36 @@ fn invalid_input_and_pages_return_structured_errors_without_losing_document() {
 }
 
 #[test]
+fn completed_exports_release_capacity_without_removing_active_copies() {
+    let input = tempfile::tempdir().unwrap();
+    let source = input.path().join("input.pdf");
+    let original = fixture();
+    std::fs::write(&source, &original).unwrap();
+    let session = create_mobile_session().unwrap();
+    value(session.open(source.to_str().unwrap()));
+    let held: Vec<String> = (0..8).map(|_| value(session.save_copy())["path"].as_str().unwrap().to_owned()).collect();
+    let limit: Value = serde_json::from_str(&session.save_copy().unwrap_err()).unwrap();
+    assert_eq!(limit["code"], "limit");
+    assert!(session.release_copy(source.to_str().unwrap()).is_err());
+    value(session.release_copy(held.get(1).unwrap()));
+    assert!(!std::path::Path::new(held.get(1).unwrap()).exists());
+    assert!(session.release_copy(held.get(1).unwrap()).is_err());
+    let active = held.first().unwrap();
+    let active_bytes = std::fs::read(active).unwrap();
+    for _ in 0..12 {
+        let changed = value(session.rotate(1));
+        let staged = value(session.save_copy());
+        let path = staged["path"].as_str().unwrap();
+        let reader = create_mobile_session().unwrap();
+        assert_eq!(value(reader.open(path))["pages"][0]["rotation"], changed["pages"][0]["rotation"]);
+        value(session.release_copy(path));
+        assert!(!std::path::Path::new(path).exists());
+        assert_eq!(std::fs::read(active).unwrap(), active_bytes);
+    }
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+}
+
+#[test]
 fn oversized_input_is_rejected_before_parsing() {
     let input = tempfile::tempdir().unwrap();
     let source = input.path().join("large.pdf");

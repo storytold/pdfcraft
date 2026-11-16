@@ -34,13 +34,15 @@ targets:
         buildPhase: resources
       - path: ../../target/ios/Generated
         excludes: ["*.h"]
+      - path: ../../target/ios/FontLicences
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: "$(PDFCRAFT_APP_BUNDLE_ID)"
         SWIFT_OBJC_BRIDGING_HEADER: PdfCraftMobilePOC/Bridge.h
         INFOPLIST_FILE: ../../target/ios/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../../target/ios/Generated"
+        HEADER_SEARCH_PATHS: '$(inherited) "$(SRCROOT)/../../target/ios/Generated"'
         INFOPLIST_KEY_CFBundleDisplayName: "${PDFCRAFT_APP_DISPLAY_NAME}"
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
@@ -66,7 +68,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: "$(PDFCRAFT_APP_BUNDLE_ID).tests"
-        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../../target/ios/Generated"
+        HEADER_SEARCH_PATHS: '$(inherited) "$(SRCROOT)/../../target/ios/Generated"'
 schemes:
   PdfCraftMobilePOC:
     build:

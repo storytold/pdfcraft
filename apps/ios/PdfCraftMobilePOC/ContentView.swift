@@ -30,7 +30,7 @@ struct ContentView: View {
     @State private var confirmClose = false
     @State private var export: Export?
     @State private var share: Export?
-    @State private var savedCopy: URL?
+    @State private var stagedCopy: URL?
     @State private var sidebarVisible = true
     @State private var showingTools = false
     @State private var toolQuery = ""
@@ -134,10 +134,12 @@ struct ContentView: View {
                     failure = error.localizedDescription
                 }
                 export = nil
+                finishStagedCopy()
             } onCancellation: {
                 export = nil
+                finishStagedCopy()
             }
-            .sheet(item: $share) { item in ShareSheet(url: item.url) }
+            .sheet(item: $share, onDismiss: finishStagedCopy) { item in ShareSheet(url: item.url) }
             .sheet(item: $textPage) { page in
                 PageTextView(page: page.number, bridge: bridge, revision: revision)
             }
@@ -325,7 +327,6 @@ struct ContentView: View {
             do {
                 document = try await bridge.rotate(page: selectedPage)
                 revision += 1
-                savedCopy = nil
             } catch { failure = error.localizedDescription }
             busy = false
         }
@@ -336,9 +337,21 @@ struct ContentView: View {
         Task {
             do {
                 let url = try await bridge.saveCopy()
-                savedCopy = url
+                stagedCopy = url
                 export = Export(url: url)
-            } catch { failure = error.localizedDescription }
+            } catch {
+                failure = error.localizedDescription
+                busy = false
+            }
+        }
+    }
+
+    private func finishStagedCopy() {
+        guard let copy = stagedCopy else { return }
+        stagedCopy = nil
+        Task {
+            do { try await bridge.releaseCopy(copy) }
+            catch { failure = error.localizedDescription }
             busy = false
         }
     }
@@ -350,13 +363,13 @@ struct ContentView: View {
                 try await bridge.close(discard: discard)
                 document = nil
                 selectedTool = nil
-                savedCopy = nil
+                stagedCopy = nil
                 revision += 1
             } catch {
                 if (error as? MobileFailure)?.sessionEnded == true {
                     document = nil
                     selectedTool = nil
-                    savedCopy = nil
+                    stagedCopy = nil
                     revision += 1
                 }
                 failure = error.localizedDescription
@@ -369,12 +382,13 @@ struct ContentView: View {
         busy = true
         Task {
             do {
-                let url: URL
-                if let savedCopy { url = savedCopy } else { url = try await bridge.saveCopy() }
-                savedCopy = url
+                let url = try await bridge.saveCopy()
+                stagedCopy = url
                 share = Export(url: url)
-            } catch { failure = error.localizedDescription }
-            busy = false
+            } catch {
+                failure = error.localizedDescription
+                busy = false
+            }
         }
     }
 }

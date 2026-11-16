@@ -5,7 +5,7 @@
 #![cfg_attr(feature = "swift", allow(clippy::unnecessary_cast))]
 
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, SyncSender};
 use std::thread::JoinHandle;
 
@@ -31,6 +31,8 @@ mod ffi {
         fn page_text(&self, page: u32) -> Result<String, String>;
         fn rotate(&self, page: u32) -> Result<String, String>;
         fn save_copy(&self) -> Result<String, String>;
+        #[swift_bridge(rust_name = "release_copy_response")]
+        fn release_copy(&self, path: &str) -> String;
         fn close(&self, discard: bool) -> Result<String, String>;
     }
 }
@@ -41,6 +43,7 @@ enum Operation {
     PageText(u32),
     Rotate(u32),
     Save,
+    ReleaseCopy(String),
     Close(bool),
 }
 
@@ -61,7 +64,8 @@ pub fn create_mobile_session() -> Result<MobileSession, String> {
     let worker = std::thread::Builder::new()
         .name("pdfcraft-mobile".into())
         .spawn(move || {
-            let mut state = State { automation: Automation::new().with_javascript(false), document: None, directory, copies: 0 };
+            let mut state =
+                State { automation: Automation::new().with_javascript(false), document: None, directory, copies: Vec::new(), copy_serial: 0 };
             for job in receiver {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| state.run(job.operation)));
                 let failed = result.is_err();
@@ -93,10 +97,12 @@ impl MobileSession {
     #[cfg(feature = "swift")]
     fn open_response(&self, path: &str) -> String {
         // swift-bridge 0.1.59 cannot generate a throwing Swift closure for a borrowed str.
-        match self.open(path) {
-            Ok(value) => json!({ "ok": true, "value": value }).to_string(),
-            Err(value) => json!({ "ok": false, "value": value }).to_string(),
-        }
+        operation_response(self.open(path))
+    }
+
+    #[cfg(feature = "swift")]
+    fn release_copy_response(&self, path: &str) -> String {
+        operation_response(self.release_copy(path))
     }
 
     fn call(&self, operation: Operation) -> Result<String, String> {
@@ -129,8 +135,20 @@ impl MobileSession {
         self.call(Operation::Save)
     }
 
+    pub fn release_copy(&self, path: &str) -> Result<String, String> {
+        self.call(Operation::ReleaseCopy(path.into()))
+    }
+
     pub fn close(&self, discard: bool) -> Result<String, String> {
         self.call(Operation::Close(discard))
+    }
+}
+
+#[cfg(feature = "swift")]
+fn operation_response(result: Result<String, String>) -> String {
+    match result {
+        Ok(value) => json!({ "ok": true, "value": value }).to_string(),
+        Err(value) => json!({ "ok": false, "value": value }).to_string(),
     }
 }
 
@@ -157,7 +175,8 @@ struct State {
     automation: Automation,
     document: Option<u64>,
     directory: tempfile::TempDir,
-    copies: u32,
+    copies: Vec<PathBuf>,
+    copy_serial: u64,
 }
 
 impl State {
@@ -289,15 +308,30 @@ impl State {
                 self.metadata()
             }
             Operation::Save => {
-                if self.copies >= 8 {
-                    return Err(error("limit", "Close and reopen the document before creating more than eight export copies"));
+                if self.copies.len() >= 8 {
+                    return Err(error("limit", "Finish an export before retaining more than eight export copies"));
                 }
-                let next_copy = self.copies + 1;
+                let next_copy = self.copy_serial.checked_add(1).ok_or_else(|| error("limit", "Export copy identifiers are exhausted"))?;
                 let output = self.directory.path().join(format!("copy-{next_copy}.pdf"));
                 let path = output.to_str().ok_or_else(|| error("storage", "The workspace path is not UTF-8"))?;
                 self.tool("doc_save", json!({ "doc": self.id()?, "path": path, "full": false }))?;
-                self.copies = next_copy;
-                Ok(json!({ "path": path }).to_string())
+                let response = json!({ "path": path }).to_string();
+                self.copy_serial = next_copy;
+                self.copies.push(output);
+                Ok(response)
+            }
+            Operation::ReleaseCopy(path) => {
+                let path = Path::new(&path);
+                if !self.copies.iter().any(|copy| copy == path) {
+                    return Err(error("export", "This export copy does not belong to the session"));
+                }
+                match std::fs::remove_file(path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => return Err(error("storage", "Cannot remove the completed export copy")),
+                }
+                self.copies.retain(|copy| copy != path);
+                Ok("{}".into())
             }
             Operation::Close(discard) => {
                 if let Some(id) = self.document {

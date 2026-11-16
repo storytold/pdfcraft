@@ -183,6 +183,13 @@ assert_equal "$(plutil -extract UIFileSharingEnabled raw -o - "$metadata")" true
 grep -Fx 'metadata-name=Craft & Tools <POC>' "$TEST_LOG"
 grep -Fx 'metadata-language=fr' "$TEST_LOG"
 grep -Fx 'metadata-version=1.2.3' "$TEST_LOG"
+font_input="$fixture/font input"
+mkdir -p "$font_input/fonts/Test Family"
+printf 'Synthetic font licence fixture\n' >"$font_input/fonts/Test Family/OFL.txt"
+CRAFT_FONTS_DIR="$font_input" bash "$root/scripts/actual-generate-ios-project.sh"
+cmp "$font_input/fonts/Test Family/OFL.txt" "$root/target/ios/FontLicences/OFL-Test Family.txt"
+CRAFT_FONTS_DIR= bash "$root/scripts/actual-generate-ios-project.sh"
+test ! -e "$root/target/ios/FontLicences/OFL-Test Family.txt"
 for key in CFBundleIdentifier CFBundleLocalizations CFBundleVersion CFBundleIconFile \
     CFBundleExecutable CFBundleDocumentTypes LSMinimumSystemVersion NSHighResolutionCapable; do
     if plutil -extract "$key" raw -o - "$metadata" >/dev/null 2>&1; then

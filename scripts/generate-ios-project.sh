@@ -16,6 +16,9 @@ if [[ ! "$PDFCRAFT_IOS_SHORT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     exit 1
 fi
 mkdir -p target/ios
+mkdir -p target/ios/FontLicences
+rm -f -- target/ios/FontLicences/OFL-*.txt
+copy_font_licences target/ios/FontLicences
 cp apps/ios/Config/Info.plist target/ios/Info.plist
 # Inherit only compatible desktop fields, not macOS handlers, localizations or signing identity.
 for key in CFBundleDisplayName CFBundleDevelopmentRegion NSHumanReadableCopyright \

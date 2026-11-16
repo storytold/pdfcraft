@@ -34,9 +34,11 @@ final class DocumentBridgeTests: XCTestCase {
                                                    appropriateFor: nil, create: true)
         let directory = documents.appendingPathComponent("PdfCraft UI Workflow Test", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let previousExport = directory.appendingPathComponent("copy-2.pdf")
-        if FileManager.default.fileExists(atPath: previousExport.path) {
-            try FileManager.default.removeItem(at: previousExport)
+        for name in ["copy-2.pdf", "copy-10.pdf"] {
+            let previousExport = directory.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: previousExport.path) {
+                try FileManager.default.removeItem(at: previousExport)
+            }
         }
         try Self.fixture().write(to: directory.appendingPathComponent("PdfCraft iOS UI Fixture.pdf"), options: .atomic)
         try Self.fixture(withText: true).write(to: directory.appendingPathComponent("PdfCraft iOS Text Fixture.pdf"), options: .atomic)
@@ -100,6 +102,21 @@ final class DocumentBridgeTests: XCTestCase {
             XCTAssertTrue(error is MobileFailure)
         }
         try await bridge.close(discard: true)
+    }
+
+    func testTerminalFailuresResetTheSessionButDocumentFailuresPreserveIt() async throws {
+        let source = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("pdf")
+        defer { try? FileManager.default.removeItem(at: source) }
+        try Self.fixture().write(to: source)
+        let bridge = DocumentBridge()
+        _ = try await bridge.open(source)
+        _ = await bridge.recovering(MobileFailure(code: "document", message: "Synthetic document failure"))
+        let rendered = try await bridge.render(page: 1, edge: 600)
+        XCTAssertFalse(rendered.data.isEmpty)
+        _ = await bridge.recovering(MobileFailure(code: "worker", message: "Synthetic terminal worker failure"))
+        let reopened = try await bridge.open(source)
+        XCTAssertEqual(reopened.pageCount, 1)
+        try await bridge.close(discard: false)
     }
 
     func testEmbeddedTextCrossesRustBridgeAndFollowsDocumentLifecycle() async throws {

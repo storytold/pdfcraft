@@ -261,6 +261,46 @@ final class WorkflowTests: XCTestCase {
         XCTAssertTrue(text.waitForNonExistence(timeout: 10))
     }
 
+    func testCancelledExportsDoNotExhaustCapacityAndLatestEditsCanBeSaved() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.buttons["Open PDF"].waitForExistence(timeout: 20))
+        app.buttons["Open PDF"].tap()
+        browseToAppFolder(app)
+        openDocument("PdfCraft iOS UI Fixture", in: app)
+        let image = app.descendants(matching: .any)["rendered-page-1"].firstMatch
+        XCTAssertTrue(image.waitForExistence(timeout: 30))
+        for _ in 0..<9 {
+            app.buttons["Rotate page 1 clockwise"].tap()
+            waitForDocumentReady(in: app)
+            app.toolbars.buttons["Save a Copy"].tap()
+            cancelExport(in: app)
+            waitForDocumentReady(in: app)
+            XCTAssertFalse(app.alerts.firstMatch.exists, app.debugDescription)
+            XCTAssertTrue(app.staticTexts["Unsaved changes"].exists)
+        }
+        app.toolbars.buttons["Save a Copy"].tap()
+        browseToAppFolder(app)
+        let save = app.navigationBars.buttons.matching(NSPredicate(format: "label == 'Export' OR label == 'Save'")).firstMatch
+        XCTAssertTrue(save.waitForExistence(timeout: 10))
+        save.tap()
+        XCTAssertTrue(app.otherElements["Browse View (Picker)"].waitForNonExistence(timeout: 20))
+        waitForDocumentReady(in: app)
+        app.buttons["Close"].tap()
+        XCTAssertTrue(app.buttons["Open PDF"].waitForExistence(timeout: 10))
+        app.buttons["Open PDF"].tap()
+        browseToAppFolder(app)
+        openDocument("copy-10", in: app)
+        XCTAssertTrue(image.waitForExistence(timeout: 30))
+        XCTAssertGreaterThan(image.frame.width, image.frame.height, "The tenth export must retain the latest rotation")
+    }
+
+    private func waitForDocumentReady(in app: XCUIApplication) {
+        expectation(for: NSPredicate { _, _ in app.buttons["Close"].isEnabled }, evaluatedWith: nil)
+        waitForExpectations(timeout: 10)
+    }
+
     private func chooseOrganize(in app: XCUIApplication) {
         XCTAssertTrue(app.buttons["Find tools and commands"].waitForExistence(timeout: 20))
         app.buttons["Find tools and commands"].tap()
@@ -292,6 +332,7 @@ final class WorkflowTests: XCTestCase {
         copyIcon.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(copy.waitForNonExistence(timeout: 15))
         XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 15))
+        waitForDocumentReady(in: app)
     }
 
     private func attachScreenshot(_ app: XCUIApplication, named name: String) {

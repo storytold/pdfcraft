@@ -43,7 +43,7 @@ private struct OutputPath: Decodable {
     let path: String
 }
 
-private struct OpenOutput: Decodable {
+private struct OperationOutput: Decodable {
     let ok: Bool
     let value: String
 }
@@ -66,26 +66,40 @@ actor DocumentBridge {
             session = created
             return created
         } catch {
-            throw translated(error)
+            throw recovering(error)
         }
     }
 
-    private func translated(_ error: Error) -> Error {
-        guard let rust = error as? RustString else { return error }
-        let text = rust.toString()
-        do {
-            return try JSONDecoder().decode(MobileFailure.self, from: Data(text.utf8))
-        } catch {
-            return MobileFailure(code: "bridge", message: "PdfCraft returned an unreadable error.")
+    func recovering(_ error: Error) -> Error {
+        let failure: Error
+        if let rust = error as? RustString {
+            do {
+                failure = try JSONDecoder().decode(MobileFailure.self, from: Data(rust.toString().utf8))
+            } catch {
+                failure = MobileFailure(code: "bridge", message: "PdfCraft returned an unreadable error.")
+            }
+        } else {
+            failure = error
         }
+        if (failure as? MobileFailure)?.sessionEnded == true { session = nil }
+        return failure
     }
 
     private func decode<T: Decodable>(_ type: T.Type, _ call: () throws -> RustString) throws -> T {
         do {
             return try JSONDecoder().decode(type, from: Data(call().toString().utf8))
         } catch {
-            throw translated(error)
+            throw recovering(error)
         }
+    }
+
+    private func response<T: Decodable>(_ type: T.Type, _ call: () throws -> RustString) throws -> T {
+        let output = try decode(OperationOutput.self, call)
+        let payload = Data(output.value.utf8)
+        guard output.ok else {
+            throw recovering(try JSONDecoder().decode(MobileFailure.self, from: payload))
+        }
+        return try JSONDecoder().decode(type, from: payload)
     }
 
     func open(_ url: URL) throws -> DocumentMetadata {
@@ -97,12 +111,7 @@ actor DocumentBridge {
         NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinationError) { coordinated in
             result = Result {
                 let engine = try self.engine()
-                let output = try self.decode(OpenOutput.self) { engine.open(coordinated.path) }
-                let payload = Data(output.value.utf8)
-                guard output.ok else {
-                    throw try JSONDecoder().decode(MobileFailure.self, from: payload)
-                }
-                return try JSONDecoder().decode(DocumentMetadata.self, from: payload)
+                return try self.response(DocumentMetadata.self) { engine.open(coordinated.path) }
             }
         }
         if let coordinationError { throw coordinationError }
@@ -140,15 +149,18 @@ actor DocumentBridge {
         return URL(fileURLWithPath: output.path)
     }
 
+    func releaseCopy(_ url: URL) throws {
+        guard let session else { return }
+        _ = try response([String: String].self) { session.release_copy(url.path) }
+    }
+
     func close(discard: Bool) throws {
         guard let session else { return }
         do {
             _ = try session.close(discard)
             self.session = nil
         } catch {
-            let failure = translated(error)
-            if (failure as? MobileFailure)?.sessionEnded == true { self.session = nil }
-            throw failure
+            throw recovering(error)
         }
     }
 }
