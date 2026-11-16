@@ -190,8 +190,9 @@ fn push_box(boxes: &mut Vec<InkBox>, rect: [f32; 4], text: String, source: CharR
 }
 
 fn link_glyphs(components: &ComponentSet, boxes: &[InkBox], params: &AlignParams) -> Links {
-    let mut links = Links { by_component: vec![Vec::new(); components.components().len()], by_box: vec![Vec::new(); boxes.len()] };
-    for (index, component) in components.components().iter().enumerate() {
+    let comp_slice = components.components();
+    let mut by_component = vec![Vec::new(); comp_slice.len()];
+    for (index, component) in comp_slice.iter().enumerate() {
         if component.kind != ComponentKind::Glyph {
             continue;
         }
@@ -199,15 +200,87 @@ fn link_glyphs(components: &ComponentSet, boxes: &[InkBox], params: &AlignParams
             let Some(score) = match_score(component, ink.rect, params) else {
                 continue;
             };
-            if let Some(of_component) = links.by_component.get_mut(index) {
+            if let Some(of_component) = by_component.get_mut(index) {
                 of_component.push((box_index, score));
             }
-            if let Some(of_box) = links.by_box.get_mut(box_index) {
+        }
+    }
+    prune_overhang_links(comp_slice, boxes, &mut by_component);
+    let mut by_box = vec![Vec::new(); boxes.len()];
+    for (index, matches) in by_component.iter().enumerate() {
+        for &(box_index, _) in matches {
+            if let Some(of_box) = by_box.get_mut(box_index) {
                 of_box.push(index);
             }
         }
     }
-    links
+    Links { by_component, by_box }
+}
+
+/// Drop secondary cell links caused by an overhanging stroke (such as an `f` hook reaching into
+/// the following `t` cell) when another component has that cell as its primary match with more
+/// ink inside it.
+fn prune_overhang_links(components: &[Component], boxes: &[InkBox], by_component: &mut [Vec<(usize, f32)>]) {
+    let primary: Vec<Option<(usize, u32)>> = by_component
+        .iter()
+        .enumerate()
+        .map(|(comp_idx, matches)| {
+            let comp = components.get(comp_idx)?;
+            matches
+                .iter()
+                .filter_map(|&(box_idx, score)| {
+                    let rect = boxes.get(box_idx)?.rect;
+                    Some((box_idx, ink_in_rect(comp, rect), score))
+                })
+                .max_by(|a, b| a.1.cmp(&b.1).then_with(|| a.2.total_cmp(&b.2)))
+                .map(|(box_idx, ink, _)| (box_idx, ink))
+        })
+        .collect();
+    for (comp_idx, matches) in by_component.iter_mut().enumerate() {
+        if matches.len() < 2 {
+            continue;
+        }
+        let Some(comp) = components.get(comp_idx) else { continue };
+        let Some((own_primary, _)) = primary.get(comp_idx).copied().flatten() else { continue };
+        matches.retain(|&(box_idx, _)| {
+            if box_idx == own_primary {
+                return true;
+            }
+            let Some(rect) = boxes.get(box_idx).map(|b| b.rect) else { return false };
+            let own_ink = ink_in_rect(comp, rect);
+            let claimed_by_better_primary = primary
+                .iter()
+                .enumerate()
+                .any(|(other_idx, p)| other_idx != comp_idx && p.is_some_and(|(p_box, p_ink)| p_box == box_idx && p_ink > own_ink));
+            !claimed_by_better_primary
+        });
+    }
+}
+
+fn ink_in_rect(component: &Component, rect: [f32; 4]) -> u32 {
+    if rect.iter().any(|v| !v.is_finite()) {
+        return 0;
+    }
+    let [bx0, by0, bx1, by1] = component.bounds;
+    let x0 = (rect[0].floor().max(0.0) as u32).max(bx0);
+    let y0 = (rect[1].floor().max(0.0) as u32).max(by0);
+    let x1 = (rect[2].ceil().max(0.0) as u32).min(bx1);
+    let y1 = (rect[3].ceil().max(0.0) as u32).min(by1);
+    if x1 <= x0 || y1 <= y0 {
+        return 0;
+    }
+    let Some(mask) = component.mask.as_ref() else {
+        return (x1 - x0).saturating_mul(y1 - y0);
+    };
+    let mut count = 0_u32;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            if mask.is_ink(i64::from(x - bx0), i64::from(y - by0)) {
+                count = count.saturating_add(1);
+            }
+        }
+    }
+    count
 }
 
 fn match_score(component: &Component, rect: [f32; 4], params: &AlignParams) -> Option<f32> {
@@ -756,6 +829,29 @@ mod tests {
         let set = analyze(&image, &AnalyzeOptions { filter: FilterParams::default(), ..AnalyzeOptions::default() }).unwrap();
         let aligned = align(&set, &[], &AlignParams::default());
         assert!(aligned.matched.is_empty() && aligned.unmatched_glyphs.is_empty() && aligned.unmatched_text.is_empty());
+    }
+
+    #[test]
+    fn an_overhanging_f_hook_does_not_duplicate_the_next_letter() {
+        // Two separate components for "ft":
+        // 'f': stem x=10..13, y=4..24 plus overhanging top hook x=13..18, y=4..7 (bbox [10, 4, 18, 24]).
+        // 't': stem x=15..18, y=9..24 plus crossbar x=14..19, y=11..13 (bbox [14, 9, 19, 24]).
+        let image = bitmap(80, 40, |x, y| {
+            let f_stem = (10..13).contains(&x) && (4..24).contains(&y);
+            let f_hook = (13..18).contains(&x) && (4..7).contains(&y);
+            let t_stem = (15..18).contains(&x) && (9..24).contains(&y);
+            let t_bar = (14..19).contains(&x) && (11..13).contains(&y);
+            f_stem || f_hook || t_stem || t_bar
+        });
+        let set = analyze(&image, &AnalyzeOptions::default()).unwrap();
+        assert_eq!(set.components().iter().filter(|c| c.kind == ComponentKind::Glyph).count(), 2);
+        let f_box = [10.0, 4.0, 14.0, 24.0];
+        let t_box = [14.0, 4.0, 19.0, 24.0];
+        let lines = vec![line(vec![word("ft", [10.0, 4.0, 19.0, 24.0], vec![ch('f', f_box), ch('t', t_box)])])];
+        let aligned = align(&set, &lines, &AlignParams::default());
+        let texts: Vec<_> = aligned.matched.iter().map(|g| role_text(&g.role)).collect();
+        assert_eq!(texts, ["f", "t"], "overhanging f hook must not turn 'ft' into 'ftt': {:?}", roles(&aligned));
+        assert!(aligned.matched.iter().all(|g| matches!(g.role, MatchRole::Character { .. })));
     }
 
     fn roles(aligned: &PageAlignment) -> Vec<&MatchRole> {
