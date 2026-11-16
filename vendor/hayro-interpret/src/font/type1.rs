@@ -110,6 +110,16 @@ impl Type1Font {
         }
     }
 
+    /// PdfCraft patch (111): [`Self::outline_glyph`] fitted to the grid at `ppem` (see
+    /// `font::hint`), or `None` when it isn't hinted.
+    pub(crate) fn hinted_outline_glyph(&self, glyph: GlyphId, ppem: f32) -> Option<BezPath> {
+        match &self.1 {
+            Kind::Standard(s) => s.hinted_outline_glyph(glyph, ppem),
+            Kind::Cff(c) => c.font.hinted_outline_glyph(glyph, ppem),
+            Kind::Type1(t) => t.font.hinted_outline_glyph(glyph, ppem),
+        }
+    }
+
     pub(crate) fn glyph_width(&self, code: u8) -> Option<f32> {
         match &self.1 {
             Kind::Standard(s) => s.glyph_width(code),

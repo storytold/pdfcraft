@@ -88,8 +88,12 @@ version = "2"
 [dependencies.siphasher]
 version = "1"
 
+# PdfCraft patch (111): 0.50 (was 0.47) hints glyph outlines at the size they are drawn for every
+# format a PDF embeds, standalone CFF and Type 1 included (#730). Its `type1` feature reads Type 1
+# programs for hinting; the outlines drawn unhinted still come from the 0.47-era API it keeps.
 [dependencies.skrifa]
-version = "0.47.0"
+version = "0.50.0"
+features = ["type1"]
 
 [dependencies.smallvec]
 version = "1"

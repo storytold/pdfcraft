@@ -80,7 +80,13 @@ pub use renderer::{OffscreenDraws, offscreen_draws};
 pub struct RenderCache<'a> {
     pub(crate) interpreter_cache: InterpreterCache<'a>,
     pub(crate) outline_cache: Rc<RefCell<HashMap<u128, Rc<kurbo::BezPath>>>>,
+    /// PdfCraft patch (34): glyph outlines fitted to the pixel grid, by glyph and size in
+    /// pixels per em; `None` for a glyph that isn't hinted at that size.
+    pub(crate) hinted_outline_cache: HintedOutlines,
 }
+
+/// PdfCraft patch (34): see [`RenderCache::hinted_outline_cache`].
+pub(crate) type HintedOutlines = Rc<RefCell<HashMap<(u128, u32), Option<Rc<kurbo::BezPath>>>>>;
 
 impl<'a> RenderCache<'a> {
     /// Create a new render cache.
@@ -88,6 +94,7 @@ impl<'a> RenderCache<'a> {
         Self {
             interpreter_cache: InterpreterCache::new(),
             outline_cache: Rc::new(RefCell::new(HashMap::new())),
+            hinted_outline_cache: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 }
@@ -167,6 +174,12 @@ pub struct RenderSettings {
     /// past it are left out, with `InterpreterWarning::ContentTruncated`. `None` keeps as many
     /// as a strip's index reaches (2^31).
     pub max_coverage: Option<usize>,
+    /// PdfCraft patch (34): fit glyph outlines to the pixel grid, vertically, at the size they
+    /// are drawn, as text engines draw text on screen: baselines, x-heights and horizontal
+    /// stems land on whole pixels instead of between them, so small text is sharp instead of
+    /// soft and uneven (storytold/pdfcraft#730). Upright text from 4 to 64 pixels per em is
+    /// hinted; where glyphs sit along the line is unchanged. Off renders as without the patch.
+    pub hint_text: bool,
 }
 
 impl Default for RenderSettings {
@@ -181,6 +194,7 @@ impl Default for RenderSettings {
             y_offset: 0.0,
             color_replacement: None,
             max_coverage: None,
+            hint_text: false,
         }
     }
 }
@@ -263,6 +277,7 @@ pub fn render_into<'a>(
         cache,
         render_settings.color_replacement,
         interpreter_settings.preview,
+        render_settings.hint_text,
     );
 
     if let Some(max) = render_settings.max_coverage {

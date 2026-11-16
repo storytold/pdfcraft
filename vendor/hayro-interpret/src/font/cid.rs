@@ -398,6 +398,18 @@ impl Type0Font {
         path
     }
 
+    /// PdfCraft patch (111): [`Self::outline_glyph`] fitted to the grid at `ppem` (see
+    /// `font::hint`), or `None` when it isn't hinted. A substitute OpenType font, which may be
+    /// stretched to the document's widths, is drawn unhinted.
+    pub(crate) fn hinted_outline_glyph(&self, glyph: GlyphId, ppem: f32) -> Option<BezPath> {
+        match &self.font_type {
+            FontType::OpenType(_) if self.fallback => None,
+            FontType::OpenType(t) => t.hinted_outline_glyph(glyph, ppem),
+            FontType::Cff(c) => c.hinted_outline_glyph(glyph, ppem),
+            FontType::Type1(t) => t.hinted_outline_glyph(glyph, ppem),
+        }
+    }
+
     pub(crate) fn font_data(&self) -> Option<crate::font::FontData> {
         match &self.font_type {
             FontType::OpenType(t) => Some(t.font_data()),

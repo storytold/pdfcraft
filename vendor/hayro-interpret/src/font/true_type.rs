@@ -97,6 +97,15 @@ impl TrueTypeFont {
         }
     }
 
+    /// PdfCraft patch (111): [`Self::outline_glyph`] fitted to the grid at `ppem` (see
+    /// `font::hint`), or `None` when it isn't hinted.
+    pub(crate) fn hinted_outline_glyph(&self, glyph: GlyphId, ppem: f32) -> Option<BezPath> {
+        match &self.kind {
+            Kind::Embedded(e) => e.base_font.hinted_outline_glyph(glyph, ppem),
+            Kind::Standard(s) => s.hinted_outline_glyph(glyph, ppem),
+        }
+    }
+
     pub(crate) fn font_data(&self) -> Option<crate::font::FontData> {
         match &self.kind {
             Kind::Embedded(e) => Some(e.base_font.font_data()),

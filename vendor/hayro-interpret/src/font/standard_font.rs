@@ -368,6 +368,18 @@ impl StandardFontBlob {
         }
     }
 
+    /// PdfCraft patch (111): [`Self::outline_glyph`] fitted to the grid at `ppem` (see
+    /// `font::hint`), or `None` when it isn't hinted. `.notdef` is drawn empty, unhinted.
+    pub(crate) fn hinted_outline_glyph(&self, glyph: GlyphId, ppem: f32) -> Option<BezPath> {
+        if glyph == GlyphId::NOTDEF {
+            return None;
+        }
+        match self {
+            Self::Cff(blob) => blob.hinted_outline_glyph(glyph, ppem),
+            Self::Otf(blob, _) => blob.hinted_outline_glyph(glyph, ppem),
+        }
+    }
+
     pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
         // Standard fonts have empty outlines for these, but in Liberation Sans
         // they are a .notdef rectangle.
@@ -483,13 +495,29 @@ impl StandardKind {
     /// moved along the slant; an ogonek hangs from the letter's right edge; a comma below is
     /// the font's comma, smaller, under the baseline.
     fn composite_outline(&self, glyph: GlyphId) -> Option<BezPath> {
+        self.composite_outline_from(glyph, &|g| Some(self.base_font_blob.outline_glyph(g)), None)
+    }
+
+    /// The base letter, mark and placement of `glyph` when it is an accented letter the
+    /// stand-in lacks and is built from two of its glyphs; `None` for a glyph of the stand-in.
+    /// PdfCraft patch (111): split from [`Self::composite_outline_from`], so hinting can ask
+    /// without building the letter.
+    fn composite_parts(&self, glyph: GlyphId) -> Option<(&'static str, &'static str, Place)> {
         let code = u8::try_from(glyph.to_u32().checked_sub(COMPOSITE_GLYPH_BASE)?).ok()?;
-        let (base, accent, place) = accented_parts(self.code_to_ps_name(code)?)?;
-        let outline = |name: &str| {
-            self.base_font_blob
-                .name_to_glyph(name)
-                .map(|g| self.base_font_blob.outline_glyph(g))
-        };
+        accented_parts(self.code_to_ps_name(code)?)
+    }
+
+    /// The accented letter `glyph` built from the outlines `part` gives its base letter and
+    /// mark. PdfCraft patch (111): `ppem`, when the parts are fitted to the grid at that size,
+    /// moves the mark by whole pixels up or down so it stays fitted too.
+    fn composite_outline_from(
+        &self,
+        glyph: GlyphId,
+        part: &dyn Fn(GlyphId) -> Option<BezPath>,
+        ppem: Option<f32>,
+    ) -> Option<BezPath> {
+        let (base, accent, place) = self.composite_parts(glyph)?;
+        let outline = |name: &str| self.base_font_blob.name_to_glyph(name).and_then(part);
         let mut path = outline(base)?;
         let mut accent = outline(accent)?;
         if path.elements().is_empty() || accent.elements().is_empty() {
@@ -534,6 +562,13 @@ impl StandardKind {
         if !(dx.is_finite() && dy.is_finite()) {
             return Some(path);
         }
+        let dy = match ppem {
+            Some(ppem) => {
+                let pixel = f64::from(crate::font::UNITS_PER_EM / ppem);
+                (dy / pixel).round() * pixel
+            }
+            None => dy,
+        };
         path.extend(Affine::translate((dx, dy)) * accent);
         Some(path)
     }
@@ -542,7 +577,27 @@ impl StandardKind {
         let composite = self.composite_outline(glyph);
         let is_composite = composite.is_some();
         let path = composite.unwrap_or_else(|| self.base_font_blob.outline_glyph(glyph));
+        self.fitted_to_width(glyph, path, is_composite)
+    }
 
+    /// PdfCraft patch (111): [`Self::outline_glyph`] fitted to the grid at `ppem` (see
+    /// `font::hint`), or `None` when it isn't hinted. An accented letter the stand-in lacks is
+    /// built from its hinted parts, so it matches its base letter drawn beside it; the width
+    /// fitting below only scales across the line, so it applies to a hinted outline as it is.
+    pub(crate) fn hinted_outline_glyph(&self, glyph: GlyphId, ppem: f32) -> Option<BezPath> {
+        let hinted = |g: GlyphId| self.base_font_blob.hinted_outline_glyph(g, ppem);
+        let (path, is_composite) = if self.composite_parts(glyph).is_some() {
+            (self.composite_outline_from(glyph, &hinted, Some(ppem))?, true)
+        } else {
+            (hinted(glyph)?, false)
+        };
+        Some(self.fitted_to_width(glyph, path, is_composite))
+    }
+
+    /// `path`, the outline of `glyph`, stretched across the line to the width the document or
+    /// the standard metrics give it. PdfCraft patch (111): split from [`Self::outline_glyph`],
+    /// which this was the rest of, so hinted outlines are fitted to the same width.
+    fn fitted_to_width(&self, glyph: GlyphId, path: BezPath, is_composite: bool) -> BezPath {
         // If the font is not embedded, we might need to stretch it so that
         // it matches the metrics of the actual underlying font blob.
 
