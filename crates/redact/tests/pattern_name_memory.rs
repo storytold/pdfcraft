@@ -1,8 +1,8 @@
 //! Memory regressions for the pattern names the redaction walk records as painted, so that the
-//! page's pattern cleanup keeps what still paints. A long name selected once and painted with
-//! again and again is recorded once, not once for each paint, nor once for each draw of a form.
-//! A test binary of its own, so that the one test is all the process runs while its peak is
-//! measured.
+//! page's pattern cleanup keeps what still paints, and for the names a graphics state holds. A long
+//! name selected once and painted with again and again is recorded once, not once for each paint,
+//! nor once for each draw of a form, and a state saved again and again shares it. A test binary
+//! of its own, so that the one test is all the process runs while its peak is measured.
 
 use std::sync::Arc;
 
@@ -57,17 +57,21 @@ fn peak_growth<T>(f: impl FnOnce() -> T) -> Option<(T, u64)> {
 ///   resources of its own over the mark;
 /// - selected and painted with once in each of 3,900 draws of such a form, which the page's
 ///   allowance decodes;
+/// - selected as fill and stroke, then saved 4,096 times with `q`;
 /// - and 64 pattern names of 1 KiB, where a Type 3 font without resources of its own, which may
 ///   paint with any of them, is shown 4,096 times.
 ///
-/// Each recorded the names again for each paint, draw or glyph shown: about 256 MiB each. Now
-/// each name is recorded once.
+/// And a font whose name is 256 KiB long, set before 1,024 `q`, as the proof's text reader reads
+/// it when the redaction is captured for its proof.
+///
+/// Each recorded or copied the name again for each paint, draw, glyph shown or state saved: from
+/// about 180 to 510 MiB each. Now each name is recorded once, and shared.
 #[test]
 fn a_pattern_name_painted_again_and_again_is_recorded_once() {
     let name = long_name();
     let resources = format!("/Pattern << /{name} 6 0 R >>");
     let cell = || stream_obj(PATTERN, b"0 0 5 5 re f");
-    let shapes: [(&str, Vec<u8>, Vec<u8>); 3] = [
+    let shapes: [(&str, Vec<u8>, Vec<u8>); 4] = [
         ("painted by the page", [format!("/Pattern cs /{name} scn ").into_bytes(), b"0 0 1 1 re f\n".repeat(4096)].concat(), Vec::new()),
         (
             "painted in each draw of a form",
@@ -75,6 +79,17 @@ fn a_pattern_name_painted_again_and_again_is_recorded_once() {
             b"0 0 1 1 re f".to_vec(),
         ),
         ("selected in each draw of a form", b"/Fm Do\n".repeat(3900), format!("/Pattern cs /{name} scn 0 0 1 1 re f").into_bytes()),
+        (
+            "saved with q",
+            [
+                format!("/Pattern cs /{name} scn /Pattern CS /{name} SCN ").into_bytes(),
+                b"q ".repeat(4096),
+                b"0 0 1 1 re f ".to_vec(),
+                b"Q ".repeat(4096),
+            ]
+            .concat(),
+            Vec::new(),
+        ),
     ];
     let mut grown = Vec::new();
     for (label, content, form) in shapes {
@@ -96,5 +111,12 @@ fn a_pattern_name_painted_again_and_again_is_recorded_once() {
     let Some((result, grew)) = peak_growth(|| apply(&mut doc, None)) else { return };
     assert!(result.is_ok(), "a Type 3 font: {result:?}");
     grown.push(("a Type 3 font shown", grew));
+
+    let font = format!("F{}", "x".repeat((256 << 10) - 1));
+    let content = [format!("BT /{font} 12 Tf ET ").into_bytes(), b"q ".repeat(1024), b"0 0 1 1 re f ".to_vec(), b"Q ".repeat(1024)].concat();
+    let doc = page(&content, "", b"", Vec::new());
+    let Some((snapshot, grew)) = peak_growth(|| pdfcraft_redact::Snapshot::capture(&doc, None)) else { return };
+    assert!(snapshot.is_ok(), "the proof's capture");
+    grown.push(("a font name saved with q, for the proof", grew));
     assert!(grown.iter().all(|(_, grew)| *grew < 64), "the peak grew by (MiB): {grown:?}");
 }

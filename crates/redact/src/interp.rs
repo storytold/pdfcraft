@@ -103,9 +103,10 @@ struct Gs {
     /// colour (`/Name SCN`). Part of the graphics state, so `q`/`Q` save and restore them with
     /// everything else. A pattern's cell is a content stream of its own and this pass does not
     /// enter it, so a pattern whose only painting was removed has to leave the page's resources
-    /// or its drawing stays in the file (#3647).
-    fill_pattern: Option<Vec<u8>>,
-    stroke_pattern: Option<Vec<u8>>,
+    /// or its drawing stays in the file (#3647). Shared, so that `q` and each form drawn copy a
+    /// reference, not the name.
+    fill_pattern: Option<Rc<[u8]>>,
+    stroke_pattern: Option<Rc<[u8]>>,
     /// The `scn` and `SCN` that selected them ([`Scope::selections`]), so a paint records a
     /// pattern once for each selection, not once for each paint.
     fill_selection: u64,
@@ -625,9 +626,9 @@ impl Walk {
             // and clear it. `cs` with a space other than /Pattern clears it too.
             b"scn" | b"SCN" => {
                 let fill = o == b"scn";
-                let picked = op.operands.last().and_then(Object::as_name).map(<[u8]>::to_vec);
+                let picked = op.operands.last().and_then(Object::as_name).map(Rc::<[u8]>::from);
                 if let Some(name) = &picked {
-                    self.out.patterns_seen.push(name.clone());
+                    self.out.patterns_seen.push(name.to_vec());
                 }
                 let selection = scope.selections;
                 scope.selections = selection.saturating_add(1);
