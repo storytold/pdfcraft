@@ -982,6 +982,34 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     Ok(())
 }
 
+fn resolve_cs_space(doc: &Document, operand: &Object, cs_res: &Dict, depth: u8) -> Option<crate::colour::Space> {
+    if depth > 4 {
+        return None;
+    }
+    let resolved = doc.resolve(operand);
+    match &*resolved {
+        Object::Name(n) => {
+            if matches!(n.as_slice(), b"DeviceGray" | b"DeviceRGB" | b"DeviceCMYK" | b"Pattern") {
+                return Some(crate::colour::space_of(doc, operand, cs_res, depth));
+            }
+            if let Some(entry) = cs_res.get(n) {
+                return resolve_cs_space(doc, entry, cs_res, depth + 1);
+            }
+            matches!(n.as_slice(), b"G" | b"CalGray" | b"RGB" | b"CalRGB" | b"CMYK").then(|| crate::colour::space_of(doc, operand, cs_res, depth))
+        }
+        Object::Array(a) => {
+            // An uncoloured pattern `[/Pattern <underlying>]` paints its numeric operands in `<underlying>`.
+            if a.first().is_some_and(|f| doc.resolve(f).as_name() == Some(b"Pattern"))
+                && let Some(base) = a.get(1)
+            {
+                return resolve_cs_space(doc, base, cs_res, depth + 1);
+            }
+            Some(crate::colour::space_of(doc, operand, cs_res, depth))
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn interpret(
     doc: &Document,
     ops: &[Op],
@@ -1118,25 +1146,15 @@ pub(super) fn interpret(
             b"cs" => {
                 ts.fill = vec![op.clone()];
                 ts.fill_space = op.operands.first().and_then(|operand| {
-                    let resolved = doc.resolve(operand);
-                    match &*resolved {
-                        Object::Name(n) => {
-                            if let Some(space) = space_cache.get(n.as_slice()) {
-                                return Some(Rc::clone(space));
-                            }
-                            let known = matches!(
-                                n.as_slice(),
-                                b"DeviceGray" | b"G" | b"CalGray" | b"DeviceRGB" | b"RGB" | b"CalRGB" | b"DeviceCMYK" | b"CMYK" | b"Pattern"
-                            ) || cs_res.get(n).is_some();
-                            known.then(|| {
-                                let space = Rc::new(crate::colour::space_of(doc, operand, cs_res, 0));
-                                space_cache.insert(n.clone(), Rc::clone(&space));
-                                space
-                            })
+                    if let Object::Name(n) = &*doc.resolve(operand) {
+                        if let Some(space) = space_cache.get(n.as_slice()) {
+                            return Some(Rc::clone(space));
                         }
-                        Object::Array(_) => Some(Rc::new(crate::colour::space_of(doc, operand, cs_res, 0))),
-                        _ => None,
+                        let space = Rc::new(resolve_cs_space(doc, operand, cs_res, 0)?);
+                        space_cache.insert(n.clone(), Rc::clone(&space));
+                        return Some(space);
                     }
+                    resolve_cs_space(doc, operand, cs_res, 0).map(Rc::new)
                 });
             }
             b"sc" | b"scn" => {

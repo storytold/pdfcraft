@@ -349,11 +349,12 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     });
                     ui.end_row();
                 });
-                if d.language == "tr" && d.engine == EngineChoice::Ocrs {
+                let tesseract_missing = pdfcraft_engine::ocr::engine_unavailable_reason(EngineChoice::Tesseract).is_some();
+                if d.language == "tr" && (d.engine == EngineChoice::Ocrs || (d.engine == EngineChoice::Auto && tesseract_missing)) {
                     ui.add_space(4.0);
                     ui.label(
                         egui::RichText::new(tl!(
-                            "The built-in engine reads unaccented Latin only; switch Engine to Automatic or Tesseract for Turkish characters."
+                            "The built-in engine reads unaccented Latin only; use Tesseract (with the Turkish language pack) for Turkish characters."
                         ))
                         .small()
                         .color(t.text_muted),
