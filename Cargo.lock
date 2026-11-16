@@ -1308,6 +1308,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-mime"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f29e82f1a7a009e68312bd2e84adab72be23344d#f29e82f1a7a009e68312bd2e84adab72be23344d"
+dependencies = [
+ "chrono",
+ "craft-codepage",
+ "encoding_rs",
+]
+
+[[package]]
 name = "craft-opc"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
@@ -1321,12 +1331,13 @@ dependencies = [
 [[package]]
 name = "craft-pdf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/storytold/craft-libs?rev=8e03cd016d42032b867fef6bad86bc69bf2c1920#8e03cd016d42032b867fef6bad86bc69bf2c1920"
 dependencies = [
  "aes",
  "chrono",
  "craft-stream-codecs",
  "flate2",
+ "hayro-syntax",
  "js-sys",
  "md-5 0.11.0",
  "sha2 0.11.1",
@@ -1414,11 +1425,11 @@ dependencies = [
 [[package]]
 name = "craft-stream-codecs"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/storytold/craft-libs?rev=8e03cd016d42032b867fef6bad86bc69bf2c1920#8e03cd016d42032b867fef6bad86bc69bf2c1920"
 dependencies = [
  "fax",
  "hayro-ccitt",
- "hayro-jbig2",
+ "hayro-jbig2 0.3.0 (git+https://github.com/storytold/craft-libs?rev=8e03cd016d42032b867fef6bad86bc69bf2c1920)",
  "thiserror 2.0.21",
 ]
 
@@ -2971,6 +2982,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hayro-jbig2"
+version = "0.3.0"
+source = "git+https://github.com/storytold/craft-libs?rev=8e03cd016d42032b867fef6bad86bc69bf2c1920#8e03cd016d42032b867fef6bad86bc69bf2c1920"
+dependencies = [
+ "hayro-ccitt",
+]
+
+[[package]]
 name = "hayro-jpeg2000"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2989,7 +3008,7 @@ version = "0.7.2"
 dependencies = [
  "flate2",
  "hayro-ccitt",
- "hayro-jbig2",
+ "hayro-jbig2 0.3.0",
  "hayro-jpeg2000",
  "memchr",
  "rustc-hash 2.1.3",
@@ -4626,8 +4645,8 @@ version = "0.21.1"
 name = "pdfcraft-content"
 version = "0.21.1"
 dependencies = [
+ "craft-pdf",
  "hayro-syntax",
- "pdfcraft-cos",
 ]
 
 [[package]]
@@ -4740,6 +4759,7 @@ dependencies = [
 name = "pdfcraft-export"
 version = "0.21.1"
 dependencies = [
+ "craft-mime",
  "craft-opc",
  "craft-rtf",
  "craft-xml",

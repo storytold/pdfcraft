@@ -85,6 +85,65 @@ pub fn line(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::singleline(text).margin(FIELD_MARGIN).min_size(vec2(0.0, FIELD_MIN_HEIGHT))
 }
 
+/// Give the field `r` the keyboard with all of `text` selected when `request` is set, so typing
+/// replaces it, and clear `request`. Call it on every pass, right after adding the field.
+///
+/// A field in the middle of an IME composition keeps its selection: the composition's next
+/// update replaces the selected range, and egui ends a composition only from inside the field.
+/// egui keeps that state private (`Memory::owns_ime_events` is only `has_focus`), so
+/// `ime_composing` follows it from the field's events. Any other request, including a repeated
+/// one while the field already has the keyboard, selects all of `text`.
+pub fn focus_selecting_all(ui: &egui::Ui, r: &egui::Response, text: &str, request: &mut bool) {
+    let composing = ime_composing(ui, r);
+    if !std::mem::take(request) {
+        return;
+    }
+    r.request_focus();
+    if composing {
+        return;
+    }
+    let mut state = egui::TextEdit::load_state(ui.ctx(), r.id).unwrap_or_default();
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::select_all_str(text)));
+    state.store(ui.ctx(), r.id);
+}
+
+/// Whether the field `r` holds an IME composition after this pass's events.
+///
+/// A non-empty pre-edit starts one, and a commit or an empty pre-edit ends it. Anything else that
+/// ends it inside the `TextEdit` (typing, a mutating key, a paste, a click) also moves its cursor
+/// off the range the last IME event left, and losing the keyboard ends it too.
+fn ime_composing(ui: &egui::Ui, r: &egui::Response) -> bool {
+    type Composition = Option<egui::text::CCursorRange>;
+    let key = r.id.with("ime_composition");
+    let cursor = egui::TextEdit::load_state(ui.ctx(), r.id).and_then(|s| s.cursor.char_range());
+    let mut composition: Composition = if r.has_focus() { ui.data(|d| d.get_temp::<Composition>(key)).flatten() } else { None };
+    let mut saw_ime = false;
+    if r.has_focus() {
+        ui.input(|i| {
+            for event in &i.events {
+                if let egui::Event::Ime(ime) = event {
+                    saw_ime = true;
+                    match ime {
+                        egui::ImeEvent::Preedit { text, .. } if text.is_empty() => composition = None,
+                        egui::ImeEvent::Preedit { text, .. } if text != "\n" && text != "\r" => composition = cursor,
+                        egui::ImeEvent::Commit(_) => composition = None,
+                        _ => {}
+                    }
+                }
+            }
+        });
+    }
+    if let Some(range) = composition {
+        if saw_ime {
+            composition = cursor.or(Some(range));
+        } else if cursor != Some(range) {
+            composition = None;
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(key, composition));
+    composition.is_some()
+}
+
 /// A multiline field with the same horizontal inset as [`line()`].
 pub fn block(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::multiline(text).margin(egui::Margin::symmetric(10, 6))
