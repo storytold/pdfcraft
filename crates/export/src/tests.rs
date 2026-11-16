@@ -388,50 +388,85 @@ fn rtf_escapes_and_sizes() {
         space_around: [false; 2],
     });
     let r = rtf(&[p]);
-    assert!(r.starts_with("{\\rtf1") && r.ends_with('}'));
+    assert!(r.starts_with("{\\rtf1") && r.trim_end().ends_with('}'));
     assert!(r.contains("Caf\\u233? \\{x\\}"), "escaped: {r}");
     let runs: Vec<_> = rtf_paras(&r).into_iter().flatten().collect();
     assert!(runs.contains(&("Annual Report".into(), true, false, Some(48))), "{runs:?}");
     assert!(runs.contains(&("Café {x}".into(), false, true, Some(20))), "{runs:?}");
 }
 
-/// A page break starts the next page's first paragraph, and stands in a paragraph of its own
-/// before a table, rather than in the table's first cell.
-#[test]
-fn rtf_page_breaks_stay_out_of_tables() {
-    let r = rtf(&[page(), table_page(), page()]);
-    let back = craft_rtf::read(r.as_bytes()).unwrap();
-    let first_cell = back.blocks.iter().find_map(|b| match b {
-        craft_rtf::Block::Table(t) => t.rows.first().and_then(|row| row.first()).map(|c| c.paras.iter().map(|p| p.text()).collect::<String>()),
-        craft_rtf::Block::Para(_) => None,
-    });
-    assert_eq!(first_cell.as_deref(), Some("Meter"), "{r}");
-    let texts: Vec<String> = back.blocks.iter().map(|b| if let craft_rtf::Block::Para(p) = b { p.text() } else { "<table>".into() }).collect();
-    let table = texts.iter().position(|t| t == "<table>");
-    assert_eq!(table.and_then(|i| i.checked_sub(1)).and_then(|i| texts.get(i)).map(String::as_str), Some("\u{000C}"), "{texts:?}");
-    assert_eq!(texts.iter().filter(|t| t.starts_with('\u{000C}')).count(), 2, "one break before each later page: {texts:?}");
+/// The RTF read back into the word model: each section's page size (points) and the text of its
+/// blocks, tables as `<table:first cell>`.
+fn rtf_sections(r: &str) -> Vec<([f32; 2], Vec<String>)> {
+    let doc = craft_rtf::doc::import(r.as_bytes()).unwrap();
+    let mut out: Vec<([f32; 2], Vec<String>)> = Vec::new();
+    let mut texts = Vec::new();
+    for b in &doc.body {
+        match &**b {
+            craft_wordmodel::Block::Para(p) => {
+                if !p.plain_text().is_empty() || !p.objects.is_empty() {
+                    texts.push(if p.objects.is_empty() { p.plain_text() } else { "<picture>".into() });
+                }
+                if let Some(s) = &p.section {
+                    out.push(([s.page_w, s.page_h], std::mem::take(&mut texts)));
+                }
+            }
+            craft_wordmodel::Block::Table(t) => {
+                let first = t
+                    .rows
+                    .first()
+                    .and_then(|r| r.cells.first())
+                    .map(|c| {
+                        c.blocks
+                            .iter()
+                            .filter_map(|b| if let craft_wordmodel::Block::Para(p) = &**b { Some(p.plain_text()) } else { None })
+                            .collect::<String>()
+                    })
+                    .unwrap_or_default();
+                texts.push(format!("<table:{}>", first.trim()));
+            }
+        }
+    }
+    out.push(([doc.last_section.page_w, doc.last_section.page_h], texts));
+    out
 }
 
-/// Empty and image-only pages still occupy a page when pictures are omitted from RTF.
+/// Each page is a section of its own, so it starts a new page, and a table on a page is in that
+/// page's section rather than after a break character in its first cell.
 #[test]
-fn rtf_preserves_breaks_for_pages_without_text() {
+fn rtf_pages_are_sections_and_tables_stay_on_theirs() {
+    let r = rtf(&[page(), table_page(), page()]);
+    let sections = rtf_sections(&r);
+    assert_eq!(sections.len(), 3, "{sections:?}");
+    assert!(sections[1].1.first().is_some_and(|t| t == "<table:Meter>"), "{sections:?}");
+    assert!(!r.contains("\\page"), "sections break the pages: {r}");
+}
+
+/// Empty and image-only pages still occupy a page; each keeps its own size.
+#[test]
+fn rtf_keeps_pages_without_text() {
     let mut blank = page();
     blank.blocks.clear();
     blank.images.clear();
     blank.rules.clear();
     let mut image_only = page();
     image_only.blocks.clear();
+    let mut small = blank.clone();
+    small.width = 400.0;
+    small.height = 500.0;
     for pages in [
         vec![blank.clone(), blank.clone(), page()],
         vec![page(), blank.clone(), blank.clone()],
         vec![page(), blank.clone(), blank.clone(), table_page()],
-        vec![blank.clone(), blank.clone(), blank],
+        vec![blank.clone(), blank.clone(), blank.clone()],
         vec![page(), image_only.clone(), image_only.clone(), page()],
         vec![page(), image_only],
+        vec![page(), small, blank],
     ] {
         let r = rtf(&pages);
-        let breaks = rtf_paras(&r).iter().flatten().map(|run| run.0.matches(craft_rtf::PAGE_BREAK).count()).sum::<usize>();
-        assert_eq!(breaks, pages.len() - 1, "{r}");
+        let sizes: Vec<[f32; 2]> = rtf_sections(&r).iter().map(|s| s.0).collect();
+        let want: Vec<[f32; 2]> = pages.iter().map(|p| [p.width as f32, p.height as f32]).collect();
+        assert_eq!(sizes, want, "{r}");
     }
 }
 
@@ -501,8 +536,10 @@ fn grid_text_becomes_a_real_table_in_every_format() {
     let r = rtf(std::slice::from_ref(&p));
     assert!(r.contains("\\trowd"), "{r}");
     assert_eq!(r.matches("\\row").count(), 4);
-    // Each cell ends at its last column's right edge; "Totals" spans two columns, so it ends at
-    // the second of the three.
+    // Each cell ends at its last column's right edge, measured from the left margin (`\cellx`):
+    // the columns start at x = 72, 232 and 392 and the table ends at 496, so 160, 160 and 104 pt
+    // wide. "Totals" spans two columns, so it ends at the second edge, and its row is padded to
+    // the grid with an empty cell.
     let back = craft_rtf::read(r.as_bytes()).unwrap();
     let rows: Vec<Vec<(i32, String)>> = back
         .blocks
@@ -511,8 +548,8 @@ fn grid_text_becomes_a_real_table_in_every_format() {
         .flat_map(|t| &t.rows)
         .map(|row| row.iter().map(|c| (c.right, c.paras.iter().map(|p| p.text()).collect())).collect())
         .collect();
-    assert_eq!(rows.first().map(|r| r.iter().map(|c| c.0).collect::<Vec<_>>()), Some(vec![4640, 7840, 9920]), "{rows:?}");
-    assert!(rows.contains(&vec![(7840, "Totals".to_string())]), "{rows:?}");
+    assert_eq!(rows.first().map(|r| r.iter().map(|c| c.0).collect::<Vec<_>>()), Some(vec![3200, 6400, 8480]), "{rows:?}");
+    assert!(rows.contains(&vec![(6400, "Totals".to_string()), (8480, String::new())]), "{rows:?}");
 
     let pt = pptx(std::slice::from_ref(&p), "Bill");
     assert!(pt.starts_with(b"PK"));
@@ -1453,4 +1490,89 @@ fn html_bounds_the_pictures_it_embeds() {
     for h in [html(std::slice::from_ref(&p), "Report"), html_simple(std::slice::from_ref(&p), "Report")] {
         assert_eq!(h.matches("<img").count(), MAX_MEDIA);
     }
+}
+
+/// RTF keeps a page's pictures, inline where they sit in the reading order (it left them out).
+#[test]
+fn rtf_keeps_pictures() {
+    let r = rtf(&[page()]);
+    assert!(r.contains(r"\pngblip"), "{r}");
+    let doc = craft_rtf::doc::import(r.as_bytes()).unwrap();
+    let pictures = doc
+        .body
+        .iter()
+        .filter_map(|b| if let craft_wordmodel::Block::Para(p) = &**b { Some(p) } else { None })
+        .flat_map(|p| &p.objects)
+        .filter(|o| matches!(o, craft_wordmodel::InlineObject::Image { .. }))
+        .count();
+    assert_eq!(pictures, 1, "{r}");
+}
+
+/// Headings are Word's Heading 1 and 2 styles, which a word processor shows in its outline.
+#[test]
+fn rtf_headings_have_heading_styles() {
+    let r = rtf(&[page()]);
+    let doc = craft_rtf::doc::import(r.as_bytes()).unwrap();
+    let heading = doc.body.iter().find_map(|b| match &**b {
+        craft_wordmodel::Block::Para(p) if p.plain_text() == "Annual Report" => Some(p.props.style.clone()),
+        _ => None,
+    });
+    let style = heading.flatten().and_then(|id| doc.styles.styles.iter().find(|s| s.id == id).map(|s| s.para.outline_level));
+    assert_eq!(style, Some(Some(0)), "Annual Report is a level 1 heading: {r}");
+}
+
+/// The document's title goes into the RTF's information group.
+#[test]
+fn rtf_names_the_title() {
+    let r = crate::rtf_with_title(&[page()], "Annual Report");
+    assert_eq!(craft_rtf::doc::import(r.as_bytes()).unwrap().core.title, "Annual Report", "{r}");
+}
+
+/// Two tables one under the other stay two tables: in RTF, rows that follow each other are one
+/// table, so a paragraph keeps them apart.
+#[test]
+fn rtf_keeps_tables_that_touch_apart() {
+    // Two grids on one page with nothing between them.
+    let mut one = table_page();
+    one.blocks.retain(|b| !b.text.starts_with("Notes"));
+    let mut lower = one.blocks.clone();
+    for b in &mut lower {
+        b.rect[1] -= 300.0;
+        b.rect[3] -= 300.0;
+    }
+    one.blocks.extend(lower);
+    let r = rtf(std::slice::from_ref(&one));
+    let (found, _) = tables(&one.blocks, &one.rules);
+    assert_eq!(found.len(), 2, "the page has two grids");
+    let read = craft_rtf::doc::import(r.as_bytes()).unwrap().body.iter().filter(|b| matches!(&***b, craft_wordmodel::Block::Table(_))).count();
+    assert_eq!(read, 2, "{r}");
+}
+
+/// A hard line ending in the text (LF, CR or CRLF) is a line break inside its paragraph or table
+/// cell, which RTF readers keep (storytold/pdfcraft#4723, by KyleKassen): they ignore a bare line
+/// ending as whitespace.
+#[test]
+fn rtf_keeps_hard_line_breaks_in_paragraphs_and_cells() {
+    let mut paragraph = page();
+    paragraph.blocks.truncate(1);
+    paragraph.blocks[0].text = "First\nSecond\r\nThird\rFourth".into();
+    paragraph.blocks[0].italic = true;
+    paragraph.images.clear();
+    let r = rtf(&[paragraph]);
+    let texts: Vec<String> = rtf_sections(&r).into_iter().flat_map(|s| s.1).collect();
+    assert_eq!(texts, ["First\nSecond\nThird\nFourth"], "one paragraph, four lines: {r}");
+
+    let mut table = table_page();
+    table.blocks[0].text = "Meter\nnumber".into();
+    table.blocks[4].text = "kWh\r\nunit".into();
+    let r = rtf(&[table]);
+    let back = craft_rtf::read(r.as_bytes()).unwrap();
+    let cells: Vec<String> = back
+        .blocks
+        .iter()
+        .filter_map(|b| if let craft_rtf::Block::Table(t) = b { Some(t) } else { None })
+        .flat_map(|t| t.rows.iter().flatten())
+        .map(|c| c.paras.iter().map(|p| p.text()).collect())
+        .collect();
+    assert!(cells.contains(&"Meter\nnumber".to_string()) && cells.contains(&"kWh\nunit".to_string()), "{cells:?}");
 }
