@@ -623,7 +623,8 @@ $n = [PdfCraftProbe.Console]::GetConsoleProcessList($ids, 256)
         assert!(restrict_to_owner(&missing, &user()).is_err(), "icacls on a missing file");
         assert!(sddl_of(&missing).is_err(), "Get-Acl on a missing file");
         let me = current_user_sid().unwrap();
-        assert!(me.starts_with("S-1-5-") && me.split('-').count() >= 4, "{me}");
+        let parts: Vec<_> = me.split('-').collect();
+        assert!(parts.len() >= 4 && parts[0] == "S" && parts[1] == "1" && parts[2..].iter().all(|part| part.parse::<u64>().is_ok()), "{me}");
         assert!(!me.contains('"') && !me.contains('\\'), "the SID alone, not the account name: {me}");
     }
 

@@ -261,6 +261,10 @@ fn request_sharper(
     }
 }
 
+/// Draw the Organize Pages grid and apply its scrolling, selection, and page operations.
+///
+/// Organize mode has no ruler chrome, so its middle-button scrolling uses an empty blocked-region
+/// list while retaining the mode-specific auto-scroll anchor treatment.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn organize_grid(
     view: &mut DocView,
@@ -285,7 +289,7 @@ pub(super) fn organize_grid(
     let viewport = ui.available_rect_before_wrap();
     view.viewport_screen = viewport;
     let auto_delta = if unobstructed {
-        view.auto_scroll.update(ui, viewport, true, invert_middle)
+        view.auto_scroll.update(ui, viewport, &[], true, invert_middle)
     } else {
         view.auto_scroll.cancel();
         Vec2::ZERO

@@ -66,6 +66,9 @@ pub use print_ui::{
 };
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
+mod ruler;
+#[doc(hidden)]
+pub use ruler::HORIZONTAL_RULER_HEIGHT;
 pub mod theme;
 pub mod viewer_prefs;
 mod widgets;
@@ -324,6 +327,8 @@ pub struct PdfCraftApp {
     /// Documents and view). Continuous scrolling at fit width by default, which never snaps
     /// between pages.
     pub view_defaults: canvas::ViewDefaults,
+    /// Whether document rulers overlay the viewport.
+    pub show_rulers: bool,
     /// The unit page sizes and margins are shown in (Preferences ▸ Documents and view).
     pub units: units::Unit,
     /// The paper Create ▸ Blank page makes (#5644): the system region's.
