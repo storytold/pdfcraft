@@ -379,10 +379,25 @@ fn metadata_stream(catalog: &Dict, doc: &Document, issue: &mut Report<'_>) {
     if stream.dict.name(b"Type") != Some(b"Metadata") || stream.dict.name(b"Subtype") != Some(b"XML") {
         issue("6.7.2.1", "The metadata stream isn't marked /Type /Metadata /Subtype /XML", None, None, false);
     }
-    // What can't be decoded within the limit `lib.rs` reads metadata with is reported there as no
-    // metadata at all.
-    let Ok(bytes) = stream.decoded_within(xmp::MAX_XMP_BYTES) else { return };
+    // What can't be decoded at all, or within the limit `lib.rs` reads metadata with, is reported
+    // there as no metadata at all.
+    let mut budget = pdfcraft_cos::DecodeBudget::new(xmp::MAX_XMP_BYTES, 0);
+    let Ok((bytes, damaged)) = budget.decode_with_damage(doc, stream, xmp::MAX_XMP_BYTES) else { return };
+    if damaged {
+        issue("6.7.2.1", "The metadata stream's data is damaged: only part of it decodes", None, None, false);
+    }
     packet(&bytes, None, issue);
+}
+
+/// Whether the decoding error `e` is a limit reached, not data that can't be decoded: the
+/// filters' own wording of a decode past its limit ("… the limit of N bytes", whatever N), or of
+/// an allowance spent.
+fn over_limit(e: &pdfcraft_cos::CosError) -> bool {
+    use pdfcraft_filters::FilterError;
+    let pdfcraft_cos::CosError::Filter(text) = e else { return false };
+    let limit = FilterError::LimitExceeded(0).to_string();
+    let head = limit.strip_suffix("0 bytes").unwrap_or(&limit);
+    (!head.is_empty() && text.starts_with(head)) || *text == FilterError::Spent.to_string()
 }
 
 /// 6.7.2.1 for the packet `bytes` of the catalog's metadata stream (`object` `None`) or of the
@@ -419,9 +434,10 @@ const MAX_COMPONENT_METADATA: usize = 64 << 20;
 
 /// 6.7.2.1 for the metadata streams of the document's components (ISO 32000-2 14.3.2: pages,
 /// XObjects, fonts and the other dictionaries with a `/Metadata` entry): their packets are held to
-/// the same encoding rules as the catalog's. Each stream is read once, the catalog's not again, and
-/// all of them within [`MAX_COMPONENT_METADATA`]; one too large to decode is left alone, as the
-/// catalog's is.
+/// the same encoding rules as the catalog's, and one whose data can't be decoded, or only in part,
+/// is reported. Each stream is read once, the catalog's not again, and all of them within
+/// [`MAX_COMPONENT_METADATA`]; one too large to decode within [`xmp::MAX_XMP_BYTES`] or what is
+/// left of that is left alone, as the catalog's is: its size is no fault of its data.
 pub(crate) fn component_metadata(doc: &Document, catalog: &Dict, objs: &[(pdfcraft_cos::ObjRef, std::sync::Arc<Object>)], issue: &mut Report<'_>) {
     let mut seen: std::collections::HashSet<pdfcraft_cos::ObjRef> = catalog.get(b"Metadata").and_then(Object::as_ref).into_iter().collect();
     let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_COMPONENT_METADATA, 0);
@@ -439,8 +455,16 @@ pub(crate) fn component_metadata(doc: &Document, catalog: &Dict, objs: &[(pdfcra
         if budget.remaining() == 0 {
             break;
         }
-        let Ok(bytes) = budget.decode_within(stream, xmp::MAX_XMP_BYTES) else { continue };
-        packet(&bytes, Some(r), issue);
+        match budget.decode_with_damage(doc, stream, xmp::MAX_XMP_BYTES) {
+            Ok((bytes, damaged)) => {
+                if damaged {
+                    issue("6.7.2.1", "Metadata stream {}'s data is damaged: only part of it decodes", Some(r.to_string()), None, false);
+                }
+                packet(&bytes, Some(r), issue);
+            }
+            Err(e) if over_limit(&e) => {}
+            Err(_) => issue("6.7.2.1", "Metadata stream {} can't be decoded", Some(r.to_string()), None, false),
+        }
     }
 }
 

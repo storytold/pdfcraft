@@ -1827,6 +1827,88 @@ endstream",
     assert_eq!(fonts_at(&page(&["/GS1 gs BT (x) Tj ET"], state), Level::A4, "6.2.10.4.1"), helvetica());
 }
 
+/// PDF/A asks for embedding only of the fonts "used for rendering" (ISO 19005-2 6.2.11.4.1, ISO
+/// 19005-4 6.2.10.4.1). Text in rendering mode 3 neither fills nor strokes (ISO 32000-2 9.3.6,
+/// Table 104), as OCR text over a scanned page does, so a font only that text uses renders nothing.
+#[test]
+fn a_font_only_invisible_text_uses_draws_nothing() {
+    let fonts_at = |doc: &Document, level: Level, clause: &str| -> Vec<String> {
+        verify(doc, level).into_iter().filter(|i| i.clause == clause).map(|i| i.message).collect()
+    };
+    let fonts = |doc: &Document| fonts_at(doc, Level::A2b, "6.2.11.4");
+    let helvetica = || vec!["The font Helvetica isn't embedded".to_string()];
+    let page = |contents: &[&str], resources: &str| {
+        let streams: Vec<String> = contents.iter().map(|c| format!("<< /Length {} >>\nstream\n{c}\nendstream", c.len() + 1)).collect();
+        let refs: Vec<String> = (0..contents.len()).map(|i| format!("{} 0 R", i + 6)).collect();
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            format!("<< /Type /Page /Parent 2 0 R /Contents [{}] /Resources << {resources} >> >>", refs.join(" ")),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            "<< /Type /ExtGState /Font [4 0 R 10] >>".to_owned(),
+        ];
+        objects.extend(streams);
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        build(&objects, "")
+    };
+    let listed = "/Font << /F1 4 0 R >>";
+    // Selected and never shown, a font draws nothing either; a visible mode after mode 3 draws.
+    for invisible in
+        ["BT /F1 10 Tf 3 Tr (x) Tj ET", "BT /F1 10 Tf ET", "3 Tr q 0 Tr Q BT /F1 10 Tf (x) Tj ET", "BT 3 Tr /F1 10 Tf [(x)] TJ (y) ' 1 2 (z) \" ET"]
+    {
+        assert!(fonts(&page(&[invisible], listed)).is_empty(), "{invisible}");
+        assert!(fonts_at(&page(&[invisible], listed), Level::A4, "6.2.10.4.1").is_empty(), "{invisible}");
+    }
+    for visible in [
+        "BT /F1 10 Tf 3 Tr (x) Tj 0 Tr (y) Tj ET",
+        "q 3 Tr Q BT /F1 10 Tf (x) Tj ET",
+        "BT /F1 10 Tf 7 Tr (x) Tj ET",
+        "BT /F1 10 Tf 3 Tr ET BT 1 Tr (x) Tj ET",
+    ] {
+        assert_eq!(fonts(&page(&[visible], listed)), helvetica(), "{visible}");
+    }
+    // A form is read where it is drawn, in the state it is drawn in: one without resources of its
+    // own takes the font and the mode of the content drawing it. One nothing draws starts visible.
+    let drawn = |content: &str, form: &str, more: &str| {
+        let content = content.to_owned();
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 4 0 R >> /XObject << /X0 7 0 R >> >> >>".to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".to_owned(),
+            format!(
+                "<< /Length {} >>
+stream
+{content}
+endstream",
+                content.len() + 1
+            ),
+            format!(
+                "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {more} /Length {} >>
+stream
+{form}
+endstream",
+                form.len() + 1
+            ),
+        ];
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        build(&objects, "")
+    };
+    assert!(fonts(&drawn("BT /F1 10 Tf 3 Tr ET /X0 Do", "BT (x) Tj ET", "")).is_empty());
+    assert_eq!(fonts(&drawn("BT /F1 10 Tf ET /X0 Do", "BT (x) Tj ET", "")), helvetica());
+    assert!(fonts(&drawn("3 Tr /X0 Do", "BT /F1 10 Tf (x) Tj ET", "")).is_empty());
+    assert_eq!(fonts(&drawn("/X0 Do", "BT /F1 10 Tf (x) Tj ET", "")), helvetica());
+    let own = "/Resources << /Font << /F1 5 0 R >> >>";
+    assert!(fonts(&drawn("3 Tr /X0 Do", "BT /F1 10 Tf (x) Tj ET", own)).is_empty());
+    assert_eq!(fonts(&drawn("/X0 Do", "BT /F1 10 Tf (x) Tj ET", own)), vec!["The font Courier isn't embedded".to_string()]);
+    assert_eq!(fonts(&drawn("", "BT /F1 10 Tf (x) Tj ET", own)), vec!["The font Courier isn't embedded".to_string()]);
+    // A form that draws itself ends.
+    assert!(
+        fonts(&drawn("3 Tr /X0 Do", "BT /F1 10 Tf (x) Tj ET /X0 Do", "/Resources << /Font << /F1 5 0 R >> /XObject << /X0 7 0 R >> >>")).is_empty()
+    );
+}
+
 /// PDF/A-2 6.1.2: the file starts with `%PDF-1.0` to `%PDF-1.7` and an end-of-line marker, then a
 /// comment of `%` and four bytes above 127; Save as PDF/A rewrites a header that doesn't.
 #[test]

@@ -284,6 +284,9 @@ pub const WORDINGS: &[&str] = &[
     "The metadata stream isn't marked /Type /Metadata /Subtype /XML",
     "The XMP metadata isn't UTF-8",
     "The XMP metadata in metadata stream {} isn't UTF-8",
+    "The metadata stream's data is damaged: only part of it decodes",
+    "Metadata stream {}'s data is damaged: only part of it decodes",
+    "Metadata stream {} can't be decoded",
     "The XMP metadata in metadata stream {} isn't well-formed XML",
     "The XMP packet header in metadata stream {} has a bytes or encoding attribute",
     "The XMP metadata isn't well-formed XML",
@@ -571,52 +574,71 @@ fn page_contents(doc: &Document, page: &Dict) -> Vec<ObjRef> {
 /// stream it didn't read counts as drawing.
 const MAX_FONT_CONTENT_DECODED: usize = 1 << 30;
 
+/// How many form XObjects deep [`drawing_fonts`] follows `Do` with the state it is drawn in. A
+/// form deeper than that is read on its own, from the start state.
+const MAX_FORM_DEPTH: usize = 12;
+
+/// How many `q` saves [`Fonts::read`] keeps; past them a `q` and its `Q` change nothing.
+const MAX_SAVED_STATES: usize = 256;
+
 /// The fonts the document draws with. PDF/A asks that every font "used for rendering" be embedded
-/// (ISO 19005-2 6.2.11.4.1, ISO 19005-4 6.2.10.4.1): a font draws when content selects it with
-/// `Tf` (ISO 32000-2 9.3.1, Table 103) by its name in that content's resource dictionary, or with
-/// `gs` by the name of a graphics state whose `/Font` entry holds it (8.4.5, Table 57). The
-/// content read is a page's `/Contents` with the page's resources, a form XObject's, a tiling
-/// pattern's or an appearance stream's with its own, and a Type 3 glyph procedure's.
+/// (ISO 19005-2 6.2.11.4.1, ISO 19005-4 6.2.10.4.1): a font draws when content shows text with it
+/// (`Tj`, `TJ`, `'` and `"`, ISO 32000-2 9.4.3) in a text rendering mode other than 3, neither
+/// fill nor stroke (9.3.6, Table 104). The current font is the one content selected with `Tf`
+/// (9.3.1, Table 103) by its name in its resource dictionary, or with `gs` through a graphics
+/// state whose `/Font` entry holds it (8.4.5, Table 57); `q` and `Q` save and restore it with the
+/// mode (8.4.2). A form XObject is read where `Do` draws it, in the state it is drawn in, up to
+/// [`MAX_FORM_DEPTH`] forms deep.
 ///
-/// A font that a resource dictionary lists but no content selects draws nothing, nor does one that
-/// only the interactive form's default resources (`/AcroForm /DR`, ISO 32000-2 12.7.3) or a
-/// default appearance string (`/DA`) name: an appearance stream that does draw with it selects it
-/// in its own content. Where the answer isn't certain the font counts: a name selected by content
-/// without resources of its own (a form that leaves them out, or a glyph procedure) counts in
-/// every resource dictionary, and every font of content that can't be decoded counts.
+/// The content read from the start is a page's `/Contents`, its streams joined as one (7.8.2), with
+/// the page's resources, and any form XObject, tiling pattern, appearance stream or Type 3 glyph
+/// procedure that no content read draws, with its own. Such content starts with no known font and
+/// a visible mode: what it inherits from where it is drawn isn't known.
+///
+/// A font that a resource dictionary lists but no content shows text with draws nothing, nor does
+/// one that only the interactive form's default resources (`/AcroForm /DR`, ISO 32000-2 12.7.3) or
+/// a default appearance string (`/DA`) name: an appearance stream that does draw with it shows
+/// text with it in its own content. Where the answer isn't certain the font counts: one current
+/// at a `Do` that can't be followed, one named by content without resources of its own (in every
+/// resource dictionary), and every font of content that can't be decoded.
 fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> std::collections::HashSet<ObjRef> {
-    let mut out = std::collections::HashSet::new();
-    // Names selected by content whose resource dictionary isn't known.
-    let mut anywhere: std::collections::HashSet<Selection> = std::collections::HashSet::new();
-    let mut every_font = false;
-    let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_FONT_CONTENT_DECODED, usize::MAX);
-    // What each page's `/Contents` selects, `None` where some of it couldn't be decoded: pages
-    // that share their content are read once.
-    let mut page_reads: std::collections::HashMap<Vec<ObjRef>, Option<std::collections::HashSet<Selection>>> = std::collections::HashMap::new();
+    let mut fonts = Fonts {
+        doc,
+        budget: pdfcraft_cos::DecodeBudget::new(MAX_FONT_CONTENT_DECODED, usize::MAX),
+        out: std::collections::HashSet::new(),
+        anywhere: std::collections::HashSet::new(),
+        every_font: false,
+        entered: std::collections::HashSet::new(),
+        reached: std::collections::HashSet::new(),
+    };
     let mut page_streams = std::collections::HashSet::new();
-    let nothing = std::collections::HashSet::new();
+    // Pages whose `/Contents` and `/Resources` entry (a reference, or a dictionary as written) are
+    // the same are read once: a stream that many pages share costs its decoding once.
+    let mut pages_read = std::collections::HashSet::new();
     for p in pdfcraft_model::pages(doc) {
-        let fonts = resource_fonts(doc, &p.dict);
         let contents = page_contents(doc, &p.dict);
         page_streams.extend(contents.iter().copied());
-        let read = page_reads.entry(contents).or_insert_with_key(|contents| {
-            // A page's streams are one stream split only between tokens (ISO 32000-2 7.8.2), so an
-            // operator's operands can end one stream and the operator start the next: they are
-            // read joined, a space between them, as renderers join them.
-            let mut joined = Vec::new();
-            for r in contents {
-                if let Object::Stream(s) = &*doc.get(*r) {
-                    joined.extend_from_slice(&budget.decode(s).ok()?);
-                    joined.push(b' ');
-                }
+        if !pages_read.insert((contents.clone(), format!("{:?}", p.dict.get(b"Resources")))) {
+            continue;
+        }
+        // A page's streams are one stream split only between tokens (ISO 32000-2 7.8.2), so an
+        // operator's operands can end one stream and the operator start the next: they are read
+        // joined, a space between them, as renderers join them.
+        let mut joined = Some(Vec::new());
+        for r in &contents {
+            let Object::Stream(s) = &*doc.get(*r) else { continue };
+            let Ok(data) = fonts.budget.decode(s) else {
+                joined = None;
+                break;
+            };
+            if let Some(all) = joined.as_mut() {
+                all.extend_from_slice(&data);
+                all.push(b' ');
             }
-            let mut names = std::collections::HashSet::new();
-            selected_fonts(&joined, &mut names);
-            Some(names)
-        });
-        match read {
-            Some(names) => add_selected(&fonts, names, false, &mut out),
-            None => add_selected(&fonts, &nothing, true, &mut out),
+        }
+        match joined {
+            Some(data) => fonts.read(&data, Some(&p.dict), TextState::default(), 0),
+            None => fonts.out.extend(resource_fonts(doc, &p.dict).into_iter().map(|(_, r)| r)),
         }
     }
     let glyph_procs = {
@@ -630,24 +652,16 @@ fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> s
     };
     for (r, o) in objs {
         let Object::Stream(s) = &**o else { continue };
-        if page_streams.contains(r) || !(is_content(&s.dict) || glyph_procs.contains(r)) {
+        if page_streams.contains(r) || fonts.reached.contains(r) || !(is_content(&s.dict) || glyph_procs.contains(r)) {
             continue;
         }
-        let own = s.dict.get(b"Resources").is_some().then(|| resource_fonts(doc, &s.dict));
-        let mut selected = std::collections::HashSet::new();
-        let unread = match budget.decode(s) {
-            Ok(data) => {
-                selected_fonts(&data, &mut selected);
-                false
-            }
-            Err(_) => true,
-        };
-        match own {
-            Some(fonts) => add_selected(&fonts, &selected, unread, &mut out),
-            None if unread => every_font = true,
-            None => anywhere.extend(selected),
+        let own = s.dict.get(b"Resources").is_some().then_some(&s.dict);
+        match fonts.budget.decode(s) {
+            Ok(data) => fonts.read(&data, own, TextState::default(), 0),
+            Err(_) => fonts.unread(own),
         }
     }
+    let Fonts { mut out, anywhere, every_font, .. } = fonts;
     if every_font || !anywhere.is_empty() {
         for (_, o) in objs {
             let Some(d) = dict_of(o) else { continue };
@@ -672,6 +686,169 @@ enum Selector {
 
 /// A resource name content selects a font by, and how.
 type Selection = (Selector, Vec<u8>);
+
+/// The font text is shown with.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Current {
+    /// A font object, found in the content's resource dictionary.
+    Font(ObjRef),
+    /// A name selected by content whose resource dictionary isn't known.
+    Named(Selection),
+}
+
+/// What [`Fonts::read`] keeps of the graphics state: the current font, unknown until content sets
+/// one, and whether the text rendering mode is 3, which neither fills nor strokes (ISO 32000-2
+/// 9.3.6, Table 104).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+struct TextState {
+    font: Option<Current>,
+    invisible: bool,
+}
+
+/// The walk [`drawing_fonts`] makes.
+struct Fonts<'a> {
+    doc: &'a Document,
+    budget: pdfcraft_cos::DecodeBudget,
+    /// The fonts found drawing.
+    out: std::collections::HashSet<ObjRef>,
+    /// Names content without resources of its own draws with.
+    anywhere: std::collections::HashSet<Selection>,
+    /// Content without resources of its own couldn't be read.
+    every_font: bool,
+    /// The forms read where content draws them, each with the state it was drawn in: a form drawn
+    /// again in the same state finds nothing new.
+    entered: std::collections::HashSet<(ObjRef, TextState)>,
+    /// The forms read where content draws them, which aren't read again on their own.
+    reached: std::collections::HashSet<ObjRef>,
+}
+
+impl Fonts<'_> {
+    /// Reads the content `data`, whose resource dictionary `holder` holds (`/Resources`), or which
+    /// has none known, from the state `start`, `depth` forms deep.
+    fn read(&mut self, data: &[u8], holder: Option<&Dict>, start: TextState, depth: usize) {
+        let fonts = holder.map(|h| resource_fonts(self.doc, h));
+        let mut state = start;
+        let mut saved: Vec<TextState> = Vec::new();
+        // `q`s past MAX_SAVED_STATES, whose `Q`s restore nothing.
+        let mut unsaved = 0usize;
+        for op in pdfcraft_content::ops(data) {
+            match op.op.as_slice() {
+                b"q" if saved.len() < MAX_SAVED_STATES => saved.push(state.clone()),
+                b"q" => unsaved = unsaved.saturating_add(1),
+                b"Q" if unsaved > 0 => unsaved -= 1,
+                b"Q" => {
+                    if let Some(s) = saved.pop() {
+                        state = s;
+                    }
+                }
+                b"Tf" => {
+                    if let Some(name) = op.name_back(1) {
+                        let selection = (Selector::Tf, name.to_vec());
+                        state.font = match &fonts {
+                            Some(list) => list.iter().find(|(s, _)| *s == selection).map(|(_, r)| Current::Font(*r)),
+                            None => Some(Current::Named(selection)),
+                        };
+                    }
+                }
+                b"gs" => {
+                    if let Some(name) = op.last_name() {
+                        let selection = (Selector::Gs, name.to_vec());
+                        match &fonts {
+                            // A graphics state without `/Font` leaves the font as it was.
+                            Some(list) => {
+                                if let Some((_, r)) = list.iter().find(|(s, _)| *s == selection) {
+                                    state.font = Some(Current::Font(*r));
+                                }
+                            }
+                            // Whether it sets a font isn't known, nor whether the text after it
+                            // shows: its font counts.
+                            None => {
+                                self.anywhere.insert(selection);
+                            }
+                        }
+                    }
+                }
+                b"Tr" => {
+                    if let Some(mode) = op.num_back(0) {
+                        state.invisible = mode == 3.0;
+                    }
+                }
+                b"Tj" | b"TJ" | b"'" | b"\"" => self.shows(&state),
+                b"Do" => {
+                    if let Some(name) = op.last_name() {
+                        self.draw(name, holder, &state, depth);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Text shown in `state`: its font draws, unless the mode is 3.
+    fn shows(&mut self, state: &TextState) {
+        if state.invisible {
+            return;
+        }
+        match &state.font {
+            Some(Current::Font(r)) => {
+                self.out.insert(*r);
+            }
+            Some(Current::Named(selection)) => {
+                self.anywhere.insert(selection.clone());
+            }
+            None => {}
+        }
+    }
+
+    /// The fonts of content that couldn't be read, whose resource dictionary `holder` holds: all
+    /// of them, or every font when its resources aren't known.
+    fn unread(&mut self, holder: Option<&Dict>) {
+        match holder {
+            Some(h) => self.out.extend(resource_fonts(self.doc, h).into_iter().map(|(_, r)| r)),
+            None => self.every_font = true,
+        }
+    }
+
+    /// `/name Do` in `state`, in content whose resource dictionary `holder` holds: a form XObject
+    /// is read in that state, with its own resources or, without them, those of the content
+    /// drawing it (ISO 32000-2 7.8.3). What can't be followed may show text with the current font.
+    fn draw(&mut self, name: &[u8], holder: Option<&Dict>, state: &TextState, depth: usize) {
+        let doc = self.doc;
+        let target = holder
+            .and_then(|h| h.get(b"Resources"))
+            .map(|r| doc.resolve(r))
+            .and_then(|r| r.as_dict().and_then(|r| r.get(b"XObject")).map(|x| doc.resolve(x)))
+            .and_then(|x| x.as_dict().and_then(|x| x.get(name)).and_then(Object::as_ref));
+        let Some(r) = target else {
+            if holder.is_none() {
+                self.shows(state);
+            }
+            return;
+        };
+        let form = doc.resolve(&Object::Ref(r));
+        let Object::Stream(s) = &*form else { return };
+        if s.dict.name(b"Subtype") != Some(b"Form") {
+            return;
+        }
+        if depth >= MAX_FORM_DEPTH {
+            self.shows(state);
+            return;
+        }
+        if !self.entered.insert((r, state.clone())) {
+            return;
+        }
+        self.reached.insert(r);
+        let own = s.dict.get(b"Resources").is_some();
+        let resources = if own { Some(&s.dict) } else { holder };
+        match self.budget.decode(s) {
+            Ok(data) => self.read(&data, resources, state.clone(), depth.saturating_add(1)),
+            Err(_) => {
+                self.shows(state);
+                self.unread(resources);
+            }
+        }
+    }
+}
 
 /// The fonts the resource dictionary of `holder` (`/Resources`, held directly or by reference)
 /// lets content select, each by how and by its name there, and as the object its reference ends
@@ -698,34 +875,6 @@ fn resource_fonts(doc: &Document, holder: &Dict) -> Vec<(Selection, ObjRef)> {
         }
     }
     out
-}
-
-/// Adds to `out` the fonts of `fonts` that content `selected`, or all of them when some of the
-/// content was `unread`.
-fn add_selected(
-    fonts: &[(Selection, ObjRef)],
-    selected: &std::collections::HashSet<Selection>,
-    unread: bool,
-    out: &mut std::collections::HashSet<ObjRef>,
-) {
-    out.extend(fonts.iter().filter(|(name, _)| unread || selected.contains(name)).map(|(_, r)| *r));
-}
-
-/// What the content `data` selects fonts by, added to `out`: the font names of `Tf`, its operator
-/// for the font and size (`/F1 12 Tf`), and the graphics state names of `gs` (`/GS1 gs`), whose
-/// state may set a font. Operators are read one at a time, so a string, a comment or an inline
-/// image never passes for one.
-fn selected_fonts(data: &[u8], out: &mut std::collections::HashSet<Selection>) {
-    for op in pdfcraft_content::ops(data) {
-        let selection = match op.op.as_slice() {
-            b"Tf" => op.name_back(1).map(|name| (Selector::Tf, name)),
-            b"gs" => op.last_name().map(|name| (Selector::Gs, name)),
-            _ => None,
-        };
-        if let Some((how, name)) = selection {
-            out.insert((how, name.to_vec()));
-        }
-    }
 }
 
 /// How many references [`font_object`] follows, as the document's own `resolve` does.
@@ -1446,6 +1595,20 @@ fn check_actions(doc: &Document, level: Level, dict: &Dict, issue: &mut impl FnM
     for action in [own].into_iter().chain(direct).flatten() {
         if let Some(name) = chain_forbidden_in(doc, action, level) {
             issue("6.5.1", "A {} action isn't allowed", Some(name), None, true);
+        }
+    }
+    // PDF/A-4 allows some additional-action triggers (6.6.3), not every action they run: an action
+    // written in the additional-actions dictionary is no object of its own, so it is checked here
+    // with its `/Next` chain (ISO 32000-2 12.6.3, Table 194). One that is an object of its own is
+    // checked as one. PDF/A-2 and 3 allow no additional actions at all.
+    if level.part() == 4
+        && let Some(aa) = dict.get(b"AA").map(|aa| doc.resolve(aa))
+        && let Some(aa) = aa.as_dict()
+    {
+        for action in aa.iter().filter_map(|(_, a)| a.as_dict()) {
+            if let Some(name) = chain_forbidden_in(doc, action, level) {
+                issue("6.5.1", "A {} action isn't allowed", Some(name), None, true);
+            }
         }
     }
 }

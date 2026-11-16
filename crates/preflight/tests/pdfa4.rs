@@ -636,6 +636,69 @@ fn component_metadata_streams_are_well_formed_utf8_packets() {
     reports(&with(b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">"), Level::A4, "6.7.2.1", "metadata stream 6 0 R isn't well-formed XML");
     let sized = String::from_utf8(good.clone()).unwrap().replacen("?>", " encoding=\"UTF-8\"?>", 1);
     reports(&with(sized.as_bytes()), Level::A4, "6.7.2.1", "in metadata stream 6 0 R has a bytes or encoding attribute");
+    // Data that can't be decoded, or only in part, is reported; a packet past the size PdfCraft
+    // reads isn't, as the catalog's isn't.
+    let flated = |data: &[u8]| {
+        use std::io::Write;
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        z.write_all(data).unwrap();
+        z.finish().unwrap()
+    };
+    let filtered = |filter: &str, data: &[u8]| File {
+        more: vec![stream(&format!("/Type /Metadata /Subtype /XML /Filter {filter}"), data)],
+        ..with_page("/Metadata 6 0 R")
+    };
+    passes(&filtered("/FlateDecode", &flated(&good)), Level::A4);
+    let cut = flated(&good);
+    let cut = cut.get(..cut.len() / 2).unwrap();
+    reports(&filtered("/FlateDecode", cut), Level::A4, "6.7.2.1", "Metadata stream 6 0 R's data is damaged");
+    reports(&filtered("/JBIG2Decode", b"x"), Level::A4, "6.7.2.1", "Metadata stream 6 0 R can't be decoded");
+    let huge = [good.as_slice(), vec![b' '; 9 << 20].as_slice()].concat();
+    let found = issues(&filtered("/FlateDecode", &flated(&huge)), Level::A4);
+    assert!(!found.iter().any(|i| i.message.contains("6 0 R")), "{found:#?}");
+    // The catalog's too.
+    let mut objects = vec![
+        o("<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>"),
+        o("<< /Type /Pages /Kids [4 0 R] /Count 1 >>"),
+        stream("/Type /Metadata /Subtype /XML /Filter /FlateDecode", cut),
+        o("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 5 0 R /Resources << >> >>"),
+        stream("", b""),
+    ];
+    let found = verify(&open(raw("%PDF-2.0", &objects, "", b"")), Level::A4);
+    assert!(found.iter().any(|i| i.message == "The metadata stream's data is damaged: only part of it decodes"), "{found:#?}");
+    if let Some(m) = objects.get_mut(2) {
+        *m = stream("/Type /Metadata /Subtype /XML /Filter /FlateDecode", &flated(&good));
+    }
+    assert!(verify(&open(raw("%PDF-2.0", &objects, "", b"")), Level::A4).is_empty());
+}
+
+/// PDF/A-4 6.6.3 allows the pointer and focus triggers, not every action they run (6.6.1): an
+/// action written in an additional-actions dictionary, and the `/Next` actions written in it, are
+/// checked as the others are.
+#[test]
+fn actions_in_additional_actions_are_checked() {
+    let appearance = stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", b"");
+    let square = |aa: &str| File {
+        more: vec![o(&format!("<< /Type /Annot /Subtype /Square /Rect [0 0 10 10] /F 4 /AP << /N 7 0 R >> /AA {aa} >>")), appearance.clone()],
+        ..with_page("/Annots [6 0 R]")
+    };
+    passes(&square("<< /E << /S /JavaScript /JS (1) >> >>"), Level::A4);
+    reports(&square("<< /E << /S /Launch /F (x) >> >>"), Level::A4, "6.6.1", "Launch action isn't allowed");
+    reports(&square("<< /E << /S /JavaScript /JS (1) /Next << /S /Launch /F (x) >> >> >>"), Level::A4, "6.6.1", "Launch action isn't allowed");
+    reports(&square("<< /E << /S /JavaScript /JS (1) /Next [<< /S /Hide /T (x) >>] >> >>"), Level::A4, "6.6.1", "Hide action isn't allowed");
+    // A widget's and a field's additional actions are not limited in their triggers, but in the
+    // actions they run.
+    let widget = File {
+        page: "/Annots [6 0 R]".to_owned(),
+        more: vec![
+            o(
+                "<< /Type /Annot /Subtype /Widget /FT /Tx /T (w) /Rect [0 0 10 10] /F 4 /P 4 0 R /AP << /N 7 0 R >> /AA << /K << /S /Launch /F (x) >> >> >>",
+            ),
+            appearance.clone(),
+        ],
+        ..with_catalog("/AcroForm << /Fields [6 0 R] >>")
+    };
+    reports(&widget, Level::A4, "6.6.1", "Launch action isn't allowed");
 }
 
 #[test]
