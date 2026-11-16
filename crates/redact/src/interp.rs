@@ -1109,18 +1109,7 @@ fn xobject(
     // The entry may lead to the stream through a reference to a reference, which the renderer
     // follows: the stream's own reference is walked, and where it goes, the references on the way
     // go with it, so that none of them keeps it in the file.
-    let mut r = xobjects.get(&name)?.as_ref()?;
-    let mut on_the_way = Vec::new();
-    let obj = loop {
-        let obj = doc.get(r);
-        match &*obj {
-            Object::Ref(next) if on_the_way.len() < MAX_REFERENCE_HOPS => {
-                on_the_way.push(r);
-                r = *next;
-            }
-            _ => break obj,
-        }
-    };
+    let (r, obj, on_the_way) = crate::stream_behind(doc, xobjects.get(&name)?)?;
     let Object::Stream(s) = &*obj else { return None };
     // What a removal or a cleaned copy makes go: the stream, and the references on the way to it.
     let gone: Vec<ObjRef> = on_the_way.into_iter().chain([r]).collect();
@@ -1343,7 +1332,8 @@ fn xobject(
                 None => Stream { dict, raw: s.raw.clone() },
             };
             let nr = doc.add(Object::Stream(stream));
-            out.tag_changes.push((r, nr, changed, empty));
+            // A structure tree may name the stream by any reference that stands for it.
+            out.tag_changes.extend(gone.iter().map(|&g| (g, nr, changed.clone(), empty.clone())));
             let n = fresh_name(scope, xobjects);
             xobjects.set(n.clone(), Object::Ref(nr));
             out.xobjects.push((n.clone(), nr));
@@ -1355,9 +1345,6 @@ fn xobject(
         _ => None,
     }
 }
-
-/// The references [`Document::resolve`] follows from one to the next.
-const MAX_REFERENCE_HOPS: usize = 32;
 
 /// Whether the ExtGState `name` sets a Type 3 font that has no `/Resources` of its own.
 fn extgstate_type3_inherits(doc: &Document, ext_gstates: &Dict, name: &[u8]) -> bool {

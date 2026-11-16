@@ -228,9 +228,14 @@ impl Font {
                     }
                 }
                 f.default_width = missing.unwrap_or(0.0);
-            } else if let Some(std) = pdfcraft_fonts::Std14::from_base_font(&String::from_utf8_lossy(font.name(b"BaseFont").unwrap_or(b""))) {
+            } else if let Some(std) = font
+                .get(b"BaseFont")
+                .map(|b| doc.resolve(b))
+                .and_then(|b| b.as_name().and_then(|n| pdfcraft_fonts::Std14::from_base_font(&String::from_utf8_lossy(n))))
+            {
                 // No /Widths: a standard font has exact published widths, by WinAnsi code (Symbol,
-                // ZapfDingbats and other encodings are refused before the proof is reached).
+                // ZapfDingbats and other encodings are refused before the proof is reached). Its
+                // name may be given by reference, as the walk reads it.
                 for code in 0..=255u8 {
                     f.widths.insert(u32::from(code), std.width(code) / 1000.0);
                 }

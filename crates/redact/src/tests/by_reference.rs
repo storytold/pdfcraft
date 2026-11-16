@@ -143,7 +143,8 @@ fn the_proof_reads_text_given_its_subtype_by_reference_under_the_mark() {
 /// The proof's text reader places text in a Type 3 font, and in a composite font, each with its
 /// `/Subtype` given by reference, where it places them given directly: four Type 3 glyphs 40 units
 /// wide, four of them in a region from x 50; and four composite glyphs 10 points wide, two-byte
-/// codes, three of them in a region from x 12.
+/// codes, three of them in a region from x 12. And Courier without `/Widths`, its `/BaseFont`
+/// given by reference: five glyphs 6 points wide, three of them in a region from x 13.
 #[test]
 fn the_proofs_text_reader_places_fonts_given_their_subtype_by_reference() {
     let shown = |doc: &Document, region: [f64; 4]| crate::verify::tests_support::shown_in(doc, 0, &[region]);
@@ -164,6 +165,11 @@ fn the_proofs_text_reader_places_fonts_given_their_subtype_by_reference() {
         );
         let doc = page(b"BT /F2 10 Tf 0 250 Td <0001000200030004> Tj ET", "/Font << /F2 5 0 R >>", vec![font.into_bytes(), b"/Type0".to_vec()]);
         assert_eq!(shown(&doc, [12.0, 230.0, 300.0, 280.0]), Some(vec![3]), "a composite font, {subtype}");
+    }
+    for base in ["/Courier", "6 0 R"] {
+        let font = format!("<< /Type /Font /Subtype /Type1 /BaseFont {base} /Encoding /WinAnsiEncoding >>");
+        let doc = page(b"BT /F1 10 Tf 0 250 Td (iiiii) Tj ET", "/Font << /F1 5 0 R >>", vec![font.into_bytes(), b"/Courier".to_vec()]);
+        assert_eq!(shown(&doc, [13.0, 230.0, 300.0, 280.0]), Some(vec![3]), "a standard font, {base}");
     }
 }
 
@@ -207,4 +213,228 @@ fn the_proof_exempts_a_mark_given_its_subtype_by_reference() {
         let proof = crate::tests_verify::prove_unapplied(&mut doc);
         assert!(proof.passed(), "by reference: {by_reference}: {}", proof.to_text());
     }
+}
+
+/// A form without resources of its own beside the mark draws the page's `/Im` through the page's
+/// names, given directly, with its `/Subtype` by reference, or through a reference to a reference:
+/// the page's draw of `/Im` under the mark goes, and the page keeps `/Im` for the form.
+#[test]
+fn an_image_a_form_given_by_reference_draws_beside_the_mark_is_kept() {
+    let form = |s: &str| stream(&format!("/Type /XObject /Subtype {s} /BBox [0 0 300 100]"), b"q 100 0 0 30 20 20 cm /Im Do Q");
+    for (label, extra) in [
+        ("direct", vec![form("/Form"), b"null".to_vec()]),
+        ("by reference", vec![form("7 0 R"), b"/Form".to_vec()]),
+        ("a chain", vec![b"7 0 R".to_vec(), form("/Form")]),
+    ] {
+        let mut objs = vec![stream(&format!("{IMAGE} /Subtype /Image"), b"IMAGESECRET_BYTES!")];
+        objs.extend(extra);
+        let mut doc = page(b"q 100 0 0 30 20 240 cm /Im Do Q /Fm Do", "/XObject << /Im 5 0 R /Fm 6 0 R >>", objs);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        apply(&mut doc, None).unwrap();
+        let p = &pdfcraft_model::pages(&doc)[0];
+        let res = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        assert!(xo.contains(b"Im") && saved_holds(&doc, b"IMAGESECRET"), "{label}");
+    }
+}
+
+/// The page and a form beside the mark share one resource dictionary listing the image the page
+/// draws under the mark, which the form never draws; the form given directly, with its `/Subtype`
+/// by reference, or through a reference to a reference: the saved file doesn't hold the image.
+#[test]
+fn an_image_a_shared_dictionary_lists_for_a_form_given_by_reference_goes() {
+    let form = |s: &str| stream(&format!("/Type /XObject /Subtype {s} /BBox [0 0 300 100] /Resources 5 0 R"), b"0 0 10 10 re f");
+    for (label, extra) in [
+        ("direct", vec![form("/Form"), b"null".to_vec()]),
+        ("by reference", vec![form("8 0 R"), b"/Form".to_vec()]),
+        ("a chain", vec![b"8 0 R".to_vec(), form("/Form")]),
+    ] {
+        let mut objs = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+            stream("", b"q 100 0 0 30 20 240 cm /Im Do Q /Fm Do"),
+            b"<< /XObject << /Im 6 0 R /Fm 7 0 R >> >>".to_vec(),
+            stream(&format!("{IMAGE} /Subtype /Image"), b"IMAGESECRET_BYTES!"),
+        ];
+        objs.extend(extra);
+        let mut doc = pdf(objs);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        assert_eq!(apply(&mut doc, None).map(|r| r.images_removed), Ok(1), "{label}");
+        assert!(!saved_holds(&doc, b"IMAGESECRET"), "{label}");
+    }
+}
+
+/// A Type 3 font, its `/Subtype` given directly or by reference, shows glyph A under the mark and
+/// glyph B beside it, each glyph drawing an image of its own: A's program and image leave the
+/// saved file, B's stay.
+#[test]
+fn a_type3_font_given_its_subtype_by_reference_loses_the_glyph_redacted() {
+    for subtype in ["/Type3", "11 0 R"] {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+            stream("", b"BT /T3 10 Tf 10 100 Td (AB) Tj ET"),
+            b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+            format!("<< /Type /Font /Subtype {subtype} /FontBBox [0 -200 1000 800] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 66 /Widths [500 500] /Encoding << /Differences [65 /A /B] >> /CharProcs << /A 7 0 R /B 8 0 R >> /Resources << /XObject << /ImA 9 0 R /ImB 10 0 R >> >> >>").into_bytes(),
+            stream("", b"/ImA Do % SECRET_GLYPH_A_PAYLOAD"),
+            stream("", b"/ImB Do % SURVIVING_GLYPH_B_PAYLOAD"),
+            stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"CONFIDENTIAL_IMAGE_A"),
+            stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBLIC_IMAGE_B"),
+            b"/Type3".to_vec(),
+        ]);
+        mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+        assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(1), "{subtype}");
+        let held: Vec<bool> = [&b"SECRET_GLYPH_A_PAYLOAD"[..], b"CONFIDENTIAL_IMAGE_A", b"SURVIVING_GLYPH_B_PAYLOAD", b"PUBLIC_IMAGE_B"]
+            .iter()
+            .map(|n| saved_holds(&doc, n))
+            .collect();
+        assert_eq!(held, [false, false, true, true], "{subtype}");
+    }
+}
+
+/// Page 1 draws a form under the mark, by its own reference or through a reference to it; page 2
+/// lists the same form without drawing it, through another reference to it: the saved file doesn't
+/// hold the form's text, as where page 2 lists it by its own reference.
+#[test]
+fn a_form_redacted_goes_by_every_reference_to_it() {
+    for (first, second) in [("6 0 R", "6 0 R"), ("6 0 R", "10 0 R"), ("5 0 R", "10 0 R")] {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R 8 0 R] /Count 2 >>".to_vec(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /XObject << /X {first} >> >> >>")
+                .into_bytes(),
+            stream("", b"/X Do"),
+            b"6 0 R".to_vec(),
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 7 0 R >> >>",
+                b"BT /F1 12 Tf 20 250 Td (FORMSECRET) Tj ET",
+            ),
+            HELVETICA.to_vec(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 9 0 R /Resources << /XObject << /Y {second} >> >> >>")
+                .into_bytes(),
+            stream("", b""),
+            b"6 0 R".to_vec(),
+        ]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(10), "{first} {second}");
+        assert!(!saved_holds(&doc, b"FORMSECRET"), "{first} {second}");
+    }
+}
+
+/// A form without resources of its own beside the mark marks content with the page's `/oc1`,
+/// given directly, with its `/Subtype` by reference, or through a reference to a reference: the
+/// page keeps `/oc1` for it when its text under the mark goes.
+#[test]
+fn a_property_a_form_given_by_reference_uses_is_kept() {
+    let form = |s: &str| stream(&format!("/Type /XObject /Subtype {s} /BBox [0 0 300 100]"), b"/OC /oc1 BDC 0 0 50 50 re f EMC");
+    for (label, extra) in [
+        ("direct", vec![form("/Form"), b"null".to_vec()]),
+        ("by reference", vec![form("7 0 R"), b"/Form".to_vec()]),
+        ("a chain", vec![b"7 0 R".to_vec(), form("/Form")]),
+    ] {
+        let mut objs = vec![HELVETICA.to_vec()];
+        objs.extend(extra);
+        objs.push(b"<< /Type /OCG /Name (Hidden) >>".to_vec());
+        let mut doc = page(
+            b"BT /F1 12 Tf 20 250 Td (SECRET) Tj ET /Fm Do",
+            "/Font << /F1 5 0 R >> /XObject << /Fm 6 0 R >> /Properties << /oc1 8 0 R >>",
+            objs,
+        );
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(6), "{label}");
+        let p = &pdfcraft_model::pages(&doc)[0];
+        let res = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let properties = res.get(b"Properties").and_then(|p| doc.resolve(p).as_dict().cloned()).unwrap_or_default();
+        assert!(properties.contains(b"oc1"), "{label}");
+    }
+}
+
+/// A tagged form reached through a reference to a reference, its marked content named in the
+/// structure tree by either reference: the element loses its `/ActualText` with the redacted
+/// text, and the saved file holds neither.
+#[test]
+fn a_tagged_form_given_by_reference_loses_its_actual_text() {
+    for stm in ["6 0 R", "5 0 R"] {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 8 0 R /MarkInfo << /Marked true >> >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /XObject << /X 5 0 R >> >> >>".to_vec(),
+            stream("", b"/X Do"),
+            b"6 0 R".to_vec(),
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 7 0 R >> >>",
+                b"/P << /MCID 0 >> BDC BT /F1 12 Tf 20 250 Td (FORMSECRET) Tj ET EMC",
+            ),
+            HELVETICA.to_vec(),
+            b"<< /Type /StructTreeRoot /K 9 0 R >>".to_vec(),
+            format!("<< /Type /StructElem /S /P /P 8 0 R /Pg 3 0 R /K << /Type /MCR /Pg 3 0 R /Stm {stm} /MCID 0 >> /ActualText (ACTUALSECRET) >>")
+                .into_bytes(),
+        ]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        assert_eq!(apply(&mut doc, None).map(|r| r.tags), Ok(1), "{stm}");
+        assert!(!doc.get(ObjRef::new(9, 0)).as_dict().unwrap().contains(b"ActualText"), "{stm}");
+        assert!(!saved_holds(&doc, b"FORMSECRET") && !saved_holds(&doc, b"ACTUALSECRET"), "{stm}");
+    }
+}
+
+/// A standard 14 font without `/Widths`, its `/BaseFont` given directly or by reference: measured
+/// as Courier either way, so the same glyphs, SECRET's, go.
+#[test]
+fn a_standard_font_named_by_reference_is_measured_as_itself() {
+    let content = |base: &str| {
+        let mut doc = page(
+            b"BT /F1 12 Tf 0 250 Td (XXXXXXXXXXSECRET) Tj ET",
+            "/Font << /F1 5 0 R >>",
+            vec![format!("<< /Type /Font /Subtype /Type1 /BaseFont {base} /Encoding /WinAnsiEncoding >>").into_bytes(), b"/Courier".to_vec()],
+        );
+        mark(&mut doc, 0, &[[72.5, 230.0, 115.0, 280.0]], "");
+        assert_eq!(apply(&mut doc, None).map(|r| r.glyphs), Ok(6), "{base}");
+        super::content(&doc, 0)
+    };
+    assert_eq!(content("6 0 R"), content("/Courier"));
+}
+
+/// Remove Hidden Information unlinks an image its page lists but doesn't draw, its `/Subtype`
+/// given by reference, as given directly.
+#[test]
+fn an_undrawn_image_given_its_subtype_by_reference_is_unlinked() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /XObject << /Deleted 4 0 R >> >> >>".to_vec(),
+        stream("/Type /XObject /Subtype 5 0 R /Width 17 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"DELETEDIMAGEBYTES"),
+        b"/Image".to_vec(),
+    ]);
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::Metadata]), Ok(Vec::new()));
+    assert!(!saved_holds(&doc, b"DELETEDIMAGEBYTES"));
+}
+
+/// Remove Hidden Information keeps the images a Type 3 glyph, and a form in its font's resources,
+/// draw through the page's names, with the font's and the form's `/Subtype` given by reference.
+#[test]
+fn images_drawn_by_a_type3_glyph_given_by_reference_stay() {
+    let bytes = super::hidden_information_removed(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 12 Tf (a) Tj ET"),
+        b"<< /XObject << /ByGlyph 7 0 R /Deleted 8 0 R /ByFontForm 11 0 R >> /Font << /T3 6 0 R >> >>".to_vec(),
+        b"<< /Type /Font /Subtype 12 0 R /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 9 0 R >> \
+           /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] /Resources << /XObject << /Fx 10 0 R >> >> >>"
+            .to_vec(),
+        super::gray_image(b"BYGLYPHIMAGE"),
+        super::gray_image(b"DELETEDIMAGEBYTES"),
+        stream("", b"10 0 d0 /ByGlyph Do /Fx Do"),
+        stream("/Type /XObject /Subtype 13 0 R /BBox [0 0 10 10]", b"/ByFontForm Do"),
+        super::gray_image(b"BYFONTFORMIMAGE"),
+        b"/Type3".to_vec(),
+        b"/Form".to_vec(),
+    ]);
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(!has(b"DELETEDIMAGEBYTES"));
+    assert!(has(b"BYGLYPHIMAGE"));
+    assert!(has(b"BYFONTFORMIMAGE"));
 }

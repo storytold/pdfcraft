@@ -823,9 +823,14 @@ fn number(t: &Tok) -> Option<u32> {
 
 /// The font's `/Subtype`, read through a reference as the renderer reads it (ISO 32000-2 §7.3.10
 /// lets any value be given by one): read as the name it holds, a Type 3 or composite font given so
-/// is measured as what it is, not as a Type 1 font.
+/// is measured as what it is, not as a Type 1 font. `/BaseFont` is read so too ([`name_of`]).
 fn subtype(doc: &Document, font: &Dict) -> Option<Vec<u8>> {
-    let value = font.get(b"Subtype")?;
+    name_of(doc, font, b"Subtype")
+}
+
+/// The name `font` gives `key`, read through a reference as the renderer reads it.
+fn name_of(doc: &Document, font: &Dict, key: &[u8]) -> Option<Vec<u8>> {
+    let value = font.get(key)?;
     match value {
         Object::Ref(_) => doc.resolve(value).as_name().map(<[u8]>::to_vec),
         _ => value.as_name().map(<[u8]>::to_vec),
@@ -835,8 +840,8 @@ fn subtype(doc: &Document, font: &Dict) -> Option<Vec<u8>> {
 /// The font's `/BaseFont` (a Type 3 font's descriptor `/FontName` when it has none), read without
 /// building its metrics, so it decodes no CMap.
 pub fn base_font_name(doc: &Document, font: &Dict) -> String {
-    font.name(b"BaseFont")
-        .map(|name| String::from_utf8_lossy(name).into_owned())
+    name_of(doc, font, b"BaseFont")
+        .map(|name| String::from_utf8_lossy(&name).into_owned())
         .or_else(|| {
             (subtype(doc, font).as_deref() == Some(b"Type3"))
                 .then(|| dict(doc, font.get(b"FontDescriptor")))
@@ -1065,7 +1070,7 @@ impl Metrics {
                     }
                 }
             } else if m.widths.is_empty() {
-                let base = String::from_utf8_lossy(font.name(b"BaseFont").unwrap_or(b"")).into_owned();
+                let base = String::from_utf8_lossy(&name_of(doc, font, b"BaseFont").unwrap_or_default()).into_owned();
                 // The real face, bold and italic included: the published metrics differ by style,
                 // so Times-Bold is not Times-Roman and neither is Helvetica scaled.
                 m.std14 = crate::Std14::from_base_font(&base).or(Some(crate::Std14::Helvetica));
@@ -1697,7 +1702,7 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool, reads: &mut Reads<'
         // An explicitly named base encoding is a deliberate statement and is always honoured,
         // even on Symbol.
         let symbolic_builtin = matches!(
-            font.name(b"BaseFont").map(|b| crate::Std14::from_base_font(&String::from_utf8_lossy(b))),
+            name_of(doc, font, b"BaseFont").map(|b| crate::Std14::from_base_font(&String::from_utf8_lossy(&b))),
             Some(Some(crate::Std14::Symbol | crate::Std14::ZapfDingbats))
         );
         let table: Option<&[u32; 256]> = match base_name.as_deref() {

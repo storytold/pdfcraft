@@ -916,6 +916,22 @@ fn a_type3_font_given_its_subtype_by_reference_is_measured_as_one() {
     assert_eq!((m.ascent, m.descent), (n.ascent, n.descent));
 }
 
+/// A standard 14 font named by reference (`/BaseFont 7 0 R`) is the face it names: measured, named
+/// and, for Symbol, read without a Latin encoding, as named directly.
+#[test]
+fn a_standard_font_named_by_reference_is_the_face_it_names() {
+    let mut doc = Document::new_empty();
+    for face in ["Courier", "Symbol"] {
+        let direct = font(&mut doc, vec![("Subtype", Object::name("Type1")), ("BaseFont", Object::name(face))]);
+        let mut indirect = direct.clone();
+        indirect.set(b"BaseFont".to_vec(), Object::Ref(doc.add(Object::name(face))));
+        assert_eq!(base_font_name(&doc, &indirect), face);
+        let (m, n) = (Metrics::from_dict(&doc, &direct), Metrics::from_dict(&doc, &indirect));
+        assert_eq!(n.std14, m.std14, "{face}");
+        assert_eq!(n.unicode.encoding, m.unicode.encoding, "{face}");
+    }
+}
+
 /// Small glyphs keep their small box: there is no 0.5 em / 0.1 em minimum for `d1` boxes, which
 /// made a 58-point line of 0.15 em glyphs 35 points high. The shape of a scanned-text bitmap
 /// font: matrix 0.0042, `/FontBBox` all zero, `d1` boxes from -8 to 33 units.

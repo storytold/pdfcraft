@@ -64,12 +64,11 @@ fn names_content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict) -> (HashS
             if !drawn.insert(n.to_vec()) {
                 continue;
             }
-            let Some(r) = xo.get(n).and_then(Object::as_ref) else { continue };
-            let obj = doc.get(r);
+            let Some((r, obj, _)) = xo.get(n).and_then(|e| crate::stream_behind(doc, e)) else { continue };
             let Object::Stream(s) = &*obj else { continue };
             // A /Resources that isn't a dictionary (null, or a missing object) is no resources of
             // its own, as for `resource_ops` and the interpreter.
-            if s.dict.name(b"Subtype") != Some(b"Form")
+            if crate::subtype(doc, &s.dict).as_deref() != Some(b"Form")
                 || s.dict.get(b"Resources").is_some_and(|r| doc.resolve(r).as_dict().is_some())
                 || !seen.insert(r)
             {
@@ -152,7 +151,9 @@ pub(crate) fn unlink_undrawn(doc: &mut Document) -> Result<usize, RedactError> {
         let listed: Vec<Vec<u8>> = xo
             .iter()
             .filter(|(_, v)| {
-                v.as_ref().is_some_and(|r| matches!(&*doc.get(r), Object::Stream(s) if matches!(s.dict.name(b"Subtype"), Some(b"Image" | b"Form"))))
+                crate::stream_behind(doc, v).is_some_and(
+                    |(_, o, _)| matches!(&*o, Object::Stream(s) if matches!(crate::subtype(doc, &s.dict).as_deref(), Some(b"Image" | b"Form"))),
+                )
             })
             .map(|(name, _)| name.to_vec())
             .collect();
@@ -260,14 +261,15 @@ fn drawn_through(doc: &Document, res: &Dict) -> (Vec<ObjRef>, Vec<Dict>) {
     let mut found: Vec<ObjRef> = Vec::new();
     let mut fonts: Vec<Dict> = Vec::new();
     for (_, x) in res_dict(doc, res, b"XObject").iter() {
-        found.extend(x.as_ref().filter(|_| matches!(&*doc.resolve(x), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form"))));
+        found
+            .extend(x.as_ref().filter(|_| matches!(&*doc.resolve(x), Object::Stream(s) if crate::subtype(doc, &s.dict).as_deref() == Some(b"Form"))));
     }
     for (_, p) in res_dict(doc, res, b"Pattern").iter() {
         found.extend(p.as_ref().filter(|_| matches!(&*doc.resolve(p), Object::Stream(s) if s.dict.int(b"PatternType") == Some(1))));
     }
     for (_, f) in res_dict(doc, res, b"Font").iter() {
         let font = doc.resolve(f);
-        let Some(font) = font.as_dict().filter(|f| f.name(b"Subtype") == Some(b"Type3")) else { continue };
+        let Some(font) = font.as_dict().filter(|f| crate::subtype(doc, f).as_deref() == Some(b"Type3")) else { continue };
         let procs = font.get(b"CharProcs").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()).unwrap_or_default();
         found.extend(procs.iter().filter_map(|(_, v)| v.as_ref()).filter(is_stream));
         fonts.extend(font.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()));
@@ -306,7 +308,7 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
             continue;
         };
         let mut xo = res_dict(doc, &res, b"XObject");
-        let names: Vec<Vec<u8>> = xo.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
+        let names: Vec<Vec<u8>> = xo.iter().filter(|(_, v)| leads_to(doc, v, &doomed)).map(|(n, _)| n.to_vec()).collect();
         let properties = res_dict(doc, &res, b"Properties");
         let property_names: Vec<Vec<u8>> = properties.iter().filter(|(_, v)| retired_properties.contains(v)).map(|(n, _)| n.to_vec()).collect();
         if names.is_empty() && property_names.is_empty() {
@@ -395,24 +397,22 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
     let mut seen = HashSet::new();
     while let Some(resources) = pending.pop() {
         for (_, value) in res_dict(doc, &resources, b"XObject").iter() {
-            let Some(reference) = value.as_ref() else { continue };
+            let Some((reference, object, _)) = crate::stream_behind(doc, value) else { continue };
             if !seen.insert(reference) {
                 continue;
             }
             if seen.len() > 1_000_000 {
                 return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect shared form resources".into() });
             }
-            let object = doc.get(reference);
             let Object::Stream(form) = &*object else { continue };
-            if form.dict.name(b"Subtype") != Some(b"Form") {
+            if crate::subtype(doc, &form.dict).as_deref() != Some(b"Form") {
                 continue;
             }
             let Some(mut res) = form.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()) else { continue };
             let names: Vec<Vec<u8>> =
                 res_dict(doc, &res, b"Properties").iter().filter(|(_, value)| retired.contains(value)).map(|(name, _)| name.to_vec()).collect();
             let mut xo = res_dict(doc, &res, b"XObject");
-            let doomed_names: Vec<Vec<u8>> =
-                xo.iter().filter(|(_, v)| v.as_ref().is_some_and(|r| doomed.contains(&r))).map(|(n, _)| n.to_vec()).collect();
+            let doomed_names: Vec<Vec<u8>> = xo.iter().filter(|(_, v)| leads_to(doc, v, doomed)).map(|(n, _)| n.to_vec()).collect();
             if names.is_empty() && doomed_names.is_empty() {
                 pending.push(res);
                 continue;
@@ -430,6 +430,12 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
         }
     }
     Ok(())
+}
+
+/// Whether the entry `value` leads to a stream in `doomed`, by any references: each reference that
+/// stands for a stream the redaction removed would keep it in the file.
+fn leads_to(doc: &Document, value: &Object, doomed: &HashSet<ObjRef>) -> bool {
+    crate::stream_behind(doc, value).is_some_and(|(r, _, _)| doomed.contains(&r))
 }
 
 fn prune_doomed_xobjects(doc: &Document, content: &[Vec<u8>], xo: &mut Dict, doomed_names: &[Vec<u8>]) -> Result<bool, CosError> {
@@ -494,10 +500,10 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
     while cursor < ops.len() {
         let op = &ops[cursor];
         if op.is("Do")
-            && let Some(r) = op.last_name().and_then(|n| xobjects.get(n)).and_then(Object::as_ref)
+            && let Some((r, object, _)) = op.last_name().and_then(|n| xobjects.get(n)).and_then(|e| crate::stream_behind(doc, e))
             && seen.insert(r)
-            && let Object::Stream(s) = &*doc.get(r)
-            && s.dict.name(b"Subtype") == Some(b"Form")
+            && let Object::Stream(s) = &*object
+            && crate::subtype(doc, &s.dict).as_deref() == Some(b"Form")
             && s.dict.get(b"Resources").is_none_or(|r| doc.resolve(r).as_dict().is_none())
         {
             let data = budget.decode(&doc.with_direct_parms(s))?;

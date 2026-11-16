@@ -261,6 +261,29 @@ pub(crate) fn subtype(doc: &Document, d: &Dict) -> Option<Vec<u8>> {
     d.get(b"Subtype").and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec))
 }
 
+/// The stream an XObject or other entry leads to, through references as the renderer follows
+/// them, up to [`MAX_REFERENCE_HOPS`] as `Document::resolve` does: its own reference, the stream,
+/// and the references on the way to it, which stand for it and go with it. `None` where the entry
+/// isn't a reference or doesn't lead to a stream.
+pub(crate) fn stream_behind(doc: &Document, entry: &Object) -> Option<(ObjRef, std::sync::Arc<Object>, Vec<ObjRef>)> {
+    let mut r = entry.as_ref()?;
+    let mut on_the_way = Vec::new();
+    loop {
+        let object = doc.get(r);
+        match &*object {
+            Object::Ref(next) if on_the_way.len() < MAX_REFERENCE_HOPS => {
+                on_the_way.push(r);
+                r = *next;
+            }
+            Object::Stream(_) => return Some((r, object, on_the_way)),
+            _ => return None,
+        }
+    }
+}
+
+/// The references `Document::resolve` follows from one to the next.
+const MAX_REFERENCE_HOPS: usize = 32;
+
 /// The pop-up `d` names (`/Popup`), when it is one: it goes with `d`. Anything else it might name
 /// (a mark on another page, say) is left alone.
 fn named_popup(doc: &Document, d: &Dict) -> Option<ObjRef> {
