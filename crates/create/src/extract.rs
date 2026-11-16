@@ -454,7 +454,7 @@ fn jpeg_samples(data: &[u8], space: &Space, w: usize, h: usize) -> Option<(Vec<u
     };
     match space {
         Space::Indexed(..) => return None,
-        Space::Cmyk => return cmyk_jpeg_samples(data, w, h),
+        Space::Cmyk => return cmyk_jpeg_samples(data, w, h).map(|px| (px, Space::Cmyk)),
         _ => {}
     }
     // Past the decoder's metadata bound, drop the Extended XMP chunks rather than the mask:
