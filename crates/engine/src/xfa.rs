@@ -325,7 +325,7 @@ fn count_instances(root: &FormNode, parent_som: &str, name: &str) -> usize {
 fn split_instance(tpl: &Template, som: &str) -> Option<(pdfcraft_xfa::DataPath, String, String, usize)> {
     let mut path = pdfcraft_xfa::data_path(tpl, som);
     let parent_som = som.rsplit_once('.').map(|(p, _)| p).unwrap_or("").to_string();
-    if path.len() != pdfcraft_xfa::data_path(tpl, &parent_som).len().saturating_add(1) {
+    if pdfcraft_xfa::binds_elsewhere(tpl, som) || path.len() != pdfcraft_xfa::data_path(tpl, &parent_som).len().saturating_add(1) {
         return None;
     }
     let (name, index) = path.pop()?;
@@ -918,8 +918,8 @@ impl<'a, 'b> Runner<'a, 'b> {
                 }
                 XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } => {
                     let Some((parent, parent_som, name, index)) = split_instance(self.tpl, som) else {
-                        // Its count lives in no data group, and nowhere else yet.
-                        self.console([format!("{som}: this subform binds to no data node, so its instances can't be added or removed yet; ignored")]);
+                        // Its count lives in no data group named after it, and nowhere else yet.
+                        self.console([format!("{som}: this subform has no data group of its own name (it binds to none, or by a reference), so its instances can't be added or removed yet; ignored")]);
                         continue;
                     };
                     let key = (parent_som, name.clone());
@@ -1534,12 +1534,18 @@ mod tests {
                     <subform name="row"><bind match="none"/><occur min="1" max="4"/></subform>
                     <subform><occur min="1" max="4"/></subform>
                     <subform name="line"><occur min="1" max="4"/></subform>
+                    <subform name="byref"><bind match="dataRef" ref="$.person"/><occur min="1" max="4"/></subform>
+                    <subform name="bystar"><bind match="dataRef" ref="$.items.item[*]"/><occur min="1" max="4"/></subform>
                 </subform></subform>
             </template>"#,
         )
         .unwrap();
         assert_eq!(split_instance(&tpl, "form[0].table[0].row[2]"), None);
         assert_eq!(split_instance(&tpl, "form[0].table[0].#subform[2]"), None);
+        // Bound by a reference: its data node is not a group named after it, so the bookkeeping
+        // by name would remove or copy the wrong node (the shared `person`, here).
+        assert_eq!(split_instance(&tpl, "form[0].table[0].byref[2]"), None);
+        assert_eq!(split_instance(&tpl, "form[0].table[0].bystar[2]"), None);
         assert_eq!(
             split_instance(&tpl, "form[0].table[0].line[2]").map(|(p, ps, n, i)| (p.len(), ps, n, i)),
             Some((2, "form[0].table[0]".into(), "line".into(), 2))

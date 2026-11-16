@@ -139,10 +139,13 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
 - **Data binding** is the default one, with subforms marked `<bind match="none"/>` bound in
   their parent's data scope and explicit `bind ref` expressions followed when they name a
   path (`$record`, `$data`, `$.` or a relative name, with `[n]` or `[*]` indexes; objects with
-  the same `[*]` reference take its instances in turn). Refs with `..`, global binding and data
-  descriptions are not followed (a data description is kept as written, not checked). The
-  instances of a repeating subform marked `match="none"`, or bound by a reference, can't be
-  added or removed by scripts yet.
+  the same `[*]` reference take its instances in turn, each counting as one: a repeating subform
+  followed by another object with the same `[*]` reference can overlap it). Same-named objects
+  that `match="none"` subforms hold take successive data nodes in the enclosing scope; areas
+  and nameless subforms keep their own numbering. Refs with `..` or signed indexes, global
+  binding, `match="none"` on a field, and data descriptions are not followed (a data
+  description is kept as written, not checked). The instances of a repeating subform marked
+  `match="none"`, or bound by a reference, can't be added or removed by scripts yet.
 - **Scripting.** JavaScript (boa) and FormCalc (a native interpreter, `pdfcraft_js::formcalc`)
   share one object model, one set of effects and one set of budgets. FormCalc covers the
   language and the common built-ins (arithmetic, logical, string, date/time, financial, unit);

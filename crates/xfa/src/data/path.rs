@@ -91,6 +91,8 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
     let page_area_index = page_area_index(tpl, &segments);
     // `$record` in a reference: the data group of the root subform, as the data is written.
     let record = tpl.root.common.name.as_deref();
+    // The `match="none"` subforms passed through since the last data scope ([`data_index`]).
+    let mut through: Vec<Step> = Vec::new();
     for (i, (name, index)) in segments.into_iter().enumerate() {
         // A page area's SOM index is the page made from it; see [`page_area_index`].
         let index = if i == 0 { page_area_index.unwrap_or(index) } else { index };
@@ -104,15 +106,18 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
             },
             None => (None, index, None),
             Some(children) => match named_in(children, &name, index, 0) {
-                Some((siblings, node)) => {
-                    let data_ref = node.common().data_ref.as_deref().map(|r| (r, star(siblings, node, index)));
-                    let index = data_index(siblings, &name, index);
+                Some(step) => {
+                    let node = step.node;
+                    let data_ref = node.common().data_ref.as_deref().map(|r| (r, node.common().star_ordinal.saturating_add(step.instance)));
                     match node {
-                        Node::Subform(sf) if sf.unbound => (Some(Container::Area(&sf.children)), index, None),
-                        Node::Subform(sf) => (Some(Container::Children(&sf.children)), index, data_ref),
+                        Node::Subform(sf) if sf.unbound => {
+                            through.push(step);
+                            (Some(Container::Area(&sf.children)), index, None)
+                        }
                         Node::Area(a) => (Some(Container::Area(&a.children)), index, None),
-                        Node::Field(_) | Node::ExclGroup(_) => (None, index, data_ref),
-                        Node::Draw(_) => (None, index, None),
+                        Node::Subform(sf) => (Some(Container::Children(&sf.children)), data_index(&through, &step, &name), data_ref),
+                        Node::Field(_) | Node::ExclGroup(_) => (None, data_index(&through, &step, &name), data_ref),
+                        Node::Draw(_) => (None, data_index(&through, &step, &name), None),
                     }
                 }
                 None => (None, index, None),
@@ -122,10 +127,12 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
             Some(Container::Area(children)) => level = Some(children),
             Some(Container::Children(children)) => {
                 level = Some(children);
+                through.clear();
                 bind(&mut out, name, index, data_ref, record);
             }
             None => {
                 level = None;
+                through.clear();
                 bind(&mut out, name, index, data_ref, record);
             }
         }
@@ -144,26 +151,12 @@ fn bind(out: &mut DataPath, name: String, index: usize, data_ref: Option<(&str, 
     }
 }
 
-/// The instance a `[*]` in `node`'s reference takes, for its instance at SOM index `index`:
-/// the instances the objects before it with the same reference took
-/// ([`Common::star_ordinal`](crate::model::Common::star_ordinal)), and then its own instance
-/// number when it is a repeating subform (its instances take SOM numbers from its own on).
-fn star(siblings: &[Node], node: &Node, index: usize) -> usize {
-    let instance = match node {
-        Node::Subform(sf) if sf.occur.max != Some(1) => {
-            let at = siblings.iter().position(|n| std::ptr::eq(n, node)).unwrap_or(0);
-            index.saturating_sub(SomIndices::of(siblings).at(at))
-        }
-        _ => 0,
-    };
-    node.common().star_ordinal.saturating_add(instance)
-}
-
 /// The data path a `bind ref` SOM expression names, from the object's parent data node at
 /// `parent` (XFA 3.3, "Explicit Data References", p. 199): `$record.a.b` (`record` is the
 /// root subform's name, which names the record's data group), `$data.a.b`, `$.a.b` or `a.b`
 /// (relative to the parent), each segment with an optional `[n]`, or `[*]`, which takes the
-/// instance `star` (see [`star`]). Anything else (another DOM such as `$form`, `..`,
+/// instance `star`: the object's `star_ordinal` plus its own instance number when it is a
+/// repeating subform. Anything else (another DOM such as `$form`, `..`, signed indexes,
 /// predicates, functions) is `None`.
 fn resolve_ref(r: &str, parent: &DataPath, record: Option<&str>, star: usize) -> Option<DataPath> {
     let r = r.trim();
@@ -187,7 +180,9 @@ fn resolve_ref(r: &str, parent: &DataPath, record: Option<&str>, star: usize) ->
         let (name, idx) = match seg.trim().split_once('[') {
             Some((n, idx)) => match idx.strip_suffix(']')?.trim() {
                 "*" => (n.trim(), star),
-                idx => (n.trim(), idx.parse::<usize>().ok()?),
+                idx if !idx.is_empty() && idx.bytes().all(|b| b.is_ascii_digit()) => (n.trim(), idx.parse::<usize>().ok()?),
+                // A signed index (`[+1]`, `[-1]`) is relative to the object's own: not followed.
+                _ => return None,
             },
             None => (seg.trim(), 0),
         };
@@ -212,7 +207,7 @@ pub(crate) fn data_instances(tpl: &Template, data: &DataNode, sf: &Subform, pare
         return 0;
     }
     let parent = data_path(tpl, parent_som);
-    if let Some(r) = sf.common.data_ref.as_deref().filter(|r| r.trim_end().ends_with("[*]")) {
+    if let Some(r) = sf.common.data_ref.as_deref().filter(|r| r.trim().rsplit('.').next().is_some_and(is_star_segment)) {
         let record = tpl.root.common.name.as_deref();
         if let Some(mut path) = resolve_ref(r, &parent, record, sf.common.star_ordinal)
             && let Some((name, first)) = path.pop()
@@ -228,7 +223,7 @@ pub(crate) fn data_instances(tpl: &Template, data: &DataNode, sf: &Subform, pare
 /// data path of its container). Master-page objects are left at 0.
 pub(crate) fn number_star_refs(tpl: &mut Template) {
     fn has_star(c: &Common) -> bool {
-        c.data_ref.as_deref().is_some_and(|r| r.contains("[*]"))
+        c.name.is_some() && c.data_ref.as_deref().is_some_and(|r| r.split('.').any(is_star_segment))
     }
     fn walk(tpl: &Template, nodes: &[Node], som: &str, seen: &mut HashMap<(DataPath, String), usize>, out: &mut Vec<usize>, depth: usize) {
         if depth > MAX_DEPTH {
@@ -278,14 +273,25 @@ pub(crate) fn number_star_refs(tpl: &mut Template) {
             }
         }
     }
-    let mut numbers = Vec::new();
     let root = tpl.root.common.name.as_ref().map(|n| format!("{n}[0]")).unwrap_or_default();
-    walk(tpl, &tpl.root.children, &root, &mut HashMap::new(), &mut numbers, 1);
-    if numbers.is_empty() {
-        return;
+    // A container whose own reference has a `[*]` is the data scope of what it holds only once
+    // it is numbered, so each pass settles one more level of such nesting; the numbers of the
+    // outermost are right after the first. Stop when a pass changes nothing.
+    let mut last: Vec<usize> = Vec::new();
+    for _ in 0..MAX_STAR_PASSES {
+        let mut numbers = Vec::new();
+        walk(tpl, &tpl.root.children, &root, &mut HashMap::new(), &mut numbers, 1);
+        if numbers.is_empty() || numbers == last {
+            return;
+        }
+        assign(&mut tpl.root.children, &mut numbers.clone().into_iter(), 1);
+        last = numbers;
     }
-    assign(&mut tpl.root.children, &mut numbers.into_iter(), 1);
 }
+
+/// Most passes [`number_star_refs`] makes: one per level of containers nested inside each other
+/// that are bound by a `[*]` reference.
+const MAX_STAR_PASSES: usize = 8;
 
 /// Whether `name` is a plain element name in a `bind ref` (an empty one is part of a `..`).
 fn ref_name(name: &str) -> bool {
@@ -333,12 +339,21 @@ enum Container<'a> {
 /// subform take the numbers from its own on. Unnamed subforms and areas, which have no SOM
 /// segment of their own, are looked through.
 fn named_at<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Option<&'a Node> {
-    named_in(nodes, name, index, depth).map(|(_, n)| n)
+    named_in(nodes, name, index, depth).map(|s| s.node)
 }
 
-/// [`named_at`], with the siblings the object was found among: `nodes`, or the children of the
-/// nameless subform or area it was found in.
-fn named_in<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Option<(&'a [Node], &'a Node)> {
+/// What a SOM segment names, found by [`named_in`]: the object, the siblings it was found among
+/// (`nodes`, or the children of the nameless subform or area it was found in), its position
+/// there, and which of its instances the segment names (0 unless it is a repeating subform).
+struct Step<'a> {
+    siblings: &'a [Node],
+    pos: usize,
+    node: &'a Node,
+    instance: usize,
+}
+
+/// [`named_at`], as a [`Step`].
+fn named_in<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Option<Step<'a>> {
     if depth > MAX_DEPTH {
         return None;
     }
@@ -350,10 +365,10 @@ fn named_in<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Op
         }
         let sib = sibs.at(i);
         if sib == index {
-            return Some((nodes, n));
+            return Some(Step { siblings: nodes, pos: i, node: n, instance: 0 });
         }
         if sib < index && matches!(n, Node::Subform(sf) if sf.occur.max != Some(1)) {
-            repeating = Some((nodes, n));
+            repeating = Some(Step { siblings: nodes, pos: i, node: n, instance: index - sib });
         }
     }
     repeating.or_else(|| {
@@ -365,18 +380,41 @@ fn named_in<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Op
     })
 }
 
-/// The data index of the object at SOM index `index` among the `siblings` named `name`: the
-/// same-named siblings before it that bind to no data node (areas, and subforms with
-/// `<bind match="none"/>`) take no data node, so they are not counted.
-fn data_index(siblings: &[Node], name: &str, index: usize) -> usize {
-    let sibs = SomIndices::of(siblings);
-    let transparent = siblings
-        .iter()
-        .enumerate()
-        .filter(|(i, n)| n.common().name.as_deref() == Some(name) && sibs.at(*i) < index)
-        .filter(|(_, n)| matches!(n, Node::Area(_)) || matches!(n, Node::Subform(sf) if sf.unbound))
-        .count();
-    index.saturating_sub(transparent)
+/// The data index of the object `at` names, named `name`, reached through the `match="none"`
+/// subforms in `through` since its data scope. Data binding treats those subforms as removed
+/// and "their children adopted by the transparent node's parent" (XFA 3.3, "Transparent
+/// Nodes", p. 193), so the index counts every same-named object before it in that adopted
+/// scope: the siblings before each step (and what the `match="none"` ones among them hold),
+/// and what the earlier instances of a repeating `match="none"` subform on the way hold. Then
+/// its own instance number, for a repeating subform.
+fn data_index(through: &[Step], at: &Step, name: &str) -> usize {
+    let mut index = 0usize;
+    for step in through {
+        index = index.saturating_add(adopted(step.siblings.get(..step.pos).unwrap_or(&[]), name, 0));
+        if let Node::Subform(sf) = step.node {
+            index = index.saturating_add(step.instance.saturating_mul(adopted(&sf.children, name, 0)));
+        }
+    }
+    index.saturating_add(adopted(at.siblings.get(..at.pos).unwrap_or(&[]), name, 0)).saturating_add(at.instance)
+}
+
+/// How many objects named `name` the data scope these `nodes` sit in takes from them: one for
+/// each such field, exclusion group, draw or subform, and what a `match="none"` subform holds,
+/// once for each instance it lays out. Areas and nameless subforms keep their contents' own
+/// numbering, as they always have here.
+fn adopted(nodes: &[Node], name: &str, depth: usize) -> usize {
+    if depth > MAX_DEPTH {
+        return 0;
+    }
+    nodes.iter().fold(0usize, |n, node| {
+        let here = match node {
+            Node::Subform(sf) if sf.unbound => adopted(&sf.children, name, depth + 1).saturating_mul(crate::layout::instance_count(&sf.occur, 0)),
+            Node::Area(_) => 0,
+            Node::Subform(sf) if sf.common.name.is_none() => 0,
+            other => usize::from(other.common().name.as_deref() == Some(name)),
+        };
+        n.saturating_add(here)
+    })
 }
 
 /// The template field the object at a SOM path is an instance of, each segment's number counted
@@ -458,4 +496,18 @@ pub(crate) fn fields_with_ids(tpl: &Template) -> Vec<(&str, String, &Field)> {
 
 pub(super) fn path_som(path: &DataPath) -> String {
     path.iter().map(|(n, i)| format!("{n}[{i}]")).collect::<Vec<_>>().join(".")
+}
+
+/// Whether a segment of a `bind ref` takes the next instance: `name[*]`, spaces allowed inside
+/// the brackets, as [`resolve_ref`] reads it.
+fn is_star_segment(seg: &str) -> bool {
+    seg.trim().split_once('[').and_then(|(_, idx)| idx.strip_suffix(']')).is_some_and(|idx| idx.trim() == "*")
+}
+
+/// Whether the object at `som` is a subform of the template whose instances are not data groups
+/// named after it under its parent's data node: one bound by a reference (`match="dataRef"`),
+/// or one with no data group of its own ([`Subform::data_name`]). Adding or removing its
+/// instances by name would change some other node. `false` for objects the template lacks.
+pub fn binds_elsewhere(tpl: &Template, som: &str) -> bool {
+    matches!(template_object(tpl, som), Some(Node::Subform(sf)) if sf.data_name().is_none() || sf.common.data_ref.is_some())
 }

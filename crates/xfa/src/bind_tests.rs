@@ -323,3 +323,65 @@ fn star_references_count_within_their_data_scope() {
     let values: Vec<Option<String>> = form.pages.iter().flat_map(|p| widgets(p)).map(|w| w.value.clone()).collect();
     assert_eq!(values, ["a", "b", "c", "d"].map(|v| Some(v.to_string())));
 }
+
+/// What a `match="none"` subform holds is adopted by the enclosing data scope (XFA 3.3,
+/// "Transparent Nodes", p. 193), so same-named objects from different `match="none"` subforms,
+/// and from the instances of a repeating one, take successive data nodes instead of sharing one.
+#[test]
+fn same_named_fields_adopted_from_match_none_subforms_take_successive_nodes() {
+    let body = format!(
+        r#"<subform name="first" layout="tb"><bind match="none"/><field name="amount" {TEXT}</field></subform>
+<subform name="second" layout="tb"><bind match="none"/><field name="amount" {TEXT}</field></subform>
+<subform name="row" layout="tb"><bind match="none"/><occur min="1" max="-1" initial="2"/><field name="amount" {TEXT}</field></subform>
+<field name="amount" {TEXT}</field>"#
+    );
+    let xml = xdp(&body, "<amount>1</amount><amount>2</amount><amount>3</amount><amount>4</amount><amount>5</amount>");
+    let (tpl, _) = parse(&xml).unwrap();
+    assert_eq!(path(&tpl, "form[0].first[0].amount[0]"), "form[0].amount[0]");
+    assert_eq!(path(&tpl, "form[0].second[0].amount[0]"), "form[0].amount[1]");
+    assert_eq!(path(&tpl, "form[0].row[0].amount[0]"), "form[0].amount[2]");
+    assert_eq!(path(&tpl, "form[0].row[1].amount[0]"), "form[0].amount[3]");
+    assert_eq!(path(&tpl, "form[0].amount[0]"), "form[0].amount[4]");
+    let form = layout_xml(&xml).unwrap();
+    let values: Vec<Option<String>> = form.pages.iter().flat_map(|p| widgets(p)).map(|w| w.value.clone()).collect();
+    assert_eq!(values, ["1", "2", "3", "4", "5"].map(|v| Some(v.to_string())));
+}
+
+/// The data index counts the siblings before an object by where they are, so a `match="none"`
+/// sibling after a repeating subform doesn't shift that subform's instances.
+#[test]
+fn a_match_none_sibling_after_a_repeating_subform_leaves_its_instances_alone() {
+    let body = format!(
+        r#"<subform name="row" layout="tb"><occur min="1" max="-1"/><field name="qty" {TEXT}</field></subform>
+<subform name="row" layout="tb"><bind match="none"/><field name="note" {TEXT}</field></subform>"#
+    );
+    let xml = xdp(&body, "<row><qty>a</qty></row><row><qty>b</qty></row><row><qty>c</qty></row>");
+    let (tpl, _) = parse(&xml).unwrap();
+    assert_eq!(path(&tpl, "form[0].row[2].qty[0]"), "form[0].row[2].qty[0]");
+}
+
+/// A container bound by a `[*]` reference is the data scope of what it holds: the second such
+/// container binds the second instance, and a `[*]` reference inside it counts from that
+/// instance's own first node again.
+#[test]
+fn star_references_inside_star_bound_containers_count_in_their_own_instance() {
+    let inner = |n: &str| {
+        format!(
+            r#"<subform name="{n}" layout="tb"><bind match="dataRef" ref="$.item[*]"/><field name="v{n}" {TEXT}<bind match="dataRef" ref="$.v[*]"/></field></subform>"#
+        )
+    };
+    let xml = xdp(&format!("{}{}", inner("a"), inner("b")), "<item><v>a0</v><v>a1</v></item><item><v>b0</v><v>b1</v></item>");
+    let (tpl, _) = parse(&xml).unwrap();
+    assert_eq!(path(&tpl, "form[0].b[0].vb[0]"), "form[0].item[1].v[0]");
+    let form = layout_xml(&xml).unwrap();
+    assert_eq!(value_at(&form, "vb[0]").as_deref(), Some("b0"));
+}
+
+/// A signed index in a reference (`[+1]`) is relative to the object's own instance, which this
+/// binding doesn't follow: the object binds by name rather than to an absolute instance.
+#[test]
+fn a_signed_index_in_a_reference_is_not_read_as_an_absolute_one() {
+    let xml = xdp(&format!(r#"<field name="x" {TEXT}<bind match="dataRef" ref="$.line[+1].amount"/></field>"#), "");
+    let (tpl, _) = parse(&xml).unwrap();
+    assert_eq!(path(&tpl, "form[0].x[0]"), "form[0].x[0]");
+}
