@@ -1683,6 +1683,112 @@ fn arabic_font_names(doc: &Document, page: usize) -> Vec<String> {
     fonts.as_dict().unwrap().iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).filter(|k| k.starts_with("PCAr")).collect()
 }
 
+/// The `/FontDescriptor /FontFamily` of each shaped-text (Type 3) font on `page`.
+fn shaped_font_families(doc: &Document, page: usize) -> Vec<String> {
+    let p = &pdfcraft_model::pages(doc)[page];
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let fonts = fonts.as_dict().unwrap();
+    arabic_font_names(doc, page)
+        .iter()
+        .map(|name| {
+            let font = doc.resolve(fonts.get(name.as_bytes()).unwrap());
+            let descriptor = doc.resolve(font.as_dict().unwrap().get(b"FontDescriptor").unwrap());
+            descriptor.as_dict().unwrap().get(b"FontFamily").unwrap().as_string().unwrap().to_text()
+        })
+        .collect()
+}
+
+/// Thai Add Text is drawn from the document Thai face, whichever the build selected: Sarabun when
+/// craft-fonts' Thai document manifest is embedded, else the interface face (Noto Sans Thai), as
+/// before. Which face is selected is pinned in the fonts crate
+/// (`craft::tests::document_manifest_faces_are_never_interface_fallbacks`), which can see the
+/// embedded document faces; a manifest file on disk may have been skipped.
+#[test]
+fn added_thai_text_is_drawn_from_the_document_thai_face() {
+    let Some(face) = pdfcraft_fonts::document_thai_font() else { return };
+    let mut doc = fixture();
+    let t = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "สวัสดี น้ำ".into(), size: 14.0, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+    let families = shaped_font_families(&doc, 0);
+    assert!(!families.is_empty());
+    assert!(families.iter().all(|f| f == face.family), "{families:?}, expected {}", face.family);
+}
+
+/// Spaces, digits and punctuation that follow Thai are drawn from the Thai face too, so a Thai
+/// line is shown with one font and keeps the width the Thai face measured for it.
+#[test]
+fn added_thai_text_draws_following_spaces_digits_and_punctuation_with_the_thai_face() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let t = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "ข้อ 12. ทดสอบ".into(), size: 14.0, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+    let s = String::from_utf8_lossy(&stream_bytes(&doc, &Object::Ref(list_added(&doc)[0].obj)).unwrap()).into_owned();
+    let words: Vec<&str> = s.split_whitespace().collect();
+    let fonts: Vec<&str> = words.windows(3).filter(|w| w[2] == "Tf").filter_map(|w| w[0].strip_prefix('/')).collect();
+    assert!(!fonts.is_empty());
+    assert!(fonts.iter().all(|f| f.starts_with("PCAr")), "one shaped face for the whole line: {fonts:?}");
+}
+
+/// A sign the Thai face draws joins the Thai run, so it is accepted where WinAnsi alone would
+/// refuse it (`ก−1`, U+2212 MINUS SIGN); one neither the face nor WinAnsi has is still refused.
+#[test]
+fn thai_text_is_checked_in_the_runs_that_draw_it() {
+    for bold in [false, true] {
+        if !pdfcraft_fonts::thai_has_styled('ก', bold) {
+            return;
+        }
+        let text = |s: &str| AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: s.into(), size: 14.0, bold, ..AddedText::default() };
+        if pdfcraft_fonts::thai_has_styled('\u{2212}', bold) {
+            assert_eq!(first_undrawable(&text("ก\u{2212}1")), None, "bold {bold}");
+            let mut doc = fixture();
+            add_content(&mut doc, 0, &Content::Text(text("ก\u{2212}1"))).unwrap();
+        }
+        let snowman = '\u{2603}';
+        if !pdfcraft_fonts::thai_has_styled(snowman, bold) {
+            assert_eq!(first_undrawable(&text("ก\u{2603}")), Some(snowman), "bold {bold}");
+        }
+        assert_eq!(first_undrawable(&text("ทดสอบ 123")), None, "bold {bold}");
+    }
+}
+
+/// Bold Add Text Thai is drawn with the Thai document manifest's Bold face: the same text's glyph
+/// outlines differ between bold and regular. Skipped when the build has no distinct Bold face, where
+/// bold falls back to the Regular face and the outlines match.
+#[test]
+fn bold_added_thai_text_draws_the_bold_faces_outlines() {
+    let (Some(regular), Some(bold)) = (pdfcraft_fonts::document_thai_font_for(false), pdfcraft_fonts::document_thai_font_for(true)) else {
+        return;
+    };
+    if regular.bytes == bold.bytes {
+        return;
+    }
+    let outlines = |bold: bool| {
+        let mut doc = fixture();
+        let t = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "ทดสอบ".into(), size: 14.0, bold, ..AddedText::default() };
+        add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+        let p = &pdfcraft_model::pages(&doc)[0];
+        let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+        let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+        let fonts = fonts.as_dict().unwrap();
+        let mut procs: Vec<Vec<u8>> = arabic_font_names(&doc, 0)
+            .iter()
+            .flat_map(|name| {
+                let font = doc.resolve(fonts.get(name.as_bytes()).unwrap());
+                let procs = doc.resolve(font.as_dict().unwrap().get(b"CharProcs").unwrap());
+                procs.as_dict().unwrap().iter().map(|(_, s)| stream_bytes(&doc, s).unwrap()).collect::<Vec<_>>()
+            })
+            .collect();
+        procs.sort();
+        procs
+    };
+    let (thin, heavy) = (outlines(false), outlines(true));
+    assert!(!thin.is_empty() && !heavy.is_empty());
+    assert_ne!(thin, heavy, "bold must change the outlines, not only the descriptor");
+}
+
 #[test]
 fn arabic_items_keep_their_own_fonts_through_saves_updates_and_deletes() {
     let mut doc = fixture();

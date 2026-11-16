@@ -68,7 +68,7 @@ pub(super) fn draw_laid_shaped(
         .map_err(|(e, c)| match c.script {
             ShapedScript::Arabic => arabic_error(e, &c.text),
             ShapedScript::Hebrew => hebrew_error(e, &c.text),
-            ShapedScript::Thai => thai_error(e, &c.text),
+            ShapedScript::Thai | ShapedScript::ThaiBold => thai_error(e, &c.text),
         })?;
     out.extend(format!("BT {}\n", t.fill_op()).bytes());
     if t.char_spacing != 0.0 {
