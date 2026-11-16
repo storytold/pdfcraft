@@ -126,6 +126,8 @@ fn job(title: &str, actual_size: bool) -> spool::Job {
         grey_pages: false,
         title: title.to_string(),
         options: Vec::new(),
+        // No driver dialog: the driver's own defaults, as the job says above.
+        driver_settings: None,
     }
 }
 
