@@ -59,8 +59,7 @@ impl Automation {
         let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
         // The document's own view settings: layer visibility, hidden comments, reading colours
         // (tools that change one drop this cache so the next render reads it again).
-        let config =
-            self.session.render_config(id).unwrap_or_else(|| RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() });
+        let config = view_config(&self.session, id, doc);
         let fresh = || (doc.display.clone(), PageRenderer::new(doc.display.clone(), config.clone()));
         let entry = self.renderers.entry(id).or_insert_with(fresh);
         if !Arc::ptr_eq(&entry.0, &doc.display) {
@@ -89,10 +88,7 @@ impl Automation {
         let out = if let Some(rgb) = invisible {
             // A one-off renderer: the cached one draws the document as it is shown.
             let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
-            let config = self
-                .session
-                .render_config(id)
-                .unwrap_or_else(|| RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() });
+            let config = view_config(&self.session, id, doc);
             let channel = |c: f64| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
             let config = RenderConfig { invisible_text: Some(rgb.map(channel)), ..config };
             PageRenderer::new(doc.display.clone(), config).render(request)
@@ -499,6 +495,11 @@ impl Automation {
 }
 
 /// A rendered raster as PNG, through the engine's encoder (Export ▸ Image writes the same).
+/// The document's own view settings, or just its password when it has none.
+fn view_config(session: &pdfcraft_engine::Session, id: DocId, doc: &pdfcraft_engine::Document) -> RenderConfig {
+    session.render_config(id).unwrap_or_else(|| RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() })
+}
+
 pub(crate) fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>> {
     pdfcraft_engine::export::encode_png(width, height, premultiplied).map_err(failed)
 }

@@ -50,6 +50,8 @@ fn show_invisible_text_paints_modes_3_and_7_in_that_render_only() {
     assert_eq!(red_pixels(&mut a, plain), (0, 0), "the cached view render is unchanged");
     let both = json!({ "doc": doc, "page": 1, "show_invisible_text": "red", "hide_text_block": 1 });
     assert!(a.call("page_render", &both).is_err(), "it can't be combined with an editor background");
+    let retype = json!({ "doc": doc, "page": 1, "show_invisible_text": "red", "hide_added_text": 1 });
+    assert!(a.call("page_render", &retype).is_err(), "nor with a retyping background");
     assert!(a.call("page_render", &json!({ "doc": doc, "page": 1, "show_invisible_text": "nope" })).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }

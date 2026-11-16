@@ -394,10 +394,11 @@ fn render_page<'a>(
     // Print previews share the viewer pool, but must use the output font policy and the layers
     // as they print (`print_layers`). Keep the caller's cancellation/warning hooks and annotation
     // settings, except what a document's scripts show while it is read (`annotations`,
-    // `appearances`) and shown invisible text, which never print. A fresh cache is essential: hayro keys cached fonts by PDF dictionary, not by the
-    // font resolver, so the viewer cache could supply an installed face even after changing the
-    // resolver (and a cached missing font from print preview could blank the viewer on switching
-    // back); nothing drawn with the viewer's layers is reused either.
+    // `appearances`) and shown invisible text, which never print. A fresh cache is essential:
+    // hayro keys cached fonts by PDF dictionary, not by the font resolver, so the viewer cache
+    // could supply an installed face even after changing the resolver (and a cached missing font
+    // from print preview could blank the viewer on switching back); nothing drawn with the
+    // viewer's layers is reused either.
     let print_settings;
     let print_cache;
     let print = req.tag & PRINT_TAG != 0;

@@ -124,6 +124,7 @@ pub(crate) fn show_glyph<'a>(
         TextRenderingMode::Invisible => {
             // Still call draw_glyph for invisible text, so that it can
             // for example be used for text extraction.
+            // PdfCraft patch (107): or paint it, when invisible text is shown.
             if let Some(paint) = shown_invisible(ctx) {
                 device.draw_glyph(
                     glyph,
@@ -144,6 +145,7 @@ pub(crate) fn show_glyph<'a>(
         }
         TextRenderingMode::Clip => {
             clip_glyph(ctx, glyph, glyph_transform);
+            // PdfCraft patch (107): paint it too, when invisible text is shown.
             if let Some(paint) = shown_invisible(ctx) {
                 device.draw_glyph(
                     glyph,
