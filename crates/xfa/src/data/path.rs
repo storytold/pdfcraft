@@ -334,7 +334,9 @@ pub(crate) fn number_star_refs(tpl: &mut Template) {
         // before anything inside it does.
         if has_star(&tpl.root.common) {
             let r = tpl.root.common.data_ref.clone().unwrap_or_default();
-            let key = match resolve_ref(&r, &DataPath::new(), record_path(tpl).as_ref(), STAR_OPEN) {
+            // Against the record as it is before the root binds: the group named after it.
+            let by_name = tpl.root.common.name.clone().map(|n| vec![(n, 0)]);
+            let key = match resolve_ref(&r, &DataPath::new(), by_name.as_ref(), STAR_OPEN) {
                 Some(matched) => (matched, String::new()),
                 None => (DataPath::new(), r),
             };

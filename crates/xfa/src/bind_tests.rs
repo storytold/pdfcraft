@@ -526,3 +526,15 @@ fn a_root_reference_from_record_is_resolved_once() {
     assert_eq!(path(&tpl, "form[0].x[0]"), "form[0].actual[0].x[0]");
     assert_eq!(path(&tpl, "form[0].y[0]"), "form[0].actual[0].code[0]");
 }
+
+/// The root's own `[*]` reference counts against the nodes it matches before the root binds:
+/// a child whose absolute reference matches the same nodes takes the next instance.
+#[test]
+fn a_root_star_reference_from_record_takes_the_first_instance() {
+    let body =
+        format!(r#"<subform name="inner" layout="tb"><bind match="dataRef" ref="$data.form.row[*]"/><field name="x" {TEXT}</field></subform>"#);
+    let xml = xdp(&body, "")
+        .replace(r#"<subform name="form" layout="tb">"#, r#"<subform name="form" layout="tb"><bind match="dataRef" ref="$record.row[*]"/>"#);
+    let (tpl, _) = parse(&xml).unwrap();
+    assert_eq!(path(&tpl, "form[0].inner[0].x[0]"), "form[0].row[1].x[0]");
+}
