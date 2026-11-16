@@ -255,8 +255,10 @@ fn plan_page(
     // around or inside the paragraph's own marked content, and must be balanced: `open` counts the
     // sequences now open, `base` those open at the current BT, which an EMC inside it may not close.
     let (mut open, mut base) = (0usize, 0usize);
-    // Marked-content boundaries must enclose the whole path, not just its paint operator.
-    let mut path = None;
+    // Marked-content boundaries must enclose the whole path, not just its paint operator. The path's
+    // first operator and the marked content open there: a mark opened or closed inside the path
+    // would cross the artifact wrapper added around it.
+    let mut path: Option<(usize, usize)> = None;
     for (at, op) in parsed.ops.iter().enumerate() {
         if path.is_some() && matches!(op.op.as_slice(), b"BT" | b"Do" | b"BI" | b"sh") {
             return Err(unsupported(index, "painted content interrupts an unfinished path"));
@@ -279,14 +281,18 @@ fn plan_page(
             b"EMC" if open > if start.is_some() { base } else { 0 } => open -= 1,
             name if start.is_none() && harmless_outside(name) => match name {
                 b"m" | b"re" => {
-                    path.get_or_insert(at);
+                    path.get_or_insert((at, open));
                 }
                 b"n" => path = None,
                 _ => {}
             },
             _ if start.is_none() && painted_outside(doc, &xobjects, op) => {
                 let first = if matches!(op.op.as_slice(), b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s") {
-                    path.take().unwrap_or(at)
+                    match path.take() {
+                        Some((_, opened)) if opened != open => return Err(unsupported(index, "marked content opens or closes inside a path")),
+                        Some((first, _)) => first,
+                        None => at,
+                    }
                 } else {
                     at
                 };
