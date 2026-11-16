@@ -411,6 +411,7 @@ fn link_target(i: &pdfcraft_render::DocInfo, target: &pdfcraft_render::LinkTarge
             })).collect::<Vec<_>>(),
             "preserve_rb": preserve_rb,
         }),
+        pdfcraft_render::LinkTarget::JavaScript(script) => json!({ "javascript": script }),
         pdfcraft_render::LinkTarget::RemoteGoTo { launch, file, destination, new_window } => json!({
             "action": if *launch { "Launch" } else { "GoToR" },
             "remote_document": file,
