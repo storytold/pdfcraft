@@ -1,6 +1,6 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-15 · **Change:** minor (craft-libs cutover for codecs, XFA XML, crypt/filters/COS/export/XFDF, PRC and ZIP; print colour management for pictures; M7 line replacement keeps source fonts; auto-tag headings by size and weight; arrow-key comment moves; stream-filter JPEG export; form, signature, optimize, redaction, measurement, PRC-normal and CMYK fixes; v0.21.1 Flatpak fix; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-16 · **Last updated:** 2026-11-16 · **Change:** patch (M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
@@ -142,6 +142,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 Newest first: the date, what moved, and the new overall estimate.
 
+- **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
 - **2026-11-11 (status docs):** Measured numbers refreshed at v0.21.0 (`main` at `3650f01f`): 835 counted features, 473 shipped and 124 partial, 64.1% unweighted and ≈ 73% tier-weighted (62.8% and ≈ 72% at v0.20.0), P0 94.6%. GitHub on the same day: 1,680 open and 1,456 closed issues (74 `priority: critical`), 20.4k stars, latest release v0.21.0. README, docs/target-app-parity.md, docs/gaps.md and docs/roadmap.md brought in line, including the checklist's 14 status changes in v0.21.0 (comment pop-ups and connector lines, printer marks, colour conversion and printing a selected area shipped; Create PDF from Office, find and replace in edit mode, document actions, the portfolio file list and page setup partial). Estimated readiness and hours not re-judged.
 - **2026-11-10 (M4, #4594):** Reconcile current main and keep the original draft-safety entry in this progress log instead of duplicating it in the shared roadmap header. Preserve inactive password cleanup and the Properties guard; behavior and estimates unchanged.
 - **2026-11-09 (status docs):** Measured numbers refreshed as `cargo xtask parity` counts them, at v0.20.0 (`main` at `9ee213ef`): 834 counted features, 464 shipped and 119 partial, 62.8% unweighted and ≈ 72% tier-weighted (57.0% and ≈ 67% on 2026-10-10), P0 94.6%. GitHub on the same day: 1,774 open and 1,202 closed issues (74 `priority: critical`), 20.1k stars, latest release v0.20.0. README, docs/target-app-parity.md, docs/gaps.md and docs/roadmap.md brought in line; docs/roadmap.md has one row per milestone again. Estimated readiness and hours not re-judged; the monthly full re-measure is due.
@@ -703,6 +704,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | patch | M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged. |
 | 2026-11-15 | minor | craft-libs cutover for codecs, XFA XML, crypt/filters/COS/export/XFDF, PRC and ZIP; print colour management for pictures; M7 line replacement keeps source fonts; auto-tag headings by size and weight; arrow-key comment moves; stream-filter JPEG export; form, signature, optimize, redaction, measurement, PRC-normal and CMYK fixes; v0.21.1 Flatpak fix; estimates unchanged. |
 | 2026-11-12 | patch | Latest release v0.21.1 (bug fixes); its checklist matches v0.21.0, so the measured numbers stand. |
 | 2026-11-11 | minor | Measured numbers refreshed at v0.21.0, `main` at 3650f01f (breadth ≈ 73% tier-weighted, 64.1% unweighted; areas C, D, E, F, G, J, K and L; 1,680 open issues; 20.4k stars; v0.21.0). Estimated readiness and hours not re-judged. |
