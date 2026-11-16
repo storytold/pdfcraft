@@ -475,3 +475,31 @@ fn a_widget_given_its_subtype_by_reference_is_flattened_before_it_goes() {
     assert!(direct.contains("/PCFl0 Do"), "{direct}");
     assert_eq!(after(true), direct);
 }
+
+/// Remove Hidden Information judges an annotation written in place in `/Annots` as one held by
+/// reference, its `/Subtype` given directly or by reference: a pop-up whose comment goes goes with
+/// it, so its `/Parent` keeps nothing of the comment, and a widget's action goes with the links
+/// and actions.
+#[test]
+fn annotations_written_in_place_are_removed_as_ones_held_by_reference() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    for (popup, widget) in [("/Popup", "/Widget"), ("5 0 R", "6 0 R")] {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [4 0 R << /Type /Annot /Subtype {popup} /Rect [100 100 200 150] /Parent 4 0 R >> \
+                 << /Type /Annot /Subtype {widget} /Rect [10 10 50 30] /A << /S /JavaScript /JS (app.alert\\(ACTIONSECRET\\)) >> >>] >>"
+            )
+            .into_bytes(),
+            b"<< /Type /Annot /Subtype /Text /Rect [10 200 30 220] /Contents (COMMENTSECRET) >>".to_vec(),
+            b"/Popup".to_vec(),
+            b"/Widget".to_vec(),
+        ]);
+        remove_hidden(&mut doc, &[Hidden::Comments, Hidden::LinksActionsScripts]).unwrap();
+        assert!(!saved_holds(&doc, b"COMMENTSECRET"), "{popup}");
+        assert!(!saved_holds(&doc, b"ACTIONSECRET"), "{widget}");
+        let page = pdfcraft_model::pages(&doc).swap_remove(0);
+        assert_eq!(crate::annots_of(&doc, &page.dict).len(), 1, "the widget stays, {widget}");
+    }
+}

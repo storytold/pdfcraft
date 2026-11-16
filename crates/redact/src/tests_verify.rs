@@ -1037,6 +1037,40 @@ fn an_image_a_type3_glyph_draws_is_found_with_subtypes_given_by_reference() {
     }
 }
 
+/// The same, the Type 3 font with `/Resources` of its own: the image named only there, where its
+/// glyph looks it up (ISO 32000-2 §9.6.4), or only in the page's, where the renderer falls back to
+/// for a name the font's lack or give no stream for (null, a missing object, a dictionary). The
+/// proof finds it either way.
+#[test]
+fn an_image_a_type3_glyph_draws_through_its_fonts_resources_is_found() {
+    for (font_resources, page_resources) in [
+        ("<< /XObject << /Im0 9 0 R >> >>", "/Font << /F1 5 0 R /T3 7 0 R >>"),
+        ("<< /ProcSet [/PDF /ImageC] >>", "/Font << /F1 5 0 R /T3 7 0 R >> /XObject << /Im0 9 0 R >>"),
+        ("<< >>", "/Font << /F1 5 0 R /T3 7 0 R >> /XObject << /Im0 9 0 R >>"),
+        ("<< /XObject << /Im0 null >> >>", "/Font << /F1 5 0 R /T3 7 0 R >> /XObject << /Im0 9 0 R >>"),
+        ("<< /XObject << /Im0 99 0 R >> >>", "/Font << /F1 5 0 R /T3 7 0 R >> /XObject << /Im0 9 0 R >>"),
+        ("<< /XObject << /Im0 7 0 R >> >>", "/Font << /F1 5 0 R /T3 7 0 R >> /XObject << /Im0 9 0 R >>"),
+    ] {
+        let spec = Spec {
+            resources: page_resources,
+            extra: vec![
+                format!(
+                    "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 8 0 R >> \
+                     /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] /Resources {font_resources} >>"
+                )
+                .into_bytes(),
+                stream("", b"10 0 d0 /Im0 Do"),
+                stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"o"),
+            ],
+            ..Spec::default()
+        };
+        let mut doc = open(build_with(b"BT /F1 10 Tf 10 100 Td (SECRETVALUE) Tj ET BT /T3 12 Tf 150 20 Td (a) Tj ET", spec));
+        mark(&mut doc, &[REGION]);
+        let (_, proof) = run(&mut doc);
+        assert_eq!(proof.entries[0].status, Status::Unverifiable, "{font_resources}: {}", proof.to_text());
+    }
+}
+
 #[test]
 fn an_ambiguous_needle_is_still_swept_outside_page_content() {
     // The word also stays on the page legitimately (so page text, the raw file and decoded

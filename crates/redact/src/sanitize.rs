@@ -910,10 +910,25 @@ fn drop_page_annotations(doc: &mut Document, which: &[Hidden], fields: bool) -> 
         let list = annots_of(doc, &p.dict);
         let mut kept = Vec::new();
         for a in list {
+            // An annotation written in place (`/Annots` should hold references, ISO 32000-2
+            // Table 31) is judged as one held by reference: a pop-up goes with its parent, and a
+            // widget's action with the links and actions.
             let Some(r) = a.as_ref() else {
-                if !doc.resolve(&a).as_dict().is_some_and(|d| drop_annot(doc, d)) {
+                let Object::Dict(mut d) = (*doc.resolve(&a)).clone() else {
                     kept.push(a);
+                    continue;
+                };
+                let parent_gone = d.get(b"Parent").and_then(Object::as_ref).is_some_and(|x| removed.contains(&x));
+                let subtype = crate::subtype(doc, &d);
+                if drop_annot(doc, &d) || (subtype.as_deref() == Some(b"Popup") && parent_gone) {
+                    continue;
                 }
+                if which.contains(&Hidden::LinksActionsScripts) && (d.contains(b"AA") || (subtype.as_deref() == Some(b"Widget") && d.contains(b"A")))
+                {
+                    d.remove(b"AA");
+                    d.remove(b"A");
+                }
+                kept.push(Object::Dict(d));
                 continue;
             };
             let d = doc.get(r).as_dict().cloned().unwrap_or_default();

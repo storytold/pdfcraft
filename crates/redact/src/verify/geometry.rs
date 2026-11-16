@@ -290,20 +290,23 @@ impl Geo<'_> {
     /// placed or cleared by this check: if `res` reaches any, every region is unverifiable.
     fn hidden_images(&mut self, res: &Dict, depth: usize) {
         let doc = self.doc;
-        let mut streams: Vec<(Option<ObjRef>, Stream)> = Vec::new();
-        let take = |o: &Object, streams: &mut Vec<(Option<ObjRef>, Stream)>| {
+        // Each stream with the resources it looks names up in when it has none of its own: `res`
+        // (`None`), or a Type 3 font's.
+        type Found = Vec<(Option<ObjRef>, Stream, Option<std::rc::Rc<Dict>>)>;
+        let mut streams: Found = Vec::new();
+        let take = |o: &Object, own: Option<&std::rc::Rc<Dict>>, streams: &mut Found| {
             if let Object::Stream(s) = &*doc.resolve(o) {
-                streams.push((o.as_ref(), s.clone()));
+                streams.push((o.as_ref(), s.clone(), own.cloned()));
             }
         };
         for (_, p) in res_dict(doc, res, b"Pattern").iter() {
-            take(p, &mut streams);
+            take(p, None, &mut streams);
         }
         for (_, g) in res_dict(doc, res, b"ExtGState").iter() {
             if let Some(Object::Dict(sm)) = doc.resolve(g).as_dict().and_then(|g| g.get(b"SMask")).map(|m| (*doc.resolve(m)).clone()).as_ref()
                 && let Some(group) = sm.get(b"G")
             {
-                take(group, &mut streams);
+                take(group, None, &mut streams);
             }
         }
         for (_, f) in res_dict(doc, res, b"Font").iter() {
@@ -311,19 +314,33 @@ impl Geo<'_> {
             if crate::subtype(doc, &font).as_deref() != Some(b"Type3") {
                 continue;
             }
+            // A glyph looks its names up in its font's /Resources (ISO 32000-2 §9.6.4). The renderer
+            // falls back to these for a name the font's lack or give no stream for (null, a missing
+            // object, a dictionary), and for every name when the font has none, so its XObjects
+            // are searched in both, the font's first.
+            let font_res = font.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).map(|mut own| {
+                let mut xobjects = res_dict(doc, res, b"XObject");
+                for (name, x) in res_dict(doc, &own, b"XObject").iter() {
+                    if matches!(&*doc.resolve(x), Object::Stream(_)) {
+                        xobjects.set(name.to_vec(), x.clone());
+                    }
+                }
+                own.set(b"XObject".to_vec(), Object::Dict(xobjects));
+                std::rc::Rc::new(own)
+            });
             if let Some(procs) = font.get(b"CharProcs").and_then(|c| doc.resolve(c).as_dict().cloned()) {
                 for (_, p) in procs.iter() {
-                    take(p, &mut streams);
+                    take(p, font_res.as_ref(), &mut streams);
                 }
             }
         }
-        for (id, s) in streams {
+        for (id, s, own) in streams {
             if let Some(r) = id
                 && !self.searched.insert(r)
             {
                 continue;
             }
-            match self.has_image(&s, res, depth + 1) {
+            match self.has_image(&s, own.as_deref().unwrap_or(res), depth + 1) {
                 Ok(false) => {}
                 Ok(true) => self.unverifiable("an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared"),
                 Err(()) => self.unverifiable("a pattern, soft mask or Type3 glyph can't be read in full"),
