@@ -19,7 +19,7 @@ The [PDF workflow research reference](research/pdf-workflows/README.md) collects
 - **217 automation tools** (`crates/automation/src/tools.rs`), so every UI action can be checked
   headlessly.
 - **View area of the checklist: 66.7% breadth** (56 shipped, 16 partial of 96). All three counted on
-  2026-11-11.
+  2026-11-16.
 
 No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24).
 
