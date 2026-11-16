@@ -210,9 +210,9 @@ fn resolve_ref(r: &str, parent: &DataPath, record: Option<&DataPath>, star: usiz
 
 /// How many instances of the repeating subform `sf` under the container at `parent_som` the
 /// data holds: the nodes its reference matches when it ends in `[*]` (from the one its first
-/// instance takes on), else the groups named after it under its parent's data node. A
-/// subform with no data group of its own ([`Subform::data_name`]) and one that occurs once
-/// count none.
+/// instance takes on), the one node a reference without one names, else the groups named
+/// after it under its parent's data node. A subform with no data group of its own
+/// ([`Subform::data_name`]) and one that occurs once count none.
 pub(crate) fn data_instances(tpl: &Template, data: &DataNode, sf: &Subform, parent_som: &str) -> usize {
     if sf.occur.max == Some(1) {
         return 0;
@@ -225,6 +225,12 @@ pub(crate) fn data_instances(tpl: &Template, data: &DataNode, sf: &Subform, pare
         {
             return data.count(&path, &name).saturating_sub(first);
         }
+    }
+    // A reference that names one node: that node, once, when the data has it. Groups named after
+    // the subform aren't its instances ([`binds_elsewhere`]).
+    if let Some(r) = sf.common.data_ref.as_deref().filter(|_| sf.common.follows_ref) {
+        let record = record_path(tpl);
+        return resolve_ref(r, &parent, record.as_ref(), sf.common.star_ordinal).map_or(0, |path| usize::from(data.get(&path).is_some()));
     }
     sf.data_name().map_or(0, |name| {
         // Its first instance's data index: same-named objects before it in the data scope (one

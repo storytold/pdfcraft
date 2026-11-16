@@ -538,3 +538,16 @@ fn a_root_star_reference_from_record_takes_the_first_instance() {
     let (tpl, _) = parse(&xml).unwrap();
     assert_eq!(path(&tpl, "form[0].inner[0].x[0]"), "form[0].row[1].x[0]");
 }
+
+/// A repeating subform bound by a reference that names one node (no `[*]`) has that one node:
+/// one instance when the data has it, however many groups the data holds of the subform's name.
+#[test]
+fn a_repeating_subform_bound_to_one_node_lays_out_once() {
+    let body = format!(
+        r#"<subform name="row" layout="tb"><occur min="0" max="-1"/><bind match="dataRef" ref="$record.actual[0]"/><field name="qty" {TEXT}</field></subform>"#
+    );
+    let xml = xdp(&body, "<row/><row/><row/><actual><qty>7</qty></actual>");
+    let form = layout_xml(&xml).unwrap();
+    let values: Vec<Option<String>> = form.pages.iter().flat_map(|p| widgets(p)).map(|w| w.value.clone()).collect();
+    assert_eq!(values, [Some("7".to_string())]);
+}
