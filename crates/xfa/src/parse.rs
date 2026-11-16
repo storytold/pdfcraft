@@ -272,6 +272,7 @@ fn parse_common(n: XmlNode, warnings: &mut Vec<String>) -> Common {
             .map(|r| r.trim().to_string())
             .filter(|r| !r.is_empty()),
         star_ordinal: 0,
+        follows_ref: false,
     }
 }
 
@@ -996,6 +997,7 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize, set_layou
         column_widths,
         overflow_leader: child(n, "overflow").and_then(|o| o.attribute("leader")).map(str::to_string).filter(|s| !s.is_empty()),
         unbound: child(n, "bind").and_then(|b| b.attribute("match")).is_some_and(|m| m.trim() == "none"),
+        adopted: Default::default(),
     }
 }
 
@@ -1327,6 +1329,7 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     let mut embedded = std::collections::BTreeSet::new();
     collect_embedded(&root_node, &mut embedded, 0);
     let mut tpl = Template { root: root_sf, page_roles, embedded, embedded_paths: Default::default(), cache: Default::default() };
+    crate::data::mark_bindings(&mut tpl);
     crate::data::number_star_refs(&mut tpl);
     let paths = crate::data::fields_with_ids(&tpl)
         .into_iter()

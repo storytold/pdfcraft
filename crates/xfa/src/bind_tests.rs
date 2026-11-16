@@ -385,3 +385,73 @@ fn a_signed_index_in_a_reference_is_not_read_as_an_absolute_one() {
     let (tpl, _) = parse(&xml).unwrap();
     assert_eq!(path(&tpl, "form[0].x[0]"), "form[0].x[0]");
 }
+
+/// The root subform binds by its own reference too, and what it holds binds under that node.
+#[test]
+fn the_root_subform_binds_by_its_reference() {
+    let xml = xdp(&format!(r#"<field name="x" {TEXT}</field>"#), "")
+        .replace(r#"<subform name="form" layout="tb">"#, r#"<subform name="form" layout="tb"><bind match="dataRef" ref="$data.actual"/>"#);
+    let (tpl, _) = parse(&xml).unwrap();
+    assert_eq!(path(&tpl, "form[0].x[0]"), "actual[0].x[0]");
+}
+
+/// An object bound by a reference it follows takes no node named after it, so a same-named
+/// object after it that binds by name takes the first such node.
+#[test]
+fn a_sibling_bound_by_its_reference_takes_no_data_index() {
+    let body = format!(
+        r#"<field name="x" {TEXT}<bind match="dataRef" ref="$.other"/></field>
+<field name="x" {TEXT}</field>
+<field name="x" {TEXT}<bind match="dataRef" ref="$form.elsewhere"/></field>
+<field name="x" {TEXT}</field>"#
+    );
+    let (tpl, _) = parse(&xdp(&body, "")).unwrap();
+    assert_eq!(path(&tpl, "form[0].x[1]"), "form[0].x[0]");
+    // A reference that can't be followed binds by name, so it does take a node.
+    assert_eq!(path(&tpl, "form[0].x[2]"), "form[0].x[1]");
+    assert_eq!(path(&tpl, "form[0].x[3]"), "form[0].x[2]");
+}
+
+/// `[*]` numbering settles however deeply containers bound by `[*]` nest, up to the nesting
+/// limit: here two chains of ten, each level bound by an absolute reference of its own, so the
+/// second chain takes the second instance at every level.
+#[test]
+fn star_numbering_settles_through_deep_nesting() {
+    let chain = |c: &str| {
+        let mut s = format!(r#"<field name="v{c}" {TEXT}<bind match="dataRef" ref="$.v[*]"/></field>"#);
+        for level in (0..10).rev() {
+            s = format!(r#"<subform name="{c}{level}" layout="tb"><bind match="dataRef" ref="$data.l{level}[*]"/>{s}</subform>"#);
+        }
+        s
+    };
+    let xml = xdp(&format!("{}{}", chain("a"), chain("b")), "");
+    let (tpl, _) = parse(&xml).unwrap();
+    let som = format!("form[0].{}.vb[0]", (0..10).map(|l| format!("b{l}[0]")).collect::<Vec<_>>().join("."));
+    // Each level binds by an absolute reference, so each settles in a pass of its own.
+    let want = "l9[1].v[0]";
+    assert_eq!(path(&tpl, &som), want);
+}
+
+/// Resolving a data path through `match="none"` sections looks at the siblings on the way, not
+/// at everything they hold: scripts resolve one for each field they touch, and a form with
+/// hundreds of such sections ran out of its script time when each lookup walked them all.
+#[test]
+fn data_paths_through_many_match_none_sections_stay_quick() {
+    let section = |i: usize| {
+        let fields: String = (0..40).map(|f| format!(r#"<field name="f{f}" {TEXT}</field>"#)).collect();
+        format!(
+            r#"<subform name="s{i}" layout="tb"><bind match="none"/><subform name="mid" layout="tb"><bind match="none"/><subform name="inner" layout="tb"><bind match="none"/>{fields}</subform></subform></subform>"#
+        )
+    };
+    let body: String = (0..1000).map(section).collect();
+    let (tpl, _) = parse(&xdp(&body, "")).unwrap();
+    let started = std::time::Instant::now();
+    let mut last = String::new();
+    for i in 0..1000 {
+        for f in [0, 13, 26, 39] {
+            last = path(&tpl, &format!("form[0].s{i}[0].mid[0].inner[0].f{f}[0]"));
+        }
+    }
+    assert_eq!(last, "form[0].f39[999]", "each section's field takes the next node of its name");
+    assert!(started.elapsed() < std::time::Duration::from_secs(1), "took {:?}", started.elapsed());
+}

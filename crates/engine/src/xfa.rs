@@ -313,9 +313,10 @@ fn has_node(n: &FormNode, som: &str, depth: usize) -> bool {
     depth <= 64 && (n.som == som || n.children.iter().any(|c| has_node(c, som, depth + 1)))
 }
 
-fn count_instances(root: &FormNode, parent_som: &str, name: &str) -> usize {
+fn count_instances(tpl: &Template, root: &FormNode, parent_som: &str, name: &str) -> usize {
     let parent = if parent_som.is_empty() { Some(root) } else { find_container(root, parent_som, 0) };
-    parent.map_or(0, |p| p.children.iter().filter(|c| c.name == name).count())
+    // A same-named sibling with no data group named after it isn't one of the instances.
+    parent.map_or(0, |p| p.children.iter().filter(|c| c.name == name && !pdfcraft_xfa::binds_elsewhere(tpl, &c.som)).count())
 }
 
 /// An instance SOM (`…table[0].row[2]`) split into its parent's data path (areas left out,
@@ -877,7 +878,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                 if let XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } = e
                     && let Some((_, parent_som, name, _)) = split_instance(tpl, som)
                 {
-                    let have = count_instances(&live.root, &parent_som, &name);
+                    let have = count_instances(tpl, &live.root, &parent_som, &name);
                     counts.entry((parent_som, name)).or_insert(have);
                 }
             }
@@ -1520,6 +1521,24 @@ mod tests {
             assert_eq!(target.as_deref(), after);
         }
         assert!(indexed_som_tail("form[0].row[bad]").is_none());
+    }
+
+    /// A same-named sibling with no data group of its own (`match="none"`) is not one of a
+    /// repeating subform's instances: counting it would make adding a row ask the data for
+    /// one row too many.
+    #[test]
+    fn instances_are_counted_without_same_named_siblings_bound_to_nothing() {
+        let (tpl, _) = pdfcraft_xfa::parse(
+            r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+                <subform name="form">
+                    <subform name="row"><bind match="none"/><field name="note"/></subform>
+                    <subform name="row"><occur min="1" max="4" initial="2"/><field name="qty"/></subform>
+                </subform>
+            </template>"#,
+        )
+        .unwrap();
+        let live = pdfcraft_xfa::form_tree(&tpl, None, &Default::default());
+        assert_eq!(count_instances(&tpl, &live.root, "form[0]", "row"), 2);
     }
 
     /// An instance of a repeating subform with `<bind match="none"/>`, or of a nameless one, has

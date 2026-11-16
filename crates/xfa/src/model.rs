@@ -401,6 +401,9 @@ pub struct Common {
     /// so this object's first instance takes the instance after theirs. Set once the template
     /// is parsed (`data::number_star_refs`).
     pub star_ordinal: usize,
+    /// Whether it binds by `data_ref`: it has one this binding follows (one it doesn't binds by
+    /// name). Set once the template is parsed (`data::mark_bindings`).
+    pub follows_ref: bool,
 }
 
 /// A container's or object's `<traversal>` links, as SOM references relative to it. Only the
@@ -553,6 +556,9 @@ pub struct Subform {
     /// (XFA 3.3 p. 176). Data binding treats it as a nameless subform, so what it holds binds
     /// in the enclosing data scope, while scripts still reach it by name (p. 194).
     pub unbound: bool,
+    /// For an `unbound` subform: how many objects of each name it hands to the enclosing data
+    /// scope, once for one instance of it (see `data::mark_bindings`). Empty otherwise.
+    pub adopted: std::collections::HashMap<String, usize>,
 }
 
 impl Subform {

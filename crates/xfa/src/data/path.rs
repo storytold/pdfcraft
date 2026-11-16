@@ -98,7 +98,10 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
         let index = if i == 0 { page_area_index.unwrap_or(index) } else { index };
         // What the segment names, its data index, and the explicit data reference it binds by.
         let (found, index, data_ref) = match level {
-            None if i == 0 && tpl.root.common.name.as_deref() == Some(name.as_str()) => (Some(Container::Children(&tpl.root.children)), index, None),
+            None if i == 0 && tpl.root.common.name.as_deref() == Some(name.as_str()) => {
+                let data_ref = tpl.root.common.data_ref.as_deref().map(|r| (r, tpl.root.common.star_ordinal));
+                (Some(Container::Children(&tpl.root.children)), index, data_ref)
+            }
             // Master-page objects are named under their page area, which is a data scope.
             None if i == 0 => match tpl.root.page_set.as_ref().and_then(|ps| ps.areas.iter().find(|a| a.name.as_deref() == Some(name.as_str()))) {
                 Some(area) => (Some(Container::Children(&area.items)), index, None),
@@ -219,8 +222,10 @@ pub(crate) fn data_instances(tpl: &Template, data: &DataNode, sf: &Subform, pare
 }
 
 /// Number the objects whose reference has a `[*]` ([`Common::star_ordinal`]): each counts the
-/// objects before it, in the form's order, with the same reference in the same data scope (the
-/// data path of its container). Master-page objects are left at 0.
+/// objects before it, in the form's order, whose reference matches the same nodes: "one more
+/// instance of the object matching the `*`" (XFA 3.3 p. 199). A relative reference matches
+/// nodes under its container's data node, so the same reference in two scopes counts apart; an
+/// absolute one matches the same nodes wherever it is. Master-page objects are left at 0.
 pub(crate) fn number_star_refs(tpl: &mut Template) {
     fn has_star(c: &Common) -> bool {
         c.name.is_some() && c.data_ref.as_deref().is_some_and(|r| r.split('.').any(is_star_segment))
@@ -233,7 +238,14 @@ pub(crate) fn number_star_refs(tpl: &mut Template) {
         for (i, n) in nodes.iter().enumerate() {
             let c = n.common();
             if has_star(c) {
-                let key = (data_path(tpl, som), c.data_ref.clone().unwrap_or_default());
+                // The nodes the reference matches: its path with each `*` left open. A reference this
+                // binding can't follow is grouped by its text in its container's scope.
+                let parent = data_path(tpl, som);
+                let r = c.data_ref.clone().unwrap_or_default();
+                let key = match resolve_ref(&r, &parent, tpl.root.common.name.as_deref(), STAR_OPEN) {
+                    Some(matched) => (matched, String::new()),
+                    None => (parent, r),
+                };
                 let count = seen.entry(key).or_insert(0);
                 out.push(*count);
                 *count = count.saturating_add(1);
@@ -291,7 +303,11 @@ pub(crate) fn number_star_refs(tpl: &mut Template) {
 
 /// Most passes [`number_star_refs`] makes: one per level of containers nested inside each other
 /// that are bound by a `[*]` reference.
-const MAX_STAR_PASSES: usize = 8;
+const MAX_STAR_PASSES: usize = MAX_DEPTH + 1;
+
+/// The instance a `*` takes while [`number_star_refs`] groups references by the nodes they
+/// match: one no real instance number takes, so the `*` stays open.
+const STAR_OPEN: usize = usize::MAX;
 
 /// Whether `name` is a plain element name in a `bind ref` (an empty one is part of a `..`).
 fn ref_name(name: &str) -> bool {
@@ -357,18 +373,21 @@ fn named_in<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Op
     if depth > MAX_DEPTH {
         return None;
     }
-    let sibs = SomIndices::of(nodes);
+    // Same-named siblings count up ([`SomIndices`]); only the ones named `name` matter here, so
+    // they are counted on the way rather than numbering every sibling.
+    let mut sib = 0usize;
     let mut repeating = None;
     for (i, n) in nodes.iter().enumerate() {
         if n.common().name.as_deref() != Some(name) {
             continue;
         }
-        let sib = sibs.at(i);
-        if sib == index {
+        let this = sib;
+        sib = sib.saturating_add(1);
+        if this == index {
             return Some(Step { siblings: nodes, pos: i, node: n, instance: 0 });
         }
-        if sib < index && matches!(n, Node::Subform(sf) if sf.occur.max != Some(1)) {
-            repeating = Some(Step { siblings: nodes, pos: i, node: n, instance: index - sib });
+        if this < index && matches!(n, Node::Subform(sf) if sf.occur.max != Some(1)) {
+            repeating = Some(Step { siblings: nodes, pos: i, node: n, instance: index - this });
         }
     }
     repeating.or_else(|| {
@@ -390,31 +409,102 @@ fn named_in<'a>(nodes: &'a [Node], name: &str, index: usize, depth: usize) -> Op
 fn data_index(through: &[Step], at: &Step, name: &str) -> usize {
     let mut index = 0usize;
     for step in through {
-        index = index.saturating_add(adopted(step.siblings.get(..step.pos).unwrap_or(&[]), name, 0));
+        index = index.saturating_add(adopted(step.siblings.get(..step.pos).unwrap_or(&[]), name));
         if let Node::Subform(sf) = step.node {
-            index = index.saturating_add(step.instance.saturating_mul(adopted(&sf.children, name, 0)));
+            index = index.saturating_add(step.instance.saturating_mul(sf.adopted.get(name).copied().unwrap_or(0)));
         }
     }
-    index.saturating_add(adopted(at.siblings.get(..at.pos).unwrap_or(&[]), name, 0)).saturating_add(at.instance)
+    index.saturating_add(adopted(at.siblings.get(..at.pos).unwrap_or(&[]), name)).saturating_add(at.instance)
 }
 
 /// How many objects named `name` the data scope these `nodes` sit in takes from them: one for
-/// each such field, exclusion group, draw or subform, and what a `match="none"` subform holds,
+/// each such field, exclusion group, draw or subform (unless it binds by a reference it follows),
+/// and what a `match="none"` subform holds,
 /// once for each instance it lays out. Areas and nameless subforms keep their contents' own
 /// numbering, as they always have here.
-fn adopted(nodes: &[Node], name: &str, depth: usize) -> usize {
-    if depth > MAX_DEPTH {
-        return 0;
+fn adopted(nodes: &[Node], name: &str) -> usize {
+    nodes.iter().fold(0usize, |n, node| n.saturating_add(adopted_one(node, name)))
+}
+
+/// What one object hands its data scope of the objects named `name`, as [`adopted`] counts.
+fn adopted_one(node: &Node, name: &str) -> usize {
+    match node {
+        // Counted once, after parsing ([`mark_bindings`]).
+        Node::Subform(sf) if sf.unbound => sf.adopted.get(name).copied().unwrap_or(0).saturating_mul(crate::layout::instance_count(&sf.occur, 0)),
+        Node::Area(_) => 0,
+        Node::Subform(sf) if sf.common.name.is_none() => 0,
+        // An object bound by a reference it follows takes no node named after it.
+        other if other.common().follows_ref => 0,
+        other => usize::from(other.common().name.as_deref() == Some(name)),
     }
-    nodes.iter().fold(0usize, |n, node| {
-        let here = match node {
-            Node::Subform(sf) if sf.unbound => adopted(&sf.children, name, depth + 1).saturating_mul(crate::layout::instance_count(&sf.occur, 0)),
-            Node::Area(_) => 0,
-            Node::Subform(sf) if sf.common.name.is_none() => 0,
-            other => usize::from(other.common().name.as_deref() == Some(name)),
-        };
-        n.saturating_add(here)
-    })
+}
+
+/// Settle what [`data_path`] needs to know of every object, once, after parsing: whether it
+/// binds by a reference this binding follows ([`Common::follows_ref`]), and for each
+/// `match="none"` subform, how many objects of each name it hands to the enclosing data scope
+/// ([`Subform::adopted`]), counted from the inside out. Looking these up when each path is
+/// resolved would walk large parts of the template for every field a script reads.
+pub(crate) fn mark_bindings(tpl: &mut Template) {
+    fn mark(nodes: &mut [Node], depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        for node in nodes.iter_mut() {
+            match node {
+                Node::Subform(sf) => {
+                    mark(&mut sf.children, depth + 1);
+                    if sf.unbound {
+                        let mut counts: HashMap<String, usize> = HashMap::new();
+                        for child in &sf.children {
+                            let inner = match child {
+                                Node::Subform(inner) if inner.unbound => Some(&inner.adopted),
+                                _ => None,
+                            };
+                            match inner {
+                                Some(map) => {
+                                    let times = match child {
+                                        Node::Subform(c) => crate::layout::instance_count(&c.occur, 0),
+                                        _ => 1,
+                                    };
+                                    for (name, n) in map {
+                                        let entry = counts.entry(name.clone()).or_insert(0);
+                                        *entry = entry.saturating_add(n.saturating_mul(times));
+                                    }
+                                }
+                                None => {
+                                    if let Some(name) = child.common().name.as_deref()
+                                        && adopted_one(child, name) > 0
+                                    {
+                                        let entry = counts.entry(name.to_string()).or_insert(0);
+                                        *entry = entry.saturating_add(1);
+                                    }
+                                }
+                            }
+                        }
+                        sf.adopted = counts;
+                    }
+                }
+                Node::Area(a) => mark(&mut a.children, depth + 1),
+                Node::Field(_) | Node::ExclGroup(_) | Node::Draw(_) => {}
+            }
+            let c = match node {
+                Node::Subform(s) => &mut s.common,
+                Node::Area(a) => &mut a.common,
+                Node::Field(f) => &mut f.common,
+                Node::ExclGroup(g) => &mut g.common,
+                Node::Draw(d) => &mut d.common,
+            };
+            c.follows_ref = c.data_ref.as_deref().is_some_and(|r| resolve_ref(r, &DataPath::new(), Some("record"), 0).is_some());
+        }
+    }
+    let root = &mut tpl.root;
+    root.common.follows_ref = root.common.data_ref.as_deref().is_some_and(|r| resolve_ref(r, &DataPath::new(), Some("record"), 0).is_some());
+    mark(&mut root.children, 1);
+    if let Some(ps) = root.page_set.as_mut() {
+        for area in &mut ps.areas {
+            mark(&mut area.items, 1);
+        }
+    }
 }
 
 /// The template field the object at a SOM path is an instance of, each segment's number counted
