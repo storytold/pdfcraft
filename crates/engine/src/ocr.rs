@@ -651,7 +651,14 @@ pub fn all_languages() -> Vec<(&'static str, &'static str)> {
 /// The English name of a document language code from [`all_languages`] (the interface
 /// translates it); `None` for a code no engine knows.
 pub fn language_name(code: &str) -> Option<&'static str> {
-    all_languages().into_iter().find(|l| l.0 == code).map(|l| l.1)
+    if let Some(l) = LANGUAGES.iter().find(|l| l.0 == code) {
+        return Some(l.1);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(l) = pdfcraft_ocr::tesseract::LANGUAGE_NAMES.iter().find(|l| l.0 == code) {
+        return Some(l.1);
+    }
+    None
 }
 
 /// The language a run with `engine` is asked for: `language` when that engine can be asked
@@ -684,6 +691,8 @@ pub fn document_languages(engine: EngineChoice) -> Vec<(&'static str, &'static s
     if engine == EngineChoice::Tesseract {
         let configured = std::env::var_os("PDFCRAFT_TESSERACT").map(|v| v.to_string_lossy().into_owned());
         if let Probe::Known(Some(tesseract)) = tesseract_engine_now(configured.as_deref()) {
+            // The probe that found the program already listed its packs: this reads that
+            // list and starts no process.
             let installed: Vec<String> = tesseract.languages().into_iter().map(|(code, _)| code).collect();
             return languages_with(&installed);
         }
@@ -2197,6 +2206,41 @@ mod tests {
         let saved = s.save_bytes(id).unwrap();
         let reopened = s.open("searchable.pdf", None, saved, None).unwrap();
         assert!(crate::tests::page_texts(&s, reopened)[0].contains("تاريخ الجلسة 2026 رقم"));
+
+        // What scans really hold between the words: brackets and the Arabic comma, a Latin
+        // word, a date and a percentage, and a left-to-right line on the same page.
+        let id = s.open("mixed.pdf", None, Arc::new(fixture(1)), None).unwrap();
+        // A word with its left edge and width; a line of them, its baseline, and how it reads.
+        type Placed = (&'static str, f64, f64);
+        type Line = (&'static [Placed], f64, &'static str);
+        let lines: [Line; 4] = [
+            (&[("قال", 150.0, 15.0), ("(نص)", 125.0, 20.0), ("هنا،", 100.0, 20.0), ("ثم", 85.0, 10.0)], 250.0, "قال (نص) هنا، ثم"),
+            (&[("العقد", 150.0, 20.0), ("Contract", 115.0, 30.0), ("بين", 97.0, 13.0), ("الطرفين", 70.0, 23.0)], 230.0, "العقد Contract بين الطرفين"),
+            (
+                &[("بتاريخ", 150.0, 23.0), ("16/11/2026", 115.0, 30.0), ("بنسبة", 92.0, 20.0), ("15%", 75.0, 13.0)],
+                210.0,
+                "بتاريخ 16/11/2026 بنسبة 15%",
+            ),
+            (&[("Agreement", 20.0, 35.0), ("No.", 60.0, 13.0), ("42", 78.0, 8.0)], 190.0, "Agreement No. 42"),
+        ];
+        let words: Vec<PlacedWord> = lines
+            .iter()
+            .flat_map(|(line, y, _)| {
+                line.iter().map(|(text, x, width)| PlacedWord {
+                    text: (*text).to_string(),
+                    origin: [*x, *y],
+                    across: [*width, 0.0],
+                    up: [0.0, 8.0],
+                    confidence: None,
+                    source: "tesseract".into(),
+                })
+            })
+            .collect();
+        s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+        let text = crate::tests::page_texts(&s, id)[0].clone();
+        for (_, _, read) in lines {
+            assert!(text.contains(read), "{read} in {text}");
+        }
     }
 
     /// The fontless searchable layer retains its original pixels, handles multiple code

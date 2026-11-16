@@ -1168,7 +1168,12 @@ impl OcrVerify {
                 &[("n", &found_words.to_string()), ("m", &read.to_string()), ("t", &total.to_string())],
             )
         } else if found_words == 0 {
-            tl!("OCR complete — no text recognized on this page.").to_string()
+            // A page that could not be read says why (a language pack that is not installed,
+            // for one); "no text recognized" is for a page that was read and has none.
+            match self.pages.iter().find_map(|p| p.failure()) {
+                Some(why) => why.to_string(),
+                None => tl!("OCR complete — no text recognized on this page.").to_string(),
+            }
         } else {
             crate::i18n::fmt(
                 tl!("Read {n} words on {m} of {t} pages"),
@@ -3057,6 +3062,23 @@ mod tests {
         assert!(v.undo(), "failed undo keeps its operation for retry");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "external\noriginal\n");
         assert_eq!(v.review.dictionary, std::collections::BTreeSet::from(["external".into(), "original".into()]));
+    }
+
+    /// A run on the Verify screen that could not read its pages says why in the status,
+    /// not "no text recognized"; a page that was read and has no text still says that.
+    #[test]
+    fn a_run_that_could_not_read_says_why_in_the_status() {
+        let page =
+            |skipped: Option<&str>| OcrPage { page: 0, words: Vec::new(), already_on_page: 0, skipped: skipped.map(String::from), notes: Vec::new() };
+        let why = "tesseract failed: Error opening data file ara.traineddata";
+        let mut v = OcrVerify::default();
+        v.finished(vec![page(Some(why))], false);
+        assert_eq!(v.message, why);
+        assert_eq!(v.phase, Phase::ReviewReady);
+        v.finished(vec![page(None)], false);
+        assert!(v.message.contains("no text recognized"), "{}", v.message);
+        v.finished(vec![page(Some(pdfcraft_engine::ocr::PAGE_HAS_TEXT))], false);
+        assert!(v.message.contains("no text recognized"), "{}", v.message);
     }
 
     /// A re-read that failed says why (the reading's language pack was removed, say) and

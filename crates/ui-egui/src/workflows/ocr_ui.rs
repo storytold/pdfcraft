@@ -974,6 +974,25 @@ impl PdfCraftApp {
                 return;
             }
         };
+        let read = found.iter().filter(|p| p.skipped.is_none()).count();
+        // A page that could not be read (a language pack that is not installed, for one) is
+        // not a page that "already had text": its reason is said, each one once.
+        let mut failures: Vec<String> = Vec::new();
+        for why in found.iter().filter_map(|p| p.failure()) {
+            if !failures.iter().any(|f| f == why) {
+                failures.push(why.to_string());
+            }
+        }
+        // Nothing was read and a page says why: that is the result of a run the user asked
+        // for, whatever its output (not "0 words", and not an empty review to accept). A run
+        // Edit started stays silent, as before.
+        if !automatic
+            && read == 0
+            && let Some(why) = failures.first()
+        {
+            self.notify_error(why.clone());
+            return;
+        }
         // The dialog's "Editable text" choice is honored: the recognition is not written as an
         // invisible layer here. It opens in the OCR Verify screen, whose Accept produces the
         // editable document (a NEW file) the choice promises.
@@ -983,17 +1002,15 @@ impl PdfCraftApp {
             self.ocr_verify.dictionary_language = language;
             self.ocr_verify.load(doc, guard, found);
             self.ocr_verify.open = true;
-            self.notify_tr("Review the recognition, then Accept to write the editable document");
-            return;
-        }
-        let read = found.iter().filter(|p| p.skipped.is_none()).count();
-        // A page that could not be read (a language pack that is not installed, for one) is
-        // not a page that "already had text": its reason is said, each one once.
-        let mut failures: Vec<String> = Vec::new();
-        for why in found.iter().filter_map(|p| p.failure()) {
-            if !failures.iter().any(|f| f == why) {
-                failures.push(why.to_string());
+            // The pages that were read are there to review; a page that was not says why
+            // here, not only once it is selected in the review.
+            let mut msg = tl!("Review the recognition, then Accept to write the editable document").to_string();
+            for why in &failures {
+                msg.push_str("; ");
+                msg.push_str(why);
             }
+            self.notify(msg);
+            return;
         }
         let skipped = found.iter().filter(|p| p.skipped.is_some() && p.failure().is_none()).count();
         // The guard refuses a result that no longer fits its document (the user edited, or
@@ -1007,13 +1024,6 @@ impl PdfCraftApp {
                 }
                 // An automatic run that found nothing (a page that has text of its own) says nothing.
                 if automatic && words == 0 {
-                    return;
-                }
-                // Nothing was read and a page says why: that is the result, not "0 words".
-                if read == 0
-                    && let Some(why) = failures.first()
-                {
-                    self.notify_error(why.clone());
                     return;
                 }
                 let words_part = if words == 1 {
@@ -1075,12 +1085,23 @@ pub(crate) fn run_batch_files(
         let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), recognizers, javascript, |_, _| true);
         match r {
             Ok(res) if res.skipped() => skipped += 1,
+            // No page of the file could be read (a language pack that is not installed, for
+            // one): a failure with its reason, not "0 words", and no copy is written.
+            Ok(res) if res.words() == 0 && res.pages.iter().any(|p| p.failure().is_some()) => {
+                let why = res.pages.iter().find_map(|p| p.failure()).unwrap_or_default();
+                failed.push(format!("{name}: {why}"));
+            }
             Ok(res) => match write(&name, &res) {
                 Ok(()) => {
                     ok += 1;
                     words += res.words();
                     if let Some(note) = low_confidence_note(&name, &res, settings.low_confidence_threshold) {
                         notes.push(note);
+                    }
+                    // Some pages were read and one was not: the copy stands, and the summary
+                    // says which file and why.
+                    if let Some(why) = res.pages.iter().find_map(|p| p.failure()) {
+                        notes.push(format!("{name}: {why}"));
                     }
                 }
                 Err(e) => failed.push(format!("{name}: {e}")),
@@ -1508,8 +1529,70 @@ mod tests {
         let has_text = finish(&mut app, vec![page(Vec::new(), Some(pdfcraft_engine::ocr::PAGE_HAS_TEXT))]);
         assert!(has_text.contains("1 page already had text") && !has_text.contains("tesseract"), "{has_text}");
         // Some pages read, one not: the count stands and the reason follows it.
+        let word2 = word.clone();
         let mixed = finish(&mut app, vec![page(vec![word], None), page(Vec::new(), Some(why))]);
         assert!(mixed.starts_with("Recognized 1 word on 1 page") && mixed.ends_with(why) && !mixed.contains("already had text"), "{mixed}");
+        // The editable output: a run that read nothing says why and opens no empty review.
+        let guard = app.session.ocr_guard(id).unwrap();
+        let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page(Vec::new(), Some(why))])), cancel: false }));
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: true, language: "ar".into() });
+        app.poll_ocr();
+        assert_eq!(app.toast.take().map(|t| t.0).as_deref(), Some(why));
+        assert!(!app.ocr_verify.open, "there is nothing to review");
+        // One page read, one not: the review opens on what was read, and the message says
+        // why the other page was not.
+        let guard = app.session.ocr_guard(id).unwrap();
+        let pages = vec![page(vec![word2], None), page(Vec::new(), Some(why))];
+        let progress = Arc::new(Mutex::new(OcrProgress { total: 2, done: 2, result: Some(Ok(pages)), cancel: false }));
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: true, language: "ar".into() });
+        app.poll_ocr();
+        let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
+        assert!(toast.starts_with("Review the recognition") && toast.ends_with(why), "{toast}");
+        assert!(app.ocr_verify.open);
+    }
+
+    /// An engine that cannot read: every page comes back with its reason.
+    struct Failing;
+
+    impl Recognizer for Failing {
+        fn id(&self) -> &'static str {
+            "failing"
+        }
+        fn available(&self) -> bool {
+            true
+        }
+        fn languages(&self) -> Vec<(String, String)> {
+            vec![("en".into(), "English".into())]
+        }
+        fn recognize(
+            &self,
+            _image: &pdfcraft_ocr::OcrImage,
+            _options: &pdfcraft_ocr::RecognizeOptions,
+        ) -> Result<Vec<pdfcraft_ocr::Line>, pdfcraft_engine::ocr::OcrError> {
+            Err(pdfcraft_engine::ocr::OcrError::Process("Error opening data file ara.traineddata".into()))
+        }
+    }
+
+    /// A batch whose engine cannot read a file (the language pack is not installed): the
+    /// file is a failure with the engine's reason, and no copy is written for it. Before, it
+    /// was counted as recognized, with 0 words, and an unchanged copy was written.
+    #[test]
+    fn a_batch_file_that_could_not_be_read_fails_with_its_reason() {
+        let s = pdfcraft_engine::Session::new();
+        let pdf = s.create_from_text("t", "fake scan").expect("fixture");
+        let files = vec![("scan.pdf".into(), pdf.to_vec())];
+        let progress = Mutex::new(BatchProgress { total: files.len(), ..Default::default() });
+        let recognizers = Recognizers { primary: Arc::new(Failing), secondary: None };
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let w = writes.clone();
+        let settings = OcrSettings { skip_text_pages: false, ..Default::default() };
+        let msg = run_batch_files(files, settings, &recognizers, true, &progress, move |_, _| {
+            w.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
+        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 0, "no copy of a file that was not read");
+        assert!(msg.contains("Recognized 0 words in 0 files"), "{msg}");
+        assert!(msg.contains("failed: scan.pdf: tesseract failed: Error opening data file ara.traineddata"), "{msg}");
     }
 
     /// A Tesseract language (#7496) is kept with Tesseract chosen, through the preferences
