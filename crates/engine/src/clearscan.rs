@@ -371,6 +371,12 @@ impl Session {
         let pages = resolve_pages(count, pages)?;
         let native = (0..count).map(|page| native_scale(doc, page)).collect();
         let cos = doc.editor.as_ref().map(|e| &e.cos).ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
+        if let Some(p) = cos.permissions() {
+            crate::edit::check_permission(
+                &Edit::ReplacePageContent { pages: Vec::new(), name: String::new(), bytes: Arc::new(Vec::new()), src_pages: Vec::new() },
+                &p,
+            )?;
+        }
         let tagged_pages: std::collections::HashSet<usize> = if pages.is_empty() {
             std::collections::HashSet::new()
         } else {
@@ -414,8 +420,17 @@ impl Session {
     ) -> Result<ClearScanReport, ClearScanError> {
         let job = self.clearscan_job(id, pages, settings)?;
         let built = job.run(progress)?;
-        let report = built.report;
-        self.apply_clearscan(id, built.built)?;
+        let mut report = built.report;
+        let partitioned = self.partition_built(id, built.built)?;
+        for (page, err) in partitioned.rejected {
+            let msg = err.to_string();
+            if let Some(slot) = report.pages.iter_mut().find(|p| p.page == page) {
+                *slot = failed_page(page, &msg);
+            }
+        }
+        if !partitioned.edits.is_empty() {
+            self.apply(id, Edit::Batch { label: "ClearScan".into(), edits: partitioned.edits })?;
+        }
         Ok(report)
     }
 
@@ -428,18 +443,54 @@ impl Session {
         if built.is_empty() {
             return Ok(());
         }
-        let edits = built
-            .into_iter()
-            .map(|(page, pdf)| Edit::ReplacePageContent {
-                pages: vec![page],
-                name: format!("clearscan-{}.pdf", page.saturating_add(1)),
-                bytes: Arc::new(pdf),
-                src_pages: vec![0],
-            })
-            .collect();
-        self.apply(id, Edit::Batch { label: "ClearScan".into(), edits })?;
+        let mut partitioned = self.partition_built(id, built)?;
+        if partitioned.edits.is_empty()
+            && let Some((_, err)) = partitioned.rejected.pop()
+        {
+            return Err(ClearScanError::Edit(err));
+        }
+        if !partitioned.edits.is_empty() {
+            self.apply(id, Edit::Batch { label: "ClearScan".into(), edits: partitioned.edits })?;
+        }
         Ok(())
     }
+
+    fn partition_built(&self, id: DocId, built: Vec<(usize, Vec<u8>)>) -> Result<PartitionedBuilt, ClearScanError> {
+        if built.is_empty() {
+            return Ok(PartitionedBuilt::default());
+        }
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        if let Some(why) = &doc.read_only_reason {
+            return Err(ClearScanError::Edit(EditError::ReadOnly(why.clone())));
+        }
+        let cos = doc.editor.as_ref().map(|e| &e.cos).ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
+        if let Some(p) = cos.permissions() {
+            crate::edit::check_permission(
+                &Edit::ReplacePageContent { pages: Vec::new(), name: String::new(), bytes: Arc::new(Vec::new()), src_pages: Vec::new() },
+                &p,
+            )?;
+        }
+        let mut edits = Vec::with_capacity(built.len());
+        let mut rejected = Vec::new();
+        for (page, pdf) in built {
+            let name = format!("clearscan-{}.pdf", page.saturating_add(1));
+            let bytes = Arc::new(pdf);
+            let mut probe = cos.clone();
+            let check = crate::sources::open_source_into(&name, &bytes, &probe)
+                .and_then(|src| pdfcraft_organize::replace_page_content(&mut probe, &[page], &src, &[0]).map_err(EditError::from));
+            match check {
+                Ok(()) => edits.push(Edit::ReplacePageContent { pages: vec![page], name, bytes, src_pages: vec![0] }),
+                Err(err) => rejected.push((page, err)),
+            }
+        }
+        Ok(PartitionedBuilt { edits, rejected })
+    }
+}
+
+#[derive(Default)]
+struct PartitionedBuilt {
+    edits: Vec<Edit>,
+    rejected: Vec<(usize, EditError)>,
 }
 
 fn failed_page(page: usize, error: &str) -> ClearScanPage {
@@ -1216,5 +1267,68 @@ mod tests {
         cos2.update_dict(root2, |c| c.set(b"StructTreeRoot".to_vec(), Object::Ref(tree2))).expect("set root2 tree");
         let pg_only_pdf = Arc::new(write_full(&cos2, &SaveOptions::default()).expect("write pg-only pdf"));
         assert_clearscan_skipped(pg_only_pdf, "tagged");
+    }
+
+    #[test]
+    fn apply_clearscan_isolates_failed_page_and_job_checks_modify_permission() {
+        let mut session = Session::new();
+        let blank2 = session.create_blank(200.0, 200.0, 2).expect("blank2");
+        let id = session.open("two.pdf", None, blank2, None).expect("open");
+
+        // Build a valid single-page replacement PDF with visible text.
+        let mut repl_cos = pdfcraft_cos::Document::open(session.create_blank(200.0, 200.0, 1).expect("repl")).expect("open repl");
+        let repl_page = pdfcraft_model::pages(&repl_cos)[0].obj;
+        let font_ref = repl_cos.add(pdfcraft_cos::Object::Dict({
+            let mut d = pdfcraft_cos::Dict::new();
+            d.set(b"Type".to_vec(), pdfcraft_cos::Object::name("Font"));
+            d.set(b"Subtype".to_vec(), pdfcraft_cos::Object::name("Type1"));
+            d.set(b"BaseFont".to_vec(), pdfcraft_cos::Object::name("Helvetica"));
+            d
+        }));
+        let mut fonts = pdfcraft_cos::Dict::new();
+        fonts.set(b"F1".to_vec(), pdfcraft_cos::Object::Ref(font_ref));
+        let mut res = pdfcraft_cos::Dict::new();
+        res.set(b"Font".to_vec(), pdfcraft_cos::Object::Dict(fonts));
+        let stream_ref = repl_cos
+            .add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), b"BT /F1 12 Tf 20 100 Td (Survived) Tj ET\n")));
+        repl_cos
+            .update_dict(repl_page, |d| {
+                d.set(b"Resources".to_vec(), pdfcraft_cos::Object::Dict(res));
+                d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(stream_ref));
+            })
+            .expect("set repl contents");
+        let valid_page_pdf = pdfcraft_cos::write_full(&repl_cos, &pdfcraft_cos::SaveOptions::default()).expect("write repl").to_vec();
+
+        // Mixing a valid built page with a corrupt built page still applies the valid page in one undo step.
+        session
+            .apply_clearscan(id, vec![(0, valid_page_pdf.clone()), (1, b"not a pdf".to_vec())])
+            .expect("valid page should survive corrupt sibling");
+        assert_eq!(session.get(id).expect("doc").can_undo(), Some("ClearScan"));
+        assert!(!session.get(id).expect("doc").text_lines(0).is_empty());
+        assert!(session.get(id).expect("doc").text_lines(1).is_empty());
+
+        // When every built entry is invalid, apply_clearscan returns an error.
+        let err = session.apply_clearscan(id, vec![(1, b"not a pdf".to_vec()), (99, valid_page_pdf)]).expect_err("all invalid should fail");
+        assert!(matches!(err, ClearScanError::Edit(_)), "unexpected error: {err:?}");
+
+        // A document encrypted with user permissions that forbid modification is rejected upfront by clearscan_job.
+        let mut plain = pdfcraft_cos::Document::open(session.create_blank(200.0, 200.0, 1).expect("plain")).expect("open plain");
+        plain
+            .set_encryption(&pdfcraft_cos::NewEncryption {
+                algorithm: pdfcraft_cos::Algorithm::Aes256,
+                user_password: "",
+                owner_password: "owner-secret",
+                permissions: 0,
+                encrypt_metadata: true,
+                seed: [7; 32],
+            })
+            .expect("encrypt");
+        let locked_bytes = Arc::new(pdfcraft_cos::write_full(&plain, &pdfcraft_cos::SaveOptions::default()).expect("write locked"));
+        let locked_id = session.open("locked.pdf", None, locked_bytes, None).expect("open locked");
+        let job_err = match session.clearscan_job(locked_id, &[], ClearScanSettings::default()) {
+            Ok(_) => panic!("modify=false should be rejected by clearscan_job"),
+            Err(err) => err,
+        };
+        assert!(matches!(job_err, ClearScanError::Edit(EditError::NotPermitted(_))), "unexpected error: {job_err:?}");
     }
 }
