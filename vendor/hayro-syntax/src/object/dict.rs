@@ -100,9 +100,12 @@ impl<'a> Dict<'a> {
     pub fn entries(&self) -> impl Iterator<Item = (Name<'a>, MaybeRef<Object<'a>>)> + '_ {
         let mut sorted_keys = self.keys().collect::<Vec<_>>();
         sorted_keys.sort_by(|n1, n2| n1.as_ref().cmp(n2.as_ref()));
-        sorted_keys.into_iter().map(|k| {
-            let obj = self.get_raw(k.deref()).unwrap();
-            (k, obj)
+        // PdfCraft patch (46): an entry whose value the first pass skipped but no object is read
+        // from (a lone sign such as `+` or `++`) is left out, as `get` leaves it unread, rather
+        // than unwrapping the failed read.
+        sorted_keys.into_iter().filter_map(|k| {
+            let obj = self.get_raw(k.deref())?;
+            Some((k, obj))
         })
     }
 
@@ -163,11 +166,13 @@ impl Debug for Dict<'_> {
 
             for (key, val) in offsets {
                 r.jump(*val);
-                debug_struct.field(
-                    &format!("{:?}", key.as_str()),
-                    &r.read_with_context::<MaybeRef<Object<'_>>>(&ReaderContext::dummy())
-                        .unwrap(),
-                );
+                // PdfCraft patch (46): an entry no object is read from is left out, as in
+                // `entries`, instead of unwrapping the failed read.
+                if let Some(value) =
+                    r.read_with_context::<MaybeRef<Object<'_>>>(&ReaderContext::dummy())
+                {
+                    debug_struct.field(&format!("{:?}", key.as_str()), &value);
+                }
             }
         }
         Ok(())

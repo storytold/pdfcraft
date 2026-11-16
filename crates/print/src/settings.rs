@@ -186,17 +186,20 @@ pub struct Settings {
 }
 
 /// How pages are rendered when printing as image.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Raster {
     /// Dots per inch, 72–600 (Acrobat offers 150, 300 and 600).
     pub dpi: f64,
     /// Render the pictures in grey, so the print-ready PDF itself is grayscale.
     pub grayscale: bool,
+    /// App-managed colour: the pictures are converted into the printer's profile. `None` leaves
+    /// colour to the printer.
+    pub colour: Option<crate::colour::ManagedColour>,
 }
 
 impl Default for Raster {
     fn default() -> Self {
-        Raster { dpi: 300.0, grayscale: false }
+        Raster { dpi: 300.0, grayscale: false, colour: None }
     }
 }
 
@@ -204,7 +207,7 @@ impl Default for Raster {
 /// Not when the pages go as grey pictures (`raster` with [`Raster::grayscale`]): they are grey
 /// already, so a driver that keeps no grayscale setting (Microsoft Print to PDF, many inkjets)
 /// still prints them instead of the job being refused (#5806).
-pub fn driver_needs_grayscale(grayscale: bool, raster: Option<Raster>) -> bool {
+pub fn driver_needs_grayscale(grayscale: bool, raster: Option<&Raster>) -> bool {
     grayscale && !raster.is_some_and(|r| r.grayscale)
 }
 

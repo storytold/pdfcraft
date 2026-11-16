@@ -101,11 +101,18 @@ pub struct FormView {
     /// The field and widget that had focus when it was last looked at: when the focus moves, the
     /// one it left runs its XFA exit scripts and the one it reached its enter scripts
     /// (`PdfCraftApp::run_focus_scripts`).
-    pub(crate) focused: Option<(String, usize)>,
+    pub(crate) focused: Option<(String, Option<ObjRef>, usize)>,
     /// The list box row clicked last, without Shift: (its field name, the row). A Shift-click picks
     /// the rows from it to the one clicked; the field's value can't say which row came last when
     /// rows share an export value, and `/I` lists them in ascending order.
     pub(crate) list_anchor: Option<(String, usize)>,
+    /// The field and widget under the pointer when it was last looked at: when it changes, the
+    /// one left runs its Mouse Exit JavaScript and the one reached its Mouse Enter (#269).
+    pub(crate) hovered: Option<WidgetRef>,
+    /// Pointer triggers waiting to run their widget's JavaScript, in order (field name, widget,
+    /// trigger): `PdfCraftApp::run_field_triggers` runs them after the frame's edit, so a check
+    /// box's Mouse Up sees the value its click just stored (#247).
+    pub(crate) triggers: Vec<(WidgetRef, pdfcraft_engine::FieldTrigger)>,
 }
 
 /// A form message for the app to show, with document data kept separate so the visible
@@ -414,9 +421,17 @@ fn toggle_edit(f: &FormField, wi: usize) -> Option<Edit> {
     Some(Edit::SetFieldValue { name: f.name.clone(), value })
 }
 
-/// The first shown widget of `f` on `page` under the pointer at `p`, with its index.
-fn widget_at<'a>(xf: &PageXform, info: &DocInfo, page: usize, f: &'a FormField, p: egui::Pos2) -> Option<(usize, &'a FormWidget)> {
-    f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && !w.hidden && widget_rect(xf, info, page, w.rect).contains(p))
+/// The first shown widget of `f` on `page` under the pointer at `p`, with its index. `shown`:
+/// whether the document's scripts show `f` while it is read, over its widgets' own flags.
+fn widget_at<'a>(
+    xf: &PageXform,
+    info: &DocInfo,
+    page: usize,
+    f: &'a FormField,
+    shown: Option<bool>,
+    p: egui::Pos2,
+) -> Option<(usize, &'a FormWidget)> {
+    f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && shown.unwrap_or(!w.hidden) && widget_rect(xf, info, page, w.rect).contains(p))
 }
 
 /// The field whose sign tab is under `p`, of `tabs` in the order they are painted: where tabs
@@ -425,11 +440,13 @@ pub(crate) fn tab_under<'a>(tabs: &[(&'a str, SignTab)], p: egui::Pos2) -> Optio
     tabs.iter().rev().find(|(_, tab)| tab.rect.contains(p)).map(|(name, _)| *name)
 }
 
-/// Whether `w`, a widget of `f`, takes a press: fillable, a push button with an action, or an
+/// Whether `w`, a widget of `f`, takes a press: fillable, a push button with an action (a click
+/// or mouse-down one), or an
 /// empty signature field (signed by clicking it, Use a certificate). A radio button of a group can
 /// be read-only on its own.
 fn usable(f: &FormField, w: &FormWidget, allowed: bool) -> bool {
-    let pressable = f.kind == FormFieldKind::PushButton && !f.read_only() && f.button.is_some();
+    // A button acting only on mouse down (`/AA /D`) takes the press too, which runs it (#4751).
+    let pressable = f.kind == FormFieldKind::PushButton && !f.read_only() && (f.button.is_some() || w.mouse_down);
     allowed && !w.read_only && (fillable(f) || pressable || f.kind == FormFieldKind::Signature)
 }
 
@@ -437,16 +454,26 @@ fn usable(f: &FormField, w: &FormWidget, allowed: bool) -> bool {
 /// press. It is the first widget under the pointer in the form's order, except on a sign tab
 /// (`tabs`, with the signature field each one signs), which is drawn over every field and so is
 /// on its own field. Over the page's text too: a check box drawn with a glyph, or set on printed
-/// text, is a button, not text to select.
-pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField], tabs: &[(&str, SignTab)], allowed: bool, p: Pos2) -> Option<Hit> {
+/// text, is a button, not text to select. The fields are `doc`'s, shown as its page actions and
+/// timers show them ([`pdfcraft_engine::Document::shown_by_scripts`]).
+pub(crate) fn hit(
+    xf: &PageXform,
+    info: &DocInfo,
+    page: usize,
+    doc: &pdfcraft_engine::Document,
+    tabs: &[(&str, SignTab)],
+    allowed: bool,
+    p: Pos2,
+) -> Option<Hit> {
     if !xf.rect.contains(p) {
         return None;
     }
     let under = |only: Option<&str>| {
-        form.iter()
+        doc.form
+            .iter()
             .enumerate()
             .filter(|(_, f)| only.is_none_or(|name| f.name == name && f.kind == FormFieldKind::Signature))
-            .find_map(|(fi, f)| widget_at(xf, info, page, f, p).map(|(wi, w)| (fi, f, wi, w)))
+            .find_map(|(fi, f)| widget_at(xf, info, page, f, doc.shown_by_scripts(&f.name), p).map(|(wi, w)| (fi, f, wi, w)))
     };
     // A tab lies inside its field's widget, so that widget is under the pointer too.
     let (field, f, widget, w) = tab_under(tabs, p).and_then(|name| under(Some(name))).or_else(|| under(None))?;
@@ -456,6 +483,38 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField
         _ => egui::CursorIcon::PointingHand,
     };
     Some(Hit::new(Owner::Field { field, widget }, Layer::Field, icon))
+}
+
+/// A widget a pointer trigger is for: its field's name and object (so a field sharing another's
+/// name runs its own script), and the widget's index in the field.
+pub(crate) type WidgetRef = (String, u64, usize);
+
+/// `f`'s widget `widget` as a trigger names it.
+fn widget_ref(f: &FormField, widget: usize) -> WidgetRef {
+    (f.name.clone(), pdfcraft_engine::js::field_object_id(f.obj), widget)
+}
+
+/// The field and widget under the pointer on a page, when a press there would take it.
+pub(crate) fn hovered(form: &[FormField], hover: Option<&Hit>) -> Option<WidgetRef> {
+    match hover.map(|h| h.owner) {
+        Some(Owner::Field { field, widget }) => form.get(field).map(|f| widget_ref(f, widget)),
+        _ => None,
+    }
+}
+
+/// Queue Mouse Exit for the widget the pointer left and Mouse Enter for the one it reached, when
+/// they differ from the last frame's (`now`: the widget under the pointer on any page).
+pub(crate) fn hover_moved(view: &mut DocView, now: Option<WidgetRef>) {
+    if view.forms.hovered == now {
+        return;
+    }
+    let left = std::mem::replace(&mut view.forms.hovered, now.clone());
+    if let Some(w) = left {
+        view.forms.triggers.push((w, pdfcraft_engine::FieldTrigger::MouseExit));
+    }
+    if let Some(w) = now {
+        view.forms.triggers.push((w, pdfcraft_engine::FieldTrigger::MouseEnter));
+    }
 }
 
 /// The tooltip (`/TU`) of the field under the pointer, as Acrobat shows it on hover (#3854): only
@@ -484,6 +543,10 @@ pub(crate) fn page_input(
     let PagePress::Mine(Owner::Field { field, widget: wi }) = press else { return false };
     let Some((f, w)) = form.get(field).and_then(|f| f.widgets.get(wi).map(|w| (f, w))) else { return false };
     let usable = usable(f, w, allowed);
+    // The press runs the widget's Mouse Down JavaScript, as in Acrobat (#269).
+    if usable && ptr.pressed().is_some() {
+        view.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseDown));
+    }
     // A text field opens on the press rather than the click, so a drag that starts on it
     // selects its text (#2213).
     if f.kind == FormFieldKind::Text
@@ -508,6 +571,8 @@ pub(crate) fn page_input(
         _ if f.read_only() || w.read_only => view.forms.notice = Some(FormNotice::ReadOnly(f.name.clone())),
         FormFieldKind::PushButton => match &f.button {
             Some(a) => view.forms.button = Some((f.name.clone(), pdfcraft_engine::js::field_object_id(f.obj), a.clone())),
+            // Its press already ran its mouse-down action.
+            None if w.mouse_down => {}
             None => view.forms.notice = Some(FormNotice::NoAction(f.name.clone())),
         },
         FormFieldKind::Text if let Some(script) = &w.mouse_up_script => {
@@ -543,6 +608,10 @@ pub(crate) fn page_input(
             if view.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi)) {
                 commit(view, form);
                 view.forms.focus = Some(open_focus(f, wi));
+            }
+            // A combo box's click runs its Mouse Up JavaScript (#269).
+            if f.kind == FormFieldKind::Combo {
+                view.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseUp));
             }
         }
         FormFieldKind::List => {
@@ -589,6 +658,8 @@ pub(crate) fn page_input(
                     view.pending_edit = Some(list_pick_edit(form, f, picked));
                 }
             }
+            // A list box's click runs its Mouse Up JavaScript after the pick is stored (#269).
+            view.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseUp));
         }
     }
     true
@@ -1376,6 +1447,9 @@ pub(crate) fn overlay(
                 view.forms.toggle = true;
             } else if toggle {
                 edit = toggle_edit(f, focus.widget);
+                // The click's Mouse Up JavaScript runs once the toggle is stored, so it reads the
+                // new value (#247).
+                view.forms.triggers.push((widget_ref(f, focus.widget), pdfcraft_engine::FieldTrigger::MouseUp));
             } else if space {
                 // Space toggles a check box and selects a radio button, as in browsers: it never
                 // turns the selected button off.
