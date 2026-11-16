@@ -295,7 +295,10 @@ fn holding(view: &DocView) -> [Option<u64>; KINDS] {
     let comments = &view.comments;
     let text = view.selection.map(|s| {
         let span = match s.span {
-            super::selection::Span::Run { anchor, head } => [anchor as u64, head as u64, 0, 0],
+            // A drag's pointer end is a `u32` of bits, so no end prints as `u64::MAX`.
+            super::selection::Span::Run { anchor, head, head_page, head_x } => {
+                [anchor as u64, head as u64, head_page as u64, head_x.map_or(u64::MAX, |x| u64::from(x.to_bits()))]
+            }
             super::selection::Span::Column { rect } => rect.map(|v| u64::from(v.to_bits())),
         };
         (s.page, span)
@@ -417,5 +420,24 @@ mod tests {
         now[Held::Comment as usize] = Some(7);
         ages.note(now);
         assert_eq!(ages.newest_first()[0], Held::Comment, "the same comment selected again is the newest");
+    }
+
+    /// Text run on to the next page, or dragged on past its last glyph, holds something new:
+    /// the same glyph numbers on another page, or another pointer end, are another selection.
+    #[test]
+    fn text_run_on_to_another_page_is_a_new_selection() {
+        use super::super::selection::{Selection, Span};
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
+        let view = &mut app.views[0];
+        let mut text = |span| {
+            view.selection = Some(Selection { page: 0, span });
+            holding(view)[Held::Text as usize]
+        };
+        let one_page = text(Span::Run { anchor: 1, head: 3, head_page: 0, head_x: None });
+        assert!(one_page.is_some());
+        assert_ne!(text(Span::Run { anchor: 1, head: 3, head_page: 1, head_x: None }), one_page, "on to page 2");
+        assert_ne!(text(Span::Run { anchor: 1, head: 3, head_page: 0, head_x: Some(40.0) }), one_page, "past the last glyph");
+        assert_eq!(text(Span::Run { anchor: 1, head: 3, head_page: 0, head_x: None }), one_page, "and back");
     }
 }
