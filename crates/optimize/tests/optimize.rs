@@ -5840,3 +5840,69 @@ fn the_fewest_strips_that_make_a_picture_are_merged() {
     let r = optimize(&mut doc, &keep).unwrap();
     assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
 }
+
+/// An image drawn under a transfer function other than the identity keeps its samples: the
+/// function maps them (ISO 32000-2 §10.5), and a steep one turns the small changes resampling and
+/// JPEG make near white into colour. One drawn after the state is restored (`Q`), or after a
+/// graphics state sets the identity again (`/TR /Identity`, `/TR2 /Default`), is optimized as
+/// before; one drawn by a form under the function keeps its samples too.
+#[test]
+fn images_drawn_under_a_transfer_function_keep_their_samples() {
+    let mut doc = Document::new_empty();
+    let invert = doc.add(Object::Dict(dict_of([
+        (b"FunctionType".to_vec(), Object::Int(2)),
+        (b"Domain".to_vec(), Object::Array(vec![0.into(), 1.into()])),
+        (b"C0".to_vec(), Object::Array(vec![1.into()])),
+        (b"C1".to_vec(), Object::Array(vec![0.into()])),
+        (b"N".to_vec(), Object::Int(1)),
+    ])));
+    let under = image(&mut doc, 1200, 1200, 3, false, None);
+    let in_form = image(&mut doc, 1200, 1200, 3, false, None);
+    let restored = image(&mut doc, 1200, 1200, 3, false, None);
+    let reset = image(&mut doc, 1200, 1200, 3, false, None);
+    let defaulted = image(&mut doc, 1200, 1200, 3, false, None);
+    let form = {
+        let mut res = Dict::new();
+        res.set(b"XObject".to_vec(), Object::Dict(xobject_dict(&[("F", in_form)])));
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Form"));
+        d.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+        doc.add(Object::Stream(Stream::from_raw(d, b"/F Do".to_vec())))
+    };
+    let p = page(
+        &mut doc,
+        &[("U", under), ("Fm", form), ("R", restored), ("I", reset), ("D", defaulted)],
+        "q /Tr gs 144 0 0 144 36 600 cm /U Do /Fm Do Q q 144 0 0 144 300 600 cm /R Do Q \
+         q /Tr gs /Id gs 144 0 0 144 36 300 cm /I Do Q q /Tr gs /Df gs 144 0 0 144 300 300 cm /D Do Q",
+    );
+    let gs = |entries: Vec<(Vec<u8>, Object)>| Object::Dict(dict_of(entries));
+    let states = dict_of([
+        (b"Tr".to_vec(), gs(vec![(b"TR".to_vec(), Object::Ref(invert))])),
+        (b"Id".to_vec(), gs(vec![(b"TR".to_vec(), Object::name("Identity"))])),
+        (b"Df".to_vec(), gs(vec![(b"TR2".to_vec(), Object::name("Default"))])),
+    ]);
+    doc.update_dict(p, |d| {
+        let mut res = d.get(b"Resources").and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+        res.set(b"ExtGState".to_vec(), Object::Dict(states));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+    })
+    .unwrap();
+    let raw = |doc: &Document, r: ObjRef| stream(doc, r).raw.clone();
+    let (under_before, in_form_before) = (raw(&doc, under), raw(&doc, in_form));
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(raw(&doc, under), under_before, "drawn under the transfer function: {report:?}");
+    assert_eq!(raw(&doc, in_form), in_form_before, "drawn by a form under it");
+    for (what, r) in [("after Q", restored), ("after /TR /Identity", reset), ("after /TR2 /Default", defaulted)] {
+        assert_eq!(stream(&doc, r).dict.int(b"Width"), Some(300), "{what} the image is resampled as before");
+    }
+    assert_eq!(report.images_resampled, 3, "{report:?}");
+}
+
+fn dict_of(entries: impl IntoIterator<Item = (Vec<u8>, Object)>) -> Dict {
+    let mut d = Dict::new();
+    for (k, v) in entries {
+        d.set(k, v);
+    }
+    d
+}
