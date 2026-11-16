@@ -285,8 +285,8 @@ fn arabic_ui_labels_use_an_explicit_paragraph_direction() {
     let previous = crate::i18n::current();
     let ctx = egui::Context::default();
     ctx.set_fonts(crate::theme::font_definitions());
-    let read = |lang: &str| {
-        crate::i18n::set_current(crate::i18n::Lang::from_code(lang).expect("registered language"));
+    let read = |lang| {
+        crate::i18n::set_current(lang);
         let mut got = None;
         ctx.run_ui(egui::RawInput::default(), |ui| {
             let galley = layout_ui(ui, "PDF واحد", egui::FontId::proportional(13.0), egui::Color32::WHITE);
@@ -296,14 +296,15 @@ fn arabic_ui_labels_use_an_explicit_paragraph_direction() {
         .drop_without_applying_deltas();
         got.expect("one layout")
     };
-    let (direction, positions) = read("ar");
+    // A fixture, so the direction is tested in a build without the craft-i18n catalogs too.
+    let (direction, positions) = read(crate::i18n::fixture_lang("ar", ""));
     crate::i18n::set_current(previous);
     assert_eq!(direction, egui::epaint::text::TextDirection::RightToLeft);
     let p = positions.iter().find(|(c, _)| *c == 'P').map(|(_, x)| *x).expect("a Latin P");
     let rightmost_arabic = positions.iter().filter(|(c, _)| is_rtl_script(*c)).map(|(_, x)| *x).fold(f32::MIN, f32::max);
     assert!(p > rightmost_arabic, "in an RTL paragraph the first Latin run is at the right: {positions:?}");
 
-    let (direction, positions) = read("en");
+    let (direction, positions) = read(crate::i18n::Lang::EN);
     crate::i18n::set_current(previous);
     assert_eq!(direction, egui::epaint::text::TextDirection::Auto);
     let p = positions.iter().find(|(c, _)| *c == 'P').map(|(_, x)| *x).expect("a Latin P");
