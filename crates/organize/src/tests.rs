@@ -953,6 +953,42 @@ fn doc_b() -> Document {
 }
 
 /// Write in full, reopen with our reader, and require hayro to agree on the page count.
+/// Extract and Split bring the form's drawing settings along with its fields: `/NeedAppearances`
+/// (the viewer draws every field from its value), and the `/DA`, `/DR` with its font, and `/Q`
+/// it draws them with (ISO 32000-2 Table 224). Without them the part shows the stale stored
+/// appearance, and the field's `/DA` names a font no resource dictionary holds.
+#[test]
+fn extracted_fields_keep_the_forms_drawing_settings() {
+    let src = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /NeedAppearances true /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) /Q 1 /DR << /Font << /Helv 6 0 R >> >> >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Ada) /DA (/Helv 10 Tf 0 g) /Rect [10 10 150 30] /P 3 0 R >>".into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    let form = |doc: &Document| {
+        let root = doc.root().unwrap();
+        let catalog = doc.get(root).as_dict().cloned().unwrap();
+        doc.resolve(catalog.get(b"AcroForm").expect("a form")).as_dict().cloned().unwrap()
+    };
+    let out = full_roundtrip(&extract_pages(&src, &[0]).unwrap());
+    let f = form(&out);
+    assert_eq!(f.get(b"NeedAppearances"), Some(&Object::Bool(true)));
+    assert_eq!(f.get(b"Q").and_then(Object::as_int), Some(1));
+    assert!(matches!(f.get(b"DA"), Some(Object::String(s)) if s.bytes == b"/Helv 0 Tf 0 g"), "{:?}", f.get(b"DA"));
+    let dr = out.resolve(f.get(b"DR").expect("/DR")).as_dict().cloned().unwrap();
+    let helv = dr.get(b"Font").map(|x| out.resolve(x)).and_then(|x| x.as_dict().and_then(|x| x.get(b"Helv").cloned())).expect("/Helv");
+    assert_eq!(out.resolve(&helv).as_dict().and_then(|d| d.name(b"BaseFont").map(<[u8]>::to_vec)), Some(b"Helvetica".to_vec()), "the font is copied");
+    // The page without fields makes a part without a form, and gets none of it.
+    let out = full_roundtrip(&extract_pages(&src, &[1]).unwrap());
+    let root = out.root().unwrap();
+    assert!(out.get(root).as_dict().unwrap().get(b"AcroForm").is_none());
+}
+
 fn full_roundtrip(doc: &Document) -> Document {
     let bytes = write_full(doc, &SaveOptions::default()).expect("writes");
     let reopened = open(bytes.clone());

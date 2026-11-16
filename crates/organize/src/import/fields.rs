@@ -305,6 +305,47 @@ pub(super) fn register_fields(dst: &mut Document, fields: &[ObjRef]) -> Result<(
     Ok(())
 }
 
+/// The form-wide entries a field is drawn with (ISO 32000-2 Table 224), from `src`'s form onto
+/// `dst`'s when the copied pages brought fields along (`dst` has a form) and `dst` does not set
+/// the entry itself: `/NeedAppearances`, which asks a viewer to draw every field from its value,
+/// and the defaults it draws them with, `/DA`, `/DR` (its fonts copied, sharing what the pages
+/// already brought) and `/Q`. Without them the copy shows the stored appearances its source told
+/// viewers to redraw, and a field's `/DA` may name a font no resource dictionary holds.
+pub(super) fn carry_form_defaults(dst: &mut Document, src: &Document, copied: HashMap<ObjRef, ObjRef>) -> Result<(), OrganizeError> {
+    let form_of = |doc: &Document| {
+        let catalog = doc.root().and_then(|r| doc.get(r).as_dict().cloned())?;
+        let entry = catalog.get(b"AcroForm")?.clone();
+        let form = doc.resolve(&entry).as_dict().cloned()?;
+        Some((entry.as_ref(), form))
+    };
+    let (Some((_, from)), Some((at, mut form))) = (form_of(src), form_of(dst)) else { return Ok(()) };
+    let mut changed = false;
+    let mut map = Some(copied);
+    for key in [&b"NeedAppearances"[..], b"DA", b"DR", b"Q"] {
+        let Some(value) = from.get(key).filter(|_| !form.contains(key)) else { continue };
+        let value = match key {
+            // The resource dictionary holds fonts by reference: copied, or shared with the pages'.
+            b"DR" => super::copy_object(dst, src, value, map.take().unwrap_or_default())?,
+            _ => (*src.resolve(value)).clone(),
+        };
+        if !matches!(value, Object::Null) {
+            form.set(key.to_vec(), value);
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok(());
+    }
+    match at {
+        Some(r) => dst.set(r, Object::Dict(form)),
+        None => {
+            let root = dst.root().ok_or(OrganizeError::NoPageTree)?;
+            dst.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(form)))?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

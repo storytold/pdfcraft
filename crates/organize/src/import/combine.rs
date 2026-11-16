@@ -32,6 +32,8 @@ pub fn extract_pages(src: &Document, pages: &[usize]) -> Result<Document, Organi
             crate::set_info(&mut out, key, &v)?;
         }
     }
+    // The form's own drawing settings come with its fields.
+    super::fields::carry_form_defaults(&mut out, src, imported.objects.clone())?;
     // After the title: the XMP packet repeats it.
     crate::pdfx::carry(&mut out, Some(src), &crate::pdfx::PrintStandard::of(src), imported.objects)?;
     // The pages share their source's resource dictionary, so the part would otherwise carry every

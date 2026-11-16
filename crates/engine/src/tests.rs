@@ -9481,6 +9481,46 @@ fn a_value_a_script_sets_reaches_every_field_bound_to_the_same_data_node() {
     );
 }
 
+/// A form with `/NeedAppearances` whose stored appearance is stale (`Old` while the value is
+/// `Ada`): PdfCraft shows the field drawn from its value, so flattening bakes `Ada`, not `Old`.
+/// A hidden field's widget stays, with its own appearance and nothing drawn for it left behind.
+fn stale_appearance_form(need_appearances: bool) -> Arc<Vec<u8>> {
+    let flag = if need_appearances { "/NeedAppearances true " } else { "" };
+    let old = "/Tx BMC BT /Helv 10 Tf 2 5 Td (Old) Tj ET EMC";
+    Arc::new(
+        pdfcraft_testkit::Pdf::new()
+            .obj(format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << {flag}/Fields [5 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 8 0 R >> >> >> >>"))
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+            .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Annots [5 0 R 6 0 R] >>")
+            .stream("", "")
+            .obj("<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Ada) /DA (/Helv 10 Tf 0 g) /Rect [20 150 200 170] /P 3 0 R /AP << /N 7 0 R >> >>")
+            .obj("<< /Type /Annot /Subtype /Widget /FT /Tx /T (secret) /V (Ada) /F 2 /DA (/Helv 10 Tf 0 g) /Rect [20 100 200 120] /P 3 0 R /AP << /N 7 0 R >> >>")
+            .stream("/Type /XObject /Subtype /Form /BBox [0 0 180 20] /Resources << /Font << /Helv 8 0 R >> >>", old)
+            .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+            .build(),
+    )
+}
+
+#[test]
+fn flattening_a_form_that_needs_appearances_bakes_the_fields_as_shown() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("need.pdf", None, stale_appearance_form(true), None).expect("opens");
+    s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap();
+    let texts = page_texts(&s, id).join("\n");
+    assert!(texts.contains("Ada") && !texts.contains("Old"), "the value as shown is baked: {texts}");
+    let d = s.get(id).unwrap();
+    assert_eq!(d.form.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["secret"], "the hidden field stays");
+    let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    let hidden = cos.get(pdfcraft_cos::ObjRef::new(6, 0));
+    let ap = hidden.as_dict().and_then(|w| w.get(b"AP")).map(|ap| cos.resolve(ap)).and_then(|ap| ap.as_dict().and_then(|ap| ap.get(b"N").cloned()));
+    assert_eq!(ap, Some(pdfcraft_cos::Object::Ref(pdfcraft_cos::ObjRef::new(7, 0))), "the hidden widget keeps its own appearance");
+    // Without the flag the stored appearance is what every viewer shows, and what is baked.
+    let id = s.open("stored.pdf", None, stale_appearance_form(false), None).expect("opens");
+    s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap();
+    let texts = page_texts(&s, id).join("\n");
+    assert!(texts.contains("Old") && !texts.contains("Ada"), "{texts}");
+}
+
 #[test]
 fn flattening_an_xfa_form_bakes_its_pages_and_takes_the_xfa_out() {
     let data = "<form><page1><country>JP</country><langs>English\nSpanish</langs></page1></form>";

@@ -1088,7 +1088,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             // form that was never laid out keeps its XFA: without it only placeholders remain.
             let shape = (*fields).then(|| pdfcraft_xfa::xfa_shape(doc)).flatten();
             let n = pdfcraft_model::pages(doc).len();
-            pdfcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), *comments, *fields)?;
+            flatten_as_shown(doc, &(0..n).collect::<Vec<_>>(), *comments, *fields)?;
             match shape {
                 Some(shape) if shape.strippable() => strip_xfa(doc, cx)?,
                 Some(_) => cx.xfa_removed.push("The XFA was kept: this dynamic form was not laid out, so its fields were not baked in".into()),
@@ -1142,6 +1142,53 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::Batch { edits, .. } => run_batch(doc, edits, cx)?,
     }
     Ok(())
+}
+
+/// [`pdfcraft_edit::flatten`], baking each form field as it is shown. A form that sets
+/// `/NeedAppearances` asks viewers to draw every field from its value (ISO 32000-2 Table 224),
+/// and PdfCraft shows it so ([`pdfcraft_forms::with_field_appearances`]); its stored appearances
+/// may say something else, or nothing. Fields are flattened from that drawn copy, so the page
+/// keeps what was on screen. A widget that stays on its page (hidden, say) gets its own
+/// appearance back, and the one drawn for it goes.
+fn flatten_as_shown(doc: &mut pdfcraft_cos::Document, pages: &[usize], comments: bool, fields: bool) -> Result<usize, EditError> {
+    let shown = (fields && pdfcraft_forms::need_appearances(doc)).then(|| pdfcraft_forms::with_field_appearances(doc)).flatten();
+    let Some(mut work) = shown else { return Ok(pdfcraft_edit::flatten(doc, pages, comments, fields)?) };
+    let drawn = pdfcraft_edit::flatten(&mut work, pages, comments, fields)?;
+    let on_page: std::collections::HashSet<pdfcraft_cos::ObjRef> = pdfcraft_model::pages(&work)
+        .iter()
+        .filter_map(|p| p.dict.get(b"Annots").map(|a| work.resolve(a)).and_then(|a| a.as_array().cloned()))
+        .flatten()
+        .filter_map(|e| e.as_ref())
+        .collect();
+    for w in pdfcraft_forms::fields(doc).iter().flat_map(|f| f.widgets.iter()).filter(|w| on_page.contains(&w.obj)) {
+        let (Some(own), Some(now)) = (doc.get(w.obj).as_dict().cloned(), work.get(w.obj).as_dict().cloned()) else { continue };
+        if own.get(b"AP") == now.get(b"AP") && own.get(b"AS") == now.get(b"AS") {
+            continue;
+        }
+        // The streams drawn for it are new objects, which nothing else uses.
+        let normal = now.get(b"AP").map(|ap| work.resolve(ap)).and_then(|ap| ap.as_dict().and_then(|ap| ap.get(b"N").cloned()));
+        let drawn_refs: Vec<pdfcraft_cos::ObjRef> = match normal {
+            Some(pdfcraft_cos::Object::Ref(r)) => vec![r],
+            Some(pdfcraft_cos::Object::Dict(states)) => states.iter().filter_map(|(_, v)| v.as_ref()).collect(),
+            _ => Vec::new(),
+        };
+        work.update_dict(w.obj, |d| {
+            for key in [&b"AP"[..], b"AS"] {
+                match own.get(key) {
+                    Some(v) => d.set(key.to_vec(), v.clone()),
+                    None => {
+                        d.remove(key);
+                    }
+                }
+            }
+        })
+        .map_err(|e| EditError::Write(e.to_string()))?;
+        for r in drawn_refs.into_iter().filter(|r| matches!(*doc.get(*r), pdfcraft_cos::Object::Null)) {
+            work.free(r);
+        }
+    }
+    *doc = work;
+    Ok(drawn)
 }
 
 /// Apply an edit batch while keeping reset deferral scoped to adjacent script writeback.
