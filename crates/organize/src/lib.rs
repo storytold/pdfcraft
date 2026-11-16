@@ -279,12 +279,30 @@ pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Organiz
     // otherwise keep it, with its content, in the saved file. Their form widgets leave the form,
     // and bookmarks and links that went to them lose that destination.
     let gone: Vec<ObjRef> = all.iter().map(|(r, _)| *r).filter(|r| !keep.iter().any(|(k, _)| k == r)).collect();
+    // A widget a kept page still lists stays in the form: one signature widget can sit in the
+    // /Annots of every page (a signature placed on all pages), and a page shows the
+    // annotations its /Annots lists (ISO 32000-2 §7.7.3.3, Table 31), so the field stays among
+    // the form's fields (§12.7.3, Table 224). An annotation a kept page lists whose /P named a
+    // deleted page names the first kept page that lists it instead (§12.5.2, Table 166).
+    let gone_set: std::collections::HashSet<ObjRef> = gone.iter().copied().collect();
+    let mut shown_on: std::collections::HashMap<ObjRef, ObjRef> = std::collections::HashMap::new();
+    for (p, _) in &keep {
+        for a in page_annots(doc, *p).iter().filter_map(Object::as_ref) {
+            shown_on.entry(a).or_insert(*p);
+        }
+    }
+    for (&a, &page) in &shown_on {
+        if doc.get(a).as_dict().and_then(|d| d.reference(b"P")).is_some_and(|p| gone_set.contains(&p)) {
+            doc.update_dict(a, |d| d.set(b"P".to_vec(), Object::Ref(page)))?;
+        }
+    }
     let mut widgets = Vec::new();
+    let mut queued = std::collections::HashSet::new();
     for r in &gone {
-        let annots = doc.get(*r).as_dict().and_then(|d| d.get(b"Annots").cloned()).map(|a| doc.resolve(&a).as_array().cloned().unwrap_or_default());
-        for a in annots.unwrap_or_default() {
-            if let Some(w) = a.as_ref().filter(|w| doc.get(*w).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget"))) {
-                widgets.push(w);
+        for a in page_annots(doc, *r).iter().filter_map(Object::as_ref) {
+            let widget = doc.get(a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget"));
+            if widget && !shown_on.contains_key(&a) && queued.insert(a) {
+                widgets.push(a);
             }
         }
     }
@@ -296,16 +314,20 @@ pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Organiz
     Ok(())
 }
 
+/// The entries of a page's /Annots array (empty when it has none or it is not an array).
+fn page_annots(doc: &Document, page: ObjRef) -> Vec<Object> {
+    let annots = doc.get(page).as_dict().and_then(|d| d.get(b"Annots").cloned());
+    annots.map(|a| doc.resolve(&a).as_array().cloned().unwrap_or_default()).unwrap_or_default()
+}
+
 /// Bookmarks, and links on the `keep` pages, that go to one of the `gone` pages lose that
 /// destination (/Dest, or a GoTo /A), rather than pointing at nothing; so does the catalog's /OpenAction.
 fn drop_destinations_to(doc: &mut Document, gone: &[ObjRef], keep: &[(ObjRef, Dict)]) -> Result<(), OrganizeError> {
     let dead_names = drop_named_destinations(doc, gone)?;
     let mut holders = outline::items(doc);
     for (p, _) in keep {
-        let annots = doc.get(*p).as_dict().and_then(|d| d.get(b"Annots").cloned()).map(|a| doc.resolve(&a).as_array().cloned().unwrap_or_default());
         holders.extend(
-            annots
-                .unwrap_or_default()
+            page_annots(doc, *p)
                 .iter()
                 .filter_map(Object::as_ref)
                 .filter(|a| doc.get(*a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Link"))),

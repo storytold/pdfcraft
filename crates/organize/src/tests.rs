@@ -4982,3 +4982,38 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
     assert_eq!(source_bookmarks(&all), [("Chapter one".to_string(), vec!["Section".to_string()])]);
     assert!(attachments(&all));
 }
+
+/// One signature widget listed in the /Annots of every page, the shape a signature placed on
+/// all pages has: deleting pages that list it, including the page its /P names, keeps the
+/// field in the form while a kept page still shows it, and moves /P to that page (as for any
+/// annotation a kept page lists).
+#[test]
+fn deleting_pages_keeps_a_widget_a_kept_page_still_lists() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /SigFlags 3 >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 8 0 R] >>".into(),                         // 3
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 8 0 R] >>".into(),                         // 4
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".into(),                         // 5
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /F 132 /Rect [0 0 0 0] /P 3 0 R >>".into(), // 6
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (only_last) /Rect [10 10 90 30] /P 5 0 R >>".into(), // 7
+        "<< /Type /Annot /Subtype /Text /Contents (note) /Rect [10 40 30 60] /P 3 0 R >>".into(), // 8
+    ];
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    delete_pages(&mut doc, &[0, 2]).unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(form_field_names(&doc), ["Signature1"], "the shared widget stays; the last page's own field goes");
+    let kept = pages(&doc).unwrap()[0].obj;
+    let widget = doc.get(ObjRef::new(6, 0)).as_dict().cloned().unwrap();
+    assert_eq!(widget.reference(b"P"), Some(kept), "/P names the page that still shows it");
+    let note = doc.get(ObjRef::new(8, 0)).as_dict().cloned().unwrap();
+    assert_eq!(note.reference(b"P"), Some(kept), "so does any other annotation the kept page lists");
+
+    // Deleting the last page alone (the sweep's case) keeps the field too, and its /P.
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    delete_pages(&mut doc, &[2]).unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(form_field_names(&doc), ["Signature1"]);
+    let widget = doc.get(ObjRef::new(6, 0)).as_dict().cloned().unwrap();
+    assert_eq!(widget.reference(b"P"), Some(ObjRef::new(3, 0)));
+}
