@@ -114,9 +114,15 @@ fn an_nfc_bookmark_that_file_url_value_cannot_resolve_is_delivered() {
         msg_send![NSAppleEventDescriptor::class(), descriptorWithDescriptorType: u32::from_be_bytes(*b"bmrk"), data: &*data]
     };
     let bookmark = bookmark.expect("a 'bmrk' descriptor");
-    // The decoder first: on a macOS that does resolve this bookmark, it is still checked.
+    // The handler first, in a list and as the direct object.
     assert_eq!(odoc_paths(&list(&[&bookmark])), std::slice::from_ref(&file));
     assert_eq!(odoc_paths(&bookmark), std::slice::from_ref(&file));
+    // The raw decode alone, without the NSURL step: where fileURLValue resolves this
+    // bookmark, the two checks above could also pass through NSURL.
+    assert_eq!(
+        crate::odoc_path::bookmark_chain(&data.to_vec()).as_ref(),
+        Some(&file)
+    );
     // #6324's premise, measured on macOS 13.3: fileURLValue cannot resolve this bookmark.
     // Where it can, the decode above still holds; only the premise is gone, so say so
     // instead of failing.
