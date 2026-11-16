@@ -150,7 +150,7 @@ impl TextBox {
         // The font the appearance would choose for this text, and whether the script faces draw
         // its Arabic, Hebrew and Thai beside it.
         let shaped = shapes(&shown, self.font.as_ref(), self.multiline);
-        let latin = if shaped { latin_part(&shown) } else { shown.clone() };
+        let latin = if shaped { latin_part(&shown, self.multiline) } else { shown.clone() };
         let font = self.font.as_ref().filter(|enc| holds(enc, &latin, self.multiline)).unwrap_or(&FontText::WinAnsi);
         let line_width = |line: &str, rtl: bool, size: f64| text_line_width(font, shaped, line, rtl, size);
         let width_of = |t: &str, size: f64| line_width(t, shaped && shaped_text::rtl_base(t), size);
@@ -811,7 +811,9 @@ fn shapes(text: &str, font: Option<&FontText>, multiline: bool) -> bool {
 
 /// What of `text` is left to the field's own font when the script faces draw the rest
 /// ([`shapes`]), line by line: the font is chosen for this, not for the letters it never draws.
-fn latin_part(text: &str) -> String {
+/// A single-line value is taken as the one line it is drawn as ([`one_line`]), so a line break
+/// in it doesn't turn the field's font away.
+fn latin_part(text: &str, multiline: bool) -> String {
     let line = |l: &str| -> String {
         shaped_text::appearance_pieces(l, shaped_text::rtl_base(l))
             .into_iter()
@@ -821,7 +823,7 @@ fn latin_part(text: &str) -> String {
             })
             .collect()
     };
-    text.split(['\n', '\r']).map(line).collect::<Vec<_>>().join("\n")
+    if multiline { text.split(['\n', '\r']).map(line).collect::<Vec<_>>().join("\n") } else { line(&one_line(text)) }
 }
 
 /// The width of `line` at `size` as the appearance draws it, in a paragraph that reads right to
@@ -962,7 +964,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     // form's font, which draws the rest, right-to-left runs in drawing order. One line of a text
     // field or combo box at a time; the `/DA` is kept.
     let shaped = matches!(f.kind, FieldKind::Text | FieldKind::Combo) && !f.is_comb() && shapes(&text, dr.as_ref().map(|(_, enc)| enc), multiline);
-    let latin_text: String = if shaped { latin_part(&text) } else { text.clone() };
+    let latin_text: String = if shaped { latin_part(&text, multiline) } else { text.clone() };
     let (font_name, font_obj, enc) = match dr.filter(|(_, enc)| can_show(enc, &latin_text)) {
         Some((o, enc)) => (da.font.clone(), o, enc),
         None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),

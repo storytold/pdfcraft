@@ -1506,6 +1506,32 @@ fn a_single_line_value_with_a_break_is_refused_as_the_appearance_decides_it() {
     }
 }
 
+/// A single-line value's line break is a space when it is drawn, so the field's own font is
+/// chosen for what is left beside the shaped text as one line: a simple font that holds that
+/// (`Ж` here) draws it, rather than Helvetica drawing it as `?`.
+#[test]
+fn a_single_line_break_beside_shaped_text_keeps_the_fields_font() {
+    use crate::appearance::text_box;
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        return;
+    }
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [6 0 R] /DA (/Cyr 0 Tf 0 g) /DR << /Font << /Cyr 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /BaseEncoding /WinAnsiEncoding /Differences [224 /uni0416] >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (one) /DA (/Cyr 12 Tf 0 g) /Rect [50 700 350 720] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let value = "\u{5e9}\u{5dc}\u{5d5}\u{5dd}\n\u{416}";
+    let all = fields(&doc);
+    let f = field(&all, "one");
+    assert!(text_box(&doc, f, &f.widgets[0]).fits(value));
+    set_value(&mut doc, "one", &FieldValue::Text(value.into())).unwrap();
+    assert!(undrawn_fields(&doc).is_empty(), "{:?}", undrawn_fields(&doc));
+}
+
 /// A combo box draws its value as a text field does, so in a build without the script's face it
 /// refuses an option, or typed text, it could only draw as `?` (and keeps the value it had), as
 /// a text field refuses it. With the face, both are shaped.
