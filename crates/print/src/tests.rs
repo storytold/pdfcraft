@@ -2024,15 +2024,28 @@ fn label_grey_areas_are_dithered_and_edges_stay_sharp() {
     assert_eq!(out.as_chunks::<3>().0.iter().map(|px| px[0]).collect::<Vec<_>>(), [0, 0, 0, 255, 255].repeat(5));
 }
 
+/// A sheet that is the stock turned is turned a quarter clockwise: its top row becomes the
+/// picture's right column.
+#[test]
+fn label_pictures_turn_clockwise() {
+    // 3 × 2 pixels, rows top to bottom: 1 2 3 / 4 5 6 (one byte value per pixel, three times).
+    let rgb: Vec<u8> = [1u8, 2, 3, 4, 5, 6].iter().flat_map(|v| [*v; 3]).collect();
+    let (w, h, out) = crate::label::turned_clockwise(&rgb, 3);
+    assert_eq!((w, h), (2, 3));
+    assert_eq!(out.as_chunks::<3>().0.iter().map(|px| px[0]).collect::<Vec<_>>(), [4, 1, 5, 2, 6, 3]);
+    assert_eq!(crate::label::turned_clockwise(&[], 0), (0, 0, Vec::new()));
+}
+
 /// A label job whose sheets aren't the stock in the user's settings is refused before anything is
 /// sent (#7018: a 4 × 6 in print on a driver left at 104 × 76.2 mm was cut off).
 #[test]
 fn label_sheets_must_be_the_users_stock() {
     let four_by_six = (288.0, 432.0);
-    assert_eq!(crate::label::sheet_fits_stock("Zebra", four_by_six, four_by_six), Ok(()));
-    assert_eq!(crate::label::sheet_fits_stock("Zebra", four_by_six, (289.13, 430.87)), Ok(()), "102 × 152 mm stock");
+    assert_eq!(crate::label::sheet_fits_stock("Zebra", four_by_six, four_by_six), Ok(false));
+    assert_eq!(crate::label::sheet_fits_stock("Zebra", four_by_six, (289.13, 430.87)), Ok(false), "102 × 152 mm stock");
     let refused = crate::label::sheet_fits_stock("Zebra", four_by_six, (294.8, 216.0)).unwrap_err();
     assert!(refused.contains("4.09 × 3.00 in labels") && refused.contains("4.00 × 6.00 in") && refused.contains("nothing was sent"), "{refused}");
-    assert!(crate::label::sheet_fits_stock("Zebra", (432.0, 288.0), four_by_six).is_err(), "a sheet the other way round");
+    // jcl-bit's case on #7018: the driver's own 4.09 × 3.00 in paper, laid out upright.
+    assert_eq!(crate::label::sheet_fits_stock("Zebra", (216.0, 294.8), (294.8, 216.0)), Ok(true), "the stock fed the other way round is turned");
     assert!(crate::label::sheet_fits_stock("Zebra", (162.0, 90.0), four_by_six).is_err(), "a smaller sheet");
 }

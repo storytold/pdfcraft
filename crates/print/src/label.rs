@@ -4,7 +4,8 @@
 //! patterns. Acrobat sends such printers pixels through GDI. So does this: every sheet of the
 //! print-ready PDF is rendered at the printer's resolution, made black and white (grey areas
 //! dithered), and sent pixel for pixel with the user's own driver settings (stock, darkness,
-//! cutter), once every sheet is known to be that stock.
+//! cutter), once every sheet is known to be that stock (turned when it is the stock fed the
+//! other way round).
 
 /// Premultiplied RGBA over white paper, `width` pixels a row → RGB where every pixel is black or
 /// white. A pixel in a flat grey area (it and its four neighbours all mid-grey: a fill, a logo, a
@@ -47,13 +48,17 @@ pub(crate) fn black_and_white(rgba: &[u8], width: usize) -> Vec<u8> {
 
 /// A label job's sheets must be the stock in the user's settings: pictures go to the driver pixel
 /// for pixel, so a sheet larger than the stock would be cut off and a smaller one would waste
-/// the rest of the label. Sides may differ by 5 pt, as drivers round metric stock; a sheet fed
-/// the other way round is refused too, since the pictures are not turned.
+/// the rest of the label. Sides may differ by 5 pt, as drivers round metric stock. A sheet that
+/// is the stock fed the other way round (an upright page on stock wider than tall) is turned:
+/// `Ok(true)`.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) fn sheet_fits_stock(printer: &str, sheet: (f64, f64), stock: (f64, f64)) -> Result<(), String> {
-    let same = (sheet.0 - stock.0).abs() <= 5.0 && (sheet.1 - stock.1).abs() <= 5.0;
-    if same {
-        return Ok(());
+pub(crate) fn sheet_fits_stock(printer: &str, sheet: (f64, f64), stock: (f64, f64)) -> Result<bool, String> {
+    let same = |(w, h): (f64, f64)| (w - stock.0).abs() <= 5.0 && (h - stock.1).abs() <= 5.0;
+    if same(sheet) {
+        return Ok(false);
+    }
+    if same((sheet.1, sheet.0)) {
+        return Ok(true);
     }
     let inches = |(w, h): (f64, f64)| format!("{:.2} × {:.2} in", w / 72.0, h / 72.0);
     Err(format!(
@@ -61,6 +66,21 @@ pub(crate) fn sheet_fits_stock(printer: &str, sheet: (f64, f64), stock: (f64, f6
         inches(stock),
         inches(sheet)
     ))
+}
+
+/// An RGB picture `width` pixels wide turned a quarter clockwise: the sheet's top becomes the
+/// label's right edge. Rows past the data are left out.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn turned_clockwise(rgb: &[u8], width: usize) -> (usize, usize, Vec<u8>) {
+    let height = (rgb.len() / 3).checked_div(width).unwrap_or(0);
+    let mut out = Vec::with_capacity(width * height * 3);
+    for y in 0..width {
+        for x in 0..height {
+            let from = ((height - 1 - x) * width + y) * 3;
+            out.extend_from_slice(rgb.get(from..from + 3).unwrap_or(&[255, 255, 255]));
+        }
+    }
+    (height, width, out)
 }
 
 /// The most bytes of black-and-white pictures one label job holds (a 4 × 6 in label at 300 dpi
@@ -98,13 +118,18 @@ pub(crate) fn submit(pdf: &[u8], job: &crate::spool::Job, printer: &str, progres
         if let Some(e) = r.error {
             return Err(format!("sheet {}: {e}", sheet + 1));
         }
-        sheet_fits_stock(printer, (to_points(r.width), to_points(r.height)), page.paper)?;
+        let turn = sheet_fits_stock(printer, (to_points(r.width), to_points(r.height)), page.paper)?;
         let rgb = black_and_white(&r.rgba, r.width as usize);
         bytes = bytes.saturating_add(rgb.len());
         if bytes > MAX_PICTURE_BYTES {
             return Err("the print is too large to send to a label printer as pictures".into());
         }
-        pictures.push((r.width, r.height, rgb));
+        if turn {
+            let (w, h, rgb) = turned_clockwise(&rgb, r.width as usize);
+            pictures.push((w as u32, h as u32, rgb));
+        } else {
+            pictures.push((r.width, r.height, rgb));
+        }
         progress(sheet + 1, sheets);
     }
     let images: Vec<rgb::RgbImage<'_>> = pictures.iter().map(|(w, h, data)| rgb::RgbImage { width: *w, height: *h, data }).collect();
