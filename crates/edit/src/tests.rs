@@ -1999,9 +1999,7 @@ fn padded_table_cells_do_not_share_an_edit_line() {
 fn same_block_styled_runs_keep_their_wide_row() {
     let w = |s: &str| pdfcraft_fonts::helvetica_width(s, 10.0);
     let rhs = 72.0 + w("AB") + 8.0;
-    let content = format!(
-        "BT /F1 10 Tf 1 0 0 1 72 700 Tm (AB) Tj /F2 10 Tf 1 0 0 1 {rhs:.4} 700 Tm (ab) Tj ET"
-    );
+    let content = format!("BT /F1 10 Tf 1 0 0 1 72 700 Tm (AB) Tj /F2 10 Tf 1 0 0 1 {rhs:.4} 700 Tm (ab) Tj ET");
     let doc = text_page(&content);
     let blocks: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.editor_text).collect();
     assert_eq!(blocks, ["AB ab"], "one BT block keeps its 1.5 em row window");
