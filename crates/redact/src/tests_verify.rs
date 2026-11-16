@@ -1010,6 +1010,33 @@ fn an_image_a_type3_glyph_draws_after_a_surplus_operand_is_found() {
     assert_eq!(proof.entries[0].status, Status::Unverifiable, "{}", proof.to_text());
 }
 
+/// The same, the Type 3 font's `/Subtype`, or the image's, given by reference: the proof still
+/// searches the glyph, and still finds the image it draws.
+#[test]
+fn an_image_a_type3_glyph_draws_is_found_with_subtypes_given_by_reference() {
+    for (font_subtype, image_subtype) in [("10 0 R", "/Image"), ("/Type3", "11 0 R")] {
+        let spec = Spec {
+            resources: "/Font << /F1 5 0 R /T3 7 0 R >> /XObject << /Im0 9 0 R >>",
+            extra: vec![
+                format!(
+                    "<< /Type /Font /Subtype {font_subtype} /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 8 0 R >> \
+                     /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] >>"
+                )
+                .into_bytes(),
+                stream("", b"10 0 d0 /Im0 Do"),
+                stream(&format!("/Type /XObject /Subtype {image_subtype} /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8"), b"o"),
+                b"/Type3".to_vec(),
+                b"/Image".to_vec(),
+            ],
+            ..Spec::default()
+        };
+        let mut doc = open(build_with(b"BT /F1 10 Tf 10 100 Td (SECRETVALUE) Tj ET BT /T3 12 Tf 150 20 Td (a) Tj ET", spec));
+        mark(&mut doc, &[REGION]);
+        let (_, proof) = run(&mut doc);
+        assert_eq!(proof.entries[0].status, Status::Unverifiable, "{font_subtype} {image_subtype}: {}", proof.to_text());
+    }
+}
+
 #[test]
 fn an_ambiguous_needle_is_still_swept_outside_page_content() {
     // The word also stays on the page legitimately (so page text, the raw file and decoded

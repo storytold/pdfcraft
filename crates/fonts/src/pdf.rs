@@ -821,13 +821,24 @@ fn number(t: &Tok) -> Option<u32> {
     }
 }
 
+/// The font's `/Subtype`, read through a reference as the renderer reads it (ISO 32000-2 §7.3.10
+/// lets any value be given by one): read as the name it holds, a Type 3 or composite font given so
+/// is measured as what it is, not as a Type 1 font.
+fn subtype(doc: &Document, font: &Dict) -> Option<Vec<u8>> {
+    let value = font.get(b"Subtype")?;
+    match value {
+        Object::Ref(_) => doc.resolve(value).as_name().map(<[u8]>::to_vec),
+        _ => value.as_name().map(<[u8]>::to_vec),
+    }
+}
+
 /// The font's `/BaseFont` (a Type 3 font's descriptor `/FontName` when it has none), read without
 /// building its metrics, so it decodes no CMap.
 pub fn base_font_name(doc: &Document, font: &Dict) -> String {
     font.name(b"BaseFont")
         .map(|name| String::from_utf8_lossy(name).into_owned())
         .or_else(|| {
-            (font.name(b"Subtype") == Some(b"Type3"))
+            (subtype(doc, font).as_deref() == Some(b"Type3"))
                 .then(|| dict(doc, font.get(b"FontDescriptor")))
                 .flatten()
                 .and_then(|d| d.name(b"FontName").map(|name| String::from_utf8_lossy(name).into_owned()))
@@ -965,7 +976,7 @@ impl Metrics {
     fn read_metrics(doc: &Document, font: &Dict, reads: &mut Reads<'_>) -> Self {
         let mut m = Metrics::fallback();
         m.std14 = None;
-        let subtype = font.name(b"Subtype").unwrap_or(b"Type1").to_vec();
+        let subtype = subtype(doc, font).unwrap_or_else(|| b"Type1".to_vec());
         let descriptor;
         // A Type 3 font measured from its glyph descriptions' `d1` boxes or its `/FontBBox` (see below).
         let mut type3_measured = false;

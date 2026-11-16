@@ -239,6 +239,16 @@ fn quad_points(doc: &Document, d: &Dict) -> Vec<[f64; 8]> {
     pdfcraft_geom::quad_points::usable_quads(a.iter().map(|x| doc.resolve(x).as_f64()))
 }
 
+/// The name `d` gives `key`, read through a reference as the renderer reads it: a `/Subtype` may be
+/// given by reference (ISO 32000-2 §7.3.10). `None` where the value isn't a name.
+pub(crate) fn name_entry(doc: &Document, d: &Dict, key: &[u8]) -> Option<Vec<u8>> {
+    let value = d.get(key)?;
+    match value {
+        Object::Ref(_) => doc.resolve(value).as_name().map(<[u8]>::to_vec),
+        _ => value.as_name().map(<[u8]>::to_vec),
+    }
+}
+
 fn color(doc: &Document, d: &Dict, key: &[u8]) -> Option<Rgb> {
     let v: Vec<f64> = doc.resolve(d.get(key)?).as_array()?.iter().filter_map(Object::as_f64).collect();
     match v.len() {
