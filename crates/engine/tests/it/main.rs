@@ -11,6 +11,7 @@ mod marked_content_isolation;
 mod ocr_edit;
 mod office_export_images;
 mod pdfa4_metadata;
+mod pdfa_gate;
 mod private_image_resize;
 mod private_text_glyphs;
 mod xfa_repeat;

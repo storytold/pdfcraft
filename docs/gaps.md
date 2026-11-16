@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-11-17 | **Last updated:** 2026-11-17 | **Change:** minor (gap 9: changes to a PDF/A file are checked against its part and reported by the tools; estimates unchanged)
 > **Last reviewed:** 2026-11-15 | **Last updated:** 2026-11-15 | **Change:** minor (gap 9: PDF/A-4, 4e and 4f are verified, not converted; estimates unchanged)
 > **Last reviewed:** 2026-11-11 | **Last updated:** 2026-11-11 | **Change:** minor (gap 8: known residual risk for the LibreOffice sidecar, sandbox tracked in #6953; estimates unchanged)
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
@@ -223,7 +224,8 @@ update the numbers.
   PDF/VT; output-intent choice; transparency flattening.
 - **Evidence:** 12 Preflight features and 9 standards features planned; `optimize.pdfa-validate`,
   `optimize.pdfa-convert` partial (2b/3b structural rules, PDF/A-4/4e/4f verification only; CMYK
-  documents get no output intent).
+  documents get no output intent); `optimize.pdfa-change-check` partial (the engine and the
+  tools report what changes to a PDF/A file break; the desktop app doesn't show it yet).
   Acrobat ships hundreds of built-in Preflight profiles.
 - **Impact:** blocks print shops, archives and accessibility compliance work.
 - **Estimate:** 65–115 h. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
@@ -435,6 +437,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | Gap 9: changes to a PDF/A file are checked against its part, and the tools say what they break. Estimates unchanged |
 | 2026-11-15 | minor | Gap 9: PDF/A-4, 4e and 4f verification (no conversion). Estimates unchanged |
 | 2026-11-11 | minor | Gap 8: known residual risk for the LibreOffice sidecar (Impress has no link-update setting; the soffice process isn't network-sandboxed). Sandboxing tracked in #6953. Estimates unchanged. |
 | 2026-10-26 | minor | Gap 8: the LibreOffice profile never updates Writer or Calc linked content on load; Impress has no such setting and the process's network access isn't sandboxed. Estimates unchanged. |

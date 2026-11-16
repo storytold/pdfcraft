@@ -8035,6 +8035,18 @@ evidence = []
 notes = ""
 
 [[feature]]
+id = "optimize.pdfa-change-check"
+title = "Changes to a file that declares PDF/A are checked against the part it declares, and the tools say what they break"
+area = "K"
+tier = "P2"
+milestone = "M11"
+status = "partial"
+commands = []
+tools = ["doc_save", "doc_optimize", "doc_reduce"]
+evidence = ["crates/engine/src/pdfa_gate.rs::only_what_the_earlier_issues_dont_account_for_is_new", "crates/engine/src/pdfa_gate.rs::the_level_checked_is_the_declared_one_or_its_level_b", "crates/engine/tests/it/pdfa_gate.rs::an_edit_that_breaks_pdfa4_is_reported_and_undo_takes_it_back", "crates/engine/tests/it/pdfa_gate.rs::what_the_file_broke_when_opened_is_not_a_change", "crates/engine/tests/it/pdfa_gate.rs::a_save_keeps_what_the_changes_broke", "crates/engine/tests/it/pdfa_gate.rs::a_copy_is_checked_from_the_same_start", "crates/engine/tests/it/pdfa_gate.rs::a_file_converted_to_pdfa_is_measured_from_its_conversion", "crates/engine/tests/it/pdfa_gate.rs::levels_a_and_u_are_checked_at_level_b_and_part_1_is_not_checked", "crates/engine/tests/it/pdfa_gate.rs::a_file_that_declares_no_pdfa_is_not_checked", "crates/automation/tests/it/pdfa_gate.rs::every_change_to_a_pdfa4_file_says_what_it_breaks", "crates/automation/tests/it/pdfa_gate.rs::a_tool_run_through_a_command_reports_once", "crates/automation/tests/it/pdfa_gate.rs::a_part_pdfcraft_does_not_check_is_said_once", "crates/automation/tests/it/pdfa_gate.rs::a_file_that_declares_no_pdfa_gets_no_pdfa_results"]
+notes = "The engine side of Acrobat's PDF/A view mode, which opens a PDF/A file read-only because changes can break it (view.pdfa-view-mode). Session::pdfa_check keeps the document as it first declared PDF/A in the session (opened, or after Convert to PDF/A) and checks it as it is now with pdfa_verify's rules at the declared level (PDF/A-4, 4e and 4f as declared; PDF/A-2 and -3 at level b, which a and u include); what fails now and didn't then is reported, so an issue the file already had, or a check that misjudges it, doesn't warn on every change, and an issue on a page that only moved to another page number is the same issue. Every tool call that opens, changes or saves such a document returns pdfa (declares, checked_as, breaks), names each new break once in warnings, and says once more when a save writes breaks into the file; doc_optimize and doc_reduce check the copy they write. Nothing is refused. PDF/A-1 is declared but not checked (checked_as null, one warning that its changes aren't checked). Only open documents: doc_batch steps run on files and report nothing. The desktop app doesn't show it yet."
+
+[[feature]]
 id = "optimize.pdfa-validate"
 title = "Verify PDF/A compliance (2b, 3b, 4, 4e and 4f so far; 1, 2a, 2u, 3a, 3u not yet)"
 area = "K"

@@ -361,6 +361,7 @@ impl Session {
             };
             e.cos.note_repair(line);
         }
+        let pdfa_gate = crate::pdfa_gate::Gate::opened(editor.as_ref().map(|e| &e.cos));
         Document {
             id: DocId(0),
             name,
@@ -395,6 +396,7 @@ impl Session {
             fonts_stale: false,
             xfa_warnings: Vec::new(),
             edit_notices: Vec::new(),
+            pdfa_gate,
         }
     }
 }

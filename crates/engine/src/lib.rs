@@ -45,6 +45,8 @@ pub mod ocr;
 mod open;
 pub mod open_parameters;
 pub mod optimizer;
+mod pdfa_gate;
+pub use pdfa_gate::{PdfaCheck, PdfaClaim};
 mod page_filter;
 mod pictures;
 pub mod print_raster;
