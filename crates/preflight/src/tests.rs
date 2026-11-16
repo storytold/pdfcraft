@@ -2367,3 +2367,38 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// What `verify` says about interpolated images under ISO 19005-2 6.2.8.
+fn interpolation_said(doc: &Document) -> Vec<String> {
+    verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.8").map(|i| i.message).collect()
+}
+
+#[test]
+fn an_interpolated_inline_image_is_reported_clause_6_2_8() {
+    let inline = || vec!["An inline image asks to be interpolated".to_string()];
+    // `I` is the abbreviation of `Interpolate` (ISO 32000-2 Table 91); PDFBOX-4750's K17 file
+    // writes the full key.
+    for content in ["BI /W 1 /H 1 /CS /G /BPC 8 /I true ID \u{0} EI", "q BI /Interpolate true /W 1 /H 1 /CS /RGB /BPC 8 ID abc EI Q"] {
+        assert_eq!(interpolation_said(&drawing(content, "", &[])), inline(), "{content}");
+    }
+    // In a form XObject too.
+    let content = "BI /W 1 /H 1 /CS /G /BPC 8 /I true ID \u{0} EI";
+    let form = format!("<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length {} >>\nstream\n{content}\nendstream", content.len());
+    assert_eq!(interpolation_said(&drawing("/X Do", "/XObject << /X 5 0 R >>", &[&form])), inline());
+    // `false`, no key, the bytes `/I true` inside image data or a string, and a stream that isn't content.
+    for content in [
+        "BI /W 1 /H 1 /CS /G /BPC 8 /I false ID \u{0} EI",
+        "BI /W 1 /H 1 /CS /G /BPC 8 ID \u{0} EI",
+        "BI /W 6 /H 1 /CS /G /BPC 8 ID /I tru EI (BI /I true ID) Tj",
+    ] {
+        assert!(interpolation_said(&drawing(content, "", &[])).is_empty(), "{content}");
+    }
+    let data = "BI /W 1 /H 1 /CS /G /BPC 8 /I true ID \u{0} EI";
+    let not_content = format!("<< /Length {} >>\nstream\n{data}\nendstream", data.len());
+    assert!(interpolation_said(&drawing("", "", &[&not_content])).is_empty());
+    // The image XObject check is unchanged, and fixable as before; the inline one isn't.
+    let issues = verify(&messy(), Level::A2b);
+    assert!(issues.iter().any(|i| i.message == "An image asks to be interpolated" && i.fixable));
+    let doc = drawing("BI /W 1 /H 1 /CS /G /BPC 8 /I true ID \u{0} EI", "", &[]);
+    assert!(verify(&doc, Level::A2b).iter().any(|i| i.message == "An inline image asks to be interpolated" && !i.fixable));
+}

@@ -14,7 +14,8 @@
 //!   NOP that ISO 32000-1 no longer defines); Named actions only for NextPage, PrevPage,
 //!   FirstPage and LastPage (ISO 32000-1 12.6.4.11, Table 212); no additional actions on the
 //!   catalog, pages, fields or widgets; `NeedAppearances` not true;
-//! - images: no `Interpolate`, no `Alternates`, no OPI; no PostScript XObjects;
+//! - images: no `Interpolate` (an inline image's `I` included), no `Alternates`, no OPI; no
+//!   PostScript XObjects;
 //! - embedded files: PDF/A-2 only allows embedded PDF/A files; PDF/A-3 needs `AFRelationship`.
 //!
 //! [`convert`] fixes what can be fixed without changing how pages look (XMP, the sRGB output
@@ -218,6 +219,7 @@ pub const WORDINGS: &[&str] = &[
     "A stream uses LZW compression",
     "A stream refers to an external file",
     "An image asks to be interpolated",
+    "An inline image asks to be interpolated",
     "An image has alternates or OPI information",
     "PostScript XObjects aren't allowed",
     "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)",
@@ -595,6 +597,37 @@ fn mark_cs_object(doc: &Document, cs: &Object, used: &mut DeviceColour, depth: u
     }
 }
 
+/// Decoded bytes one verification reads looking for inline images, all content streams together.
+/// Past it, content is not inspected.
+const MAX_INLINE_DECODED: usize = 1 << 30;
+
+/// Whether an inline image in any content stream asks to be interpolated: its dictionary has `I`
+/// or `Interpolate` true (ISO 32000-2 8.9.7, Table 91), which PDF/A forbids as it does for image
+/// XObjects (ISO 19005-2 6.2.8, ISO 19005-4 6.2.7.1). The content streams are those the device
+/// colour scan reads: pages' `/Contents`, Type 3 glyph procedures, and streams whose dictionary
+/// says they hold content. Each is read operator by operator, so image data and strings are never
+/// taken for operators, and reading stops at the first such image.
+fn inline_image_interpolates(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> bool {
+    let referenced = referenced_content(doc, objs);
+    let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_INLINE_DECODED, usize::MAX);
+    for (r, o) in objs {
+        let Object::Stream(s) = &**o else { continue };
+        if !(referenced.contains(r) || is_content(&s.dict)) {
+            continue;
+        }
+        let Ok(data) = budget.decode(s) else { continue };
+        // Only content with the `BI` operator holds inline images: the rest isn't parsed.
+        if !data.windows(2).any(|w| w == b"BI") {
+            continue;
+        }
+        let interpolates = |image: &Dict| [b"I".as_slice(), b"Interpolate"].iter().any(|k| matches!(image.get(k), Some(Object::Bool(true))));
+        if pdfcraft_content::ops(&data).any(|op| op.inline.as_ref().is_some_and(|(image, _)| interpolates(image))) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Whether any content or object uses a device colour space.
 fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> DeviceColour {
     let mut used = DeviceColour::default();
@@ -696,6 +729,10 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     let drawing = drawing_fonts(doc, &objs);
     check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
     check_limits(doc, &objs, &pages, &mut issue);
+    if inline_image_interpolates(doc, &objs) {
+        // Content would have to be rewritten to change it, which `convert` doesn't do.
+        issue("6.2.8", "An inline image asks to be interpolated", None, None, false);
+    }
     check_spots(doc, &objs, &mut issue);
     check_graphics_states(doc, &mut issue);
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
