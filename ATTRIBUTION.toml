@@ -2658,6 +2658,17 @@ usage = "Runtime window/Dock icon on macOS (apps/pdfcraft/src/main.rs)"
 sha256 = "68ac6730b8990d07503351d32eacea81e9ec171a7a6f09daf52d6555d8245c8a"
 
 [[asset]]
+path = "apps/ios/PdfCraftMobilePOC/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
+title = "PdfCraft iPhone and iPad app icon"
+author = "PdfCraft contributors (drawn by the project owner in ArtCraft)"
+source = "Derived from assets/app-icon/pdfcraft-1024.png; contributor-original master artwork (assets/app-icon/README.md)"
+licence = "MIT OR Apache-2.0"
+licence_file = "assets/app-icon/LICENSE.txt"
+kind = "icon"
+usage = "Universal iOS app icon; macOS lion artwork without desktop padding, flattened on PdfCraft red by packaging/ios-icon.swift"
+sha256 = "fd5a5f0e7eb6722be843b164ff1ddecf37c2ea60cb0f92adbf07210ce4ee8ded"
+
+[[asset]]
 path = "assets/app-icon/pdfcraft.icns"
 title = "PdfCraft app icon (macOS .icns)"
 author = "PdfCraft contributors (drawn by the project owner in ArtCraft)"

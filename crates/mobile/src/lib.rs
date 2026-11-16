@@ -17,6 +17,7 @@ const MAX_INPUT: u64 = 32 * 1024 * 1024;
 const MAX_PAGES: usize = 2_000;
 const MAX_EDGE: u32 = 2_048;
 const MAX_PIXELS: f64 = 4_000_000.0;
+const MAX_PAGE_TEXT_BYTES: usize = 256 * 1024;
 
 #[cfg(feature = "swift")]
 #[swift_bridge::bridge]
@@ -27,6 +28,7 @@ mod ffi {
         #[swift_bridge(rust_name = "open_response")]
         fn open(&self, path: &str) -> String;
         fn render(&self, page: u32, edge: u32) -> Result<String, String>;
+        fn page_text(&self, page: u32) -> Result<String, String>;
         fn rotate(&self, page: u32) -> Result<String, String>;
         fn save_copy(&self) -> Result<String, String>;
         fn close(&self, discard: bool) -> Result<String, String>;
@@ -36,6 +38,7 @@ mod ffi {
 enum Operation {
     Open(String),
     Render(u32, u32),
+    PageText(u32),
     Rotate(u32),
     Save,
     Close(bool),
@@ -118,6 +121,10 @@ impl MobileSession {
         self.call(Operation::Rotate(page))
     }
 
+    pub fn page_text(&self, page: u32) -> Result<String, String> {
+        self.call(Operation::PageText(page))
+    }
+
     pub fn save_copy(&self) -> Result<String, String> {
         self.call(Operation::Save)
     }
@@ -129,6 +136,21 @@ impl MobileSession {
 
 fn error(code: &str, message: &str) -> String {
     json!({ "code": code, "message": message }).to_string()
+}
+
+fn page_text_response(output: &Value, page: u32) -> Result<String, String> {
+    let invalid = || error("text", "The engine returned an invalid page text result");
+    let pages = output.get("pages").and_then(Value::as_array).ok_or_else(invalid)?;
+    let result =
+        pages.first().filter(|result| pages.len() == 1 && result.get("page").and_then(Value::as_u64) == Some(u64::from(page))).ok_or_else(invalid)?;
+    let text = result.get("text").and_then(Value::as_str).ok_or_else(invalid)?;
+    let truncated = match result.get("truncated") {
+        Some(value) => value.as_bool().ok_or_else(invalid)?,
+        None => false,
+    };
+    // Bound text crossing into Swift without splitting a Unicode scalar; never hide a partial result.
+    let end = text.floor_char_boundary(MAX_PAGE_TEXT_BYTES.min(text.len()));
+    Ok(json!({ "page": page, "text": &text[..end], "truncated": truncated || end < text.len() }).to_string())
 }
 
 struct State {
@@ -251,6 +273,17 @@ impl State {
                     .collect();
                 Ok(json!({ "path": path, "width": image.1, "height": image.2, "warnings": warnings }).to_string())
             }
+            Operation::PageText(page) => {
+                let output = self.tool("text_extract", json!({ "doc": self.id()?, "pages": [page] }))?;
+                let result = output
+                    .iter()
+                    .find_map(|part| match part {
+                        Content::Json(value) => Some(value),
+                        _ => None,
+                    })
+                    .ok_or_else(|| error("text", "The engine returned no page text result"))?;
+                page_text_response(result, page)
+            }
             Operation::Rotate(page) => {
                 self.tool("page_rotate", json!({ "doc": self.id()?, "pages": [page], "degrees": 90 }))?;
                 self.metadata()
@@ -273,6 +306,40 @@ impl State {
                 }
                 Ok("{}".into())
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_response_caps_utf8_and_preserves_engine_truncation() {
+        let prefix = "a".repeat(MAX_PAGE_TEXT_BYTES - 1);
+        let output = json!({ "pages": [{ "page": 1, "text": format!("{prefix}\u{e9}") }] });
+        let result: Value = serde_json::from_str(&page_text_response(&output, 1).unwrap()).unwrap();
+        assert_eq!(result["text"], prefix);
+        assert_eq!(result["truncated"], true);
+        let exact = "a".repeat(MAX_PAGE_TEXT_BYTES);
+        let output = json!({ "pages": [{ "page": 1, "text": exact }] });
+        let result: Value = serde_json::from_str(&page_text_response(&output, 1).unwrap()).unwrap();
+        assert_eq!(result["text"].as_str().unwrap().len(), MAX_PAGE_TEXT_BYTES);
+        assert_eq!(result["truncated"], false);
+        let output = json!({ "pages": [{ "page": 1, "text": "", "truncated": true }] });
+        let result: Value = serde_json::from_str(&page_text_response(&output, 1).unwrap()).unwrap();
+        assert_eq!(result["truncated"], true);
+    }
+
+    #[test]
+    fn missing_or_invalid_page_text_is_not_an_empty_success() {
+        for output in [
+            json!({ "pages": [] }),
+            json!({ "pages": [{ "page": 2, "text": "wrong page" }] }),
+            json!({ "pages": [{ "page": 1 }] }),
+            json!({ "pages": [{ "page": 1, "text": "", "truncated": "unknown" }] }),
+        ] {
+            assert!(page_text_response(&output, 1).is_err());
         }
     }
 }

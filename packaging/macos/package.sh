@@ -4,7 +4,7 @@
 #   $DIST/pdfcraft-<version>-macos-<arch>.dmg          PdfCraft.app on a drag-to-Applications DMG
 #   $DIST/pdfcraft-cli-<version>-macos-<arch>.zip      the headless CLI
 #
-# Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
+# Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--profile debug|release] [--skip-build]
 #
 # Signing (env):
 #   MACOS_SIGN_IDENTITY   codesign identity (name or SHA-1). Default "-" = ad-hoc (local testing;
@@ -18,15 +18,25 @@ set -euo pipefail
 HERE="$ROOT/packaging/macos"
 
 ARCH=universal
+PROFILE=release
 SKIP_BUILD=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --arch) ARCH="$2"; shift 2 ;;
+    --arch | --profile)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }
+      if [[ "$1" = --arch ]]; then ARCH="$2"; else PROFILE="$2"; fi
+      shift 2
+      ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+case "$PROFILE" in
+  debug) PROFILE_ARGS=(--profile dev) ;;
+  release) PROFILE_ARGS=(--release) ;;
+  *) echo "unknown --profile $PROFILE" >&2; exit 2 ;;
+esac
 case "$ARCH" in
   universal) TARGETS=(aarch64-apple-darwin x86_64-apple-darwin) ;;
   aarch64) TARGETS=(aarch64-apple-darwin) ;;
@@ -52,20 +62,20 @@ else
   warn "macOS: APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID incomplete; signed but not notarized"
 fi
 
-echo "==> PdfCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTARIZE"
+echo "==> PdfCraft $VERSION for macOS ($ARCH, $PROFILE), identity: $IDENTITY, notarize: $NOTARIZE"
 
 # ---- build -------------------------------------------------------------------------------------
 if [[ "$SKIP_BUILD" = 0 ]]; then
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
-  (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli "${args[@]}")
+  (cd "$ROOT" && cargo build "${PROFILE_ARGS[@]}" --locked -p pdfcraft -p pdfcraft-cli "${args[@]}")
 fi
 
 rm -rf "$WORK"
 mkdir -p "$WORK/bin"
 for bin in pdfcraft pdfcraft-cli; do
   inputs=()
-  for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
+  for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/$PROFILE/$bin"); done
   lipo -create -output "$WORK/bin/$bin" "${inputs[@]}"
   lipo -info "$WORK/bin/$bin"
 done

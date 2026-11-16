@@ -20,6 +20,48 @@ fn value(result: Result<String, String>) -> Value {
 }
 
 #[test]
+fn page_text_reads_only_the_requested_page_and_survives_rotation_and_reopen() {
+    let input = tempfile::tempdir().unwrap();
+    let source = input.path().join("text.pdf");
+    let original = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> >> >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 6 0 R >>")
+        .stream("", b"BT /F1 12 Tf 10 260 Td (PdfCraft text reading) Tj 0 -18 Td (caf\\351) Tj ET")
+        .stream("", b"1 0 0 rg 10 20 60 40 re f")
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+        .build();
+    std::fs::write(&source, &original).unwrap();
+    let session = create_mobile_session().unwrap();
+    assert!(session.page_text(1).is_err(), "a closed document is not empty text");
+    value(session.open(source.to_str().unwrap()));
+    let text = value(session.page_text(1));
+    assert_eq!(text["page"], 1);
+    assert_eq!(text["text"], "PdfCraft text reading\ncaf\u{e9}");
+    assert_eq!(text["truncated"], false);
+    let empty = value(session.page_text(2));
+    assert_eq!(empty["page"], 2);
+    assert_eq!(empty["text"], "");
+    assert_eq!(empty["truncated"], false);
+    assert!(session.page_text(0).is_err());
+    assert!(session.page_text(3).is_err());
+    assert_eq!(value(session.page_text(1)), text, "invalid requests must not lose the document");
+    assert_eq!(value(session.rotate(1))["dirty"], true);
+    assert_eq!(value(session.page_text(1))["text"], text["text"]);
+    let saved = value(session.save_copy());
+    value(session.close(false));
+    assert!(session.page_text(1).is_err());
+    value(session.open(saved["path"].as_str().unwrap()));
+    assert_eq!(value(session.page_text(1))["text"], text["text"]);
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+    value(session.close(false));
+    std::fs::write(&source, fixture()).unwrap();
+    value(session.open(source.to_str().unwrap()));
+    assert_eq!(value(session.page_text(1))["text"], "", "a new document must not reuse old text");
+}
+
+#[test]
 fn open_render_rotate_save_reopen_preserves_pixels_and_original() {
     let input = tempfile::tempdir().unwrap();
     let original = fixture();

@@ -33,6 +33,12 @@ struct RenderedPage: Sendable {
     let hasWarnings: Bool
 }
 
+struct ExtractedPageText: Decodable, Sendable {
+    let page: UInt32
+    let text: String
+    let truncated: Bool
+}
+
 private struct OutputPath: Decodable {
     let path: String
 }
@@ -118,6 +124,14 @@ actor DocumentBridge {
     func rotate(page: UInt32) throws -> DocumentMetadata {
         let engine = try engine()
         return try decode(DocumentMetadata.self) { try engine.rotate(page) }
+    }
+
+    func pageText(page: UInt32) throws -> ExtractedPageText {
+        try Task.checkCancellation()
+        let engine = try engine()
+        let output = try decode(ExtractedPageText.self) { try engine.page_text(page) }
+        try Task.checkCancellation()
+        return output
     }
 
     func saveCopy() throws -> URL {
