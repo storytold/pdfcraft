@@ -94,20 +94,21 @@ pub(crate) fn forbids_annotation(level: Level, subtype: &[u8]) -> bool {
 }
 
 /// 6.3.3 and 6.4.1: an annotation's appearance dictionary holds only `/N`, which for a button
-/// widget is a dictionary of appearance states (ISO 32000-2 12.5.5), and a widget has no `/A`
-/// action.
+/// widget is a dictionary of appearance states and for every other annotation an appearance stream
+/// (ISO 32000-2 12.5.5), and a widget has no `/A` action.
 pub(crate) fn annotation(doc: &Document, dict: &Dict, subtype: Option<&[u8]>, name: &str, page: Option<usize>, issue: &mut Report<'_>) {
     let appearance = dict.get(b"AP").map(|ap| doc.resolve(ap));
     let appearance = appearance.as_deref().and_then(Object::as_dict);
     if appearance.is_some_and(|ap| ap.iter().any(|(k, _)| k.as_slice() != b"N")) {
         issue("6.3.3", "A {} annotation's appearance dictionary holds more than N", Some(name.to_owned()), page, false);
     }
-    if subtype == Some(b"Widget")
-        && field_type(doc, dict) == Some(b"Btn".to_vec())
-        && let Some(normal) = appearance.and_then(|ap| ap.get(b"N")).map(|n| doc.resolve(n))
-        && !matches!(&*normal, Object::Dict(_))
-    {
-        issue("6.3.3", "A button's normal appearance isn't a dictionary of appearance states", None, page, false);
+    if let Some(normal) = appearance.and_then(|ap| ap.get(b"N")).map(|n| doc.resolve(n)) {
+        let button = subtype == Some(b"Widget") && field_type(doc, dict) == Some(b"Btn".to_vec());
+        if button && !matches!(&*normal, Object::Dict(_)) {
+            issue("6.3.3", "A button's normal appearance isn't a dictionary of appearance states", None, page, false);
+        } else if !button && !matches!(&*normal, Object::Stream(_)) {
+            issue("6.3.3", "A {} annotation's normal appearance isn't an appearance stream", Some(name.to_owned()), page, false);
+        }
     }
     if subtype == Some(b"Widget") && dict.get(b"A").is_some() {
         issue("6.4.1", "A widget annotation has an action (A)", None, page, false);
@@ -260,7 +261,7 @@ pub(crate) fn document(doc: &Document, catalog: &Dict, issue: &mut Report<'_>) {
     catalog_version(doc, catalog, issue);
     catalog_entries(doc, catalog, issue);
     metadata_stream(catalog, doc, issue);
-    output_intents(doc, catalog, issue);
+    output_intents(doc, catalog, None, issue);
     end_of_file(doc, issue);
 }
 
@@ -330,11 +331,13 @@ fn catalog_entries(doc: &Document, catalog: &Dict, issue: &mut Report<'_>) {
     }
 }
 
-/// 6.11: a page has no presentation steps (`/PresSteps`).
-pub(crate) fn page(page: &Dict, index: usize, issue: &mut Report<'_>) {
+/// 6.11 and 6.2.3: a page has no presentation steps (`/PresSteps`), and its own output intents
+/// follow the rules of the catalog's.
+pub(crate) fn page(doc: &Document, page: &Dict, index: usize, issue: &mut Report<'_>) {
     if page.get(b"PresSteps").is_some() {
         issue("6.11", "A page has presentation steps (PresSteps)", None, Some(index), false);
     }
+    output_intents(doc, page, Some(index), issue);
 }
 
 /// How many optional content configurations [`optional_content_names`] reads.
@@ -379,18 +382,65 @@ fn metadata_stream(catalog: &Dict, doc: &Document, issue: &mut Report<'_>) {
     // What can't be decoded within the limit `lib.rs` reads metadata with is reported there as no
     // metadata at all.
     let Ok(bytes) = stream.decoded_within(xmp::MAX_XMP_BYTES) else { return };
-    let Ok(text) = std::str::from_utf8(&bytes) else {
-        issue("6.7.2.1", "The XMP metadata isn't UTF-8", None, None, false);
+    packet(&bytes, None, issue);
+}
+
+/// 6.7.2.1 for the packet `bytes` of the catalog's metadata stream (`object` `None`) or of the
+/// metadata stream `object` of a component: UTF-8, well-formed, and no `bytes` or `encoding`
+/// attribute in its `xpacket` header.
+fn packet(bytes: &[u8], object: Option<pdfcraft_cos::ObjRef>, issue: &mut Report<'_>) {
+    let named = object.map(|o| o.to_string());
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        match named {
+            Some(o) => issue("6.7.2.1", "The XMP metadata in metadata stream {} isn't UTF-8", Some(o), None, false),
+            None => issue("6.7.2.1", "The XMP metadata isn't UTF-8", None, None, false),
+        }
         return;
     };
     if xmp::parse(text).is_none() {
-        issue("6.7.2.1", "The XMP metadata isn't well-formed XML", None, None, false);
+        match &named {
+            Some(o) => issue("6.7.2.1", "The XMP metadata in metadata stream {} isn't well-formed XML", Some(o.clone()), None, false),
+            None => issue("6.7.2.1", "The XMP metadata isn't well-formed XML", None, None, false),
+        }
     }
     if let Some(start) = text.find("<?xpacket")
         && let Some(header) = text.get(start..).and_then(|rest| rest.find("?>").and_then(|end| rest.get(..end)))
         && (header.contains(" bytes=") || header.contains(" encoding="))
     {
-        issue("6.7.2.1", "The XMP packet header has a bytes or encoding attribute", None, None, false);
+        match named {
+            Some(o) => issue("6.7.2.1", "The XMP packet header in metadata stream {} has a bytes or encoding attribute", Some(o), None, false),
+            None => issue("6.7.2.1", "The XMP packet header has a bytes or encoding attribute", None, None, false),
+        }
+    }
+}
+
+/// The most of all component metadata streams [`component_metadata`] decodes, together.
+const MAX_COMPONENT_METADATA: usize = 64 << 20;
+
+/// 6.7.2.1 for the metadata streams of the document's components (ISO 32000-2 14.3.2: pages,
+/// XObjects, fonts and the other dictionaries with a `/Metadata` entry): their packets are held to
+/// the same encoding rules as the catalog's. Each stream is read once, the catalog's not again, and
+/// all of them within [`MAX_COMPONENT_METADATA`]; one too large to decode is left alone, as the
+/// catalog's is.
+pub(crate) fn component_metadata(doc: &Document, catalog: &Dict, objs: &[(pdfcraft_cos::ObjRef, std::sync::Arc<Object>)], issue: &mut Report<'_>) {
+    let mut seen: std::collections::HashSet<pdfcraft_cos::ObjRef> = catalog.get(b"Metadata").and_then(Object::as_ref).into_iter().collect();
+    let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_COMPONENT_METADATA, 0);
+    for (_, o) in objs {
+        let dict = match &**o {
+            Object::Dict(d) => d,
+            Object::Stream(s) => &s.dict,
+            _ => continue,
+        };
+        let Some(r) = dict.get(b"Metadata").and_then(Object::as_ref) else { continue };
+        if !seen.insert(r) {
+            continue;
+        }
+        let Object::Stream(stream) = &*doc.get(r) else { continue };
+        if budget.remaining() == 0 {
+            break;
+        }
+        let Ok(bytes) = budget.decode_within(stream, xmp::MAX_XMP_BYTES) else { continue };
+        packet(&bytes, Some(r), issue);
     }
 }
 
@@ -401,12 +451,13 @@ const MAX_ICC_HEADER_READ: usize = 16 << 20;
 /// How many output intents [`output_intents`] reads.
 const MAX_INTENTS: usize = 4096;
 
-/// 6.2.3: no output intent names an external profile (`/DestOutputProfileRef`, ISO 32000-2 14.11.5,
-/// Table 401), all that have a `/DestOutputProfile` share one profile object, and the PDF/A one's
-/// profile is an output (`prtr`) or monitor (`mntr`) profile of gray, RGB or CMYK (the ICC header's
-/// device class and data colour space, ICC.1 7.2.5 and 7.2.6).
-fn output_intents(doc: &Document, catalog: &Dict, issue: &mut Report<'_>) {
-    let Some(list) = catalog.get(b"OutputIntents").map(|o| doc.resolve(o)) else { return };
+/// 6.2.3: in the output intents of `holder`, the catalog or the page `page` (ISO 32000-2 14.11.5
+/// lets both have them), none names an external profile (`/DestOutputProfileRef`, Table 401), all
+/// that have a `/DestOutputProfile` share one profile object, and the PDF/A one's profile is an
+/// output (`prtr`) or monitor (`mntr`) profile of gray, RGB or CMYK (the ICC header's device class
+/// and data colour space, ICC.1 7.2.5 and 7.2.6).
+fn output_intents(doc: &Document, holder: &Dict, page: Option<usize>, issue: &mut Report<'_>) {
+    let Some(list) = holder.get(b"OutputIntents").map(|o| doc.resolve(o)) else { return };
     let Some(list) = list.as_array() else { return };
     let mut profiles = std::collections::HashSet::new();
     let (mut external, mut direct) = (false, 0usize);
@@ -420,7 +471,7 @@ fn output_intents(doc: &Document, catalog: &Dict, issue: &mut Report<'_>) {
             && let Ok(header) = profile.decoded_within(MAX_ICC_HEADER_READ)
             && !(matches!(header.get(12..16), Some(b"prtr" | b"mntr")) && matches!(header.get(16..20), Some(b"GRAY" | b"RGB " | b"CMYK")))
         {
-            issue("6.2.3", "The PDF/A output intent's profile isn't an output or monitor profile of gray, RGB or CMYK", None, None, false);
+            issue("6.2.3", "The PDF/A output intent's profile isn't an output or monitor profile of gray, RGB or CMYK", None, page, false);
         }
         match intent.get(b"DestOutputProfile") {
             Some(Object::Ref(r)) => {
@@ -432,10 +483,10 @@ fn output_intents(doc: &Document, catalog: &Dict, issue: &mut Report<'_>) {
         }
     }
     if external {
-        issue("6.2.3", "An output intent names an external profile (DestOutputProfileRef)", None, None, false);
+        issue("6.2.3", "An output intent names an external profile (DestOutputProfileRef)", None, page, false);
     }
     if profiles.len().saturating_add(direct) > 1 {
-        issue("6.2.3", "The output intents have different destination profiles", None, None, false);
+        issue("6.2.3", "The output intents have different destination profiles", None, page, false);
     }
 }
 
@@ -468,13 +519,29 @@ pub(crate) fn embedded_files_named(doc: &Document, catalog: &Dict, issue: &mut R
 
 /// 6.9: an embedded file's file specification, at `level`: it has `/F` and `/UF` (ISO 32000-2
 /// 7.11.3, Table 43) and an `/AFRelationship`, its stream names a MIME type (7.11.4, Table 44),
-/// and in PDF/A-4 itself (not 4e or 4f) the file is a PDF/A file of part 1, 2 or 4. That is judged
-/// by what the embedded file declares ([`declares_pdfa`]); it isn't verified in turn.
+/// and in PDF/A-4 itself (not 4e or 4f) the file is a PDF/A file of part 1, 2 or 4: it declares
+/// one, and when that is a level [`verify`](crate::verify) checks it is verified at it
+/// ([`embedded_pdfa`]).
 pub(crate) fn embedded_file(doc: &Document, level: Level, spec: &Dict, issue: &mut Report<'_>) {
     let streams = spec.get(b"EF").map(|ef| doc.resolve(ef)).and_then(|ef| ef.as_dict().cloned()).unwrap_or_default();
     let streams: Vec<_> = streams.iter().map(|(_, s)| doc.resolve(s)).collect();
-    if level == Level::A4 && !streams.iter().all(|s| matches!(&**s, Object::Stream(s) if declares_pdfa(s))) {
-        issue("6.9", "Embedded files must be PDF/A-1, PDF/A-2 or PDF/A-4 files themselves (use PDF/A-4f for others)", None, None, false);
+    if level == Level::A4 {
+        let mut not_pdfa = false;
+        for stream in &streams {
+            match &**stream {
+                Object::Stream(s) => match embedded_pdfa(s) {
+                    Embedded::NotPdfa => not_pdfa = true,
+                    Embedded::Declares => {}
+                    Embedded::Fails(label) => {
+                        issue("6.9", "An embedded file declares {} but doesn't conform to it", Some(label.to_owned()), None, false)
+                    }
+                },
+                _ => not_pdfa = true,
+            }
+        }
+        if not_pdfa {
+            issue("6.9", "Embedded files must be PDF/A-1, PDF/A-2 or PDF/A-4 files themselves (use PDF/A-4f for others)", None, None, false);
+        }
     }
     if spec.get(b"AFRelationship").is_none() {
         issue("6.9", "An embedded file has no AFRelationship", None, None, false);
@@ -490,16 +557,55 @@ pub(crate) fn embedded_file(doc: &Document, level: Level, spec: &Dict, issue: &m
     }
 }
 
-/// The largest embedded file [`declares_pdfa`] opens.
+/// The largest embedded file [`embedded_pdfa`] opens.
 const MAX_EMBEDDED_PDF: usize = 64 << 20;
 
-/// Whether the embedded file `s` is a PDF whose metadata declares PDF/A-1, 2 or 4. Only the
-/// declaration is read, one level down: the embedded file isn't verified, and its own embedded
-/// files aren't opened.
-fn declares_pdfa(s: &pdfcraft_cos::Stream) -> bool {
-    let Ok(bytes) = s.decoded_within(MAX_EMBEDDED_PDF) else { return false };
-    let Ok(inner) = Document::open(std::sync::Arc::new(bytes.to_vec())) else { return false };
-    crate::declared(&inner).pdfa.is_some_and(|(part, _)| matches!(part, 1 | 2 | 4))
+/// How many embedded files deep [`embedded_pdfa`] verifies: an embedded file's own embedded files
+/// are judged by their declaration only.
+const MAX_NESTED_VERIFY: usize = 1;
+
+thread_local! {
+    /// How many embedded-file verifications this thread is inside.
+    static NESTED_VERIFY: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// What [`embedded_pdfa`] finds an embedded file to be.
+enum Embedded {
+    /// Not a PDF, or one that declares no PDF/A part 1, 2 or 4.
+    NotPdfa,
+    /// A PDF that declares PDF/A-1, 2 or 4, and passes verification at that level when it is one
+    /// [`verify`](crate::verify) checks (PDF/A-2b, 4, 4e or 4f) and the file isn't nested deeper
+    /// than [`MAX_NESTED_VERIFY`].
+    Declares,
+    /// A PDF that declares this level and fails its verification.
+    Fails(&'static str),
+}
+
+/// Leaves one embedded-file verification when dropped.
+struct NestedGuard;
+
+impl Drop for NestedGuard {
+    fn drop(&mut self) {
+        NESTED_VERIFY.with(|n| n.set(n.get().saturating_sub(1)));
+    }
+}
+
+/// What the embedded file `s` is for PDF/A-4's 6.9: a PDF whose metadata declares PDF/A-1, 2 or 4,
+/// verified at that level where PdfCraft checks it, one embedded file deep. PDF/A-1, 2a and 2u are
+/// judged by their declaration alone.
+fn embedded_pdfa(s: &pdfcraft_cos::Stream) -> Embedded {
+    let Ok(bytes) = s.decoded_within(MAX_EMBEDDED_PDF) else { return Embedded::NotPdfa };
+    let Ok(inner) = Document::open(std::sync::Arc::new(bytes.to_vec())) else { return Embedded::NotPdfa };
+    let Some((part, conformance)) = crate::declared(&inner).pdfa.filter(|(part, _)| matches!(part, 1 | 2 | 4)) else {
+        return Embedded::NotPdfa;
+    };
+    let Some(level) = Level::from_declared(part, &conformance) else { return Embedded::Declares };
+    if NESTED_VERIFY.with(std::cell::Cell::get) >= MAX_NESTED_VERIFY {
+        return Embedded::Declares;
+    }
+    NESTED_VERIFY.with(|n| n.set(n.get().saturating_add(1)));
+    let _guard = NestedGuard;
+    if crate::verify(&inner, level).is_empty() { Embedded::Declares } else { Embedded::Fails(level.label()) }
 }
 
 /// Whether `name` has the shape of a MIME type: a type and a subtype, neither empty, around one `/`.

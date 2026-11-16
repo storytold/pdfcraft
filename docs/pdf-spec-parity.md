@@ -132,7 +132,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-15 | minor | Subset standards: PDF/A-4, 4e and 4f verification (Standards ▸ PDF/A, which opens on the declared level, and `pdfa_verify` levels 4, 4e, 4f), no conversion. `optimize.pdfa-validate` stays partial |
+| 2026-11-15 | minor | Subset standards: PDF/A-4, 4e and 4f verification (Standards ▸ PDF/A, which opens on the declared level when it is 2b, 3b, 4, 4e or 4f and on PDF/A-2b otherwise, and `pdfa_verify` levels 4, 4e, 4f, which without a level checks the same level), no conversion. `optimize.pdfa-validate` stays partial |
 | 2026-11-05 | minor | Subset standards: the PDF/A rows name 2b and 3b only, and the PDF/X row says what is there — the identification is carried through Combine and can be removed; no verifier, no converter. No feature status changed |
 | 2026-10-30 | minor | §7.4: JBIG2 decoding (`hayro-jbig2`) in `pdfcraft-filters`, which `Document::decoded_image` uses with the image's `/JBIG2Globals`: export reads JBIG2 behind other filters too, and redaction clears pixels in JBIG2 images instead of removing them whole (one whose page isn't its size still is) |
 | 2026-10-26 | minor | §7.4: redaction clears pixels in CCITT fax images through the CCITT decoder, instead of removing them whole (Group 4 and Group 3 off bytes; Group 3 on bytes is still removed whole, as the bootstrap renderer may draw it as other rows than the decoder reads) |

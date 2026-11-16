@@ -1798,6 +1798,33 @@ endstream",
     assert_eq!(fonts(&glyphs("", "1000 0 d0 BT /F2 10 Tf (x) Tj ET")), helvetica());
     assert!(fonts(&glyphs("", "1000 0 d0 0 0 1 1 re f")).is_empty());
     assert_eq!(fonts(&glyphs("/Filter /NoSuchDecode", "x")), helvetica());
+    // A page's `/Contents` streams are one stream split between any two tokens (ISO 32000-2
+    // 7.8.2): the font name can end one stream and its `Tf` start the next.
+    let page = |contents: &[&str], resources: &str| {
+        let streams: Vec<String> = contents.iter().map(|c| format!("<< /Length {} >>\nstream\n{c}\nendstream", c.len() + 1)).collect();
+        let refs: Vec<String> = (0..contents.len()).map(|i| format!("{} 0 R", i + 6)).collect();
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            format!("<< /Type /Page /Parent 2 0 R /Contents [{}] /Resources << {resources} >> >>", refs.join(" ")),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            "<< /Type /ExtGState /Font [4 0 R 10] >>".to_owned(),
+        ];
+        objects.extend(streams);
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        build(&objects, "")
+    };
+    let listed = "/Font << /F1 4 0 R >>";
+    assert_eq!(fonts(&page(&["BT /F1", "10 Tf (x) Tj ET"], listed)), helvetica());
+    assert_eq!(fonts(&page(&["BT", "/F1 10 Tf (x) Tj ET"], listed)), helvetica());
+    assert!(fonts(&page(&["BT", "(x) Tj ET"], listed)).is_empty());
+    // A graphics state's `/Font` entry selects its font for `gs` (ISO 32000-2 8.4.5, Table 57),
+    // with no `Tf` at all.
+    let state = "/ExtGState << /GS1 5 0 R >>";
+    assert_eq!(fonts(&page(&["/GS1 gs BT (x) Tj ET"], state)), helvetica());
+    assert_eq!(fonts(&page(&["/GS1", "gs BT (x) Tj ET"], &format!("{state} {listed}"))), helvetica());
+    assert!(fonts(&page(&["BT (x) Tj ET"], state)).is_empty());
+    assert_eq!(fonts_at(&page(&["/GS1 gs BT (x) Tj ET"], state), Level::A4, "6.2.10.4.1"), helvetica());
 }
 
 /// PDF/A-2 6.1.2: the file starts with `%PDF-1.0` to `%PDF-1.7` and an end-of-line marker, then a

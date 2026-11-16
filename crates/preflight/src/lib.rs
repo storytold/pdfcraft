@@ -266,6 +266,7 @@ pub const WORDINGS: &[&str] = &[
     "A graphics state has a halftone origin (HTO)",
     "A PDF/A-4f file needs embedded files listed in the catalog's name dictionary (EmbeddedFiles)",
     "Embedded files must be PDF/A-1, PDF/A-2 or PDF/A-4 files themselves (use PDF/A-4f for others)",
+    "An embedded file declares {} but doesn't conform to it",
     "An embedded file's file specification lacks F or UF",
     "An embedded file has no MIME type (Subtype)",
     "A {} annotation's appearance dictionary holds more than N",
@@ -282,6 +283,9 @@ pub const WORDINGS: &[&str] = &[
     "Two optional content configurations have the same Name",
     "The metadata stream isn't marked /Type /Metadata /Subtype /XML",
     "The XMP metadata isn't UTF-8",
+    "The XMP metadata in metadata stream {} isn't UTF-8",
+    "The XMP metadata in metadata stream {} isn't well-formed XML",
+    "The XMP packet header in metadata stream {} has a bytes or encoding attribute",
     "The XMP metadata isn't well-formed XML",
     "The XMP packet header has a bytes or encoding attribute",
     "An output intent names an external profile (DestOutputProfileRef)",
@@ -289,6 +293,7 @@ pub const WORDINGS: &[&str] = &[
     "Data follows the last end-of-file marker (%%EOF)",
     "A 3D stream's Subtype isn't U3D or PRC",
     "A button's normal appearance isn't a dictionary of appearance states",
+    "A {} annotation's normal appearance isn't an appearance stream",
     "The PDF/A output intent's profile isn't an output or monitor profile of gray, RGB or CMYK",
     "A stream uses the filter {}, which ISO 32000-2 doesn't define",
     "A stream uses the Crypt filter with a crypt filter other than Identity",
@@ -568,7 +573,8 @@ const MAX_FONT_CONTENT_DECODED: usize = 1 << 30;
 
 /// The fonts the document draws with. PDF/A asks that every font "used for rendering" be embedded
 /// (ISO 19005-2 6.2.11.4.1, ISO 19005-4 6.2.10.4.1): a font draws when content selects it with
-/// `Tf` (ISO 32000-2 9.3.1, Table 103) by its name in that content's resource dictionary. The
+/// `Tf` (ISO 32000-2 9.3.1, Table 103) by its name in that content's resource dictionary, or with
+/// `gs` by the name of a graphics state whose `/Font` entry holds it (8.4.5, Table 57). The
 /// content read is a page's `/Contents` with the page's resources, a form XObject's, a tiling
 /// pattern's or an appearance stream's with its own, and a Type 3 glyph procedure's.
 ///
@@ -581,33 +587,37 @@ const MAX_FONT_CONTENT_DECODED: usize = 1 << 30;
 fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> std::collections::HashSet<ObjRef> {
     let mut out = std::collections::HashSet::new();
     // Names selected by content whose resource dictionary isn't known.
-    let mut anywhere: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+    let mut anywhere: std::collections::HashSet<Selection> = std::collections::HashSet::new();
     let mut every_font = false;
     let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_FONT_CONTENT_DECODED, usize::MAX);
-    // What each page content stream selects, `None` where it couldn't be decoded: a stream that
-    // many pages share is read once.
-    let mut page_streams: std::collections::HashMap<ObjRef, Option<std::collections::HashSet<Vec<u8>>>> = std::collections::HashMap::new();
+    // What each page's `/Contents` selects, `None` where some of it couldn't be decoded: pages
+    // that share their content are read once.
+    let mut page_reads: std::collections::HashMap<Vec<ObjRef>, Option<std::collections::HashSet<Selection>>> = std::collections::HashMap::new();
+    let mut page_streams = std::collections::HashSet::new();
+    let nothing = std::collections::HashSet::new();
     for p in pdfcraft_model::pages(doc) {
         let fonts = resource_fonts(doc, &p.dict);
-        let mut selected = std::collections::HashSet::new();
-        let mut unread = false;
-        for r in page_contents(doc, &p.dict) {
-            // A page's streams are read as one (ISO 32000-2 7.8.2), but split only between tokens,
-            // so an operator's operands are in the stream that has the operator.
-            let read = page_streams.entry(r).or_insert_with(|| match &*doc.get(r) {
-                Object::Stream(s) => budget.decode(s).ok().map(|data| {
-                    let mut names = std::collections::HashSet::new();
-                    selected_fonts(&data, &mut names);
-                    names
-                }),
-                _ => Some(std::collections::HashSet::new()),
-            });
-            match read {
-                Some(names) => selected.extend(names.iter().cloned()),
-                None => unread = true,
+        let contents = page_contents(doc, &p.dict);
+        page_streams.extend(contents.iter().copied());
+        let read = page_reads.entry(contents).or_insert_with_key(|contents| {
+            // A page's streams are one stream split only between tokens (ISO 32000-2 7.8.2), so an
+            // operator's operands can end one stream and the operator start the next: they are
+            // read joined, a space between them, as renderers join them.
+            let mut joined = Vec::new();
+            for r in contents {
+                if let Object::Stream(s) = &*doc.get(*r) {
+                    joined.extend_from_slice(&budget.decode(s).ok()?);
+                    joined.push(b' ');
+                }
             }
+            let mut names = std::collections::HashSet::new();
+            selected_fonts(&joined, &mut names);
+            Some(names)
+        });
+        match read {
+            Some(names) => add_selected(&fonts, names, false, &mut out),
+            None => add_selected(&fonts, &nothing, true, &mut out),
         }
-        add_selected(&fonts, &selected, unread, &mut out);
     }
     let glyph_procs = {
         let (mut read, mut procs) = (std::collections::HashSet::new(), std::collections::HashSet::new());
@@ -620,7 +630,7 @@ fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> s
     };
     for (r, o) in objs {
         let Object::Stream(s) = &**o else { continue };
-        if page_streams.contains_key(r) || !(is_content(&s.dict) || glyph_procs.contains(r)) {
+        if page_streams.contains(r) || !(is_content(&s.dict) || glyph_procs.contains(r)) {
             continue;
         }
         let own = s.dict.get(b"Resources").is_some().then(|| resource_fonts(doc, &s.dict));
@@ -651,36 +661,69 @@ fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> s
     out
 }
 
-/// The fonts the resource dictionary of `holder` (`/Resources`, held directly or by reference)
-/// lists in `/Font`, by name, each the object its reference ends at.
-fn resource_fonts(doc: &Document, holder: &Dict) -> Vec<(Vec<u8>, ObjRef)> {
-    let Some(resources) = holder.get(b"Resources").map(|r| doc.resolve(r)) else { return Vec::new() };
-    let Some(fonts) = resources.as_dict().and_then(|r| r.get(b"Font")).map(|f| doc.resolve(f)) else { return Vec::new() };
-    let Some(fonts) = fonts.as_dict() else { return Vec::new() };
-    fonts.iter().filter_map(|(k, f)| Some((k.to_vec(), font_object(doc, f.as_ref()?)))).collect()
+/// How content selects a font: with `Tf` by its name in the resources' `/Font`, or with `gs` by
+/// the name in the resources' `/ExtGState` of a graphics state whose `/Font` entry holds it
+/// (ISO 32000-2 8.4.5, Table 57).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Selector {
+    Tf,
+    Gs,
 }
 
-/// Adds to `out` the fonts of `fonts` whose names content `selected`, or all of them when some of
-/// the content was `unread`.
+/// A resource name content selects a font by, and how.
+type Selection = (Selector, Vec<u8>);
+
+/// The fonts the resource dictionary of `holder` (`/Resources`, held directly or by reference)
+/// lets content select, each by how and by its name there, and as the object its reference ends
+/// at: those listed in `/Font`, and those the graphics states in `/ExtGState` hold in their
+/// `/Font` entry (`[font size]`, the font an indirect reference, ISO 32000-2 Table 57).
+fn resource_fonts(doc: &Document, holder: &Dict) -> Vec<(Selection, ObjRef)> {
+    let Some(resources) = holder.get(b"Resources").map(|r| doc.resolve(r)) else { return Vec::new() };
+    let Some(resources) = resources.as_dict() else { return Vec::new() };
+    let mut out = Vec::new();
+    if let Some(fonts) = resources.get(b"Font").map(|f| doc.resolve(f))
+        && let Some(fonts) = fonts.as_dict()
+    {
+        out.extend(fonts.iter().filter_map(|(k, f)| Some(((Selector::Tf, k.to_vec()), font_object(doc, f.as_ref()?)))));
+    }
+    if let Some(states) = resources.get(b"ExtGState").map(|g| doc.resolve(g))
+        && let Some(states) = states.as_dict()
+    {
+        for (k, state) in states.iter() {
+            let state = doc.resolve(state);
+            let Some(font) = state.as_dict().and_then(|s| s.get(b"Font")).map(|f| doc.resolve(f)) else { continue };
+            if let Some(r) = font.as_array().and_then(|a| a.first()).and_then(Object::as_ref) {
+                out.push(((Selector::Gs, k.to_vec()), font_object(doc, r)));
+            }
+        }
+    }
+    out
+}
+
+/// Adds to `out` the fonts of `fonts` that content `selected`, or all of them when some of the
+/// content was `unread`.
 fn add_selected(
-    fonts: &[(Vec<u8>, ObjRef)],
-    selected: &std::collections::HashSet<Vec<u8>>,
+    fonts: &[(Selection, ObjRef)],
+    selected: &std::collections::HashSet<Selection>,
     unread: bool,
     out: &mut std::collections::HashSet<ObjRef>,
 ) {
     out.extend(fonts.iter().filter(|(name, _)| unread || selected.contains(name)).map(|(_, r)| *r));
 }
 
-/// The font names the content `data` selects with `Tf`, its operator for the font and size
-/// (`/F1 12 Tf`), added to `out`. Operators are read one at a time, so a string, a comment or an
-/// inline image never passes for one.
-fn selected_fonts(data: &[u8], out: &mut std::collections::HashSet<Vec<u8>>) {
+/// What the content `data` selects fonts by, added to `out`: the font names of `Tf`, its operator
+/// for the font and size (`/F1 12 Tf`), and the graphics state names of `gs` (`/GS1 gs`), whose
+/// state may set a font. Operators are read one at a time, so a string, a comment or an inline
+/// image never passes for one.
+fn selected_fonts(data: &[u8], out: &mut std::collections::HashSet<Selection>) {
     for op in pdfcraft_content::ops(data) {
-        if op.op == b"Tf"
-            && let Some(name) = op.name_back(1)
-            && !out.contains(name)
-        {
-            out.insert(name.to_vec());
+        let selection = match op.op.as_slice() {
+            b"Tf" => op.name_back(1).map(|name| (Selector::Tf, name)),
+            b"gs" => op.last_name().map(|name| (Selector::Gs, name)),
+            _ => None,
+        };
+        if let Some((how, name)) = selection {
+            out.insert((how, name.to_vec()));
         }
     }
 }
@@ -867,6 +910,8 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     // PDF/A-4 dropped the value types and extension schemas of XMP properties.
     if !part4 {
         check_xmp_packets(&objs, &located_issue);
+    } else {
+        part4::component_metadata(doc, &catalog(doc), &objs, &mut issue);
     }
     check_output_intent(doc, level, &objs, &mut issue);
     check_catalog_actions(doc, level, &mut issue);
@@ -897,7 +942,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
             None => {}
         }
         if part4 {
-            part4::page(&p.dict, i, &mut issue);
+            part4::page(doc, &p.dict, i, &mut issue);
         }
     }
     check_transparency(doc, level, &pages, &mut issue);
@@ -1101,50 +1146,57 @@ fn check_output_intent(
     // PDF/A-4 also accepts DeviceRGB or DeviceCMYK drawn inside an isolated transparency group
     // whose own colour space is a device-independent one of as many components.
     let covered = if part4 { part4::group_blending_components(doc, objs) } else { Default::default() };
-    let mut used = if covered.is_empty() {
-        uses_device_colour(doc, objs)
+    // PDF/A-4 also accepts DeviceRGB or DeviceCMYK drawn in a device-independent blending space of
+    // as many components: for what no such form group covers, every page's transparency group
+    // colour space. An isolated group of its own space keeps what is drawn inside it from the
+    // page's (ISO 32000-2 11.4.7), so the page's space covers only the objects outside them.
+    let pages = if part4 { pdfcraft_model::pages(doc) } else { Vec::new() };
+    let page_space = if part4 { part4::page_blending_components(doc, &pages) } else { None };
+    let blend = |used: &mut DeviceColour, n: Option<i64>| match n {
+        Some(3) => used.rgb = false,
+        Some(4) => used.cmyk = false,
+        _ => {}
+    };
+    let used = if covered.is_empty() {
+        let mut used = uses_device_colour(doc, objs);
+        blend(&mut used, page_space);
+        used
     } else {
         // The objects outside such a group, then those inside an RGB one and inside a CMYK one,
         // each read on their own. The three sets don't share an object, so no stream is decoded
         // twice, but each has its own decoding budget: at most three times MAX_COLOUR_DECODED.
         let within = |n: Option<i64>| -> Vec<_> { objs.iter().filter(|(r, _)| covered.get(&r.num).copied() == n).cloned().collect() };
         let mut used = uses_device_colour(doc, &within(None));
+        blend(&mut used, page_space);
         for n in [3, 4] {
-            let inside = uses_device_colour(doc, &within(Some(n)));
+            let mut inside = uses_device_colour(doc, &within(Some(n)));
+            blend(&mut inside, Some(n));
             used.gray |= inside.gray;
-            used.rgb |= inside.rgb && n != 3;
-            used.cmyk |= inside.cmyk && n != 4;
+            used.rgb |= inside.rgb;
+            used.cmyk |= inside.cmyk;
             used.default_rgb |= inside.default_rgb;
             used.default_cmyk |= inside.default_cmyk;
             used.incomplete |= inside.incomplete;
         }
         used
     };
-    // PDF/A-4 also accepts DeviceRGB or DeviceCMYK drawn in a device-independent blending space of
-    // as many components: here, every page's transparency group colour space.
-    let pages = if part4 { pdfcraft_model::pages(doc) } else { Vec::new() };
-    if part4 {
-        match part4::page_blending_components(doc, &pages) {
-            Some(3) => used.rgb = false,
-            Some(4) => used.cmyk = false,
-            _ => {}
-        }
-    }
     if used.incomplete && part4 {
         issue("6.2.4.3", "Some content could not be read for device colour", None, None, false);
     } else if used.incomplete {
         issue("6.2.3", "Some content could not be read for device colour", None, None, false);
     }
     let mut intent = pdfa_intent_profile(doc);
-    // PDF/A-4 takes a page's own PDF/A output intent (ISO 32000-2 14.11.5) where the document has
-    // none. Device colour is judged for the document as a whole, so that holds when every page has
-    // one; pages whose profiles differ in their components leave the components unknown.
-    if intent.is_none() && part4 {
-        let profiles: Option<Vec<Option<i64>>> = pages.iter().map(|p| pdfa_intent_profile_in(doc, &p.dict)).collect();
-        if let Some(profiles) = profiles.filter(|p| !p.is_empty()) {
+    // PDF/A-4 takes a page's own PDF/A output intent in place of the document's for that page (ISO
+    // 32000-2 14.11.5). Device colour is judged for the document as a whole, so the intent that
+    // applies is the same on every page or its components are unknown, and device colour of any
+    // kind then needs another allowance; a page with no intent of either kind leaves none.
+    if part4 && !pages.is_empty() {
+        let document = intent;
+        let profiles: Option<Vec<Option<i64>>> = pages.iter().map(|p| pdfa_intent_profile_in(doc, &p.dict).or(document)).collect();
+        intent = profiles.map(|profiles| {
             let first = profiles.first().copied().flatten();
-            intent = Some(if profiles.iter().all(|n| *n == first) { first } else { None });
-        }
+            if profiles.iter().all(|n| *n == first) { first } else { None }
+        });
     }
     match intent {
         None if used.any() => {

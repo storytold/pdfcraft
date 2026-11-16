@@ -334,6 +334,9 @@ fn annotations_print_show_and_have_only_a_normal_appearance() {
     };
     passes(&square("<< /N 7 0 R >>"), Level::A4);
     reports(&square("<< /N 7 0 R /D 7 0 R >>"), Level::A4, "6.3.3", "appearance dictionary holds more than N");
+    // Any other annotation's normal appearance is an appearance stream.
+    reports(&square("<< /N 0 >>"), Level::A4, "6.3.3", "Square annotation's normal appearance isn't an appearance stream");
+    reports(&square("<< /N << /On 7 0 R >> >>"), Level::A4, "6.3.3", "normal appearance isn't an appearance stream");
     let widget = |entries: &str| File {
         page: "/Annots [6 0 R]".to_owned(),
         more: vec![o(&format!("<< /Type /Annot /Subtype /Widget /T (w) /Rect [0 0 10 10] /F 4 /P 4 0 R {entries} >>")), appearance.clone()],
@@ -342,6 +345,8 @@ fn annotations_print_show_and_have_only_a_normal_appearance() {
     // A button's normal appearance is a dictionary of states.
     passes(&widget("/FT /Btn /AP << /N << /Off 7 0 R >> >>"), Level::A4);
     reports(&widget("/FT /Btn /AP << /N 7 0 R >>"), Level::A4, "6.3.3", "button's normal appearance");
+    passes(&widget("/FT /Tx /AP << /N 7 0 R >>"), Level::A4);
+    reports(&widget("/FT /Tx /AP << /N << /Off 7 0 R >> >>"), Level::A4, "6.3.3", "Widget annotation's normal appearance isn't an appearance stream");
     reports(&widget("/FT /Tx /AP << /N 7 0 R >> /A << /S /GoTo /D [4 0 R /Fit] >>"), Level::A4, "6.4.1", "widget annotation has an action");
 }
 
@@ -393,6 +398,31 @@ fn a_page_output_intent_stands_in_for_the_documents() {
     };
     reports(&transparent(group), Level::A4, "6.2.9", "transparency but no device-independent blending colour space");
     passes(&transparent(&format!("{group} {PAGE_INTENT}")), Level::A4);
+    // A page's own intent takes the place of the document's for that page (ISO 32000-2 14.11.5).
+    let intent =
+        |n: u8| format!("/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (x) /DestOutputProfile {n} 0 R >>]");
+    let both = |catalog: u8, page: u8| File {
+        catalog: intent(catalog),
+        content: "1 0 0 rg 0 0 10 10 re f",
+        more: vec![srgb_profile(), profile_of(4, b"CMYK")],
+        ..with_page(&intent(page))
+    };
+    reports(&both(6, 7), Level::A4, "6.2.4.3", "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile");
+    passes(&both(7, 6), Level::A4);
+    passes(&both(6, 6), Level::A4);
+}
+
+/// 6.2.3 holds for a page's output intents as for the catalog's.
+#[test]
+fn a_pages_output_intents_follow_the_catalogs_rules() {
+    let page = |intents: &str| File { more: vec![srgb_profile(), srgb_profile()], ..with_page(&format!("/OutputIntents [{intents}]")) };
+    let intent = |n: u8| format!("<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (sRGB) /DestOutputProfile {n} 0 R >>");
+    passes(&page(&intent(6)), Level::A4);
+    let external = format!("{} << /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier (x) /DestOutputProfileRef << >> >>", intent(6));
+    reports(&page(&external), Level::A4, "6.2.3", "external profile");
+    reports(&page(&format!("{} {}", intent(6), intent(7))), Level::A4, "6.2.3", "different destination profiles");
+    let found = issues(&page(&external), Level::A4);
+    assert!(found.iter().any(|i| i.message.contains("external profile") && i.page == Some(0)), "{found:#?}");
 }
 
 /// An ICC profile stream object of `n` components whose header names the data colour space
@@ -499,6 +529,11 @@ fn a_form_groups_own_blending_space_covers_device_colour_drawn_inside_it() {
     let cal = "/I true /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>]";
     passes(&drawn(4, 3, cal, "/ColorSpace << /C /DeviceRGB >>", "/C cs 1 0 0 sc 0 0 10 10 re f", Vec::new()), Level::A4);
     passes(&drawn(3, 4, icc, "", cmyk, Vec::new()), Level::A4);
+    // A page's RGB blending space doesn't reach into an isolated CMYK group: DeviceRGB drawn there
+    // is blended in CMYK.
+    let cal_page = "/Group << /S /Transparency /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >>";
+    reports(&File { page: cal_page.to_owned(), ..drawn(4, 4, icc, "", rgb, Vec::new()) }, Level::A4, "6.2.4.3", not_rgb);
+    passes(&File { page: cal_page.to_owned(), content: "/X0 Do 1 0 0 rg 0 0 10 10 re f", ..drawn(4, 4, icc, "", cmyk, Vec::new()) }, Level::A4);
     // A form inside the group, and an image only the group draws, are painted in its space too.
     let nested = form("/Resources << >>", rgb);
     passes(&drawn(4, 3, icc, "/XObject << /Y 9 0 R >>", "/Y Do", vec![nested.clone()]), Level::A4);
@@ -572,6 +607,35 @@ fn embedded_files_follow_the_level() {
     let plain = bytes(&File { header: "%PDF-1.7", packet: described("", ""), ..File::default() });
     let undeclared = file(None, good, stream("/Type /EmbeddedFile /Subtype /application#2Fpdf", &plain), listed);
     reports(&undeclared, Level::A4, "6.9", "must be PDF/A-1, PDF/A-2 or PDF/A-4 files");
+    // The declaration isn't taken for conformance: a file that declares PDF/A-2b or PDF/A-4 is
+    // verified at that level. PDF/A-1, 2a and 2u, which PdfCraft doesn't check, are taken as
+    // declared.
+    let pdf = |bytes: &[u8]| stream("/Type /EmbeddedFile /Subtype /application#2Fpdf", bytes);
+    let red = "1 0 0 rg 0 0 10 10 re f";
+    let failing2b = bytes(&File { header: "%PDF-1.7", packet: packet("2", None, Some("B")), content: red, ..File::default() });
+    reports(&file(None, good, pdf(&failing2b), listed), Level::A4, "6.9", "declares PDF/A-2b but doesn't conform to it");
+    let failing4 = bytes(&File { after: b"junk", ..File::default() });
+    reports(&file(None, good, pdf(&failing4), listed), Level::A4, "6.9", "declares PDF/A-4 but doesn't conform to it");
+    for (part, conformance) in [("1", Some("B")), ("2", Some("U"))] {
+        let declared = bytes(&File { header: "%PDF-1.7", packet: packet(part, None, conformance), content: red, ..File::default() });
+        passes(&file(None, good, pdf(&declared), listed), Level::A4);
+    }
+    // One embedded file deep: the files an embedded file embeds are judged by their declaration.
+    let inner = bytes(&file(None, good, pdf(&failing4), listed));
+    assert!(!verify(&open(inner.clone()), Level::A4).is_empty());
+    passes(&file(None, good, pdf(&inner), listed), Level::A4);
+}
+
+/// 6.7.2.1 holds for every metadata stream, a page's as well as the catalog's.
+#[test]
+fn component_metadata_streams_are_well_formed_utf8_packets() {
+    let good = packet("4", Some("2020"), None);
+    let with = |data: &[u8]| File { more: vec![stream("/Type /Metadata /Subtype /XML", data)], ..with_page("/Metadata 6 0 R") };
+    passes(&with(&good), Level::A4);
+    reports(&with(&[good.as_slice(), b"<!-- \xFF -->"].concat()), Level::A4, "6.7.2.1", "metadata stream 6 0 R isn't UTF-8");
+    reports(&with(b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">"), Level::A4, "6.7.2.1", "metadata stream 6 0 R isn't well-formed XML");
+    let sized = String::from_utf8(good.clone()).unwrap().replacen("?>", " encoding=\"UTF-8\"?>", 1);
+    reports(&with(sized.as_bytes()), Level::A4, "6.7.2.1", "in metadata stream 6 0 R has a bytes or encoding attribute");
 }
 
 #[test]
