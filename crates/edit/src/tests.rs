@@ -726,6 +726,47 @@ fn flattening_fields_drops_the_ones_on_no_page() {
     assert_eq!(left, [pdfcraft_cos::ObjRef::new(7, 0)], "only the hidden field on the page stays");
 }
 
+/// A form whose `/AcroForm` is null, its fields known only from the widgets on the page (viewers
+/// fill them all the same). Flattening draws the shown widget and leaves the one that is not
+/// shown (`/F 32`, NoView): that one stays a field of the form, listed in `/Fields`, and its tree
+/// no longer holds the widget flattened away. With every widget flattened, no form is made.
+#[test]
+fn flattening_lists_the_field_of_a_widget_it_leaves_and_prunes_its_tree() {
+    let page = stream("", " ");
+    let objs = |hidden_flag: u32| {
+        vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm null >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [6 0 R 7 0 R] >>".into(),
+            page.clone(),
+            "<< /T (form1) /Kids [6 0 R 7 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (shown) /Parent 5 0 R /Rect [10 10 150 40] /F 4 /AP << /N 8 0 R >> >>".into(),
+            format!(
+                "<< /Type /Annot /Subtype /Widget /FT /Tx /T (footer) /Parent 5 0 R /Rect [10 90 150 120] /F {hidden_flag} /AP << /N 8 0 R >> >>"
+            ),
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream".into(),
+        ]
+    };
+    let form = |doc: &Document| {
+        let root = doc.root().unwrap();
+        doc.get(root).as_dict().unwrap().get(b"AcroForm").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned())
+    };
+    let o = objs(96);
+    let mut doc = build(&o.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "only the shown widget is drawn");
+    let doc = reopen(&doc);
+    let af = form(&doc).expect("a form, to list the field left on the page");
+    let listed: Vec<pdfcraft_cos::ObjRef> = doc.resolve(af.get(b"Fields").unwrap()).as_array().unwrap().iter().filter_map(|f| f.as_ref()).collect();
+    assert_eq!(listed, [pdfcraft_cos::ObjRef::new(5, 0)], "the left widget's tree is in the form");
+    let kids = doc.get(pdfcraft_cos::ObjRef::new(5, 0)).as_dict().unwrap().get(b"Kids").cloned();
+    assert_eq!(kids, Some(Object::Array(vec![Object::Ref(pdfcraft_cos::ObjRef::new(7, 0))])), "the flattened widget is out of its tree");
+    // Both widgets shown and flattened: no field is left, and no form is made for none.
+    let o = objs(4);
+    let mut doc = build(&o.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 2);
+    assert!(form(&reopen(&doc)).is_none(), "no form dictionary appears");
+}
+
 /// #1794: a form field whose widget has no usable appearance (none stored, or none for its
 /// selected state) has nothing to draw. Flattening used to remove it anyway, losing its value
 /// with no ink in its place. It stays, in the page and in the form, like a comment that can't be

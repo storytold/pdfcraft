@@ -621,11 +621,20 @@ thread_local! {
 
 /// Remove flattened widgets from the AcroForm field tree, and fields left without widgets. With
 /// `on_page`, also the widgets (fields without kids) that are on no page.
+///
+/// A widget that stays on its page (a hidden one, which is not drawn) stays a field. When its
+/// field tree is one `/AcroForm /Fields` does not list (a form whose `/Fields` leaves fields out,
+/// or that has none), viewers find it from the page all the same; its tree is pruned like the
+/// listed ones, and what survives is listed, so the widget left on the page belongs to the form
+/// and its tree no longer holds the widgets flattened away. A document with no form dictionary
+/// gets one only to list such a field.
 fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&HashSet<ObjRef>>) -> Result<(), EditError> {
     let Some(root) = doc.root() else { return Ok(()) };
-    let Some(af) = doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned()) else { return Ok(()) };
-    let af_ref = af.as_ref();
-    let mut af_dict = doc.resolve(&af).as_dict().cloned().unwrap_or_default();
+    let af = doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned());
+    let af_ref = af.as_ref().and_then(Object::as_ref);
+    let existing = af.as_ref().map(|af| doc.resolve(af)).and_then(|af| af.as_dict().cloned());
+    let had_form = existing.is_some();
+    let mut af_dict = existing.unwrap_or_default();
     let fields = af_dict.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
     // Returns whether the node survives, and whether that answer depends on the depth cutoff.
     // `known` holds each node's answer once it is visited, so a node listed twice is pruned once,
@@ -678,15 +687,55 @@ fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&
         (!survivors.is_empty(), cut)
     }
     let mut known = HashMap::new();
-    let survivors: Vec<Object> =
+    let mut survivors: Vec<Object> =
         fields.iter().filter(|f| f.as_ref().is_none_or(|r| keep(doc, r, widgets, on_page, &mut known, 0).0)).cloned().collect();
-    if survivors.len() == fields.len() && widgets.is_empty() {
+    // Then the trees of the widgets left on the pages that the listed ones did not reach.
+    let unlisted: Vec<ObjRef> =
+        widget_roots(doc).into_iter().filter(|(w, top)| !known.contains_key(w) && !known.contains_key(top)).map(|(_, top)| top).collect();
+    let mut adopted = HashSet::new();
+    for top in unlisted {
+        if adopted.insert(top) && keep(doc, top, widgets, on_page, &mut known, 0).0 {
+            survivors.push(Object::Ref(top));
+        }
+    }
+    if survivors.len() == fields.len() && widgets.is_empty() && adopted.is_empty() {
         return Ok(()); // only looked for fields on no page, and there were none
     }
+    if !had_form && survivors.is_empty() {
+        return Ok(()); // no form, and no field left to list in one
+    }
     af_dict.set(b"Fields".to_vec(), Object::Array(survivors));
-    match af_ref {
+    match af_ref.filter(|_| had_form) {
         Some(r) => doc.set(r, Object::Dict(af_dict)),
         None => doc.update_dict(root, |d| d.set(b"AcroForm".to_vec(), Object::Dict(af_dict)))?,
     }
     Ok(())
+}
+
+/// Most `/Parent` links climbed from a widget to the top of its field tree.
+const MAX_PARENT_DEPTH: usize = 64;
+
+/// Each widget on the pages, with the top of its field tree (its topmost `/Parent`), in page order.
+fn widget_roots(doc: &Document) -> Vec<(ObjRef, ObjRef)> {
+    let mut out = Vec::new();
+    for page in page_list(doc) {
+        let annots = page.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        for r in annots.iter().filter_map(Object::as_ref) {
+            let Some(d) = doc.get(r).as_dict().cloned() else { continue };
+            if d.name(b"Subtype") != Some(b"Widget") || !(d.contains(b"FT") || d.contains(b"T") || d.contains(b"Parent")) {
+                continue;
+            }
+            let mut top = r;
+            let mut climbed = HashSet::from([r]);
+            while climbed.len() <= MAX_PARENT_DEPTH {
+                let Some(parent) = doc.get(top).as_dict().and_then(|d| d.reference(b"Parent")) else { break };
+                if !climbed.insert(parent) || doc.get(parent).as_dict().is_none() {
+                    break;
+                }
+                top = parent;
+            }
+            out.push((r, top));
+        }
+    }
+    out
 }

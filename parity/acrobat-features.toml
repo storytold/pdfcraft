@@ -4950,8 +4950,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.flatten"]
 tools = ["doc_flatten"]
-evidence = ["crates/edit/src/tests.rs::flattening_draws_appearances_into_the_page_and_removes_the_comments", "crates/edit/src/tests.rs::flattening_keeps_a_valued_widget_it_cannot_draw", "crates/engine/src/tests.rs::flattening_keeps_the_look_and_drops_the_objects", "crates/automation/tests/it/automation.rs::flattening_through_tools"]
-notes = "widgets drawn into content and pruned from the field tree; a widget with no appearance to draw (none stored, or none for its selected state) stays a live field rather than losing its value, so a form with such fields is not fully flattened — Acrobat regenerates appearances first, which PdfCraft does not yet do here"
+evidence = ["crates/edit/src/tests.rs::flattening_draws_appearances_into_the_page_and_removes_the_comments", "crates/edit/src/tests.rs::flattening_keeps_a_valued_widget_it_cannot_draw", "crates/edit/src/tests.rs::flattening_lists_the_field_of_a_widget_it_leaves_and_prunes_its_tree", "crates/engine/src/tests.rs::flattening_keeps_the_look_and_drops_the_objects", "crates/automation/tests/it/automation.rs::flattening_through_tools"]
+notes = "widgets drawn into content and pruned from the field tree, including trees /Fields does not list (a hidden widget left on its page stays a field, listed in /Fields; no form dictionary is made when none is left); a widget with no appearance to draw (none stored, or none for its selected state) stays a live field rather than losing its value, so a form with such fields is not fully flattened — Acrobat regenerates appearances first, which PdfCraft does not yet do here"
 
 [[feature]]
 id = "form.prepare-form-mode"
