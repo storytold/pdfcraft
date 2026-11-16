@@ -107,6 +107,8 @@ impl PdfCraftApp {
             desktop_theme: None,
             #[cfg(target_os = "linux")]
             desktop_theme_enabled: false,
+            #[cfg(target_os = "linux")]
+            tablet: None,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             invert_middle_drag: false,
             animation_effects: motion::AnimationEffects::default(),
@@ -536,6 +538,13 @@ impl eframe::App for PdfCraftApp {
     /// would keep the place the pointer entered at: tell it where the pointer really is, so the
     /// page grid can show (and use) the gap under it.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // The Wayland pen (#3650): events the sidecar reader converted since the last
+        // frame, before egui reads this frame's input. Nothing here on X11/XWayland
+        // (no sidecar), so the pointer path is untouched.
+        #[cfg(target_os = "linux")]
+        if let Some(tablet) = &self.tablet {
+            tablet.take_events(raw);
+        }
         // The button's release a window move or resize kept from egui.
         window_controls::release_after_desktop_grab(ctx, raw);
         // The wheel after Alt+Tab back, before the mouse has moved (#1518).

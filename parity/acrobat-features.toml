@@ -10450,6 +10450,18 @@ evidence = []
 notes = ""
 
 [[feature]]
+id = "misc.native-wayland-pen"
+title = "Native Wayland pen input (tablet-v2)"
+area = "N"
+tier = "P3"
+milestone = "none"
+status = "shipped"
+commands = []
+tools = []
+evidence = ["crates/ui-egui/src/platform/tablet.rs::entry_and_move_place_the_pointer", "crates/ui-egui/src/platform/tablet.rs::tip_down_and_up_are_primary_press_and_release", "crates/ui-egui/src/platform/tablet.rs::barrel_button_is_secondary", "crates/ui-egui/src/platform/tablet.rs::leaving_the_surface_clears_the_pointer", "crates/ui-egui/src/platform/tablet.rs::the_eraser_end_is_active_only_while_proximate", "crates/ui-egui/src/platform/tablet.rs::other_button_codes_are_dropped"]
+notes = "The pen works on native Wayland (#3650): winit binds no tablet-v2 and Hyprland/niri/GNOME/KDE do not emulate pointer events for tablet tools, so the `wayland-tablet` sidecar crate binds `zwp_tablet_v2` on winit's own `wl_display` (guest mode, one connection, own event queue) and a reader thread converts each frame to egui pointer events — motion, tip down/up as the primary button, the stylus barrel button as secondary, leaving the surface as PointerGone; `ctx.request_repaint` wakes the idle `ControlFlow::Wait` loop. The eraser end erases ink whatever tool is selected (Acrobat's behaviour); the eraser circle shows on hover and never picks or moves comments. Pressure and tilt are not in egui's input model; they ride `PenSnapshot` (`PdfCraftApp::pen_snapshot`, unused by tools yet). Any start failure — X11/XWayland, a compositor without tablet-v2, no seat, binding errors — is logged once and changes nothing; mouse, touch and XWayland pointer input never pass through the sidecar. Still missing: pressure/tilt driving the drawn line's width, the side button bound to a tool action, and pen input on X11/XWayland."
+
+[[feature]]
 id = "misc.user-docs"
 title = "User documentation and keyboard reference"
 area = "N"

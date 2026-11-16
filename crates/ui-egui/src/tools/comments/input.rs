@@ -10,6 +10,14 @@ use crate::page_cursor::{Layer, Subject};
 use crate::page_keys::PageKeys;
 use crate::page_router::{CommentPart, Hit, Owner, PagePress};
 
+/// Whether the active tool's click places the pending comment bundle: every tool but
+/// the comment eraser. The comment eraser's click falls through to the eraser dispatch
+/// below and the bundle stays pending (the eraser end erases ink, it does not manage
+/// the bundle; `page_tool`'s precedence, #3650).
+fn places_the_bundle(tool: QuickTool) -> bool {
+    tool != QuickTool::Comment(CommentTool::Eraser)
+}
+
 /// Comment input on one page, before text selection runs. `press` is what this page has to do with
 /// the press the pages hold: a press on a comment where the tool reaches it ([`hit`]: the Select
 /// tool, Fill & Sign over its marks, a shape tool over the selected shape's handles) is that
@@ -34,7 +42,8 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
         return true;
     }
     // Copied comments on the pointer: a click places the bundle, centred where it is clicked,
-    // on this page; a right-click lets it go. Nothing else on the page takes the click.
+    // on this page; a right-click lets it go. Nothing else on the page takes the click, but
+    // the comment eraser's falls through to the eraser dispatch below (see `places_the_bundle`).
     if let Some(Gesture::Place { xfdf, bounds, .. }) = cv.gesture.clone() {
         if over_page {
             view.cursor.claim(Layer::Drag, egui::CursorIcon::Grabbing);
@@ -44,27 +53,32 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
             cv.gesture = None;
             return true;
         }
-        if resp.clicked()
-            && over_page
-            && cx.allowed
-            && let Some(p) = pointer
-        {
-            let [x, y] = cx.to_user(p);
-            let offset = [x - (bounds[0] + bounds[2]) / 2.0, y - (bounds[1] + bounds[3]) / 2.0];
-            // Larger than the page it lands on (an A0 bundle on an A4 page): placed as it is,
-            // and said so.
-            if let Some(page) = cx.info.pages.get(cx.page) {
-                let a = page.user_to_view((bounds[0] + offset[0]) as f32, (bounds[1] + offset[1]) as f32);
-                let b = page.user_to_view((bounds[2] + offset[0]) as f32, (bounds[3] + offset[1]) as f32);
-                let (w, h) = ((a[0] - b[0]).abs(), (a[1] - b[1]).abs());
-                if w > page.width + 1.0 || h > page.height + 1.0 {
-                    cv.notice = Some("The copied comments are larger than this page; they were placed as they are");
+        if places_the_bundle(cx.tool) {
+            if resp.clicked()
+                && over_page
+                && cx.allowed
+                && let Some(p) = pointer
+            {
+                let [x, y] = cx.to_user(p);
+                let offset = [x - (bounds[0] + bounds[2]) / 2.0, y - (bounds[1] + bounds[3]) / 2.0];
+                // Larger than the page it lands on (an A0 bundle on an A4 page): placed as it is,
+                // and said so.
+                if let Some(page) = cx.info.pages.get(cx.page) {
+                    let a = page.user_to_view((bounds[0] + offset[0]) as f32, (bounds[1] + offset[1]) as f32);
+                    let b = page.user_to_view((bounds[2] + offset[0]) as f32, (bounds[3] + offset[1]) as f32);
+                    let (w, h) = ((a[0] - b[0]).abs(), (a[1] - b[1]).abs());
+                    if w > page.width + 1.0 || h > page.height + 1.0 {
+                        cv.notice = Some("The copied comments are larger than this page; they were placed as they are");
+                    }
                 }
+                cv.gesture = None;
+                view.pending_edit = Some(Edit::PasteComments { xfdf, page: cx.page, offset: Some(offset) });
             }
-            cv.gesture = None;
-            view.pending_edit = Some(Edit::PasteComments { xfdf, page: cx.page, offset: Some(offset) });
+            return true;
         }
-        return true;
+        // The comment eraser's click falls through to the eraser dispatch below — the
+        // bundle stays pending, and nothing here consumes its input (see
+        // `places_the_bundle`).
     }
     let moving = moving_on(view, cx.page);
     let gestures = Gestures { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page, free };

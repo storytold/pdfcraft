@@ -1,0 +1,50 @@
+[package]
+name = "wayland-tablet"
+description = "Pen tablet sidecar for native Wayland: tablet-v2 on the windowing library's own wl_display"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+# This crate cannot inherit the workspace lints as-is: cargo rejects any member
+# override of an *inherited* lint. The workspace's `unsafe_code = "forbid"` cannot
+# be mirrored literally: cargo turns a table `forbid` into an `-F` rustc flag,
+# which no source attribute can override, and this crate has one genuinely unsafe
+# call (why: `spawn_with`'s safety comment — no safe alternative exists, and a
+# second connection cannot receive tablet events for the app's windows). `deny`
+# keeps the default an error, with `#[allow(unsafe_code)]` scoped to that one call
+# site; keep this table in sync with the root [workspace.lints] otherwise.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"
+
+[dependencies]
+thiserror.workspace = true
+raw-window-handle = "0.6"
+# Poll + monotonic-time source for the dedicated reader thread (poll the shared
+# Wayland socket; the example measures event delay against the compositor's own
+# timestamps, which are CLOCK_MONOTONIC milliseconds).
+# q.v. docs: rustix::event::poll, rustix::time::clock_gettime.
+rustix = { version = "1", default-features = false, features = ["event", "time"] }
+# The connection itself: tablet-v2 bindings on the same wl_display the egui side
+# already talks on (q.v. wayland-backend docs, FFI section: "If your code needs
+# to do FFI, you just need to directly depend on `wayland-backend` with the
+# appropriate `*_system` feature enabled, and all the other crates in your
+# dependency tree will automatically use the `sys` backend").
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
+# `client` exposes the stable protocols; tablet-v2 is `wp::tablet::zv2`
+# (protocols/stable/tablet/tablet-v2.xml in the crate source).
+wayland-protocols = { version = "0.32", features = ["client"] }
+
+[dev-dependencies]
+softbuffer = "0.4.8"
+winit = { version = "0.30", features = ["wayland"] }

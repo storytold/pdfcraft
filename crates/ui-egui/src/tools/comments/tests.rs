@@ -908,3 +908,92 @@ fn insert_text_icon_is_distinct_from_edit_text_and_matches_its_command() {
     assert_eq!(insert, command, "the annotation toolbar and command use the same icon");
     assert!(crate::widgets::icons::exists(insert));
 }
+
+/// A `PageCx` over one page at the given pointer, for the two-pass click below.
+fn click_cx<'a>(ptr: &'a PagePointer, tool: QuickTool, xf: &'a PageXform, info: &'a DocInfo, prefs: &'a CommentPrefs) -> PageCx<'a> {
+    PageCx {
+        page: 0,
+        xf,
+        ptr,
+        info,
+        tool,
+        prefs,
+        allowed: true,
+        hidden: false,
+        redact_mark: ([0.0; 3], 1.0),
+        keys: crate::page_keys::PageKeys::new(false),
+    }
+}
+
+/// One UI pass over `page_input`: the pointer resting on the page, and the primary
+/// button going down (`down`) or up. The pass's `Response` is a click-sensitive widget
+/// under the pointer, as the page view's content widget is; press and release are two
+/// passes, so the widget's click registers on the release.
+fn click_pass(ctx: &egui::Context, cx: &PageCx<'_>, down: bool, view: &mut DocView) {
+    let at = pos2(150.0, 200.0);
+    let screen = Rect::from_min_size(Pos2::ZERO, vec2(600.0, 800.0));
+    let mut input = egui::RawInput { screen_rect: Some(screen), time: Some(1.0), ..Default::default() };
+    input.events.push(egui::Event::PointerMoved(at));
+    input.events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: down, modifiers: egui::Modifiers::NONE });
+    ctx.run_ui(input, |ui| {
+        let resp = ui.interact(screen, egui::Id::unique("page-under-test"), egui::Sense::click());
+        page_input(ui, &resp, cx, crate::page_router::PagePress::Free, false, view);
+    })
+    .drop_without_applying_deltas();
+}
+
+/// A copied-comment bundle hangs on the pointer and the pen's eraser end clicks the
+/// page: the bundle is neither placed nor let go — it stays pending, because the
+/// eraser end erases ink and does not manage the bundle (`places_the_bundle`,
+/// #3650). The same click with the Select tool places the bundle, as before.
+#[test]
+fn an_eraser_end_click_leaves_the_pending_bundle_pending() {
+    let prefs = CommentPrefs::default();
+    let info = DocInfo {
+        pages: vec![PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+        ..Default::default()
+    };
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 };
+    let ctx = egui::Context::default();
+    let at = pos2(150.0, 200.0);
+    // egui hit-tests a pass against the widgets of the pass before it
+    // (`Context::end_pass` reads `prev_pass.widgets`), so a widget's first pass
+    // registers no hover and a press made on it finds nothing. Two passes that
+    // create the same widget go first; every pass below then sees it as the page
+    // view's widget, which is there every frame.
+    let screen = Rect::from_min_size(Pos2::ZERO, vec2(600.0, 800.0));
+    let mut warm = egui::RawInput { screen_rect: Some(screen), time: Some(0.0), ..Default::default() };
+    warm.events.push(egui::Event::PointerMoved(at));
+    for _ in 0..2 {
+        ctx.run_ui(warm.clone(), |ui| {
+            ui.interact(screen, egui::Id::unique("page-under-test"), egui::Sense::click());
+        })
+        .drop_without_applying_deltas();
+    }
+    let hang = |view: &mut DocView| {
+        view.comments.gesture = Some(Gesture::Place { xfdf: "<xfdf/>".into(), bounds: [10.0, 10.0, 60.0, 40.0], count: 2, outlines: Vec::new() });
+    };
+
+    // The eraser end: a click falls through to the eraser dispatch, the bundle stays.
+    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
+    hang(&mut view);
+    let ptr = PagePointer { pos: Some(at), origin: Some(at), edges: vec![crate::page_pointer::Edge::Press(at)], ..Default::default() };
+    click_pass(&ctx, &click_cx(&ptr, QuickTool::Comment(CommentTool::Eraser), &xf, &info, &prefs), true, &mut view);
+    let ptr = PagePointer { pos: Some(at), edges: vec![crate::page_pointer::Edge::Release(at)], released: Some(at), ..Default::default() };
+    click_pass(&ctx, &click_cx(&ptr, QuickTool::Comment(CommentTool::Eraser), &xf, &info, &prefs), false, &mut view);
+    assert!(matches!(view.comments.gesture, Some(Gesture::Place { .. })), "the eraser end's click leaves the bundle pending");
+    assert!(view.pending_edit.is_none(), "the eraser end's click does not place the bundle");
+
+    // The Select tool, the same click: the bundle is placed where it was clicked.
+    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
+    hang(&mut view);
+    let ptr = PagePointer { pos: Some(at), origin: Some(at), edges: vec![crate::page_pointer::Edge::Press(at)], ..Default::default() };
+    click_pass(&ctx, &click_cx(&ptr, QuickTool::Select, &xf, &info, &prefs), true, &mut view);
+    let ptr = PagePointer { pos: Some(at), edges: vec![crate::page_pointer::Edge::Release(at)], released: Some(at), ..Default::default() };
+    click_pass(&ctx, &click_cx(&ptr, QuickTool::Select, &xf, &info, &prefs), false, &mut view);
+    assert!(view.comments.gesture.is_none(), "the Select tool's click places the bundle");
+    assert!(
+        matches!(view.pending_edit, Some(Edit::PasteComments { page: 0, offset: Some(_), .. })),
+        "the Select tool's click places the bundle where it was clicked"
+    );
+}
