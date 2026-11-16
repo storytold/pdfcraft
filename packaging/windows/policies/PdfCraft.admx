@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitions revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <policyNamespaces>
+    <target prefix="pdfcraft" namespace="ArtCraft.PdfCraft" />
+    <using prefix="windows" namespace="Microsoft.Policies.Windows" />
+  </policyNamespaces>
+  <resources minRequiredRevision="1.0" />
+  <categories>
+    <category name="PdfCraft" displayName="$(string.PdfCraftCategory)">
+      <parentCategory ref="windows:WindowsComponents" />
+    </category>
+  </categories>
+  <policies>
+    <policy name="PdfCraft_DisableUpdateCheck" class="Machine" displayName="$(string.DisableUpdateCheck)" explainText="$(string.DisableUpdateCheck_Explain)" key="Software\Policies\PdfCraft" valueName="DisableUpdateCheck">
+      <parentCategory ref="PdfCraft" />
+      <supportedOn ref="windows:SUPPORTED_WindowsVista" />
+      <enabledValue>
+        <decimal value="1" />
+      </enabledValue>
+      <disabledValue>
+        <decimal value="0" />
+      </disabledValue>
+    </policy>
+  </policies>
+</policyDefinitions>

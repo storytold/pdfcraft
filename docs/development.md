@@ -28,6 +28,19 @@ the low-disk artifacts, run `cargo clean --profile low-disk`.
 Building PdfCraft requires Rust 1.95 or later: the UI crate and its `egui` and `craft-ui`
 dependencies need it, and the workspace `rust-version` states the same minimum.
 
+## Windows update policy
+
+On Windows, administrators can set `HKEY_LOCAL_MACHINE\SOFTWARE\Policies\PdfCraft\DisableUpdateCheck`
+as a `REG_DWORD`. A value of `1` disables automatic and manual update checks and shows the startup
+preference unchecked and disabled. If the value is absent or `0`, the user controls the automatic
+check as usual.
+
+The Group Policy templates are in [`packaging/windows/policies/`](../packaging/windows/policies/):
+copy `PdfCraft.admx` to `PolicyDefinitions` and the matching language file
+(`en-US/PdfCraft.adml` or `de-DE/PdfCraft.adml`) to its language subfolder. In Group Policy Editor,
+find **Computer Configuration → Policies → Administrative Templates → Windows Components → PdfCraft**.
+Enabling **Disable update checks** writes `1`; disabling it writes `0`.
+
 ## Annotation tool pin
 
 The annotation quick bar's **Keep tool selected** pin is a shared preference, stored as the
