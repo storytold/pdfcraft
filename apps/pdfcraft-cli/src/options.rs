@@ -19,6 +19,25 @@ pub(crate) fn has_flag(args: &[String], specs: &[OptionSpec], name: &str) -> boo
     false
 }
 
+/// Returns the operand of the last occurrence of value-taking `--name`, skipping operands of other
+/// options (`--password --out input.pdf --out out.pdf` returns `out.pdf`).
+pub(crate) fn value_of_flag<'a>(args: &'a [String], specs: &[OptionSpec], name: &str) -> Option<&'a str> {
+    let mut i = 0;
+    let mut result = None;
+    while let Some(a) = args.get(i) {
+        if a == name {
+            result = args.get(i + 1).map(String::as_str);
+            i += 2;
+            continue;
+        }
+        match specs.iter().find(|spec| spec.name == a.as_str()) {
+            Some(spec) if spec.takes_value => i += 2,
+            _ => i += 1,
+        }
+    }
+    result
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct OptionSpec {
     pub(crate) name: &'static str,
@@ -168,4 +187,16 @@ pub(crate) fn positional<'a>(args: &'a [String], specs: &[OptionSpec]) -> Vec<&'
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn value_of_flag_skips_password_operand() {
+        let args: Vec<String> = ["--password", "--out", "input.pdf", "--out", "compressed.pdf"].iter().map(|s| s.to_string()).collect();
+        let specs = [OptionSpec { name: "--password", takes_value: true }, OptionSpec { name: "--out", takes_value: true }];
+        assert_eq!(value_of_flag(&args, &specs, "--out"), Some("compressed.pdf"));
+    }
 }
