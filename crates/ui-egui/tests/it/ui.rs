@@ -2126,6 +2126,10 @@ fn keyboard_tab_navigation_cycles_exclusively_through_docked_tabs() {
 
 #[test]
 fn resolve_close_saving_detached_tab_preserves_main_window_active_tab() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ui-test-resolve-close-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let save_path = dir.join("middle_saved.pdf");
+
     let mut h = three_tab_harness();
     let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
 
@@ -2133,6 +2137,8 @@ fn resolve_close_saving_detached_tab_preserves_main_window_active_tab() {
     h.state_mut().detach_tab(ids[1]);
     // Set active tab to first.pdf (index 0)
     h.state_mut().active = Some(0);
+    // The document was opened from bytes, so Save would otherwise ask with a native dialog.
+    h.state_mut().save_override = Some(save_path.to_string_lossy().into_owned());
     h.run_steps(3);
 
     // Make middle.pdf dirty so close requests a save
@@ -2147,6 +2153,8 @@ fn resolve_close_saving_detached_tab_preserves_main_window_active_tab() {
 
     // Active tab in main window must still be first.pdf (index 0), NOT detached middle.pdf!
     assert_eq!(h.state().active, Some(0));
+    assert!(h.state().views.iter().all(|view| view.id != ids[1]), "saving the detached tab closes it");
+    assert!(save_path.is_file(), "the save was written instead of asking with a native dialog");
 }
 
 #[test]

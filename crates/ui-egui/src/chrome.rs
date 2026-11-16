@@ -350,14 +350,13 @@ fn tab_drag(app: &mut PdfCraftApp, ui: &egui::Ui, slots: &[(usize, Rect)], dragg
     let (from, released) = dragged?;
     let pos = ui.ctx().pointer_latest_pos()?;
     // Past the strip, the tab leaves for its own window. A drag along the strip still reorders
-    // it, and a drag onto the right half of the page still splits.
+    // it (including past either end), and a drag onto the right half of the page still splits.
     #[cfg(not(target_arch = "wasm32"))]
     if app.views.len() > 1 {
         let strip = slots.iter().skip(1).fold(slots.first().map(|(_, rect)| *rect).unwrap_or(Rect::ZERO), |acc, (_, rect)| acc.union(*rect));
-        let outside = pos.y < strip.top() - TAB_TEAR_OFF_DISTANCE
-            || pos.y > strip.bottom() + TAB_TEAR_OFF_DISTANCE
-            || pos.x < strip.left() - TAB_TEAR_OFF_DISTANCE
-            || pos.x > strip.right() + TAB_TEAR_OFF_DISTANCE;
+        // Tear-off is vertical: leaving above or below the strip. Horizontal past either end
+        // still reorders along the strip (#5348 slot-to-view tests).
+        let outside = pos.y < strip.top() - TAB_TEAR_OFF_DISTANCE || pos.y > strip.bottom() + TAB_TEAR_OFF_DISTANCE;
         let stays = matches!(app.drop_target(pos, place), TabDrop::SplitRight | TabDrop::Pane(_));
         if outside && !stays {
             if released && !busy {
