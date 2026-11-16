@@ -429,12 +429,12 @@ fn without_icc_profile(data: &[u8]) -> Option<Vec<u8>> {
 /// with the space they are in. An ICC-based space is read as its device space.
 fn jpeg_samples(data: &[u8], space: &Space, w: usize, h: usize) -> Option<(Vec<u8>, Space)> {
     let space = match space {
-        Space::Icc(device, ..) => device,
+        Space::Icc(device, ..) => &**device,
         other => other,
     };
     match space {
         Space::Indexed(..) => return None,
-        Space::Cmyk => return cmyk_jpeg_samples(data, w, h),
+        Space::Cmyk => return cmyk_jpeg_samples(data, w, h).map(|px| (px, Space::Cmyk)),
         _ => {}
     }
     // Past the decoder's metadata bound, drop the Extended XMP chunks rather than the mask:

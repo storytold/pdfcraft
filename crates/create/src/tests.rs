@@ -3334,7 +3334,9 @@ fn a_cmyk_jpeg_flooded_with_extended_xmp_is_exported_in_its_colours() {
         Stream::from_raw(d, jpeg.clone())
     });
     let (_, rgba) = exported_rgba(&doc);
-    assert!(rgba.as_chunks::<4>().0.iter().all(|p| p[0] <= 6 && p[1] >= 249 && p[2] >= 249), "{:?}", &rgba[..4]);
+    // Full cyan as the page draws it, through the renderer's CMYK profile (#2269).
+    let cyan = pdfcraft_render::cmyk_to_srgb(&[255, 0, 0, 0]).unwrap();
+    assert!(rgba.as_chunks::<4>().0.iter().all(|p| p[..3].iter().zip(&cyan).all(|(a, b)| a.abs_diff(*b) <= 6)), "{:?}", &rgba[..4]);
 }
 
 /// Stripping leaves everything but the Extended XMP chunks, byte for byte.
