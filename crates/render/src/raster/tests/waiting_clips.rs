@@ -72,6 +72,7 @@ q 30 180 60 30 re W n /G0 gs 0 0 0 rg 35 185 50 20 re f Q
 q 100 140 40 30 re W n 0 0 0 RG 6 w 0 j 10 M 105 145 m 120 167 l 135 145 l S Q
 q 100 180 50 40 re W n /G1 gs 1 0 0 rg 105 185 40 30 re f Q
 q 160 215 60 20 re W n /Sh0 sh Q
+q 30 30 40 40 re W n 0 0.5 0.5 rg 25 25 50 50 re 40 40 20 20 re f* Q
 Q";
 
 #[test]

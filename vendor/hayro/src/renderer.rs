@@ -1762,6 +1762,8 @@ impl Renderer {
     /// it already come first, so they are skipped.
     fn apply_clips_through(&mut self, end: usize) {
         let Some(first) = self.clips.iter().position(|c| !c.on_device) else { return };
+        // Clips can go on in the middle of a draw that has set its own fill rule.
+        let draw_fill = *self.ctx.fill_rule();
         for i in first..end.min(self.clips.len()) {
             if let Some(c) = self.clips.get_mut(i) {
                 c.on_device = true;
@@ -1770,6 +1772,7 @@ impl Renderer {
                 let _ = DEVICE_CLIPS.try_with(|n| n.set(n.get().saturating_add(1)));
             }
         }
+        self.ctx.set_fill_rule(draw_fill);
     }
 
     /// PdfCraft patch (33): before a solid fill or stroke that paints within `device`, put on the
