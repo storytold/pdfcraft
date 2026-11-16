@@ -186,7 +186,7 @@ fn has_non_default_decode(doc: &Document, d: &Dict, n: usize) -> bool {
     if arr.len() != n * 2 {
         return true;
     }
-    for pair in arr.chunks_exact(2) {
+    for pair in arr.as_chunks::<2>().0 {
         let Some(d0) = doc.resolve(&pair[0]).as_f64() else { return true };
         let Some(d1) = doc.resolve(&pair[1]).as_f64() else { return true };
         if (d0 - 0.0).abs() > 1e-6 || (d1 - 1.0).abs() > 1e-6 {
