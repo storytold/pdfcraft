@@ -14761,3 +14761,24 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
     assert_eq!(page_text(&mut a, reopened), [new, old]);
     assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
 }
+
+/// A file with no cross-reference data whose catalog names a page tree that isn't there: opening
+/// it finds the page by scanning and keeps the rebuilt tree as a revision in memory, but the
+/// file on disk is still the damaged one. Its first save rewrites that file in full, so it is
+/// not reported as incremental; the next save appends to what was written, and is.
+#[test]
+fn a_save_of_a_repaired_file_reports_a_full_rewrite() {
+    const DAMAGED: &[u8] = b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 9 0 R >>\nendobj\n2 0 obj\n<< /Type /Page /MediaBox [0 0 200 200] /Resources << >> /Contents 3 0 R >>\nendobj\n3 0 obj\n<< /Length 0 >>\nstream\n\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    let dir = workdir("save-repaired-incremental");
+    std::fs::write(dir.join("damaged.pdf"), DAMAGED).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "damaged.pdf" }))["doc"].as_u64().unwrap();
+    let first = ok(&mut a, "doc_save", json!({ "doc": doc, "full": false }));
+    let written = std::fs::read(dir.join("damaged.pdf")).unwrap();
+    assert!(!written.starts_with(DAMAGED), "the repaired file is rewritten in full");
+    assert_eq!(first["incremental"], false, "{first}");
+    ok(&mut a, "page_rotate", json!({ "doc": doc, "pages": [1], "degrees": 90 }));
+    let second = ok(&mut a, "doc_save", json!({ "doc": doc, "full": false }));
+    assert!(std::fs::read(dir.join("damaged.pdf")).unwrap().starts_with(&written), "the next save appends");
+    assert_eq!(second["incremental"], true, "{second}");
+}

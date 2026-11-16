@@ -438,7 +438,7 @@ impl PdfCraftApp {
         }
         // LaunchServices recovery (and Finder metadata edits) changes ctime. The worker
         // already read the stable file: identical saved bytes are not a document change.
-        if self.session.get(c.doc).is_some_and(|d| d.saved_bytes().as_slice() == c.bytes.as_slice()) {
+        if self.session.get(c.doc).is_some_and(|d| d.file_bytes().as_slice() == c.bytes.as_slice()) {
             self.watch.known_as(c.doc, Some(c.stamp));
             return;
         }

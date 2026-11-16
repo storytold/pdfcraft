@@ -32,6 +32,8 @@ struct DocumentOpenData<'a> {
     name: String,
     path: Option<String>,
     bytes: Arc<Vec<u8>>,
+    /// The file as read, before opening appended any revision in memory (see `Editor::file`).
+    file: Arc<Vec<u8>>,
     info: DocInfo,
     structure: Result<Result<pdfcraft_cos::Document, pdfcraft_cos::CosError>, Box<dyn std::any::Any + Send>>,
     render_password: Option<String>,
@@ -120,6 +122,7 @@ impl Session {
         bytes: Arc<Vec<u8>>,
         password: Option<&str>,
     ) -> Result<PreparedDocument, OpenError> {
+        let file = bytes.clone();
         let cos = std::panic::catch_unwind(|| pdfcraft_cos::Document::open_with_password(bytes.clone(), password));
         // The renderer authenticates on its own. It cannot use the owner password of R2–R4
         // files, so give it the user password that owner authentication recovers.
@@ -286,7 +289,7 @@ impl Session {
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
         let mut document =
-            Self::build_document(context, DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa });
+            Self::build_document(context, DocumentOpenData { name, path, bytes, file, info, structure: cos, render_password, password, xfa });
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
@@ -300,7 +303,7 @@ impl Session {
 
     /// The last step of opening: build the document record and register it.
     fn build_document(context: &OpenContext, data: DocumentOpenData<'_>) -> Document {
-        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa } = data;
+        let DocumentOpenData { name, path, bytes, file, mut info, structure: cos, render_password, password, xfa } = data;
         let mut config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
@@ -310,6 +313,7 @@ impl Session {
                     Some(Editor {
                         cos,
                         saved,
+                        file,
                         saved_keys: keys.clone(),
                         unsaved_file: false,
                         undo: Vec::new(),
