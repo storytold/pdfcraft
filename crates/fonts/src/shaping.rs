@@ -1,9 +1,10 @@
 //! Arabic, Hebrew and Thai text shaping with the matching craft-fonts face and bounded glyph outlines.
 
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
-use harfrust::{BufferClusterLevel, Direction, ShapeOptions, ShaperData, UnicodeBuffer, script};
-use skrifa::instance::{LocationRef, Size};
+use harfrust::{BufferClusterLevel, Direction, ShapeOptions, ShaperData, ShaperInstance, UnicodeBuffer, script};
+use skrifa::instance::{Location, LocationRef, Size};
 use skrifa::raw::TableProvider;
 use skrifa::{FontRef, GlyphId, MetadataProvider};
 
@@ -26,28 +27,95 @@ pub struct ShapedCluster {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShapedScript {
     Arabic,
+    /// The Arabic face's bold instance (its `wght` axis at 700): the same glyph ids, other outlines.
+    ArabicBold,
     Hebrew,
     Thai,
+    /// Devanagari, with the craft-fonts `Deva` face.
+    Devanagari,
+    /// Cyrillic, Greek and the Latin letters outside WinAnsiEncoding, with the bundled Inter.
+    Latin,
+    /// Han and kana with the Japanese document face (BIZ UDPGothic), and Han with the Simplified
+    /// Chinese one (Noto Sans CJK SC) for Chinese text ([`han_script`]).
+    Japanese,
+    Chinese,
+    /// Hangul, with the craft-fonts `Kore` face (Nanum Gothic).
+    Korean,
 }
 
 impl ShapedScript {
     pub fn font(self) -> Option<&'static crate::CraftFont> {
         match self {
             Self::Arabic => crate::document_arabic_font(),
+            Self::ArabicBold => crate::document_arabic_font().filter(|_| bold_instance().is_some()),
             Self::Hebrew => crate::document_hebrew_font(false),
             Self::Thai => crate::document_thai_font(),
+            Self::Devanagari => crate::document_devanagari_font(),
+            Self::Latin => crate::document_latin_fonts(false).into_iter().next(),
+            Self::Japanese => crate::document_japanese_font_for_style(false, false),
+            // The sans face (Noto Sans CJK SC) before a calligraphic one (LXGW WenKai).
+            Self::Chinese => {
+                let hans = || crate::CRAFT_FONTS.iter().filter(|f| f.covers("Hans"));
+                hans().find(|f| f.family.contains("Sans")).or_else(|| hans().find(|f| f.style == "Regular")).or_else(|| hans().next())
+            }
+            Self::Korean => crate::CRAFT_FONTS.iter().find(|f| f.covers("Kore")),
+        }
+    }
+
+    /// The script's name, for a face without a family of its own.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Arabic | Self::ArabicBold => "Arabic",
+            Self::Hebrew => "Hebrew",
+            Self::Thai => "Thai",
+            Self::Devanagari => "Devanagari",
+            Self::Latin => "Latin",
+            Self::Japanese => "Japanese",
+            Self::Chinese => "Chinese",
+            Self::Korean => "Korean",
         }
     }
 }
 
+/// The face for Han characters in `text`: Japanese when the text has kana (or there is no
+/// Chinese face), Chinese otherwise.
+pub fn han_script(text: &str) -> ShapedScript {
+    let kana = text.chars().any(|c| matches!(u32::from(c), 0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F));
+    if kana || ShapedScript::Chinese.font().is_none() { ShapedScript::Japanese } else { ShapedScript::Chinese }
+}
+
+/// Whether the face of `kind` has a glyph for `c` (false without the face).
+pub fn script_has(kind: ShapedScript, c: char) -> bool {
+    face(kind).is_some_and(|(font, _)| font.charmap().map(c).is_some())
+}
+
+/// Shape one directional run of `text` with the face of `kind`, clusters in drawing order.
+pub fn shape(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedCluster>, GlyphError> {
+    shape_script(text, rtl, kind)
+}
+
 fn face(script: ShapedScript) -> Option<&'static (FontRef<'static>, ShaperData)> {
+    // The bold instance is the regular face's program at another location. Set the shared cell
+    // up from the regular face: asking for the bold one would initialise it from inside its own
+    // initialiser (`bold_instance` reads this cell), which never returns.
+    let script = if script == ShapedScript::ArabicBold { ShapedScript::Arabic } else { script };
     static FACE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static HEBREW: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static THAI: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static DEVANAGARI: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static LATIN: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static JAPANESE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static CHINESE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static KOREAN: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     let cache = match script {
-        ShapedScript::Arabic => &FACE,
+        ShapedScript::Arabic | ShapedScript::ArabicBold => &FACE,
         ShapedScript::Hebrew => &HEBREW,
         ShapedScript::Thai => &THAI,
+        ShapedScript::Devanagari => &DEVANAGARI,
+        ShapedScript::Latin => &LATIN,
+        ShapedScript::Japanese => &JAPANESE,
+        ShapedScript::Chinese => &CHINESE,
+        ShapedScript::Korean => &KOREAN,
     };
     cache
         .get_or_init(|| {
@@ -56,6 +124,38 @@ fn face(script: ShapedScript) -> Option<&'static (FontRef<'static>, ShaperData)>
             Some((font, data))
         })
         .as_ref()
+}
+
+/// The bold instance of the Arabic document face: its location and shaper instance at
+/// `wght` 700. `None` without the face or when it has no weight axis (a static face).
+fn bold_instance() -> Option<&'static (Location, ShaperInstance)> {
+    static BOLD: OnceLock<Option<(Location, ShaperInstance)>> = OnceLock::new();
+    BOLD.get_or_init(|| {
+        let (font, _) = face(ShapedScript::Arabic)?;
+        let axis = font.axes().iter().find(|axis| axis.tag() == skrifa::Tag::new(b"wght"))?;
+        let weight = 700.0f32.clamp(axis.min_value(), axis.max_value());
+        // A face whose weight axis cannot reach a heavier weight has no bold to offer.
+        if weight <= axis.default_value() {
+            return None;
+        }
+        let location = font.axes().location([("wght", weight)]);
+        let instance = ShaperInstance::from_variations(font, [harfrust::Variation { tag: harfrust::Tag::new(b"wght"), value: weight }]);
+        Some((location, instance))
+    })
+    .as_ref()
+}
+
+/// The variation location glyphs of `script` are measured and drawn at.
+fn location(script: ShapedScript) -> Option<LocationRef<'static>> {
+    match script {
+        ShapedScript::ArabicBold => bold_instance().map(|(location, _)| LocationRef::from(location)),
+        _ => Some(LocationRef::default()),
+    }
+}
+
+/// Whether the Arabic document face can draw a true bold (a variable face with a weight axis).
+pub fn arabic_bold_available() -> bool {
+    bold_instance().is_some()
 }
 
 /// Whether the Arabic document face has a glyph for `c` (false without the face).
@@ -68,6 +168,11 @@ pub fn arabic_has(c: char) -> bool {
 /// [`GlyphError::Missing`] when it lacks a character.
 pub fn shape_arabic(text: &str, rtl: bool) -> Result<Vec<ShapedCluster>, GlyphError> {
     shape_script(text, rtl, ShapedScript::Arabic)
+}
+
+/// [`shape_arabic`] with the face's bold instance; [`GlyphError::NoFont`] when it has none.
+pub fn shape_arabic_bold(text: &str, rtl: bool) -> Result<Vec<ShapedCluster>, GlyphError> {
+    shape_script(text, rtl, ShapedScript::ArabicBold)
 }
 
 /// Whether the Hebrew document face has a glyph for `c` (false without the face).
@@ -93,20 +198,29 @@ pub fn shape_thai(text: &str) -> Result<Vec<ShapedCluster>, GlyphError> {
 
 fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedCluster>, GlyphError> {
     let (font, data) = face(kind).ok_or(GlyphError::NoFont)?;
-    let shaper = data.shaper(font).build();
+    let instance = match kind {
+        ShapedScript::ArabicBold => Some(&bold_instance().ok_or(GlyphError::NoFont)?.1),
+        _ => None,
+    };
+    let shaper = data.shaper(font).instance(instance).build();
     let scale = 1.0 / f64::from(shaper.units_per_em().max(1));
     let mut buffer = UnicodeBuffer::new();
     buffer.push_str(text);
     buffer.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
-    buffer.set_script(match kind {
-        ShapedScript::Arabic => script::ARABIC,
-        ShapedScript::Hebrew => script::HEBREW,
-        ShapedScript::Thai => script::THAI,
-    });
-    // Preserve the historical Arabic per-character mapping; Hebrew and Thai marks stay with their base.
+    match kind {
+        ShapedScript::Arabic | ShapedScript::ArabicBold => buffer.set_script(script::ARABIC),
+        ShapedScript::Hebrew => buffer.set_script(script::HEBREW),
+        ShapedScript::Thai => buffer.set_script(script::THAI),
+        ShapedScript::Devanagari => buffer.set_script(script::DEVANAGARI),
+        ShapedScript::Korean => buffer.set_script(script::HANGUL),
+        ShapedScript::Japanese | ShapedScript::Chinese => buffer.set_script(script::HAN),
+        // Cyrillic, Greek or Latin: the shaper reads it from the text.
+        ShapedScript::Latin => buffer.guess_segment_properties(),
+    }
+    // Preserve the historical Arabic per-character mapping; other scripts' marks stay with their base.
     buffer.set_cluster_level(match kind {
-        ShapedScript::Arabic => BufferClusterLevel::Characters,
-        ShapedScript::Hebrew | ShapedScript::Thai => BufferClusterLevel::MonotoneGraphemes,
+        ShapedScript::Arabic | ShapedScript::ArabicBold => BufferClusterLevel::Characters,
+        _ => BufferClusterLevel::MonotoneGraphemes,
     });
     let shaped = shaper.shape(buffer, ShapeOptions::new());
     // Clusters are byte offsets into `text`; a cluster shows the characters up to the next one.
@@ -147,21 +261,21 @@ pub fn arabic_glyph(id: u32) -> Result<GlyphOutline, GlyphError> {
 /// A bounded outline from the same face that produced the shaped glyph id.
 pub fn shaped_glyph(script: ShapedScript, id: u32) -> Result<GlyphOutline, GlyphError> {
     let (font, _) = face(script).ok_or(GlyphError::NoFont)?;
-    glyph(font, id)
+    // Bold Arabic is the variable face's weight instance (`location`).
+    glyph(font, id, location(script).ok_or(GlyphError::NoFont)?)
 }
 
 /// Glyph `id` of the face in `bytes`, bounded like [`shaped_glyph`]: for text shaped with
 /// [`crate::source_shaping::shape`] in a face no [`ShapedScript`] names.
 pub fn face_glyph(bytes: &[u8], id: u32) -> Result<GlyphOutline, GlyphError> {
-    glyph(&FontRef::new(bytes).map_err(|_| GlyphError::NoFont)?, id)
+    glyph(&FontRef::new(bytes).map_err(|_| GlyphError::NoFont)?, id, LocationRef::default())
 }
 
-fn glyph(font: &FontRef, id: u32) -> Result<GlyphOutline, GlyphError> {
+fn glyph(font: &FontRef, id: u32, loc: LocationRef<'_>) -> Result<GlyphOutline, GlyphError> {
     if font.maxp().map_or(true, |m| id >= u32::from(m.num_glyphs())) {
         return Err(GlyphError::Missing);
     }
     let gid = GlyphId::new(id);
-    let loc = LocationRef::default();
     let scale = 1.0 / font.metrics(Size::unscaled(), loc).units_per_em.max(1) as f64;
     let width = font.glyph_metrics(Size::unscaled(), loc).advance_width(gid).unwrap_or(0.0) as f64 * scale;
     // Marks have no advance; the widest ligatures (U+FDFD) span a few em.
@@ -171,7 +285,36 @@ fn glyph(font: &FontRef, id: u32) -> Result<GlyphOutline, GlyphError> {
     if font.outline_glyphs().get(gid).is_none() {
         return Ok(GlyphOutline { contours: Vec::new(), width, bbox: [0.0, 0.0, width, 0.0] });
     }
-    crate::script::bounded_outline(font, gid, width)
+    crate::script::bounded_outline_at(font, gid, width, loc)
+}
+
+/// A shaped glyph's ink bounds in em units, cached independently of flattened outlines so
+/// measuring many wrap candidates never repeatedly walks the same glyph's curves.
+pub fn shaped_bounds(script: ShapedScript, id: u32) -> Result<[f64; 4], GlyphError> {
+    type BoundsCache = Mutex<HashMap<(ShapedScript, u32), [f64; 4]>>;
+    static CACHE: OnceLock<BoundsCache> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(bounds) = cache.lock().ok().and_then(|cache| cache.get(&(script, id)).copied()) {
+        return Ok(bounds);
+    }
+    let (font, _) = face(script).ok_or(GlyphError::NoFont)?;
+    let loc = location(script).ok_or(GlyphError::NoFont)?;
+    let em = f64::from(font.metrics(Size::unscaled(), loc).units_per_em.max(1));
+    let bounds = match font.glyph_metrics(Size::unscaled(), loc).bounds(GlyphId::new(id)) {
+        Some(bounds) => [bounds.x_min, bounds.y_min, bounds.x_max, bounds.y_max].map(|v| f64::from(v) / em),
+        // Empty variable-font glyphs (space and joining controls) have no curve bounds.
+        None => shaped_glyph(script, id)?.bbox,
+    };
+    if bounds.iter().any(|v| !v.is_finite() || v.abs() > 64.0) {
+        return Err(GlyphError::TooComplex);
+    }
+    // A poisoned cache is dispensable; the measured bounds above remain usable.
+    if let Ok(mut cache) = cache.lock()
+        && cache.len() < 65_536
+    {
+        cache.insert((script, id), bounds);
+    }
+    Ok(bounds)
 }
 
 #[cfg(test)]

@@ -29,6 +29,25 @@ pub(crate) fn is_rtl(c: char) -> bool {
     !is_digit(c) && matches!(u32::from(c), 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFC | 0x1_0800..=0x1_0FFF | 0x1_E800..=0x1_EFFF)
 }
 
+/// One right-to-left letter with the combining marks drawn on it (a letter with tanween or
+/// harakat) and nothing else: browsers wrap such a cluster in its own `/ActualText`.
+pub(crate) fn is_rtl_cluster(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars.next().is_some_and(|c| is_rtl(c) && !is_mark(c)) && {
+        let mut marks = chars.peekable();
+        marks.peek().is_some() && marks.all(is_mark)
+    }
+}
+
+/// One glyph's text as it goes into a line read in drawing order. A ligature glyph's ToUnicode
+/// gives the letters it joins in typing order (Word maps its لا glyph to lam then alef), but the
+/// line around it is turned into typing order as a whole ([`to_logical`]), so their order is turned
+/// first: otherwise سلام reads back as سالم. Anything else is returned as it is.
+pub(crate) fn glyph_in_drawing_order(text: &str) -> std::borrow::Cow<'_, str> {
+    let letters = text.chars().filter(|c| is_rtl(*c) && !is_mark(*c)).count();
+    if letters > 1 && text.chars().all(is_rtl) { std::borrow::Cow::Owned(to_visual(text)) } else { std::borrow::Cow::Borrowed(text) }
+}
+
 /// The Hebrew block and the Hebrew presentation forms.
 pub(crate) fn is_hebrew(c: char) -> bool {
     matches!(u32::from(c), 0x0590..=0x05FF | 0xFB1D..=0xFB4F)
@@ -44,7 +63,7 @@ fn is_digit(c: char) -> bool {
 }
 
 /// Combining marks that ride on the character before them.
-fn is_mark(c: char) -> bool {
+pub(crate) fn is_mark(c: char) -> bool {
     is_hebrew_mark(c)
         || matches!(
             u32::from(c),
@@ -76,6 +95,9 @@ fn mirrored(c: char) -> char {
 fn class(c: char) -> Class {
     if is_digit(c) {
         Class::Number
+    } else if is_number_separator(c) {
+        // The Arabic decimal and thousands separators sit inside a number (١٬٢٥٠), like `.`.
+        Class::Neutral
     } else if is_rtl(c) {
         Class::Rtl
     } else if c.is_alphabetic() {
@@ -156,7 +178,14 @@ fn runs(cl: &[Cluster], member: impl Fn(&Cluster) -> bool, bridge: impl Fn(&[Clu
 /// One separator between two digits (`1,000`, `12:30`, `3.5`, `1/2`, `5-6`) keeps a number whole.
 fn number_separator(cl: &[Cluster], j: usize) -> bool {
     let digit = |k: Option<usize>| k.and_then(|k| cl.get(k)).is_some_and(|c| c.class == Class::Number);
-    cl.get(j).is_some_and(|c| matches!(c.text.as_str(), "." | "," | ":" | "/" | "-" | "+")) && digit(j.checked_sub(1)) && digit(Some(j + 1))
+    cl.get(j).is_some_and(|c| matches!(c.text.as_str(), "." | "," | ":" | "/" | "-" | "+") || c.text.chars().all(is_number_separator))
+        && digit(j.checked_sub(1))
+        && digit(Some(j + 1))
+}
+
+/// U+066B ARABIC DECIMAL SEPARATOR and U+066C ARABIC THOUSANDS SEPARATOR.
+fn is_number_separator(c: char) -> bool {
+    matches!(c, '\u{066B}' | '\u{066C}')
 }
 
 fn reverse_mirrored(cl: &mut [Cluster]) {
@@ -309,6 +338,9 @@ mod tests {
             "פרק 3 (מבוא)",
             "שָׁלוֹם עוֹלָם",
             "مرحبا بالعالم",
+            // Arabic thousands and decimal separators inside a number (١٬٢٥٠ read as ٢٥٠٬١).
+            "الإيرادات ١٬٢٥٠ ريال",
+            "النسبة ١٢٫٥ في المئة",
         ] {
             let visual = drawn(logical);
             assert_ne!(visual, logical, "{logical:?} should be reordered");
