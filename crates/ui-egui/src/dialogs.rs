@@ -1387,16 +1387,14 @@ fn dialog_delete_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendi
         req.close = true;
         return false;
     };
-    let name = app.session.get(d.doc).map(|doc| doc.name.clone()).unwrap_or_default();
     ui.label(egui::RichText::new(tl!("Delete page?")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     let n = d.pages.len();
-    let line = if n == 1 {
-        crate::i18n::fmt(tl!("Delete this page from “{name}”?"), &[("name", &name)])
+    ui.label(if n == 1 {
+        tl!("Are you Sure you want to delete this page?").to_string()
     } else {
-        crate::i18n::fmt(tl!("Delete these {n} pages from “{name}”?"), &[("name", &name), ("n", &n.to_string())])
-    };
-    ui.label(line);
+        crate::i18n::fmt(tl!("Are you Sure you want to delete these {n} pages?"), &[("n", &n.to_string())])
+    });
     ui.add_space(12.0);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         if widgets::pill_button(ui, tl!("Delete"), true).clicked() {

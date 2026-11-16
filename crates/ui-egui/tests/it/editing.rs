@@ -8115,6 +8115,63 @@ fn an_edit_before_the_pages_delete_ask_is_processed_drops_the_ask() {
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 5);
 }
 
+/// Cancel in the pages delete ask deletes nothing: the ask closes, the pages stay, and the ask
+/// carries nothing after it — confirming again queues no deletion either.
+#[test]
+fn cancel_in_the_pages_delete_ask_deletes_nothing() {
+    let mut h = pages_panel(5);
+    h.state_mut().views[0].select_pages(&[0]);
+    h.run_steps(2);
+    assert!(h.state_mut().execute("page.delete"));
+    h.run_steps(3);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "the ask is closed");
+    assert_eq!(page_texts(h.state()).len(), 5, "cancel deletes nothing");
+    // The draft went with it: a confirm after the cancel queues nothing.
+    h.state_mut().confirm_delete_pages();
+    h.run_steps(2);
+    assert_eq!(page_texts(h.state()).len(), 5);
+}
+
+/// Dismissing the pages delete ask (Escape) deletes nothing and drops the ask with it.
+#[test]
+fn dismissing_the_pages_delete_ask_deletes_nothing() {
+    let mut h = pages_panel(5);
+    h.state_mut().views[0].select_pages(&[0]);
+    h.run_steps(2);
+    assert!(h.state_mut().execute("page.delete"));
+    h.run_steps(3);
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "the ask is dismissed");
+    assert_eq!(page_texts(h.state()).len(), 5, "dismissing deletes nothing");
+    h.state_mut().confirm_delete_pages();
+    h.run_steps(2);
+    assert_eq!(page_texts(h.state()).len(), 5);
+}
+
+/// A document that changed while the pages delete ask was open deletes nothing: those indices
+/// would name the newer document's pages.
+#[test]
+fn a_document_changed_behind_the_open_pages_delete_ask_deletes_nothing() {
+    let mut h = pages_panel(5);
+    h.state_mut().views[0].select_pages(&[0]);
+    h.run_steps(2);
+    assert!(h.state_mut().execute("page.delete"));
+    h.run_steps(3);
+    // An edit runs behind the open ask: confirming must not apply the captured pages to it.
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![1], degrees: 90 });
+    h.run_steps(2);
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert_eq!(page_texts(h.state()).len(), 5, "the changed document deletes nothing");
+    // The draft went with it: a second confirm queues nothing either.
+    h.state_mut().confirm_delete_pages();
+    h.run_steps(2);
+    assert_eq!(page_texts(h.state()).len(), 5);
+}
+
 /// In crop mode, a right-click on another picture selects it for its menu, as without crop mode. It
 /// went to crop mode's whole-page hit, which unselected every picture.
 #[test]
