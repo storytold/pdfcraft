@@ -27,7 +27,7 @@ mod xfdf;
 
 #[cfg(test)]
 use common::{MAX_DEPTH, MAX_XML_DEPTH, arr, nums_of, parse_hex, text_of, xml_nesting_depth};
-use common::{check_form_xml_depth, esc, parse_form_xml, walk_xfdf, xml_name};
+use common::{check_form_xml_depth, el_text, esc, parse_form_xml, walk_xfdf, xml_name};
 pub use fdf::export_fdf;
 use fdf::{ImportBudget, fdf_body, import_fdf, walk_fdf};
 #[cfg(test)]
@@ -178,13 +178,12 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
     let text = String::from_utf8_lossy(bytes);
     let t = text.trim_start_matches('\u{feff}').trim_start();
     check_form_xml_depth(t)?;
-    let xml = parse_form_xml(t).map_err(|_| DataError::UnknownFormat)?;
-    let root = xml.root_element();
-    if root.tag_name().name() != "xfdf" {
+    let root = parse_form_xml(t).map_err(|_| DataError::UnknownFormat)?;
+    if root.local() != "xfdf" {
         return Err(DataError::UnknownFormat);
     }
     let mut values = Vec::new();
-    if let Some(fields) = root.children().find(|c| c.has_tag_name("fields")) {
+    if let Some(fields) = root.child(craft_xml::Local("fields")) {
         walk_xfdf(fields, "", &mut values, 0)?;
     }
     Ok(values)
@@ -283,15 +282,12 @@ fn import_table(doc: &mut Document, text: &str) -> Result<Report, DataError> {
     let t = text.trim_start_matches('\u{feff}');
     let values: Vec<(String, Vec<String>)> = if t.trim_start().starts_with('<') {
         check_form_xml_depth(t)?;
-        let xml = parse_form_xml(t).map_err(|e| DataError::Malformed(e.to_string()))?;
-        xml.root_element()
-            .children()
-            .filter(|c| c.is_element())
+        let root = parse_form_xml(t).map_err(|e| DataError::Malformed(e.to_string()))?;
+        root.elements()
             .map(|c| {
-                let name =
-                    c.attributes().find(|a| a.name() == "original").map(|a| a.value().to_string()).unwrap_or_else(|| c.tag_name().name().to_string());
+                let name = c.attr_local("original").map(str::to_owned).unwrap_or_else(|| c.local().to_string());
                 // Comments and processing instructions do not end a field's character data.
-                (name, vec![c.children().filter(|node| node.is_text()).filter_map(|node| node.text()).collect()])
+                (name, vec![el_text(c)])
             })
             .collect()
     } else if has_tab_delimiter(t) {
