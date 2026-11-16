@@ -91,7 +91,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let (natural, pills_width) = calculate_tabs_natural_widths(app, ui, &t, animated);
                 let gap = ui.spacing().item_spacing.x;
                 let doc_budget = (tabs_width - pills_width).max(0.0);
-                let overflow = tabs_overflow(&natural, doc_budget, gap, TAB_MIN_WIDTH);
+                let overflow = pills_width > tabs_width || tabs_overflow(&natural, doc_budget, gap, TAB_MIN_WIDTH);
                 if overflow {
                     tabs_width = (tabs_width - 2.0 * (TAB_ARROW + gap)).max(0.0);
                 }
@@ -743,7 +743,10 @@ fn tab_drag(app: &mut PdfCraftApp, ui: &egui::Ui, slots: &[(usize, Rect)], dragg
     match app.drop_target(pos, place) {
         TabDrop::Strip => {
             let x = pos.x;
-            let to = drop_index(slots, from, x);
+            let raw_to = drop_index(slots, from, x);
+            let is_pinned = app.views.get(from).is_some_and(|v| v.pinned);
+            let pinned_others = slots.iter().filter(|(i, _)| *i != from && app.views.get(*i).is_some_and(|v| v.pinned)).count();
+            let to = if is_pinned { raw_to.min(pinned_others) } else { raw_to.max(pinned_others) };
             if released {
                 ui.data_mut(|d| {
                     d.remove_temp::<TabDragState>(ui.scope_id().with("drag_reorder"));
@@ -801,28 +804,70 @@ pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Re
     let inner = Rect::from_min_max(strip.min + vec2(6.0, 2.0), strip.max - vec2(6.0, 0.0));
     let mut row = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(Layout::left_to_right(Align::Max)).id_salt(("tab-row", place)));
     row.spacing_mut().item_spacing.x = 4.0;
-    let natural: Vec<f32> = tabs.iter().filter_map(|&i| crate::canvas::tab_label(app, i)).map(|name| tab_natural_width(&row, &t, &name)).collect();
-    let cap = tab_cap(&natural, row.available_width(), 4.0, TAB_MIN_WIDTH);
+
+    let animated = crate::motion::animated(ui.ctx());
+    let (natural, pills_width) = {
+        let mut nat = Vec::new();
+        let mut pills_w = 0.0;
+        let mut seen = std::collections::HashSet::new();
+        for &idx in &tabs {
+            let Some(v) = app.views.get(idx) else { continue };
+            if let Some(gid) = v.group
+                && seen.insert(gid)
+                && let Some(g) = app.group(gid)
+            {
+                pills_w += crate::tab_group::group_pill_natural_width(&row, &g.title) + 4.0;
+            }
+            if compute_tab_scale(app, v, animated) > 0.001 {
+                if v.pinned {
+                    nat.push(36.0 * compute_tab_scale(app, v, animated));
+                } else if let Some(name) = crate::canvas::tab_label(app, idx) {
+                    nat.push(tab_natural_width(&row, &t, &name) * compute_tab_scale(app, v, animated));
+                }
+            }
+        }
+        (nat, pills_w)
+    };
+    let doc_budget = (row.available_width() - pills_width).max(0.0);
+    let cap = tab_cap(&natural, doc_budget, 4.0, TAB_MIN_WIDTH);
     let mut close = None;
     let mut action = None;
     let mut slots = Vec::with_capacity(tabs.len());
+    let mut pill_slots = Vec::new();
     let mut dragged = None;
+    let mut rendered_groups = std::collections::HashSet::new();
+    let mut on_edit_group = None;
+    let mut toggle_collapsed = None;
     let mut last_group = None;
     let mut last_tab_right = None;
     for &i in &tabs {
         let Some(view) = app.views.get(i) else { continue };
-        let Some(doc) = app.session.get(view.id) else { continue };
+        let (view_id, view_key, view_group, view_pinned) = (view.id, view.view_key(), view.group, view.pinned);
+        let Some(doc) = app.session.get(view_id) else { continue };
         let Some(name) = crate::canvas::tab_label(app, i) else { continue };
-        let same_group_as_prev = match (last_group, view.group) {
+
+        let mut pill_state = GroupPillState {
+            rendered_groups: &mut rendered_groups,
+            pill_slots: &mut pill_slots,
+            on_edit_group: &mut on_edit_group,
+            toggle_collapsed: &mut toggle_collapsed,
+        };
+        show_group_pill_if_needed(app, &mut row, &t, inner.height(), view_group, &mut pill_state);
+
+        let total_scale = compute_tab_scale(app, view, animated);
+        if total_scale <= 0.001 {
+            continue;
+        }
+
+        let same_group_as_prev = match (last_group, view_group) {
             (Some(prev), Some(curr)) => prev == curr,
             _ => false,
         };
         let bridge_left = if same_group_as_prev { last_tab_right } else { None };
         let dirty = doc.dirty;
         let file = (name != doc.name).then(|| doc.name.clone());
-        let id = row.scope_id().with(("pane-tab", view.view_key()));
-        let group_color = view.group.and_then(|gid| app.group(gid)).map(|g| g.color.color32());
-        let view_pinned = view.pinned;
+        let id = row.scope_id().with(("pane-tab", view_key));
+        let group_color = view_group.and_then(|gid| app.group(gid)).map(|g| g.color.color32());
         let spec = TabSpec {
             id,
             theme: &t,
@@ -838,13 +883,13 @@ pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Re
             pinned: view_pinned,
             group_color,
             bridge_left,
-            scale: 1.0,
+            scale: total_scale,
             shift_x: 0.0,
             drag: None,
             defer_paint: false,
         };
         let (response, _) = tab(&mut row, spec, &mut close);
-        last_group = view.group;
+        last_group = view_group;
         last_tab_right = Some(response.rect.right());
         slots.push((i, response.rect));
         if response.dragged() || response.drag_stopped() {
@@ -867,6 +912,17 @@ pub(crate) fn pane_tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, strip: Re
             close = Some(i);
         }
     }
+    if let Some(gid) = toggle_collapsed {
+        app.toggle_group_collapsed(gid);
+    }
+    if let Some(gid) = on_edit_group {
+        app.editing_group = Some(gid);
+        if let Some(g) = app.group(gid) {
+            app.group_title_draft = g.title.clone();
+        }
+    }
+    show_group_editor_if_active(app, &mut row, &pill_slots);
+
     tab_drag(app, &row, &slots, dragged, place, close.is_some() || action.is_some());
     if let Some(i) = close
         && let Some(view) = app.views.get(i)

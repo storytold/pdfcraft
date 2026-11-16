@@ -265,6 +265,10 @@ impl PdfCraftApp {
     /// in `views`.
     pub(crate) fn move_tab_in_strip(&mut self, from: usize, slots: &[(usize, Rect)], to: usize) {
         let others: Vec<usize> = slots.iter().map(|(i, _)| *i).filter(|&i| i != from).collect();
+        let is_pinned = self.views.get(from).is_some_and(|v| v.pinned);
+        let pinned_others = others.iter().filter(|&&idx| self.views.get(idx).is_some_and(|v| v.pinned)).count();
+        let to = if is_pinned { to.min(pinned_others) } else { to.max(pinned_others) };
+
         let (anchor, before) = match others.get(to) {
             Some(&a) => (a, true),
             None => match others.last() {

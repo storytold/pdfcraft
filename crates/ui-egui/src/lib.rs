@@ -577,6 +577,8 @@ pub struct PdfCraftApp {
     pub host_dirty: Option<HostDirtyFn>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
     pub close_request: Option<CloseRequest>,
+    /// Documents waiting to be closed once the current close prompt is resolved.
+    pub pending_close_queue: Vec<pdfcraft_engine::DocId>,
     /// The button of the "save changes?" question the keyboard has chosen; Save when it opens.
     pub(crate) save_prompt_button: dialogs::PromptButton,
     /// `attend_save_prompt` has seen the pending "save changes?" question. It is false again once

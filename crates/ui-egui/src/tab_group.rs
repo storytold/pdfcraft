@@ -110,6 +110,8 @@ impl PdfCraftApp {
         if tab_index >= self.views.len() {
             return;
         }
+        let prev_group = self.views[tab_index].group;
+        let was_pinned = self.views[tab_index].pinned;
         self.views[tab_index].group = Some(group_id);
         self.views[tab_index].pinned = false;
 
@@ -129,6 +131,20 @@ impl PdfCraftApp {
                 self.views.insert(target.min(self.views.len()), view);
                 self.active = Some(target.min(self.views.len().saturating_sub(1)));
             }
+        } else if was_pinned {
+            // Destination group had no other members. Move the newly unpinned tab after all remaining pinned tabs.
+            let pinned_count = self.views.iter().enumerate().filter(|(i, v)| *i != tab_index && v.pinned).count();
+            if tab_index < pinned_count {
+                let view = self.views.remove(tab_index);
+                self.views.insert(pinned_count.min(self.views.len()), view);
+                self.active = Some(pinned_count.min(self.views.len().saturating_sub(1)));
+            }
+        }
+
+        if let Some(og) = prev_group
+            && og != group_id
+        {
+            self.cleanup_empty_group(og);
         }
     }
 
@@ -480,5 +496,85 @@ mod tests {
         assert_eq!(app.tab_groups.len(), 0);
         assert_eq!(app.views.len(), 1);
         assert_eq!(app.session.get(app.views[0].id).unwrap().name, "doc3.pdf");
+    }
+
+    #[test]
+    fn add_pinned_tab_to_empty_group_moves_past_pinned_tabs() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes("doc3.pdf", None, FIXTURE.to_vec()).unwrap();
+
+        // Pin doc1 and doc2
+        app.set_tab_pinned(0, true);
+        app.set_tab_pinned(1, true);
+        assert!(app.views[0].pinned);
+        assert!(app.views[1].pinned);
+
+        // Add doc1 (index 0) to a new empty group
+        let gid = app.create_tab_group("Test".into(), TabGroupColor::Blue);
+        app.add_tab_to_group(0, gid);
+
+        // doc1 is now unpinned and in the group, and must be after remaining pinned doc2
+        assert!(!app.views[1].pinned);
+        assert_eq!(app.views[1].group, Some(gid));
+        assert!(app.views[0].pinned);
+        assert_eq!(app.session.get(app.views[0].id).unwrap().name, "doc2.pdf");
+        assert_eq!(app.session.get(app.views[1].id).unwrap().name, "doc1.pdf");
+    }
+
+    #[test]
+    fn moving_last_member_to_another_group_cleans_up_previous_group() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
+
+        let g1 = app.create_tab_group("G1".into(), TabGroupColor::Blue);
+        let g2 = app.create_tab_group("G2".into(), TabGroupColor::Green);
+        app.add_tab_to_group(0, g1);
+        app.add_tab_to_group(1, g2);
+
+        assert_eq!(app.tab_groups.len(), 2);
+        // Move doc1 from g1 to g2
+        app.add_tab_to_group(0, g2);
+
+        // g1 is now empty and should be cleaned up
+        assert_eq!(app.tab_groups.len(), 1);
+        assert_eq!(app.tab_groups[0].id, g2);
+    }
+
+    #[test]
+    fn multi_dirty_bulk_close_prompts_sequentially() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc1.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes("doc2.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes("doc3.pdf", None, FIXTURE.to_vec()).unwrap();
+
+        // Mark doc2 and doc3 dirty by applying edits
+        app.active = Some(1);
+        assert!(app.apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edit2".into() }));
+        app.active = Some(2);
+        assert!(app.apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Edit3".into() }));
+        app.active = Some(0);
+
+        app.close_tabs_to_right(0);
+
+        // The first prompt is for one of the dirty tabs
+        assert!(app.close_request.is_some());
+        assert_eq!(app.pending_close_queue.len(), 1);
+
+        // Answer "Don't Save" to first prompt
+        let ctx = egui::Context::default();
+        app.resolve_close(&ctx, Some(false));
+
+        // The second prompt opens for the other dirty tab
+        assert!(app.close_request.is_some());
+        assert_eq!(app.pending_close_queue.len(), 0);
+
+        // Answer "Don't Save" to second prompt
+        app.resolve_close(&ctx, Some(false));
+        assert!(app.close_request.is_none());
+        assert_eq!(app.views.len(), 1);
+        assert_eq!(app.session.get(app.views[0].id).unwrap().name, "doc1.pdf");
     }
 }

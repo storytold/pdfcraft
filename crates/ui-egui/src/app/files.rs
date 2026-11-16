@@ -1068,7 +1068,10 @@ impl PdfCraftApp {
         }
         self.remember_view(index);
         let view = self.views.remove(index);
-        let (id, place) = (view.id, view.place());
+        let (id, place, group) = (view.id, view.place(), view.group);
+        if let Some(gid) = group {
+            self.cleanup_empty_group(gid);
+        }
         // Another tab showing the same document (split view) keeps it open.
         if !self.views.iter().any(|v| v.id == id) {
             #[cfg(not(target_arch = "wasm32"))]

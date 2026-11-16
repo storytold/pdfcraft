@@ -1929,11 +1929,13 @@ fn tab_dragging_between_grouped_tabs_adopts_group() {
     assert_eq!(h.state().views[2].group, None);
 
     // Drag last.pdf between doc 0 and doc 1
+    let last_key = h.state().views[2].view_key();
     let tab = |h: &Harness<'static, PdfCraftApp>, name: &str| h.get_by_role_and_label(egui::accesskit::Role::Tab, name).rect();
     let to = tab(&h, "first.pdf").right_center() + egui::vec2(2.0, 0.0);
     drag_named_tab(&mut h, "last.pdf", to, true);
 
     // last.pdf was dropped between two members of the group, so it adopted the group!
+    assert_eq!(h.state().views[1].view_key(), last_key);
     assert_eq!(h.state().views[1].group, Some(gid));
 }
 

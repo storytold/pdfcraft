@@ -29,7 +29,11 @@ impl PdfCraftApp {
                 // The question is about this tab of the document (`asking_tab`).
                 self.active = Some(index);
             }
-            self.close_request = Some(CloseRequest::Tab(id));
+            if self.close_request.is_none() {
+                self.close_request = Some(CloseRequest::Tab(id));
+            } else if !self.pending_close_queue.contains(&id) {
+                self.pending_close_queue.push(id);
+            }
         } else {
             self.close_tab(index);
         }
@@ -146,7 +150,9 @@ impl PdfCraftApp {
             }
         }
         match choice {
-            None => {} // cancelled: nothing closes
+            None => {
+                self.pending_close_queue.clear();
+            } // cancelled: nothing closes
             Some(false) => self.close_and_continue(ctx, index, req),
             Some(true) => {
                 let Some(id) = self.views.get(index).map(|v| v.id) else { return };
@@ -157,11 +163,14 @@ impl PdfCraftApp {
                 // frame when the user has to choose where. A failed or cancelled save keeps the
                 // document open.
                 let ctx = ctx.clone();
-                self.save_then(index, SaveTarget::InPlace, move |app| {
+                let started = self.save_then(index, SaveTarget::InPlace, move |app| {
                     if let Some(i) = app.asking_tab(id) {
                         app.close_and_continue(&ctx, i, req);
                     }
                 });
+                if !started {
+                    self.pending_close_queue.clear();
+                }
             }
         }
     }
@@ -182,6 +191,7 @@ impl PdfCraftApp {
             if req == CloseRequest::Quit {
                 self.forget_quit_session();
             }
+            self.pending_close_queue.clear();
             return;
         }
         self.close_tab(index);
@@ -196,6 +206,19 @@ impl PdfCraftApp {
                 }
                 None if req == CloseRequest::Quit => self.quit(ctx),
                 None => {}
+            }
+        } else if self.close_request.is_none() {
+            while !self.pending_close_queue.is_empty() {
+                let next_id = self.pending_close_queue.remove(0);
+                if let Some(i) = self.asking_tab(next_id) {
+                    if self.asks_before_closing(i) {
+                        self.save_prompt_seen = false;
+                        self.close_request = Some(CloseRequest::Tab(next_id));
+                        break;
+                    } else {
+                        self.close_tab(i);
+                    }
+                }
             }
         }
     }
