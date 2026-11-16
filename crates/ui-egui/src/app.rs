@@ -95,6 +95,7 @@ impl PdfCraftApp {
             portfolio_panel: None,
             quick_tool: QuickTool::Select,
             space_hand: None,
+            space_tap: None,
             full_screen_tool: None,
             comment_prefs: Default::default(),
             hotbar: Default::default(),

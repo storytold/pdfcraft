@@ -1890,6 +1890,51 @@ fn v_h_and_space_pick_the_quick_tools() {
     assert_eq!(h.state().quick_tool, QuickTool::Select, "typing a space in the find bar");
 }
 
+#[test]
+fn space_scrolls_a_screen_as_page_down_does() {
+    // #7483: Space only showed the Hand for as long as it was down. In Acrobat it scrolls a screen
+    // on, and Shift+Space a screen back.
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    use pdfcraft_ui_egui::canvas::Fit;
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].fit = Fit::Width;
+    h.run_steps(4);
+    let top = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).map(|r| r.top()).expect("page 1 on screen");
+    let press = |h: &mut Harness<'static, PdfCraftApp>, modifiers, key| {
+        h.key_press_modifiers(modifiers, key);
+        h.run_steps(4);
+        top(h)
+    };
+    let start = top(&h);
+    let screen = press(&mut h, Modifiers::NONE, Key::PageDown);
+    assert!(screen < start - 100.0, "Page Down scrolls a screen: {screen} from {start}");
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::PageUp), start);
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::Space), screen, "Space goes a screen on");
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "and leaves the tool");
+    assert_eq!(press(&mut h, Modifiers::SHIFT, Key::Space), start, "Shift+Space goes a screen back");
+    // Held for the Hand and used with the pointer, Space is no tap: letting it go scrolls nothing.
+    let at = h.state().views[0].viewport_rect().center();
+    h.key_down(Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand, "Space held");
+    h.hover_at(at);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+    }
+    h.key_up(Key::Space);
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "Space released");
+    assert_eq!(top(&h), start, "the Hand's press is no tap");
+    // Typing a space in the find bar scrolls nothing either.
+    h.state_mut().views[0].open_find();
+    h.run_steps(4);
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::Space), start, "a space typed in the find bar");
+}
+
 /// Like [`fixture`], with each page's size given.
 fn sized_fixture(sizes: &[(u32, u32)]) -> Vec<u8> {
     let n = sizes.len();

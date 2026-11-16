@@ -386,15 +386,17 @@ fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) 
 /// The view's keys: its chords, then its plain keys. `chords`: no menu of the menu bar has the
 /// keyboard and nothing covers the pages, so chords may run (they wait for a menu, as the
 /// registered commands' do). An open form field keeps the paging and scrolling keys for itself.
+/// `space`: Space's step, a screen on (`Some(true)`) or back, as Page Down and Page Up go (#7483).
 pub(crate) fn shortcuts(
     view: &mut DocView,
     ctx: &egui::Context,
     keys: crate::page_keys::PageKeys,
     chords: bool,
     speed: crate::scroll_speed::ScrollSpeed,
+    space: Option<bool>,
 ) {
     if let Some((arrows, field_open)) = view_chords(view, ctx, chords) {
-        view_keys(view, ctx, keys, speed, arrows, field_open);
+        view_keys(view, ctx, keys, speed, arrows, field_open, space);
     }
 }
 
@@ -456,6 +458,7 @@ fn view_keys(
     speed: crate::scroll_speed::ScrollSpeed,
     arrows: bool,
     field_open: bool,
+    space: Option<bool>,
 ) {
     use egui::Key;
     let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && keys.pressed(ctx, k);
@@ -517,6 +520,10 @@ fn view_keys(
     // once there is nothing left to scroll that way, as ↓ / ↑ do in single-page view; ⌘→ / ⌘←
     // turn it at once.
     let scrolls = view.continuous;
+    // Space and Shift+Space go as Page Down and Page Up do (#7483), except in full screen, where
+    // Space has turned the page above.
+    let space = space.filter(|_| view.presentation.is_none());
+    let (page_down, page_up) = (key(Key::PageDown) || space == Some(true), key(Key::PageUp) || space == Some(false));
     let line = KEY_SCROLL_LINE * speed.factor();
     // Only an up-to-date view counts: no jump pending.
     let sideways = |view: &DocView, right: bool| {
@@ -531,7 +538,7 @@ fn view_keys(
     };
     if key(Key::ArrowRight) && sideways(view, true) {
         view.key_side += line;
-    } else if key(Key::ArrowRight) || (key(Key::PageDown) && (command || !scrolls)) {
+    } else if key(Key::ArrowRight) || (page_down && (command || !scrolls)) {
         view.step_page(true);
         if key(Key::ArrowRight) {
             at_edge(view, true);
@@ -539,7 +546,7 @@ fn view_keys(
     }
     if key(Key::ArrowLeft) && sideways(view, false) {
         view.key_side -= line;
-    } else if key(Key::ArrowLeft) || (key(Key::PageUp) && (command || !scrolls)) {
+    } else if key(Key::ArrowLeft) || (page_up && (command || !scrolls)) {
         view.step_page(false);
         if key(Key::ArrowLeft) {
             at_edge(view, false);
@@ -552,10 +559,15 @@ fn view_keys(
     // Page Up keep a screen.
     if !command {
         let screen = (view.viewport_h - KEY_SCROLL_LINE).max(KEY_SCROLL_LINE);
-        let steps = [(Key::ArrowDown, line), (Key::ArrowUp, -line), (Key::PageDown, screen), (Key::PageUp, -screen)];
-        for (k, by) in steps {
+        let steps = [
+            (Key::ArrowDown, line, key(Key::ArrowDown)),
+            (Key::ArrowUp, -line, key(Key::ArrowUp)),
+            (Key::PageDown, screen, page_down),
+            (Key::PageUp, -screen, page_up),
+        ];
+        for (k, by, pressed) in steps {
             let arrow = matches!(k, Key::ArrowDown | Key::ArrowUp);
-            if !key(k) || !(scrolls || arrow) {
+            if !pressed || !(scrolls || arrow) {
                 continue;
             }
             let forward = k == Key::ArrowDown;

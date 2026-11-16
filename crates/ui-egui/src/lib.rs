@@ -364,6 +364,9 @@ pub struct PdfCraftApp {
     pub quick_tool: QuickTool,
     /// The tool to go back to when Space, held for a temporary Hand, is released.
     space_hand: Option<QuickTool>,
+    /// Space is down for the pages: whether letting it go still counts as a tap, which scrolls a
+    /// screen on (#7483). A press with the pointer meanwhile is the Hand's drag instead.
+    space_tap: Option<bool>,
     /// The tool before full screen, given back on leaving it (see [`Self::apply_full_screen`]).
     full_screen_tool: Option<QuickTool>,
     /// Comment author, per-tool colours and widths, pin.
