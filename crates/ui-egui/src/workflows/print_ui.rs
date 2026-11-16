@@ -185,9 +185,10 @@ impl PdfCraftApp {
     /// being asked: one dialog at a time, in the order asked, each for its own document. A file
     /// still opening holds back the ones after it (opens can finish in any order, and one that
     /// needed a password is opened again after the others); one no longer opening (it couldn't
-    /// be opened, or its password was cancelled) is passed over.
+    /// be opened, or its password was cancelled) is passed over. Every modal prompt holds the
+    /// queue, another document's permissions password among them (#1723 review).
     pub(crate) fn open_queued_print(&mut self) {
-        if self.dialog.is_some() || self.password_prompt.is_some() || self.print_requests.is_empty() {
+        if self.modal_open() || self.print_requests.is_empty() {
             return;
         }
         // Still opening: on the worker, or waiting for room in its queue (a launch with more
@@ -1178,5 +1179,25 @@ mod tests {
         app.open_queued_print();
         assert_eq!(app.print_requests, vec![(path, None)], "kept until the file opens");
         assert_eq!(app.dialog, None);
+    }
+
+    /// #1723 review: a queued Print dialog waits while another document asks for its permissions
+    /// password, and comes once that prompt closes.
+    #[test]
+    fn a_print_request_waits_for_every_modal_prompt() {
+        let mut app = PdfCraftApp::new();
+        let blank = app.session.create_blank(612.0, 792.0, 1).unwrap();
+        app.open_bytes("a.pdf", None, blank.to_vec()).unwrap();
+        let (_, id) = app.active_ids().unwrap();
+        let doc = app.session.get(id).unwrap();
+        app.unlock_prompt = Some(crate::state::UnlockPrompt::new(doc, None));
+        app.print_requests.push(("a.pdf".to_string(), Some(id)));
+        app.open_queued_print();
+        assert_eq!(app.dialog, None, "not over the password prompt");
+        assert_eq!(app.print_requests.len(), 1, "kept for later");
+        app.unlock_prompt = None;
+        app.open_queued_print();
+        assert_eq!(app.dialog, Some(crate::Dialog::Print));
+        assert!(app.print_requests.is_empty());
     }
 }

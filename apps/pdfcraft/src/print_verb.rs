@@ -38,8 +38,10 @@ pub(crate) fn run(files: &[String], javascript: bool) -> Vec<String> {
 }
 
 /// The system default printer's name, which the verb's jobs go to; none when there is none.
+/// Read from the queues, as the Print dialog lists them, so no other printer's driver is asked
+/// anything (a networked printer in power save would hold the job up).
 fn default_printer() -> Option<String> {
-    spool::printers().into_iter().find(|p| p.default).map(|p| p.name)
+    spool::printer_queues().into_iter().find(|p| p.default).map(|p| p.name)
 }
 
 /// The print-ready PDF of `path` and its job for the default printer, or why there is none.
@@ -53,6 +55,9 @@ fn prepare(path: &str, javascript: bool) -> Result<(Vec<u8>, spool::Job), String
     // Refuses a document whose permissions forbid printing.
     let pdf = session.print_pdf(id, &settings).map_err(|e| e.to_string())?;
     let mut job = job(&name, actual_size);
+    // The first page's standard paper by name, as the Print dialog's jobs carry their paper, so
+    // CUPS feeds that sheet rather than the queue's default.
+    job.options.extend(sizes.first().and_then(|&s| print::matching_paper(s)).and_then(print::media_option));
     // CUPS is told which way the sheets run (#2713), as for the Print dialog's jobs.
     if let Ok(sheets) = print::layout(&sizes, &settings) {
         print::add_cups_orientation(&mut job.options, &sheets);
@@ -232,6 +237,24 @@ mod tests {
         let (pdf, job) = prepare(&path, true).unwrap();
         assert!(pdf.starts_with(b"%PDF"));
         assert_eq!(job.title, "doc.pdf");
+    }
+
+    /// #1723 review: the job names the first page's standard paper, as the Print dialog's do, so
+    /// a Legal page doesn't come out on a Letter queue's default paper. A size with no standard
+    /// paper names none, and the spooler shrinks it onto the default paper.
+    #[test]
+    fn the_job_names_the_first_pages_standard_paper() {
+        let media = |w, h| {
+            let blank = Session::new().create_blank(w, h, 1).unwrap();
+            let (_dir, path) = file_with(&blank);
+            prepare(&path, true).unwrap().1.options.into_iter().filter(|(k, _)| k == "media").collect::<Vec<_>>()
+        };
+        let legal = paper_named("US Legal");
+        for (size, name) in [(A4, "A4"), (LETTER, "US Letter"), (legal, "US Legal"), ((A4.1, A4.0), "A4")] {
+            let index = PAPERS.iter().position(|(n, _)| *n == name).unwrap();
+            assert_eq!(media(size.0, size.1), print::media_option(index).into_iter().collect::<Vec<_>>(), "{name}");
+        }
+        assert_eq!(media(400.0, 300.0), Vec::new(), "no standard paper: none named");
     }
 
     #[test]
