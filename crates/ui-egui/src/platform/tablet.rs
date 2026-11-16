@@ -37,9 +37,12 @@ use raw_window_handle::HasDisplayHandle;
 use wayland_tablet::{PenEvent, PumpMode, TabletSidecar, ToolKind};
 
 /// Linux event codes the tablet-v2 `button` event forwards raw (tablet-v2.xml:
-/// "button is an enum, but not a wl_pointer one"); the values are the Linux input
-/// event codes for a stylus' barrel buttons.
-const BTN_STYLUS: u32 = 0x140;
+/// "button is an enum, but not a wl_pointer one"). The bound one is the Linux
+/// input event code for a stylus' barrel button (input-event-codes.h:
+/// `BTN_STYLUS` is 0x14b — `BTN_TOOL_PEN` is 0x140, a tool kind, not a button);
+/// `BTN_STYLUS2` (0x14c) stays unbound — one barrel button is what the UI binds,
+/// as Acrobat's pen side button.
+const BTN_STYLUS: u32 = 0x14b;
 
 /// One pen state snapshot for the tool layer: what the last [`PenEvent`] said.
 ///
@@ -298,7 +301,8 @@ fn to_egui(ev: &PenEvent, modifiers: egui::Modifiers) -> (Vec<egui::Event>, Snap
         PenEvent::Button { button, pressed, .. } => {
             // The barrel button acts as the secondary button (what Acrobat's pen side
             // button does). Any other code is dropped with a note: tablet-v2 forwards
-            // raw Linux event codes and this build binds only the stylus buttons.
+            // raw Linux event codes and this build binds only the stylus button
+            // (`BTN_STYLUS`); `BTN_STYLUS2` stays unbound.
             if *button == BTN_STYLUS {
                 out.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: *pressed, modifiers });
             } else {
@@ -431,6 +435,23 @@ mod tests {
     fn other_button_codes_are_dropped() {
         let (events, _) = to_egui(&PenEvent::Button { frame: frame(ToolKind::Pen, 0.0, 0.0), button: 0x141, pressed: true }, no_mods());
         assert_eq!(events, Vec::<egui::Event>::new(), "{events:?}");
+    }
+
+    /// The real `BTN_STYLUS` code, fed raw (not through the constant): 0x14b is the
+    /// kernel's stylus barrel button (`input-event-codes.h`; 0x140 is
+    /// `BTN_TOOL_PEN`, a tool kind) and reaches egui as the secondary button. With
+    /// the code the constant used to carry by mistake (0x140), this feeds an unbound
+    /// code and nothing comes out.
+    #[test]
+    fn the_raw_stylus_code_is_the_secondary_button() {
+        for pressed in [true, false] {
+            let (events, _) = to_egui(&PenEvent::Button { frame: frame(ToolKind::Pen, 6.0, 7.0), button: 0x14b, pressed }, no_mods());
+            assert_eq!(
+                events,
+                vec![egui::Event::PointerButton { pos: egui::pos2(6.0, 7.0), button: egui::PointerButton::Secondary, pressed, modifiers: no_mods() }],
+                "{events:?}"
+            );
+        }
     }
 
     /// The pen leaving the surface clears egui's pointer, like a mouse leaving.
