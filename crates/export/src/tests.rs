@@ -1428,3 +1428,17 @@ fn a_long_bulleted_list_keeps_every_bullet_with_its_item() {
     assert_eq!(paragraphs.len(), 150, "{paragraphs:?}");
     assert!(paragraphs.iter().enumerate().all(|(n, p)| *p == format!("\u{F0B7} item {n};")), "{paragraphs:?}");
 }
+
+#[test]
+fn shared_base64_keeps_padded_unwrapped_export_bytes() {
+    for (input, expected) in
+        [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")]
+    {
+        assert_eq!(base64(input.as_bytes()), expected);
+    }
+    assert_eq!(base64(&[251, 255, 255]), "+///");
+    let encoded = base64(&[255; 256]);
+    assert_eq!(encoded.len(), 344);
+    assert!(!encoded.contains(['\r', '\n']));
+    assert!(encoded.ends_with("/w=="));
+}
