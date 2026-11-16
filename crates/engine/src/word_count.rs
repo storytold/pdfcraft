@@ -78,6 +78,7 @@ fn count_inner(source: ExportSource, pages: &[usize], options: Options, mut prog
             tables: options.exclude_tables,
             code: options.exclude_code,
             images: options.exclude_images,
+            painted: false,
             mcids: excluded.remove(&page).unwrap_or_default(),
         };
         let text = renderer.filtered_text(page, filter).map_err(|e| format!("page {}: {e}", page.saturating_add(1)))?.plain_text();
