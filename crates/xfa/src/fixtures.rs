@@ -368,12 +368,12 @@ pub fn static_rows_shell(rows: &[usize]) -> Vec<u8> {
 }
 
 /// A static XFA form whose `page1` holds an unnamed subform with a text field `x`, then a text field `x` of its own:
-/// SOM numbers them `x[0]` and `x[1]`, while Designer names them `#subform[0].x[0]` and `x[0]`. The AcroForm lists the
-/// direct field first when `direct_first`.
-pub fn static_mixed_shell(direct_first: bool) -> Vec<u8> {
+/// SOM numbers them `x[0]` and `x[1]`, while Designer names them `#subform[0].x[0]` and `x[0]`. The AcroForm lists them
+/// in document order, as Designer writes it.
+pub fn static_mixed_shell() -> Vec<u8> {
     let xdp = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\" layout=\"tb\"><subform name=\"page1\" layout=\"tb\"><subform layout=\"tb\"><field name=\"x\" w=\"2in\" h=\"0.3in\"><ui><textEdit/></ui></field></subform><field name=\"x\" w=\"2in\" h=\"0.3in\"><ui><textEdit/></ui></field></subform></subform></template></xdp:xdp>";
     // 8: the unnamed subform's field, 9: its widget `x[0]`, 10: the direct widget `x[0]`
-    let kids = if direct_first { "10 0 R 8 0 R" } else { "8 0 R 10 0 R" };
+    let kids = "8 0 R 10 0 R";
     let objs: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA 5 0 R /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) >> >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),

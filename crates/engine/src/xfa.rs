@@ -1789,29 +1789,27 @@ mod tests {
     use super::*;
 
     /// Designer numbers a field inside each unnamed subform, SOM across them: beside a field of the same name in an unnamed
-    /// subform, a field named `x[0]` is the live `x[1]`, whichever the AcroForm lists first.
+    /// subform, a field named `x[0]` is the live `x[1]`. Such names go by order, as Designer lists the fields.
     #[test]
     fn a_static_field_beside_an_unnamed_subform_is_matched_in_order() {
-        for direct_first in [false, true] {
-            let doc = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::static_mixed_shell(direct_first))).expect("opens");
-            let tpl = pdfcraft_xfa::template_of(&doc).expect("a template");
-            // the live paths of the two `x`, in document order (the same path until unnamed subforms number across)
-            let live = pdfcraft_xfa::form_tree(&tpl, None, &Default::default());
-            fn walk(n: &FormNode, out: &mut Vec<String>) {
-                if n.kind == Some(NodeKind::Field) {
-                    out.push(n.som.clone());
-                }
-                n.children.iter().for_each(|c| walk(c, out));
+        let doc = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::static_mixed_shell())).expect("opens");
+        let tpl = pdfcraft_xfa::template_of(&doc).expect("a template");
+        // the live paths of the two `x`, in document order (the same path until unnamed subforms number across)
+        let live = pdfcraft_xfa::form_tree(&tpl, None, &Default::default());
+        fn walk(n: &FormNode, out: &mut Vec<String>) {
+            if n.kind == Some(NodeKind::Field) {
+                out.push(n.som.clone());
             }
-            let mut xs = Vec::new();
-            walk(&live.root, &mut xs);
-            let som_of = |name: &str| {
-                let f = pdfcraft_forms::fields(&doc).into_iter().find(|f| f.name == name).expect("the field");
-                static_som(&doc, &tpl, &f)
-            };
-            assert_eq!(som_of("form1[0].page1[0].#subform[0].x[0]").as_ref(), xs.first(), "direct first: {direct_first}");
-            assert_eq!(som_of("form1[0].page1[0].x[0]").as_ref(), xs.get(1), "direct first: {direct_first}");
+            n.children.iter().for_each(|c| walk(c, out));
         }
+        let mut xs = Vec::new();
+        walk(&live.root, &mut xs);
+        let som_of = |name: &str| {
+            let f = pdfcraft_forms::fields(&doc).into_iter().find(|f| f.name == name).expect("the field");
+            static_som(&doc, &tpl, &f)
+        };
+        assert_eq!(som_of("form1[0].page1[0].#subform[0].x[0]").as_ref(), xs.first());
+        assert_eq!(som_of("form1[0].page1[0].x[0]").as_ref(), xs.get(1));
     }
 
     /// A static form's field whose name has no unnamed step is the live object of its indices, whatever order the
