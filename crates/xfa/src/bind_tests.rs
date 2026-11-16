@@ -500,3 +500,29 @@ fn master_page_objects_take_the_instances_of_a_star_reference_in_turn() {
     assert_eq!(path(&tpl, "front[0].a[0]"), "form[0].codes[0].code[0]");
     assert_eq!(path(&tpl, "front[0].b[0]"), "form[0].codes[0].code[1]");
 }
+
+/// A repeating subform after a `match="none"` sibling that holds an object of its name starts
+/// at the data node after that object's, and lays out only the instances the data has left.
+#[test]
+fn a_repeating_subform_after_an_adopted_namesake_counts_only_the_rest() {
+    let body = format!(
+        r#"<subform name="wrap" layout="tb"><bind match="none"/><subform name="row" layout="tb"><field name="qty" {TEXT}</field></subform></subform>
+<subform name="row" layout="tb"><occur min="1" max="-1"/><field name="qty" {TEXT}</field></subform>"#
+    );
+    let xml = xdp(&body, "<row><qty>a</qty></row><row><qty>b</qty></row><row><qty>c</qty></row>");
+    let form = layout_xml(&xml).unwrap();
+    let values: Vec<Option<String>> = form.pages.iter().flat_map(|p| widgets(p)).map(|w| w.value.clone()).collect();
+    assert_eq!(values, ["a", "b", "c"].map(|v| Some(v.to_string())), "no empty fourth row");
+}
+
+/// The root's own reference is resolved once: what the root holds binds under the node it
+/// names, and `$record` is that same node, even when the reference starts from `$record`.
+#[test]
+fn a_root_reference_from_record_is_resolved_once() {
+    let body = format!(r#"<field name="x" {TEXT}</field><field name="y" {TEXT}<bind match="dataRef" ref="$record.code"/></field>"#);
+    let xml = xdp(&body, "")
+        .replace(r#"<subform name="form" layout="tb">"#, r#"<subform name="form" layout="tb"><bind match="dataRef" ref="$record.actual"/>"#);
+    let (tpl, _) = parse(&xml).unwrap();
+    assert_eq!(path(&tpl, "form[0].x[0]"), "form[0].actual[0].x[0]");
+    assert_eq!(path(&tpl, "form[0].y[0]"), "form[0].actual[0].code[0]");
+}

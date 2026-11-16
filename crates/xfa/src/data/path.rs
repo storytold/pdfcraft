@@ -89,20 +89,27 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
     let mut level: Option<&[Node]> = None;
     let segments = som_to_path(som);
     let page_area_index = page_area_index(tpl, &segments);
-    // `$record` in a reference: the data group of the root subform, as the data is written.
-    let record = record_path(tpl);
-    let record = record.as_ref();
+    // `$record` in a reference: the root subform's data node ([`record_path`]), worked out the
+    // first time something needs it: most paths bind by name all the way.
+    let record_cell: std::cell::OnceCell<Option<DataPath>> = std::cell::OnceCell::new();
+    let record = || record_cell.get_or_init(|| record_path(tpl)).as_ref();
     // The `match="none"` subforms passed through since the last data scope ([`data_index`]).
     let mut through: Vec<Step> = Vec::new();
     for (i, (name, index)) in segments.into_iter().enumerate() {
         // A page area's SOM index is the page made from it; see [`page_area_index`].
         let index = if i == 0 { page_area_index.unwrap_or(index) } else { index };
+        // The root binds to the record: the node its own reference names, resolved once
+        // ([`record_path`]), else the group named after it.
+        if i == 0 && level.is_none() && tpl.root.common.name.as_deref() == Some(name.as_str()) {
+            level = Some(&tpl.root.children);
+            match tpl.root.common.data_ref.as_ref().and_then(|_| record()) {
+                Some(path) => out = path.clone(),
+                None => out.push((name, index)),
+            }
+            continue;
+        }
         // What the segment names, its data index, and the explicit data reference it binds by.
         let (found, index, data_ref) = match level {
-            None if i == 0 && tpl.root.common.name.as_deref() == Some(name.as_str()) => {
-                let data_ref = tpl.root.common.data_ref.as_deref().map(|r| (r, tpl.root.common.star_ordinal));
-                (Some(Container::Children(&tpl.root.children)), index, data_ref)
-            }
             // Master-page objects are named under their page area, which is a data scope.
             None if i == 0 => match tpl.root.page_set.as_ref().and_then(|ps| ps.areas.iter().find(|a| a.name.as_deref() == Some(name.as_str()))) {
                 Some(area) => (Some(Container::Children(&area.items)), index, None),
@@ -132,12 +139,12 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
             Some(Container::Children(children)) => {
                 level = Some(children);
                 through.clear();
-                bind(&mut out, name, index, data_ref, record);
+                bind(&mut out, name, index, data_ref, data_ref.and_then(|_| record()));
             }
             None => {
                 level = None;
                 through.clear();
-                bind(&mut out, name, index, data_ref, record);
+                bind(&mut out, name, index, data_ref, data_ref.and_then(|_| record()));
             }
         }
     }
@@ -219,7 +226,35 @@ pub(crate) fn data_instances(tpl: &Template, data: &DataNode, sf: &Subform, pare
             return data.count(&path, &name).saturating_sub(first);
         }
     }
-    sf.data_name().map_or(0, |name| data.count(&parent, name))
+    sf.data_name().map_or(0, |name| {
+        // Its first instance's data index: same-named objects before it in the data scope (one
+        // of its name, or what a `match="none"` sibling hands on) take the nodes before that.
+        let first = som_index(tpl, parent_som, sf)
+            .map(|sib| if parent_som.is_empty() { format!("{name}[{sib}]") } else { format!("{parent_som}.{name}[{sib}]") })
+            .and_then(|som| data_path(tpl, &som).last().map(|(_, index)| *index))
+            .unwrap_or(0);
+        data.count(&parent, name).saturating_sub(first)
+    })
+}
+
+/// The SOM index of the subform `sf` among the children of the container at `parent_som`, or
+/// `None` when it isn't one of them (it sits in a nameless wrapper, or the template lacks it).
+fn som_index(tpl: &Template, parent_som: &str, sf: &Subform) -> Option<usize> {
+    let path = som_to_path(parent_som);
+    let children: &[Node] = if path.len() == 1 && tpl.root.common.name.as_deref() == path.first().map(|(n, _)| n.as_str()) {
+        &tpl.root.children
+    } else {
+        match template_object(tpl, parent_som).or_else(|| master_object(tpl, parent_som))? {
+            Node::Subform(s) => &s.children,
+            Node::Area(a) => &a.children,
+            _ => return None,
+        }
+    };
+    // The layout works on a copy of the template, so a subform equal to `sf` is `sf`.
+    let pos =
+        children.iter().position(|n| matches!(n, Node::Subform(s) if s.common.name == sf.common.name && (std::ptr::eq(&**s, sf) || **s == *sf)))?;
+    let name = sf.common.name.as_deref()?;
+    Some(children.get(..pos)?.iter().filter(|n| n.common().name.as_deref() == Some(name)).count())
 }
 
 /// Number the objects whose reference has a `[*]` ([`Common::star_ordinal`]): each counts the
@@ -641,10 +676,30 @@ pub fn binds_elsewhere(tpl: &Template, som: &str) -> bool {
 
 /// Whether the objects at SOM paths `a` and `b` are instances of the same template object: the
 /// instances of one repeating subform's field are, the same-named fields of two copies of a
-/// subform (`part[0]`, `part[1]`) are not. `false` when the template has neither.
+/// subform (`part[0]`, `part[1]`) are not. Master-page objects (`Page1[n].x`) are found in their
+/// page area. `false` when the template has neither.
 pub fn same_template_object(tpl: &Template, a: &str, b: &str) -> bool {
-    match (template_object(tpl, a), template_object(tpl, b)) {
+    let object = |som: &str| template_object(tpl, som).or_else(|| master_object(tpl, som));
+    match (object(a), object(b)) {
         (Some(x), Some(y)) => std::ptr::eq(x, y),
         _ => false,
     }
+}
+
+/// The master-page object a SOM path starting at a page area names (`Page1[2].hdr[0].x[0]`):
+/// every page made from the area holds the same object, whatever its page's index.
+fn master_object<'a>(tpl: &'a Template, som: &str) -> Option<&'a Node> {
+    let path = som_to_path(som);
+    let ((area, _), rest) = path.split_first()?;
+    let area = tpl.root.page_set.as_ref()?.areas.iter().find(|a| a.name.as_deref() == Some(area.as_str()))?;
+    let ((last, last_index), inner) = rest.split_last()?;
+    let mut children: &[Node] = &area.items;
+    for (name, index) in inner {
+        children = match named_at(children, name, *index, 0)? {
+            Node::Subform(sf) => &sf.children,
+            Node::Area(a) => &a.children,
+            _ => return None,
+        };
+    }
+    named_at(children, last, *last_index, 0)
 }

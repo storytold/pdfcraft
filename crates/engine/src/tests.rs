@@ -12638,6 +12638,38 @@ fn a_reset_gives_each_copy_of_a_floating_field_its_own_default() {
     assert_eq!(at("form[0].row[1].amount[0]").as_deref(), Some("b1"));
 }
 
+/// A floating field on a master page has an instance on each page made from it, each with its
+/// own data: a reset takes every page's back to its default, not only the first page's.
+#[test]
+fn a_reset_clears_a_master_page_floating_field_on_every_page() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><occur max="-1"/><contentArea x="0.5in" y="1in" w="7.5in" h="9in"/><medium short="8.5in" long="11in"/>
+  <field name="Stamp" id="floatStamp" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+  <draw x="0.5in" y="0.2in" w="5in" h="0.4in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Stamp: <span xfa:embed="#floatStamp"/></p></body></exData></value></draw>
+ </pageArea></pageSet>
+ <subform name="one" w="7in" h="8in">
+  <field name="clear" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">xfa.host.resetData();</script></event></field>
+ </subform>
+ <subform name="two" w="7in" h="8in"><breakBefore targetType="pageArea"/></subform>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><front><Stamp>Paid</Stamp></front><front><Stamp>Paid</Stamp></front><form/></xfa:data></xfa:datasets>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("pages.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let text = |s: &Session| page_texts(s, id).join("\n");
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+    assert_eq!(text(&s).matches("Stamp: Paid").count(), 2, "{}", text(&s));
+    let o = s.run_javascript(id, "", Some("clear")).expect("clicks");
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(text(&s).matches("Paid").count(), 0, "every page's stamp is reset: {}", text(&s));
+}
+
 /// An XFA button's click script may show the attachments panel; a text field's exit script
 /// asking the same is noted on the console and ignored.
 #[test]
