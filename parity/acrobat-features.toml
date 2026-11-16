@@ -3154,8 +3154,8 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/organize/src/tests.rs::layers_are_registered_with_their_default_state"]
-notes = ""
+evidence = ["crates/organize/src/tests.rs::layers_are_registered_with_their_default_state", "crates/organize/src/tests.rs::extracted_layers_keep_their_auto_state_radio_groups_and_lock"]
+notes = "Copied layers keep, from the source's default configuration, their on/off state, the view/print/export auto state (/AS), radio-button groups, lock, and their presence in an explicit /Order (nesting and labels are not kept: copied layers are listed flat). Other configurations (/Configs), /ListMode and /Intent are not copied."
 
 [[feature]]
 id = "organize.preserve-inherited"

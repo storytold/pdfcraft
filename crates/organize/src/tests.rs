@@ -4982,3 +4982,51 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
     assert_eq!(source_bookmarks(&all), [("Chapter one".to_string(), vec!["Section".to_string()])]);
     assert!(attachments(&all));
 }
+
+/// A print-only layer (a "COPY" mark the view auto state turns off on screen) keeps that auto
+/// state when its page is extracted, with its radio-button group, lock and presentation: an
+/// explicit empty `/Order` stays empty. Without `/AS` the copy shows the mark on screen.
+#[test]
+fn extracted_layers_keep_their_auto_state_radio_groups_and_lock() {
+    let b: Vec<String> = vec![
+        concat!(
+            "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 9 0 R] /D << /ON [5 0 R 9 0 R] /Order [] ",
+            "/AS [6 0 R 7 0 R << /Event /Export /Category [/Export] /OCGs [9 0 R] >>] /RBGroups [[5 0 R 9 0 R]] /Locked [5 0 R] >> >> >>"
+        )
+        .into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Properties << /MC0 5 0 R >> >> >>".into(), // 3
+        "<< /Length 34 >>
+stream
+/OC /MC0 BDC 0 0 m 100 100 l S EMC
+endstream"
+            .into(), // 4
+        "<< /Type /OCG /Name (Watermark) /Usage << /View << /ViewState /OFF >> /Print << /PrintState /ON >> >> >>".into(), // 5
+        "<< /Event /View /Category [/View] /OCGs [5 0 R 9 0 R] >>".into(),          // 6
+        "<< /Event /Print /Category [/Print] /OCGs 5 0 R >>".into(),                // 7
+        "<< /Title (unused) >>".into(),                                             // 8
+        "<< /Type /OCG /Name (Other, not on the page) >>".into(),                   // 9
+    ];
+    let out = full_roundtrip(&extract_pages(&open(build(&b, "/Root 1 0 R")), &[0]).unwrap());
+    let props = out.resolve(catalog(&out).get(b"OCProperties").unwrap()).as_dict().cloned().unwrap();
+    let ocgs = props.get(b"OCGs").and_then(Object::as_array).cloned().unwrap();
+    assert_eq!(ocgs.len(), 1, "only the layer the page uses: {ocgs:?}");
+    let d = out.resolve(props.get(b"D").unwrap()).as_dict().cloned().unwrap();
+    let arr = |k: &[u8]| d.get(k).map(|v| out.resolve(v)).and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let auto: Vec<(Vec<u8>, Vec<Object>)> = arr(b"AS")
+        .iter()
+        .map(|u| {
+            let u = out.resolve(u).as_dict().cloned().unwrap();
+            (u.name(b"Event").unwrap().to_vec(), u.get(b"OCGs").and_then(Object::as_array).cloned().unwrap())
+        })
+        .collect();
+    assert_eq!(
+        auto,
+        [(b"View".to_vec(), ocgs.clone()), (b"Print".to_vec(), ocgs.clone())],
+        "view and print auto states; the export one names no copied layer"
+    );
+    assert_eq!(arr(b"RBGroups"), [Object::Array(ocgs.clone())]);
+    assert_eq!(arr(b"Locked"), ocgs);
+    assert_eq!(arr(b"Order"), [], "an explicit empty /Order presents no layer");
+    assert_eq!(arr(b"ON"), ocgs);
+}
