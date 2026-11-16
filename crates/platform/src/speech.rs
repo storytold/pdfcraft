@@ -237,11 +237,21 @@ impl Player {
     }
 
     /// Queue a pause request; poll status to observe the resulting playback state.
+    /// An uninitialized player remains idle without creating a worker or opening audio.
     pub fn pause(&mut self) -> Result<(), String> {
+        // No speech service exists yet, so an inactive control must not initialize one.
+        if self.sender.is_none() {
+            return Ok(());
+        }
         self.send(Request::Pause)
     }
     /// Queue a resume request without restarting the current chunk.
+    /// An uninitialized player remains idle without creating a worker or opening audio.
     pub fn resume(&mut self) -> Result<(), String> {
+        // No speech service exists yet, so an inactive control must not initialize one.
+        if self.sender.is_none() {
+            return Ok(());
+        }
         self.send(Request::Resume)
     }
     /// Invalidate queued starts and request cancellation, even when the command queue is full.
@@ -500,6 +510,31 @@ mod tests {
             }
             assert!(Instant::now() < until, "failed worker must disconnect");
             std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Idle controls must not construct a missing native backend or consume an injected one.
+    #[test]
+    fn inactive_pause_and_resume_do_not_initialize_the_worker() {
+        for pause in [true, false] {
+            let mut native = Player::new();
+            native.available = true;
+            native.backend = BackendSource::Native(missing_native_backend);
+            let (injected, log, _) = setup(false);
+            for mut player in [native, injected] {
+                if pause {
+                    player.pause().unwrap();
+                } else {
+                    player.resume().unwrap();
+                }
+                assert!(player.sender.is_none(), "inactive controls must not start the worker");
+                assert_eq!(player.status().state, State::Idle);
+                assert!(player.status().error.is_none());
+                if let BackendSource::Injected(backend) = &player.backend {
+                    assert!(backend.is_some(), "the injected backend must remain unused");
+                }
+            }
+            assert!(log.lock().unwrap().is_empty());
         }
     }
 
