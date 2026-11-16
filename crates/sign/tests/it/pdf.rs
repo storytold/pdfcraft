@@ -325,6 +325,21 @@ fn an_indirect_annots_array_is_judged_by_the_annotations_it_gains() {
     assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::OTHER])));
 }
 
+/// A signature widget taken off the page's inline /Annots array is covered by no permission (the
+/// indirect-array case is the test above), and stays a change whatever level the signature has.
+#[test]
+fn removing_a_widget_from_an_inline_annots_array_is_not_a_comment_change() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let page = pdfcraft_cos::ObjRef { num: 3, generation: 0 };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let inline = open(&signed).get(page).as_dict().and_then(|d| d.get(b"Annots").cloned()).unwrap();
+    assert!(matches!(inline, Object::Array(ref a) if !a.is_empty()), "the page keeps its widgets inline");
+    let stripped = edit_after(&signed, |doc| doc.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Array(vec![]))).unwrap());
+    let s = signatures(&open(&stripped), &stripped, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::OTHER])));
+}
+
 /// Issue #1328: a signature field whose /V is null, directly or through a reference, is unsigned:
 /// it is listed as unsigned and can be signed by name.
 #[test]
@@ -1035,6 +1050,13 @@ fn embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid() {
         doc.get(root).as_dict().unwrap().get(b"DSS").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap();
     assert_eq!(dss_dict.name(b"Type"), Some(b"DSS".as_slice()));
     assert!(dss_dict.contains(b"Certs") && dss_dict.contains(b"OCSPs") && dss_dict.contains(b"CRLs") && dss_dict.contains(b"VRI"));
+    // A signature's /VRI entry points at the store's arrays instead of holding its own copy of each.
+    let vri = dss_dict.get(b"VRI").map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()).unwrap();
+    let entry = vri.iter().next().and_then(|(_, e)| e.as_dict().cloned()).unwrap();
+    for (vri_key, dss_key) in [(&b"Cert"[..], &b"Certs"[..]), (b"OCSP", b"OCSPs"), (b"CRL", b"CRLs")] {
+        assert!(matches!(entry.get(vri_key), Some(pdfcraft_cos::Object::Ref(_))));
+        assert_eq!(entry.get(vri_key), dss_dict.get(dss_key));
+    }
     // The earlier signature still validates; the DSS counts as a permitted change.
     let s = signatures(&doc, &ltv, &TrustStore::default()).into_iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
     assert_eq!(s.status, Status::Unknown);
@@ -2981,12 +3003,7 @@ fn wordings_are_complete() {
     let source = source.as_str();
     // The modules below `pdf` word whole sentences too: how a signature value had to be read, and
     // what a certificate does not allow.
-    let elsewhere = [
-        include_str!("../../src/x509.rs"),
-        include_str!("../../src/cms.rs"),
-        include_str!("../../src/keys.rs"),
-        include_str!("../../src/rsa_pad.rs"),
-    ];
+    let elsewhere = [include_str!("../../src/x509.rs"), include_str!("../../src/cms.rs"), include_str!("../../src/keys.rs")];
     /// A sentence said to the user, as opposed to an OID, a name or a tag: it reads as English.
     fn is_sentence(s: &str) -> bool {
         s.len() > 24 && s.ends_with('.') && s.contains(' ') && s.starts_with(|c: char| c.is_ascii_uppercase())
@@ -3019,6 +3036,15 @@ fn wordings_are_complete() {
         out
     }
     let mut said = after(source, &["Detail::plain(", "Detail::of("]);
+    // These existing diagnostics now come from pinned craft-pkcs7 instead of local source.
+    // Keep their translation coverage; crypto.rs exercises the corresponding tolerated forms.
+    said.extend([
+        "The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.",
+        "The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.",
+        "The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.",
+        "The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.",
+    ]);
+
     let at_hand = ["Detail::plain(", "Detail::of(", ".push(", "Some("];
     said.extend(elsewhere.iter().flat_map(|s| after(s, &at_hand)).filter(|s| is_sentence(s)));
     let summary = source.split("pub fn summary").nth(1).and_then(|s| s.split("\n    }").next()).unwrap_or_default();
@@ -3352,6 +3378,38 @@ fn signing_a_field_with_a_null_value_after_another_signature_keeps_the_first_val
         "{:?}",
         all.iter().map(|s| (&s.status, &s.modification)).collect::<Vec<_>>()
     );
+}
+
+/// Fields that name one signature value are listed each, under their own name, with the verdict
+/// the value earned once.
+#[test]
+fn fields_sharing_a_signature_value_are_listed_with_one_verdict() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    let v = open(&signed).get(pdfcraft_cos::ObjRef { num: 6, generation: 0 }).as_dict().and_then(|d| d.get(b"V").cloned()).unwrap();
+    let shared = edit_after(&signed, |doc| {
+        let mut w = pdfcraft_cos::Dict::new();
+        w.set(b"Type".to_vec(), Object::name("Annot"));
+        w.set(b"Subtype".to_vec(), Object::name("Widget"));
+        w.set(b"FT".to_vec(), Object::name("Sig"));
+        w.set(b"T".to_vec(), PdfString::text("Twin"));
+        w.set(b"V".to_vec(), v.clone());
+        w.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0); 4]));
+        let w = doc.add(Object::Dict(w));
+        let root = doc.root().unwrap();
+        let af = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()).unwrap();
+        let af = doc.resolve(&af).as_dict().cloned().unwrap();
+        let mut fields = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap();
+        fields.push(Object::Ref(w));
+        let mut af = af;
+        af.set(b"Fields".to_vec(), Object::Array(fields));
+        doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(af))).unwrap();
+    });
+    let list = signatures(&open(&shared), &shared, &trust);
+    let (a, b) = (list.iter().find(|s| s.field == "Approval").unwrap(), list.iter().find(|s| s.field == "Twin").unwrap());
+    assert!(a.signed && b.signed);
+    assert_eq!((a.status, &a.modification, &a.signer, a.signed_len), (b.status, &b.modification, &b.signer, b.signed_len));
 }
 
 #[test]

@@ -58,6 +58,23 @@ impl Op {
     pub fn last_name(&self) -> Option<&[u8]> {
         self.operands.last().and_then(Object::as_name)
     }
+
+    /// Operand `k` counted from the end (0 is the last), as the renderer reads an operator's
+    /// operands: `(x) /OC /MC0 BDC` marks with `/OC /MC0`, and `(x) /F1 10 Tf` selects `/F1`.
+    pub fn back(&self, k: usize) -> Option<&Object> {
+        let i = self.operands.len().checked_sub(k)?.checked_sub(1)?;
+        self.operands.get(i)
+    }
+
+    /// [`Op::back`] as a name.
+    pub fn name_back(&self, k: usize) -> Option<&[u8]> {
+        self.back(k).and_then(Object::as_name)
+    }
+
+    /// [`Op::back`] as a number.
+    pub fn num_back(&self, k: usize) -> Option<f64> {
+        self.back(k).and_then(Object::as_f64)
+    }
 }
 
 /// A parsed stream.

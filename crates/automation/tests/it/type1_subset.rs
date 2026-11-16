@@ -135,11 +135,9 @@ fn render(a: &mut Automation, id: u64) -> Vec<u8> {
 fn check_replacement(a: &mut Automation, id: u64) -> Vec<u8> {
     let lines = a.session().get(DocId(id)).unwrap().text_lines(0);
     let png = render(a, id);
-    let mut reader = png::Decoder::new(std::io::Cursor::new(&png)).read_info().unwrap();
-    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
-    let image = reader.next_frame(&mut pixels).unwrap();
-    let channels = image.color_type.samples();
-    assert!(channels >= 3);
+    let image = craft_image_codecs::decode(&png).unwrap();
+    let (width, height, pixels) = (image.width() as usize, image.height() as usize, image.to_rgba8());
+    let channels = 4;
     // The subset has no space glyph; the writer preserves its gap with positioning.
     assert_eq!(lines.iter().flat_map(|l| l.text.chars()).filter(|ch| !ch.is_whitespace()).collect::<String>(), "GuideChoiceProblems");
     for ch in ['P', 'b'] {
@@ -147,9 +145,9 @@ fn check_replacement(a: &mut Automation, id: u64) -> Vec<u8> {
         assert_ne!(line.font, "F1", "{ch} must not use a missing subset outline");
         assert!(line.bold, "the replacement retains the source weight");
         let [left, bottom, right, top] = line.rect;
-        let dark = ((150.0 - top).max(0.0) as usize * 2..((150.0 - bottom).ceil() as usize * 2).min(image.height as usize))
-            .flat_map(|y| (left.max(0.0) as usize * 2..(right.ceil() as usize * 2).min(image.width as usize)).map(move |x| (x, y)))
-            .filter(|(x, y)| pixels[(y * image.width as usize + x) * channels..][..3].iter().any(|v| *v < 128))
+        let dark = ((150.0 - top).max(0.0) as usize * 2..((150.0 - bottom).ceil() as usize * 2).min(height))
+            .flat_map(|y| (left.max(0.0) as usize * 2..(right.ceil() as usize * 2).min(width)).map(move |x| (x, y)))
+            .filter(|(x, y)| pixels[(y * width + x) * channels..][..3].iter().any(|v| *v < 128))
             .count();
         assert!(dark > 10, "{ch} has visible ink, not just a Unicode mapping");
     }

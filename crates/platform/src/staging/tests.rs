@@ -130,6 +130,7 @@ fn atomic_saves_keep_finder_tags_and_binary_extended_attributes() {
         ("com.apple.metadata:_kMDItemUserTags", b"<plist version=\"1.0\"><array><string>PdfCraft\n6</string></array></plist>"),
         ("com.pdfcraft.test.binary", b"\0\xff\x80original\0"),
         ("com.pdfcraft.test.empty", b""),
+        ("com.apple.ResourceFork", b"\0\xfffork"),
     ];
     std::fs::write(&target, b"OLD").unwrap();
     for (name, value) in attributes {
@@ -188,7 +189,7 @@ fn a_failed_flush_keeps_the_original_extended_attributes() {
 #[cfg(target_os = "macos")]
 #[test]
 fn a_growing_resource_fork_refuses_publication_and_keeps_original() {
-    use rustix::fs::{XattrFlags, fgetxattr, fsetxattr, getxattr, setxattr};
+    use rustix::fs::{XattrFlags, fgetxattr_query, fsetxattr, getxattr, setxattr};
     let dir = test_dir("xattrs-growing-fork");
     let target = dir.join("out.pdf");
     let name = "com.apple.ResourceFork";
@@ -197,17 +198,18 @@ fn a_growing_resource_fork_refuses_publication_and_keeps_original() {
         setxattr(&target, name, b"ABC", XattrFlags::empty()).unwrap();
         let source = std::fs::File::open(&target).unwrap();
         let result = write_atomically_with(&target, b"REPLACEMENT PDF", form, [23], |staged| {
-            let size = fgetxattr(&source, name, &mut [] as &mut [u8])?;
-            let value = read_xattr_value(size, |buffer| {
-                if buffer.is_empty() {
-                    return Ok(fgetxattr(&source, name, buffer)?);
-                }
-                // HFS can return the prefix that fits instead of ERANGE. APFS need not
-                // have that behaviour: model the kernel response, not a timing race.
-                setxattr(&target, name, b"ABCD", XattrFlags::empty())?;
-                buffer.get_mut(..3).unwrap().copy_from_slice(b"ABC");
-                Ok(3)
-            })?;
+            let size = fgetxattr_query(&source, name)?;
+            let value = read_xattr_value(
+                size,
+                |buffer| {
+                    // HFS can return the prefix that fits instead of ERANGE. APFS need not
+                    // have that behaviour: model the kernel response, not a timing race.
+                    setxattr(&target, name, b"ABCD", XattrFlags::empty())?;
+                    buffer.get_mut(..3).unwrap().copy_from_slice(b"ABC");
+                    Ok(3)
+                },
+                || Ok(fgetxattr_query(&source, name)?),
+            )?;
             fsetxattr(staged, name, &value, XattrFlags::empty())?;
             Ok(())
         });
@@ -227,29 +229,29 @@ fn a_growing_resource_fork_refuses_publication_and_keeps_original() {
 #[test]
 fn attribute_reads_require_a_complete_value_and_stable_size() {
     for bytes in [&b""[..], &b"\0\xffB"[..]] {
-        let value = read_xattr_value(bytes.len(), |buffer| {
-            if !buffer.is_empty() {
+        let value = read_xattr_value(
+            bytes.len(),
+            |buffer| {
                 buffer.get_mut(..bytes.len()).unwrap().copy_from_slice(bytes);
-            }
-            Ok(bytes.len())
-        })
+                Ok(bytes.len())
+            },
+            || Ok(bytes.len()),
+        )
         .unwrap();
         assert_eq!(value, bytes);
     }
     for (before, read_len, after) in [(3, 2, 3), (3, 3, 4), (0, 1, 1), (3, 2, 2)] {
-        let result = read_xattr_value(before, |buffer| Ok(if buffer.is_empty() { after } else { read_len }));
+        let result = read_xattr_value(before, |_| Ok(read_len), || Ok(after));
         assert!(result.unwrap_err().to_string().contains("changed size"));
     }
-    let result = read_xattr_value(3, |buffer| {
-        if buffer.is_empty() { Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "size recheck refused")) } else { Ok(3) }
-    });
+    let result = read_xattr_value(3, |_| Ok(3), || Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "size recheck refused")));
     assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
 }
 
 #[cfg(target_os = "macos")]
 #[test]
 fn oversized_extended_attributes_refuse_the_save_without_replacing_the_target() {
-    use rustix::fs::{XattrFlags, getxattr, setxattr};
+    use rustix::fs::{XattrFlags, getxattr_query, setxattr};
     let dir = test_dir("xattrs-limit");
     let target = dir.join("out.pdf");
     std::fs::write(&target, b"OLD").unwrap();
@@ -267,7 +269,7 @@ fn oversized_extended_attributes_refuse_the_save_without_replacing_the_target() 
     assert!(e.to_string().contains("Save As"), "{e}");
     assert!(!flushed, "metadata failure must stop before flush and rename");
     assert_eq!(std::fs::read(&target).unwrap(), b"OLD");
-    let size = getxattr(&target, "com.apple.ResourceFork", &mut [] as &mut [u8]).unwrap();
+    let size = getxattr_query(&target, "com.apple.ResourceFork").unwrap();
     assert_eq!(size, fork.len());
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
     std::fs::remove_dir_all(dir).unwrap();
@@ -446,5 +448,78 @@ fn a_replaced_link_keeps_its_own_attributes_not_its_targets() {
     assert_eq!(std::fs::read(&link).unwrap(), b"NEW");
     assert_eq!(std::fs::read(&referent).unwrap(), b"OLD", "the file the link pointed to is untouched");
     assert_ne!(std::fs::metadata(&referent).unwrap().file_attributes() & HIDDEN, 0, "and still hidden");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #5001, #4593: a save overwriting an existing file preserves its original attributes even if
+/// the server (such as Samba/QNAP NAS hiding dot-files) marks the temporary staging file hidden.
+#[cfg(windows)]
+#[test]
+fn a_replaced_file_restores_attributes_if_server_hides_staging_file() {
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    const HIDDEN: u32 = 0x2;
+    let dir = test_dir("server-hides-staging");
+    let target = dir.join("plain.pdf");
+    std::fs::write(&target, b"OLD").unwrap();
+    assert_eq!(std::fs::metadata(&target).unwrap().file_attributes() & HIDDEN, 0, "target starts visible");
+
+    // Create a temporary hidden reference file to obtain permissions with the HIDDEN attribute.
+    let hidden_ref = dir.join("hidden_ref");
+    let _ = std::fs::OpenOptions::new().write(true).create_new(true).attributes(HIDDEN).open(&hidden_ref).unwrap();
+    let hidden_perm = std::fs::metadata(&hidden_ref).unwrap().permissions();
+    let _ = std::fs::remove_file(&hidden_ref);
+
+    for form in [StagingName::TagThenSuffix, StagingName::SuffixThenTag] {
+        write_atomically_with(&target, b"NEW", form, [77], |_file| {
+            // Find the staging file in dir (the file that is not target):
+            for entry in std::fs::read_dir(&dir)? {
+                let path = entry?.path();
+                if path != target {
+                    // Mark the staging file as HIDDEN on disk (simulating Samba hiding dot-files).
+                    std::fs::set_permissions(&path, hidden_perm.clone())?;
+                    assert_ne!(std::fs::metadata(&path)?.file_attributes() & HIDDEN, 0, "staging file was marked hidden");
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().file_attributes() & HIDDEN,
+            0,
+            "the saved file remains visible despite server hiding the staging file"
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"NEW");
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+#[cfg(windows)]
+fn a_replaced_local_file_keeps_archive_bit_intact() {
+    use std::os::windows::fs::MetadataExt as _;
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("pdfcraft-platform-test-archive-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let target = dir.join("plain.pdf");
+    std::fs::write(&target, b"OLD").unwrap();
+
+    // Clear the archive bit on the replaced file (simulating backup tools like robocopy /M or attrib -A).
+    const ARCHIVE: u32 = 0x20;
+    let status = std::process::Command::new("attrib").arg("-A").arg(&target).status().unwrap();
+    assert!(status.success(), "attrib -A succeeded");
+    let old_attrs = std::fs::metadata(&target).unwrap().file_attributes();
+    assert_eq!(old_attrs & ARCHIVE, 0, "archive bit was cleared on the old file");
+
+    write_atomically(&target, b"NEW", StagingName::TagThenSuffix).unwrap();
+
+    // The newly written file must have the archive bit set by the system (#5001, #4593, #6029, #6119).
+    let new_attrs = std::fs::metadata(&target).unwrap().file_attributes();
+    assert_ne!(new_attrs & ARCHIVE, 0, "the newly saved file has the archive bit set by the file system");
+    assert_eq!(std::fs::read(&target).unwrap(), b"NEW");
+
     let _ = std::fs::remove_dir_all(&dir);
 }
