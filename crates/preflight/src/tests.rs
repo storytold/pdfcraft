@@ -2367,3 +2367,29 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// A content stream of unclosed `[` (PDFBOX-4623 `poppler-43279-0.pdf` holds 7.3 MB of them) is
+/// read in time that grows with its length, not its square, and what follows the run is still
+/// read: here, a fill in DeviceRGB, found as device colour and not as content left unread.
+#[test]
+fn a_long_run_of_unclosed_brackets_does_not_stall_verification() {
+    let content = format!("{} 1 0 0 rg 0 0 10 10 re f", "[".repeat(40_000));
+    let page = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << >> /Contents 4 0 R >>",
+            &page,
+        ],
+        "",
+    );
+    let started = std::time::Instant::now();
+    let issues = verify(&doc, Level::A2b);
+    let took = started.elapsed();
+    // Release builds take well under a second; before the fix they took a minute, debug builds
+    // far longer.
+    assert!(took < std::time::Duration::from_secs(20), "{took:?}");
+    let said: Vec<&str> = issues.iter().filter(|i| i.clause == "6.2.3").map(|i| i.message.as_str()).collect();
+    assert_eq!(said, ["Device colour is used, but there is no PDF/A output intent"]);
+}
