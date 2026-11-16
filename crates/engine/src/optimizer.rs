@@ -135,6 +135,9 @@ impl OptimizeJob {
         let all: Vec<pdfcraft_cos::ObjRef> = cos.object_numbers().into_iter().map(|n| pdfcraft_cos::ObjRef::new(n, cos.generation(n))).collect();
         let merged = pdfcraft_organize::dedupe_resources(&mut cos, &all, false);
         step(OptimizeStage::Writing)?;
+        // After optimizing: what the copy declares by then decides where its time goes.
+        let (cos, mod_date) = crate::metadata::prepare_save(std::borrow::Cow::Owned(cos), opts.mod_date.clone())?;
+        let opts = SaveOptions { mod_date, ..opts };
         let bytes = write_full(&cos, &opts).map_err(|e| EditError::Write(e.to_string()))?;
         Ok((Arc::new(bytes), OptimizeReport { optimize: report, merged, discarded }))
     }

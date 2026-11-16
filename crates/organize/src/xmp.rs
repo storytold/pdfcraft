@@ -151,16 +151,73 @@ fn remove_all(xmp: &str, names: &[impl AsRef<str>]) -> Option<String> {
     out
 }
 
+/// Set (or remove, with an empty `value`) the XMP property that mirrors the information key
+/// `key` (see [`property`]), and nothing else: for a document that keeps its metadata in XMP
+/// alone (`crate::metadata`). `None` when `key` has no such property, else whether the packet
+/// can hold it: `false` for a file without XMP or a packet that can't be edited safely, which
+/// is left as it was.
+pub(crate) fn set_mirror(doc: &mut Document, key: &str, value: &str) -> Result<Option<bool>, OrganizeError> {
+    let Some((name, ns, shape)) = property(key) else { return Ok(None) };
+    if !editable(doc) {
+        return Ok(Some(false));
+    }
+    edit_packet(doc, |xmp| set_property(xmp, name, ns, shape, value))?;
+    Ok(Some(true))
+}
+
+/// Record in the catalog's XMP packet that the document was changed at `date` (an XMP date):
+/// `xmp:ModifyDate`, and `xmp:MetadataDate`, which is never older than it (XMP Specification
+/// Part 1, §8.4, the `xmp:` namespace), each added when missing. Whether the packet changed;
+/// a file without XMP or a packet that can't be edited safely is left as it was, and so is one
+/// that binds `xmp` to another namespace or writes a date under another prefix (`xap:`, as early
+/// writers did): a second `ModifyDate` would contradict the first.
+pub(crate) fn set_modified(doc: &mut Document, date: &str) -> Result<bool, OrganizeError> {
+    edit_packet(doc, |xmp| {
+        if binds_prefix_elsewhere(xmp, "xmp", XMP) || other_prefix(xmp, "ModifyDate") || other_prefix(xmp, "MetadataDate") {
+            return None;
+        }
+        let modified = set_property(xmp, "xmp:ModifyDate", XMP, Shape::Text, date);
+        let both = set_property(modified.as_deref().unwrap_or(xmp), "xmp:MetadataDate", XMP, Shape::Text, date);
+        both.or(modified)
+    })
+}
+
+/// Whether `xmp` names a property `local` under a prefix other than `xmp` (`<xap:ModifyDate>`,
+/// `xap:ModifyDate="..."`).
+fn other_prefix(xmp: &str, local: &str) -> bool {
+    let tail = format!(":{local}");
+    xmp.match_indices(&tail).any(|(i, _)| {
+        let before = xmp.get(..i).unwrap_or_default();
+        let len: usize = before.chars().rev().take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.')).map(char::len_utf8).sum();
+        let prefix = before.get(before.len().saturating_sub(len)..).unwrap_or_default();
+        !prefix.is_empty() && prefix != "xmp"
+    })
+}
+
+/// Whether the catalog has an XMP packet [`edit_packet`] can change: an indirect metadata stream
+/// that decodes, within [`MAX_XMP`], to UTF-8 with an `rdf:RDF` to add properties to.
+pub(crate) fn editable(doc: &Document) -> bool {
+    packet(doc).is_some_and(|(_, _, xmp)| xmp.contains("</rdf:RDF>"))
+}
+
+/// The catalog's XMP packet: its stream's reference and object, and its text. `None` for a file
+/// without one, and for a packet that isn't an indirect stream, doesn't decode within
+/// [`MAX_XMP`] or isn't UTF-8.
+fn packet(doc: &Document) -> Option<(pdfcraft_cos::ObjRef, Arc<Object>, String)> {
+    let root = doc.root()?;
+    // A metadata stream is always indirect (§7.3.8); anything else is left alone.
+    let r = doc.get(root).as_dict().and_then(|c| c.reference(b"Metadata"))?;
+    let obj = doc.get(r);
+    let Object::Stream(stream) = &*obj else { return None };
+    let xmp = String::from_utf8(stream.decoded_within(MAX_XMP).ok()?).ok()?;
+    Some((r, obj, xmp))
+}
+
 /// Rewrite the catalog's XMP packet with `edit` (`None`: unchanged); whether it changed. Files
 /// without XMP and packets that can't be edited safely are left alone.
 fn edit_packet(doc: &mut Document, edit: impl FnOnce(&str) -> Option<String>) -> Result<bool, OrganizeError> {
-    let Some(root) = doc.root() else { return Ok(false) };
-    // A metadata stream is always indirect (§7.3.8); anything else is left alone.
-    let Some(r) = doc.get(root).as_dict().and_then(|c| c.reference(b"Metadata")) else { return Ok(false) };
-    let obj = doc.get(r);
+    let Some((r, obj, xmp)) = packet(doc) else { return Ok(false) };
     let Object::Stream(stream) = &*obj else { return Ok(false) };
-    let Ok(bytes) = stream.decoded_within(MAX_XMP) else { return Ok(false) };
-    let Ok(xmp) = String::from_utf8(bytes) else { return Ok(false) };
     let Some(updated) = edit(&xmp) else { return Ok(false) };
     // Written unfiltered, as PDF/A asks of metadata streams, so other tools can read it.
     let mut dict = stream.dict.clone();

@@ -87,6 +87,11 @@ pub struct SignOptions {
     pub appearance_labels: AppearanceLabels,
     /// A drawing, typed signature or image shown where the large name would be.
     pub graphic: Option<crate::graphic::Graphic>,
+    /// Leave the document information dictionary alone rather than stamp its `/ModDate` with
+    /// `date`: the document keeps its metadata in XMP, where the caller recorded the time (a
+    /// PDF/A-4 file, which has no `/Info`, ISO 19005-4 §6.1.3). The engine decides this for
+    /// every save.
+    pub no_info_mod_date: bool,
 }
 
 /// What an encrypted document's permissions (ISO 32000-2 §7.6.4.2, Table 22) allow when it was
@@ -364,7 +369,8 @@ fn sign_inner(
     // (a cleared redaction mark) stays out of the file, as in a save; what signing added is
     // reachable (the signature through the field's `/V`), and the placeholders are found in the
     // written bytes.
-    let save = SaveOptions { mod_date: Some(opts.date.clone()), object_streams: false, drop_unlinked: true, ..SaveOptions::default() };
+    let mod_date = (!opts.no_info_mod_date).then(|| opts.date.clone());
+    let save = SaveOptions { mod_date, object_streams: false, drop_unlinked: true, ..SaveOptions::default() };
     let mut out = pdfcraft_cos::write_incremental(&doc, &save)?;
     let (br_at, gap) = locate(&out, reserve)?;
     let (start, end) = gap;
@@ -402,6 +408,17 @@ fn sign_inner(
 /// whose `/Contents` is an RFC 3161 token covering the whole current file (`/ETSI.RFC3161`).
 /// The transport is the caller's; a rejected or malformed token produces no file.
 pub fn timestamp_document(doc: &Document, tsa: &dyn crate::timestamp::TimestampAuthority, date: &str) -> Result<Vec<u8>, SignError> {
+    timestamp_document_with(doc, tsa, date, true)
+}
+
+/// [`timestamp_document`], stamping `/Info /ModDate` with `date` only when `info_mod_date` (see
+/// [`SignOptions::no_info_mod_date`]).
+pub fn timestamp_document_with(
+    doc: &Document,
+    tsa: &dyn crate::timestamp::TimestampAuthority,
+    date: &str,
+    info_mod_date: bool,
+) -> Result<Vec<u8>, SignError> {
     // A pending security change would make the incremental save a full rewrite that applies
     // or removes protection as it signs (and breaks existing signatures): save it first.
     if doc.encryption_changed() {
@@ -430,7 +447,7 @@ pub fn timestamp_document(doc: &Document, tsa: &dyn crate::timestamp::TimestampA
     build.set(b"App".to_vec(), Object::Dict(app));
     v.set(b"Prop_Build".to_vec(), Object::Dict(build));
     doc.add(Object::Dict(v));
-    let save = SaveOptions { mod_date: Some(date.to_string()), object_streams: false, ..SaveOptions::default() };
+    let save = SaveOptions { mod_date: info_mod_date.then(|| date.to_string()), object_streams: false, ..SaveOptions::default() };
     let mut out = pdfcraft_cos::write_incremental(&doc, &save)?;
     let (br_at, gap) = locate(&out, TOKEN_RESERVE)?;
     let (start, end) = gap;

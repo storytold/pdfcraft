@@ -19,12 +19,13 @@ impl Session {
             return Ok(editor.saved.clone());
         }
         // What the user removed again before saving (a cleared redaction mark) stays out of the file.
-        let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), drop_unlinked: true, ..SaveOptions::default() };
+        // A PDF/A-4 file records the time in its XMP, not in a new /Info (ISO 19005-4 §6.1.3).
+        let (cos, mod_date) = crate::metadata::prepare_save(writable(&editor.cos)?, self.now().map(pdfcraft_cos::pdf_date))?;
+        let opts = SaveOptions { mod_date, drop_unlinked: true, ..SaveOptions::default() };
         // A restored snapshot can be based on an earlier revision. Append to the last saved
         // file so that revision stays in the chain. A full rewrite (redaction, new encryption,
         // a reconstructed file) still writes the current graph on its own.
         let rewrite = editor.cos.full_save_required() || editor.cos.encryption_changed() || editor.cos.revisions().is_empty();
-        let cos = writable(&editor.cos)?;
         guard(|| {
             if on_saved || rewrite {
                 write_incremental(&cos, &opts)
@@ -46,8 +47,8 @@ impl Session {
             return Err(EditError::Signed);
         }
         let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
-        let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
-        let cos = writable(&editor.cos)?;
+        let (cos, mod_date) = crate::metadata::prepare_save(writable(&editor.cos)?, self.now().map(pdfcraft_cos::pdf_date))?;
+        let opts = SaveOptions { mod_date, ..SaveOptions::default() };
         guard(|| write_full(&cos, &opts)).map_err(EditError::Write)?.map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
     }
 
@@ -344,6 +345,8 @@ impl Session {
         }
         // A typed Password-field value is not signed into the file (#3926), as it isn't saved.
         let cos = drawn_for_first_signature(writable(&editor.cos)?);
+        let (cos, info) = crate::metadata::prepare_save(cos, Some(opts.date.clone()))?;
+        opts.no_info_mod_date = info.is_none();
         Ok(Arc::new(pdfcraft_sign::sign(&cos, id, &opts)?))
     }
 
@@ -362,6 +365,8 @@ impl Session {
             opts.date = self.signing_date();
         }
         let cos = drawn_for_first_signature(writable(&editor.cos)?);
+        let (cos, info) = crate::metadata::prepare_save(cos, Some(opts.date.clone()))?;
+        opts.no_info_mod_date = info.is_none();
         let signed = Arc::new(pdfcraft_sign::sign_with_timestamp(&cos, id, &opts, tsa)?);
         // Checked like a save before anyone writes it (#2166).
         self.check_save(doc, &signed)?;
@@ -374,8 +379,8 @@ impl Session {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         let date = if date.is_empty() { self.signing_date() } else { date };
-        let cos = writable(&editor.cos)?;
-        let stamped = Arc::new(pdfcraft_sign::timestamp_document(&cos, tsa, &date)?);
+        let (cos, info) = crate::metadata::prepare_save(writable(&editor.cos)?, Some(date.clone()))?;
+        let stamped = Arc::new(pdfcraft_sign::timestamp_document_with(&cos, tsa, &date, info.is_some())?);
         self.check_save(doc, &stamped)?;
         Ok(stamped)
     }

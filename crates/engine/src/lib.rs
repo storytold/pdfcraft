@@ -38,6 +38,7 @@ pub mod js;
 mod layers;
 pub mod links;
 mod live_scripts;
+mod metadata;
 pub mod model3d;
 mod object_clip;
 pub mod ocr;
