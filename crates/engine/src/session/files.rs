@@ -235,6 +235,12 @@ impl Session {
         options: &pdfcraft_ocr::AdaptiveCompressOptions,
     ) -> Result<(Arc<Vec<u8>>, pdfcraft_ocr::AdaptiveCompressReport), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        if doc.is_signed() {
+            return Err(EditError::Signed);
+        }
+        if !doc.allows_modification() {
+            return Err(EditError::NotPermitted("compressing scans"));
+        }
         let mut cos = match doc.editor.as_ref() {
             Some(e) => e.cos.clone(),
             None => {
@@ -244,7 +250,8 @@ impl Session {
         let report = guard(|| pdfcraft_ocr::adaptive_compress_scans(&mut cos, *options))
             .map_err(|e| EditError::Write(e.to_string()))?
             .map_err(|e| EditError::Write(e.to_string()))?;
-        let bytes = write_full(&cos, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?;
+        let out = writable(&cos)?;
+        let bytes = write_full(&out, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?;
         Ok((Arc::new(bytes), report))
     }
 
