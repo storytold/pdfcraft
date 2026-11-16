@@ -374,11 +374,13 @@ pub(crate) fn body(
                 widgets::radio_value(ui, &mut d.which, Which::All, tl!("All"));
                 widgets::radio_value(ui, &mut d.which, Which::Current, tl!("Current page"));
                 let pages = widgets::radio_value(ui, &mut d.which, Which::Range, tl!("Pages"));
-                let r = ui.add_enabled(
-                    d.which == Which::Range,
-                    crate::widgets::line(&mut d.range).hint_text(format!("1-{}", sizes.len())).desired_width(110.0),
-                ).labelled_by(pages.id);
-                if r.gained_focus() {
+                // Always enabled: a disabled field never takes the keyboard, so clicking into it
+                // left All chosen and a range typed there was not printed. Clicking or typing in
+                // it chooses Pages.
+                let r = ui
+                    .add(crate::widgets::line(&mut d.range).hint_text(format!("1-{}", sizes.len())).desired_width(110.0))
+                    .labelled_by(pages.id);
+                if r.gained_focus() || r.changed() {
                     d.which = Which::Range;
                 }
             });

@@ -2071,3 +2071,35 @@ fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
     open(&mut gone);
     assert_eq!(setup(&gone), office);
 }
+
+/// A range typed into the Pages field is what prints: clicking into the field chooses Pages
+/// (it was disabled while All was chosen, so it took no typing and the whole document printed).
+#[test]
+fn a_range_typed_into_the_pages_field_is_what_prints() {
+    use pdfcraft_ui_egui::PrintWhich;
+    let mut h = harness();
+    let bytes = h.state().session.create_blank(200.0, 300.0, 10).unwrap();
+    h.state_mut().open_bytes("ten.pdf", None, bytes.as_ref().clone()).unwrap();
+    h.run_steps(3);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.which, PrintWhich::All);
+    h.get_by_role_and_label(Role::TextInput, "Pages").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Pages").type_text("5-6");
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.which, PrintWhich::Range);
+    assert_eq!(h.state().print_draft.range, "5-6");
+    h.get_by_label("Sheet 1 of 2");
+    let out = std::env::temp_dir().join(format!("pdfcraft-print-typed-range-{}.pdf", std::process::id()));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().print_draft.printer = None;
+    h.run_steps(1);
+    h.get_by_label("Save as PDF").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    let saved = std::fs::read(&out).expect("saved");
+    let _ = std::fs::remove_file(&out);
+    let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(saved)).unwrap();
+    assert_eq!(pdfcraft_model::pages(&doc).len(), 2);
+}
