@@ -1,4 +1,4 @@
-use super::listing::{mk_rotation, nums, sig_fields};
+use super::listing::{mk_rotation, nums, sig_fields, text, walk_sig_fields};
 use super::{Certificate, Dict, DigestAlg, DigitalId, Document, HashSet, Object, PdfString, SaveOptions, SignError, SignedData, Stream};
 
 // ── signing ─────────────────────────────────────────────────────────────────────────────────
@@ -119,14 +119,44 @@ fn check_signing_permissions(doc: &Document, opts: &SignOptions) -> Result<(), S
 /// Placeholder `/ByteRange` values: fixed width, patched after writing.
 const BR_MARK: [i64; 3] = [1_111_111_111, 2_222_222_222, 3_333_333_333];
 
+/// Whether `doc` already holds a signature or a document timestamp: a signature dictionary whose
+/// `/Contents` holds a nonzero byte (a field whose `/V` has an empty or zero-filled `/Contents`
+/// is not signed yet). A signature field without a name (`/T`) counts too: indirect signature
+/// dictionaries and document timestamps are found in one pass over the file (by `/ByteRange`,
+/// or as timestamps), not through the field tree.
+pub fn has_signatures(doc: &Document) -> bool {
+    let signed = |d: &Dict| {
+        let contents = d.get(b"Contents").map(|c| doc.resolve(c));
+        // Hex strings decode to the DER when parsed; a literal string carries hex text.
+        let der = contents
+            .as_deref()
+            .and_then(Object::as_string)
+            .and_then(|s| if s.hex { Some(s.bytes.clone()) } else { super::validate::unhex(&s.bytes) });
+        der.is_some_and(|der| der.iter().any(|b| *b != 0))
+    };
+    sig_fields(doc).iter().any(|f| f.dict.get(b"V").map(|v| doc.resolve(v)).as_deref().and_then(Object::as_dict).is_some_and(signed))
+        || doc
+            .scan_objects()
+            .any(|(_, o)| o.as_dict().is_some_and(|d| (d.contains(b"ByteRange") || super::validate::is_doc_timestamp(d)) && signed(d)))
+}
+
 /// Sign `doc` with `id`; returns the signed file (an incremental update when possible).
+///
+/// The document's first signature (no [`has_signatures`]) removes the AcroForm's
+/// `/NeedAppearances` flag: Acrobat does not recognise a signature while it is set. Later
+/// signatures leave the flag as it is. This function draws no field appearances: once the flag is
+/// gone, viewers show each field's stored normal appearance (`/AP /N`), so a filled field whose
+/// stored appearance draws no text (an empty placeholder such as `/Tx BMC EMC`, or a look left
+/// from an earlier value) shows that instead of its value. A caller that wants the values kept
+/// draws the fields first, as `Session::sign` in the engine does.
 pub fn sign(doc: &Document, id: &DigitalId, opts: &SignOptions) -> Result<Vec<u8>, SignError> {
     sign_inner(doc, id, opts, None)
 }
 
 /// Sign and embed an RFC 3161 signature timestamp from `tsa` (PAdES B-T). The transport is the
 /// caller's: this crate never opens a socket, and a rejected or malformed token fails the
-/// signing before any file is produced.
+/// signing before any file is produced. The form's `/NeedAppearances` flag is handled as in
+/// [`sign`].
 pub fn sign_with_timestamp(
     doc: &Document,
     id: &DigitalId,
@@ -153,6 +183,7 @@ fn sign_inner(
     }
     check_signing_permissions(doc, opts)?;
     let mut doc = doc.clone();
+    let earlier_signatures = has_signatures(&doc);
     let root = doc.root().ok_or_else(|| SignError::Pdf("the document has no catalog".into()))?;
     let alg = id.key.preferred_digest();
     let reserve =
@@ -232,6 +263,10 @@ fn sign_inner(
             w.set(b"Subtype".to_vec(), Object::name("Widget"));
             w.set(b"FT".to_vec(), Object::name("Sig"));
             w.set(b"T".to_vec(), PdfString::text(&fname));
+            // The walk lists no field without a usable name, and counts a signed one as unread.
+            if text(&doc, &w, b"T").is_none() {
+                return Err(SignError::Pdf("a signature field needs a name that isn't blank".into()));
+            }
             w.set(b"V".to_vec(), Object::Ref(sig));
             w.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|x| Object::Real(*x)).collect()));
             w.set(b"P".to_vec(), Object::Ref(page));
@@ -280,6 +315,14 @@ fn sign_inner(
                 // Inline (or new) AcroForms stay in the catalog.
                 None => doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(af)))?,
             }
+            // The walk has to read the whole form, the new field included: past its caps the
+            // signature would be listed as unread fields, and its name could repeat an unread one.
+            if !walk_sig_fields(&doc).1 {
+                return Err(SignError::Pdf(
+                    "this form has too many fields, or a field name too long, for PdfCraft to read them all, so it can't add a signature field"
+                        .into(),
+                ));
+            }
             (wr, rect, turn)
         }
     };
@@ -292,6 +335,24 @@ fn sign_inner(
         if let Some(Object::Ref(r)) = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()) {
             doc.update_dict(r, |af| af.set(b"SigFlags".to_vec(), Object::Int(3)))?;
         }
+    }
+    // Acrobat does not recognise a signature in a form that asks viewers to redraw its fields
+    // (`/NeedAppearances true`): redrawing would change what the signature covers. The first
+    // signature drops the flag; a later one leaves it, as removing it would count as a change
+    // to the earlier signatures. Without the flag viewers draw each field's stored `/AP /N`, so
+    // a filled field whose stored appearance draws no text (an empty placeholder, or a stale
+    // look) shows that instead of its value unless the caller drew the fields first (see `sign`).
+    if !earlier_signatures {
+        if let Some(Object::Ref(r)) = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()) {
+            doc.update_dict(r, |af| {
+                af.remove(b"NeedAppearances");
+            })?;
+        }
+        doc.update_dict(root, |c| {
+            if let Some(Object::Dict(af)) = c.get_mut(b"AcroForm") {
+                af.remove(b"NeedAppearances");
+            }
+        })?;
     }
     // The appearance.
     let ap = appearance(&mut doc, rect, turn, &name, &id.certificate, opts)?;

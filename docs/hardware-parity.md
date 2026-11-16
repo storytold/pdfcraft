@@ -1,6 +1,8 @@
 # Hardware and platform parity
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (M12: physical Linux English/Italian speech, native device controls, CLI/MCP and desktop checks passed; poor voice naturalness reported; physical macOS playback remains open. Estimates unchanged.) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-16 | **Last updated:** 2026-11-16 | **Change:** patch (M12 #1476: integrate current main while preserving local Read out loud and lazy inactive controls; platform validation remains partial. Estimates unchanged.)
+
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (web OCR shipped: Web Workers with SIMD, checked in a browser; earlier: web printing through the browser's print dialog; earlier: shared craft-print spooler with passing Windows CI; Windows printers row and 1:1 touchpad scrolling, #756, #759) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Each hardware feature Acrobat Pro uses, per platform, ours against Acrobat's. Acrobat runs on macOS
 and Windows (plus a limited web viewer/editor in Document Cloud); PdfCraft runs on macOS, Windows,
@@ -34,14 +36,15 @@ printing are counted in their feature areas). **Platforms ≈ 70% ready, 15–30
 | Windows (x64, x86, ARM64) | yes (x64, ARM64) | yes | signed installers | — |
 | Linux | no | yes | AppImage, deb, rpm, Flatpak, tarball | Chinese faces in Flatpak (#689) |
 | FreeBSD | no | yes | package | — |
-| Web | Acrobat online (cloud) | yes (WASM, offline in the browser) | static site | OCR, crash recovery, PKCS #12 signing, hosted deployment |
+| Web | Acrobat online (cloud) | yes (WASM, offline in the browser) | static site | OCR as fast as native (Web Workers with SIMD read a page about 17× slower), crash recovery, PKCS #12 signing, hosted deployment |
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-13 | minor | M12: physical Linux English/Italian speech, native device controls, CLI/MCP and desktop checks passed; poor voice naturalness reported; physical macOS playback remains open. Estimates unchanged. |
-| 2026-10-12 | minor | Read out loud remains partial: Windows native playback plus macOS say and Linux espeak-ng candidates, with English/Italian voices and same-position pause/resume. Native physical macOS/Linux audio validation, FreeBSD/web and semantic tag-tree ordering remain open. Estimates unchanged. |
+| 2026-11-16 | patch | M12 #1476: integrate main, preserve local Read out loud, lazy inactive controls and shared-document split views; platform validation remains partial. Estimates unchanged. |
+| 2026-10-12 | minor | Web OCR (`ocr.ocr-web`) shipped after a browser check |
+| 2026-10-12 | minor | Web platform row: OCR downloads its models on first use and reads in Web Workers with SIMD (`ocr.ocr-web`, partial); what's left is speed |
 | 2026-10-11 | minor | Web printers row: printing through the browser's print dialog (gap 4 closed); Web platform row no longer lists printing |
 | 2026-10-10 | major | Created from the code, `vendor/README.md`, `.github/workflows/release.yml`, the print crate's README and user issues |
 | 2026-10-10 | minor | Windows printing shipped (#756): the Windows row's gap is closed; the web row keeps "printing" |

@@ -14,8 +14,9 @@ or constructing a player never starts speech or opens an audio device.
 Open **View → Read out loud**, or **Prepare for accessibility → Read out loud**. Choose the
 current page or a page range, an installed voice (or the system default), and a speed from 0.5×
 to 2×. Press Read out loud. Pause and Resume preserve the current audio position; Stop cancels
-preparation and playback. Closing the player, closing or switching the source tab, or changing
-the source PDF stops it. The controls do not create an Undo step or mark the document dirty. If native cancellation fails,
+preparation and playback. Closing the player, closing the source document’s last view, switching
+to another document, or changing the source PDF stops it. Closing one split view keeps playback
+when another view of the same source remains. The controls do not create an Undo step or mark the document dirty. If native cancellation fails,
 the speech worker exits and releases its audio handles; status reports the error.
 
 Text preparation runs off the desktop UI thread. A request is limited to 64 pages, 1 MiB of

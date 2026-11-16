@@ -50,6 +50,10 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   RFC 6960 OCSP responses (responder identity, OCSP-signing EKU for delegated responders,
   CertID hash matching, validity windows); validation checks embedded evidence against the
   signer's chain and a verified revocation invalidates the signature.
+- **Status layers:** `show_status_layers` draws each signature's validated state (icon, and a
+  caption in the caller's words) into named-layer appearances, whose `/N` draws one layer form
+  that holds and draws `n1` and `n3`; `has_status_layers` says whether a document has any. It
+  works on a display copy and never edits an original object, so saving keeps the signed bytes.
 
 Not yet: revocation fetching (AIA/CRLDP extraction and a fetcher), timestamp-server
 configuration, FieldMDP locks, certificate security, direct PKCS #11 access to tokens.
@@ -114,9 +118,9 @@ needs a prompt to open is listed and asks at signing (issue #179).
   SHA3-224/256/384/512 and RIPEMD-160. RSA PKCS #1 v1.5 and RSASSA-PSS (the hash, MGF1 hash and
   salt length the signature declares), ECDSA on P-256, P-384, P-521, brainpoolP256r1, P384r1 and
   P512r1 (also BSI "plain" ECDSA), and Ed25519 (RFC 8419, over the signed attributes).
-  Signing: RSA, P-256, P-384 with SHA-256/384/512. The RSA padding checks and brainpoolP512r1 are
-  written here (`rsa_pad`, `ec512`) on `crypto-bigint`, because the typed APIs of the `rsa` crate
-  and RustCrypto don't cover them.
+  Signing: RSA, P-256, P-384 with SHA-256/384/512. Verification delegates to the existing pinned `craft-pkcs7` implementation, including
+  RSA padding checks and brainpoolP512r1 arithmetic. PdfCraft keeps its document trust policy,
+  platform signing and user-facing error/diagnostic vocabulary.
 
 Oracles: poppler's `pdfsig` reports our signatures valid; OpenSSL reads our `.p12` files and
 verifies our CMS; `tests/data/openssl-signed.pdf` is a signature OpenSSL made, which we validate.

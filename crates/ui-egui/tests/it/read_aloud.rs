@@ -166,3 +166,29 @@ fn read_aloud_source_switch_and_edit_stop_hidden_playback() {
     wait(&mut h, State::Idle);
     assert_eq!(log.lock().unwrap().iter().filter(|s| s.as_str() == "Hello").count(), 2);
 }
+
+/// Split views keep their shared source alive until the document's last tab closes.
+#[test]
+fn read_aloud_split_view_close_keeps_audio_until_the_last_source_tab() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let backend = log.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("split-voice.pdf", None, PDF.to_vec()).unwrap();
+        app.read_aloud.player = Player::with_backend(Box::new(Fake(backend.clone())));
+        app
+    });
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut().split_tab(0, false);
+    assert_eq!(h.state().views.len(), 2);
+    h.state_mut().start_read_aloud(1, 1).unwrap();
+    wait(&mut h, State::Speaking);
+    h.state_mut().close_tab(1);
+    h.run_steps(4);
+    assert!(h.state().session.get(id).is_some());
+    assert_eq!(h.state().read_aloud.player.status().state, State::Speaking);
+    h.state_mut().close_tab(0);
+    wait(&mut h, State::Idle);
+    assert!(h.state().session.get(id).is_none());
+    assert_eq!(log.lock().unwrap().iter().filter(|s| s.as_str() == "Hello").count(), 1);
+}

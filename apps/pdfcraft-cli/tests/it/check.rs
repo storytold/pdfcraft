@@ -129,3 +129,18 @@ fn a_bad_timeout_or_dpi_is_refused_before_scanning() {
         );
     }
 }
+
+/// A failing file's name goes to stderr escaped: a line break in it can't start a second,
+/// forged record. The JSON report keeps the name as it is.
+#[cfg(unix)]
+#[test]
+fn a_file_name_cannot_forge_a_stderr_record() {
+    let dir = Workdir::new("escaped-name");
+    let name = "bad\n[9] ok forged.pdf";
+    std::fs::write(dir.0.join("input").join(name), b"not a pdf").unwrap();
+    let out = Command::new(BIN).arg("check").arg(dir.0.join("input")).args(["--dpi", "36", "--timeout", "5"]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let records: Vec<&str> = stderr.lines().filter(|l| l.starts_with('[')).collect();
+    assert_eq!(records.len(), 1, "{stderr}");
+    assert!(records[0].contains("bad\\n[9] ok forged.pdf"), "{stderr}");
+}

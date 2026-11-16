@@ -200,6 +200,30 @@ fn tools_that_read_a_path_are_held_to_the_read_root() {
     ok(&mut server, "text_font_files", json!({"directories": [s(&base.join("in"))]}));
 }
 
+/// The installed colour profiles are outside the read root: confined, `print_color_profiles`
+/// lists and `doc_print` names only the profiles inside it, and without read authority none.
+#[test]
+fn colour_profiles_are_looked_for_inside_the_read_root() {
+    let (mut server, base) = confined("profiles", true, true);
+    let profile = craft_cms::Builtin::AdobeRgbCompat.profile().to_bytes();
+    std::fs::write(base.join("in/wide.icc"), profile.as_slice()).unwrap();
+    std::fs::write(base.join("outside/other.icc"), profile.as_slice()).unwrap();
+    let listed = ok(&mut server, "print_color_profiles", json!({}));
+    let paths: Vec<&str> = listed["profiles"].as_array().unwrap().iter().filter_map(|p| p["path"].as_str()).collect();
+    assert_eq!(paths.len(), 1, "{listed}");
+    assert!(paths[0].ends_with("wide.icc"), "{listed}");
+    ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}));
+    let print =
+        |name: &str| json!({"doc": 1, "pages": "1", "dpi": 72, "path": s(&base.join("out/m.pdf")), "color_management": "app", "color_profile": name});
+    ok(&mut server, "doc_print", print("wide"));
+    let (error, text) = call(&mut server, "doc_print", print("other"));
+    assert!(error, "a profile outside the read root isn't found by name: {text}");
+    refused(&mut server, "doc_print", print(&s(&base.join("outside/other.icc"))), "outside the read root");
+
+    let (mut unread, _) = confined("profiles-unread", false, true);
+    refused(&mut unread, "print_color_profiles", json!({}), "read authority is absent");
+}
+
 #[test]
 fn tools_that_write_a_path_are_held_to_the_write_root() {
     let (mut server, base) = confined("writes", true, true);

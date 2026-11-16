@@ -34,7 +34,14 @@ pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
 }
 
 /// Square icon button: transparent until hovered; `selected` gets the accent treatment.
+/// `tooltip` is both its accessible name and its one tooltip.
 pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tooltip: &str) -> Response {
+    labeled_button(ui, name, box_size, selected, tooltip, tooltip)
+}
+
+/// [`button`] whose tooltip says more than its accessible name (`label`). It shows that one
+/// tooltip, so callers add no `on_hover_text` of their own (#6548: two tooltips stacked).
+pub fn labeled_button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, label: &str, tooltip: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     // The shared button paints no fill of its own: the eased press wash below replaces it.
     let clear = |icon| ButtonVisuals { fill: Color32::TRANSPARENT, stroke: Stroke::NONE, icon };
@@ -46,7 +53,7 @@ pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tool
         corner_radius: t.radius.into(),
         focus_stroke: Stroke::new(1.0, t.accent),
     };
-    let label = if tooltip.is_empty() { name } else { tooltip };
+    let label = if label.is_empty() { name } else { label };
     // The wash eases from the response, so reserve its place under the icon and focus ring.
     let wash = ui.painter().add(egui::Shape::Noop);
     let mut painted = None;
