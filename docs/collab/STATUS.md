@@ -6293,3 +6293,33 @@ client-side `opId` dedup). All three are recorded here as open limitations.
 
 The push is still denied to this agent (`.opencode/agents/pdfcraft-envoy.md`
 denies `git push*`), so `63f452cf6` is local; the seventeen replies are posted.
+
+## The fifteen re-review threads on `116b5c22e` (2026-11-16T20:56Z, local)
+
+Measured 20:30Z: the PR head, the fork tip and this clone all read `116b5c22e`.
+Fifteen CodeRabbit threads were open there without an answer naming that head
+(the earlier replies named ancestors and went unread). All fifteen now answer
+with a `file:line` and a test on `116b5c22e`.
+
+Ten are resolved because the code on that head closes them: comment length and
+font size (`collab-annot`), the `page.move` inverse clamp (`collab-client-pdf`),
+the source-URL role gate and allowlist (`control.rs`), both HTTP head fixes
+(`http.rs`), `--callback-url` (`main.rs`), the empty-etag marker (`rooms.rs`),
+the replay-only restore body (`collab-pdf`), the journal directory sync
+(`store.rs`). Five stay open: three are the §5 deferrals (publication
+reconciliation, page copy under the hub lock, resync duplicate reply); two
+needed code.
+
+That code is **`54949a041`** (2 files, +124/−7), one commit above the pushed
+head: `Target::Field` takes `MAX_FIELD_NAME_BYTES` (256, like a presence
+`FieldCaret`) instead of the 128-byte identifier bound, and a room generation
+makes `Hub::finish` drop an outcome whose room was closed and reopened. Tests:
+`a_field_name_is_bounded_like_a_caret_not_like_an_identifier`,
+`a_publication_that_outlives_its_room_does_not_touch_the_replacement`,
+`an_in_flight_publication_does_not_clear_work_it_never_carried`.
+
+Gate on `agents` at `54949a041`: fmt clean; `clippy --no-deps -D warnings`
+clean on collab-pdf, collab-server, collab-daemon, collab-hub, collab-proto;
+tests 75 + 35 + 48 unit, 5 integration, 0 failed (workspace clippy stays red on
+main's `xfdf.rs:326` under 1.99). **Awaiting the owner's push:** `54949a041` and
+the docs commit above it; the PR head is `116b5c22e` until then.
