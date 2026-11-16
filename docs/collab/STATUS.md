@@ -1,8 +1,61 @@
 # PdfCraft collaboration — status and handoff
 
 - Branch: `feature/realtime-collaboration` (upstream `storytold/pdfcraft`).
-- Merge: **`origin/main` is merged into the branch** six times, all true merges
-  — no rebase and no force. `c15cc0f57` (2026-11-10) merged `debb826f2` ("M10:
+- **The seventh merge of `origin/main`, and the one that clears the PR's
+  `DIRTY`: `e6bd1eee3` (2026-11-16) merges `e191b0ea6` ("M3: select text across
+  pages (view.text-select)", 2026-11-15T22:55:35+01:00), the tip at the fetch.**
+  It is a true merge, not a rebase: the branch's first parent stays `60abe99e7`.
+  The pre-merge proof, run before touching the tree: `git merge-tree --write-tree
+  origin/main a1cc8382d` wrote `fdf03b8e9…` and **exited 1**, with four
+  conflicted paths — `Cargo.lock`, `crates/cos/src/object.rs` (modify/delete),
+  `crates/ui-egui/src/canvas.rs`, `crates/ui-egui/src/editing.rs`; the same
+  command against the local tip `60abe99e7` wrote `df19e31a6…` and also exited 1
+  with the same four. (The brief's `4135afe0` is not the tree this git writes for
+  either input; the exit code and the four paths are the reproducible part.)
+  Resolutions, one per conflict:
+  1. **`crates/cos/src/object.rs` — the deletion is accepted, the file is not
+     revived.** Main deleted the whole layer in `ed18238d7` ("crypt, filters,
+     cos, export, xfdf: migrate to craft-pdf, craft-rtf, craft-csv", 16 files,
+     −10924), and `crates/cos` is now `pub use craft_pdf::cos::*;` over
+     `craft-pdf = { git = "https://github.com/storytold/craft-libs", rev =
+     "e2dc681a3" }`. The module moved to `crates/pdf/src/cos/object.rs` in
+     craft-libs, and at that rev it carries `decoded_strict_within` with the
+     `decode` closure plus a `pub(crate) decoded_strict_within_counted` — main's
+     own fix of the duplicate (#6933/#6934) after the siphon. The branch's only
+     change in the file was the 4-line resolution of that duplicate (a doc
+     comment and a delegation to the counted path), measured
+     `git diff d749fd806..HEAD -- crates/cos/src/object.rs`; the two paths decode
+     through the same `filters::decode` with the same byte bound and the same
+     error, so there is nothing to port: the behaviour the branch wanted is what
+     the new location already does. `git rm` recorded it.
+  2. **`Cargo.lock` — the union, re-resolved rather than hand-merged.** The lock
+     was taken from `origin/main` and `cargo metadata` (without `--locked`) added
+     the branch's packages: the `pdfcraft-collab*` members and `craft-web-host`
+     on the branch's pin `7666e2b1…` (main's lock had `fd5e2fe`), while main's
+     versions of the shared crates stay. The branch's crates pull a second
+     version of `num-bigint` (0.5.1), `rand` (0.10.3) and `rsa` (0.10.0-rc.18),
+     which is why those three appear qualified. `cargo metadata --locked` exits 0
+     locally and on the build host.
+  3. **`crates/ui-egui/src/canvas.rs` — both sides kept.** The branch's
+     remote-presence block (`RemoteCursor`, `RemoteSelection`,
+     `RemoteSelectionKind`, `paint_remote_selections`, `annotation_rects`,
+     `quad_rect`, `paint_remote_cursors`) sits beside main's `PageMarks` alias,
+     which `DocView::pending_redaction` uses; neither replaces the other.
+  4. **`crates/ui-egui/src/editing.rs` — one line, both conditions:**
+     `matches!(edit, Edit::AddAnnotation(_) | Edit::AddAnnotationNamed(..)) ||
+     across_pages.is_some()`, the branch's named-annotation variant and main's
+     markup across pages.
+  Against its first parent the merge is **289 files, +12299/−30792** (the
+  deletions are main's siphon), and against `origin/main` the branch is **110
+  files, +46289/−165**. After it the branch is **156 commits ahead and 0 behind**
+  `e191b0ea6`, the tree is clean, and `git merge-tree --write-tree origin/main
+  HEAD` **exits 0** (tree `c437202b7…`). The gate is §4, "Gate on the merge head
+  `e6bd1eee3`". Nothing was pushed: PR #6622 and the fork still carry
+  `a1cc8382d`, and `gh pr view 6622` at 2026-11-16T00:17Z reads
+  `mergeable: CONFLICTING`, `mergeStateStatus: DIRTY`, `baseRefOid`
+  `d749fd806` — the DIRTY clears when the owner or `pr-agent` pushes this head.
+- Merge: **`origin/main` is merged into the branch** seven times, all true merges
+  — no rebase and no force (the seventh is the bullet above). `c15cc0f57` (2026-11-10) merged `debb826f2` ("M10:
   preserve annotation placement precision (#4995) (#5002)") when the branch had
   been rebased onto `ba28458ad` (§4 records that rebase and its four conflict
   stops); one file conflicted, `crates/annot/src/tests.rs`, where both sides
@@ -842,6 +895,53 @@ The app window "Collaboration" shows role, version/epoch, participants, errors,
 commit result, and a commit button for owner/editor.
 
 ## 4. Tests and verification
+
+### Gate on the merge head `e6bd1eee3` (2026-11-16, local; not pushed)
+
+`e6bd1eee3` merges `origin/main` `e191b0ea6`; the header bullet names the four
+conflicts and each resolution. On the build host `agents`,
+`git rev-parse HEAD` reads `e6bd1eee3da86059c89e1e1af9a1b6af68b6c77a` with the
+tree clean apart from this docs record, `cargo metadata --locked` exits 0 and
+`cargo fmt --all -- --check` exits 0.
+
+**The host's default toolchain was one release behind the CI's.** The workflow
+that passed `main` at `e191b0ea6` (CI `43766373074`, gate job `132972274242`)
+installed **`rustc 1.100.0 (0ef1bc386 2026-11-09)`**; the host carried
+`1.99.1 (58cf8f9c3 2026-10-13)`, where clippy reports `collapsible_match` on
+main's untouched `crates/xfdf/src/xfdf.rs:326` — code this merge does not change
+(it is byte-identical to `origin/main`'s file) — while
+`cargo clippy -p pdfcraft-xfdf --all-targets --locked -- -D warnings` at
+`1.100.0` exits 0 on the same file. So the finding is the older clippy's, not
+the merge's, and the gate runs on the CI's toolchain: `rustup toolchain install
+1.100.0 --profile minimal --component clippy --component rustfmt` puts it
+beside the default (which is unchanged) and every step goes through `rustup run
+1.100.0`. The wasm step needed its target as well —
+`rustup target add wasm32-unknown-unknown --toolchain 1.100.0`: a first attempt
+stopped at `wasm` with `E0463: can't find crate for core` after six green steps.
+`target/` was regenerated for the new toolchain: the 1.99 artifacts (171 G) were
+deleted because the host stood at 99 % disk.
+
+Command, started 2026-11-16T00:44:45Z and finished 00:49:22Z:
+
+```
+umask 022 CARGO_BUILD_JOBS=8 \
+CRAFT_I18N_DIR=/home/markin/build/i18n-866 \
+CRAFT_FONTS_DIR=/home/markin/craft-fonts \
+CI=1 rustup run 1.100.0 cargo xtask ci
+```
+
+Printed **`CI: all 10 steps passed`** and exited **0** — `fmt`, `clippy`,
+`cli-no-default-features`, `test`, `i18n-report`, `layers`, `wasm`,
+`license-check`, `deny`, `parity`. The test step's totals: **10088 passed, 0
+failed, 22 ignored**, over 156 targets (111 `Running`, 45 `Doc-tests`). The
+293-test drop from the `a1cc8382d` gate's 10381 is main's siphon, not a removed
+check: `crates/cos` and its tests left the workspace for `craft-pdf`
+(`crates/cos/src/document/tests.rs` alone held 93 `#[test]`s, and the moved
+tests run in craft-libs' own CI now), while this merge adds no test of its own.
+Logs: host `/tmp/gate-e6bd1eee3-full.log`, local
+`.craft/logs/gate-pdfcraft-e6bd1eee3.log` (875 382 bytes); the first attempt's
+log, which stopped at `wasm` after six green steps, is
+`.craft/logs/gate-pdfcraft-e6bd1eee3-first-attempt.log`.
 
 ### Gate on the lock-fix head `a1cc8382d` (PR #6622, 2026-11-13)
 
