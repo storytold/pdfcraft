@@ -11,7 +11,7 @@
 //! - Calibrated document context (`/OutputIntents` with CMYK destinations)
 //! - Inherited page-level default color spaces (`/DefaultCMYK` or `/DefaultRGB`)
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use image::codecs::jpeg::JpegEncoder;
 use image::{ExtendedColorType, ImageEncoder};
@@ -165,62 +165,54 @@ fn has_cmyk_output_intents(doc: &Document) -> bool {
     false
 }
 
-/// Cap the Form XObject walk against deeply nested form trees.
-const MAX_FORM_DEPTH: usize = 32;
-
-/// Cap the total Form XObject visits across one page's traversal. A DAG of shared
-/// forms can fan out exponentially; when exhausted, return `true` conservatively so
-/// the document-wide skip fires.
-const MAX_FORM_VISITS: usize = 4096;
+/// Upper bound on Form-dictionary visits per document. With a global visited set, each
+/// reachable Form is enqueued at most once, so this is a hard cap on work. When exceeded,
+/// return `true` conservatively so the document-wide skip fires.
+const MAX_FORM_VISITS: usize = 10_000;
 
 /// Whether any page, or any Form XObject reachable from a page, defines
 /// `/DefaultCMYK` or `/DefaultRGB` in its `/Resources /ColorSpace` dictionary.
 fn pages_have_default_colour_spaces(doc: &Document) -> bool {
+    let mut visited: HashSet<ObjRef> = HashSet::new();
+    let mut work = 0usize;
     for p in pdfcraft_model::pages(doc) {
-        let mut path: HashSet<ObjRef> = HashSet::new();
-        let mut visits = 0usize;
-        if form_tree_has_defaults(doc, &p.dict, 0, &mut path, &mut visits) {
+        if dict_reaches_default(doc, &p.dict, &mut visited, &mut work) {
             return true;
         }
     }
     false
 }
 
-/// Conservative at the depth and visit limits: when `MAX_FORM_DEPTH` or `MAX_FORM_VISITS`
-/// is exceeded without completing the walk, returns `true`, because a default could exist
-/// further down. The visited set is per-path (`path`), so a form referenced again at a
-/// shallower depth is still walked there.
-fn form_tree_has_defaults(doc: &Document, dict: &Dict, depth: usize, path: &mut HashSet<ObjRef>, visits: &mut usize) -> bool {
-    if depth > MAX_FORM_DEPTH {
-        return true;
-    }
-    let Some(res_obj) = dict.get(b"Resources").map(|r| doc.resolve(r)) else { return false };
-    let Some(res) = res_obj.as_dict() else { return false };
-    if let Some(cs_obj) = res.get(b"ColorSpace").map(|cs| doc.resolve(cs))
-        && let Some(cs_dict) = cs_obj.as_dict()
-        && (cs_dict.contains(b"DefaultCMYK") || cs_dict.contains(b"DefaultRGB"))
-    {
-        return true;
-    }
-    let Some(xobj_obj) = res.get(b"XObject").map(|x| doc.resolve(x)) else { return false };
-    let Some(xobj) = xobj_obj.as_dict() else { return false };
-    for (_, val) in xobj.iter() {
-        let Object::Ref(r) = val else { continue };
-        if !path.insert(*r) {
-            continue;
-        }
-        *visits += 1;
-        if *visits > MAX_FORM_VISITS {
-            path.remove(r);
+/// Breadth-first walk from `start` over Form XObjects, looking for a scope that
+/// declares `/DefaultCMYK` or `/DefaultRGB`.
+fn dict_reaches_default(doc: &Document, start: &Dict, visited: &mut HashSet<ObjRef>, work: &mut usize) -> bool {
+    let mut queue: VecDeque<Dict> = VecDeque::new();
+    queue.push_back(start.clone());
+    while let Some(dict) = queue.pop_front() {
+        *work += 1;
+        if *work > MAX_FORM_VISITS {
             return true;
         }
-        let found = match &*doc.get(*r) {
-            Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form") => form_tree_has_defaults(doc, &s.dict, depth + 1, path, visits),
-            _ => false,
-        };
-        path.remove(r);
-        if found {
+        let Some(res_obj) = dict.get(b"Resources").map(|r| doc.resolve(r)) else { continue };
+        let Some(res) = res_obj.as_dict() else { continue };
+        if let Some(cs_obj) = res.get(b"ColorSpace").map(|cs| doc.resolve(cs))
+            && let Some(cs_dict) = cs_obj.as_dict()
+            && (cs_dict.contains(b"DefaultCMYK") || cs_dict.contains(b"DefaultRGB"))
+        {
             return true;
+        }
+        let Some(xobj_obj) = res.get(b"XObject").map(|x| doc.resolve(x)) else { continue };
+        let Some(xobj) = xobj_obj.as_dict() else { continue };
+        for (_, val) in xobj.iter() {
+            let Object::Ref(r) = val else { continue };
+            if !visited.insert(*r) {
+                continue;
+            }
+            if let Object::Stream(s) = &*doc.get(*r)
+                && s.dict.name(b"Subtype") == Some(b"Form")
+            {
+                queue.push_back(s.dict.clone());
+            }
         }
     }
     false
@@ -407,9 +399,9 @@ mod tests {
         let form = doc.add(Object::Stream(Stream::from_raw(form_dict, vec![])));
 
         // Direct test: empty page resources return false, while the form's resources return true.
-        assert!(!form_tree_has_defaults(&doc, &Dict::new(), 0, &mut HashSet::new(), &mut 0));
+        assert!(!dict_reaches_default(&doc, &Dict::new(), &mut HashSet::new(), &mut 0));
         let Object::Stream(s) = &*doc.get(form) else { panic!() };
-        assert!(form_tree_has_defaults(&doc, &s.dict, 0, &mut HashSet::new(), &mut 0));
+        assert!(dict_reaches_default(&doc, &s.dict, &mut HashSet::new(), &mut 0));
 
         // Page referencing the form via /XObject also detects the form-local default.
         let mut xobj = Dict::new();
@@ -418,80 +410,66 @@ mod tests {
         page_res.set(b"XObject".to_vec(), Object::Dict(xobj));
         let mut page_dict = Dict::new();
         page_dict.set(b"Resources".to_vec(), Object::Dict(page_res));
-        assert!(form_tree_has_defaults(&doc, &page_dict, 0, &mut HashSet::new(), &mut 0));
+        assert!(dict_reaches_default(&doc, &page_dict, &mut HashSet::new(), &mut 0));
     }
 
     #[test]
-    fn depth_limit_assumes_defaults_and_skips_conversion() {
-        let mut doc = Document::new_empty();
+    fn form_traversal_work_is_bounded_on_adversarial_graphs() {
+        // Deterministic pseudo-random generator; no external crate.
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
 
-        // Build MAX_FORM_DEPTH + 1 nested forms with no defaults anywhere; hitting the depth limit
-        // must still conservatively return true.
-        const DEPTH: usize = MAX_FORM_DEPTH + 1;
-        let mut child: Option<ObjRef> = None;
-        for _ in 0..DEPTH {
-            let mut res = Dict::new();
-            let mut xobjects = Dict::new();
-            if let Some(c) = child {
-                xobjects.set(b"F".to_vec(), Object::Ref(c));
+        for case in 0..64 {
+            let mut doc = Document::new_empty();
+            const FORMS: usize = 60;
+            let mut form_refs: Vec<ObjRef> = Vec::new();
+            for _ in 0..FORMS {
+                let mut xobjects = Dict::new();
+                let entries = (next() % 9) as usize;
+                for k in 0..entries {
+                    let name = format!("E{k}").into_bytes();
+                    let target = if form_refs.is_empty() || next() % 3 == 0 {
+                        // Non-Form XObject: skipped by the subtype filter.
+                        let mut d = Dict::new();
+                        d.set(b"Type".to_vec(), Object::name("XObject"));
+                        doc.add(Object::Stream(Stream::from_raw(d, vec![])))
+                    } else {
+                        // Earlier Form, possibly shared many times or cyclic.
+                        form_refs[(next() as usize) % form_refs.len()]
+                    };
+                    xobjects.set(name, Object::Ref(target));
+                }
+                let mut res = Dict::new();
+                res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+                let mut form = Dict::new();
+                form.set(b"Subtype".to_vec(), Object::name("Form"));
+                form.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+                form.set(b"Resources".to_vec(), Object::Dict(res));
+                form_refs.push(doc.add(Object::Stream(Stream::from_raw(form, vec![]))));
             }
-            res.set(b"XObject".to_vec(), Object::Dict(xobjects));
 
-            let mut form = Dict::new();
-            form.set(b"Subtype".to_vec(), Object::name("Form"));
-            form.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
-            form.set(b"Resources".to_vec(), Object::Dict(res));
-            child = Some(doc.add(Object::Stream(Stream::from_raw(form, vec![]))));
-        }
-
-        let mut page_res = Dict::new();
-        let mut xobjects = Dict::new();
-        xobjects.set(b"F".to_vec(), Object::Ref(child.unwrap()));
-        page_res.set(b"XObject".to_vec(), Object::Dict(xobjects));
-        let mut page = Dict::new();
-        page.set(b"Resources".to_vec(), Object::Dict(page_res));
-
-        assert!(form_tree_has_defaults(&doc, &page, 0, &mut HashSet::new(), &mut 0));
-    }
-
-    #[test]
-    fn shared_forms_terminate_within_visit_budget() {
-        let mut doc = Document::new_empty();
-
-        // A chain of forms where each form names the next one twice, with no defaults.
-        // Without a visit budget, walking this is 2^depth visits.
-        const DEPTH: usize = MAX_FORM_DEPTH;
-        let mut child: Option<ObjRef> = None;
-        for _ in 0..DEPTH {
+            let mut page_res = Dict::new();
             let mut xobjects = Dict::new();
-            if let Some(c) = child {
-                xobjects.set(b"A".to_vec(), Object::Ref(c));
-                xobjects.set(b"B".to_vec(), Object::Ref(c));
-            }
-            let mut res = Dict::new();
-            res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+            xobjects.set(b"F".to_vec(), Object::Ref(*form_refs.last().unwrap()));
+            page_res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+            let mut page = Dict::new();
+            page.set(b"Resources".to_vec(), Object::Dict(page_res));
+            let page_ref = doc.add(Object::Dict(page));
+            let Object::Dict(pd) = &*doc.get(page_ref) else { panic!() };
 
-            let mut form = Dict::new();
-            form.set(b"Subtype".to_vec(), Object::name("Form"));
-            form.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
-            form.set(b"Resources".to_vec(), Object::Dict(res));
-            child = Some(doc.add(Object::Stream(Stream::from_raw(form, vec![]))));
+            let mut visited: HashSet<ObjRef> = HashSet::new();
+            let mut work = 0usize;
+            let start = std::time::Instant::now();
+            let _ = dict_reaches_default(&doc, pd, &mut visited, &mut work);
+            let elapsed = start.elapsed();
+
+            assert!(elapsed.as_millis() < 500, "case {case}: {elapsed:?}");
+            assert!(work <= MAX_FORM_VISITS + 1, "case {case}: work={work}");
         }
-
-        let mut page_res = Dict::new();
-        let mut xobjects = Dict::new();
-        xobjects.set(b"F".to_vec(), Object::Ref(child.unwrap()));
-        page_res.set(b"XObject".to_vec(), Object::Dict(xobjects));
-        let mut page = Dict::new();
-        page.set(b"Resources".to_vec(), Object::Dict(page_res));
-        let page_ref = doc.add(Object::Dict(page));
-
-        let Object::Dict(pd) = &*doc.get(page_ref) else { panic!() };
-        let mut path: HashSet<ObjRef> = HashSet::new();
-        let mut visits = 0usize;
-        let start = std::time::Instant::now();
-        assert!(form_tree_has_defaults(&doc, pd, 0, &mut path, &mut visits));
-        assert!(start.elapsed().as_secs() < 5, "traversal exceeded budget window");
-        assert!(visits <= MAX_FORM_VISITS + 1);
     }
 }
