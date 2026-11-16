@@ -2367,3 +2367,129 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// A stream object with `dict` added to its dictionary and `data` as its content.
+fn content(dict: &str, data: &str) -> String {
+    format!("<< {dict} /Length {} >>\nstream\n{data}\nendstream", data.len())
+}
+
+/// The 6.2.2 findings of a document whose page tree node has `pages` added and whose one page has
+/// `page` added and the content `data` (object 4), with the further objects `more` from object 5.
+fn content_findings(pages: &str, page: &str, data: &str, more: &[&str]) -> Vec<String> {
+    let pages = format!("<< /Type /Pages /Kids [3 0 R] /Count 1 {pages} >>");
+    let page = format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Contents 4 0 R {page} >>");
+    let data = content("", data);
+    let mut objs = vec!["<< /Type /Catalog /Pages 2 0 R >>", pages.as_str(), page.as_str(), data.as_str()];
+    objs.extend_from_slice(more);
+    verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.2").map(|i| i.message).collect()
+}
+
+#[test]
+fn content_streams_use_only_defined_operators_clause_6_2_2() {
+    let none = Vec::<String>::new();
+    let unknown = ["Content uses the operator UnknownOperator, which ISO 32000 doesn't define"];
+    // Every operator of ISO 32000-2 Table A.1, an inline image among them.
+    let all = "q 1 0 0 1 0 0 cm 1 w 0 J 0 j 10 M [] 0 d /RelativeColorimetric ri 1 i 0 0 m 1 1 l 1 1 1 1 1 1 c 1 1 1 1 v 1 1 1 1 y h 0 0 1 1 re \
+        S s f F f* B B* b b* n W W* n BT 1 Tc 1 Tw 100 Tz 1 TL 0 Tr 0 Ts 1 1 Td 1 1 TD 1 0 0 1 0 0 Tm T* (a) Tj [(a)] TJ (a) ' 1 1 (a) \" ET \
+        /DeviceGray CS /DeviceGray cs 0 SC 0 SCN 0 sc 0 scn 0 G 0 g 0 0 0 RG 0 0 0 rg 0 0 0 0 K 0 0 0 0 k /T MP /T << >> DP /T BMC EMC \
+        /T << >> BDC EMC BX EX BI /W 1 /H 1 /BPC 8 /CS /G ID \x00 EI Q";
+    assert_eq!(content_findings("", "/Resources << >>", all, &[]), none);
+    // An operator ISO 32000 doesn't define: on the page, between BX and EX, in a form XObject a page
+    // paints, in an annotation's appearance and in a Type 3 glyph the page shows.
+    assert_eq!(content_findings("", "/Resources << >>", "q UnknownOperator Q", &[]), unknown);
+    assert_eq!(content_findings("", "/Resources << >>", "q BX UnknownOperator EX Q", &[]), unknown);
+    let form = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >>", "q UnknownOperator Q");
+    assert_eq!(content_findings("", "/Resources << /XObject << /X 5 0 R >> >>", "/X Do", &[&form]), unknown);
+    assert_eq!(content_findings("", "/Resources << /XObject << /X 5 0 R >> >>", "q Q", &[&form]), none);
+    let annot = "<< /Type /Annot /Subtype /Square /Rect [0 0 1 1] /F 4 /AP << /N 6 0 R >> >>";
+    assert_eq!(content_findings("", "/Resources << >> /Annots [5 0 R]", "", &[annot, &form]), unknown);
+    let glyph = content("", "1000 0 d0 UnknownOperator");
+    let type3 = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 6 0 R >> /Resources << >> >>";
+    assert_eq!(content_findings("", "/Resources << /Font << /F 5 0 R >> >>", "BT /F 1 Tf (a) Tj ET", &[type3, &glyph]), unknown);
+    // A keyword read only after the parser skipped a damaged operand isn't judged.
+    assert_eq!(content_findings("", "/Resources << >>", "q <41!> Q", &[]), none);
+    // Nor one after a number written wrong, or a non-finite number printed as a word.
+    assert_eq!(content_findings("", "/Resources << >>", "0 0.0.75 1 1 re f UnknownOperator", &[]), none);
+    assert_eq!(content_findings("", "/Resources << >>", "BT Infinity Tz UnknownOperator ET", &[]), none);
+    assert_eq!(content_findings("", "/Resources << >>", "BT (0.0.75) Tj /a.b.c MP UnknownOperator ET", &[]), unknown);
+    // Nor binary data, or a stream whose filter only an inline image may name.
+    assert_eq!(content_findings("", "/Resources << >>", "q \u{e9}t\u{e9} UnknownOperator Q", &[]), none);
+    let abbreviated =
+        content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >> /Filter /AHx", "7120556E6B6E6F776E4F70657261746F722051>");
+    assert_eq!(content_findings("", "/Resources << /XObject << /X 5 0 R >> >>", "/X Do", &[&abbreviated]), none);
+    let hex = content(
+        "/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >> /Filter [/ASCIIHexDecode]",
+        "7120556E6B6E6F776E4F70657261746F722051>",
+    );
+    assert_eq!(content_findings("", "/Resources << /XObject << /X 5 0 R >> >>", "/X Do", &[&hex]), unknown);
+    // A form that paints itself is read once.
+    let looping = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /X 5 0 R >> >>", "/X Do");
+    assert_eq!(content_findings("", "/Resources << /XObject << /X 5 0 R >> >>", "/X Do", &[&looping]), none);
+}
+
+#[test]
+fn content_streams_that_name_resources_have_their_own_clause_6_2_2() {
+    let none = Vec::<String>::new();
+    // Content that refers to resources by name has its own resource dictionary.
+    let page = ["A page refers to resources by name but has no Resources dictionary of its own"];
+    assert_eq!(
+        content_findings(
+            "/Resources << /XObject << /X 5 0 R >> >>",
+            "",
+            "/X Do",
+            &[&content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >>", "")]
+        ),
+        page
+    );
+    assert_eq!(content_findings("/Resources << /ColorSpace << /C [/CalGray << /WhitePoint [1 1 1] >>] >> >>", "", "/C cs", &[]), page);
+    assert_eq!(content_findings("", "", "/DeviceRGB cs 1 0 0 rg 0 0 1 1 re f", &[]), none);
+    assert_eq!(content_findings("", "", "BI /W 1 /H 1 /BPC 8 /CS /RGB ID \x00\x00\x00 EI", &[]), none);
+    let cal = "/ColorSpace << /C [/CalGray << /WhitePoint [1 1 1] >>] >>";
+    assert_eq!(content_findings(&format!("/Resources << {cal} >>"), "", "BI /W 1 /H 1 /BPC 8 /CS /C ID \x00 EI", &[]), page);
+    assert_eq!(content_findings("/Resources << /Properties << /P << >> >> >>", "", "/T /P BDC EMC", &[]), page);
+    // A name no resource dictionary defines isn't one the stream's own would have held.
+    assert_eq!(content_findings("", "", "/X Do BT /F 1 Tf ET /T /P BDC EMC", &[]), none);
+    assert_eq!(content_findings("", "", "/T BMC EMC /T << /MCID 0 >> BDC EMC", &[]), none);
+    let bare_form = |data: &str| content("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", data);
+    let form_msg = ["A form XObject refers to resources by name but has no Resources dictionary"];
+    assert_eq!(content_findings("", &format!("/Resources << /XObject << /X 5 0 R >> {cal} >>"), "/X Do", &[&bare_form("/C cs 0.5 sc")]), form_msg);
+    assert_eq!(content_findings("", "/Resources << /XObject << /X 5 0 R >> >>", "/X Do", &[&bare_form("0 g 0 0 1 1 re f")]), none);
+    let bare_type3 = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 6 0 R >> >>";
+    assert_eq!(
+        content_findings(
+            "",
+            &format!("/Resources << /Font << /F 5 0 R >> {cal} >>"),
+            "BT /F 1 Tf (a) Tj ET",
+            &[bare_type3, &content("", "1000 0 d0 /C cs")]
+        ),
+        ["A Type 3 font's glyphs refer to resources by name, but the font has no Resources dictionary"]
+    );
+    // A glyph's own stream may carry them.
+    assert_eq!(
+        content_findings(
+            "",
+            &format!("/Resources << /Font << /F 5 0 R >> {cal} >>"),
+            "BT /F 1 Tf (a) Tj ET",
+            &[bare_type3, &content(&format!("/Resources << {cal} >>"), "1000 0 d0 /C cs")]
+        ),
+        none
+    );
+    let tiling = content("/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 1 1] /XStep 1 /YStep 1", "/C cs 0 0 1 1 re f");
+    assert_eq!(
+        content_findings("", &format!("/Resources << /Pattern << /P 5 0 R >> {cal} >>"), "/Pattern cs /P scn 0 0 1 1 re f", &[&tiling]),
+        ["A tiling pattern refers to resources by name but has no Resources dictionary"]
+    );
+    // None is fixable.
+    let doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
+            &content("", "Foo"),
+        ],
+        "",
+    );
+    let found: Vec<_> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.2").collect();
+    assert_eq!(found.len(), 1);
+    assert!(found.iter().all(|i| !i.fixable));
+}
