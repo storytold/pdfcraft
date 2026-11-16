@@ -662,9 +662,12 @@ impl OcrVerify {
         true
     }
 
+    /// The settings a page or a region is read again with: the toolbar's choices, in the
+    /// language the reading under review was made in, as far as the engine chosen now can be
+    /// asked for it (a Tesseract language read again by another engine reads as English).
     fn reread_settings(&self, draft: &super::ocr_ui::OcrDraft) -> OcrSettings {
         let mut settings = draft.settings();
-        settings.language = self.dictionary_language.clone();
+        settings.language = pdfcraft_engine::ocr::language_for(settings.engine, &self.dictionary_language).to_string();
         settings
     }
 
@@ -3053,10 +3056,18 @@ mod tests {
         let mut session = Session::new();
         let (_, mut v) = loaded(&mut session, &[Some(40.0)]);
         v.dictionary_language = "ja".into();
-        let draft = super::ocr_ui::OcrDraft { language: "fr".into(), ..Default::default() };
+        let draft = super::ocr_ui::OcrDraft { language: "fr".into(), engine: EngineChoice::Tesseract, ..Default::default() };
         let settings = v.reread_settings(&draft);
         assert_eq!(settings.language, "ja");
         assert_eq!(settings.dpi, draft.settings().dpi);
+        // The engine was changed since the reading: the built-in engine (alone, or first under
+        // Automatic) is never asked for a Tesseract language.
+        for engine in [EngineChoice::Ocrs, EngineChoice::Auto] {
+            let draft = super::ocr_ui::OcrDraft { language: "fr".into(), engine, ..Default::default() };
+            assert_eq!(v.reread_settings(&draft).language, "en", "{engine:?}");
+        }
+        v.dictionary_language = "en".into();
+        assert_eq!(v.reread_settings(&draft).language, "en");
         assert!(dictionary_path(std::path::Path::new("prefs"), "../outside").is_err());
     }
 

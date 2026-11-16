@@ -222,6 +222,9 @@ pub struct OcrRun {
     /// The dialog promised an editable document: the result goes to the OCR Verify screen
     /// (whose Accept produces the editable document), not to an invisible layer.
     pub editable: bool,
+    /// The language the pages were read in. The review of an editable result keeps its
+    /// dictionary in it and re-reads a page or a region in it.
+    pub language: String,
     /// The web build reads the pages in Web Workers, pumped by [`PdfCraftApp::poll_ocr`].
     #[cfg(target_arch = "wasm32")]
     pub web: Option<crate::ocr_web::Pages>,
@@ -587,8 +590,9 @@ impl PdfCraftApp {
         let progress = Arc::new(Mutex::new(OcrProgress { total: job.pages.len(), ..Default::default() }));
         #[cfg(target_arch = "wasm32")]
         {
+            let language = job.settings.language.clone();
             let web = Some(crate::ocr_web::Pages::new(job.steps()));
-            self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable, web });
+            self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable, language, web });
             self.poll_ocr();
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -609,6 +613,7 @@ impl PdfCraftApp {
         editable: bool,
     ) {
         let p = progress.clone();
+        let language = job.settings.language.clone();
         // A failure is written on the worker thread: in the UI's language.
         let lang = crate::i18n::current();
         let work = move || {
@@ -632,7 +637,7 @@ impl PdfCraftApp {
         } else {
             std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
         }
-        self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable });
+        self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable, language });
         self.poll_ocr();
     }
 
@@ -913,6 +918,7 @@ impl PdfCraftApp {
         }
         let Some(run) = self.ocr_run.as_ref() else { return };
         let (doc, progress, auto, guard, editable) = (run.doc, run.progress.clone(), run.automatic, run.guard.clone(), run.editable);
+        let language = run.language.clone();
         let automatic = auto.is_some();
         let mut s = match progress.lock() {
             Ok(s) => s,
@@ -972,6 +978,9 @@ impl PdfCraftApp {
         // invisible layer here. It opens in the OCR Verify screen, whose Accept produces the
         // editable document (a NEW file) the choice promises.
         if editable && !automatic {
+            // The review continues in the language the pages were read in: its dictionary, and
+            // a page or a region read again.
+            self.ocr_verify.dictionary_language = language;
             self.ocr_verify.load(doc, guard, found);
             self.ocr_verify.open = true;
             self.notify_tr("Review the recognition, then Accept to write the editable document");
@@ -1221,6 +1230,7 @@ mod tests {
                 guard,
                 automatic: automatic.then_some(AutoOcr { page: 0, generation }),
                 editable: false,
+                language: "en".into(),
             }
         };
         let label = |app: &PdfCraftApp| app.session.get(app.active_ids().unwrap().1).unwrap().can_undo().map(String::from);
@@ -1270,7 +1280,8 @@ mod tests {
         };
         let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
         let guard = app.session.ocr_guard(id).unwrap();
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: Some(AutoOcr { page: 0, generation }), editable: false });
+        app.ocr_run =
+            Some(OcrRun { doc: id, progress, guard, automatic: Some(AutoOcr { page: 0, generation }), editable: false, language: "en".into() });
         app.views[0].auto_ocr_tried.insert(0);
         // The document changes while the run is out.
         let img = craft_image_codecs::Image::from_u8(8, 8, craft_image_codecs::ChannelLayout::Rgba, [250, 250, 250, 255].repeat(64)).unwrap();
@@ -1310,7 +1321,7 @@ mod tests {
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 3, ..Default::default() }));
         poison(&progress);
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false, language: "en".into() });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the next run isn't refused as already running");
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
@@ -1548,7 +1559,7 @@ mod tests {
         };
         let page = OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() };
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false, language: "en".into() });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the run is over");
         let toast = app.toast.clone().map(|t| t.0).unwrap_or_default();
@@ -1584,7 +1595,7 @@ mod tests {
         };
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false, language: "en".into() });
         app.poll_ocr();
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
         assert!(toast.contains("3 characters had no font"), "{toast}");
@@ -1611,11 +1622,14 @@ mod tests {
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
         app.ocr_draft.output_mode = pdfcraft_engine::ocr::OutputMode::EditableText;
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: true });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: true, language: "ar".into() });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the run is over");
         assert_eq!(app.session.get(id).unwrap().can_undo(), None, "no invisible layer was written");
         assert!(app.ocr_verify.open, "the review opens, to accept as an editable document");
         assert_eq!(app.ocr_verify.phase, crate::workflows::ocr_verify::Phase::ReviewReady);
+        // The review goes on in the language the pages were read in (its dictionary, and what
+        // a page or a region is read again in), not in the one a review before it left behind.
+        assert_eq!(app.ocr_verify.dictionary_language, "ar");
     }
 }
