@@ -192,17 +192,34 @@ fn push_box(boxes: &mut Vec<InkBox>, rect: [f32; 4], text: String, source: CharR
 fn link_glyphs(components: &ComponentSet, boxes: &[InkBox], params: &AlignParams) -> Links {
     let comp_slice = components.components();
     let mut by_component = vec![Vec::new(); comp_slice.len()];
+    let mut boxes_by_y: Vec<usize> = (0..boxes.len()).collect();
+    boxes_by_y.sort_by(|&a, &b| boxes[a].rect[1].total_cmp(&boxes[b].rect[1]).then_with(|| a.cmp(&b)));
+    let max_box_h = boxes.iter().map(|b| (b.rect[3] - b.rect[1]).max(0.0)).fold(0.0_f32, f32::max);
     for (index, component) in comp_slice.iter().enumerate() {
         if component.kind != ComponentKind::Glyph {
             continue;
         }
-        for (box_index, ink) in boxes.iter().enumerate() {
+        let blob = component.rect();
+        let min_top = blob[1] - max_box_h;
+        let start = boxes_by_y.partition_point(|&i| boxes[i].rect[1] < min_top);
+        let Some(of_component) = by_component.get_mut(index) else {
+            continue;
+        };
+        for &box_index in &boxes_by_y[start..] {
+            let Some(ink) = boxes.get(box_index) else { continue };
+            if ink.rect[1] >= blob[3] {
+                break;
+            }
+            if ink.rect[3] <= blob[1] || ink.rect[2] <= blob[0] || ink.rect[0] >= blob[2] {
+                continue;
+            }
             let Some(score) = match_score(component, ink.rect, params) else {
                 continue;
             };
-            if let Some(of_component) = by_component.get_mut(index) {
-                of_component.push((box_index, score));
-            }
+            of_component.push((box_index, score));
+        }
+        if of_component.len() > 1 {
+            of_component.sort_unstable_by_key(|&(box_index, _)| box_index);
         }
     }
     prune_overhang_links(comp_slice, boxes, &mut by_component);
@@ -236,6 +253,12 @@ fn prune_overhang_links(components: &[Component], boxes: &[InkBox], by_component
                 .map(|(box_idx, ink, _)| (box_idx, ink))
         })
         .collect();
+    let mut max_primary_ink = vec![0_u32; boxes.len()];
+    for &(box_idx, ink) in primary.iter().flatten() {
+        if let Some(slot) = max_primary_ink.get_mut(box_idx) {
+            *slot = (*slot).max(ink);
+        }
+    }
     for (comp_idx, matches) in by_component.iter_mut().enumerate() {
         if matches.len() < 2 {
             continue;
@@ -248,11 +271,7 @@ fn prune_overhang_links(components: &[Component], boxes: &[InkBox], by_component
             }
             let Some(rect) = boxes.get(box_idx).map(|b| b.rect) else { return false };
             let own_ink = ink_in_rect(comp, rect);
-            let claimed_by_better_primary = primary
-                .iter()
-                .enumerate()
-                .any(|(other_idx, p)| other_idx != comp_idx && p.is_some_and(|(p_box, p_ink)| p_box == box_idx && p_ink > own_ink));
-            !claimed_by_better_primary
+            max_primary_ink.get(box_idx).copied().unwrap_or(0) <= own_ink
         });
     }
 }

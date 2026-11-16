@@ -234,10 +234,13 @@ fn erase_region(
     let Some(paint) = paint else {
         return 0;
     };
+    let outer = bounds.expand(halo.saturating_add(radius), raster.width, raster.height).unwrap_or(paint);
+    let local_protect: Vec<InkRegion<'_>> =
+        protect.iter().copied().filter(|kept| Rect::from_bounds(kept.bounds).is_some_and(|r| r.overlaps(outer))).collect();
     let side = tile_side(local_limit, halo);
     // One paper colour for the whole glyph. A tile in the middle of a letter has no paper of
     // its own, and sampling there would fall back to white and leave a pale block.
-    let paper = sample_around(raster, bounds, protect, page_mask, halo, radius);
+    let paper = sample_around(raster, bounds, &local_protect, page_mask, halo, radius);
     let mut erased = 0_u64;
     let mut top = paint.top;
     while top < paint.bottom {
@@ -246,7 +249,7 @@ fn erase_region(
         while left < paint.right {
             let right = left.saturating_add(side).min(paint.right);
             let tile = Rect { left, top, right, bottom };
-            erased = erased.saturating_add(erase_tile(raster, region, protect, page_mask, tile, halo, &paper));
+            erased = erased.saturating_add(erase_tile(raster, region, &local_protect, page_mask, tile, halo, &paper));
             left = right;
         }
         top = bottom;
@@ -524,6 +527,10 @@ impl Rect {
 
     fn contains(self, x: u32, y: u32) -> bool {
         x >= self.left && y >= self.top && x < self.right && y < self.bottom
+    }
+
+    fn overlaps(self, other: Rect) -> bool {
+        self.left < other.right && other.left < self.right && self.top < other.bottom && other.top < self.bottom
     }
 
     fn expand(self, pad: u32, page_w: u32, page_h: u32) -> Option<Rect> {
