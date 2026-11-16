@@ -199,6 +199,9 @@ impl PdfCraftApp {
         v["print"] = print;
         // Each printer's paper, sizing and two-sided choice, the one printed to last first (#2001).
         v["print_printers"] = crate::print_ui::setups_to_json(&self.print_draft.setups);
+        // The printer list as last read, so a new window's Print dialog offers it at once while
+        // the fresh one is read.
+        v["print_known_printers"] = crate::print_ui::known_printers_to_json(&self.print_draft.printers);
         v.to_string()
     }
 
@@ -344,6 +347,9 @@ impl PdfCraftApp {
         }
         if let Some(setups) = crate::print_ui::setups_from_json(&v["print_printers"]) {
             self.print_draft.setups = setups;
+        }
+        if let Some(printers) = crate::print_ui::known_printers_from_json(&v["print_known_printers"]) {
+            self.print_draft.printers = printers;
         }
         // The Print dialog's remembered choices (#2001). Settings are untrusted: an unknown name
         // or a scale outside the dialog's range keeps the default. The scale is read before the

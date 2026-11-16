@@ -64,3 +64,48 @@ fn a_late_list_keeps_the_paper_picked_meanwhile() {
     assert_eq!(d.printer.as_deref(), Some("Office"), "the same printer");
     assert_eq!(d.paper, 0, "the paper is as it was left, not the printer's setup again");
 }
+
+/// A new window's Print dialog offers the printers saved last time at once, rather than "looking
+/// for printers" until the spooler answers (each document opened from the file manager may be a
+/// new process); the fresh list then replaces them.
+#[test]
+fn a_new_window_offers_the_saved_list_while_the_fresh_one_is_read() {
+    let mut first = PdfCraftApp::new();
+    first.print_draft.printers = vec![
+        Printer { name: "Office".into(), default: true, two_sided: Some(true), description: "Office laser".into() },
+        Printer { name: "Label".into(), default: false, two_sided: None, description: String::new() },
+    ];
+    let saved = first.persist();
+
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.restore(&saved);
+        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    let gate = Arc::new(Mutex::new(()));
+    let wait = gate.clone();
+    h.state_mut().printer_source = Some(Arc::new(move || {
+        let _open = wait.lock();
+        vec![Printer { name: "Home".into(), default: true, two_sided: None, description: String::new() }]
+    }));
+    let hold = gate.lock().unwrap();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(2);
+    let d = &h.state().print_draft;
+    assert!(d.printers_loading, "the fresh list is still being read");
+    assert_eq!(d.printer.as_deref(), Some("Office"), "the saved default is offered at once");
+    let names: Vec<_> = d.printers.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, ["Office", "Label"]);
+    assert_eq!(d.printers[0].two_sided, None, "two-sided support is read again, not saved");
+
+    drop(hold);
+    wait_for_list(&mut h);
+    h.run_steps(2);
+    let d = &h.state().print_draft;
+    assert_eq!(d.printer.as_deref(), Some("Home"), "a saved printer no longer listed gives way to the default");
+    let names: Vec<_> = d.printers.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, ["Home"]);
+}

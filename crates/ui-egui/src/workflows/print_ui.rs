@@ -13,10 +13,12 @@ use crate::{PdfCraftApp, widgets};
 
 mod body;
 mod draft;
+mod known;
 mod setups;
 
 pub(crate) use body::body;
 pub use draft::{CUSTOM_SCALE, Handling, IMAGE_DPI, PrintDraft, Which};
+pub(crate) use known::{from_json as known_printers_from_json, to_json as known_printers_to_json};
 pub use setups::PrinterSetup;
 pub(crate) use setups::{from_json as setups_from_json, to_json as setups_to_json};
 

@@ -1033,7 +1033,9 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     app.restore(&saved);
     // Grayscale is one of the preferences remembered across restarts (#2001); copies, pages and
     // orientation are this job's and are not saved.
-    let expected = pdfcraft_ui_egui::PrintDraft { paper: a4, grayscale: true, paper_overridden: true, ..Default::default() };
+    // The printer list as last read is kept too, so a new window offers it at once.
+    let printers = h.state().print_draft.printers.clone();
+    let expected = pdfcraft_ui_egui::PrintDraft { paper: a4, grayscale: true, paper_overridden: true, printers, ..Default::default() };
     assert_eq!(app.print_draft, expected, "only the paper and the remembered preferences persist");
 
     // Default draft without override round-trips with paper_overridden remaining false.
