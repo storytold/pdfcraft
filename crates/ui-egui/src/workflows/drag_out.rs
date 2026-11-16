@@ -44,15 +44,32 @@ pub(crate) fn write_offered(root: &Path, name: &str, bytes: &[u8]) -> std::io::R
     Ok(path)
 }
 
-/// Remove the folders under `root` last changed more than [`KEEP`] before `now`.
+/// Remove the folders under `root` that drags made (named `<process>-<time>`, see
+/// [`write_offered`]) and last changed more than [`KEEP`] before `now`. A `root` that is a link
+/// or junction (to somewhere a drag didn't make) is left alone, and so is anything in it that
+/// isn't a drag's own folder.
 fn remove_old(root: &Path, now: SystemTime) {
+    let real_folder = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink());
+    if !real_folder(root) {
+        return;
+    }
     let Ok(entries) = std::fs::read_dir(root) else { return };
     for entry in entries.flatten() {
+        let path = entry.path();
+        if !is_drag_folder_name(&entry.file_name().to_string_lossy()) || !real_folder(&path) {
+            continue;
+        }
         let changed = entry.metadata().and_then(|m| m.modified()).ok();
         if changed.and_then(|t| now.duration_since(t).ok()).is_some_and(|age| age > KEEP) {
-            let _ = std::fs::remove_dir_all(entry.path());
+            let _ = std::fs::remove_dir_all(path);
         }
     }
+}
+
+/// Whether `name` is a drag's folder name: digits, a hyphen, digits.
+fn is_drag_folder_name(name: &str) -> bool {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    name.split_once('-').is_some_and(|(process, time)| digits(process) && digits(time))
 }
 
 /// The folder drags offer their files from.
@@ -100,7 +117,8 @@ impl crate::PdfCraftApp {
         };
         self.dragged_out = Some(path.clone());
         if let Err(e) = start_system_drag(window, path) {
-            self.notify_fmt("Couldn't extract pages: {e}", &[("e", &e)]);
+            // The file is written by now: what failed is the system's drag.
+            self.notify_fmt("Couldn't drag the pages out: {e}", &[("e", &e)]);
         }
     }
 }
@@ -129,6 +147,21 @@ mod tests {
         assert!(dir.exists(), "a drag's file is kept while it may still be copied");
         remove_old(&root, SystemTime::now() + KEEP * 2);
         assert!(!dir.exists(), "an old drag's folder is removed");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cleanup_leaves_what_drags_did_not_make() {
+        let root = std::env::temp_dir().join(format!("pdfcraft-drag-test-others-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mine = write_offered(&root, "a.pdf", b"%PDF").unwrap().parent().unwrap().to_path_buf();
+        let other = root.join("photos");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(root.join("notes.txt"), b"keep").unwrap();
+        remove_old(&root, SystemTime::now() + KEEP * 2);
+        assert!(!mine.exists(), "a drag's old folder goes");
+        assert!(other.exists() && root.join("notes.txt").exists(), "what drags didn't make stays");
+        assert!(is_drag_folder_name("1234-5678") && !is_drag_folder_name("12-") && !is_drag_folder_name("a-1"));
         let _ = std::fs::remove_dir_all(&root);
     }
 }
