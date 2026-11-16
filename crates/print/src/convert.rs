@@ -11,8 +11,6 @@
 //! - Calibrated document context (`/OutputIntents` with CMYK destinations)
 //! - Inherited page-level default color spaces (`/DefaultCMYK` or `/DefaultRGB`)
 
-use std::collections::HashSet;
-
 use image::codecs::jpeg::JpegEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
@@ -60,7 +58,7 @@ pub fn cmyk_to_rgb(c: u8, m: u8, y: u8, k: u8) -> [u8; 3] {
 #[inline]
 fn apply_decode(val: u8, d0: f32, d1: f32) -> f32 {
     let v = f32::from(val) / 255.0;
-    d0 + v * (d1 - d0)
+    (d0 + v * (d1 - d0)).clamp(0.0, 1.0)
 }
 
 /// Reads and validates a 4-channel CMYK `/Decode` array from image dictionary `d`.
@@ -82,8 +80,14 @@ fn read_cmyk_decode(doc: &Document, d: &Dict) -> Option<[f32; 8]> {
     Some(out)
 }
 
+/// Largest CMYK JPEG, in pixels, that conversion decodes. Larger images are left unchanged.
+const MAX_CMYK_JPEG_PIXELS: usize = 1 << 26;
+
 /// Decodes raw JPEG bytes of a 4-component CMYK image into raw CMYK samples.
 fn decode_cmyk_jpeg(data: &[u8], w: usize, h: usize, decode_parms_color_transform: Option<i64>) -> Option<Vec<u8>> {
+    if w.checked_mul(h)? > MAX_CMYK_JPEG_PIXELS {
+        return None;
+    }
     let options = DecoderOptions::default().set_strict_mode(false).set_max_width(usize::from(u16::MAX)).set_max_height(usize::from(u16::MAX));
     let mut dec = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
     dec.decode_headers().ok()?;
@@ -159,23 +163,18 @@ fn has_cmyk_output_intents(doc: &Document) -> bool {
     false
 }
 
-/// Finds all page-level `/DefaultCMYK` or `/DefaultRGB` resource references.
-fn page_default_color_spaces(doc: &Document) -> (HashSet<ObjRef>, HashSet<ObjRef>) {
-    let mut default_cmyk = HashSet::new();
-    let mut default_rgb = HashSet::new();
+/// Whether any page defines `/DefaultCMYK` or `/DefaultRGB` in its `/Resources /ColorSpace` dictionary.
+fn pages_have_default_colour_spaces(doc: &Document) -> bool {
     for p in pdfcraft_model::pages(doc) {
         let Some(res_obj) = p.dict.get(b"Resources").map(|r| doc.resolve(r)) else { continue };
         let Some(res) = res_obj.as_dict() else { continue };
         let Some(cs_obj) = res.get(b"ColorSpace").map(|cs| doc.resolve(cs)) else { continue };
         let Some(cs_dict) = cs_obj.as_dict() else { continue };
-        if let Some(Object::Ref(r)) = cs_dict.get(b"DefaultCMYK") {
-            default_cmyk.insert(*r);
-        }
-        if let Some(Object::Ref(r)) = cs_dict.get(b"DefaultRGB") {
-            default_rgb.insert(*r);
+        if cs_dict.contains(b"DefaultCMYK") || cs_dict.contains(b"DefaultRGB") {
+            return true;
         }
     }
-    (default_cmyk, default_rgb)
+    false
 }
 
 /// Converts eligible DeviceCMYK raster images in `doc` to DeviceRGB.
@@ -184,11 +183,10 @@ pub fn convert_colors(doc: &mut Document, options: ConvertColorsOptions) -> Resu
         return Ok(ConvertColorsReport::default());
     }
 
-    if options.preserve_icc && has_cmyk_output_intents(doc) {
+    if options.preserve_icc && (has_cmyk_output_intents(doc) || pages_have_default_colour_spaces(doc)) {
         return Ok(ConvertColorsReport::default());
     }
 
-    let (defaults_cmyk, defaults_rgb) = page_default_color_spaces(doc);
     let mut report = ConvertColorsReport::default();
     let image_refs: Vec<ObjRef> = doc
         .scan_objects()
@@ -209,11 +207,8 @@ pub fn convert_colors(doc: &mut Document, options: ConvertColorsOptions) -> Resu
         let d = &s.dict;
 
         // Strict fail-safe guards per ISO 32000-2 & prepress rules:
-        if d.contains(b"SMask") || d.contains(b"SMaskInData") || d.contains(b"OPI") {
-            report.skipped += 1;
-            continue;
-        }
-        if defaults_cmyk.contains(&r) || defaults_rgb.contains(&r) {
+        let colour_key_mask = matches!(d.get(b"Mask").map(|m| doc.resolve(m)).as_deref(), Some(Object::Array(_)));
+        if d.contains(b"SMask") || d.contains(b"SMaskInData") || d.contains(b"OPI") || colour_key_mask {
             report.skipped += 1;
             continue;
         }
