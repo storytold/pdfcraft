@@ -4,6 +4,8 @@ This branch contains an experimental iOS/iPadOS integration of the open-source P
 The goal is to evaluate a native mobile architecture using the existing PdfCraft Rust core with a Swift/SwiftUI interface.
 This project is not an official ArtCraft mobile release and does not imply endorsement by ArtCraft.
 The implementation is intended for technical evaluation and potential upstream contribution.
+The app is configured as a universal iPhone and iPad app; its current native workflow is tested
+on both Simulator device families. This does not claim complete feature parity with desktop PdfCraft.
 
 Blackout Secure sponsors this fork experiment on `blackout-secure-ios-poc`.
 The development app is **PdfCraftMobilePOC**, bundle ID `com.blackoutsecure.pdfcraft.poc`.
@@ -16,6 +18,22 @@ The fork owner explicitly approved a small Swift/SwiftUI Apple-platform shell, d
 upstream Rust-only native-app policy. This exception is limited to this experiment.
 It is **not** upstream approval and does not change the synchronized house rules in
 [AGENTS.md](../../AGENTS.md). Upstream adoption requires maintainer agreement.
+
+## Relationship to the suite proposal
+
+The suite-wide direction is under discussion in
+[RFC-0039](https://github.com/storytold/craft-contrib/pull/60). That proposal currently
+favors an egui-based Mobile Mode, Android first, with iOS later. This SwiftUI shell is a
+separate, fork-only iPhone/iPad proof of concept and is evidence for that discussion, not
+an approved suite architecture or a claim of full feature parity. Do not copy this shell
+or its Rust bridge into other Craft apps without the required maintainer decisions.
+
+Related upstream work is tracked in the
+[PdfCraft mobile-support request](https://github.com/storytold/pdfcraft/issues/2085),
+the [draft native mobile host](https://github.com/storytold/pdfcraft/pull/1119),
+the [shared `craft-mobile` proposal](https://github.com/storytold/craft-libs/pull/632),
+and the [shared-crate candidate inventory](https://github.com/storytold/craft-libs/issues/115).
+These proposals use different approaches and remain separate from this fork experiment.
 
 PDF parsing, rendering, page rotation, validation, serialization, resource limits, and
 document ownership stay in Rust. Swift is limited to native views, accessibility labels,
@@ -82,8 +100,14 @@ bash scripts/build-ios-simulator.sh
 xcrun simctl list devices available
 bash scripts/run-ios-simulator.sh <simulator-uuid>
 
-# Rust tests, then hosted Swift bridge tests, then native UI workflow tests:
-bash scripts/test-ios.sh <simulator-uuid>
+# Run the full Rust, hosted Swift, and native UI workflow test suites on each device family.
+# Use an available iPhone UUID for the first run and an available iPad UUID for the second.
+# Run one Simulator at a time; the scripts share generated bindings and build output.
+bash scripts/test-ios.sh <iphone-simulator-uuid>
+bash scripts/test-ios.sh <ipad-simulator-uuid>
+
+# Launch interactively on either device family using that Simulator's UUID:
+bash scripts/run-ios-simulator.sh <simulator-uuid>
 
 # Individual generation/build steps:
 bash scripts/build-ios-rust.sh aarch64-apple-ios-sim
@@ -144,7 +168,10 @@ present the native share sheet. Run both test targets in order with the script.
 The app's Documents folder is visible in Files; private working copies/previews are not
 stored there.
 
-Run one Simulator at a time; the scripts share generated bindings and build output.
+The project targets both iPhone and iPad (`TARGETED_DEVICE_FAMILY` is `1,2` in
+[project.yml](project.yml)). Run one Simulator at a time; the scripts share generated bindings
+and build output. UI tests exercise the iPhone and iPad Files picker behavior, including the
+iPad sidebar and its native export-picker controls.
 Native UI tests allow up to five minutes per test, including bounded waits for Files
 provider startup. The test adapts to iPhone sheet dismissal and iPad's native Cancel
 control rather than replacing either platform's Files UI.

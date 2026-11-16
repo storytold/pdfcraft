@@ -85,6 +85,6 @@
     }
   ],
   "inputs": [
-    { "id": "simulator", "type": "promptString", "description": "Simulator UUID from xcrun simctl list devices available" }
+    { "id": "simulator", "type": "promptString", "description": "Simulator UUID from xcrun simctl list devices available; run iOS: Test All once for an iPhone and once for an iPad" }
   ]
 }
