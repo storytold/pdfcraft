@@ -66,8 +66,9 @@ Use `bash scripts/build-apple.sh --help` for the positional interface:
   [iOS test command](../scripts/test-ios.sh) sequentially on each selected family.
   It is an Apple POC test set, not every test in this large workspace. Native tests
   currently require Debug. An unsigned device build is not physical-device testing.
-  Budget up to 20 minutes for the aggregate native suites on a slower local host;
-  a 10-minute aggregate deadline was insufficient in this review.
+  Allow a measured, bounded budget for native startup and repeated Files operations.
+  A 30-minute aggregate deadline was insufficient during this review; final
+  verification uses separate 25-minute maximum deadlines per family.
 - `package all` reuses the [macOS packager](../packaging/macos/package.sh), produces
   a Simulator ZIP, and creates a real device `.xcarchive`. The macOS packager's new
   `--profile debug|release` defaults to `release`, preserving existing callers.
@@ -154,44 +155,79 @@ local Xcode 27.2 do not prove hosted availability or minimum-OS runtime coverage
 
 ## Validation evidence
 
-The real aggregate Debug build and all three unsigned packaging paths completed
-successfully. They produced actual desktop `.app`/DMG/ZIP, Simulator ZIP and
-device `.xcarchive`, not mock artifacts. Isolated shell regressions cover profile
-selection, build failure propagation, target checks, forced non-distribution
-signing, packaging paths and sequential device dispatch, including paths with spaces.
-Shared workflow fixtures test two synthetic consumers separately from native runs.
-The unchanged shared workflow's actual-artifact validators also passed for all
-three real Debug package scopes (exit 0 each); structural compatibility does not
-establish signing, hosted compilation or Store acceptance.
+Runtime and native harness source:
+`7d8609279768337bdbf2e5ef7014e6e7d96ca6d7`, signed with the requested contributor
+key. Later screenshot/report-only commits do not change that tested runtime.
 
-The aggregate native tests passed with a corrected 1200-second deadline: 32
-desktop-platform tests, seven Rust adapter tests per device iteration, and six
-hosted Swift plus six native UI tests on each iPhone 18 Pro and iPad Pro 11-inch
-(M5), iOS 27. All four XCTest result bundles report zero failures and zero skips.
-The first 600-second aggregate attempt timed out during the iPad UI suite (exit
-124); it was not treated as a pass. No tests were removed to make the retry pass.
+| Actual validation | Result |
+| --- | --- |
+| Desktop platform tests | 32 passed |
+| Rust mobile adapter | 2 unit + 6 workflow cases passed on each native invocation |
+| iPad Pro 11-inch (M5), iOS 27 | 9 hosted + 7 UI passed, no failures or skips |
+| iPhone 18 Pro, iOS 27 | 9 hosted + 7 UI passed, no failures or skips |
+| Shell contracts | Passed: metadata inheritance/XML escaping/prerelease mapping, required-field/tool-version errors, desktop-field exclusion, profiles, paths, sequencing and distinct retained result paths |
+| Actual Debug macOS/Simulator/device packages | Aggregate package command passed; real app/DMG/CLI ZIP, Simulator app ZIP and unsigned device archive |
+| Optimized unsigned iOS-device archive | Release package command passed; actual iPhoneOS arm64 archive, not an IPA |
 
-The real optimized device command `bash scripts/build-apple.sh package ios-device
-Release` also completed with exit 0. Xcode's resolved Release settings select
-`aarch64-apple-ios/release`, including quoted custom paths with spaces. A further
-six hosted tests passed using an actual library path containing spaces.
-The first cold Release invocation reached `ARCHIVE SUCCEEDED` but its driver
-exited 2 after being edited while Bash was reading it. The complete command was
-rerun successfully against frozen script contents; the earlier exit was not hidden.
-Release macOS/Simulator products and hosted GitHub Apple execution were not run.
+Both family suites exercise actual Files import, malformed input/cancellation,
+text selection/copy, multipage navigation/zoom/rotation/landscape, large text,
+save/cancel/reopen and sharing. The added export case cancels nine edits/exports,
+then saves and reopens the tenth copy with the latest rotation. Rust separately
+retains seven active copies while repeatedly editing/exporting/releasing later
+copies and checking the original and retained bytes remain unchanged.
 
-`cargo fmt --check`, the focused `cargo clippy --locked -p pdfcraft-mobile
---features swift --all-targets --no-deps -- -D warnings`, `cargo xtask layers`,
-`cargo xtask assets` and `cargo xtask wasm` passed (33 wasm crates).
-The broader dependency-linting Clippy command remains blocked by pre-existing
-`clippy::collapsible_match` in [unchanged XFDF source](../crates/xfdf/src/xfdf.rs);
-no unrelated source or lint suppression was added. Existing vendor/wasm warnings
-also remain. This is not a claim that the full workspace CI is green.
+Terminal workers and native document state are reset together; ordinary document
+errors preserve a healthy document. Cleanup failures retain the URL and keep
+actions disabled with Retry Cleanup or explicit Discard and Close. Two focused
+hosted regressions cover those state transitions without adding a second PDF model.
 
-Do not extrapolate
-physical-device, hosted-runner, VoiceOver speech or Apple acceptance from them.
-Builds before the final source commit carried baseline HEAD plus local changes;
-they were not immutable release artifacts.
+A separate real iPad hosted run passed seven tests using both source and Rust-library
+paths containing spaces. Its compiled optional font notice matched the synthetic
+input byte-for-byte; the generator reuses the desktop notice helper and removes
+stale generated notices. The old unquoted header setting also built on Xcode 27.2:
+the alleged header failure was **not reproduced**. Explicit quoting is retained
+as consistency hardening, not presented as a proven red/green fix.
+
+**Failures and corrections are retained, not counted as passes.** The first cold
+upstream desktop package hit its roughly 600-second budget; a platform-only retry
+completed. A native run was intentionally stopped to fix valid review findings.
+The expanded 1,780-second aggregate later timed out during iPad UI execution.
+An iPhone rerun initially passed five UI cases and failed two at native Files
+selection, before import or export. Replacing a blind double-tap with one tap and
+one observed, bounded retry passed both targeted cases. Final complete family
+runs use frozen source and explicit unique result bundles, avoiding Xcode's pruning
+of earlier DerivedData results. No PDF assertions or tests were removed.
+
+Earlier pre-sync Debug/Release packaging and smaller native suites are historical
+evidence, not tests of every newer source revision. An early Release driver was
+edited while Bash was reading it and exited 2 despite Xcode archiving; a complete
+frozen-script rerun passed. Do not edit an executing driver.
+
+The focused strict mobile Clippy (`--no-deps`), formatting, layering, assets and
+wasm checks passed; wasm covers 33 crates. The broader dependency-linting Clippy
+command remains blocked by pre-existing `clippy::collapsible_match` in
+[unchanged XFDF source](../crates/xfdf/src/xfdf.rs). Existing vendor/wasm and Xcode
+debugger-version warnings remain. Shared orchestration separately passed 34
+focused tests/lints; shared-library boundary evidence passed 14. Synthetic
+workflow/adapter fixtures are not real multi-app or hosted Apple execution.
+
+### Public screenshot boundary
+
+The [synthetic workflow canvas captures](images/ios-poc/) come from genuine
+`WorkflowTests.testFilesRotateExportReopenAndShare` attachments. They show only the
+contributor-original geometric PDF and its page border, with no system text,
+symbols, personal documents or provider/account UI. Their provenance/hashes are in
+the asset manifest and the capture note. They are document-canvas crops, not
+claims of full native-chrome or physical-device evidence.
+
+Full native-chrome captures remain private under the current stricter asset rule.
+The required app-owner decision for SDK fonts/symbols and screenshot publication
+is explicitly requested in [RFC-0041](https://github.com/storytold/craft-contrib/pull/63);
+an unapproved language exception cannot override asset policy. No platform font
+or symbol file is copied or relicensed.
+
+Do not extrapolate minimum-OS, physical-device, hosted-runner, VoiceOver speech,
+hostile-document certification or Apple acceptance from local Simulator results.
 
 ## Official sources
 
