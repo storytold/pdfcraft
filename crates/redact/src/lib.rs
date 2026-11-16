@@ -224,6 +224,11 @@ pub struct Report {
     /// told; Remove hidden information removes them. See [`Elsewhere`] for when the counts are
     /// of every place holding any text.
     pub still_holding: Elsewhere,
+    /// Glyphs kept although their full font box (descent to ascent) reaches into a mark, because
+    /// their one-em box does not: the overlap is the space font metrics leave between lines, as
+    /// on the line below a mark when lines are set solid. Ink a glyph draws outside its one-em box
+    /// stays in the file, so a caller can report these for a check.
+    pub glyphs_beside_marks: usize,
 }
 
 pub(crate) fn rect_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
