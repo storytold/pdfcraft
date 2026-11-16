@@ -981,6 +981,39 @@ fn an_area_highlight_ended_with_escape_stays_a_highlight() {
     assert_eq!(doc.redaction_marks(), 0, "nothing marked for redaction");
 }
 
+/// An area box ended in the same pass as Escape is finished, not left half drawn: Redact, picked
+/// later, marks nothing the user didn't draw. Escape dropped the Highlight tool before the pages
+/// saw the release, and the box waited for Redact. (The tools are picked as by their keys, with
+/// no panel opening beside the pages to move them.)
+#[test]
+fn an_area_box_ended_with_escape_leaves_nothing_for_redact() {
+    let mut h = three_pages();
+    h.state_mut().set_option("quick", "highlight").unwrap();
+    h.run_steps(2);
+    let page = h.state().views[0].page_screen_rect(0).expect("page on screen");
+    let (from, to) = (page.min + egui::vec2(20.0, 15.0), page.min + egui::vec2(120.0, 60.0));
+    h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.input_mut().events.extend([
+        Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+        Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+    ]);
+    h.run_steps(3);
+    h.state_mut().set_option("quick", "redact").unwrap();
+    h.run_steps(1);
+    h.hover_at(page.min + egui::vec2(200.0, 120.0));
+    h.run_steps(3);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert_eq!(doc.redaction_marks(), 0, "Redact marks nothing");
+    let marks: Vec<&str> = doc.info.annotations.iter().map(|a| a.subtype.as_str()).collect();
+    assert_eq!(marks, ["Highlight"], "the box drawn is a highlight");
+}
+
 /// Review of #5017: a highlight across pages is followed up as one on a single page is: the
 /// comment where the selection ends is selected and its note opens for typing.
 #[test]

@@ -790,7 +790,7 @@ pub struct DocView {
     /// its release neither clicks nor ends a drag.
     pub(crate) press_cancelled: bool,
     /// The pages held a press on the last pass, not cancelled: the key pass leaves Escape to
-    /// `cancel_on_escape` while its button stays down.
+    /// `cancel_on_escape` while its button stays down, and to nothing in the pass it comes up.
     held_press: bool,
     /// When each kind of selection on the pages was made, for the key pass: the newest takes a key
     /// first.

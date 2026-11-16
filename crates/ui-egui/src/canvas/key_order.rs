@@ -99,7 +99,8 @@ fn arrows(view: &mut DocView, cx: &KeyCx<'_>) {
 
 /// Escape: one step back per press. The first in this order that holds something takes it:
 /// 1. what reads it itself later in the pass: an editor open on the page, a press the pages hold
-///    (`cancel_on_escape`), the Measure tool's points;
+///    (`cancel_on_escape`; in the pass its button comes up, the pages finish it), the Measure
+///    tool's points;
 /// 2. a comment being drawn or placed, Prepare's area selection;
 /// 3. a picture's crop mode, the camera;
 /// 4. a selection, the newest first;
@@ -179,10 +180,11 @@ fn editor_open(view: &DocView) -> bool {
         || view.fill_text.is_some()
 }
 
-/// The pages held a press last pass and the button is still down: `cancel_on_escape` cancels it
-/// this pass.
+/// The pages held a press last pass, and its button is still down or comes up in this pass. While
+/// it is down `cancel_on_escape` cancels the press. In the pass it comes up the pages finish it, so
+/// Escape does nothing else then: dropping the tool first would leave an area box half drawn.
 fn press_held(view: &DocView, ctx: &egui::Context) -> bool {
-    view.held_press && ctx.input(|i| i.pointer.primary_down())
+    view.held_press && ctx.input(|i| i.pointer.primary_down() || i.pointer.primary_released())
 }
 
 /// The Measure tool has points down or a reading: it cancels them itself.
