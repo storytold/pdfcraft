@@ -434,12 +434,19 @@ pub(crate) fn matrix_of(doc: &Document, dict: &Dict) -> Result<Matrix, ()> {
 pub(crate) fn bbox_of(doc: &Document, dict: &Dict) -> Result<Option<[f64; 4]>, ()> {
     let Some(b) = dict.get(b"BBox") else { return Ok(None) };
     let b = doc.resolve(b);
-    let v: Vec<f64> =
-        b.as_array().ok_or(())?.iter().map(|x| doc.resolve(x).as_f64().filter(|v| v.is_finite()).ok_or(())).collect::<Result<_, _>>()?;
-    match v[..] {
-        [a, b, c, d] => Ok(Some([a.min(c), b.min(d), a.max(c), b.max(d)])),
-        _ => Err(()),
+    // A null value is no entry (ISO 32000-2 §7.3.9), whether given directly or by reference.
+    if matches!(&*b, Object::Null) {
+        return Ok(None);
     }
+    // The length is checked before any entry is resolved: the walk reads it at every `Do`, and an
+    // array of any length would be resolved entry by entry each time.
+    let items = b.as_array().filter(|a| a.len() == 4).ok_or(())?;
+    let mut v = [0.0; 4];
+    for (value, item) in v.iter_mut().zip(items) {
+        *value = doc.resolve(item).as_f64().filter(|n| n.is_finite()).ok_or(())?;
+    }
+    let [a, b, c, d] = v;
+    Ok(Some([a.min(c), b.min(d), a.max(c), b.max(d)]))
 }
 
 /// The content streams of a page as `(raw object, decoded)`, a missing or unreadable entry an

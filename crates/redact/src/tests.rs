@@ -896,6 +896,36 @@ fn an_xobject_of_unknown_subtype_is_placed_by_referenced_geometry() {
     }
 }
 
+/// A `/BBox` of null is no entry (ISO 32000-2 §7.3.9), directly or by reference. It was read as a
+/// malformed box, so an unclassifiable XObject placed outside every mark was removed and counted.
+/// No `/BBox` at all is the control.
+#[test]
+fn an_xobject_of_unknown_subtype_with_a_null_bbox_is_placed_as_without_one() {
+    for bbox in ["", "/BBox null", "/BBox 8 0 R"] {
+        let x = stream(&format!("/Type /XObject /Subtype /PS {bbox}"), [0]);
+        let src = b"q 10 0 0 10 200 200 cm /X1 Do Q";
+        let mut doc = one_page(src, "/XObject << /X1 7 0 R >>", vec![x, b"null".to_vec()]);
+        let rects = [[5.0, 5.0, 25.0, 25.0]];
+        assert_eq!(under(&mut doc, 0, &rects), 0, "{bbox:?}: verification leaves it out");
+        mark(&mut doc, 0, &rects, "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.forms_removed, 0, "{bbox:?}: {r:?}");
+        let c = content(&doc, 0);
+        assert!(c.contains("/X1 Do"), "{bbox:?}: the placement outside the mark stays: {c}");
+    }
+}
+
+/// A `/BBox` is read only when it has four entries; any other length is malformed whatever its
+/// entries, so the placement's place can't be told and it counts as under a mark.
+#[test]
+fn an_xobject_of_unknown_subtype_with_a_bbox_of_the_wrong_length_counts() {
+    for bbox in ["/BBox []", "/BBox [0 0 10 10 10]", "/BBox [0 0 10 10 8 0 R]"] {
+        let x = stream(&format!("/Type /XObject /Subtype /PS {bbox}"), [0]);
+        let mut doc = one_page(b"q 10 0 0 10 200 200 cm /X1 Do Q", "/XObject << /X1 7 0 R >>", vec![x, b"10".to_vec()]);
+        assert_eq!(under(&mut doc, 0, &[[5.0, 5.0, 25.0, 25.0]]), 1, "{bbox:?}: verification counts it");
+    }
+}
+
 #[test]
 fn vectors_are_removed_or_clipped_and_inline_images_go() {
     let src = b"0 g 10 10 20 20 re f 0 0 300 300 re f q 10 0 0 10 50 50 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x80 EI Q 1 0 0 RG 150 150 m 160 160 l S";
