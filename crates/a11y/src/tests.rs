@@ -50,7 +50,7 @@ fn autotag_text_writes_marked_content_and_parent_tree_across_pages() {
         "",
     );
     let result = autotag_text(&mut doc).unwrap();
-    assert_eq!(result, AutoTagResult { pages: 2, paragraphs: 3 });
+    assert_eq!(result, AutoTagResult { pages: 2, paragraphs: 2, headings: 1 });
     let catalog = doc.get(doc.root().unwrap());
     let root = catalog.as_dict().unwrap().reference(b"StructTreeRoot").unwrap();
     let tree = doc.get(root);
@@ -62,14 +62,18 @@ fn autotag_text_writes_marked_content_and_parent_tree_across_pages() {
     assert_eq!(entries[2].as_int(), Some(1));
     assert_eq!(entries[1].as_array().unwrap().len(), 2);
     assert_eq!(entries[3].as_array().unwrap().len(), 1);
-    for page in pdfcraft_model::pages(&doc) {
+    // The 18 pt line stands out from the 12 pt body: a heading, the rest paragraphs.
+    let first_marks = ["/H1 <</MCID 0>> BDC", "/P <</MCID 0>> BDC"];
+    for (page, first) in pdfcraft_model::pages(&doc).iter().zip(first_marks) {
         let content = page.dict.get(b"Contents").unwrap();
         let stream = doc.resolve(content);
         let Object::Stream(stream) = &*stream else { panic!("marked page content") };
         let text = String::from_utf8(stream.decoded_strict().unwrap()).unwrap();
-        assert!(text.contains("/P <</MCID 0>> BDC"), "{text}");
+        assert!(text.contains(first), "{text}");
         assert!(text.contains("EMC"), "{text}");
     }
+    let kinds: Vec<String> = tags(&doc).iter().map(|t| t.kind.clone()).collect();
+    assert_eq!(kinds, ["Document", "H1", "P", "P"]);
     let report = check(&doc, &Options::default());
     assert_eq!(status(&report, Rule::TaggedPdf), Status::Passed);
     assert_eq!(status(&report, Rule::TaggedContent), Status::Passed);
@@ -104,7 +108,7 @@ fn autotag_text_reads_content_with_parameters_given_by_reference() {
     let mut predicted = pdfcraft_cos::Stream::flate(Dict::new(), &rows);
     predicted.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
     doc.set(ObjRef::new(4, 0), predicted);
-    assert_eq!(autotag_text(&mut doc).unwrap(), AutoTagResult { pages: 1, paragraphs: 1 });
+    assert_eq!(autotag_text(&mut doc).unwrap(), AutoTagResult { pages: 1, paragraphs: 1, headings: 0 });
     let page = &pdfcraft_model::pages(&doc)[0];
     let written = doc.resolve(page.dict.get(b"Contents").unwrap());
     let Object::Stream(written) = &*written else { panic!("page content") };
@@ -157,7 +161,7 @@ fn autotag_text_marks_vector_graphics_and_images_as_artifacts() {
         "",
     );
     let result = autotag_text(&mut doc).unwrap();
-    assert_eq!(result, AutoTagResult { pages: 1, paragraphs: 1 });
+    assert_eq!(result, AutoTagResult { pages: 1, paragraphs: 1, headings: 0 });
     let report = check(&doc, &Options { rules: [Rule::TaggedPdf, Rule::TaggedContent].into(), pages: None });
     assert_eq!(status(&report, Rule::TaggedPdf), Status::Passed);
     assert_eq!(status(&report, Rule::TaggedContent), Status::Passed);

@@ -55,6 +55,8 @@ pub struct Document {
     pub(crate) js_runtime: js::Runtime,
     pub(crate) js_zoom: f64,
     pub(crate) js_page: usize,
+    /// How its page actions and timers show it while it is read (see [`Session::show_page`](crate::Session::show_page)).
+    pub(crate) live: crate::live_scripts::LiveView,
     /// Dynamic XFA forms: what laying the template out produced (pages and fields are
     /// PdfCraft's; Adobe's viewers draw the form from the XFA packets themselves).
     pub xfa: Option<XfaLayout>,
