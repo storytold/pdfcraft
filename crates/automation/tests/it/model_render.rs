@@ -61,12 +61,11 @@ fn open(a: &mut Automation, path: &str) -> u64 {
 
 /// The RGB of pixel (x, y) of a PNG.
 fn rgb(data: &[u8], x: usize, y: usize) -> [u8; 3] {
-    let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
-    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
-    let info = reader.next_frame(&mut pixels).unwrap();
-    let channels = info.line_size / info.width as usize;
-    let at = y * info.line_size + x * channels;
-    [pixels[at], pixels[at + 1], pixels[at + 2]]
+    let img = craft_image_codecs::decode(data).unwrap();
+    let w = img.width() as usize;
+    let rgba = img.to_rgba8();
+    let at = (y * w + x) * 4;
+    [rgba[at], rgba[at + 1], rgba[at + 2]]
 }
 
 #[test]
