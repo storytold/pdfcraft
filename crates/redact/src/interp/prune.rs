@@ -590,7 +590,7 @@ pub(super) fn extgstate_font(
 /// What is written back is a dictionary of this page's own, so pruning never reaches through a
 /// `/Pattern` dictionary another page shares. The pattern objects dropped are added to `pruned`,
 /// for [`unlink_pruned_patterns`].
-pub(crate) fn prune_patterns(doc: &Document, res: &mut Dict, seen: &[Vec<u8>], painted: &[Vec<u8>], pruned: &mut Vec<ObjRef>) -> usize {
+pub(crate) fn prune_patterns(doc: &Document, res: &mut Dict, seen: &[Vec<u8>], painted: &HashSet<Vec<u8>>, pruned: &mut Vec<ObjRef>) -> usize {
     let Some(mut pat) = res.get(b"Pattern").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) else { return 0 };
     let mut dropped = 0;
     for n in seen {
