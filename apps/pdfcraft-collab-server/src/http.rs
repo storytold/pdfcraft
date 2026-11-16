@@ -176,6 +176,16 @@ pub fn parse_http_url(url: &str) -> Result<Endpoint, HttpError> {
     Ok(Endpoint { host, port, path })
 }
 
+/// The `Host` header value of a request to `endpoint`: the authority the URL
+/// named, with its port unless the port is http's default, and an IPv6 host in
+/// brackets as the URL had it. A proxy that routes by authority refuses a
+/// request whose `Host` omits a non-default port, and the commit would then stay
+/// unpublished with no automatic retry (thread on PR #6622).
+fn host_header(endpoint: &Endpoint) -> String {
+    let host = if endpoint.host.contains(':') { format!("[{}]", endpoint.host) } else { endpoint.host.clone() };
+    if endpoint.port == 80 { host } else { format!("{host}:{}", endpoint.port) }
+}
+
 /// A plain-HTTP client with one deadline per request. No redirects, no proxy,
 /// no chunked responses: a callback endpoint that needs those is not one this
 /// daemon can talk to, and refusing is better than guessing.
@@ -203,7 +213,7 @@ impl Client {
 
     fn exchange(&self, stream: &mut TcpStream, endpoint: &Endpoint, head: &str, body: &[u8], limit: u64) -> Result<(u16, Vec<u8>), HttpError> {
         stream
-            .write_all(format!("{head}Host: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", endpoint.host, body.len()).as_bytes())
+            .write_all(format!("{head}Host: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", host_header(endpoint), body.len()).as_bytes())
             .map_err(|e| error(format!("could not send the request: {e}")))?;
         stream.write_all(body).map_err(|e| error(format!("could not send the body: {e}")))?;
         stream.flush().map_err(|e| error(format!("could not flush the request: {e}")))?;
@@ -273,7 +283,7 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
-    use super::{Client, Endpoint, parse_http_url, read_request, respond};
+    use super::{Client, Endpoint, host_header, parse_http_url, read_request, respond};
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::time::Duration;
@@ -365,6 +375,37 @@ mod tests {
         let seen = receiver.recv()?;
         assert!(seen.starts_with("POST /commit"), "{seen}");
         assert!(seen.contains(r#"{"fileId":"file-1"}"#), "{seen}");
+        Ok(())
+    }
+
+    /// `Host` names the authority with its port, and an IPv6 host in brackets: a
+    /// proxy that routes by authority refuses a request whose `Host` omitted a
+    /// non-default port, and the commit would then stay unpublished (thread on
+    /// PR #6622).
+    #[test]
+    fn the_host_header_carries_the_authority_with_its_port() -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else { return };
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while stream.read(&mut byte).unwrap_or(0) == 1 {
+                head.push(byte[0]);
+                if head.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let _ = respond(&mut stream, "200 OK", "application/pdf", b"%PDF-1.7 fixture");
+            let _ = sender.send(String::from_utf8_lossy(&head).into_owned());
+        });
+        let client = Client { timeout: Duration::from_secs(5) };
+        client.get(&format!("http://{address}/file.pdf"), 1024)?;
+        let seen = receiver.recv()?;
+        assert!(seen.contains(&format!("Host: 127.0.0.1:{}\r\n", address.port())), "{seen}");
+        assert_eq!(host_header(&Endpoint { host: "::1".into(), port: 8788, path: "/".into() }), "[::1]:8788");
+        assert_eq!(host_header(&Endpoint { host: "cabinet.test".into(), port: 80, path: "/".into() }), "cabinet.test");
         Ok(())
     }
 

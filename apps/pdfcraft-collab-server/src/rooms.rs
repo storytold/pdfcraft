@@ -294,6 +294,12 @@ impl Adapter for CabinetAdapter {
             // room stays dirty so the next commit retries it.
             Err(_) => return Ok(()),
         };
+        // A room whose copy was never published has no cabinet tag: an empty
+        // `CABINET` etag is refused on the next open, so the marker is left as it
+        // is instead of being made unreadable (thread on PR #6622).
+        if etag.trim().is_empty() {
+            return Ok(());
+        }
         // The digest of the bytes this marker describes. It is what a later
         // ticket compares against: the cabinet's tag is opaque (its file
         // modification time), so "the tag changed" alone cannot tell our own
@@ -471,7 +477,7 @@ pub fn open_room(hub: &mut Hub<CabinetAdapter>, config: &RoomsConfig, doc: DocKe
     let base = store.base()?;
     let seed = seed.map(|seed| (seed.bytes, seed.etag, seed.cabinet_version, seed.mirror));
 
-    let (bytes, mirror, created) = match (base, seed) {
+    let (bytes, mirror, created, prepared) = match (base, seed) {
         (Some(base), seed) => {
             if let Some((sent, etag, cabinet_version, _)) = &seed {
                 match store.cabinet() {
@@ -506,17 +512,22 @@ pub fn open_room(hub: &mut Hub<CabinetAdapter>, config: &RoomsConfig, doc: DocKe
                 }
             }
             let mirror = seed.and_then(|(_, _, _, mirror)| mirror);
-            (base, mirror, false)
+            (Arc::new(base), mirror, false, None)
         }
         (None, Some((bytes, etag, cabinet_version, mirror))) => {
             if bytes.len() > config.max_source_bytes {
                 return Err(RoomError::invalid(format!("the file is larger than the {} byte limit", config.max_source_bytes)));
             }
+            // Open the document before anything is written: a file the engine
+            // refuses must not leave a base and a marker behind, or the
+            // corrected file would meet the room's old tag as a conflict it
+            // cannot resolve (thread on PR #6622).
+            let pdf = PdfAdapter::open(format!("{}.pdf", doc.as_str()), bytes.clone())?;
             store.write_base(0, 0, bytes.as_slice())?;
             store.set_cabinet(Some(CabinetCopy { version: 0, etag, expected: cabinet_version, sha256: Some(sha256_of(bytes.as_slice())) }))?;
             version = 0;
             epoch = 0;
-            (bytes.to_vec(), mirror, true)
+            (bytes, mirror, true, Some(pdf))
         }
         (None, None) => return Err(RoomError::Missing(format!("no session and no file for {}", doc.as_str()))),
     };
@@ -528,7 +539,10 @@ pub fn open_room(hub: &mut Hub<CabinetAdapter>, config: &RoomsConfig, doc: DocKe
     let copy = store.cabinet().cloned();
     let published_version = copy.as_ref().map_or(0, |copy| copy.version);
     let expected_version = copy.as_ref().map_or(0, CabinetCopy::expected_version);
-    let mut pdf = PdfAdapter::open(format!("{}.pdf", doc.as_str()), Arc::new(bytes))?;
+    let mut pdf = match prepared {
+        Some(pdf) => pdf,
+        None => PdfAdapter::open(format!("{}.pdf", doc.as_str()), bytes)?,
+    };
     pdf.attach_store(store);
     let adapter = CabinetAdapter::new(pdf, doc.as_str(), mirror, config.publisher.clone(), expected_version);
     hub.open_room_at(doc.clone(), adapter, version, epoch).map_err(|e| RoomError::invalid(e.message))?;
@@ -1080,6 +1094,59 @@ mod tests {
             }
             other => return Err(format!("unexpected error: {other:?}").into()),
         }
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// A file the engine refuses must not leave a base and a marker behind: the
+    /// corrected file would meet the room's old tag as a conflict it cannot
+    /// resolve (thread on PR #6622).
+    #[test]
+    fn a_file_the_engine_refuses_leaves_no_room_on_disk() -> Result<(), Box<dyn std::error::Error>> {
+        let root = root("invalid-seed");
+        let config = config(&root, None);
+        let doc = DocKey::new("file-1")?;
+        let bad = Arc::new(b"not a pdf at all".to_vec());
+        let seed = Seed { etag: etag_of(&bad), bytes: bad, cabinet_version: None, mirror: None };
+        assert!(open_room(&mut Hub::new(RoomConfig::default()), &config, doc.clone(), Some(seed)).is_err(), "a file that is not a PDF does not open");
+        let dir = config.data.join(doc.as_str());
+        assert!(!dir.join("CURRENT").exists(), "nothing was persisted for a file the engine refused");
+        assert!(!dir.join("CABINET").exists());
+        assert!(!dir.join("versions").exists());
+
+        // The corrected file then opens as a new room instead of a conflict.
+        let good = Arc::new(fixture("one"));
+        let seed = Seed { etag: etag_of(&good), bytes: good, cabinet_version: None, mirror: None };
+        let opened = open_room(&mut Hub::new(RoomConfig::default()), &config, doc, Some(seed))?;
+        assert!(opened.created);
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// A room whose marker predates this build has no cabinet tag; a commit must
+    /// not write an empty one, because the next open refuses to read it (thread
+    /// on PR #6622).
+    #[test]
+    fn a_legacy_room_does_not_write_an_empty_etag_marker() -> Result<(), Box<dyn std::error::Error>> {
+        let root = root("legacy-marker");
+        let config = config(&root, None);
+        let doc = DocKey::new("file-1")?;
+        let bytes = Arc::new(fixture("one"));
+        let seed = Seed { etag: etag_of(&bytes), bytes, cabinet_version: None, mirror: None };
+        open_room(&mut Hub::new(RoomConfig::default()), &config, doc.clone(), Some(seed))?;
+        std::fs::remove_file(config.data.join(doc.as_str()).join("CABINET"))?;
+
+        let mut hub = Hub::new(RoomConfig::default());
+        open_room(&mut hub, &config, doc.clone(), None)?;
+        let room = hub.room_mut(&doc).ok_or("no room")?;
+        let editor = ActorId::new("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        edit(room, "n1")?;
+        commit(room, &editor, 1)?;
+        drop(hub);
+
+        // The restart has to find a marker it can read.
+        open_room(&mut Hub::new(RoomConfig::default()), &config, doc, None)?;
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }

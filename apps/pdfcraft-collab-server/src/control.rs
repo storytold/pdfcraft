@@ -334,7 +334,12 @@ impl Control {
         // cabinet's tag is the file's version). A caller that names the content
         // by its digest instead must send the bytes it describes; that is the
         // old spelling, kept so a host without a tag still works.
-        let etag = match (&request.etag, &seed) {
+        //
+        // A `sha256:` tag is compared in its canonical form: the cabinet may
+        // print upper-case hex for powershell- or .NET-built strings, and the
+        // daemon's own tags are lower case.
+        let request_etag = request.etag.as_deref().map(|etag| canonical_etag(etag).unwrap_or_else(|| etag.to_owned()));
+        let etag = match (&request_etag, &seed) {
             (Some(etag), Some(seed)) if etag.starts_with("sha256:") && *etag != seed.etag => {
                 return Reply::error(400, "invalid", "the etag does not match the bytes that were sent");
             }
@@ -812,6 +817,24 @@ mod tests {
         });
         let (status, reply) = post(address, body)?;
         assert_eq!(status, 400, "{reply}");
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// The cabinet may print a digest in upper-case hex, while the marker and
+    /// the daemon's own tags are lower case: the comparison is canonical, so the
+    /// same content is not refused as a foreign file (thread on PR #6622).
+    #[test]
+    fn an_upper_case_etag_names_the_same_content() -> Result<(), Box<dyn std::error::Error>> {
+        let (control, root) = control("etag-case", None);
+        let address = control.bind("127.0.0.1:0")?;
+        let pdf = fixture("one");
+        let canonical = rooms::etag_of(&pdf);
+        let upper = format!("sha256:{}", canonical.trim_start_matches("sha256:").to_ascii_uppercase());
+        let body = serde_json::json!({"fileId": "file-1", "jwt": "good", "etag": upper, "bytes": rooms::base64_encode(&pdf)});
+        let (status, reply) = post(address, body)?;
+        assert_eq!(status, 201, "{reply}");
+        assert_eq!(reply["etag"], canonical, "the room keeps the canonical tag, not the caller's spelling");
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }

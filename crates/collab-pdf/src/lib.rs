@@ -339,10 +339,17 @@ impl PdfAdapter {
 
     /// The `/NM` a collaboration client proposed for a new annotation. Absent
     /// means the engine names it; a present name must be free (ADR-0002).
+    ///
+    /// The name is trimmed here, before the free-name check, because that is how
+    /// the summaries read `/NM` back: a client that sends `" x "` when `x`
+    /// exists would otherwise pass the check, be added as `" x "`, and be listed
+    /// as a second `x` — and the adapter, not the summary, refused it after the
+    /// mutation.
     fn requested_name(payload: &Value) -> Result<Option<String>, AdapterError> {
         let Some(value) = payload.get("nm").filter(|value| !value.is_null()) else { return Ok(None) };
         let name = value.as_str().ok_or_else(|| AdapterError::new(ErrorCode::Invalid, "nm must be a string", false))?;
-        if name.trim().is_empty() {
+        let name = name.trim();
+        if name.is_empty() {
             return Err(AdapterError::new(ErrorCode::Invalid, "nm must not be empty", false));
         }
         if name.len() > MAX_ANNOTATION_NAME {
@@ -1750,6 +1757,44 @@ mod tests {
             matches!(room.apply(&editor, &add("a2", 1)?, 0), Err(e) if e.code == pdfcraft_collab_proto::ErrorCode::Conflict),
             "two annotations may not share an /NM"
         );
+        Ok(())
+    }
+
+    /// The free-name check compares the name the summaries will show: a padded
+    /// `/NM` used to pass it, be added as `" name "`, and then be listed as a
+    /// second copy of `name` (thread on PR #6622).
+    #[test]
+    fn a_padded_client_name_is_compared_in_its_trimmed_form() -> Result<(), Box<dyn std::error::Error>> {
+        let adapter = PdfAdapter::open("fixture.pdf", fixture(1).into())?;
+        let mut room = Room::new(SessionId::new("session-1")?, DocKey::new("file-1")?, adapter, RoomConfig::default());
+        let editor = ActorId::new("editor")?;
+        room.hello(editor.clone(), Role::Editor, &hello()?, 0)?;
+        let add = |id: &str, base: u64, name: &str| {
+            op(
+                id,
+                ConflictClass::Merge,
+                Target::Page(PageRef { index: 0, epoch: 0 }),
+                base,
+                0,
+                json!({"action": "annotation.add", "at": [40.0, 250.0], "contents": "hello", "nm": name}),
+            )
+        };
+        room.apply(&editor, &add("a1", 0, "same-name")?, 0)?;
+        assert!(
+            matches!(room.apply(&editor, &add("a2", 1, " same-name ")?, 0), Err(e) if e.code == pdfcraft_collab_proto::ErrorCode::Conflict),
+            "a padded name is the name the summary shows"
+        );
+        let named: Vec<_> = room
+            .adapter()
+            .document()
+            .ok_or("gone")?
+            .info
+            .annotations
+            .iter()
+            .filter(|a| a.name.is_some())
+            .map(|a| a.name.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(named, vec!["same-name".to_owned()], "the refused add changed nothing");
         Ok(())
     }
 

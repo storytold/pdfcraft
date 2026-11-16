@@ -102,7 +102,10 @@ struct Daemon {
 impl Daemon {
     fn spawn(root: &Path, documents: &Path, data: &Path, public_pem: &Path, fault: Option<&Path>) -> Result<Self, Box<dyn std::error::Error>> {
         let listen = free_port()?;
-        let health = free_port()?;
+        // The health listener takes a port the kernel picks: two `free_port()`
+        // calls could return the same number, and the daemon would then fail to
+        // bind its health socket before the test reached recovery (thread on PR
+        // #6622). The test only needs the WebSocket address.
         let stderr = root.join(format!("daemon-{listen}.stderr"));
         let mut command = Command::new(env!("CARGO_BIN_EXE_pdfcraft-collab-server"));
         command
@@ -115,7 +118,7 @@ impl Daemon {
             .arg("--listen")
             .arg(format!("127.0.0.1:{listen}"))
             .arg("--health")
-            .arg(format!("127.0.0.1:{health}"))
+            .arg("127.0.0.1:0")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(std::fs::File::create(&stderr)?);

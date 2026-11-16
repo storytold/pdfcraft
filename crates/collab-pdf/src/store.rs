@@ -209,30 +209,43 @@ impl Store {
             serde_json::to_vec(&record).map_err(|e| AdapterError::new(ErrorCode::Internal, format!("could not encode an operation: {e}"), false))?;
         line.push(b'\n');
         let path = self.dir.join(JOURNAL);
+        // The first append creates the directory entry, and `sync_data` covers
+        // the file's data only: without the directory sync a power loss could
+        // lose an operation the room has acknowledged.
+        let created = !path.exists();
         let mut file = OpenOptions::new().create(true).append(true).open(&path).map_err(|e| io_error(&path, "open", e))?;
         file.write_all(&line).map_err(|e| io_error(&path, "append", e))?;
         file.sync_data().map_err(|e| io_error(&path, "sync", e))?;
+        if created {
+            File::open(&self.dir).and_then(|dir| dir.sync_all()).map_err(|e| io_error(&self.dir, "sync", e))?;
+        }
         Ok(())
     }
 
     /// Every journal record, oldest first. A torn last line is dropped: it was
-    /// never acknowledged.
+    /// never acknowledged. Records are read as bytes, so a crash that tore the
+    /// final record inside a multi-byte character loses that record instead of
+    /// making the room unopenable.
     pub fn journal(&self) -> Result<Vec<JournalRecord>, AdapterError> {
         let path = self.dir.join(JOURNAL);
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(io_error(&path, "read", e)),
         };
-        let lines: Vec<(usize, &str)> = text.lines().enumerate().filter(|(_, line)| !line.trim().is_empty()).collect();
-        let last = lines.last().map(|(index, _)| *index);
+        let lines: Vec<&[u8]> = bytes.split(|byte| *byte == b'\n').filter(|line| !line.iter().all(u8::is_ascii_whitespace)).collect();
+        let last = lines.len().saturating_sub(1);
         let mut records = Vec::with_capacity(lines.len());
-        for (index, line) in lines {
-            match serde_json::from_str::<JournalRecord>(line) {
+        for (index, line) in lines.into_iter().enumerate() {
+            let parsed = match std::str::from_utf8(line) {
+                Ok(line) => serde_json::from_str::<JournalRecord>(line).map_err(|e| format!("is corrupt: {e}")),
+                Err(e) => Err(format!("is not UTF-8: {e}")),
+            };
+            match parsed {
                 Ok(record) => records.push(record),
-                Err(_) if Some(index) == last => break,
+                Err(_) if index == last => break,
                 Err(e) => {
-                    return Err(AdapterError::new(ErrorCode::Invalid, format!("{} line {} is corrupt: {e}", path.display(), index + 1), false));
+                    return Err(AdapterError::new(ErrorCode::Invalid, format!("{} line {} {e}", path.display(), index + 1), false));
                 }
             }
         }
@@ -477,6 +490,29 @@ mod tests {
         text.insert_str(0, "not json\n");
         std::fs::write(&journal, text)?;
         assert!(store.journal().is_err(), "a broken line before the end hides acknowledged operations");
+        let _ = std::fs::remove_dir_all(&path);
+        Ok(())
+    }
+
+    /// A crash can stop inside a multi-byte character of the last record, which
+    /// leaves bytes that are not even UTF-8. That record was never acknowledged,
+    /// so it is dropped like a torn JSON line — but a broken line anywhere else
+    /// still stops the room from opening.
+    #[test]
+    fn a_last_record_torn_inside_a_character_is_dropped() -> Result<(), Box<dyn std::error::Error>> {
+        let path = dir("torn-utf8");
+        let actor = ActorId::new("editor")?;
+        let mut store = Store::open(&path)?;
+        store.append(1, &actor, &op("a1")?, 1_000)?;
+        let journal = path.join("journal.jsonl");
+        let mut bytes = std::fs::read(&journal)?;
+        bytes.extend_from_slice(b"{\"version\":2,\"actor\":\"\xc3");
+        std::fs::write(&journal, bytes)?;
+        assert_eq!(store.journal()?.len(), 1, "the record torn inside a character was never acknowledged");
+        let mut bytes = std::fs::read(&journal)?;
+        bytes.splice(0..0, [0xff, b'\n']);
+        std::fs::write(&journal, bytes)?;
+        assert!(store.journal().is_err(), "a line that is not UTF-8 before the end is not a torn tail");
         let _ = std::fs::remove_dir_all(&path);
         Ok(())
     }

@@ -227,7 +227,14 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--control" => parsed.control = Some(value()?),
             "--documents" => parsed.documents = Some(value()?.into()),
             "--data" => parsed.data = value()?.into(),
-            "--callback-url" => parsed.callback = Some(value()?),
+            "--callback-url" => {
+                let url = value()?;
+                // A callback URL this client cannot use (https, a space, a
+                // missing host) would make every publication fail while the
+                // daemon looked healthy, and the queue would retry it for ever.
+                http::parse_http_url(&url).map_err(|e| format!("--callback-url is not usable: {e}"))?;
+                parsed.callback = Some(url);
+            }
             "--max-source-bytes" => parsed.max_source_bytes = value()?.parse().map_err(|_| "--max-source-bytes needs a number".to_owned())?,
             "--jwt-key" => parsed.jwt_key = Some(value()?.into()),
             "--jwt-secret-file" => parsed.jwt_secret_file = Some(value()?.into()),
@@ -425,6 +432,16 @@ mod tests {
         assert_eq!(parsed.control.as_deref(), Some("127.0.0.1:8789"));
         assert_eq!(parsed.callback.as_deref(), Some("http://cabinet/commit"));
         assert_eq!(parsed.max_source_bytes, 1024);
+    }
+
+    /// A callback URL the client cannot use must not start a daemon whose every
+    /// publication fails and whose queue retries for ever (thread on PR #6622).
+    #[test]
+    fn a_callback_url_the_client_cannot_use_is_refused_at_start_up() {
+        for url in ["https://cabinet/commit", "http://cabinet/a b", "ftp://cabinet/commit", "http:///commit"] {
+            assert!(parse_args(args(&["--callback-url", url]).into_iter()).is_err(), "{url:?} must not start a daemon");
+        }
+        parse_args(args(&["--callback-url", "http://127.0.0.1:8788/commit"]).into_iter()).expect("a plain URL is accepted");
     }
 
     #[test]
