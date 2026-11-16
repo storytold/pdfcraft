@@ -78,6 +78,12 @@ impl PdfCraftApp {
                         }
                     }
                 }
+                // Done, whatever it found: release the slot, then ask for the frame that retires
+                // it, so paths queued meanwhile don't wait for the user's next input.
+                drop(out);
+                if let Some(ctx) = &ctx {
+                    ctx.request_repaint();
+                }
             };
             if self.run_inline {
                 work();
@@ -101,6 +107,12 @@ impl PdfCraftApp {
         if finished {
             self.recent_check.gone = None;
             self.recent_check.opened.clear();
+            // Paths queued while that check ran start theirs on the next frame: ask for it.
+            if !self.recent_check.unchecked.is_empty()
+                && let Some(ctx) = &self.ctx
+            {
+                ctx.request_repaint();
+            }
         }
     }
 }
@@ -177,6 +189,38 @@ mod tests {
             "the queued check keeps what is there and drops what is not"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A finished check asks for the frame that retires it even when nothing was missing, and
+    /// retiring it asks for the frame that starts the paths queued meanwhile; otherwise an
+    /// idle window leaves them unchecked until the next input (CodeRabbit on #6323).
+    #[test]
+    fn a_finished_check_asks_for_the_frames_that_follow() {
+        let here = std::env::temp_dir().to_string_lossy().into_owned();
+        let mut app = PdfCraftApp::new();
+        app.run_inline = true;
+        let ctx = egui::Context::default();
+        // Frames nobody asks anything in leave no repaint requested (a new context wants a few).
+        let settle = || {
+            for _ in 0..4 {
+                ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+            }
+        };
+        settle();
+        assert!(!ctx.has_requested_repaint());
+        app.ctx = Some(ctx.clone());
+        // Nothing is missing, and the worker still asks for a frame when it is done.
+        app.recent_check.focused(&here);
+        app.check_restored_recent();
+        assert!(ctx.has_requested_repaint(), "the finished worker asks for the frame that retires it");
+        settle();
+        assert!(!ctx.has_requested_repaint());
+        // A check that ends with paths still queued asks for the frame that starts them.
+        app.recent_check.gone = Some(Arc::new(Mutex::new(Vec::new())));
+        app.recent_check.focused(&here);
+        app.check_restored_recent();
+        assert!(app.recent_check.gone.is_none() && !app.recent_check.unchecked.is_empty());
+        assert!(ctx.has_requested_repaint(), "retiring a check asks for the frame that starts the queued one");
     }
 
     #[test]
