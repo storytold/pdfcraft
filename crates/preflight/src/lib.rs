@@ -16,7 +16,8 @@
 //!   FirstPage and LastPage (ISO 32000-1 12.6.4.11, Table 212); no additional actions on the
 //!   catalog, pages, fields or widgets; `NeedAppearances` not true;
 //! - images: no `Interpolate`, no `Alternates`, no OPI; no PostScript XObjects;
-//! - embedded files: PDF/A-2 only allows embedded PDF/A files; PDF/A-3 needs `AFRelationship`.
+//! - embedded files: PDF/A-2 only allows embedded PDF/A-1 and PDF/A-2 files; PDF/A-3 needs
+//!   `AFRelationship`; both need `F` and `UF` in the file specification.
 //!
 //! [`convert`] fixes what can be fixed without changing how pages look (XMP, the sRGB output
 //! intent, forbidden actions, annotation flags, Interpolate, NeedAppearances, encryption) and
@@ -249,7 +250,7 @@ pub const WORDINGS: &[&str] = &[
     "An image asks to be interpolated",
     "An image has alternates or OPI information",
     "PostScript XObjects aren't allowed",
-    "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)",
+    "Embedded files must be PDF/A-1 or PDF/A-2 files themselves (use PDF/A-3 for others)",
     "An embedded file has no AFRelationship",
     // PDF/A-4's own.
     "The metadata has no pdfaid:rev",
@@ -1802,6 +1803,23 @@ fn check_stream(
     }
 }
 
+/// The embedded file specification `d` as Save as PDF/A at `level` leaves it, with whether it
+/// gained an `/AFRelationship` (PDF/A-3) and a `/UF`; `None` when it needs neither.
+fn fix_file_spec(doc: &Document, level: Level, d: &Dict) -> Option<(Dict, bool, bool)> {
+    let mut nd = d.clone();
+    let relationship = level == Level::A3b && d.get(b"AFRelationship").is_none();
+    if relationship {
+        nd.set(b"AFRelationship".to_vec(), Object::name("Unspecified"));
+    }
+    // The name in Unicode, from the name every reader reads (ISO 32000-2 7.11.3, Table 43).
+    let name = d.get(b"F").map(|f| doc.resolve(f)).filter(|f| d.get(b"UF").is_none() && f.as_string().is_some());
+    if let Some(name) = &name {
+        nd.set(b"UF".to_vec(), (**name).clone());
+    }
+    (relationship || name.is_some()).then_some((nd, relationship, name.is_some()))
+}
+
+/// 6.8 (6.9 for PDF/A-4): the embedded file the file specification `dict` holds, at `level`.
 fn check_embedded_file(
     doc: &Document,
     level: Level,
@@ -1809,12 +1827,26 @@ fn check_embedded_file(
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
     match level {
-        Level::A2b => issue("6.8", "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)", None, None, false),
+        Level::A2b => {
+            let found = part4::embedded_conformance(&part4::embedded_streams(doc, dict), &[1, 2]);
+            for label in found.fails {
+                issue("6.8", "An embedded file declares {} but doesn't conform to it", Some(label.to_owned()), None, false);
+            }
+            if found.not_pdfa {
+                issue("6.8", "Embedded files must be PDF/A-1 or PDF/A-2 files themselves (use PDF/A-3 for others)", None, None, false);
+            }
+        }
         Level::A3b if dict.get(b"AFRelationship").is_none() => {
             issue("6.8", "An embedded file has no AFRelationship", None, None, true);
         }
         Level::A3b => {}
-        Level::A4 | Level::A4e | Level::A4f => part4::embedded_file(doc, level, dict, issue),
+        Level::A4 | Level::A4e | Level::A4f => return part4::embedded_file(doc, level, dict, issue),
+    }
+    // ISO 32000-2 7.11.3, Table 43: F for compatibility and UF for the name in Unicode. `convert`
+    // fills in UF from F.
+    let has_f = dict.get(b"F").is_some();
+    if !has_f || dict.get(b"UF").is_none() {
+        issue("6.8", "An embedded file's file specification lacks F or UF", None, None, has_f);
     }
 }
 
@@ -2161,7 +2193,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
     doc.update_dict(root, |c| *c = cat)?;
 
     // Pages, annotations, fields, images, embedded files.
-    let (mut actions, mut flags, mut images, mut removed, mut files) = (0, 0, 0, 0, 0);
+    let (mut actions, mut flags, mut images, mut removed, mut files, mut names) = (0, 0, 0, 0, 0, 0);
     let page_annots = page_annot_refs(doc);
     for p in pdfcraft_model::pages(doc) {
         let mut changed = false;
@@ -2208,11 +2240,14 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
             }
             continue;
         }
-        if level == Level::A3b && ty.as_deref() == Some(b"Filespec") && d.get(b"EF").is_some() && d.get(b"AFRelationship").is_none() {
-            let mut nd = d.clone();
-            nd.set(b"AFRelationship".to_vec(), Object::name("Unspecified"));
+        if matches!(level, Level::A2b | Level::A3b)
+            && ty.as_deref() == Some(b"Filespec")
+            && d.get(b"EF").is_some()
+            && let Some((nd, relationship, name)) = fix_file_spec(doc, level, &d)
+        {
             doc.set_existing(r, Object::Dict(nd))?;
-            files += 1;
+            files += usize::from(relationship);
+            names += usize::from(name);
         }
     }
     remove_from_pages(doc, &forbidden_annots)?;
@@ -2238,6 +2273,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
         (images, "cleared image interpolation and alternates"),
         (removed, "removed multimedia annotations"),
         (files, "marked embedded files' relationship"),
+        (names, "gave embedded files their name in Unicode (UF)"),
     ] {
         if n > 0 {
             fixed.push(format!("{n}: {what}"));

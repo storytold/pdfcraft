@@ -626,6 +626,72 @@ fn embedded_files_follow_the_level() {
     passes(&file(None, good, pdf(&inner), listed), Level::A4);
 }
 
+/// PDF/A-2 6.8: an embedded file is a PDF/A-1 or PDF/A-2 file, and in PDF/A-2 and 3 its file
+/// specification has F and UF (ISO 32000-2 7.11.3, Table 43), which Save as PDF/A fills in from F.
+#[test]
+fn embedded_files_at_2b_are_pdfa_1_or_2_and_named_in_unicode() {
+    let named = "/F (a.pdf) /UF (a.pdf)";
+    let pdf = |bytes: &[u8]| stream("/Type /EmbeddedFile /Subtype /application#2Fpdf", bytes);
+    let file = |spec: &str, embedded: Vec<u8>| File {
+        header: "%PDF-1.7",
+        packet: packet("2", None, Some("B")),
+        more: vec![o(&format!("<< /Type /Filespec {spec} /EF << /F 7 0 R >> >>")), embedded],
+        ..with_catalog("/Names << /EmbeddedFiles << /Names [(a.pdf) 6 0 R] >> >>")
+    };
+    let embedded = |part: &str, conformance: Option<&str>, content: &'static str| {
+        bytes(&File { header: "%PDF-1.7", packet: packet(part, None, conformance), content, ..File::default() })
+    };
+    let found = |f: &File, level: Level| -> Vec<(String, bool)> {
+        let found = issues(f, level);
+        for i in &found {
+            assert!(WORDINGS.contains(&i.pattern), "not listed for translation: {:?}", i.pattern);
+        }
+        found.into_iter().filter(|i| i.clause == "6.8").map(|i| (i.message, i.fixable)).collect()
+    };
+    let not_pdfa = || vec![("Embedded files must be PDF/A-1 or PDF/A-2 files themselves (use PDF/A-3 for others)".to_owned(), false)];
+    // An embedded PDF/A-2b file that conforms: the whole file passes.
+    let pdfa2 = embedded("2", Some("B"), "");
+    passes(&file(named, pdf(&pdfa2)), Level::A2b);
+    // PDF/A-2a and 2u, which PdfCraft doesn't verify, are taken as declared, and so is PDF/A-1 with
+    // the file header ISO 19005-1 6.1.2 asks for.
+    let red = "1 0 0 rg 0 0 10 10 re f";
+    for (part, conformance) in [("2", "U"), ("2", "A"), ("1", "B")] {
+        assert_eq!(found(&file(named, pdf(&embedded(part, Some(conformance), red))), Level::A2b), [], "{part}{conformance}");
+    }
+    // A PDF/A-1 file without the binary comment after its header, or with bytes before it.
+    let pdfa1 = embedded("1", Some("B"), "");
+    let uncommented = [b"%PDF-1.7\n%abcd".as_slice(), pdfa1.get(14..).unwrap()].concat();
+    assert_eq!(uncommented.len(), pdfa1.len());
+    let failing1 = || vec![("An embedded file declares PDF/A-1 but doesn't conform to it".to_owned(), false)];
+    assert_eq!(found(&file(named, pdf(&uncommented)), Level::A2b), failing1());
+    let preceded = [b"Invalid data\n".as_slice(), &pdfa1].concat();
+    assert_eq!(found(&file(named, pdf(&preceded)), Level::A2b), failing1());
+    // A PDF/A-2b file that doesn't conform, one of another part, a PDF that declares nothing, and a
+    // file that isn't a PDF.
+    let failing2b = embedded("2", Some("B"), red);
+    let failing = vec![("An embedded file declares PDF/A-2b but doesn't conform to it".to_owned(), false)];
+    assert_eq!(found(&file(named, pdf(&failing2b)), Level::A2b), failing);
+    for other in
+        [embedded("3", Some("B"), ""), embedded("4", None, ""), bytes(&File { header: "%PDF-1.7", packet: described("", ""), ..File::default() })]
+    {
+        assert_eq!(found(&file(named, pdf(&other)), Level::A2b), not_pdfa());
+    }
+    assert_eq!(found(&file(named, stream("/Type /EmbeddedFile /Subtype /text#2Fplain", b"a")), Level::A2b), not_pdfa());
+    // F and UF, at 2b and 3b: UF can be filled in from F, F can't be made up.
+    let lacks = |fixable: bool| vec![("An embedded file's file specification lacks F or UF".to_owned(), fixable)];
+    assert_eq!(found(&file("/F (a.pdf)", pdf(&pdfa2)), Level::A2b), lacks(true));
+    assert_eq!(found(&file("/UF (a.pdf)", pdf(&pdfa2)), Level::A2b), lacks(false));
+    let text = || stream("/Type /EmbeddedFile /Subtype /text#2Fplain", b"a");
+    assert_eq!(found(&file(&format!("{named} /AFRelationship /Data"), text()), Level::A3b), []);
+    assert_eq!(found(&file("/F (a.pdf) /AFRelationship /Data", text()), Level::A3b), lacks(true));
+    let mut doc = open(bytes(&file("/F (a.pdf)", text())));
+    let report = convert(&mut doc, Level::A3b).unwrap();
+    assert!(report.fixed.iter().any(|f| f.contains("UF")), "{:?}", report.fixed);
+    assert!(report.remaining.iter().all(|i| i.clause != "6.8"), "{:#?}", report.remaining);
+    let spec = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
+    assert_eq!(spec.as_dict().and_then(|d| d.get(b"UF")).and_then(|u| u.as_string()).map(|u| u.to_text()), Some("a.pdf".to_owned()));
+}
+
 /// 6.7.2.1 holds for every metadata stream, a page's as well as the catalog's.
 #[test]
 fn component_metadata_streams_are_well_formed_utf8_packets() {

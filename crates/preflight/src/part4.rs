@@ -547,23 +547,13 @@ pub(crate) fn embedded_files_named(doc: &Document, catalog: &Dict, issue: &mut R
 /// one, and when that is a level [`verify`](crate::verify) checks it is verified at it
 /// ([`embedded_pdfa`]).
 pub(crate) fn embedded_file(doc: &Document, level: Level, spec: &Dict, issue: &mut Report<'_>) {
-    let streams = spec.get(b"EF").map(|ef| doc.resolve(ef)).and_then(|ef| ef.as_dict().cloned()).unwrap_or_default();
-    let streams: Vec<_> = streams.iter().map(|(_, s)| doc.resolve(s)).collect();
+    let streams = embedded_streams(doc, spec);
     if level == Level::A4 {
-        let mut not_pdfa = false;
-        for stream in &streams {
-            match &**stream {
-                Object::Stream(s) => match embedded_pdfa(s) {
-                    Embedded::NotPdfa => not_pdfa = true,
-                    Embedded::Declares => {}
-                    Embedded::Fails(label) => {
-                        issue("6.9", "An embedded file declares {} but doesn't conform to it", Some(label.to_owned()), None, false)
-                    }
-                },
-                _ => not_pdfa = true,
-            }
+        let found = embedded_conformance(&streams, &[1, 2, 4]);
+        for label in found.fails {
+            issue("6.9", "An embedded file declares {} but doesn't conform to it", Some(label.to_owned()), None, false);
         }
-        if not_pdfa {
+        if found.not_pdfa {
             issue("6.9", "Embedded files must be PDF/A-1, PDF/A-2 or PDF/A-4 files themselves (use PDF/A-4f for others)", None, None, false);
         }
     }
@@ -581,6 +571,38 @@ pub(crate) fn embedded_file(doc: &Document, level: Level, spec: &Dict, issue: &m
     }
 }
 
+/// The streams of the embedded file specification `spec` (`/EF`, ISO 32000-2 7.11.4), resolved.
+pub(crate) fn embedded_streams(doc: &Document, spec: &Dict) -> Vec<std::sync::Arc<Object>> {
+    let streams = spec.get(b"EF").map(|ef| doc.resolve(ef)).and_then(|ef| ef.as_dict().cloned()).unwrap_or_default();
+    streams.iter().map(|(_, s)| doc.resolve(s)).collect()
+}
+
+/// What [`embedded_conformance`] finds of an embedded file's streams.
+pub(crate) struct Conformance {
+    /// A stream isn't a PDF that declares one of the parts asked for.
+    pub(crate) not_pdfa: bool,
+    /// The levels that streams declare and fail, in their order.
+    pub(crate) fails: Vec<&'static str>,
+}
+
+/// Whether the embedded file `streams` are PDF/A files of one of `parts` ([`embedded_pdfa`]):
+/// PDF/A-2 6.8 asks for parts 1 and 2, PDF/A-4 6.9 for parts 1, 2 and 4. A value that isn't a
+/// stream isn't one.
+pub(crate) fn embedded_conformance(streams: &[std::sync::Arc<Object>], parts: &[u8]) -> Conformance {
+    let mut found = Conformance { not_pdfa: false, fails: Vec::new() };
+    for stream in streams {
+        match &**stream {
+            Object::Stream(s) => match embedded_pdfa(s, parts) {
+                Embedded::NotPdfa => found.not_pdfa = true,
+                Embedded::Declares => {}
+                Embedded::Fails(label) => found.fails.push(label),
+            },
+            _ => found.not_pdfa = true,
+        }
+    }
+    found
+}
+
 /// The largest embedded file [`embedded_pdfa`] opens.
 const MAX_EMBEDDED_PDF: usize = 64 << 20;
 
@@ -595,13 +617,13 @@ thread_local! {
 
 /// What [`embedded_pdfa`] finds an embedded file to be.
 enum Embedded {
-    /// Not a PDF, or one that declares no PDF/A part 1, 2 or 4.
+    /// Not a PDF, or one that declares none of the PDF/A parts asked for.
     NotPdfa,
-    /// A PDF that declares PDF/A-1, 2 or 4, and passes verification at that level when it is one
-    /// [`verify`](crate::verify) checks (PDF/A-2b, 4, 4e or 4f) and the file isn't nested deeper
-    /// than [`MAX_NESTED_VERIFY`].
+    /// A PDF that declares one of the parts asked for, and passes verification at that level when
+    /// it is one [`verify`](crate::verify) checks (PDF/A-2b, 4, 4e or 4f) and the file isn't
+    /// nested deeper than [`MAX_NESTED_VERIFY`], or the file header check when it is PDF/A-1.
     Declares,
-    /// A PDF that declares this level and fails its verification.
+    /// A PDF that declares this level and fails its verification, or for PDF/A-1 its header.
     Fails(&'static str),
 }
 
@@ -614,15 +636,21 @@ impl Drop for NestedGuard {
     }
 }
 
-/// What the embedded file `s` is for PDF/A-4's 6.9: a PDF whose metadata declares PDF/A-1, 2 or 4,
-/// verified at that level where PdfCraft checks it, one embedded file deep. PDF/A-1, 2a and 2u are
-/// judged by their declaration alone.
-fn embedded_pdfa(s: &pdfcraft_cos::Stream) -> Embedded {
+/// What the embedded file `s` is: a PDF whose metadata declares a PDF/A part of `parts`, verified
+/// at that level where PdfCraft checks it, one embedded file deep. PDF/A-2a and 2u are judged by
+/// their declaration alone. PdfCraft doesn't verify PDF/A-1, but ISO 19005-1 6.1.2 asks
+/// for the file header PDF/A-2 and 3 do (`%PDF-1.n` at the first byte, then a comment of four
+/// bytes above 127), so a file that declares PDF/A-1 is held to that.
+fn embedded_pdfa(s: &pdfcraft_cos::Stream, parts: &[u8]) -> Embedded {
     let Ok(bytes) = s.decoded_within(MAX_EMBEDDED_PDF) else { return Embedded::NotPdfa };
     let Ok(inner) = Document::open(std::sync::Arc::new(bytes.to_vec())) else { return Embedded::NotPdfa };
-    let Some((part, conformance)) = crate::declared(&inner).pdfa.filter(|(part, _)| matches!(part, 1 | 2 | 4)) else {
+    let Some((part, conformance)) = crate::declared(&inner).pdfa.filter(|(part, _)| parts.contains(part)) else {
         return Embedded::NotPdfa;
     };
+    if part == 1 {
+        let header = crate::header::check(&inner, false);
+        return if header.version || header.comment { Embedded::Fails("PDF/A-1") } else { Embedded::Declares };
+    }
     let Some(level) = Level::from_declared(part, &conformance) else { return Embedded::Declares };
     if NESTED_VERIFY.with(std::cell::Cell::get) >= MAX_NESTED_VERIFY {
         return Embedded::Declares;
