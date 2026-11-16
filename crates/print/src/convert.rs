@@ -171,18 +171,22 @@ const MAX_FORM_DEPTH: usize = 32;
 /// Whether any page, or any Form XObject reachable from a page, defines
 /// `/DefaultCMYK` or `/DefaultRGB` in its `/Resources /ColorSpace` dictionary.
 fn pages_have_default_colour_spaces(doc: &Document) -> bool {
-    let mut seen: HashSet<ObjRef> = HashSet::new();
     for p in pdfcraft_model::pages(doc) {
-        if form_tree_has_defaults(doc, &p.dict, 0, &mut seen) {
+        let mut path: HashSet<ObjRef> = HashSet::new();
+        if form_tree_has_defaults(doc, &p.dict, 0, &mut path) {
             return true;
         }
     }
     false
 }
 
-fn form_tree_has_defaults(doc: &Document, dict: &Dict, depth: usize, seen: &mut HashSet<ObjRef>) -> bool {
+/// Conservative at the depth limit: when `MAX_FORM_DEPTH` is exceeded without
+/// completing the walk, returns `true`, because a default could exist further down.
+/// The visited set is per-path (`path`), so a form referenced again at a shallower
+/// depth is still walked there.
+fn form_tree_has_defaults(doc: &Document, dict: &Dict, depth: usize, path: &mut HashSet<ObjRef>) -> bool {
     if depth > MAX_FORM_DEPTH {
-        return false;
+        return true;
     }
     let Some(res_obj) = dict.get(b"Resources").map(|r| doc.resolve(r)) else { return false };
     let Some(res) = res_obj.as_dict() else { return false };
@@ -196,14 +200,15 @@ fn form_tree_has_defaults(doc: &Document, dict: &Dict, depth: usize, seen: &mut 
     let Some(xobj) = xobj_obj.as_dict() else { return false };
     for (_, val) in xobj.iter() {
         let Object::Ref(r) = val else { continue };
-        if !seen.insert(*r) {
+        if !path.insert(*r) {
             continue;
         }
-        let Object::Stream(s) = &*doc.get(*r) else { continue };
-        if s.dict.name(b"Subtype") != Some(b"Form") {
-            continue;
-        }
-        if form_tree_has_defaults(doc, &s.dict, depth + 1, seen) {
+        let found = match &*doc.get(*r) {
+            Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form") => form_tree_has_defaults(doc, &s.dict, depth + 1, path),
+            _ => false,
+        };
+        path.remove(r);
+        if found {
             return true;
         }
     }
@@ -403,5 +408,38 @@ mod tests {
         let mut page_dict = Dict::new();
         page_dict.set(b"Resources".to_vec(), Object::Dict(page_res));
         assert!(form_tree_has_defaults(&doc, &page_dict, 0, &mut HashSet::new()));
+    }
+
+    #[test]
+    fn depth_limit_assumes_defaults_and_skips_conversion() {
+        let mut doc = Document::new_empty();
+
+        // Build MAX_FORM_DEPTH + 1 nested forms with no defaults anywhere; hitting the depth limit
+        // must still conservatively return true.
+        const DEPTH: usize = MAX_FORM_DEPTH + 1;
+        let mut child: Option<ObjRef> = None;
+        for _ in 0..DEPTH {
+            let mut res = Dict::new();
+            let mut xobjects = Dict::new();
+            if let Some(c) = child {
+                xobjects.set(b"F".to_vec(), Object::Ref(c));
+            }
+            res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+
+            let mut form = Dict::new();
+            form.set(b"Subtype".to_vec(), Object::name("Form"));
+            form.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+            form.set(b"Resources".to_vec(), Object::Dict(res));
+            child = Some(doc.add(Object::Stream(Stream::from_raw(form, vec![]))));
+        }
+
+        let mut page_res = Dict::new();
+        let mut xobjects = Dict::new();
+        xobjects.set(b"F".to_vec(), Object::Ref(child.unwrap()));
+        page_res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let mut page = Dict::new();
+        page.set(b"Resources".to_vec(), Object::Dict(page_res));
+
+        assert!(form_tree_has_defaults(&doc, &page, 0, &mut HashSet::new()));
     }
 }
