@@ -9,6 +9,8 @@
 //! - no encryption; no LZW; no external streams;
 //! - an output intent (`GTS_PDFA1`) with an ICC profile when device colour is used;
 //! - every font used for rendering (selected with `Tf` by some content) embedded;
+//! - no text showing operator referring to the `.notdef` glyph, where the font dictionary settles
+//!   that it does (see `notdef.rs`);
 //! - annotations: allowed types, printable, not hidden, with appearance streams;
 //! - actions: none of the forbidden kinds (JavaScript, Launch, Sound, Movie, ResetForm,
 //!   ImportData, Hide, SetOCGState, Rendition, Trans, GoTo3DView, and the PDF 1.2 SetState and
@@ -28,6 +30,7 @@ mod gstate;
 mod header;
 pub mod icc;
 mod limits;
+mod notdef;
 mod part4;
 mod spot;
 mod trailer;
@@ -244,6 +247,8 @@ pub const WORDINGS: &[&str] = &[
     // Fonts, streams, images and embedded files.
     "The font {} isn't embedded",
     "A font isn't embedded",
+    "Text refers to the .notdef glyph of the font {}",
+    "Text refers to the .notdef glyph of a font",
     "A stream uses LZW compression",
     "A stream refers to an external file",
     "An image asks to be interpolated",
@@ -605,9 +610,13 @@ const MAX_SAVED_STATES: usize = 256;
 /// [`MAX_FORM_DEPTH`], one named by content without resources of its own (in every
 /// resource dictionary), every font of content that can't be decoded, and every font that could be
 /// current after a `Q` whose saved state [`MAX_SAVED_STATES`] didn't keep.
-fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> std::collections::HashSet<ObjRef> {
+///
+/// The same walk finds the fonts text refers to `.notdef` with, in any mode ([`notdef`]): the
+/// second of what this returns, in the order it found them.
+fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> (std::collections::HashSet<ObjRef>, Vec<ObjRef>) {
     let mut fonts = Fonts {
         doc,
+        notdef: notdef::Notdef::new(doc),
         budget: pdfcraft_cos::DecodeBudget::new(MAX_FONT_CONTENT_DECODED, usize::MAX),
         out: std::collections::HashSet::new(),
         anywhere: std::collections::HashSet::new(),
@@ -685,7 +694,7 @@ fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> s
             fonts.read_alone(r, s);
         }
     }
-    let Fonts { mut out, anywhere, every_font, .. } = fonts;
+    let Fonts { mut out, anywhere, every_font, notdef, .. } = fonts;
     if every_font || !anywhere.is_empty() {
         for (_, o) in objs {
             let Some(d) = dict_of(o) else { continue };
@@ -696,7 +705,7 @@ fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> s
             }
         }
     }
-    out
+    (out, notdef.found())
 }
 
 /// How content selects a font: with `Tf` by its name in the resources' `/Font`, or with `gs` by
@@ -740,6 +749,8 @@ struct TextState {
 /// The walk [`drawing_fonts`] makes.
 struct Fonts<'a> {
     doc: &'a Document,
+    /// The text that refers to `.notdef`, whatever the mode.
+    notdef: notdef::Notdef<'a>,
     budget: pdfcraft_cos::DecodeBudget,
     /// The fonts found drawing.
     out: std::collections::HashSet<ObjRef>,
@@ -827,7 +838,12 @@ impl Fonts<'_> {
                         state.invisible = mode == 3.0;
                     }
                 }
-                b"Tj" | b"TJ" | b"'" | b"\"" => self.shows(&state),
+                b"Tj" | b"TJ" | b"'" | b"\"" => {
+                    self.shows(&state);
+                    if let Some(Current::Font(font)) = &state.font {
+                        self.notdef.shows(*font, &op);
+                    }
+                }
                 b"Do" => {
                     if let Some(name) = op.last_name() {
                         self.draw(name, holder.zip(which), &state, depth);
@@ -1172,7 +1188,16 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
         }
     }
     check_transparency(doc, level, &pages, &mut issue);
-    let drawing = drawing_fonts(doc, &objs);
+    let (drawing, notdef) = drawing_fonts(doc, &objs);
+    for font in notdef {
+        let font = doc.resolve(&Object::Ref(font));
+        match font.as_dict().and_then(|f| f.name(b"BaseFont")) {
+            Some(n) => {
+                issue("6.2.11.8", "Text refers to the .notdef glyph of the font {}", Some(String::from_utf8_lossy(n).into_owned()), None, false)
+            }
+            None => issue("6.2.11.8", "Text refers to the .notdef glyph of a font", None, None, false),
+        }
+    }
     check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
     // PDF/A-4 has no implementation limits of its own: ISO 32000-2 sets none.
     if !part4 {

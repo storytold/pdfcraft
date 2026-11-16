@@ -2702,3 +2702,115 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// What `verify` says under ISO 19005-2 6.2.11.8 (ISO 19005-4 6.2.10.9 at `Level::A4`): text that
+/// refers to the `.notdef` glyph.
+fn notdef_said(doc: &Document, level: Level) -> Vec<String> {
+    let clause = if level.part() == 4 { "6.2.10.9" } else { "6.2.11.8" };
+    verify(doc, level).into_iter().filter(|i| i.clause == clause).map(|i| i.message).collect()
+}
+
+/// A page showing `content` with the font `font` as `/F1` (object 5), followed by `extra` objects
+/// from object 6 on.
+fn notdef_page(content: &str, font: &str, extra: &[&str]) -> Vec<String> {
+    let mut objs = vec![font];
+    objs.extend_from_slice(extra);
+    notdef_said(&drawing(content, "/Font << /F1 5 0 R >>", &objs), Level::A2b)
+}
+
+#[test]
+fn text_referring_to_the_notdef_glyph_is_reported_clause_6_2_11_8() {
+    let type1 = "<< /Type /Font /Subtype /Type1 /BaseFont /Sans /Encoding /WinAnsiEncoding >>";
+    let notdef = || vec!["Text refers to the .notdef glyph of the font Sans".to_string()];
+    // No base encoding of ISO 32000-2 Annex D names a glyph for codes 0 to 31: those select
+    // `.notdef`, in whatever text rendering mode and through each text showing operator.
+    for content in [
+        "BT /F1 10 Tf <00> Tj ET",
+        "BT /F1 10 Tf 3 Tr <1F> Tj ET",
+        "BT /F1 10 Tf [(A) -20 <0141>] TJ ET",
+        "BT /F1 10 Tf 12 TL <05> ' ET",
+        "BT /F1 10 Tf 1 2 <05> \" ET",
+    ] {
+        assert_eq!(notdef_page(content, type1, &[]), notdef(), "{content}");
+    }
+    let doc = drawing("BT /F1 10 Tf <00> Tj ET", "/Font << /F1 5 0 R >>", &[type1]);
+    assert_eq!(notdef_said(&doc, Level::A4), notdef(), "PDF/A-4 asks the same under its own clause");
+    // Codes the encoding names, a code in a string that isn't shown, and text in another font.
+    let type1_b = "<< /Type /Font /Subtype /Type1 /BaseFont /Other /Encoding /WinAnsiEncoding >>";
+    for content in [r"BT /F1 10 Tf (Hello \177) Tj ET", r"BT /F1 10 Tf (\000) pop ET", "BT /F2 10 Tf <00> Tj ET"] {
+        let doc = drawing(content, "/Font << /F1 5 0 R /F2 6 0 R >>", &[type1, "<< /Type /Font /Subtype /Type3 >>"]);
+        assert!(notdef_said(&doc, Level::A2b).is_empty(), "{content}");
+    }
+    // Another font's text doesn't count against this one, and each font is named once.
+    let two = drawing("BT /F2 10 Tf <00> Tj /F1 10 Tf (A) Tj <00> Tj ET", "/Font << /F1 5 0 R /F2 6 0 R >>", &[type1, type1_b]);
+    assert_eq!(
+        notdef_said(&two, Level::A2b),
+        ["Text refers to the .notdef glyph of the font Other", "Text refers to the .notdef glyph of the font Sans"]
+    );
+}
+
+#[test]
+fn notdef_follows_differences_and_leaves_built_in_encodings_alone() {
+    let font = |encoding: &str| format!("<< /Type /Font /Subtype /Type1 /BaseFont /Sans {encoding} >>");
+    let said = |encoding: &str, content: &str| notdef_page(content, &font(encoding), &[]);
+    // `/Differences` names `.notdef` for a code, or gives a low code a name.
+    assert_eq!(said("/Encoding << /Differences [65 /.notdef] >>", "BT /F1 10 Tf (A) Tj ET").len(), 1);
+    // A code that isn't an integer gives the names after it no code.
+    assert!(said("/Encoding << /Differences [65 /a 65.5 /.notdef] >>", "BT /F1 10 Tf (AB) Tj ET").is_empty());
+    assert!(said("/Encoding << /BaseEncoding /WinAnsiEncoding /Differences [1 /a /b] >>", "BT /F1 10 Tf <0102> Tj ET").is_empty());
+    assert_eq!(said("/Encoding << /BaseEncoding /WinAnsiEncoding /Differences [1 /a /b] >>", "BT /F1 10 Tf <03> Tj ET").len(), 1);
+    // Without a base encoding of Annex D the font's own encoding decides, which isn't read here.
+    for encoding in ["", "/Encoding << /Differences [65 /a] >>", "/Encoding /Custom"] {
+        assert!(said(encoding, "BT /F1 10 Tf <00> Tj ET").is_empty(), "{encoding}");
+    }
+}
+
+#[test]
+fn notdef_in_truetype_fonts_only_when_nonsymbolic() {
+    let font = "<< /Type /Font /Subtype /TrueType /BaseFont /Serif /Encoding /WinAnsiEncoding /FontDescriptor 6 0 R >>";
+    let descriptor = |flags: u32| format!("<< /Type /FontDescriptor /FontName /Serif /Flags {flags} >>");
+    // PDFBOX-5752: a nonsymbolic TrueType subset shown with two-byte codes.
+    let content = "BT /F1 14 Tf [<003600530046>3<0004>] TJ ET";
+    assert_eq!(notdef_page(content, font, &[descriptor(32).as_str()]), ["Text refers to the .notdef glyph of the font Serif"]);
+    // A symbolic font finds its glyphs by code in its own `cmap`.
+    for flags in [4, 36, 0] {
+        assert!(notdef_page(content, font, &[descriptor(flags).as_str()]).is_empty(), "{flags}");
+    }
+}
+
+#[test]
+fn notdef_in_identity_type0_fonts() {
+    let type0 = "<< /Type /Font /Subtype /Type0 /BaseFont /Mincho /Encoding /Identity-H /DescendantFonts [6 0 R] >>";
+    let cff = "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /Mincho >>";
+    let notdef = || vec!["Text refers to the .notdef glyph of the font Mincho".to_string()];
+    assert_eq!(notdef_page("BT /F1 10 Tf <00410000> Tj ET", type0, &[cff]), notdef());
+    // A zero byte inside a two-byte code isn't CID 0.
+    assert!(notdef_page("BT /F1 10 Tf <41000041> Tj ET", type0, &[cff]).is_empty());
+    let truetype = |map: &str| format!("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Mincho {map} >>");
+    assert_eq!(notdef_page("BT /F1 10 Tf <0000> Tj ET", type0, &[&truetype("/CIDToGIDMap /Identity")]), notdef());
+    assert_eq!(notdef_page("BT /F1 10 Tf <0000> Tj ET", type0, &[&truetype("")]), notdef());
+    // A map stream takes CIDs to glyphs: CID 1 to glyph 0, CID 0 to glyph 5.
+    let mapped = truetype("/CIDToGIDMap 7 0 R");
+    let map = "<< /Length 4 >>\nstream\n\0\x05\0\0\nendstream";
+    assert_eq!(notdef_page("BT /F1 10 Tf <0001> Tj ET", type0, &[&mapped, map]), notdef());
+    assert!(notdef_page("BT /F1 10 Tf <0000> Tj ET", type0, &[&mapped, map]).is_empty());
+    // Past the map, and with another CMap, nothing is decided.
+    assert!(notdef_page("BT /F1 10 Tf <0002> Tj ET", type0, &[&mapped, map]).is_empty());
+    let other = type0.replace("Identity-H", "UniJIS-UCS2-H");
+    assert!(notdef_page("BT /F1 10 Tf <0000> Tj ET", &other, &[cff]).is_empty());
+}
+
+#[test]
+fn notdef_is_found_in_forms_drawn_and_read_on_their_own() {
+    let type1 = "<< /Type /Font /Subtype /Type1 /BaseFont /Sans /Encoding /WinAnsiEncoding >>";
+    let form = |resources: &str| {
+        let content = "BT /F1 10 Tf <00> Tj ET";
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {resources} /Length {} >>\nstream\n{content}\nendstream", content.len())
+    };
+    // Drawn by the page, with the page's resources.
+    let drawn = drawing("/X Do", "/Font << /F1 5 0 R >> /XObject << /X 6 0 R >>", &[type1, &form("")]);
+    assert_eq!(notdef_said(&drawn, Level::A2b), ["Text refers to the .notdef glyph of the font Sans"]);
+    // Drawn by nothing, with its own.
+    let alone = drawing("", "", &[type1, &form("/Resources << /Font << /F1 5 0 R >> >>")]);
+    assert_eq!(notdef_said(&alone, Level::A2b), ["Text refers to the .notdef glyph of the font Sans"]);
+}
