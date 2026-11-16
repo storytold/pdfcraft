@@ -420,13 +420,19 @@ impl Interp<'_> {
                 Val::Num(flows.iter().enumerate().map(|(i, v)| self.to_num(v) / (1.0 + r).powi(i as i32 + 1)).sum())
             }
             "ipmt" | "ppmt" => {
-                let (pv, r, pmt, first, count) = (
+                let (pv, annual, pmt, first, count) = (
                     self.arg_num(args, 0)?,
                     self.arg_num(args, 1)?,
                     self.arg_num(args, 2)?,
                     self.arg_num(args, 3)?.max(1.0),
                     self.arg_num(args, 4)?.max(1.0),
                 );
+                // The rate is annual and the payments monthly (FormCalc specification, IPmt and PPmt).
+                let r = annual / 12.0;
+                // A payment below the first month's interest repays nothing, and both answer 0.
+                if pmt < pv * r {
+                    return Ok(Some(Val::Num(0.0)));
+                }
                 let (mut balance, mut interest, mut principal) = (pv, 0.0, 0.0);
                 for period in 1..=((first + count - 1.0).min(10_000.0) as u32) {
                     self.step()?;
