@@ -92,6 +92,7 @@ impl Session {
         let id = DocId(self.next_id);
         let mut document = prepared.document;
         document.id = id;
+        document.session_read_only = self.read_only;
         // Trust or the interface language may have changed while it was prepared on another
         // thread.
         if !Arc::ptr_eq(&document.trust, &self.trust) {
@@ -371,6 +372,7 @@ impl Session {
             dirty: false,
             generation: 0,
             read_only_reason,
+            session_read_only: false,
             form: Arc::new(form),
             marker_scan: OnceLock::new(),
             links: OnceLock::new(),

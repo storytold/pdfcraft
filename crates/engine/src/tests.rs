@@ -86,6 +86,88 @@ fn prepared_open_does_not_mutate_the_session_until_commit() {
     assert_eq!(session.get(id).expect("committed document").info.pages.len(), 3);
 }
 
+/// A read-only session offers no change and refuses every one, for the documents open when it
+/// is turned on and for those opened after.
+#[test]
+fn a_read_only_session_refuses_every_change() {
+    struct UnusedTsa;
+    impl sign::TimestampAuthority for UnusedTsa {
+        fn timestamp(&self, _request: &[u8]) -> Result<Vec<u8>, sign::SignError> {
+            Ok(b"not der".to_vec())
+        }
+    }
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    let evidence = sign::dss::Evidence { certs: vec![digital_id.certificate.raw.clone()], ocsps: Vec::new(), crls: Vec::new() };
+    let opts = || SignOptions { rect: None, ..SignOptions::default() };
+    let refused = Err(EditError::ReadOnly(crate::session::READ_ONLY.into()));
+    let (mut s, before) = session_with(2);
+    s.set_read_only(true);
+    let after = s.open("later.pdf", None, Arc::new(fixture(2)), None).unwrap();
+    for id in [before, after] {
+        let doc = s.get(id).unwrap();
+        assert!(!doc.editable() && !doc.allows_modification() && !doc.allows_form_filling() && !doc.allows_annotation() && !doc.allows_assembly());
+        let bytes = doc.bytes.clone();
+        assert_eq!(s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }), refused);
+        assert_eq!(s.prepare_text(id, 0).map(|_| ()), refused);
+        assert_eq!(s.revert(id), refused);
+        assert_eq!(s.sign(id, &digital_id, opts()).map(|_| ()), refused);
+        assert_eq!(s.sign_with_timestamp(id, &digital_id, opts(), &UnusedTsa).map(|_| ()), refused);
+        assert_eq!(s.timestamp_document(id, &UnusedTsa, String::new()).map(|_| ()), refused);
+        assert_eq!(s.embed_ltv(id, &evidence).map(|_| ()), refused);
+        let doc = s.get(id).unwrap();
+        assert!(Arc::ptr_eq(&doc.bytes, &bytes) && !doc.dirty, "nothing changed");
+    }
+}
+
+/// Turned on with changes unsaved, a read-only session keeps them but offers no Undo or Redo
+/// and refuses both; turned off, the history is back.
+#[test]
+fn a_read_only_session_keeps_earlier_changes_and_their_history() {
+    let refused = Err(EditError::ReadOnly(crate::session::READ_ONLY.into()));
+    let (mut s, id) = session_with(2);
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    s.apply(id, Edit::RotatePages { pages: vec![1], degrees: 90 }).unwrap();
+    s.undo(id).unwrap();
+    s.set_read_only(true);
+    let doc = s.get(id).unwrap();
+    assert_eq!((doc.can_undo(), doc.can_redo()), (None, None));
+    let bytes = doc.bytes.clone();
+    assert_eq!(s.undo(id).map(|_| ()), refused);
+    assert_eq!(s.redo(id).map(|_| ()), refused);
+    let doc = s.get(id).unwrap();
+    assert!(Arc::ptr_eq(&doc.bytes, &bytes) && doc.dirty, "the earlier change is kept, unsaved");
+
+    s.set_read_only(false);
+    assert!(s.get(id).unwrap().can_redo().is_some());
+    s.undo(id).expect("undoable again");
+}
+
+#[test]
+fn a_read_only_session_refuses_renaming_a_file() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-rename-read-only-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("first.pdf");
+    let mut session = Session::new();
+    let bytes = Arc::new(fixture(1));
+    std::fs::write(&file, bytes.as_ref()).unwrap();
+    session.set_read_only(true);
+    let path = file.to_string_lossy().into_owned();
+    let id = session.open("first.pdf", Some(path.clone()), bytes, None).expect("opens");
+
+    assert_eq!(session.rename_file(id, "second"), Err(RenameError::Failed(crate::session::READ_ONLY.into())));
+    assert!(file.exists() && !dir.join("second.pdf").exists(), "file on disk is untouched");
+    let doc = session.get(id).expect("open");
+    assert_eq!(doc.name, "first.pdf");
+    assert_eq!(doc.path.as_deref(), Some(path.as_str()));
+
+    session.set_read_only(false);
+    let renamed = session.rename_file(id, "second").expect("renames once editable");
+    assert!(!file.exists() && std::path::Path::new(&renamed).exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn custom_image_stamp_keeps_displayed_orientation_on_rotated_pages() {
     let colours = [[240, 20, 20, 255], [20, 180, 20, 255], [20, 20, 240, 255], [230, 180, 20, 255]];

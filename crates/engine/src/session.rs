@@ -51,4 +51,9 @@ pub struct Session {
     /// What the XFA scripts' time limits are multiplied by (`None`: 1); see
     /// [`Session::with_xfa_time_scale`].
     pub(crate) xfa_time_scale: Option<u32>,
+    /// Documents are shown but never changed; see [`Session::set_read_only`].
+    pub(crate) read_only: bool,
 }
+
+/// Why a read-only session ([`Session::set_read_only`]) refuses a change.
+pub(crate) const READ_ONLY: &str = "it is open read-only";

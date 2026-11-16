@@ -129,6 +129,25 @@ impl Session {
         self.open(name, None, bytes, password.as_deref()).map_err(|e| e.to_string())
     }
 
+    /// Show documents without changing them, for a host that only lets the person read a file.
+    /// Every open document, and every one opened later, is not [`Document::editable`] and has
+    /// nothing to undo or redo, so an interface offers no change, and every change is refused
+    /// with [`EditError::ReadOnly`]: [`Session::apply`] and [`Session::prepare_text`], undo and
+    /// redo, revert, and signing; renaming the file is refused too. Reading, finding, copying and
+    /// printing still work. Changes made before are kept, unsaved, and turning it off makes them
+    /// undoable again.
+    pub fn set_read_only(&mut self, read_only: bool) {
+        self.read_only = read_only;
+        for doc in &mut self.docs {
+            doc.session_read_only = read_only;
+        }
+    }
+
+    /// [`EditError::ReadOnly`] in a read-only session.
+    pub(crate) fn check_editable(&self) -> Result<(), EditError> {
+        if self.read_only { Err(EditError::ReadOnly(super::READ_ONLY.into())) } else { Ok(()) }
+    }
+
     pub(crate) fn doc_mut(&mut self, id: DocId) -> Result<&mut Document, EditError> {
         self.docs.iter_mut().find(|d| d.id == id).ok_or(EditError::NoDocument)
     }
