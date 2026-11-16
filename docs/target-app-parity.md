@@ -1,6 +1,6 @@
 # PdfCraft parity with Adobe Acrobat Pro
 
-> **Last reviewed:** 2026-11-13 · **Last updated:** 2026-11-13 · **Change:** minor (progress by release: breadth charts and a table for all 25 releases, v0.1.0 to v0.21.1, each recounted from its own checklist; measured numbers still those of v0.21.0, whose checklist v0.21.1 keeps) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-15 · **Change:** minor (craft-libs cutover for codecs, XFA XML, crypt/filters/COS/export/XFDF, PRC and ZIP; print colour management for pictures; M7 line replacement keeps source fonts; auto-tag headings by size and weight; arrow-key comment moves; stream-filter JPEG export; form, signature, optimize, redaction, measurement, PRC-normal and CMYK fixes; v0.21.1 Flatpak fix; scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 The authoritative assessment of how close PdfCraft is to Acrobat Pro. [ROADMAP.md](../ROADMAP.md)
 summarizes it; [gaps.md](gaps.md) lists every shortfall one by one; the deep-dive checklists are
@@ -386,6 +386,7 @@ licensed OCR or AI model.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | minor | craft-libs cutover for codecs, XFA XML, crypt/filters/COS/export/XFDF, PRC and ZIP; print colour management for pictures; M7 line replacement keeps source fonts; auto-tag headings by size and weight; arrow-key comment moves; stream-filter JPEG export; form, signature, optimize, redaction, measurement, PRC-normal and CMYK fixes; v0.21.1 Flatpak fix; scores and estimates unchanged. |
 | 2026-11-13 | minor | Progress by release: charts of breadth (unweighted, tier-weighted and by tier) and a table for all 25 releases, v0.1.0 to v0.21.1, each recounted from its own checklist with `cargo xtask parity`'s rules. Measured numbers unchanged (v0.21.1 keeps v0.21.0's checklist). |
 | 2026-11-11 | minor | Measured numbers recomputed at v0.21.0 (`main` at 3650f01f): 835 counted (473 shipped, 124 partial), 64.1% unweighted, ≈ 73% tier-weighted, P0 94.6%. Area breadths and the C, D, E, F, G, L and N texts, evidence (code size, tests, commands, tools, issues) and calibration brought up to date; the commit count is now measured from 5d590604 to the release cut. Estimated readiness and hours not re-judged; the mainstream split is still from 2026-10-26. |
 | 2026-11-09 | minor | Measured numbers recomputed as `cargo xtask parity` counts them, at v0.20.0 (`main` at 9ee213ef): 834 counted (464 shipped, 119 partial), 62.8% unweighted, ≈ 72% tier-weighted, P0 94.6%. Area breadths, evidence (code size, tests, tools, issues), localization (35 interface languages), calibration and the I, J, M and N area texts brought up to date; the beta requirements gained a status column. Estimated readiness and hours not re-judged (the monthly re-measure is due); the mainstream split is still from 2026-10-26. Earlier header notes moved into this table. |
