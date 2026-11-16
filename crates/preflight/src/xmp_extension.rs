@@ -8,9 +8,10 @@
 //!   `valueType` lists are optional. TechNote 0009, written for PDF/A-1, calls `schema` an
 //!   optional description; PDF/A-2 requires it, as its conformance tests show;
 //! - a property (`pdfaProperty`, 4.4) has `name`, `valueType`, `category` and `description`;
-//! - a value type (`pdfaType`, 4.5) has `type`, `namespaceURI`, `prefix`, `description` and
-//!   `field`. TechNote 0009 calls `field` optional; PDF/A-2 requires it, as its conformance tests
-//!   show;
+//! - a value type (`pdfaType`, 4.5) has `type`, `namespaceURI`, `prefix` and `description`. Its
+//!   `field` list is optional, an "Optional description of the structured fields" (4.5): a simple
+//!   type has none, and a description of a type the XMP Specification defines, such as `Part` or
+//!   `Font`, which writers often add, needs none;
 //! - a field (`pdfaField`, 4.6) has `name`, `valueType` and `description`;
 //! - each of the five namespaces is written with its own prefix (`pdfaExtension`, `pdfaSchema`,
 //!   `pdfaProperty`, `pdfaType`, `pdfaField`): "Unlike predefined XMP schemas, the namespace
@@ -22,6 +23,14 @@
 //! asks for names that are valid XML names (4.4, 4.6) and a category that is internal or external
 //! (4.4), and an empty prefix or namespace binds nothing. The human-readable descriptions
 //! (`pdfaSchema:schema` and the `description` entries) are Text and may be empty.
+//!
+//! The fields a value type describes are the fields its values may have. PDF/A-2 6.6.2.3.1 asks
+//! that every property use a predefined schema or an extension schema, and a field is a property
+//! of the structure that holds it (ISO 16684-1 6.3.2). So a structure value of a property that an
+//! extension schema describes, with a value type the packet describes, has only the fields that
+//! type lists in its namespace; [`Findings::undescribed`] holds the others. A property of a
+//! predefined namespace keeps the types the XMP Specification gives it, whatever a packet
+//! describes for it.
 
 use crate::xmp::NsScope;
 use craft_xml::El;
@@ -33,6 +42,7 @@ const SCHEMA: &str = "http://www.aiim.org/pdfa/ns/schema#";
 const PROPERTY: &str = "http://www.aiim.org/pdfa/ns/property#";
 const TYPE: &str = "http://www.aiim.org/pdfa/ns/type#";
 const FIELD: &str = "http://www.aiim.org/pdfa/ns/field#";
+const XML: &str = "http://www.w3.org/XML/1998/namespace";
 
 /// Each container namespace with its required prefix (TechNote 0009, 4.1).
 const PREFIXES: [(&str, &str); 5] =
@@ -43,6 +53,9 @@ const PREFIXES: [(&str, &str); 5] =
 const MAX_FINDINGS: usize = 1000;
 /// How much of a name the packet gives (a namespace URI, a property) a finding repeats.
 const MAX_SHOWN_CHARS: usize = 200;
+/// How many property and value type descriptions, and fields of each type, a packet's values are
+/// compared with. A packet that describes more is a hostile one.
+const MAX_DESCRIBED: usize = 10_000;
 
 /// What the extension schema descriptions of a document break of 6.6.2.3.3, in the order the
 /// metadata streams and their descriptions come.
@@ -55,6 +68,27 @@ pub(crate) struct Findings {
     /// `pdfaExtension:schemas` containers that aren't one `rdf:Bag` (TechNote 0009, 4.2: "bag
     /// Schema").
     pub(crate) not_bag: Vec<NotBag>,
+    /// Fields of structure values that their value type doesn't describe (6.6.2.3.1), each once
+    /// per stream, property and field.
+    pub(crate) undescribed: Vec<Undescribed>,
+}
+
+/// A field of a property's structure value that the property's value type doesn't describe.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Undescribed {
+    pub(crate) object: ObjRef,
+    /// The property, as the packet writes its name.
+    pub(crate) property: String,
+    /// The field, as the packet writes its name.
+    pub(crate) field: String,
+    /// The value type, by its `pdfaType:type`.
+    pub(crate) value_type: String,
+}
+
+/// A value type a packet describes: its namespace and the names of its fields.
+struct Described {
+    namespace: Option<String>,
+    fields: Vec<String>,
 }
 
 /// A description without an entry it needs, or with the entry empty.
@@ -116,6 +150,10 @@ impl Findings {
         }
         let mut containers = Vec::new();
         walk_containers(doc, &NsScope::root(), &mut containers);
+        // The properties the packet describes, by namespace and name, with their value types, and
+        // the value types it describes, by name.
+        let mut properties_described: Vec<(String, String, String)> = Vec::new();
+        let mut types_described: Vec<(String, Described)> = Vec::new();
         for (container, cscope) in containers {
             self.prefixes_in(object, container, &cscope);
             let children: Vec<(&El, NsScope<'_>)> = container.elements().map(|c| (c, cscope.child(c))).collect();
@@ -129,20 +167,32 @@ impl Findings {
                 self.need(&at(None), schema, &sscope, SCHEMA, "pdfaSchema", &["schema", "namespaceURI", "prefix"]);
                 let properties = entries(schema, &sscope, SCHEMA, "property").flat_map(|(e, es)| items(e, &es));
                 for (n, (property, pscope)) in properties.enumerate() {
+                    if let (Some(ns), Some(name), Some(ty)) = (
+                        raw_value(schema, &sscope, SCHEMA, "namespaceURI"),
+                        raw_value(property, &pscope, PROPERTY, "name"),
+                        raw_value(property, &pscope, PROPERTY, "valueType"),
+                    ) && properties_described.len() < MAX_DESCRIBED
+                    {
+                        properties_described.push((ns, name, ty));
+                    }
                     let name = value(property, &pscope, PROPERTY, "name").unwrap_or_else(|| position(n));
                     self.need(&at(Some(name)), property, &pscope, PROPERTY, "pdfaProperty", &["name", "valueType", "category", "description"]);
                 }
                 let value_types = entries(schema, &sscope, SCHEMA, "valueType").flat_map(|(e, es)| items(e, &es));
                 for (n, (value_type, vtscope)) in value_types.enumerate() {
+                    if let Some(ty) = raw_value(value_type, &vtscope, TYPE, "type")
+                        && types_described.len() < MAX_DESCRIBED
+                    {
+                        let fields = entries(value_type, &vtscope, TYPE, "field")
+                            .flat_map(|(e, es)| items(e, &es))
+                            .filter_map(|(field, fscope)| raw_value(field, &fscope, FIELD, "name"))
+                            .take(MAX_DESCRIBED)
+                            .collect();
+                        let namespace = raw_value(value_type, &vtscope, TYPE, "namespaceURI");
+                        types_described.push((ty, Described { namespace, fields }));
+                    }
                     let name = value(value_type, &vtscope, TYPE, "type").unwrap_or_else(|| position(n));
-                    self.need(
-                        &at(Some(name.clone())),
-                        value_type,
-                        &vtscope,
-                        TYPE,
-                        "pdfaType",
-                        &["type", "namespaceURI", "prefix", "description", "field"],
-                    );
+                    self.need(&at(Some(name.clone())), value_type, &vtscope, TYPE, "pdfaType", &["type", "namespaceURI", "prefix", "description"]);
                     for (n, (field, fscope)) in entries(value_type, &vtscope, TYPE, "field").flat_map(|(e, es)| items(e, &es)).enumerate() {
                         let field_name = value(field, &fscope, FIELD, "name").unwrap_or_else(|| position(n));
                         self.need(
@@ -157,11 +207,57 @@ impl Findings {
                 }
             }
         }
+        self.undescribed_in(object, doc, &properties_described, &types_described);
     }
 
     /// Whether another finding may be recorded (see [`MAX_FINDINGS`]).
     fn room(&self) -> bool {
-        self.missing.len().saturating_add(self.prefixes.len()).saturating_add(self.not_bag.len()) < MAX_FINDINGS
+        self.missing.len().saturating_add(self.prefixes.len()).saturating_add(self.not_bag.len()).saturating_add(self.undescribed.len())
+            < MAX_FINDINGS
+    }
+
+    /// Notes the fields of structure values in the packet `doc`, from the metadata stream
+    /// `object`, that their value type doesn't describe: the values of the properties `properties`
+    /// (namespace, name, value type) whose type is one of `types`. A property of a predefined
+    /// namespace is left to the types the XMP Specification gives it.
+    fn undescribed_in(&mut self, object: ObjRef, doc: &El, properties: &[(String, String, String)], types: &[(String, Described)]) {
+        fn walk<'a>(el: &'a El, parent: &NsScope<'a>, parent_is_rdf: bool, out: &mut Vec<(&'a El, NsScope<'a>)>) {
+            let scope = parent.child(el);
+            if parent_is_rdf && scope.is(el, RDF, "Description") {
+                out.extend(el.elements().map(|p| (p, scope.child(p))));
+            }
+            let is_rdf = scope.is(el, RDF, "RDF");
+            for child in el.elements() {
+                walk(child, &scope, is_rdf, out);
+            }
+        }
+        if properties.is_empty() || types.is_empty() {
+            return;
+        }
+        let mut values = Vec::new();
+        walk(doc, &NsScope::root(), false, &mut values);
+        for (property, pscope) in values {
+            let Some(ns) = pscope.el_ns(property) else { continue };
+            if crate::xmp_types::is_predefined(ns) {
+                continue;
+            }
+            let Some((_, _, ty)) = properties.iter().find(|(n, name, _)| n == ns && name == property.local()) else { continue };
+            let (array, item_type) = array_item(ty);
+            let Some((ty_name, described)) = types.iter().find(|(name, _)| name == item_type) else { continue };
+            let holders = if array { items(property, &pscope) } else { vec![(property, pscope.clone())] };
+            for (value, vscope) in holders {
+                for (written, field_ns, local) in fields(value, &vscope) {
+                    let known = described.namespace.as_deref() == field_ns && described.fields.iter().any(|f| f == local);
+                    if known || !self.room() {
+                        continue;
+                    }
+                    let found = Undescribed { object, property: shown(&property.name), field: shown(written), value_type: shown(ty_name) };
+                    if !self.undescribed.contains(&found) {
+                        self.undescribed.push(found);
+                    }
+                }
+            }
+        }
     }
 
     /// Notes the entries of `ns` in `names` that the description `d`, at `at`, lacks, or holds
@@ -241,6 +337,12 @@ fn shown(s: &str) -> String {
 /// The text of the entry `name` of `ns` in the description `d`, written as an element or an
 /// attribute, trimmed and [`shown`]; `None` when it is absent or blank.
 fn value(d: &El, scope: &NsScope<'_>, ns: &str, name: &str) -> Option<String> {
+    raw_value(d, scope, ns, name).map(|text| shown(&text))
+}
+
+/// The text of the entry `name` of `ns` in the description `d`, as [`value`] reads it but whole,
+/// for comparing names.
+fn raw_value(d: &El, scope: &NsScope<'_>, ns: &str, name: &str) -> Option<String> {
     let owned;
     let raw = match entry(d, scope, ns, name) {
         Some((e, _)) => {
@@ -250,7 +352,50 @@ fn value(d: &El, scope: &NsScope<'_>, ns: &str, name: &str) -> Option<String> {
         None => scope.attr(d, ns, name)?,
     };
     let text = raw.trim();
-    (!text.is_empty()).then(|| shown(text))
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
+/// A `pdfaProperty:valueType` read as an array or not, and the type of the value or of its items:
+/// `bag Font` is an array of `Font` (TechNote 0009 writes the array kinds `bag`, `seq` and `alt`,
+/// the XMP Specification `Bag`, `Seq` and `Alt`).
+fn array_item(ty: &str) -> (bool, &str) {
+    let ty = ty.trim();
+    match ty.split_once(char::is_whitespace) {
+        Some((kind, item)) if ["bag", "seq", "alt"].iter().any(|k| kind.eq_ignore_ascii_case(k)) => (true, item.trim()),
+        _ => (false, ty),
+    }
+}
+
+/// The fields of the structure value `value` (a property element or an array item): as the packet
+/// writes each one's name, its namespace and its local name. They are the elements of its
+/// `rdf:parseType="Resource"` node or of its one `rdf:Description`, or the attributes of either or
+/// of an empty element, other than RDF and XML syntax (ISO 16684-1 7.9.2.5). A value that isn't a
+/// structure, or a qualified one (`rdf:value`), has none.
+fn fields<'a>(value: &'a El, scope: &NsScope<'a>) -> Vec<(&'a str, Option<&'a str>, &'a str)> {
+    let holder = if scope.attr(value, RDF, "parseType") == Some("Resource") {
+        Some((value, scope.clone()))
+    } else {
+        let children: Vec<&El> = value.elements().collect();
+        match children.as_slice() {
+            [d] if is(d, &scope.child(d), RDF, "Description") => Some((*d, scope.child(d))),
+            [] => Some((value, scope.clone())),
+            _ => None,
+        }
+    };
+    let Some((holder, hscope)) = holder else { return Vec::new() };
+    let syntax = |ns: Option<&str>| matches!(ns, Some(RDF) | Some(XML));
+    if holder.elements().any(|c| hscope.child(c).is(c, RDF, "value")) || hscope.attr(holder, RDF, "value").is_some() {
+        return Vec::new();
+    }
+    let attributes = holder.attrs.iter().filter(|(k, _)| k != "xmlns" && !k.starts_with("xmlns:")).filter_map(|(k, _)| {
+        let ns = hscope.attr_ns(k);
+        (!syntax(ns)).then(|| (k.as_str(), ns, k.split_once(':').map_or(k.as_str(), |(_, l)| l)))
+    });
+    let elements = holder.elements().filter_map(|c| {
+        let ns = hscope.child(c).el_ns(c);
+        (!syntax(ns)).then(|| (c.name.as_str(), ns, c.local()))
+    });
+    attributes.chain(elements).collect()
 }
 
 /// The prefix of the qualified name `text` begins with, empty when it has none.

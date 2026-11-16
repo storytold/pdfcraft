@@ -703,6 +703,12 @@ fn named(ty: Ty) -> String {
     }
 }
 
+/// Whether `ns` is the namespace of a predefined schema, whose properties have the types the XMP
+/// Specification gives them.
+pub(crate) fn is_predefined(ns: &str) -> bool {
+    SCHEMAS.iter().any(|s| s.uri == ns)
+}
+
 fn property(ns: &str, name: &str) -> Option<(&'static Schema, Ty)> {
     let schema = SCHEMAS.iter().find(|s| s.uri == ns)?;
     schema.properties.iter().find(|(n, _)| *n == name).map(|(_, t)| (schema, *t))
