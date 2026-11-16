@@ -553,9 +553,17 @@ fn scan_stream_object(
 
 /// The font object an ExtGState's `/Font` entry names (its first element), if any.
 fn gs_font_object(doc: &Document, state_obj: &Object) -> Option<Object> {
-    let state = doc.resolve(state_obj).as_dict()?.clone();
-    let font_entry = doc.resolve(state.get(b"Font")?).as_array()?.clone();
-    font_entry.into_iter().next()
+    #[cfg(test)]
+    GS_FONT_READS.with(|c| c.set(c.get() + 1));
+    let state = doc.resolve(state_obj);
+    let font_entry = doc.resolve(state.as_dict()?.get(b"Font")?);
+    font_entry.as_array()?.first().cloned()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many graphics states' `/Font` the cleanup has read ([`gs_font_object`]).
+    pub(crate) static GS_FONT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Whether font `f` (a reference, or a font dictionary) is a Type 3 font, the only kind the font
@@ -617,17 +625,22 @@ pub(crate) fn prune_type3_from_resources(
         add_soft_mask_ops(doc, res, &mut ops, known)?;
     }
 
+    // Which fonts are drawn decides only which Type 3 fonts go, so it is worked out only when there
+    // is one, and each graphics state name once, however often it is set.
     let mut drawn_font_names = HashSet::new();
-    for op in &ops {
-        if op.is("Tf") {
-            if let Some(name) = op.name_back(1) {
-                drawn_font_names.insert(name.to_vec());
-            }
-        } else if op.is("gs")
-            && let Some(name) = op.last_name()
-        {
-            let extg = res_dict(doc, res, b"ExtGState");
-            if let Some(font_obj) = extg.get(name).and_then(|state_obj| gs_font_object(doc, state_obj)) {
+    if type3 {
+        let extg = res_dict(doc, res, b"ExtGState");
+        let mut states_read = HashSet::new();
+        for op in &ops {
+            if op.is("Tf") {
+                if let Some(name) = op.name_back(1) {
+                    drawn_font_names.insert(name.to_vec());
+                }
+            } else if op.is("gs")
+                && let Some(name) = op.last_name()
+                && states_read.insert(name)
+                && let Some(font_obj) = extg.get(name).and_then(|state_obj| gs_font_object(doc, state_obj))
+            {
                 drawn_font_names.extend(
                     fonts
                         .iter()

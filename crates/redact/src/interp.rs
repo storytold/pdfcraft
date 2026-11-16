@@ -200,7 +200,6 @@ pub(crate) struct Scope<'a> {
     pub removed: Option<Vec<Removed>>,
     /// How many text operators have been shown, for [`Removed::op`].
     shown: usize,
-    fonts: HashMap<Vec<u8>, Rc<Metrics>>,
     used_names: Vec<Vec<u8>>,
     depth: usize,
     /// Form entries and decoded bytes left for this page, its content streams already charged:
@@ -232,7 +231,6 @@ impl<'a> Scope<'a> {
             run_end: None,
             removed: None,
             shown: 0,
-            fonts: HashMap::new(),
             used_names: Vec::new(),
             depth: 0,
             budget,
@@ -497,6 +495,30 @@ struct Piece {
     changed: bool,
 }
 
+/// What a font name sets ([`Walk::font_sets`]).
+#[derive(Clone)]
+struct FontSet {
+    font: Rc<Metrics>,
+    vertical: bool,
+    type3_inherits: bool,
+}
+
+/// What a graphics state name sets that the walk reads ([`Walk::state_sets`]): its `/Font`, with
+/// its size, and its line width, miter limit, join and cap.
+struct StateSet {
+    font: Option<(FontSet, f64)>,
+    line_width: Option<f64>,
+    miter_limit: Option<f64>,
+    line_join: Option<f64>,
+    line_cap: Option<f64>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many font and graphics state names the walk has read ([`Walk::font_sets`]).
+    pub(crate) static FONT_STATE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The interpreter state carried across the operators of a scope.
 struct Walk {
     gs: Gs,
@@ -509,6 +531,10 @@ struct Walk {
     fonts_res: Dict,
     ext_gstates: Dict,
     xobjects: Dict,
+    /// What each font name (`Tf`) and graphics state name (`gs`) of this scope sets, read once:
+    /// a name set again and again would otherwise copy its dictionary each time.
+    font_sets: HashMap<Vec<u8>, FontSet>,
+    state_sets: HashMap<Vec<u8>, Rc<StateSet>>,
     /// This scope's pattern names, which a Type 3 glyph without resources may paint with.
     patterns: Vec<Vec<u8>>,
     fallback: Rc<Metrics>,
@@ -536,6 +562,8 @@ impl Walk {
             fonts_res: res_dict(doc, resources, b"Font"),
             ext_gstates: res_dict(doc, resources, b"ExtGState"),
             xobjects: res_dict(doc, resources, b"XObject"),
+            font_sets: HashMap::new(),
+            state_sets: HashMap::new(),
             patterns: res_dict(doc, resources, b"Pattern").iter().map(|(n, _)| n.to_vec()).collect(),
             fallback: Rc::new(Metrics::fallback()),
             path: Vec::new(),
@@ -559,7 +587,7 @@ impl Walk {
             return;
         }
         if !self.path.is_empty() && matches!(o, b"w" | b"M" | b"j" | b"J" | b"d" | b"gs") {
-            self.graphics_state(doc, scope, &op);
+            self.graphics_state(doc, &op);
             self.pending.push(op);
             return;
         }
@@ -572,7 +600,7 @@ impl Walk {
         }
         let kept = match o {
             b"q" | b"Q" | b"cm" | b"Tf" | b"gs" | b"w" | b"M" | b"j" | b"J" => {
-                self.graphics_state(doc, scope, &op);
+                self.graphics_state(doc, &op);
                 Some(op)
             }
             b"BT" | b"Tc" | b"Tw" | b"Tz" | b"TL" | b"Ts" | b"Tr" | b"Td" | b"TD" | b"Tm" | b"T*" => {
@@ -709,7 +737,7 @@ impl Walk {
         // behind clipping (F-008). Refuse partial clip retention and remove the path.
     }
 
-    fn graphics_state(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {
+    fn graphics_state(&mut self, doc: &Document, op: &Op) {
         let last = op.nums::<1>().map(|[v]| v);
         match op.op.as_slice() {
             b"q" => self.stack.push((self.gs.clone(), self.tm, self.tlm)),
@@ -723,45 +751,79 @@ impl Walk {
                     self.gs.ctm = Matrix(m).then(&self.gs.ctm);
                 }
             }
-            b"Tf" => self.select_font(doc, scope, op),
+            b"Tf" => self.select_font(doc, op),
             // The operand before the operator, as the renderer reads it: `1 12 w` is a width of 12.
             b"w" => self.gs.line_width = last.unwrap_or(self.gs.line_width),
             b"M" => self.gs.miter_limit = last.unwrap_or(self.gs.miter_limit),
             b"j" => self.gs.line_join = last.map_or(self.gs.line_join, |j| j as i64),
             b"J" => self.gs.line_cap = last.map_or(self.gs.line_cap, |j| j as i64),
-            _ => {
-                if let Some((font, vertical, size)) = op.last_name().and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
-                    (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
+            b"gs" => {
+                if let Some(name) = op.last_name()
+                    && let Some((set, size)) = &self.state_set(doc, name).font
+                {
+                    (self.gs.font, self.gs.vertical, self.gs.size) = (set.font.clone(), set.vertical, *size);
                     // As for `Tf`: a Type 3 font without /Resources paints through this scope's.
-                    self.gs.type3_inherits = op.last_name().is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
+                    self.gs.type3_inherits = set.type3_inherits;
                 }
-                if let Some(state) = op.name(0).and_then(|n| self.ext_gstates.get(n)).and_then(|s| doc.resolve(s).as_dict().cloned()) {
-                    let num = |key: &[u8]| state.get(key).and_then(|v| doc.resolve(v).as_f64());
-                    self.gs.line_width = num(b"LW").unwrap_or(self.gs.line_width);
-                    self.gs.miter_limit = num(b"ML").unwrap_or(self.gs.miter_limit);
-                    self.gs.line_join = num(b"LJ").map_or(self.gs.line_join, |j| j as i64);
-                    self.gs.line_cap = num(b"LC").map_or(self.gs.line_cap, |j| j as i64);
+                if let Some(name) = op.name(0) {
+                    let state = self.state_set(doc, name);
+                    self.gs.line_width = state.line_width.unwrap_or(self.gs.line_width);
+                    self.gs.miter_limit = state.miter_limit.unwrap_or(self.gs.miter_limit);
+                    self.gs.line_join = state.line_join.map_or(self.gs.line_join, |j| j as i64);
+                    self.gs.line_cap = state.line_cap.map_or(self.gs.line_cap, |j| j as i64);
                 }
             }
+            _ => {}
         }
     }
 
-    fn select_font(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {
+    fn select_font(&mut self, doc: &Document, op: &Op) {
         // `/F1 12 Tf` takes its last two operands, as the renderer does: a surplus before them
         // is ignored, not read in their place.
         self.gs.size = op.nums::<1>().map_or(self.gs.size, |[size]| size);
         let Some(name) = op.operands.len().checked_sub(2).and_then(|i| op.name(i)) else { return };
-        let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
-        self.gs.vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
-        self.gs.type3_inherits = font_dict.as_ref().is_some_and(|d| type3_without_resources(doc, d));
-        self.gs.font = match scope.fonts.get(name) {
-            Some(f) => f.clone(),
+        let set = match self.font_sets.get(name) {
+            Some(set) => set.clone(),
             None => {
-                let m = font_dict.as_ref().map_or_else(|| self.fallback.clone(), |d| Rc::new(Metrics::from_dict(doc, d)));
-                scope.fonts.insert(name.to_vec(), m.clone());
-                m
+                #[cfg(test)]
+                FONT_STATE_READS.with(|c| c.set(c.get() + 1));
+                let held = self.fonts_res.get(name).map(|f| doc.resolve(f));
+                let font_dict = held.as_deref().and_then(Object::as_dict);
+                let font = font_dict.map_or_else(|| self.fallback.clone(), |d| Rc::new(Metrics::from_dict(doc, d)));
+                let set = FontSet {
+                    font,
+                    vertical: font_dict.is_some_and(|d| is_vertical(doc, d)),
+                    type3_inherits: font_dict.is_some_and(|d| type3_without_resources(doc, d)),
+                };
+                // A name the resources don't have costs nothing to look up again: only those they
+                // have are kept, so names made up by the thousand don't fill the cache.
+                if held.is_some() {
+                    self.font_sets.insert(name.to_vec(), set.clone());
+                }
+                set
             }
         };
+        (self.gs.font, self.gs.vertical, self.gs.type3_inherits) = (set.font, set.vertical, set.type3_inherits);
+    }
+
+    /// What the graphics state `name` sets that the walk reads, read once for this scope.
+    fn state_set(&mut self, doc: &Document, name: &[u8]) -> Rc<StateSet> {
+        if let Some(set) = self.state_sets.get(name) {
+            return set.clone();
+        }
+        #[cfg(test)]
+        FONT_STATE_READS.with(|c| c.set(c.get() + 1));
+        let font = extgstate_font(doc, &self.ext_gstates, name, &self.fallback)
+            .map(|(font, vertical, size)| (FontSet { font, vertical, type3_inherits: extgstate_type3_inherits(doc, &self.ext_gstates, name) }, size));
+        let held = self.ext_gstates.get(name).map(|s| doc.resolve(s));
+        let state = held.as_deref().and_then(Object::as_dict);
+        let num = |key: &[u8]| state.and_then(|s| s.get(key)).and_then(|v| doc.resolve(v).as_f64());
+        let set = Rc::new(StateSet { font, line_width: num(b"LW"), miter_limit: num(b"ML"), line_join: num(b"LJ"), line_cap: num(b"LC") });
+        // As for fonts: only a name the resources have is kept.
+        if held.is_some() {
+            self.state_sets.insert(name.to_vec(), set.clone());
+        }
+        set
     }
 
     /// Text state and text-positioning operators.
@@ -1249,11 +1311,9 @@ fn xobject(
             };
             let own = s.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned());
             let res = own.clone().unwrap_or_else(|| resources.clone());
-            let saved_fonts = std::mem::take(&mut scope.fonts);
             scope.depth += 1;
             let inner = process_from(doc, scope, std::slice::from_ref(&data), &res, Gs { ctm: fctm, ..gs.clone() });
             scope.depth -= 1;
-            scope.fonts = saved_fonts;
             out.residue += inner.residue;
             out.vertical |= inner.vertical;
             out.ambiguous |= inner.ambiguous;
