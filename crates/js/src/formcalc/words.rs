@@ -30,10 +30,11 @@ fn words_below_1000(n: u64) -> String {
     }
     let r = n % 100;
     if r >= 20 {
+        // The word after the hyphen is lower case: "Twenty-three" (FormCalc specification, WordNum).
         parts.push(if r.is_multiple_of(10) {
             TENS[(r / 10) as usize].to_string()
         } else {
-            format!("{}-{}", TENS[(r / 10) as usize], ONES[(r % 10) as usize])
+            format!("{}-{}", TENS[(r / 10) as usize], ONES[(r % 10) as usize].to_lowercase())
         });
     } else if r > 0 || n == 0 {
         parts.push(ONES[r as usize].to_string());
@@ -41,11 +42,23 @@ fn words_below_1000(n: u64) -> String {
     parts.join(" ")
 }
 
+/// What `WordNum`'s second argument asks for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum WordStyle {
+    /// `0`: the whole number.
+    Number,
+    /// `1`: the whole number of dollars.
+    Dollars,
+    /// `2`: dollars and cents, the cents in words too.
+    DollarsAndCents,
+}
+
 /// `WordNum`: an integer in English words (up to the billions).
-pub(super) fn word_num(n: f64, cents: bool) -> String {
+pub(super) fn word_num(n: f64, style: WordStyle) -> String {
     if !n.is_finite() || !(0.0..1e12).contains(&n) {
         return String::new();
     }
+    let cents = style == WordStyle::DollarsAndCents;
     let cents_total = (n * 100.0).round() as u64;
     let whole = if cents { cents_total / 100 } else { n.trunc() as u64 };
     if whole >= 1_000_000_000_000 {
@@ -65,11 +78,15 @@ pub(super) fn word_num(n: f64, cents: bool) -> String {
         parts.push(words_below_1000(rest));
     }
     let mut out = parts.join(" ");
-    if cents {
-        let c = cents_total % 100;
-        let dollars = if whole == 1 { "Dollar" } else { "Dollars" };
-        let cent = if c == 1 { "Cent" } else { "Cents" };
-        out.push_str(&format!(" {dollars} And {c:02} {cent}"));
+    let dollars = if whole == 1 { "Dollar" } else { "Dollars" };
+    match style {
+        WordStyle::Number => {}
+        WordStyle::Dollars => out.push_str(&format!(" {dollars}")),
+        WordStyle::DollarsAndCents => {
+            let c = cents_total % 100;
+            let cent = if c == 1 { "Cent" } else { "Cents" };
+            out.push_str(&format!(" {dollars} And {} {cent}", words_below_1000(c)));
+        }
     }
     out
 }

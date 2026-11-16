@@ -2,7 +2,7 @@ use super::ast::Expr;
 use super::dates::{MAX_DAYS, civil_from_days, days_from_civil, format_date, parse_date};
 use super::parser::parse;
 use super::value::{Val, fixed, is_numeric_text, parse_num};
-use super::words::{decode_entities, word_num};
+use super::words::{WordStyle, decode_entities, word_num};
 use super::{Interp, MAX_STRING, R, STRING_TOO_LONG, XfaKind, is_limit};
 
 impl Interp<'_> {
@@ -192,7 +192,14 @@ impl Interp<'_> {
             "wordnum" => {
                 let v = self.arg_num(args, 0)?;
                 let kind = if args.len() > 1 { self.arg_num(args, 1)? } else { 0.0 };
-                Val::Str(word_num(v, kind == 2.0))
+                let style = if kind == 1.0 {
+                    WordStyle::Dollars
+                } else if kind == 2.0 {
+                    WordStyle::DollarsAndCents
+                } else {
+                    WordStyle::Number
+                };
+                Val::Str(word_num(v, style))
             }
             "uuid" => Val::Str(format!("{:032x}", (self.steps as u128).wrapping_mul(0x9E37_79B9_7F4A_7C15_F39C_C060_5CED_C835))),
             "encode" | "decode" => {
