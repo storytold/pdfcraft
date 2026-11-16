@@ -154,3 +154,118 @@ fn approval_signatures_restrict_nothing() {
     s.apply(id, comment()).expect("a comment");
     s.apply(id, rotate()).expect("a page change (validation reports it)");
 }
+
+const XFDF_FIELDS: &str =
+    r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><fields><field name="name"><value>Ada</value></field></fields></xfdf>"#;
+const XFDF_COMMENTS: &str = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><text page="0" name="c1" rect="100,150,120,170"><contents>Imported</contents></text></annots></xfdf>"#;
+const XFDF_BOTH: &str = r#"<?xml version="1.0"?><xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><text page="0" name="c1" rect="100,150,120,170"><contents>Imported</contents></text></annots><fields><field name="name"><value>Ada</value></field></fields></xfdf>"#;
+
+fn import(name: &str, bytes: &[u8]) -> Edit {
+    Edit::ImportData { name: name.into(), bytes: Arc::new(bytes.to_vec()) }
+}
+
+/// A PDF holding one comment, for Import comments from a PDF.
+fn review_pdf() -> Vec<u8> {
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("review.pdf", None, Arc::new(form()), None).unwrap();
+    s.apply(id, comment()).unwrap();
+    s.save_bytes(id).unwrap().to_vec()
+}
+
+/// The field's value and the number of comments (annotations other than widgets).
+fn state(s: &Session, id: DocId) -> (Vec<String>, usize) {
+    let doc = s.get(id).unwrap();
+    let value = doc.form.iter().find(|f| f.name == "name").map(|f| f.value.clone()).unwrap_or_default();
+    (value, doc.info.annotations.iter().filter(|a| a.subtype != "Widget").count())
+}
+
+/// An import is judged by what it brings in: field values are filling in forms, comments need
+/// a level 3 certification, and a file holding both is refused as a whole at level 2.
+#[test]
+fn imports_are_judged_by_what_they_bring_in() {
+    let fields_xml = b"<?xml version=\"1.0\"?><fields><name>Ada</name></fields>";
+    let review = review_pdf();
+
+    // 1: no import at all.
+    let (mut s, id) = certified(Some(1));
+    let before = s.get(id).unwrap().bytes.clone();
+    for (name, bytes) in [
+        ("f.xfdf", XFDF_FIELDS.as_bytes()),
+        ("f.xml", fields_xml),
+        ("c.xfdf", XFDF_COMMENTS.as_bytes()),
+        ("b.xfdf", XFDF_BOTH.as_bytes()),
+        ("review.pdf", &review),
+    ] {
+        assert_eq!(refused(s.apply(id, import(name, bytes))), "importing data", "{name}");
+    }
+    assert!(!s.get(id).unwrap().dirty && s.get(id).unwrap().can_undo().is_none());
+    assert_eq!(s.save_bytes(id).unwrap(), before, "a save writes the signed file as it is");
+
+    // 2: field data only.
+    let (mut s, id) = certified(Some(2));
+    assert_eq!(refused(s.apply(id, import("c.xfdf", XFDF_COMMENTS.as_bytes()))), "comments");
+    assert_eq!(refused(s.apply(id, import("review.pdf", &review))), "comments");
+    assert_eq!(refused(s.apply(id, import("b.xfdf", XFDF_BOTH.as_bytes()))), "comments", "comments with the values: refused as a whole");
+    assert_eq!(state(&s, id), (Vec::new(), 0), "nothing was imported");
+    assert!(s.get(id).unwrap().can_undo().is_none());
+    s.apply(id, import("f.xfdf", XFDF_FIELDS.as_bytes())).expect("XFDF field values are form filling");
+    assert_eq!(state(&s, id), (vec!["Ada".to_string()], 0));
+    s.apply(id, Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text(String::new()) }).unwrap();
+    s.apply(id, import("f.xml", fields_xml)).expect("XML field values are form filling");
+    assert_eq!(state(&s, id), (vec!["Ada".to_string()], 0));
+    assert!(matches!(saved_verdict(&mut s, id), Modification::Allowed(_)), "the certification stays valid");
+
+    // 3: field data and comments.
+    let (mut s, id) = certified(Some(3));
+    s.apply(id, import("b.xfdf", XFDF_BOTH.as_bytes())).expect("values and comments are allowed");
+    assert_eq!(state(&s, id), (vec!["Ada".to_string()], 1));
+    s.apply(id, import("review.pdf", &review)).expect("comments from a PDF are allowed");
+    assert_eq!(state(&s, id).1, 2);
+    assert!(matches!(saved_verdict(&mut s, id), Modification::Allowed(_)), "the certification stays valid");
+}
+
+/// A certified XFA form whose filled text would grow its field keeps its signed pages: the
+/// form is not laid out again (that would replace pages, which no certification allows), the
+/// value is kept, the document says so, and the certification stays valid.
+#[test]
+fn a_growing_xfa_fill_under_a_certification_keeps_the_signed_pages() {
+    // Without scripts the edit lays the form out itself; with them, the form's script engine does.
+    for scripted in [false, true] {
+        growing_xfa_fill_keeps_the_signed_pages(scripted);
+    }
+}
+
+fn growing_xfa_fill_keeps_the_signed_pages(scripted: bool) {
+    let template = pdfcraft_xfa::fixtures::growable_text_template(scripted);
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("growing.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let opts = SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), certify: Some(2), ..SignOptions::default() };
+    let signed = s.sign(id, &digital_id(), opts).unwrap();
+    s.mark_signed(id, signed, None).unwrap();
+    assert_eq!(s.get(id).unwrap().certification(), Some(2));
+    let pages = s.get(id).unwrap().info.pages.len();
+    let text: String = (0..150).map(|i| format!("Row{i:03} sample\n")).collect();
+    s.apply(id, Edit::SetFieldValue { name: "ACTIVIDADES".into(), value: FieldValue::Text(text.clone()) }).expect("filling is allowed");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), pages, "no page added (scripted: {scripted})");
+    let value = doc.form.iter().find(|f| f.name == "ACTIVIDADES").map(|f| f.value.clone());
+    assert_eq!(value, Some(vec![text.clone()]), "the value is kept");
+    assert!(doc.xfa_warnings.iter().any(|w| w.contains("certification")), "{:?}", doc.xfa_warnings);
+    // Importing the form's data is form filling too, and keeps the signed pages the same way.
+    let longer: String = (0..200)
+        .map(|i| {
+            format!(
+                "Line{i:03} imported
+"
+            )
+        })
+        .collect();
+    let data = format!("<form><Page3><ACTIVIDADES>{longer}</ACTIVIDADES></Page3></form>");
+    s.apply(id, import("data.xml", data.as_bytes())).expect("importing the form's data is allowed");
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), pages, "no page added (scripted: {scripted})");
+    let value = doc.form.iter().find(|f| f.name == "ACTIVIDADES").map(|f| f.value.clone());
+    assert_eq!(value, Some(vec![longer.clone()]), "the imported value is kept");
+    let verdict = saved_verdict(&mut s, id);
+    assert!(matches!(verdict, Modification::Allowed(_)), "the certification stays valid: {verdict:?}");
+}

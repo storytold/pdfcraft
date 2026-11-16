@@ -165,6 +165,7 @@ impl Session {
         let reason = doc.read_only_reason.clone().unwrap_or_default();
         let signed = doc.is_signed();
         let certified = doc.check_certification(&edit);
+        cx.certification = doc.certification();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
         if let Some(p) = editor.cos.permissions() {
             check_permission(&edit, &p)?;
@@ -280,6 +281,7 @@ impl Session {
                     ran_away: false,
                     highlight,
                     time_scale: cx.xfa_time_scale,
+                    keep_layout: cx.certification.is_some(),
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
                 // only those).
@@ -304,7 +306,18 @@ impl Session {
                 .map_err(EditError::Write)
                 .inspect_err(|_| discard_edit_callbacks(&cx))?;
             // Rebuilding from stale data would discard accepted widget values.
-            if xfa_notes.is_empty() {
+            if xfa_notes.is_empty() && cx.certification.is_some() {
+                // Under a certification the form is not laid out again: that replaces pages and
+                // widgets, which no level allows (ISO 32000-2 Table 257). The signed pages are
+                // kept; the value is in the field and the data.
+                let needed = guard(|| xfa::relayout_needed(&next, tpl, &doc.form))
+                    .unwrap_or_else(|m| Err(format!("laying out the XFA text failed unexpectedly ({m})")))
+                    .map_err(EditError::Write)
+                    .inspect_err(|_| discard_edit_callbacks(&cx))?;
+                if needed {
+                    xfa_notes.push(xfa::LAYOUT_KEPT.to_string());
+                }
+            } else if xfa_notes.is_empty() {
                 let reflow = guard(|| xfa::relayout_changed_text(&mut next, tpl, &doc.form))
                     .unwrap_or_else(|m| Err(format!("laying out the XFA text failed unexpectedly ({m})")))
                     .map_err(EditError::Write)

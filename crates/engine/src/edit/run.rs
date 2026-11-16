@@ -180,8 +180,10 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
 /// §12.8.2.2.1, Table 257). A certification the catalog's `/Perms /DocMDP` names prevents the
 /// changes it does not permit, as well as detecting them: 1 permits none, 2 filling in forms (and
 /// signing, which is not an edit), 3 comments as well. Document information is metadata at every
-/// level, as signature validation judges it (every save rewrites `/ModDate`). Anything not named
-/// here is refused, so an edit added later fails closed.
+/// level, as signature validation judges it (every save rewrites `/ModDate`). An import is
+/// judged by what it brings in, once it has been read ([`check_import`]); with no changes
+/// allowed it is refused here. Anything not named here is refused, so an edit added later fails
+/// closed.
 pub(crate) fn check_certification(edit: &Edit, level: u8) -> Result<(), EditError> {
     let refuse = |what: &'static str| Err(EditError::Certified { level, what });
     match edit {
@@ -240,7 +242,27 @@ pub(crate) fn check_certification(edit: &Edit, level: u8) -> Result<(), EditErro
         | Edit::SetPageBox { .. }
         | Edit::InsertPagesFrom { .. }
         | Edit::NumberPages { .. } => refuse("page changes"),
+        // Field values, comments or both, depending on the file: [`check_import`] decides on
+        // what the import read from it.
+        Edit::ImportData { .. } => {
+            if level >= 2 {
+                Ok(())
+            } else {
+                refuse("importing data")
+            }
+        }
         _ => refuse("changes to the document"),
+    }
+}
+
+/// Whether the certification (`None`: none) allows what an import brought in: field values are
+/// filling in forms (2 and 3), comments need 3 (ISO 32000-2 Table 257). A file holding both is
+/// refused as a whole where its comments are.
+fn check_import(certification: Option<u8>, comments: bool, fields: bool) -> Result<(), EditError> {
+    match certification {
+        Some(level) if comments && level < 3 => Err(EditError::Certified { level, what: "comments" }),
+        Some(level) if fields && level < 2 => Err(EditError::Certified { level, what: "filling in form fields" }),
+        _ => Ok(()),
     }
 }
 
@@ -334,6 +356,9 @@ pub(crate) struct EditCtx {
     /// What [`Edit::PrepareText`] prepared, repaired and left grouped, for
     /// [`Session::prepare_text`](crate::Session::prepare_text).
     pub(crate) prepared: Option<pdfcraft_edit::text::forms::Preparation>,
+    /// The document's certification level (DocMDP `/P`, `None`: not certified): an import is
+    /// checked against it by what it brought in.
+    pub(crate) certification: Option<u8>,
 }
 
 impl EditCtx {
@@ -387,6 +412,7 @@ impl EditCtx {
             redaction_elsewhere: None,
             redaction_identification: pdfcraft_redact::Identification::default(),
             prepared: None,
+            certification: None,
         }
     }
 
@@ -833,6 +859,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 ran_away: false,
                 highlight,
                 time_scale: cx.xfa_time_scale,
+                keep_layout: cx.certification.is_some(),
             };
             let ran = if matches!(activity.as_str(), "enter" | "exit") {
                 xfa::on_focus(doc, &tpl, som, activity, &mut run).map(|changes| changes.is_empty())
@@ -1106,6 +1133,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
         }
         Edit::ImportData { name, bytes } if bytes.starts_with(b"%PDF-") => {
+            check_import(cx.certification, true, false)?;
             let src = comment_source(bytes).map_err(|p| EditError::Source(format!("{name}: {p}")))?;
             import_pdf_comments(doc, &src)?;
         }
@@ -1116,6 +1144,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             match text {
                 Some(Ok(text)) if is_xfa_data_file(&text) => {
                     let expect_root = cx.xfa.as_ref().and_then(|t| t.root.common.name.clone());
+                    check_import(cx.certification, false, true)?;
                     let r = pdfcraft_xfa::import_data(doc, &text, expect_root.as_deref(), cx.xfa_datasets)
                         .map_err(|e| EditError::Write(e.to_string()))?;
                     cx.xfa_datasets = r.stream.or(cx.xfa_datasets);
@@ -1131,11 +1160,15 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     let mut data = doc.clone();
                     match pdfcraft_xfdf::import(&mut data, bytes) {
                         Ok(report) => {
+                            check_import(cx.certification, report.comments > 0, report.fields > 0)?;
                             note_skipped(&mut data, &report);
                             *doc = data;
                         }
                         Err(e) if bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => match comment_source(bytes) {
-                            Ok(src) => import_pdf_comments(doc, &src)?,
+                            Ok(src) => {
+                                check_import(cx.certification, true, false)?;
+                                import_pdf_comments(doc, &src)?
+                            }
                             Err(SourceProblem::Unreadable(_)) => return Err(e.into()),
                             Err(p) => return Err(EditError::Source(format!("{name}: {p}"))),
                         },
