@@ -596,11 +596,7 @@ mod doc_error_notice_tests {
         let detail = "document script 1: TypeError: boom";
         app.handle_js(
             id,
-            JsOutput {
-                doc_errors: vec![detail.into()],
-                requests: vec![Request::Submit("https://example.test/form".into())],
-                ..Default::default()
-            },
+            JsOutput { doc_errors: vec![detail.into()], requests: vec![Request::Submit("https://example.test/form".into())], ..Default::default() },
         );
         let shown = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
         assert!(shown.contains("form asks to be submitted"), "{shown}");
