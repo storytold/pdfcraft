@@ -543,7 +543,7 @@ impl eframe::App for PdfCraftApp {
         // (no sidecar), so the pointer path is untouched.
         #[cfg(target_os = "linux")]
         if let Some(tablet) = &self.tablet {
-            tablet.take_events(raw);
+            tablet.take_events(ctx, raw);
         }
         // The button's release a window move or resize kept from egui.
         window_controls::release_after_desktop_grab(ctx, raw);

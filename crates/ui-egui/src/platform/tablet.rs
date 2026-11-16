@@ -104,12 +104,38 @@ struct PenInput {
     frame_eraser: AtomicBool,
 }
 
+/// The receiving frame's zoom (`ctx.pixels_per_point()`) guarded the way
+/// `drag_pointer::in_window` guards it: a zoom that is not a positive finite number
+/// (before the host's first scale event reaches egui) leaves the coordinates alone.
+fn frame_zoom(ctx: &egui::Context) -> Option<f32> {
+    let zoom = ctx.pixels_per_point();
+    (zoom.is_finite() && zoom > 0.0).then_some(zoom)
+}
+
+/// Surface coordinates into egui points, at drain time: every position the events
+/// carry is in the compositor's surface space, and the frame's zoom is what turns it
+/// into points (see [`to_egui`]).
+fn to_points(events: &mut [egui::Event], zoom: Option<f32>) {
+    let Some(zoom) = zoom else { return };
+    for event in events {
+        match event {
+            egui::Event::PointerMoved(pos) | egui::Event::PointerButton { pos, .. } => {
+                *pos = egui::pos2(pos.x / zoom, pos.y / zoom);
+            }
+            _ => {}
+        }
+    }
+}
+
 impl PenInput {
     /// Move the events the reader has converted since the last frame into `raw`, and
-    /// resolve the eraser end from the drained batch.
+    /// resolve the eraser end from the drained batch. The zoom is the receiving
+    /// frame's: the surface coordinates the events carry become egui points here,
+    /// with this frame's zoom — not in the reader thread, whose zoom may be stale by
+    /// the time this frame drains (see [`to_egui`]).
     ///
     /// Called from `raw_input_hook`, before egui reads this frame's input.
-    fn take_events(&self, raw: &mut egui::RawInput) {
+    fn take_events(&self, raw: &mut egui::RawInput, zoom: Option<f32>) {
         let pending = self.stash.lock().map(|mut stash| std::mem::take(&mut *stash));
         match pending {
             Ok(pending) => {
@@ -129,7 +155,8 @@ impl PenInput {
                 // sticks.
                 let mut latched = self.eraser_latch.load(Ordering::Relaxed);
                 let mut any_eraser = false;
-                for Stashed { kind, prox_out, events } in pending {
+                for Stashed { kind, prox_out, mut events } in pending {
+                    to_points(&mut events, zoom);
                     raw.events.extend(events);
                     if kind == ToolKind::Eraser {
                         any_eraser = true;
@@ -210,9 +237,10 @@ impl Tablet {
     }
 
     /// Move the events the reader has converted since the last frame into `raw`, and
-    /// resolve the eraser end from the drained batch. See [`PenInput::take_events`].
-    pub fn take_events(&self, raw: &mut egui::RawInput) {
-        self.input.take_events(raw);
+    /// resolve the eraser end from the drained batch. See [`PenInput::take_events`];
+    /// the zoom is this frame's, read off `ctx`.
+    pub fn take_events(&self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.input.take_events(raw, frame_zoom(ctx));
     }
 
     /// The latest pen state, for the tool layer (pressure, tilt, eraser flag).
@@ -267,13 +295,14 @@ fn current_modifiers(ctx: &egui::Context) -> egui::Modifiers {
 
 /// What one [`PenEvent`] becomes in egui, plus the snapshot update it carries.
 ///
-/// Positions: tablet-v2's `motion` coordinates are surface-local, in the same logical
-/// space `wl_pointer.motion` reports (both are "surface-local" per tablet-v2.xml and
-/// wayland.xml); egui points are that space, so the frame's x/y are used as-is. winit
-/// multiplies the same coordinates by the scale factor for its *physical* cursor
-/// events and egui-winit divides them back — there is no scale division left to do
-/// here. If a compositor ever reports differently, this comment's claim is the place
-/// to revisit.
+/// Positions: tablet-v2's `motion` coordinates are surface-local in the compositor's
+/// global space — exactly what `wl_pointer.motion` reports (both are "surface-local"
+/// per tablet-v2.xml and wayland.xml) — and that is not egui's point space. The
+/// division by the zoom happens at drain time ([`PenInput::take_events`]) with the
+/// zoom the receiving frame holds (egui's `pixels_per_point`, which the pinned
+/// egui-winit keeps from the host's scale factor), not with one the reader thread
+/// saw first: the zoom can change between the reader's conversion and this frame's
+/// drain. So the events here carry the surface coordinates as they came.
 fn to_egui(ev: &PenEvent, modifiers: egui::Modifiers) -> (Vec<egui::Event>, SnapshotUpdate) {
     let mut out = Vec::new();
     let mut update = SnapshotUpdate::default();
@@ -481,9 +510,35 @@ mod tests {
     }
 
     fn drain(input: &PenInput) -> egui::RawInput {
+        drain_at(input, None)
+    }
+
+    /// The drain with the frame's zoom (`None`: 1x, the surface coordinates as points).
+    fn drain_at(input: &PenInput, zoom: Option<f32>) -> egui::RawInput {
         let mut raw = egui::RawInput::default();
-        input.take_events(&mut raw);
+        input.take_events(&mut raw, zoom);
         raw
+    }
+
+    /// The drain turns the surface coordinates the reader stashed into egui points
+    /// with the receiving frame's zoom: at 2x, (200, 100) surface is (100, 50) points;
+    /// drained at 1x, the same batch comes through unchanged. The zoom is this frame's,
+    /// not the reader thread's: it can change between the two.
+    #[test]
+    fn the_drain_divides_surface_coordinates_by_the_frames_zoom() {
+        let input = PenInput::default();
+        {
+            let mut stash = input.stash.lock().unwrap();
+            stash.push(stashed(&PenEvent::Move { frame: frame(ToolKind::Pen, 200.0, 100.0) }));
+        }
+        let raw = drain_at(&input, Some(2.0));
+        assert_eq!(raw.events, vec![egui::Event::PointerMoved(egui::pos2(100.0, 50.0))], "{:?}", raw.events);
+        {
+            let mut stash = input.stash.lock().unwrap();
+            stash.push(stashed(&PenEvent::Move { frame: frame(ToolKind::Pen, 200.0, 100.0) }));
+        }
+        let raw = drain_at(&input, None);
+        assert_eq!(raw.events, vec![egui::Event::PointerMoved(egui::pos2(200.0, 100.0))], "{:?}", raw.events);
     }
 
     /// The eraser tap whose whole life fits between two frames — enter, press,
