@@ -150,6 +150,7 @@ fn find_interval(bounds: &[f32], x: f32) -> Option<usize> {
 mod tests {
     use super::*;
     use hayro_syntax::object::FromBytes;
+    use smallvec::smallvec;
 
     #[test]
     fn simple() {
