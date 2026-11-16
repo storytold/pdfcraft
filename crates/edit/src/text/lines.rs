@@ -395,35 +395,40 @@ pub(crate) fn page_dict(doc: &Document, page: usize) -> Result<pdfcraft_model::P
     pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
 }
 
-fn fill_color(fill: &[Op]) -> [f64; 3] {
+fn is_known_cs(doc: &Document, operand: &Object, cs_res: &Dict) -> bool {
+    let resolved = doc.resolve(operand);
+    match &*resolved {
+        Object::Name(n) => {
+            matches!(n.as_slice(), b"DeviceGray" | b"G" | b"CalGray" | b"DeviceRGB" | b"RGB" | b"CalRGB" | b"DeviceCMYK" | b"CMYK" | b"Pattern")
+                || cs_res.get(n).is_some()
+        }
+        Object::Array(_) => true,
+        _ => false,
+    }
+}
+
+fn fill_color(doc: &Document, cs_res: &Dict, fill: &[Op]) -> [f64; 3] {
     let Some(op) = fill.iter().rev().find(|op| matches!(op.op.as_slice(), b"g" | b"rg" | b"k" | b"sc" | b"scn")) else {
         return [0.0, 0.0, 0.0];
     };
-    let space = match op.op.as_slice() {
-        b"sc" | b"scn" => match op.operands.len() {
-            1 => b"g".as_slice(),
-            3 => b"rg".as_slice(),
-            4 => b"k".as_slice(),
-            _ => return [0.0; 3],
-        },
-        other => other,
-    };
-    match space {
-        b"g" => {
-            let v = op.operands.first().and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0);
-            [v, v, v]
-        }
-        b"rg" => [
-            op.operands.first().and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0),
-            op.operands.get(1).and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0),
-            op.operands.get(2).and_then(Object::as_f64).unwrap_or(0.0).clamp(0.0, 1.0),
-        ],
-        b"k" => {
-            let c = op.operands.first().and_then(Object::as_f64).unwrap_or(0.0);
-            let m = op.operands.get(1).and_then(Object::as_f64).unwrap_or(0.0);
-            let y = op.operands.get(2).and_then(Object::as_f64).unwrap_or(0.0);
-            let k = op.operands.get(3).and_then(Object::as_f64).unwrap_or(0.0);
-            [(1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)]
+    let vals: Vec<f64> = op.operands.iter().filter_map(Object::as_f64).collect();
+    match op.op.as_slice() {
+        b"g" => crate::colour::rgb(&crate::colour::Space::Gray, &vals),
+        b"rg" => crate::colour::rgb(&crate::colour::Space::Rgb, &vals),
+        b"k" => crate::colour::rgb(&crate::colour::Space::Cmyk, &vals),
+        b"sc" | b"scn" => {
+            if let Some(cs_op) = fill.iter().rev().find(|o| o.is("cs"))
+                && let Some(cs_operand) = cs_op.operands.first()
+                && is_known_cs(doc, cs_operand, cs_res)
+            {
+                return crate::colour::rgb(&crate::colour::space_of(doc, cs_operand, cs_res, 0), &vals);
+            }
+            match vals.len() {
+                1 => crate::colour::rgb(&crate::colour::Space::Gray, &vals),
+                3 => crate::colour::rgb(&crate::colour::Space::Rgb, &vals),
+                4 => crate::colour::rgb(&crate::colour::Space::Cmyk, &vals),
+                _ => [0.0, 0.0, 0.0],
+            }
         }
         _ => [0.0, 0.0, 0.0],
     }
@@ -460,6 +465,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
     let pieces = joined(&content_streams(doc, &p.dict)?);
     let ops = pieces.parse().ops;
     let properties = res.get(b"Properties").and_then(|o| doc.dict(o)).unwrap_or_default();
+    let cs_res = res.get(b"ColorSpace").and_then(|o| doc.dict(o)).unwrap_or_default();
     let shown = interpret(doc, &ops, &res, &mut cache, &mut carry, None, actual_text.then_some(&properties))?;
     let mut last: Option<(usize, Pen)> = None; // the stream piece and where its last run ended
     for mut s in shown {
@@ -486,7 +492,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                         (s.size - l.size).abs() < 0.01
                             && s.bold == l.bold
                             && s.italic == l.italic
-                            && fill_color(&s.state.fill) == l.color
+                            && fill_color(doc, &cs_res, &s.state.fill) == l.color
                             && same_paint(l, &s.state)
                     }))
                 && near
@@ -527,7 +533,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                 size: s.size,
                 bold: s.bold,
                 italic: s.italic,
-                color: fill_color(&s.state.fill),
+                color: fill_color(doc, &cs_res, &s.state.fill),
                 decodable: s.decodable,
                 visual_order: s.visual_order,
                 face: s.face.clone(),
@@ -598,7 +604,7 @@ fn compatible_word(line: &TextLine, shown: &Shown) -> bool {
 
 /// The line `s` continues, or a new one: `last` is the previous run of the same stream
 /// (`bt`, baseline, end x, size).
-fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream: usize) {
+fn add_shown(doc: &Document, cs_res: &Dict, lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream: usize) {
     let joins = last.is_some_and(|pen| {
         let bt = pen.bt;
         lines.last().is_some_and(|l| l.scope == s.scope && l.paint == s.paint && l.logical_order == s.logical_order)
@@ -609,7 +615,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
                     (s.size - l.size).abs() < 0.01
                         && s.bold == l.bold
                         && s.italic == l.italic
-                        && fill_color(&s.state.fill) == l.color
+                        && fill_color(doc, cs_res, &s.state.fill) == l.color
                         && same_paint(l, &s.state)
                 }))
             && pen.continues(&s, if bt == s.bt { 3.0 } else { 1.5 }).0
@@ -646,7 +652,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             size: s.size,
             bold: s.bold,
             italic: s.italic,
-            color: fill_color(&s.state.fill),
+            color: fill_color(doc, cs_res, &s.state.fill),
             decodable: s.decodable,
             visual_order: s.visual_order,
             face: s.face.clone(),
@@ -827,6 +833,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         let mut invoked = Vec::new();
         let (mut held, none) = (None, Dict::new());
         let properties = resource_dict(w.doc, resources, b"Properties", &mut held).unwrap_or(&none);
+        let cs_res = resources.get(b"ColorSpace").and_then(|c| w.doc.dict(c)).unwrap_or_default();
         let shown = interpret(w.doc, ops, resources, &mut cache, carry, Some(&mut invoked), Some(properties))?;
         let mut last = None;
         let mut last_stream = None;
@@ -848,7 +855,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             if last_stream.replace(si).is_some_and(|prev| prev != si) {
                 last = None;
             }
-            add_shown(&mut w.lines, &mut last, s, si);
+            add_shown(w.doc, &cs_res, &mut w.lines, &mut last, s, si);
         }
         for (_, name, ts) in forms {
             enter(w, resources, &name, ts, &mut carry.text_left)?;
@@ -911,4 +918,29 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
     }
     lines.retain(|l| !l.text.trim().is_empty());
     Ok((lines, w.budget.truncated))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fill_color_resolves_separation_spot_color_through_colorspace_resource() {
+        let doc = Document::new_empty();
+        let mut tint = Dict::default();
+        tint.set(b"FunctionType", Object::Int(2));
+        tint.set(b"Domain", Object::Array(vec![Object::Int(0), Object::Int(1)]));
+        tint.set(b"C0", Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(0), Object::Int(0)]));
+        tint.set(b"C1", Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(0), Object::Int(1)]));
+        tint.set(b"N", Object::Int(1));
+        let sep = Object::Array(vec![Object::name("Separation"), Object::name("Black"), Object::name("DeviceCMYK"), Object::Dict(tint)]);
+        let mut cs_res = Dict::default();
+        cs_res.set(b"CS0", sep);
+
+        let fill = vec![Op::new("cs", vec![Object::name("CS0")]), Op::new("scn", vec![Object::Int(1)])];
+        assert_eq!(fill_color(&doc, &cs_res, &fill), [0.0, 0.0, 0.0], "100% spot black must not read as white");
+
+        let rgb_fallback = vec![Op::new("scn", vec![Object::Real(0.2), Object::Real(0.4), Object::Real(0.6)])];
+        assert_eq!(fill_color(&doc, &cs_res, &rgb_fallback), [0.2, 0.4, 0.6]);
+    }
 }

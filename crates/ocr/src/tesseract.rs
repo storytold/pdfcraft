@@ -42,6 +42,7 @@ pub const LANGUAGE_CODES: &[(&str, &str)] = &[
     ("ko", "kor"),
     ("ar", "ara"),
     ("nl", "nld"),
+    ("tr", "tur"),
 ];
 
 /// English names for [`LANGUAGE_CODES`] (dropdowns show code + name).
@@ -58,6 +59,7 @@ pub const LANGUAGE_NAMES: &[(&str, &str)] = &[
     ("ko", "Korean"),
     ("ar", "Arabic"),
     ("nl", "Dutch"),
+    ("tr", "Turkish"),
 ];
 
 /// Map a settings language code to a Tesseract one: trimmed, case-insensitive, allow-listed;
@@ -685,6 +687,7 @@ mod tests {
         assert_eq!(language_code("ja"), "jpn");
         assert_eq!(language_code("ko"), "kor");
         assert_eq!(language_code("nl"), "nld");
+        assert_eq!(language_code("tr"), "tur");
         assert_eq!(language_code("klingon"), "eng", "unknown → eng");
         assert_eq!(language_code(""), "eng");
         // The security property: whatever the settings say, only allow-listed codes reach a
