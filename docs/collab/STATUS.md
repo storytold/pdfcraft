@@ -1,23 +1,38 @@
 # PdfCraft collaboration — status and handoff
 
 - Branch: `feature/realtime-collaboration` (upstream `storytold/pdfcraft`).
-- **Local head, measured 2026-11-16T02:15Z: the code commits are `069fa0442`
-  (nine of the ten advisory findings of the review of #6622) on top of
-  `1de96e28c` (the six security findings), which sits one commit above
-  `84ea8456c` (the docs record of the seventh merge below); this record is one
-  docs commit above `069fa0442`.** The record deliberately does not pin its own
-  hash — it changes every amend; read it with `git log -1`. At that measurement
-  the branch was 160 commits ahead of `origin/main` `e191b0ea6`, 0 behind, tree
-  clean. `069fa0442` closes nine of the ten advisory threads (#1, #2, #4, #7,
-  #11, #13, #14, #19, #20) and defers #16 with its reason; the table, the fixes
-  and the gate are in "The ten advisory findings of #6622" below. `1de96e28c`
-  closed the six open security findings the same review left — threads #8, #9,
-  #10, #15, #17, #18, all six read at the code of `84ea8456c` and all six open
-  there; its table and gate are in "The six open security findings of #6622".
-  **Nothing was pushed**, `origin/main` was not merged again, no ADR was
-  published: PR #6622 still carries `a1cc8382d` and reads
-  `CONFLICTING`/`DIRTY` against `d749fd806`, and the fix reaches it only when
-  the owner or `pr-agent` pushes this line.
+- **Local head, measured 2026-11-16T09:52Z: `4b88d24e4`, the ninth merge of
+  `origin/main` (`75a6ce50c`, ten commits above `e191b0ea6`) into the delivered
+  line.** Its first parent is `6a6fd7d87`, the docs record of the ten advisory
+  findings; the code commits below it are `069fa0442` (nine of the ten advisory
+  findings of the review of #6622) on `1de96e28c` (the six security findings) on
+  `84ea8456c` (the docs record of the seventh merge). The record deliberately
+  does not pin its own hash — read it with `git log -1`. After the merge the
+  branch is **162 commits ahead of `origin/main` `75a6ce50c` and 0 behind**,
+  tree clean; this record is one docs commit above the merge, so with it the
+  count reads 163. The merge is local and **not pushed**. `069fa0442` closes nine of
+  the ten advisory threads (#1, #2, #4, #7, #11, #13, #14, #19, #20) and defers
+  #16 with its reason; the table, the fixes and the gate are in "The ten
+  advisory findings of #6622" below. `1de96e28c` closed the six open security
+  findings the same review left — threads #8, #9, #10, #15, #17, #18, all six
+  read at the code of `84ea8456c` and all six open there; its table and gate are
+  in "The six open security findings of #6622". "The ninth merge of `origin/main`"
+  below has this merge's evidence, the corrections to earlier records and the
+  remainder.
+- **The head `6a6fd7d87` is delivered — the earlier header of this file said it
+  was not.** Measured 2026-11-16T09:52Z: PR #6622's `headRefOid` and the fork
+  `copoka/pdfcraft`'s branch tip both read `6a6fd7d87` (`gh pr view 6622 --json
+  headRefOid`; `git ls-remote fork refs/heads/feature/realtime-collaboration`),
+  the PR reads `mergeable: MERGEABLE`, `mergeStateStatus: UNSTABLE`,
+  `baseRefOid` `e191b0ea6`, not a draft, `reviewDecision` empty, `updatedAt`
+  `2026-11-16T03:28:30Z`. **It has no workflow run to approve**:
+  `gh run list --commit 6a6fd7d87` returns nothing and the commit's one
+  check-run is CodeRabbit, `skipped`; the five runs created 13:16Z belong to
+  `a1cc8382d`. The delivered line's gate is the part-by-part host sweep in "The
+  ten advisory findings" — metadata 0, fmt 0, `cargo deny` 0, tests 10176
+  passed / 0 failed — whose only red step is the workspace `clippy` on main's
+  `crates/xfdf/src/xfdf.rs:326`, a file the branch does not touch
+  (`git diff origin/main HEAD -- crates/xfdf` is empty).
 - **The seventh merge of `origin/main`, and the one that clears the PR's
   `DIRTY`: `e6bd1eee3` (2026-11-16) merges `e191b0ea6` ("M3: select text across
   pages (view.text-select)", 2026-11-15T22:55:35+01:00), the tip at the fetch.**
@@ -466,6 +481,120 @@ several `/NM`, per-line quads, the caret (`5bad54c40`, §4), re-addressed across
   daemon: `docs/collab/server.md`
 - Task and acceptance criteria: `../../TASK.md` in the cabinet-office checkout
 
+## The ninth merge of `origin/main` (2026-11-16)
+
+Measured 2026-11-16T09:52Z on `feature/realtime-collaboration`. `origin/main`
+had moved from `e191b0ea6` (the base the seventh merge took) to `75a6ce50c` —
+#7377 and the nine commits before it — while the branch's delivered head was
+`6a6fd7d87`.
+
+Before touching the tree, both commands reproduce:
+
+```
+$ git fetch origin main
+$ git rev-list --left-right --count origin/main...HEAD
+10	161
+$ git merge-tree --write-tree origin/main HEAD
+fc32902bd692d5d5118a4c0c709648cea5980cc7
+EXIT=0
+```
+
+`git merge --no-ff origin/main` then made **`4b88d24e4`**, first parent
+`6a6fd7d87`, second parent `75a6ce50c`: **no conflicted path, no resolution and
+no hand edit** — the merge carries main's ten commits alone and is **25 files,
++341/−423** against its first parent (the `sign` crate delegating public-key
+verification to `craft-pkcs7`, the search field's focus work, Bosnian catalogs,
+the roadmap). `Cargo.lock` did not move. After it:
+
+```
+$ git rev-list --left-right --count origin/main...HEAD
+0	162
+$ git diff --shortstat origin/main HEAD
+113 files changed, 47628 insertions(+), 169 deletions(-)
+$ git status --porcelain                     # nothing
+$ git merge-tree --write-tree origin/main HEAD   # EXIT=0
+```
+
+Nothing was pushed, no ADR was published, no review thread was resolved and the
+PR was not approved.
+
+### Gate on the merge `4b88d24e4`
+
+Host `agents` through `scripts/remote-build.sh`, 2026-11-16T09:52:31–09:59:00Z;
+rustc/clippy 1.99.1 (58cf8f9c3 2026-10-13). The log is
+`.craft/logs/gate-pdfcraft-4b88d24e4.log`, one `<STEP>_RC=` line per step and an
+`EXIT=` summary at its end. The ui-egui suites ran with
+`CRAFT_I18N_DIR=/tmp/craft-i18n-575cfdef` and
+`CRAFT_FONTS_DIR=/home/markin/craft-fonts`; without them the i18n comments test
+and epaint's font lookup fail for the documented reason (§4).
+
+| Step | Result |
+|---|---|
+| `cargo metadata --locked` | **exit 0** (`META_RC=0`; the same three `unused patch` warnings for the egui fork as before) |
+| `cargo fmt --all -- --check` | **exit 0** (`FMT_RC=0`) |
+| `cargo clippy -j 8 -p pdfcraft-collab-annot -p pdfcraft-collab-client-pdf -p pdfcraft-collab-hub -p pdfcraft-collab-pdf -p pdfcraft-collab-server -p pdfcraft-collab-ws -p pdfcraft-ui-egui --all-targets --no-deps -- -D warnings` | **exit 0** (`CLIPPY_RC=0`) |
+| `cargo test -j 6` on the same crates | **exit 0 — 3221 passed, 0 failed, 5 ignored** (`TEST_RC=0`), 14 running suites + 7 doc-tests: 24 collab-annot + 50 collab-client-pdf + 7 collab-hub + 73 collab-pdf + 35 collab-server + 18 collab-ws unit + 36 collab-ws e2e + 1028 ui-egui unit + 1 flatpak + 1931 ui-egui `it` + 6 ocr + 7 page_shadows + 4 perf + 1 play |
+| `cargo test -j 6 -p pdfcraft-collab-daemon` | **exit 0 — 48 passed, 0 failed** (`TEST_DAEMON_RC=0`): 43 daemon unit + `conflict_resolve` + `crash_recovery` + `publication_retry` + 2 `restore_publication` |
+
+`EXIT=5/5 green`. The workspace `clippy` step of `cargo xtask ci` stays red on
+main's `crates/xfdf/src/xfdf.rs:326` under this toolchain (the foreign red of
+the earlier gates); it is out of the scope of this gate and was not touched.
+
+### What the earlier records said, and what is true now
+
+- **"Nothing was pushed; PR #6622 still carries `a1cc8382d` and reads
+  `CONFLICTING`/`DIRTY` against `d749fd806`"** — the header, the closing lines
+  of "The ten advisory findings" and "The six open security findings", and §6 —
+  is **superseded at 2026-11-16T03:28:30Z**, when the owner or `pr-agent`
+  pushed `6a6fd7d87`. Measured 2026-11-16T09:52Z,
+  `gh pr view 6622 --repo storytold/pdfcraft --json
+  headRefOid,mergeable,mergeStateStatus,baseRefOid,reviewDecision,updatedAt,isDraft`
+  reads `headRefOid` **`6a6fd7d87`**, `mergeable` **`MERGEABLE`**,
+  `mergeStateStatus` **`UNSTABLE`**, `baseRefOid` `e191b0ea6`, not a draft,
+  `reviewDecision` empty, `updatedAt` `2026-11-16T03:28:30Z`, and
+  `git ls-remote fork refs/heads/feature/realtime-collaboration` reads the same
+  commit. The PR is not `DIRTY`: `git merge-tree --write-tree origin/main HEAD`
+  exits 0 before and after this merge.
+- **"Approve the five runs on the head"** does not apply to `6a6fd7d87`:
+  `gh run list --commit 6a6fd7d87 --json databaseId,name,status,conclusion`
+  returns an empty array, and
+  `gh api repos/storytold/pdfcraft/commits/6a6fd7d87/check-runs` counts **one**
+  check run — CodeRabbit, `conclusion: skipped` — while
+  `commits/6a6fd7d87/status` reads `total_count` 0. There is no workflow run on
+  the delivered head, so there is nothing to approve; the five runs created
+  13:16:18Z belong to `a1cc8382d`.
+- **The delivered head's gate** is the part-by-part host sweep already logged at
+  `.craft/logs/gate-pdfcraft-6a6fd7d87*.log`, read again here:
+  `META=0`, `FMT=0`, `DENY_RC=0`, `TEST_RC=0` with **10176 tests passed**
+  (76 in `-test.log` + 10100 in `-test2.log`; 0 failed), and the workspace
+  `clippy` red only at main's `crates/xfdf/src/xfdf.rs:326`
+  (`clippy::collapsible_match` under clippy 1.99.0) — a file this branch does
+  not touch (`git diff origin/main HEAD -- crates/xfdf` is empty; its last
+  commit is main's `7d44e6541`), so it is a foreign red and was not fixed here.
+- **"The branch is 151 / 158 / 160 ahead and N behind"** — those counts were
+  right against the `origin/main` of their measurement. After this merge the
+  branch is **162 commits ahead of `75a6ce50c` and 0 behind**.
+
+### Remainder, and whose it is
+
+1. **The review and the merge of PR #6622 — the owner's.** There is nothing to
+   approve on `6a6fd7d87` (no workflow run exists on it); the merge decision,
+   and whether the local merge `4b88d24e4` is pushed first, are the owner's. The
+   branch merges cleanly into `75a6ce50c` (`EXIT=0` above), so a push clears any
+   staleness against `main` rather than creating it.
+2. **58 of the 61 review threads are unresolved** — measured through the review
+   API (`reviewThreads { totalCount, nodes { isResolved } }`: 61 total, 58
+   unresolved). Every one has an answer (the 20 CodeRabbit threads and the
+   follow-ups); resolving them is the maintainer's action, and this pass
+   resolved none.
+3. **#16 — `resync` returns the whole tail as one `Snapshot` and the send path
+   checks no `encoded_len` — is a protocol decision, not a local fix.** A
+   bounded tail is a wire change: a continuation field in `collab-proto`, an
+   order-preserving apply loop in every client (the web host-bridge included),
+   and a rule for operations a client sends between batches. It waits for the
+   owner's decision and the RFC, as "The ten advisory findings" records; a local
+   convention here would be a private protocol.
+
 ## The six open security findings of #6622 (2026-11-16)
 
 Measured 2026-11-16T04:10Z on `84ea8456c`, the docs record of the seventh
@@ -538,7 +667,10 @@ At that measurement PR #6622 still read `headRefOid` `a1cc8382d`
 `updatedAt` 2026-11-16T01:31:14Z — the PR is DIRTY because it carries
 `a1cc8382d`, not this line: `git merge-tree --write-tree origin/main HEAD` on the
 local head **exits 0** (tree `3fee51a5e`) against `origin/main` `e191b0ea6`, so
-pushing this line is what clears it.
+pushing this line is what clears it. **It did clear it:** the push of
+2026-11-16T03:28:30Z carried `6a6fd7d87` to the fork and the PR, which reads
+`MERGEABLE` / `UNSTABLE` at the measurement in "The ninth merge of
+`origin/main`" below; the DIRTY sentence above describes 04:10Z only.
 
 ## The ten advisory findings of #6622 (2026-11-16)
 
@@ -630,12 +762,15 @@ every reply says so.
 | 19 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581381777 |
 | 20 | https://github.com/storytold/pdfcraft/pull/6622#discussion_r4581381934 |
 
-Nothing was pushed: at the measurement (2026-11-16T02:14Z) PR #6622 still read
-`headRefOid` `a1cc8382d`, `mergeable: CONFLICTING`, `mergeStateStatus: DIRTY`,
-`baseRefOid` `d749fd806` — the PR carries `a1cc8382d`, not this line, and
-`git merge-tree --write-tree origin/main HEAD` on the local head is not part of
-this pass. `origin/main` was not merged again, no ADR was published and no file
-outside these ten findings was touched.
+Nothing was pushed by this pass: at the measurement (2026-11-16T02:14Z) PR
+#6622 still read `headRefOid` `a1cc8382d`, `mergeable: CONFLICTING`,
+`mergeStateStatus: DIRTY`, `baseRefOid` `d749fd806` — the PR carried
+`a1cc8382d`, not this line. **Superseded at 2026-11-16T03:28:30Z: the owner or
+`pr-agent` pushed `6a6fd7d87`, which is the PR's head at the measurement in
+"The ninth merge of `origin/main`" (MERGEABLE / UNSTABLE, no workflow run on
+it).** `origin/main` was not merged again in that pass, no ADR was published and
+no file outside these ten findings was touched; the next merge is `4b88d24e4`
+there.
 
 ## Open review threads
 
@@ -5280,18 +5415,21 @@ Ordered by the risk they pose to production.
 
 Work in this order unless the owner says otherwise.
 
-**First, the push.** Measured 2026-11-16T04:35Z: this clone's HEAD is a docs
-record above `1de96e28c`, which closes the six open security findings of the
-review (§"The six open security findings of #6622"); the branch is 158 commits
-ahead of `origin/main` `e191b0ea6`, 0 behind, the tree clean, and **nothing was
-pushed by the agent**. PR #6622 keeps the head its last push set until the owner
-or `pr-agent` pushes this line; only after that do the six replies in the
-threads point at a commit the PR carries, and only then do the five workflow
-runs on the new head need approving. The remaining review threads are the ten
-listed in "Open review threads" (#1, #2, #4, #7, #11, #13, #14, #16, #19, #20).
-Note that the workspace `clippy` step is red on main's `crates/xfdf/src/xfdf.rs:326`
-under clippy 1.99 (§ gate above): that is not this branch's, and a fix belongs
-in its own change.
+**First, the owner's review and merge.** Measured 2026-11-16T09:52Z: the
+delivered head `6a6fd7d87` is the fork's and PR #6622's head, the PR reads
+`MERGEABLE` / `UNSTABLE` with **no workflow run on the head to approve**, and
+this clone is one merge commit above it — `4b88d24e4`, the ninth merge of
+`origin/main` `75a6ce50c`, after which the branch is 162 commits ahead and 0
+behind with a clean tree and `git merge-tree --write-tree origin/main HEAD`
+exiting 0 ("The ninth merge of `origin/main`"). Nothing on the code side is
+owed. The remainder is the owner's: the review, the 58 of 61 unresolved review
+threads, the merge decision (and whether the local merge is pushed first), #16
+as a protocol decision (a wire change, not a local fix), and the manual desktop
+acceptance. The workspace `clippy` step stays red on main's
+`crates/xfdf/src/xfdf.rs:326` under clippy 1.99; that file is not this branch's
+and a fix belongs in its own change. The historical "first, the push" paragraph
+this replaces was right at 04:35Z and is superseded by the push of
+2026-11-16T03:28:30Z that carried `6a6fd7d87`.
 
 **Deliver first.** Measured 2026-11-12T23:35Z (`git`, `git ls-remote fork`,
 `gh pr view 6622`): **PR #6622 carries the branch's tip**, and at that moment
