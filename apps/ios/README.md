@@ -86,12 +86,12 @@ those inputs; do not invoke XcodeGen directly without the generation script.
 `CURRENT_PROJECT_VERSION` remains the separate POC build number `1`, not a
 production distribution counter. Licence texts and `NOTICE` are bundled too.
 
-The fork bundle ID, internal bundle name, target/module/executable, universal device families and visible
+The unregistered POC bundle ID, internal bundle name, target/module/executable, universal device families and visible
 POC disclaimer remain unchanged. The production macOS identifier, desktop category,
 minimum system version, Finder document handlers, and desktop translation list are
 not copied: the mobile shell has not implemented those integrations/translations.
 The native Files folder now displays **PdfCraft**, matching the installed app name.
-This alignment does not make the fork an official release or enable signing or uploads.
+This alignment does not make the upstream review proposal an official release or enable signing or uploads.
 
 ## Desktop-first native workspace
 
@@ -154,7 +154,7 @@ Shared CI is proposed in
 [storytold/craft-common-actions#259](https://github.com/storytold/craft-common-actions/issues/259)
 and [storytold/craft-common-actions#260](https://github.com/storytold/craft-common-actions/pull/260).
 No publishing workflow, credential or store submission is activated. Existing desktop
-CI/release behavior is unchanged; this remains a fork-only proof of concept.
+CI/release behavior is unchanged; this remains an upstream-submitted proof of concept.
 
 The [Apple platform review](../../docs/apple-platform-review.md) now records shared
 repository ownership, the aggregate macOS+iOS build/test/unsigned-package command,
@@ -251,6 +251,15 @@ cargo xtask wasm
 Generated bindings/build products live under ignored `target/ios/`; XcodeGen's
 `PdfCraftMobilePOC.xcodeproj` is ignored. The source of project configuration is
 [project.yml](project.yml), [Config/](Config/), and the build scripts.
+Each native test invocation prints a unique `target/ios/TestResults/<device>.*`
+directory containing `hosted.xcresult` and `ui.xcresult`; explicit result paths
+prevent Xcode's DerivedData retention from pruning earlier device evidence.
+Inspect summaries with `xcrun xcresulttool get test-results summary --path <result>`
+and export attachments with `xcrun xcresulttool export attachments --path <result>
+--output-path <directory>`. Keep full native-chrome captures private under the
+current asset policy; the native-resource publication exception is requested,
+not granted, in [RFC-0041](https://github.com/storytold/craft-contrib/pull/63).
+Only permitted synthetic document-canvas crops are published as current evidence.
 Build scripts must run before building the generated Xcode project.
 Intel Simulator and XCFramework distribution are not implemented.
 Release now selects the matching optimized Rust archive. Use the
@@ -492,6 +501,8 @@ semantics, the bridge API and the visible native workflows were unchanged.
   private copy; document actions stay disabled until that cleanup finishes. Active
   copies are never recycled to make room. Rust callers must call `release_copy` after
   consumers finish, or drop the session to clean the workspace.
+  A cleanup error retains the lease and keeps actions disabled; the error alert
+  offers Retry Cleanup or explicit Discard and Close rather than losing the path.
 - These are input/raster bounds, **not** a hard whole-process memory or CPU sandbox.
   Parser/decompression/font complexity and extreme documents can still exceed device
   budgets. There is no claim of hostile-document certification.
@@ -505,6 +516,8 @@ semantics, the bridge API and the visible native workflows were unchanged.
   a successful empty document. Terminal worker failures invalidate the cached bridge
   session, including failures during the initial open, so a new import can recover.
   Ordinary document errors preserve the healthy worker and current document.
+  Terminal action/render/text errors also clear the stale native document state;
+  ordinary errors preserve the document and any pending cleanup lease.
 - Raster pages have controls/labels for accessibility; **Read Text** provides selectable
   text and VoiceOver access in a separate sheet, not a position-aligned text overlay.
   There is no custom read-aloud player or OCR. Reading order and Unicode fidelity depend

@@ -113,6 +113,12 @@ cp "$root/packaging/macos/Info.plist.in" "$root/target/ios/Info.plist"
 : >"$TEST_LOG"
 CARGO_TARGET_DIR='relative target' bash "$root/scripts/actual-test-ios.sh" phone
 assert_equal "$(grep -cF "RUST_LIBRARY_ROOT=$root/relative target" "$TEST_LOG")" 2
+first_results="$(find "$root/target/ios/TestResults" -mindepth 1 -maxdepth 1 -type d -name 'phone.*')"
+test -d "$first_results"
+grep -F -- "-resultBundlePath $first_results/hosted.xcresult" "$TEST_LOG"
+grep -F -- "-resultBundlePath $first_results/ui.xcresult" "$TEST_LOG"
+CARGO_TARGET_DIR='relative target' bash "$root/scripts/actual-test-ios.sh" phone
+assert_equal "$(find "$root/target/ios/TestResults" -mindepth 1 -maxdepth 1 -type d -name 'phone.*' | wc -l | tr -d ' ')" 2
 MACOS_SIGN_IDENTITY=never-use-an-inherited-identity bash "$root/scripts/build-apple.sh" package all Debug
 grep -F 'mac-package identity=- --arch aarch64 --profile debug --skip-build' "$TEST_LOG"
 test -s "$root/target/apple/Debug/macos/PdfCraft.app.zip"

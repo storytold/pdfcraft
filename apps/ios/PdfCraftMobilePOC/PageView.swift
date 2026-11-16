@@ -6,6 +6,7 @@ struct PageView: View {
     let revision: Int
     let selected: Bool
     let select: () -> Void
+    let terminalFailure: (Error) -> Void
     @State private var image: UIImage?
     @State private var failure: String?
     @State private var warning = false
@@ -67,7 +68,7 @@ struct PageView: View {
         }
         .padding(.horizontal)
         .sheet(isPresented: $readingText) {
-            PageTextView(page: page.number, bridge: bridge, revision: revision)
+            PageTextView(page: page.number, bridge: bridge, revision: revision, terminalFailure: terminalFailure)
         }
         .task(id: revision) {
             image = nil
@@ -83,7 +84,9 @@ struct PageView: View {
             } catch is CancellationError {
                 // Disappearing pages must not publish stale images or errors.
             } catch {
+                guard !Task.isCancelled else { return }
                 failure = error.localizedDescription
+                if (error as? MobileFailure)?.sessionEnded == true { terminalFailure(error) }
             }
         }
         .onDisappear { image = nil }
@@ -94,6 +97,7 @@ struct PageTextView: View {
     let page: UInt32
     let bridge: DocumentBridge
     let revision: Int
+    let terminalFailure: (Error) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var output: ExtractedPageText?
     @State private var failure: String?
@@ -149,7 +153,9 @@ struct PageTextView: View {
             } catch is CancellationError {
                 // Dismissed readers must not publish stale text or errors.
             } catch {
+                guard !Task.isCancelled else { return }
                 failure = error.localizedDescription
+                if (error as? MobileFailure)?.sessionEnded == true { terminalFailure(error) }
             }
         }
     }

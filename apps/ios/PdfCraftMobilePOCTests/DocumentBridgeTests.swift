@@ -119,6 +119,57 @@ final class DocumentBridgeTests: XCTestCase {
         try await bridge.close(discard: false)
     }
 
+    func testDocumentActionsClearTerminalStateButPreserveOrdinaryFailures() {
+        let state = DocumentActionState()
+        state.document = DocumentMetadata(pageCount: 1, dirty: true, editable: true, pages: [], warnings: [])
+        state.selectedTool = .organize
+        state.busy = true
+        state.failed(MobileFailure(code: "document", message: "Synthetic document failure"))
+        XCTAssertEqual(state.document?.dirty, true)
+        XCTAssertEqual(state.selectedTool, .organize)
+        XCTAssertFalse(state.busy)
+        XCTAssertEqual(state.revision, 0)
+        state.stagedCopy = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-copy.pdf")
+        state.busy = true
+        state.failed(MobileFailure(code: "worker", message: "Synthetic terminal failure"))
+        XCTAssertNil(state.document)
+        XCTAssertNil(state.selectedTool)
+        XCTAssertNil(state.stagedCopy)
+        XCTAssertFalse(state.busy)
+        XCTAssertEqual(state.revision, 1)
+    }
+
+    func testFailedExportCleanupRetainsItsLeaseAndCanRetry() async throws {
+        let state = DocumentActionState()
+        let copy = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-copy.pdf")
+        state.document = DocumentMetadata(pageCount: 1, dirty: true, editable: true, pages: [], warnings: [])
+        state.stagedCopy = copy
+        state.busy = true
+        do {
+            try await state.releaseCopy { url in
+                XCTAssertEqual(url, copy)
+                throw MobileFailure(code: "storage", message: "Synthetic removal failure")
+            }
+            XCTFail("Cleanup failure must be surfaced")
+        } catch {
+            state.failed(error)
+        }
+        XCTAssertEqual(state.stagedCopy, copy)
+        XCTAssertTrue(state.busy, "Actions must remain disabled while an export lease is retained")
+        XCTAssertEqual(state.document?.dirty, true)
+        XCTAssertFalse(state.releasingCopy)
+        var released = false
+        try await state.releaseCopy { url in
+            XCTAssertEqual(url, copy)
+            XCTAssertTrue(state.busy)
+            released = true
+        }
+        XCTAssertTrue(released)
+        XCTAssertNil(state.stagedCopy)
+        XCTAssertFalse(state.busy)
+        XCTAssertEqual(state.document?.dirty, true)
+    }
+
     func testEmbeddedTextCrossesRustBridgeAndFollowsDocumentLifecycle() async throws {
         let source = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("pdf")
         defer { try? FileManager.default.removeItem(at: source) }

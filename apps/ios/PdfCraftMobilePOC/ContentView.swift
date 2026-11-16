@@ -20,21 +20,17 @@ struct ContentView: View {
     @AppStorage("mobile.workspace.appearance") private var appearance = WorkspaceAppearance.system
     @AppStorage("mobile.workspace.pinnedTools") private var pinnedToolIDs = ""
     @State private var bridge = DocumentBridge()
-    @State private var document: DocumentMetadata?
+    @State private var actions = DocumentActionState()
     @State private var documentName = ""
     @State private var selectedPage: UInt32 = 1
-    @State private var revision = 0
     @State private var importing = false
-    @State private var busy = false
     @State private var failure: String?
     @State private var confirmClose = false
     @State private var export: Export?
     @State private var share: Export?
-    @State private var stagedCopy: URL?
     @State private var sidebarVisible = true
     @State private var showingTools = false
     @State private var toolQuery = ""
-    @State private var selectedTool: WorkspaceTool?
     @State private var pendingTool: WorkspaceTool?
     @State private var queuedTool: WorkspaceTool?
     @State private var textPage: PageMetadata?
@@ -56,7 +52,7 @@ struct ContentView: View {
                 workspace
             }
             .background(style.background)
-            .navigationTitle(document == nil ? "PdfCraft" : documentName)
+            .navigationTitle(actions.document == nil ? "PdfCraft" : documentName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarLeading) {
@@ -66,18 +62,18 @@ struct ContentView: View {
                         Image(systemName: "sidebar.left")
                     }
                     .accessibilityLabel("All tools")
-                    if document != nil {
+                    if actions.document != nil {
                         Button("Close") {
-                            if document?.dirty == true { confirmClose = true } else { close(discard: false) }
+                            if actions.document?.dirty == true { confirmClose = true } else { close(discard: false) }
                         }
-                        .disabled(busy)
+                        .disabled(actions.busy)
                         .keyboardShortcut("w")
                     }
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    if document == nil {
+                    if actions.document == nil {
                         Button("Open") { beginOpen() }
-                            .disabled(busy)
+                            .disabled(actions.busy)
                             .keyboardShortcut("o")
                             .accessibilityIdentifier("toolbar-open")
                     }
@@ -99,21 +95,21 @@ struct ContentView: View {
                     .accessibilityValue(appearance.title)
                 }
                 ToolbarItemGroup(placement: .bottomBar) {
-                    if let document {
+                    if let document = actions.document {
                         Button("Rotate") { rotate() }
-                            .disabled(busy || !document.editable)
+                            .disabled(actions.busy || !document.editable)
                             .accessibilityLabel("Rotate page \(selectedPage) clockwise")
                         Spacer()
                         Button("Save a Copy") { save() }
-                            .disabled(busy)
+                            .disabled(actions.busy)
                             .keyboardShortcut("s", modifiers: [.command, .shift])
-                        Button("Share") { shareDocument() }.disabled(busy)
+                        Button("Share") { shareDocument() }.disabled(actions.busy)
                     }
                 }
             }
             .toolbarBackground(style.panel, for: .navigationBar, .bottomBar)
             .toolbarBackground(.visible, for: .navigationBar, .bottomBar)
-            .overlay { if busy { ProgressView("Working locally").padding().background(.regularMaterial).clipShape(RoundedRectangle(cornerRadius: 12)) } }
+            .overlay { if actions.busy { ProgressView("Working locally").padding().background(.regularMaterial).clipShape(RoundedRectangle(cornerRadius: 12)) } }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.pdf]) { result in
                 let tool = pendingTool
                 pendingTool = nil
@@ -126,9 +122,9 @@ struct ContentView: View {
                           item: export, contentTypes: [.pdf], defaultFilename: export?.url.lastPathComponent) { result in
                 switch result {
                 case .success:
-                    if let current = document {
-                        document = DocumentMetadata(pageCount: current.pageCount, dirty: false, editable: current.editable,
-                                                    pages: current.pages, warnings: current.warnings)
+                    if let current = actions.document {
+                        actions.document = DocumentMetadata(pageCount: current.pageCount, dirty: false, editable: current.editable,
+                                                            pages: current.pages, warnings: current.warnings)
                     }
                 case .failure(let error):
                     failure = error.localizedDescription
@@ -141,7 +137,7 @@ struct ContentView: View {
             }
             .sheet(item: $share, onDismiss: finishStagedCopy) { item in ShareSheet(url: item.url) }
             .sheet(item: $textPage) { page in
-                PageTextView(page: page.number, bridge: bridge, revision: revision)
+                PageTextView(page: page.number, bridge: bridge, revision: actions.revision, terminalFailure: handleFailure)
             }
             .sheet(isPresented: $showingTools, onDismiss: {
                 if let tool = queuedTool {
@@ -153,13 +149,13 @@ struct ContentView: View {
                 NavigationStack {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 16) {
-                            WorkspaceToolList(query: toolQuery, pinned: pinnedTools, selected: selectedTool,
+                            WorkspaceToolList(query: toolQuery, pinned: pinnedTools, selected: actions.selectedTool,
                                               select: { queuedTool = $0; showingTools = false }, togglePin: togglePin)
                             Text("Tools available in this mobile build. Choose a tool to open a PDF first when needed.")
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
                         .padding()
-                        .disabled(busy)
+                        .disabled(actions.busy)
                     }
                     .background(style.background)
                     .accessibilityIdentifier("tools-browser")
@@ -174,7 +170,14 @@ struct ContentView: View {
                 }
             }
             .alert("PdfCraft", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
-                Button("OK") { failure = nil }
+                if actions.stagedCopy != nil {
+                    Button("Retry Cleanup") { failure = nil; finishStagedCopy() }
+                        .disabled(actions.releasingCopy)
+                    Button("Discard and Close", role: .destructive) { failure = nil; close(discard: true) }
+                        .disabled(actions.releasingCopy)
+                } else {
+                    Button("OK") { failure = nil }
+                }
             } message: { Text(failure ?? "") }
             .confirmationDialog("Discard unsaved changes?", isPresented: $confirmClose, titleVisibility: .visible) {
                 Button("Discard and Close", role: .destructive) { close(discard: true) }
@@ -189,9 +192,9 @@ struct ContentView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 Text("All tools").font(.headline).accessibilityAddTraits(.isHeader)
-                WorkspaceToolList(query: "", pinned: pinnedTools, selected: selectedTool,
+                WorkspaceToolList(query: "", pinned: pinnedTools, selected: actions.selectedTool,
                                   select: choose, togglePin: togglePin)
-                if let document {
+                if let document = actions.document {
                     Divider()
                     Text("Pages").font(.headline).accessibilityAddTraits(.isHeader)
                     ForEach(document.pages) { page in
@@ -206,13 +209,13 @@ struct ContentView: View {
         .frame(width: 240)
         .frame(maxHeight: .infinity)
         .background(style.panel)
-        .disabled(busy)
+        .disabled(actions.busy)
         .accessibilityIdentifier("workspace-sidebar")
     }
 
     @ViewBuilder
     private var workspace: some View {
-        if let document {
+        if let document = actions.document {
             VStack(spacing: 0) {
                 HStack {
                     Text("Page \(selectedPage) of \(document.pageCount)").font(.headline)
@@ -221,7 +224,7 @@ struct ContentView: View {
                 }
                 .padding()
                 .background(style.panel)
-                if selectedTool == .organize {
+                if actions.selectedTool == .organize {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(WorkspaceTool.organize.title).font(.headline)
                         Text(WorkspaceTool.organize.detail).font(.callout).foregroundStyle(.secondary)
@@ -252,8 +255,9 @@ struct ContentView: View {
                                     .font(.callout).padding()
                             }
                             ForEach(document.pages) { page in
-                                PageView(page: page, bridge: bridge, revision: revision,
-                                         selected: selectedPage == page.number) { selectedPage = page.number }
+                                PageView(page: page, bridge: bridge, revision: actions.revision,
+                                         selected: selectedPage == page.number, select: { selectedPage = page.number },
+                                         terminalFailure: handleFailure)
                                     .id(page.number)
                             }
                         }
@@ -262,9 +266,9 @@ struct ContentView: View {
                     .onChange(of: selectedPage) { _, page in reader.scrollTo(page, anchor: .top) }
                 }
             }
-            .disabled(busy)
+            .disabled(actions.busy)
         } else {
-            WorkspaceHome(pinned: pinnedTools, busy: busy, open: { beginOpen() }, select: choose,
+            WorkspaceHome(pinned: pinnedTools, busy: actions.busy, open: { beginOpen() }, select: choose,
                           togglePin: togglePin, showTools: { showingTools = true })
         }
     }
@@ -281,12 +285,12 @@ struct ContentView: View {
     }
 
     private func choose(_ tool: WorkspaceTool) {
-        guard !busy else { return }
-        guard let document else {
+        guard !actions.busy else { return }
+        guard let document = actions.document else {
             beginOpen(for: tool)
             return
         }
-        selectedTool = tool
+        actions.selectedTool = tool
         switch tool {
         case .organize:
             break
@@ -304,91 +308,82 @@ struct ContentView: View {
     }
 
     private func open(_ url: URL, then tool: WorkspaceTool? = nil) {
-        busy = true
+        actions.busy = true
         Task {
             do {
-                document = try await bridge.open(url)
+                actions.document = try await bridge.open(url)
                 documentName = url.deletingPathExtension().lastPathComponent
                 selectedPage = 1
-                selectedTool = nil
-                revision += 1
-                busy = false
+                actions.selectedTool = nil
+                actions.revision += 1
+                actions.busy = false
                 if let tool { choose(tool) }
             } catch {
-                failure = error.localizedDescription
-                busy = false
+                handleFailure(error)
             }
         }
     }
 
     private func rotate() {
-        busy = true
+        actions.busy = true
         Task {
             do {
-                document = try await bridge.rotate(page: selectedPage)
-                revision += 1
-            } catch { failure = error.localizedDescription }
-            busy = false
+                actions.document = try await bridge.rotate(page: selectedPage)
+                actions.revision += 1
+                actions.busy = false
+            } catch { handleFailure(error) }
         }
     }
 
     private func save() {
-        busy = true
+        actions.busy = true
         Task {
             do {
                 let url = try await bridge.saveCopy()
-                stagedCopy = url
+                actions.stagedCopy = url
                 export = Export(url: url)
             } catch {
-                failure = error.localizedDescription
-                busy = false
+                handleFailure(error)
             }
         }
     }
 
     private func finishStagedCopy() {
-        guard let copy = stagedCopy else { return }
-        stagedCopy = nil
         Task {
-            do { try await bridge.releaseCopy(copy) }
-            catch { failure = error.localizedDescription }
-            busy = false
+            do { try await actions.releaseCopy { try await bridge.releaseCopy($0) } }
+            catch { handleFailure(error) }
         }
     }
 
     private func close(discard: Bool) {
-        busy = true
+        actions.busy = true
         Task {
             do {
                 try await bridge.close(discard: discard)
-                document = nil
-                selectedTool = nil
-                stagedCopy = nil
-                revision += 1
+                actions.clearDocument()
+                actions.busy = false
             } catch {
-                if (error as? MobileFailure)?.sessionEnded == true {
-                    document = nil
-                    selectedTool = nil
-                    stagedCopy = nil
-                    revision += 1
-                }
-                failure = error.localizedDescription
+                handleFailure(error)
             }
-            busy = false
         }
     }
 
     private func shareDocument() {
-        busy = true
+        actions.busy = true
         Task {
             do {
                 let url = try await bridge.saveCopy()
-                stagedCopy = url
+                actions.stagedCopy = url
                 share = Export(url: url)
             } catch {
-                failure = error.localizedDescription
-                busy = false
+                handleFailure(error)
             }
         }
+    }
+
+    private func handleFailure(_ error: Error) {
+        actions.failed(error)
+        if actions.document == nil { textPage = nil }
+        failure = error.localizedDescription
     }
 }

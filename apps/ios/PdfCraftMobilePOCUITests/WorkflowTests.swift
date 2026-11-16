@@ -215,6 +215,7 @@ final class WorkflowTests: XCTestCase {
         XCTAssertTrue(app.otherElements["Browse View (Picker)"].waitForNonExistence(timeout: 20),
                       app.debugDescription)
         XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 20), app.debugDescription)
+        waitForDocumentReady(in: app)
         app.buttons["Close"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(app.buttons["Open PDF"].waitForExistence(timeout: 10), app.debugDescription)
         app.buttons["Open PDF"].tap()
@@ -223,6 +224,7 @@ final class WorkflowTests: XCTestCase {
         XCTAssertTrue(image.waitForExistence(timeout: 30), app.debugDescription)
         XCTAssertGreaterThan(image.frame.width, image.frame.height)
         attachScreenshot(app, named: "Reopened rotated export")
+        attachScreenshot(image, named: "Reopened rotated export canvas")
 
         shareAndCopy(in: app)
     }
@@ -335,8 +337,8 @@ final class WorkflowTests: XCTestCase {
         waitForDocumentReady(in: app)
     }
 
-    private func attachScreenshot(_ app: XCUIApplication, named name: String) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
+    private func attachScreenshot(_ element: XCUIElement, named name: String) {
+        let attachment = XCTAttachment(screenshot: element.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
