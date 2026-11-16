@@ -763,7 +763,9 @@ fn handle_menu_button_keys(app: &mut PdfCraftApp, ctx: &egui::Context, popup_id:
     }
 
     if menu_focused {
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Tab)) || ctx.memory(|m| m.focused().is_some_and(|id| id != btn.id)) {
+            menu_focused = false;
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             menu_focused = false;
             ctx.request_repaint();
         } else if ctx.input_mut(|i| {
@@ -800,10 +802,12 @@ fn handle_menu_button_keys(app: &mut PdfCraftApp, ctx: &egui::Context, popup_id:
     }
 
     // Alt+letter (e.g. Alt+F) opens the Menu popup and selects that submenu.
+    // Disabled on macOS so Option-generated text remains available.
+    let is_mac = matches!(ctx.os(), egui::os::OperatingSystem::Mac | egui::os::OperatingSystem::IOS);
     let alt_letter = ctx.input(|i| {
         i.events.iter().find_map(|e| match e {
             egui::Event::Key { key, pressed: true, modifiers, .. }
-                if modifiers.alt && !modifiers.command && !modifiers.ctrl && !modifiers.mac_cmd =>
+                if !is_mac && modifiers.alt && !modifiers.command && !modifiers.ctrl && !modifiers.mac_cmd =>
             {
                 crate::menus::key_letter(*key).map(|c| (c, *key))
             }

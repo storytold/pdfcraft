@@ -774,6 +774,48 @@ fn f10_followed_by_down_arrow_opens_menu_popup() {
 }
 
 #[test]
+fn f10_followed_by_f_opens_file_menu() {
+    let mut h = harness();
+    h.key_press(egui::Key::F10);
+    h.run_steps(1);
+    h.key_press(egui::Key::F);
+    h.run_steps(3);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("File")).is_some(),
+        "F10 then F opened the File menu"
+    );
+}
+
+#[test]
+fn f10_followed_by_tab_clears_menu_focus_so_later_f_does_not_open_file() {
+    let mut h = harness();
+    h.key_press(egui::Key::F10);
+    h.run_steps(1);
+    // Tab moves keyboard focus away from the Menu button to the next control.
+    h.key_press(egui::Key::Tab);
+    h.run_steps(1);
+    // A subsequent 'F' key must be handled by the newly focused control, not open File.
+    h.key_press(egui::Key::F);
+    h.run_steps(2);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("File")).is_none(),
+        "File menu must not open when F is pressed after Tab moved focus away"
+    );
+}
+
+#[test]
+fn alt_f_mnemonic_is_disabled_on_macos_preserving_option_keys() {
+    let mut h = harness();
+    h.ctx.set_os(egui::os::OperatingSystem::Mac);
+    h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::F);
+    h.run_steps(3);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("File")).is_none(),
+        "Alt+F mnemonic must not open File menu on macOS"
+    );
+}
+
+#[test]
 fn alt_tap_followed_by_down_arrow_opens_menu_popup() {
     let mut h = harness();
     h.event(egui::Event::Key { key: egui::Key::AltLeft, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT });
