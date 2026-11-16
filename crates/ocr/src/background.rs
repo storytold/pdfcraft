@@ -570,9 +570,9 @@ fn grey_rgb(raster: &PageRaster) -> bool {
     if raster.channels() != 3 {
         return false;
     }
-    sampled_pixels(raster).all(|pixel| {
-        let max = pixel.iter().copied().max().unwrap_or(0);
-        let min = pixel.iter().copied().min().unwrap_or(0);
+    raster.data().as_chunks::<3>().0.iter().all(|&[r, g, b]| {
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
         max.saturating_sub(min) <= GREY_SPREAD
     })
 }
@@ -586,10 +586,8 @@ fn photographic(raster: &PageRaster) -> bool {
     let mut mean_rb = 0.0_f64;
     let mut m2_rg = 0.0_f64;
     let mut m2_rb = 0.0_f64;
-    for pixel in sampled_pixels(raster) {
-        let r = f64::from(pixel.first().copied().unwrap_or(0));
-        let g = f64::from(pixel.get(1).copied().unwrap_or(0));
-        let b = f64::from(pixel.get(2).copied().unwrap_or(0));
+    for &[r, g, b] in sampled_pixels(raster) {
+        let (r, g, b) = (f64::from(r), f64::from(g), f64::from(b));
         n += 1.0;
         let rg = r - g;
         let rb = r - b;
@@ -607,16 +605,10 @@ fn photographic(raster: &PageRaster) -> bool {
     (m2_rg / denom).sqrt() > PHOTO_CHROMA || (m2_rb / denom).sqrt() > PHOTO_CHROMA
 }
 
-fn sampled_pixels(raster: &PageRaster) -> impl Iterator<Item = &[u8]> {
-    let pixels = raster.data().len() / usize::from(raster.channels()).max(1);
-    let stride = pixels.div_ceil(SAMPLE_CAP).max(1);
-    let channels = usize::from(raster.channels());
-    raster
-        .data()
-        .chunks(channels)
-        .enumerate()
-        .filter(move |(index, _)| index % stride == 0)
-        .filter_map(move |(_, pixel)| (pixel.len() == channels).then_some(pixel))
+fn sampled_pixels(raster: &PageRaster) -> impl Iterator<Item = &[u8; 3]> {
+    let pixels = raster.data().as_chunks::<3>().0;
+    let stride = pixels.len().div_ceil(SAMPLE_CAP).max(1);
+    pixels.iter().step_by(stride)
 }
 
 /// The image XObject written into the document.
@@ -1273,5 +1265,14 @@ mod tests {
         assert_rect(cleaned.raster(), [8, 7, 12, 13], &cream);
         assert_eq!(cleaned.raster().pixel(7, 9), Some(&cream[..]), "halo inside hollow frame must be erased to cream");
         assert_eq!(cleaned.raster().pixel(1, 1), Some(&[0, 0, 0][..]), "border frame ink stays protected");
+    }
+
+    #[test]
+    fn grey_rgb_keeps_colour_for_a_thin_coloured_mark_between_sample_strides() {
+        // 256x256 = 65,536 pixels (4x SAMPLE_CAP, so strided sampling steps by 4).
+        // Put a thin blue mark at x = 1, y = 0 (index 1, skipped by index % 4 == 0).
+        let mut page = raster(256, 256, 3, &[245, 245, 245]);
+        paint_rect(&mut page, [1, 0, 2, 1], &[20, 40, 210]);
+        assert_eq!(encoding_for(&page), BackgroundEncoding::FlateRgb, "thin coloured mark must not be dropped as FlateGray");
     }
 }
