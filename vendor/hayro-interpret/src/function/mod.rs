@@ -137,6 +137,19 @@ impl Clamper {
         }
     }
 
+    /// PdfCraft patch (115): the outputs of a calculator function are the top `n` values of its
+    /// operand stack, `n` being the number of `/Range` pairs (ISO 32000-2 §7.10.5.3), or the
+    /// whole stack when `/Range` is missing. A stack holding more than `n` values is an error
+    /// in the spec's words, but PDFium, MuPDF, Poppler and Ghostscript all take the top `n` and
+    /// ignore the rest (hayro took the bottom `n`). `None` when it holds fewer: those readers
+    /// split on it, so it stays the error the spec calls it.
+    fn top_outputs<'s, T>(&self, stack: &'s [T]) -> Option<&'s [T]> {
+        match &self.range {
+            Some(range) => stack.get(stack.len().checked_sub(range.len())?..),
+            None => Some(stack),
+        }
+    }
+
     fn clamp_output(&self, output: &mut [f32]) {
         if let Some(range) = &self.range {
             if range.len() != output.len() {

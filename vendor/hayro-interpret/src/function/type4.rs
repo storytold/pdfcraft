@@ -71,7 +71,12 @@ impl Type4 {
             0,
         )?;
 
-        let mut out: SmallVec<_> = arg_stack.items().iter().map(|i| i.as_f32()).collect();
+        let mut out: SmallVec<_> = self
+            .clamper
+            .top_outputs(arg_stack.items())?
+            .iter()
+            .map(|i| i.as_f32())
+            .collect();
 
         self.clamper.clamp_output(&mut out);
 
