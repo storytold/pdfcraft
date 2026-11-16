@@ -131,6 +131,10 @@ pub(crate) fn forget_typing_before(ctx: &egui::Context, id: egui::Id, doc: pdfcr
     }
     let aside = |doc: pdfcraft_engine::DocId| id.with(("typing-aside", doc));
     let aligns = id.with(ALIGN_HISTORY);
+    if last.is_some_and(|l| l != doc) {
+        // The narrowed-word anchor belongs to the document that made it.
+        ctx.data_mut(|d| d.remove::<[usize; 4]>(id.with("narrowed word")));
+    }
     if let Some(left) = last.filter(|l| *l != doc)
         && let Some(state) = egui::TextEdit::load_state(ctx, id)
     {
@@ -251,7 +255,9 @@ fn char_under(galley: &egui::Galley, pos: egui::Vec2) -> Option<usize> {
     let end = |i: usize| galley.pos_from_cursor(CCursor::new(i));
     [caret.checked_sub(1), Some(caret)].into_iter().flatten().find(|&i| {
         let (from, to) = (start(i), end(i + 1));
-        (from.center().y - to.center().y).abs() < 1.0 && from.min.x <= pos.x && pos.x < to.min.x
+        // The pointer must be on the glyph's own row: a click in the blank space after a short
+        // row hits the caret that starts the next row, whose first glyph shares the x range.
+        (from.center().y - to.center().y).abs() < 1.0 && from.y_range().contains(pos.y) && from.min.x <= pos.x && pos.x < to.min.x
     })
 }
 
@@ -269,7 +275,9 @@ pub(crate) fn narrow_double_click(ui: &egui::Ui, id: egui::Id, text: &str, outpu
     let ends = |r: CCursorRange| (usize::from(r.primary.index), usize::from(r.secondary.index));
     let mut selected = state.cursor.char_range();
     let mut changed = false;
-    let down = output.response.is_pointer_button_down_on();
+    // A press and its release can arrive in one frame (no button down at the end of it); egui still
+    // handles that press, so it counts here too.
+    let down = output.response.is_pointer_button_down_on() || (output.response.hovered() && ui.input(|i| i.pointer.any_pressed()));
     let stored = kept.filter(|m| down || selected.map(ends) == Some((m[2], m[3])));
     let narrowed = stored.map(|m| [m[0], m[1]]);
     let mut keep = narrowed;
@@ -1262,11 +1270,15 @@ mod tests {
         }
 
         fn with_width(narrow: bool, width: f32) -> Self {
+            Self::with_text(narrow, width, "Take a calm walk.")
+        }
+
+        fn with_text(narrow: bool, width: f32, text: &str) -> Self {
             use egui::text::{CCursor, CCursorRange};
             let mut live = LiveBox {
                 ctx: egui::Context::default(),
                 id: egui::Id::unique("paragraph"),
-                text: String::from("Take a calm walk."),
+                text: text.to_owned(),
                 time: 0.0,
                 narrow,
                 width,
@@ -1286,13 +1298,13 @@ mod tests {
             self.time += 0.05;
             events.insert(0, egui::Event::ModifiersChanged(modifiers));
             let input = egui::RawInput { events, time: Some(self.time), ..Default::default() };
-            let (id, narrow, width) = (self.id, self.narrow, self.width);
+            let (id, narrow, width, count) = (self.id, self.narrow, self.width, self.text.chars().count());
             let mut selection = None;
             let mut spans = Vec::new();
             let mut output = self.ctx.run_ui(input, |ui| {
                 let out = egui::TextEdit::multiline(&mut self.text).id(id).desired_width(width).show(ui);
                 let row = out.galley_pos.to_vec2();
-                spans = (0..17)
+                spans = (0..count)
                     .map(|i| {
                         let start = egui::text::CCursor { index: i.into(), prefer_next_row: true };
                         let end = egui::text::CCursor::new(i + 1);
@@ -1329,6 +1341,53 @@ mod tests {
             }
             self.pass(vec![], modifiers)
         }
+    }
+
+    /// A Shift-click on `at` whose press and release arrive in the same frame.
+    fn tap(live: &mut LiveBox, at: egui::Pos2, modifiers: egui::Modifiers) -> Option<String> {
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers };
+        live.time += 2.0;
+        live.pass(vec![egui::Event::PointerMoved(at)], modifiers);
+        live.pass(vec![press(true), press(false)], modifiers);
+        live.pass(vec![], modifiers)
+    }
+
+    /// A Shift-click that is pressed and released within one frame still keeps the narrowed word.
+    #[test]
+    fn a_shift_click_pressed_and_released_in_one_frame_keeps_the_word() {
+        let shift = egui::Modifiers { shift: true, ..Default::default() };
+        let mut live = LiveBox::new(true);
+        let a = live.point(5, 0.2);
+        assert_eq!(live.click(a, 2, egui::Modifiers::NONE).as_deref(), Some("a"));
+        let before = live.point(2, 0.5);
+        assert_eq!(tap(&mut live, before, shift).as_deref(), Some("ke a"));
+    }
+
+    /// A double-click in the blank space after a short row is not narrowed to the one-letter word
+    /// that starts the row below, though the caret it hits is that word's start.
+    #[test]
+    fn a_double_click_in_the_blank_after_a_row_does_not_narrow_to_the_next_row() {
+        let blank = |narrow| {
+            let mut live = LiveBox::with_text(narrow, 22.0, "i W");
+            assert!(live.spans[2].0.y > live.spans[0].0.y + 1.0, "W wraps below the i: {:?}", live.spans);
+            let at = egui::Pos2::new(live.spans[2].0.x + 8.0, live.spans[0].0.y);
+            live.click(at, 2, egui::Modifiers::NONE)
+        };
+        assert_eq!(blank(true), blank(false));
+    }
+
+    /// The narrowed-word anchor does not pass to the document the text box is next used for.
+    #[test]
+    fn the_narrowed_word_anchor_does_not_pass_to_another_document() {
+        use pdfcraft_engine::DocId;
+        let (ctx, id) = (egui::Context::default(), egui::Id::unique("box"));
+        let mut from = None;
+        forget_typing_before(&ctx, id, DocId(1), &mut from, "Take a calm walk.");
+        ctx.data_mut(|d| d.insert_temp(id.with("narrowed word"), [5usize, 6, 5, 6]));
+        forget_typing_before(&ctx, id, DocId(1), &mut from, "Take a calm walk.");
+        assert!(ctx.data(|d| d.get_temp::<[usize; 4]>(id.with("narrowed word"))).is_some(), "the same document keeps it");
+        forget_typing_before(&ctx, id, DocId(2), &mut from, "Take a calm walk.");
+        assert!(ctx.data(|d| d.get_temp::<[usize; 4]>(id.with("narrowed word"))).is_none());
     }
 
     /// Double-click one fifth into the one-letter "a" of "Take a calm walk.", with `shift` held or
