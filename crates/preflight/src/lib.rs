@@ -714,7 +714,9 @@ fn check_identification(doc: &Document, level: Level, issue: &mut impl FnMut(&'s
         Some(x) => {
             let part = xmp::identifier(&x, xmp::PDFA_ID, "part");
             let conf = xmp::identifier(&x, xmp::PDFA_ID, "conformance");
-            if part.as_deref() != Some(&level.part().to_string()) || conf.as_deref().map(str::to_uppercase).as_deref() != Some("B") {
+            // 6.6.4: the conformance is one of the capital letters A, B and U, and a level A or U
+            // file meets every level B requirement too, so any of the three is identified at level b.
+            if part.as_deref() != Some(&level.part().to_string()) || !matches!(conf.as_deref(), Some("A" | "B" | "U")) {
                 issue("6.6.4", "The metadata doesn't identify the file as {}", Some(level.label().to_owned()), None, true);
             }
             if let Some(title) = info(doc, "Title")
