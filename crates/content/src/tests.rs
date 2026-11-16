@@ -40,6 +40,44 @@ fn splicing_visits_each_piece_a_few_times() {
     assert_eq!(two.splice([(tj, b"(b) Tj".to_vec())]), [b"q (b) Tj".to_vec(), b" Q".to_vec()]);
 }
 
+/// An unterminated nest of array openers is given up on: only the openers are damage, so the
+/// operator after them is still read rather than being lost with the rest of the read.
+#[test]
+fn a_given_up_array_keeps_the_operator_after_it() {
+    let n = 1 << 15;
+    let mut src = "[".repeat(n);
+    src.push_str("\n1 0 0 1 0 0 cm");
+    RESCANNED.with(|c| c.set(0));
+    let p = parse(src.as_bytes());
+    let rescanned = RESCANNED.with(|c| c.get());
+    assert!(rescanned <= src.len() + MIN_RESCAN, "{rescanned} bytes read for a {}-byte stream", src.len());
+    assert_eq!(p.ops.last().and_then(|o| o.nums::<6>()), Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+}
+
+/// Damage to one array does not hide a later one: a closing delimiter ends it, so a valid `TJ`
+/// array after a given-up array still reaches the operator as an array.
+#[test]
+fn a_valid_array_after_a_given_up_one_is_parsed() {
+    let mut src = "[".repeat(4096);
+    src.push_str("] [(A) -50 (B)] TJ");
+    let p = parse(src.as_bytes());
+    let tj = p.ops.iter().find(|o| o.is("TJ")).expect("the operator after the valid array");
+    assert!(matches!(tj.operands.first(), Some(Object::Array(a)) if a.len() == 3), "{:?}", tj.operands);
+}
+
+/// Closing delimiters re-arm array parsing, but only within the rescan allowance: runs of openers
+/// each followed by a `]` can't make every re-armed read scan the rest of the stream.
+#[test]
+fn re_armed_array_reads_stay_within_the_rescan_allowance() {
+    let src = "[".repeat(100) + "]";
+    let src = src.repeat(2000);
+    RESCANNED.with(|c| c.set(0));
+    parse(src.as_bytes());
+    let rescanned = RESCANNED.with(|c| c.get());
+    let limit = src.len() * RESCAN_PER_BYTE + MIN_RESCAN + src.len();
+    assert!(rescanned <= limit, "{rescanned} bytes read for a {}-byte stream", src.len());
+}
+
 #[test]
 fn a_long_unreadable_number_is_read_once() {
     for junk in ["+", "5"] {
@@ -586,4 +624,69 @@ fn invert_accepts_small_scale_and_rejects_singular() {
     assert!(Matrix([f64::NAN, 0., 0., 1., 0., 0.]).invert().is_none());
     // A subnormal scale passes the relative check but its inverse overflows (CodeRabbit on #5703).
     assert!(Matrix([1e-310, 0., 0., 1., 0., 0.]).invert().is_none());
+}
+
+/// Failed operands that read to the end of the stream (an unterminated array, hex string or
+/// dictionary, or unreadable inline-image parameters) are not retried from every byte without
+/// end: the bytes they read stay proportional to the stream, through both [`parse`] and [`ops`].
+#[test]
+fn failed_operands_read_a_bounded_multiple_of_the_stream() {
+    let n = 1 << 18;
+    for (junk, len) in [("[", 1), ("<", 1), ("<< /a ", 6), ("BI /K ( EI ", 11)] {
+        let mut src = junk.repeat(n / len).into_bytes();
+        src.extend_from_slice(b"\n1 0 0 1 0 0 cm");
+        let limit = src.len() * (RESCAN_PER_BYTE + 2) + MIN_RESCAN + src.len();
+        RESCANNED.with(|c| c.set(0));
+        let p = parse(&src);
+        let rescanned = RESCANNED.with(|c| c.get());
+        assert!(rescanned <= limit, "{junk:?}: {rescanned} bytes read for a {}-byte stream", src.len());
+        assert!(p.skipped > 0, "{junk:?}");
+        RESCANNED.with(|c| c.set(0));
+        let streamed = ops(&src).count();
+        let rescanned = RESCANNED.with(|c| c.get());
+        assert!(rescanned <= limit, "{junk:?}: {rescanned} bytes read streaming a {}-byte stream", src.len());
+        assert_eq!(streamed, p.ops.len(), "{junk:?}");
+    }
+    // A short stray opener still recovers byte by byte, keeping what follows it.
+    let p = parse(b"[ 1 0 0 1 0 0 cm");
+    assert_eq!(p.ops.last().and_then(|o| o.nums::<6>()), Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+    let p = parse(b"<< /a 1 0 0 1 0 0 cm");
+    assert_eq!(p.ops.last().map(|o| o.op.clone()), Some(b"cm".to_vec()));
+}
+
+/// Operands without an operator are not all held: only the last [`MAX_OPERANDS`] or so are kept
+/// for the operator that may follow, and the rest count as skipped.
+#[test]
+fn operands_without_an_operator_are_bounded() {
+    let n = 100_000;
+    let mut src = "1 ".repeat(n).into_bytes();
+    src.extend_from_slice(b"0 0 1 0 0 cm");
+    let p = parse(&src);
+    let cm = p.ops.last().expect("the cm operator");
+    assert!(cm.operands.len() <= 2 * MAX_OPERANDS, "{} operands kept", cm.operands.len());
+    assert_eq!(cm.nums::<6>(), Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+    assert_eq!(p.skipped + cm.operands.len(), n + 5);
+    assert_eq!(cm.span.start, 0);
+}
+
+/// `skipped` counts bytes: operands dropped without an operator count their bytes, not 1 each.
+#[test]
+fn dropped_operands_count_their_bytes() {
+    let p = parse(b"q Q 123 /Name (str)");
+    assert_eq!(p.skipped, b"123".len() + b"/Name".len() + b"(str)".len());
+}
+
+/// Once repeated damaged arrays have spent the rescan allowance, a later valid `TJ` array is still
+/// read as an array, and the probes that find it stay within the allowance.
+#[test]
+fn a_valid_array_after_an_exhausted_allowance_is_parsed() {
+    let mut src = "[ ".repeat(50_000);
+    src.push_str("] [(A) -50 (B)] TJ");
+    let mut ops = Ops::new(src.as_bytes(), &[]);
+    ops.rescanned = src.len() * RESCAN_PER_BYTE + MIN_RESCAN + 1;
+    ops.arrays_given_up = true;
+    let found: Vec<Op> = ops.by_ref().collect();
+    assert!(ops.probed <= 4 * src.len(), "{} bytes probed for a {}-byte stream", ops.probed, src.len());
+    let tj = found.iter().find(|o| o.is("TJ")).expect("the operator after the valid array");
+    assert!(matches!(tj.operands.first(), Some(Object::Array(a)) if a.len() == 3), "{:?}", tj.operands);
 }
