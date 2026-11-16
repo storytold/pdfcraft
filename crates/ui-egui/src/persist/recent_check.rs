@@ -7,15 +7,19 @@
 //! is up; each frame only takes the answers it has so far. An entry the worker hasn't reached
 //! yet, or can't tell about (the mount answers with an error), stays listed and can be opened or
 //! removed by hand. A worker stuck on a dead mount stays stuck, but nothing waits for it.
+//!
+//! Opening a file that already has a tab puts it back in the list without reading it, so that
+//! entry is asked about the same way (#6323).
 
 use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::PdfCraftApp;
 
-/// The recent files restored from settings that haven't been checked yet, and the check under way.
+/// The recent files that haven't been checked yet (restored from settings, or put back by
+/// focusing an open tab), and the check under way.
 #[derive(Debug, Default)]
 pub struct RecentCheck {
-    /// Paths restored from settings, checked on the next frame.
+    /// Paths to check on the next frame that no check is under way.
     unchecked: Vec<String>,
     /// The paths the worker has found gone so far; it adds to them as it goes.
     gone: Option<Arc<Mutex<Vec<String>>>>,
@@ -27,6 +31,14 @@ impl RecentCheck {
     /// Settings just restored these recent files: check them once the window is up.
     pub(crate) fn restored(&mut self, paths: Vec<String>) {
         self.unchecked = paths;
+    }
+
+    /// A tab showing `path` put it back in the list without reading the file: check it is still
+    /// there, as for a restored entry.
+    pub(crate) fn focused(&mut self, path: &str) {
+        if !self.unchecked.iter().any(|p| p == path) {
+            self.unchecked.push(path.to_string());
+        }
     }
 
     /// `path` was just opened: an answer the worker gives about it later is out of date.
@@ -47,7 +59,9 @@ impl PdfCraftApp {
     /// far (called each frame). The check runs on a worker thread, inline in tests
     /// ([`PdfCraftApp::run_inline`]).
     pub(crate) fn check_restored_recent(&mut self) {
-        let paths = std::mem::take(&mut self.recent_check.unchecked);
+        // One check at a time: paths queued while a worker runs wait for it to finish, so its
+        // answers aren't dropped with its slot.
+        let paths = if self.recent_check.gone.is_none() { std::mem::take(&mut self.recent_check.unchecked) } else { Vec::new() };
         // The web build's recent files aren't paths on a file system.
         if !paths.is_empty() && !cfg!(target_arch = "wasm32") {
             let slot = Arc::new(Mutex::new(Vec::new()));

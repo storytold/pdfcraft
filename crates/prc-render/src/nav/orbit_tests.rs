@@ -277,7 +277,7 @@ fn a_pressed_point_off_centre_keeps_its_place_as_the_view_turns() {
 
 #[test]
 fn a_vertex_too_far_to_measure_gives_an_infinite_reach_not_a_near_one() {
-    let mut mesh = pdfcraft_prc::TriangleMesh::default();
+    let mut mesh = craft_prc::TriangleMesh::default();
     mesh.positions = vec![[-f64::MAX, -f64::MAX, 0.0], [f64::MAX, f64::MAX, 0.0], [f64::MAX, -f64::MAX, 0.0], [0.0, 0.0, 0.0]];
     mesh.triangles = vec![[0, 1, 2], [3, 3, 3]];
     let meshes = [WorldMesh::new(mesh)];

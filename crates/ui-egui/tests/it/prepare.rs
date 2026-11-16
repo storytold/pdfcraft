@@ -336,6 +336,229 @@ fn format_validate_and_calculate_tabs() {
     assert_eq!(f.actions.calculate, Calculate::Notation("name".into()));
 }
 
+/// The radio of the Calculate tab's custom calculation script (#6630).
+const CUSTOM: &str = "Custom calculation script:";
+
+/// What the Calculate tab says when an edit would take the custom script past 256 KiB.
+const REFUSAL: &str = "A script edited here can be at most 256 KiB long; that change wasn't made.";
+
+/// The longest custom script the Calculate tab edits, in bytes.
+const MAX_EDITED_SCRIPT: usize = 256 * 1024;
+
+/// The harness in Prepare Form, with `city`'s calculation set to `js`, a script of its own.
+fn with_calculate_script(js: &str) -> Harness<'static, PdfCraftApp> {
+    let mut h = harness();
+    set_calculate_script(&mut h, js);
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h
+}
+
+/// Sets `city`'s calculate script, as form_set_script does.
+fn set_calculate_script(h: &mut Harness<'static, PdfCraftApp>, js: &str) {
+    let edit = pdfcraft_engine::Edit::SetFieldScript { name: "city".into(), event: "calculate".into(), script: Some(js.into()) };
+    assert!(h.state_mut().apply_edit(edit));
+    h.run_steps(2);
+}
+
+/// Opens Field Properties of `name` on the Calculate tab.
+fn open_calculate(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
+    h.state_mut().open_field_props(name, 0);
+    h.run_steps(2);
+    h.get_by_label("Calculate").click();
+    h.run_steps(2);
+}
+
+/// Clicks the dialog button `label` (OK or Cancel).
+fn press(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    h.get_by_label(label).click();
+    h.run_steps(3);
+}
+
+/// Clicks the Calculate tab's radio `label`.
+fn choose(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    h.get_by_role_and_label(Role::RadioButton, label).click();
+    h.run_steps(2);
+}
+
+/// Whether the Calculate tab's radio `label` is selected.
+fn chosen(h: &Harness<'static, PdfCraftApp>, label: &str) -> bool {
+    use egui_kittest::kittest::NodeT;
+    h.get_by_role_and_label(Role::RadioButton, label).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)
+}
+
+/// `city`'s calculation as the document has it: the recognised one and the script of its own.
+fn city_calculation(h: &Harness<'static, PdfCraftApp>) -> (pdfcraft_engine::form_scripts::Calculate, Option<String>) {
+    let s = h.state();
+    let f = s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "city").unwrap().clone();
+    (f.actions.calculate, f.actions.scripts.calculate)
+}
+
+/// What each multi-line box on the tab holds.
+fn script_boxes(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
+    h.query_all_by_role(Role::MultilineTextInput).filter_map(|n| n.value()).collect()
+}
+
+/// The script box's description: what a screen reader says about it besides its text.
+fn script_box_description(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
+    use egui_kittest::kittest::NodeT;
+    h.get_by_role_and_label(Role::MultilineTextInput, CUSTOM).accesskit_node().description()
+}
+
+/// Selects everything in the script box and types `text` over it.
+fn retype_script(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
+    h.get_by_role(Role::MultilineTextInput).click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_role(Role::MultilineTextInput).type_text(text);
+    h.run_steps(2);
+}
+
+/// Pastes `text` into the script box where its cursor is.
+fn paste_script(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
+    h.get_by_role(Role::MultilineTextInput).click();
+    h.run_steps(1);
+    h.event(egui::Event::Paste(text.into()));
+    h.run_steps(2);
+}
+
+/// A field whose calculation is a script of its own shows it on the Calculate tab as a custom
+/// calculation script, not as "Value is not calculated" (#6630); another choice and back brings
+/// the script back, and OK without a change keeps it.
+#[test]
+fn the_calculate_tab_shows_a_custom_calculation_script() {
+    let js = "event.value = \"*\" + this.getField(\"name\").value + \"*\";";
+    let mut h = with_calculate_script(js);
+    open_calculate(&mut h, "city");
+    assert!(chosen(&h, CUSTOM), "the script is the field's calculation");
+    assert!(!chosen(&h, "Value is not calculated"));
+    assert_eq!(script_boxes(&h), [js]);
+    assert_eq!(script_box_description(&h), None, "nothing to say about it");
+    choose(&mut h, "Simplified field notation:");
+    assert!(!script_boxes(&h).contains(&js.to_owned()));
+    choose(&mut h, CUSTOM);
+    assert_eq!(script_boxes(&h), [js]);
+    assert_eq!(h.state().field_props.as_ref().and_then(|d| d.props()), None, "an untouched tab changes nothing");
+    press(&mut h, "OK");
+    assert_eq!(city_calculation(&h), (pdfcraft_engine::form_scripts::Calculate::None, Some(js.to_owned())));
+}
+
+/// Only a script that is no sum or notation opens as a custom script: a sum stays a sum, and a
+/// field with no calculation opens on "Value is not calculated", with no script box.
+#[test]
+fn a_sum_or_no_calculation_does_not_open_as_a_custom_script() {
+    let mut h = with_calculate_script("AFSimple_Calculate(\"SUM\", new Array(\"name\"));");
+    open_calculate(&mut h, "city");
+    assert!(chosen(&h, "Value is the"), "the sum is recognised");
+    assert!(!chosen(&h, CUSTOM));
+    assert!(script_boxes(&h).is_empty());
+    press(&mut h, "Cancel");
+    open_calculate(&mut h, "name");
+    assert!(chosen(&h, "Value is not calculated"));
+    assert!(!chosen(&h, CUSTOM));
+    assert!(script_boxes(&h).is_empty());
+}
+
+/// An edited custom script is written as typed, and "Value is not calculated" removes it.
+#[test]
+fn an_edited_custom_script_is_written_and_no_calculation_removes_it() {
+    use pdfcraft_engine::form_scripts::Calculate;
+    let mut h = with_calculate_script("event.value = 1;");
+    open_calculate(&mut h, "city");
+    let edited = "event.value = this.getField(\"name\").value; // città";
+    retype_script(&mut h, edited);
+    assert_eq!(script_boxes(&h), [edited]);
+    press(&mut h, "OK");
+    assert_eq!(city_calculation(&h), (Calculate::None, Some(edited.to_owned())));
+    open_calculate(&mut h, "city");
+    choose(&mut h, "Value is not calculated");
+    press(&mut h, "OK");
+    assert_eq!(city_calculation(&h), (Calculate::None, None));
+}
+
+/// An edit is taken up to exactly 256 KiB, counted in bytes as the JavaScript engine counts them;
+/// one past it, by a byte or by a multi-byte paste of fewer characters, is refused, the box keeps
+/// what it had, and the refusal is said beside the box and in its description until the next edit
+/// is taken.
+#[test]
+fn an_edit_past_256_kib_is_refused_and_the_next_edit_is_taken() {
+    use pdfcraft_engine::form_scripts::Calculate;
+    let js = "event.value = 1;";
+    let mut h = with_calculate_script(js);
+    open_calculate(&mut h, "city");
+    let refused = |h: &Harness<'static, PdfCraftApp>| (h.query_by_label(REFUSAL).is_some(), script_box_description(h));
+    assert_eq!(refused(&h), (false, None));
+    // 100 Ki euro signs are 300 KiB: fewer characters than the limit, more bytes.
+    for paste in ["x".repeat(300 * 1024), "€".repeat(100 * 1024)] {
+        paste_script(&mut h, &paste);
+        assert_eq!(refused(&h), (true, Some(REFUSAL.to_owned())), "{} bytes", paste.len());
+        assert_eq!(script_boxes(&h), [js], "the box keeps what it had");
+    }
+    // Exactly at the limit is taken, and the refusal is no longer said.
+    let full = format!("/*{}*/", "x".repeat(MAX_EDITED_SCRIPT - 4));
+    retype_script(&mut h, &full);
+    assert_eq!(refused(&h), (false, None));
+    assert!(script_boxes(&h) == [full.as_str()], "the box holds the full 256 KiB");
+    // One byte more is not.
+    h.key_press(egui::Key::End);
+    h.get_by_role(Role::MultilineTextInput).type_text(" ");
+    h.run_steps(2);
+    assert!(refused(&h).0, "256 KiB and a byte");
+    assert!(script_boxes(&h) == [full.as_str()]);
+    press(&mut h, "OK");
+    assert!(city_calculation(&h) == (Calculate::None, Some(full)));
+}
+
+/// The refusal is forgotten when another calculation is chosen or the dialog is opened again, and
+/// choosing Custom again brings back the field's own script, not an edit that was left.
+#[test]
+fn a_refusal_is_forgotten_on_another_choice_or_reopening() {
+    use pdfcraft_engine::form_scripts::Calculate;
+    let js = "event.value = 1;";
+    let mut h = with_calculate_script(js);
+    open_calculate(&mut h, "city");
+    retype_script(&mut h, "event.value = 2;");
+    paste_script(&mut h, &"x".repeat(300 * 1024));
+    assert!(h.query_by_label(REFUSAL).is_some());
+    choose(&mut h, "Simplified field notation:");
+    assert!(h.query_by_label(REFUSAL).is_none(), "another choice forgets it");
+    choose(&mut h, CUSTOM);
+    assert!(h.query_by_label(REFUSAL).is_none());
+    assert_eq!(script_box_description(&h), None);
+    assert_eq!(script_boxes(&h), [js], "the field's own script, not the edit left behind");
+    paste_script(&mut h, &"x".repeat(300 * 1024));
+    assert!(h.query_by_label(REFUSAL).is_some());
+    press(&mut h, "Cancel");
+    open_calculate(&mut h, "city");
+    assert!(h.query_by_label(REFUSAL).is_none(), "opening the dialog again forgets it");
+    press(&mut h, "OK");
+    assert_eq!(city_calculation(&h), (Calculate::None, Some(js.to_owned())));
+}
+
+/// A script past 256 KiB isn't edited: the box shows its start, read-only (cut at a character, not
+/// inside one), says why, and OK keeps the whole script.
+#[test]
+fn a_script_past_256_kib_shows_its_start_and_is_kept() {
+    use pdfcraft_engine::form_scripts::Calculate;
+    // 18 + 3 × 100 Ki + 2 bytes: 256 KiB falls inside a euro sign.
+    let long = format!("event.value = 1;/*{}*/", "€".repeat(100 * 1024));
+    let mut h = with_calculate_script(&long);
+    open_calculate(&mut h, "city");
+    assert!(chosen(&h, CUSTOM));
+    let note = "This script is too long to edit here (300 KiB); its start is shown. It is kept as it is.";
+    assert!(h.query_by_label(note).is_some());
+    assert_eq!(script_box_description(&h).as_deref(), Some(note));
+    let start = &long[..MAX_EDITED_SCRIPT - 1];
+    assert!(script_boxes(&h) == [start], "the box shows the start, up to the last whole character");
+    h.get_by_role(Role::MultilineTextInput).click();
+    h.run_steps(1);
+    h.get_by_role(Role::MultilineTextInput).type_text("x");
+    h.run_steps(2);
+    assert!(script_boxes(&h) == [start], "and can't be typed in");
+    press(&mut h, "OK");
+    assert!(city_calculation(&h) == (Calculate::None, Some(long)));
+}
+
 /// Renaming a field in Field Properties renames it in the formulas that read it, in the same undo
 /// step, and says how many changed.
 #[test]
@@ -450,17 +673,21 @@ fn position_tab_rotates_a_field() {
     assert!(h.state().field_props.as_ref().unwrap().props().is_none(), "an unchanged draft is not an edit");
     h.get_by_label("Position").click();
     h.run_steps(2);
-    h.get_by_label("Rotation:");
-    h.state_mut().field_props.as_mut().unwrap().rotation = 90;
-    assert!(h.state().field_props.as_ref().unwrap().props().is_some());
+    // Picked from the list, as a person does.
+    h.get_by_label("Rotation:").click();
+    h.run_steps(2);
+    h.get_by_label("90°").click();
+    h.run_steps(2);
+    let draft = h.state().field_props.as_ref().unwrap().clone();
+    assert_eq!(draft.rotation, 90);
+    let props = draft.props().expect("a new rotation is an edit");
+    assert!(props.rect.is_none(), "picking a rotation moved the field: {:?}", props.rect);
     h.get_by_label("OK").click();
     h.run_steps(3);
     let turned = widget(&h);
     assert_eq!(turned.rotation, 90);
-    let [x0, y0, x1, y1] = before.rect;
-    let (cx, cy, w, ht) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, x1 - x0, y1 - y0);
-    let expect = [cx - ht / 2.0, cy - w / 2.0, cx + ht / 2.0, cy + w / 2.0];
-    assert!(turned.rect.iter().zip(expect).all(|(a, b)| (a - b).abs() < 0.05), "{:?} vs {expect:?}", turned.rect);
+    // The field stays where it was placed; only its content turns (#4296).
+    assert!(turned.rect.iter().zip(before.rect).all(|(a, b)| (a - b).abs() < 0.05), "{:?} moved from {:?}", turned.rect, before.rect);
     h.state_mut().execute("edit.undo");
     h.run_steps(3);
     let back = widget(&h);
@@ -1851,4 +2078,27 @@ fn with_prepare_open_a_double_click_on_a_field_leaves_the_polygon_unfinished() {
     let polygons = s.session.get(s.views[0].id).unwrap().info.annotations.iter().filter(|a| a.subtype == "Polygon").count();
     assert_eq!(polygons, 0, "the polygon is not finished");
     assert!(matches!(s.views[0].comments.gesture, Some(pdfcraft_ui_egui::comments::Gesture::Draw { .. })), "it is still being clicked out");
+}
+
+/// Delete and Escape with a dialog open are the dialog's: the field selected behind it stays and
+/// stays selected. Delete removed it, and Escape deselected it as it closed the dialog.
+#[test]
+fn delete_and_escape_under_a_dialog_leave_the_selected_field() {
+    for key in [egui::Key::Delete, egui::Key::Escape] {
+        let mut h = harness();
+        let before = names(&h).len();
+        assert!(h.state_mut().execute("form.add.text"));
+        h.run_steps(2);
+        let (a, b) = (at(&h, 40.0, 300.0), at(&h, 200.0, 322.0));
+        drag(&mut h, a, b);
+        h.run_steps(2);
+        assert_eq!(h.state().views[0].prepare.selected.as_ref().map(|s| s.0.as_str()), Some("Text1"));
+        h.state_mut().dialog = Some(Dialog::Shortcuts);
+        h.run_steps(3);
+        h.key_press(key);
+        h.run_steps(3);
+        assert_eq!(names(&h).len(), before + 1, "{key:?} under a dialog deletes nothing");
+        assert!(h.state().views[0].prepare.selected.is_some(), "{key:?}: still selected");
+        assert_eq!(h.state().dialog.is_none(), key == egui::Key::Escape, "{key:?}: only Escape closes it");
+    }
 }

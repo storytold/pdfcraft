@@ -1,14 +1,14 @@
 //! Template XML → [`model`](crate::model). Only what the layout engine uses is read; everything
 //! else in the template is ignored, never rejected.
 
+use crate::xml::Node as XmlNode;
 use base64::Engine;
-use roxmltree::Node as XmlNode;
 
 use crate::XfaError;
 use crate::model::{
     Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Margin, Node,
     Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Prop, Props, Rect, RichText, Run, Script, Stroke, Subform,
-    Template, Ui, VAlign, Value,
+    Template, Traversal, Ui, VAlign, Value,
 };
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
@@ -62,11 +62,11 @@ fn scale(v: &str) -> Option<f64> {
 }
 
 /// The first child element of `n` named `name` (by local name, in any namespace).
-fn child<'a, 'd>(n: XmlNode<'a, 'd>, name: &str) -> Option<XmlNode<'a, 'd>> {
+fn child<'a>(n: XmlNode<'a>, name: &str) -> Option<XmlNode<'a>> {
     n.children().find(|c| c.is_element() && c.tag_name().name() == name)
 }
 
-fn children<'a, 'd>(n: XmlNode<'a, 'd>, name: &'a str) -> impl Iterator<Item = XmlNode<'a, 'd>> + 'a {
+fn children<'a>(n: XmlNode<'a>, name: &'a str) -> impl Iterator<Item = XmlNode<'a>> + 'a {
     n.children().filter(move |c| c.is_element() && c.tag_name().name() == name)
 }
 
@@ -265,7 +265,27 @@ fn parse_common(n: XmlNode, warnings: &mut Vec<String>) -> Common {
         font: parse_font(child(n, "font")),
         para: parse_para(child(n, "para")),
         col_span: n.attribute("colSpan").and_then(|c| c.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 64),
+        traversal: parse_traversal(child(n, "traversal")),
     }
+}
+
+/// Longest traversal reference kept (a SOM path); longer ones are ignored.
+const MAX_TRAVERSE_REF: usize = 1024;
+
+/// `<traversal><traverse operation="first|next" ref="…"/>`: the first of each kept. A
+/// `<traverse>` that computes its target with a script, or names none, is ignored.
+fn parse_traversal(n: Option<XmlNode>) -> Traversal {
+    let mut out = Traversal::default();
+    for t in n.into_iter().flat_map(|n| children(n, "traverse")) {
+        let Some(r) = t.attribute("ref").map(str::trim).filter(|r| !r.is_empty() && r.len() <= MAX_TRAVERSE_REF) else { continue };
+        let slot = match t.attribute("operation").map(str::trim).unwrap_or("next") {
+            "first" => &mut out.first,
+            "next" => &mut out.next,
+            _ => continue,
+        };
+        slot.get_or_insert_with(|| r.to_string());
+    }
+    out
 }
 
 /// The property elements of an object that scripts read through the object model (XFA 3.3
@@ -395,7 +415,7 @@ fn parse_props(n: XmlNode, warnings: &mut Vec<String>) -> Props {
     /// The property elements under `n`, whose tag is `within` (empty for the object itself):
     /// `extras` in the object and inside one (forms keep named values there), `script` in a
     /// `validate` or a `calculate` (XFA 3.3 p. 880, p. 641, p. 827).
-    fn elements<'a, 'd>(n: XmlNode<'a, 'd>, within: &str) -> impl Iterator<Item = XmlNode<'a, 'd>> + use<'a, 'd> {
+    fn elements<'a>(n: XmlNode<'a>, within: &str) -> impl Iterator<Item = XmlNode<'a>> + use<'a> {
         let (extras, script) = (within.is_empty() || within == "extras", matches!(within, "validate" | "calculate"));
         let ns = n.tag_name().namespace();
         n.children().filter(move |c| {
@@ -1246,8 +1266,8 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
             crate::MAX_XML_DEPTH
         )));
     }
-    let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
-    let doc = roxmltree::Document::parse_with_options(xml, opts()).map_err(|e| XfaError::Malformed(format!("template XML: {e}")))?;
+    let opts = || crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
+    let doc = crate::xml::Document::parse_with_options(xml, opts()).map_err(|e| XfaError::Malformed(format!("template XML: {e}")))?;
     let root = doc.root_element();
     // The XDP's config packet has a <template> element too: the one we want is in the
     // xfa-template namespace, or at least has a subform in it.
@@ -1267,7 +1287,7 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     // written again with them merged in. The saved state below still comes from `doc`.
     let (expanded, mut warnings) = crate::proto::expand(template);
     let expanded_doc;
-    let template = match expanded.as_deref().map(|x| roxmltree::Document::parse_with_options(x, opts())) {
+    let template = match expanded.as_deref().map(|x| crate::xml::Document::parse_with_options(x, opts())) {
         Some(Ok(d)) => {
             expanded_doc = d;
             expanded_doc.root_element()

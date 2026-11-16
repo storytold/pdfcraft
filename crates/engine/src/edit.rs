@@ -5,8 +5,8 @@ use std::sync::Arc;
 use crate::{
     AddedContent, AddedText, Background, BorderShape, BoxSpec, EditError, FieldProps, FieldValue, FillMark, Hairlines, HeaderFooter, Hidden,
     ImageEdit, InitialView, Label, LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget,
-    PageBox, Protection, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image, decode_data_file,
-    embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, open_source, strip_xfa,
+    PageBox, PrinterMarks, Protection, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image,
+    decode_data_file, embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, strip_xfa,
     unrestricted, xfa, xfa_after_data_change,
 };
 
@@ -338,6 +338,12 @@ pub enum Edit {
         name: String,
         image: Arc<Vec<u8>>,
     },
+    /// Set the picture of one exact push-button field; legacy name-only calls remain available.
+    SetFieldImageTarget {
+        name: String,
+        object: pdfcraft_cos::ObjRef,
+        image: Arc<Vec<u8>>,
+    },
     /// Duplicate a field onto other pages (same field, shared value).
     DuplicateField {
         name: String,
@@ -359,6 +365,14 @@ pub enum Edit {
     },
     /// Document Properties ▸ Initial View (and the language and binding).
     SetInitialView(Box<InitialView>),
+    /// Print production ▸ Add printer marks: trim and bleed marks, registration targets, colour
+    /// bars and page information outside the trim box, as a page mark; the page may be widened
+    /// to make room (`settings.make_room`), so the page geometry is read again.
+    AddPrinterMarks {
+        pages: Vec<usize>,
+        settings: PrinterMarks,
+        replace: bool,
+    },
     /// Print production ▸ Fix hairlines: strokes narrower than `settings.narrower_than` points on
     /// the page (after every transformation; zero-width lines always) get `settings.width`.
     FixHairlines {
@@ -376,6 +390,16 @@ pub enum Edit {
     /// Remove the document-level attachment whose name-tree key is `key`.
     DeleteAttachment {
         key: String,
+    },
+    /// Print production ▸ Convert colours: every colour on the pages in grayscale, RGB or CMYK.
+    ConvertColours {
+        pages: Vec<usize>,
+        settings: pdfcraft_edit::ConvertColours,
+    },
+    /// Change or clear only `/Desc` on a document-level attachment's file specification.
+    EditAttachmentDescription {
+        key: String,
+        description: Option<String>,
     },
     /// Build a tagged structure tree for an untagged, text-only document.
     AutoTagText,
@@ -434,8 +458,8 @@ pub enum Edit {
     RemoveStandardId {
         standard: Standard,
     },
-    /// What a script (button or console) changed in form fields: values, read-only, required
-    /// and visibility.
+    /// What a script (button or console) changed in form fields: values, appearance colours,
+    /// read-only, required and visibility.
     ApplyScriptChanges {
         changes: Vec<pdfcraft_forms::FieldChange>,
     },

@@ -210,6 +210,90 @@ fn reopening_a_relative_tab_deduplicates_its_absolute_recent_entry() {
     }
 }
 
+/// Focusing a tab reads nothing from disk, so it must not vouch for a file that has gone: the row
+/// it puts back leaves the list once the missing-file check has looked (#6323 review).
+#[test]
+fn reopening_a_tab_whose_file_is_gone_does_not_keep_it_in_recent() {
+    let dir = scratch("recent-gone");
+    let kept = dir.join("kept.pdf").to_string_lossy().into_owned();
+    let gone = dir.join("gone.pdf").to_string_lossy().into_owned();
+    for path in [&kept, &gone] {
+        std::fs::write(path, fixture(1)).unwrap();
+    }
+    for from_recent in [false, true] {
+        std::fs::write(&gone, fixture(1)).unwrap();
+        let mut h = harness(&[]);
+        h.state_mut().run_inline = true;
+        h.state_mut().open_path(&kept);
+        support::wait_until(&mut h, "first file", |app| app.views.len() == 1);
+        h.state_mut().open_path(&gone);
+        support::wait_until(&mut h, "second file", |app| app.views.len() == 2);
+        assert_eq!(h.state().recent.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(), [gone.as_str(), kept.as_str()]);
+        std::fs::remove_file(&gone).unwrap();
+        // The tab is still open; opening the other file and coming back promotes it again.
+        h.state_mut().open_path(&kept);
+        if from_recent {
+            h.state_mut().open_recent(&gone);
+        } else {
+            h.state_mut().open_path(&gone);
+        }
+        assert_eq!(h.state().views.len(), 2, "the tab is reused");
+        assert_eq!(h.state().active, Some(1));
+        h.run_steps(3);
+        assert_eq!(
+            h.state().recent.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            [kept.as_str()],
+            "from_recent={from_recent}: the missing file leaves Recent"
+        );
+        // A file that is still there stays listed after the same check.
+        h.state_mut().open_path(&kept);
+        h.run_steps(3);
+        assert_eq!(h.state().recent.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(), [kept.as_str()]);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A row promoted by focusing a tab with unsaved edits keeps describing the saved file; a clean
+/// tab, and a file with no row left, are described from the document (#6323 review).
+#[test]
+fn reopening_an_edited_tab_keeps_the_saved_page_count_in_recent() {
+    let dir = scratch("recent-saved-metadata");
+    let path = dir.join("three.pdf").to_string_lossy().into_owned();
+    let bytes = fixture(3);
+    std::fs::write(&path, &bytes).unwrap();
+    for from_recent in [false, true] {
+        let mut app = PdfCraftApp::new();
+        app.open_path(&path);
+        let id = app.views.first().unwrap().id;
+        let reopen = |app: &mut PdfCraftApp| {
+            if from_recent {
+                app.open_recent(&path);
+            } else {
+                app.open_path(&path);
+            }
+        };
+        reopen(&mut app);
+        assert_eq!((app.recent[0].pages, app.recent[0].size), (3, bytes.len()), "a clean tab describes the file");
+        app.apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
+        assert!(app.session.get(id).unwrap().dirty);
+        assert_eq!(app.session.get(id).unwrap().info.pages.len(), 2);
+        reopen(&mut app);
+        assert_eq!(app.views.len(), 1);
+        assert_eq!(app.recent.len(), 1);
+        assert_eq!(
+            (app.recent[0].pages, app.recent[0].size),
+            (3, bytes.len()),
+            "from_recent={from_recent}: unsaved edits do not describe the saved file"
+        );
+        // With the row cleared there is no saved description left: the document stands in.
+        assert!(app.execute("file.clear_recent"));
+        reopen(&mut app);
+        assert_eq!(app.recent.len(), 1);
+        assert_eq!(app.recent[0].pages, 2);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn insert_from_file_uses_the_pick_on_the_next_frame() {
     let dir = std::env::temp_dir().join(format!("printcraft-pickers-insert-{}", std::process::id()));
