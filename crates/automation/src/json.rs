@@ -131,6 +131,36 @@ impl Args<'_> {
         }
         Ok(p)
     }
+
+    /// Non-empty list of 1-based bookmark paths -> 0-based indices.
+    pub(crate) fn paths(&self, key: &str) -> Result<Vec<Vec<usize>>> {
+        let v = self.get(key).ok_or_else(|| Self::missing(key))?;
+        let arr = v.as_array().ok_or_else(|| Self::wrong(key, "an array of bookmark paths"))?;
+        if arr.is_empty() {
+            return Err(ToolError::InvalidArgs(format!("{key} must not be empty")));
+        }
+        let mut out = Vec::with_capacity(arr.len());
+        for item in arr {
+            let ints = item
+                .as_array()
+                .ok_or_else(|| Self::wrong(key, "an array of 1-based integer paths"))?
+                .iter()
+                .map(|x| x.as_i64().ok_or_else(|| Self::wrong(key, "an array of 1-based integer paths")))
+                .collect::<Result<Vec<_>>>()?;
+            if ints.is_empty() {
+                return Err(ToolError::InvalidArgs(format!("{key} entries must not be empty")));
+            }
+            let mut one = Vec::with_capacity(ints.len());
+            for n in ints {
+                if n < 1 {
+                    return Err(ToolError::InvalidArgs(format!("{key} path elements must be >= 1")));
+                }
+                one.push(usize::try_from(n - 1).map_err(|_| Self::wrong(key, "a valid path"))?);
+            }
+            out.push(one);
+        }
+        Ok(out)
+    }
     pub(crate) fn opt_path(&self, key: &str) -> Result<Option<Vec<usize>>> {
         let Some(v) = self.opt_ints(key)? else { return Ok(None) };
         v.iter().map(|i| if *i >= 1 { Ok(*i as usize - 1) } else { Err(Self::wrong(key, "1-based positions")) }).collect::<Result<Vec<_>>>().map(Some)
@@ -215,13 +245,22 @@ pub(crate) fn destination(view: &pdfcraft_render::DestView, page: &pdfcraft_rend
             json!({ "fit": "XYZ", "left": x, "top": y, "zoom": zoom.map(f64::from) })
         }
         DestView::Fit => json!({ "fit": "Fit" }),
+        DestView::FitB => json!({ "fit": "FitB" }),
         DestView::FitH { top } => {
             let (x, y) = points(None, *top);
             json!({ "fit": "FitH", "left": x, "top": y })
         }
+        DestView::FitBH { top } => {
+            let (x, y) = points(None, *top);
+            json!({ "fit": "FitBH", "left": x, "top": y })
+        }
         DestView::FitV { left } => {
             let (x, y) = points(*left, None);
             json!({ "fit": "FitV", "left": x, "top": y })
+        }
+        DestView::FitBV { left } => {
+            let (x, y) = points(*left, None);
+            json!({ "fit": "FitBV", "left": x, "top": y })
         }
         DestView::FitR { rect } => json!({ "fit": "FitR", "rect": comments::rect_to_view(page, *rect) }),
     })

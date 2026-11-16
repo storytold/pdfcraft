@@ -4982,3 +4982,277 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
     assert_eq!(source_bookmarks(&all), [("Chapter one".to_string(), vec!["Section".to_string()])]);
     assert!(attachments(&all));
 }
+
+fn build_multi_page_doc(page_count: usize, objs: &[String]) -> Vec<u8> {
+    let mut b: Vec<String> = Vec::new();
+    let pages_id = 2;
+    let first_page_id = 3;
+    let first_content_id = first_page_id + page_count;
+    let outlines_id = first_content_id + page_count;
+
+    // 1: Catalog
+    if objs.is_empty() {
+        b.push(format!("<< /Type /Catalog /Pages {pages_id} 0 R >>"));
+    } else {
+        b.push(format!("<< /Type /Catalog /Pages {pages_id} 0 R /Outlines {outlines_id} 0 R >>"));
+    }
+    // 2: Pages
+    let kids: String = (0..page_count).map(|i| format!("{} 0 R", first_page_id + i)).collect::<Vec<_>>().join(" ");
+    b.push(format!("<< /Type /Pages /Kids [{kids}] /Count {page_count} /MediaBox [0 0 612 792] >>"));
+    // Pages
+    for i in 0..page_count {
+        b.push(format!("<< /Type /Page /Parent {pages_id} 0 R /Contents {} 0 R >>", first_content_id + i));
+    }
+    // Empty contents
+    for _ in 0..page_count {
+        b.push(raw("BT ET"));
+    }
+    for o in objs {
+        b.push(o.clone());
+    }
+    build(&b, "/Root 1 0 R")
+}
+
+fn check_qpdf_if_present(bytes: &[u8]) {
+    let qpdf = pdfcraft_oracle::or_skip!(pdfcraft_oracle::qpdf());
+    let path = std::env::temp_dir().join(format!("pdfcraft_outline_arena_test_{}.pdf", std::process::id()));
+    std::fs::write(&path, bytes).expect("write temp pdf");
+    let output = qpdf.command().arg("--check").arg(&path).output().expect("run qpdf");
+    let _ = std::fs::remove_file(&path);
+    assert!(output.status.success(), "qpdf --check failed: {}", String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn arena_level2_caravan_move_touches_minimal_objects_preserves_unknown_keys_and_heals_parent_count() {
+    // Pages: 2 pages -> catalog(1), pages(2), page0(3), page1(4), content0(5), content1(6), Outlines(7)
+    // Nodes starting at obj 8:
+    // 8: Ch1, 9: Ch2, 10: Sec1.1 (child of Ch1, has 50 children 11..=60 + /CustomTag (keep))
+    let first_sub = 11usize;
+    let sub_count = 50usize;
+    let last_sub = first_sub + sub_count - 1;
+    let mut extra = Vec::new();
+    // 7: Outlines (/Count intentionally corrupted as 999!)
+    extra.push("<< /Type /Outlines /First 8 0 R /Last 9 0 R /Count 999 >>".to_string());
+    // 8: Ch1 (open, First/Last 10)
+    extra.push("<< /Title (Ch1) /Parent 7 0 R /Next 9 0 R /First 10 0 R /Last 10 0 R /Count 51 /Dest [3 0 R /Fit] >>".to_string());
+    // 9: Ch2 (leaf with URI action)
+    extra.push("<< /Title (Ch2) /Parent 7 0 R /Prev 8 0 R /A << /S /URI /URI (https://example.org/) >> >>".to_string());
+    // 10: Sec1.1 (open, 50 kids + custom COS key)
+    extra.push(format!(
+        "<< /Title (Sec 1.1) /Parent 8 0 R /First {first_sub} 0 R /Last {last_sub} 0 R /Count {sub_count} /CustomTag (preserve-me) /Dest [4 0 R /XYZ 10 700 1.5] >>"
+    ));
+    // 11..=60: 50 Level-3 Subsections
+    for i in 0..sub_count {
+        let obj_id = first_sub + i;
+        let prev = if i > 0 { format!(" /Prev {} 0 R", obj_id - 1) } else { String::new() };
+        let next = if i + 1 < sub_count { format!(" /Next {} 0 R", obj_id + 1) } else { String::new() };
+        extra.push(format!("<< /Title (Sub {i}) /Parent 10 0 R{prev}{next} /Dest [3 0 R /Fit] >>"));
+    }
+
+    let raw_bytes = build_multi_page_doc(2, &extra);
+    let mut doc = open(raw_bytes);
+
+    let new_paths = move_bookmarks_batch(&mut doc, &[vec![0, 0]], &[1], OutlinePlacementKind::LastChild).unwrap();
+    assert_eq!(new_paths, vec![vec![1, 0]]);
+
+    // None of the 50 Level-3 children (11..=60) may be dirtied!
+    let modified = doc.modified_objects();
+    for sub_id in first_sub..=last_sub {
+        assert!(!modified.contains(&(sub_id as u32)), "Level-3 child {sub_id} must stay clean during Level-2 move");
+    }
+    // Modified objects should only be Root(7), Ch1(8), Ch2(9), Sec1.1(10) — at most 4 objects!
+    assert!(modified.len() <= 4, "expected minimal object diffs, got {modified:?}");
+
+    // Unknown /CustomTag on Sec1.1 and Ch2 URI action survive; Ch1 loses last child -> /Count removed!
+    let sec_obj = doc.get(pdfcraft_cos::ObjRef::new(10, 0));
+    let sec_dict = sec_obj.as_dict().unwrap();
+    assert_eq!(sec_dict.get(b"CustomTag").and_then(|o| o.as_string()).map(|s| s.to_text()).as_deref(), Some("preserve-me"));
+    let ch1_obj = doc.get(pdfcraft_cos::ObjRef::new(8, 0));
+    let ch1_dict = ch1_obj.as_dict().unwrap();
+    assert!(ch1_dict.get(b"Count").is_none(), "parent losing last child must remove /Count rather than write 0");
+    let ch2_obj = doc.get(pdfcraft_cos::ObjRef::new(9, 0));
+    let ch2_dict = ch2_obj.as_dict().unwrap();
+    assert_eq!(ch2_dict.int(b"Count"), Some(51), "auto-expanded new parent holds Sec1.1 (1) + 50 kids = 51");
+    assert!(ch2_dict.get(b"A").is_some(), "non-GoTo action on Ch2 preserved");
+    let root_obj = doc.get(pdfcraft_cos::ObjRef::new(7, 0));
+    let root_dict = root_obj.as_dict().unwrap();
+    assert_eq!(root_dict.int(b"Count"), Some(53), "corrupt /Count 999 healed to 1 (Ch1) + 1 (Ch2) + 51 = 53");
+
+    let reopened = save_and_reopen(&doc);
+    assert_eq!(bookmarks(&reopened).len(), 53);
+
+    let inc_bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    check_qpdf_if_present(&inc_bytes);
+}
+
+#[test]
+fn arena_caravan_prunes_descendants_rejects_self_drops_and_sorts_by_euler_in() {
+    // 7: Outlines, 8: A1 -> (9: A1a -> 10: A1a_i), 11: B1, 12: C1 (collapsed leaf)
+    let extra = vec![
+        "<< /Type /Outlines /First 8 0 R /Last 12 0 R /Count 5 >>".to_string(),
+        "<< /Title (A1) /Parent 7 0 R /Next 11 0 R /First 9 0 R /Last 9 0 R /Count 2 /Dest [3 0 R /Fit] >>".to_string(),
+        "<< /Title (A1a) /Parent 8 0 R /First 10 0 R /Last 10 0 R /Count 1 /Dest [3 0 R /Fit] >>".to_string(),
+        "<< /Title (A1a_i) /Parent 9 0 R /Dest [3 0 R /Fit] >>".to_string(),
+        "<< /Title (B1) /Parent 7 0 R /Prev 8 0 R /Next 12 0 R /Dest [4 0 R /Fit] >>".to_string(),
+        "<< /Title (C1) /Parent 7 0 R /Prev 11 0 R /Dest [3 0 R /Fit] >>".to_string(),
+    ];
+    let mut doc = open(build_multi_page_doc(2, &extra));
+
+    // Self/descendant drop rejection
+    assert!(matches!(move_bookmarks_batch(&mut doc, &[vec![0], vec![1]], &[0, 0, 0], OutlinePlacementKind::Before), Err(OutlineError::IntoItself)));
+    assert!(!doc.is_modified());
+
+    // Passing descendant A1a_i BEFORE A1 and B1 must prune A1a_i and place [A1, B1] under C1 in euler order
+    let moved = move_bookmarks_batch(&mut doc, &[vec![0, 0, 0], vec![1], vec![0]], &[2], OutlinePlacementKind::LastChild).unwrap();
+    assert_eq!(moved, vec![vec![0, 0], vec![0, 1]]);
+    let tree = outline_tree(&doc, &[]).unwrap();
+    assert_eq!(tree.nodes.len(), 1);
+    assert_eq!(tree.nodes[0].title, "C1");
+    assert!(tree.nodes[0].open);
+    assert_eq!(tree.nodes[0].children.len(), 2);
+    assert_eq!(tree.nodes[0].children[0].title, "A1");
+    assert_eq!(tree.nodes[0].children[1].title, "B1");
+    assert_eq!(tree.nodes[0].children[0].children[0].children[0].title, "A1a_i");
+}
+
+#[test]
+fn arena_cycle_guard_deep_chain_and_all_table149_destinations() {
+    // 1 page: Outlines(5) -> 6 -> Next 7 -> Next 6
+    let cyclic = vec![
+        "<< /Type /Outlines /First 6 0 R /Last 7 0 R /Count 2 >>".to_string(),
+        "<< /Title (Loop1) /Parent 5 0 R /Next 7 0 R /Dest [3 0 R /Fit] >>".to_string(),
+        "<< /Title (Loop2) /Parent 5 0 R /Prev 6 0 R /Next 6 0 R /Dest [3 0 R /Fit] >>".to_string(),
+    ];
+    let doc = open(build_multi_page_doc(1, &cyclic));
+    let arena = OutlineArena::from_doc(&doc).unwrap();
+    assert_eq!(arena.preorder_items().len(), 2);
+
+    // 100,000-level deep chain in arena without stack overflow
+    let depth = 100_000usize;
+    let mut deep = OutlineArena::from_doc(&doc).unwrap();
+    deep.nodes = vec![OutlineArenaNode::new(String::new(), None, None, 0, true)];
+    deep.nodes[0].cos_obj = None;
+    let mut parent = ArenaNodeId::ROOT;
+    for i in 0..depth {
+        let id = ArenaNodeId(u32::try_from(deep.nodes.len()).unwrap());
+        let mut n = OutlineArenaNode::new(format!("N{i}"), None, None, 0, true);
+        n.parent = Some(parent);
+        if let Some(p) = deep.node_mut(parent) {
+            p.first_child = Some(id);
+            p.last_child = Some(id);
+        }
+        deep.nodes.push(n);
+        parent = id;
+    }
+    deep.recompute_metadata();
+    assert_eq!(deep.flat_visible_rows.len(), depth);
+    assert_eq!(deep.node(parent).map(|n| n.depth), Some(depth as u32));
+
+    // All 8 Table 149 explicit destination variants round-trip identically
+    let variants = vec![
+        ViewDestination::Xyz { page: 0, left: Some(12.5), top: Some(720.25), zoom: Some(1.75) },
+        ViewDestination::Fit { page: 1 },
+        ViewDestination::FitH { page: 0, top: Some(400.0) },
+        ViewDestination::FitV { page: 1, left: Some(50.0) },
+        ViewDestination::FitR { page: 0, rect: [10.0, 20.0, 200.0, 300.0] },
+        ViewDestination::FitB { page: 1 },
+        ViewDestination::FitBH { page: 0, top: Some(610.0) },
+        ViewDestination::FitBV { page: 1, left: Some(88.0) },
+    ];
+    let mut single = open(build_multi_page_doc(
+        2,
+        &[
+            "<< /Type /Outlines /First 8 0 R /Last 8 0 R /Count 1 >>".to_string(),
+            "<< /Title (Target) /Parent 7 0 R /A << /S /URI /URI (https://example.org/) >> >>".to_string(),
+        ],
+    ));
+    for dest in variants {
+        set_bookmark_destination(&mut single, &[0], &dest).unwrap();
+        let reopened = save_and_reopen(&single);
+        let reloaded = OutlineArena::from_doc(&reopened).unwrap();
+        let id = reloaded.resolve_path(&[0]).unwrap();
+        assert_eq!(reloaded.node(id).and_then(|n| n.dest.as_ref()), Some(&dest));
+        // /A must have been cleared when /Dest was set
+        assert!(reopened.get(pdfcraft_cos::ObjRef::new(8, 0)).as_dict().unwrap().get(b"A").is_none());
+    }
+}
+
+#[test]
+fn arena_delete_batch_copy_remap_regex_nest_shift_pages_and_generated_tree() {
+    // 3 pages -> Outlines(9)
+    // 10: "1 Intro" (page 0 /Dest) -> 11: "1.1 Detail" (page 1 /A GoTo)
+    // 12: "UnmatchedNote" (URI)
+    // 13: "2 Chapter" (page 2 /FitH 500)
+    let objs = vec![
+        "<< /Type /Outlines /First 10 0 R /Last 13 0 R /Count 4 >>".to_string(),
+        "<< /Title (1 Intro) /Parent 9 0 R /Next 12 0 R /First 11 0 R /Last 11 0 R /Count 1 /Dest [3 0 R /Fit] >>".to_string(),
+        "<< /Title (1.1 Detail) /Parent 10 0 R /A << /S /GoTo /D [4 0 R /XYZ 10 20 null] >> >>".to_string(),
+        "<< /Title (UnmatchedNote) /Parent 9 0 R /Prev 10 0 R /Next 13 0 R /A << /S /URI /URI (https://example.org) >> >>".to_string(),
+        "<< /Title (2 Chapter) /Parent 9 0 R /Prev 12 0 R /Dest [5 0 R /FitH 500] >>".to_string(),
+    ];
+    let mut doc = open(build_multi_page_doc(3, &objs));
+
+    // Shift pages atomically fails before mutating if ANY page goes out of bounds (both + and -)
+    assert!(shift_bookmark_pages(&mut doc, &[vec![0], vec![2]], true, 1).is_err());
+    assert!(shift_bookmark_pages(&mut doc, &[vec![0]], true, -1).is_err());
+    assert!(!doc.is_modified());
+
+    // Shift pages for 1 Intro (+ children) by +1 succeeds for both /Dest (0->1) and /GoTo (1->2)
+    let shifted = shift_bookmark_pages(&mut doc, &[vec![0], vec![1]], true, 1).unwrap();
+    assert_eq!(shifted, 2);
+    let arena = OutlineArena::from_doc(&doc).unwrap();
+    assert_eq!(arena.node(arena.resolve_path(&[0]).unwrap()).unwrap().dest, Some(ViewDestination::Fit { page: 1 }));
+    assert_eq!(
+        arena.node(arena.resolve_path(&[0, 0]).unwrap()).unwrap().dest,
+        Some(ViewDestination::Xyz { page: 2, left: Some(10.0), top: Some(20.0), zoom: None })
+    );
+
+    // Invalid regex rejected cleanly without mutating
+    assert!(regex_nest_bookmarks(&mut doc, Some("[unclosed")).is_err());
+
+    // Regex nest places "UnmatchedNote" under "1.1 Detail" (1 level under previous matched heading depth 2 -> depth 3) and "2 Chapter" at root depth 1
+    regex_nest_bookmarks(&mut doc, None).unwrap();
+    let tree = outline_tree(&doc, &[]).unwrap();
+    assert_eq!(tree.nodes.len(), 2);
+    assert_eq!(tree.nodes[0].title, "1 Intro");
+    assert_eq!(tree.nodes[0].children[0].title, "1.1 Detail");
+    assert_eq!(tree.nodes[0].children[0].children[0].title, "UnmatchedNote");
+    assert_eq!(tree.nodes[1].title, "2 Chapter");
+    // Unmatched URI action preserved
+    assert!(doc.get(pdfcraft_cos::ObjRef::new(12, 0)).as_dict().unwrap().get(b"A").is_some());
+
+    // Batch copy & remap: deleting page 0 shifts page 1->0, 2->1; deleting last page clamps safely
+    let mut copied = outline_trees_batch(&doc, &[vec![0], vec![1]]).unwrap();
+    delete_pages(&mut doc, &[0]).unwrap();
+    remap_copied_outlines(&doc, &mut copied.tree.nodes, &copied.page_refs).unwrap();
+    assert_eq!(copied.tree.nodes[0].page, Some(0));
+    assert_eq!(copied.tree.nodes[0].children[0].page, Some(1));
+    assert_eq!(copied.tree.nodes[1].page, Some(1));
+
+    // Delete page 2 too (which copied[0].children[0] originally referenced as 5 0 R; now doc has 2 pages [3 0 R, 4 0 R], Wait: 5 0 R was page 2!)
+    // Actually we just deleted page 0 (3 0 R); now doc has 2 pages [4 0 R (idx 0), 5 0 R (idx 1)]. Delete idx 1 (5 0 R) -> only 1 page remains!
+    let mut copied_again = copied.clone();
+    delete_pages(&mut doc, &[1]).unwrap();
+    remap_copied_outlines(&doc, &mut copied_again.tree.nodes, &copied_again.page_refs).unwrap();
+    assert_eq!(copied_again.tree.nodes[0].children[0].page, Some(0));
+
+    // Batch delete including overlapping child path removes everything cleanly and clears root /Count
+    delete_bookmarks_batch(&mut doc, &[vec![0, 0], vec![0], vec![1]]).unwrap();
+    assert!(outline_tree(&doc, &[]).unwrap().nodes.is_empty());
+    let root_obj = doc.get(pdfcraft_cos::ObjRef::new(9, 0));
+    let root_dict = root_obj.as_dict().unwrap();
+    assert!(root_dict.get(b"Count").is_none());
+
+    // Generated tree sanitizes newlines and truncates at 128 chars at root level
+    let long_title = format!("Line1\n\tLine2   {}", "x".repeat(150));
+    let entries = vec![
+        OutlineEntry { level: 1, title: long_title, page: 0, element: None, top: Some(700.0) },
+        OutlineEntry { level: 2, title: "Sub".into(), page: 0, element: None, top: None },
+    ];
+    add_generated_bookmark_tree(&mut doc, &entries, true).unwrap();
+    let gen_tree = outline_tree(&doc, &[]).unwrap();
+    assert_eq!(gen_tree.nodes.len(), 1);
+    assert!(!gen_tree.nodes[0].title.contains('\n'));
+    assert_eq!(gen_tree.nodes[0].title.chars().count(), 128);
+    assert_eq!(gen_tree.nodes[0].children[0].title, "Sub");
+}

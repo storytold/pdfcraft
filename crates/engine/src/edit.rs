@@ -137,6 +137,37 @@ pub enum Edit {
     BookmarksFromTextStyles {
         levels: Vec<crate::text_style_bookmarks::TextStyle>,
     },
+    /// Move `paths` (in normalized document order) to `placement` relative to `target` atomically.
+    MoveBookmarksBatch {
+        paths: Vec<Vec<usize>>,
+        target: Vec<usize>,
+        placement: pdfcraft_organize::OutlinePlacementKind,
+    },
+    /// Delete multiple bookmark subtrees atomically in one surgical COS commit.
+    DeleteBookmarksBatch {
+        paths: Vec<Vec<usize>>,
+    },
+    /// Update a bookmark's destination (`Set Destination to Current View`), clearing `/A`.
+    SetBookmarkDestination {
+        path: Vec<usize>,
+        dest: pdfcraft_organize::ViewDestination,
+    },
+    /// Auto-generate outlines using Tier 1 (TOC) then Tier 2 (statistical typography).
+    AutoGenerateBookmarks {
+        max_depth: u8,
+        prefer_toc: bool,
+        replace_existing: bool,
+    },
+    /// Re-nest the outline in pre-order using `pattern` (or default numbering regex).
+    RegexNestBookmarks {
+        pattern: Option<String>,
+    },
+    /// Shift destination page indices for `paths` (optionally including descendants) by `page_delta`.
+    ShiftBookmarkPages {
+        paths: Vec<Vec<usize>>,
+        include_children: bool,
+        page_delta: i32,
+    },
     /// Label pages `from..=to` (0-based) as Acrobat's "Number pages" does; later pages keep their labels.
     NumberPages {
         from: usize,

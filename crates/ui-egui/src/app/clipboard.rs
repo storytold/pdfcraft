@@ -66,11 +66,26 @@ impl PdfCraftApp {
             self.receive_pastes(i, pastes, false);
             return;
         }
+        let bookmarks_owns_keyboard =
+            self.right == Some(RightPanel::Bookmarks) && self.bookmark_rename.is_none() && self.views.get(i).is_some_and(|v| v.bookmarks_focused);
         let copy = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Copy)))
             || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::C)));
         let cut = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Cut)))
             || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::X)));
         let paste = ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::V)));
+
+        if bookmarks_owns_keyboard {
+            let editable =
+                self.views.get(i).and_then(|v| self.session.get(v.id)).is_some_and(|d| d.allows_assembly() && d.read_only_reason.is_none());
+            if cut && editable {
+                self.bookmark_action(crate::panels::BmAction::CutSelected);
+            } else if copy {
+                self.bookmark_action(crate::panels::BmAction::CopySelected);
+            } else if paste && editable && self.bookmark_clipboard.is_some() {
+                self.bookmark_action(crate::panels::BmAction::PasteAtFocus);
+            }
+            return;
+        }
 
         // Objects selected together in Edit a PDF take ⌘C and ⌘X.
         let objects = (copy || cut) && self.quick_tool == QuickTool::EditText && self.views.get(i).is_some_and(|v| v.objects.count() > 0);

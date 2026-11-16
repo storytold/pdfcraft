@@ -29,6 +29,11 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::SetBookmarkStyle { .. }
         | Edit::ImportBookmarks { .. }
         | Edit::BookmarksFromStructure
+        | Edit::MoveBookmarksBatch { .. }
+        | Edit::DeleteBookmarksBatch { .. }
+        | Edit::SetBookmarkDestination { .. }
+        | Edit::RegexNestBookmarks { .. }
+        | Edit::ShiftBookmarkPages { .. }
         | Edit::NumberPages { .. } => {
             if p.assemble() {
                 Ok(())
@@ -38,7 +43,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         }
         // Creates bookmarks (assembly), and their titles are the document's text, copied out of it
         // (Table 22, bit 5), as an export of it would be.
-        Edit::BookmarksFromTextStyles { .. } => {
+        Edit::BookmarksFromTextStyles { .. } | Edit::AutoGenerateBookmarks { .. } => {
             if !p.assemble() {
                 Err(EditError::NotPermitted("page changes"))
             } else if !p.copy() {
@@ -604,6 +609,27 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 return Err(EditError::Invalid("no text is set in the chosen styles".into()));
             }
             pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
+        }
+        Edit::MoveBookmarksBatch { paths, target, placement } => {
+            pdfcraft_organize::move_bookmarks_batch(doc, paths, target, *placement)?;
+        }
+        Edit::DeleteBookmarksBatch { paths } => {
+            pdfcraft_organize::delete_bookmarks_batch(doc, paths)?;
+        }
+        Edit::SetBookmarkDestination { path, dest } => {
+            pdfcraft_organize::set_bookmark_destination(doc, path, dest)?;
+        }
+        Edit::AutoGenerateBookmarks { max_depth, prefer_toc, replace_existing } => {
+            let options =
+                crate::auto_bookmarks::AutoGenerateOptions { max_depth: *max_depth, prefer_toc: *prefer_toc, replace_existing: *replace_existing };
+            let entries = crate::auto_bookmarks::generate(doc, &options)?;
+            pdfcraft_organize::add_generated_bookmark_tree(doc, &entries, *replace_existing)?;
+        }
+        Edit::RegexNestBookmarks { pattern } => {
+            pdfcraft_organize::regex_nest_bookmarks(doc, pattern.as_deref())?;
+        }
+        Edit::ShiftBookmarkPages { paths, include_children, page_delta } => {
+            pdfcraft_organize::shift_bookmark_pages(doc, paths, *include_children, *page_delta)?;
         }
         Edit::NumberPages { from, to, style, prefix, first } => pdfcraft_organize::number_pages(doc, *from, *to, *style, prefix, *first)?,
         Edit::AddMeasurement(m) => {

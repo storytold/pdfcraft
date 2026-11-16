@@ -64,6 +64,54 @@ impl DocView {
         Some((*page, at))
     }
 
+    /// Topmost visible `(page_index, vertical_fraction_0_to_1)` for Scroll-Spy highlighting.
+    pub(crate) fn current_top_position(&self, info: &DocInfo) -> (usize, f32) {
+        if self.organize || !self.viewport_screen.is_positive() || self.screen_xforms.is_empty() {
+            return (self.current, 0.0);
+        }
+        let top = self.viewport_screen.top();
+        let pick = |slack: f32| {
+            let showing = || self.screen_xforms.iter().filter(move |(_, xf)| xf.rect.bottom() > top + slack);
+            showing()
+                .filter(|(_, xf)| xf.rect.top() <= top)
+                .min_by_key(|(p, _)| *p)
+                .or_else(|| showing().min_by(|a, b| a.1.rect.top().total_cmp(&b.1.rect.top()).then(a.0.cmp(&b.0))))
+        };
+        let Some((page, xf)) = pick(sliver(self.screen_ppp)).or_else(|| pick(0.0)) else {
+            return (self.current, 0.0);
+        };
+        let Some(p) = info.pages.get(*page) else {
+            return (*page, 0.0);
+        };
+        let y = top.clamp(xf.rect.top(), xf.rect.bottom());
+        let frac = ((y - xf.rect.top()) / xf.rect.height().max(1.0)).clamp(0.0, 1.0);
+        let _ = p;
+        (*page, frac)
+    }
+
+    /// Capture the exact active viewport zoom/fit and position for `"Set Destination to Current View"`.
+    pub(crate) fn current_view_destination(&self, info: &DocInfo) -> Option<pdfcraft_engine::ViewDestination> {
+        let (page, [_, pos_top]) = self.bookmark_position(info).unwrap_or((self.current, [None, None]));
+        if page >= info.pages.len() {
+            return None;
+        }
+        let [corner_left, corner_top] = self.place_at_corner(info).unwrap_or([None, pos_top]);
+        match self.fit {
+            Fit::Page => Some(pdfcraft_engine::ViewDestination::Fit { page }),
+            Fit::Width => Some(pdfcraft_engine::ViewDestination::FitH { page, top: pos_top.map(f64::from) }),
+            Fit::Height => Some(pdfcraft_engine::ViewDestination::FitV { page, left: corner_left.map(f64::from) }),
+            Fit::None => {
+                let zoom = self.zoom.is_finite().then(|| f64::from(self.zoom)).filter(|z| *z > 0.0);
+                Some(pdfcraft_engine::ViewDestination::Xyz {
+                    page,
+                    left: corner_left.map(f64::from),
+                    top: corner_top.or(pos_top).map(f64::from),
+                    zoom,
+                })
+            }
+        }
+    }
+
     /// The user-space `[left, top]` at the window's top-left (where `/XYZ` puts its point), on the
     /// page showing there: what a destination's null coordinate keeps (ISO 32000-2 §12.3.2.2).
     /// Acrobat keeps the place this way across pages, so a CAD sheet's cross-reference opens the
@@ -173,16 +221,16 @@ impl DocView {
                 let [fx, fy] = point(left.or(kept_left), top.or(kept_top));
                 (fx, fy, corner)
             }
-            DestView::Fit => {
+            DestView::Fit | DestView::FitB => {
                 self.fit = Fit::Page;
                 return;
             }
-            DestView::FitH { top } => {
+            DestView::FitH { top } | DestView::FitBH { top } => {
                 self.fit = Fit::Width;
                 let [fx, fy] = point(None, top);
                 (fx, fy, corner)
             }
-            DestView::FitV { left } => {
+            DestView::FitV { left } | DestView::FitBV { left } => {
                 self.fit = Fit::Height;
                 let [fx, fy] = point(left, None);
                 (fx, fy, corner)

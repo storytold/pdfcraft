@@ -59,3 +59,41 @@ pub(crate) fn outline_rows(items: &[pdfcraft_render::OutlineItem]) -> Vec<Bookma
     }
     rows
 }
+
+/// Vertical fraction `0.0..=1.0` (0 = displayed top, 1 = displayed bottom) of an outline item's
+/// destination on `page` at clockwise `view_rotation`.
+pub fn view_top_fraction(info: &pdfcraft_render::DocInfo, page: usize, view: &pdfcraft_render::DestView, view_rotation: u16) -> f32 {
+    use pdfcraft_render::DestView;
+    let Some(p) = info.pages.get(page) else { return 0.0 };
+    let (x, y) = match *view {
+        DestView::Top | DestView::Fit | DestView::FitB => return 0.0,
+        DestView::Xyz { left, top, .. } => (left, top),
+        DestView::FitH { top } | DestView::FitBH { top } => (None, top),
+        DestView::FitV { left } | DestView::FitBV { left } => (left, None),
+        DestView::FitR { rect } => (Some(rect[0]), Some(rect[3])),
+    };
+    p.dest_fraction(x, y, view_rotation)[1].unwrap_or(0.0)
+}
+
+/// Child index in `siblings` where a new bookmark targeting `(page, left, top)` belongs when
+/// inserting in reading/page order `(page, dest_fraction)`.
+pub fn page_order_insert_index(
+    info: &pdfcraft_render::DocInfo,
+    siblings: &[pdfcraft_render::OutlineItem],
+    page: usize,
+    left: Option<f64>,
+    top: Option<f64>,
+) -> usize {
+    let target_frac = info.pages.get(page).and_then(|p| p.dest_fraction(left.map(|v| v as f32), top.map(|v| v as f32), 0)[1]).unwrap_or(0.0);
+    siblings
+        .iter()
+        .position(|item| {
+            item.page.is_some_and(|ip| {
+                if ip != page {
+                    return ip > page;
+                }
+                view_top_fraction(info, ip, &item.view, 0).total_cmp(&target_frac).is_gt()
+            })
+        })
+        .unwrap_or(siblings.len())
+}

@@ -205,7 +205,6 @@ impl Automation {
             "bookmark_add" => {
                 let page = self.page(&a)?;
                 let parent = a.opt_path("parent")?.unwrap_or_default();
-                let index = a.opt_int("position")?.map_or(usize::MAX, |p| (p.max(1) - 1) as usize);
                 let title = a.str("title")?.to_string();
                 let (left, top) = (a.bookmark_coordinate("left")?, a.bookmark_coordinate("top")?);
                 let [left, top] = match self.doc(&a)?.info.pages.get(page) {
@@ -213,6 +212,13 @@ impl Automation {
                     None => [None, None],
                 };
                 let (left, top) = (left.map(f64::from), top.map(f64::from));
+                let in_page_order = a.opt_bool("in_page_order")?.unwrap_or(false);
+                let index = if in_page_order {
+                    let id = self.doc(&a)?.id;
+                    self.session.page_order_insert_index(id, &parent, page, left, top).unwrap_or(usize::MAX)
+                } else {
+                    a.opt_int("position")?.map_or(usize::MAX, |p| (p.max(1) - 1) as usize)
+                };
                 self.apply(&a, Edit::AddBookmark { parent, index, title, page, left, top })?
             }
             "bookmark_rename" => {
@@ -297,6 +303,66 @@ impl Automation {
                 out["bookmarks"] = listing["bookmarks"].clone();
                 out["next"] = listing["next"].clone();
                 out
+            }
+            "bookmark_move_batch" => {
+                let paths = a.paths("paths")?;
+                let target = a.path("target")?;
+                let placement = match a.str("placement")? {
+                    "before" => pdfcraft_engine::OutlinePlacementKind::Before,
+                    "after" => pdfcraft_engine::OutlinePlacementKind::After,
+                    "first_child" => pdfcraft_engine::OutlinePlacementKind::FirstChild,
+                    "last_child" => pdfcraft_engine::OutlinePlacementKind::LastChild,
+                    other => return Err(ToolError::InvalidArgs(format!("unknown placement {other:?}"))),
+                };
+                self.apply(&a, Edit::MoveBookmarksBatch { paths, target, placement })?
+            }
+            "bookmark_cut_copy_paste" => self.bookmark_cut_copy_paste(&a)?,
+            "bookmark_set_destination" => {
+                let path = a.path("path")?;
+                let page = self.page(&a)?;
+                let kind = a.str("type")?;
+                let (left, top, zoom) = (a.opt_num("left")?, a.opt_num("top")?, a.opt_num("zoom")?.filter(|z| *z > 0.0));
+                let dest = match kind {
+                    "XYZ" => pdfcraft_engine::ViewDestination::Xyz { page, left, top, zoom },
+                    "Fit" => pdfcraft_engine::ViewDestination::Fit { page },
+                    "FitH" => pdfcraft_engine::ViewDestination::FitH { page, top },
+                    "FitV" => pdfcraft_engine::ViewDestination::FitV { page, left },
+                    "FitB" => pdfcraft_engine::ViewDestination::FitB { page },
+                    "FitBH" => pdfcraft_engine::ViewDestination::FitBH { page, top },
+                    "FitBV" => pdfcraft_engine::ViewDestination::FitBV { page, left },
+                    "FitR" => {
+                        let arr = a
+                            .get("rect")
+                            .and_then(Value::as_array)
+                            .and_then(|v| v.iter().map(Value::as_f64).collect::<Option<Vec<_>>>())
+                            .filter(|r| r.len() == 4 && r.iter().all(|x| x.is_finite()))
+                            .ok_or_else(|| ToolError::InvalidArgs("FitR requires rect: [x0, y0, x1, y1]".into()))?;
+                        pdfcraft_engine::ViewDestination::FitR { page, rect: [arr[0], arr[1], arr[2], arr[3]] }
+                    }
+                    other => return Err(ToolError::InvalidArgs(format!("unknown destination type {other:?}"))),
+                };
+                self.apply(&a, Edit::SetBookmarkDestination { path, dest })?
+            }
+            "bookmark_auto_generate" => {
+                let max_depth = u8::try_from(a.opt_int("max_depth")?.unwrap_or(3).clamp(1, 6)).unwrap_or(3);
+                let prefer_toc = a.opt_bool("prefer_toc")?.unwrap_or(true);
+                let replace_existing = a.opt_bool("replace")?.unwrap_or(true);
+                let mut out = self.apply(&a, Edit::AutoGenerateBookmarks { max_depth, prefer_toc, replace_existing })?;
+                let listing = self.bookmark_listing(&a)?;
+                out["bookmarks"] = listing["bookmarks"].clone();
+                out["next"] = listing["next"].clone();
+                out
+            }
+            "bookmark_regex_nest" => {
+                let pattern = a.opt_str("pattern")?.map(str::to_string);
+                self.apply(&a, Edit::RegexNestBookmarks { pattern })?
+            }
+            "bookmark_shift_pages" => {
+                let paths = a.paths("paths")?;
+                let include_children = a.opt_bool("include_children")?.unwrap_or(true);
+                let delta_raw = a.int("page_delta")?;
+                let page_delta = i32::try_from(delta_raw).map_err(|_| ToolError::InvalidArgs("page_delta out of range".into()))?;
+                self.apply(&a, Edit::ShiftBookmarkPages { paths, include_children, page_delta })?
             }
             "doc_protect" => self.doc_protect(&a)?,
             "page_replace" => {

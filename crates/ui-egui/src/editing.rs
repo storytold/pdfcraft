@@ -1300,18 +1300,38 @@ impl PdfCraftApp {
         use crate::panels::BmAction as A;
         let Some((i, id)) = self.active_ids() else { return };
         let current = self.views[i].current;
-        let parent_of = |p: &[usize]| p[..p.len() - 1].to_vec();
+        let parent_of = |p: &[usize]| p[..p.len().saturating_sub(1)].to_vec();
         let edit = match action {
             A::New => {
-                let n = self.session.get(id).map_or(0, |d| d.info.outline.len());
-                // Where the reader is: the selection's corner, else the top of the window.
-                let (page, [left, top]) =
-                    self.session.get(id).and_then(|d| self.views.get(i)?.bookmark_position(&d.info)).unwrap_or((current, [None, None]));
-                let (left, top) = (left.map(f64::from), top.map(f64::from));
-                self.apply_edit(Edit::AddBookmark { parent: vec![], index: n, title: "Untitled".into(), page, left, top });
-                // Like Acrobat: the new bookmark starts in rename mode.
-                self.bookmark_rename = Some((vec![n], "Untitled".into()));
-                self.right = Some(crate::RightPanel::Bookmarks);
+                let (n, (page, [left, top]), parent, index) = {
+                    let Some(doc) = self.session.get(id) else { return };
+                    let n = doc.info.outline.len();
+                    let pos = self.views.get(i).and_then(|v| v.bookmark_position(&doc.info)).unwrap_or((current, [None, None]));
+                    let (left_f, top_f) = (pos.1[0].map(f64::from), pos.1[1].map(f64::from));
+                    let (parent, index) = if self.bookmark_insert_in_page_order {
+                        (Vec::new(), self.session.page_order_insert_index(id, &[], pos.0, left_f, top_f).unwrap_or(n))
+                    } else if let Some(focused) =
+                        self.views.get_mut(i).and_then(|v| crate::panels::focused_path(&doc.info.outline, &mut v.bookmarks_ui))
+                    {
+                        let p = parent_of(&focused);
+                        let at = focused.last().map_or(n, |x| x.saturating_add(1));
+                        (p, at)
+                    } else {
+                        (Vec::new(), n)
+                    };
+                    (n, (pos.0, [left_f, top_f]), parent, index)
+                };
+                let _ = n;
+                let mut new_path = parent.clone();
+                new_path.push(index);
+                if self.apply_edit(Edit::AddBookmark { parent, index, title: "Untitled".into(), page, left, top }) {
+                    if let Some(item) = self.session.get(id).and_then(|d| bookmark_at(&d.info.outline, &new_path)) {
+                        let key = crate::panels::BookmarkKey::for_item(item, &new_path);
+                        self.views[i].bookmarks_ui.select_only(key);
+                    }
+                    self.bookmark_rename = Some((new_path, "Untitled".into()));
+                    self.right = Some(crate::RightPanel::Bookmarks);
+                }
                 return;
             }
             A::StartRename(path) => {
@@ -1321,9 +1341,16 @@ impl PdfCraftApp {
             }
             A::Rename(path, title) => Edit::RenameBookmark { path, title },
             A::SetToCurrentPage(path) => Edit::SetBookmarkPage { path, page: current },
+            A::SetDestinationToCurrentView(path) => {
+                let Some(dest) = self.session.get(id).and_then(|d| self.views.get(i)?.current_view_destination(&d.info)) else {
+                    return;
+                };
+                Edit::SetBookmarkDestination { path, dest }
+            }
             A::SetStyle(path, bold, italic) => Edit::SetBookmarkStyle { path, bold, italic },
             A::SetColor(path, color) => Edit::SetBookmarkColor { path, color: Some(color) },
             A::Delete(path) => Edit::DeleteBookmark { path },
+            A::DeleteBatch(paths) => Edit::DeleteBookmarksBatch { paths },
             A::MoveUp(path) => {
                 let at = path[path.len() - 1].saturating_sub(1);
                 Edit::MoveBookmark { to_parent: parent_of(&path), from: path, index: at }
@@ -1343,20 +1370,71 @@ impl PdfCraftApp {
                 let at = parent[parent.len() - 1] + 1;
                 Edit::MoveBookmark { from: path, to_parent: grand, index: at }
             }
-            A::Copy(path) => {
-                self.copy_bookmark(id, &path);
+            A::MoveBatch { paths, target, placement, expand_parent } => {
+                if self.apply_edit(Edit::MoveBookmarksBatch { paths, target, placement })
+                    && let Some(parent_key) = expand_parent
+                {
+                    self.views[i].bookmarks_ui.set_expanded(parent_key, true);
+                }
                 return;
             }
-            A::Cut(path) => match self.copy_bookmark(id, &path) {
+            A::Copy(path) => {
+                self.copy_bookmarks(id, &[path]);
+                return;
+            }
+            A::CopyBatch(paths) => {
+                self.copy_bookmarks(id, &paths);
+                return;
+            }
+            A::CopySelected => {
+                let paths = self.selected_or_focused_bookmark_paths(i, id);
+                self.copy_bookmarks(id, &paths);
+                return;
+            }
+            A::Cut(path) => match self.copy_bookmarks(id, std::slice::from_ref(&path)) {
                 Some(false) => Edit::DeleteBookmark { path },
-                // Paste could not bring back what the copy left out, so the bookmarks stay.
                 Some(true) => {
                     self.notify_tr("Bookmarks nested too deep to list could not be copied, so nothing was cut.");
                     return;
                 }
                 None => return,
             },
+            A::CutBatch(paths) => match self.copy_bookmarks(id, &paths) {
+                Some(false) => Edit::DeleteBookmarksBatch { paths },
+                Some(true) => {
+                    self.notify_tr("Bookmarks nested too deep to list could not be copied, so nothing was cut.");
+                    return;
+                }
+                None => return,
+            },
+            A::CutSelected => {
+                let paths = self.selected_or_focused_bookmark_paths(i, id);
+                match self.copy_bookmarks(id, &paths) {
+                    Some(false) => Edit::DeleteBookmarksBatch { paths },
+                    Some(true) => {
+                        self.notify_tr("Bookmarks nested too deep to list could not be copied, so nothing was cut.");
+                        return;
+                    }
+                    None => return,
+                }
+            }
             A::Paste { parent, index } => {
+                self.paste_bookmarks(id, parent, index);
+                return;
+            }
+            A::PasteAtFocus => {
+                let focused = self
+                    .session
+                    .get(id)
+                    .and_then(|d| self.views.get_mut(i).and_then(|v| crate::panels::focused_path(&d.info.outline, &mut v.bookmarks_ui)));
+                let (parent, index) = match focused {
+                    Some(f) => {
+                        let p = parent_of(&f);
+                        let at = f.last().map_or(usize::MAX, |x| x.saturating_add(1));
+                        (p, at)
+                    }
+                    None => (Vec::new(), usize::MAX),
+                };
                 self.paste_bookmarks(id, parent, index);
                 return;
             }
@@ -1364,9 +1442,26 @@ impl PdfCraftApp {
                 self.right = Some(crate::RightPanel::Bookmarks);
                 Edit::BookmarksFromStructure
             }
-            // A dialog chooses the styles; it makes the edit.
             A::FromTextStyles => {
                 self.open_text_style_bookmarks(id);
+                return;
+            }
+            A::OpenAutoGenerate => {
+                if !self.may_copy(id) {
+                    return;
+                }
+                self.auto_generate_draft.doc = Some(id);
+                self.dialog = Some(crate::Dialog::AutoGenerateBookmarks);
+                return;
+            }
+            A::OpenRegexNest => {
+                self.regex_nest_draft.doc = Some(id);
+                self.dialog = Some(crate::Dialog::RegexNestBookmarks);
+                return;
+            }
+            A::OpenShiftPages(paths) => {
+                self.shift_pages_draft = crate::bookmark_tools_ui::ShiftPagesDraft { doc: Some(id), paths, ..self.shift_pages_draft.clone() };
+                self.dialog = Some(crate::Dialog::ShiftBookmarkPages);
                 return;
             }
         };
@@ -1375,17 +1470,29 @@ impl PdfCraftApp {
 }
 
 impl PdfCraftApp {
-    /// Put the bookmark at `path` and its subtree on the bookmark clipboard. `Some(true)` when
-    /// bookmarks nested too deep to list were left out; `None` if it could not be read (the reason
-    /// is shown).
-    fn copy_bookmark(&mut self, id: pdfcraft_engine::DocId, path: &[usize]) -> Option<bool> {
-        match self.session.outline_tree(id, path) {
-            Some(Ok(tree)) => {
-                if tree.truncated {
+    fn selected_or_focused_bookmark_paths(&mut self, i: usize, id: pdfcraft_engine::DocId) -> Vec<Vec<usize>> {
+        let Some(doc) = self.session.get(id) else { return Vec::new() };
+        let Some(view) = self.views.get_mut(i) else { return Vec::new() };
+        let paths = crate::panels::selected_pruned_paths(&doc.info.outline, &mut view.bookmarks_ui);
+        if !paths.is_empty() {
+            return paths;
+        }
+        crate::panels::focused_path(&doc.info.outline, &mut view.bookmarks_ui).into_iter().collect()
+    }
+
+    /// Put `paths` (in document order, pruned of nested duplicates) on the bookmark clipboard.
+    fn copy_bookmarks(&mut self, id: pdfcraft_engine::DocId, paths: &[Vec<usize>]) -> Option<bool> {
+        if paths.is_empty() {
+            return None;
+        }
+        match self.session.outline_trees_batch(id, paths) {
+            Some(Ok(copied)) => {
+                let truncated = copied.tree.truncated;
+                if truncated {
                     self.notify_tr("Bookmarks nested too deep to list were left out of the copy.");
                 }
-                self.bookmark_clipboard = Some(tree.nodes);
-                Some(tree.truncated)
+                self.bookmark_clipboard = Some(crate::BookmarkClipboard { source_doc: id, copied });
+                Some(truncated)
             }
             Some(Err(e)) => {
                 self.notify_error(e);
@@ -1395,10 +1502,16 @@ impl PdfCraftApp {
         }
     }
 
-    /// Paste the bookmark clipboard as one undoable edit. Bookmarks whose page this document lacks
-    /// arrive without a destination, and the toast says how many.
+    /// Paste the bookmark clipboard as one undoable edit (remapping same-doc page ObjRefs first).
     fn paste_bookmarks(&mut self, id: pdfcraft_engine::DocId, parent: Vec<usize>, index: usize) {
-        let Some(bookmarks) = self.bookmark_clipboard.clone() else { return };
+        let Some(clip) = self.bookmark_clipboard.clone() else { return };
+        let mut bookmarks = clip.copied.tree.nodes;
+        if clip.source_doc == id
+            && let Some(Err(e)) = self.session.remap_copied_outlines(id, &mut bookmarks, &clip.copied.page_refs)
+        {
+            self.notify_error(e);
+            return;
+        }
         let pages = self.session.get(id).map_or(0, |d| d.info.pages.len());
         let unmapped = pdfcraft_engine::outline_unmapped(&bookmarks, pages).len();
         if self.apply_edit(Edit::ImportBookmarks { parent, index, bookmarks, replace: false }) && unmapped > 0 {

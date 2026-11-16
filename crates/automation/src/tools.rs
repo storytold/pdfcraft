@@ -407,7 +407,8 @@ pub fn tools() -> Vec<ToolDef> {
                 "parent": path("Parent bookmark (omit for the top level)"),
                 "position": { "type": "integer", "minimum": 1, "description": "1-based position among the parent's children (default: last)." },
                 "top": { "type": "number", "minimum": -1000000, "maximum": 1000000, "description": "Points from the top of the displayed page." },
-                "left": { "type": "number", "minimum": -1000000, "maximum": 1000000, "description": "Points from the left of the displayed page." }
+                "left": { "type": "number", "minimum": -1000000, "maximum": 1000000, "description": "Points from the left of the displayed page." },
+                "in_page_order": { "type": "boolean", "description": "Insert in reading (page, y) order under parent instead of appending at position (default false)." }
             }),
             &["doc", "title", "page"],
         )),
@@ -519,6 +520,110 @@ pub fn tools() -> Vec<ToolDef> {
                 }
             }),
             &["doc", "levels"],
+        )),
+        t(
+            "bookmark_move_batch",
+            "Move multiple bookmarks atomically",
+            "Move one or more bookmark subtrees (1-based paths) to a placement relative to target in a single undoable step.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "paths": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1 } },
+                    "description": "1-based bookmark paths to move."
+                },
+                "target": path("Target bookmark (1-based path)"),
+                "placement": { "type": "string", "enum": ["before", "after", "first_child", "last_child"] }
+            }),
+            &["doc", "paths", "target", "placement"],
+        )),
+        t(
+            "bookmark_cut_copy_paste",
+            "Cut, copy, or paste bookmarks",
+            "Batch copy or cut bookmarks (1-based paths) onto the session bookmark clipboard, or paste them into a document (with same-document page tracking). Undoable for cut and paste.",
+        )
+        .destructive()
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "action": { "type": "string", "enum": ["copy", "cut", "paste"] },
+                "paths": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1 } },
+                    "description": "1-based paths to copy or cut (required for copy and cut)."
+                },
+                "parent": path("Parent bookmark for paste (omit for top level)"),
+                "position": { "type": "integer", "minimum": 1, "description": "1-based child position for paste (default: last)." }
+            }),
+            &["doc", "action"],
+        )),
+        t(
+            "bookmark_set_destination",
+            "Set a bookmark's explicit destination",
+            "Set a bookmark's destination to a page and exact ISO 32000-2 Table 149 fit mode (/XYZ, /Fit, /FitH, /FitV, /FitR, /FitB, /FitBH, /FitBV) in PDF user space, replacing any existing /A action. Undoable.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "path": path("The bookmark"),
+                "page": { "type": "integer", "minimum": 1 },
+                "type": { "type": "string", "enum": ["XYZ", "Fit", "FitH", "FitV", "FitR", "FitB", "FitBH", "FitBV"] },
+                "left": { "type": "number", "minimum": -1000000, "maximum": 1000000 },
+                "top": { "type": "number", "minimum": -1000000, "maximum": 1000000 },
+                "zoom": { "type": "number", "minimum": 0, "maximum": 100 },
+                "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }
+            }),
+            &["doc", "path", "page", "type"],
+        )),
+        t(
+            "bookmark_auto_generate",
+            "Auto-generate bookmarks",
+            "Generate a bookmark outline automatically using Table-of-Contents detection (when present and prefer_toc is true) or 4-stage statistical typography heading analysis. Undoable.",
+        )
+        .destructive()
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "max_depth": { "type": "integer", "minimum": 1, "maximum": 6, "description": "Maximum heading depth (1-6, default 3)." },
+                "prefer_toc": { "type": "boolean", "description": "Scan first 15 pages for a Table of Contents first (default true)." },
+                "replace": { "type": "boolean", "description": "Replace existing top-level bookmarks (default true)." }
+            }),
+            &["doc"],
+        )),
+        t(
+            "bookmark_regex_nest",
+            "Nest bookmarks by regex numbering",
+            "Re-nest existing bookmarks in pre-order using a bounded numbering regex (default matches 1, 1.2, 1.2.3 prefixes). Undoable.",
+        )
+        .destructive()
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "pattern": { "type": "string", "minLength": 1, "description": "Optional custom regex (uses num group or group 1 or whole match)." }
+            }),
+            &["doc"],
+        )),
+        t(
+            "bookmark_shift_pages",
+            "Shift bookmark target pages",
+            "Adjust target page numbers by page_delta across the selected 1-based bookmark paths (optionally including descendants). Fails atomically if any destination falls out of page bounds. Undoable.",
+        )
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "paths": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1 } }
+                },
+                "include_children": { "type": "boolean", "description": "Shift descendant bookmarks too (default true)." },
+                "page_delta": { "type": "integer", "minimum": -100000, "maximum": 100000 }
+            }),
+            &["doc", "paths", "page_delta"],
         )),
         t("page_number", "Number pages", "Label a range of pages (e.g. i, ii, iii for front matter, or A-1, A-2 for an appendix). Later pages keep their labels. Undoable.").with(schema(
             json!({

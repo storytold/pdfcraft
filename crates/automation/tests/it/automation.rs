@@ -648,6 +648,60 @@ fn bookmarks_from_text_styles_through_tools() {
     assert!(matches!(call(&mut a, json!(too_many)), Err(ToolError::InvalidArgs(_))));
 }
 
+#[test]
+fn bookmark_batch_tools_generate_regex_shift_and_clipboard() {
+    let dir = workdir("bookmark-batch-tools");
+    std::fs::write(dir.join("styled.pdf"), styled_headings_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "styled.pdf" }))["doc"].as_u64().unwrap();
+
+    // Auto-generate via statistical typography (Tier 2).
+    let generated = ok(&mut a, "bookmark_auto_generate", json!({ "doc": doc, "max_depth": 3, "prefer_toc": true, "replace": true }));
+    assert!(generated["bookmarks"].as_array().is_some_and(|b| !b.is_empty()), "{generated}");
+
+    // Replace with explicit numbered bookmarks + test in_page_order insertion.
+    ok(
+        &mut a,
+        "bookmark_import",
+        json!({
+            "doc": doc,
+            "replace": true,
+            "bookmarks": [
+                { "title": "1 Intro", "page": 1 },
+                { "title": "2 Results", "page": 2 }
+            ]
+        }),
+    );
+    ok(&mut a, "bookmark_add", json!({ "doc": doc, "title": "1.1 Scope", "page": 1, "top": 400.0, "in_page_order": true }));
+    let list = ok(&mut a, "bookmark_list", json!({ "doc": doc }));
+    assert_eq!(list["bookmarks"][1]["title"], "1.1 Scope");
+
+    // Regex nest places "1.1 Scope" under "1 Intro".
+    ok(&mut a, "bookmark_regex_nest", json!({ "doc": doc }));
+    let nested = ok(&mut a, "bookmark_list", json!({ "doc": doc }));
+    assert_eq!(nested["bookmarks"][0]["children"][0]["title"], "1.1 Scope");
+
+    // Set exact destination (/FitB) and shift pages atomically (+1 on child -> page 2; out-of-bounds fails cleanly).
+    ok(&mut a, "bookmark_set_destination", json!({ "doc": doc, "path": [1, 1], "page": 1, "type": "FitB" }));
+    assert!(!err(&mut a, "bookmark_shift_pages", json!({ "doc": doc, "paths": [[2]], "page_delta": 5 })).to_string().is_empty());
+    ok(&mut a, "bookmark_shift_pages", json!({ "doc": doc, "paths": [[1, 1]], "include_children": false, "page_delta": 1 }));
+    let shifted = ok(&mut a, "bookmark_list", json!({ "doc": doc }));
+    assert_eq!(shifted["bookmarks"][0]["children"][0]["page"], 2);
+
+    // Move batch ([1, 1] and [2] -> after? let's add a third and move two into [1])
+    ok(&mut a, "bookmark_add", json!({ "doc": doc, "title": "Appendix", "page": 2 }));
+    ok(&mut a, "bookmark_move_batch", json!({ "doc": doc, "paths": [[2], [3]], "target": [1], "placement": "last_child" }));
+    let moved = ok(&mut a, "bookmark_list", json!({ "doc": doc }));
+    assert_eq!(moved["bookmarks"].as_array().unwrap().len(), 1);
+    assert_eq!(moved["bookmarks"][0]["children"].as_array().unwrap().len(), 3);
+
+    // Copy + Paste into second doc & Cut/Paste within same doc after deleting page 1.
+    ok(&mut a, "bookmark_cut_copy_paste", json!({ "doc": doc, "action": "copy", "paths": [[1, 2]] }));
+    ok(&mut a, "bookmark_cut_copy_paste", json!({ "doc": doc, "action": "paste" }));
+    let pasted = ok(&mut a, "bookmark_list", json!({ "doc": doc }));
+    assert_eq!(pasted["bookmarks"].as_array().unwrap().len(), 2);
+}
+
 /// A one-page PDF whose form holds one text field named `name`.
 fn form_pdf(name: &str) -> Vec<u8> {
     let objs: Vec<String> = vec![

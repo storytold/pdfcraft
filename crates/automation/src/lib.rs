@@ -104,6 +104,8 @@ pub struct Automation {
     next_ocr_review: u64,
     /// What object_copy copied, for object_paste into any open document.
     objects_clipboard: Option<pdfcraft_engine::ObjectClipboard>,
+    /// Bookmarks copied or cut by `bookmark_cut_copy_paste`.
+    bookmark_clipboard: Option<(DocId, pdfcraft_engine::CopiedOutlines)>,
 }
 
 impl Default for Automation {
@@ -125,6 +127,7 @@ impl Automation {
             ocr_reviews: HashMap::new(),
             next_ocr_review: 0,
             objects_clipboard: None,
+            bookmark_clipboard: None,
         }
     }
 

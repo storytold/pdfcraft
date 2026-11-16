@@ -121,6 +121,12 @@ pub enum Dialog {
     Protect,
     /// Bookmarks ▸ New bookmarks from text styles (#1693).
     BookmarksFromTextStyles,
+    /// Bookmarks ▸ Auto-generate bookmarks.
+    AutoGenerateBookmarks,
+    /// Bookmarks ▸ Nest bookmarks by numbering.
+    RegexNestBookmarks,
+    /// Bookmarks ▸ Shift bookmark pages.
+    ShiftBookmarkPages,
     /// Set Page Boxes (crop, trim, bleed, art, media).
     PageBoxes,
     /// Add / Update Header and Footer, Watermark, Background.
@@ -242,6 +248,13 @@ pub struct PagePropsDraft {
     pub pages: Vec<usize>,
     pub before: Option<pdfcraft_engine::TabOrder>,
     pub tab_order: Option<pdfcraft_engine::TabOrder>,
+}
+
+/// Copied bookmarks plus source document ID and COS page `ObjRef`s for same-doc paste validation.
+#[derive(Clone, Debug)]
+pub struct BookmarkClipboard {
+    pub source_doc: DocId,
+    pub copied: pdfcraft_engine::CopiedOutlines,
 }
 
 /// Copied comments: their XFDF (each with its replies), for `Edit::PasteComments`.

@@ -9,6 +9,7 @@ use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, wid
 
 pub(super) mod appearance;
 pub mod bookmark_styles_ui;
+pub mod bookmark_tools_ui;
 pub(super) mod comment_props;
 pub(super) mod convert_colours_ui;
 pub(super) mod credits;
@@ -506,6 +507,18 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
         }
         Dialog::BookmarksFromTextStyles => {
             req.close = crate::bookmark_styles_ui::body(ui, app, &t);
+            return false;
+        }
+        Dialog::AutoGenerateBookmarks => {
+            req.close = crate::bookmark_tools_ui::auto_generate_body(ui, app, &t);
+            return false;
+        }
+        Dialog::RegexNestBookmarks => {
+            req.close = crate::bookmark_tools_ui::regex_nest_body(ui, app, &t);
+            return false;
+        }
+        Dialog::ShiftBookmarkPages => {
+            req.close = crate::bookmark_tools_ui::shift_pages_body(ui, app, &t);
             return false;
         }
         Dialog::NumberPages => {

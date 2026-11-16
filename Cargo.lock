@@ -4741,6 +4741,7 @@ dependencies = [
  "pdfcraft-testkit",
  "pdfcraft-xfa",
  "pdfcraft-xfdf",
+ "regex",
  "thiserror 2.0.21",
  "unicode-segmentation",
  "url",
@@ -4877,6 +4878,7 @@ dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-oracle",
+ "regex",
  "thiserror 2.0.21",
 ]
 

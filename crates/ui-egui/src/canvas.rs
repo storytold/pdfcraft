@@ -761,6 +761,10 @@ pub struct DocView {
     pub panel_drag: Option<Vec<usize>>,
     /// Transient keyboard owner for this document's Pages sidebar.
     pub(crate) pages_focus_id: Option<egui::Id>,
+    /// Transient keyboard owner for this document's Bookmarks sidebar.
+    pub(crate) bookmarks_focused: bool,
+    /// UI-only expansion, selection, and drag state for the Bookmarks sidebar (never dirties COS).
+    pub(crate) bookmarks_ui: crate::panels::BookmarkPanelState,
     /// Marquee Zoom / Snapshot: the rectangle being dragged (page, start), and a finished one.
     pub marquee: Option<(usize, Pos2)>,
     pub marquee_done: Option<crate::zoom_snap::Marquee>,
@@ -1194,6 +1198,8 @@ impl DocView {
             org_drag: None,
             panel_drag: None,
             pages_focus_id: None,
+            bookmarks_focused: false,
+            bookmarks_ui: Default::default(),
             marquee: None,
             marquee_done: None,
             area_pick: None,
@@ -1928,6 +1934,7 @@ fn draw_pages(
         if let Some(id) = view.pages_focus_id {
             ui.memory_mut(|m| m.surrender_focus(id));
         }
+        view.bookmarks_focused = false;
     }
     let pointer = ptr.pos;
     // A press on a page makes it the current one (as in Acrobat), so a page command with

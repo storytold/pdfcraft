@@ -13,6 +13,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod actions;
+pub mod auto_bookmarks;
 pub mod autotag;
 mod bookmarks;
 pub mod build_info;
@@ -150,8 +151,9 @@ pub use pdfcraft_sign::{SignOptions, SignatureInfo, Status as SignatureStatus, S
 pub use pdfcraft_xfdf::Format as DataFormat;
 pub use pdfcraft_xfdf::{Outline as CommentOutline, comment_count, comment_outlines, comments_bounds, is_xfdf_comments};
 
+pub use auto_bookmarks::AutoGenerateOptions;
 use bookmarks::outline_rows;
-pub use bookmarks::{BookmarkPage, BookmarkRow};
+pub use bookmarks::{BookmarkPage, BookmarkRow, page_order_insert_index, view_top_fraction};
 use comments::comment_list;
 pub use comments::{SummarySort, comment_kind, comment_summary, comment_type_name};
 #[cfg(test)]
@@ -165,6 +167,7 @@ pub use history::Label;
 use layers::{apply_layer_state, print_layer_states, print_preview_layers, set_default_layer_state, use_layer_choices};
 pub use open::{OpenContext, PreparedDocument};
 pub use page_filter::{PageOrientation, PageParity, filter_pages};
+pub use pdfcraft_organize::{CopiedOutlines, DEFAULT_REGEX_NEST_PATTERN, OutlinePlacementKind, ViewDestination};
 pub use pictures::{MarkFile, image_dimensions};
 use pictures::{embed_image, fit_picture, mark_source, model_poster};
 use protection::unrestricted;

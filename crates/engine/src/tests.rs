@@ -2472,6 +2472,145 @@ fn headings_in_two_columns_are_two_bookmarks() {
     assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Untitled→0[Left heading→1,Right heading→1]"]);
 }
 
+#[test]
+fn auto_generate_bookmarks_tier1_toc_resolves_ambiguous_page_labels_and_undoes() {
+    // Pages:
+    // 0: Cover labeled "1" (ambiguous!)
+    // 1: TOC page labeled "ii" with dot leaders & indented subsection referencing "1", "2", "3"
+    // 2: Preface labeled "iii"
+    // 3: Body page labeled "1" (first matching physical page > TOC page 1)
+    // 4: Body page labeled "2"
+    // 5: Body page labeled "3"
+    let toc_stream = "\
+        BT /FB 16 Tf 72 720 Td (Table of Contents) Tj ET \
+        BT /FR 11 Tf 72 680 Td (1. Overview ................... 1) Tj ET \
+        BT /FR 11 Tf 96 660 Td (1.1 Scope ................... 2) Tj ET \
+        BT /FR 11 Tf 72 640 Td (2. Results .................... 3) Tj ET";
+    let body_stream = "BT /FR 11 Tf 72 700 Td (Regular body text paragraph.) Tj ET";
+    let bytes = pdfcraft_testkit::Pdf::new()
+        .obj(
+            "<< /Type /Catalog /Pages 2 0 R \
+             /PageLabels << /Nums [ 0 << /S /D /St 1 >> 1 << /S /r /St 2 >> 3 << /S /D /St 1 >> ] >> >>",
+        )
+        .obj("<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] /Count 6 /MediaBox [0 0 612 792] /Resources << /Font << /FB 11 0 R /FR 12 0 R >> >> >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 9 0 R >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 10 0 R >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 9 0 R >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 9 0 R >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 9 0 R >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 9 0 R >>")
+        .stream("", body_stream)
+        .stream("", toc_stream)
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("toc.pdf", None, Arc::new(bytes), None).unwrap();
+    s.apply(id, Edit::AutoGenerateBookmarks { max_depth: 3, prefer_toc: true, replace_existing: true }).unwrap();
+    // Level 1 sits at root (/Outlines); physical pages 3, 4, 5 -> 1-based 4, 5, 6 in outline_titles (never cover page 0!).
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["1. Overview→4[1.1 Scope→5]", "2. Results→6"]);
+    s.undo(id).unwrap();
+    assert!(s.get(id).unwrap().info.outline.is_empty());
+    s.redo(id).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["1. Overview→4[1.1 Scope→5]", "2. Results→6"]);
+}
+
+#[test]
+fn auto_generate_bookmarks_tier2_typography_excludes_headers_footers_and_checks_permissions() {
+    let p0 = "\
+        BT /FR 9 Tf 72 760 Td (ANNUAL REPORT) Tj ET \
+        BT /FB 18 Tf 72 680 Td (Chapter One) Tj ET \
+        BT /FR 11 Tf 72 640 Td (This is a normal body paragraph explaining details cleanly.) Tj ET \
+        BT /FB 14 Tf 72 600 Td (Background) Tj ET \
+        BT /FR 9 Tf 72 25 Td (Page 1) Tj ET";
+    let p1 = "\
+        BT /FR 9 Tf 72 760 Td (ANNUAL REPORT) Tj ET \
+        BT /FR 11 Tf 72 680 Td (More narrative text without any headings here at all.) Tj ET \
+        BT /FR 9 Tf 72 25 Td (Page 2) Tj ET";
+    let p2 = "\
+        BT /FR 9 Tf 72 760 Td (ANNUAL REPORT) Tj ET \
+        BT /FB 18 Tf 72 680 Td (Chapter Two) Tj ET \
+        BT /FR 11 Tf 72 640 Td (Second body paragraph discussing test results in full detail.) Tj ET \
+        BT /FR 9 Tf 72 25 Td (Page 3) Tj ET";
+    let p3 = "\
+        BT /FR 9 Tf 72 760 Td (ANNUAL REPORT) Tj ET \
+        BT /FB 14 Tf 72 680 Td (Appendix) Tj ET \
+        BT /FR 9 Tf 72 25 Td (Page 4) Tj ET";
+
+    let raw_doc = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R] /Count 4 /MediaBox [0 0 612 792] /Resources << /Font << /FB 11 0 R /FR 12 0 R >> >> >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 8 0 R >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 9 0 R >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 10 0 R >>")
+        .stream("", p0)
+        .stream("", p1)
+        .stream("", p2)
+        .stream("", p3)
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+        .build();
+
+    let mut s = Session::new();
+    let id = s.open("report.pdf", None, Arc::new(raw_doc.clone()), None).unwrap();
+    s.apply(id, Edit::AddBookmark { parent: vec![], index: 0, title: "Existing".into(), page: 0, left: None, top: None }).unwrap();
+    s.apply(id, Edit::AutoGenerateBookmarks { max_depth: 3, prefer_toc: false, replace_existing: false }).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Existing→1", "Chapter One→1[Background→1]", "Chapter Two→3[Appendix→4]"]);
+
+    // Permission check: copy=false with assemble=true must be rejected
+    let mut cos_doc = pdfcraft_cos::Document::open(Arc::new(raw_doc)).unwrap();
+    cos_doc
+        .set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: "",
+            owner_password: "owner",
+            permissions: -1 ^ 0b1_0000,
+            encrypt_metadata: true,
+            seed: [7u8; 32],
+        })
+        .unwrap();
+    let protected = Arc::new(pdfcraft_cos::write_full(&cos_doc, &pdfcraft_cos::SaveOptions::default()).unwrap());
+    let pid = s.open("locked.pdf", None, protected, None).unwrap();
+    let err = s.apply(pid, Edit::AutoGenerateBookmarks { max_depth: 3, prefer_toc: false, replace_existing: true }).unwrap_err();
+    assert_eq!(err, EditError::NotPermitted("copying text and images"));
+}
+
+#[test]
+fn engine_batch_bookmark_edits_destination_regex_shift_and_page_order() {
+    let (mut s, id) = session_with(5);
+    s.apply(id, Edit::AddBookmark { parent: vec![], index: 0, title: "1 First".into(), page: 0, left: None, top: Some(700.0) }).unwrap();
+    s.apply(id, Edit::AddBookmark { parent: vec![], index: 1, title: "2 Third".into(), page: 3, left: None, top: Some(700.0) }).unwrap();
+    let idx = s.page_order_insert_index(id, &[], 1, None, Some(600.0)).unwrap();
+    assert_eq!(idx, 1);
+    s.apply(id, Edit::AddBookmark { parent: vec![], index: idx, title: "1.1 Second".into(), page: 1, left: None, top: Some(600.0) }).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["1 First→1", "1.1 Second→2", "2 Third→4"]);
+
+    // Verify OutlineItem COS ObjRef is populated
+    assert!(s.get(id).unwrap().info.outline[0].obj.is_some());
+
+    // Regex nest moves "1.1 Second" under "1 First"
+    s.apply(id, Edit::RegexNestBookmarks { pattern: None }).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["1 First→1[1.1 Second→2]", "2 Third→4"]);
+
+    // Shift pages +1
+    s.apply(id, Edit::ShiftBookmarkPages { paths: vec![vec![0], vec![1]], include_children: true, page_delta: 1 }).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["1 First→2[1.1 Second→3]", "2 Third→5"]);
+
+    // Set exact destination (/FitB)
+    s.apply(id, Edit::SetBookmarkDestination { path: vec![1], dest: pdfcraft_organize::ViewDestination::FitB { page: 2 } }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.outline[1].page, Some(2));
+    assert_eq!(s.get(id).unwrap().info.outline[1].view, pdfcraft_render::DestView::FitB);
+
+    // MoveBookmarksBatch + DeleteBookmarksBatch
+    s.apply(id, Edit::MoveBookmarksBatch { paths: vec![vec![1]], target: vec![0], placement: pdfcraft_organize::OutlinePlacementKind::LastChild })
+        .unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["1 First→2[1.1 Second→3,2 Third→3]"]);
+
+    s.apply(id, Edit::DeleteBookmarksBatch { paths: vec![vec![0, 0], vec![0, 1]] }).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["1 First→2"]);
+}
+
 /// `style` at another size.
 fn pdfcraft_engine_style(style: &text_style_bookmarks::TextStyle, size: f64) -> text_style_bookmarks::TextStyle {
     text_style_bookmarks::TextStyle { size, ..style.clone() }

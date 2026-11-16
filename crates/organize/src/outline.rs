@@ -88,13 +88,13 @@ pub enum OutlineError {
 
 type Result<T> = std::result::Result<T, OutlineError>;
 
-fn outline_root(doc: &Document) -> Option<ObjRef> {
+pub(crate) fn outline_root(doc: &Document) -> Option<ObjRef> {
     let root = doc.root()?;
     doc.get(root).as_dict()?.reference(b"Outlines")
 }
 
 /// The children of `parent` (an item or the outline root), in order. Cycle-safe.
-fn children_of(doc: &Document, parent: ObjRef, seen: &mut HashSet<ObjRef>) -> Vec<ObjRef> {
+pub(crate) fn children_of(doc: &Document, parent: ObjRef, seen: &mut HashSet<ObjRef>) -> Vec<ObjRef> {
     let mut out = Vec::new();
     let mut next = doc.get(parent).as_dict().and_then(|d| d.reference(b"First"));
     while let Some(r) = next {
@@ -194,7 +194,7 @@ impl Targets {
 
 /// Every entry of the catalog's `/Names /Dests` name tree, by name. The first entry of a name wins.
 /// Iterative, and nodes deeper than `NAME_TREE_DEPTH` are skipped.
-fn name_tree(doc: &Document) -> HashMap<Vec<u8>, Object> {
+pub(crate) fn name_tree(doc: &Document) -> HashMap<Vec<u8>, Object> {
     let mut out = HashMap::new();
     let Some(root) = doc.root() else { return out };
     let Some(names) = doc.get(root).as_dict().and_then(|c| c.get(b"Names").cloned()) else { return out };
@@ -244,7 +244,7 @@ fn name_key(doc: &Document, key: &Object) -> Option<Vec<u8>> {
 }
 
 /// A named destination in the catalog's PDF 1.1 `/Dests` dictionary.
-fn dests_dict(doc: &Document, key: &[u8]) -> Option<Object> {
+pub(crate) fn dests_dict(doc: &Document, key: &[u8]) -> Option<Object> {
     let root = doc.root()?;
     let dests = doc.get(root).as_dict().and_then(|c| c.get(b"Dests").cloned())?;
     let dests = doc.resolve(&dests);
@@ -316,7 +316,7 @@ fn item_dest(doc: &Document, targets: &mut Targets, d: &Dict) -> Option<Vec<Obje
 }
 
 /// A bookmark's title as viewers show it: the decoded text, without NULs or surrounding space.
-fn title_of(doc: &Document, d: &Dict) -> String {
+pub(crate) fn title_of(doc: &Document, d: &Dict) -> String {
     let title = d.get(b"Title").map(|t| doc.resolve(t));
     let text = match title.as_deref() {
         Some(Object::String(s)) => s.to_text(),
@@ -342,7 +342,7 @@ fn describe(doc: &Document, targets: &mut Targets, obj: ObjRef, path: Vec<usize>
 /// A bookmark title's `/C` as a colour: three numbers, each kept within 0–1 (ISO 32000-2
 /// §12.3.3, Table 151: "An array of three numbers in the range 0.0 to 1.0"); a number past the
 /// range, however large, is kept at its edge. Black, the default, and anything else give `None`.
-fn title_color(doc: &Document, c: &Object) -> Option<[f32; 3]> {
+pub(crate) fn title_color(doc: &Document, c: &Object) -> Option<[f32; 3]> {
     let [r, g, b] = c.as_array()?.as_slice() else { return None };
     let channel = |v: &Object| doc.resolve(v).as_f64().map(|v| v.clamp(0.0, 1.0) as f32);
     let rgb = [channel(r)?, channel(g)?, channel(b)?];
@@ -422,7 +422,7 @@ pub(crate) fn container(doc: &mut Document, parent_path: &[usize]) -> Result<Obj
 }
 
 /// Set `key` on the dictionary `r` (or remove it with `None`) only if it changes.
-fn put(doc: &mut Document, r: ObjRef, key: &[u8], value: Option<Object>) -> Result<()> {
+pub(crate) fn put(doc: &mut Document, r: ObjRef, key: &[u8], value: Option<Object>) -> Result<()> {
     let current = doc.get(r).as_dict().and_then(|d| d.get(key).cloned());
     if current == value {
         return Ok(());

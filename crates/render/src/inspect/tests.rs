@@ -1891,11 +1891,11 @@ fn destination_operands_become_views() {
     assert_eq!(v(b"XYZ", &[Some(0.0), Some(420.0), Some(0.0)]), Xyz { left: Some(0.0), top: Some(420.0), zoom: None });
     assert_eq!(v(b"XYZ", &[Some(72.0), Some(500.0), Some(1.5)]), Xyz { left: Some(72.0), top: Some(500.0), zoom: Some(1.5) });
     assert_eq!(v(b"Fit", &[]), Fit);
-    assert_eq!(v(b"FitB", &[]), Fit);
+    assert_eq!(v(b"FitB", &[]), FitB);
     assert_eq!(v(b"FitH", &[Some(250.0)]), FitH { top: Some(250.0) });
-    assert_eq!(v(b"FitBH", &[None]), FitH { top: None });
+    assert_eq!(v(b"FitBH", &[None]), FitBH { top: None });
     assert_eq!(v(b"FitV", &[Some(120.0)]), FitV { left: Some(120.0) });
-    assert_eq!(v(b"FitBV", &[Some(5.0)]), FitV { left: Some(5.0) });
+    assert_eq!(v(b"FitBV", &[Some(5.0)]), FitBV { left: Some(5.0) });
     // FitR's corners are normalized.
     assert_eq!(v(b"FitR", &[Some(110.0), Some(220.0), Some(10.0), Some(20.0)]), FitR { rect: [10.0, 20.0, 110.0, 220.0] });
     // Missing operands are null; so are non-finite ones, and a zoom that isn't positive.
@@ -1965,7 +1965,7 @@ fn bookmarks_and_links_keep_their_destination_view() {
         [
             LinkTarget::Page(1, Xyz { left: Some(72.0), top: Some(500.0), zoom: Some(1.5) }),
             LinkTarget::Page(1, Xyz { left: None, top: Some(300.0), zoom: Some(2.0) }),
-            LinkTarget::Page(1, FitH { top: Some(100.0) }),
+            LinkTarget::Page(1, FitBH { top: Some(100.0) }),
             LinkTarget::Page(1, Fit),
         ]
     );

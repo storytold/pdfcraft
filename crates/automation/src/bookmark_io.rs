@@ -60,6 +60,58 @@ impl Automation {
         Ok(out)
     }
 
+    pub(crate) fn bookmark_cut_copy_paste(&mut self, a: &Args) -> Result<Value> {
+        let action = a.str("action")?;
+        let id = self.doc(a)?.id;
+        match action {
+            "copy" | "cut" => {
+                let paths = a.paths("paths")?;
+                let copied = match self.session.outline_trees_batch(id, &paths) {
+                    Some(res) => res.map_err(|e| match e {
+                        pdfcraft_organize::OutlineError::NoSuchBookmark(_) => failed("one or more bookmark paths do not exist"),
+                        other => failed(other),
+                    })?,
+                    None => return Err(failed(format!("document {} is not open", id.0))),
+                };
+                if action == "cut" && copied.tree.truncated {
+                    return Err(failed("bookmarks nested too deep to copy cleanly, so nothing was cut"));
+                }
+                let count = copied.tree.nodes.len();
+                let truncated = copied.tree.truncated;
+                self.bookmark_clipboard = Some((id, copied));
+                if action == "cut" {
+                    let mut out = self.apply(a, Edit::DeleteBookmarksBatch { paths })?;
+                    out["count"] = json!(count);
+                    out["truncated"] = json!(truncated);
+                    Ok(out)
+                } else {
+                    Ok(json!({ "count": count, "truncated": truncated }))
+                }
+            }
+            "paste" => {
+                let Some((source_doc, clip)) = self.bookmark_clipboard.clone() else {
+                    return Err(failed("the bookmark clipboard is empty"));
+                };
+                let mut nodes = clip.tree.nodes;
+                if source_doc == id {
+                    match self.session.remap_copied_outlines(id, &mut nodes, &clip.page_refs) {
+                        Some(res) => res.map_err(failed)?,
+                        None => return Err(failed(format!("document {} is not open", id.0))),
+                    }
+                }
+                let parent = a.opt_path("parent")?.unwrap_or_default();
+                let index = a.opt_int("position")?.map_or(usize::MAX, |p| usize::try_from(p.max(1) - 1).unwrap_or(usize::MAX));
+                let count = self.doc(a)?.info.pages.len();
+                let unmapped = pdfcraft_engine::outline_unmapped(&nodes, count);
+                let mut out = self.apply(a, Edit::ImportBookmarks { parent, index, bookmarks: nodes, replace: false })?;
+                out["unmapped"] = json!(unmapped.iter().map(|p| one_based(p)).collect::<Vec<_>>());
+                out["truncated"] = json!(clip.tree.truncated);
+                Ok(out)
+            }
+            other => Err(ToolError::InvalidArgs(format!("unknown action {other:?}; expected copy, cut, or paste"))),
+        }
+    }
+
     fn outline_of(&self, id: DocId, path: &[usize]) -> Result<pdfcraft_engine::OutlineTree> {
         match self.session.outline_tree(id, path) {
             // The engine names the path 0-based; the caller gave it 1-based.

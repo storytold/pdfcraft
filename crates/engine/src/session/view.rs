@@ -234,6 +234,66 @@ impl Session {
         Some(pdfcraft_organize::outline_tree(&editor.cos, path))
     }
 
+    /// Copy multiple outline subtrees in normalized document order, honoring the portable
+    /// copy depth limit so `Cut` warns rather than silently dropping deep descendants.
+    pub fn outline_trees_batch(
+        &self,
+        id: DocId,
+        paths: &[Vec<usize>],
+    ) -> Option<Result<pdfcraft_organize::CopiedOutlines, pdfcraft_organize::OutlineError>> {
+        let editor = self.get(id)?.editor.as_ref()?;
+        let mut batch = match pdfcraft_organize::outline_trees_batch(&editor.cos, paths) {
+            Ok(b) => b,
+            Err(e) => return Some(Err(e)),
+        };
+        let mut nodes = Vec::with_capacity(paths.len());
+        let mut truncated = false;
+        let mut sorted: Vec<Vec<usize>> = paths.to_vec();
+        sorted.sort();
+        sorted.dedup();
+        // Prune descendants whose ancestor path is already selected, keeping document order.
+        let mut pruned: Vec<Vec<usize>> = Vec::with_capacity(sorted.len());
+        for p in sorted {
+            if !pruned.iter().any(|anc| p.starts_with(anc)) {
+                pruned.push(p);
+            }
+        }
+        for p in pruned {
+            match pdfcraft_organize::outline_tree(&editor.cos, &p) {
+                Ok(t) => {
+                    truncated |= t.truncated;
+                    nodes.extend(t.nodes);
+                }
+                Err(e) => return Some(Err(e)),
+            }
+        }
+        batch.tree.nodes = nodes;
+        batch.tree.truncated = truncated;
+        Some(Ok(batch))
+    }
+
+    /// Remap copied outline page destinations against `id`'s current Page Tree before pasting.
+    pub fn remap_copied_outlines(
+        &self,
+        id: DocId,
+        nodes: &mut [pdfcraft_organize::OutlineNode],
+        page_refs: &std::collections::HashMap<usize, pdfcraft_cos::ObjRef>,
+    ) -> Option<Result<(), pdfcraft_organize::OrganizeError>> {
+        let editor = self.get(id)?.editor.as_ref()?;
+        Some(pdfcraft_organize::remap_copied_outlines(&editor.cos, nodes, page_refs))
+    }
+
+    /// Compute the child index under `parent` (`[]` = top level) where `(page, left, top)` falls
+    /// in reading/page order.
+    pub fn page_order_insert_index(&self, id: DocId, parent: &[usize], page: usize, left: Option<f64>, top: Option<f64>) -> Option<usize> {
+        let info = &self.get(id)?.info;
+        let mut siblings: &[pdfcraft_render::OutlineItem] = &info.outline;
+        for &idx in parent {
+            siblings = &siblings.get(idx)?.children;
+        }
+        Some(crate::bookmarks::page_order_insert_index(info, siblings, page, left, top))
+    }
+
     /// Top-level bookmarks as split points: (first page of each part, its bookmark's title).
     pub fn bookmark_splits(&self, id: DocId) -> Vec<(usize, String)> {
         let Some(doc) = self.get(id) else { return Vec::new() };

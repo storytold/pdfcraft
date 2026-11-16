@@ -359,8 +359,11 @@ fn dest_view_value(view: DestView) -> Value {
         DestView::Top => json!({ "kind": "top" }),
         DestView::Xyz { left, top, zoom } => json!({ "kind": "xyz", "left": left, "top": top, "zoom": zoom }),
         DestView::Fit => json!({ "kind": "fit" }),
+        DestView::FitB => json!({ "kind": "fit_b" }),
         DestView::FitH { top } => json!({ "kind": "fit_h", "top": top }),
+        DestView::FitBH { top } => json!({ "kind": "fit_bh", "top": top }),
         DestView::FitV { left } => json!({ "kind": "fit_v", "left": left }),
+        DestView::FitBV { left } => json!({ "kind": "fit_bv", "left": left }),
         DestView::FitR { rect } => json!({ "kind": "fit_r", "rect": rect }),
     }
 }
