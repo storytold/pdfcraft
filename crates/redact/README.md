@@ -153,20 +153,26 @@ two operands where they are names), not following a form drawn inside itself aga
 deeper than the walk follows forms, where the renderer draws nothing either; the font cleanup, with
 no Type 3 font listed, doesn't read them. The cleanups made once for the whole operation (the
 properties pages share, a Type 3 font's forms) read them on an allowance of their own each time.
-Where such a form can't all be read (it doesn't decode or runs past that allowance, the parser
-passes over bytes in it, or those operators or a read's 65,536 scopes are passed), a cleanup that
-would remove a name refuses the operation, since that form may still draw with it: removing it
-could lose paint beside a mark, and keeping an image or form the redaction replaced would keep what
-was redacted. A cleanup with nothing to remove goes on. A name nothing draws is never kept,
-except a property named by a form whose `/Resources` isn't a dictionary, which is kept as the page's. The
-Type 3 font cleanup's scan of the glyphs shown is the exception: it reads such forms in full, as
-before, and scans one again under another chain of names only where its scan looked a name up
-past its own resources, found there or not. It fails past 65,536 scans in all of forms, with
-resources of their own or without, made again in another chain of names while the same page, or
-form no page draws, is scanned, or past an allowance of a page decoded by them in all. So pages
-that each reach one form through many forms with resources of their own add up: 50 pages, each
-drawing 30 such forms that draw one 200 KB form showing text with the page's Type 3 font, are
-refused.
+Where such a form can't all be read (it doesn't decode, its data is damaged partway or, for Flate,
+cut short, it runs past that allowance, the parser passes over bytes in it, or those operators or a
+read's 65,536 scopes are passed), a cleanup that would remove a name refuses the operation, since
+that form may still draw with it: removing it could lose paint beside a mark, and keeping an image
+or form the redaction replaced would keep what was redacted. A form without resources of its own
+whose data is damaged partway, or whose Flate data is cut short, counts so too: Flate data that
+stops before its last block ends may have held more, so it counts even where it holds all of the
+form. Data that only lacks its end marker (ASCIIHex `>`, ASCII85 `~>`, LZW's or RunLength's end
+code), which those decoders accept, is read as whole. A cleanup with nothing to remove goes on. A
+name nothing draws is never kept, except a property named by a form whose `/Resources` isn't a
+dictionary, which is kept as the page's. The Type 3 font cleanup's scan of the glyphs shown is the
+exception: it reads such forms in full, as before (one damaged partway as far as the damage), and
+scans one again under another chain of names only where its scan looked a name up past its own
+resources, found there or not. The soft-mask groups, the forms without resources inside them and the
+appearances the Type 3 font cleanup reads itself, and a font's forms' and glyphs' own data, are read
+as far as any damage, as on `main`. It fails past 65,536 scans in all of forms, with resources of
+their own or without, made again in another chain of names while the same page, or form no page
+draws, is scanned, or past an allowance of a page decoded by them in all. So pages that each reach
+one form through many forms with resources of their own add up: 50 pages, each drawing 30 such forms
+that draw one 200 KB form showing text with the page's Type 3 font, are refused.
 Colour spaces and shadings that a form with resources of its own, or a form without resources
 inside it, takes from its caller aren't counted, as the walk doesn't look them up by name, so the
 Type 3 font cleanup can drop one that a form inside a font's form takes that way. Content that can't be
@@ -181,21 +187,22 @@ skipping that mark. The count covers the marks on the pages being applied.
 
 Tiling-pattern cells are separate streams. Applying a mark removes a pattern resource when no
 surviving paint uses it. A form the walk leaves as it is, because it reaches no mark, still paints
-all it did: the patterns it selects through the names it is drawn with count as used, and where
-it, or a form inside it, sets a Type 3 font without resources of its own (by `Tf` or a graphics
-state's `/Font`), or what draws it has set one, whose glyphs paint through those names, the page
-keeps every pattern it selected, as where the walk shows a glyph of such a font. Such a form is read for them only where those names
-give a pattern, once for each chain of forms it is drawn in, and no more than 4,096 times on a
-page, within an allowance of a page for forms without resources of their own and another, with
-2,000,000 operators, for forms with them; where it can't all be read (it doesn't decode, the
-parser passes over bytes in it, or a limit is passed), Apply refuses rather than remove a
-pattern. If a cell remains reachable after rewriting the selected pages and may
-contain text, images, replacement descriptions, or unreadable content, Apply refuses with a
-`RedactError::Pattern` and restores the document and pending marks. This includes patterns owned
-by Forms and patterns inherited by Forms. Vector-only retained cells remain supported. The
-bounded check is conservative: an unrelated retained pattern on a selected page can also cause
-refusal when its content cannot be proven safe. If a selected page had a pattern resource, the
-check covers all pages after rewriting so another page cannot keep the same cell in the saved PDF.
+all it did: the patterns it selects through the names it is drawn with count as used, and where it,
+or a form inside it, sets a Type 3 font without resources of its own (by `Tf` or a graphics state's
+`/Font`), or what draws it has set one, whose glyphs paint through those names, the page keeps every
+pattern it selected, as where the walk shows a glyph of such a font. Such a form is read for them
+only where those names give a pattern, once for each chain of forms it is drawn in, and no more than
+4,096 times on a page, within an allowance of a page for forms without resources of their own and
+another, with 2,000,000 operators, for forms with them; where it can't all be read (it doesn't
+decode, its data is damaged partway or, for Flate, cut short, the parser passes over bytes in it, or
+a limit is passed), Apply refuses rather than remove a pattern. If a cell remains reachable after
+rewriting the selected pages and may contain text, images, replacement descriptions, or unreadable
+content, Apply refuses with a `RedactError::Pattern` and restores the document and pending marks.
+This includes patterns owned by Forms and patterns inherited by Forms. Vector-only retained cells
+remain supported. The bounded check is conservative: an unrelated retained pattern on a selected
+page can also cause refusal when its content cannot be proven safe. If a selected page had a pattern
+resource, the check covers all pages after rewriting so another page cannot keep the same cell in
+the saved PDF.
 
 Before changing any page, `apply` prepares the redaction appearances with a shared 8 MiB
 budget for their uncompressed PDF content across the selected pages. It bounds repeated-text

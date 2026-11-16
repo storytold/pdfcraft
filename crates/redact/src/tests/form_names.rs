@@ -177,6 +177,32 @@ fn a_page_pattern_a_form_clear_of_the_marks_may_paint_past_what_is_read_refuses_
     assert_eq!(out.map(|r| r.patterns_removed), Ok(0), "painted beside the mark too");
 }
 
+/// A form clear of the mark paints with the page's `/P0` after damage in its Flate data, with
+/// resources of its own or without: which patterns it paints with isn't known, and the redaction is
+/// refused rather than drop `/P0`, which nothing else still paints with. Read whole, the form keeps
+/// `/P0`.
+#[test]
+fn a_page_pattern_a_form_clear_of_the_marks_paints_after_damage_refuses_the_redaction() {
+    let paint = b"/Pattern cs /P0 scn 20 40 100 30 re f".as_slice();
+    let run = |form_res: &str, data: Vec<u8>| {
+        let form = stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 100] {form_res} /Filter /FlateDecode"), &data);
+        let mut doc = one_page(
+            b"/Pattern cs /P0 scn 20 140 100 30 re f 0 g /Fm Do",
+            "/Pattern << /P0 7 0 R >> /XObject << /Fm 8 0 R >>",
+            vec![red_cell(), form],
+        );
+        mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+        apply(&mut doc, None)
+    };
+    let refused = |out: &Result<Report, RedactError>| matches!(out, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail, .. })) if detail.contains("may paint with a pattern it would remove"));
+    for form_res in ["", "/Resources << >>"] {
+        let out = run(form_res, flate_stored(b"0 0 1 1 re f ", Some(paint)));
+        assert!(refused(&out), "{form_res:?}: {out:?}");
+        let out = run(form_res, pdfcraft_filters::encode_flate(&[b"0 0 1 1 re f ".as_slice(), paint].concat()));
+        assert_eq!(out.map(|r| r.patterns_removed), Ok(0), "{form_res:?}, whole");
+    }
+}
+
 /// A form clear of the mark drawn 1,000 times is read for its patterns once; on a page whose
 /// resources give no pattern, not at all. 4,096 forms clear of the mark are read, and the page's
 /// `/P0`, painted only under the mark, goes; with one more, which isn't read, which of the patterns
@@ -1630,6 +1656,69 @@ fn an_image_a_form_beside_the_mark_may_draw_past_what_is_read_refuses_the_redact
     }
     let (out, _) = run(drawing_im_after(b"", ""));
     assert_eq!(out.map(|r| r.images_removed), Ok(1), "read in full");
+}
+
+/// Flate data holding `prefix` in a stored block, then, with `tail`, a block of the reserved type,
+/// which is damage, and `tail`, which no decoder reaches; without, nothing more: the stream is never
+/// finished, though it holds all of `prefix`.
+fn flate_stored(prefix: &[u8], tail: Option<&[u8]>) -> Vec<u8> {
+    let len = u16::try_from(prefix.len()).unwrap();
+    let damage = tail.map(|tail| [&[0x07][..], tail].concat()).unwrap_or_default();
+    [&[0x78, 0x01, 0x00][..], &len.to_le_bytes(), &(!len).to_le_bytes(), prefix, &damage].concat()
+}
+
+/// `data` in PNG-predicted rows of 4 bytes (`/Predictor 12 /Columns 4`), each tagged 0 but the
+/// row `bad`, tagged 9, which is no PNG filter: damage, which the renderer reads past.
+fn png_rows(data: &[u8], bad: Option<usize>) -> Vec<u8> {
+    let mut padded = data.to_vec();
+    padded.resize(data.len().div_ceil(4) * 4, b' ');
+    padded.chunks(4).enumerate().flat_map(|(i, row)| [&[if Some(i) == bad { 9 } else { 0 }][..], row].concat()).collect()
+}
+
+/// The page draws its image under the mark, and beside it a form that draws the same `/Im` after
+/// damage in its data: a Flate block of the reserved type, after which nothing decodes, or a PNG
+/// predictor row of no PNG filter, which the renderer reads past. With
+/// resources of its own or without, the read is partial, and the redaction is refused, the
+/// document unchanged, rather than remove `/Im` the form may draw; so for Flate data never
+/// finished, which may have held more, in a form drawing only a box. Flate data never finished but
+/// holding all of the content, and the content whole, keep the image and are redacted.
+#[test]
+fn a_form_whose_data_is_damaged_beside_the_mark_refuses_the_redaction() {
+    let run = |resources: &str, filter: &str, data: &[u8]| {
+        let image = stream("/Type /XObject /Subtype /Image /Width 6 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"SECRET_IMAGE_BYTES");
+        let form = stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 100] {resources} {filter}"), data);
+        let parms = b"<< /Predictor 12 /Columns 4 >>".to_vec();
+        let mut doc = one_page(b"q 100 0 0 30 20 240 cm /Im Do Q /Fm Do", "/XObject << /Im 7 0 R /Fm 8 0 R >>", vec![image, form, parms]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        let before = write_full(&doc, &SaveOptions::default()).unwrap();
+        let out = apply(&mut doc, None);
+        let unchanged = write_full(&doc, &SaveOptions::default()).unwrap() == before;
+        (out, unchanged, full_save_holds(&doc, b"SECRET_IMAGE_BYTES"))
+    };
+    let start = b"0 0 1 1 re f ".as_slice();
+    let content = [start, b"q 100 0 0 30 20 20 cm /Im Do Q"].concat();
+    let flate = "/Filter /FlateDecode";
+    let predicted = "/Filter /FlateDecode /DecodeParms 9 0 R";
+    for resources in ["/Resources << >>", ""] {
+        for (label, filter, data) in [
+            ("a Flate block of the reserved type", flate, flate_stored(start, Some(&content[start.len()..]))),
+            ("a predictor row of no PNG filter", predicted, pdfcraft_filters::encode_flate(&png_rows(&content, Some(start.len() / 4)))),
+            ("Flate never finished, drawing a box", flate, flate_stored(start, None)),
+        ] {
+            let (out, unchanged, _) = run(resources, filter, &data);
+            assert!(refused_past_what_is_read(&out), "{resources:?}, {label}: {out:?}");
+            assert!(unchanged, "{resources:?}, {label}");
+        }
+        for (label, filter, data) in [
+            ("Flate never finished", flate, flate_stored(&content, None)),
+            ("whole", flate, pdfcraft_filters::encode_flate(&content)),
+            ("whole, predicted", predicted, pdfcraft_filters::encode_flate(&png_rows(&content, None))),
+        ] {
+            let (out, _, kept) = run(resources, filter, &data);
+            assert_eq!(out.map(|r| r.images_removed), Ok(1), "{resources:?}, {label}");
+            assert!(kept, "{resources:?}, {label}: drawn beside the mark");
+        }
+    }
 }
 
 /// A form beside the mark that can't all be read changes nothing where no name would be removed:

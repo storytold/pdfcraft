@@ -13,8 +13,9 @@ use super::{
 /// that can't be told: such a form doesn't decode (an image codec or a /Filter it can't run, say)
 /// or runs past `budget` (for the fonts' cleanup, an allowance of its own when no Type 3 font is
 /// listed), the walk passes 2,000,000 operators, or the parser can't read all of such a form or of
-/// `content`; or, with a name to drop, a form with resources of its own wasn't all read.
-/// Corrupt data in such a form is read, tolerantly, up to the damage, which may be nothing.
+/// `content`; or, with a name to drop, a form with resources of its own wasn't all read, or the
+/// data of a form, with resources of its own or without, is damaged partway or, for Flate, cut
+/// short, so that what it draws after the damage isn't known.
 pub(crate) fn prune(
     doc: &Document,
     budget: &mut DecodeBudget,
@@ -685,6 +686,7 @@ pub(super) fn clip_out(rects: &[[f64; 4]], ctm: &Matrix, around: [f64; 4]) -> Op
 ///   between them (all but the fonts' cleanup when no Type 3 font is listed, which has one of its
 ///   own). An error when that can't all be read: the parser can't read all of `content` or of such
 ///   a form, the walk passes 2,000,000 operators, or such a form doesn't decode or runs past `budget`.
+///   One damaged partway is read as far as the damage, and makes the read [`Drawn::partial`].
 /// - **A form with resources of its own** looks a name up in its caller's where neither its own nor
 ///   those of the forms on the way to it give it, as the renderer does ([`super::form_resources`]):
 ///   of its operators, those naming an XObject (`Do`), font (`Tf`), graphics state (`gs`) or pattern
@@ -694,10 +696,10 @@ pub(super) fn clip_out(rects: &[[f64; 4]], ctm: &Matrix, around: [f64; 4]) -> Op
 ///   way with resources of their own), not inside themselves again nor deeper than [`MAX_DEPTH`] of
 ///   them, where the renderer draws nothing either (it draws no form inside itself, nor anything
 ///   nested more than 50 deep), within an allowance of a page of their own, 2,000,000 of their
-///   operators and 65,536 scopes. One that doesn't decode isn't read, bytes the parser can't read
-///   in one are passed over, and past a limit the later ones aren't read: none of these fails the
-///   read, but each makes it [`Drawn::partial`], and a cleanup that would then remove a name fails
-///   ([`may_remove`]), as such a form may draw with it.
+///   operators and 65,536 scopes. One that doesn't decode isn't read, nor past damage in its data,
+///   bytes the parser can't read in one are passed over, and past a limit the later ones aren't
+///   read: none of these fails the read, but each makes it [`Drawn::partial`], and a cleanup that
+///   would then remove a name fails ([`may_remove`]), as such a form may draw with it.
 ///
 /// Operators are read one at a time, and of forms with resources of their own only those kept are
 /// held, so the walk stops at one past a limit rather than holding them all.
@@ -855,7 +857,9 @@ pub(crate) fn resource_ops_from(
             continue;
         }
         if child.is_none() {
-            let data = budget.decode(&doc.with_direct_parms(s))?;
+            // A stream damaged partway decodes to what came before the damage: not all of it.
+            let (data, damaged) = budget.decode_with_damage(doc, s, usize::MAX)?;
+            partial |= damaged;
             let mut read = pdfcraft_content::ops(&data);
             for op in read.by_ref() {
                 if op.is("Do")
@@ -889,9 +893,10 @@ pub(crate) fn resource_ops_from(
             }
             None => {
                 let mut read = FormRead::default();
-                match scoped.budget.decode(&doc.with_direct_parms(s)) {
+                match scoped.budget.decode_with_damage(doc, s, usize::MAX) {
                     Err(_) => read.partial = true,
-                    Ok(data) => {
+                    Ok((data, damaged)) => {
+                        read.partial |= damaged;
                         let mut parsed = pdfcraft_content::ops(&data);
                         for op in parsed.by_ref() {
                             scoped.ops += 1;
@@ -1020,8 +1025,8 @@ struct FormRead {
 pub(crate) struct Drawn {
     /// The operators that look names up in it.
     pub(crate) ops: Vec<Op>,
-    /// Whether a form with resources of its own that the content draws wasn't all read, so that it
-    /// may still draw a name `ops` doesn't.
+    /// Whether a form the content draws wasn't all read (one with resources of its own, or one
+    /// whose data is damaged), so that it may still draw a name `ops` doesn't.
     pub(crate) partial: bool,
     /// Whether such a form, or one inside it, sets a Type 3 font without resources of its own that
     /// the names of a form on the way give ([`sets_type3`]); one that the names read give is set by
@@ -1034,10 +1039,7 @@ pub(crate) struct Drawn {
 /// a replaced one would keep what was redacted, so the operation is refused.
 pub(crate) fn may_remove(partial: bool) -> Result<(), CosError> {
     if partial {
-        return Err(CosError::Syntax {
-            offset: 0,
-            detail: "redaction could not fully read a form with resources of its own that may draw with what it would remove".into(),
-        });
+        return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully read a form that may draw with what it would remove".into() });
     }
     Ok(())
 }
