@@ -184,27 +184,49 @@ impl CleanedPage {
 /// Paint `text` out of `raster`. `protect` is kept, except where it is also text ink.
 /// The input raster is not changed.
 pub fn derender(raster: &PageRaster, text: &[InkRegion<'_>], protect: &[InkRegion<'_>], params: &DerenderParams) -> Result<CleanedPage, OcrError> {
-    derender_limited(raster, text, protect, params, LOCAL_MAP_PIXELS)
+    derender_limited(raster, text, protect, None, params, LOCAL_MAP_PIXELS)
+}
+
+/// [`derender`] with the full-page binary bitmap as fallback for protected components whose
+/// bounding box exceeded [`crate::components::FilterParams::max_mask_pixels`] (`mask: None`).
+pub fn derender_with_page_mask(
+    raster: &PageRaster,
+    text: &[InkRegion<'_>],
+    protect: &[InkRegion<'_>],
+    page_mask: Option<&Bitmap>,
+    params: &DerenderParams,
+) -> Result<CleanedPage, OcrError> {
+    derender_limited(raster, text, protect, page_mask, params, LOCAL_MAP_PIXELS)
 }
 
 fn derender_limited(
     raster: &PageRaster,
     text: &[InkRegion<'_>],
     protect: &[InkRegion<'_>],
+    page_mask: Option<&Bitmap>,
     params: &DerenderParams,
     local_limit: u64,
 ) -> Result<CleanedPage, OcrError> {
     let mut cleaned = raster.clone();
+    let page_mask = page_mask.filter(|mask| mask.width() == raster.width() && mask.height() == raster.height());
     let halo = params.halo.min(MAX_HALO);
     let radius = params.sample_radius.min(MAX_SAMPLE_RADIUS);
     let mut erased = 0_u64;
     for region in text {
-        erased = erased.saturating_add(erase_region(&mut cleaned, region, protect, halo, radius, local_limit));
+        erased = erased.saturating_add(erase_region(&mut cleaned, region, protect, page_mask, halo, radius, local_limit));
     }
     Ok(CleanedPage { raster: cleaned, erased })
 }
 
-fn erase_region(raster: &mut PageRaster, region: &InkRegion<'_>, protect: &[InkRegion<'_>], halo: u32, radius: u32, local_limit: u64) -> u64 {
+fn erase_region(
+    raster: &mut PageRaster,
+    region: &InkRegion<'_>,
+    protect: &[InkRegion<'_>],
+    page_mask: Option<&Bitmap>,
+    halo: u32,
+    radius: u32,
+    local_limit: u64,
+) -> u64 {
     let Some(bounds) = Rect::from_bounds(region.bounds) else {
         return 0;
     };
@@ -215,7 +237,7 @@ fn erase_region(raster: &mut PageRaster, region: &InkRegion<'_>, protect: &[InkR
     let side = tile_side(local_limit, halo);
     // One paper colour for the whole glyph. A tile in the middle of a letter has no paper of
     // its own, and sampling there would fall back to white and leave a pale block.
-    let paper = sample_around(raster, bounds, protect, halo, radius);
+    let paper = sample_around(raster, bounds, protect, page_mask, halo, radius);
     let mut erased = 0_u64;
     let mut top = paint.top;
     while top < paint.bottom {
@@ -224,7 +246,7 @@ fn erase_region(raster: &mut PageRaster, region: &InkRegion<'_>, protect: &[InkR
         while left < paint.right {
             let right = left.saturating_add(side).min(paint.right);
             let tile = Rect { left, top, right, bottom };
-            erased = erased.saturating_add(erase_tile(raster, region, protect, tile, halo, &paper));
+            erased = erased.saturating_add(erase_tile(raster, region, protect, page_mask, tile, halo, &paper));
             left = right;
         }
         top = bottom;
@@ -246,7 +268,15 @@ fn tile_side(limit: u64, pad: u32) -> u32 {
     u32::try_from(side).unwrap_or(1).max(1)
 }
 
-fn erase_tile(raster: &mut PageRaster, region: &InkRegion<'_>, protect: &[InkRegion<'_>], tile: Rect, halo: u32, paper: &[u8]) -> u64 {
+fn erase_tile(
+    raster: &mut PageRaster,
+    region: &InkRegion<'_>,
+    protect: &[InkRegion<'_>],
+    page_mask: Option<&Bitmap>,
+    tile: Rect,
+    halo: u32,
+    paper: &[u8],
+) -> u64 {
     // The map has to see ink just outside the tile, or a halo that crosses the cut is missed.
     // Paper was already sampled for the whole glyph; the ring here is only so that stamp reaches.
     let Some(map_rect) = tile.expand(halo, raster.width, raster.height) else {
@@ -256,9 +286,9 @@ fn erase_tile(raster: &mut PageRaster, region: &InkRegion<'_>, protect: &[InkReg
         return 0;
     };
     let mut map = vec![0_u8; len];
-    stamp_region(&mut map, map_rect, region, raster.width(), raster.height(), halo, true);
+    stamp_region(&mut map, map_rect, region, None, raster.width(), raster.height(), halo, true);
     for kept in protect {
-        stamp_region(&mut map, map_rect, kept, raster.width(), raster.height(), 0, false);
+        stamp_region(&mut map, map_rect, kept, page_mask, raster.width(), raster.height(), 0, false);
     }
     let mut erased = 0_u64;
     for y in tile.top..tile.bottom {
@@ -278,7 +308,8 @@ fn erase_tile(raster: &mut PageRaster, region: &InkRegion<'_>, protect: &[InkReg
 
 /// `text` stamps ink as 1 and, when `halo` is non-zero, the ring as 2. A protect region stamps
 /// 3 over paper and over the ring, and leaves text ink alone.
-fn stamp_region(map: &mut [u8], map_rect: Rect, region: &InkRegion<'_>, page_w: u32, page_h: u32, halo: u32, text: bool) {
+#[allow(clippy::too_many_arguments)]
+fn stamp_region(map: &mut [u8], map_rect: Rect, region: &InkRegion<'_>, page_mask: Option<&Bitmap>, page_w: u32, page_h: u32, halo: u32, text: bool) {
     let Some(bounds) = Rect::from_bounds(region.bounds) else {
         return;
     };
@@ -314,6 +345,9 @@ fn stamp_region(map: &mut [u8], map_rect: Rect, region: &InkRegion<'_>, page_w: 
             let bottom = map_rect.bottom.min(bounds.bottom).min(page_h);
             for y in top..bottom {
                 for x in left..right {
+                    if !text && page_mask.is_some_and(|mask| !mask.is_ink(i64::from(x), i64::from(y))) {
+                        continue;
+                    }
                     stamp_pixel(map, map_rect, x, y, halo, text);
                 }
             }
@@ -354,7 +388,7 @@ fn stamp_pixel(map: &mut [u8], map_rect: Rect, x: u32, y: u32, halo: u32, text: 
 /// The paper colour around `bounds`: the ring between the halo and the sample radius.
 /// Protected ink is not paper. No ring (the glyph covers the page, or the radius is zero and
 /// the halo is the whole window) falls back to white.
-fn sample_around(raster: &PageRaster, bounds: Rect, protect: &[InkRegion<'_>], halo: u32, radius: u32) -> Vec<u8> {
+fn sample_around(raster: &PageRaster, bounds: Rect, protect: &[InkRegion<'_>], page_mask: Option<&Bitmap>, halo: u32, radius: u32) -> Vec<u8> {
     let channels = usize::from(raster.channels());
     let pad = halo.saturating_add(radius);
     let Some(outer) = bounds.expand(pad, raster.width, raster.height) else {
@@ -366,7 +400,7 @@ fn sample_around(raster: &PageRaster, bounds: Rect, protect: &[InkRegion<'_>], h
     let mut seen = 0_usize;
     for y in outer.top..outer.bottom {
         for x in outer.left..outer.right {
-            if inner.is_some_and(|inner| inner.contains(x, y)) || protect.iter().any(|region| covers(region, x, y)) {
+            if inner.is_some_and(|inner| inner.contains(x, y)) || protect.iter().any(|region| covers(region, page_mask, x, y)) {
                 continue;
             }
             if !seen.is_multiple_of(stride) {
@@ -394,7 +428,7 @@ fn push_sample(raster: &PageRaster, x: u32, y: u32, channels: usize, samples: &m
     }
 }
 
-fn covers(region: &InkRegion<'_>, x: u32, y: u32) -> bool {
+fn covers(region: &InkRegion<'_>, page_mask: Option<&Bitmap>, x: u32, y: u32) -> bool {
     let Some(bounds) = Rect::from_bounds(region.bounds) else {
         return false;
     };
@@ -405,7 +439,7 @@ fn covers(region: &InkRegion<'_>, x: u32, y: u32) -> bool {
         Some(mask) if mask.width() == bounds.width() && mask.height() == bounds.height() => {
             mask.is_ink(i64::from(x - bounds.left), i64::from(y - bounds.top))
         }
-        _ => true,
+        _ => page_mask.is_none_or(|mask| mask.is_ink(i64::from(x), i64::from(y))),
     }
 }
 
@@ -961,8 +995,8 @@ mod tests {
         let letter = solid_mask(12, 6);
         // The map cap is one pixel, so the glyph is painted as many tiles and the halo has to
         // cross a tile edge.
-        let cleaned =
-            derender_limited(&page, &[region([2, 2, 14, 8], Some(&letter))], &[], &DerenderParams { halo: 1, sample_radius: 2 }, 1).expect("tiled");
+        let cleaned = derender_limited(&page, &[region([2, 2, 14, 8], Some(&letter))], &[], None, &DerenderParams { halo: 1, sample_radius: 2 }, 1)
+            .expect("tiled");
         assert_rect(cleaned.raster(), [1, 1, 15, 9], &[190]);
         assert_eq!(cleaned.raster().pixel(18, 10), Some(&[190][..]));
     }
@@ -1209,5 +1243,35 @@ mod tests {
 
     fn light(page: &pdfcraft_render::RenderedPage, x: u32, y_pdf: u32) -> bool {
         sample(page, x, y_pdf)[0] > 200
+    }
+
+    #[test]
+    fn a_maskless_protected_frame_uses_the_page_bitmap_for_cream_paper_and_halo() {
+        let cream = [245_u8, 238, 220];
+        let mut page = raster(24, 20, 3, &cream);
+        // Hollow border frame around [1, 1, 23, 19), plus a letter at [8, 7, 12, 13) with a 1-px grey halo at (7, 9).
+        paint_rect(&mut page, [1, 1, 23, 2], &[0, 0, 0]);
+        paint_rect(&mut page, [1, 18, 23, 19], &[0, 0, 0]);
+        paint_rect(&mut page, [1, 1, 2, 19], &[0, 0, 0]);
+        paint_rect(&mut page, [22, 1, 23, 19], &[0, 0, 0]);
+        paint_rect(&mut page, [8, 7, 12, 13], &[0, 0, 0]);
+        paint_rect(&mut page, [7, 9, 8, 10], &[120, 115, 105]);
+
+        let letter = solid_mask(4, 6);
+        let page_binary = mask(24, 20, |x, y| {
+            let on_border = (1..23).contains(&x) && (1..19).contains(&y) && (x == 1 || x == 22 || y == 1 || y == 18);
+            let on_letter = (8..12).contains(&x) && (7..13).contains(&y);
+            on_border || on_letter
+        });
+        // Protected border frame has mask: None (as when its bounding box exceeds max_mask_pixels).
+        let text = [region([8, 7, 12, 13], Some(&letter))];
+        let protect = [region([1, 1, 23, 19], None)];
+        let cleaned = derender_with_page_mask(&page, &text, &protect, Some(&page_binary), &DerenderParams { halo: 1, sample_radius: 3 })
+            .expect("clean with page mask");
+
+        // Letter and its halo take the cream paper colour (not 255 white), while the border stays black.
+        assert_rect(cleaned.raster(), [8, 7, 12, 13], &cream);
+        assert_eq!(cleaned.raster().pixel(7, 9), Some(&cream[..]), "halo inside hollow frame must be erased to cream");
+        assert_eq!(cleaned.raster().pixel(1, 1), Some(&[0, 0, 0][..]), "border frame ink stays protected");
     }
 }

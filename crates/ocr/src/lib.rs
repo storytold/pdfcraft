@@ -51,7 +51,7 @@ pub use align::{AlignParams, CharRef, MatchRole, PageAlignment, ResolvedGlyph, T
 pub use annotations::{AnnotatedLine, AnnotatedWord, CharBox};
 pub use background::{
     BackgroundEncoding, BackgroundImage, CleanedPage, ClearScanLayer, DerenderParams, GlyphShow, InkRegion, PageRaster, content_stream, derender,
-    embed_background, encoding_for, protected_regions, text_regions,
+    derender_with_page_mask, embed_background, encoding_for, protected_regions, text_regions,
 };
 pub use cluster::{ClusterParams, Clusters, GlyphCluster, Prototype, SkipReason, cluster, cluster_pages};
 pub use components::{AnalyzeOptions, Component, ComponentKind, ComponentSet, Connectivity, FilterParams, analyze, analyze_page};

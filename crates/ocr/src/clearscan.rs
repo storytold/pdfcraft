@@ -19,7 +19,7 @@ use crate::OcrError;
 use crate::align::{AlignParams, MatchRole, ResolvedGlyph, align};
 use crate::annotations::AnnotatedLine;
 use crate::background::{
-    ClearScanLayer, DerenderParams, InkRegion, PageRaster, content_stream, derender, embed_background, encoding_for, protected_regions,
+    ClearScanLayer, DerenderParams, InkRegion, PageRaster, content_stream, derender_with_page_mask, embed_background, encoding_for, protected_regions,
 };
 use crate::cluster::{ClusterParams, cluster};
 use crate::components::{AnalyzeOptions, analyze_page};
@@ -239,7 +239,7 @@ where
     let (masters, skipped_clusters) = masters_of(&clustered, &aligned.matched, &lines, options)?;
     progress(ClearScanStage::Compose);
     let raster = deskewed_raster(&buf, src_w, src_h, raster.channels, &page)?;
-    let frame = ComposeFrame { points_per_pixel: deskew_ppp, source_ppp, to_original: page.to_original, geometry };
+    let frame = ComposeFrame { points_per_pixel: deskew_ppp, source_ppp, to_original: page.to_original, geometry, page_mask: &page.binary };
     compose(&raster, components.components(), &masters, &lines, frame, options, skipped_clusters)
 }
 
@@ -547,11 +547,12 @@ struct Placed {
     text: String,
 }
 
-struct ComposeFrame {
+struct ComposeFrame<'a> {
     points_per_pixel: f64,
     source_ppp: f64,
     to_original: crate::deskew::Affine,
     geometry: Option<PageGeometry>,
+    page_mask: &'a crate::binarize::Bitmap,
 }
 
 fn compose(
@@ -559,7 +560,7 @@ fn compose(
     components: &[crate::components::Component],
     masters: &[Master],
     lines: &[AnnotatedLine],
-    frame: ComposeFrame,
+    frame: ComposeFrame<'_>,
     options: &ClearScanOptions,
     skipped_clusters: usize,
 ) -> Result<ClearScanOutput, OcrError> {
@@ -569,7 +570,7 @@ fn compose(
     // prototype, and a glyph whose origin cannot be shown stay in the scan.
     let text = erase_regions(masters, height_px, points_per_pixel);
     let protect = protected_regions(components);
-    let cleaned = derender(raster, &text, &protect, &options.derender)?;
+    let cleaned = derender_with_page_mask(raster, &text, &protect, Some(frame.page_mask), &options.derender)?;
     let erased = cleaned.erased();
     let encoding = encoding_for(cleaned.raster());
     let metrics = page_metrics(lines);
