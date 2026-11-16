@@ -33,18 +33,26 @@ pub enum ShadingFunction {
 impl ShadingFunction {
     /// Evaluate the shading function.
     pub fn eval(&self, input: &Values) -> Option<Values> {
+        let mut out = Values::new();
+        self.eval_into(input, &mut out)?;
+        Some(out)
+    }
+
+    /// Evaluate the shading function into `out` without allocating intermediate input vectors.
+    pub(crate) fn eval_into(&self, input: &[f32], out: &mut Values) -> Option<()> {
         match self {
-            Self::Single(s) => s.eval(input.clone()),
+            Self::Single(s) => s.eval_into(input, out),
             Self::Multiple(m) => {
                 // 1-in, 1-out function for each color component.
-
-                let mut out = smallvec![];
+                out.clear();
+                let mut component = Values::new();
 
                 for func in m {
-                    out.push(*func.eval(input.clone())?.first()?);
+                    func.eval_into(input, &mut component)?;
+                    out.push(*component.first()?);
                 }
 
-                Some(out)
+                Some(())
             }
         }
     }

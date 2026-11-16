@@ -95,11 +95,32 @@ impl Function {
 
     /// Evaluate the function with the given input.
     pub fn eval(&self, input: Values) -> Option<Values> {
+        if let FunctionType::Type4(t4) = self.0.as_ref() {
+            return t4.eval(input);
+        }
+
+        let mut out = Values::new();
+        self.eval_into(&input, &mut out)?;
+        Some(out)
+    }
+
+    /// Evaluate the function into `out`, avoiding heap allocations on the Type 0/2/3 paths.
+    pub(crate) fn eval_into(&self, input: &[f32], out: &mut Values) -> Option<()> {
+        out.clear();
         match self.0.as_ref() {
-            FunctionType::Type0(t0) => t0.eval(input),
-            FunctionType::Type2(t2) => Some(t2.eval(*input.first()?)),
-            FunctionType::Type3(t3) => t3.eval(*input.first()?),
-            FunctionType::Type4(t4) => Some(t4.eval(input)?),
+            FunctionType::Type0(t0) => {
+                *out = t0.eval(Values::from_slice(input))?;
+                Some(())
+            }
+            FunctionType::Type2(t2) => {
+                t2.eval_into(*input.first()?, out);
+                Some(())
+            }
+            FunctionType::Type3(t3) => t3.eval_into(*input.first()?, out),
+            FunctionType::Type4(t4) => {
+                *out = t4.eval(Values::from_slice(input))?;
+                Some(())
+            }
         }
     }
 
