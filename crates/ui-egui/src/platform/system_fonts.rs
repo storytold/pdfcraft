@@ -489,6 +489,7 @@ fn read_face(path: &Path, probe: char, max: u64, first: Option<u32>) -> Option<A
 
 /// The first face of the file that parses and maps `c`. egui parses fonts with the same skrifa,
 /// so a face accepted here is one it can load.
+#[cfg(test)]
 fn face_with(bytes: &[u8], c: char) -> Option<u32> {
     face_preferring(bytes, c, None)
 }
@@ -605,7 +606,7 @@ mod tests {
         let ttc = list.iter().position(|p| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc"));
         if let Some(i) = sc_otf {
             assert!(
-                ttc.map_or(true, |j| i < j),
+                ttc.is_none_or(|j| i < j),
                 "Simplified Chinese candidates must try NotoSansCJKsc-Regular.otf before NotoSansCJK-Regular.ttc: {list:?}"
             );
         }
