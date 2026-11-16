@@ -257,12 +257,12 @@ impl DocView {
         }
         self.current = page;
         self.reset_coarse_state();
-        self.show_comment_hit();
+        self.reveal_find_comment();
     }
 
-    /// A comment hit selects that thread and outlines it. A text hit, while comments are included,
+    /// A comment match selects that thread and outlines it. A text match, while comments are included,
     /// leaves the previous comment so the highlight on the page is the match.
-    fn show_comment_hit(&mut self) {
+    fn reveal_find_comment(&mut self) {
         if !self.find.as_ref().is_some_and(|f| f.include_comments) {
             return;
         }
