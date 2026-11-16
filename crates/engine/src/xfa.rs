@@ -1638,9 +1638,11 @@ fn som_key(name: &str) -> Vec<String> {
 }
 
 /// The fields of the live form a static form's AcroForm fields stand for: `(SOM path, field name, field object)`, in
-/// the fields' order. A field takes the next live field or exclusion group whose named steps are its own; one on a page
-/// master (named from the page set, `form1[0].#pageSet[0].Page1[1].Print[0]`) the master's, which every page's copy
-/// shares. Fields with no match are left out.
+/// the fields' order. A field whose name is a live object's path takes that object, when no field of the same named
+/// steps goes through an unnamed subform (where Designer's indices and SOM's differ); any other takes the next live
+/// field or exclusion group of its named steps not yet taken. One on a page master (named from the page set,
+/// `form1[0].#pageSet[0].Page1[1].Print[0]`) takes the master's, which every page's copy shares. Fields with no match
+/// are left out.
 fn static_fields(doc: &pdfcraft_cos::Document, tpl: &Template, live: &LiveForm) -> Vec<(String, String, pdfcraft_cos::ObjRef)> {
     fn gather(n: &FormNode, out: &mut HashMap<Vec<String>, Vec<String>>, depth: usize) {
         if depth > 64 {
@@ -1654,26 +1656,42 @@ fn static_fields(doc: &pdfcraft_cos::Document, tpl: &Template, live: &LiveForm) 
     let mut by_key: HashMap<Vec<String>, Vec<String>> = HashMap::new();
     gather(&live.root, &mut by_key, 0);
     let areas: HashSet<&str> = tpl.root.page_set.iter().flat_map(|ps| ps.areas.iter().filter_map(|a| a.name.as_deref())).collect();
-    let mut taken: HashMap<Vec<String>, usize> = HashMap::new();
-    let mut assigned: HashSet<String> = HashSet::new();
+    let fields = pdfcraft_forms::fields(doc);
+    // Designer numbers same-named objects inside each unnamed subform, SOM across them: a name's indices are the live
+    // ones only when no field of the same named steps goes through an unnamed subform.
+    let through_unnamed: HashSet<Vec<String>> = fields.iter().filter(|f| f.name.contains('#')).map(|f| som_key(&f.name)).collect();
+    // which live objects of each key are taken, by position (two objects may share a path)
+    let mut used: HashMap<Vec<String>, Vec<bool>> = HashMap::new();
+    // first, every field the live object of exactly its name stands for, so no field matched in order takes it
+    let mut exact: Vec<Option<usize>> = vec![None; fields.len()];
+    for (k, f) in fields.iter().enumerate() {
+        let key = som_key(&f.name);
+        if f.name.contains('#') || through_unnamed.contains(&key) {
+            continue;
+        }
+        let Some(soms) = by_key.get(&key) else { continue };
+        let taken = used.entry(key).or_insert_with(|| vec![false; soms.len()]);
+        if let Some(i) = soms.iter().enumerate().position(|(i, s)| *s == f.name && !taken.get(i).copied().unwrap_or(true)) {
+            if let Some(t) = taken.get_mut(i) {
+                *t = true;
+            }
+            exact[k] = Some(i);
+        }
+    }
     let mut out = Vec::new();
-    for f in pdfcraft_forms::fields(doc) {
+    for (k, f) in fields.iter().enumerate() {
         let key = som_key(&f.name);
         if let Some(soms) = by_key.get(&key) {
-            // A name with no unnamed step carries the live indices: it is that object, wherever it comes in the list.
-            // Otherwise the next one not yet taken (Designer numbers inside each unnamed subform, SOM across them).
-            let exact = (!f.name.contains('#')).then(|| soms.iter().find(|s| **s == f.name && !assigned.contains(*s))).flatten();
-            let som = exact.or_else(|| {
-                let n = taken.entry(key).or_insert(0);
-                while soms.get(*n).is_some_and(|s| assigned.contains(s)) {
-                    *n += 1;
+            // otherwise the next one of its steps not yet taken, in order
+            let taken = used.entry(key).or_insert_with(|| vec![false; soms.len()]);
+            let at = exact.get(k).copied().flatten().or_else(|| {
+                let i = taken.iter().position(|t| !t)?;
+                if let Some(t) = taken.get_mut(i) {
+                    *t = true;
                 }
-                let next = soms.get(*n);
-                *n += 1;
-                next
+                Some(i)
             });
-            if let Some(som) = som {
-                assigned.insert(som.clone());
+            if let Some(som) = at.and_then(|i| soms.get(i)) {
                 out.push((som.clone(), f.name.clone(), f.obj));
             }
             continue;
@@ -1769,6 +1787,32 @@ pub(crate) fn mark_script_buttons(doc: &pdfcraft_cos::Document, fields: &mut [pd
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Designer numbers a field inside each unnamed subform, SOM across them: beside a field of the same name in an unnamed
+    /// subform, a field named `x[0]` is the live `x[1]`, whichever the AcroForm lists first.
+    #[test]
+    fn a_static_field_beside_an_unnamed_subform_is_matched_in_order() {
+        for direct_first in [false, true] {
+            let doc = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::static_mixed_shell(direct_first))).expect("opens");
+            let tpl = pdfcraft_xfa::template_of(&doc).expect("a template");
+            // the live paths of the two `x`, in document order (the same path until unnamed subforms number across)
+            let live = pdfcraft_xfa::form_tree(&tpl, None, &Default::default());
+            fn walk(n: &FormNode, out: &mut Vec<String>) {
+                if n.kind == Some(NodeKind::Field) {
+                    out.push(n.som.clone());
+                }
+                n.children.iter().for_each(|c| walk(c, out));
+            }
+            let mut xs = Vec::new();
+            walk(&live.root, &mut xs);
+            let som_of = |name: &str| {
+                let f = pdfcraft_forms::fields(&doc).into_iter().find(|f| f.name == name).expect("the field");
+                static_som(&doc, &tpl, &f)
+            };
+            assert_eq!(som_of("form1[0].page1[0].#subform[0].x[0]").as_ref(), xs.first(), "direct first: {direct_first}");
+            assert_eq!(som_of("form1[0].page1[0].x[0]").as_ref(), xs.get(1), "direct first: {direct_first}");
+        }
+    }
 
     /// A static form's field whose name has no unnamed step is the live object of its indices, whatever order the
     /// AcroForm lists the fields in, and when only a later instance has a field.

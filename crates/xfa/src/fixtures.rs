@@ -367,6 +367,28 @@ pub fn static_rows_shell(rows: &[usize]) -> Vec<u8> {
     assemble(objs)
 }
 
+/// A static XFA form whose `page1` holds an unnamed subform with a text field `x`, then a text field `x` of its own:
+/// SOM numbers them `x[0]` and `x[1]`, while Designer names them `#subform[0].x[0]` and `x[0]`. The AcroForm lists the
+/// direct field first when `direct_first`.
+pub fn static_mixed_shell(direct_first: bool) -> Vec<u8> {
+    let xdp = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\" layout=\"tb\"><subform name=\"page1\" layout=\"tb\"><subform layout=\"tb\"><field name=\"x\" w=\"2in\" h=\"0.3in\"><ui><textEdit/></ui></field></subform><field name=\"x\" w=\"2in\" h=\"0.3in\"><ui><textEdit/></ui></field></subform></subform></template></xdp:xdp>";
+    // 8: the unnamed subform's field, 9: its widget `x[0]`, 10: the direct widget `x[0]`
+    let kids = if direct_first { "10 0 R 8 0 R" } else { "8 0 R 10 0 R" };
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA 5 0 R /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Annots [9 0 R 10 0 R] >>".to_vec(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        b"<< /T (form1[0]) /Kids [7 0 R] >>".to_vec(),
+        format!("<< /T (page1[0]) /Parent 6 0 R /Kids [{kids}] >>").into_bytes(),
+        b"<< /T (#subform[0]) /Parent 7 0 R /Kids [9 0 R] >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (x[0]) /Parent 8 0 R /Rect [72 700 300 720] /P 3 0 R /DA (/Helv 10 Tf 0 g) >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (x[0]) /Parent 7 0 R /Rect [72 660 300 680] /P 3 0 R /DA (/Helv 10 Tf 0 g) >>".to_vec(),
+    ];
+    assemble(objs)
+}
+
 /// A PDF file holding `objs` as objects 1, 2, … in order, with a cross-reference table and a
 /// trailer whose root is object 1.
 fn assemble(objs: Vec<Vec<u8>>) -> Vec<u8> {
