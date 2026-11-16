@@ -82,10 +82,11 @@ fn an_empty_list_or_a_null_direct_object_yields_no_path() {
     assert_eq!(odoc_paths(&NSAppleEventDescriptor::nullDescriptor()), Vec::<PathBuf>::new());
 }
 
-/// #6324 on Apple's own bookmark bytes, measured on macOS 13.3 only: an NSURL
+/// #6324 on Apple's own bookmark bytes, measured on macOS 13.3 only: for an NSURL
 /// bookmark of a file under an NFC-named directory, as a `'bmrk'` item (the
-/// Finder/`open` shape), has no `fileURLValue` in-process, and the handler's raw
-/// decode delivers the on-disk NFC path, in a list and as the direct object itself.
+/// Finder/`open` shape), the handler's raw decode delivers the on-disk NFC path, in
+/// a list and as the direct object itself. Whether `fileURLValue` resolves it is
+/// noted, not asserted: on 13.3 it cannot in-process, the premise of #6324.
 #[test]
 fn an_nfc_bookmark_that_file_url_value_cannot_resolve_is_delivered() {
     // A bookmark records the resolved path, and the temp dir is under the /var symlink.
@@ -116,9 +117,13 @@ fn an_nfc_bookmark_that_file_url_value_cannot_resolve_is_delivered() {
     // The decoder first: on a macOS that does resolve this bookmark, it is still checked.
     assert_eq!(odoc_paths(&list(&[&bookmark])), std::slice::from_ref(&file));
     assert_eq!(odoc_paths(&bookmark), std::slice::from_ref(&file));
-    assert!(
-        bookmark.fileURLValue().is_none(),
-        "fileURLValue resolved an NFC bookmark: #6324's premise (macOS 13.3) no longer holds here"
-    );
+    // #6324's premise, measured on macOS 13.3: fileURLValue cannot resolve this bookmark.
+    // Where it can, the decode above still holds; only the premise is gone, so say so
+    // instead of failing.
+    if bookmark.fileURLValue().is_some() {
+        eprintln!(
+            "note: fileURLValue resolved an NFC bookmark here; #6324's premise does not hold on this macOS"
+        );
+    }
     std::fs::remove_dir_all(&directory).expect("clean up");
 }
