@@ -330,6 +330,9 @@ impl DocView {
             Fit::Height => self.zoom = (self.viewport_h - 2.0 * MARGIN) / (h * PT),
             Fit::None => {}
         }
+        if self.fit != Fit::None {
+            self.zoom = self.zoom.min(self.max_fit_zoom);
+        }
         self.zoom = self.zoom.clamp(0.08, 64.0);
     }
 
