@@ -217,8 +217,8 @@ pub(crate) struct Output {
     pub patterns_painted: Vec<Vec<u8>>,
     /// A Type 3 glyph without resources of its own was shown in this scope or a nested form,
     /// through a font set by `Tf` or an ExtGState, or such a font is set by a form left as it is
-    /// ([`unwalked_patterns`]): which of the page's patterns it paints with is not tracked, so the
-    /// page keeps them all.
+    /// ([`unwalked_patterns`]) or for one by what draws it: which of the page's patterns it paints
+    /// with is not tracked, so the page keeps them all.
     pub keeps_all_patterns: bool,
     /// A form left as it is in this scope or a nested form may paint with patterns that couldn't
     /// be read ([`unwalked_patterns`]): pruning the page's patterns then fails.
@@ -1593,7 +1593,10 @@ fn xobject(
                 && !scope.everywhere()
                 && !scope.hits(fctm.bbox(bb))
             {
-                // Left as it is, the form still paints all it did.
+                // Left as it is, the form still paints all it did: with a Type 3 font without
+                // resources of its own that its caller set too, whose glyphs may paint with any of
+                // the page's patterns, as where the walk shows one.
+                out.keeps_all_patterns |= gs.type3_inherits;
                 unwalked_patterns(doc, scope, out, resources, xobjects, op, r);
                 return None;
             }

@@ -216,29 +216,42 @@ fn a_type3_font_with_null_resources_keeps_the_page_pattern() {
 /// The Type 3 font is shown by a form clear of the mark, which the walk leaves as it is: set by
 /// `Tf` through the page's names, from a form with resources of its own that don't give it, from
 /// that form's own `/Font`, by an ExtGState's `/Font`, and from the `/Font` of a form drawing the
-/// one that shows it.
+/// one that shows it; or set by what draws the form, which only shows the glyph: by the page's
+/// `Tf`, outside a text object or inside one ended before the form, by the page's ExtGState, to a
+/// form with resources of its own that don't give a font, and by a form the walk enters.
 #[test]
 fn a_type3_glyph_in_a_form_clear_of_the_mark_keeps_the_page_pattern() {
     let clear = "/Type /XObject /Subtype /Form /BBox [290 220 350 280]";
     let shows = b"BT /T3 1 Tf 300 230 Td (a) Tj ET\n".as_slice();
-    let rows: [(&str, Vec<Vec<u8>>); 5] = [
-        ("", vec![stream_obj(clear, shows)]),
-        ("", vec![stream_obj(&format!("{clear} /Resources << /ProcSet [/PDF] >>"), shows)]),
-        ("", vec![stream_obj(&format!("{clear} /Resources << /Font << /T3 7 0 R >> >>"), shows)]),
-        (
-            "/ExtGState << /GS 10 0 R >>",
-            vec![stream_obj(clear, b"/GS gs BT 300 230 Td (a) Tj ET\n"), b"<< /Type /ExtGState /Font [7 0 R 1] >>".to_vec()],
-        ),
+    let shows_set = b"BT 300 230 Td (a) Tj ET\n".as_slice();
+    let gs = b"<< /Type /ExtGState /Font [7 0 R 1] >>".to_vec();
+    let draws = "/Fm Do\n";
+    let rows: [(&str, &str, Vec<Vec<u8>>); 10] = [
+        ("", draws, vec![stream_obj(clear, shows)]),
+        ("", draws, vec![stream_obj(&format!("{clear} /Resources << /ProcSet [/PDF] >>"), shows)]),
+        ("", draws, vec![stream_obj(&format!("{clear} /Resources << /Font << /T3 7 0 R >> >>"), shows)]),
+        ("/ExtGState << /GS 10 0 R >>", draws, vec![stream_obj(clear, b"/GS gs BT 300 230 Td (a) Tj ET\n"), gs.clone()]),
         (
             "",
+            draws,
             vec![
                 stream_obj(&format!("{clear} /Resources << /Font << /T3 7 0 R >> /XObject << /B 10 0 R >> >>"), b"/B Do\n"),
                 stream_obj(&format!("{clear} /Resources << /ProcSet [/PDF] >>"), shows),
             ],
         ),
+        ("", "/T3 1 Tf /Fm Do\n", vec![stream_obj(clear, shows_set)]),
+        ("", "BT /T3 1 Tf ET /Fm Do\n", vec![stream_obj(clear, shows_set)]),
+        ("/ExtGState << /GS 10 0 R >>", "/GS gs /Fm Do\n", vec![stream_obj(clear, shows_set), gs]),
+        ("", "/T3 1 Tf /Fm Do\n", vec![stream_obj(&format!("{clear} /Resources << /ProcSet [/PDF] >>"), shows_set)]),
+        (
+            "/XObject << /Fm 9 0 R /W 10 0 R >>",
+            "/W Do\n",
+            vec![stream_obj(clear, shows_set), stream_obj("/Type /XObject /Subtype /Form /BBox [0 0 500 300]", b"/T3 1 Tf /Fm Do\n")],
+        ),
     ];
-    for (extra, objs) in rows {
-        assert_glyph_kept(type3_page(&format!("/XObject << /Fm 9 0 R >> {extra}"), b"/Fm Do\n/Pattern cs /P0 scn 35 110 170 35 re f\n", objs));
+    for (extra, draw, objs) in rows {
+        let names = if extra.starts_with("/XObject") { extra.to_string() } else { format!("/XObject << /Fm 9 0 R >> {extra}") };
+        assert_glyph_kept(type3_page(&names, format!("{draw}/Pattern cs /P0 scn 35 110 170 35 re f\n").as_bytes(), objs));
     }
 }
 /// Known limit (fidelity only, never a leak: a missed use can only prune more). Kept annotation
