@@ -6262,3 +6262,34 @@ payload).
   "inactive" is drawn where presence is read. A merge intent re-addressed after a
   resync takes the new target epoch (`collab-client::with_epoch`); without it a
   retried comment was stale for ever.
+
+## The seventeen review threads of the daemon, `collab-pdf` and `annot` (2026-11-16)
+
+Measured 2026-11-16T17:05Z on the head `a58dfdf01`: #6622 has 61 review threads,
+58 unresolved, and 17 of them name `apps/pdfcraft-collab-server/`,
+`crates/collab-pdf/` or `crates/annot/`. Six were already fixed on the head —
+`1de96e28c` and `069fa0442` are its ancestors, so the earlier "push the commit"
+answers were stale — and only needed a pointer to the code and the test at the
+head. Nine were still open at the code and are fixed in **`63f452cf6`** (7 files,
++252/−20): the `Host` header carries the authority with its port; `--callback-url`
+is parsed at start-up; a journal record torn inside a multi-byte character is
+dropped like a torn JSON line; the first append syncs the journal's directory; a
+`sha256:` etag is compared canonically; a padded `/NM` is trimmed before the
+free-name check; a refused seed is not persisted; a commit with no cabinet tag
+writes no empty marker; and the crash test's health listener takes a
+kernel-assigned port. Each has a regression test named in its reply.
+
+Gate on the host `agents`: `cargo fmt --all -- --check` clean, clippy
+`-D warnings` clean on `pdfcraft-collab-pdf`, `pdfcraft-collab-server` and
+`pdfcraft-collab-daemon`, `cargo test` 75 + 35 + 48 unit and 5 integration
+passed, 0 failed.
+
+Three findings are deferred in their threads, not dismissed: reconciling an
+accepted publication whose `CABINET` write failed (needs a retained publication
+slot and its crash tests), the page copy under the hub lock (needs a
+prepare/apply split of `Adapter::apply` for every adapter), and the second half
+of the `annot` naming finding (a reply applied twice across a resync needs
+client-side `opId` dedup). All three are recorded here as open limitations.
+
+The push is still denied to this agent (`.opencode/agents/pdfcraft-envoy.md`
+denies `git push*`), so `63f452cf6` is local; the seventeen replies are posted.
