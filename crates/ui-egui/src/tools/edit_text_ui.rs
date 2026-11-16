@@ -13,6 +13,7 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
+use crate::page_keys::PageKeys;
 use crate::page_pointer::PagePointer;
 use crate::page_router::{Hit, Owner, PagePress, ParagraphPart};
 
@@ -865,7 +866,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
 }
 
 /// The inline editor; returns the edit once the text is applied.
-pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -> Option<Edit> {
+pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo) -> Option<Edit> {
     let view_id = view.id;
     // Clicks outside the document (the Format text panel) keep the paragraph open, as does the
     // keyboard moving there. Where the click landed is `interact_pos`: `latest_pos` is gone on the
@@ -1046,8 +1047,8 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     ctx.request_repaint();
                 }
                 let lost = lost_focus_once(&r, &mut ed.had_focus);
-                let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                let apply = ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
+                let esc = keys.pressed(ctx, egui::Key::Escape);
+                let apply = keys.pressed(ctx, egui::Key::Enter) && ui.input(|i| i.modifiers.command);
                 if esc {
                     done = Some(false);
                 } else if apply || (lost && !outside && !hold) {

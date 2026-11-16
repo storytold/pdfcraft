@@ -98,6 +98,13 @@ help and feedback: https://discord.gg/artcraft"
 );
 
 fn main() -> ExitCode {
+    // Before anything uses aws-lc: an `OPENSSL_ia32cap` naming a CPU feature this processor lacks
+    // would stop it, so the CLI runs again without it (#2916, `pdfcraft_platform::crypto_env`).
+    if let Some(code) = pdfcraft_platform::crypto_env::run_without_cpu_override() {
+        std::process::exit(code);
+    }
+    // aws-lc detects the CPU's features here, where it used to before `main` (`init_crypto`).
+    pdfcraft_engine::sign::init_crypto();
     // `std::env::args` panics on an argument that is not UTF-8 ("called `Result::unwrap()` on an
     // `Err` value"), which a Latin-1 file name is, and it panics while collecting them: even
     // `--help` ended that way. Such a name cannot be passed on either, since the paths here are

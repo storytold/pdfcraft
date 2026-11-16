@@ -1,6 +1,9 @@
 use super::common::{WidgetRest, clamp_opt, divide, is_row, moved, solid_extent, split_line, split_widget, splittable, widget_box};
 use super::items::Item;
-use super::{Ctx, Frame, Layout, Layouter, MAX_DEPTH, MAX_MEASURES, Node, Rect, SomIndices, Splitting, Subform, XfaError, data_path, instance_count};
+use super::{
+    Ctx, Frame, Layout, Layouter, MAX_DEPTH, MAX_INSTANCES, MAX_MEASURES, Node, Rect, SomIndices, Splitting, Subform, XfaError, data_path,
+    subform_instances,
+};
 
 impl Layouter<'_> {
     /// Place `node` as one block of size (`w`, `h`) at the cursor: in this content area when it fits,
@@ -18,7 +21,12 @@ impl Layouter<'_> {
         // A field a page break may split starts here, and what doesn't fit goes on in the next
         // content area (XFA 3.3 pp. 291–292), rather than the whole field moving there.
         let splits = may_split && matches!(node, Node::Field(f) if f.splits_at_page_break());
-        if !splits && y + h > rect.bottom() + 0.01 && h <= rect.h + 0.01 {
+        // A growable flowing subform (`lr-tb`/`rl-tb`, no `h`) is split where its objects allow
+        // ("splittable: in margins and where consensus exists among contained objects", XFA 3.3
+        // p. 1520), so it starts here and the rest goes on in the next content area, as one
+        // taller than a content area does. Anything else that fits one moves there whole.
+        let flows_on = matches!(node, Node::Subform(s) if matches!(s.layout, Layout::LrTb | Layout::RlTb) && s.common.h.is_none());
+        if !splits && !flows_on && y + h > rect.bottom() + 0.01 && h <= rect.h + 0.01 {
             self.make_room(h, 0.0)?;
         }
         let (rect, y, _) = self.cursor();
@@ -27,7 +35,7 @@ impl Layouter<'_> {
         // doesn't fit here can turn out so. The item count goes back with the items taken off the
         // page; the measurement budget doesn't, as that work was done. (A text field draws no
         // picture, so the picture budget is untouched.)
-        let undo = (splits && y + h > rect.bottom() + 0.01).then(|| (self.fields, self.names.clone(), self.items));
+        let undo = (splits && y + h > rect.bottom() + 0.01).then(|| (self.fields, self.names.clone(), self.taken.clone(), self.items));
         self.leaves.clear();
         self.field_border = None;
         self.draw_node(node, Rect::new(x, y, w, h), ctx, depth, sib)?;
@@ -50,7 +58,7 @@ impl Layouter<'_> {
             return Ok(());
         }
         let Some(som) = (if splits { self.splittable_widget_since(first, rect.bottom() - self.frames_bottom()) } else { None }) else {
-            if let Some((fields, names, items)) = undo {
+            if let Some((fields, names, taken, items)) = undo {
                 // Not split after all (a value, or no room for a line of it here): undone, and
                 // placed as before, moving to the next content area whole.
                 if let Some(p) = self.pages.last_mut() {
@@ -58,11 +66,12 @@ impl Layouter<'_> {
                 }
                 self.fields = fields;
                 self.names = names;
+                self.taken = taken;
                 self.items = items;
                 self.leaves.clear();
                 return self.place_block(node, x, (w, h), ctx, depth, sib, false);
             }
-            return self.split_block(first, y, drawn);
+            return self.split_block(first, y, drawn, flows_on);
         };
         // The field breaks into pieces, each with the field's border all round (a border's
         // default `break="close"`, XFA 3.3 pp. 629–630): the border drawn round the whole field
@@ -81,7 +90,7 @@ impl Layouter<'_> {
             _ => None,
         };
         self.splitting = Some(Splitting { som, rect: Rect::new(x, y, w, h), pieces: Vec::new() });
-        let split = self.split_block(first, y, drawn);
+        let split = self.split_block(first, y, drawn, false);
         let pieces = self.splitting.take().map(|s| s.pieces).unwrap_or_default();
         split?;
         if let Some(b) = border {
@@ -120,8 +129,11 @@ impl Layouter<'_> {
     /// Spread the items the last page holds from index `first` on (a block drawn from `top` to
     /// `end`, past the bottom of its content area) over this and the following content areas.
     /// Breaks fall between text, pictures and fields, never through one that fits in an area;
-    /// fills and lines are cut at the break.
-    fn split_block(&mut self, first: usize, top: f64, end: f64) -> Result<(), XfaError> {
+    /// fills and lines are cut at the break. A flowing subform (`flows_on`: one [`Self::flow_block`]
+    /// splits where it would otherwise move whole) breaks the flowed subforms round it there too
+    /// ([`Self::break_frames`]), so they keep their border; anything else just moves on, and
+    /// those subforms are drawn without theirs ([`Self::finish_frame`]).
+    fn split_block(&mut self, first: usize, top: f64, end: f64, flows_on: bool) -> Result<(), XfaError> {
         let items: Vec<Item> = match self.pages.last_mut() {
             Some(p) if first <= p.items.len() => p.items.split_off(first),
             _ => return Ok(()),
@@ -178,32 +190,13 @@ impl Layouter<'_> {
                     f.lost = true;
                 }
             }
-            let mut cut = limit;
-            if rect.h < 1.0 {
+            let cut = if rect.h < 1.0 {
                 // No room to split into: leave the rest here.
-                cut = f64::INFINITY;
+                f64::INFINITY
             } else {
-                // The lowest break at or above the bottom that crosses no solid item: going
-                // through them from the lowest top up, a break moved to an item's top can't
-                // cross one already passed.
-                let mut solid: Vec<(f64, f64)> = rest
-                    .iter()
-                    .filter(|(item, _)| !loose(item))
-                    .filter_map(|(item, kept)| kept.or_else(|| solid_extent(item)))
-                    .filter(|e| e.0 < limit - 0.01)
-                    .collect();
-                solid.sort_by(|a, b| b.0.total_cmp(&a.0));
-                for (t, b) in solid {
-                    if t < cut - 0.01 && b > cut + 0.01 {
-                        cut = t;
-                    }
-                }
-                if cut <= seg_top + 0.01 {
-                    // An item taller than what is left. Start it in a fresh area if this one
-                    // already holds something; otherwise cut through it.
-                    cut = if first_segment && placed && seg_top > rect.y + 0.01 { seg_top } else { limit };
-                }
-            }
+                let solid = rest.iter().filter(|(item, _)| !loose(item)).filter_map(|(item, kept)| kept.or_else(|| solid_extent(item)));
+                lowest_break(solid, limit, seg_top, first_segment && placed && seg_top > rect.y + 0.01)
+            };
             let mut here = Vec::new();
             let mut below = Vec::new();
             // The rest of the split widget's box: a piece down to this break, closed on every
@@ -278,15 +271,21 @@ impl Layouter<'_> {
             rest = below;
             seg_top = cut;
             first_segment = false;
-            let (rect, y) = if field.is_some() {
-                // A field breaks the flowed subforms round it as a field moving on whole does:
-                // each closes its part at the break and opens a new one, after its top margin,
-                // in the next content area.
+            let (rect, y) = if field.is_some() || flows_on {
+                // A field breaks the flowed subforms round it as a field moving on whole does, and
+                // so does a flowing subform: each closes its part at the break, after its bottom
+                // margin, and opens a new one, after its top margin, in the next content area.
+                let area_h = self.cursor().0.h;
                 if let Some(c) = &mut self.cur {
                     c.y = (cut - shift).min(c.rect.bottom()).max(c.y);
-                    c.placed = true;
+                    if field.is_some() {
+                        c.placed = true;
+                    }
                 }
-                self.break_frames(0.0, false)?;
+                // A flowing subform's rest that fits an area has the top margins give way to it,
+                // as `make_room` does.
+                let left = (end - cut).max(0.0);
+                self.break_frames(if flows_on && left <= area_h + 0.01 { left } else { 0.0 }, false)?;
                 let (rect, y, _) = self.cursor();
                 (rect, y)
             } else {
@@ -305,8 +304,20 @@ impl Layouter<'_> {
 
     // ───────────────────────────────────────────────────────────────────────── flow
 
-    /// Flow `node` (a subform; anything else is ignored) into the content areas.
+    /// Flow subform `node` (each instance the data asks for; anything else is ignored) into the
+    /// content areas, shown where it and what it is inside say ([`Common::views`]); hidden from
+    /// both, it still takes its room.
     pub(super) fn flow_subform(&mut self, node: &Node, avail: Option<(f64, f64)>, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
+        self.warn_other_views(node.common());
+        let views = self.views.and(node.common().views());
+        let outer = std::mem::replace(&mut self.views, views);
+        let flowed = self.flow_subform_in(node, avail, ctx, depth, sib);
+        self.views = outer;
+        flowed
+    }
+
+    /// [`Self::flow_subform`] once where the subform shows is set.
+    pub(super) fn flow_subform_in(&mut self, node: &Node, avail: Option<(f64, f64)>, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
         if depth > MAX_DEPTH {
             return Ok(());
         }
@@ -316,8 +327,7 @@ impl Layouter<'_> {
             self.break_frames(0.0, true)?;
         }
         // Data adds instances of a repeating subform (rows added in another viewer).
-        let instances = self.instances(node, &ctx.som);
-        self.warn_truncated(node, &ctx.som, instances);
+        let instances = self.laid_out_instances(node, &ctx.som);
         let ctx_parent = ctx;
         for i in 0..instances {
             // Every instance spends budget, so nested repeats that place nothing still stop.
@@ -329,7 +339,7 @@ impl Layouter<'_> {
             let w = clamp_opt(sf.common.w.unwrap_or(w), sf.common.min_w, sf.common.max_w).min(w.max(1.0));
             if !matches!(sf.layout, Layout::Tb | Layout::Table) || sf.common.h.is_some() {
                 // Not splittable: one block.
-                let (_, h) = self.size_of(node, w, ctx_parent, depth);
+                let (_, h) = self.size_at(node, w, ctx_parent, depth, sib + i);
                 self.flow_block(node, x, (w, h), ctx_parent, depth, sib + i)?;
                 continue;
             }
@@ -360,8 +370,7 @@ impl Layouter<'_> {
                             self.flow_subform(child, Some((inner_x, inner_w)), &ctx, depth + 1, csib)?;
                             continue;
                         }
-                        let (cw, ch) = self.size_of(child, inner_w, &ctx, depth + 1);
-                        self.flow_block(child, inner_x, (cw, ch), &ctx, depth + 1, csib)?;
+                        self.flow_instances(child, inner_x, inner_w, &ctx, depth + 1, csib)?;
                     }
                 }
             }
@@ -393,8 +402,8 @@ impl Layouter<'_> {
             Some(Node::Subform(l)) => Some((li, l.as_ref())),
             _ => None,
         });
-        let lead_h = lead.map_or(0.0, |(_, l)| self.row_height(l, &cols, inner_w, ctx, depth + 1));
         let sibs = SomIndices::of(&sf.children);
+        let lead_h = lead.map_or(0.0, |(li, l)| self.row_height(l, &cols, inner_w, ctx, depth + 1, sibs.at(li)));
         for (ci, child) in sf.children.iter().enumerate() {
             if !child.common().presence.occupies() {
                 continue;
@@ -404,10 +413,9 @@ impl Layouter<'_> {
                 && row.layout == Layout::Row
             {
                 // Rows added as data (in another viewer) repeat the row.
-                let instances = self.instances(child, &ctx.som);
-                self.warn_truncated(child, &ctx.som, instances);
+                let instances = self.laid_out_instances(child, &ctx.som);
                 for inst in 0..instances {
-                    let h = self.row_height(row, &cols, inner_w, ctx, depth + 1);
+                    let h = self.row_height(row, &cols, inner_w, ctx, depth + 1, csib.saturating_add(inst));
                     let led = lead.filter(|(li, _)| *li != ci);
                     if self.make_room(h, led.map_or(0.0, |_| lead_h))?
                         && let Some((li, l)) = led
@@ -428,8 +436,23 @@ impl Layouter<'_> {
                 self.flow_subform(child, Some((x, inner_w)), ctx, depth + 1, csib)?;
                 continue;
             }
-            let (cw, ch) = self.size_of(child, inner_w, ctx, depth + 1);
-            self.flow_block(child, x, (cw, ch), ctx, depth + 1, csib)?;
+            self.flow_instances(child, x, inner_w, ctx, depth + 1, csib)?;
+        }
+        Ok(())
+    }
+
+    /// Flow `node`, which isn't split across content areas, as one block per instance (a
+    /// repeating positioned subform gets one for each row the data or its `occur` gives it, XFA
+    /// 3.3, "Repeating Elements using Occurrence Limits", p. 263), each as tall as its own
+    /// content; the data rows past them are reported.
+    fn flow_instances(&mut self, node: &Node, x: f64, inner_w: f64, ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
+        for instance in 0..self.laid_out_instances(node, &ctx.som) {
+            // Every instance spends budget, so nested repeats that place nothing still stop.
+            self.measures.set(self.measures.get().saturating_add(1));
+            self.check_measures()?;
+            let sib = sib.saturating_add(instance);
+            let size = self.size_at(node, inner_w, ctx, depth, sib);
+            self.flow_block(node, x, size, ctx, depth, sib)?;
         }
         Ok(())
     }
@@ -443,26 +466,61 @@ impl Layouter<'_> {
     /// repeating subform's `occur` and data instances ([`instance_count`]); one for anything else.
     pub(super) fn instances(&self, node: &Node, parent_som: &str) -> usize {
         let Node::Subform(sf) = node else { return 1 };
-        let from_data = match (&sf.common.name, self.data) {
-            (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
-            _ => 0,
-        };
-        instance_count(&sf.occur, from_data)
+        subform_instances(self.tpl, self.data, sf, parent_som)
+    }
+
+    /// [`Self::instances`] for laying `node` out: the count every layout that repeats a subform
+    /// draws (flowed or positioned, top to bottom, wrapped or a table's rows), with the data rows
+    /// past it reported ([`Self::warn_truncated`]).
+    pub(super) fn laid_out_instances(&mut self, node: &Node, parent_som: &str) -> usize {
+        let instances = self.instances(node, parent_som);
+        self.warn_truncated(node, parent_som, instances);
+        instances
     }
 
     /// The data holds more instances of `node` than `laid_out`: say so, since calculations
-    /// then see only those.
-    fn warn_truncated(&mut self, node: &Node, parent_som: &str, laid_out: usize) {
+    /// then see only those, and say why. (The template's own counts can't ask for more: the
+    /// parser reads `initial` and `max` up to [`MAX_INSTANCES`].)
+    pub(super) fn warn_truncated(&mut self, node: &Node, parent_som: &str, laid_out: usize) {
         let Node::Subform(sf) = node else { return };
         let from_data = match (&sf.common.name, self.data) {
             (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
             _ => 0,
         };
-        if from_data > laid_out {
-            self.warn_once(format!(
-                "{}: the data holds {from_data} rows; only the first {laid_out} are laid out (calculations see those)",
-                sf.common.name.as_deref().unwrap_or("a subform")
-            ));
+        if from_data <= laid_out {
+            return;
         }
+        let name = sf.common.name.as_deref().unwrap_or("a subform");
+        // The template's own `occur max` is the form's rule: past it, the extra data is ignored
+        // (XFA 3.3, p. 336). Only the layout's own limit needs naming as a limit.
+        let why = if sf.occur.max.is_some_and(|m| m <= laid_out) {
+            String::new()
+        } else {
+            format!("; {MAX_INSTANCES} is the most one repeating subform lays out")
+        };
+        self.warn_once(format!("{name}: the data holds {from_data} rows; only the first {laid_out} are laid out (calculations see those){why}"));
+    }
+}
+
+/// The lowest break at or above `limit` that crosses none of the `solid` items' extents: going
+/// through them from the lowest top up, a break moved to an item's top can't cross one already
+/// passed. When that leaves nothing below `seg_top` (an item taller than what is left), the
+/// item starts in a fresh area if this one already holds something (`fresh`); otherwise the
+/// break cuts through it at `limit`.
+fn lowest_break(solid: impl Iterator<Item = (f64, f64)>, limit: f64, seg_top: f64, fresh: bool) -> f64 {
+    let mut solid: Vec<(f64, f64)> = solid.filter(|e| e.0 < limit - 0.01).collect();
+    solid.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut cut = limit;
+    for (t, b) in solid {
+        if t < cut - 0.01 && b > cut + 0.01 {
+            cut = t;
+        }
+    }
+    if cut > seg_top + 0.01 {
+        cut
+    } else if fresh {
+        seg_top
+    } else {
+        limit
     }
 }
