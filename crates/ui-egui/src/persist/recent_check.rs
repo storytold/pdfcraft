@@ -34,8 +34,10 @@ impl RecentCheck {
     }
 
     /// A tab showing `path` put it back in the list without reading the file: check it is still
-    /// there, as for a restored entry.
+    /// there, as for a restored entry. An earlier open no longer vouches for it (the file may
+    /// have gone since), so the check this queues decides.
     pub(crate) fn focused(&mut self, path: &str) {
+        self.opened.retain(|p| p != path);
         if !self.unchecked.iter().any(|p| p == path) {
             self.unchecked.push(path.to_string());
         }
@@ -90,9 +92,10 @@ impl PdfCraftApp {
         let finished = Arc::strong_count(slot) == 1;
         let gone = std::mem::take(&mut *slot.lock().unwrap_or_else(PoisonError::into_inner));
         if !gone.is_empty() {
-            // A file opened since the check began is there, whatever the worker found earlier.
-            let opened = &self.recent_check.opened;
-            self.recent.retain(|r| !gone.contains(&r.path) || opened.contains(&r.path));
+            // A file opened since the check began is there, whatever the worker found earlier,
+            // and one queued for a later check is left for that check to decide.
+            let RecentCheck { opened, unchecked, .. } = &self.recent_check;
+            self.recent.retain(|r| !gone.contains(&r.path) || opened.contains(&r.path) || unchecked.contains(&r.path));
         }
         // The worker has finished (or panicked) and everything it found is taken.
         if finished {
@@ -122,6 +125,58 @@ mod tests {
         app.recent_check.gone = Some(Arc::new(Mutex::new(vec!["/gone/a.pdf".to_string()])));
         app.check_restored_recent();
         assert!(app.recent.is_empty());
+    }
+
+    /// Focusing a tab after its file was opened and then deleted ends that open's exemption:
+    /// the check the focus queued removes the row (CodeRabbit on #6323).
+    #[test]
+    fn a_focus_after_an_open_lets_the_check_decide() {
+        let mut app = PdfCraftApp::new();
+        app.run_inline = true;
+        let row = |path: &str| crate::state::RecentFile { name: "x.pdf".into(), path: path.into(), pages: 1, size: 0 };
+        app.recent = vec![row("/gone/b.pdf")];
+        // Another focus is waiting for its check when b.pdf is opened; b.pdf then goes and its
+        // tab is focused, all before the next frame.
+        app.recent_check.focused("/gone/a.pdf");
+        app.recent_check.opened("/gone/b.pdf");
+        app.recent_check.focused("/gone/b.pdf");
+        app.check_restored_recent();
+        assert!(app.recent.is_empty(), "the earlier open does not keep a file that has gone since");
+        // An open after the focus still vouches for the file.
+        app.check_restored_recent();
+        app.recent = vec![row("/gone/b.pdf")];
+        app.recent_check.focused("/gone/b.pdf");
+        app.recent_check.opened("/gone/b.pdf");
+        app.check_restored_recent();
+        assert_eq!(app.recent.len(), 1);
+    }
+
+    /// An answer from a check already under way does not remove a row that a later focus put
+    /// back and queued again: the queued check decides (CodeRabbit on #6323).
+    #[test]
+    fn an_older_answer_leaves_a_requeued_row_to_its_own_check() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-recent-requeue-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let back = dir.join("back.pdf").to_string_lossy().into_owned();
+        let lost = dir.join("lost.pdf").to_string_lossy().into_owned();
+        std::fs::write(&back, b"%PDF-1.7").unwrap();
+        let mut app = PdfCraftApp::new();
+        app.run_inline = true;
+        app.recent = [&back, &lost].map(|p| crate::state::RecentFile { name: "x.pdf".into(), path: p.clone(), pages: 1, size: 0 }).into();
+        // The worker found both gone; back.pdf was recreated and both tabs focused before the
+        // answer was taken.
+        app.recent_check.gone = Some(Arc::new(Mutex::new(vec![back.clone(), lost.clone()])));
+        app.recent_check.focused(&back);
+        app.recent_check.focused(&lost);
+        app.check_restored_recent();
+        assert_eq!(app.recent.len(), 2, "the older answer waits for the queued check");
+        app.check_restored_recent();
+        assert_eq!(
+            app.recent.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            [back.as_str()],
+            "the queued check keeps what is there and drops what is not"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
