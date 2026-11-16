@@ -816,3 +816,59 @@ fn a_command_shortcut_leaves_the_menu_bar_so_arrow_keys_do_not_reopen_the_popup(
         "the bar was left, so ArrowDown did not open the Menu popup"
     );
 }
+
+#[test]
+fn alt_f_followed_by_mnemonic_x_quits() {
+    let mut h = harness();
+    h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::F);
+    h.run_steps(3);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref().is_some_and(|l| l.contains("Exit") || l.contains("Quit")))
+            .is_some(),
+        "File submenu is open"
+    );
+    h.key_press(egui::Key::X);
+    h.step();
+    let closed = h.output().viewport_output.values().any(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
+    assert!(closed, "Alt+F then X executed Exit/Quit via keyboard mnemonic without mouse click");
+}
+
+#[test]
+fn alt_f_opens_fichier_and_not_fenetre_under_french_locale() {
+    use egui_kittest::kittest::NodeT;
+    let mut h = harness();
+    h.state_mut().set_option("language", "fr").unwrap();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::F);
+    h.run_steps(3);
+    let fichier = h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("Fichier"));
+    assert!(fichier.is_some(), "Alt+F opens Fichier");
+
+    let items: Vec<_> =
+        h.query_all_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.has_popup() == Some(egui::accesskit::HasPopup::Menu)).collect();
+    let mut keys = std::collections::HashSet::new();
+    for it in &items {
+        if let Some(ak) = it.accesskit_node().data().access_key() {
+            assert!(keys.insert(ak.to_string()), "Duplicate access key '{ak}' on menu item '{:?}'", it.accesskit_node().label());
+        }
+    }
+}
+
+#[test]
+fn plain_letters_in_open_submenu_do_not_switch_to_other_top_level_menus() {
+    let mut h = harness();
+    h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::F);
+    h.run_steps(3);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref().is_some_and(|l| l.contains("Exit") || l.contains("Quit")))
+            .is_some(),
+        "File submenu is open"
+    );
+    h.key_press(egui::Key::W);
+    h.run_steps(2);
+    assert!(
+        h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref().is_some_and(|l| l.contains("Exit") || l.contains("Quit")))
+            .is_some(),
+        "File submenu remains open and did not switch to Window"
+    );
+}
