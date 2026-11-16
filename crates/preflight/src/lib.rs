@@ -600,8 +600,9 @@ const MAX_SAVED_STATES: usize = 256;
 /// A font that a resource dictionary lists but no content shows text with draws nothing, nor does
 /// one that only the interactive form's default resources (`/AcroForm /DR`, ISO 32000-2 12.7.3) or
 /// a default appearance string (`/DA`) name: an appearance stream that does draw with it shows
-/// text with it in its own content. Where the answer isn't certain the font counts: one current
-/// at a `Do` that can't be followed, one named by content without resources of its own (in every
+/// text with it in its own content. Where the answer isn't certain the font counts: one current,
+/// in any mode, at a `Do` of a form that can't be followed, decoded or read past
+/// [`MAX_FORM_DEPTH`], one named by content without resources of its own (in every
 /// resource dictionary), every font of content that can't be decoded, and every font that could be
 /// current after a `Q` whose saved state [`MAX_SAVED_STATES`] didn't keep.
 fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> std::collections::HashSet<ObjRef> {
@@ -847,6 +848,12 @@ impl Fonts<'_> {
         }
     }
 
+    /// Content that isn't read, drawn in `state`: it may set a visible mode and show text with the
+    /// current font, so that font draws whatever the mode is.
+    fn may_show(&mut self, state: &TextState) {
+        self.shows(&TextState { font: state.font.clone(), invisible: false });
+    }
+
     /// Text shown in `state`: its font draws, unless the mode is 3.
     fn shows(&mut self, state: &TextState) {
         if state.invisible {
@@ -885,7 +892,7 @@ impl Fonts<'_> {
             .and_then(|x| x.as_dict().and_then(|x| x.get(name)).and_then(Object::as_ref));
         let Some(r) = target else {
             if holder.is_none() {
-                self.shows(state);
+                self.may_show(state);
             }
             return;
         };
@@ -895,7 +902,9 @@ impl Fonts<'_> {
             return;
         }
         if depth >= MAX_FORM_DEPTH {
-            self.shows(state);
+            // Read on its own the form starts with no font, so the font it takes from here counts
+            // now.
+            self.may_show(state);
             if self.cut.insert(r) {
                 self.cut_order.push(r);
             }
@@ -911,7 +920,7 @@ impl Fonts<'_> {
         match self.budget.decode(s) {
             Ok(data) => self.read(&data, resources, state.clone(), depth.saturating_add(1)),
             Err(_) => {
-                self.shows(state);
+                self.may_show(state);
                 self.unread(resources.map(|(h, _)| h));
             }
         }

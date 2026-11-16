@@ -2009,6 +2009,68 @@ fn a_form_cut_off_by_the_depth_limit_is_read_on_its_own() {
     }
 }
 
+/// A form drawn past [`MAX_FORM_DEPTH`] in mode 3 takes the current font from where it is drawn,
+/// and its own content can make the text visible again (ISO 32000-2 9.3.6): read on its own it
+/// starts with no font, so the font current where it is cut off counts.
+#[test]
+fn a_form_cut_off_in_mode_3_counts_the_font_it_takes() {
+    let found = |last: &str| -> Vec<String> {
+        // Object 5 is `/T`, drawing `last`; 6 on are the wrappers `/W1` to `/W12`, each drawing the
+        // next and the last drawing `/T`, all without resources of their own.
+        let wrappers = MAX_FORM_DEPTH;
+        let form = |content: &str| {
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length {} >>\nstream\n{content}\nendstream", content.len() + 1)
+        };
+        let mut names = vec!["/T 5 0 R".to_owned()];
+        names.extend((1..=wrappers).map(|i| format!("/W{i} {} 0 R", i + 5)));
+        let font = wrappers + 6;
+        let page_content = "BT /F1 10 Tf 3 Tr ET /W1 Do";
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 {font} 0 R >> /XObject << {} >> >> >>", names.join(" ")),
+            format!("<< /Length {} >>\nstream\n{page_content}\nendstream", page_content.len() + 1),
+            form(last),
+        ];
+        objects.extend((1..=wrappers).map(|i| form(&if i == wrappers { "/T Do".to_owned() } else { format!("/W{} Do", i + 1) })));
+        objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned());
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        let doc = build(&objects, "");
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect()
+    };
+    assert_eq!(found("BT 0 Tr (x) Tj ET"), ["The font Helvetica isn't embedded"]);
+}
+
+/// A form whose content isn't read, because it can't be found or decoded, may set a visible mode
+/// (ISO 32000-2 9.3.6) and show text with the font current where it is drawn: that font counts
+/// even when it is drawn in mode 3.
+#[test]
+fn a_form_not_read_counts_the_current_font_in_mode_3() {
+    let found = |page_content: &str, x: &str| -> Vec<String> {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 6 0 R >> /XObject << /X 5 0 R >> >> >>".to_owned(),
+            format!("<< /Length {} >>\nstream\n{page_content}\nendstream", page_content.len() + 1),
+            x.to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".to_owned(),
+        ];
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        let doc = build(&objects, "");
+        let mut found: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect();
+        found.sort();
+        found
+    };
+    // `/X` can't be decoded; its own resources hold Courier, and it takes Helvetica from the page.
+    let broken = "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /Font << /F2 7 0 R >> >> /Filter /NoSuchDecode /Length 2 >>\nstream\nxx\nendstream";
+    assert_eq!(found("BT /F1 10 Tf 3 Tr ET /X Do", broken), ["The font Courier isn't embedded", "The font Helvetica isn't embedded"]);
+    // `/X`, which no content draws and so is read on its own without resources, draws `/Y`, which
+    // can't be found: the name it selected counts in every resource dictionary.
+    let alone = "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 27 >>\nstream\nBT /F1 10 Tf 3 Tr ET /Y Do\nendstream";
+    assert_eq!(found("", alone), ["The font Helvetica isn't embedded"]);
+}
+
 /// PDF/A-2 6.1.2: the file starts with `%PDF-1.0` to `%PDF-1.7` and an end-of-line marker, then a
 /// comment of `%` and four bytes above 127; Save as PDF/A rewrites a header that doesn't.
 #[test]
