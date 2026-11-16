@@ -2367,3 +2367,80 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// A page that draws `content` with the colour spaces `/C4` (ICCBased CMYK) and `/C3` (ICCBased
+/// RGB), the graphics states `/GS0`..`/GS3`, and a form `/Fm` that draws `form`.
+fn overprinting(content: &str, form: &str) -> Document {
+    overprinting_as("C4", content, form)
+}
+
+/// [`overprinting`], with the ICCBased CMYK space under the resource name `cmyk`.
+fn overprinting_as(cmyk: &str, content: &str, form: &str) -> Document {
+    let stream = |d: &str, extra: &str| format!("<< /Length {} {extra} >>\nstream\n{d}\nendstream", d.len());
+    build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            &format!(
+                "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ColorSpace << /{cmyk} [/ICCBased 5 0 R] /C3 [/ICCBased 6 0 R] >> /ExtGState << /GS0 << /OP true /op false /OPM 1 >> /GS1 << /OP false /op true /OPM 1 >> /GS2 << /OP true /OPM 1 >> /GS3 << /OP true /op true /OPM 0 >> >> /XObject << /Fm 7 0 R >> >> >>"
+            ),
+            &stream(content, ""),
+            &stream("", "/N 4"),
+            &stream("", "/N 3"),
+            &stream(form, "/Type /XObject /Subtype /Form /BBox [0 0 10 10]"),
+        ],
+        "",
+    )
+}
+
+fn overprint_reported(doc: &Document) -> bool {
+    verify(doc, Level::A2b).iter().any(|i| i.clause == "6.2.4.2")
+}
+
+#[test]
+fn icc_cmyk_painted_with_overprint_mode_1_is_reported_clause_6_2_4_2() {
+    let reported = |content: &str, form: &str| overprint_reported(&overprinting(content, form));
+    // Stroking overprint on, and a stroke in ICCBased CMYK (by `B`, `S`, or text in a stroking mode).
+    assert!(reported("/GS0 gs /C4 CS 0 0 0 1 SC 0 0 10 10 re B", ""));
+    assert!(reported("/GS0 gs /C4 CS 0 0 0 1 SC 0 0 10 10 re S", ""));
+    assert!(reported("/GS0 gs /C4 CS 0 0 0 1 SC BT 1 Tr (x) Tj ET", ""));
+    // Non-stroking overprint on, and a fill in ICCBased CMYK.
+    assert!(reported("/GS1 gs /C4 cs 0 0 0 1 sc 0 0 10 10 re f", ""));
+    assert!(reported("/GS1 gs /C4 cs 0 0 0 1 sc BT (x) Tj ET", ""));
+    // `OP` without `op` sets both.
+    assert!(reported("/GS2 gs /C4 cs 0 0 0 1 sc 0 0 10 10 re f", ""));
+    // A form drawn in that state, and a form that sets it itself.
+    assert!(reported("/GS1 gs /C4 cs /Fm Do", "0 0 10 10 re f"));
+    assert!(reported("/Fm Do", "/GS1 gs /C4 cs 0 0 10 10 re f"));
+
+    // Device CMYK drawn in an ICCBased CMYK `/DefaultCMYK`, by `k` and by `cs`.
+    let defaulted = |content: &str| overprint_reported(&overprinting_as("DefaultCMYK", content, ""));
+    assert!(defaulted("/GS2 gs 0 0 0 1 k 0 0 10 10 re f"));
+    assert!(defaulted("/GS2 gs /DeviceCMYK cs 0 0 0 1 sc 0 0 10 10 re f"));
+    assert!(!defaulted("/GS2 gs 0 0 0 rg 0 0 10 10 re f"));
+
+    // ICCBased RGB, device CMYK, overprinting off for the operation that paints, mode 0.
+    assert!(!reported("/GS2 gs /C3 cs /C3 CS 0 0 10 10 re B", ""));
+    assert!(!reported("/GS2 gs 0 0 0 1 k 0 0 0 1 K 0 0 10 10 re B", ""));
+    assert!(!reported("/GS0 gs /C4 cs 0 0 0 1 sc 0 0 10 10 re f", ""));
+    assert!(!reported("/GS1 gs /C4 CS 0 0 0 1 SC 0 0 10 10 re S", ""));
+    assert!(!reported("/GS3 gs /C4 cs /C4 CS 0 0 10 10 re B", ""));
+    // The state is restored by `Q`; a device colour replaces the space; text in mode 3 paints
+    // nothing; a form that isn't drawn is read from the initial state.
+    assert!(!reported("q /GS2 gs Q /C4 cs 0 0 10 10 re f", ""));
+    assert!(!reported("/GS2 gs /C4 cs 0 0 0 1 k 0 0 10 10 re f", ""));
+    assert!(!reported("/GS2 gs /C4 cs /C4 CS BT 3 Tr (x) Tj ET", ""));
+    assert!(!reported("/GS2 gs /C4 cs", "0 0 10 10 re f"));
+    // Painting before the state is set, and the same bytes in a string.
+    assert!(!reported("/C4 cs 0 0 10 10 re f /GS2 gs", ""));
+    assert!(!reported("/GS2 gs /C4 cs BT 3 Tr (0 0 10 10 re f) Tj ET", ""));
+}
+
+#[test]
+fn icc_cmyk_overprint_is_cited_and_not_fixable() {
+    let issues = verify(&overprinting("/GS2 gs /C4 cs 0 0 10 10 re f", ""), Level::A2b);
+    let found: Vec<&Issue> = issues.iter().filter(|i| i.clause == "6.2.4.2").collect();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].message, "An ICCBased CMYK colour space is painted with overprinting on and overprint mode 1");
+    assert!(!found[0].fixable);
+}
