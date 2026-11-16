@@ -234,9 +234,10 @@ fn starts_list_item(row: &[usize], lines: &[TextLine]) -> bool {
     row.iter().filter_map(|i| lines.get(*i)).map(|l| l.text.trim_start()).find(|t| !t.is_empty()).is_some_and(opens_with_marker)
 }
 
-/// How far apart `line` is from `prev` along their shared baseline: the boxes' `frame_gap`,
-/// or the ink-to-ink gap when both draw ink on an upright baseline, whichever is wider.
-/// Padding spaces inside table cells shrink the boxes' gap without moving the glyphs (#7086).
+/// How far apart `line` is from `prev` along their shared baseline in the edit path: the boxes'
+/// `frame_gap`, or the ink-to-ink gap when both draw ink on an upright baseline, whichever is
+/// wider. Padding spaces inside table cells shrink the boxes' gap without moving the glyphs
+/// (#7086). Reading groups with `frame_gap`: its 1.5 em window is unchanged.
 fn row_gap(prev: &TextLine, line: &TextLine, frame_gap: f64) -> f64 {
     if !prev.upright() || !line.upright() {
         return frame_gap;
@@ -252,7 +253,9 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
     for (i, line) in lines.iter().enumerate() {
         let joins = rows.last().and_then(|r| r.last()).and_then(|i| lines.get(*i)).is_some_and(|prev| {
             let frame_gap = line.frame_rect()[0] - prev.frame_rect()[2];
-            let gap = row_gap(prev, line, frame_gap);
+            // The ink-to-ink gap belongs to the edit path (#7086). Reading and export keep the
+            // boxes' gap, so padding spaces there do not split a line as they always have.
+            let gap = if mixed { row_gap(prev, line, frame_gap) } else { frame_gap };
             // OCR words (invisible text over a scan) join only across a word space: a wider gap
             // is a table cell or a tab stop, which a rewrite would close up.
             let scanned = !mixed || (invisible(prev) == invisible(line) && (!invisible(line) || gap < prev.size.max(line.size) * 0.6));

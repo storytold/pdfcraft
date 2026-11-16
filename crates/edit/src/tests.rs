@@ -1993,6 +1993,26 @@ fn padded_table_cells_do_not_share_an_edit_line() {
     assert_eq!(blocks, ["AB ", " CD"]);
 }
 
+/// #7086: padding spaces are an edit-path concern. Reading and export group with the boxes'
+/// gap, so two padded runs 10 pt apart stay one paragraph instead of splitting on the wider
+/// ink-to-ink gap.
+#[test]
+fn padded_runs_stay_one_reading_block() {
+    let w = |s: &str| pdfcraft_fonts::helvetica_width(s, 10.0);
+    // Their boxes 10 pt apart (past the cross-BT line join, inside the 1.5 em reading window);
+    // four padding spaces each side put the glyphs about 32 pt apart.
+    let rhs = 72.0 + w("AB    ") + 10.0;
+    let content = format!(
+        "BT /F1 10 Tf 1 0 0 1 72 700 Tm (AB    ) Tj ET \
+         BT /F1 10 Tf 1 0 0 1 {rhs:.4} 700 Tm (    CD) Tj ET"
+    );
+    let doc = text_page(&content);
+    let texts: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(texts, ["AB    ", "    CD"], "the runs are separate edit lines");
+    let blocks: Vec<_> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(blocks, ["AB        CD"], "reading keeps the row it always grouped");
+}
+
 fn descriptor_text_page() -> Document {
     let content = "BT /F1 12 Tf 72 700 Td (ab) Tj ET";
     let objs: Vec<String> = vec![
