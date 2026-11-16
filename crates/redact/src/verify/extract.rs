@@ -233,9 +233,10 @@ impl Font {
                 .map(|b| doc.resolve(b))
                 .and_then(|b| b.as_name().and_then(|n| pdfcraft_fonts::Std14::from_base_font(&String::from_utf8_lossy(n))))
             {
-                // No /Widths: a standard font has exact published widths, by WinAnsi code (Symbol,
-                // ZapfDingbats and other encodings are refused before the proof is reached). Its
-                // name may be given by reference, as the walk reads it.
+                // No /Widths: a standard font has exact published widths, here by the code shown
+                // (WinAnsi for the Latin faces, their own encodings for Symbol and ZapfDingbats;
+                // unlike the walk, a code an `/Encoding` remaps is measured as itself). Its name
+                // may be given by reference, as the walk reads it.
                 for code in 0..=255u8 {
                     f.widths.insert(u32::from(code), std.width(code) / 1000.0);
                 }

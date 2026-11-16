@@ -422,7 +422,7 @@ fn scan_xobject(
 /// draws no text.
 fn scan_pattern(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, name: &[u8], depth: usize) -> Result<(), CosError> {
     let patterns = res_dict(ctx.doc, res, b"Pattern");
-    let Some(r) = patterns.get(name).and_then(Object::as_ref) else { return Ok(()) };
+    let Some((r, _, _)) = patterns.get(name).and_then(|p| crate::stream_behind(ctx.doc, p)) else { return Ok(()) };
     scan_stream_object(ctx, res, holder_ref, r, None, depth)
 }
 
@@ -432,7 +432,7 @@ fn scan_soft_mask(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, nam
     let states = res_dict(ctx.doc, res, b"ExtGState");
     let Some(state) = states.get(name).and_then(|s| ctx.doc.resolve(s).as_dict().cloned()) else { return Ok(()) };
     let Some(mask) = state.get(b"SMask").and_then(|m| ctx.doc.resolve(m).as_dict().cloned()) else { return Ok(()) };
-    let Some(group) = mask.get(b"G").and_then(Object::as_ref) else { return Ok(()) };
+    let Some((group, _, _)) = mask.get(b"G").and_then(|g| crate::stream_behind(ctx.doc, g)) else { return Ok(()) };
     scan_stream_object(ctx, res, holder_ref, group, None, depth)
 }
 
@@ -450,7 +450,8 @@ fn scan_appearances(ctx: &mut ScanContext<'_>, page: &Dict, page_ref: ObjRef, pa
 
 /// The streams an annotation can show: its normal, rollover and down appearances (ISO 32000-2
 /// §12.5.5), each one stream or a dictionary of streams by appearance state. Readers draw no
-/// other `/AP` entry, so one can't keep a glyph the page no longer shows.
+/// other `/AP` entry, so one can't keep a glyph the page no longer shows. Each is the stream's own
+/// reference, however many references lead to it.
 fn appearance_streams(doc: &Document, annot: &Object) -> Vec<ObjRef> {
     let Some(ap) = doc.resolve(annot).as_dict().and_then(|a| a.get(b"AP").cloned()) else { return Vec::new() };
     let Some(ap) = doc.resolve(&ap).as_dict().cloned() else { return Vec::new() };
@@ -458,8 +459,8 @@ fn appearance_streams(doc: &Document, annot: &Object) -> Vec<ObjRef> {
     for key in [b"N", b"R", b"D"] {
         let Some(entry) = ap.get(key) else { continue };
         match &*doc.resolve(entry) {
-            Object::Dict(states) => streams.extend(states.iter().filter_map(|(_, s)| s.as_ref())),
-            _ => streams.extend(entry.as_ref()),
+            Object::Dict(states) => streams.extend(states.iter().filter_map(|(_, s)| crate::stream_behind(doc, s)).map(|(r, _, _)| r)),
+            _ => streams.extend(crate::stream_behind(doc, entry).map(|(r, _, _)| r)),
         }
     }
     streams
@@ -502,7 +503,8 @@ fn add_soft_mask_ops(doc: &Document, res: &Dict, ops: &mut Vec<pdfcraft_content:
                 .last_name()
                 .and_then(|n| states.get(n))
                 .and_then(|s| doc.resolve(s).as_dict().and_then(|s| s.get(b"SMask").cloned()))
-                .and_then(|m| doc.resolve(&m).as_dict().and_then(|m| m.get(b"G").and_then(Object::as_ref))),
+                .and_then(|m| doc.resolve(&m).as_dict().and_then(|m| m.get(b"G").and_then(|g| crate::stream_behind(doc, g))))
+                .map(|(r, _, _)| r),
             b"Do" if cursor >= known => op
                 .last_name()
                 .and_then(|n| xobjects.get(n))

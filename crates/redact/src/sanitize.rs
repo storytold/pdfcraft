@@ -734,7 +734,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
             pages = pdfcraft_model::pages(doc);
         }
         for (old, new, changed, empty) in out.tag_changes {
-            crate::tags::clean(doc, page.obj, Some((old, new)), &changed, &empty)?;
+            crate::tags::clean(doc, page.obj, Some((&old, new)), &changed, &empty)?;
         }
     }
     // What a page no longer draws must not stay reachable through an inherited or shared

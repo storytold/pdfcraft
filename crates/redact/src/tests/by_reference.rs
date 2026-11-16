@@ -141,7 +141,7 @@ fn the_proof_reads_text_given_its_subtype_by_reference_under_the_mark() {
 }
 
 /// The proof's text reader places text in a Type 3 font, and in a composite font, each with its
-/// `/Subtype` given by reference, where it places them given directly: four Type 3 glyphs 40 units
+/// `/Subtype` given by reference, where it places them given directly: five Type 3 glyphs 40 units
 /// wide, four of them in a region from x 50; and four composite glyphs 10 points wide, two-byte
 /// codes, three of them in a region from x 12. And Courier without `/Widths`, its `/BaseFont`
 /// given by reference: five glyphs 6 points wide, three of them in a region from x 13.
@@ -352,11 +352,15 @@ fn a_property_a_form_given_by_reference_uses_is_kept() {
 }
 
 /// A tagged form reached through a reference to a reference, its marked content named in the
-/// structure tree by either reference: the element loses its `/ActualText` with the redacted
-/// text, and the saved file holds neither.
+/// structure tree by either reference, or by both, with `/StmOwn` naming the reference on the way
+/// too, in an MCR written in place or held by reference: the element loses its `/ActualText` with
+/// the redacted text, is counted once, and names the cleaned copy, which still shows some of its
+/// marked content, instead; the saved file holds neither.
 #[test]
 fn a_tagged_form_given_by_reference_loses_its_actual_text() {
-    for stm in ["6 0 R", "5 0 R"] {
+    let mcr = |stm: &str| format!("<< /Type /MCR /Pg 3 0 R /Stm {stm} /MCID 0 >>");
+    let owned = "<< /Type /MCR /Pg 3 0 R /Stm 5 0 R /StmOwn 5 0 R /MCID 0 >>";
+    for kids in [mcr("6 0 R"), mcr("5 0 R"), format!("[{} {}]", mcr("6 0 R"), mcr("5 0 R")), owned.to_string(), "10 0 R".to_string()] {
         let mut doc = pdf(vec![
             b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 8 0 R /MarkInfo << /Marked true >> >>".to_vec(),
             b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
@@ -365,17 +369,25 @@ fn a_tagged_form_given_by_reference_loses_its_actual_text() {
             b"6 0 R".to_vec(),
             stream(
                 "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 7 0 R >> >>",
-                b"/P << /MCID 0 >> BDC BT /F1 12 Tf 20 250 Td (FORMSECRET) Tj ET EMC",
+                b"/P << /MCID 0 >> BDC BT /F1 12 Tf 20 250 Td (FORMSECRET) Tj 0 -100 Td (KEPT) Tj ET EMC",
             ),
             HELVETICA.to_vec(),
             b"<< /Type /StructTreeRoot /K 9 0 R >>".to_vec(),
-            format!("<< /Type /StructElem /S /P /P 8 0 R /Pg 3 0 R /K << /Type /MCR /Pg 3 0 R /Stm {stm} /MCID 0 >> /ActualText (ACTUALSECRET) >>")
-                .into_bytes(),
+            format!("<< /Type /StructElem /S /P /P 8 0 R /Pg 3 0 R /K {kids} /ActualText (ACTUALSECRET) >>").into_bytes(),
+            owned.as_bytes().to_vec(),
         ]);
         mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
-        assert_eq!(apply(&mut doc, None).map(|r| r.tags), Ok(1), "{stm}");
-        assert!(!doc.get(ObjRef::new(9, 0)).as_dict().unwrap().contains(b"ActualText"), "{stm}");
-        assert!(!saved_holds(&doc, b"FORMSECRET") && !saved_holds(&doc, b"ACTUALSECRET"), "{stm}");
+        assert_eq!(apply(&mut doc, None).map(|r| r.tags), Ok(1), "{kids}");
+        let element = doc.get(ObjRef::new(9, 0)).as_dict().cloned().unwrap();
+        assert!(!element.contains(b"ActualText"), "{kids}");
+        let marked: Vec<Dict> = match element.get(b"K").map(|k| doc.resolve(k)).as_deref() {
+            Some(Object::Array(a)) => a.iter().filter_map(|m| doc.resolve(m).as_dict().cloned()).collect(),
+            Some(Object::Dict(m)) => vec![m.clone()],
+            _ => Vec::new(),
+        };
+        let named: Vec<ObjRef> = marked.iter().flat_map(|m| [m.get(b"Stm"), m.get(b"StmOwn")]).flatten().filter_map(Object::as_ref).collect();
+        assert!(!named.is_empty() && named.iter().all(|r| !matches!(r.num, 5 | 6)), "{kids}: {named:?}");
+        assert!(!saved_holds(&doc, b"FORMSECRET") && !saved_holds(&doc, b"ACTUALSECRET"), "{kids}");
     }
 }
 
@@ -397,19 +409,22 @@ fn a_standard_font_named_by_reference_is_measured_as_itself() {
 }
 
 /// Remove Hidden Information unlinks an image its page lists but doesn't draw, its `/Subtype`
-/// given by reference, as given directly.
+/// given by reference, listed directly or through a reference to a reference.
 #[test]
 fn an_undrawn_image_given_its_subtype_by_reference_is_unlinked() {
     use crate::sanitize::{Hidden, remove_hidden};
-    let mut doc = pdf(vec![
-        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /XObject << /Deleted 4 0 R >> >> >>".to_vec(),
-        stream("/Type /XObject /Subtype 5 0 R /Width 17 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"DELETEDIMAGEBYTES"),
-        b"/Image".to_vec(),
-    ]);
-    assert_eq!(remove_hidden(&mut doc, &[Hidden::Metadata]), Ok(Vec::new()));
-    assert!(!saved_holds(&doc, b"DELETEDIMAGEBYTES"));
+    for entry in ["4 0 R", "6 0 R"] {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /XObject << /Deleted {entry} >> >> >>").into_bytes(),
+            stream("/Type /XObject /Subtype 5 0 R /Width 17 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"DELETEDIMAGEBYTES"),
+            b"/Image".to_vec(),
+            b"4 0 R".to_vec(),
+        ]);
+        assert_eq!(remove_hidden(&mut doc, &[Hidden::Metadata]), Ok(Vec::new()), "{entry}");
+        assert!(!saved_holds(&doc, b"DELETEDIMAGEBYTES"), "{entry}");
+    }
 }
 
 /// Remove Hidden Information keeps the images a Type 3 glyph, and a form in its font's resources,
@@ -437,4 +452,26 @@ fn images_drawn_by_a_type3_glyph_given_by_reference_stay() {
     assert!(!has(b"DELETEDIMAGEBYTES"));
     assert!(has(b"BYGLYPHIMAGE"));
     assert!(has(b"BYFONTFORMIMAGE"));
+}
+
+/// Remove Hidden Information's form fields: a widget given its `/Subtype` by reference is
+/// flattened, its value drawn into the page, before it is taken off the page, as when given
+/// directly.
+#[test]
+fn a_widget_given_its_subtype_by_reference_is_flattened_before_it_goes() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let after = |by_reference: bool| {
+        let mut doc = super::hidden_fixture();
+        if by_reference {
+            let held = doc.add(Object::name("Widget"));
+            doc.update_dict(ObjRef::new(17, 0), |d| d.set(b"Subtype".to_vec(), Object::Ref(held))).unwrap();
+        }
+        remove_hidden(&mut doc, &[Hidden::FormFields]).unwrap();
+        let page = pdfcraft_model::pages(&doc).swap_remove(0);
+        assert!(!crate::annots_of(&doc, &page.dict).iter().any(|a| a.as_ref() == Some(ObjRef::new(17, 0))), "{by_reference}");
+        super::content(&doc, 0)
+    };
+    let direct = after(false);
+    assert!(direct.contains("/PCFl0 Do"), "{direct}");
+    assert_eq!(after(true), direct);
 }

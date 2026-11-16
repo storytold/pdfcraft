@@ -962,7 +962,7 @@ fn redact_page_content(
     }
 
     for (old, new, changed, empty) in out.tag_changes {
-        report.tags += tags::clean(doc, page.obj, Some((old, new)), &changed, &empty)?;
+        report.tags += tags::clean(doc, page.obj, Some((&old, new)), &changed, &empty)?;
     }
     Ok(())
 }

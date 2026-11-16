@@ -30,9 +30,16 @@ const NO_VIEW: i64 = 32;
 /// reply, and is flattened (or kept) as it would be without. Keep in step with hayro-interpret's
 /// PdfCraft patch (81).
 fn is_reply(doc: &Document, d: &Dict) -> bool {
-    !matches!(d.name(b"Subtype"), Some(b"Widget" | b"Link" | b"Popup"))
+    !matches!(subtype_of(doc, d).as_slice(), b"Widget" | b"Link" | b"Popup")
         && d.get(b"IRT").is_some_and(|o| doc.resolve(o).as_dict().is_some())
         && d.get(b"RT").map(|o| doc.resolve(o)).as_deref().and_then(Object::as_name) != Some(b"Group")
+}
+
+/// An annotation's `/Subtype`, which may be given by reference (ISO 32000-2 §7.3.10), as the
+/// renderer reads it: a widget given so is drawn on the page, so it is flattened as one, and Remove
+/// Hidden Information, which flattens fields here, then removes it from the page as a widget.
+fn subtype_of(doc: &Document, d: &Dict) -> Vec<u8> {
+    d.get(b"Subtype").and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec)).unwrap_or_default()
 }
 
 fn nums(doc: &Document, o: Option<&Object>) -> Option<Vec<f64>> {
@@ -122,7 +129,7 @@ enum Which {
 }
 
 fn selected(doc: &Document, d: &Dict, which: Which) -> bool {
-    let subtype = d.name(b"Subtype").unwrap_or_default();
+    let subtype = subtype_of(doc, d);
     match which {
         // Comments are what the comment list calls comments: links, pop-ups and the non-markup
         // multimedia and print-production annotations (3D, Screen, Movie, RichMedia,
@@ -131,10 +138,10 @@ fn selected(doc: &Document, d: &Dict, which: Which) -> bool {
             if subtype == b"Widget" {
                 fields
             } else {
-                comments && pdfcraft_annot::is_comment_subtype(&String::from_utf8_lossy(subtype))
+                comments && pdfcraft_annot::is_comment_subtype(&String::from_utf8_lossy(&subtype))
             }
         }
-        Which::FillSign => !matches!(subtype, b"Link" | b"Popup" | b"Widget") && pdfcraft_annot::is_fill_sign(doc, d),
+        Which::FillSign => !matches!(subtype.as_slice(), b"Link" | b"Popup" | b"Widget") && pdfcraft_annot::is_fill_sign(doc, d),
     }
 }
 
@@ -262,7 +269,7 @@ fn retained_annotations(doc: &Document, list: &[Object], usable_properties: bool
             if let Some(parent) = annotation.reference(b"IRT") {
                 children.entry(parent).or_default().push(reference);
             }
-            if annotation.name(b"Subtype") == Some(b"Popup")
+            if subtype_of(doc, annotation) == b"Popup"
                 && let Some(parent) = annotation.reference(b"Parent")
             {
                 children.entry(parent).or_default().push(reference);
@@ -274,7 +281,7 @@ fn retained_annotations(doc: &Document, list: &[Object], usable_properties: bool
             if let Some(parent) = annotation.reference(b"IRT") {
                 inline_children.entry(parent).or_default().push(k);
             }
-            if annotation.name(b"Subtype") == Some(b"Popup")
+            if subtype_of(doc, annotation) == b"Popup"
                 && let Some(parent) = annotation.reference(b"Parent")
             {
                 inline_children.entry(parent).or_default().push(k);
@@ -339,7 +346,7 @@ fn undrawn_on(doc: &Document, all: &[pdfcraft_model::Page], pages: &[usize], whi
             if !selected(doc, &d, which) || flags & (HIDDEN | NO_VIEW) != 0 || !transferable(doc, &d, usable_properties) || is_reply(doc, &d) {
                 continue;
             }
-            let widget = d.name(b"Subtype") == Some(b"Widget");
+            let widget = subtype_of(doc, &d) == b"Widget";
             let drawn = pdfcraft_fonts::undrawn_mark(&d);
             let would_draw = || (!widget && appearance(doc, &d).is_none()).then(|| pdfcraft_annot::appearance::undrawable_text(&d)).flatten();
             if let Some(c) = drawn.or_else(|| would_draw().map(|(_, c)| c)) {
@@ -358,8 +365,7 @@ fn prepare_appearances(doc: &mut Document, list: &[Object], which: Which, retain
             continue;
         }
         let d = doc.resolve(entry).as_dict().cloned().unwrap_or_default();
-        let subtype = d.name(b"Subtype").unwrap_or_default();
-        if subtype == b"Widget" || !selected(doc, &d, which) || !transferable(doc, &d, usable_properties) {
+        if subtype_of(doc, &d) == b"Widget" || !selected(doc, &d, which) || !transferable(doc, &d, usable_properties) {
             continue;
         }
         let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
@@ -395,7 +401,7 @@ fn take_threads(
         let r = entry.as_ref();
         let obj = doc.resolve(entry);
         let Some(d) = obj.as_dict() else { continue };
-        let popup_of = d.reference(b"Parent").filter(|_| d.name(b"Subtype") == Some(b"Popup"));
+        let popup_of = d.reference(b"Parent").filter(|_| subtype_of(doc, d) == b"Popup");
         // Only a reply goes with what it answers: a `/RT /Group` member was drawn (and went) or
         // stays, hidden or undrawable, as any annotation.
         let reply_to = d.reference(b"IRT").filter(|_| is_reply(doc, d));
@@ -485,8 +491,7 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
         for (k, entry) in list.iter().enumerate() {
             let obj = doc.resolve(entry);
             let Some(d) = obj.as_dict() else { continue };
-            let subtype = d.name(b"Subtype").unwrap_or_default();
-            let widget = subtype == b"Widget";
+            let widget = subtype_of(doc, d) == b"Widget";
             if retained.contains(k, entry) || !transferable(doc, d, existing_properties.is_some()) {
                 retained.insert(k, entry);
                 continue;

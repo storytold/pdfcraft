@@ -112,6 +112,10 @@ struct Gs {
     type3_inherits: bool,
 }
 
+/// A form replaced by a cleaned copy: the references that stood for it, the copy's, and the
+/// marked content the rewrite changed and emptied ([`crate::tags::clean`]).
+pub(crate) type TagChange = (Vec<ObjRef>, ObjRef, HashSet<i64>, HashSet<i64>);
+
 /// What processing a scope produced.
 #[derive(Default)]
 pub(crate) struct Output {
@@ -154,7 +158,7 @@ pub(crate) struct Output {
     /// `TJ` array, say), which other readers may still draw, is neither found nor removed, and a
     /// rewrite would drop the bytes but keep the strings. A redaction must not trust it.
     pub unparsed: bool,
-    pub tag_changes: Vec<(ObjRef, ObjRef, HashSet<i64>, HashSet<i64>)>,
+    pub tag_changes: Vec<TagChange>,
     pub error: Option<CosError>,
 }
 
@@ -1333,7 +1337,7 @@ fn xobject(
             };
             let nr = doc.add(Object::Stream(stream));
             // A structure tree may name the stream by any reference that stands for it.
-            out.tag_changes.extend(gone.iter().map(|&g| (g, nr, changed.clone(), empty.clone())));
+            out.tag_changes.push((gone.clone(), nr, changed, empty));
             let n = fresh_name(scope, xobjects);
             xobjects.set(n.clone(), Object::Ref(nr));
             out.xobjects.push((n.clone(), nr));
