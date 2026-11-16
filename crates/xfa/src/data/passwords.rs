@@ -1,26 +1,38 @@
 use super::import::datasets_packet;
 use super::merge::Op;
-use super::path::{data_path, parse_datasets};
+use super::path::{data_path, parse_datasets_packet};
 use super::values::{Want, path_of, text_of, with_template};
 use super::write::{datasets_stream_ref, rewrite};
 use super::{DataNode, DataPath, Document, MAX_DEPTH, Node, ObjRef, Object, SomIndices, Template, Ui, XfaError};
 
+/// How deep the AcroForm field tree is walked for password fields: as deep as the form's own
+/// field walk (`pdfcraft_forms::fields`), which is what editing and dataset synchronization see.
+const MAX_ACRO_DEPTH: usize = 64;
+
 /// The SOM path and default value of every AcroForm text field with the Password flag (bit 14,
 /// `1 << 13`) in `doc`, for static XFA forms whose password fields set the flag in the AcroForm
-/// dictionary.
-fn acro_password_fields(doc: &Document) -> Vec<(String, String)> {
+/// dictionary. `None` when the walk was cut short at [`MAX_ACRO_DEPTH`]: which branch is cut
+/// depends on the order the tree is visited in, so a field the form's own walk reaches may have
+/// been missed, and the caller can't tell that no password field is left.
+fn acro_password_fields(doc: &Document) -> Option<Vec<(String, String)>> {
     const PASSWORD_FLAG: i64 = 1 << 13;
-    let Some(root) = doc.root() else { return Vec::new() };
+    let Some(root) = doc.root() else { return Some(Vec::new()) };
     let catalog = doc.get(root);
-    let Some(acro) = catalog.as_dict().and_then(|c| c.get(b"AcroForm")).map(|a| doc.resolve(a)) else { return Vec::new() };
+    let Some(acro) = catalog.as_dict().and_then(|c| c.get(b"AcroForm")).map(|a| doc.resolve(a)) else { return Some(Vec::new()) };
     let Some(top) = acro.as_dict().and_then(|a| a.get(b"Fields")).map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()) else {
-        return Vec::new();
+        return Some(Vec::new());
     };
     struct AcroWalk<'a> {
         doc: &'a Document,
-        seen: std::collections::HashSet<ObjRef>,
+        /// Each field reached, with what it was reached with: its parent's name, type, flags and
+        /// default, which decide what it classifies as.
+        seen: std::collections::HashMap<ObjRef, Reach>,
+        /// Fields past the depth limit, with what they were reached with. One reached again from
+        /// another root in the same way was classified there; any other is not fully read.
+        cut: Vec<(ObjRef, Reach)>,
         out: Vec<(String, String)>,
     }
+    type Reach = (String, Option<Vec<u8>>, i64, Option<String>);
     impl AcroWalk<'_> {
         fn walk(
             &mut self,
@@ -31,12 +43,19 @@ fn acro_password_fields(doc: &Document) -> Vec<(String, String)> {
             inherited_dv: Option<&str>,
             depth: usize,
         ) {
-            if depth > 32 {
+            if depth > MAX_ACRO_DEPTH {
+                let reach: Reach = (parent_name.to_string(), inherited_ft.map(<[u8]>::to_vec), inherited_ff, inherited_dv.map(str::to_string));
+                self.cut.extend(items.iter().filter_map(Object::as_ref).map(|r| (r, reach.clone())));
                 return;
             }
             for item in items {
                 let Some(r) = item.as_ref() else { continue };
-                if !self.seen.insert(r) {
+                let reach: Reach = (parent_name.to_string(), inherited_ft.map(<[u8]>::to_vec), inherited_ff, inherited_dv.map(str::to_string));
+                // The reach a field was classified with stays: a later visit that skips it classified
+                // nothing, so it must not stand in for the cut-off one.
+                if let std::collections::hash_map::Entry::Vacant(slot) = self.seen.entry(r) {
+                    slot.insert(reach);
+                } else {
                     continue;
                 }
                 let obj = self.doc.get(r);
@@ -65,20 +84,35 @@ fn acro_password_fields(doc: &Document) -> Vec<(String, String)> {
             }
         }
     }
-    let mut w = AcroWalk { doc, seen: std::collections::HashSet::new(), out: Vec::new() };
+    let mut w = AcroWalk { doc, seen: std::collections::HashMap::new(), cut: Vec::new(), out: Vec::new() };
     w.walk(&top, "", None, 0, None, 0);
-    w.out
+    // Decided once every root has been visited: a branch cut deep down may be reached shallower
+    // from a later root, and is then read in full.
+    let incomplete = w.cut.iter().any(|(r, reach)| w.seen.get(r) != Some(reach));
+    (!incomplete).then_some(w.out)
 }
 
 /// The `Want` entries needed to restore password fields in `doc`'s datasets packet to their
 /// defaults (or empty when they have no default).
-fn password_dataset_wants(doc: &Document) -> Vec<Want> {
+///
+/// The packet is read as the datasets writer reads it ([`parse_datasets_packet`]): a packet the
+/// writer can't read holds no value it wrote, so there is nothing typed in it to clear. An error
+/// when the password fields can't all be found (a field tree deeper than the field walk reaches):
+/// the save is refused rather than written with a typed password left in the data.
+fn password_dataset_wants(doc: &Document) -> Result<Vec<Want>, XfaError> {
     if datasets_stream_ref(doc).is_none() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let Ok(Some(packet)) = datasets_packet(doc) else { return Vec::new() };
-    let Some(data) = parse_datasets(&packet) else { return Vec::new() };
-    with_template(doc, None, |tpl| {
+    // Checked before the packet is read: a packet that can't be parsed leaves nothing to clear, but
+    // a form whose fields can't all be found is refused whatever the packet holds.
+    let Some(acro_fields) = acro_password_fields(doc) else {
+        return Err(XfaError::Malformed(
+            "the form's fields nest too deeply to find every password field, so typed passwords could not be removed from its XFA data".into(),
+        ));
+    };
+    let Ok(Some(packet)) = datasets_packet(doc) else { return Ok(Vec::new()) };
+    let Some(data) = parse_datasets_packet(&packet) else { return Ok(Vec::new()) };
+    Ok(with_template(doc, None, |tpl| {
         let mut candidates: Vec<(String, DataPath, String)> = Vec::new();
         let mut seen = std::collections::HashSet::new();
         if let Some(t) = tpl {
@@ -153,7 +187,7 @@ fn password_dataset_wants(doc: &Document) -> Vec<Want> {
                 }
             }
         }
-        for (som, default) in acro_password_fields(doc) {
+        for (som, default) in acro_fields {
             let path = path_of(tpl, &som);
             if !path.is_empty() && seen.insert(path.clone()) {
                 candidates.push((som, path, default));
@@ -166,27 +200,29 @@ fn password_dataset_wants(doc: &Document) -> Vec<Want> {
                 (!cur.is_empty() && cur != default).then_some(Want { som, path, text: default, ensure: false })
             })
             .collect()
-    })
+    }))
 }
 
 /// Whether any XFA password field (`<passwordEdit/>` or an AcroForm text field with the Password
-/// flag) holds a value in `doc`'s datasets packet beyond its default (#3944).
+/// flag) holds a value in `doc`'s datasets packet beyond its default (#3944). A form whose
+/// password fields can't all be found counts as holding some, so that clearing them
+/// ([`clear_password_values`]) reports why the document can't be written without them.
 pub fn has_password_values(doc: &Document) -> bool {
-    !password_dataset_wants(doc).is_empty()
+    !password_dataset_wants(doc).is_ok_and(|w| w.is_empty())
 }
 
 /// Clear typed password values from `doc`'s XFA datasets packet (restoring a template default
 /// where the field has one, else emptying the element), replacing the datasets stream in place
 /// (#3944). Returns how many password fields were cleared in the datasets.
 pub fn clear_password_values(doc: &mut Document) -> Result<usize, XfaError> {
-    let wants = password_dataset_wants(doc);
+    let wants = password_dataset_wants(doc)?;
     if wants.is_empty() {
         return Ok(0);
     }
     let count = wants.len();
     let reuse = datasets_stream_ref(doc);
     let report = rewrite(doc, &[Op::Values(&wants)], reuse)?;
-    if !report.written || !password_dataset_wants(doc).is_empty() {
+    if !report.written || !password_dataset_wants(doc)?.is_empty() {
         let reason = report.warnings.first().map_or("the XFA datasets password values could not be cleared", String::as_str);
         return Err(XfaError::Malformed(reason.to_string()));
     }
