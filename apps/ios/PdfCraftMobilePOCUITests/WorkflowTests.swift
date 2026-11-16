@@ -383,12 +383,12 @@ final class WorkflowTests: XCTestCase {
         }
         XCTAssertTrue(visible, "The PDF thumbnail must be visible before tapping\n" + app.debugDescription)
         // Files can report an invalid accessibility hit point for a visible thumbnail.
-        let thumbnail = item.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            // Compact Simulator Files sheets can ignore a single synthetic tap.
-            thumbnail.doubleTap()
-        } else {
-            thumbnail.tap()
+        item.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        if UIDevice.current.userInterfaceIdiom == .phone && !picker.waitForNonExistence(timeout: 5) {
+            // Retry only an observed ignored Files tap; a blind double-tap can race dismissal.
+            XCTContext.runActivity(named: "Retry ignored Files thumbnail tap") { _ in
+                item.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            }
         }
         XCTAssertTrue(app.otherElements["Browse View (Picker)"].waitForNonExistence(timeout: 20),
                       app.debugDescription)
