@@ -1440,6 +1440,42 @@ fn a_multiline_fit_check_uses_the_shaped_height_the_appearance_draws() {
     }
 }
 
+/// A multi-line field with an automatic size picks one whose lines the appearance can draw: the
+/// height it sizes by counts the shaped top of the first line and the shaped descents, as drawing
+/// and the fit check do. Only at the smallest size (4 pt) may lines still be cut off.
+#[test]
+fn a_multiline_automatic_size_leaves_room_for_shaped_marks() {
+    use crate::appearance::{Overflow, value_overflow};
+    for value in ["ฏู๊ป์ปี่", "اللّٰهُمَّ", "שָׁלוֹם"] {
+        // Without the script's face nothing is shaped (and the value is refused).
+        if pdfcraft_fonts::shaped_text::line_reach(value).is_none() {
+            continue;
+        }
+        for quarter in 0..48 {
+            let height = 10.0 + f64::from(quarter) * 0.25;
+            let objs: Vec<String> = vec![
+                "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+                "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+                "<< /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+                format!(
+                    "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /Ff 4096 /DA (/Helv 0 Tf 0 g) /Rect [50 400 350 {}] /P 3 0 R >>",
+                    400.0 + height
+                ),
+            ];
+            let mut doc = document(&objs);
+            for lines in [1, 2] {
+                set_value(&mut doc, "note", &FieldValue::Text(vec![value; lines].join("\n"))).unwrap();
+                let all = fields(&doc);
+                let f = field(&all, "note");
+                let cut = value_overflow(&doc, f, &f.widgets[0]);
+                assert!(!matches!(cut, Some(Overflow::Tall { size, .. }) if size > 4.0), "{value} x{lines} in {height}: {cut:?}");
+            }
+        }
+    }
+}
+
 /// A single-line field holds its value as a whole, line breaks included, in the refusal as in
 /// the appearance: a font that has the letters but not the break doesn't draw the value, so a
 /// build without the script's face refuses it instead of storing text it draws as `?`.

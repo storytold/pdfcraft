@@ -865,7 +865,25 @@ fn single_line(text: &str, shaped: bool) -> (String, bool) {
 fn multiline_auto_size(enc: &FontText, shaped: bool, text: &str, width: f64, height: f64) -> f64 {
     if shaped {
         // Only the wrapped height bounds a multi-line size; the width of one line is not asked.
-        auto_text_size_by(width, height, true, |_| 0.0, |size| wrapped(enc, shaped, text, size, width).len() as f64 * size * 1.15)
+        // The height is the line count's, or, where shaped marks reach further, what drawing and
+        // [`TextBox::fits`] need: the first line's top down to the lowest descent.
+        auto_text_size_by(
+            width,
+            height,
+            true,
+            |_| 0.0,
+            |size| {
+                let lines = wrapped(enc, shaped, text, size, width);
+                let top = first_line_top(shaped, &lines);
+                let mut above = 0.0;
+                let mut reach = lines.len() as f64 * 1.15;
+                for (line, _) in &lines {
+                    reach = reach.max(top + above + line_descent(shaped, line));
+                    above += 1.15;
+                }
+                reach * size
+            },
+        )
     } else {
         auto_text_size(text, width, height, true, |t, size| enc.width(t, size))
     }
