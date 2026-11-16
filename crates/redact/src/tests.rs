@@ -3539,23 +3539,26 @@ fn forms_with_resources_of_their_own_are_read_in_up_to_65536_scopes() {
 }
 
 /// 255 forms each draw the same 256 forms with resources of their own, as above, so each of those
-/// is read once and taken again 65,024 times, at what it hands on. Drawing one name its own
-/// resources give, 1,000 times, it is cheap to take again, and the read is whole; so it is keeping
-/// one operator of 10,000 operands and a string of 4,096 bytes, which is handed on with only the
-/// last two, as names or null.
-/// Drawing 1,000 such names, or one of 4,096 bytes, or a form without resources whose 1,000 marks
-/// (malformed, a dictionary alone) name nothing, each taking again costs them, and past 2,000,000
-/// the read is partial.
+/// is read once and taken again 254 times (65,024 in all), at what it hands on. Drawing one name
+/// its own resources give, 1,000 times, it is cheap to take again, and the read is whole; so it is
+/// keeping one operator of 10,000 operands and a string of 4,096 bytes, which is handed on with
+/// only the last two, as names or null, and keeping one operator 1,000 times, handed on once.
+/// Drawing 1,000 such names, or one of 4,096 bytes, each taking again costs them, and past
+/// 2,000,000 the read is partial; so for drawing five forms without resources, each holding six
+/// marks (malformed, dictionaries alone) that name nothing, each taken again in each of 65,280
+/// scopes at one for each mark.
 #[test]
 fn a_form_taken_again_costs_the_names_it_hands_on() {
     let long = "X".repeat(4096);
     let names: Vec<u8> = (0..1000).flat_map(|i| format!("/X{i} Do ").into_bytes()).collect();
-    let rows: [(Vec<u8>, String, bool); 5] = [
+    let marks: String = (0..5).map(|i| format!("/G{i} {} 0 R ", 518 + i)).collect();
+    let rows: [(Vec<u8>, String, bool); 6] = [
         (b"/X Do ".repeat(1000), "/Resources << /XObject << /X 516 0 R >> >>".into(), false),
         ([b"0 ".repeat(10_000), format!("({long}) /P0 scn").into_bytes()].concat(), "/Resources << /ProcSet [/PDF] >>".into(), false),
+        (b"/P0 scn ".repeat(1000), "/Resources << /ProcSet [/PDF] >>".into(), false),
         (names, "/Resources << /XObject 517 0 R >>".into(), true),
         (format!("/{long} Do").into_bytes(), format!("/Resources << /XObject << /{long} 516 0 R >> >>"), true),
-        (b"/G Do".to_vec(), "/Resources << /XObject << /G 518 0 R >> >>".into(), true),
+        (b"/G0 Do /G1 Do /G2 Do /G3 Do /G4 Do".to_vec(), format!("/Resources << /XObject << {marks}>> >>"), true),
     ];
     for (content, own, partial) in rows {
         let seconds: String = (0..256).map(|i| format!("/S{i} {} 0 R ", 4 + i)).collect();
@@ -3574,7 +3577,9 @@ fn a_form_taken_again_costs_the_names_it_hands_on() {
         objs.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b""));
         let xs: String = (0..1000).map(|i| format!("/X{i} 516 0 R ")).collect();
         objs.push(format!("<< {xs}>>").into_bytes());
-        objs.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b"<< >> BDC EMC ".repeat(1000)));
+        for _ in 0..5 {
+            objs.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b"BDC << >> BDC << >> << >> BDC DP << >> DP << >> << >> DP"));
+        }
         let doc = pdf(objs);
         let firsts: Dict = (0..255u32).map(|i| (format!("F{i}").into_bytes(), Object::Ref(ObjRef::new(260 + i, 0)))).collect();
         let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(firsts))]);

@@ -148,7 +148,7 @@ resources of its own inside such a form reads the page's properties, and the pag
 cleanups of a page's and form's own resources read a form with resources of its own once for the
 page, within one allowance of a page and 2,000,000 of such forms' operators that all of the page's
 cleanups share (a form taken again costs what it hands on: each name it draws and each operator it
-keeps, a name counted with its bytes; of an operator only what the cleanups read is kept, its last
+keeps, each once, a name counted with its bytes; of an operator only what the cleanups read is kept, its last
 two operands where they are names), not following a form drawn inside itself again nor a chain
 deeper than the walk follows forms, where the renderer draws nothing either; the font cleanup, with
 no Type 3 font listed, doesn't read them. The cleanups made once for the whole operation (the
@@ -181,12 +181,15 @@ skipping that mark. The count covers the marks on the pages being applied.
 
 Tiling-pattern cells are separate streams. Applying a mark removes a pattern resource when no
 surviving paint uses it. A form the walk leaves as it is, because it reaches no mark, still paints
-all it did: the patterns it selects through the names it is drawn with count as used. Such a form
-is read for them only where those names give a pattern, once for each chain of forms it is drawn
-in, and no more than 4,096 times on a page, within an allowance of a page for forms without
-resources of their own and another for forms with them; where it can't all be read (it doesn't
-decode, the parser passes over bytes in it, or a limit is passed), Apply refuses rather than
-remove a pattern. If a cell remains reachable after rewriting the selected pages and may
+all it did: the patterns it selects through the names it is drawn with count as used, and where
+it, or a form inside it, sets a Type 3 font without resources of its own (by `Tf` or a graphics
+state's `/Font`), whose glyphs paint through those names, the page keeps every pattern it
+selected, as for such a font the walk meets. Such a form is read for them only where those names
+give a pattern, once for each chain of forms it is drawn in, and no more than 4,096 times on a
+page, within an allowance of a page for forms without resources of their own and another, with
+2,000,000 operators, for forms with them; where it can't all be read (it doesn't decode, the
+parser passes over bytes in it, or a limit is passed), Apply refuses rather than remove a
+pattern. If a cell remains reachable after rewriting the selected pages and may
 contain text, images, replacement descriptions, or unreadable content, Apply refuses with a
 `RedactError::Pattern` and restores the document and pending marks. This includes patterns owned
 by Forms and patterns inherited by Forms. Vector-only retained cells remain supported. The

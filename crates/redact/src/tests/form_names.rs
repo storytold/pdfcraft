@@ -1899,22 +1899,33 @@ fn a_rewritten_forms_cleanups_read_forms_with_resources_within_one_allowance_a_p
     assert!(read <= 2_000_001, "{read}");
 }
 
-/// The same, `/S` setting a graphics state its own resources don't give 100,000 times: read once,
-/// it is taken again for each rewritten `/W` at what it keeps, so the page's 2,000,000 operators run
-/// out, and the redaction is refused rather than drop `/W`, which `/S` may then draw.
+/// The same, `/S` setting graphics states its own resources don't give 100,000 times: read once, it
+/// is taken again for each rewritten `/W` at what it keeps. Setting one state each time, it keeps
+/// that one once, and the page is redacted (its cleanups then read the rewritten `/W`s too);
+/// setting 100,000 states, the page's 2,000,000 operators run out, and the redaction is refused
+/// rather than drop `/W`, which `/S` may then draw.
 #[test]
 fn a_form_taken_again_and_again_costs_what_it_keeps() {
-    let w = stream(
-        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> /XObject << /S 8 0 R >> >>",
-        b"BT /F1 10 Tf 20 250 Td (SECRET) Tj ET /S Do",
-    );
-    let s = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100] /Resources << /ProcSet [/PDF] >>", b"/a gs ".repeat(100_000));
-    let mut doc = one_page(&b"/W Do ".repeat(64), "/XObject << /W 7 0 R >>", vec![w, s]);
-    mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
-    crate::interp::SCOPED_OPS_READ.with(|c| c.set(0));
-    let out = apply(&mut doc, None);
-    assert!(refused_past_what_is_read(&out), "{out:?}");
-    assert_eq!(crate::interp::SCOPED_OPS_READ.with(std::cell::Cell::get), 100_000);
+    let one = b"/a gs ".repeat(100_000);
+    let each: Vec<u8> = (0..100_000).flat_map(|i| format!("/a{i} gs ").into_bytes()).collect();
+    for (content, redacted) in [(one, true), (each, false)] {
+        let w = stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> /XObject << /S 8 0 R >> >>",
+            b"BT /F1 10 Tf 20 250 Td (SECRET) Tj ET /S Do",
+        );
+        let s = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 100] /Resources << /ProcSet [/PDF] >>", &content);
+        let mut doc = one_page(&b"/W Do ".repeat(64), "/XObject << /W 7 0 R >>", vec![w, s]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        crate::interp::SCOPED_OPS_READ.with(|c| c.set(0));
+        let out = apply(&mut doc, None);
+        if redacted {
+            assert_eq!(out.map(|r| r.glyphs), Ok(64 * 6));
+        } else {
+            assert!(refused_past_what_is_read(&out), "{out:?}");
+        }
+        let read = crate::interp::SCOPED_OPS_READ.with(std::cell::Cell::get);
+        assert!((100_000..101_000).contains(&read), "redacted {redacted}: {read}");
+    }
 }
 
 /// Sixty forms beside the mark, each with resources of its own giving the next: the cleanups follow

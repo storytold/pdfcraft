@@ -750,13 +750,15 @@ impl ScopedReads {
 
 /// What [`resource_ops_from`] works out of the forms it reads, kept for the reads that share it
 /// ([`ScopedReads`]): each form's own resources, in the categories it looks names up in, each
-/// category copied once for however many forms give it the same way ([`CategoryGiven`]), and what
-/// the objects they give are.
+/// category copied once for however many forms give it the same way ([`CategoryGiven`]), what the
+/// objects they give are, and which fonts and graphics states set a Type 3 font without resources
+/// of its own ([`sets_type3`]).
 #[derive(Default)]
 struct ReadCache {
     own_of: HashMap<ObjRef, Rc<OwnResources>>,
     copies: HashMap<CategoryGiven, Rc<Dict>>,
     kinds: Kinds,
+    type3: HashMap<(ObjRef, Category), bool>,
 }
 
 /// How a form gives one of its own categories, so that forms giving it the same way share one copy:
@@ -793,6 +795,7 @@ pub(crate) fn resource_ops_from(
     let mut seen = HashSet::new();
     let cache = &mut scoped.cache;
     let mut partial = false;
+    let mut type3 = false;
     let mut cursor = 0;
     while let Some((name, scope)) = draws.get(cursor).cloned() {
         cursor += 1;
@@ -905,12 +908,13 @@ pub(crate) fn resource_ops_from(
                             }
                             let marks = page_properties && matches!(op.op.as_slice(), b"BDC" | b"DP");
                             let own = child.and_then(|i| scopes.get(i)).filter(|_| !page_properties);
-                            if marks
-                                || Category::of(&op).is_some_and(|(category, name)| {
-                                    own.is_none_or(|own| own.own.gives(doc, category, name, &mut cache.kinds).is_none())
-                                })
-                            {
-                                read.kept.push(slim(op));
+                            let looked = Category::of(&op)
+                                .map(|(category, name)| (category, own.and_then(|own| own.own.gives(doc, category, name, &mut cache.kinds))));
+                            match looked {
+                                Some((category, Some(entry))) => read.type3 |= sets_type3(doc, category, &entry, &mut cache.type3),
+                                Some((_, None)) => read.kept.push(slim(op)),
+                                None if marks => read.kept.push(slim(op)),
+                                None => {}
                             }
                         }
                         read.partial |= parsed.skipped() > 0;
@@ -918,6 +922,11 @@ pub(crate) fn resource_ops_from(
                 }
                 read.draws.sort_unstable();
                 read.draws.dedup();
+                // The cleanups ask only whether an operator is there, so each is handed on once.
+                let order =
+                    |a: &Op, b: &Op| a.op.cmp(&b.op).then_with(|| a.operands.iter().map(Object::as_name).cmp(b.operands.iter().map(Object::as_name)));
+                read.kept.sort_unstable_by(order);
+                read.kept.dedup_by(|a, b| order(a, b).is_eq());
                 let names = |sum: usize, name: &[u8]| sum.saturating_add(name.len()).saturating_add(1);
                 let drawn = read.draws.iter().fold(1, |sum, name| names(sum, name));
                 read.weight =
@@ -928,15 +937,60 @@ pub(crate) fn resource_ops_from(
             }
         };
         partial |= read.partial;
+        type3 |= read.type3;
         draws.extend(read.draws.iter().map(|n| (n.clone(), child)));
         for op in &read.kept {
             let marks = page_properties && matches!(op.op.as_slice(), b"BDC" | b"DP");
-            if marks || Category::of(op).is_some_and(|(category, name)| given_in(doc, &scopes, child, category, name, &mut cache.kinds).is_none()) {
-                ops.push(op.clone());
+            match Category::of(op).map(|(category, name)| (category, given_in(doc, &scopes, child, category, name, &mut cache.kinds))) {
+                Some((category, Some(entry))) => type3 |= sets_type3(doc, category, &entry, &mut cache.type3),
+                Some((_, None)) => ops.push(op.clone()),
+                None if marks => ops.push(op.clone()),
+                None => {}
             }
         }
     }
-    Ok(Drawn { ops, partial })
+    Ok(Drawn { ops, partial, type3 })
+}
+
+/// Whether what `drawn` reads sets a Type 3 font without resources of its own ([`sets_type3`]):
+/// through the names of a form on the way ([`Drawn::type3`]), or by an operator of `drawn.ops`
+/// naming one that `res`, the names read, give. Each name is looked up once, and each object read
+/// once for the reads that share `scoped`.
+pub(crate) fn sets_type3_drawn(doc: &Document, scoped: &mut ScopedReads, res: &Dict, drawn: &Drawn) -> bool {
+    if drawn.type3 {
+        return true;
+    }
+    let fonts = res.get(b"Font").map(|names| doc.resolve(names));
+    let states = res.get(b"ExtGState").map(|names| doc.resolve(names));
+    let mut asked = HashSet::new();
+    drawn.ops.iter().filter_map(Category::of).any(|(category, name)| {
+        let names = match category {
+            Category::Font => &fonts,
+            Category::ExtGState => &states,
+            Category::XObject | Category::Pattern => return false,
+        };
+        asked.insert((category, name))
+            && names
+                .as_ref()
+                .and_then(|names| names.as_dict())
+                .and_then(|names| names.get(name))
+                .is_some_and(|entry| sets_type3(doc, category, entry, &mut scoped.cache.type3))
+    })
+}
+
+/// Whether `entry`, given for `category`, sets a Type 3 font without resources of its own, whose
+/// glyphs then paint through the names of what shows them: such a font (`Tf`), or a graphics state
+/// whose `/Font` is one (`gs`). Each object is read once, into `cache`.
+fn sets_type3(doc: &Document, category: Category, entry: &Object, cache: &mut HashMap<(ObjRef, Category), bool>) -> bool {
+    let read = || match category {
+        Category::Font => doc.resolve(entry).as_dict().is_some_and(|font| super::type3_without_resources(doc, font)),
+        Category::ExtGState => super::state_sets_type3(doc, entry),
+        Category::XObject | Category::Pattern => false,
+    };
+    match entry {
+        Object::Ref(r) => *cache.entry((*r, category)).or_insert_with(read),
+        _ => read(),
+    }
 }
 
 /// `op` as the cleanups read a kept operator: its keyword, and of its operands the last two, each
@@ -950,12 +1004,14 @@ fn slim(op: Op) -> Op {
 
 /// What reading a form with resources of its own, or one drawn inside such a form, gave: the names
 /// it draws, each once, the operators that may look a name up past it ([`resource_ops`]) as
-/// [`slim`] keeps them, whether it wasn't all read, and what taking it again costs of [`MAX_OPS`]:
-/// one for each operator, one for each name with its bytes, and one.
+/// [`slim`] keeps them, each once, whether it sets a Type 3 font without resources of its own that
+/// its own resources give ([`sets_type3`]), whether it wasn't all read, and what taking it again
+/// costs of [`MAX_OPS`]: one for each operator, one for each name with its bytes, and one.
 #[derive(Default)]
 struct FormRead {
     draws: Vec<Vec<u8>>,
     kept: Vec<Op>,
+    type3: bool,
     partial: bool,
     weight: usize,
 }
@@ -967,6 +1023,10 @@ pub(crate) struct Drawn {
     /// Whether a form with resources of its own that the content draws wasn't all read, so that it
     /// may still draw a name `ops` doesn't.
     pub(crate) partial: bool,
+    /// Whether such a form, or one inside it, sets a Type 3 font without resources of its own that
+    /// the names of a form on the way give ([`sets_type3`]); one that the names read give is set by
+    /// an operator among `ops`.
+    pub(crate) type3: bool,
 }
 
 /// Before a cleanup removes a name what it read doesn't use: an error when that read was

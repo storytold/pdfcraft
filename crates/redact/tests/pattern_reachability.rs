@@ -213,6 +213,34 @@ fn a_type3_font_with_null_resources_keeps_the_page_pattern() {
     doc.update_dict(pdfcraft_cos::ObjRef::new(7, 0), |d| d.set(b"Resources".to_vec(), Object::Null)).unwrap();
     assert_glyph_kept(doc);
 }
+/// The Type 3 font is shown by a form clear of the mark, which the walk leaves as it is: set by
+/// `Tf` through the page's names, from a form with resources of its own that don't give it, from
+/// that form's own `/Font`, by an ExtGState's `/Font`, and from the `/Font` of a form drawing the
+/// one that shows it.
+#[test]
+fn a_type3_glyph_in_a_form_clear_of_the_mark_keeps_the_page_pattern() {
+    let clear = "/Type /XObject /Subtype /Form /BBox [290 220 350 280]";
+    let shows = b"BT /T3 1 Tf 300 230 Td (a) Tj ET\n".as_slice();
+    let rows: [(&str, Vec<Vec<u8>>); 5] = [
+        ("", vec![stream_obj(clear, shows)]),
+        ("", vec![stream_obj(&format!("{clear} /Resources << /ProcSet [/PDF] >>"), shows)]),
+        ("", vec![stream_obj(&format!("{clear} /Resources << /Font << /T3 7 0 R >> >>"), shows)]),
+        (
+            "/ExtGState << /GS 10 0 R >>",
+            vec![stream_obj(clear, b"/GS gs BT 300 230 Td (a) Tj ET\n"), b"<< /Type /ExtGState /Font [7 0 R 1] >>".to_vec()],
+        ),
+        (
+            "",
+            vec![
+                stream_obj(&format!("{clear} /Resources << /Font << /T3 7 0 R >> /XObject << /B 10 0 R >> >>"), b"/B Do\n"),
+                stream_obj(&format!("{clear} /Resources << /ProcSet [/PDF] >>"), shows),
+            ],
+        ),
+    ];
+    for (extra, objs) in rows {
+        assert_glyph_kept(type3_page(&format!("/XObject << /Fm 9 0 R >> {extra}"), b"/Fm Do\n/Pattern cs /P0 scn 35 110 170 35 re f\n", objs));
+    }
+}
 /// Known limit (fidelity only, never a leak: a missed use can only prune more). Kept annotation
 /// appearances are not interpreted for pattern use, so a Type 3 font without resources shown in
 /// one does not keep the page's patterns. ISO 32000 resolves the glyph's names in the

@@ -36,7 +36,7 @@ pub(crate) use prune::{
     ScopedReads, may_remove, prune, prune_patterns, prune_properties, resource_ops, resource_ops_with, unlink_doomed, unlink_pruned_patterns,
     unlink_undrawn,
 };
-use prune::{clip_out, extgstate_font, prune_form_resources, resource_ops_from};
+use prune::{clip_out, extgstate_font, prune_form_resources, resource_ops_from, sets_type3_drawn};
 
 /// How deep this pass follows form XObjects. A form past it is removed rather than walked, which
 /// is the fail-safe choice for a redaction -- marked content inside a form we cannot read would
@@ -216,8 +216,9 @@ pub(crate) struct Output {
     pub patterns_seen: Vec<Vec<u8>>,
     pub patterns_painted: Vec<Vec<u8>>,
     /// A Type 3 glyph without resources of its own was shown in this scope or a nested form,
-    /// through a font set by `Tf` or an ExtGState: which of the page's patterns it paints with is
-    /// not tracked, so the page keeps them all.
+    /// through a font set by `Tf` or an ExtGState, or such a font is set by a form left as it is
+    /// ([`unwalked_patterns`]): which of the page's patterns it paints with is not tracked, so the
+    /// page keeps them all.
     pub keeps_all_patterns: bool,
     /// A form left as it is in this scope or a nested form may paint with patterns that couldn't
     /// be read ([`unwalked_patterns`]): pruning the page's patterns then fails.
@@ -553,10 +554,12 @@ fn walk_form(doc: &mut Document, scope: &mut Scope<'_>, data: &[Vec<u8>], names:
 type Picked = Option<Rc<Selected>>;
 
 /// The pattern names a form left as it is selects, each once, and what they weigh: each its length
-/// and 32 bytes ([`MAX_UNWALKED_BYTES`]).
+/// and 32 bytes ([`MAX_UNWALKED_BYTES`]); and whether it sets a Type 3 font without resources of
+/// its own, whose glyphs may paint with any pattern the names give.
 struct Selected {
     names: Vec<Vec<u8>>,
     bytes: usize,
+    type3: bool,
 }
 
 /// How many forms left as they are a page reads for the patterns they select
@@ -571,7 +574,8 @@ const MAX_UNWALKED_BYTES: usize = 16 << 20;
 
 /// A form drawn with `op` that the walk leaves as it is (it reaches no mark) still paints all it
 /// did, so the patterns it selects through `resources` are painted, and [`prune_patterns`] keeps
-/// them. It is read as the cleanups read what draws through these names ([`resource_ops_from`],
+/// them; where it sets a Type 3 font without resources of its own, every pattern is kept
+/// ([`Output::keeps_all_patterns`]). It is read as the cleanups read what draws through these names ([`resource_ops_from`],
 /// through `xobjects`), only where `resources` give a pattern (told once for each chain of walked
 /// forms), and once for each chain it is drawn in; its names, each once, are counted once in each
 /// scope. Where that can't all be read, or past [`MAX_UNWALKED`] such reads or
@@ -603,8 +607,9 @@ fn unwalked_patterns(doc: &Document, scope: &mut Scope<'_>, out: &mut Output, re
                     names.sort_unstable();
                     names.dedup();
                     let bytes = names.iter().fold(0usize, |sum, name| sum.saturating_add(name.len()).saturating_add(32));
+                    let type3 = sets_type3_drawn(doc, &mut scope.unwalked_scoped, resources, &drawn);
                     // Kept only where they can be counted here.
-                    (bytes <= room).then(|| Rc::new(Selected { names, bytes }))
+                    (bytes <= room).then(|| Rc::new(Selected { names, bytes, type3 }))
                 }
                 _ => None,
             };
@@ -622,6 +627,8 @@ fn unwalked_patterns(doc: &Document, scope: &mut Scope<'_>, out: &mut Output, re
             #[cfg(test)]
             UNWALKED_NAMES.with(|c| c.set(c.get() + selected.names.len()));
             out.patterns_painted.extend(selected.names.iter().cloned());
+            // Its Type 3 glyphs may paint with any of the page's patterns, as one the walk shows.
+            out.keeps_all_patterns |= selected.type3;
         }
         _ => {
             out.patterns_unknown = true;
@@ -1769,7 +1776,12 @@ fn xobject(
 
 /// Whether the ExtGState `name` sets a Type 3 font that has no `/Resources` of its own.
 fn extgstate_type3_inherits(doc: &Document, ext_gstates: &Dict, name: &[u8]) -> bool {
-    let Some(state) = ext_gstates.get(name).map(|s| doc.resolve(s)) else { return false };
+    ext_gstates.get(name).is_some_and(|state| state_sets_type3(doc, state))
+}
+
+/// Whether the graphics state `state` sets a Type 3 font that has no `/Resources` of its own.
+fn state_sets_type3(doc: &Document, state: &Object) -> bool {
+    let state = doc.resolve(state);
     let Some(font) = state.as_dict().and_then(|d| d.get(b"Font")).map(|f| doc.resolve(f)) else { return false };
     let Some(reference) = font.as_array().and_then(|a| a.first()) else { return false };
     let dict = doc.resolve(reference);
