@@ -75,13 +75,18 @@ impl PdfCraftApp {
         }
         // A document-level script failed or was skipped (today, one over the 256 KiB limit):
         // say so where the user looks, not only in the JavaScript console. Field-script
-        // errors stay console-only. The console keeps the whole text; the toast names the
-        // first error, shortened.
+        // errors stay console-only. The console keeps the whole text; the notice names the
+        // first error, shortened. It joins the form-message queue at the front: this run may
+        // also ask to submit, whose notice takes the toast, and a notice set now would be
+        // replaced before it was seen.
+        let empty = out.is_empty();
+        let mut alerts = out.alerts;
         if let Some(first) = out.doc_errors.first() {
             let detail = short_doc_error(first);
-            self.notify_fmt("A document script couldn't run: {detail}", &[("detail", &detail)]);
+            let text = crate::i18n::fmt(tl!("A document script couldn't run: {detail}"), &[("detail", &detail)]);
+            alerts.insert(0, Message { text, icon: MessageIcon::Error, ..Default::default() });
         }
-        if out.is_empty() {
+        if empty && alerts.is_empty() {
             return;
         }
         self.js_console.log.extend(out.console.iter().cloned());
@@ -138,7 +143,7 @@ impl PdfCraftApp {
                 Request::Beep | Request::Reset(_) => {}
             }
         }
-        self.show_script_messages(out.alerts);
+        self.show_script_messages(alerts);
     }
 
     fn focus_script_field(&mut self, id: DocId, view: Option<usize>, name: &str, object_id: Option<u64>) {
@@ -581,6 +586,30 @@ mod doc_error_notice_tests {
         assert!(app.js_console.log.iter().any(|l| l.contains(detail)), "{:?}", app.js_console.log);
         app.handle_js(id, JsOutput::default());
         assert_eq!(app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default(), toast, "an empty frame repeats nothing");
+    }
+
+    /// #7382: a failed document script's notice is not lost when the same output also asks to
+    /// submit: the submit notice takes the toast now and the error follows in the queue.
+    #[test]
+    fn a_document_script_error_waits_for_the_runs_submit_notice() {
+        let (mut app, id) = app();
+        let detail = "document script 1: TypeError: boom";
+        app.handle_js(
+            id,
+            JsOutput {
+                doc_errors: vec![detail.into()],
+                requests: vec![Request::Submit("https://example.test/form".into())],
+                ..Default::default()
+            },
+        );
+        let shown = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(shown.contains("form asks to be submitted"), "{shown}");
+        assert_eq!(app.script_messages.len(), 1, "the error notice waits its turn");
+        assert!(app.script_messages[0].text.contains("document script"), "{:?}", app.script_messages);
+        app.toast = None;
+        assert!(app.next_script_message());
+        let after = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(after.contains("document script") && after.contains("boom"), "{after}");
     }
 
     #[test]
