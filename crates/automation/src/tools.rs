@@ -1606,7 +1606,6 @@ pub fn tools() -> Vec<ToolDef> {
             .cmd("ocr.recognize")
             .with(schema(json!({}), &[])),
         t("ocr_adaptive_compress", "Adaptive scan compression (MRC/Otsu)", "Scan & OCR ▸ Adaptive compression of scans: detect near-bilevel grayscale and RGB scans of text documents, apply heuristic dual-guard (chroma and bimodal histogram) Otsu thresholding with content-loss prevention, and pack samples to 1-bit monochrome bitmaps compressed with CCITT Group 4 or Flate. Preserves photographs, color artwork, and prepress assets with soft masks or ICC profiles.")
-            .cmd("ocr.adaptive_compress")
             .with(schema(
                 json!({
                     "doc": doc(),
