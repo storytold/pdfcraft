@@ -428,16 +428,15 @@ fn masters_of(
             skipped = skipped.saturating_add(1);
             continue;
         }
-        let Some(first_index) = group.members().first().copied() else {
-            skipped = skipped.saturating_add(1);
-            continue;
-        };
-        let Some(first) = glyphs.get(first_index) else {
-            skipped = skipped.saturating_add(1);
-            continue;
-        };
-        let page_baseline = baseline_of(first, lines);
-        let Some(baseline) = baseline_in_prototype(anchor[1], page_baseline, first.component.centroid[1]) else {
+        let mut prototype_baselines = Vec::new();
+        for &index in group.members() {
+            let Some(glyph) = glyphs.get(index) else { continue };
+            let page_baseline = baseline_of(glyph, lines);
+            if let Some(b) = baseline_in_prototype(anchor[1], page_baseline, glyph.component.centroid[1]) {
+                prototype_baselines.push(b);
+            }
+        }
+        let Some(baseline) = median(&mut prototype_baselines) else {
             skipped = skipped.saturating_add(1);
             continue;
         };
@@ -1279,5 +1278,47 @@ mod tests {
         };
         assert!(sample(42, 42) < 80, "stroke ink must stay visible, got {}", sample(42, 42));
         assert!(sample(42, 54) > 200, "truncated outer must not fill the hole, got {}", sample(42, 54));
+    }
+
+    #[test]
+    fn cluster_baseline_uses_median_across_members_not_just_first() {
+        let (width, height) = (180_u32, 160_u32);
+        // Three identical stems ('I') at y = 20..40, 60..80, 100..120.
+        let pixels = marked_page(width, height, &[[30, 20, 36, 40], [30, 60, 36, 80], [30, 100, 36, 120]]);
+        let out = clearscan_image(
+            ScanRaster { pixels: &pixels, width, height, channels: 1, points_per_pixel: 1.0 },
+            &tuned(1, 1.0),
+            |_| {
+                let line = |top: f32, bottom: f32, baseline: f32| AnnotatedLine {
+                    words: vec![AnnotatedWord {
+                        text: "I".into(),
+                        rect: [30.0, top, 36.0, bottom],
+                        chars: vec![CharBox { char: 'I', rect: [30.0, top, 36.0, bottom] }],
+                    }],
+                    baseline,
+                    x_height: 10.0,
+                    cap_height: 20.0,
+                    descent: 0.0,
+                };
+                // First line has a descender-skewed baseline (+10 px below the stem bottom);
+                // lines 2 and 3 sit on the true baseline (bottom).
+                Ok(vec![line(20.0, 40.0, 50.0), line(60.0, 80.0, 80.0), line(100.0, 120.0, 120.0)])
+            },
+            no_progress,
+        )
+        .expect("median cluster baseline");
+        assert_eq!(out.clusters, 1, "all three stems cluster into one master");
+
+        let mut renderer = PageRenderer::new(Arc::new(out.pdf), RenderConfig::default());
+        let rendered = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..RenderRequest::default() });
+        assert!(rendered.error.is_none(), "{:?}", rendered.error);
+        let sample = |x: u32, y: u32| -> u8 {
+            let idx = (y as usize * rendered.width as usize + x as usize) * 4;
+            rendered.rgba[idx]
+        };
+        // With the median baseline across members, lines 2 and 3 draw at their true vertical
+        // positions (centres at y = 70 and y = 110), rather than being shifted up by 10 px.
+        assert!(sample(33, 75) < 80, "second stem lower half must stay dark at y=75, got {}", sample(33, 75));
+        assert!(sample(33, 115) < 80, "third stem lower half must stay dark at y=115, got {}", sample(33, 115));
     }
 }

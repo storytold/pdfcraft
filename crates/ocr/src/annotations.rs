@@ -68,9 +68,13 @@ fn union(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]
 }
 
+fn is_descender_char(c: char) -> bool {
+    "gjpqyQ".contains(c)
+}
+
 /// A word's letters that reach below the baseline.
 fn has_descender(word: &AnnotatedWord) -> bool {
-    word.text.chars().any(|c| "gjpqyQ".contains(c))
+    word.text.chars().any(is_descender_char)
 }
 
 /// A word's tall letters: capitals, digits and ascending lowercase, which reach about the
@@ -108,8 +112,17 @@ impl AnnotatedLine {
     pub fn measure(words: Vec<AnnotatedWord>) -> AnnotatedLine {
         let bottoms = |filter: fn(&AnnotatedWord) -> bool| words.iter().filter(|w| filter(w)).map(|w| w.rect[3]).collect::<Vec<_>>();
         let tops = |filter: fn(&AnnotatedWord) -> bool| words.iter().filter(|w| filter(w)).map(|w| w.rect[1]).collect::<Vec<_>>();
-        // The baseline: where the words that sit on it end.
-        let baseline = median(bottoms(|w| !has_descender(w))).or_else(|| median(bottoms(|_| true))).unwrap_or(0.0);
+        let char_bottoms = || {
+            words
+                .iter()
+                .flat_map(|w| &w.chars)
+                .filter(|c| c.char.is_alphanumeric() && !is_descender_char(c.char))
+                .map(|c| c.rect[3])
+                .collect::<Vec<_>>()
+        };
+        // The baseline: where the words (or, when every word has a descender, the non-descender
+        // characters) that sit on it end.
+        let baseline = median(bottoms(|w| !has_descender(w))).or_else(|| median(char_bottoms())).or_else(|| median(bottoms(|_| true))).unwrap_or(0.0);
         // Heights above it, from the tops of the words that reach each height.
         let cap_height = median(tops(has_cap)).map_or(0.0, |top| (baseline - top).max(0.0));
         let x_height = median(tops(is_x_height_only)).map_or(0.0, |top| (baseline - top).max(0.0));
@@ -235,6 +248,33 @@ mod tests {
         let line = AnnotatedLine::measure(words);
         assert_eq!(line.baseline, 125.0, "the median of the bottoms");
         assert_eq!(line.descent, 5.0);
+    }
+
+    #[test]
+    fn a_line_where_every_word_has_a_descender_uses_non_descender_char_bottoms() {
+        let words = vec![
+            AnnotatedWord {
+                text: "gap".into(),
+                rect: [0.0, 55.0, 30.0, 125.0],
+                chars: vec![
+                    CharBox { char: 'g', rect: [0.0, 55.0, 10.0, 125.0] },
+                    CharBox { char: 'a', rect: [10.0, 55.0, 20.0, 100.0] },
+                    CharBox { char: 'p', rect: [20.0, 55.0, 30.0, 125.0] },
+                ],
+            },
+            AnnotatedWord {
+                text: "dog".into(),
+                rect: [40.0, 30.0, 70.0, 125.0],
+                chars: vec![
+                    CharBox { char: 'd', rect: [40.0, 30.0, 50.0, 100.0] },
+                    CharBox { char: 'o', rect: [50.0, 55.0, 60.0, 100.0] },
+                    CharBox { char: 'g', rect: [60.0, 55.0, 70.0, 125.0] },
+                ],
+            },
+        ];
+        let line = AnnotatedLine::measure(words);
+        assert_eq!(line.baseline, 100.0, "non-descender chars anchor the baseline");
+        assert_eq!(line.descent, 25.0);
     }
 
     /// No lowercase: the x-height is inferred from the cap height through the ratio.
