@@ -363,9 +363,11 @@ impl Session {
             clock: self.clock,
             utc_offset: self.utc_offset,
             trust: self.trust.clone(),
+            captions: self.captions.clone(),
             js_off: self.js_off,
             date_format: self.date_format.clone(),
             date_language: self.date_language.clone(),
+            field_highlight: self.field_highlight,
             xfa_time_scale: self.xfa_time_scale,
         })
     }
