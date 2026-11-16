@@ -238,6 +238,77 @@ trailer << /Root 1 0 R >>
     assert!(t == t_comma, "the t of ț must be the t's pixels");
 }
 
+/// A page in Helvetica showing `text` (character codes `<01>`, `<02>`, … naming the glyphs in
+/// `glyphs`) at `size` points with its baseline at `(x, y)`, one show per entry; at scale 1 one
+/// point is one pixel.
+fn helvetica(width: u32, height: u32, glyphs: &str, shows: &[(f32, f32, f32, &str)]) -> Vec<u8> {
+    let content: String = shows.iter().map(|(size, x, y, codes)| format!("BT /F1 {size} Tf 1 0 0 1 {x} {y} Tm <{codes}> Tj ET\n")).collect();
+    format!(
+        "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica
+  /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [1 {glyphs}] >> >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    )
+    .into_bytes()
+}
+
+/// A glyph across a tile's edge is drawn in the tile as in the whole page, its baseline on a half
+/// pixel included. Rounding took halves away from zero: a baseline at row 20.5 went to row 21 in
+/// the page and, at -0.5 in a tile starting at row 21, to row 20 there, so the descenders below it
+/// were a row off in the tile.
+#[test]
+fn a_glyph_across_a_tile_edge_on_a_half_pixel_baseline_matches_the_whole_page() {
+    // At scale 1 a baseline 19.5 pt from the bottom of a 40 pt page is at row 20.5 from the top.
+    let pdf = helvetica(60, 40, "/p /g /y", &[(10.0, 5.0, 19.5, "010203")]);
+    let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let full = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+    let tile = Tile { x: 0, y: 21, w: 60, h: 19 };
+    let part = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: Some(tile), scale: 1.0, tag: 0, ..Default::default() });
+    assert!(full.error.is_none() && part.error.is_none(), "{:?} {:?}", full.error, part.error);
+    assert!(part.rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[0] < 128), "the descenders reach into the tile");
+    for y in 0..19u32 {
+        for x in 0..60u32 {
+            let a = &full.rgba[(((y + 21) * full.width + x) * 4) as usize..][..4];
+            let b = &part.rgba[((y * 60 + x) * 4) as usize..][..4];
+            assert_eq!(a, b, "pixel {x},{} of the page", y + 21);
+        }
+    }
+}
+
+/// The comma under a letter the stand-in builds from two glyphs (Helvetica's `ț`) is drawn at
+/// three quarters of the letter's size, and is fitted at that size: row by row it has the ink of
+/// the font's own comma drawn at that size. Fitted at the letter's size and then shrunk, its
+/// edges fell between rows again.
+#[test]
+fn a_comma_below_is_fitted_at_the_size_it_is_drawn() {
+    // ț at 40 pt and the comma alone at 30 pt, both on whole-pixel baselines.
+    let pdf = helvetica(120, 80, "/uni021B /comma", &[(40.0, 10.0, 20.0, "01"), (30.0, 70.0, 20.0, "02")]);
+    let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    // The ink of each row of the columns `left..right`, from row `top` down, without the empty
+    // rows before and after it.
+    let rows = |left: u32, right: u32, top: u32| -> Vec<f32> {
+        let sums: Vec<f32> = (top..page.height).map(|y| (left..right).map(|x| ink(&page, x, y)).sum()).collect();
+        let first = sums.iter().position(|&s| s > 0.05).unwrap_or(sums.len());
+        let last = sums.iter().rposition(|&s| s > 0.05).map_or(first, |i| i + 1);
+        sums[first..last].to_vec()
+    };
+    // Below the baseline (row 60) and the row of the t's overshoot, only the comma of ț is inked.
+    let (built, own) = (rows(5, 50, 61), rows(60, 110, 0));
+    assert!(!own.is_empty() && built.len() == own.len(), "the commas span {} and {} rows", built.len(), own.len());
+    for (row, (b, o)) in built.iter().zip(&own).enumerate() {
+        assert!((b - o).abs() <= 0.1, "row {row} of the comma: {b:.2} under ț, {o:.2} alone");
+    }
+}
+
 /// Hinting off renders as before the patch: hayro's default leaves glyph outlines as they are.
 #[test]
 fn hayro_hints_only_when_asked() {

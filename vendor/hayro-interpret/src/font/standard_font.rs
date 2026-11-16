@@ -495,7 +495,11 @@ impl StandardKind {
     /// moved along the slant; an ogonek hangs from the letter's right edge; a comma below is
     /// the font's comma, smaller, under the baseline.
     fn composite_outline(&self, glyph: GlyphId) -> Option<BezPath> {
-        self.composite_outline_from(glyph, &|g| Some(self.base_font_blob.outline_glyph(g)), None)
+        self.composite_outline_from(
+            glyph,
+            &|g, _| Some(self.base_font_blob.outline_glyph(g)),
+            None,
+        )
     }
 
     /// The base letter, mark and placement of `glyph` when it is an accented letter the
@@ -508,23 +512,33 @@ impl StandardKind {
     }
 
     /// The accented letter `glyph` built from the outlines `part` gives its base letter and
-    /// mark. PdfCraft patch (111): `ppem`, when the parts are fitted to the grid at that size,
-    /// moves the mark by whole pixels up or down so it stays fitted too.
+    /// mark, each asked for with the scale it is drawn at (a comma below is drawn smaller).
+    /// PdfCraft patch (111): `ppem`, when the parts are fitted to the grid at the size they are
+    /// drawn, moves the mark by whole pixels up or down so it stays fitted too.
     fn composite_outline_from(
         &self,
         glyph: GlyphId,
-        part: &dyn Fn(GlyphId) -> Option<BezPath>,
+        part: &dyn Fn(GlyphId, f64) -> Option<BezPath>,
         ppem: Option<f32>,
     ) -> Option<BezPath> {
         let (base, accent, place) = self.composite_parts(glyph)?;
-        let outline = |name: &str| self.base_font_blob.name_to_glyph(name).and_then(part);
-        let mut path = outline(base)?;
-        let mut accent = outline(accent)?;
+        let outline = |name: &str, scale: f64| {
+            self.base_font_blob
+                .name_to_glyph(name)
+                .and_then(|g| part(g, scale))
+        };
+        let mut path = outline(base, 1.0)?;
+        let accent_scale = if place == Place::CommaBelow {
+            COMMA_BELOW_SCALE
+        } else {
+            1.0
+        };
+        let mut accent = outline(accent, accent_scale)?;
         if path.elements().is_empty() || accent.elements().is_empty() {
             return Some(path);
         }
-        if place == Place::CommaBelow {
-            accent = Affine::scale(COMMA_BELOW_SCALE) * accent;
+        if accent_scale != 1.0 {
+            accent = Affine::scale(accent_scale) * accent;
         }
         let (b, a) = (path.bounding_box(), accent.bounding_box());
         let (dx, dy) = match place {
@@ -542,7 +556,7 @@ impl StandardKind {
             }
             Place::Ogonek => (b.x1 - a.x1, 0.0),
             Place::Above => {
-                let x_top = outline("x")
+                let x_top = outline("x", 1.0)
                     .filter(|x| !x.elements().is_empty())
                     .map_or(b.y1, |x| x.bounding_box().y1);
                 // Overshoot of round lowercase letters (o, g, s) over x is not a taller letter.
@@ -585,11 +599,16 @@ impl StandardKind {
     /// built from its hinted parts, so it matches its base letter drawn beside it; the width
     /// fitting below only scales across the line, so it applies to a hinted outline as it is.
     pub(crate) fn hinted_outline_glyph(&self, glyph: GlyphId, ppem: f32) -> Option<BezPath> {
-        let hinted = |g: GlyphId| self.base_font_blob.hinted_outline_glyph(g, ppem);
+        // A part drawn at `scale` is fitted at the size it is drawn, so a comma below, drawn
+        // smaller, is fitted at its own size rather than shrunk off the grid.
+        let hinted = |g: GlyphId, scale: f64| {
+            self.base_font_blob
+                .hinted_outline_glyph(g, (f64::from(ppem) * scale) as f32)
+        };
         let (path, is_composite) = if self.composite_parts(glyph).is_some() {
             (self.composite_outline_from(glyph, &hinted, Some(ppem))?, true)
         } else {
-            (hinted(glyph)?, false)
+            (hinted(glyph, 1.0)?, false)
         };
         Some(self.fitted_to_width(glyph, path, is_composite))
     }

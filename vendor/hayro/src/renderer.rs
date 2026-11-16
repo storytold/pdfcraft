@@ -914,7 +914,11 @@ fn hinted_size(transform: Affine) -> Option<(f32, Affine)> {
     if !range.contains(&ppem) {
         return None;
     }
-    let snapped = Affine::new([a, b, c, d.signum() * ppem / 1000.0, e, f.round()]);
+    // Halves round up, as images snap: `round` takes them away from zero, so a baseline at row
+    // 100.5 went to row 101 in the whole page but, at -0.5 in a tile starting at row 101, to
+    // row 100 there, and a glyph across the tile's edge was torn by a pixel.
+    let baseline = (f + 0.5).floor();
+    let snapped = Affine::new([a, b, c, d.signum() * ppem / 1000.0, e, baseline]);
     Some((ppem as f32, snapped))
 }
 
