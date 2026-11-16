@@ -2180,8 +2180,12 @@ fn render_warnings_are_kept_per_page_until_the_page_changes() {
     assert_eq!(v.warned_pages.get(&0), Some(&vec![RenderWarning::ColourFallback]), "a text result does not clear the page's warning");
     v.receive_result(&ctx, result(request, Vec::new()));
     assert_eq!(v.warned_pages.get(&0), Some(&vec![RenderWarning::ColourFallback]), "a silent render does not clear it");
+    v.warn_notice_dismissed.insert(0);
     v.invalidate_content();
     assert!(v.warned_pages.get(&0).is_none(), "an edit or view change clears it with the page");
+    // The dismissal names page 0 by index; a page-list edit may put another page there, so it
+    // goes with the warning it dismissed rather than hiding that page's first warning.
+    assert!(v.warn_notice_dismissed.is_empty(), "a dismissed warning does not outlive its page list");
 }
 
 /// Dismissing another notice doesn't hide a page found cut later (#623), and dismissing the

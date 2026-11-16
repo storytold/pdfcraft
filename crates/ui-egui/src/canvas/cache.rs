@@ -194,6 +194,10 @@ impl DocView {
         self.errors.clear();
         self.cut_pages.clear();
         self.warned_pages.clear();
+        // The dismissals name pages by index, and a page-list edit (insert, delete, move) gives
+        // those indexes to other pages: drop them with the warnings they dismissed, so the next
+        // warning on a reused index is not hidden.
+        self.warn_notice_dismissed.clear();
         self.slow_pages.clear();
         self.waiting_since.clear();
         self.last_queue.clear();
