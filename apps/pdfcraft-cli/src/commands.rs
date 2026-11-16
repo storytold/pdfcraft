@@ -463,10 +463,10 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
 pub(crate) fn adaptive_compress(args: &[String]) -> Result<(), CliError> {
     validate_options("adaptive-compress", args, ADAPTIVE_COMPRESS_OPTIONS)?;
     let path = *positional(args, ADAPTIVE_COMPRESS_OPTIONS).first().ok_or("adaptive-compress: missing file")?;
-    let out = value_of_flag(args, ADAPTIVE_COMPRESS_OPTIONS, "--out").ok_or("adaptive-compress: missing --out")?;
-    let password = value_of_flag(args, ADAPTIVE_COMPRESS_OPTIONS, "--password");
+    let out = value_of_flag("adaptive-compress", args, ADAPTIVE_COMPRESS_OPTIONS, "--out")?.ok_or("adaptive-compress: missing --out")?;
+    let password = value_of_flag("adaptive-compress", args, ADAPTIVE_COMPRESS_OPTIONS, "--password")?;
     let binarize_scans = !has_flag(args, ADAPTIVE_COMPRESS_OPTIONS, "--no-binarize");
-    let max_pixels = match value_of_flag(args, ADAPTIVE_COMPRESS_OPTIONS, "--max-pixels") {
+    let max_pixels = match value_of_flag("adaptive-compress", args, ADAPTIVE_COMPRESS_OPTIONS, "--max-pixels")? {
         Some(v) => v.parse::<u64>().map_err(|_| format!("adaptive-compress: --max-pixels expects a non-negative integer, got {v:?}"))?,
         None => 80_000_000,
     };

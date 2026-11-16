@@ -20,13 +20,15 @@ pub(crate) fn has_flag(args: &[String], specs: &[OptionSpec], name: &str) -> boo
 }
 
 /// Returns the operand of the last occurrence of value-taking `--name`, skipping operands of other
-/// options (`--password --out input.pdf --out out.pdf` returns `out.pdf`).
-pub(crate) fn value_of_flag<'a>(args: &'a [String], specs: &[OptionSpec], name: &str) -> Option<&'a str> {
+/// options (`--password --out input.pdf --out out.pdf` returns `Ok(Some("out.pdf"))`). Returns
+/// `Err` if `--name` appears at the end of `args` without a value.
+pub(crate) fn value_of_flag<'a>(command: &str, args: &'a [String], specs: &[OptionSpec], name: &str) -> Result<Option<&'a str>, CliError> {
     let mut i = 0;
     let mut result = None;
     while let Some(a) = args.get(i) {
         if a == name {
-            result = args.get(i + 1).map(String::as_str);
+            let val = args.get(i + 1).map(String::as_str).ok_or_else(|| needs_value(command, name, None))?;
+            result = Some(val);
             i += 2;
             continue;
         }
@@ -35,7 +37,7 @@ pub(crate) fn value_of_flag<'a>(args: &'a [String], specs: &[OptionSpec], name: 
             _ => i += 1,
         }
     }
-    result
+    Ok(result)
 }
 
 #[derive(Clone, Copy)]
@@ -197,6 +199,8 @@ mod tests {
     fn value_of_flag_skips_password_operand() {
         let args: Vec<String> = ["--password", "--out", "input.pdf", "--out", "compressed.pdf"].iter().map(|s| s.to_string()).collect();
         let specs = [OptionSpec { name: "--password", takes_value: true }, OptionSpec { name: "--out", takes_value: true }];
-        assert_eq!(value_of_flag(&args, &specs, "--out"), Some("compressed.pdf"));
+        assert_eq!(value_of_flag("adaptive-compress", &args, &specs, "--out").unwrap(), Some("compressed.pdf"));
+        let dangling: Vec<String> = ["--max-pixels"].iter().map(|s| s.to_string()).collect();
+        assert!(value_of_flag("adaptive-compress", &dangling, &specs, "--max-pixels").is_err());
     }
 }
