@@ -467,6 +467,25 @@ impl ColorSpace {
             .unwrap_or(AlphaColor::BLACK)
     }
 
+    /// Convert a contiguous slice of colour-space samples into packed RGB8 bytes, reusing
+    /// `u8_scratch` when the colour space converts directly from 8-bit samples.
+    pub(crate) fn convert_rgb8_batch(
+        &self,
+        input: &[f32],
+        u8_scratch: &mut Vec<u8>,
+        output: &mut [u8],
+    ) -> Option<()> {
+        if self.supports_u8() {
+            u8_scratch.clear();
+            u8_scratch.extend(input.iter().copied().map(f32_to_u8));
+            if self.convert_u8(u8_scratch, output).is_some() {
+                return Some(());
+            }
+        }
+
+        self.convert_f32(input, output, false)
+    }
+
     /// PdfCraft patch (38): whether this space can be the default colour space of `family`
     /// (ISO 32000-2 §8.6.5.6): it has as many components as the device space and is not a
     /// Lab, Indexed or Pattern space. Nor is a device space: a default that names one is
