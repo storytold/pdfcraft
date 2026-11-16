@@ -1308,6 +1308,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-mime"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f29e82f1a7a009e68312bd2e84adab72be23344d#f29e82f1a7a009e68312bd2e84adab72be23344d"
+dependencies = [
+ "chrono",
+ "craft-codepage",
+ "encoding_rs",
+]
+
+[[package]]
 name = "craft-opc"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
@@ -4740,6 +4750,7 @@ dependencies = [
 name = "pdfcraft-export"
 version = "0.21.1"
 dependencies = [
+ "craft-mime",
  "craft-opc",
  "craft-rtf",
  "craft-xml",
