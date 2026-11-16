@@ -52,6 +52,8 @@ pub enum RightPanel {
     Search,
     /// Compare files: the differences.
     Compare,
+    /// Every saved measurement, by page.
+    Measurements,
 }
 
 /// Quick-action bar tools (the vertical floating strip).

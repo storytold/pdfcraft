@@ -67,6 +67,7 @@ impl PdfCraftApp {
                     "fields" => Some(RightPanel::Fields),
                     "layers" => Some(RightPanel::Layers),
                     "attachments" => Some(RightPanel::Attachments),
+                    "measurements" => Some(RightPanel::Measurements),
                     "signatures" => Some(RightPanel::Signatures),
                     "accessibility" => Some(RightPanel::Accessibility),
                     "tags" => Some(RightPanel::Tags),

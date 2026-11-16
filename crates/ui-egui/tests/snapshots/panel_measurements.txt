@@ -1,0 +1,6 @@
+Label = "Measurements"
+Label = "0"
+Button "Close" [off]
+Button "Export measurements as CSV" [off] [disabled]
+Image
+Label = "This document has no measurements."
