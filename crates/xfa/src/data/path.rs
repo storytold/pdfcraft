@@ -292,7 +292,18 @@ pub(crate) fn number_star_refs(tpl: &mut Template) {
     let mut last: Vec<usize> = Vec::new();
     for _ in 0..MAX_STAR_PASSES {
         let mut numbers = Vec::new();
-        walk(tpl, &tpl.root.children, &root, &mut HashMap::new(), &mut numbers, 1);
+        let mut seen = HashMap::new();
+        // The root comes first in the form's order, so its own reference takes its instance
+        // before anything inside it does.
+        if has_star(&tpl.root.common) {
+            let r = tpl.root.common.data_ref.clone().unwrap_or_default();
+            let key = match resolve_ref(&r, &DataPath::new(), tpl.root.common.name.as_deref(), STAR_OPEN) {
+                Some(matched) => (matched, String::new()),
+                None => (DataPath::new(), r),
+            };
+            seen.insert(key, 1);
+        }
+        walk(tpl, &tpl.root.children, &root, &mut seen, &mut numbers, 1);
         if numbers.is_empty() || numbers == last {
             return;
         }
@@ -600,4 +611,11 @@ fn is_star_segment(seg: &str) -> bool {
 /// instances by name would change some other node. `false` for objects the template lacks.
 pub fn binds_elsewhere(tpl: &Template, som: &str) -> bool {
     matches!(template_object(tpl, som), Some(Node::Subform(sf)) if sf.data_name().is_none() || sf.common.data_ref.is_some())
+}
+
+/// Whether the object at `som` binds by an explicit data reference this binding follows
+/// ([`Common::follows_ref`]): its data node is the one the reference names, not one per
+/// instance of the subforms around it.
+pub fn binds_by_ref(tpl: &Template, som: &str) -> bool {
+    template_object(tpl, som).is_some_and(|n| n.common().follows_ref)
 }

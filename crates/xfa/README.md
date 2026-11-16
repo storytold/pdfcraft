@@ -143,9 +143,10 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   followed by another object with the same `[*]` reference can overlap it). Same-named objects
   that `match="none"` subforms hold take successive data nodes in the enclosing scope; areas
   and nameless subforms keep their own numbering. Refs with `..` or signed indexes, global
-  binding, `match="none"` on a field, and data descriptions are not followed (a data
-  description is kept as written, not checked). The instances of a repeating subform marked
-  `match="none"`, or bound by a reference, can't be added or removed by scripts yet.
+  binding, `match="none"` on a field or on the root subform, and data descriptions are not
+  followed (a data description is kept as written, not checked). The instances of a repeating
+  subform marked `match="none"`, or bound by a reference, can't be added or removed by scripts
+  yet.
 - **Scripting.** JavaScript (boa) and FormCalc (a native interpreter, `pdfcraft_js::formcalc`)
   share one object model, one set of effects and one set of budgets. FormCalc covers the
   language and the common built-ins (arithmetic, logical, string, date/time, financial, unit);

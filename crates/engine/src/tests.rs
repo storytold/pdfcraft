@@ -12518,6 +12518,37 @@ fn a_reset_clears_a_floating_field_in_every_row() {
     assert_eq!(text.matches("Amount: none").count(), 2, "both rows reset: {text}");
 }
 
+/// A floating field bound by a reference to one row's node is reset there alone: only a field
+/// the template repeats goes back to its default in every row.
+#[test]
+fn a_reset_of_a_floating_field_bound_to_one_row_leaves_the_other_rows() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="amount" id="second" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui><value><text>none</text></value><bind match="dataRef" ref="$.row[1].amount"/></field>
+ <draw w="5in" h="0.4in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Second: <span xfa:embed="#second"/></p></body></exData></value></draw>
+ <field name="clear" w="2in" h="0.3in"><ui><button/></ui>
+  <event activity="click"><script contentType="application/x-javascript">xfa.host.resetData();</script></event></field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><row><amount>10</amount></row><row><amount>20</amount></row></form></xfa:data></xfa:datasets>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    assert!(page_texts(&s, id).join("\n").contains("Second: 20"));
+    let o = s.run_javascript(id, "", Some("clear")).expect("clicks");
+    assert_eq!(o.error, None, "{o:?}");
+    assert!(page_texts(&s, id).join("\n").contains("Second: none"));
+    let saved = s.save_bytes(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(saved).unwrap();
+    let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).expect("a datasets packet");
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].row[0].amount[0]")), Some("10"), "the other row keeps its value");
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].row[1].amount[0]")), Some("none"));
+}
+
 /// An XFA button's click script may show the attachments panel; a text field's exit script
 /// asking the same is noted on the console and ignored.
 #[test]

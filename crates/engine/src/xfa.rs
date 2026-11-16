@@ -840,9 +840,14 @@ impl<'a, 'b> Runner<'a, 'b> {
             if by_som.contains_key(&som) || !wanted(&som) {
                 continue;
             }
-            // Every row that holds it, not only the first.
-            let names: Vec<String> = pdfcraft_xfa::data_path(self.tpl, &som).into_iter().map(|(name, _)| name).collect();
-            let paths = self.data.as_ref().map(|d| d.paths_named(&names, pdfcraft_xfa::MAX_FORM_NODES)).unwrap_or_default();
+            // Every row that holds it, not only the first; but a field bound by a reference has
+            // the one node the reference names, whatever the rows around it.
+            let paths = if pdfcraft_xfa::binds_by_ref(self.tpl, &som) {
+                vec![pdfcraft_xfa::data_path(self.tpl, &som)]
+            } else {
+                let names: Vec<String> = pdfcraft_xfa::data_path(self.tpl, &som).into_iter().map(|(name, _)| name).collect();
+                self.data.as_ref().map(|d| d.paths_named(&names, pdfcraft_xfa::MAX_FORM_NODES)).unwrap_or_default()
+            };
             for path in paths {
                 if self.data.as_ref().and_then(|d| d.text_at(&path)).unwrap_or("") != default {
                     self.embedded_changed = true;

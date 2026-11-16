@@ -455,3 +455,14 @@ fn data_paths_through_many_match_none_sections_stay_quick() {
     assert_eq!(last, "form[0].f39[999]", "each section's field takes the next node of its name");
     assert!(started.elapsed() < std::time::Duration::from_secs(1), "took {:?}", started.elapsed());
 }
+
+/// The root comes first in the form's order, so its own `[*]` reference takes the first
+/// instance and an object inside it with the same reference takes the next.
+#[test]
+fn the_root_takes_the_first_instance_of_its_star_reference() {
+    let xml =
+        xdp(&format!(r#"<subform name="inner" layout="tb"><bind match="dataRef" ref="$data.item[*]"/><field name="x" {TEXT}</field></subform>"#), "")
+            .replace(r#"<subform name="form" layout="tb">"#, r#"<subform name="form" layout="tb"><bind match="dataRef" ref="$data.item[*]"/>"#);
+    let (tpl, _) = parse(&xml).unwrap();
+    assert_eq!(path(&tpl, "form[0].inner[0].x[0]"), "item[1].x[0]");
+}
