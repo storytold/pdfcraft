@@ -5,6 +5,7 @@
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-15 | **Last updated:** 2026-11-15 | **Change:** minor (craft-libs cutover for codecs, XFA XML, crypt/filters/COS/export/XFDF, PRC and ZIP; print colour management for pictures; M7 line replacement keeps source fonts; auto-tag headings by size and weight; arrow-key comment moves; stream-filter JPEG export; form, signature, optimize, redaction, measurement, PRC-normal and CMYK fixes; v0.21.1 Flatpak fix; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M6, PR #4166/#4088: integrate main f137a289 at 0.16.1; retain automatic-field Print suppression, explicit button/console printing and document-error provenance; 761 scoped tests and verification gates passed; 13-step CLI exercise and render inspection passed; existing warnings retained; estimates unchanged)
 > **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M10 #5130: preserve manual duplex defaults; validate DocumentDuplex review fix and CI formatting; estimates unchanged)
 >
