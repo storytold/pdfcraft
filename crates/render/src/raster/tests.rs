@@ -6982,6 +6982,53 @@ fn sampled_functions_interpolate_their_grid_as_before() {
     assert_eq!(f.eval([0.5, 0.5].into_iter().collect()), None);
 }
 
+#[test]
+fn sampled_functions_interpolate_across_dimensions_and_grid_edges() {
+    use hayro::hayro_interpret::Function;
+    use hayro_syntax::object::{FromBytes, Object};
+
+    // 1D: Size [3] with decode scaling beyond [0, 1] and Range clamping.
+    let f1d_bytes =
+        b"<< /FunctionType 0 /Domain [0 1] /Range [-1 1] /Decode [-2 2] /Size [3] /BitsPerSample 8 /Length 3 >> stream\n\x00\x80\xff\nendstream";
+    let f1d = Function::new(&Object::from_bytes(f1d_bytes).expect("1d stream")).expect("1d sampled");
+    let exact = f1d.eval([0.5].into_iter().collect()).expect("exact 1d");
+    let want_mid = -2.0 + (128.0 / 255.0) * 4.0;
+    assert!((exact[0] - want_mid).abs() < 1e-5, "1d midpoint: got {:?}, want {want_mid}", exact);
+    let clamped = f1d.eval([0.0].into_iter().collect()).expect("clamped 1d");
+    assert_eq!(clamped.as_slice(), &[-1.0], "1d range clamp");
+
+    // 3D: Size [2 2 2], 4 outputs (exercises the iterative post-order reduction path and short stream).
+    let mut s3 = Vec::new();
+    for k in 0..2u8 {
+        for j in 0..2u8 {
+            for i in 0..2u8 {
+                s3.extend_from_slice(&[50 * i, 70 * j, 90 * k, 40 * i * j * k]);
+            }
+        }
+    }
+    let build_3d = |data: &[u8]| {
+        let mut b = format!(
+            "<< /FunctionType 0 /Domain [0 1 0 1 0 1] /Range [0 1 0 1 0 1 0 1] /Size [2 2 2] /BitsPerSample 8 /Length {} >> stream\n",
+            data.len()
+        )
+        .into_bytes();
+        b.extend_from_slice(data);
+        b.extend_from_slice(b"\nendstream");
+        b
+    };
+    let f3d = Function::new(&Object::from_bytes(&build_3d(&s3)).expect("3d stream")).expect("3d sampled");
+    for (x, y, z) in [(0.0, 0.0, 0.0), (1.0, 1.0, 1.0), (0.25, 0.5, 0.75), (0.8, 0.0, 0.4)] {
+        let got = f3d.eval([x, y, z].into_iter().collect()).expect("3d eval");
+        let want = [50.0 * x / 255.0, 70.0 * y / 255.0, 90.0 * z / 255.0, 40.0 * x * y * z / 255.0];
+        assert!(got.len() == 4 && got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-5), "({x}, {y}, {z}): got {got:?}, want {want:?}");
+    }
+
+    let short3d = build_3d(&s3[..16]); // only k = 0 slice present
+    let f3d_short = Function::new(&Object::from_bytes(&short3d).expect("short 3d stream")).expect("short 3d sampled");
+    assert!(f3d_short.eval([0.5, 0.5, 0.0].into_iter().collect()).is_some());
+    assert_eq!(f3d_short.eval([0.5, 0.5, 0.5].into_iter().collect()), None);
+}
+
 /// From `cargo xtask fuzz`: a mesh shading whose points lie far off the page (a 147-byte
 /// Coons patch stream decoded onto ±40000) was sampled pixel by pixel over its whole
 /// bounding box, up to 65536 × 65536 entries: a synthetic page passed 6 GB in six seconds.
