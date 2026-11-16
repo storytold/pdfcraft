@@ -218,7 +218,9 @@ fn a_type3_font_with_null_resources_keeps_the_page_pattern() {
 /// that form's own `/Font`, by an ExtGState's `/Font`, and from the `/Font` of a form drawing the
 /// one that shows it; or set by what draws the form, which only shows the glyph: by the page's
 /// `Tf`, outside a text object or inside one ended before the form, by the page's ExtGState, to a
-/// form with resources of its own that don't give a font, and by a form the walk enters.
+/// form with resources of its own that don't give a font, and by a form the walk enters. And where
+/// another form clear of the mark, showing nothing, is drawn after the one showing the glyph, with
+/// the font still set or after the page sets another.
 #[test]
 fn a_type3_glyph_in_a_form_clear_of_the_mark_keeps_the_page_pattern() {
     let clear = "/Type /XObject /Subtype /Form /BBox [290 220 350 280]";
@@ -226,7 +228,7 @@ fn a_type3_glyph_in_a_form_clear_of_the_mark_keeps_the_page_pattern() {
     let shows_set = b"BT 300 230 Td (a) Tj ET\n".as_slice();
     let gs = b"<< /Type /ExtGState /Font [7 0 R 1] >>".to_vec();
     let draws = "/Fm Do\n";
-    let rows: [(&str, &str, Vec<Vec<u8>>); 10] = [
+    let rows: [(&str, &str, Vec<Vec<u8>>); 12] = [
         ("", draws, vec![stream_obj(clear, shows)]),
         ("", draws, vec![stream_obj(&format!("{clear} /Resources << /ProcSet [/PDF] >>"), shows)]),
         ("", draws, vec![stream_obj(&format!("{clear} /Resources << /Font << /T3 7 0 R >> >>"), shows)]),
@@ -248,6 +250,8 @@ fn a_type3_glyph_in_a_form_clear_of_the_mark_keeps_the_page_pattern() {
             "/W Do\n",
             vec![stream_obj(clear, shows_set), stream_obj("/Type /XObject /Subtype /Form /BBox [0 0 500 300]", b"/T3 1 Tf /Fm Do\n")],
         ),
+        ("/XObject << /Fm 9 0 R /Gm 10 0 R >>", "/T3 1 Tf /Fm Do /Gm Do\n", vec![stream_obj(clear, shows_set), stream_obj(clear, b"q Q\n")]),
+        ("/XObject << /Fm 9 0 R /Gm 10 0 R >>", "/Fm Do /F1 1 Tf /Gm Do\n", vec![stream_obj(clear, shows), stream_obj(clear, b"q Q\n")]),
     ];
     for (extra, draw, objs) in rows {
         let names = if extra.starts_with("/XObject") { extra.to_string() } else { format!("/XObject << /Fm 9 0 R >> {extra}") };
