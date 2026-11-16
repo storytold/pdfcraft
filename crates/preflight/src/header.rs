@@ -4,6 +4,9 @@
 //!
 //! A document whose next save rewrites it in full is judged by the header that save writes: the
 //! version it keeps, followed by the writer's own binary comment.
+//!
+//! PDF/A-4 (ISO 19005-4 6.1.2, as veraPDF words it) asks for `%PDF-2.n` instead, `n` a digit, and the
+//! same binary comment.
 
 use pdfcraft_cos::Document;
 
@@ -17,8 +20,9 @@ pub(crate) struct Header {
 }
 
 /// What the header of `doc` breaks of 6.1.2: as stored, or, when the next save rewrites the
-/// file, as that save will write it.
-pub(crate) fn check(doc: &Document) -> Header {
+/// file, as that save will write it. `pdf2` asks for a PDF 2.n header, as PDF/A-4 does.
+pub(crate) fn check(doc: &Document, pdf2: bool) -> Header {
+    let allowed = |version: &[u8]| if pdf2 { matches!(version, [b'2', b'.', b'0'..=b'9']) } else { allowed(version) };
     if doc.full_save_required() || doc.encryption_changed() {
         let written = doc.version().get(..3).unwrap_or_default();
         return Header { version: !allowed(written.as_bytes()), comment: false };
@@ -59,7 +63,7 @@ fn binary_comment(data: &[u8]) -> bool {
 /// Makes the next save of `doc` write a header 6.1.2 allows, when the current one breaks it:
 /// a full save, at version 1.7 when the version kept isn't 1.0 to 1.7. What it fixed, if anything.
 pub(crate) fn rewrite(doc: &mut Document) -> Option<String> {
-    let header = check(doc);
+    let header = check(doc, false);
     if !header.version && !header.comment {
         return None;
     }

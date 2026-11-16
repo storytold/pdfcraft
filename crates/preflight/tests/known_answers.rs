@@ -374,16 +374,28 @@ fn postscript_xobjects_are_reported_clause_6_2_9() {
 
 #[test]
 fn fonts_must_be_embedded_clause_6_2_11_4() {
-    let page = "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> >>";
+    // The page draws with /F1 from content object `contents`.
+    let page = |contents: u32| format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R /Resources << /Font << /F1 5 0 R >> >> >>");
+    let text = "<< /Length 22 >>
+stream
+BT /F1 12 Tf (x) Tj ET
+endstream";
     let packet = a2b_packet(None);
     let embedded = "<< /Type /Font /Subtype /TrueType /BaseFont /Sans /FontDescriptor 6 0 R >>";
     let descriptor = "<< /Type /FontDescriptor /FontName /Sans /Flags 32 /FontFile2 7 0 R >>";
     let program = font_program(None);
-    let doc = page_document(page, Some(packet.as_str()), "", &[embedded, descriptor, program.as_str()], "");
+    let doc = page_document(&page(8), Some(packet.as_str()), "", &[embedded, descriptor, program.as_str(), text], "");
     assert_not_reported(&doc, Level::A2b, "6.2.11.4");
     let missing = "<< /Type /Font /Subtype /TrueType /BaseFont /Sans >>";
-    let doc = page_document(page, Some(packet.as_str()), "", &[missing], "");
+    let doc = page_document(&page(6), Some(packet.as_str()), "", &[missing, text], "");
     assert_reported(&doc, Level::A2b, "6.2.11.4");
+    // A font the resources list but no content selects isn't used for rendering.
+    let blank = "<< /Length 0 >>
+stream
+
+endstream";
+    let doc = page_document(&page(6), Some(packet.as_str()), "", &[missing, blank], "");
+    assert_not_reported(&doc, Level::A2b, "6.2.11.4");
 }
 
 /// A file built by hand, apart from its output profile, with everything the verifier asks for: an

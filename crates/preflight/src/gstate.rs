@@ -3,13 +3,17 @@
 //!
 //! - no transfer function: no `/TR` entry, and `/TR2` only as `/Default` (ISO 32000-1 10.4);
 //! - no `/HTP` (halftone phase) entry, a PDF 1.2 key ISO 32000-1 no longer defines;
+//!   PDF/A-4 asks the same of `/HTO`, the halftone origin PDF 2.0 put in its place;
 //! - halftones of type 1 or 5 only, without a `/HalftoneName` (ISO 32000-1 10.5.5); the halftones
 //!   a type 5 halftone holds for its colorants are checked the same way;
-//! - a halftone's `/TransferFunction` only where one is needed: a type 5 halftone's component for
-//!   a non-primary colorant has one, and no other halftone does. The primary colour components
-//!   are those of the standard device spaces: Gray; Red, Green and Blue; Cyan, Magenta, Yellow
-//!   and Black (ISO 32000-1 10.5.5.6; ISO 32000-2 10.6.5.6). The `Default` component is left as
-//!   it is (ISO 32000-1 Table 130);
+//! - a halftone's `/TransferFunction` only as ISO 32000 requires it: a type 5 halftone's component
+//!   for a non-primary colorant has one (ISO 32000-1 Table 130; ISO 32000-2 Table 128). The
+//!   primary colour components are those of the standard device spaces: Gray; Red, Green and Blue;
+//!   Cyan, Magenta, Yellow and Black (ISO 32000-1 10.5.5.6; ISO 32000-2 10.6.5.6). PDF/A's note to
+//!   the rule names the halftones that may not have one: a halftone used for every colorant, and a
+//!   type 5 halftone's component for Cyan, Magenta, Yellow or Black. The entry is optional for the
+//!   other primary components, Gray, Red, Green and Blue, and may be there (pdf-association
+//!   pdf-issues #314). The `Default` component is left as it is;
 //! - a rendering intent (`/RI`) that is one of the four of ISO 32000-1 8.6.5.8, Table 70.
 //!
 //! Graphics state dictionaries are found as the `/ExtGState` entries of resource dictionaries
@@ -32,6 +36,9 @@ const HALFTONE_KEYS: [&[u8]; 4] = [b"Type", b"HalftoneType", b"HalftoneName", b"
 /// The primary colour components of DeviceGray, DeviceRGB and DeviceCMYK, whose halftones take
 /// the graphics state's transfer function.
 const PRIMARY: [&[u8]; 8] = [b"Gray", b"Red", b"Green", b"Blue", b"Cyan", b"Magenta", b"Yellow", b"Black"];
+/// The primary colour components whose halftones may not have a transfer function: those of
+/// DeviceCMYK, as PDF/A's note to 6.2.5 names them.
+const PROCESS_CMYK: [&[u8]; 4] = [b"Cyan", b"Magenta", b"Yellow", b"Black"];
 /// The entries that hold resource dictionaries.
 const RESOURCES: [&[u8]; 2] = [b"Resources", b"DR"];
 
@@ -44,6 +51,8 @@ pub(crate) struct Findings {
     pub(crate) transfer2: bool,
     /// A graphics state has an `/HTP`.
     pub(crate) phase: bool,
+    /// A graphics state has an `/HTO`, PDF 2.0's halftone origin (ISO 32000-2 Table 57).
+    pub(crate) origin: bool,
     /// Halftone types other than 1 and 5, in order.
     pub(crate) halftone_types: BTreeSet<i64>,
     /// A halftone's `/HalftoneType` is missing or isn't an integer.
@@ -180,6 +189,9 @@ impl Scan<'_> {
         if self.present(gs, b"HTP").is_some() {
             self.findings.phase = true;
         }
+        if self.present(gs, b"HTO").is_some() {
+            self.findings.origin = true;
+        }
         if let Some(ht) = self.present(gs, b"HT")
             && let Some(ht) = ht.as_dict()
         {
@@ -219,6 +231,8 @@ impl Scan<'_> {
                     self.findings.missing_transfer.insert(String::from_utf8_lossy(c).into_owned());
                 }
             }
+            // Gray, Red, Green and Blue: optional either way.
+            Some(c) if !PROCESS_CMYK.contains(&c) => {}
             _ => self.findings.halftone_transfer |= transfer,
         }
         if colorant.is_none() && kind == Some(5) {
@@ -280,7 +294,7 @@ mod tests {
         let found = check(&doc);
         assert_eq!(found, Findings { halftone_transfer: true, ..Findings::default() });
         let messages: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.5").map(|i| i.message).collect();
-        assert_eq!(messages, ["A halftone has a transfer function, which only a non-primary colorant's halftone may have"]);
+        assert_eq!(messages, ["A halftone for every colorant, or for Cyan, Magenta, Yellow or Black, has a transfer function"]);
     }
 
     #[test]

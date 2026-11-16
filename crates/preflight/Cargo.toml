@@ -15,7 +15,9 @@ craft-cms-v2 = { package = "craft-cms", version = "0.1.0", git = "https://github
 craft-xml = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-cos = { workspace = true }
+pdfcraft-filters = { workspace = true }
 pdfcraft-model = { workspace = true }
 
 [dev-dependencies]
 flate2 = { workspace = true }
+proptest = { workspace = true }

@@ -1,13 +1,14 @@
 //! pdfcraft-preflight — Standards: PDF/A (L4).
 //!
 //! [`verify`] checks a document against the parts of ISO 19005-2/-3 (PDF/A-2b, PDF/A-3b) that can
-//! be decided from the object graph:
+//! be decided from the object graph, and against the same rules as ISO 19005-4 (PDF/A-4, 4e and
+//! 4f) words them, with that part's own (see `part4.rs`):
 //!
 //! - identification: XMP metadata with `pdfaid:part` and `pdfaid:conformance`, consistent with
 //!   the document information dictionary;
 //! - no encryption; no LZW; no external streams;
 //! - an output intent (`GTS_PDFA1`) with an ICC profile when device colour is used;
-//! - every font embedded;
+//! - every font used for rendering (selected with `Tf` by some content) embedded;
 //! - annotations: allowed types, printable, not hidden, with appearance streams;
 //! - actions: none of the forbidden kinds (JavaScript, Launch, Sound, Movie, ResetForm,
 //!   ImportData, Hide, SetOCGState, Rendition, Trans, GoTo3DView, and the PDF 1.2 SetState and
@@ -27,6 +28,7 @@ mod gstate;
 mod header;
 pub mod icc;
 mod limits;
+mod part4;
 mod spot;
 mod trailer;
 mod transparency;
@@ -37,10 +39,16 @@ mod xmp_types;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 /// The PDF/A part and conformance level.
+///
+/// The PDF/A-4 levels (ISO 19005-4: PDF/A-4, 4e and 4f) are verified only: [`convert`] changes
+/// nothing for them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
     A2b,
     A3b,
+    A4,
+    A4e,
+    A4f,
 }
 
 impl Level {
@@ -48,6 +56,7 @@ impl Level {
         match self {
             Level::A2b => 2,
             Level::A3b => 3,
+            Level::A4 | Level::A4e | Level::A4f => 4,
         }
     }
 
@@ -55,6 +64,9 @@ impl Level {
         match self {
             Level::A2b => "PDF/A-2b",
             Level::A3b => "PDF/A-3b",
+            Level::A4 => "PDF/A-4",
+            Level::A4e => "PDF/A-4e",
+            Level::A4f => "PDF/A-4f",
         }
     }
 
@@ -62,6 +74,22 @@ impl Level {
         match id.to_ascii_lowercase().replace(['/', '-', ' '], "").as_str() {
             "pdfa2b" | "a2b" | "2b" => Some(Level::A2b),
             "pdfa3b" | "a3b" | "3b" => Some(Level::A3b),
+            "pdfa4" | "a4" | "4" => Some(Level::A4),
+            "pdfa4e" | "a4e" | "4e" => Some(Level::A4e),
+            "pdfa4f" | "a4f" | "4f" => Some(Level::A4f),
+            _ => None,
+        }
+    }
+
+    /// The level a document declares, as [`declared`] reads it (`pdfaid:part` and the
+    /// `pdfaid:conformance` it upper-cases), when it is one [`verify`] checks.
+    pub fn from_declared(part: u8, conformance: &str) -> Option<Level> {
+        match (part, conformance) {
+            (2, "B") => Some(Level::A2b),
+            (3, "B") => Some(Level::A3b),
+            (4, "") => Some(Level::A4),
+            (4, "E") => Some(Level::A4e),
+            (4, "F") => Some(Level::A4f),
             _ => None,
         }
     }
@@ -78,7 +106,8 @@ impl Level {
 /// [`Issue::said`] does that.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Issue {
-    /// The ISO 19005-2 clause.
+    /// The ISO 19005 clause: as part 2 numbers it for PDF/A-2 and 3 (which number them alike), as
+    /// part 4 does for PDF/A-4.
     pub clause: &'static str,
     pub message: String,
     /// The problem as it is worded here, with `{}` or a named hole where the document's own name goes.
@@ -198,7 +227,7 @@ pub const WORDINGS: &[&str] = &[
     "A halftone has type {}: only types 1 and 5 are allowed",
     "A halftone's HalftoneType is missing or isn't an integer",
     "A halftone has a HalftoneName",
-    "A halftone has a transfer function, which only a non-primary colorant's halftone may have",
+    "A halftone for every colorant, or for Cyan, Magenta, Yellow or Black, has a transfer function",
     "The halftone for the colorant {} has no transfer function",
     "A graphics state has the rendering intent {}, which isn't a standard one",
     "A graphics state has a rendering intent that isn't a name",
@@ -222,6 +251,55 @@ pub const WORDINGS: &[&str] = &[
     "PostScript XObjects aren't allowed",
     "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)",
     "An embedded file has no AFRelationship",
+    // PDF/A-4's own.
+    "The metadata has no pdfaid:rev",
+    "The metadata gives pdfaid:rev as {}, not 2020",
+    "The identification property {} isn't written with the prefix pdfaid",
+    "The file doesn't start with a %PDF-2.0 to %PDF-2.9 header line",
+    "The trailer names a document information dictionary (Info), but the catalog has no PieceInfo",
+    "The document information dictionary holds {}: only ModDate is allowed",
+    "The catalog gives the version {}, not 2.0 to 2.9",
+    "The document's additional actions (/AA) use the trigger {}, which PDF/A-4 doesn't allow",
+    "A page's additional actions use the trigger {}, which PDF/A-4 doesn't allow",
+    "A {} annotation's additional actions use a trigger PDF/A-4 doesn't allow",
+    "A graphics state uses the blend mode {}, which ISO 32000-2 doesn't define",
+    "A graphics state has a halftone origin (HTO)",
+    "A PDF/A-4f file needs embedded files listed in the catalog's name dictionary (EmbeddedFiles)",
+    "Embedded files must be PDF/A-1, PDF/A-2 or PDF/A-4 files themselves (use PDF/A-4f for others)",
+    "An embedded file declares {} but doesn't conform to it",
+    "An embedded file's file specification lacks F or UF",
+    "An embedded file has no MIME type (Subtype)",
+    "A {} annotation's appearance dictionary holds more than N",
+    "A widget annotation has an action (A)",
+    "A form XObject has OPI information",
+    "A form XObject refers to another file (Ref)",
+    "The permissions dictionary holds {}: only UR3 and DocMDP are allowed",
+    "The form has an XFA form (XFA)",
+    "The catalog asks for its XFA form to be rendered (NeedsRendering)",
+    "The document has alternate presentations (AlternatePresentations)",
+    "The catalog has requirements (Requirements)",
+    "A page has presentation steps (PresSteps)",
+    "An optional content configuration has no Name",
+    "Two optional content configurations have the same Name",
+    "The metadata stream isn't marked /Type /Metadata /Subtype /XML",
+    "The XMP metadata isn't UTF-8",
+    "The XMP metadata in metadata stream {} isn't UTF-8",
+    "The metadata stream's data is damaged: only part of it decodes",
+    "Metadata stream {}'s data is damaged: only part of it decodes",
+    "Metadata stream {} can't be decoded",
+    "The XMP metadata in metadata stream {} isn't well-formed XML",
+    "The XMP packet header in metadata stream {} has a bytes or encoding attribute",
+    "The XMP metadata isn't well-formed XML",
+    "The XMP packet header has a bytes or encoding attribute",
+    "An output intent names an external profile (DestOutputProfileRef)",
+    "The output intents have different destination profiles",
+    "Data follows the last end-of-file marker (%%EOF)",
+    "A 3D stream's Subtype isn't U3D or PRC",
+    "A button's normal appearance isn't a dictionary of appearance states",
+    "A {} annotation's normal appearance isn't an appearance stream",
+    "The PDF/A output intent's profile isn't an output or monitor profile of gray, RGB or CMYK",
+    "A stream uses the filter {}, which ISO 32000-2 doesn't define",
+    "A stream uses the Crypt filter with a crypt filter other than Identity",
 ];
 
 /// What a document declares (the Standards panel).
@@ -345,8 +423,13 @@ fn dict_of(o: &Object) -> Option<&Dict> {
 /// a null or missing profile describes no colour, so it doesn't stand in for a blending colour
 /// space (6.2.10).
 fn pdfa_intent_has_profile(doc: &Document) -> bool {
-    let cat = catalog(doc);
-    let list = cat.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
+    pdfa_intent_in(doc, &catalog(doc))
+}
+
+/// Whether the dictionary `holder` (the catalog, or a page) lists a PDF/A output intent with a
+/// profile stream.
+fn pdfa_intent_in(doc: &Document, holder: &Dict) -> bool {
+    let list = holder.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
     list.iter().any(|oi| {
         let oi = doc.resolve(oi);
         let Some(d) = oi.as_dict() else { return false };
@@ -365,8 +448,12 @@ const MAX_ICC_PROFILE: usize = 16 << 20;
 /// components (`/N`, else the ICC header's data colour space; `None` when neither says), or
 /// `None` when the document has no PDF/A output intent.
 fn pdfa_intent_profile(doc: &Document) -> Option<Option<i64>> {
-    let cat = catalog(doc);
-    let list = cat.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
+    pdfa_intent_profile_in(doc, &catalog(doc))
+}
+
+/// [`pdfa_intent_profile`] for the output intents of `holder`: the catalog, or a page.
+fn pdfa_intent_profile_in(doc: &Document, holder: &Dict) -> Option<Option<i64>> {
+    let list = holder.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
     list.iter().find_map(|oi| {
         let d = doc.resolve(oi).as_dict().cloned()?;
         if d.name(b"S") != Some(b"GTS_PDFA1") {
@@ -466,15 +553,7 @@ fn type3_procs_within(
 fn referenced_content(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> std::collections::HashSet<ObjRef> {
     let mut out = std::collections::HashSet::new();
     for p in pdfcraft_model::pages(doc) {
-        let contents = match p.dict.get(b"Contents") {
-            Some(Object::Ref(r)) => match &*doc.get(*r) {
-                Object::Array(a) => a.clone(),
-                _ => vec![Object::Ref(*r)],
-            },
-            Some(Object::Array(a)) => a.clone(),
-            _ => Vec::new(),
-        };
-        out.extend(contents.iter().filter_map(Object::as_ref));
+        out.extend(page_contents(doc, &p.dict));
     }
     let mut read = std::collections::HashSet::new();
     for (_, o) in objs {
@@ -485,19 +564,399 @@ fn referenced_content(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
     out
 }
 
-/// The fonts the document draws with: those a resource dictionary names (`/Resources`, of a page or
-/// a page tree node, a form XObject or an annotation's appearance stream, a pattern or a Type 3
-/// font). PDF/A asks that every font "used for rendering" be embedded (ISO 19005-2, 6.2.11.4.1). A
-/// font that only the interactive form's default resources hold (`/AcroForm /DR`, ISO 32000-1
-/// 12.7.2) draws nothing, so it needn't be: an appearance stream that does draw with it names it in
-/// its own `/Resources`.
+/// The content streams of the page `page`, in order: its `/Contents`, one stream or an array of
+/// them (ISO 32000-2 7.7.3.3, Table 31).
+fn page_contents(doc: &Document, page: &Dict) -> Vec<ObjRef> {
+    let contents = match page.get(b"Contents") {
+        Some(Object::Ref(r)) => match &*doc.get(*r) {
+            Object::Array(a) => a.clone(),
+            _ => vec![Object::Ref(*r)],
+        },
+        Some(Object::Array(a)) => a.clone(),
+        _ => Vec::new(),
+    };
+    contents.iter().filter_map(Object::as_ref).collect()
+}
+
+/// The most content [`drawing_fonts`] decodes, all streams together. Past it, every font of a
+/// stream it didn't read counts as drawing.
+const MAX_FONT_CONTENT_DECODED: usize = 1 << 30;
+
+/// How many form XObjects deep [`drawing_fonts`] follows `Do` with the state it is drawn in. A
+/// form deeper than that is read on its own, from the start state.
+const MAX_FORM_DEPTH: usize = 12;
+
+/// How many `q` saves [`Fonts::read`] keeps. A `Q` past them restores a state that wasn't kept:
+/// every font that could be current then counts as drawing.
+const MAX_SAVED_STATES: usize = 256;
+
+/// The fonts the document draws with. PDF/A asks that every font "used for rendering" be embedded
+/// (ISO 19005-2 6.2.11.4.1, ISO 19005-4 6.2.10.4.1): a font draws when content shows text with it
+/// (`Tj`, `TJ`, `'` and `"`, ISO 32000-2 9.4.3) in a text rendering mode other than 3, neither
+/// fill nor stroke (9.3.6, Table 104). The current font is the one content selected with `Tf`
+/// (9.3.1, Table 103) by its name in its resource dictionary, or with `gs` through a graphics
+/// state whose `/Font` entry holds it (8.4.5, Table 57); `q` and `Q` save and restore it with the
+/// mode (8.4.2). A form XObject is read where `Do` draws it, in the state it is drawn in, up to
+/// [`MAX_FORM_DEPTH`] forms deep.
+///
+/// The content read from the start is a page's `/Contents`, its streams joined as one (7.8.2), with
+/// the page's resources, and any form XObject, tiling pattern, appearance stream or Type 3 glyph
+/// procedure that no content read draws, or that content draws past [`MAX_FORM_DEPTH`], with its
+/// own. Such content starts with no known font and a visible mode: what it inherits from where it
+/// is drawn isn't known.
+///
+/// A font that a resource dictionary lists but no content shows text with draws nothing, nor does
+/// one that only the interactive form's default resources (`/AcroForm /DR`, ISO 32000-2 12.7.3) or
+/// a default appearance string (`/DA`) name: an appearance stream that does draw with it shows
+/// text with it in its own content. Where the answer isn't certain the font counts: one current,
+/// in any mode, at a `Do` of a form that can't be followed, decoded or read past
+/// [`MAX_FORM_DEPTH`], one named by content without resources of its own (in every
+/// resource dictionary), every font of content that can't be decoded, and every font that could be
+/// current after a `Q` whose saved state [`MAX_SAVED_STATES`] didn't keep.
 fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> std::collections::HashSet<ObjRef> {
-    let mut out = std::collections::HashSet::new();
-    for (_, o) in objs {
-        let Some(resources) = dict_of(o).and_then(|d| d.get(b"Resources")).map(|r| doc.resolve(r)) else { continue };
-        let Some(fonts) = resources.as_dict().and_then(|r| r.get(b"Font")).map(|f| doc.resolve(f)) else { continue };
-        if let Some(fonts) = fonts.as_dict() {
-            out.extend(fonts.iter().filter_map(|(_, f)| f.as_ref()).map(|r| font_object(doc, r)));
+    let mut fonts = Fonts {
+        doc,
+        budget: pdfcraft_cos::DecodeBudget::new(MAX_FONT_CONTENT_DECODED, usize::MAX),
+        out: std::collections::HashSet::new(),
+        anywhere: std::collections::HashSet::new(),
+        every_font: false,
+        entered: std::collections::HashSet::new(),
+        reached: std::collections::HashSet::new(),
+        cut: std::collections::HashSet::new(),
+        cut_order: Vec::new(),
+    };
+    let mut page_streams = std::collections::HashSet::new();
+    // Pages whose `/Contents` and `/Resources` entry (a reference, or a dictionary as written) are
+    // the same are read once: a stream that many pages share costs its decoding once.
+    let mut pages_read = std::collections::HashSet::new();
+    // Each page `/Resources` entry as written, numbered: pages with the same one share its number.
+    let mut page_resources = std::collections::HashMap::new();
+    for p in pdfcraft_model::pages(doc) {
+        let contents = page_contents(doc, &p.dict);
+        page_streams.extend(contents.iter().copied());
+        let written = format!("{:?}", p.dict.get(b"Resources"));
+        let next = page_resources.len();
+        let holder = Holder::Page(*page_resources.entry(written).or_insert(next));
+        if !pages_read.insert((contents.clone(), holder)) {
+            continue;
+        }
+        // A page's streams are one stream split only between tokens (ISO 32000-2 7.8.2), so an
+        // operator's operands can end one stream and the operator start the next: they are read
+        // joined, a space between them, as renderers join them.
+        let mut joined = Some(Vec::new());
+        for r in &contents {
+            let Object::Stream(s) = &*doc.get(*r) else { continue };
+            let Ok(data) = fonts.budget.decode(s) else {
+                joined = None;
+                break;
+            };
+            if let Some(all) = joined.as_mut() {
+                all.extend_from_slice(&data);
+                all.push(b' ');
+            }
+        }
+        match joined {
+            Some(data) => fonts.read(&data, Some((&p.dict, holder)), TextState::default(), 0),
+            None => fonts.out.extend(resource_fonts(doc, &p.dict).into_iter().map(|(_, r)| r)),
+        }
+    }
+    let glyph_procs = {
+        let (mut read, mut procs) = (std::collections::HashSet::new(), std::collections::HashSet::new());
+        for (_, o) in objs {
+            if let Some(d) = dict_of(o) {
+                type3_procs(doc, d, 0, &mut read, &mut procs);
+            }
+        }
+        procs
+    };
+    // The content read on its own, each stream once.
+    let mut alone = std::collections::HashSet::new();
+    for (r, o) in objs {
+        let Object::Stream(s) = &**o else { continue };
+        let drawn = fonts.reached.contains(r) && !fonts.cut.contains(r);
+        if page_streams.contains(r) || drawn || !(is_content(&s.dict) || glyph_procs.contains(r)) {
+            continue;
+        }
+        alone.insert(*r);
+        fonts.read_alone(*r, s);
+    }
+    // Reading on its own goes `MAX_FORM_DEPTH` forms deep too, and can cut off a form the pass
+    // above had already passed over as drawn: those are read now, in the order they were cut, until
+    // none is left.
+    let mut next = 0;
+    while let Some(&r) = fonts.cut_order.get(next) {
+        next += 1;
+        if page_streams.contains(&r) || !alone.insert(r) {
+            continue;
+        }
+        if let Object::Stream(s) = &*doc.resolve(&Object::Ref(r)) {
+            fonts.read_alone(r, s);
+        }
+    }
+    let Fonts { mut out, anywhere, every_font, .. } = fonts;
+    if every_font || !anywhere.is_empty() {
+        for (_, o) in objs {
+            let Some(d) = dict_of(o) else { continue };
+            for (name, font) in resource_fonts(doc, d) {
+                if every_font || anywhere.contains(&name) {
+                    out.insert(font);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// How content selects a font: with `Tf` by its name in the resources' `/Font`, or with `gs` by
+/// the name in the resources' `/ExtGState` of a graphics state whose `/Font` entry holds it
+/// (ISO 32000-2 8.4.5, Table 57).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Selector {
+    Tf,
+    Gs,
+}
+
+/// A resource name content selects a font by, and how.
+type Selection = (Selector, Vec<u8>);
+
+/// Which resource dictionary content is read with: a page's `/Resources` entry as written, numbered
+/// as [`drawing_fonts`] meets it, or the one in the dictionary of a content stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Holder {
+    Page(usize),
+    Stream(ObjRef),
+}
+
+/// The font text is shown with.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Current {
+    /// A font object, found in the content's resource dictionary.
+    Font(ObjRef),
+    /// A name selected by content whose resource dictionary isn't known.
+    Named(Selection),
+}
+
+/// What [`Fonts::read`] keeps of the graphics state: the current font, unknown until content sets
+/// one, and whether the text rendering mode is 3, which neither fills nor strokes (ISO 32000-2
+/// 9.3.6, Table 104).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+struct TextState {
+    font: Option<Current>,
+    invisible: bool,
+}
+
+/// The walk [`drawing_fonts`] makes.
+struct Fonts<'a> {
+    doc: &'a Document,
+    budget: pdfcraft_cos::DecodeBudget,
+    /// The fonts found drawing.
+    out: std::collections::HashSet<ObjRef>,
+    /// Names content without resources of its own draws with.
+    anywhere: std::collections::HashSet<Selection>,
+    /// Content without resources of its own couldn't be read.
+    every_font: bool,
+    /// The forms read where content draws them, each with the state it was drawn in and, for a form
+    /// without resources of its own, the resource dictionary it takes from the content drawing it:
+    /// a form drawn again in the same state with the same resources finds nothing new.
+    entered: std::collections::HashSet<(ObjRef, TextState, Option<Holder>)>,
+    /// The forms read where content draws them, which aren't read again on their own unless
+    /// [`Fonts::cut`] holds them.
+    reached: std::collections::HashSet<ObjRef>,
+    /// The forms some content draws past [`MAX_FORM_DEPTH`], which are read on their own even when
+    /// read where other content draws them: that reading may have found less, in another state.
+    cut: std::collections::HashSet<ObjRef>,
+    /// [`Fonts::cut`] in the order the forms were first cut off.
+    cut_order: Vec<ObjRef>,
+}
+
+impl Fonts<'_> {
+    /// Reads the content `data` with the resource dictionary `holder` holds (`/Resources`) and
+    /// which one it is, or with none known, from the state `start`, `depth` forms deep.
+    fn read(&mut self, data: &[u8], holder: Option<(&Dict, Holder)>, start: TextState, depth: usize) {
+        let (which, holder) = (holder.map(|(_, w)| w), holder.map(|(h, _)| h));
+        let fonts = holder.map(|h| resource_fonts(self.doc, h));
+        let start_font = start.font.clone();
+        let mut state = start;
+        let mut saved: Vec<TextState> = Vec::new();
+        // `q`s past MAX_SAVED_STATES, whose `Q`s restore a state that wasn't kept.
+        let mut unsaved = 0usize;
+        // Whether such a `Q` has been read.
+        let mut lost = false;
+        for op in pdfcraft_content::ops(data) {
+            match op.op.as_slice() {
+                b"q" if saved.len() < MAX_SAVED_STATES => saved.push(state.clone()),
+                b"q" => unsaved = unsaved.saturating_add(1),
+                // The font and mode it restores aren't known: the mode is taken as visible, and
+                // every font that could be current then counts, those of these resources and the
+                // one the content started with.
+                b"Q" if unsaved > 0 => {
+                    unsaved -= 1;
+                    state.invisible = false;
+                    if !lost {
+                        lost = true;
+                        self.unread(holder);
+                        self.shows(&TextState { font: start_font.clone(), invisible: false });
+                    }
+                }
+                b"Q" => {
+                    if let Some(s) = saved.pop() {
+                        state = s;
+                    }
+                }
+                b"Tf" => {
+                    if let Some(name) = op.name_back(1) {
+                        let selection = (Selector::Tf, name.to_vec());
+                        state.font = match &fonts {
+                            Some(list) => list.iter().find(|(s, _)| *s == selection).map(|(_, r)| Current::Font(*r)),
+                            None => Some(Current::Named(selection)),
+                        };
+                    }
+                }
+                b"gs" => {
+                    if let Some(name) = op.last_name() {
+                        let selection = (Selector::Gs, name.to_vec());
+                        match &fonts {
+                            // A graphics state without `/Font` leaves the font as it was.
+                            Some(list) => {
+                                if let Some((_, r)) = list.iter().find(|(s, _)| *s == selection) {
+                                    state.font = Some(Current::Font(*r));
+                                }
+                            }
+                            // Whether it sets a font isn't known, nor whether the text after it
+                            // shows: its font counts.
+                            None => {
+                                self.anywhere.insert(selection);
+                            }
+                        }
+                    }
+                }
+                b"Tr" => {
+                    if let Some(mode) = op.num_back(0) {
+                        state.invisible = mode == 3.0;
+                    }
+                }
+                b"Tj" | b"TJ" | b"'" | b"\"" => self.shows(&state),
+                b"Do" => {
+                    if let Some(name) = op.last_name() {
+                        self.draw(name, holder.zip(which), &state, depth);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Reads the content stream `s`, the object `r`, on its own: from the start state, with its own
+    /// resources or none known.
+    fn read_alone(&mut self, r: ObjRef, s: &Stream) {
+        let own = s.dict.get(b"Resources").is_some().then_some(&s.dict);
+        match self.budget.decode(s) {
+            Ok(data) => self.read(&data, own.map(|d| (d, Holder::Stream(r))), TextState::default(), 0),
+            Err(_) => self.unread(own),
+        }
+    }
+
+    /// Content that isn't read, drawn in `state`: it may set a visible mode and show text with the
+    /// current font, so that font draws whatever the mode is.
+    fn may_show(&mut self, state: &TextState) {
+        self.shows(&TextState { font: state.font.clone(), invisible: false });
+    }
+
+    /// Text shown in `state`: its font draws, unless the mode is 3.
+    fn shows(&mut self, state: &TextState) {
+        if state.invisible {
+            return;
+        }
+        match &state.font {
+            Some(Current::Font(r)) => {
+                self.out.insert(*r);
+            }
+            Some(Current::Named(selection)) => {
+                self.anywhere.insert(selection.clone());
+            }
+            None => {}
+        }
+    }
+
+    /// The fonts of content that couldn't be read, whose resource dictionary `holder` holds: all
+    /// of them, or every font when its resources aren't known.
+    fn unread(&mut self, holder: Option<&Dict>) {
+        match holder {
+            Some(h) => self.out.extend(resource_fonts(self.doc, h).into_iter().map(|(_, r)| r)),
+            None => self.every_font = true,
+        }
+    }
+
+    /// `/name Do` in `state`, in content whose resource dictionary `holder` holds: a form XObject
+    /// is read in that state, with its own resources or, without them, those of the content
+    /// drawing it (ISO 32000-2 7.8.3). What can't be followed may show text with the current font.
+    fn draw(&mut self, name: &[u8], holder: Option<(&Dict, Holder)>, state: &TextState, depth: usize) {
+        let (which, holder) = (holder.map(|(_, w)| w), holder.map(|(h, _)| h));
+        let doc = self.doc;
+        let target = holder
+            .and_then(|h| h.get(b"Resources"))
+            .map(|r| doc.resolve(r))
+            .and_then(|r| r.as_dict().and_then(|r| r.get(b"XObject")).map(|x| doc.resolve(x)))
+            .and_then(|x| x.as_dict().and_then(|x| x.get(name)).and_then(Object::as_ref));
+        let Some(r) = target else {
+            if holder.is_none() {
+                self.may_show(state);
+            }
+            return;
+        };
+        let form = doc.resolve(&Object::Ref(r));
+        let Object::Stream(s) = &*form else { return };
+        if s.dict.name(b"Subtype") != Some(b"Form") {
+            return;
+        }
+        if depth >= MAX_FORM_DEPTH {
+            // Read on its own the form starts with no font, so the font it takes from here counts
+            // now.
+            self.may_show(state);
+            if self.cut.insert(r) {
+                self.cut_order.push(r);
+            }
+            return;
+        }
+        let own = s.dict.get(b"Resources").is_some();
+        let inherited = if own { None } else { which };
+        if !self.entered.insert((r, state.clone(), inherited)) {
+            return;
+        }
+        self.reached.insert(r);
+        let resources = if own { Some((&s.dict, Holder::Stream(r))) } else { holder.zip(which) };
+        match self.budget.decode(s) {
+            Ok(data) => self.read(&data, resources, state.clone(), depth.saturating_add(1)),
+            Err(_) => {
+                self.may_show(state);
+                self.unread(resources.map(|(h, _)| h));
+            }
+        }
+    }
+}
+
+/// The fonts the resource dictionary of `holder` (`/Resources`, held directly or by reference)
+/// lets content select, each by how and by its name there, and as the object its reference ends
+/// at: those listed in `/Font`, and those the graphics states in `/ExtGState` hold in their
+/// `/Font` entry (`[font size]`, the font an indirect reference, ISO 32000-2 Table 57).
+fn resource_fonts(doc: &Document, holder: &Dict) -> Vec<(Selection, ObjRef)> {
+    let Some(resources) = holder.get(b"Resources").map(|r| doc.resolve(r)) else { return Vec::new() };
+    let Some(resources) = resources.as_dict() else { return Vec::new() };
+    let mut out = Vec::new();
+    if let Some(fonts) = resources.get(b"Font").map(|f| doc.resolve(f))
+        && let Some(fonts) = fonts.as_dict()
+    {
+        out.extend(fonts.iter().filter_map(|(k, f)| Some(((Selector::Tf, k.to_vec()), font_object(doc, f.as_ref()?)))));
+    }
+    if let Some(states) = resources.get(b"ExtGState").map(|g| doc.resolve(g))
+        && let Some(states) = states.as_dict()
+    {
+        for (k, state) in states.iter() {
+            let state = doc.resolve(state);
+            let Some(font) = state.as_dict().and_then(|s| s.get(b"Font")).map(|f| doc.resolve(f)) else { continue };
+            if let Some(r) = font.as_array().and_then(|a| a.first()).and_then(Object::as_ref) {
+                out.push(((Selector::Gs, k.to_vec()), font_object(doc, r)));
+            }
         }
     }
     out
@@ -665,20 +1124,31 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     };
     // Each problem is worded here and named by the document there: the wording goes on the list in
     // `WORDINGS` for an interface to translate, and the name goes in its `{}` as it stands.
+    // PDF/A-4 cites its own clause numbers, and Save as PDF/A doesn't make PDF/A-4 files, so nothing
+    // is fixable for it.
+    let part4 = level.part() == 4;
+    let cite = |clause: &'static str| if part4 { part4::clause(clause) } else { clause };
     let mut issue = |clause: &'static str, pattern: &'static str, value: Option<String>, page: Option<usize>, fixable: bool| {
+        let (clause, fixable) = (cite(clause), fixable && !part4);
         let message = fill(pattern, value.as_deref(), &[]);
         push(Issue { clause, message, pattern, value, values: Vec::new(), page, object: None, fixable });
     };
     // A problem in one indirect object, worded with named holes.
     let located_issue = |clause: &'static str, pattern: &'static str, values: Vec<(&'static str, String)>, object: ObjRef, fixable: bool| {
+        let (clause, fixable) = (cite(clause), fixable && !part4);
         let message = fill(pattern, None, &values);
         push(Issue { clause, message, pattern, value: None, values, page: None, object: Some(object), fixable });
     };
     check_identification(doc, level, &mut issue);
     let objs = objects(doc);
-    check_xmp_packets(&objs, &located_issue);
-    check_output_intent(doc, &objs, &mut issue);
-    check_catalog_actions(doc, &mut issue);
+    // PDF/A-4 dropped the value types and extension schemas of XMP properties.
+    if !part4 {
+        check_xmp_packets(&objs, &located_issue);
+    } else {
+        part4::component_metadata(doc, &catalog(doc), &objs, &mut issue);
+    }
+    check_output_intent(doc, level, &objs, &mut issue);
+    check_catalog_actions(doc, level, &mut issue);
     // Pages: annotations and page actions.
     let pages = pdfcraft_model::pages(doc);
     // Each annotation's page: the first page that lists it.
@@ -696,16 +1166,31 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     let page_of = |r: ObjRef| annot_pages.get(&r).copied();
     for (i, p) in pages.iter().enumerate() {
-        if p.dict.get(b"AA").is_some() {
-            issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true);
+        match p.dict.get(b"AA") {
+            Some(aa) if part4 => {
+                if let Some(trigger) = part4::forbidden_trigger(doc, aa) {
+                    issue("6.5.2", "A page's additional actions use the trigger {}, which PDF/A-4 doesn't allow", Some(trigger), Some(i), false);
+                }
+            }
+            Some(_) => issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true),
+            None => {}
+        }
+        if part4 {
+            part4::page(doc, &p.dict, i, &mut issue);
         }
     }
-    check_transparency(doc, &pages, &mut issue);
+    check_transparency(doc, level, &pages, &mut issue);
     let drawing = drawing_fonts(doc, &objs);
     check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
-    check_limits(doc, &objs, &pages, &mut issue);
+    // PDF/A-4 has no implementation limits of its own: ISO 32000-2 sets none.
+    if !part4 {
+        check_limits(doc, &objs, &pages, &mut issue);
+    }
     check_spots(doc, &objs, &mut issue);
-    check_graphics_states(doc, &mut issue);
+    check_graphics_states(doc, level, &mut issue);
+    if level == Level::A4f {
+        part4::embedded_files_named(doc, &catalog(doc), &mut issue);
+    }
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
     let mut out = out.into_inner();
     let mut seen = std::collections::HashSet::new();
@@ -715,10 +1200,11 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
 
 /// 6.1.2, 6.1.3 and 6.6: identification and metadata, the file header, the file identifier and
 /// encryption.
-fn check_identification(doc: &Document, level: Level, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+fn check_identification(doc: &Document, level: Level, issue: &mut dyn FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
     // 6.1.3 / 6.6: identification and metadata.
     match metadata(doc) {
         None => issue("6.6.2.1", "The document has no XMP metadata", None, None, true),
+        Some(x) if level.part() == 4 => part4::identification(&x, level, issue),
         Some(x) => {
             let part = xmp::identifier(&x, xmp::PDFA_ID, "part");
             let conf = xmp::identifier(&x, xmp::PDFA_ID, "conformance");
@@ -733,8 +1219,10 @@ fn check_identification(doc: &Document, level: Level, issue: &mut impl FnMut(&'s
         }
     }
     // 6.1.2: the file header.
-    let header = header::check(doc);
-    if header.version {
+    let header = header::check(doc, level.part() == 4);
+    if header.version && level.part() == 4 {
+        issue("6.1.2", "The file doesn't start with a %PDF-2.0 to %PDF-2.9 header line", None, None, false);
+    } else if header.version {
         issue("6.1.2", "The file doesn't start with a %PDF-1.0 to %PDF-1.7 header line", None, None, true);
     }
     if header.comment {
@@ -750,6 +1238,9 @@ fn check_identification(doc: &Document, level: Level, issue: &mut impl FnMut(&'s
     }
     if doc.trailer().get(b"Encrypt").is_some() {
         issue("6.1.3", "The document is encrypted", None, None, true);
+    }
+    if level.part() == 4 {
+        part4::document(doc, &catalog(doc), issue);
     }
 }
 
@@ -879,16 +1370,75 @@ fn report_xmp_extension(
 /// 6.2.3 and 6.2.4.3: the output intent device colour needs.
 fn check_output_intent(
     doc: &Document,
+    level: Level,
     objs: &[(ObjRef, std::sync::Arc<Object>)],
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
-    let used = uses_device_colour(doc, objs);
-    if used.incomplete {
+    // PDF/A-4 says what device colour needs under 6.2.4.3, and keeps 6.2.3 for the output intent
+    // itself.
+    let part4 = level.part() == 4;
+    // PDF/A-4 also accepts DeviceRGB or DeviceCMYK drawn inside an isolated transparency group
+    // whose own colour space is a device-independent one of as many components.
+    let covered = if part4 { part4::group_blending_components(doc, objs) } else { Default::default() };
+    // PDF/A-4 also accepts DeviceRGB or DeviceCMYK drawn in a device-independent blending space of
+    // as many components: for what no such form group covers, every page's transparency group
+    // colour space. An isolated group of its own space keeps what is drawn inside it from the
+    // page's (ISO 32000-2 11.4.7), so the page's space covers only the objects outside them.
+    let pages = if part4 { pdfcraft_model::pages(doc) } else { Vec::new() };
+    let page_space = if part4 { part4::page_blending_components(doc, &pages) } else { None };
+    let blend = |used: &mut DeviceColour, n: Option<i64>| match n {
+        Some(3) => used.rgb = false,
+        Some(4) => used.cmyk = false,
+        _ => {}
+    };
+    let used = if covered.is_empty() {
+        let mut used = uses_device_colour(doc, objs);
+        blend(&mut used, page_space);
+        used
+    } else {
+        // The objects outside such a group, then those inside an RGB one and inside a CMYK one,
+        // each read on their own. The three sets don't share an object, so no stream is decoded
+        // twice, but each has its own decoding budget: at most three times MAX_COLOUR_DECODED.
+        let within = |n: Option<i64>| -> Vec<_> { objs.iter().filter(|(r, _)| covered.get(&r.num).copied() == n).cloned().collect() };
+        let mut used = uses_device_colour(doc, &within(None));
+        blend(&mut used, page_space);
+        for n in [3, 4] {
+            let mut inside = uses_device_colour(doc, &within(Some(n)));
+            blend(&mut inside, Some(n));
+            used.gray |= inside.gray;
+            used.rgb |= inside.rgb;
+            used.cmyk |= inside.cmyk;
+            used.default_rgb |= inside.default_rgb;
+            used.default_cmyk |= inside.default_cmyk;
+            used.incomplete |= inside.incomplete;
+        }
+        used
+    };
+    if used.incomplete && part4 {
+        issue("6.2.4.3", "Some content could not be read for device colour", None, None, false);
+    } else if used.incomplete {
         issue("6.2.3", "Some content could not be read for device colour", None, None, false);
     }
-    match pdfa_intent_profile(doc) {
+    let mut intent = pdfa_intent_profile(doc);
+    // PDF/A-4 takes a page's own PDF/A output intent in place of the document's for that page (ISO
+    // 32000-2 14.11.5). Device colour is judged for the document as a whole, so the intent that
+    // applies is the same on every page or its components are unknown, and device colour of any
+    // kind then needs another allowance; a page with no intent of either kind leaves none.
+    if part4 && !pages.is_empty() {
+        let document = intent;
+        let profiles: Option<Vec<Option<i64>>> = pages.iter().map(|p| pdfa_intent_profile_in(doc, &p.dict).or(document)).collect();
+        intent = profiles.map(|profiles| {
+            let first = profiles.first().copied().flatten();
+            if profiles.iter().all(|n| *n == first) { first } else { None }
+        });
+    }
+    match intent {
         None if used.any() => {
-            issue("6.2.3", "Device colour is used, but there is no PDF/A output intent", None, None, !used.cmyk);
+            if part4 {
+                issue("6.2.4.3", "Device colour is used, but there is no PDF/A output intent", None, None, false);
+            } else {
+                issue("6.2.3", "Device colour is used, but there is no PDF/A output intent", None, None, !used.cmyk);
+            }
             if used.cmyk {
                 issue("6.2.4.3", "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)", None, None, false);
             }
@@ -906,13 +1456,21 @@ fn check_output_intent(
     }
 }
 
-fn check_catalog_actions(doc: &Document, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
-    // 6.1.3 / 6.6.1: catalog actions.
+fn check_catalog_actions(doc: &Document, level: Level, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    // 6.1.3 / 6.6.1: catalog actions. PDF/A-4 allows JavaScript and some additional actions.
     let cat = catalog(doc);
-    if cat.get(b"AA").is_some() {
-        issue("6.5.2", "The document has additional actions (/AA)", None, None, true);
+    let part4 = level.part() == 4;
+    match cat.get(b"AA") {
+        Some(aa) if part4 => {
+            if let Some(trigger) = part4::forbidden_trigger(doc, aa) {
+                issue("6.5.2", "The document's additional actions (/AA) use the trigger {}, which PDF/A-4 doesn't allow", Some(trigger), None, false);
+            }
+        }
+        Some(_) => issue("6.5.2", "The document has additional actions (/AA)", None, None, true),
+        None => {}
     }
-    if let Some(names) = cat.get(b"Names").map(|n| doc.resolve(n))
+    if !part4
+        && let Some(names) = cat.get(b"Names").map(|n| doc.resolve(n))
         && names.as_dict().is_some_and(|n| n.get(b"JavaScript").is_some())
     {
         issue("6.5.1", "The document has document-level JavaScript", None, None, true);
@@ -942,6 +1500,7 @@ pub fn page_uses_transparency(doc: &Document, page: &Dict) -> bool {
 
 fn check_transparency(
     doc: &Document,
+    level: Level,
     pages: &[pdfcraft_model::Page],
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
@@ -953,9 +1512,16 @@ fn check_transparency(
     for (i, p) in pages.iter().enumerate() {
         let painting = transparency::page_painting(doc, &p.dict, &mut shared);
         for name in painting.unknown_blend_modes {
-            issue("6.2.10", "A graphics state uses the blend mode {}, which ISO 32000-1 doesn't define", Some(name), Some(i), false);
+            if level.part() == 4 {
+                issue("6.2.10", "A graphics state uses the blend mode {}, which ISO 32000-2 doesn't define", Some(name), Some(i), false);
+            } else {
+                issue("6.2.10", "A graphics state uses the blend mode {}, which ISO 32000-1 doesn't define", Some(name), Some(i), false);
+            }
         }
-        if painting.transparency && !intent && !transparency::page_names_blending_space(doc, &p.dict) {
+        // PDF 2.0 lets a page carry its own output intents (ISO 32000-2 14.11.5), and PDF/A-4 takes a
+        // PDF/A one there in place of the document's.
+        let page_intent = || level.part() == 4 && pdfa_intent_in(doc, &p.dict);
+        if painting.transparency && !intent && !page_intent() && !transparency::page_names_blending_space(doc, &p.dict) {
             let n = Some((i + 1).to_string());
             issue("6.2.10", "Page {} has transparency but no device-independent blending colour space or PDF/A output intent", n, Some(i), false);
         }
@@ -1007,17 +1573,22 @@ fn check_spots(
     }
 }
 
-fn check_graphics_states(doc: &Document, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
-    // 6.2.5: the extended graphics state.
+fn check_graphics_states(doc: &Document, level: Level, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    // 6.2.5: the extended graphics state. PDF 2.0 names the halftone origin HTO, where earlier
+    // versions had the phase HTP (ISO 32000-2 8.4.5, Table 57); PDF/A-4 forbids HTO.
     let gs = gstate::check(doc);
+    if level.part() == 4 {
+        if gs.origin {
+            issue("6.2.5", "A graphics state has a halftone origin (HTO)", None, None, false);
+        }
+    } else if gs.phase {
+        issue("6.2.5", "A graphics state has a halftone phase (HTP)", None, None, false);
+    }
     if gs.transfer {
         issue("6.2.5", "A graphics state has a transfer function (TR)", None, None, false);
     }
     if gs.transfer2 {
         issue("6.2.5", "A graphics state has a transfer function (TR2) other than Default", None, None, false);
-    }
-    if gs.phase {
-        issue("6.2.5", "A graphics state has a halftone phase (HTP)", None, None, false);
     }
     for kind in gs.halftone_types {
         issue("6.2.5", "A halftone has type {}: only types 1 and 5 are allowed", Some(kind.to_string()), None, false);
@@ -1029,7 +1600,7 @@ fn check_graphics_states(doc: &Document, issue: &mut impl FnMut(&'static str, &'
         issue("6.2.5", "A halftone has a HalftoneName", None, None, false);
     }
     if gs.halftone_transfer {
-        issue("6.2.5", "A halftone has a transfer function, which only a non-primary colorant's halftone may have", None, None, false);
+        issue("6.2.5", "A halftone for every colorant, or for Cyan, Magenta, Yellow or Black, has a transfer function", None, None, false);
     }
     for colorant in gs.missing_transfer {
         issue("6.2.5", "The halftone for the colorant {} has no transfer function", Some(colorant), None, false);
@@ -1079,15 +1650,16 @@ fn check_one_object(
 ) {
     let ty = dict.name(b"Type");
     let subtype = dict.name(b"Subtype");
-    check_actions(doc, dict, issue);
+    check_actions(doc, level, dict, issue);
     let is_annot = matches!(object, Object::Dict(_)) && is_annotation(doc, dict, ty, subtype, page.is_some());
-    if is_annot && check_annotation(doc, dict, subtype, page, issue) {
+    if is_annot && check_annotation(doc, level, dict, subtype, page, issue) {
         // A forbidden annotation stops every later check for its object, as the scan did before
         // it was split into helpers: the rest of its own checks and the form field, font, stream
         // and embedded file below all came after that `continue`.
         return;
     }
-    if dict.get(b"FT").is_some() && dict.get(b"AA").is_some() && !is_annot {
+    // PDF/A-4 lets form fields have additional actions.
+    if dict.get(b"FT").is_some() && dict.get(b"AA").is_some() && !is_annot && level.part() != 4 {
         issue("6.5.2", "A form field has additional actions", None, None, true);
     }
     // A Type 0 font's descendant is checked through it.
@@ -1095,19 +1667,33 @@ fn check_one_object(
         check_font(doc, dict, issue);
     }
     if let Object::Stream(stream) = object {
-        check_stream(doc, stream, subtype, issue);
+        check_stream(doc, level, stream, subtype, issue);
     }
     if ty == Some(b"Filespec") && dict.get(b"EF").is_some() {
-        check_embedded_file(level, dict, issue);
+        check_embedded_file(doc, level, dict, issue);
     }
 }
 
-fn check_actions(doc: &Document, dict: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+fn check_actions(doc: &Document, level: Level, dict: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
     let own = (dict.get(b"S").is_some() && is_action(dict)).then_some(dict);
     let direct = [b"A".as_slice(), b"OpenAction"].map(|key| dict.get(key).and_then(|action| action.as_dict()));
     for action in [own].into_iter().chain(direct).flatten() {
-        if let Some(name) = chain_forbidden(doc, action) {
+        if let Some(name) = chain_forbidden_in(doc, action, level) {
             issue("6.5.1", "A {} action isn't allowed", Some(name), None, true);
+        }
+    }
+    // PDF/A-4 allows some additional-action triggers (6.6.3), not every action they run: an action
+    // written in the additional-actions dictionary is no object of its own, so it is checked here
+    // with its `/Next` chain (ISO 32000-2 12.6.3, Table 194). One that is an object of its own is
+    // checked as one. PDF/A-2 and 3 allow no additional actions at all.
+    if level.part() == 4
+        && let Some(aa) = dict.get(b"AA").map(|aa| doc.resolve(aa))
+        && let Some(aa) = aa.as_dict()
+    {
+        for action in aa.iter().filter_map(|(_, a)| a.as_dict()) {
+            if let Some(name) = chain_forbidden_in(doc, action, level) {
+                issue("6.5.1", "A {} action isn't allowed", Some(name), None, true);
+            }
         }
     }
 }
@@ -1121,29 +1707,46 @@ fn is_annotation(doc: &Document, dict: &Dict, ty: Option<&[u8]>, subtype: Option
 
 fn check_annotation(
     doc: &Document,
+    level: Level,
     dict: &Dict,
     subtype: Option<&[u8]>,
     page: Option<usize>,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) -> bool {
+    let part4 = level.part() == 4;
     let name = subtype.map(|bytes| String::from_utf8_lossy(bytes).into_owned()).unwrap_or_default();
-    if subtype.is_some_and(|value| FORBIDDEN_ANNOTS.contains(&value)) {
+    let forbidden = |value: &[u8]| if part4 { part4::forbids_annotation(level, value) } else { FORBIDDEN_ANNOTS.contains(&value) };
+    if subtype.is_some_and(forbidden) {
         issue("6.3.1", "{} annotations aren't allowed", Some(name), page, true);
         return true;
     }
     let flags = dict.int(b"F").unwrap_or(0);
-    if subtype != Some(b"Popup") && (flags & 4 == 0 || flags & (1 | 2 | 32) != 0) {
+    // Invisible, Hidden and NoView, and for PDF/A-4 ToggleNoView too (ISO 32000-2 Table 167).
+    let hiding = if part4 { 1 | 2 | 32 | 256 } else { 1 | 2 | 32 };
+    if subtype != Some(b"Popup") && (flags & 4 == 0 || flags & hiding != 0) {
         issue("6.3.2", "A {} annotation isn't set to print, or is hidden", Some(name.clone()), page, true);
     }
-    check_annotation_appearance(doc, dict, subtype, &name, page, issue);
-    if dict.get(b"AA").is_some() {
-        issue("6.5.2", "A {} annotation has additional actions", Some(name), page, true);
+    check_annotation_appearance(doc, level, dict, subtype, &name, page, issue);
+    if part4 {
+        part4::annotation(doc, dict, subtype, &name, page, issue);
+    }
+    match dict.get(b"AA") {
+        // PDF/A-4 lets a widget have any additional actions, and other annotations those of pointer
+        // and focus.
+        Some(aa) if part4 => {
+            if subtype != Some(b"Widget") && part4::forbidden_trigger(doc, aa).is_some() {
+                issue("6.5.2", "A {} annotation's additional actions use a trigger PDF/A-4 doesn't allow", Some(name), page, false);
+            }
+        }
+        Some(_) => issue("6.5.2", "A {} annotation has additional actions", Some(name), page, true),
+        None => {}
     }
     false
 }
 
 fn check_annotation_appearance(
     doc: &Document,
+    level: Level,
     dict: &Dict,
     subtype: Option<&[u8]>,
     name: &str,
@@ -1155,7 +1758,8 @@ fn check_annotation_appearance(
         .map(|appearance| doc.resolve(appearance))
         .and_then(|appearance| appearance.as_dict().cloned())
         .is_some_and(|appearance| appearance.get(b"N").is_some());
-    if has_appearance || matches!(subtype, Some(b"Popup") | Some(b"Link")) {
+    // PDF 2.0's projection annotations need none in PDF/A-4 either.
+    if has_appearance || matches!(subtype, Some(b"Popup") | Some(b"Link")) || (level.part() == 4 && subtype == Some(b"Projection")) {
         return;
     }
     let zero_area = dict.get(b"Rect").map(|rect| doc.resolve(rect)).and_then(|rect| rect.as_array().cloned()).is_some_and(|values| {
@@ -1170,6 +1774,7 @@ fn check_annotation_appearance(
 /// Checks a stream's compression filters, external file keys, and image/PostScript subtype rules.
 fn check_stream(
     doc: &Document,
+    level: Level,
     stream: &pdfcraft_cos::Stream,
     subtype: Option<&[u8]>,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
@@ -1196,18 +1801,28 @@ fn check_stream(
             issue("6.2.8", "An image has alternates or OPI information", None, None, true);
         }
     }
-    if subtype == Some(b"PS") {
+    // ISO 32000-2 no longer defines PostScript XObjects, and PDF/A-4 says nothing of them.
+    if subtype == Some(b"PS") && level.part() != 4 {
         issue("6.2.9", "PostScript XObjects aren't allowed", None, None, false);
+    }
+    if level.part() == 4 {
+        part4::stream(doc, &stream.dict, subtype, &filters, issue);
     }
 }
 
-fn check_embedded_file(level: Level, dict: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+fn check_embedded_file(
+    doc: &Document,
+    level: Level,
+    dict: &Dict,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
     match level {
         Level::A2b => issue("6.8", "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)", None, None, false),
         Level::A3b if dict.get(b"AFRelationship").is_none() => {
             issue("6.8", "An embedded file has no AFRelationship", None, None, true);
         }
         Level::A3b => {}
+        Level::A4 | Level::A4e | Level::A4f => part4::embedded_file(doc, level, dict, issue),
     }
 }
 
@@ -1269,12 +1884,17 @@ const MAX_ACTION_CHAIN: usize = 1024;
 /// `/Next` (ISO 32000-2 12.6.2: a dictionary or an array of them, which may be an object of its
 /// own). An action `/Next` refers to is an object of its own, checked and removed as one.
 fn chain_forbidden(doc: &Document, a: &Dict) -> Option<String> {
+    chain_forbidden_in(doc, a, Level::A2b)
+}
+
+/// [`chain_forbidden`] with the actions `level` forbids, which for PDF/A-4 are fewer.
+fn chain_forbidden_in(doc: &Document, a: &Dict, level: Level) -> Option<String> {
     let mut read = 0;
     let mut seen = std::collections::HashSet::new();
     // Objects `/Next` refers to (an action, or an array of them), each read once and borrowed:
     // one array shared by many chains is not copied per chain.
     let mut held: Vec<std::sync::Arc<Object>> = Vec::new();
-    if let Some(s) = walk_chain(doc, a, &mut read, &mut seen, &mut held) {
+    if let Some(s) = walk_chain(doc, level, a, &mut read, &mut seen, &mut held) {
         return Some(s);
     }
     while let Some(o) = held.pop() {
@@ -1294,7 +1914,7 @@ fn chain_forbidden(doc: &Document, a: &Dict) -> Option<String> {
             _ => continue,
         };
         for d in dicts {
-            if let Some(s) = walk_chain(doc, d, &mut read, &mut seen, &mut held) {
+            if let Some(s) = walk_chain(doc, level, d, &mut read, &mut seen, &mut held) {
                 return Some(s);
             }
         }
@@ -1316,6 +1936,7 @@ fn hold_referenced(doc: &Document, list: &[Object], seen: &mut std::collections:
 /// an indirect `/Next`, or a reference inside a `/Next` array, names goes to `held`.
 fn walk_chain(
     doc: &Document,
+    level: Level,
     a: &Dict,
     read: &mut usize,
     seen: &mut std::collections::HashSet<ObjRef>,
@@ -1327,7 +1948,7 @@ fn walk_chain(
         if *read > MAX_ACTION_CHAIN {
             return Some("too deeply chained".into());
         }
-        if let Some(s) = action_forbidden(doc, d) {
+        if let Some(s) = action_forbidden(doc, level, d) {
             return Some(s);
         }
         match d.get(b"Next") {
@@ -1351,10 +1972,10 @@ fn walk_chain(
 /// The forbidden kind of the action `d` itself, if it is one: a forbidden type, or a Named
 /// action for anything but the four of [`NAMED_ACTIONS`]. The type and the name may each be given
 /// directly or by reference.
-fn action_forbidden(doc: &Document, d: &Dict) -> Option<String> {
+fn action_forbidden(doc: &Document, level: Level, d: &Dict) -> Option<String> {
     let s = doc.resolve(d.get(b"S")?);
     let s = s.as_name()?;
-    if FORBIDDEN_ACTIONS.contains(&s) {
+    if FORBIDDEN_ACTIONS.contains(&s) && !part4::allows_action(level, s) {
         return Some(String::from_utf8_lossy(s).into_owned());
     }
     let n = d.get(b"N").map(|n| doc.resolve(n));
@@ -1472,7 +2093,13 @@ fn convert_direct_page_annots(
 }
 
 /// Make `doc` conform to `level` as far as possible, then re-check it.
+///
+/// PDF/A-4 levels are verified only: for them nothing is changed, and the report holds what
+/// [`verify`] finds.
 pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos::CosError> {
+    if level.part() == 4 {
+        return Ok(Report { fixed: Vec::new(), remaining: verify(doc, level) });
+    }
     let mut fixed = Vec::new();
     if doc.trailer().get(b"Encrypt").is_some() {
         doc.remove_encryption();
