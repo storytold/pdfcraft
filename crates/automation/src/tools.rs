@@ -813,6 +813,7 @@ pub fn tools() -> Vec<ToolDef> {
             "Convert colours",
             "Convert colour spaces of raster images in the document (Acrobat Print Production ▸ Convert Colors). Converts uncalibrated DeviceCMYK raster images to DeviceRGB using standard subtractive conversion, while preserving pure CMYK spaces when output intents or separation profiles are present.",
         )
+        .destructive()
         .with(schema(
             json!({
                 "doc": doc(),

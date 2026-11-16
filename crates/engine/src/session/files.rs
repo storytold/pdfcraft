@@ -314,6 +314,9 @@ impl Session {
     /// Converts uncalibrated DeviceCMYK raster images to DeviceRGB.
     pub fn convert_colors(&self, id: DocId, options: &print::ConvertColorsOptions) -> Result<(Arc<Vec<u8>>, print::ConvertColorsReport), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        if !doc.allows_modification() {
+            return Err(EditError::NotPermitted("converting colors"));
+        }
         let mut cos = match doc.editor.as_ref() {
             Some(e) => e.cos.clone(),
             None => {
@@ -321,7 +324,8 @@ impl Session {
             }
         };
         let report = guard(|| print::convert_colors(&mut cos, *options)).map_err(EditError::Print)?.map_err(|e| EditError::Print(e.to_string()))?;
-        let bytes = write_full(&cos, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?;
+        let out = writable(&cos)?;
+        let bytes = write_full(&out, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?;
         Ok((Arc::new(bytes), report))
     }
 
