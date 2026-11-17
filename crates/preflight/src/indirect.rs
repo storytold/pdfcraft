@@ -100,11 +100,11 @@ pub(crate) fn check(doc: &Document) -> Findings {
         };
         let Some(header) = data.get(at..end) else { continue };
         let number = digits(header);
-        let gap_1 = header.get(number..).map_or(0, |r| r.iter().take_while(|&&b| is_whitespace(b)).count());
+        let (gap_1, comment_1) = space(header, number);
         let generation_at = number.saturating_add(gap_1);
         let generation = header.get(generation_at..).map_or(0, digits);
         let gap_2_at = generation_at.saturating_add(generation);
-        let gap_2 = header.get(gap_2_at..).map_or(0, |r| r.iter().take_while(|&&b| is_whitespace(b)).count());
+        let (gap_2, comment_2) = space(header, gap_2_at);
         let obj_at = gap_2_at.saturating_add(gap_2);
         if generation == 0 || header.get(obj_at..obj_at.saturating_add(3)) != Some(b"obj".as_slice()) {
             // Not an object header after all: nothing more is known of it.
@@ -114,7 +114,9 @@ pub(crate) fn check(doc: &Document) -> Findings {
         if !is_eol(at.checked_sub(1).and_then(|p| data.get(p))) {
             note(&mut out.before_header);
         }
-        if gap_1 != 1 || gap_2 != 1 {
+        // A comment counts as a white-space character of its own (ISO 32000-2 7.2.4), so a gap
+        // holding one is never a single white-space character.
+        if gap_1 != 1 || gap_2 != 1 || comment_1 || comment_2 {
             note(&mut out.spacing);
         }
         let body = at.saturating_add(obj_at).saturating_add(3);
@@ -152,6 +154,15 @@ pub(crate) fn check(doc: &Document) -> Findings {
         }
     }
     out
+}
+
+/// The white space and comments at `at` in `data`: how many bytes they take, and whether a
+/// comment is among them.
+fn space(data: &[u8], at: usize) -> (usize, bool) {
+    let mut lx = Lexer::new(data, at);
+    lx.skip_ws();
+    // Past white space, a `%` can only start a comment.
+    (lx.pos.saturating_sub(at), data.get(at..lx.pos).is_some_and(|gap| gap.contains(&b'%')))
 }
 
 /// Where the object value starting at `body` ends, past the white space and comments after it:
