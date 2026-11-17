@@ -9,7 +9,9 @@
 //! `/UserUnit` it was written for.
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
-use pdfcraft_fonts::{GlyphError, GlyphOutline, ShapedScript, Std14, literal, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, win_ansi};
+use pdfcraft_fonts::{
+    GlyphError, GlyphOutline, ShapedScript, Std14, literal, shape_arabic, shape_hebrew, shape_inter, shape_thai, shaped_glyph, win_ansi,
+};
 use unicode_bidi::{Level, ParagraphBidiInfo};
 
 use crate::{EditError, MarkKind, check, contents, matrix_number, n, page_list, place_tagged};
@@ -88,5 +90,7 @@ fn align_from(code: Option<i64>) -> Align {
 
 #[cfg(test)]
 mod arabic_tests;
+#[cfg(test)]
+mod inter_tests;
 #[cfg(test)]
 mod thai_tests;
