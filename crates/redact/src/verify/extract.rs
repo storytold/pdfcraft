@@ -433,17 +433,30 @@ pub(crate) fn matrix_of(doc: &Document, dict: &Dict) -> Result<Matrix, ()> {
 /// A form's `/BBox` as `[x0 y0 x1 y1]`: absent is `None`, present but malformed is an error.
 pub(crate) fn bbox_of(doc: &Document, dict: &Dict) -> Result<Option<[f64; 4]>, ()> {
     let Some(b) = dict.get(b"BBox") else { return Ok(None) };
-    let b = doc.resolve(b);
+    // Only a reference is resolved; a direct value is read in place, since `resolve` copies it.
+    // The walk reads the box at every `Do`, and a direct array of any length (or an entry that is
+    // itself a large array) would be copied each time.
+    let held;
+    let b = match b {
+        Object::Ref(_) => {
+            held = doc.resolve(b);
+            &*held
+        }
+        direct => direct,
+    };
     // A null value is no entry (ISO 32000-2 §7.3.9), whether given directly or by reference.
-    if matches!(&*b, Object::Null) {
+    if matches!(b, Object::Null) {
         return Ok(None);
     }
-    // The length is checked before any entry is resolved: the walk reads it at every `Do`, and an
-    // array of any length would be resolved entry by entry each time.
+    // The length is checked before any entry is read.
     let items = b.as_array().filter(|a| a.len() == 4).ok_or(())?;
     let mut v = [0.0; 4];
     for (value, item) in v.iter_mut().zip(items) {
-        *value = doc.resolve(item).as_f64().filter(|n| n.is_finite()).ok_or(())?;
+        let n = match item {
+            Object::Ref(_) => doc.resolve(item).as_f64(),
+            direct => direct.as_f64(),
+        };
+        *value = n.filter(|n| n.is_finite()).ok_or(())?;
     }
     let [a, b, c, d] = v;
     Ok(Some([a.min(c), b.min(d), a.max(c), b.max(d)]))
