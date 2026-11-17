@@ -6323,3 +6323,33 @@ clean on collab-pdf, collab-server, collab-daemon, collab-hub, collab-proto;
 tests 75 + 35 + 48 unit, 5 integration, 0 failed (workspace clippy stays red on
 main's `xfdf.rs:326` under 1.99). **Awaiting the owner's push:** `54949a041` and
 the docs commit above it; the PR head is `116b5c22e` until then.
+
+## The merged main, and the review of 2026-11-17 (2026-11-17T13:05Z, local)
+
+Measured 13:00Z: the PR #6622 head, the fork tip and this clone were all
+`640262986`, 39 commits behind `origin/main` `271e479c5`. An end-to-end run on
+that head (issue comment 12:09Z) found two defects CI cannot see while the
+`collab` feature is off, plus a localisation note.
+
+`271e479c5` is merged as **`68682dba4`** with no conflict (53 files, +590/−1672;
+169 ahead, 0 behind). The fixes follow in **`1cb097407`**: `selection_caret`
+follows the head's `head_page` and presence carries the selection's first page
+(the one range a frame can name); `Store::append`'s directory sync is
+`#[cfg(unix)]`, because Windows cannot open a directory as a file (`os error 5`)
+and NTFS journals the entry itself; and the Collaboration window, its
+participant lines and the status/error strings go through `tl!`/`i18n::fmt`,
+with a translated role label while `role_name` stays the wire word. The merge
+also needed one test fixture: `FormWidget` gained `mouse_down`.
+
+Gate on `agents` at `1cb097407`: fmt clean; `cargo build -p pdfcraft-web
+--features collab --target wasm32-unknown-unknown` exits 0 (it failed before);
+clippy `--no-deps -D warnings` clean on the five collab crates; `cargo test -p
+pdfcraft-ui-egui --features collab` 1056 lib + 1931 integration passed, 2
+failed — `the_selection_bar_stays_inside_the_pages_area` and
+`find_again_while_composing_keeps_the_query` — which fail identically without
+the feature: no craft-i18n catalogs (`language must be one of auto, en`) and no
+CJK font on the host. collab-pdf and collab-server: 75 + 35, 0 failed.
+
+**Awaiting the owner's push:** `68682dba4` and `1cb097407` (this agent's `git
+push` is denied). The PR head stays `64026298` until then: no approve, no
+merge, no CI change here.
