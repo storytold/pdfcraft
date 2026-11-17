@@ -536,13 +536,14 @@ pub struct PageRenderer {
     pdf: Option<Pdf>,
     settings: InterpreterSettings,
     stats: RenderStats,
+    needs_reparse: bool,
 }
 
 impl PageRenderer {
     pub fn new(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
         let pdf = parse(&bytes, config.password.as_deref());
         let settings = config.settings();
-        Self { bytes, config, pdf, settings, stats: RenderStats { parser_builds: 1, ..RenderStats::default() } }
+        Self { bytes, config, pdf, settings, stats: RenderStats { parser_builds: 1, ..RenderStats::default() }, needs_reparse: false }
     }
 
     pub fn page_count(&self) -> usize {
@@ -556,6 +557,7 @@ impl PageRenderer {
 
     /// Extract one page for statistics, with semantic exclusions. Never rasterizes or panics.
     pub fn filtered_text(&mut self, page: usize, filter: crate::text::TextFilter) -> Result<crate::PageText, String> {
+        self.ensure_fresh_parser();
         let pdf = self.pdf.as_ref().ok_or("the document could not be parsed")?;
         self.stats.text_interpretations = self.stats.text_interpretations.saturating_add(1);
         catch_unwind(AssertUnwindSafe(|| crate::text::extract_page_filtered(pdf, page, &self.settings, filter)))
@@ -569,7 +571,7 @@ impl PageRenderer {
 
     /// Borrow the parsed document with one shared `RenderCache` across multiple `render` calls.
     pub fn session<R>(&mut self, f: impl FnOnce(&mut RenderSession<'_>) -> R) -> R {
-        let mut needs_reparse = false;
+        self.ensure_fresh_parser();
         let out = {
             let mut session = RenderSession {
                 bytes: &self.bytes,
@@ -578,15 +580,20 @@ impl PageRenderer {
                 settings: &self.settings,
                 stats: &mut self.stats,
                 cache: RenderCache::new(),
-                needs_reparse: &mut needs_reparse,
+                needs_reparse: &mut self.needs_reparse,
             };
             f(&mut session)
         };
-        if needs_reparse {
-            self.pdf = parse(&self.bytes, self.config.password.as_deref());
-            self.stats.parser_builds += 1;
-        }
+        self.ensure_fresh_parser();
         out
+    }
+
+    fn ensure_fresh_parser(&mut self) {
+        if self.needs_reparse {
+            self.stats.parser_builds += 1;
+            self.pdf = parse(&self.bytes, self.config.password.as_deref());
+            self.needs_reparse = false;
+        }
     }
 }
 
@@ -619,19 +626,17 @@ impl RenderSession<'_> {
             }
         }
         let Some(pdf) = self.pdf.filter(|_| !*self.needs_reparse) else {
-            let msg = if *self.needs_reparse {
-                let Some(fresh) = parse(self.bytes, self.config.password.as_deref()) else {
-                    return finish(req, start, Err(("the document could not be parsed".into(), false)), Vec::new());
-                };
-                let cache = RenderCache::new();
-                let warnings = Arc::new(Mutex::new(Vec::new()));
-                let settings = warning_settings(self.settings, warnings.clone());
-                let r = render_page(&fresh, &cache, &settings, self.config, req);
-                return finish(req, start, r, take_warnings(&warnings));
-            } else {
-                "the document could not be parsed"
-            };
-            return finish(req, start, Err((msg.into(), false)), Vec::new());
+            if *self.needs_reparse {
+                self.stats.parser_builds += 1;
+                if let Some(fresh) = parse(self.bytes, self.config.password.as_deref()) {
+                    let cache = RenderCache::new();
+                    let warnings = Arc::new(Mutex::new(Vec::new()));
+                    let settings = warning_settings(self.settings, warnings.clone());
+                    let r = render_page(&fresh, &cache, &settings, self.config, req);
+                    return finish(req, start, r, take_warnings(&warnings));
+                }
+            }
+            return finish(req, start, Err(("the document could not be parsed".into(), false)), Vec::new());
         };
         let warnings = Arc::new(Mutex::new(Vec::new()));
         let settings = warning_settings(self.settings, warnings.clone());
