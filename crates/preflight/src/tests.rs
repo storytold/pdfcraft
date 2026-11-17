@@ -2441,6 +2441,37 @@ fn type3_fonts_a_graphics_state_selects_are_read_clause_6_2_2() {
     assert_eq!(content_findings("", selects, "BT /GS gs (a) Tj ET", &["<< /Type /ExtGState /Font 6 0 R >>", type3, &glyph]), none);
 }
 
+/// Content without resources of its own is read with each resource dictionary it is drawn with:
+/// a font or form first reached where its names find nothing is still judged where they do.
+#[test]
+fn content_without_resources_is_read_with_each_dictionary_it_is_drawn_with_clause_6_2_2() {
+    let cal = "/ColorSpace << /C [/CalGray << /WhitePoint [1 1 1] >>] >>";
+    // A Type 3 font without resources (6), selected first through a graphics state on the page,
+    // which doesn't define the /C its glyph (7) uses, then with Tf in form 8, which does.
+    let bare_type3 = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 7 0 R >> >>";
+    let glyph = content("", "1000 0 d0 /C cs");
+    let form = content(&format!("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /Font << /F 6 0 R >> {cal} >>"), "BT /F 1 Tf (a) Tj ET");
+    let page = "/Resources << /ExtGState << /GS 5 0 R >> /XObject << /X 8 0 R >> >>";
+    let gs = "<< /Type /ExtGState /Font [6 0 R 12] >>";
+    assert_eq!(
+        content_findings("", page, "BT /GS gs (a) Tj ET /X Do", &[gs, bare_type3, &glyph, &form]),
+        ["A Type 3 font's glyphs refer to resources by name, but the font has no Resources dictionary"]
+    );
+    // A form without resources (6) drawn by two forms: by 5 first, whose resources don't name /Y,
+    // then by 7, whose resources name it a form (8) with an undefined operator.
+    let bare = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", "/Y Do");
+    let first = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /B 6 0 R >> >>", "/B Do");
+    let second = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /B 6 0 R /Y 8 0 R >> >>", "/B Do");
+    let named = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >>", "UnknownOperator");
+    let found = content_findings("", "/Resources << /XObject << /P 5 0 R /Q 7 0 R >> >>", "/P Do /Q Do", &[&first, &bare, &second, &named]);
+    assert!(found.contains(&"Content uses the operator UnknownOperator, which ISO 32000 doesn't define".to_owned()), "{found:?}");
+    // Read with the same resources again, it isn't read again: a form that paints itself ends.
+    let looping = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", "/B Do");
+    let holder = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /B 6 0 R >> >>", "/B Do");
+    let found = content_findings("", "/Resources << /XObject << /P 5 0 R >> >>", "/P Do", &[&holder, &looping]);
+    assert_eq!(found, ["A form XObject refers to resources by name but has no Resources dictionary"]);
+}
+
 #[test]
 fn content_streams_that_name_resources_have_their_own_clause_6_2_2() {
     let none = Vec::<String>::new();

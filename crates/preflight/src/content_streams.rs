@@ -20,9 +20,12 @@
 //! soft mask groups of the graphics states `gs` sets; and the
 //! appearance streams of the pages' annotations. A form XObject that no content paints isn't
 //! read, as it is never drawn. Names are looked up as readers look them up: in the stream's own
-//! resources, or, when it has none, in those of the content that drew it.
+//! resources, or, when it has none, in those of the content that drew it. Content with resources
+//! of its own is read once; content without them once for each resource dictionary it is drawn
+//! with, since what its names find, and so what it is reported for and what it draws, depends on
+//! that dictionary.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
@@ -53,6 +56,9 @@ const MAX_DECODED: usize = 1 << 28;
 const MAX_DEPTH: usize = 32;
 /// How many content streams are read in all.
 const MAX_STREAMS: usize = 1 << 16;
+/// The bytes of content read in all, a stream read again with other resources counted again:
+/// twice [`MAX_DECODED`], so content read once always fits.
+const MAX_READ: usize = 2 * MAX_DECODED;
 
 /// What kind of content stream refers to resources without its own resource dictionary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,12 +78,22 @@ pub(crate) struct Findings {
 }
 
 pub(crate) fn check(doc: &Document) -> Findings {
-    let mut walk = Walk { doc, seen: HashSet::new(), streams: 0, budget: DecodeBudget::new(MAX_DECODED, usize::MAX), found: Findings::default() };
+    let mut walk = Walk {
+        doc,
+        seen: HashSet::new(),
+        decoded: HashMap::new(),
+        streams: 0,
+        read: 0,
+        budget: DecodeBudget::new(MAX_DECODED, usize::MAX),
+        found: Findings::default(),
+    };
     for p in pdfcraft_model::pages(doc) {
         // The page's own dictionary, to tell its own resources from inherited ones.
         let own = doc.get(p.obj);
         let explicit = own.as_dict().is_some_and(|d| d.get(b"Resources").is_some());
         let resources = p.dict.get(b"Resources").map(|r| doc.resolve(r));
+        // Which resource dictionary that is: its object, or the page's when it is written there.
+        let context = Some(p.dict.get(b"Resources").and_then(Object::as_ref).unwrap_or(p.obj));
         let contents = p.dict.get(b"Contents").map(|c| doc.resolve(c));
         let parts: Vec<Object> = match contents.as_deref() {
             Some(Object::Array(a)) => a.clone(),
@@ -87,21 +103,21 @@ pub(crate) fn check(doc: &Document) -> Findings {
         // The parts of a page's contents are one stream cut in pieces (ISO 32000-2 7.8.2).
         let mut data = Vec::new();
         for part in &parts {
-            let Some(bytes) = walk.decode(part) else { continue };
+            let Some(bytes) = walk.decode(part, None) else { continue };
             data.extend_from_slice(&bytes);
             data.push(b'\n');
         }
-        walk.run(&data, resources.as_deref(), explicit, Holder::Page, 0);
+        walk.run(&data, resources.as_deref(), context, explicit, Holder::Page, 0);
         let annots = p.dict.get(b"Annots").map(|a| doc.resolve(a));
         for a in annots.as_deref().and_then(Object::as_array).into_iter().flatten() {
             let a = doc.resolve(a);
             let Some(ap) = a.as_dict().and_then(|a| a.get(b"AP")).map(|ap| doc.resolve(ap)) else { continue };
             for (_, v) in ap.as_dict().into_iter().flat_map(|d| d.iter()) {
                 match &*doc.resolve(v) {
-                    Object::Stream(_) => walk.form(v, None, 0),
+                    Object::Stream(_) => walk.form(v, None, None, 0),
                     Object::Dict(states) => {
                         for (_, s) in states.iter() {
-                            walk.form(s, None, 0);
+                            walk.form(s, None, None, 0);
                         }
                     }
                     _ => {}
@@ -112,20 +128,31 @@ pub(crate) fn check(doc: &Document) -> Findings {
     walk.found
 }
 
+/// Which resource dictionary content is read with: the object that holds it (the dictionary
+/// itself, or the page or stream it is written in), `None` when none is known.
+type Context = Option<ObjRef>;
+
 struct Walk<'a> {
     doc: &'a Document,
-    /// The content streams read, each once.
-    seen: HashSet<ObjRef>,
+    /// The content streams and Type 3 fonts read, each with the resource dictionary it was read
+    /// with when it has none of its own (`None` when it has).
+    seen: HashSet<(ObjRef, Context)>,
+    /// The data of each content stream decoded, so one read again with other resources isn't
+    /// decoded again (`None` when it can't be).
+    decoded: HashMap<ObjRef, Option<Arc<[u8]>>>,
     streams: usize,
+    /// The bytes of content read so far (see [`MAX_READ`]).
+    read: usize,
     budget: DecodeBudget,
     found: Findings,
 }
 
 impl Walk<'_> {
-    /// The decoded data of the stream `o` refers to, once per stream and within the budgets.
-    fn decode(&mut self, o: &Object) -> Option<Arc<[u8]>> {
+    /// The decoded data of the stream `o` refers to, read with the resources of `context` (`None`
+    /// when it has its own): once per stream and context, decoded once, within the budgets.
+    fn decode(&mut self, o: &Object, context: Context) -> Option<Arc<[u8]>> {
         if let Object::Ref(r) = o
-            && !self.seen.insert(*r)
+            && !self.seen.insert((*r, context))
         {
             return None;
         }
@@ -133,6 +160,21 @@ impl Walk<'_> {
             return None;
         }
         self.streams = self.streams.saturating_add(1);
+        if let Object::Ref(r) = o
+            && let Some(done) = self.decoded.get(r)
+        {
+            return done.clone();
+        }
+        let data = self.decode_new(o);
+        if let Object::Ref(r) = o {
+            self.decoded.insert(*r, data.clone());
+        }
+        data
+    }
+
+    /// The decoded data of the stream `o` refers to, when its filters are ones a stream may name
+    /// and it decodes within the budget.
+    fn decode_new(&mut self, o: &Object) -> Option<Arc<[u8]>> {
         let held = self.doc.resolve(o);
         let Object::Stream(s) = &*held else { return None };
         // A filter a stream can't name (the abbreviations are for inline images only, ISO 32000-2
@@ -151,13 +193,14 @@ impl Walk<'_> {
     }
 
     /// Read a form XObject (or an appearance stream) `o`, drawn from content whose resources are
-    /// `outer`.
-    fn form(&mut self, o: &Object, outer: Option<&Object>, depth: usize) {
-        self.stream_content(o, outer, Holder::Form, depth);
+    /// `outer`, those of `context`.
+    fn form(&mut self, o: &Object, outer: Option<&Object>, context: Context, depth: usize) {
+        self.stream_content(o, outer, context, Holder::Form, depth);
     }
 
-    /// Read the content stream `o` with its own resources, or `outer` when it has none.
-    fn stream_content(&mut self, o: &Object, outer: Option<&Object>, holder: Holder, depth: usize) {
+    /// Read the content stream `o` with its own resources, or `outer` (those of `context`) when it
+    /// has none.
+    fn stream_content(&mut self, o: &Object, outer: Option<&Object>, context: Context, holder: Holder, depth: usize) {
         if depth > MAX_DEPTH {
             return;
         }
@@ -166,16 +209,25 @@ impl Walk<'_> {
         if holder == Holder::Form && !is_form(self.doc, s) {
             return;
         }
-        let own = s.dict.get(b"Resources").map(|r| self.doc.resolve(r));
-        let Some(data) = self.decode(o) else { return };
+        let own_entry = s.dict.get(b"Resources");
+        let own = own_entry.map(|r| self.doc.resolve(r));
         let explicit = own.is_some();
+        let Some(data) = self.decode(o, if explicit { None } else { context }) else { return };
+        let context = match own_entry {
+            Some(entry) => entry.as_ref().or_else(|| o.as_ref()),
+            None => context,
+        };
         let resources = own.or_else(|| outer.map(|r| Arc::new(r.clone())));
-        self.run(&data, resources.as_deref(), explicit, holder, depth);
+        self.run(&data, resources.as_deref(), context, explicit, holder, depth);
     }
 
-    /// Read the operators of `data`, drawn with `resources`. `explicit` says whether the stream
-    /// has resources of its own.
-    fn run(&mut self, data: &[u8], resources: Option<&Object>, explicit: bool, holder: Holder, depth: usize) {
+    /// Read the operators of `data`, drawn with `resources`, those of `context`. `explicit` says
+    /// whether the stream has resources of its own.
+    fn run(&mut self, data: &[u8], resources: Option<&Object>, context: Context, explicit: bool, holder: Holder, depth: usize) {
+        self.read = self.read.saturating_add(data.len());
+        if self.read > MAX_READ {
+            return;
+        }
         let doc = self.doc;
         let lookup = |category: &[u8], name: &[u8]| -> Option<Object> {
             let res = resources?.as_dict()?;
@@ -207,12 +259,12 @@ impl Walk<'_> {
             match kw {
                 b"Do" => {
                     if let Some(x) = op.last_name().and_then(|n| lookup(b"XObject", n)) {
-                        self.form(&x, resources, next);
+                        self.form(&x, resources, context, next);
                     }
                 }
                 b"Tf" => {
                     if let Some(f) = op.name_back(1).and_then(|n| lookup(b"Font", n)) {
-                        self.type3(&f, resources, next);
+                        self.type3(&f, resources, context, next);
                     }
                 }
                 b"scn" | b"SCN" => {
@@ -220,19 +272,19 @@ impl Walk<'_> {
                         && let Object::Stream(s) = &*doc.resolve(&p)
                         && s.dict.get(b"PatternType").and_then(|t| doc.resolve(t).as_int()) == Some(1)
                     {
-                        self.stream_content(&p, resources, Holder::Pattern, next);
+                        self.stream_content(&p, resources, context, Holder::Pattern, next);
                     }
                 }
                 b"gs" => {
                     let gs = op.last_name().and_then(|n| lookup(b"ExtGState", n)).map(|g| doc.resolve(&g));
                     let mask = gs.as_deref().and_then(Object::as_dict).and_then(|g| g.get(b"SMask")).map(|m| doc.resolve(m));
                     if let Some(group) = mask.as_deref().and_then(Object::as_dict).and_then(|m| m.get(b"G")) {
-                        self.form(group, resources, next);
+                        self.form(group, resources, context, next);
                     }
                     // A graphics state can select a font as `Tf` does, by reference (Table 57).
                     let font = gs.as_deref().and_then(Object::as_dict).and_then(|g| g.get(b"Font")).map(|f| doc.resolve(f));
                     if let Some(f) = font.as_deref().and_then(Object::as_array).and_then(|a| a.first()) {
-                        self.type3(f, resources, next);
+                        self.type3(f, resources, context, next);
                     }
                 }
                 _ => {}
@@ -240,22 +292,29 @@ impl Walk<'_> {
         }
     }
 
-    /// The glyph procedures of the Type 3 font `f`, with its resources or `outer`.
-    fn type3(&mut self, f: &Object, outer: Option<&Object>, depth: usize) {
+    /// The glyph procedures of the Type 3 font `f`, with its resources or `outer`, those of
+    /// `context`.
+    fn type3(&mut self, f: &Object, outer: Option<&Object>, context: Context, depth: usize) {
         let doc = self.doc;
         let font = doc.resolve(f);
         let Some(d) = font.as_dict() else { return };
         if d.get(b"Subtype").map(|s| doc.resolve(s)).as_deref().and_then(Object::as_name) != Some(b"Type3") {
             return;
         }
-        // A font is read once, wherever it is selected.
+        let own_entry = d.get(b"Resources");
+        let own = own_entry.map(|r| doc.resolve(r));
+        let explicit = own.is_some();
+        // A font with resources of its own is read once, wherever it is selected; one without them
+        // once for each resource dictionary it is selected with.
         if let Object::Ref(r) = f
-            && !self.seen.insert(*r)
+            && !self.seen.insert((*r, if explicit { None } else { context }))
         {
             return;
         }
-        let own = d.get(b"Resources").map(|r| doc.resolve(r));
-        let explicit = own.is_some();
+        let context = match own_entry {
+            Some(entry) => entry.as_ref().or_else(|| f.as_ref()),
+            None => context,
+        };
         let resources = own.or_else(|| outer.map(|r| Arc::new(r.clone())));
         let procs = d.get(b"CharProcs").map(|c| doc.resolve(c));
         for (_, p) in procs.as_deref().and_then(Object::as_dict).into_iter().flat_map(|d| d.iter()) {
@@ -264,13 +323,18 @@ impl Walk<'_> {
             }
             // A glyph's own stream may carry the resources it uses, as readers accept.
             let glyph = doc.resolve(p);
-            let glyph_own = match &*glyph {
-                Object::Stream(g) => g.dict.get(b"Resources").map(|r| doc.resolve(r)),
+            let glyph_entry = match &*glyph {
+                Object::Stream(g) => g.dict.get(b"Resources").cloned(),
                 _ => None,
             };
-            let Some(data) = self.decode(p) else { continue };
+            let glyph_own = glyph_entry.as_ref().map(|r| doc.resolve(r));
             let explicit = explicit || glyph_own.is_some();
-            self.run(&data, glyph_own.as_deref().or(resources.as_deref()), explicit, Holder::Type3, depth);
+            let Some(data) = self.decode(p, if explicit { None } else { context }) else { continue };
+            let context = match &glyph_entry {
+                Some(entry) => entry.as_ref().or_else(|| p.as_ref()),
+                None => context,
+            };
+            self.run(&data, glyph_own.as_deref().or(resources.as_deref()), context, explicit, Holder::Type3, depth);
         }
     }
 }
