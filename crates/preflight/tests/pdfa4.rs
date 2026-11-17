@@ -272,6 +272,16 @@ fn javascript_is_allowed_and_forbidden_actions_are_not() {
     assert!(issues(&with_catalog("/OpenAction << /S /JavaScript /JS (1;) >>"), Level::A2b).iter().any(|i| i.message.contains("JavaScript")));
     reports(&with_catalog("/OpenAction << /S /Trans /Trans << >> >>"), Level::A4, "6.6.1", "A Trans action");
     reports(&with_catalog("/OpenAction << /S /GoTo /D [4 0 R /Fit] /Next << /S /Launch /F (x) >> >>"), Level::A4, "6.6.1", "Launch");
+    // A document-level JavaScript action written in the name tree, at its root or in a kid, runs
+    // its `/Next` chain too.
+    let chained = "<< /S /JavaScript /JS (1;) /Next << /S /Launch /F (x) >> >>";
+    reports(&with_catalog(&format!("/Names << /JavaScript << /Names [(a) {chained}] >> >>")), Level::A4, "6.6.1", "A Launch action");
+    let kid = File {
+        more: vec![o(&format!("<< /Limits [(a) (a)] /Names [(a) {chained}] >>")), o("[6 0 R 6 0 R]")],
+        ..with_catalog("/Names << /JavaScript << /Kids 7 0 R >> >>")
+    };
+    reports(&kid, Level::A4, "6.6.1", "A Launch action");
+    passes(&File { more: vec![o("<< /Names [(a) << /S /JavaScript /JS (1;) >>] >>"), o("[6 0 R]")], ..kid }, Level::A4);
     let optional = with_catalog("/OpenAction << /S /SetOCGState /State [] >>");
     reports(&optional, Level::A4, "6.6.1", "SetOCGState");
     reports(&File { packet: packet("4", Some("2020"), Some("F")), ..optional.clone() }, Level::A4f, "6.6.1", "SetOCGState");
@@ -534,6 +544,10 @@ fn a_form_groups_own_blending_space_covers_device_colour_drawn_inside_it() {
     let cal_page = "/Group << /S /Transparency /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >>";
     reports(&File { page: cal_page.to_owned(), ..drawn(4, 4, icc, "", rgb, Vec::new()) }, Level::A4, "6.2.4.3", not_rgb);
     passes(&File { page: cal_page.to_owned(), content: "/X0 Do 1 0 0 rg 0 0 10 10 re f", ..drawn(4, 4, icc, "", cmyk, Vec::new()) }, Level::A4);
+    // An isolated group whose own space is no device-independent one keeps the page's out too: a
+    // DeviceCMYK group blends DeviceRGB in CMYK. A non-isolated one blends in the page's space.
+    reports(&File { page: cal_page.to_owned(), ..drawn(4, 4, "/I true /CS /DeviceCMYK", "", rgb, Vec::new()) }, Level::A4, "6.2.4.3", not_rgb);
+    passes(&File { page: cal_page.to_owned(), ..drawn(4, 4, "/CS /DeviceCMYK", "", rgb, Vec::new()) }, Level::A4);
     // A form inside the group, and an image only the group draws, are painted in its space too.
     let nested = form("/Resources << >>", rgb);
     passes(&drawn(4, 3, icc, "/XObject << /Y 9 0 R >>", "/Y Do", vec![nested.clone()]), Level::A4);
@@ -557,9 +571,9 @@ fn a_form_groups_own_blending_space_covers_device_colour_drawn_inside_it() {
         ..drawn(4, 3, icc, "/XObject << /Y 9 0 R >>", "/Y Do", vec![nested.clone()])
     };
     reports(&both, Level::A4, "6.2.4.3", not_rgb);
-    // Forms that draw each other inside the group end, and are left uncovered.
+    // Forms that draw each other are drawn inside the group all the same (veraPDF passes this too).
     let cycle = vec![form("/Resources << /XObject << /Z 10 0 R >> >>", rgb), form("/Resources << /XObject << /Y 9 0 R >> >>", "/Y Do")];
-    reports(&drawn(4, 3, icc, "/XObject << /Y 9 0 R >>", "/Y Do", cycle), Level::A4, "6.2.4.3", not_rgb);
+    passes(&drawn(4, 3, icc, "/XObject << /Y 9 0 R >>", "/Y Do", cycle), Level::A4);
     // PDF/A-2 6.2.4.3 has no such allowance.
     let found = verify(&open(bytes(&drawn(4, 3, icc, "", rgb, Vec::new()))), Level::A2b);
     assert!(found.iter().any(|i| i.message == not_rgb), "{found:#?}");
@@ -579,6 +593,68 @@ fn output_intents_share_one_local_output_or_monitor_profile() {
         class.copy_from_slice(b"scnr");
     }
     reports(&with(format!("/OutputIntents [{}]", intent(6)), vec![stream("/N 3", &input)]), Level::A4, "6.2.3", "isn't an output or monitor profile");
+    // A profile stream that can't be decoded is no such profile, even where nothing is drawn; one
+    // that is no stream at all is taken as missing.
+    let broken = stream("/N 3 /Filter /NoSuchDecode", b"xxxx");
+    reports(&with(format!("/OutputIntents [{}]", intent(6)), vec![broken]), Level::A4, "6.2.3", "isn't an output or monitor profile");
+    passes(&with(format!("/OutputIntents [{}]", intent(6)), vec![o("<< /N 3 >>")]), Level::A4);
+}
+
+/// PDF/A-4 6.2.4.3 where pages have output intents and blending spaces of their own: device colour
+/// is judged against those of the page it is drawn on (ISO 32000-2 14.11.5 and 11.4.7), so pages
+/// may differ.
+#[test]
+fn device_colour_is_judged_on_the_page_it_is_drawn_on() {
+    let rgb = "1 0 0 rg 0 0 10 10 re f";
+    let cmyk = "1 0 0 0 k 0 0 10 10 re f";
+    let intent =
+        |n: u8| format!("/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (x) /DestOutputProfile {n} 0 R >>]");
+    let calrgb = "/Group << /S /Transparency /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >>";
+    let icc_cmyk = "/Group << /S /Transparency /CS [/ICCBased 9 0 R] >>";
+    // Two pages, each with its own content: the sRGB profile is object 8, a CMYK one 9.
+    let two = |first: &str, second: &str, contents: [&str; 2]| {
+        let page = |entries: &str, content: u8| {
+            o(&format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents {content} 0 R /Resources << >> {entries} >>"))
+        };
+        let objects = vec![
+            o("<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>"),
+            o("<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 >>"),
+            stream("/Type /Metadata /Subtype /XML", &packet("4", Some("2020"), None)),
+            page(first, 5),
+            stream("", contents[0].as_bytes()),
+            page(second, 7),
+            stream("", contents[1].as_bytes()),
+            srgb_profile(),
+            profile_of(4, b"CMYK"),
+        ];
+        let found = verify(&Document::open(std::sync::Arc::new(raw("%PDF-2.0", &objects, "", b""))).unwrap(), Level::A4);
+        let mut messages: Vec<String> = found.into_iter().map(|i| i.message).collect();
+        messages.sort();
+        messages
+    };
+    let none: [&str; 0] = [];
+    // RGB on a page with an RGB intent, CMYK on one with a CMYK intent, and a page with neither
+    // that draws nothing.
+    assert_eq!(two(&intent(8), &intent(9), [rgb, cmyk]), none);
+    assert_eq!(two(&intent(8), "", [rgb, ""]), none);
+    assert_eq!(
+        two(&intent(8), &intent(9), [cmyk, rgb]),
+        [
+            "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile",
+            "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile"
+        ]
+    );
+    assert_eq!(
+        two(&intent(8), "", [rgb, cmyk]),
+        ["Device colour is used, but there is no PDF/A output intent", "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)"]
+    );
+    // Each page's blending space covers its own device colour.
+    assert_eq!(two(calrgb, icc_cmyk, [rgb, cmyk]), none);
+    assert_eq!(two(calrgb, "", [rgb, ""]), none);
+    assert_eq!(
+        two(calrgb, icc_cmyk, [cmyk, rgb]),
+        ["Device colour is used, but there is no PDF/A output intent", "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)"]
+    );
 }
 
 #[test]
@@ -727,6 +803,14 @@ fn the_metadata_stream_is_a_well_formed_utf8_packet() {
     let good = packet("4", Some("2020"), None);
     let sized = String::from_utf8(good.clone()).unwrap().replacen("?>", " bytes=\"10\"?>", 1);
     reports(&File { packet: sized.into_bytes(), ..File::default() }, Level::A4, "6.7.2.1", "bytes or encoding attribute");
+    // However the attribute is spaced (XML 1.0 2.3), and only the attribute: `id` holds no `bytes`.
+    let text = String::from_utf8(good.clone()).unwrap();
+    for header in [" encoding = \"UTF-8\"?>", "\tbytes=\"10\"?>", "\nencoding\t=\"UTF-8\"?>"] {
+        let spaced = text.replacen("?>", header, 1).into_bytes();
+        reports(&File { packet: spaced, ..File::default() }, Level::A4, "6.7.2.1", "bytes or encoding attribute");
+    }
+    let named = text.replacen("W5M0MpCehiHzreSzNTczkc9d\"", "W5M0MpCehiHzreSzNTczkc9d\" xbytes=\"1\"", 1).into_bytes();
+    passes(&File { packet: named, ..File::default() }, Level::A4);
     reports(&File { packet: [good.as_slice(), b"<!-- \xFF -->"].concat(), ..File::default() }, Level::A4, "6.7.2.1", "isn't UTF-8");
     let mut objects = vec![
         o("<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>"),
