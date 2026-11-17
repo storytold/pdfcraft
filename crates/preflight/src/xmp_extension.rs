@@ -244,10 +244,19 @@ impl Findings {
             let Some((_, _, ty)) = properties.iter().find(|(n, name, _)| n == ns && name == property.local()) else { continue };
             let (array, item_type) = array_item(ty);
             let Some((ty_name, described)) = types.iter().find(|(name, _)| name == item_type) else { continue };
-            let holders = if array { items(property, &pscope) } else { vec![(property, pscope.clone())] };
+            let holders = if array {
+                // A qualified array's items are in its `rdf:value`.
+                let (value, vscope) = qualified_value(property, &pscope);
+                items(value, &vscope)
+            } else {
+                vec![(property, pscope.clone())]
+            };
             for (value, vscope) in holders {
                 for (written, field_ns, local) in fields(value, &vscope) {
-                    let known = described.namespace.as_deref() == field_ns && described.fields.iter().any(|f| f == local);
+                    // A type the XMP Specification defines keeps its fields, whatever a packet's
+                    // description of it lists (TechNote 0009, 4.5: the list is optional).
+                    let known = (described.namespace.as_deref() == field_ns && described.fields.iter().any(|f| f == local))
+                        || crate::xmp_types::predefined_field(ty_name, field_ns, local) == Some(true);
                     if known || !self.room() {
                         continue;
                     }
@@ -370,8 +379,33 @@ fn array_item(ty: &str) -> (bool, &str) {
 /// writes each one's name, its namespace and its local name. They are the elements of its
 /// `rdf:parseType="Resource"` node or of its one `rdf:Description`, or the attributes of either or
 /// of an empty element, other than RDF and XML syntax (ISO 16684-1 7.9.2.5). A value that isn't a
-/// structure, or a qualified one (`rdf:value`), has none.
+/// structure has none. A qualified value's fields are those of its `rdf:value` (7.9.2.5, the
+/// qualifiers beside it are no fields), read up to [`MAX_QUALIFIED`] values deep.
 fn fields<'a>(value: &'a El, scope: &NsScope<'a>) -> Vec<(&'a str, Option<&'a str>, &'a str)> {
+    let (mut value, mut scope) = (value, scope.clone());
+    for _ in 0..MAX_QUALIFIED {
+        match structure_fields(value, &scope) {
+            Fields::Of(found) => return found,
+            Fields::Qualified(inner, iscope) => (value, scope) = (inner, iscope),
+        }
+    }
+    Vec::new()
+}
+
+/// How many `rdf:value` elements deep [`fields`] reads a qualified value.
+const MAX_QUALIFIED: usize = 8;
+
+/// What [`structure_fields`] finds in a value.
+enum Fields<'a> {
+    /// Its fields.
+    Of(Vec<(&'a str, Option<&'a str>, &'a str)>),
+    /// It is qualified: its value is this `rdf:value` element.
+    Qualified(&'a El, NsScope<'a>),
+}
+
+/// The fields of `value` as [`fields`] reads them, or the `rdf:value` element a qualified value
+/// holds.
+fn structure_fields<'a>(value: &'a El, scope: &NsScope<'a>) -> Fields<'a> {
     // An array item's `rdf:Description` comes here as the item itself (see [`items`]).
     let holder = if scope.attr(value, RDF, "parseType") == Some("Resource") || is(value, scope, RDF, "Description") {
         Some((value, scope.clone()))
@@ -383,10 +417,14 @@ fn fields<'a>(value: &'a El, scope: &NsScope<'a>) -> Vec<(&'a str, Option<&'a st
             _ => None,
         }
     };
-    let Some((holder, hscope)) = holder else { return Vec::new() };
+    let Some((holder, hscope)) = holder else { return Fields::Of(Vec::new()) };
     let syntax = |ns: Option<&str>| matches!(ns, Some(RDF) | Some(XML));
-    if holder.elements().any(|c| hscope.child(c).is(c, RDF, "value")) || hscope.attr(holder, RDF, "value").is_some() {
-        return Vec::new();
+    if let Some(inner) = holder.elements().find(|c| hscope.child(c).is(c, RDF, "value")) {
+        return Fields::Qualified(inner, hscope.child(inner));
+    }
+    // A simple qualified value, written as an attribute.
+    if hscope.attr(holder, RDF, "value").is_some() {
+        return Fields::Of(Vec::new());
     }
     let attributes = holder.attrs.iter().filter(|(k, _)| k != "xmlns" && !k.starts_with("xmlns:")).filter_map(|(k, _)| {
         let ns = hscope.attr_ns(k);
@@ -396,7 +434,28 @@ fn fields<'a>(value: &'a El, scope: &NsScope<'a>) -> Vec<(&'a str, Option<&'a st
         let ns = hscope.child(c).el_ns(c);
         (!syntax(ns)).then(|| (c.name.as_str(), ns, c.local()))
     });
-    attributes.chain(elements).collect()
+    Fields::Of(attributes.chain(elements).collect())
+}
+
+/// The `rdf:value` of the qualified property `e` (ISO 16684-1 7.9.2.5), written in it with
+/// `rdf:parseType="Resource"` or in its one `rdf:Description`; `e` itself when it has none.
+fn qualified_value<'a>(e: &'a El, scope: &NsScope<'a>) -> (&'a El, NsScope<'a>) {
+    let holder = if scope.attr(e, RDF, "parseType") == Some("Resource") {
+        Some((e, scope.clone()))
+    } else {
+        e.elements().find_map(|c| {
+            let cs = scope.child(c);
+            is(c, &cs, RDF, "Description").then_some((c, cs))
+        })
+    };
+    holder
+        .and_then(|(d, ds)| {
+            d.elements().find_map(|v| {
+                let vs = ds.child(v);
+                is(v, &vs, RDF, "value").then_some((v, vs))
+            })
+        })
+        .unwrap_or_else(|| (e, scope.clone()))
 }
 
 /// The prefix of the qualified name `text` begins with, empty when it has none.

@@ -1486,6 +1486,25 @@ fn xmp_extension_value_types_describe_the_fields_of_values_clause_6_6_2_3_1() {
     assert_eq!(undescribed(described_values("C", &custom_type(&[]), r#"<t:p xml:lang="en" rdf:resource="http://x/"/>"#)), []);
     let qualified = r#"<t:p rdf:parseType="Resource"><rdf:value>v</rdf:value><c:q>v</c:q></t:p>"#;
     assert_eq!(undescribed(described_values("C", &custom_type(&[]), qualified)), []);
+    // A qualified structure's fields are those of its rdf:value (ISO 16684-1 7.9.2.5), not its
+    // qualifiers; a qualified array's items are in its rdf:value too.
+    let qualified_structure =
+        r#"<t:p rdf:parseType="Resource"><rdf:value rdf:parseType="Resource"><c:f1>v</c:f1><c:f9>v</c:f9></rdf:value><c:q>v</c:q></t:p>"#;
+    assert_eq!(undescribed(described_values("C", &custom_type(&["f1"]), qualified_structure)), one("c:f9"));
+    let qualified_items = r#"<t:p><rdf:Description><rdf:value><rdf:Bag><rdf:li rdf:parseType="Resource"><c:f9>v</c:f9></rdf:li></rdf:Bag></rdf:value><c:q>v</c:q></rdf:Description></t:p>"#;
+    assert_eq!(undescribed(described_values("bag C", &custom_type(&["f1"]), qualified_items)), one("c:f9"));
+    let qualified_resource = r#"<t:p rdf:parseType="Resource"><rdf:value><rdf:Seq><rdf:li c:f9="v"/></rdf:Seq></rdf:value><c:q>v</c:q></t:p>"#;
+    assert_eq!(undescribed(described_values("seq C", &custom_type(&["f1"]), qualified_resource)), one("c:f9"));
+    // A type the XMP Specification defines keeps its fields when the packet describes it without
+    // them: Dimensions (XMP Specification Part 2, stDim).
+    let dimensions = r#"<rdf:li rdf:parseType="Resource"><pdfaType:type>Dimensions</pdfaType:type><pdfaType:namespaceURI>http://ns.adobe.com/xap/1.0/sType/Dimensions#</pdfaType:namespaceURI><pdfaType:prefix>stDim</pdfaType:prefix><pdfaType:description>d</pdfaType:description></rdf:li>"#;
+    let sized = r#"<t:p rdf:parseType="Resource" xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#"><stDim:w>1</stDim:w><stDim:h>2</stDim:h><stDim:unit>inch</stDim:unit></t:p>"#;
+    assert_eq!(undescribed(described_values("Dimensions", dimensions, sized)), []);
+    let oversized = sized.replace("<stDim:unit>", "<stDim:depth>3</stDim:depth><stDim:unit>");
+    assert_eq!(
+        undescribed(described_values("Dimensions", dimensions, &oversized)),
+        [("t:p".to_owned(), "stDim:depth".to_owned(), "Dimensions".to_owned())]
+    );
     assert_eq!(undescribed(described_values("Text", &custom_type(&[]), structure)), []);
     let other_property = r#"<t:other rdf:parseType="Resource"><c:f1>v</c:f1></t:other>"#;
     assert_eq!(undescribed(described_values("C", &custom_type(&[]), other_property)), []);
@@ -1514,16 +1533,19 @@ fn xmp_extension_value_types_describe_the_fields_of_values_clause_6_6_2_3_1() {
         verify(&doc, Level::A2b).into_iter().filter(|i| i.clause.starts_with("6.6.2.3")).collect()
     };
     assert_eq!(verified(fonts), []);
-    // The same packet in a namespace of its own: the Font fields aren't described. Through verify,
-    // under 6.6.2.3.1, located in its stream and not fixable.
+    // The same packet in a namespace of its own: the fields the XMP Specification gives Font are
+    // described by that, and only a field it doesn't give is reported. Through verify, under
+    // 6.6.2.3.1, located in its stream and not fixable.
     let own = fonts.replace("http://ns.adobe.com/xap/1.0/t/pg/", "http://t.example/");
     assert_ne!(own, fonts);
+    assert_eq!(verified(&own), []);
+    let own = own.replace("<stFnt:fontName>Inter</stFnt:fontName>", "<stFnt:fontName>Inter</stFnt:fontName><stFnt:weight>Bold</stFnt:weight>");
     let issues = verified(&own);
     assert_eq!(issues.len(), 1, "{issues:?}");
     assert_eq!(issues[0].clause, "6.6.2.3.1");
     assert_eq!(
         issues[0].message,
-        "The XMP property xmpTPg:Fonts in metadata stream 3 0 R has the field stFnt:fontName, which its value type Font doesn't describe"
+        "The XMP property xmpTPg:Fonts in metadata stream 3 0 R has the field stFnt:weight, which its value type Font doesn't describe"
     );
     assert_eq!(issues[0].object, Some(ObjRef::new(3, 0)));
     assert!(!issues[0].fixable);
