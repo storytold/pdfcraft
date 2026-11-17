@@ -2702,3 +2702,40 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// PDF/A-2 and 3, 6.4.2, 6.10 and 6.11: no XFA form and no `/NeedsRendering`, no alternate
+/// presentations and no presentation steps, no `/Requirements`. PDF/A-4 forbids the same, under
+/// 6.4.2, 6.11 and 6.12 (`tests/pdfa4.rs`).
+#[test]
+fn document_features_no_pdfa_part_allows_clauses_6_4_2_6_10_6_11() {
+    let found = |catalog: &str, page: &str, level: Level| -> Vec<(&'static str, String, Option<usize>)> {
+        let doc = build(
+            &[
+                &format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>"),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                &format!("<< /Type /Page /Parent 2 0 R {page} >>"),
+            ],
+            "",
+        );
+        verify(&doc, level)
+            .into_iter()
+            .filter(|i| matches!(i.clause, "6.4.2" | "6.10" | "6.11" | "6.12"))
+            .inspect(|i| assert!(!i.fixable && WORDINGS.contains(&i.pattern), "{i:?}"))
+            .map(|i| (i.clause, i.message, i.page))
+            .collect()
+    };
+    for level in [Level::A2b, Level::A3b] {
+        assert_eq!(found("/AcroForm << /Fields [] >> /Names << /Dests << >> >>", "", level), []);
+        assert_eq!(found("/AcroForm << /Fields [] /XFA [] >>", "", level), [("6.4.2", "The form has an XFA form (XFA)".to_owned(), None)]);
+        assert_eq!(
+            found("/NeedsRendering true", "", level),
+            [("6.4.2", "The catalog asks for its XFA form to be rendered (NeedsRendering)".to_owned(), None)]
+        );
+        assert_eq!(
+            found("/Names << /AlternatePresentations << >> >>", "", level),
+            [("6.10", "The document has alternate presentations (AlternatePresentations)".to_owned(), None)]
+        );
+        assert_eq!(found("", "/PresSteps << >>", level), [("6.10", "A page has presentation steps (PresSteps)".to_owned(), Some(0))]);
+        assert_eq!(found("/Requirements []", "", level), [("6.11", "The catalog has requirements (Requirements)".to_owned(), None)]);
+    }
+}

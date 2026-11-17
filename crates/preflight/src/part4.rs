@@ -302,10 +302,11 @@ fn catalog_version(doc: &Document, catalog: &Dict, issue: &mut Report<'_>) {
     }
 }
 
-/// 6.1.11, 6.4.2, 6.10, 6.11 and 6.12: what the catalog may not hold. A permissions dictionary
-/// holds only `/UR3` and `/DocMDP` (ISO 32000-2 12.8.6, Table 263); no XFA form and no
-/// `/NeedsRendering`; every optional content configuration has a `/Name` of its own; no alternate
-/// presentations; no `/Requirements`.
+/// 6.1.11 and 6.10: what the catalog may not hold that only PDF/A-4 asks about. A permissions
+/// dictionary holds only `/UR3` and `/DocMDP` (ISO 32000-2 12.8.6, Table 263); every optional
+/// content configuration has a `/Name` of its own. What every part forbids (an XFA form,
+/// `/NeedsRendering`, alternate presentations, `/Requirements`) is
+/// [`check_document_features`](crate::check_document_features)'s.
 fn catalog_entries(doc: &Document, catalog: &Dict, issue: &mut Report<'_>) {
     let dict_of = |key: &[u8]| catalog.get(key).map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned());
     if let Some(perms) = dict_of(b"Perms") {
@@ -314,29 +315,13 @@ fn catalog_entries(doc: &Document, catalog: &Dict, issue: &mut Report<'_>) {
             issue("6.1.11", "The permissions dictionary holds {}: only UR3 and DocMDP are allowed", Some(others), None, false);
         }
     }
-    if dict_of(b"AcroForm").is_some_and(|form| form.get(b"XFA").is_some()) {
-        issue("6.4.2", "The form has an XFA form (XFA)", None, None, false);
-    }
-    if catalog.get(b"NeedsRendering").is_some() {
-        issue("6.4.2", "The catalog asks for its XFA form to be rendered (NeedsRendering)", None, None, false);
-    }
-    if dict_of(b"Names").is_some_and(|names| names.get(b"AlternatePresentations").is_some()) {
-        issue("6.11", "The document has alternate presentations (AlternatePresentations)", None, None, false);
-    }
-    if catalog.get(b"Requirements").is_some() {
-        issue("6.12", "The catalog has requirements (Requirements)", None, None, false);
-    }
     if let Some(properties) = dict_of(b"OCProperties") {
         optional_content_names(doc, &properties, issue);
     }
 }
 
-/// 6.11 and 6.2.3: a page has no presentation steps (`/PresSteps`), and its own output intents
-/// follow the rules of the catalog's.
+/// 6.2.3: a page's own output intents follow the rules of the catalog's.
 pub(crate) fn page(doc: &Document, page: &Dict, index: usize, issue: &mut Report<'_>) {
-    if page.get(b"PresSteps").is_some() {
-        issue("6.11", "A page has presentation steps (PresSteps)", None, Some(index), false);
-    }
     output_intents(doc, page, Some(index), issue);
 }
 
