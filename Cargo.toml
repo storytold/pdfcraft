@@ -191,3 +191,8 @@ eframe = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77
 egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
 egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+
+[workspace.metadata.cl]
+selection = ["pdfcraft", "pdfcraft-ui-egui", "pdfcraft-web"]
+tracked = ["egui", "eframe"]
+unset_env = ["CRAFT_FONTS_DIR", "CRAFT_FONTS_REQUIRED", "CRAFT_I18N_DIR", "CRAFT_I18N_REQUIRED", "PDFCRAFT_REQUIRE_WINRES"]
