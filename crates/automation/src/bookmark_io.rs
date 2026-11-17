@@ -76,15 +76,21 @@ impl Automation {
                 if action == "cut" && copied.tree.truncated {
                     return Err(failed("bookmarks nested too deep to copy cleanly, so nothing was cut"));
                 }
+                if action == "cut" && copied.has_unportable {
+                    return Err(failed(
+                        "one or more selected bookmarks have non-GoTo actions or unrecognized keys that cannot be cut cleanly, so nothing was cut",
+                    ));
+                }
                 let count = copied.tree.nodes.len();
                 let truncated = copied.tree.truncated;
-                self.bookmark_clipboard = Some((id, copied));
                 if action == "cut" {
                     let mut out = self.apply(a, Edit::DeleteBookmarksBatch { paths })?;
+                    self.bookmark_clipboard = Some((id, copied));
                     out["count"] = json!(count);
                     out["truncated"] = json!(truncated);
                     Ok(out)
                 } else {
+                    self.bookmark_clipboard = Some((id, copied));
                     Ok(json!({ "count": count, "truncated": truncated }))
                 }
             }

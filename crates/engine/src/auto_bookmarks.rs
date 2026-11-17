@@ -154,10 +154,12 @@ fn build_regex(pattern: &str, case_insensitive: bool) -> Option<regex::Regex> {
 
 fn try_parse_toc(doc: &Document, pages: &[Vec<NormLine>], total_pages: usize, max_depth: u8) -> Option<Vec<OutlineEntry>> {
     let header_re = build_regex(r"^(?:table\s+of\s+contents|contents|index|outline|inhalt|sommaire)\b", true)?;
-    let leader_re =
-        build_regex(r"^(?P<title>.+?)\s*(?:[.\u{2024}\u{2026}\x{00B7}\u{2022}_-]\s*){2,}(?P<page>\d{1,5}|[ivxlcdmIVXLCDM]{1,8})\s*$", false)?;
-    let gap_re = build_regex(r"^(?P<title>.+?)\s{2,}(?P<page>\d{1,5}|[ivxlcdmIVXLCDM]{1,8})\s*$", false)?;
-    let num_re = build_regex(r"^(?P<num>\d+(?:\.\d+)*)\s+", false)?;
+    let leader_re = build_regex(
+        r"^(?P<title>.+?)\s*(?:[.\u{2024}\u{2026}\x{00B7}\u{2022}_-]\s*){2,}(?P<page>[^\s.\u{2024}\u{2026}\x{00B7}\u{2022}_-]\S{0,31})\s*$",
+        false,
+    )?;
+    let gap_re = build_regex(r"^(?P<title>.+?)\s{2,}(?P<page>\S{1,32})\s*$", false)?;
+    let num_re = build_regex(r"^(?P<num>\d+(?:\.\d+)*)[.)]?\s+", false)?;
 
     let label_lookup = build_page_label_map(doc, total_pages);
     let scan_limit = total_pages.min(MAX_TOC_SCAN_PAGES);
@@ -251,7 +253,7 @@ fn build_page_label_map(doc: &Document, total_pages: usize) -> HashMap<String, V
     let Ok(labels) = PageLabels::new(doc) else { return map };
     for p in 0..total_pages {
         if let Ok(lbl) = labels.label(p) {
-            let key = lbl.trim().to_ascii_lowercase();
+            let key = lbl.trim().to_lowercase();
             if !key.is_empty() {
                 map.entry(key).or_default().push(p);
             }
@@ -267,7 +269,7 @@ fn resolve_toc_page(
     toc_page: usize,
     prev_resolved: Option<usize>,
 ) -> Option<usize> {
-    let key = token.trim().to_ascii_lowercase();
+    let key = token.trim().to_lowercase();
     if let Some(candidates) = label_map.get(&key) {
         if let Some(prev) = prev_resolved
             && let Some(&p) = candidates.iter().find(|&&p| p > toc_page && p >= prev)
@@ -387,15 +389,19 @@ fn extract_typography_headings(pages: &[Vec<NormLine>], total_pages: usize, max_
 
     // Stage C: collect & coalesce heading candidates.
     let mut raw_candidates: Vec<HeadingCandidate> = Vec::new();
+    let mut uninterrupted_heading = false;
     for l in content_lines {
         let len = l.text.chars().count();
         if !(2..=MAX_HEADING_LINE_CHARS).contains(&len) {
+            uninterrupted_heading = false;
             continue;
         }
         if l.text.chars().all(|c| c.is_ascii_digit() || !c.is_alphanumeric()) {
+            uninterrupted_heading = false;
             continue;
         }
         if url_re.as_ref().is_some_and(|re| re.is_match(&l.text)) {
+            uninterrupted_heading = false;
             continue;
         }
         let is_larger = l.size >= s_body * 1.15 && (l.size - s_body) >= 0.9;
@@ -407,10 +413,12 @@ fn extract_typography_headings(pages: &[Vec<NormLine>], total_pages: usize, max_
         let ends_sentence = l.text.ends_with(['.', ',', ';']);
         let qualifies = is_larger || is_bold_contrast || (num_match.is_some() && !ends_sentence);
         if !qualifies || (!is_larger && ends_sentence) {
+            uninterrupted_heading = false;
             continue;
         }
 
-        if let Some(prev) = raw_candidates.last_mut()
+        if uninterrupted_heading
+            && let Some(prev) = raw_candidates.last_mut()
             && prev.page == l.page
             && prev.bold == l.bold
             && prev.italic == l.italic
@@ -423,6 +431,7 @@ fn extract_typography_headings(pages: &[Vec<NormLine>], total_pages: usize, max_
             prev.text.push_str(&l.text);
             prev.bottom_disp = prev.bottom_disp.min(l.disp[1]);
             prev.top_disp = prev.top_disp.max(l.disp[3]);
+            uninterrupted_heading = true;
             continue;
         }
 
@@ -437,6 +446,7 @@ fn extract_typography_headings(pages: &[Vec<NormLine>], total_pages: usize, max_
             top_disp: l.disp[3],
             num_depth,
         });
+        uninterrupted_heading = true;
     }
 
     if raw_candidates.is_empty() {

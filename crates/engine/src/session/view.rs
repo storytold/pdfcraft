@@ -242,34 +242,7 @@ impl Session {
         paths: &[Vec<usize>],
     ) -> Option<Result<pdfcraft_organize::CopiedOutlines, pdfcraft_organize::OutlineError>> {
         let editor = self.get(id)?.editor.as_ref()?;
-        let mut batch = match pdfcraft_organize::outline_trees_batch(&editor.cos, paths) {
-            Ok(b) => b,
-            Err(e) => return Some(Err(e)),
-        };
-        let mut nodes = Vec::with_capacity(paths.len());
-        let mut truncated = false;
-        let mut sorted: Vec<Vec<usize>> = paths.to_vec();
-        sorted.sort();
-        sorted.dedup();
-        // Prune descendants whose ancestor path is already selected, keeping document order.
-        let mut pruned: Vec<Vec<usize>> = Vec::with_capacity(sorted.len());
-        for p in sorted {
-            if !pruned.iter().any(|anc| p.starts_with(anc)) {
-                pruned.push(p);
-            }
-        }
-        for p in pruned {
-            match pdfcraft_organize::outline_tree(&editor.cos, &p) {
-                Ok(t) => {
-                    truncated |= t.truncated;
-                    nodes.extend(t.nodes);
-                }
-                Err(e) => return Some(Err(e)),
-            }
-        }
-        batch.tree.nodes = nodes;
-        batch.tree.truncated = truncated;
-        Some(Ok(batch))
+        Some(pdfcraft_organize::outline_trees_batch(&editor.cos, paths))
     }
 
     /// Remap copied outline page destinations against `id`'s current Page Tree before pasting.

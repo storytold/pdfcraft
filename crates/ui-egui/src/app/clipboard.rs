@@ -81,7 +81,7 @@ impl PdfCraftApp {
                 self.bookmark_action(crate::panels::BmAction::CutSelected);
             } else if copy {
                 self.bookmark_action(crate::panels::BmAction::CopySelected);
-            } else if paste && editable && self.bookmark_clipboard.is_some() {
+            } else if (paste || !pastes.is_empty()) && editable && self.bookmark_clipboard.is_some() {
                 self.bookmark_action(crate::panels::BmAction::PasteAtFocus);
             }
             return;

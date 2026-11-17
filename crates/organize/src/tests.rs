@@ -5256,3 +5256,78 @@ fn arena_delete_batch_copy_remap_regex_nest_shift_pages_and_generated_tree() {
     assert_eq!(gen_tree.nodes[0].title.chars().count(), 128);
     assert_eq!(gen_tree.nodes[0].children[0].title, "Sub");
 }
+
+#[test]
+fn arena_batch_copy_caps_depth_flags_unportable_and_drops_deep_trees_iteratively() {
+    // 1) Deep OutlineNode trees drop iteratively without stack overflow, and outline_trees_batch caps at 33 levels.
+    let deep_bytes = deep_outline(40);
+    let deep_doc = open(deep_bytes);
+    let deep_copied = outline_trees_batch(&deep_doc, &[vec![0]]).unwrap();
+    assert!(deep_copied.tree.truncated);
+    assert!(!deep_copied.has_unportable);
+    let mut depth = 0usize;
+    let mut cur = deep_copied.tree.nodes.first();
+    while let Some(n) = cur {
+        depth += 1;
+        cur = n.children.first();
+    }
+    assert_eq!(depth, 33);
+
+    // 10,000-level OutlineArena -> to_outline_nodes -> drop without stack overflow
+    let chain_depth = 10_000usize;
+    let mut arena = OutlineArena::from_doc(&doc_a()).unwrap();
+    arena.nodes = vec![OutlineArenaNode::new(String::new(), None, None, 0, true)];
+    arena.nodes[0].cos_obj = None;
+    let mut parent = ArenaNodeId::ROOT;
+    for i in 0..chain_depth {
+        let id = ArenaNodeId(u32::try_from(arena.nodes.len()).unwrap());
+        let mut n = OutlineArenaNode::new(format!("D{i}"), None, None, 0, true);
+        n.parent = Some(parent);
+        if let Some(p) = arena.node_mut(parent) {
+            p.first_child = Some(id);
+            p.last_child = Some(id);
+        }
+        arena.nodes.push(n);
+        parent = id;
+    }
+    arena.recompute_metadata();
+    let deep_nodes = arena.to_outline_nodes(&[ArenaNodeId(1)]);
+    drop(deep_nodes);
+
+    // 2) Unportable detection: non-GoTo /A, /A with extra keys, or unknown keys on item or descendant.
+    let objs = vec![
+        "<< /Type /Outlines /First 8 0 R /Last 11 0 R /Count 5 >>".to_string(),
+        "<< /Title (PlainDest) /Parent 7 0 R /Next 9 0 R /Dest [3 0 R /Fit] >>".to_string(),
+        "<< /Title (GoToAction) /Parent 7 0 R /Prev 8 0 R /Next 10 0 R /A << /S /GoTo /D [4 0 R /XYZ 10 20 null] >> >>".to_string(),
+        "<< /Title (UriAction) /Parent 7 0 R /Prev 9 0 R /Next 11 0 R /A << /S /URI /URI (https://example.org) >> >>".to_string(),
+        "<< /Title (ParentOfTagged) /Parent 7 0 R /Prev 10 0 R /First 12 0 R /Last 12 0 R /Count 1 /Dest [3 0 R /Fit] >>".to_string(),
+        "<< /Title (TaggedChild) /Parent 11 0 R /CustomTag (keep) /Dest [4 0 R /Fit] >>".to_string(),
+    ];
+    let doc = open(build_multi_page_doc(2, &objs));
+    assert!(!outline_trees_batch(&doc, &[vec![0]]).unwrap().has_unportable);
+    assert!(!outline_trees_batch(&doc, &[vec![1]]).unwrap().has_unportable);
+    assert!(outline_trees_batch(&doc, &[vec![2]]).unwrap().has_unportable);
+    assert!(outline_trees_batch(&doc, &[vec![3]]).unwrap().has_unportable);
+}
+
+#[test]
+fn arena_batch_move_many_siblings_uses_cached_lookups() {
+    let n = 400usize;
+    let first_id = 6usize;
+    let mut objs = vec![format!("<< /Type /Outlines /First {first_id} 0 R /Last {} 0 R /Count {n} >>", first_id + n - 1)];
+    for i in 0..n {
+        let obj = first_id + i;
+        let prev = if i > 0 { format!(" /Prev {} 0 R", obj - 1) } else { String::new() };
+        let next = if i + 1 < n { format!(" /Next {} 0 R", obj + 1) } else { String::new() };
+        objs.push(format!("<< /Title (Item {i}) /Parent 5 0 R{prev}{next} /Dest [3 0 R /Fit] >>"));
+    }
+    let mut doc = open(build_multi_page_doc(1, &objs));
+    let paths: Vec<Vec<usize>> = (200..250).map(|i| vec![i]).collect();
+    let moved = move_bookmarks_batch(&mut doc, &paths, &[10], OutlinePlacementKind::Before).unwrap();
+    let expected: Vec<Vec<usize>> = (10..60).map(|i| vec![i]).collect();
+    assert_eq!(moved, expected);
+    let titles: Vec<String> = bookmarks(&doc).into_iter().map(|b| b.title).collect();
+    assert_eq!(titles[10], "Item 200");
+    assert_eq!(titles[59], "Item 249");
+    assert_eq!(titles[60], "Item 10");
+}

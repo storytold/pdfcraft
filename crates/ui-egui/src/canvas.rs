@@ -1025,6 +1025,7 @@ impl DocView {
         }
         self.org_drag = None;
         self.panel_drag = None;
+        self.bookmarks_ui.drag = None;
         self.selection_drag = false;
         self.selection_drag_ended = false;
         self.router.cancel();

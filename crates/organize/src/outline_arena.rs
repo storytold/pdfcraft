@@ -219,6 +219,7 @@ pub struct OutlineArenaNode {
     pub(crate) title_dirty: bool,
     pub(crate) dest_dirty: bool,
     pub(crate) dest_is_goto_action: bool,
+    pub(crate) has_unportable: bool,
     pub(crate) style_dirty: bool,
     pub(crate) had_count: bool,
 }
@@ -245,6 +246,7 @@ impl OutlineArenaNode {
             title_dirty: false,
             dest_dirty: false,
             dest_is_goto_action: false,
+            has_unportable: false,
             style_dirty: false,
             had_count,
         }
@@ -272,6 +274,7 @@ impl OutlineArenaNode {
             title_dirty: true,
             dest_dirty: true,
             dest_is_goto_action: false,
+            has_unportable: false,
             style_dirty: true,
             had_count: false,
         }
@@ -413,6 +416,63 @@ impl OutlineArena {
                 idx = idx.saturating_add(1);
                 cur = self.node(c).and_then(|n| n.next_sibling);
             }
+            rev.push(idx);
+            id = parent;
+        }
+        rev.reverse();
+        rev
+    }
+
+    fn collect_children(&self, parent: ArenaNodeId) -> Vec<ArenaNodeId> {
+        let mut kids = Vec::new();
+        let mut cur = self.node(parent).and_then(|n| n.first_child);
+        let mut guard = 0usize;
+        while let Some(c) = cur {
+            if guard > self.nodes.len() {
+                break;
+            }
+            guard = guard.saturating_add(1);
+            kids.push(c);
+            cur = self.node(c).and_then(|n| n.next_sibling);
+        }
+        kids
+    }
+
+    fn resolve_path_cached(&self, cache: &mut HashMap<ArenaNodeId, Vec<ArenaNodeId>>, path: &[usize]) -> Result<ArenaNodeId, OutlineError> {
+        let mut current = ArenaNodeId::ROOT;
+        for &child_idx in path {
+            let kids = cache.entry(current).or_insert_with(|| self.collect_children(current));
+            current = kids.get(child_idx).copied().ok_or_else(|| OutlineError::NoSuchBookmark(path.to_vec()))?;
+        }
+        Ok(current)
+    }
+
+    fn collect_child_indices(&self, parent: ArenaNodeId) -> HashMap<ArenaNodeId, usize> {
+        let mut indices = HashMap::new();
+        let mut cur = self.node(parent).and_then(|n| n.first_child);
+        let mut idx = 0usize;
+        let mut guard = 0usize;
+        while let Some(c) = cur {
+            if guard > self.nodes.len() {
+                break;
+            }
+            guard = guard.saturating_add(1);
+            indices.entry(c).or_insert(idx);
+            idx = idx.saturating_add(1);
+            cur = self.node(c).and_then(|n| n.next_sibling);
+        }
+        indices
+    }
+
+    fn node_to_path_cached(&self, cache: &mut HashMap<ArenaNodeId, HashMap<ArenaNodeId, usize>>, mut id: ArenaNodeId) -> Vec<usize> {
+        let mut rev = Vec::new();
+        let mut guard = 0usize;
+        while id != ArenaNodeId::ROOT && guard <= self.nodes.len() {
+            guard = guard.saturating_add(1);
+            let Some(node) = self.node(id) else { break };
+            let Some(parent) = node.parent else { break };
+            let indices = cache.entry(parent).or_insert_with(|| self.collect_child_indices(parent));
+            let idx = indices.get(&id).copied().unwrap_or(indices.len());
             rev.push(idx);
             id = parent;
         }
@@ -965,6 +1025,16 @@ impl OutlineArena {
 
     /// Convert each pruned `root` subtree into portable [`crate::OutlineNode`] iteratively.
     pub fn to_outline_nodes(&self, roots: &[ArenaNodeId]) -> Vec<crate::OutlineNode> {
+        self.collect_outline_nodes(roots, None, None).0
+    }
+
+    /// Single-pass depth-capped portable conversion + `page_refs` + unportable-attribute scan.
+    fn collect_outline_nodes(
+        &self,
+        roots: &[ArenaNodeId],
+        max_abs_depth: Option<u32>,
+        pages: Option<&[ObjRef]>,
+    ) -> (Vec<crate::OutlineNode>, bool, bool, HashMap<usize, ObjRef>) {
         struct Frame {
             node: crate::OutlineNode,
             next_child: Option<ArenaNodeId>,
@@ -981,13 +1051,37 @@ impl OutlineArena {
         };
 
         let mut out = Vec::with_capacity(roots.len());
+        let mut truncated = false;
+        let mut has_unportable = false;
+        let mut page_refs = HashMap::new();
         let mut seen = HashSet::new();
+
+        let record_page = |page: Option<usize>, page_refs: &mut HashMap<usize, ObjRef>| {
+            if let (Some(pages), Some(p)) = (pages, page)
+                && let Some(&obj) = pages.get(p)
+            {
+                page_refs.insert(p, obj);
+            }
+        };
+
         for &root_id in roots {
             if root_id == ArenaNodeId::ROOT || !seen.insert(root_id) {
                 continue;
             }
             let Some(root_node) = self.node(root_id) else { continue };
-            let mut stack = vec![Frame { node: make_portable(root_node), next_child: root_node.first_child }];
+            has_unportable |= root_node.has_unportable;
+            if max_abs_depth.is_some_and(|limit| root_node.depth > limit) {
+                truncated = true;
+                continue;
+            }
+            let root_at_limit = max_abs_depth.is_some_and(|limit| root_node.depth >= limit);
+            if root_at_limit && root_node.first_child.is_some() {
+                truncated = true;
+            }
+            let portable = make_portable(root_node);
+            record_page(portable.page, &mut page_refs);
+            let first_child = if root_at_limit { None } else { root_node.first_child };
+            let mut stack = vec![Frame { node: portable, next_child: first_child }];
             while let Some(top) = stack.last_mut() {
                 if let Some(cid) = top.next_child {
                     let next_sib = self.node(cid).and_then(|c| c.next_sibling);
@@ -995,7 +1089,19 @@ impl OutlineArena {
                     if seen.insert(cid)
                         && let Some(cn) = self.node(cid)
                     {
-                        stack.push(Frame { node: make_portable(cn), next_child: cn.first_child });
+                        has_unportable |= cn.has_unportable;
+                        if max_abs_depth.is_some_and(|limit| cn.depth > limit) {
+                            truncated = true;
+                            continue;
+                        }
+                        let at_limit = max_abs_depth.is_some_and(|limit| cn.depth >= limit);
+                        if at_limit && cn.first_child.is_some() {
+                            truncated = true;
+                        }
+                        let portable = make_portable(cn);
+                        record_page(portable.page, &mut page_refs);
+                        let child_first = if at_limit { None } else { cn.first_child };
+                        stack.push(Frame { node: portable, next_child: child_first });
                     }
                 } else if let Some(done) = stack.pop() {
                     if let Some(parent) = stack.last_mut() {
@@ -1006,7 +1112,7 @@ impl OutlineArena {
                 }
             }
         }
-        out
+        (out, truncated, has_unportable, page_refs)
     }
 
     /// Insert auto-generated [`crate::OutlineEntry`] items using a Monotonic Stack under `ROOT`.
@@ -1343,14 +1449,15 @@ pub fn move_bookmarks_batch(
     placement: OutlinePlacementKind,
 ) -> Result<Vec<Vec<usize>>, OutlineError> {
     let mut arena = OutlineArena::from_doc(doc)?;
+    let mut children_cache = HashMap::new();
     let mut ids = Vec::with_capacity(paths.len());
     for p in paths {
         if p.is_empty() {
             return Err(OutlineError::NoSuchBookmark(Vec::new()));
         }
-        ids.push(arena.resolve_path(p)?);
+        ids.push(arena.resolve_path_cached(&mut children_cache, p)?);
     }
-    let target_id = arena.resolve_path(target_path)?;
+    let target_id = arena.resolve_path_cached(&mut children_cache, target_path)?;
     let slot = match placement {
         OutlinePlacementKind::Before => OutlinePlacement::BeforeSibling(target_id),
         OutlinePlacementKind::After => OutlinePlacement::AfterSibling(target_id),
@@ -1359,7 +1466,8 @@ pub fn move_bookmarks_batch(
     };
     let moved = arena.move_caravan(&ids, slot)?;
     arena.commit_dirty_to_cos(doc)?;
-    Ok(moved.into_iter().map(|id| arena.node_to_path(id)).collect())
+    let mut index_cache = HashMap::new();
+    Ok(moved.into_iter().map(|id| arena.node_to_path_cached(&mut index_cache, id)).collect())
 }
 
 /// Placement selector for path-based batch moves and automation tools.
@@ -1443,36 +1551,29 @@ pub struct CopiedOutlines {
     pub tree: crate::OutlineTree,
     /// Map from 0-based `page` index at copy time to its COS page `ObjRef`.
     pub page_refs: HashMap<usize, ObjRef>,
+    /// True if any copied subtree bookmark has a non-GoTo `/A` action or unrecognized
+    /// dictionary keys that [`crate::OutlineNode`] cannot preserve.
+    pub has_unportable: bool,
 }
 
-/// Export `paths` (in normalized, pruned document order) without the 32-level listing cap.
+/// Export `paths` (in normalized, pruned document order), honoring the 33-level portable listing
+/// cap and reporting truncation or unportable bookmark attributes in a single iterative pass.
 pub fn outline_trees_batch(doc: &Document, paths: &[Vec<usize>]) -> Result<CopiedOutlines, OutlineError> {
     let arena = OutlineArena::from_doc(doc)?;
+    let mut children_cache = HashMap::new();
     let mut raw_ids = Vec::with_capacity(paths.len());
     for p in paths {
         if p.is_empty() {
             return Err(OutlineError::NoSuchBookmark(Vec::new()));
         }
-        raw_ids.push(arena.resolve_path(p)?);
+        raw_ids.push(arena.resolve_path_cached(&mut children_cache, p)?);
     }
     let pruned = arena.normalize_and_prune_selection(&raw_ids);
-    let nodes = arena.to_outline_nodes(&pruned);
+    let pages: Vec<ObjRef> = walk(doc).unwrap_or_default().into_iter().map(|(r, _)| r).collect();
+    let max_abs_depth = u32::try_from(crate::outline::LIST_DEPTH.saturating_add(1)).unwrap_or(33);
+    let (nodes, truncated, has_unportable, page_refs) = arena.collect_outline_nodes(&pruned, Some(max_abs_depth), Some(&pages));
 
-    let pages = walk(doc).unwrap_or_default();
-    let mut page_refs = HashMap::new();
-    let mut stack: Vec<&crate::OutlineNode> = nodes.iter().collect();
-    while let Some(node) = stack.pop() {
-        if let Some(p) = node.page
-            && let Some(&(obj, _)) = pages.get(p)
-        {
-            page_refs.insert(p, obj);
-        }
-        for c in &node.children {
-            stack.push(c);
-        }
-    }
-
-    Ok(CopiedOutlines { tree: crate::OutlineTree { nodes, truncated: false }, page_refs })
+    Ok(CopiedOutlines { tree: crate::OutlineTree { nodes, truncated }, page_refs, has_unportable })
 }
 
 /// Validate and remap `nodes` destinations for same-document paste against the current Page Tree.
@@ -1565,6 +1666,27 @@ fn load_node(
     let style_flags = u8::try_from(flags.clamp(0, 255)).unwrap_or(0);
 
     let (dest, dest_is_goto_action) = load_node_dest(doc, d, page_map, page_count, names_cache);
+    let has_unknown_keys = d.iter().any(|(k, _)| {
+        !matches!(k.as_slice(), b"Title" | b"Parent" | b"Prev" | b"Next" | b"First" | b"Last" | b"Count" | b"Dest" | b"A" | b"C" | b"F")
+    });
+    let has_unportable_action = if let Some(raw_a) = d.get(b"A") {
+        let resolved_a = doc.resolve(raw_a);
+        if matches!(&*resolved_a, Object::Null) {
+            false
+        } else if d.get(b"Dest").is_some_and(|v| !matches!(&*doc.resolve(v), Object::Null)) || !dest_is_goto_action {
+            true
+        } else if let Some(ad) = resolved_a.as_dict() {
+            let type_ok = ad.get(b"Type").is_none_or(|t| doc.resolve(t).as_name() == Some(b"Action"));
+            let s_ok = ad.get(b"S").is_none_or(|s| doc.resolve(s).as_name() == Some(b"GoTo"));
+            let keys_ok = ad.iter().all(|(k, _)| matches!(k.as_slice(), b"Type" | b"S" | b"D"));
+            !(type_ok && s_ok && keys_ok)
+        } else {
+            true
+        }
+    } else {
+        false
+    };
+    let has_unportable = has_unknown_keys || has_unportable_action;
 
     OutlineArenaNode {
         cos_obj: Some(item_ref),
@@ -1586,6 +1708,7 @@ fn load_node(
         title_dirty: false,
         dest_dirty: false,
         dest_is_goto_action,
+        has_unportable,
         style_dirty: false,
         had_count: raw_count.is_some(),
     }

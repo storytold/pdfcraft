@@ -1391,32 +1391,18 @@ impl PdfCraftApp {
                 self.copy_bookmarks(id, &paths);
                 return;
             }
-            A::Cut(path) => match self.copy_bookmarks(id, std::slice::from_ref(&path)) {
-                Some(false) => Edit::DeleteBookmark { path },
-                Some(true) => {
-                    self.notify_tr("Bookmarks nested too deep to list could not be copied, so nothing was cut.");
-                    return;
-                }
-                None => return,
-            },
-            A::CutBatch(paths) => match self.copy_bookmarks(id, &paths) {
-                Some(false) => Edit::DeleteBookmarksBatch { paths },
-                Some(true) => {
-                    self.notify_tr("Bookmarks nested too deep to list could not be copied, so nothing was cut.");
-                    return;
-                }
-                None => return,
-            },
+            A::Cut(path) => {
+                self.cut_bookmarks(id, vec![path], true);
+                return;
+            }
+            A::CutBatch(paths) => {
+                self.cut_bookmarks(id, paths, false);
+                return;
+            }
             A::CutSelected => {
                 let paths = self.selected_or_focused_bookmark_paths(i, id);
-                match self.copy_bookmarks(id, &paths) {
-                    Some(false) => Edit::DeleteBookmarksBatch { paths },
-                    Some(true) => {
-                        self.notify_tr("Bookmarks nested too deep to list could not be copied, so nothing was cut.");
-                        return;
-                    }
-                    None => return,
-                }
+                self.cut_bookmarks(id, paths, false);
+                return;
             }
             A::Paste { parent, index } => {
                 self.paste_bookmarks(id, parent, index);
@@ -1481,24 +1467,49 @@ impl PdfCraftApp {
     }
 
     /// Put `paths` (in document order, pruned of nested duplicates) on the bookmark clipboard.
-    fn copy_bookmarks(&mut self, id: pdfcraft_engine::DocId, paths: &[Vec<usize>]) -> Option<bool> {
+    fn copy_bookmarks(&mut self, id: pdfcraft_engine::DocId, paths: &[Vec<usize>]) {
         if paths.is_empty() {
-            return None;
+            return;
         }
         match self.session.outline_trees_batch(id, paths) {
             Some(Ok(copied)) => {
-                let truncated = copied.tree.truncated;
-                if truncated {
+                if copied.tree.truncated {
                     self.notify_tr("Bookmarks nested too deep to list were left out of the copy.");
                 }
                 self.bookmark_clipboard = Some(crate::BookmarkClipboard { source_doc: id, copied });
-                Some(truncated)
             }
-            Some(Err(e)) => {
-                self.notify_error(e);
-                None
+            Some(Err(e)) => self.notify_error(e),
+            None => {}
+        }
+    }
+
+    /// Copy `paths` and delete the originals only when the portable clipboard copy is lossless.
+    fn cut_bookmarks(&mut self, id: pdfcraft_engine::DocId, paths: Vec<Vec<usize>>, single: bool) {
+        if paths.is_empty() {
+            return;
+        }
+        match self.session.outline_trees_batch(id, &paths) {
+            Some(Ok(copied)) => {
+                if copied.tree.truncated {
+                    self.bookmark_clipboard = Some(crate::BookmarkClipboard { source_doc: id, copied });
+                    self.notify_tr("Bookmarks nested too deep to list could not be copied, so nothing was cut.");
+                    return;
+                }
+                if copied.has_unportable {
+                    self.notify_tr("Bookmarks with non-GoTo actions or unsupported attributes cannot be cut cleanly, so nothing was cut.");
+                    return;
+                }
+                let edit = if single && let [path] = paths.as_slice() {
+                    Edit::DeleteBookmark { path: path.clone() }
+                } else {
+                    Edit::DeleteBookmarksBatch { paths }
+                };
+                if self.apply_edit(edit) {
+                    self.bookmark_clipboard = Some(crate::BookmarkClipboard { source_doc: id, copied });
+                }
             }
-            None => None,
+            Some(Err(e)) => self.notify_error(e),
+            None => {}
         }
     }
 

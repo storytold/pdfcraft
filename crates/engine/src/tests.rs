@@ -2577,6 +2577,56 @@ fn auto_generate_bookmarks_tier2_typography_excludes_headers_footers_and_checks_
 }
 
 #[test]
+fn auto_generate_bookmarks_handles_prefixed_page_labels_trailing_punctuation_and_body_interruption() {
+    // 1) Tier 1 TOC with uniform x-indent, prefixed page labels ("A-1", "A-2"), and trailing "." / ")" on numbering.
+    let toc_stream = "\
+        BT /FB 16 Tf 72 720 Td (Table of Contents) Tj ET \
+        BT /FR 11 Tf 72 680 Td (1. Overview ................... A-1) Tj ET \
+        BT /FR 11 Tf 72 660 Td (1.1. Scope .................... A-2) Tj ET \
+        BT /FR 11 Tf 72 640 Td (1.2\\) Details) Tj ET \
+        BT /FR 11 Tf 450 640 Td (A-2) Tj ET";
+    let body_stream = "BT /FR 11 Tf 72 700 Td (Regular body text paragraph.) Tj ET";
+    let bytes = pdfcraft_testkit::Pdf::new()
+        .obj(
+            "<< /Type /Catalog /Pages 2 0 R \
+             /PageLabels << /Nums [ 0 << /S /r /St 1 >> 1 << /S /D /P (A-) /St 1 >> ] >> >>",
+        )
+        .obj("<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 612 792] /Resources << /Font << /FB 9 0 R /FR 10 0 R >> >> >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>")
+        .stream("", toc_stream)
+        .stream("", body_stream)
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("toc_prefixed.pdf", None, Arc::new(bytes), None).unwrap();
+    s.apply(id, Edit::AutoGenerateBookmarks { max_depth: 3, prefer_toc: true, replace_existing: true }).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["1. Overview→2[1.1. Scope→3,1.2) Details→3]"]);
+
+    // 2) Tier 2 typography: intervening body line prevents coalescing close headings, while uninterrupted heading lines coalesce.
+    let p0 = "\
+        BT /FB 14 Tf 72 700 Td (Heading One) Tj ET \
+        BT /FR 10 Tf 72 690 Td (Intervening body sentence.) Tj ET \
+        BT /FB 14 Tf 72 680 Td (Heading Two) Tj ET \
+        BT /FB 14 Tf 72 620 Td (Wrapped) Tj ET \
+        BT /FB 14 Tf 72 605 Td (Title) Tj ET \
+        BT /FR 10 Tf 72 560 Td (Enough body text here to establish the body font baseline size cleanly.) Tj ET";
+    let typo_bytes = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] /Resources << /Font << /FB 5 0 R /FR 6 0 R >> >> >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>")
+        .stream("", p0)
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+        .build();
+    let tid = s.open("typo.pdf", None, Arc::new(typo_bytes), None).unwrap();
+    s.apply(tid, Edit::AutoGenerateBookmarks { max_depth: 3, prefer_toc: false, replace_existing: true }).unwrap();
+    assert_eq!(outline_titles(&s.get(tid).unwrap().info.outline), ["Heading One→1", "Heading Two→1", "Wrapped Title→1"]);
+}
+
+#[test]
 fn engine_batch_bookmark_edits_destination_regex_shift_and_page_order() {
     let (mut s, id) = session_with(5);
     s.apply(id, Edit::AddBookmark { parent: vec![], index: 0, title: "1 First".into(), page: 0, left: None, top: Some(700.0) }).unwrap();

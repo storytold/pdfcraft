@@ -3280,8 +3280,50 @@ fn image_handles_account_for_document_and_view_rotation() {
 fn cancelling_pointer_gestures_lets_go_of_a_camera_corner() {
     let mut v = view(1, PageLayout::Single, true);
     v.camera = Some(crate::camera_ui::CameraQuad { grab: Some(2), ..crate::camera_ui::CameraQuad::inset(0, 300.0, 400.0) });
+    v.bookmarks_ui.drag = Some(Default::default());
     v.cancel_pointer_gestures();
     assert_eq!(v.camera.map(|q| q.grab), Some(None));
+    assert!(v.bookmarks_ui.drag.is_none());
+}
+
+#[test]
+fn current_view_destination_uses_single_viewport_observation_across_fits_ignoring_selection() {
+    let info = pdfcraft_render::DocInfo {
+        pages: (0..3)
+            .map(|_| pdfcraft_render::PageInfo { width: 842.0, height: 595.0, label: String::new(), crop: [0.0, 0.0, 842.0, 595.0], rotation: 0 })
+            .collect(),
+        ..Default::default()
+    };
+    let mut v = view(3, PageLayout::Single, true);
+    v.current = 1;
+    v.zoom = 2.0;
+    v.viewport_screen = Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 600.0));
+    // Page 0 leaves only a 0.2 px sliver below top=0 (closer to `corner` than Page 1, yet skipped by topmost_visible_page).
+    v.screen_xforms = vec![
+        (0, PageXform { rect: Rect::from_min_size(pos2(SIDE - 400.0, -1189.8), vec2(1684.0, 1190.0)), rot: 0, pw: 842.0, ph: 595.0 }),
+        (1, PageXform { rect: Rect::from_min_size(pos2(SIDE - 200.0, -100.0), vec2(1684.0, 1190.0)), rot: 0, pw: 842.0, ph: 595.0 }),
+    ];
+    // Text selection on page 0 must be ignored by current_view_destination.
+    v.texts.insert(0, std::sync::Arc::new(line_text("abc")));
+    v.select_text(0, 0, 2);
+
+    v.fit = Fit::None;
+    let xyz = v.current_view_destination(&info).unwrap();
+    assert!(
+        matches!(xyz, pdfcraft_engine::ViewDestination::Xyz { page: 1, left: Some(l), top: Some(t), zoom: Some(z) } if (l - 100.0).abs() < 1e-2 && (t - 545.0).abs() < 1e-2 && (z - 2.0).abs() < 1e-6),
+        "{xyz:?}"
+    );
+
+    v.fit = Fit::Width;
+    let fith = v.current_view_destination(&info).unwrap();
+    assert!(matches!(fith, pdfcraft_engine::ViewDestination::FitH { page: 1, top: Some(t) } if (t - 545.0).abs() < 1e-2), "{fith:?}");
+
+    v.fit = Fit::Height;
+    let fitv = v.current_view_destination(&info).unwrap();
+    assert!(matches!(fitv, pdfcraft_engine::ViewDestination::FitV { page: 1, left: Some(l) } if (l - 100.0).abs() < 1e-2), "{fitv:?}");
+
+    v.fit = Fit::Page;
+    assert_eq!(v.current_view_destination(&info), Some(pdfcraft_engine::ViewDestination::Fit { page: 1 }));
 }
 
 /// A camera corner at the page's edge is hit on the page only: a press off the page is no page's,

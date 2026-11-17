@@ -702,6 +702,64 @@ fn bookmark_batch_tools_generate_regex_shift_and_clipboard() {
     assert_eq!(pasted["bookmarks"].as_array().unwrap().len(), 2);
 }
 
+#[test]
+fn bookmark_cut_rejects_unportable_action_or_unknown_keys_without_touching_clipboard_or_source() {
+    let dir = workdir("bookmark-cut-rejects-unportable");
+    let objs: &[&str] = &[
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 300] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Outlines /First 6 0 R /Last 9 0 R /Count 5 >>",
+        "<< /Title (Portable) /Parent 5 0 R /Next 7 0 R /Dest [3 0 R /Fit] >>",
+        "<< /Title (GoToAction) /Parent 5 0 R /Prev 6 0 R /Next 8 0 R /A << /S /GoTo /D [4 0 R /XYZ 10 20 null] >> >>",
+        "<< /Title (WebLink) /Parent 5 0 R /Prev 7 0 R /Next 9 0 R /A << /S /URI /URI (https://example.org) >> >>",
+        "<< /Title (ParentTagged) /Parent 5 0 R /Prev 8 0 R /First 10 0 R /Last 10 0 R /Count 1 /Dest [3 0 R /Fit] >>",
+        "<< /Title (TaggedChild) /Parent 9 0 R /CustomTag (keep-me) /Dest [4 0 R /Fit] >>",
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+
+    std::fs::write(dir.join("in.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc_id = ok(&mut a, "doc_open", json!({ "path": "in.pdf" }))["doc"].as_u64().unwrap();
+
+    // Seed clipboard with [1] ("Portable").
+    ok(&mut a, "bookmark_cut_copy_paste", json!({ "doc": doc_id, "action": "copy", "paths": [[1]] }));
+
+    // Cutting non-GoTo /A [3] or parent of tagged child [4] must fail and leave source + clipboard intact.
+    assert!(!err(&mut a, "bookmark_cut_copy_paste", json!({ "doc": doc_id, "action": "cut", "paths": [[3]] })).to_string().is_empty());
+    assert!(!err(&mut a, "bookmark_cut_copy_paste", json!({ "doc": doc_id, "action": "cut", "paths": [[4]] })).to_string().is_empty());
+    let listed = ok(&mut a, "bookmark_list", json!({ "doc": doc_id }));
+    assert_eq!(listed["bookmarks"].as_array().unwrap().len(), 4);
+    assert_eq!(listed["bookmarks"][2]["title"], "WebLink");
+    assert_eq!(listed["bookmarks"][3]["children"][0]["title"], "TaggedChild");
+
+    // Clipboard still holds "Portable", not "WebLink" or "ParentTagged".
+    ok(&mut a, "bookmark_cut_copy_paste", json!({ "doc": doc_id, "action": "paste" }));
+    let after_paste = ok(&mut a, "bookmark_list", json!({ "doc": doc_id }));
+    assert_eq!(after_paste["bookmarks"].as_array().unwrap().len(), 5);
+    assert_eq!(after_paste["bookmarks"][4]["title"], "Portable");
+
+    // Cutting pure /GoTo /A [2] succeeds and pastes cleanly.
+    ok(&mut a, "bookmark_cut_copy_paste", json!({ "doc": doc_id, "action": "cut", "paths": [[2]] }));
+    ok(&mut a, "bookmark_cut_copy_paste", json!({ "doc": doc_id, "action": "paste" }));
+    let final_list = ok(&mut a, "bookmark_list", json!({ "doc": doc_id }));
+    assert_eq!(final_list["bookmarks"].as_array().unwrap().len(), 5);
+    assert_eq!(final_list["bookmarks"][4]["title"], "GoToAction");
+    assert_eq!(final_list["bookmarks"][4]["page"], 2);
+}
+
 /// A one-page PDF whose form holds one text field named `name`.
 fn form_pdf(name: &str) -> Vec<u8> {
     let objs: Vec<String> = vec![

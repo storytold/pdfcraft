@@ -784,3 +784,62 @@ fn insert_in_page_order_set_destination_current_view_and_single_line_truncation(
     let third_view = h.state().session.get(id).unwrap().info.outline[2].view;
     assert!(matches!(third_view, pdfcraft_render::DestView::Xyz { zoom: Some(z), .. } if (z - 1.5).abs() < 0.05), "{third_view:?}");
 }
+
+#[test]
+fn request_paste_context_pruned_root_and_set_dest_ignores_text_selection() {
+    let mut h = harness();
+    add(&mut h, "Parent");
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(2);
+    add(&mut h, "Child");
+    menu(&mut h, "Child", "Indent");
+    h.state_mut().set_option("page", "3").unwrap();
+    h.run_steps(2);
+    add(&mut h, "Third");
+    menu(&mut h, "Third", "Outdent");
+    assert_eq!(outline(&h), [("Parent".into(), Some(0), 0), ("Child".into(), Some(1), 1), ("Third".into(), Some(2), 0)]);
+
+    // 1) RequestPaste-style egui::Event::Paste when Bookmarks owns keyboard pastes copied bookmark, not canvas.
+    menu(&mut h, "Third", "Copy");
+    h.get_by_label("Parent").click();
+    h.run_steps(1);
+    h.event(egui::Event::Paste("some canvas text".into()));
+    h.run_steps(3);
+    assert_eq!(outline(&h).len(), 4);
+    assert_eq!(outline(&h)[2].0, "Third");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(outline(&h).len(), 3);
+
+    // 2) Selecting both Parent and Child then right-clicking Child for Copy and Delete targets pruned root Parent.
+    h.get_by_label("Parent").click();
+    h.run_steps(1);
+    let child_pos = h.get_by_label("Child").rect().center();
+    h.event(egui::Event::ModifiersChanged(Modifiers::COMMAND));
+    h.hover_at(child_pos);
+    h.event(egui::Event::PointerButton { pos: child_pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::COMMAND });
+    h.event(egui::Event::PointerButton { pos: child_pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::COMMAND });
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    menu(&mut h, "Child", "Copy");
+    menu(&mut h, "Child", "Delete");
+    assert_eq!(outline(&h), [("Third".into(), Some(2), 0)]);
+    // Verify Copy captured the pruned root (Parent + Child), not just Child.
+    h.get_by_label("Third").click();
+    h.run_steps(1);
+    h.event(egui::Event::Paste("paste-subtree".into()));
+    h.run_steps(3);
+    assert_eq!(outline(&h), [("Third".into(), Some(2), 0), ("Parent".into(), Some(0), 0), ("Child".into(), Some(1), 1)]);
+
+    // 3) Text selection on page 0 must NOT hijack "Set destination to current view" when viewport is on page 2.
+    h.state_mut().views[0].select_text(0, 0, 1);
+    h.state_mut().execute("view.zoom.fit_width");
+    h.state_mut().views[0].go_to_page(2);
+    h.run_steps(4);
+    crate::support::settle(&mut h);
+    menu(&mut h, "Third", "Set destination to current view");
+    let id = h.state().views[0].id;
+    let b = &h.state().session.get(id).unwrap().info.outline[0];
+    assert_eq!(b.page, Some(2));
+    assert!(matches!(b.view, pdfcraft_render::DestView::FitH { .. }), "{:?}", b.view);
+}

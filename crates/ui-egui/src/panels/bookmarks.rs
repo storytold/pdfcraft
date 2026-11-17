@@ -699,11 +699,14 @@ fn draw_context_menu(
     action: &mut Option<BmAction>,
     gained_focus: &mut bool,
 ) {
-    let selected_paths: Vec<Vec<usize>> = if view_state.selected_keys.contains(&node.key) && view_state.selected_keys.len() > 1 {
+    let mut selected_paths: Vec<Vec<usize>> = if view_state.selected_keys.contains(&node.key) && view_state.selected_keys.len() > 1 {
         proj.pruned_roots_from_keys(&view_state.selected_keys).into_iter().filter_map(|idx| proj.nodes.get(idx).map(|n| n.path.clone())).collect()
     } else {
         vec![node.path.clone()]
     };
+    if selected_paths.is_empty() {
+        selected_paths.push(node.path.clone());
+    }
     let multi = selected_paths.len() > 1;
     let depth = node.depth.saturating_sub(1) as usize;
     let i = node.sibling_idx;
@@ -751,21 +754,23 @@ fn draw_context_menu(
         pick(ui, tl!("Indent"), !multi && i > 0, BmAction::Indent(node.path.clone()));
         pick(ui, tl!("Outdent"), !multi && depth > 0, BmAction::Outdent(node.path.clone()));
         ui.separator();
-        if multi {
-            pick(ui, tl!("Cut"), true, BmAction::CutBatch(selected_paths.clone()));
-            pick(ui, tl!("Copy"), true, BmAction::CopyBatch(selected_paths.clone()));
-        } else {
-            pick(ui, tl!("Cut"), true, BmAction::Cut(node.path.clone()));
-            pick(ui, tl!("Copy"), true, BmAction::Copy(node.path.clone()));
+        match selected_paths.as_slice() {
+            [single] => {
+                pick(ui, tl!("Cut"), true, BmAction::Cut(single.clone()));
+                pick(ui, tl!("Copy"), true, BmAction::Copy(single.clone()));
+            }
+            _ => {
+                pick(ui, tl!("Cut"), true, BmAction::CutBatch(selected_paths.clone()));
+                pick(ui, tl!("Copy"), true, BmAction::CopyBatch(selected_paths.clone()));
+            }
         }
         let parent = node.path.get(..depth).unwrap_or_default().to_vec();
         pick(ui, tl!("Paste"), can_paste, BmAction::Paste { parent, index: i.saturating_add(1) });
         ui.separator();
         pick(ui, tl!("Shift page numbers…"), true, BmAction::OpenShiftPages(selected_paths.clone()));
-        if multi {
-            pick(ui, tl!("Delete"), true, BmAction::DeleteBatch(selected_paths));
-        } else {
-            pick(ui, tl!("Delete"), true, BmAction::Delete(node.path.clone()));
+        match selected_paths.as_slice() {
+            [single] => pick(ui, tl!("Delete"), true, BmAction::Delete(single.clone())),
+            _ => pick(ui, tl!("Delete"), true, BmAction::DeleteBatch(selected_paths)),
         }
         if let Some(a) = styled {
             *action = Some(a);

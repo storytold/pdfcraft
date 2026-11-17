@@ -38,6 +38,18 @@ pub struct OutlineNode {
     pub children: Vec<OutlineNode>,
 }
 
+impl Drop for OutlineNode {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return;
+        }
+        let mut stack = std::mem::take(&mut self.children);
+        while let Some(mut node) = stack.pop() {
+            stack.append(&mut node.children);
+        }
+    }
+}
+
 /// The tree [`outline_tree`] read.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutlineTree {
