@@ -120,6 +120,26 @@ pub fn date_names() -> DateNames {
     *DATE_NAMES.read().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+thread_local! {
+    /// The year a date typed without one takes ([`keystroke`]), while [`with_current_year`] runs.
+    static CURRENT_YEAR: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
+}
+
+/// Runs `f` with `year` as the current year: a date typed with its day and month but not its year,
+/// in a format whose year follows them, is taken in that year when committed ([`keystroke`]), as
+/// Acrobat takes it. The caller passes the session's clock, so tests can fix it. The year in force
+/// before is restored afterwards, a panic in `f` included.
+pub fn with_current_year<R>(year: i32, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<i32>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CURRENT_YEAR.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(CURRENT_YEAR.with(|c| c.replace(Some(year))));
+    f()
+}
+
 /// `text` with the month and weekday names of `lists` (in the order months, short months,
 /// weekdays, short weekdays) written as their English names, so a parser that reads English
 /// reads them. The longest name wins at each place, case ignored, and only a whole name: one
@@ -361,19 +381,25 @@ fn order(fmt: &str) -> Vec<Part> {
 /// Parse typed text against a date/time format (AFDate_KeystrokeEx's leniency: any
 /// separators, month names, two-digit years). `None` when it isn't a valid date.
 pub fn parse_date(text: &str, fmt: &str) -> Option<DateTime> {
+    parse_date_with(text, fmt, None)
+}
+
+/// [`parse_date`], where a date typed with its day and month but without the year that follows
+/// them in `fmt` takes `year` (`None`: it isn't a date).
+fn parse_date_with(text: &str, fmt: &str, year: Option<i32>) -> Option<DateTime> {
     let names = date_names();
     let lists: [&[&str]; 4] = [&names.months, &names.months_short, &names.days, &names.days_short];
     // Weekdays are shown, not typed (see `order`): where the format has one but none was typed, a
     // name the language shares between a weekday and a month (Italian "mar") is the month, as
     // the names are read again with no weekday expected (#5303).
-    read_date(&english_names(text, fmt, lists), fmt, &names).or_else(|| {
+    read_date(&english_names(text, fmt, lists), fmt, &names, year).or_else(|| {
         let no_weekday = fmt.replace("dddd", " ").replace("ddd", " ");
-        (no_weekday != fmt).then(|| read_date(&english_names(text, &no_weekday, lists), fmt, &names)).flatten()
+        (no_weekday != fmt).then(|| read_date(&english_names(text, &no_weekday, lists), fmt, &names, year)).flatten()
     })
 }
 
-/// [`parse_date`] of `english`, typed text whose month and weekday names are English.
-fn read_date(english: &str, fmt: &str, names: &DateNames) -> Option<DateTime> {
+/// [`parse_date_with`] of `english`, typed text whose month and weekday names are English.
+fn read_date(english: &str, fmt: &str, names: &DateNames, year: Option<i32>) -> Option<DateTime> {
     let t = english.trim();
     if t.is_empty() {
         return None;
@@ -447,6 +473,7 @@ fn read_date(english: &str, fmt: &str, names: &DateNames) -> Option<DateTime> {
     let mut wanted = [parts.iter().filter(|p| takes_number(p) && !is_time(p)).count(), parts.iter().filter(|p| is_time(p)).count()];
     let mut tail = false;
     let mut have_y = false;
+    let (mut have_m, mut have_d) = (false, false);
     for (i, part) in parts.iter().enumerate() {
         let kind = usize::from(is_time(part));
         let need = wanted.get(kind).copied().unwrap_or(0);
@@ -468,12 +495,24 @@ fn read_date(english: &str, fmt: &str, names: &DateNames) -> Option<DateTime> {
                 dt.m = match month_name {
                     Some(m) => m,
                     None => take(&mut nums, &mut tail)?,
-                }
+                };
+                have_m = true;
             }
-            'd' => dt.d = take(&mut nums, &mut tail)?,
+            'd' => {
+                dt.d = take(&mut nums, &mut tail)?;
+                have_d = true;
+            }
             'y' => {
-                let y = i32::try_from(take(&mut nums, &mut tail)?).ok()?;
-                dt.y = if y < 100 { if y < 50 { 2000 + y } else { 1900 + y } } else { y };
+                dt.y = match year {
+                    // Day and month typed, nothing left for the year that follows them: the
+                    // given year, as Acrobat fills it in. A year the format puts first is never
+                    // left out ("10-10" is no date for yyyy-mm-dd).
+                    Some(now) if nums.is_empty() && have_m && have_d => now,
+                    _ => {
+                        let y = i32::try_from(take(&mut nums, &mut tail)?).ok()?;
+                        if y < 100 { if y < 50 { 2000 + y } else { 1900 + y } } else { y }
+                    }
+                };
                 have_y = true;
             }
             // Times may be left out; a number that is there must be readable.
@@ -681,9 +720,17 @@ pub fn keystroke(f: &Format, field: &str, value: &str) -> Result<String, String>
             // as typed and shows it ×100: keep the typed number.
             make_number(value).map(js_number).ok_or_else(bad)
         }
-        Format::Date(fmt) | Format::Time(fmt) => parse_date(value, fmt)
-            .map(|_| value.trim().to_string())
-            .ok_or_else(|| format!("Invalid date/time: please ensure that the date/time exists. Field [ {field} ] should match format {fmt}")),
+        // A date typed without the year that follows its day and month takes the current year
+        // ([`with_current_year`]) and is stored written out in the format, so the year it took
+        // stays and shows ("10.10" in dd.mm.yyyy is stored as "10.10.2026").
+        Format::Date(fmt) | Format::Time(fmt) => match parse_date(value, fmt) {
+            Some(_) => Ok(value.trim().to_string()),
+            None => CURRENT_YEAR
+                .with(std::cell::Cell::get)
+                .and_then(|year| parse_date_with(value, fmt, Some(year)))
+                .map(|dt| format_date_in(dt, fmt, &date_names()))
+                .ok_or_else(|| format!("Invalid date/time: please ensure that the date/time exists. Field [ {field} ] should match format {fmt}")),
+        },
         Format::Special(n) => {
             let m = SPECIAL_MASKS[(*n).min(3) as usize];
             apply_mask(m, value).filter(|s| mask_fits(m, s)).map(|_| value.trim().to_string()).ok_or_else(bad)

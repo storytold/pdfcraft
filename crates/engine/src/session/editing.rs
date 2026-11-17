@@ -45,10 +45,16 @@ fn deletes_pages(edit: &Edit) -> bool {
     }
 }
 
-/// Keep edits to the working copy until both the operation and its script callbacks succeed.
+/// Keep edits to the working copy until both the operation and its script callbacks succeed. A
+/// date typed into a field without its year takes the year of the session's clock (`cx.today`).
 fn run_checked_edit(next: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
-    let result = guard(|| run_edit(next, edit, cx))
-        .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))));
+    let year = i32::try_from(cx.today.0).ok();
+    let mut run = || guard(|| run_edit(next, edit, cx));
+    let result = match year {
+        Some(year) => pdfcraft_forms::af::with_current_year(year, run),
+        None => run(),
+    }
+    .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))));
     let refusal = cx.js.as_mut().and_then(|runner| runner.refused.take());
     if refusal.is_some() || result.is_err() {
         discard_edit_callbacks(cx);

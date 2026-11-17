@@ -520,3 +520,25 @@ fn a_simple_calculation_that_expands_past_the_allowance_is_not_calculated() {
     assert_eq!(calculate(&within, &thousand).as_deref(), Some("1000000"));
     assert_eq!(calculate(&past, &thousand), None);
 }
+
+/// A date typed with its day and month but not the year that follows them takes the current
+/// year and is stored written out in the format, as Acrobat takes it: "10.10" in dd.mm.yyyy is
+/// 10.10.<year>. One number alone, a year the format puts first, a day the year doesn't have and
+/// any date typed with no current year given stay refused; a whole date is stored as typed.
+#[test]
+fn a_date_typed_without_its_year_takes_the_current_year() {
+    let date = |fmt: &str| Format::Date(fmt.into());
+    let in_2026 = |fmt: &str, typed: &str| with_current_year(2026, || keystroke(&date(fmt), "d", typed));
+    assert_eq!(in_2026("dd.mm.yyyy", "10.10"), Ok("10.10.2026".into()));
+    assert_eq!(in_2026("dd.mm.yyyy", "1.2"), Ok("01.02.2026".into()));
+    assert_eq!(in_2026("mm/dd/yyyy", "10/10"), Ok("10/10/2026".into()));
+    assert_eq!(in_2026("mm/dd/yyyy", "1/2"), Ok("01/02/2026".into()));
+    assert_eq!(in_2026("dd.mm.yy", "10.10"), Ok("10.10.26".into()));
+    assert!(in_2026("dd.mm.yyyy", "10").is_err(), "a day alone is no date");
+    assert!(in_2026("yyyy-mm-dd", "10-10").is_err(), "a year that comes first is not left out");
+    assert!(in_2026("dd.mm.yyyy", "29.02").is_err(), "2026 has no 29 February");
+    assert_eq!(with_current_year(2028, || keystroke(&date("dd.mm.yyyy"), "d", "29.02")), Ok("29.02.2028".into()));
+    assert_eq!(in_2026("dd.mm.yyyy", "10.10.2025"), Ok("10.10.2025".into()), "a whole date is stored as typed");
+    assert!(keystroke(&date("dd.mm.yyyy"), "d", "10.10").is_err(), "no current year given: refused, as before");
+    assert_eq!(parse_date("10.10", "dd.mm.yyyy"), None, "reading a stored value never fills a year in");
+}
