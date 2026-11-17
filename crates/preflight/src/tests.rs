@@ -2591,6 +2591,18 @@ fn embedded_files_are_associated_files_clause_6_8() {
     let others: String = (0..5000).map(|i| format!("/AF /N{i} BDC EMC ")).collect();
     assert_eq!(found(&listed(&format!("{others}/AF /MC0 BDC EMC")), Level::A3b), Vec::<(String, bool)>::new());
     assert_eq!(found(&listed(&others), Level::A3b), [(said.to_string(), true)]);
+    // A name is read in the resources of the content that uses it: the page's /MC0 names a.xml,
+    // a form's /MC0 names b.xml, and only the content that tags it associates its own.
+    let second = |form_content: &str| {
+        let spec_b = "<< /Type /Filespec /F (b.xml) /UF (b.xml) /AFRelationship /Data /EF << /F 9 0 R >> >>";
+        let form = format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /Properties << /MC0 [10 0 R] >> >> /Length {} >>\nstream\n{form_content}\nendstream",
+            form_content.len()
+        );
+        page_with_resources("/AF /MC0 BDC EMC", "/Properties << /MC0 [7 0 R] >>", names, &[plain, file, spec, "[7 0 R]", file, spec_b, &form])
+    };
+    assert_eq!(found(&second(""), Level::A3b), [(said.to_string(), true)]);
+    assert_eq!(found(&second("/AF /MC0 BDC EMC"), Level::A3b), Vec::<(String, bool)>::new());
     // Save as PDF/A associates it with the document.
     let mut doc = with("", "", plain);
     let report = convert(&mut doc, Level::A3b).unwrap();
