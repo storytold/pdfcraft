@@ -2367,3 +2367,40 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// 6.1.13 and ISO 32000-1 Table C.1: graphics states are nested at most 28 deep with `q` and `Q`.
+/// A page's `/Contents` streams count as one stream; each form counts from zero.
+#[test]
+fn graphics_state_nesting_is_limited_clause_6_1_13() {
+    let limits =
+        |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.13").map(|i| i.message).collect() };
+    let stream = |content: &str| format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let form =
+        |content: &str| format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let page = |parts: &[String], xobject: Option<String>| {
+        let mut objects =
+            vec!["<< /Type /Catalog /Pages 2 0 R >>".to_owned(), "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned()];
+        let first = 4 + usize::from(xobject.is_some());
+        let refs: Vec<String> = (0..parts.len()).map(|i| format!("{} 0 R", first + i)).collect();
+        let resources = if xobject.is_some() { "/Resources << /XObject << /X 4 0 R >> >>" } else { "" };
+        objects.push(format!("<< /Type /Page /Parent 2 0 R /Contents [{}] {resources} >>", refs.join(" ")));
+        objects.extend(xobject);
+        objects.extend(parts.iter().map(|p| stream(p)));
+        let refs: Vec<&str> = objects.iter().map(String::as_str).collect();
+        build(&refs, "")
+    };
+    let deep = |n: usize| format!("{}{}", "q ".repeat(n), "Q ".repeat(n));
+    let message = ["Content nests graphics states (q) more than 28 deep"];
+    assert!(limits(&page(&[deep(28)], None)).is_empty());
+    assert_eq!(limits(&page(&[deep(29)], None)), message);
+    // Closed states don't count, nor does a Q with none open, nor a q inside a string.
+    assert!(limits(&page(&[format!("Q Q {} {} BT (q q q q) Tj ET", deep(28), deep(28))], None)).is_empty());
+    // The parts of a page's contents are one stream: 15 and 14 deep.
+    let (a, b) = ("q ".repeat(15), format!("{}{}", "q ".repeat(14), "Q ".repeat(29)));
+    assert_eq!(limits(&page(&[a.clone(), b], None)), message);
+    assert!(limits(&page(&[a, "Q ".repeat(15), deep(28)], None)).is_empty());
+    // A form drawn 20 deep, nesting 20 itself, is two streams within the limit; 29 in the form isn't.
+    let drawn = format!("{} /X Do {}", "q ".repeat(20), "Q ".repeat(20));
+    assert!(limits(&page(std::slice::from_ref(&drawn), Some(form(&deep(20))))).is_empty());
+    assert_eq!(limits(&page(&[drawn], Some(form(&deep(29))))), message);
+}

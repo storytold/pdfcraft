@@ -1,6 +1,7 @@
 //! PDF/A-2 6.1.13: a file stays within the implementation limits of ISO 32000-1 Annex C (Table C.1
 //! and the page size limits after it): integers that fit in 32 bits, strings of at most 32767
-//! bytes, names of at most 127 bytes, and page boundaries between 3 and 14400 units wide and high.
+//! bytes, names of at most 127 bytes, graphics states nested at most 28 deep with `q` and `Q`,
+//! and page boundaries between 3 and 14400 units wide and high.
 //!
 //! The values are read from the trailer, the indirect objects and the content streams, as parsed:
 //! a name written with `#xx` escapes counts its decoded bytes. A page's `/Contents` streams are read
@@ -33,6 +34,8 @@ const MAX_CMAP_CHAIN: usize = 8;
 const MAX_STRING: usize = 32767;
 /// Table C.1: the longest name, in bytes.
 const MAX_NAME: usize = 127;
+/// Table C.1: how deep graphics states may be nested with `q` and `Q`.
+const MAX_Q_DEPTH: usize = 28;
 /// The smallest and largest page boundary, in default user space units.
 const MIN_PAGE: f64 = 3.0;
 const MAX_PAGE: f64 = 14400.0;
@@ -51,11 +54,13 @@ pub(crate) struct Exceeded {
     pub(crate) real: bool,
     pub(crate) string: bool,
     pub(crate) name: bool,
+    /// A content stream nests `q` more than [`MAX_Q_DEPTH`] deep.
+    pub(crate) q_depth: bool,
 }
 
 impl Exceeded {
     fn all(self) -> bool {
-        self.int && self.real && self.string && self.name
+        self.int && self.real && self.string && self.name && self.q_depth
     }
 
     fn name(&mut self, n: &[u8]) {
@@ -83,11 +88,22 @@ impl Exceeded {
         }
     }
 
-    /// The operands of one content stream, inline images' dictionaries included.
+    /// The operands of one content stream, inline images' dictionaries included, and how deep it
+    /// nests graphics states. Each stream counts its own `q` from zero, a page's `/Contents` read
+    /// as one stream; a `Q` with no `q` open is ignored.
     fn content(&mut self, data: &[u8]) {
+        let mut depth = 0usize;
         for op in pdfcraft_content::ops(data) {
             if self.all() {
                 return;
+            }
+            match op.op.as_slice() {
+                b"q" => {
+                    depth = depth.saturating_add(1);
+                    self.q_depth |= depth > MAX_Q_DEPTH;
+                }
+                b"Q" => depth = depth.saturating_sub(1),
+                _ => {}
             }
             for v in &op.operands {
                 self.value(v, 0);
