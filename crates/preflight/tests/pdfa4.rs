@@ -616,6 +616,9 @@ fn embedded_files_follow_the_level() {
     reports(&file(None, good, pdf(&failing2b), listed), Level::A4, "6.9", "declares PDF/A-2b but doesn't conform to it");
     let failing4 = bytes(&File { after: b"junk", ..File::default() });
     reports(&file(None, good, pdf(&failing4), listed), Level::A4, "6.9", "declares PDF/A-4 but doesn't conform to it");
+    // PDF/A-4 has no level B.
+    let four_b = bytes(&File { packet: packet("4", Some("2020"), Some("B")), ..File::default() });
+    reports(&file(None, good, pdf(&four_b), listed), Level::A4, "6.9", "must be PDF/A-1, PDF/A-2 or PDF/A-4 files");
     for (part, conformance) in [("1", Some("B")), ("2", Some("U"))] {
         let declared = bytes(&File { header: "%PDF-1.7", packet: packet(part, None, conformance), content: red, ..File::default() });
         passes(&file(None, good, pdf(&declared), listed), Level::A4);
@@ -677,6 +680,11 @@ fn embedded_files_at_2b_are_pdfa_1_or_2_and_named_in_unicode() {
         assert_eq!(found(&file(named, pdf(&other)), Level::A2b), not_pdfa());
     }
     assert_eq!(found(&file(named, stream("/Type /EmbeddedFile /Subtype /text#2Fplain", b"a")), Level::A2b), not_pdfa());
+    // A declaration of a level its part doesn't have isn't one: PDF/A-2 without a conformance level,
+    // PDF/A-2e, PDF/A-1u.
+    for (part, conformance) in [("2", None), ("2", Some("E")), ("1", Some("U"))] {
+        assert_eq!(found(&file(named, pdf(&embedded(part, conformance, ""))), Level::A2b), not_pdfa(), "{part}{conformance:?}");
+    }
     // F and UF, at 2b and 3b: UF can be filled in from F, F can't be made up.
     let lacks = |fixable: bool| vec![("An embedded file's file specification lacks F or UF".to_owned(), fixable)];
     assert_eq!(found(&file("/F (a.pdf)", pdf(&pdfa2)), Level::A2b), lacks(true));

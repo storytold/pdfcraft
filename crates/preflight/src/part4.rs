@@ -647,6 +647,17 @@ fn embedded_pdfa(s: &pdfcraft_cos::Stream, parts: &[u8]) -> Embedded {
     let Some((part, conformance)) = crate::declared(&inner).pdfa.filter(|(part, _)| parts.contains(part)) else {
         return Embedded::NotPdfa;
     };
+    // A declaration names a level its part has (ISO 19005-1 6.7.11, ISO 19005-2 6.6.4, ISO 19005-4
+    // 6.7.3): A or B for PDF/A-1, A, B or U for PDF/A-2 and 3, none, E or F for PDF/A-4.
+    let level_of_part = match part {
+        1 => matches!(conformance.as_str(), "A" | "B"),
+        2 | 3 => matches!(conformance.as_str(), "A" | "B" | "U"),
+        4 => matches!(conformance.as_str(), "" | "E" | "F"),
+        _ => false,
+    };
+    if !level_of_part {
+        return Embedded::NotPdfa;
+    }
     if part == 1 {
         let header = crate::header::check(&inner, false);
         return if header.version || header.comment { Embedded::Fails("PDF/A-1") } else { Embedded::Declares };
