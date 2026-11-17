@@ -2702,3 +2702,41 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// PDF/A-2 and 3, 6.1.7.2: a stream uses only the filters of ISO 32000 Table 6, not LZW, and the
+/// Crypt filter only as Identity. PDF/A-4 cites the same rule as 6.1.6.2 (`tests/pdfa4.rs`).
+#[test]
+fn streams_use_only_standard_filters_clause_6_1_7_2() {
+    let found = |dict: &str, level: Level| -> Vec<String> {
+        let doc = build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /X 4 0 R >> >> /Contents 5 0 R >>",
+                &format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {dict} /Length 0 >>\nstream\n\nendstream"),
+                "<< /Length 6 >>\nstream\n/X Do\nendstream",
+            ],
+            "",
+        );
+        verify(&doc, level)
+            .into_iter()
+            .filter(|i| i.clause == "6.1.7.2")
+            .inspect(|i| assert!(!i.fixable && WORDINGS.contains(&i.pattern), "{i:?}"))
+            .map(|i| i.message)
+            .collect()
+    };
+    for level in [Level::A2b, Level::A3b] {
+        assert_eq!(found("/Filter /FlateDecode", level), Vec::<String>::new());
+        assert_eq!(found("/Filter [/ASCII85Decode /FlateDecode]", level), Vec::<String>::new());
+        // A name Table 6 doesn't have, the abbreviations of inline images among them.
+        assert_eq!(found("/Filter /Bad", level), ["A stream uses the filter Bad, which ISO 32000-2 doesn't define"]);
+        assert_eq!(found("/Filter [/A85 /FlateDecode]", level), ["A stream uses the filter A85, which ISO 32000-2 doesn't define"]);
+        // The Identity crypt filter, named or by default, and another one.
+        assert_eq!(found("/Filter /Crypt", level), Vec::<String>::new());
+        assert_eq!(found("/Filter [/Crypt] /DecodeParms [<< /Name /Identity >>]", level), Vec::<String>::new());
+        assert_eq!(
+            found("/Filter [/FlateDecode /Crypt] /DecodeParms [null << /Name /StdCF >>]", level),
+            ["A stream uses the Crypt filter with a crypt filter other than Identity"]
+        );
+    }
+}

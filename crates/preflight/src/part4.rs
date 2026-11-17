@@ -132,43 +132,11 @@ fn field_type(doc: &Document, dict: &Dict) -> Option<Vec<u8>> {
     None
 }
 
-/// The standard filters of ISO 32000-2 7.4, Table 6.
-const FILTERS: &[&[u8]] = &[
-    b"ASCIIHexDecode",
-    b"ASCII85Decode",
-    b"LZWDecode",
-    b"FlateDecode",
-    b"RunLengthDecode",
-    b"CCITTFaxDecode",
-    b"JBIG2Decode",
-    b"DCTDecode",
-    b"JPXDecode",
-    b"Crypt",
-];
-
-/// 6.1.6.1, 6.1.6.2, 6.2.8.1 and 6.2.8.2: a stream's `filters` are the standard ones (LZW, which
-/// PDF/A-2 forbids too, is reported with its rules), a Crypt filter only the Identity one (ISO
-/// 32000-2 7.4.10, Table 14); a 3D stream is U3D or PRC (ISO 32000-2 13.6.3, Table 311); and a
-/// form XObject has no OPI dictionary and refers to no other file (`/Ref`, a reference XObject,
-/// ISO 32000-2 8.10.4).
-pub(crate) fn stream(doc: &Document, dict: &Dict, subtype: Option<&[u8]>, filters: &[Vec<u8>], issue: &mut Report<'_>) {
-    for filter in filters.iter().filter(|f| !FILTERS.contains(&f.as_slice())) {
-        let shown = String::from_utf8_lossy(filter.get(..filter.len().min(64)).unwrap_or_default()).into_owned();
-        issue("6.1.6.2", "A stream uses the filter {}, which ISO 32000-2 doesn't define", Some(shown), None, false);
-    }
-    if let Some(at) = filters.iter().position(|f| f.as_slice() == b"Crypt") {
-        let parameters = dict.get(b"DecodeParms").map(|p| doc.resolve(p));
-        let parameters = match parameters.as_deref() {
-            Some(Object::Array(list)) => list.get(at).map(|p| doc.resolve(p)),
-            _ => parameters,
-        };
-        // Without decode parameters, or a Name in them, the crypt filter is Identity (Table 14).
-        let identity =
-            parameters.as_deref().and_then(Object::as_dict).is_none_or(|p| p.get(b"Name").is_none() || p.name(b"Name") == Some(b"Identity"));
-        if !identity {
-            issue("6.1.6.2", "A stream uses the Crypt filter with a crypt filter other than Identity", None, None, false);
-        }
-    }
+/// 6.1.6.1, 6.2.8.1 and 6.2.8.2: a 3D stream is U3D or PRC (ISO 32000-2 13.6.3, Table 311); and
+/// a form XObject has no OPI dictionary and refers to no other file (`/Ref`, a reference XObject,
+/// ISO 32000-2 8.10.4). Which filters a stream may use (6.1.6.2) is
+/// [`check_filters`](crate::check_filters)'s, for every part.
+pub(crate) fn stream(dict: &Dict, subtype: Option<&[u8]>, issue: &mut Report<'_>) {
     if dict.name(b"Type") == Some(b"3D") && !matches!(subtype, Some(b"U3D" | b"PRC")) {
         issue("6.1.6.1", "A 3D stream's Subtype isn't U3D or PRC", None, None, false);
     }

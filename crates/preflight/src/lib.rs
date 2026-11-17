@@ -1782,6 +1782,7 @@ fn check_stream(
     if filters.iter().any(|filter| filter == b"LZWDecode" || filter == b"LZW") {
         issue("6.1.7.2", "A stream uses LZW compression", None, None, false);
     }
+    check_filters(doc, &stream.dict, &filters, issue);
     if stream.dict.get(b"F").is_some() || stream.dict.get(b"FFilter").is_some() {
         issue("6.1.7.1", "A stream refers to an external file", None, None, false);
     }
@@ -1798,7 +1799,50 @@ fn check_stream(
         issue("6.2.9", "PostScript XObjects aren't allowed", None, None, false);
     }
     if level.part() == 4 {
-        part4::stream(doc, &stream.dict, subtype, &filters, issue);
+        part4::stream(&stream.dict, subtype, issue);
+    }
+}
+
+/// The standard filters of ISO 32000-1 and ISO 32000-2 7.4, Table 6.
+const FILTERS: &[&[u8]] = &[
+    b"ASCIIHexDecode",
+    b"ASCII85Decode",
+    b"LZWDecode",
+    b"FlateDecode",
+    b"RunLengthDecode",
+    b"CCITTFaxDecode",
+    b"JBIG2Decode",
+    b"DCTDecode",
+    b"JPXDecode",
+    b"Crypt",
+];
+
+/// ISO 19005-2 and -3 6.1.7.2, ISO 19005-4 6.1.6.2 (which `part4::clause` maps it to): a
+/// stream's `filters` are the standard ones of Table 6 (LZW, which PDF/A-2 and 3 forbid as well,
+/// is [`check_stream`]'s), and a Crypt filter is only the Identity one (ISO 32000-2 7.4.10,
+/// Table 14). The abbreviations of 8.9.7, Table 92 are for inline images, not streams.
+fn check_filters(
+    doc: &Document,
+    dict: &Dict,
+    filters: &[Vec<u8>],
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    for filter in filters.iter().filter(|f| !FILTERS.contains(&f.as_slice())) {
+        let shown = String::from_utf8_lossy(filter.get(..filter.len().min(64)).unwrap_or_default()).into_owned();
+        issue("6.1.7.2", "A stream uses the filter {}, which ISO 32000-2 doesn't define", Some(shown), None, false);
+    }
+    if let Some(at) = filters.iter().position(|f| f.as_slice() == b"Crypt") {
+        let parameters = dict.get(b"DecodeParms").map(|p| doc.resolve(p));
+        let parameters = match parameters.as_deref() {
+            Some(Object::Array(list)) => list.get(at).map(|p| doc.resolve(p)),
+            _ => parameters,
+        };
+        // Without decode parameters, or a Name in them, the crypt filter is Identity (Table 14).
+        let identity =
+            parameters.as_deref().and_then(Object::as_dict).is_none_or(|p| p.get(b"Name").is_none() || p.name(b"Name") == Some(b"Identity"));
+        if !identity {
+            issue("6.1.7.2", "A stream uses the Crypt filter with a crypt filter other than Identity", None, None, false);
+        }
     }
 }
 
