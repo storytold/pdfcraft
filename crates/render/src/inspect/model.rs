@@ -443,6 +443,23 @@ pub fn fill_group_text(all: &mut [Annotation]) {
     }
 }
 
+/// The text a Replace Text proposal replaces: the `/Contents` of the strikeouts
+/// (`/IT /StrikeOutTextEdit`) grouped under the caret `primary`, joined by spaces. `None` for
+/// anything else and for a proposal that kept none (older files, or one made from quads), so
+/// the comment shows only the replacement.
+pub fn replaced_text(all: &[Annotation], primary: &Annotation) -> Option<String> {
+    if primary.subtype != "Caret" || primary.is_reply() {
+        return None;
+    }
+    let parts: Vec<&str> = all
+        .iter()
+        .filter(|s| s.is_group_member() && s.subtype == "StrikeOut" && s.intent.as_deref() == Some("StrikeOutTextEdit") && s.replies_to(primary))
+        .filter_map(|s| s.contents.as_deref().map(str::trim))
+        .filter(|t| !t.is_empty())
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
 /// A comment's pop-up window (ISO 32000-2 §12.5.6.14).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Popup {

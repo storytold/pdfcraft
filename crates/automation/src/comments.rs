@@ -202,6 +202,7 @@ impl Automation {
                 "intent": c.intent,
                 "author": c.author,
                 "contents": c.contents,
+                "replaces": pdfcraft_render::replaced_text(&all, c),
                 "modified": c.modified,
                 "rect": crate::view_rect(&doc.info, c.page, c.shown_rect(doc.info.pages.get(c.page).map_or(0, |p| p.rotation))),
                 "color": c.color.map(hex),
@@ -311,6 +312,8 @@ impl Automation {
             "squiggly" => Some(Markup::Squiggly),
             _ => None,
         };
+        // The text a `find` marked, which Replace Text keeps with its replacement.
+        let mut struck = String::new();
         let shape = if let Some(markup) = markup {
             let quads = match (a.opt_str("find")?, a.get("quads")) {
                 (Some(needle), _) => {
@@ -323,6 +326,7 @@ impl Automation {
                     if !a.opt_bool("all")?.unwrap_or(false) {
                         hits.truncate(1);
                     }
+                    struck = hits.iter().map(|r| text.text_of(r.clone())).collect::<Vec<_>>().join(" ");
                     hits.into_iter().flat_map(|r| text.line_rects(r)).map(|r| info.view_rect_to_quad(r)).collect()
                 }
                 (None, Some(q)) => {
@@ -510,7 +514,7 @@ impl Automation {
             let mut caret = Style::default_for(&Shape::Caret { rect: [0.0; 4] });
             caret.color = style.color;
             let strike = style;
-            let mut out = self.apply(a, Edit::ReplaceText { page, quads, text: contents, author, strike, caret })?;
+            let mut out = self.apply(a, Edit::ReplaceText { page, quads, text: contents, original: struck, author, strike, caret })?;
             out["comment"] = json!({ "page": page + 1, "type": "replace" });
             return Ok(out);
         }

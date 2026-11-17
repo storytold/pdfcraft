@@ -3053,6 +3053,8 @@ fn replace_text_lists_its_replacement() {
         (Some("Caret"), Some("red"), Some("StrikeOut")),
         "{list}"
     );
+    // The proposal shows what it replaces with its replacement, and keeps it through a save.
+    assert_eq!(c["replaces"], "Page 1", "{list}");
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "new.pdf" }));
     let mut b = auto(&dir);
     for (path, text, primary) in [("new.pdf", "red", "Caret"), ("other.pdf", "busy", "Caret"), ("old.pdf", "red", "StrikeOut")] {

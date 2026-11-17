@@ -473,6 +473,15 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                         edit = Some(e);
                     }
                 } else {
+                    // A Replace Text proposal reads as one entry: the struck text, then its replacement.
+                    if let Some(original) = pdfcraft_render::replaced_text(&info.annotations, a) {
+                        let text = egui::RichText::new(original).strikethrough().color(t.text_muted).font(theme::regular(13.0));
+                        let mut label = egui::Label::new(text).wrap();
+                        if !selected {
+                            label = label.truncate();
+                        }
+                        ui.add(label);
+                    }
                     let body = a.contents.as_deref().unwrap_or("");
                     if body.is_empty() {
                         let text = egui::RichText::new(tl!(kind_label(a))).italics().color(t.text_faint).font(theme::regular(13.0));

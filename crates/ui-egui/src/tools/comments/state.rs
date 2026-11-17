@@ -203,6 +203,8 @@ pub struct CommentView {
     pub attachment_request: Option<(usize, usize, bool)>,
     /// Replace Text: the struck-out text's quads while the replacement is typed.
     pub replace: Option<Vec<[f64; 8]>>,
+    /// The text those quads cover, kept with the replacement so the proposal shows both.
+    pub replace_original: String,
     /// Attach file: where the icon goes (page, top-left in user space), for the app to pick a file.
     pub attach_at: Option<(usize, [f64; 2])>,
     pub search_focus: bool,

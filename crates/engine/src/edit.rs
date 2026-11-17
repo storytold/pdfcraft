@@ -229,6 +229,8 @@ pub enum Edit {
         page: usize,
         quads: Vec<[f64; 8]>,
         text: String,
+        /// The struck-out text, shown with the replacement; empty when not known.
+        original: String,
         author: String,
         strike: Style,
         caret: Style,
