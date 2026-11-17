@@ -699,11 +699,22 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     check_limits(doc, &objs, &pages, &mut issue);
     check_spots(doc, &objs, &mut issue);
     check_graphics_states(doc, &mut issue);
-    // One message per kind of problem is enough for repeated ones (as preflight summaries do).
-    let mut out = out.into_inner();
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));
-    out
+    // One message per kind of problem is enough for repeated ones (as preflight summaries do). A
+    // repeated problem is fixable only if every occurrence is: two fonts both named Helvetica
+    // say the same thing, and converting may embed one and not the other.
+    let mut kept: Vec<Issue> = Vec::new();
+    let mut index = std::collections::HashMap::new();
+    for i in out.into_inner() {
+        let key = (i.clause, i.message.clone(), i.page);
+        match index.get(&key).and_then(|&k: &usize| kept.get_mut(k)) {
+            Some(first) => first.fixable &= i.fixable,
+            None => {
+                index.insert(key, kept.len());
+                kept.push(i);
+            }
+        }
+    }
+    kept
 }
 
 /// 6.1.2, 6.1.3 and 6.6: identification and metadata, the file header, the file identifier and
@@ -1524,11 +1535,12 @@ fn embed_standard_fonts(doc: &mut Document) -> Result<Option<String>, pdfcraft_c
     let mut fonts: Vec<ObjRef> = drawing_fonts(doc, &objects(doc)).into_iter().collect();
     fonts.sort_by_key(|r| (r.num, r.generation));
     let mut embedded = Vec::new();
+    let mut programs = embed::Programs::new();
     for r in fonts {
         let font = doc.get(r);
         let Some(plan) = font.as_dict().and_then(|d| embed::plan(doc, d)) else { continue };
         let name = font.as_dict().and_then(|d| d.name(b"BaseFont")).map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_default();
-        embed::embed(doc, r, plan)?;
+        embed::embed(doc, r, plan, &mut programs)?;
         if !embedded.contains(&name) {
             embedded.push(name);
         }

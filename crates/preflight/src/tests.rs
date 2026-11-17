@@ -2544,3 +2544,60 @@ fn convert_removes_usage_rights_and_the_build_number_they_carry() {
     let r = convert(&mut doc, Level::A2b).unwrap();
     assert_eq!(int_issue(&r.remaining), Some(false));
 }
+
+/// Font dictionaries of one face share one embedded program: a generator that writes a
+/// `/Helvetica` per page would otherwise get a copy of the program per page.
+#[test]
+fn fonts_of_one_face_share_one_embedded_program() {
+    let content = "BT /F1 12 Tf (a) Tj /F2 12 Tf (b) Tj /F3 12 Tf (c) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let mut doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R >> >> >>",
+            stream.as_str(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>",
+        ],
+        "",
+    );
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.remaining.is_empty(), "{:#?}", r.remaining);
+    let program = |n: u32| {
+        let font = doc.get(ObjRef::new(n, 0)).as_dict().cloned().unwrap();
+        let fd = doc.resolve(font.get(b"FontDescriptor").unwrap()).as_dict().cloned().unwrap();
+        fd.get(b"FontFile3").and_then(Object::as_ref).unwrap()
+    };
+    assert_eq!(program(5), program(6), "both Helveticas point to one program");
+    assert_ne!(program(5), program(7), "Times has its own");
+}
+
+/// Two fonts of one name report one problem, which is fixable only if converting can embed
+/// both: here one names a glyph the substitute lacks, so it stays, whichever comes first.
+#[test]
+fn a_problem_repeated_by_several_fonts_is_fixable_only_if_all_are() {
+    let embeddable = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+    let not = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Differences [65 /uni0416] >> >>";
+    for (first, second) in [(embeddable, not), (not, embeddable)] {
+        let content = "BT /F1 12 Tf (A) Tj /F2 12 Tf (A) Tj ET";
+        let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+        let mut doc = build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+                stream.as_str(),
+                first,
+                second,
+            ],
+            "",
+        );
+        let font = |issues: &[Issue]| -> Vec<bool> {
+            issues.iter().filter(|i| i.message == "The font Helvetica isn't embedded").map(|i| i.fixable).collect()
+        };
+        assert_eq!(font(&verify(&doc, Level::A2b)), [false]);
+        assert_eq!(font(&convert(&mut doc, Level::A2b).unwrap().remaining), [false]);
+    }
+}

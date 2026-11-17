@@ -214,18 +214,25 @@ fn number(v: f64) -> Object {
     if v.fract() == 0.0 && v.abs() < 1e9 { Object::Int(v as i64) } else { Object::Real(v) }
 }
 
-/// Embed `e` into the font dictionary `r`: a `/FontFile3` program, `/Widths` for codes 0–255
-/// from it, and a font descriptor of its own. The descriptor starts from the font's old one, so
-/// a value the document gave (its flags above all, which say how codes are read) stays; one
-/// that describes the program (its name, box and character set) is replaced.
-pub(crate) fn embed(doc: &mut Document, r: ObjRef, embedding: Embedding) -> Result<(), pdfcraft_cos::CosError> {
+/// The `/FontFile3` program streams written so far in one conversion, by face: the font
+/// dictionaries of one face share one (some generators write a `/Helvetica` per page, and
+/// a copy each would grow the file by the program every time).
+pub(crate) type Programs = HashMap<Std14, ObjRef>;
+
+/// Embed `e` into the font dictionary `r`: a `/FontFile3` program (the face's one in `programs`,
+/// written there on first use), `/Widths` for codes 0–255 from it, and a font descriptor of its
+/// own. The descriptor starts from the font's old one, so a value the document gave (its flags
+/// above all, which say how codes are read) stays; one that describes the program (its name,
+/// box and character set) is replaced.
+pub(crate) fn embed(doc: &mut Document, r: ObjRef, embedding: Embedding, programs: &mut Programs) -> Result<(), pdfcraft_cos::CosError> {
     let Embedding { face, widths, metrics: e } = embedding;
-    let program = pdfcraft_render::standard_font_program(face);
     let Object::Dict(mut font) = (*doc.get(r)).clone() else { return Ok(()) };
     let mut fd = font.get(b"FontDescriptor").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap_or_default();
-    let mut file = Dict::new();
-    file.set(b"Subtype".to_vec(), Object::name("Type1C"));
-    let file = doc.add(Object::Stream(Stream::flate(file, &program)));
+    let file = *programs.entry(face).or_insert_with(|| {
+        let mut file = Dict::new();
+        file.set(b"Subtype".to_vec(), Object::name("Type1C"));
+        doc.add(Object::Stream(Stream::flate(file, &pdfcraft_render::standard_font_program(face))))
+    });
     fd.set(b"Type".to_vec(), Object::name("FontDescriptor"));
     if let Some(name) = font.get(b"BaseFont").cloned() {
         fd.set(b"FontName".to_vec(), name);
