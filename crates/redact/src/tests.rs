@@ -875,13 +875,24 @@ fn a_pattern_whose_only_painting_was_redacted_leaves_the_page() {
             .and_then(|r| doc.resolve(r).as_dict().cloned())
             .is_some_and(|res| res.get(b"Pattern").is_some())
     };
+    // An emptied name stays defined (the `scn` that selected it is still in the content), but
+    // by an empty pattern, not the original cell (object 7).
+    let names_the_cell = |doc: &Document| {
+        pdfcraft_model::pages(doc)[0]
+            .dict
+            .get(b"Resources")
+            .and_then(|r| doc.resolve(r).as_dict().cloned())
+            .and_then(|res| res.get(b"Pattern").and_then(|p| doc.resolve(p).as_dict().cloned()))
+            .and_then(|pat| pat.get(b"P0").and_then(Object::as_ref))
+            .is_some_and(|r| r.num == 7)
+    };
 
     // One box, marked: the pattern is no longer painted, so it goes with the fill.
     let mut doc = page_with("/Pattern cs /P0 scn 20 140 100 30 re f");
     mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
     let report = apply(&mut doc, None).unwrap();
     assert_eq!(report.patterns_removed, 1, "the pattern left the page");
-    assert!(!has_pattern(&doc), "the page has no /Pattern left");
+    assert!(has_pattern(&doc) && !names_the_cell(&doc), "the page's /P0 names an empty pattern, not the cell");
     let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
     assert!(!saved.windows(8).any(|w| w == b"(SECRET)"), "the cell's text is gone from the saved file");
 
@@ -916,7 +927,7 @@ fn a_pattern_whose_only_painting_was_redacted_leaves_the_page() {
     let mut doc = one_page(b"/Pattern cs /P0 scn 20 140 100 30 re f", "/Pattern 8 0 R", vec![cell, b"<< /P0 7 0 R >>".to_vec()]);
     mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
     assert_eq!(apply(&mut doc, None).unwrap().patterns_removed, 1, "an indirect /Pattern is resolved before it is pruned");
-    assert!(!has_pattern(&doc), "the page has no /Pattern left");
+    assert!(has_pattern(&doc) && !names_the_cell(&doc), "the page's /P0 names an empty pattern, not the cell");
     let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
     assert!(!saved.windows(8).any(|w| w == b"(SECRET)"), "the cell's text is gone from the saved file");
 }
@@ -940,10 +951,23 @@ fn a_page_whose_pruned_pattern_is_still_selected_renders() {
     mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
     assert_eq!(apply(&mut doc, None).unwrap().patterns_removed, 1, "the pattern is pruned");
 
-    // The state this test is about: the selector outlived the resource it names.
+    // The selector outlived the paint that used it: the name it selects is still defined, by an
+    // empty pattern, so the content names nothing its resources lack (ISO 32000-2 7.8.3).
     let after = content(&doc, 0);
     assert!(after.contains("/P0 scn"), "the selector is still in the content: {after}");
     assert!(!after.contains("20 140 100 30 re"), "the fill that used it is gone: {after}");
+    let page = pdfcraft_model::pages(&doc)[0].dict.clone();
+    let res = doc.resolve(page.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let pat = doc.resolve(res.get(b"Pattern").expect("the page still has its /Pattern")).as_dict().cloned().unwrap();
+    let stand_in = pat.get(b"P0").and_then(Object::as_ref).expect("/P0 is still defined");
+    assert_ne!(stand_in.num, 7, "it no longer names the original cell");
+    match &*doc.get(stand_in) {
+        Object::Stream(s) => {
+            assert_eq!(s.dict.int(b"PatternType"), Some(1));
+            assert!(s.decoded().unwrap().is_empty(), "the stand-in cell draws nothing");
+        }
+        other => panic!("the stand-in is a pattern stream: {other:?}"),
+    }
 
     let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
     assert!(!bytes.windows(8).any(|w| w == b"(SECRET)"), "the cell's text is gone from the saved file");
