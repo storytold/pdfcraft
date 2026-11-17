@@ -185,15 +185,19 @@ pub(crate) fn set_mirror(doc: &mut Document, key: &str, value: &str) -> Result<O
         // which binding applies to it isn't resolved here.
         return Ok(Some(value.is_empty() && before.is_empty()));
     }
-    let changed = edit_packet(doc, |xmp| if value.is_empty() { remove_all(xmp, &[name]) } else { set_property(xmp, name, ns, shape, value) })?;
-    if !value.is_empty() {
-        // Written, or refused with the packet as it was.
-        return Ok(Some(changed));
-    }
-    // A clear holds only when the packet now has no copy of the property, as an element or an
-    // attribute: one this couldn't take out (an element that never ends) refuses it.
-    let after = if changed { packet(doc).map(|(_, _, xmp)| held(&xmp)) } else { Some(before) };
-    Ok(Some(after.is_some_and(|left| left.is_empty())))
+    let changed = edit_packet(doc, |xmp| {
+        if value.is_empty() {
+            // A clear is committed only when the edited packet holds no copy of the property, as an
+            // element or an attribute: one this couldn't take out (an element that never ends)
+            // refuses the whole clear, leaving any copy it could take out where it was.
+            remove_all(xmp, &[name]).filter(|removed| held(removed).is_empty())
+        } else {
+            set_property(xmp, name, ns, shape, value)
+        }
+    })?;
+    // Written, or cleared; or refused with the packet as it was, which a clear of a property
+    // that was never there still counts as done.
+    Ok(Some(changed || (value.is_empty() && before.is_empty())))
 }
 
 /// Record in the catalog's XMP packet that the document was changed at `date` (an XMP date):
