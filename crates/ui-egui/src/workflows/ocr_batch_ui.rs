@@ -111,6 +111,11 @@ impl OcrBatchDraft {
     }
 }
 
+/// What stays outside the scrolling body: the dialog title, the action row and the window's own
+/// chrome. Same shape as the Recognize Text dialog's reserve (#6599).
+const BATCH_DIALOG_RESERVE: f32 = 200.0;
+const BATCH_MIN_SCROLL: f32 = 40.0;
+
 /// The dialog. Returns (start, cancel).
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let title = crate::i18n::menu_label("ocr.recognize_batch", "Recognize text in multiple files…");
@@ -120,13 +125,29 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     // The non-blocking status: drawing must not wait for an external probe. The worker checks again.
     let unavailable = pdfcraft_engine::ocr::engine_unavailable_reason(app.ocr_draft.engine);
     let available = unavailable.is_none();
-    card(ui, t, None, |ui| inputs(ui, app, t));
-    card(ui, t, Some(tl!("Output folder")), |ui| output(ui, app, t));
-    card(ui, t, Some(tl!("Settings")), |ui| crate::ocr_ui::settings_fields_with(ui, &mut app.ocr_draft, false));
-    if let Some(reason) = &unavailable {
-        hint(ui, t, reason);
-        ui.add_space(6.0);
-    }
+    // The cards scroll between the title and the action row. Only the input list scrolled on its
+    // own, so in a short window or at a large display scale an unbounded body pushed the
+    // "Recognize text" and "Cancel" row below the dialog's edge, where nothing reached it.
+    // Sized from the window rather than fixed, as the Recognize Text dialog does (#6599): a
+    // fixed height is exactly what runs off a window shorter than it.
+    let max = (ui.ctx().content_rect().height() - BATCH_DIALOG_RESERVE).max(BATCH_MIN_SCROLL);
+    egui::ScrollArea::vertical()
+        .id_salt("ocr-batch-body")
+        .max_height(max)
+        // Only applies when the cards overflow: the dialog then opens at its full height instead
+        // of growing frame by frame.
+        .min_scrolled_height(max)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            card(ui, t, None, |ui| inputs(ui, app, t));
+            card(ui, t, Some(tl!("Output folder")), |ui| output(ui, app, t));
+            card(ui, t, Some(tl!("Settings")), |ui| crate::ocr_ui::settings_fields_with(ui, &mut app.ocr_draft, false));
+            if let Some(reason) = &unavailable {
+                hint(ui, t, reason);
+                ui.add_space(6.0);
+            }
+        });
+    ui.add_space(8.0);
     let ready = available && app.ocr_batch_draft.shown_ready() && app.ocr_batch.is_none();
     let (mut go, mut cancel) = (false, false);
     ui.horizontal(|ui| {
