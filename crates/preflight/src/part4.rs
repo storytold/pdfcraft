@@ -115,9 +115,9 @@ pub(crate) fn annotation(doc: &Document, dict: &Dict, subtype: Option<&[u8]>, na
 /// How many `/Parent` links [`field_type`] follows.
 const MAX_FIELD_DEPTH: usize = 32;
 
-/// The field type (`/FT`) of the widget `dict`: its own, or inherited from its parents (ISO 32000-2
-/// 12.7.4.1, Table 226).
-fn field_type(doc: &Document, dict: &Dict) -> Option<Vec<u8>> {
+/// The field type (`/FT`) of the widget or field `dict`: its own, or inherited from its parents (ISO
+/// 32000-2 12.7.4.1, Table 226).
+pub(crate) fn field_type(doc: &Document, dict: &Dict) -> Option<Vec<u8>> {
     let mut current = dict.clone();
     for _ in 0..MAX_FIELD_DEPTH {
         if let Some(ft) = current.get(b"FT").map(|f| doc.resolve(f)) {

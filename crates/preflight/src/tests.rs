@@ -2912,3 +2912,26 @@ fn widget_and_field_actions_are_reported_clause_6_4_1() {
         convert(&mut converted, Level::A2b).unwrap().remaining.into_iter().filter(|i| i.clause == "6.4.1").map(|i| i.message).collect();
     assert_eq!(left, ["A widget annotation has an action (A)", "A form field has an action (A)"]);
 }
+
+/// A field that inherits its field type from its parent is a field for 6.4.1 too, and Save as
+/// PDF/A takes its additional actions away; a page, whose parent is no field, isn't one.
+#[test]
+fn a_field_that_inherits_its_type_is_checked_for_actions() {
+    let uri = "<< /S /URI /URI (https://example.com) >>";
+    let mut doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            &format!("<< /Type /Page /Parent 2 0 R /Annots [6 0 R] /AA << /O {uri} >> >>"),
+            "<< /FT /Tx /T (address) /Kids [5 0 R] >>",
+            &format!("<< /Parent 4 0 R /T (street) /Kids [6 0 R] /AA << /K {uri} >> >>"),
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [0 0 20 20] /F 4 >>",
+        ],
+        "",
+    );
+    let fields = |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.4.1").map(|i| i.message).collect() };
+    assert_eq!(fields(&doc), ["A form field has additional actions"]);
+    convert(&mut doc, Level::A2b).unwrap();
+    assert!(fields(&doc).is_empty());
+    assert!(doc.get(ObjRef::new(5, 0)).as_dict().is_some_and(|d| d.get(b"AA").is_none()));
+}

@@ -1871,12 +1871,14 @@ fn check_one_object(
         return;
     }
     // 6.4.1: a form field has neither an action nor additional actions in PDF/A-2 and 3. PDF/A-4
-    // lets it have additional actions. A field merged with its widget is checked as the widget.
-    if dict.get(b"FT").is_some() && !is_annot && level.part() != 4 {
-        if entry(doc, dict, b"AA") {
+    // lets it have additional actions. A field merged with its widget is checked as the widget. A
+    // field is known by its field type, its own or one it inherits.
+    let (aa, a) = (entry(doc, dict, b"AA"), entry(doc, dict, b"A"));
+    if (aa || a) && !is_annot && level.part() != 4 && part4::field_type(doc, dict).is_some() {
+        if aa {
             issue("6.4.1", "A form field has additional actions", None, None, true);
         }
-        if entry(doc, dict, b"A") {
+        if a {
             issue("6.4.1", "A form field has an action (A)", None, None, false);
         }
     }
@@ -2434,7 +2436,9 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
             removed += 1;
             continue;
         }
-        if matches!(&*o, Object::Dict(_)) && (is_annot || d.get(b"FT").is_some()) {
+        // A field is known by its field type, its own or one it inherits; only its actions change.
+        let field = || (d.get(b"AA").is_some() || d.get(b"A").is_some()) && part4::field_type(doc, &d).is_some();
+        if matches!(&*o, Object::Dict(_)) && (is_annot || field()) {
             let mut nd = d.clone();
             if fix_annot_or_field(doc, &mut nd, is_annot, sub.as_deref(), &mut actions, &mut flags) {
                 doc.set_existing(r, Object::Dict(nd))?;
