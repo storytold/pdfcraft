@@ -502,8 +502,36 @@ fn insert_description(xmp: &str, name: &str, ns: &str, element: &str) -> Option<
     Some(out)
 }
 
-/// Where the element `name` is in `xmp`, from its `<` to past its end tag (or past `/>`).
+/// `xmp` with its comments, CDATA sections and processing instructions blanked out, each byte a
+/// space, so that a search finds only the markup they don't hold, at the same offsets. A `<` can
+/// only start markup in a well-formed packet (XML 1.0 2.4), so each one starts a tag or one of
+/// these; one that is never closed is blanked to the end.
+fn markup_only(xmp: &str) -> String {
+    const HIDDEN: [(&str, &str); 3] = [("<!--", "-->"), ("<![CDATA[", "]]>"), ("<?", "?>")];
+    let mut out = xmp.as_bytes().to_vec();
+    let mut at = 0;
+    while let Some(i) = xmp.get(at..).and_then(|s| s.find('<')).map(|i| i + at) {
+        let rest = xmp.get(i..).unwrap_or_default();
+        let Some((open, close)) = HIDDEN.into_iter().find(|(open, _)| rest.starts_with(open)) else {
+            at = i + 1;
+            continue;
+        };
+        let end = rest.get(open.len()..).and_then(|r| r.find(close)).map_or(xmp.len(), |e| i + open.len() + e + close.len());
+        for b in out.get_mut(i..end).into_iter().flatten() {
+            *b = b' ';
+        }
+        at = end;
+    }
+    // Each blanked run starts at `<` and ends after an ASCII delimiter or at the end, so only whole
+    // characters were replaced; were it otherwise, nothing would be found rather than a wrong span.
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// Where the element `name` is in `xmp`, from its `<` to past its end tag (or past `/>`). One in a
+/// comment, a CDATA section or a processing instruction isn't an element, nor is an end tag there.
 fn element_span(xmp: &str, name: &str) -> Option<(usize, usize)> {
+    let masked = markup_only(xmp);
+    let xmp = masked.as_str();
     let open = format!("<{name}");
     let mut from = 0;
     while let Some(i) = xmp.get(from..).and_then(|s| s.find(&open)).map(|i| i + from) {
@@ -527,8 +555,11 @@ fn element_span(xmp: &str, name: &str) -> Option<(usize, usize)> {
 }
 
 /// Where the attribute `name` is in `xmp`: its start (including the whitespace before it), the
-/// start and end of its value, and its quote character. Only matches inside a start tag.
+/// start and end of its value, and its quote character. Only matches inside a start tag, not one
+/// written in a comment, a CDATA section or a processing instruction.
 fn attribute_span(xmp: &str, name: &str) -> Option<(usize, usize, usize, char)> {
+    let masked = markup_only(xmp);
+    let xmp = masked.as_str();
     let mut from = 0;
     // Track tag and quote state in one pass rather than searching back from every match.
     let (mut scanned, mut in_tag, mut quote) = (0, false, None);
@@ -741,6 +772,39 @@ mod tests {
         assert!(!other_prefix("<a xmp:ModifyDate='1'/>", "ModifyDate"));
         for hostile in ["<", "<a", "<a b=", "<a b='", "<!--", "<![CDATA[", "<a\u{e9}=\"\u{e9}", "<a =x>", "<a b c='1'/>"] {
             let _ = names(hostile);
+        }
+    }
+
+    /// A comment, a CDATA section or a processing instruction that holds a property's markup is left
+    /// as it is, and the property itself is what changes.
+    #[test]
+    fn markup_in_comments_is_not_edited() {
+        let real = "<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">Real</rdf:li></rdf:Alt></dc:title>";
+        for hidden in
+            ["<!-- <dc:title>Old</dc:title> -->", "<!-- <dc:title> -->", "<![CDATA[<dc:title>Old</dc:title>]]>", "<?note <dc:title>Old</dc:title>?>"]
+        {
+            let packet = PACKET.replace("<dc:title>", &format!("{hidden}<dc:title>"));
+            let packet = packet.replace("Untitled 1", "Real");
+            assert!(packet.contains(real), "{packet}");
+            let out = set_property(&packet, "dc:title", DC, Shape::LangAlt, "New").unwrap();
+            assert!(out.contains(hidden), "{hidden}: {out}");
+            assert!(out.contains("<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">New</rdf:li></rdf:Alt></dc:title>"), "{hidden}: {out}");
+            assert!(!out.contains("Real"), "{hidden}: {out}");
+            assert_eq!(get_property(&packet, "dc:title", Shape::LangAlt).as_deref(), Some("Real"), "{hidden}");
+            // Removed, the property goes and the comment stays.
+            let out = set_property(&packet, "dc:title", DC, Shape::LangAlt, "").unwrap();
+            assert!(out.contains(hidden) && !out.contains("Real"), "{hidden}: {out}");
+        }
+        // An attribute written in a comment isn't the property either.
+        let packet =
+            "<rdf:RDF xmlns:rdf=\"r\"><!-- <rdf:Description pdf:Keywords=\"c\"/> --><rdf:Description rdf:about=\"\" pdf:Keywords=\"k\"/></rdf:RDF>";
+        let out = set_property(packet, "pdf:Keywords", PDF, Shape::Text, "n").unwrap();
+        assert_eq!(out, packet.replace("pdf:Keywords=\"k\"", "pdf:Keywords=\"n\""));
+        // Unclosed, it hides the rest; hostile input doesn't panic.
+        assert_eq!(element_span("<!-- <dc:title>a</dc:title>", "dc:title"), None);
+        for hostile in ["<", "<!", "<!-", "<!--", "<?", "<![CDATA[", "\u{e9}<!--\u{e9}", "<!---->", "<??>"] {
+            let _ = markup_only(hostile);
+            let _ = element_span(hostile, "dc:title");
         }
     }
 
