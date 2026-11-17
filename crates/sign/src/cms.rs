@@ -413,6 +413,7 @@ pub fn attach_timestamp_token(cms: &[u8], token: &[u8]) -> Result<Vec<u8>, SignE
     let wrapped_new = der::explicit(0, &new_sd);
     Ok(der::seq(&[&der::oid(SIGNED_DATA), &wrapped_new]))
 }
+#[cfg(test)]
 fn attribute(o: &str, value: &[u8]) -> Vec<u8> {
     der::seq(&[&der::oid(o), &der::set_of(&[value])])
 }
@@ -456,29 +457,23 @@ struct SignedDataInput<'a> {
 }
 
 fn build(input: SignedDataInput<'_>) -> Result<Vec<u8>, SignError> {
+    use craft_pkcs7::cms::{SigningCertificate, SigningInput};
     let SignedDataInput { key, cert, chain, alg, content_type, content, content_digest } = input;
-    let cert_hash = DigestAlg::Sha256.digest(&[&cert.raw]);
-    let general_names = der::seq(&[&der::explicit(4, &cert.issuer.raw)]);
-    let serial = der::tlv(tag::INTEGER, if cert.serial.is_empty() { &[0] } else { &cert.serial });
-    let ess = der::seq(&[&der::seq(&[&der::seq(&[&der::octets(&cert_hash), &der::seq(&[&general_names, &serial])])])]);
-    let attrs =
-        [attribute(CONTENT_TYPE, &der::oid(content_type)), attribute(MESSAGE_DIGEST, &der::octets(content_digest)), attribute(SIGNING_CERT_V2, &ess)];
-    let refs: Vec<&[u8]> = attrs.iter().map(Vec::as_slice).collect();
-    let set = der::set_of(&refs);
-    let signature = key.sign(alg, &set)?;
-    let mut signed_attrs = set.clone();
-    signed_attrs[0] = tag::ctx(0);
-    let sid = der::seq(&[&cert.issuer.raw, &serial]);
-    let signer = der::seq(&[&der::int(1), &sid, &alg.algorithm(), &signed_attrs, &key.signature_algorithm(alg), &der::octets(&signature)]);
-    let mut certs: Vec<&[u8]> = vec![&cert.raw];
-    certs.extend(chain.iter().filter(|c| c.raw != cert.raw).map(|c| c.raw.as_slice()));
-    let encap = match content {
-        Some(c) => der::seq(&[&der::oid(content_type), &der::explicit(0, &der::octets(c))]),
-        None => der::seq(&[&der::oid(content_type)]),
-    };
-    let signed_data =
-        der::seq(&[&der::int(1), &der::set_of(&[&alg.algorithm()]), &encap, &der::tlv(tag::ctx(0), &certs.concat()), &der::set_of(&[&signer])]);
-    Ok(der::seq(&[&der::oid(SIGNED_DATA), &der::explicit(0, &signed_data)]))
+    let chain: Vec<&[u8]> = chain.iter().map(|c| c.raw.as_slice()).collect();
+    // Keep the app's platform/keychain provider and error intact. Only the public certificate
+    // material and exact signed-attribute bytes cross the shared writer boundary.
+    craft_pkcs7::cms::sign_with(
+        SigningInput {
+            cert: SigningCertificate { der: &cert.raw, issuer_der: &cert.issuer.raw, serial: &cert.serial },
+            chain: &chain,
+            alg: crate::keys::shared_digest(alg),
+            content_type,
+            content,
+            content_digest,
+            signature_algorithm: &key.signature_algorithm(alg),
+        },
+        |attrs| key.sign(alg, attrs),
+    )
 }
 
 #[cfg(test)]

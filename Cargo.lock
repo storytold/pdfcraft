@@ -1350,7 +1350,7 @@ dependencies = [
 [[package]]
 name = "craft-pkcs7"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=2284a6bf76b3d629b5e5bb2ca71e1c319d8dae5f#2284a6bf76b3d629b5e5bb2ca71e1c319d8dae5f"
+source = "git+https://github.com/storytold/craft-libs?rev=6344f3e42e8a4a5304e4c760314e92f7bc195aa2#6344f3e42e8a4a5304e4c760314e92f7bc195aa2"
 dependencies = [
  "aes",
  "aws-lc-rs",
