@@ -256,12 +256,12 @@ fn other_prefixes(x: &str) -> Vec<&'static str> {
 
 /// The rules for the document as a whole: the information dictionary, the catalog's version and
 /// entries, the metadata stream, the output intents and the end of the file.
-pub(crate) fn document(doc: &Document, catalog: &Dict, issue: &mut Report<'_>) {
+pub(crate) fn document(doc: &Document, catalog: &Dict, profiles: &mut Profiles, issue: &mut Report<'_>) {
     information(doc, catalog, issue);
     catalog_version(doc, catalog, issue);
     catalog_entries(doc, catalog, issue);
     metadata_stream(catalog, doc, issue);
-    output_intents(doc, catalog, None, issue);
+    output_intents(doc, catalog, None, profiles, issue);
     end_of_file(doc, issue);
 }
 
@@ -333,11 +333,11 @@ fn catalog_entries(doc: &Document, catalog: &Dict, issue: &mut Report<'_>) {
 
 /// 6.11 and 6.2.3: a page has no presentation steps (`/PresSteps`), and its own output intents
 /// follow the rules of the catalog's.
-pub(crate) fn page(doc: &Document, page: &Dict, index: usize, issue: &mut Report<'_>) {
+pub(crate) fn page(doc: &Document, page: &Dict, index: usize, profiles: &mut Profiles, issue: &mut Report<'_>) {
     if page.get(b"PresSteps").is_some() {
         issue("6.11", "A page has presentation steps (PresSteps)", None, Some(index), false);
     }
-    output_intents(doc, page, Some(index), issue);
+    output_intents(doc, page, Some(index), profiles, issue);
 }
 
 /// How many optional content configurations [`optional_content_names`] reads.
@@ -420,13 +420,25 @@ fn packet(bytes: &[u8], object: Option<pdfcraft_cos::ObjRef>, issue: &mut Report
     }
     if let Some(start) = text.find("<?xpacket")
         && let Some(header) = text.get(start..).and_then(|rest| rest.find("?>").and_then(|end| rest.get(..end)))
-        && (header.contains(" bytes=") || header.contains(" encoding="))
+        && (declares_pseudo_attribute(header, "bytes") || declares_pseudo_attribute(header, "encoding"))
     {
         match named {
             Some(o) => issue("6.7.2.1", "The XMP packet header in metadata stream {} has a bytes or encoding attribute", Some(o), None, false),
             None => issue("6.7.2.1", "The XMP packet header has a bytes or encoding attribute", None, None, false),
         }
     }
+}
+
+/// Whether the `xpacket` processing instruction `header` gives the pseudo-attribute `name`: the
+/// name after white space, then `=` after any white space, as XML 1.0 2.3 (`S`, `Eq`) lets an
+/// attribute be written: a header (ISO 16684-1 7.3.2) can space them however it likes.
+fn declares_pseudo_attribute(header: &str, name: &str) -> bool {
+    let white = |c: char| matches!(c, ' ' | '\t' | '\r' | '\n');
+    header.match_indices(name).any(|(at, _)| {
+        let before = header.get(..at).and_then(|h| h.chars().next_back()).is_some_and(white);
+        let after = header.get(at.saturating_add(name.len())..).is_some_and(|rest| rest.trim_start_matches(white).starts_with('='));
+        before && after
+    })
 }
 
 /// The most of all component metadata streams [`component_metadata`] decodes, together.
@@ -475,12 +487,61 @@ const MAX_ICC_HEADER_READ: usize = 16 << 20;
 /// How many output intents [`output_intents`] reads.
 const MAX_INTENTS: usize = 4096;
 
+/// What the start of an ICC profile stream holds, as [`Profiles`] reads it.
+#[derive(Clone)]
+enum ProfileHeader {
+    /// The first 20 bytes of the profile (fewer when it is shorter): its header's device class and
+    /// data colour space are bytes 12 to 19 (ICC.1 7.2.5 and 7.2.6).
+    Read(Vec<u8>),
+    /// Larger than [`MAX_ICC_HEADER_READ`] decoded: not read, and no fault of its data.
+    TooLarge,
+    /// Data that can't be decoded.
+    Broken,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many ICC profile streams [`Profiles::header`] has decoded.
+    pub(crate) static PROFILE_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The ICC profile headers read so far, by profile object: a profile that many output intents,
+/// pages or transparency groups name is decoded once.
+#[derive(Default)]
+pub(crate) struct Profiles(std::collections::HashMap<pdfcraft_cos::ObjRef, ProfileHeader>);
+
+impl Profiles {
+    /// The header of the profile `profile`, a reference or a stream written in place; `None` when
+    /// it is no stream.
+    fn header(&mut self, doc: &Document, profile: &Object) -> Option<ProfileHeader> {
+        let at = profile.as_ref();
+        if let Some(known) = at.and_then(|r| self.0.get(&r)) {
+            return Some(known.clone());
+        }
+        let resolved = doc.resolve(profile);
+        let Object::Stream(s) = &*resolved else { return None };
+        #[cfg(test)]
+        PROFILE_DECODES.with(|n| n.set(n.get().saturating_add(1)));
+        let header = match s.decoded_within(MAX_ICC_HEADER_READ) {
+            Ok(data) => ProfileHeader::Read(data.get(..20).unwrap_or(&data).to_vec()),
+            Err(e) if over_limit(&e) => ProfileHeader::TooLarge,
+            Err(_) => ProfileHeader::Broken,
+        };
+        if let Some(r) = at {
+            self.0.insert(r, header.clone());
+        }
+        Some(header)
+    }
+}
+
 /// 6.2.3: in the output intents of `holder`, the catalog or the page `page` (ISO 32000-2 14.11.5
 /// lets both have them), none names an external profile (`/DestOutputProfileRef`, Table 401), all
 /// that have a `/DestOutputProfile` share one profile object, and the PDF/A one's profile is an
 /// output (`prtr`) or monitor (`mntr`) profile of gray, RGB or CMYK (the ICC header's device class
-/// and data colour space, ICC.1 7.2.5 and 7.2.6).
-fn output_intents(doc: &Document, holder: &Dict, page: Option<usize>, issue: &mut Report<'_>) {
+/// and data colour space, ICC.1 7.2.5 and 7.2.6). A profile stream that can't be decoded is none of
+/// those; one too large to read the header of within [`MAX_ICC_HEADER_READ`] is left alone, and a
+/// profile that is no stream at all is taken as missing.
+fn output_intents(doc: &Document, holder: &Dict, page: Option<usize>, headers: &mut Profiles, issue: &mut Report<'_>) {
     let Some(list) = holder.get(b"OutputIntents").map(|o| doc.resolve(o)) else { return };
     let Some(list) = list.as_array() else { return };
     let mut profiles = std::collections::HashSet::new();
@@ -489,12 +550,12 @@ fn output_intents(doc: &Document, holder: &Dict, page: Option<usize>, issue: &mu
         let intent = doc.resolve(intent);
         let Some(intent) = intent.as_dict() else { continue };
         external |= intent.get(b"DestOutputProfileRef").is_some();
-        if intent.name(b"S") == Some(b"GTS_PDFA1")
-            && let Some(profile) = intent.get(b"DestOutputProfile").map(|p| doc.resolve(p))
-            && let Object::Stream(profile) = &*profile
-            && let Ok(header) = profile.decoded_within(MAX_ICC_HEADER_READ)
-            && !(matches!(header.get(12..16), Some(b"prtr" | b"mntr")) && matches!(header.get(16..20), Some(b"GRAY" | b"RGB " | b"CMYK")))
-        {
+        let header = match intent.get(b"DestOutputProfile") {
+            Some(profile) if intent.name(b"S") == Some(b"GTS_PDFA1") => headers.header(doc, profile),
+            _ => None,
+        };
+        let fits = |h: &[u8]| matches!(h.get(12..16), Some(b"prtr" | b"mntr")) && matches!(h.get(16..20), Some(b"GRAY" | b"RGB " | b"CMYK"));
+        if matches!(&header, Some(ProfileHeader::Broken)) || matches!(&header, Some(ProfileHeader::Read(h)) if !fits(h.as_slice())) {
             issue("6.2.3", "The PDF/A output intent's profile isn't an output or monitor profile of gray, RGB or CMYK", None, page, false);
         }
         match intent.get(b"DestOutputProfile") {
@@ -638,51 +699,61 @@ fn is_mime_type(name: &[u8]) -> bool {
     matches!((parts.next(), parts.next(), parts.next()), (Some(t), Some(s), None) if !t.is_empty() && !s.is_empty())
 }
 
-/// 6.2.4.3: the device colour space that every page's transparency group makes device-independent
-/// for PDF/A-4, as the number of its components: 3 for DeviceRGB, 4 for DeviceCMYK.
-///
-/// PDF/A-4 accepts DeviceRGB or DeviceCMYK where the current transparency blending space is a
-/// device-independent RGB- or CMYK-based one. A page's group colour space (`/Group /CS`, ISO
-/// 32000-2 11.4.7 and Table 145) is the blending space of everything painted on the page, and a
-/// device space of as many components inside it is taken as that space (11.7.2). Device colour is
-/// judged for the document as a whole here, so the allowance holds only when every page has a
-/// transparency group with a CalRGB or an ICCBased RGB space (3), or with an ICCBased CMYK one (4),
-/// the same number for all of them. A form XObject's own group is [`group_blending_components`].
-pub(crate) fn page_blending_components(doc: &Document, pages: &[pdfcraft_model::Page]) -> Option<i64> {
-    let mut found = None;
-    for p in pages {
-        let group = p.dict.get(b"Group").map(|g| doc.resolve(g));
-        let group = group.as_deref().and_then(Object::as_dict).filter(|g| g.name(b"S") == Some(b"Transparency"))?;
-        let n = cie_components(doc, group.get(b"CS")?)?;
-        if found.is_some_and(|f| f != n) {
-            return None;
-        }
-        found = Some(n);
-    }
-    found
+/// Where device colour is drawn, for 6.2.4.3: the PDF/A output intent that applies there (`None`
+/// when none does, `Some(None)` when one does whose components aren't known, else their number) and
+/// the components of the transparency blending space there when it is a device-independent RGB (3)
+/// or CMYK (4) one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct Place {
+    pub(crate) intent: Option<Option<i64>>,
+    pub(crate) blend: Option<i64>,
 }
 
-/// How far [`group_blending_components`] follows references back towards a page, and how deep it
-/// reads into one object's direct objects for the references it holds.
+/// The place a page's content is drawn in: the page's own PDF/A output intent or else the
+/// document's `document` (ISO 32000-2 14.11.5), and the page's transparency group colour space
+/// (`/Group /CS`, 11.4.7 and Table 145), the blending space of everything painted on the page.
+pub(crate) fn page_place(doc: &Document, page: &Dict, document: Option<Option<i64>>, profiles: &mut Profiles) -> Place {
+    let group = page.get(b"Group").map(|g| doc.resolve(g));
+    let group = group.as_deref().and_then(Object::as_dict).filter(|g| g.name(b"S") == Some(b"Transparency"));
+    let blend = group.and_then(|g| g.get(b"CS")).and_then(|cs| cie_components(doc, cs, profiles));
+    Place { intent: plain_intent(crate::pdfa_intent_profile_in(doc, page).or(document)), blend }
+}
+
+/// The output intent `intent` as 6.2.4.3 tells intents apart: none, an RGB (3) or a CMYK (4) one,
+/// or one of another or an unknown number of components (`Some(None)`). A file can't make more
+/// places than that out of the numbers its profiles give.
+pub(crate) fn plain_intent(intent: Option<Option<i64>>) -> Option<Option<i64>> {
+    intent.map(|n| n.filter(|n| matches!(n, 3 | 4)))
+}
+
+/// How far [`colour_places`] reads into one object's direct objects for the references it holds.
 const MAX_GROUP_DEPTH: usize = 32;
 
-/// 6.2.4.3: the objects whose device colour an isolated transparency group of their own makes
-/// device-independent for PDF/A-4, each with the components of that group's space (3 or 4), by
-/// object number.
+/// An indirect object as [`colour_places`] takes and groups them.
+type Indirect = (pdfcraft_cos::ObjRef, std::sync::Arc<Object>);
+
+/// The objects of `objs` grouped by the places they are drawn in, each group with its places, for
+/// 6.2.4.3: PDF/A-4 judges device colour against the output intent and the blending space where it
+/// is used.
 ///
-/// An isolated transparency group XObject (`/I true`) with a group colour space (`/CS`) composites
-/// everything painted inside it in that space, and a device space of as many components is taken
-/// as it (ISO 32000-2 11.4.7, Table 145 `/CS`, 11.6.6 and Annex P). That holds for the form's own
-/// content and resources, and for anything they alone refer to: an object belongs to a group's
-/// space when every object referring to it does, and anything else referring to it (a page, an
-/// annotation, a structure element) leaves it out. A non-isolated group, or one without `/CS`,
-/// takes its parent's space, so it is judged by what refers to it in the same way; an isolated
-/// group whose `/CS` isn't a device-independent RGB or CMYK space covers nothing inside it.
-pub(crate) fn group_blending_components(
+/// The content of the page `pages[i]`, and what it refers to, is drawn at `page_places[i]`. An
+/// isolated transparency group XObject (`/I true`) with a group colour space (`/CS`) composites
+/// what is painted inside it in that space (ISO 32000-2 11.4.7, Table 145 `/CS`, 11.6.6 and Annex
+/// P), so what it refers to is drawn where it is, but in that blending space: a device-independent
+/// RGB or CMYK one, or one that allows no device colour. A non-isolated group, or one without
+/// `/CS`, blends in its parent's. What no page leads to (the catalog, its form fields and structure
+/// tree, an object nothing refers to) is drawn at `elsewhere`. A reference back up (`/Parent`, `/P`)
+/// leads nowhere: it draws nothing.
+pub(crate) fn colour_places(
     doc: &Document,
-    objs: &[(pdfcraft_cos::ObjRef, std::sync::Arc<Object>)],
-) -> std::collections::HashMap<u32, i64> {
-    use std::collections::{HashMap, HashSet};
+    objs: &[Indirect],
+    pages: &[pdfcraft_model::Page],
+    page_places: &[Place],
+    elsewhere: Place,
+    profiles: &mut Profiles,
+) -> Vec<(Vec<Place>, Vec<Indirect>)> {
+    use std::collections::HashMap;
+    // The blending space of each isolated group with a colour space of its own, by object number.
     let mut own: HashMap<u32, Option<i64>> = HashMap::new();
     for (r, o) in objs {
         let Object::Stream(s) = &**o else { continue };
@@ -694,94 +765,134 @@ pub(crate) fn group_blending_components(
         if matches!(group.get(b"I").map(|i| doc.resolve(i)).as_deref(), Some(Object::Bool(true)))
             && let Some(cs) = group.get(b"CS")
         {
-            own.insert(r.num, cie_components(doc, cs));
+            own.insert(r.num, cie_components(doc, cs, profiles));
         }
     }
-    if !own.values().any(Option::is_some) {
-        return HashMap::new();
+    // Every object drawn in the one place: nothing to tell apart.
+    if page_places.iter().all(|p| *p == elsewhere) && own.values().all(|blend| *blend == elsewhere.blend) {
+        return vec![(vec![elsewhere], objs.to_vec())];
     }
-    // Who refers to each object.
-    let mut referrers: HashMap<u32, Vec<u32>> = HashMap::new();
-    for (r, o) in objs {
-        let mut found = HashSet::new();
-        let mut stack: Vec<(&Object, usize)> = match &**o {
-            Object::Stream(s) => s.dict.iter().map(|(_, x)| (x, 1)).collect(),
-            other => vec![(other, 0)],
+    let page_at: HashMap<u32, Place> = pages.iter().zip(page_places).map(|(p, place)| (p.obj.num, *place)).collect();
+    let (refers, referred) = references(objs);
+    // The places go down the references from the pages and from what nothing refers to. An object
+    // gains each place at most once, and there are few places, so the walk is linear in the
+    // references.
+    let mut places: Vec<Vec<Place>> = vec![Vec::new(); objs.len()];
+    let mut work = Vec::new();
+    for (i, (r, _)) in objs.iter().enumerate() {
+        let start = match page_at.get(&r.num) {
+            Some(place) => Some(*place),
+            None if !referred.get(i).copied().unwrap_or(true) => Some(elsewhere),
+            None => None,
         };
+        if let (Some(place), Some(list)) = (start, places.get_mut(i)) {
+            list.push(place);
+            work.push(i);
+        }
+    }
+    let mut first_pass = true;
+    loop {
+        while let Some(i) = work.pop() {
+            let from = places.get(i).cloned().unwrap_or_default();
+            for &j in refers.get(i).map(Vec::as_slice).unwrap_or_default() {
+                let Some((target, _)) = objs.get(j) else { continue };
+                // A page is drawn in its own place only.
+                if page_at.contains_key(&target.num) {
+                    continue;
+                }
+                let blend = own.get(&target.num).copied();
+                let Some(list) = places.get_mut(j) else { continue };
+                let mut grew = false;
+                for place in &from {
+                    let place = Place { blend: blend.unwrap_or(place.blend), ..*place };
+                    if !list.contains(&place) {
+                        list.push(place);
+                        grew = true;
+                    }
+                }
+                if grew {
+                    work.push(j);
+                }
+            }
+        }
+        if !first_pass {
+            break;
+        }
+        // What only a cycle of objects that nothing else refers to leads to is drawn elsewhere.
+        first_pass = false;
+        for (i, list) in places.iter_mut().enumerate() {
+            if list.is_empty() {
+                list.push(elsewhere);
+                work.push(i);
+            }
+        }
+    }
+    let mut groups: HashMap<Vec<Place>, Vec<Indirect>> = HashMap::new();
+    for (object, mut list) in objs.iter().zip(places) {
+        list.sort_unstable();
+        groups.entry(list).or_default().push(object.clone());
+    }
+    let mut groups: Vec<_> = groups.into_iter().collect();
+    groups.sort_by(|a, b| a.0.cmp(&b.0));
+    groups
+}
+
+/// What each of `objs` refers to, as positions in `objs`, and whether anything refers to it. A
+/// reference back up (`/Parent`, `/P`) isn't counted.
+fn references(objs: &[Indirect]) -> (Vec<Vec<usize>>, Vec<bool>) {
+    use std::collections::{HashMap, HashSet};
+    let index: HashMap<u32, usize> = objs.iter().enumerate().map(|(i, (r, _))| (r.num, i)).collect();
+    let mut refers: Vec<Vec<usize>> = vec![Vec::new(); objs.len()];
+    let mut referred = vec![false; objs.len()];
+    for (i, (r, o)) in objs.iter().enumerate() {
+        let top = match &**o {
+            Object::Stream(s) => &s.dict,
+            Object::Dict(d) => d,
+            _ => continue,
+        };
+        let mut found = HashSet::new();
+        let mut stack: Vec<(&Object, usize)> = top.iter().filter(|(k, _)| !matches!(k.as_slice(), b"Parent" | b"P")).map(|(_, v)| (v, 1)).collect();
         while let Some((v, depth)) = stack.pop() {
             match v {
                 Object::Ref(t) if t.num != r.num => {
-                    found.insert(t.num);
+                    if let Some(&j) = index.get(&t.num) {
+                        found.insert(j);
+                    }
                 }
                 Object::Array(a) if depth < MAX_GROUP_DEPTH => stack.extend(a.iter().map(|x| (x, depth + 1))),
                 Object::Dict(d) if depth < MAX_GROUP_DEPTH => stack.extend(d.iter().map(|(_, x)| (x, depth + 1))),
                 _ => {}
             }
         }
-        for t in found {
-            referrers.entry(t).or_default().push(r.num);
-        }
-    }
-    let mut known: HashMap<u32, Option<i64>> = HashMap::new();
-    let mut out = HashMap::new();
-    for (r, _) in objs {
-        let mut open = HashSet::new();
-        if let Some(n) = covered_by_group(r.num, 0, &own, &referrers, &mut known, &mut open) {
-            out.insert(r.num, n);
-        }
-    }
-    out
-}
-
-/// The components of the group space object `num` is painted in, when it is always the same
-/// device-independent RGB or CMYK one: see [`group_blending_components`]. `open` holds the objects
-/// being worked out further up, which a cycle back to them leaves uncovered.
-fn covered_by_group(
-    num: u32,
-    depth: usize,
-    own: &std::collections::HashMap<u32, Option<i64>>,
-    referrers: &std::collections::HashMap<u32, Vec<u32>>,
-    known: &mut std::collections::HashMap<u32, Option<i64>>,
-    open: &mut std::collections::HashSet<u32>,
-) -> Option<i64> {
-    if let Some(n) = own.get(&num) {
-        return *n;
-    }
-    if let Some(n) = known.get(&num) {
-        return *n;
-    }
-    if depth >= MAX_GROUP_DEPTH || !open.insert(num) {
-        return None;
-    }
-    let mut found = None;
-    for &p in referrers.get(&num).map(Vec::as_slice).unwrap_or_default() {
-        match covered_by_group(p, depth + 1, own, referrers, known, open) {
-            Some(n) if found.is_none_or(|f| f == n) => found = Some(n),
-            _ => {
-                found = None;
-                break;
+        for &j in &found {
+            if let Some(flag) = referred.get_mut(j) {
+                *flag = true;
             }
         }
+        if let Some(list) = refers.get_mut(i) {
+            list.extend(found);
+        }
     }
-    open.remove(&num);
-    known.insert(num, found);
-    found
+    (refers, referred)
 }
 
 /// The components of `cs` when it is a device-independent RGB-based (3) or CMYK-based (4) colour
 /// space a transparency group may blend in (ISO 32000-2 11.3.4): CalRGB, or an ICCBased space
 /// whose profile header says `RGB ` or `CMYK` (ICC.1 7.2.6). Lab and the ICC spaces that hold
 /// lightness and chromaticity apart may not be blending spaces, and CalGray covers no RGB or CMYK.
-fn cie_components(doc: &Document, cs: &Object) -> Option<i64> {
+fn cie_components(doc: &Document, cs: &Object, profiles: &mut Profiles) -> Option<i64> {
     let cs = doc.resolve(cs);
     let a = cs.as_array()?;
     match doc.resolve(a.first()?).as_name()? {
         b"CalRGB" => Some(3),
         b"ICCBased" => {
-            let profile = doc.resolve(a.get(1)?);
-            let Object::Stream(s) = &*profile else { return None };
-            let header = s.decoded_within(MAX_ICC_HEADER_READ).ok()?;
-            match (s.dict.int(b"N")?, header.get(16..20)?) {
+            let profile = a.get(1)?;
+            let n = match &*doc.resolve(profile) {
+                Object::Stream(s) => s.dict.int(b"N")?,
+                _ => return None,
+            };
+            let Some(ProfileHeader::Read(header)) = profiles.header(doc, profile) else { return None };
+            match (n, header.get(16..20)?) {
                 (3, b"RGB ") => Some(3),
                 (4, b"CMYK") => Some(4),
                 _ => None,
