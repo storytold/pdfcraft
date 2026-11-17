@@ -1,0 +1,6 @@
+Label = "AI assistant"
+Button "Close" [off]
+Label = "Asistente de IA (optativo)"
+Label = "Resume el PDF abierto y responde preguntas sobre él con Ollama local, Claude Code, Codex o un proveedor OpenAI compatible elegido por usted. Cada respuesta indica las páginas de donde sale y si el texto es extraído u OCR; sólo se muestran citas verificadas contra el texto."
+Label = "Ollama puede procesar localmente. Claude Code, Codex y una API externa envían texto al proveedor: requieren autorización por sesión. No se descargan modelos ni se inicia sesión automáticamente."
+Button "Activar asistente"

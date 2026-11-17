@@ -164,7 +164,7 @@ fn check(h: &Harness<'static, PdfCraftApp>, name: &str) -> Result<(), String> {
 }
 
 /// Every panel, in the order of the rail.
-const ALL: [RightPanel; 11] = [
+const ALL: [RightPanel; 12] = [
     RightPanel::Comments,
     RightPanel::Bookmarks,
     RightPanel::Pages,
@@ -176,6 +176,7 @@ const ALL: [RightPanel; 11] = [
     RightPanel::Tags,
     RightPanel::Search,
     RightPanel::Compare,
+    RightPanel::Assistant,
 ];
 
 /// Opens `p` with something in it and names its snapshot. No wildcard on purpose: a new
@@ -190,6 +191,7 @@ fn open(p: RightPanel) -> (Harness<'static, PdfCraftApp>, &'static str) {
         RightPanel::Attachments => "attachments",
         RightPanel::Signatures => "signatures",
         RightPanel::Tags => "tags",
+        RightPanel::Assistant => "assistant",
         RightPanel::Accessibility => {
             let mut h = harness("none");
             assert!(h.state_mut().execute("a11y.check"));
@@ -258,4 +260,11 @@ fn every_panel_matches_its_snapshot() {
 "
         )
     );
+}
+
+#[test]
+fn assistant_panel_starts_disabled_without_a_network_request() {
+    let (h, name) = open(RightPanel::Assistant);
+    assert_eq!(h.state().right, Some(RightPanel::Assistant));
+    check(&h, name).unwrap();
 }

@@ -1,0 +1,23 @@
+[package]
+name = "pdfcraft-assistant"
+description = "Optional document assistant: summaries and questions over the open PDF with a local model, page-cited and verified"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+pdfcraft-cos = { workspace = true }
+pdfcraft-content = { workspace = true }
+pdfcraft-model = { workspace = true }
+pdfcraft-render = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+# Plain HTTP to the local model server (and, only when the person chooses one, an external one).
+# Already in the tree through craft-libs' font store, with the same features.
+ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "_ring", "gzip", "platform-verifier"] }

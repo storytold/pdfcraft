@@ -55,6 +55,8 @@ unicode-bidi = "0.3"
 skrifa = "0.44"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The optional local document assistant (View ▸ Side panels ▸ Assistant).
+pdfcraft-assistant = { path = "../assistant", version = "0.21.0" }
 craft-update = { workspace = true }
 # Control-channel tokens.
 getrandom = "0.4"
