@@ -651,8 +651,9 @@ fn inline_images(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], max:
             match budget.decode(s) {
                 Ok(part) => {
                     data.extend_from_slice(&part);
-                    // Whitespace between parts, as between any two tokens.
-                    data.push(b'\n');
+                    // A space between parts, as between any two tokens, and as the content
+                    // library joins them: a comment that a part ends in goes on into the next.
+                    data.push(b' ');
                 }
                 Err(_) => found.incomplete = true,
             }

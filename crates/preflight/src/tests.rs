@@ -2417,6 +2417,17 @@ fn an_inline_image_split_across_content_parts_is_read_whole() {
         second.as_str(),
     ];
     assert_eq!(interpolation_said(&build(&objs, "")), ["An inline image asks to be interpolated"]);
+    // A comment that ends a part without an end-of-line marker goes on into the next part: the
+    // image there is commented out.
+    let (first, second) = (stream("q %"), stream("BI /W 1 /H 1 /CS /G /BPC 8 /I true ID x EI\nQ"));
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] >>",
+        first.as_str(),
+        second.as_str(),
+    ];
+    assert!(interpolation_said(&build(&objs, "")).is_empty());
 }
 
 /// Content that cannot be read may hold an interpolated inline image: the report says it was not
