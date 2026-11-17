@@ -2071,6 +2071,174 @@ fn a_form_not_read_counts_the_current_font_in_mode_3() {
     assert_eq!(found("", alone), ["The font Helvetica isn't embedded"]);
 }
 
+/// A page that draws thousands of images listed in one `/XObject` dictionary written in its
+/// resources (PDFBOX-5530 has two pages of some 25,000 each) has that dictionary looked up once for
+/// its content, not once per `Do`: copying it at each one took minutes. The fonts are still found.
+#[test]
+fn a_page_drawing_many_images_looks_up_its_xobjects_once() {
+    const IMAGES: usize = 3000;
+    let names: String = (0..IMAGES).map(|i| format!("/Im{i} 5 0 R ")).collect();
+    let content: String = (0..IMAGES).map(|i| format!("/Im{i} Do\n")).collect::<String>() + "BT /F1 10 Tf (x) Tj ET";
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 6 0 R >> /XObject << {names}>> >> >>"),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len() + 1),
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream"
+            .to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+    ];
+    let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+    let doc = build(&objects, "");
+    XOBJECT_LOOKUPS.with(|n| n.set(0));
+    let fonts: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect();
+    assert_eq!(fonts, ["The font Helvetica isn't embedded"]);
+    // One content stream read (the page's), whatever the number of `Do`s in it.
+    let lookups = XOBJECT_LOOKUPS.with(std::cell::Cell::get);
+    assert!(lookups <= 2, "the /XObject dictionary was looked up {lookups} times");
+}
+
+/// The fonts verify finds unembedded at `level` in the document of `objects` (numbered from 1).
+fn unembedded(objects: &[String], level: Level) -> Vec<String> {
+    let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+    let doc = build(&objects, "");
+    let clause = if level.part() == 4 { "6.2.10.4.1" } else { "6.2.11.4" };
+    let mut found: Vec<String> = verify(&doc, level).into_iter().filter(|i| i.clause == clause).map(|i| i.message).collect();
+    found.sort();
+    found
+}
+
+/// A field appearance without resources of its own that selects a font by name draws with the
+/// font the interactive form's default resources (`/AcroForm /DR`) give that name, which a reader
+/// falls back on: it counts as drawing.
+#[test]
+fn a_font_an_appearance_without_resources_takes_from_the_form_defaults_draws() {
+    let file = |appearance: &str| {
+        vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DR << /Font << /Helv 6 0 R >> >> >> >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] /Resources << >> >>".to_owned(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (f) /Rect [0 0 20 20] /F 4 /P 3 0 R /AP << /N 5 0 R >> >>".to_owned(),
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length {} >>\nstream\n{appearance}\nendstream", appearance.len() + 1),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        ]
+    };
+    for level in [Level::A2b, Level::A4] {
+        assert_eq!(unembedded(&file("BT /Helv 10 Tf 2 2 Td (x) Tj ET"), level), ["The font Helvetica isn't embedded"], "{level:?}");
+        // Named, but no text shown with it.
+        assert_eq!(unembedded(&file("BT /Helv 10 Tf ET"), level), Vec::<String>::new(), "{level:?}");
+    }
+}
+
+/// A tiling pattern paints its cell in the graphics state its parent content starts with (ISO
+/// 32000-2 8.7.3.1): text it shows without a `Tf` of its own is in the font the form listing it
+/// was drawn with.
+#[test]
+fn a_tiling_pattern_shows_text_in_the_font_its_form_was_drawn_with() {
+    let file = |page: &str, cell: &str| {
+        vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 6 0 R >> /XObject << /X 5 0 R >> >> >>".to_owned(),
+            format!("<< /Length {} >>\nstream\n{page}\nendstream", page.len() + 1),
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Resources << /Pattern << /P1 7 0 R >> >> /Length 34 >>\nstream\n/Pattern cs /P1 scn 0 0 20 20 re f\nendstream".to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            format!(
+                "<< /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >> /Length {} >>\nstream\n{cell}\nendstream",
+                cell.len() + 1
+            ),
+        ]
+    };
+    let shows = "BT 0 0 Td (x) Tj ET";
+    for level in [Level::A2b, Level::A4] {
+        assert_eq!(unembedded(&file("BT /F1 10 Tf ET /X Do", shows), level), ["The font Helvetica isn't embedded"], "{level:?}");
+        // The form drawn before any font is selected, or the pattern's text in mode 3 as the
+        // form was drawn: nothing shows with Helvetica.
+        assert_eq!(unembedded(&file("/X Do BT /F1 10 Tf ET", shows), level), Vec::<String>::new(), "{level:?}");
+        assert_eq!(unembedded(&file("BT /F1 10 Tf 3 Tr ET /X Do", shows), level), Vec::<String>::new(), "{level:?}");
+        assert_eq!(unembedded(&file("BT /F1 10 Tf 3 Tr ET /X Do", "BT 0 Tr (x) Tj ET"), level), ["The font Helvetica isn't embedded"], "{level:?}");
+    }
+}
+
+/// An ICC profile that many output intents, on the catalog and on every page, name is decoded
+/// once: each decoding can cost up to 16 MB of inflating.
+#[test]
+fn a_profile_many_output_intents_name_is_decoded_once() {
+    const PAGES: usize = 50;
+    let intent = "<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (x) /DestOutputProfile 3 0 R >>";
+    let intents = format!("/OutputIntents [{}]", vec![intent; 20].join(" "));
+    let profile = icc::srgb();
+    let mut out = b"%PDF-2.0\n%\xE2\xE3\xCF\xD3\n".to_vec();
+    let mut offsets = Vec::new();
+    let mut object = |out: &mut Vec<u8>, body: &[u8]| {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", offsets.len()).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    };
+    let kids: String = (0..PAGES).map(|i| format!("{} 0 R ", i + 4)).collect();
+    object(&mut out, format!("<< /Type /Catalog /Pages 2 0 R {intents} >>").as_bytes());
+    object(&mut out, format!("<< /Type /Pages /Kids [{kids}] /Count {PAGES} /MediaBox [0 0 200 200] >>").as_bytes());
+    let mut stream = format!("<< /N 3 /Length {} >>\nstream\n", profile.len()).into_bytes();
+    stream.extend_from_slice(&profile);
+    stream.extend_from_slice(b"\nendstream");
+    object(&mut out, &stream);
+    for _ in 0..PAGES {
+        object(&mut out, format!("<< /Type /Page /Parent 2 0 R /Resources << >> {intents} >>").as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
+    for o in &offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1).as_bytes());
+    let doc = Document::open(std::sync::Arc::new(out)).unwrap();
+    part4::PROFILE_DECODES.with(|n| n.set(0));
+    let found = verify(&doc, Level::A4);
+    assert!(!found.iter().any(|i| i.clause == "6.2.3"), "{found:#?}");
+    assert_eq!(part4::PROFILE_DECODES.with(std::cell::Cell::get), 1);
+}
+
+/// However many output intents of different components the pages have, an object they all draw is
+/// drawn in a bounded number of places: the work of placing it doesn't grow with the pages.
+#[test]
+fn pages_with_intents_of_many_component_counts_make_few_places() {
+    const PAGES: usize = 200;
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        format!(
+            "<< /Type /Pages /Kids [{}] /Count {PAGES} /MediaBox [0 0 200 200] >>",
+            (0..PAGES).map(|i| format!("{} 0 R ", i + 5)).collect::<String>()
+        ),
+        "<< /Length 21 >>\nstream\n1 0 0 rg 0 0 1 1 re f\nendstream".to_owned(),
+        "<< /N 1 /Length 1 >>\nstream\nx\nendstream".to_owned(),
+    ];
+    // Page `i` is object 5 + i, and its profile, of 5 + i components, object 5 + PAGES + i.
+    for i in 0..PAGES {
+        objects.push(format!(
+            "<< /Type /Page /Parent 2 0 R /Contents 3 0 R /OutputIntents [<< /S /GTS_PDFA1 /DestOutputProfile {} 0 R >>] >>",
+            i + 5 + PAGES
+        ));
+    }
+    for i in 0..PAGES {
+        objects.push(format!(
+            "<< /N {} /Length 1 >>
+stream
+x
+endstream",
+            i + 5
+        ));
+    }
+    let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+    let doc = build(&objects, "");
+    let pages = pdfcraft_model::pages(&doc);
+    let mut profiles = part4::Profiles::default();
+    let places: Vec<part4::Place> = pages.iter().map(|p| part4::page_place(&doc, &p.dict, None, &mut profiles)).collect();
+    let elsewhere = part4::Place { intent: None, blend: None };
+    let groups = part4::colour_places(&doc, &super::objects(&doc), &pages, &places, elsewhere, &mut profiles);
+    assert!(groups.iter().all(|(places, _)| places.len() <= 12), "{:?}", groups.iter().map(|(p, _)| p.len()).collect::<Vec<_>>());
+}
+
 /// PDF/A-2 6.1.2: the file starts with `%PDF-1.0` to `%PDF-1.7` and an end-of-line marker, then a
 /// comment of `%` and four bytes above 127; Save as PDF/A rewrites a header that doesn't.
 #[test]

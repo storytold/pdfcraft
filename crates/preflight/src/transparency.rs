@@ -73,7 +73,7 @@ pub(crate) struct Shared(HashMap<ObjRef, Painting>);
 
 /// An object read in place, or the object a reference names as the document holds it: either way
 /// nothing is copied.
-enum Held<'o> {
+pub(crate) enum Held<'o> {
     Direct(&'o Object),
     Resolved(Arc<Object>),
 }
@@ -91,7 +91,7 @@ impl std::ops::Deref for Held<'_> {
 
 /// `o`, or the object it refers to, without copying either ([`Document::resolve`] copies a direct
 /// object).
-fn held<'o>(doc: &Document, o: &'o Object) -> Held<'o> {
+pub(crate) fn held<'o>(doc: &Document, o: &'o Object) -> Held<'o> {
     match o {
         Object::Ref(_) => Held::Resolved(doc.resolve(o)),
         o => Held::Direct(o),
