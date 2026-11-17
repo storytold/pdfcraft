@@ -13,7 +13,7 @@
 
 use std::collections::HashSet;
 
-use pdfcraft_cos::{Document, ImageBudget, ObjRef, Object, Stream};
+use pdfcraft_cos::{Dict, Document, ImageBudget, ObjRef, Object, Stream};
 
 use crate::OptimizeError;
 use crate::images::{MAX_PIXELS, allowance, components, effective_resolutions, is_dct, jpeg, pixels, resample};
@@ -58,6 +58,10 @@ pub fn downsample_page_images(doc: &mut Document, pages: &[ObjRef], target_ppi: 
     // The measure above reads page content and the forms it draws, not annotations: an image an
     // appearance stream draws as well may have to stay finer than the page alone says.
     let (annotated, too_deep) = annotation_images(doc, &all);
+    // Nor what a tiling pattern paints where a fill or stroke selects it (`scn`/`SCN`): there its
+    // own matrix and tiling set the size, and an image measured fine on the page alone would be
+    // made too coarse for the pattern.
+    let (patterned, pattern_too_deep) = pattern_images(doc);
     // Masks belong to their image and are kept as they are, also when the image they belong to is
     // drawn on a page that is not selected: a premultiplied mask has to keep that image's size.
     let masks: HashSet<ObjRef> = everywhere
@@ -92,6 +96,14 @@ pub fn downsample_page_images(doc: &mut Document, pages: &[ObjRef], target_ppi: 
         }
         if too_deep {
             report.skipped.push(format!("{name}: an annotation's appearance nests forms deeper than can be followed, so it may draw it"));
+            continue;
+        }
+        if patterned.contains(&r) {
+            report.skipped.push(format!("{name}: a tiling pattern draws it, at a size that wasn't measured"));
+            continue;
+        }
+        if pattern_too_deep {
+            report.skipped.push(format!("{name}: a tiling pattern nests forms deeper than can be followed, so it may draw it"));
             continue;
         }
         match resampled(doc, s, ppi, target_ppi, &mut budget) {
@@ -154,6 +166,26 @@ fn annotation_images(doc: &Document, pages: &[ObjRef]) -> (HashSet<ObjRef>, bool
     (images, too_deep)
 }
 
+/// The images the tiling patterns (`/PatternType 1`) of the document draw, directly or through
+/// the forms they draw. Every tiling pattern counts, selected anywhere or nowhere: which fill or
+/// stroke selects which pattern, from page content, a form, an appearance or a glyph, isn't
+/// followed, and leaving an image alone is the safe side. A pattern object that can't be read
+/// draws nothing in any reader either. The flag says that a pattern nests forms deeper than the
+/// walk follows, as for [`annotation_images`].
+fn pattern_images(doc: &Document) -> (HashSet<ObjRef>, bool) {
+    let mut images = HashSet::new();
+    let mut too_deep = false;
+    let mut seen = HashSet::new();
+    for (_, obj) in doc.scan_objects() {
+        let Object::Stream(pattern) = &*obj else { continue };
+        if pattern.dict.get(b"PatternType").and_then(|t| doc.resolve(t).as_int()) != Some(1) {
+            continue;
+        }
+        resources_images(doc, &pattern.dict, 0, &mut seen, &mut images, &mut too_deep);
+    }
+    (images, too_deep)
+}
+
 /// The images form `r` draws, and those of the forms it draws, into `images`. A form met before
 /// is not read again, and `depth` is bounded: a cycle or a deep nest ends the walk.
 fn forms_images(doc: &Document, r: ObjRef, depth: usize, seen: &mut HashSet<ObjRef>, images: &mut HashSet<ObjRef>, too_deep: &mut bool) {
@@ -165,7 +197,13 @@ fn forms_images(doc: &Document, r: ObjRef, depth: usize, seen: &mut HashSet<ObjR
         return;
     }
     let Object::Stream(form) = &*doc.get(r) else { return };
-    let Some(xobjects) = form.dict.get(b"Resources").map(|res| doc.resolve(res)).and_then(|res| res.as_dict().cloned()) else { return };
+    resources_images(doc, &form.dict, depth, seen, images, too_deep);
+}
+
+/// The images and forms in the `/XObject` resources of the stream whose dictionary is `dict` (a
+/// form's or a pattern's), as [`forms_images`] collects them.
+fn resources_images(doc: &Document, dict: &Dict, depth: usize, seen: &mut HashSet<ObjRef>, images: &mut HashSet<ObjRef>, too_deep: &mut bool) {
+    let Some(xobjects) = dict.get(b"Resources").map(|res| doc.resolve(res)).and_then(|res| res.as_dict().cloned()) else { return };
     let Some(xobjects) = xobjects.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()) else { return };
     for (_, entry) in xobjects.iter() {
         let Some(child) = entry.as_ref() else { continue };

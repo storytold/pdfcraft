@@ -356,3 +356,95 @@ fn a_mask_of_an_image_on_an_unselected_page_keeps_its_size() {
     assert_eq!(r.resampled, 0, "{r:?}");
     assert_eq!(stream(&doc, mask).raw, before.raw, "the mask is as it was");
 }
+
+/// A tiling pattern (`/PatternType 1`) whose cell draws `xobjects` with `content`, as the page's
+/// `/P0` pattern resource.
+fn tile(doc: &mut Document, page: ObjRef, xobjects: &[(&str, ObjRef)], content: &str) -> ObjRef {
+    let mut x = Dict::new();
+    for (n, r) in xobjects {
+        x.set(n.as_bytes().to_vec(), Object::Ref(*r));
+    }
+    let mut res = Dict::new();
+    res.set(b"XObject".to_vec(), Object::Dict(x));
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("Pattern"));
+    d.set(b"PatternType".to_vec(), Object::Int(1));
+    d.set(b"PaintType".to_vec(), Object::Int(1));
+    d.set(b"TilingType".to_vec(), Object::Int(1));
+    d.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 288.into(), 288.into()]));
+    d.set(b"XStep".to_vec(), Object::Int(288));
+    d.set(b"YStep".to_vec(), Object::Int(288));
+    d.set(b"Resources".to_vec(), Object::Dict(res));
+    let pattern = doc.add(Object::Stream(Stream::from_raw(d, content.as_bytes().to_vec())));
+    doc.update_dict(page, |p| {
+        let mut res = p.get(b"Resources").and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+        let mut patterns = Dict::new();
+        patterns.set(b"P0".to_vec(), Object::Ref(pattern));
+        res.set(b"Pattern".to_vec(), Object::Dict(patterns));
+        p.set(b"Resources".to_vec(), Object::Dict(res));
+    })
+    .unwrap();
+    pattern
+}
+
+/// The page walk measures `Do`, not what a tiling pattern paints where a fill selects it
+/// (`/Pattern cs /P0 scn`), with its own matrix and tiling. A scan drawn at 600 ppi on the page
+/// and again, larger (300 ppi), in a pattern's cell would be made too coarse for the pattern if
+/// only the page were measured, so it is left alone and the report says why, also when the cell
+/// reaches the image through a form (#5126 review).
+#[test]
+fn an_image_a_tiling_pattern_draws_is_left_alone() {
+    for shape in ["direct", "through a form"] {
+        let mut doc = Document::new_empty();
+        let img = jpeg_image(&mut doc, 1200, 1200, 3, |_| {});
+        let p = page(&mut doc, &[("Im0", img)], "q 144 0 0 144 36 36 cm /Im0 Do Q q /Pattern cs /P0 scn 36 36 288 288 re f Q");
+        match shape {
+            "direct" => tile(&mut doc, p, &[("Im0", img)], "q 288 0 0 288 0 0 cm /Im0 Do Q"),
+            _ => {
+                let inner = form(&mut doc, &[("Im0", img)], "q 288 0 0 288 0 0 cm /Im0 Do Q");
+                tile(&mut doc, p, &[("Fm0", inner)], "/Fm0 Do")
+            }
+        };
+        let before = stream(&doc, img);
+
+        let r = downsample_page_images(&mut doc, &[p], 300.0).unwrap();
+        assert_eq!((r.images, r.resampled), (1, 0), "{shape}: {r:?}");
+        assert!(r.skipped.iter().any(|why| why.contains("tiling pattern")), "{shape}: {:?}", r.skipped);
+        assert_eq!(stream(&doc, img).raw, before.raw, "{shape}: the image is as it was");
+    }
+}
+
+/// Only what a pattern draws is held back: another image on the same page, which no pattern
+/// draws, is still resampled.
+#[test]
+fn an_image_no_pattern_draws_is_still_resampled_beside_one() {
+    let mut doc = Document::new_empty();
+    let held = jpeg_image(&mut doc, 1200, 1200, 3, |_| {});
+    let free = jpeg_image(&mut doc, 1200, 1200, 3, |_| {});
+    let p = page(&mut doc, &[("Im0", held), ("Im1", free)], "q 144 0 0 144 36 36 cm /Im0 Do Q q 144 0 0 144 324 36 cm /Im1 Do Q");
+    tile(&mut doc, p, &[("Im0", held)], "q 288 0 0 288 0 0 cm /Im0 Do Q");
+
+    let r = downsample_page_images(&mut doc, &[p], 300.0).unwrap();
+    assert_eq!((r.images, r.resampled), (2, 1), "{r:?}");
+    assert_eq!(r.skipped.len(), 1, "{:?}", r.skipped);
+}
+
+/// A pattern that nests forms deeper than the walk follows may draw a page image anywhere below,
+/// so the pass leaves every image alone and says why.
+#[test]
+fn a_pattern_nested_beyond_the_walk_leaves_every_image_alone() {
+    let mut doc = Document::new_empty();
+    let img = jpeg_image(&mut doc, 1200, 1200, 3, |_| {});
+    let p = page(&mut doc, &[("Im0", img)], "q 144 0 0 144 36 36 cm /Im0 Do Q");
+    let mut drawing = form(&mut doc, &[("Im0", img)], "q 288 0 0 288 0 0 cm /Im0 Do Q");
+    for _ in 0..20 {
+        drawing = form(&mut doc, &[("Fm0", drawing)], "/Fm0 Do");
+    }
+    tile(&mut doc, p, &[("Fm0", drawing)], "/Fm0 Do");
+    let before = stream(&doc, img);
+
+    let r = downsample_page_images(&mut doc, &[p], 300.0).unwrap();
+    assert_eq!((r.images, r.resampled), (1, 0), "{r:?}");
+    assert!(r.skipped.iter().any(|why| why.contains("tiling pattern") && why.contains("deeper")), "{:?}", r.skipped);
+    assert_eq!(stream(&doc, img).raw, before.raw);
+}
