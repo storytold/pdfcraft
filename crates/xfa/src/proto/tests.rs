@@ -399,3 +399,28 @@ fn a_som_expression_past_its_length_limit_is_not_followed() {
     assert_eq!(field(&t, "long").common.h, None);
     assert!(close(field(&t, "short").common.h, 2.0 * MM));
 }
+
+#[test]
+fn cached_child_counts_preserve_truncation_and_charge_when_budget_shrinks() {
+    let doc = crate::xml::Document::parse("<root><a/><b/><c/></root>").unwrap();
+    let node = doc.root_element();
+    let mut cache = std::collections::HashMap::new();
+    assert_eq!(super::child_count(node, 1, &mut cache), 2);
+    assert!(cache.is_empty(), "truncated counts are not reusable");
+    assert_eq!(super::child_count(node, 10, &mut cache), 3);
+    assert_eq!(cache.get(&node.id()), Some(&3));
+    for remaining in 0..=5 {
+        assert_eq!(super::child_count(node, remaining, &mut cache), node.children().take(remaining + 1).count());
+    }
+    assert_eq!(super::child_count(node, 10, &mut cache), 3, "a cached use is still charged");
+}
+
+#[test]
+fn child_count_memoization_has_a_fixed_entry_limit() {
+    let doc = crate::xml::Document::parse(&format!("<root>{}</root>", "<a/>".repeat(5_000))).unwrap();
+    let mut cache = std::collections::HashMap::new();
+    for node in doc.root_element().children() {
+        assert_eq!(super::child_count(node, 1, &mut cache), 0);
+    }
+    assert_eq!(cache.len(), 4_096);
+}
