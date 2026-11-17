@@ -2428,6 +2428,20 @@ fn content_streams_use_only_defined_operators_clause_6_2_2() {
 }
 
 #[test]
+fn type3_fonts_a_graphics_state_selects_are_read_clause_6_2_2() {
+    let unknown = ["Content uses the operator UnknownOperator, which ISO 32000 doesn't define"];
+    // `gs` selects a font by reference, as `Tf` does by name (ISO 32000-2 Table 57).
+    let glyph = content("", "1000 0 d0 UnknownOperator");
+    let type3 = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 7 0 R >> /Resources << >> >>";
+    let selects = "/Resources << /ExtGState << /GS 5 0 R >> >>";
+    let gs = "<< /Type /ExtGState /Font [6 0 R 12] >>";
+    assert_eq!(content_findings("", selects, "BT /GS gs (a) Tj ET", &[gs, type3, &glyph]), unknown);
+    // A `/Font` that isn't a `[font size]` array selects nothing.
+    let none = Vec::<String>::new();
+    assert_eq!(content_findings("", selects, "BT /GS gs (a) Tj ET", &["<< /Type /ExtGState /Font 6 0 R >>", type3, &glyph]), none);
+}
+
+#[test]
 fn content_streams_that_name_resources_have_their_own_clause_6_2_2() {
     let none = Vec::<String>::new();
     // Content that refers to resources by name has its own resource dictionary.

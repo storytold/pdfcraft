@@ -15,8 +15,9 @@
 //! number is written wrong (`0.0.75`, `Infinity`), what follows may be the rest of the damage.
 //!
 //! The content read is what the pages draw: their contents, and through them the form XObjects
-//! `Do` paints, the glyph procedures of the Type 3 fonts `Tf` selects, the tiling patterns
-//! `scn`/`SCN` select, and the soft mask groups of the graphics states `gs` sets; and the
+//! `Do` paints, the glyph procedures of the Type 3 fonts `Tf` selects, or the graphics states `gs`
+//! sets select with `/Font` (ISO 32000-2 Table 57), the tiling patterns `scn`/`SCN` select, and the
+//! soft mask groups of the graphics states `gs` sets; and the
 //! appearance streams of the pages' annotations. A form XObject that no content paints isn't
 //! read, as it is never drawn. Names are looked up as readers look them up: in the stream's own
 //! resources, or, when it has none, in those of the content that drew it.
@@ -227,6 +228,11 @@ impl Walk<'_> {
                     let mask = gs.as_deref().and_then(Object::as_dict).and_then(|g| g.get(b"SMask")).map(|m| doc.resolve(m));
                     if let Some(group) = mask.as_deref().and_then(Object::as_dict).and_then(|m| m.get(b"G")) {
                         self.form(group, resources, next);
+                    }
+                    // A graphics state can select a font as `Tf` does, by reference (Table 57).
+                    let font = gs.as_deref().and_then(Object::as_dict).and_then(|g| g.get(b"Font")).map(|f| doc.resolve(f));
+                    if let Some(f) = font.as_deref().and_then(Object::as_array).and_then(|a| a.first()) {
+                        self.type3(f, resources, next);
                     }
                 }
                 _ => {}
