@@ -199,8 +199,15 @@ pub(crate) fn forbidden_trigger(doc: &Document, aa: &Object) -> Option<String> {
 pub(crate) type Report<'a> = dyn FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool) + 'a;
 
 /// 6.7.3: the identification schema names part 4, the 2020 revision and the level's conformance
-/// letter (none for PDF/A-4 itself), and writes `part` and `rev` with the prefix `pdfaid`.
+/// letter (none for PDF/A-4 itself), and writes `part` and `rev` with the prefix `pdfaid`. A packet
+/// that can't be parsed identifies nothing.
 pub(crate) fn identification(x: &str, level: Level, issue: &mut Report<'_>) {
+    // A packet that isn't well-formed XML holds no identification schema (ISO 16684-1 reads none
+    // from it; 6.7.2.1 reports the packet), however its text reads: the file isn't identified.
+    if xmp::parse(x).is_none() {
+        issue("6.7.3", "The metadata doesn't identify the file as {}", Some(level.label().to_owned()), None, false);
+        return;
+    }
     let part = xmp::identifier(x, xmp::PDFA_ID, "part");
     let conformance = xmp::identifier(x, xmp::PDFA_ID, "conformance");
     let wanted = match level {

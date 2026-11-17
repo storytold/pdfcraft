@@ -871,7 +871,7 @@ fn the_catalog_holds_none_of_what_pdfa4_leaves_out() {
 
 #[test]
 fn the_metadata_stream_is_a_well_formed_utf8_packet() {
-    // The identification is still read by its prefix, but the packet's elements aren't closed.
+    // The identification is written, but the packet's elements aren't closed.
     let broken = o("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><pdfaid:part>4</pdfaid:part><pdfaid:rev>2020</pdfaid:rev>");
     reports(&File { packet: broken, ..File::default() }, Level::A4, "6.7.2.1", "isn't well-formed XML");
     let good = packet("4", Some("2020"), None);
@@ -1042,4 +1042,27 @@ fn forms_reached_through_an_alias_or_named_p_are_judged_on_their_page() {
         two("/XObject 10 0 R", "/P Do", vec![o("<< /P 11 0 R >>"), form("1 0 0 0 k 0 0 10 10 re f")]),
         ["DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile"]
     );
+}
+
+/// 6.7.3: a packet that isn't well-formed XML holds no identification schema, so the file isn't
+/// identified as PDF/A-4, whatever the packet's text names. Only that is said of it: its revision
+/// and prefixes aren't read.
+#[test]
+fn a_packet_that_is_not_well_formed_identifies_nothing_clause_6_7_3() {
+    let broken = |conformance: &str| {
+        o(&format!(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">             <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\"><pdfaid:part>4</pdfaid:part>             {conformance}<pdfaid:rev>2020</pdfaid:rev></rdf:Description></rdf:RDF>"
+        ))
+    };
+    for (level, conformance) in
+        [(Level::A4, ""), (Level::A4e, "<pdfaid:conformance>E</pdfaid:conformance>"), (Level::A4f, "<pdfaid:conformance>F</pdfaid:conformance>")]
+    {
+        let file = File { packet: broken(conformance), ..File::default() };
+        reports(&file, level, "6.7.3", &format!("doesn't identify the file as {}", level.label()));
+        let found = issues(&file, level);
+        let identification: Vec<&str> = found.iter().filter(|i| i.clause == "6.7.3").map(|i| i.message.as_str()).collect();
+        assert_eq!(identification.len(), 1, "{level:?}: {found:#?}");
+    }
+    // Well-formed, the same identification passes.
+    passes(&File { packet: packet("4", Some("2020"), None), ..File::default() }, Level::A4);
 }
