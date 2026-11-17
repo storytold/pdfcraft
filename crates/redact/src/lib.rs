@@ -58,6 +58,12 @@ pub enum RedactError {
     NothingToApply,
     #[error("page {0} has content that can't be read, so it can't be redacted safely")]
     Unreadable(usize),
+    /// The page tree and the renderer count a different number of pages (a page repeated in
+    /// `/Kids`, say), so a mark's page can't be matched to the page the renderer drew.
+    #[error(
+        "the document's page tree and its rendered pages disagree on how many pages there are, so the redaction could not be verified; nothing was changed"
+    )]
+    AmbiguousPages,
     /// Redact annotations with no readable area (neither usable `/QuadPoints` nor a usable `/Rect`).
     /// Skipping them would leave the text under them in the file while the others report success.
     #[error(
@@ -75,6 +81,10 @@ pub enum RedactError {
         "page {0} has vertical-writing text while a redaction mark is pending, and PdfCraft cannot tell whether that text lies under the mark yet, so nothing was changed"
     )]
     VerticalText(usize),
+    #[error(
+        "page {0} shows text in a font whose CMap has codespace ranges PdfCraft could not read, so it cannot tell which text a string holds while a redaction mark is pending; nothing was changed"
+    )]
+    DroppedCodespace(usize),
     #[error(
         "redaction appearance has invalid geometry or exceeds the 8 MiB budget; reduce the marked area, turn off repeated text or apply fewer pages at once (nothing was redacted)"
     )]
@@ -849,6 +859,9 @@ fn redact_page_content(
     if out.vertical {
         return Err(RedactError::VerticalText(pi + 1));
     }
+    if out.dropped_codes {
+        return Err(RedactError::DroppedCodespace(pi + 1));
+    }
     // An inline image the renderer reads no image for (no `EI` it accepts, or parameters it
     // can't read): where the page's operators resume after it is a guess, so neither removal
     // nor the verify pass can be trusted on this page. Likewise bytes the parser can't read in
@@ -1135,6 +1148,19 @@ pub fn clear_marks(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize,
         }
     }
     Ok(targets.len())
+}
+
+/// `o` with a chain of references followed, as a viewer follows it, to at most 16 links (so a
+/// reference cycle ends): hidden-layer state must not escape classification through one.
+pub(crate) fn resolve_chain(doc: &pdfcraft_cos::Document, o: &pdfcraft_cos::Object) -> std::sync::Arc<pdfcraft_cos::Object> {
+    let mut o = doc.resolve(o);
+    for _ in 0..16 {
+        if !matches!(*o, pdfcraft_cos::Object::Ref(_)) {
+            break;
+        }
+        o = doc.resolve(&o);
+    }
+    o
 }
 
 /// The name to save a document under after [`apply`]: `_Redacted` before the extension, as

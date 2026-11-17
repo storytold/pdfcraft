@@ -23,8 +23,9 @@
 //! (4.4), and an empty prefix or namespace binds nothing. The human-readable descriptions
 //! (`pdfaSchema:schema` and the `description` entries) are Text and may be empty.
 
+use crate::xmp::NsScope;
+use craft_xml::El;
 use pdfcraft_cos::ObjRef;
-use roxmltree::{Document, Node};
 
 const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const EXTENSION: &str = "http://www.aiim.org/pdfa/ns/extension/";
@@ -103,31 +104,55 @@ struct Place {
 
 impl Findings {
     /// Adds what the packet `doc`, from the metadata stream `object`, breaks.
-    pub(crate) fn add(&mut self, object: ObjRef, doc: &Document<'_>) {
-        let containers = doc.descendants().filter(|n| is(n, EXTENSION, "schemas"));
-        for container in containers {
-            self.prefixes_in(object, doc, &container);
-            let children: Vec<Node<'_, '_>> = container.children().filter(Node::is_element).collect();
-            if !matches!(children.as_slice(), [bag] if is(bag, RDF, "Bag")) && self.room() {
-                let found = children.iter().take(MAX_SHOWN_CHARS).map(|c| written_name(doc, c)).collect::<Vec<_>>().join(", ");
+    pub(crate) fn add(&mut self, object: ObjRef, doc: &El) {
+        fn walk_containers<'a>(el: &'a El, parent: &NsScope<'a>, out: &mut Vec<(&'a El, NsScope<'a>)>) {
+            let scope = parent.child(el);
+            if scope.is(el, EXTENSION, "schemas") {
+                out.push((el, scope.clone()));
+            }
+            for child in el.elements() {
+                walk_containers(child, &scope, out);
+            }
+        }
+        let mut containers = Vec::new();
+        walk_containers(doc, &NsScope::root(), &mut containers);
+        for (container, cscope) in containers {
+            self.prefixes_in(object, container, &cscope);
+            let children: Vec<(&El, NsScope<'_>)> = container.elements().map(|c| (c, cscope.child(c))).collect();
+            if !matches!(children.as_slice(), [(bag, bscope)] if is(bag, bscope, RDF, "Bag")) && self.room() {
+                let found = children.iter().take(MAX_SHOWN_CHARS).map(|(c, _)| c.name.as_str()).collect::<Vec<_>>().join(", ");
                 self.not_bag.push(NotBag { object, found: shown(&found) });
             }
-            for (n, schema) in items(&container).iter().enumerate() {
-                let id = value(schema, SCHEMA, "namespaceURI").unwrap_or_else(|| position(n));
+            for (n, (schema, sscope)) in items(container, &cscope).into_iter().enumerate() {
+                let id = value(schema, &sscope, SCHEMA, "namespaceURI").unwrap_or_else(|| position(n));
                 let at = |item: Option<String>| Place { object, schema: id.clone(), item };
-                self.need(&at(None), schema, SCHEMA, "pdfaSchema", &["schema", "namespaceURI", "prefix"]);
-                let properties = entries(schema, SCHEMA, "property").flat_map(|e| items(&e));
-                for (n, property) in properties.enumerate() {
-                    let name = value(&property, PROPERTY, "name").unwrap_or_else(|| position(n));
-                    self.need(&at(Some(name)), &property, PROPERTY, "pdfaProperty", &["name", "valueType", "category", "description"]);
+                self.need(&at(None), schema, &sscope, SCHEMA, "pdfaSchema", &["schema", "namespaceURI", "prefix"]);
+                let properties = entries(schema, &sscope, SCHEMA, "property").flat_map(|(e, es)| items(e, &es));
+                for (n, (property, pscope)) in properties.enumerate() {
+                    let name = value(property, &pscope, PROPERTY, "name").unwrap_or_else(|| position(n));
+                    self.need(&at(Some(name)), property, &pscope, PROPERTY, "pdfaProperty", &["name", "valueType", "category", "description"]);
                 }
-                let value_types = entries(schema, SCHEMA, "valueType").flat_map(|e| items(&e));
-                for (n, value_type) in value_types.enumerate() {
-                    let name = value(&value_type, TYPE, "type").unwrap_or_else(|| position(n));
-                    self.need(&at(Some(name.clone())), &value_type, TYPE, "pdfaType", &["type", "namespaceURI", "prefix", "description", "field"]);
-                    for (n, field) in entries(&value_type, TYPE, "field").flat_map(|e| items(&e)).enumerate() {
-                        let field_name = value(&field, FIELD, "name").unwrap_or_else(|| position(n));
-                        self.need(&at(Some(format!("{name}/{field_name}"))), &field, FIELD, "pdfaField", &["name", "valueType", "description"]);
+                let value_types = entries(schema, &sscope, SCHEMA, "valueType").flat_map(|(e, es)| items(e, &es));
+                for (n, (value_type, vtscope)) in value_types.enumerate() {
+                    let name = value(value_type, &vtscope, TYPE, "type").unwrap_or_else(|| position(n));
+                    self.need(
+                        &at(Some(name.clone())),
+                        value_type,
+                        &vtscope,
+                        TYPE,
+                        "pdfaType",
+                        &["type", "namespaceURI", "prefix", "description", "field"],
+                    );
+                    for (n, (field, fscope)) in entries(value_type, &vtscope, TYPE, "field").flat_map(|(e, es)| items(e, &es)).enumerate() {
+                        let field_name = value(field, &fscope, FIELD, "name").unwrap_or_else(|| position(n));
+                        self.need(
+                            &at(Some(format!("{name}/{field_name}"))),
+                            field,
+                            &fscope,
+                            FIELD,
+                            "pdfaField",
+                            &["name", "valueType", "description"],
+                        );
                     }
                 }
             }
@@ -141,13 +166,13 @@ impl Findings {
 
     /// Notes the entries of `ns` in `names` that the description `d`, at `at`, lacks, or holds
     /// empty when they are entries that name something (see [`NAMING`]).
-    fn need(&mut self, at: &Place, d: &Node<'_, '_>, ns: &str, prefix: &str, names: &[&str]) {
+    fn need(&mut self, at: &Place, d: &El, scope: &NsScope<'_>, ns: &str, prefix: &str, names: &[&str]) {
         for name in names {
-            let element = entry(d, ns, name);
-            let attribute = d.attribute((ns, *name));
-            let empty = match (element, attribute) {
+            let element = entry(d, scope, ns, name);
+            let attribute = scope.attr(d, ns, name);
+            let empty = match (element.as_ref(), attribute) {
                 (None, None) => false,
-                (Some(e), _) => NAMING.contains(name) && is_empty(&e),
+                (Some((e, es)), _) => NAMING.contains(name) && is_empty(e, es),
                 (None, Some(a)) => NAMING.contains(name) && a.trim().is_empty(),
             };
             if (empty || (element.is_none() && attribute.is_none())) && self.room() {
@@ -160,22 +185,25 @@ impl Findings {
 
     /// Notes container namespaces written in `container` (itself included) with another prefix
     /// than their own.
-    fn prefixes_in(&mut self, object: ObjRef, doc: &Document<'_>, container: &Node<'_, '_>) {
-        let text = doc.input_text();
-        for n in container.descendants().filter(Node::is_element) {
-            let element = (n.tag_name().namespace(), text.get(n.range()).unwrap_or_default().strip_prefix('<').unwrap_or_default());
-            let attributes = n.attributes().map(|a| (a.namespace(), text.get(a.range_qname()).unwrap_or_default()));
+    fn prefixes_in(&mut self, object: ObjRef, container: &El, scope: &NsScope<'_>) {
+        fn walk(findings: &mut Findings, object: ObjRef, n: &El, scope: &NsScope<'_>) {
+            let element = (scope.el_ns(n), n.name.as_str());
+            let attributes = n.attrs.iter().map(|(k, _)| (scope.attr_ns(k), k.as_str()));
             for (ns, qname) in std::iter::once(element).chain(attributes) {
                 let Some(&(namespace, own)) = PREFIXES.iter().find(|(uri, _)| Some(*uri) == ns) else { continue };
                 let written = shown(written_prefix(qname));
                 if written != own
-                    && self.room()
-                    && !self.prefixes.iter().any(|p| p.object == object && p.namespace == namespace && p.written == written)
+                    && findings.room()
+                    && !findings.prefixes.iter().any(|p| p.object == object && p.namespace == namespace && p.written == written)
                 {
-                    self.prefixes.push(Prefix { object, namespace, own, written });
+                    findings.prefixes.push(Prefix { object, namespace, own, written });
                 }
             }
+            for child in n.elements() {
+                walk(findings, object, child, &scope.child(child));
+            }
         }
+        walk(self, object, container, scope);
     }
 }
 
@@ -186,11 +214,14 @@ const NAMING: [&str; 6] = ["namespaceURI", "prefix", "name", "type", "valueType"
 
 /// Whether the element entry `e` holds no value: no element, no text but white space, and no
 /// `rdf:resource` or `rdf:value` attribute with a value.
-fn is_empty(e: &Node<'_, '_>) -> bool {
+fn is_empty(e: &El, scope: &NsScope<'_>) -> bool {
     let blank = |v: Option<&str>| v.is_none_or(|v| v.trim().is_empty());
-    !e.children().any(|c| c.is_element() || (c.is_text() && c.text().is_some_and(|t| !t.trim().is_empty())))
-        && blank(e.attribute((RDF, "resource")))
-        && blank(e.attribute((RDF, "value")))
+    !e.children.iter().any(|c| match c {
+        craft_xml::Node::El(_) => true,
+        craft_xml::Node::Text(t) | craft_xml::Node::CData(t) => !t.trim().is_empty(),
+        _ => false,
+    }) && blank(scope.attr(e, RDF, "resource"))
+        && blank(scope.attr(e, RDF, "value"))
 }
 
 /// `#n` for the 0-based position `n`, counted from 1.
@@ -209,43 +240,66 @@ fn shown(s: &str) -> String {
 
 /// The text of the entry `name` of `ns` in the description `d`, written as an element or an
 /// attribute, trimmed and [`shown`]; `None` when it is absent or blank.
-fn value(d: &Node<'_, '_>, ns: &str, name: &str) -> Option<String> {
-    let text = entry(d, ns, name).and_then(|e| e.text()).or_else(|| d.attribute((ns, name)))?.trim();
+fn value(d: &El, scope: &NsScope<'_>, ns: &str, name: &str) -> Option<String> {
+    let owned;
+    let raw = match entry(d, scope, ns, name) {
+        Some((e, _)) => {
+            owned = e.text();
+            owned.as_ref()
+        }
+        None => scope.attr(d, ns, name)?,
+    };
+    let text = raw.trim();
     (!text.is_empty()).then(|| shown(text))
-}
-
-/// The name of the element `n` as the packet writes it, prefix included.
-fn written_name<'i>(doc: &Document<'i>, n: &Node<'_, '_>) -> &'i str {
-    qualified_name(doc.input_text().get(n.range()).unwrap_or_default().strip_prefix('<').unwrap_or_default())
-}
-
-/// The qualified name the text of a start tag (after its `<`) or of an attribute begins with.
-fn qualified_name(text: &str) -> &str {
-    text.split(|c: char| c.is_whitespace() || c == '>' || c == '/' || c == '=').next().unwrap_or_default()
 }
 
 /// The prefix of the qualified name `text` begins with, empty when it has none.
 fn written_prefix(text: &str) -> &str {
-    qualified_name(text).split_once(':').map_or("", |(p, _)| p)
+    text.split_once(':').map_or("", |(p, _)| p)
 }
 
-fn is(n: &Node<'_, '_>, ns: &str, name: &str) -> bool {
-    n.is_element() && n.tag_name().namespace() == Some(ns) && n.tag_name().name() == name
+fn is(n: &El, scope: &NsScope<'_>, ns: &str, name: &str) -> bool {
+    scope.is(n, ns, name)
 }
 
 /// Every element entry `name` of `ns` in the description `d`: a list written twice is read twice.
-fn entries<'a, 'i>(d: &Node<'a, 'i>, ns: &'a str, name: &'a str) -> impl Iterator<Item = Node<'a, 'i>> {
-    d.children().filter(move |c| is(c, ns, name))
+fn entries<'a>(d: &'a El, scope: &'a NsScope<'a>, ns: &'a str, name: &'a str) -> impl Iterator<Item = (&'a El, NsScope<'a>)> {
+    d.elements().filter_map(move |c| {
+        let cs = scope.child(c);
+        is(c, &cs, ns, name).then_some((c, cs))
+    })
 }
 
 /// The element entry `name` of `ns` in the description `d`.
-fn entry<'a, 'i>(d: &Node<'a, 'i>, ns: &str, name: &str) -> Option<Node<'a, 'i>> {
-    d.children().find(|c| is(c, ns, name))
+fn entry<'a>(d: &'a El, scope: &NsScope<'a>, ns: &str, name: &str) -> Option<(&'a El, NsScope<'a>)> {
+    d.elements().find_map(|c| {
+        let cs = scope.child(c);
+        is(c, &cs, ns, name).then_some((c, cs))
+    })
 }
 
 /// The descriptions in the array `e` holds: each item's `rdf:parseType="Resource"` node or
 /// `rdf:Description`.
-fn items<'a, 'i>(e: &Node<'a, 'i>) -> Vec<Node<'a, 'i>> {
-    let Some(array) = e.children().find(|c| is(c, RDF, "Bag") || is(c, RDF, "Seq") || is(c, RDF, "Alt")) else { return Vec::new() };
-    array.children().filter(|i| is(i, RDF, "li")).map(|li| li.children().find(|c| is(c, RDF, "Description")).unwrap_or(li)).collect()
+fn items<'a>(e: &'a El, scope: &NsScope<'a>) -> Vec<(&'a El, NsScope<'a>)> {
+    let Some((array, ascope)) = e.elements().find_map(|c| {
+        let cs = scope.child(c);
+        (is(c, &cs, RDF, "Bag") || is(c, &cs, RDF, "Seq") || is(c, &cs, RDF, "Alt")).then_some((c, cs))
+    }) else {
+        return Vec::new();
+    };
+    array
+        .elements()
+        .filter_map(|li| {
+            let ls = ascope.child(li);
+            is(li, &ls, RDF, "li").then_some((li, ls))
+        })
+        .map(|(li, ls)| {
+            li.elements()
+                .find_map(|c| {
+                    let cs = ls.child(c);
+                    is(c, &cs, RDF, "Description").then_some((c, cs))
+                })
+                .unwrap_or((li, ls))
+        })
+        .collect()
 }
