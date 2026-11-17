@@ -2896,9 +2896,10 @@ fn streams_use_only_standard_filters_clause_6_1_7_2() {
     for level in [Level::A2b, Level::A3b] {
         assert_eq!(found("/Filter /FlateDecode", level), Vec::<String>::new());
         assert_eq!(found("/Filter [/ASCII85Decode /FlateDecode]", level), Vec::<String>::new());
-        // A name Table 6 doesn't have, the abbreviations of inline images among them.
-        assert_eq!(found("/Filter /Bad", level), ["A stream uses the filter Bad, which ISO 32000-2 doesn't define"]);
-        assert_eq!(found("/Filter [/A85 /FlateDecode]", level), ["A stream uses the filter A85, which ISO 32000-2 doesn't define"]);
+        // A name Table 6 doesn't have, the abbreviations of inline images among them, named
+        // against ISO 32000-1, which PDF/A-2 and 3 are based on.
+        assert_eq!(found("/Filter /Bad", level), ["A stream uses the filter Bad, which ISO 32000-1 doesn't define"]);
+        assert_eq!(found("/Filter [/A85 /FlateDecode]", level), ["A stream uses the filter A85, which ISO 32000-1 doesn't define"]);
         // The Identity crypt filter, named or by default, and another one.
         assert_eq!(found("/Filter /Crypt", level), Vec::<String>::new());
         assert_eq!(found("/Filter [/Crypt] /DecodeParms [<< /Name /Identity >>]", level), Vec::<String>::new());
