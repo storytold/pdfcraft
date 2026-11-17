@@ -629,7 +629,7 @@ mod tests {
         let ttc = list.iter().position(|p| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc"));
         if let Some(i) = sc_otf {
             assert!(
-                ttc.is_none_or(|j| i < j),
+        ttc.is_none_or(|j| i < j),
                 "Simplified Chinese candidates must try NotoSansCJKsc-Regular.otf before NotoSansCJK-Regular.ttc: {list:?}"
             );
         }
