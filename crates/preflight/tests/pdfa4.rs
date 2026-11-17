@@ -1028,6 +1028,8 @@ fn forms_reached_through_an_alias_or_named_p_are_judged_on_their_page() {
     assert_eq!(two("/XObject 10 0 R", "/P Do", vec![o("<< /P 11 0 R >>"), form(rgb)]), none);
     // A name map's /P that is an alias of the form (12 stands for 11).
     assert_eq!(two("/XObject 10 0 R", "/P Do", vec![o("<< /P 12 0 R >>"), form(rgb), o("11 0 R")]), none);
+    // A name map that is itself reached through an alias (10 stands for 12, which names the form /P).
+    assert_eq!(two("/XObject 10 0 R", "/P Do", vec![o("12 0 R"), form(rgb), o("<< /P 11 0 R >>")]), none);
     // A name map's /P that is a dictionary: a shading pattern whose shading paints DeviceRGB.
     let shading = vec![
         o("<< /P 11 0 R >>"),
