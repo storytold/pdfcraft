@@ -3060,9 +3060,9 @@ fn notdef_is_found_in_an_appearance_that_takes_its_font_from_the_form_defaults()
 #[test]
 fn notdef_is_not_judged_with_a_font_a_restore_past_the_kept_saves_may_have_replaced() {
     // `/Good` maps code 0 to a glyph, `/Bad` doesn't; both are embedded.
-    let good = "<< /Type /Font /Subtype /Type1 /BaseFont /Good /Encoding << /Differences [0 /A] >> /FontDescriptor 8 0 R >>";
-    let bad = "<< /Type /Font /Subtype /Type1 /BaseFont /Bad /Encoding /WinAnsiEncoding /FontDescriptor 8 0 R >>";
-    let descriptor = "<< /Type /FontDescriptor /FontName /Good /Flags 32 /FontFile 9 0 R >>";
+    let good = "<< /Type /Font /Subtype /Type1 /BaseFont /Good /Encoding << /Differences [0 /A] >> /FontDescriptor 7 0 R >>";
+    let bad = "<< /Type /Font /Subtype /Type1 /BaseFont /Bad /Encoding /WinAnsiEncoding /FontDescriptor 7 0 R >>";
+    let descriptor = "<< /Type /FontDescriptor /FontName /Good /Flags 32 /FontFile 8 0 R >>";
     let program = "<< /Length 0 >>
 stream
 
@@ -3072,7 +3072,7 @@ stream
 BT <00> Tj ET
 endstream";
     let said = |content: &str| {
-        let resources = "/Font << /F1 5 0 R /F2 6 0 R >> /XObject << /X 10 0 R >>";
+        let resources = "/Font << /F1 5 0 R /F2 6 0 R >> /XObject << /X 9 0 R >>";
         notdef_said(&drawing(content, resources, &[good, bad, descriptor, program, form]), Level::A2b)
     };
     let bad_said = ["Text refers to the .notdef glyph of the font Bad"];
@@ -3081,8 +3081,10 @@ endstream";
     assert_eq!(said("BT /F2 10 Tf <00> Tj ET"), bad_said);
     // The `Q` brings back `/Good`, which the walk didn't keep: `/Bad` isn't the font judged.
     assert!(said(&format!("BT /F1 10 Tf {deep} q /F2 10 Tf Q <00> Tj ET")).is_empty());
-    // Nor in a form drawn from there, before it selects a font of its own.
+    // Nor in a form drawn from there, before it selects a font of its own; drawn with `/Bad`
+    // known, the same form is judged.
     assert!(said(&format!("BT /F1 10 Tf {deep} q /F2 10 Tf Q ET /X Do")).is_empty());
+    assert_eq!(said("BT /F2 10 Tf ET /X Do"), bad_said);
     // A font selected after that `Q` is known again.
     assert_eq!(said(&format!("BT /F1 10 Tf {deep} q Q /F2 10 Tf <00> Tj ET")), bad_said);
     // Within the kept saves the font is still followed.
