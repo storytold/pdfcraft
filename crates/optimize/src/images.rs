@@ -55,6 +55,10 @@ const MAX_FORM_DEPTH: usize = 12;
 /// Walks of a form already walked once (other scale or caller) before the measurement gives up.
 /// Each form's first walk is free: their number is bounded by the file's object count.
 const MAX_REWALKS: usize = 100_000;
+/// Saved graphics states (`q`) open at once whose matrix a content stream's walk keeps. Deeper
+/// saves are only counted, so that each `Q` still closes its own; the matrix one of them would
+/// restore is not kept, so the measurement gives up.
+const MAX_SAVES: usize = 256;
 
 /// State of one [`effective_resolutions`] pass.
 struct Walk<'a> {
@@ -70,7 +74,7 @@ struct Walk<'a> {
     rewalks: usize,
     /// Decoded bytes left for the page being walked.
     budget: DecodeBudget,
-    /// False once a use may have been missed (depth or work limit).
+    /// False once a use may have been missed or mismeasured (depth or work limit).
     complete: bool,
     out: HashMap<ObjRef, f64>,
     /// Images drawn or listed at least once where `/DefaultGray` or `/DefaultRGB` is in force, by
@@ -124,10 +128,19 @@ impl Walk<'_> {
             }
         }
         let mut stack = vec![ctm];
-        for op in pdfcraft_content::parse(data).ops {
+        // Saves past MAX_SAVES still open.
+        let mut lost = 0usize;
+        // An operator at a time: parsed whole, short operators took over thirty times the bytes
+        // they were read from.
+        for op in pdfcraft_content::ops(data) {
             let top = stack.last().copied().unwrap_or(ctm);
             match op.op.as_slice() {
-                b"q" => stack.push(top),
+                b"q" if lost == 0 && stack.len() <= MAX_SAVES => stack.push(top),
+                b"q" => {
+                    lost = lost.saturating_add(1);
+                    self.complete = false;
+                }
+                b"Q" if lost > 0 => lost -= 1,
                 b"Q" if stack.len() > 1 => {
                     stack.pop();
                 }
@@ -257,9 +270,10 @@ fn remaps_device_spaces(doc: &Document, resources: &Dict) -> bool {
 
 /// The effective resolution (ppi) of every image drawn by `pages`: the smallest over its uses.
 ///
-/// If forms nest too deeply, are drawn too many times, or a page's or form's content doesn't
-/// decode within its budget or is damaged partway, every image is given `INFINITY` (never
-/// resampled), since its largest use may be among those missed.
+/// If forms nest too deeply, are drawn too many times, saved graphics states nest past
+/// `MAX_SAVES`, or a page's or form's content doesn't decode within its budget or is damaged
+/// partway, every image is given `INFINITY` (never resampled), since its largest use may be among
+/// those missed or mismeasured.
 pub fn effective_resolutions(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef, f64> {
     let Ok((ppi, ..)) = walk_pages(doc, pages, &mut |_| true) else { return HashMap::new() };
     ppi
