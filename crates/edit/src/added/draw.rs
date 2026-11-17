@@ -1,5 +1,6 @@
 use super::layout::{
-    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, latin_width, norm, shaped_layout, text_rect, thai_error, wrapped,
+    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, japanese_error, latin_width, norm, shaped_layout, text_rect, thai_error,
+    wrapped,
 };
 use super::types::{AddedText, Align, Family, Ink};
 use super::{
@@ -70,6 +71,7 @@ pub(super) fn draw_laid_shaped(
             ShapedScript::Hebrew => hebrew_error(e, &c.text),
             ShapedScript::Thai => thai_error(e, &c.text),
             ShapedScript::Latin => EditError::Invalid(pdfcraft_fonts::shaped_text::latin_message(e, &c.text)),
+            ShapedScript::Japanese => japanese_error(e, &c.text),
         })?;
     out.extend(format!("BT {}\n", t.fill_op()).bytes());
     if t.char_spacing != 0.0 {

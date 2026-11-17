@@ -32,6 +32,8 @@ pub enum ShapedScript {
     /// ([`crate::document_latin_fonts`]), which every build has: for the ones WinAnsiEncoding
     /// lacks, beside the standard font that draws the rest.
     Latin,
+    /// One glyph per character from the Japanese document face. CJK does not join.
+    Japanese,
 }
 
 impl ShapedScript {
@@ -41,6 +43,7 @@ impl ShapedScript {
             Self::Hebrew => crate::document_hebrew_font(false),
             Self::Thai => crate::document_thai_font(),
             Self::Latin => crate::document_latin_fonts(false).into_iter().next(),
+            Self::Japanese => crate::document_japanese_font(),
         }
     }
 }
@@ -50,11 +53,13 @@ fn face(script: ShapedScript) -> Option<&'static (FontRef<'static>, ShaperData)>
     static HEBREW: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static THAI: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static LATIN: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static JAPANESE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     let cache = match script {
         ShapedScript::Arabic => &FACE,
         ShapedScript::Hebrew => &HEBREW,
         ShapedScript::Thai => &THAI,
         ShapedScript::Latin => &LATIN,
+        ShapedScript::Japanese => &JAPANESE,
     };
     cache
         .get_or_init(|| {
@@ -130,6 +135,33 @@ fn latin_run(text: &str) -> LatinRun {
         .unwrap_or(LatinRun::Latin)
 }
 
+/// One glyph per character of `text` from the Japanese document face. [`GlyphError::NoFont`]
+/// when this build has none; [`GlyphError::Missing`] when it lacks a character.
+pub fn shape_japanese(text: &str) -> Result<Vec<ShapedCluster>, GlyphError> {
+    if text.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (font, _) = face(ShapedScript::Japanese).ok_or(GlyphError::NoFont)?;
+    let loc = LocationRef::default();
+    let upem = font.metrics(Size::unscaled(), loc).units_per_em.max(1) as f64;
+    let advances = font.glyph_metrics(Size::unscaled(), loc);
+    let charmap = font.charmap();
+    let mut out = Vec::new();
+    for c in text.chars() {
+        let Some(gid) = charmap.map(c) else { return Err(GlyphError::Missing) };
+        let id = u32::from(gid);
+        if id == 0 {
+            return Err(GlyphError::Missing);
+        }
+        let width = advances.advance_width(gid).unwrap_or(0.0) as f64 / upem;
+        if !width.is_finite() || width <= 0.0 || width > 2.0 {
+            return Err(GlyphError::Missing);
+        }
+        out.push(ShapedCluster { script: ShapedScript::Japanese, glyphs: vec![(id, [0.0, 0.0])], advance: width, text: c.to_string() });
+    }
+    Ok(out)
+}
+
 fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedCluster>, GlyphError> {
     let (font, data) = face(kind).ok_or(GlyphError::NoFont)?;
     let shaper = data.shaper(font).build();
@@ -146,11 +178,12 @@ fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedC
             LatinRun::Cyrillic => script::CYRILLIC,
             LatinRun::Latin => script::LATIN,
         },
+        ShapedScript::Japanese => script::HAN,
     });
     // Preserve the historical Arabic per-character mapping; Hebrew, Thai and Latin marks stay with their base.
     buffer.set_cluster_level(match kind {
         ShapedScript::Arabic => BufferClusterLevel::Characters,
-        ShapedScript::Hebrew | ShapedScript::Thai | ShapedScript::Latin => BufferClusterLevel::MonotoneGraphemes,
+        ShapedScript::Hebrew | ShapedScript::Thai | ShapedScript::Latin | ShapedScript::Japanese => BufferClusterLevel::MonotoneGraphemes,
     });
     let shaped = shaper.shape(buffer, ShapeOptions::new());
     // Clusters are byte offsets into `text`; a cluster shows the characters up to the next one.

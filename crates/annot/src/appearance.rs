@@ -10,9 +10,9 @@
 //!
 //! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use a standard text
 //! font with WinAnsi encoding: Helvetica, or the face their `/DA` or `/DS` asks for
-//! ([`crate::text_style`]), and draw Thai from the craft-fonts Thai face as Type 3 glyphs
-//! (`pdfcraft_fonts::shaped_text`, the writer Add text uses); lines break at that face's
-//! standard-14 widths and the Thai face's shaped advances (no other font program is bundled).
+//! ([`crate::text_style`]), and draw Thai and Japanese from the craft-fonts faces as Type 3
+//! glyphs (`pdfcraft_fonts::shaped_text`, the writer Add text uses for Thai); lines break at
+//! that face's standard-14 widths and the shaped advances (no other font program is bundled).
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
 use pdfcraft_fonts::shaped_text;
@@ -26,7 +26,7 @@ pub fn text_width(text: &str, size: f64) -> f64 {
 
 /// [`text_width`] in the standard `face` a text box draws its other text in.
 pub fn text_width_in(face: pdfcraft_fonts::Std14, text: &str, size: f64) -> f64 {
-    shaped_text::thai_width(text, size, |s, size| face.text_width(s, size))
+    shaped_text::markup_width(text, size, |s, size| face.text_width(s, size))
 }
 
 /// `text` wrapped `width` wide as [`text_width`] measures it; a Thai mark stays on its letter.
@@ -1567,9 +1567,9 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     if round {
         y -= ((rect[3] - rect[1] - 2.0 * pad - text_lines_height(&lines, size)) / 2.0).max(0.0);
     }
-    // Thai is shaped and drawn from the Thai face (Type 3 fonts in the form's resources, whose
-    // streams `apply_appearance` stores in the document); the rest, and Thai it can't draw (as
-    // `?`, which `undrawable_text` reports), in the box's standard face.
+    // Thai and Japanese are shaped and drawn from the craft-fonts faces (Type 3 fonts in the
+    // form's resources, whose streams `apply_appearance` stores in the document). The rest, and a
+    // run the face can't draw (as `?`, which `undrawable_text` reports), stays in the standard face.
     let mut fonts = font_resources(face);
     let (pieces, shaped) = shaped_text::appearance_lines(&lines, &mut fonts);
     let mut current = None;

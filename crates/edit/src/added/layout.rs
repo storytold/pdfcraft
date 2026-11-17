@@ -1,6 +1,7 @@
 use super::types::{AddedImage, AddedText};
 use super::{
-    Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedScript, shape_arabic, shape_hebrew, shape_thai,
+    Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedScript, shape_arabic, shape_hebrew, shape_japanese,
+    shape_thai,
 };
 
 pub(super) fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
@@ -303,6 +304,7 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
                     ShapedScript::Latin => {
                         pdfcraft_fonts::shape_latin(&s).map_err(|e| EditError::Invalid(pdfcraft_fonts::shaped_text::latin_message(e, &s)))?
                     }
+                    ShapedScript::Japanese => shape_japanese(&s).map_err(|e| japanese_error(e, &s))?,
                 };
                 Piece::Shaped(shaped)
             } else if run_rtl {
@@ -344,6 +346,10 @@ pub(super) fn hebrew_error(e: GlyphError, text: &str) -> EditError {
 
 pub(super) fn thai_error(e: GlyphError, text: &str) -> EditError {
     EditError::Invalid(pdfcraft_fonts::shaped_text::thai_message(e, text))
+}
+
+pub(super) fn japanese_error(e: GlyphError, text: &str) -> EditError {
+    EditError::Invalid(pdfcraft_fonts::shaped_text::japanese_message(e, text))
 }
 
 /// The box a text item occupies (height from its lines).

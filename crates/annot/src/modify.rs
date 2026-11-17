@@ -31,10 +31,18 @@ pub(crate) fn refuse_foreign_text(doc: &Document, d: &Dict) -> Result<(), AnnotE
 /// Thai typed into a text box (`free_text`) that this build can't draw (it has no Thai face): refused
 /// with what to do, rather than drawn as `?`.
 pub(crate) fn refuse_undrawable_thai(free_text: bool, text: &str) -> Result<(), AnnotError> {
-    match free_text.then(|| pdfcraft_fonts::shaped_text::thai_refusal(text)).flatten() {
-        Some(why) => Err(AnnotError::Undrawable(why)),
-        None => Ok(()),
+    if !free_text {
+        return Ok(());
     }
+    if let Some(why) = pdfcraft_fonts::shaped_text::thai_refusal(text) {
+        return Err(AnnotError::Undrawable(why));
+    }
+    // Japanese the face can draw is shaped into the appearance. Without that face, or without
+    // the character, refuse it: writing `?` is what prints (#6382).
+    if let Some(why) = pdfcraft_fonts::shaped_text::cjk_refusal(text) {
+        return Err(AnnotError::Undrawable(why));
+    }
+    Ok(())
 }
 
 /// Format a number for content streams and DA strings.
