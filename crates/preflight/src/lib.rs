@@ -268,6 +268,7 @@ pub const WORDINGS: &[&str] = &[
     "A PDF/A-4f file needs embedded files listed in the catalog's name dictionary (EmbeddedFiles)",
     "Embedded files must be PDF/A-1, PDF/A-2 or PDF/A-4 files themselves (use PDF/A-4f for others)",
     "An embedded file declares {} but doesn't conform to it",
+    "Some embedded files weren't checked: there are more of them than one verification reads",
     "An embedded file's file specification lacks F or UF",
     "An embedded file has no MIME type (Subtype)",
     "A {} annotation's appearance dictionary holds more than N",
@@ -1221,6 +1222,7 @@ thread_local! {
 
 /// Check `doc` against `level`.
 pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
+    part4::begin_verification();
     // Shared by `issue` and `located_issue`, each of which takes the list out, adds one issue and
     // puts it back.
     let out = std::cell::Cell::new(Vec::new());
@@ -1832,9 +1834,11 @@ fn check_objects(
     page_of: &impl Fn(ObjRef) -> Option<usize>,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
+    // Each embedded file stream is judged once, however many file specifications name it.
+    let mut embedded = part4::EmbeddedChecks::default();
     for (r, o) in objects {
         let Some(d) = dict_of(o) else { continue };
-        check_one_object(doc, level, d, o, drawing.contains(r), page_of(*r), issue);
+        check_one_object(doc, level, d, o, drawing.contains(r), page_of(*r), &mut embedded, issue);
     }
     for (i, p) in pdfcraft_model::pages(doc).into_iter().enumerate() {
         if let Some(a) = p.dict.get(b"Annots").map(|a| doc.resolve(a))
@@ -1842,14 +1846,19 @@ fn check_objects(
         {
             for entry in a {
                 if let Object::Dict(d) = entry {
-                    check_one_object(doc, level, d, entry, false, Some(i), issue);
+                    check_one_object(doc, level, d, entry, false, Some(i), &mut embedded, issue);
                 }
             }
         }
     }
+    embedded.report(issue);
 }
 
-/// Checks a single object against the PDF/A rules for `level`.
+/// Checks a single object against the PDF/A rules for `level`, with the embedded file verdicts
+/// of the verification so far in `embedded`.
+// The verification's state it reads and keeps is what each argument is; a struct of them would be
+// only this list again.
+#[allow(clippy::too_many_arguments)]
 fn check_one_object(
     doc: &Document,
     level: Level,
@@ -1857,6 +1866,7 @@ fn check_one_object(
     object: &Object,
     draws: bool,
     page: Option<usize>,
+    embedded: &mut part4::EmbeddedChecks,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
     let ty = dict.name(b"Type");
@@ -1881,7 +1891,7 @@ fn check_one_object(
         check_stream(doc, level, stream, subtype, issue);
     }
     if ty == Some(b"Filespec") && dict.get(b"EF").is_some() {
-        check_embedded_file(doc, level, dict, issue);
+        check_embedded_file(doc, level, dict, embedded, issue);
     }
 }
 
@@ -2025,6 +2035,7 @@ fn check_embedded_file(
     doc: &Document,
     level: Level,
     dict: &Dict,
+    embedded: &mut part4::EmbeddedChecks,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
     match level {
@@ -2033,7 +2044,7 @@ fn check_embedded_file(
             issue("6.8", "An embedded file has no AFRelationship", None, None, true);
         }
         Level::A3b => {}
-        Level::A4 | Level::A4e | Level::A4f => part4::embedded_file(doc, level, dict, issue),
+        Level::A4 | Level::A4e | Level::A4f => part4::embedded_file(doc, level, dict, embedded, issue),
     }
 }
 
