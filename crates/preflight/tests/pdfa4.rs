@@ -992,8 +992,8 @@ mod never_panics {
     }
 }
 
-/// Forms reached through an alias, or named `/P` in a resource dictionary of their own, are drawn
-/// on the page that draws them, and are judged against that page's output intent.
+/// Forms and patterns reached through an alias, or named `/P` in a resource name map of their own,
+/// are drawn on the page that draws them, and are judged against that page's output intent.
 #[test]
 fn forms_reached_through_an_alias_or_named_p_are_judged_on_their_page() {
     let rgb = "1 0 0 rg 0 0 10 10 re f";
@@ -1026,6 +1026,15 @@ fn forms_reached_through_an_alias_or_named_p_are_judged_on_their_page() {
     assert_eq!(two("/XObject << /X 10 0 R >>", "/X Do", vec![o("11 0 R"), form(rgb)]), none);
     // Object 10 is a resource dictionary of its own that names the form /P.
     assert_eq!(two("/XObject 10 0 R", "/P Do", vec![o("<< /P 11 0 R >>"), form(rgb)]), none);
+    // A name map's /P that is an alias of the form (12 stands for 11).
+    assert_eq!(two("/XObject 10 0 R", "/P Do", vec![o("<< /P 12 0 R >>"), form(rgb), o("11 0 R")]), none);
+    // A name map's /P that is a dictionary: a shading pattern whose shading paints DeviceRGB.
+    let shading = vec![
+        o("<< /P 11 0 R >>"),
+        o("<< /PatternType 2 /Shading 12 0 R >>"),
+        o("<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 1 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 1 1] /N 1 >> >>"),
+    ];
+    assert_eq!(two("/Pattern 10 0 R", "/Pattern cs /P scn 0 0 10 10 re f", shading), none);
     // The form still counts as drawn there: CMYK in it is judged against the RGB intent.
     assert_eq!(
         two("/XObject 10 0 R", "/P Do", vec![o("<< /P 11 0 R >>"), form("1 0 0 0 k 0 0 10 10 re f")]),
