@@ -153,15 +153,33 @@ fn remove_all(xmp: &str, names: &[impl AsRef<str>]) -> Option<String> {
 
 /// Set (or remove, with an empty `value`) the XMP property that mirrors the information key
 /// `key` (see [`property`]), and nothing else: for a document that keeps its metadata in XMP
-/// alone (`crate::metadata`). `None` when `key` has no such property, else whether the packet
-/// can hold it: `false` for a file without XMP or a packet that can't be edited safely, which
-/// is left as it was.
+/// alone (`crate::metadata`). `None` when `key` has no such property, else whether the packet now
+/// says what was asked: `true` when the value was written, or, for a removal, when no copy of the
+/// property is left. `false`, with the packet left as it was, when it can't be edited safely:
+/// a file without XMP (unless there is nothing to remove), a packet that can't be read or has no
+/// `rdf:RDF`, one that binds the property's prefix to another namespace, or one that writes the
+/// property under another prefix for its namespace (Namespaces in XML §4: the prefix doesn't
+/// name the property, the namespace does), which this text editor can't rewrite in place.
 pub(crate) fn set_mirror(doc: &mut Document, key: &str, value: &str) -> Result<Option<bool>, OrganizeError> {
     let Some((name, ns, shape)) = property(key) else { return Ok(None) };
-    if !editable(doc) {
-        return Ok(Some(false));
+    let Some((prefix, local)) = name.split_once(':') else { return Ok(Some(false)) };
+    let Some((_, _, xmp)) = packet(doc) else {
+        // Without a metadata stream there is nothing to remove; one that can't be read may hold it.
+        let has_stream = doc.root().is_some_and(|root| doc.get(root).as_dict().is_some_and(|c| c.get(b"Metadata").is_some()));
+        return Ok(Some(value.is_empty() && !has_stream));
+    };
+    let tags = names(&xmp);
+    let ours = prefixes_for(&tags, ns);
+    // The prefixes under which the packet names the property.
+    let mut held = tags.iter().filter_map(|(n, _)| n.split_once(':').filter(|(p, l)| *l == local && (*p == prefix || ours.contains(p))));
+    let elsewhere = held.clone().any(|(p, _)| p != prefix);
+    if !xmp.contains("</rdf:RDF>") || binds_prefix_elsewhere(&xmp, prefix, ns) || elsewhere {
+        // A removal is still done when the packet holds no copy of the property at all. A copy
+        // under the property's own prefix counts even where that prefix is also bound elsewhere:
+        // which binding applies to it isn't resolved here.
+        return Ok(Some(value.is_empty() && held.next().is_none()));
     }
-    edit_packet(doc, |xmp| set_property(xmp, name, ns, shape, value))?;
+    edit_packet(doc, |xmp| if value.is_empty() { remove_all(xmp, &[name]) } else { set_property(xmp, name, ns, shape, value) })?;
     Ok(Some(true))
 }
 
@@ -182,22 +200,60 @@ pub(crate) fn set_modified(doc: &mut Document, date: &str) -> Result<bool, Organ
     })
 }
 
-/// Whether `xmp` names a property `local` under a prefix other than `xmp` (`<xap:ModifyDate>`,
-/// `xap:ModifyDate="..."`).
+/// Whether an element or attribute of `xmp` is named `local` under a prefix other than `xmp`
+/// (`<xap:ModifyDate>`, `xap:ModifyDate="..."`). Text and attribute values that merely mention
+/// such a name don't count.
 fn other_prefix(xmp: &str, local: &str) -> bool {
-    let tail = format!(":{local}");
-    xmp.match_indices(&tail).any(|(i, _)| {
-        let before = xmp.get(..i).unwrap_or_default();
-        let len: usize = before.chars().rev().take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.')).map(char::len_utf8).sum();
-        let prefix = before.get(before.len().saturating_sub(len)..).unwrap_or_default();
-        !prefix.is_empty() && prefix != "xmp"
-    })
+    names(xmp).iter().any(|(n, _)| n.split_once(':').is_some_and(|(p, l)| l == local && p != "xmp" && p != "xmlns"))
 }
 
-/// Whether the catalog has an XMP packet [`edit_packet`] can change: an indirect metadata stream
-/// that decodes, within [`MAX_XMP`], to UTF-8 with an `rdf:RDF` to add properties to.
-pub(crate) fn editable(doc: &Document) -> bool {
-    packet(doc).is_some_and(|(_, _, xmp)| xmp.contains("</rdf:RDF>"))
+/// The prefixes the attributes `names` (from [`names`]) declare for the namespace `ns`.
+fn prefixes_for<'a>(names: &[(&'a str, Option<&str>)], ns: &str) -> Vec<&'a str> {
+    names.iter().filter(|(_, v)| *v == Some(ns)).filter_map(|(n, _)| n.strip_prefix("xmlns:")).collect()
+}
+
+/// The names of the elements and attributes in `xmp`'s start tags, in order, each attribute with
+/// its value. Comments, CDATA sections, processing instructions, declarations, end tags and
+/// character data are read past, so text that looks like markup is never taken for a name.
+/// Linear in the packet; a tag that never ends ends the list.
+fn names(xmp: &str) -> Vec<(&str, Option<&str>)> {
+    let is_name_end = |c: char| c.is_whitespace() || matches!(c, '/' | '>' | '=');
+    let mut out = Vec::new();
+    let mut rest = xmp;
+    while let Some(i) = rest.find('<') {
+        rest = rest.get(i + 1..).unwrap_or_default();
+        // Markup that holds no names: read past its end.
+        let skip = [("!--", "-->"), ("![CDATA[", "]]>"), ("?", "?>"), ("!", ">"), ("/", ">")].into_iter().find(|(open, _)| rest.starts_with(open));
+        if let Some((_, close)) = skip {
+            let Some(end) = rest.find(close) else { break };
+            rest = rest.get(end + close.len()..).unwrap_or_default();
+            continue;
+        }
+        let len = rest.find(is_name_end).unwrap_or(rest.len());
+        out.push((rest.get(..len).unwrap_or_default(), None));
+        rest = rest.get(len..).unwrap_or_default();
+        // The attributes, up to the end of the tag.
+        loop {
+            rest = rest.trim_start();
+            if rest.is_empty() || rest.starts_with('>') || rest.starts_with("/>") {
+                break;
+            }
+            let len = rest.find(is_name_end).unwrap_or(rest.len()).max(rest.chars().next().map_or(1, char::len_utf8));
+            let name = rest.get(..len).unwrap_or_default();
+            rest = rest.get(len..).unwrap_or_default().trim_start();
+            let Some(after_eq) = rest.strip_prefix('=') else { continue };
+            let after_eq = after_eq.trim_start();
+            let Some(quote) = after_eq.chars().next().filter(|c| matches!(c, '"' | '\'')) else {
+                rest = after_eq;
+                continue;
+            };
+            let value = after_eq.get(1..).unwrap_or_default();
+            let Some(end) = value.find(quote) else { return out };
+            out.push((name, value.get(..end)));
+            rest = value.get(end + 1..).unwrap_or_default();
+        }
+    }
+    out
 }
 
 /// The catalog's XMP packet: its stream's reference and object, and its text. `None` for a file
@@ -385,20 +441,32 @@ fn unescape(text: &str) -> String {
 /// `xmp` with the property `name` (namespace `ns`) set to `value`, or removed when `value` is
 /// empty; `None` when nothing changes or the packet has no `rdf:RDF` to add the property to.
 fn set_property(xmp: &str, name: &str, ns: &str, shape: Shape, value: &str) -> Option<String> {
-    let element = (!value.is_empty()).then(|| match shape {
-        Shape::LangAlt => format!("<{name}><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></{name}>", esc(value)),
-        Shape::Seq => format!("<{name}><rdf:Seq><rdf:li>{}</rdf:li></rdf:Seq></{name}>", esc(value)),
-        Shape::Text => format!("<{name}>{}</{name}>", esc(value)),
-    });
+    let make = |decls: &str| {
+        (!value.is_empty()).then(|| match shape {
+            Shape::LangAlt => format!("<{name}{decls}><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></{name}>", esc(value)),
+            Shape::Seq => format!("<{name}{decls}><rdf:Seq><rdf:li>{}</rdf:li></rdf:Seq></{name}>", esc(value)),
+            Shape::Text => format!("<{name}{decls}>{}</{name}>", esc(value)),
+        })
+    };
     // The element form, `<dc:title>…</dc:title>` (or `<dc:title/>`): replaced where it stands, so
-    // it keeps the namespace declaration of the description around it.
+    // it keeps the namespace declaration of the description around it, and the namespace
+    // declarations of its own start tag (`<xmp:ModifyDate xmlns:xmp="…">`), which may be what
+    // binds its prefix.
     if let Some((start, end)) = element_span(xmp, name) {
+        let tag = xmp.get(start..end)?;
+        let tag = tag.get(..=tag.find('>')?)?;
+        let decls: String = names(tag)
+            .into_iter()
+            .filter(|(n, _)| *n == "xmlns" || n.starts_with("xmlns:"))
+            .filter_map(|(n, v)| Some(format!(" {n}=\"{}\"", v?.replace('"', "&quot;"))))
+            .collect();
         let mut out = String::with_capacity(xmp.len());
         out.push_str(xmp.get(..start)?);
-        out.push_str(element.as_deref().unwrap_or_default());
+        out.push_str(make(&decls).as_deref().unwrap_or_default());
         out.push_str(xmp.get(end..)?);
         return Some(out);
     }
+    let element = make("");
     // The attribute form, `pdf:Keywords="…"` on an `rdf:Description`: only simple text can be
     // written there; a structured value moves to an element of its own.
     if let Some((start, value_start, value_end, quote)) = attribute_span(xmp, name) {
@@ -658,5 +726,29 @@ mod tests {
         let packet = packet.replace("</rdf:Description>", "</rdf:Description><rdf:Description rdf:about='u'/>");
         let (_, s, e, q) = attribute_span(&packet, "rdf:about").unwrap();
         assert_eq!((packet.get(s..e), q), (Some("u"), '\''));
+    }
+
+    #[test]
+    fn names_are_read_from_tags_only() {
+        let xmp = "<?xpacket begin=\"<a:b>\"?><!-- <c:d e:f=\"1\"> --><x:a p:q='1' r:s = \"<t:u>\" lone>\
+                   text xap:ModifyDate=\"2\" <![CDATA[<v:w/>]]></x:a><y:b/><é:z k=\"é\"/>";
+        let found = names(xmp);
+        assert_eq!(found, [("x:a", None), ("p:q", Some("1")), ("r:s", Some("<t:u>")), ("y:b", None), ("é:z", None), ("k", Some("é"))]);
+        // Only element and attribute names count as another prefix for a date.
+        assert!(!other_prefix("<dc:title>On xap:ModifyDate</dc:title><a note='xap:ModifyDate'/>", "ModifyDate"));
+        assert!(other_prefix("<a xap:ModifyDate='1'/>", "ModifyDate"));
+        assert!(other_prefix("<xap:ModifyDate>1</xap:ModifyDate>", "ModifyDate"));
+        assert!(!other_prefix("<a xmp:ModifyDate='1'/>", "ModifyDate"));
+        for hostile in ["<", "<a", "<a b=", "<a b='", "<!--", "<![CDATA[", "<a\u{e9}=\"\u{e9}", "<a =x>", "<a b c='1'/>"] {
+            let _ = names(hostile);
+        }
+    }
+
+    #[test]
+    fn a_replaced_element_keeps_its_own_namespace_declarations() {
+        let packet = "<rdf:RDF xmlns:rdf=\"r\"><rdf:Description rdf:about=\"\">\
+                      <xmp:ModifyDate xmlns:xmp='http://ns.adobe.com/xap/1.0/' rdf:parseType=\"Literal\">2020</xmp:ModifyDate></rdf:Description></rdf:RDF>";
+        let out = set_property(packet, "xmp:ModifyDate", XMP, Shape::Text, "2026").unwrap();
+        assert!(out.contains("<xmp:ModifyDate xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">2026</xmp:ModifyDate>"), "{out}");
     }
 }

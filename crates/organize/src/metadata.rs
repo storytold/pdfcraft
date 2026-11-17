@@ -67,7 +67,9 @@ pub fn record_save(doc: &mut Document, home: MetadataHome, mod_date: Option<Stri
 /// document keeps it: [`crate::set_info`] for [`MetadataHome::Info`], the XMP property alone
 /// for [`MetadataHome::Xmp`] (see the module documentation). Refused, changing nothing, when
 /// the key has no XMP property PdfCraft writes (Title, Author, Subject, Keywords, Creator and
-/// Producer do) or the packet can't be edited; clearing such a key still takes it out of `/Info`.
+/// Producer do) or the packet can't be edited. Clearing such a key still takes it out of `/Info`
+/// when the packet holds no copy of it; one the packet still holds refuses the clear, since the
+/// property would stay.
 pub fn set_info_in(doc: &mut Document, home: MetadataHome, key: &str, value: &str) -> Result<(), OrganizeError> {
     let MetadataHome::Xmp { piece_info } = home else { return crate::set_info(doc, key, value) };
     let custom = !STANDARD_INFO_KEYS.contains(&key);
@@ -77,7 +79,6 @@ pub fn set_info_in(doc: &mut Document, home: MetadataHome, key: &str, value: &st
     let value = value.trim();
     match xmp::set_mirror(doc, key, value)? {
         Some(true) => {}
-        Some(false) if value.is_empty() => {}
         Some(false) => {
             return Err(OrganizeError::Invalid(format!(
                 "a PDF/A-4 file keeps its document properties in its XMP metadata, which can't be edited here, so {key} was not changed"
@@ -292,5 +293,61 @@ mod tests {
         let info = d.trailer().get(b"Info").map(|o| d.resolve(o)).unwrap();
         assert_eq!(info.as_dict().map(|i| i.iter().count()), Some(0));
         assert!(xmp_of(&d).contains(">New<"));
+    }
+
+    /// A property the packet holds in a form this can't rewrite (another prefix for its
+    /// namespace, its prefix bound elsewhere, `rdf:RDF` under another prefix) refuses both the
+    /// change and the clear, with nothing changed: `/Info` keeps the value the packet would
+    /// otherwise contradict or lose.
+    #[test]
+    fn a_property_in_a_form_that_cant_be_rewritten_is_refused() {
+        let home = MetadataHome::Xmp { piece_info: false };
+        let ids = "xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\" pdfaid:part=\"4\" pdfaid:rev=\"2020\"";
+        let other_rdf = format!(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><r:RDF xmlns:r=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+             <r:Description r:about=\"\" {ids} xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+             <dc:title><r:Alt><r:li xml:lang=\"x-default\">Old</r:li></r:Alt></dc:title></r:Description></r:RDF></x:xmpmeta>"
+        );
+        let other_dc = packet(
+            PDFA4,
+            "<rdf:Description rdf:about=\"\" xmlns:d=\"http://purl.org/dc/elements/1.1/\">\
+             <d:title><rdf:Alt><rdf:li xml:lang=\"x-default\">Old</rdf:li></rdf:Alt></d:title></rdf:Description>",
+        );
+        let vendor_xmp =
+            packet(PDFA4, "<rdf:Description rdf:about=\"\" xmlns:xmp=\"urn:vendor\"><xmp:CreatorTool>Vendor</xmp:CreatorTool></rdf:Description>");
+        for (xmp, key) in [(&other_rdf, "Title"), (&other_dc, "Title"), (&vendor_xmp, "Creator")] {
+            for value in ["New", ""] {
+                let mut d = doc(xmp, &[], &[(key, "Old")]);
+                let before = written(&d);
+                assert!(set_info_in(&mut d, home, key, value).is_err(), "{key}={value:?} in {xmp}");
+                assert_eq!(written(&d), before, "nothing changed: {key}={value:?} in {xmp}");
+            }
+        }
+    }
+
+    /// The save's date check reads element and attribute names: a title that mentions
+    /// `xap:ModifyDate` doesn't stop the dates being recorded, and an `xmp:ModifyDate` that binds
+    /// its own prefix keeps that binding when rewritten.
+    #[test]
+    fn a_save_dates_packets_that_only_look_unusual() {
+        let home = MetadataHome::Xmp { piece_info: false };
+        let mention = packet(
+            &format!("{PDFA4} xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmp:ModifyDate=\"2020-01-01T00:00:00Z\""),
+            "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+             <dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">On xap:ModifyDate</rdf:li></rdf:Alt></dc:title></rdf:Description>",
+        );
+        let mut d = doc(&mention, &[], &[]);
+        record_save(&mut d, home, Some("D:20261117093005Z".into())).unwrap();
+        let x = xmp_of(&d);
+        assert!(x.contains("xmp:ModifyDate=\"2026-11-17T09:30:05Z\"") && x.contains("On xap:ModifyDate"), "{x}");
+
+        let local = packet(
+            PDFA4,
+            "<rdf:Description rdf:about=\"\"><xmp:ModifyDate xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">2020-01-01T00:00:00Z</xmp:ModifyDate></rdf:Description>",
+        );
+        let mut d = doc(&local, &[], &[]);
+        record_save(&mut d, home, Some("D:20261117093005Z".into())).unwrap();
+        let x = xmp_of(&d);
+        assert!(x.contains("<xmp:ModifyDate xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">2026-11-17T09:30:05Z</xmp:ModifyDate>"), "{x}");
     }
 }
