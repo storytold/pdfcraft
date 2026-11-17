@@ -1474,6 +1474,9 @@ fn xmp_extension_value_types_describe_the_fields_of_values_clause_6_6_2_3_1() {
     for kind in ["bag", "Bag", "seq"] {
         assert_eq!(undescribed(described_values(&format!("{kind} C"), &custom_type(&["f1"]), items)), one("c:f9"), "{kind}");
     }
+    // An item written as an rdf:Description.
+    let described_item = r#"<t:p><rdf:Seq><rdf:li><rdf:Description><c:f1>v</c:f1><c:f9>v</c:f9></rdf:Description></rdf:li></rdf:Seq></t:p>"#;
+    assert_eq!(undescribed(described_values("seq C", &custom_type(&["f1"]), described_item)), one("c:f9"));
     // Each field once per property.
     let twice = r#"<t:p><rdf:Bag><rdf:li c:f2="v"/><rdf:li c:f2="w"/></rdf:Bag></t:p>"#;
     assert_eq!(undescribed(described_values("bag C", &custom_type(&["f1"]), twice)), one("c:f2"));

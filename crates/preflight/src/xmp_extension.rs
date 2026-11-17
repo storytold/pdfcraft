@@ -372,7 +372,8 @@ fn array_item(ty: &str) -> (bool, &str) {
 /// of an empty element, other than RDF and XML syntax (ISO 16684-1 7.9.2.5). A value that isn't a
 /// structure, or a qualified one (`rdf:value`), has none.
 fn fields<'a>(value: &'a El, scope: &NsScope<'a>) -> Vec<(&'a str, Option<&'a str>, &'a str)> {
-    let holder = if scope.attr(value, RDF, "parseType") == Some("Resource") {
+    // An array item's `rdf:Description` comes here as the item itself (see [`items`]).
+    let holder = if scope.attr(value, RDF, "parseType") == Some("Resource") || is(value, scope, RDF, "Description") {
         Some((value, scope.clone()))
     } else {
         let children: Vec<&El> = value.elements().collect();
