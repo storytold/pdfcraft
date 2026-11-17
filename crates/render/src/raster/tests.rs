@@ -11923,3 +11923,22 @@ fn a_to_unicode_cmap_reads_its_mappings_past_a_token_it_cannot_parse() {
     let unclosed = format!("{body}{}{}", "(".repeat(4096), "x".repeat(1 << 16));
     assert!(CMap::parse(unclosed.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x48).is_some()));
 }
+
+#[test]
+fn page_renderer_session_matches_single_renders_and_tracks_stats() {
+    let pdf = std::sync::Arc::new(one_page_pdf(b"0 0 0 rg 10 10 20 20 re f", ""));
+    let mut single = PageRenderer::new(pdf.clone(), RenderConfig::default());
+    let req_px = RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false };
+    let req_tx = RenderRequest { page: 0, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false };
+    let expected_px = single.render(req_px);
+    let expected_tx = single.render(req_tx);
+
+    let mut batched = PageRenderer::new(pdf, RenderConfig::default());
+    let (got_px, got_tx) = batched.session(|s| (s.render(req_px), s.render(req_tx)));
+    assert_eq!(got_px.error, None);
+    assert_eq!(got_tx.error, expected_tx.error);
+    assert_eq!(got_tx.text.is_some(), expected_tx.text.is_some());
+    assert_eq!((got_px.width, got_px.height), (expected_px.width, expected_px.height));
+    assert_eq!(got_px.rgba.as_ref(), expected_px.rgba.as_ref());
+    assert_eq!(batched.stats(), single.stats());
+}

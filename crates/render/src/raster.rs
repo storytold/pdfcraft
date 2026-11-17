@@ -564,6 +564,46 @@ impl PageRenderer {
 
     /// Render one page. Never panics.
     pub fn render(&mut self, req: RenderRequest) -> RenderedPage {
+        self.session(|s| s.render(req))
+    }
+
+    /// Borrow the parsed document with one shared `RenderCache` across multiple `render` calls.
+    pub fn session<R>(&mut self, f: impl FnOnce(&mut RenderSession<'_>) -> R) -> R {
+        let mut needs_reparse = false;
+        let out = {
+            let mut session = RenderSession {
+                bytes: &self.bytes,
+                config: &self.config,
+                pdf: self.pdf.as_ref(),
+                settings: &self.settings,
+                stats: &mut self.stats,
+                cache: RenderCache::new(),
+                needs_reparse: &mut needs_reparse,
+            };
+            f(&mut session)
+        };
+        if needs_reparse {
+            self.pdf = parse(&self.bytes, self.config.password.as_deref());
+            self.stats.parser_builds += 1;
+        }
+        out
+    }
+}
+
+/// Multi-page rendering session sharing one [`RenderCache`] over a borrowed [`PageRenderer`].
+pub struct RenderSession<'a> {
+    bytes: &'a Arc<Vec<u8>>,
+    config: &'a RenderConfig,
+    pdf: Option<&'a Pdf>,
+    settings: &'a InterpreterSettings,
+    stats: &'a mut RenderStats,
+    cache: RenderCache<'a>,
+    needs_reparse: &'a mut bool,
+}
+
+impl RenderSession<'_> {
+    /// Render one page reusing this session's `RenderCache`. Never panics.
+    pub fn render(&mut self, req: RenderRequest) -> RenderedPage {
         let start = Stopwatch::start();
         if self.pdf.is_some() {
             self.stats.render_requests += 1;
@@ -578,17 +618,27 @@ impl PageRenderer {
                 RequestKind::Text => self.stats.text_interpretations += 1,
             }
         }
-        let Some(pdf) = self.pdf.as_ref() else {
-            return finish(req, start, Err(("the document could not be parsed".into(), false)), Vec::new());
+        let Some(pdf) = self.pdf.filter(|_| !*self.needs_reparse) else {
+            let msg = if *self.needs_reparse {
+                let Some(fresh) = parse(self.bytes, self.config.password.as_deref()) else {
+                    return finish(req, start, Err(("the document could not be parsed".into(), false)), Vec::new());
+                };
+                let cache = RenderCache::new();
+                let warnings = Arc::new(Mutex::new(Vec::new()));
+                let settings = warning_settings(self.settings, warnings.clone());
+                let r = render_page(&fresh, &cache, &settings, self.config, req);
+                return finish(req, start, r, take_warnings(&warnings));
+            } else {
+                "the document could not be parsed"
+            };
+            return finish(req, start, Err((msg.into(), false)), Vec::new());
         };
-        let cache = RenderCache::new();
         let warnings = Arc::new(Mutex::new(Vec::new()));
-        let settings = warning_settings(&self.settings, warnings.clone());
-        let r = render_page(pdf, &cache, &settings, &self.config, req);
+        let settings = warning_settings(self.settings, warnings.clone());
+        let r = render_page(pdf, &self.cache, &settings, self.config, req);
         let warnings = take_warnings(&warnings);
         if matches!(r, Err((_, true))) {
-            self.pdf = parse(&self.bytes, self.config.password.as_deref());
-            self.stats.parser_builds += 1;
+            *self.needs_reparse = true;
         }
         finish(req, start, r, warnings)
     }
