@@ -1901,7 +1901,8 @@ fn space_scrolls_a_screen_as_page_down_does() {
     h.state_mut().active = Some(0);
     h.state_mut().views[0].fit = Fit::Width;
     h.run_steps(4);
-    let top = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).map(|r| r.top()).expect("page 1 on screen");
+    // Page 1's top on screen, if any of it shows.
+    let top = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).map(|r| r.top());
     let press = |h: &mut Harness<'static, PdfCraftApp>, modifiers, key| {
         h.key_press_modifiers(modifiers, key);
         h.run_steps(4);
@@ -1909,7 +1910,7 @@ fn space_scrolls_a_screen_as_page_down_does() {
     };
     let start = top(&h);
     let screen = press(&mut h, Modifiers::NONE, Key::PageDown);
-    assert!(screen < start - 100.0, "Page Down scrolls a screen: {screen} from {start}");
+    assert!(screen.zip(start).is_some_and(|(s, t)| s < t - 100.0), "Page Down scrolls a screen: {screen:?} from {start:?}");
     assert_eq!(press(&mut h, Modifiers::NONE, Key::PageUp), start);
     assert_eq!(press(&mut h, Modifiers::NONE, Key::Space), screen, "Space goes a screen on");
     assert_eq!(h.state().quick_tool, QuickTool::Select, "and leaves the tool");
@@ -1929,10 +1930,38 @@ fn space_scrolls_a_screen_as_page_down_does() {
     h.run_steps(4);
     assert_eq!(h.state().quick_tool, QuickTool::Select, "Space released");
     assert_eq!(top(&h), start, "the Hand's press is no tap");
+    // Let go under a dialog, Space is no tap: closing the dialog scrolls nothing.
+    h.key_down(Key::Space);
+    h.run_steps(2);
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::Shortcuts);
+    h.run_steps(2);
+    h.key_up(Key::Space);
+    h.run_steps(2);
+    h.state_mut().dialog = None;
+    h.run_steps(4);
+    assert_eq!(top(&h), start, "a Space let go under a dialog");
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    // Shift+Space held goes back once, not once per repeat: from two screens down, to one.
+    let down = press(&mut h, Modifiers::NONE, Key::PageDown);
+    assert!(down.is_some(), "page 1 still shows one screen down");
+    press(&mut h, Modifiers::NONE, Key::PageDown);
+    let key = |pressed, repeat| egui::Event::Key { key: Key::Space, physical_key: None, pressed, repeat, modifiers: Modifiers::SHIFT };
+    h.event(egui::Event::ModifiersChanged(Modifiers::SHIFT));
+    h.event(key(true, false));
+    h.run_steps(2);
+    for _ in 0..3 {
+        h.event(key(true, true));
+        h.run_steps(2);
+    }
+    h.event(key(false, false));
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(4);
+    assert_eq!(top(&h), down, "one screen back for a held Shift+Space");
     // Typing a space in the find bar scrolls nothing either.
     h.state_mut().views[0].open_find();
     h.run_steps(4);
-    assert_eq!(press(&mut h, Modifiers::NONE, Key::Space), start, "a space typed in the find bar");
+    let at = top(&h);
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::Space), at, "a space typed in the find bar");
 }
 
 /// Like [`fixture`], with each page's size given.

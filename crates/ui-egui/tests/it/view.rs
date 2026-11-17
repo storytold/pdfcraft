@@ -3499,6 +3499,8 @@ fn full_screen_every_key_and_click_goes_where_it_says() {
     let moves = [
         (K(Key::ArrowRight, Modifiers::NONE), 0, 1),
         (K(Key::Space, Modifiers::NONE), 0, 1),
+        // Shift+Space turns on as Space does: it is the full screen's, not the view's Page Up (#7483).
+        (K(Key::Space, Modifiers::SHIFT), 0, 1),
         (K(Key::Enter, Modifiers::NONE), 0, 1),
         (K(Key::PageDown, Modifiers::NONE), 0, 1),
         (Click(Primary, Modifiers::NONE), 0, 1),

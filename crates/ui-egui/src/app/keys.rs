@@ -23,16 +23,20 @@ impl PdfCraftApp {
             if !covered && let Some(choice) = dialogs::save_prompt_key(ctx, &mut self.save_prompt_button) {
                 self.resolve_close(ctx, choice);
             }
+            self.space_tap = None;
             return;
         }
         // The other dialogs and prompts are modal too (⌘W closed the file behind Preferences,
         // #870).
         if self.modal_open() {
+            // A Space let go under the dialog is no tap: the pages never see it released.
+            self.space_tap = None;
             return;
         }
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
             && view.auto_scroll.escape(ctx)
         {
+            self.space_tap = None;
             return;
         }
         // The in-window menu bar holds the keys while one of its menus is open or it has the
@@ -113,12 +117,18 @@ impl PdfCraftApp {
     ///
     /// Space scrolls too, as in Acrobat (#7483): pressed and let go without a press of the pointer
     /// in between it goes a screen on, as Page Down does, and Shift+Space a screen back, as Page
-    /// Up. Returns that step for the view: `Some(true)` on, `Some(false)` back.
+    /// Up. Neither repeats while the key is held. Returns that step for the view: `Some(true)` on,
+    /// `Some(false)` back. Full screen keeps Space and Shift+Space for its own page turning.
     fn tool_keys(&mut self, i: usize, ctx: &egui::Context) -> Option<bool> {
         use egui::Key;
         let keys = self.page_keys;
         let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input() && self.views[i].forms.focus.is_none();
         let free = free && !keys.over();
+        // Only a Space the pages see go down and come back up is a tap: one let go while something
+        // else had the keyboard is not.
+        if !free {
+            self.space_tap = None;
+        }
         let (plain, space) = (ctx.input(|input| input.modifiers.is_none()), PageKeys::held(ctx, Key::Space));
         // Space going down starts a tap, once: the key's repeats while it is held start none.
         if free && plain && self.space_tap.is_none() && keys.pressed(ctx, Key::Space) {
@@ -140,13 +150,20 @@ impl PdfCraftApp {
                 self.quick_tool = previous;
             }
         }
-        if free {
+        if free && !self.views[i].presenting() {
             // Shift+Space starts no Hand, so it scrolls back at once. Judged by the press's own
-            // modifiers, and taken so that nothing else reads it as a plain Space.
+            // modifiers, and taken so that nothing else reads it as a plain Space. Only its first
+            // press steps: the key's repeats while it is held, then its release, find a tap that
+            // isn't one (`Some(false)`), and a plain Space repeating after Shift is let go starts
+            // none.
+            let tap = &mut self.space_tap;
             keys.take_presses(ctx, |key, modifiers| {
                 let back = key == Key::Space && modifiers.shift_only();
                 if back {
-                    step = Some(false);
+                    if tap.is_none() {
+                        step = Some(false);
+                    }
+                    *tap = Some(false);
                 }
                 back
             });
