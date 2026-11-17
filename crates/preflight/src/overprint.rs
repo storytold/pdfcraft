@@ -16,6 +16,9 @@
 //! - a form XObject drawn with `Do` is read in the state it is drawn in (8.10.1), with its own
 //!   `/Resources`, or its caller's when it has none.
 //!
+//! A form is read again only when drawn in a new state, with other resources when it takes its
+//! caller's, or less deeply nested than before (so the forms it draws are followed further).
+//!
 //! Painting is `S` and `s` (stroke), `f`, `F` and `f*` (fill), `B`, `B*`, `b` and `b*` (both), and
 //! text shown by `Tj`, `TJ`, `'` and `"` in a mode that fills, strokes or both (Table 104).
 //!
@@ -25,7 +28,7 @@
 //! a graphics state dictionary whose `/OPM` is 1 are read at all, since without one the mode is
 //! never 1.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object};
 
@@ -71,7 +74,7 @@ pub(crate) fn icc_cmyk_overprinted(doc: &Document, objs: &[(ObjRef, std::sync::A
     if !objs.iter().any(|(_, o)| has_mode_1(o, 0)) {
         return false;
     }
-    let mut walk = Walk { doc, budget: DecodeBudget::new(MAX_DECODED, usize::MAX), read: HashSet::new(), reached: HashSet::new() };
+    let mut walk = Walk { doc, budget: DecodeBudget::new(MAX_DECODED, usize::MAX), read: HashMap::new(), reached: HashSet::new() };
     for page in pdfcraft_model::pages(doc) {
         let resources = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned());
         let contents = match page.dict.get(b"Contents").map(|c| doc.resolve(c)).as_deref() {
@@ -92,7 +95,7 @@ pub(crate) fn icc_cmyk_overprinted(doc: &Document, objs: &[(ObjRef, std::sync::A
                 data.push(b'\n');
             }
         }
-        if walk.content(&data, resources.as_ref(), State::default(), 0) {
+        if walk.content(&data, resources.as_ref(), page.obj, State::default(), 0) {
             return true;
         }
     }
@@ -106,7 +109,7 @@ pub(crate) fn icc_cmyk_overprinted(doc: &Document, objs: &[(ObjRef, std::sync::A
         let resources = s.dict.get(b"Resources").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned());
         let Ok(data) = walk.budget.decode(s) else { continue };
         walk.reached.insert(*r);
-        if walk.content(&data, resources.as_ref(), State::default(), 0) {
+        if walk.content(&data, resources.as_ref(), *r, State::default(), 0) {
             return true;
         }
     }
@@ -115,18 +118,18 @@ pub(crate) fn icc_cmyk_overprinted(doc: &Document, objs: &[(ObjRef, std::sync::A
 
 /// Whether `o` holds, directly, a dictionary whose `/OPM` is 1, or may be: a reference is followed
 /// only when the state is used.
+/// A stream's dictionary is searched as any other, so a form's direct `/Resources` count.
 fn has_mode_1(o: &Object, depth: u8) -> bool {
     if depth > MAX_DIRECT_DEPTH {
         return false;
     }
-    match o {
-        Object::Dict(d) => {
-            d.get(b"OPM").is_some_and(|m| is_one(m) || matches!(m, Object::Ref(_))) || d.iter().any(|(_, v)| has_mode_1(v, depth.saturating_add(1)))
-        }
-        Object::Stream(s) => s.dict.get(b"OPM").is_some_and(|m| is_one(m) || matches!(m, Object::Ref(_))),
-        Object::Array(a) => a.iter().any(|v| has_mode_1(v, depth.saturating_add(1))),
-        _ => false,
-    }
+    let d = match o {
+        Object::Dict(d) => d,
+        Object::Stream(s) => &s.dict,
+        Object::Array(a) => return a.iter().any(|v| has_mode_1(v, depth.saturating_add(1))),
+        _ => return false,
+    };
+    d.get(b"OPM").is_some_and(|m| is_one(m) || matches!(m, Object::Ref(_))) || d.iter().any(|(_, v)| has_mode_1(v, depth.saturating_add(1)))
 }
 
 fn is_one(o: &Object) -> bool {
@@ -137,18 +140,25 @@ fn is_one(o: &Object) -> bool {
     }
 }
 
+/// A form drawn in a state: the form, the state, and, for a form without `/Resources` of its own,
+/// the object whose resources it takes.
+type Drawn = (ObjRef, State, Option<ObjRef>);
+
 struct Walk<'a> {
     doc: &'a Document,
     budget: DecodeBudget,
-    /// Forms already read, with the state they were drawn in: the same state reads the same way.
-    read: HashSet<(ObjRef, State)>,
+    /// Forms already read, by what decides how they read, with the least depth each was read at:
+    /// the same state and resources read the same way, and a form read less deeply follows its
+    /// own forms further.
+    read: HashMap<Drawn, u8>,
     /// Content streams read at least once.
     reached: HashSet<ObjRef>,
 }
 
 impl Walk<'_> {
     /// Reads one content stream from `state`; true at the first painting that breaks the rule.
-    fn content(&mut self, data: &[u8], resources: Option<&Dict>, mut state: State, depth: u8) -> bool {
+    /// `owner` is the object `resources` come from: a page, or a form or other stream with its own.
+    fn content(&mut self, data: &[u8], resources: Option<&Dict>, owner: ObjRef, mut state: State, depth: u8) -> bool {
         let mut saved = Vec::new();
         // `q`s past `MAX_SAVES`, whose `Q`s restore nothing.
         let mut unsaved = 0usize;
@@ -212,18 +222,23 @@ impl Walk<'_> {
                 b"Do" if depth < MAX_FORM_DEPTH => {
                     let Some(name) = op.name(0) else { continue };
                     let Some(Object::Ref(r)) = resources.and_then(|res| self.entry(res, b"XObject", name)) else { continue };
-                    if !self.read.insert((r, state)) {
-                        continue;
-                    }
                     let form = self.doc.resolve(&Object::Ref(r));
                     let Object::Stream(s) = &*form else { continue };
                     if s.dict.name(b"Subtype") != Some(b"Form") {
                         continue;
                     }
-                    self.reached.insert(r);
                     let own = s.dict.get(b"Resources").map(|x| self.doc.resolve(x)).and_then(|x| x.as_dict().cloned());
+                    // Without resources of its own the form names what its caller's resources hold,
+                    // so another caller may make it read differently.
+                    let key = (r, state, own.is_none().then_some(owner));
+                    if self.read.get(&key).is_some_and(|&read_at| read_at <= depth) {
+                        continue;
+                    }
+                    self.read.insert(key, depth);
+                    self.reached.insert(r);
                     let Ok(inner) = self.budget.decode(s) else { continue };
-                    if self.content(&inner, own.as_ref().or(resources), state, depth.saturating_add(1)) {
+                    let inner_owner = if own.is_some() { r } else { owner };
+                    if self.content(&inner, own.as_ref().or(resources), inner_owner, state, depth.saturating_add(1)) {
                         return true;
                     }
                 }

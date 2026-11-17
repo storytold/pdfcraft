@@ -2444,3 +2444,72 @@ fn icc_cmyk_overprint_is_cited_and_not_fixable() {
     assert_eq!(found[0].message, "An ICCBased CMYK colour space is painted with overprinting on and overprint mode 1");
     assert!(!found[0].fixable);
 }
+
+/// A form XObject stream with dictionary entries `extra`, drawing `content`.
+fn form_xobject(content: &str, extra: &str) -> String {
+    format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {extra} /Length {} >>\nstream\n{content}\nendstream", content.len())
+}
+
+/// A graphics state with `/OPM 1` that only a form's own direct `/Resources` hold is still found,
+/// so the document is read.
+#[test]
+fn icc_cmyk_overprint_set_only_in_a_forms_own_resources_is_reported() {
+    let icc = "<< /Length 0 /N 4 >>\nstream\n\nendstream";
+    let form = form_xobject(
+        "/GSF gs /C4 cs 0 0 0 1 sc 0 0 10 10 re f",
+        "/Resources << /ExtGState << /GSF << /OP true /OPM 1 >> >> /ColorSpace << /C4 [/ICCBased 5 0 R] >> >>",
+    );
+    assert!(overprint_reported(&drawing("/Fm Do", "/XObject << /Fm 6 0 R >>", &[icc, &form])));
+    // The same form with mode 0 says nothing.
+    let mode_0 = form.replace("/OPM 1", "/OPM 0");
+    assert!(!overprint_reported(&drawing("/Fm Do", "/XObject << /Fm 6 0 R >>", &[icc, &mode_0])));
+}
+
+/// A form without resources of its own takes each caller's: drawn by two pages in the same state,
+/// it is read with each page's resources, not once for both.
+#[test]
+fn a_form_taking_its_callers_resources_is_read_with_each_callers() {
+    let page = |cs: u32| {
+        format!(
+            "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /ExtGState << /GS << /OP true /OPM 1 >> >> /ColorSpace << /C [/ICCBased {cs} 0 R] >> /XObject << /Fm 6 0 R >> >> >>"
+        )
+    };
+    let (rgb_page, cmyk_page) = (page(7), page(8));
+    let content = "/Fm Do";
+    let contents = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let form = form_xobject("/GS gs /C cs 0 0 10 10 re f", "");
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>",
+        rgb_page.as_str(),
+        cmyk_page.as_str(),
+        contents.as_str(),
+        form.as_str(),
+        "<< /Length 0 /N 3 >>\nstream\n\nendstream",
+        "<< /Length 0 /N 4 >>\nstream\n\nendstream",
+    ];
+    assert!(overprint_reported(&build(&objs, "")));
+}
+
+/// A form first reached at the depth limit, where the forms it draws are not followed, is read
+/// again when the page draws it directly, so the form it draws inherits the page's state.
+#[test]
+fn a_form_first_reached_at_the_depth_limit_is_read_again_less_deeply() {
+    // `/L1` .. `/L15` each draw the next, `/L15` draws `/F`, which is then read at the limit;
+    // `/F` draws `/G`, which fills.
+    let mut extra = vec!["<< /Length 0 /N 4 >>\nstream\n\nendstream".to_string()];
+    let mut names = String::new();
+    for n in 1..=15 {
+        let next = if n == 15 { "F".to_string() } else { format!("L{}", n + 1) };
+        extra.push(form_xobject(&format!("/{next} Do"), ""));
+        names.push_str(&format!("/L{n} {} 0 R ", 5 + n));
+    }
+    extra.push(form_xobject("/G Do", ""));
+    extra.push(form_xobject("0 0 10 10 re f", ""));
+    names.push_str("/F 21 0 R /G 22 0 R");
+    let resources = format!("/ExtGState << /GS << /OP true /OPM 1 >> >> /ColorSpace << /C4 [/ICCBased 5 0 R] >> /XObject << {names} >>");
+    let extra: Vec<&str> = extra.iter().map(String::as_str).collect();
+    assert!(overprint_reported(&drawing("/GS gs /C4 cs /L1 Do /F Do", &resources, &extra)));
+    // Drawn only through the chain, `/G` is past the limit and not read in the page's state.
+    assert!(!overprint_reported(&drawing("/GS gs /C4 cs /L1 Do", &resources, &extra)));
+}
