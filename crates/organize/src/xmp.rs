@@ -30,6 +30,7 @@ const MAX_XMP: usize = 16 << 20;
 const DC: &str = "http://purl.org/dc/elements/1.1/";
 const PDF: &str = "http://ns.adobe.com/pdf/1.3/";
 const XMP: &str = "http://ns.adobe.com/xap/1.0/";
+const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 /// Adobe's PDF extension schema: custom document properties, each under its own name.
 const PDFX: &str = "http://ns.adobe.com/pdfx/1.3/";
 
@@ -451,14 +452,16 @@ fn set_property(xmp: &str, name: &str, ns: &str, shape: Shape, value: &str) -> O
     // The element form, `<dc:title>…</dc:title>` (or `<dc:title/>`): replaced where it stands, so
     // it keeps the namespace declaration of the description around it, and the namespace
     // declarations of its own start tag (`<xmp:ModifyDate xmlns:xmp="…">`), which may be what
-    // binds its prefix.
+    // binds its prefix. Such a declaration scopes only this element (Namespaces in XML 1.0 §6.1),
+    // whose content is now ours: an `xmlns:rdf` there binds the `rdf:Alt` or `rdf:Seq` written
+    // inside it, so it is written bound to RDF, whatever it said.
     if let Some((start, end)) = element_span(xmp, name) {
         let tag = xmp.get(start..end)?;
         let tag = tag.get(..=tag.find('>')?)?;
         let decls: String = names(tag)
             .into_iter()
             .filter(|(n, _)| *n == "xmlns" || n.starts_with("xmlns:"))
-            .filter_map(|(n, v)| Some(format!(" {n}=\"{}\"", v?.replace('"', "&quot;"))))
+            .filter_map(|(n, v)| Some(format!(" {n}=\"{}\"", if n == "xmlns:rdf" { RDF } else { v? }.replace('"', "&quot;"))))
             .collect();
         let mut out = String::with_capacity(xmp.len());
         out.push_str(xmp.get(..start)?);
@@ -492,7 +495,8 @@ fn set_property(xmp: &str, name: &str, ns: &str, shape: Shape, value: &str) -> O
 /// description of the packet.
 fn insert_description(xmp: &str, name: &str, ns: &str, element: &str) -> Option<String> {
     let prefix = name.split(':').next()?;
-    let at = xmp.rfind("</rdf:RDF>")?;
+    // The packet's own end tag, not one written in a trailing comment.
+    let at = markup_only(xmp).rfind("</rdf:RDF>")?;
     // Every description of a packet describes the same resource (XMP: one `rdf:about` value).
     let about = attribute_span(xmp, "rdf:about").and_then(|(_, s, e, _)| xmp.get(s..e)).unwrap_or_default().replace('"', "&quot;");
     let mut out = String::with_capacity(xmp.len() + element.len() + 128);
@@ -814,5 +818,36 @@ mod tests {
                       <xmp:ModifyDate xmlns:xmp='http://ns.adobe.com/xap/1.0/' rdf:parseType=\"Literal\">2020</xmp:ModifyDate></rdf:Description></rdf:RDF>";
         let out = set_property(packet, "xmp:ModifyDate", XMP, Shape::Text, "2026").unwrap();
         assert!(out.contains("<xmp:ModifyDate xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">2026</xmp:ModifyDate>"), "{out}");
+    }
+
+    /// The `rdf:Alt` written in place of a property's value is RDF's even when the property's start
+    /// tag bound `rdf` to another namespace and wrote its value under another prefix.
+    #[test]
+    fn a_replaced_value_is_written_in_the_rdf_namespace() {
+        let title = format!(
+            "<dc:title xmlns:dc=\"{DC}\" xmlns:rdf=\"urn:other\" xmlns:r=\"{RDF}\"><r:Alt><r:li xml:lang=\"x-default\">Old</r:li></r:Alt></dc:title>"
+        );
+        let packet = format!("<rdf:RDF xmlns:rdf=\"{RDF}\"><rdf:Description rdf:about=\"\">{title}</rdf:Description></rdf:RDF>");
+        let out = set_property(&packet, "dc:title", DC, Shape::LangAlt, "New").unwrap();
+        let expected = format!(
+            "<dc:title xmlns:dc=\"{DC}\" xmlns:rdf=\"{RDF}\" xmlns:r=\"{RDF}\"><rdf:Alt><rdf:li xml:lang=\"x-default\">New</rdf:li></rdf:Alt></dc:title>"
+        );
+        assert!(out.contains(&expected), "{out}");
+        assert!(!out.contains("urn:other"), "{out}");
+    }
+
+    /// A property that is missing is added before the packet's own `</rdf:RDF>`, not inside a
+    /// comment after it that holds one.
+    #[test]
+    fn a_missing_property_is_added_before_the_real_rdf_end_tag() {
+        let comment = "<!-- </rdf:RDF> -->";
+        let packet = PACKET.replace("</x:xmpmeta>", &format!("{comment}</x:xmpmeta>"));
+        let modified = set_property(&packet, "xmp:ModifyDate", XMP, Shape::Text, "2026-11-18").unwrap();
+        let out = set_property(&modified, "xmp:MetadataDate", XMP, Shape::Text, "2026-11-18").unwrap();
+        assert!(out.contains(comment), "{out}");
+        let tail = format!("</rdf:Description>\n</rdf:RDF>\n{comment}</x:xmpmeta>\n<?xpacket end=\"w\"?>");
+        assert!(out.ends_with(&tail), "{out}");
+        assert_eq!(get_property(&out, "xmp:ModifyDate", Shape::Text).as_deref(), Some("2026-11-18"));
+        assert_eq!(get_property(&out, "xmp:MetadataDate", Shape::Text).as_deref(), Some("2026-11-18"));
     }
 }
