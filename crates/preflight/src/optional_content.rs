@@ -1,0 +1,99 @@
+//! PDF/A-2 and -3 6.9, PDF/A-4 6.10: optional content. Each optional content configuration
+//! dictionary, the catalog's `/OCProperties /D` and those in its `/Configs` (ISO 32000-2 8.11.4.2,
+//! Tables 98 and 99):
+//!
+//! - has a `/Name`, unique among the configurations;
+//! - lists every optional content group of the file (`/OCGs`) when it has an `/Order` array, at any
+//!   depth of that array's nesting;
+//! - in PDF/A-2 and 3, has no `/AS` (auto state) entry. PDF/A-4 doesn't ask this.
+
+use std::collections::HashSet;
+
+use pdfcraft_cos::{Dict, Document, ObjRef, Object};
+
+use crate::Level;
+
+/// How many optional content configurations are read.
+const MAX_CONFIGURATIONS: usize = 4096;
+/// How deep an `/Order` array's nested arrays are followed.
+const MAX_ORDER_DEPTH: usize = 32;
+/// How many entries of one `/Order` array, at every depth, are read.
+const MAX_ORDER_ENTRIES: usize = 1 << 16;
+
+/// The groups an `/Order` array lists, at every depth of its nesting.
+fn ordered(doc: &Document, order: &Object) -> HashSet<ObjRef> {
+    let mut found = HashSet::new();
+    let mut stack: Vec<(Object, usize)> = vec![(order.clone(), 0)];
+    let mut read = 0usize;
+    while let Some((o, depth)) = stack.pop() {
+        read = read.saturating_add(1);
+        if read > MAX_ORDER_ENTRIES {
+            break;
+        }
+        match o {
+            Object::Ref(r) => match &*doc.resolve(&Object::Ref(r)) {
+                // An array kept as an object of its own is followed like a direct one.
+                Object::Array(a) if depth < MAX_ORDER_DEPTH => stack.extend(a.iter().map(|x| (x.clone(), depth.saturating_add(1)))),
+                Object::Array(_) => {}
+                _ => {
+                    found.insert(r);
+                }
+            },
+            Object::Array(a) if depth < MAX_ORDER_DEPTH => stack.extend(a.into_iter().map(|x| (x, depth.saturating_add(1)))),
+            // A label (a text string) or anything else names no group.
+            _ => {}
+        }
+    }
+    found
+}
+
+/// The optional content rules for `level`, cited as PDF/A-2 numbers them (6.9): the caller gives
+/// PDF/A-4 its own number.
+pub(crate) fn check(
+    doc: &Document,
+    level: Level,
+    catalog: &Dict,
+    issue: &mut dyn FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    let Some(properties) = catalog.get(b"OCProperties").map(|p| doc.resolve(p)) else { return };
+    let Some(properties) = properties.as_dict() else { return };
+    let mut configurations: Vec<Object> = properties.get(b"D").cloned().into_iter().collect();
+    if let Some(list) = properties.get(b"Configs").map(|c| doc.resolve(c))
+        && let Some(list) = list.as_array()
+    {
+        configurations.extend(list.iter().take(MAX_CONFIGURATIONS).cloned());
+    }
+    // Every group of the file is listed in /OCGs (Table 98).
+    let groups: HashSet<ObjRef> = properties
+        .get(b"OCGs")
+        .map(|g| doc.resolve(g))
+        .and_then(|g| g.as_array().map(|a| a.iter().take(MAX_ORDER_ENTRIES).filter_map(Object::as_ref).collect()))
+        .unwrap_or_default();
+    let mut names = HashSet::new();
+    let (mut unnamed, mut repeated, mut unordered, mut auto_state) = (false, false, false, false);
+    for configuration in &configurations {
+        let configuration = doc.resolve(configuration);
+        let Some(configuration) = configuration.as_dict() else { continue };
+        match configuration.get(b"Name").map(|n| doc.resolve(n)).and_then(|n| n.as_string().map(|s| s.bytes.clone())) {
+            Some(name) => repeated |= !names.insert(name),
+            None => unnamed = true,
+        }
+        if let Some(order) = configuration.get(b"Order").filter(|o| !matches!(**o, Object::Null)) {
+            let listed = ordered(doc, order);
+            unordered |= groups.iter().any(|g| !listed.contains(g));
+        }
+        auto_state |= configuration.get(b"AS").is_some_and(|a| !matches!(*doc.resolve(a), Object::Null));
+    }
+    if unnamed {
+        issue("6.9", "An optional content configuration has no Name", None, None, false);
+    }
+    if repeated {
+        issue("6.9", "Two optional content configurations have the same Name", None, None, false);
+    }
+    if unordered {
+        issue("6.9", "An optional content configuration's Order doesn't list every optional content group", None, None, false);
+    }
+    if auto_state && level.part() != 4 {
+        issue("6.9", "An optional content configuration has an auto state (AS)", None, None, false);
+    }
+}

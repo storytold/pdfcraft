@@ -28,6 +28,7 @@ mod gstate;
 mod header;
 pub mod icc;
 mod limits;
+mod optional_content;
 mod part4;
 mod spot;
 mod trailer;
@@ -282,6 +283,8 @@ pub const WORDINGS: &[&str] = &[
     "A page has presentation steps (PresSteps)",
     "An optional content configuration has no Name",
     "Two optional content configurations have the same Name",
+    "An optional content configuration's Order doesn't list every optional content group",
+    "An optional content configuration has an auto state (AS)",
     "The metadata stream isn't marked /Type /Metadata /Subtype /XML",
     "The XMP metadata isn't UTF-8",
     "The XMP metadata in metadata stream {} isn't UTF-8",
@@ -1362,6 +1365,13 @@ fn check_identification(
     if doc.trailer().get(b"Encrypt").is_some() {
         issue("6.1.3", "The document is encrypted", None, None, true);
     }
+    // 6.9: optional content, which PDF/A-4 numbers 6.10 (`part4::clause` gives 6.9 to embedded
+    // files, so the number is given here).
+    let part4 = level.part() == 4;
+    let mut optional_issue = |clause: &'static str, pattern: &'static str, value: Option<String>, page: Option<usize>, fixable: bool| {
+        issue(if part4 && clause == "6.9" { "6.10" } else { clause }, pattern, value, page, fixable)
+    };
+    optional_content::check(doc, level, &catalog(doc), &mut optional_issue);
     if level.part() == 4 {
         part4::document(doc, &catalog(doc), profiles, issue);
     }

@@ -302,10 +302,10 @@ fn catalog_version(doc: &Document, catalog: &Dict, issue: &mut Report<'_>) {
     }
 }
 
-/// 6.1.11, 6.4.2, 6.10, 6.11 and 6.12: what the catalog may not hold. A permissions dictionary
-/// holds only `/UR3` and `/DocMDP` (ISO 32000-2 12.8.6, Table 263); no XFA form and no
-/// `/NeedsRendering`; every optional content configuration has a `/Name` of its own; no alternate
-/// presentations; no `/Requirements`.
+/// 6.1.11, 6.4.2, 6.11 and 6.12: what the catalog may not hold. A permissions dictionary holds only
+/// `/UR3` and `/DocMDP` (ISO 32000-2 12.8.6, Table 263); no XFA form and no `/NeedsRendering`; no
+/// alternate presentations; no `/Requirements`. Optional content (6.10) is checked with PDF/A-2's
+/// ([`crate::optional_content`]).
 fn catalog_entries(doc: &Document, catalog: &Dict, issue: &mut Report<'_>) {
     let dict_of = |key: &[u8]| catalog.get(key).map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned());
     if let Some(perms) = dict_of(b"Perms") {
@@ -326,9 +326,6 @@ fn catalog_entries(doc: &Document, catalog: &Dict, issue: &mut Report<'_>) {
     if catalog.get(b"Requirements").is_some() {
         issue("6.12", "The catalog has requirements (Requirements)", None, None, false);
     }
-    if let Some(properties) = dict_of(b"OCProperties") {
-        optional_content_names(doc, &properties, issue);
-    }
 }
 
 /// 6.11 and 6.2.3: a page has no presentation steps (`/PresSteps`), and its own output intents
@@ -338,36 +335,6 @@ pub(crate) fn page(doc: &Document, page: &Dict, index: usize, profiles: &mut Pro
         issue("6.11", "A page has presentation steps (PresSteps)", None, Some(index), false);
     }
     output_intents(doc, page, Some(index), profiles, issue);
-}
-
-/// How many optional content configurations [`optional_content_names`] reads.
-const MAX_CONFIGURATIONS: usize = 4096;
-
-/// 6.10: each optional content configuration (`/D` and those in `/Configs`, ISO 32000-2 8.11.4.2)
-/// has a `/Name`, and no two have the same one.
-fn optional_content_names(doc: &Document, properties: &Dict, issue: &mut Report<'_>) {
-    let mut configurations: Vec<Object> = properties.get(b"D").cloned().into_iter().collect();
-    if let Some(list) = properties.get(b"Configs").map(|c| doc.resolve(c))
-        && let Some(list) = list.as_array()
-    {
-        configurations.extend(list.iter().take(MAX_CONFIGURATIONS).cloned());
-    }
-    let mut names = std::collections::HashSet::new();
-    let (mut unnamed, mut repeated) = (false, false);
-    for configuration in &configurations {
-        let configuration = doc.resolve(configuration);
-        let Some(configuration) = configuration.as_dict() else { continue };
-        match configuration.get(b"Name").map(|n| doc.resolve(n)).and_then(|n| n.as_string().map(|s| s.bytes.clone())) {
-            Some(name) => repeated |= !names.insert(name),
-            None => unnamed = true,
-        }
-    }
-    if unnamed {
-        issue("6.10", "An optional content configuration has no Name", None, None, false);
-    }
-    if repeated {
-        issue("6.10", "Two optional content configurations have the same Name", None, None, false);
-    }
 }
 
 /// 6.7.2.1: the catalog's metadata stream says it is one (`/Type /Metadata /Subtype /XML`, ISO

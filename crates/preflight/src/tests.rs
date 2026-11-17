@@ -79,8 +79,9 @@ fn verify_reports_what_breaks_pdfa() {
 /// what this reads off the file; the sentences `convert` reports as fixed are not wordings.
 #[test]
 fn wordings_are_complete() {
-    // PDF/A-4's own rules report through the same `issue` from `part4.rs`.
-    let source = [include_str!("lib.rs"), include_str!("part4.rs")].concat();
+    // PDF/A-4's own rules report through the same `issue` from `part4.rs`, and optional content's
+    // from its module.
+    let source = [include_str!("lib.rs"), include_str!("part4.rs"), include_str!("optional_content.rs")].concat();
     let source = source.as_str();
     let mut said = Vec::new();
     let mut rest = source;
@@ -2869,4 +2870,44 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
+}
+
+/// PDF/A-2 6.9, PDF/A-4 6.10: every optional content configuration has a unique Name, an Order
+/// that lists every group when it has one, and, in PDF/A-2 and 3, no AS.
+#[test]
+fn optional_content_configurations_are_checked_clause_6_9() {
+    let oc = |d: &str, configs: &str, level: Level| -> Vec<(&'static str, String)> {
+        let catalog = format!("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [3 0 R 4 0 R] /D {d} {configs} >> >>");
+        let doc =
+            build(&[&catalog, "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Type /OCG /Name (a) >>", "<< /Type /OCG /Name (b) >>", "[4 0 R]"], "");
+        let mut found: Vec<(&str, String)> =
+            verify(&doc, level).into_iter().filter(|i| i.message.contains("optional content")).map(|i| (i.clause, i.message)).collect();
+        found.sort();
+        found
+    };
+    let none: Vec<(&str, String)> = Vec::new();
+    // Named, with an Order listing both groups: directly, nested under a label, or in an array of
+    // its own.
+    for order in ["[3 0 R 4 0 R]", "[(Layers) [3 0 R [4 0 R]]]", "[3 0 R 5 0 R]"] {
+        let d = format!("<< /Name (View) /Order {order} >>");
+        assert_eq!(oc(&d, "", Level::A2b), none, "{order}");
+        assert_eq!(oc(&d, "", Level::A4), none, "{order}");
+    }
+    // No Order at all asks for nothing.
+    assert_eq!(oc("<< /Name (View) >>", "", Level::A2b), none);
+    let missing = "An optional content configuration's Order doesn't list every optional content group";
+    assert_eq!(oc("<< /Name (View) /Order [3 0 R] >>", "", Level::A2b), [("6.9", missing.to_owned())]);
+    assert_eq!(oc("<< /Name (View) /Order [3 0 R] >>", "", Level::A4), [("6.10", missing.to_owned())]);
+    // A configuration in /Configs, with a name the default one has too, and none at all.
+    let unnamed = "An optional content configuration has no Name";
+    let twice = "Two optional content configurations have the same Name";
+    assert_eq!(
+        oc("<< /Name (View) >>", "/Configs [<< /Name (View) >> << /Order [3 0 R 4 0 R] >>]", Level::A3b),
+        [("6.9", unnamed.to_owned()), ("6.9", twice.to_owned())]
+    );
+    // AS is PDF/A-2's and 3's rule only; a null AS is none.
+    let auto = "<< /Name (View) /AS [<< /Event /View /Category [/View] /OCGs [3 0 R] >>] >>";
+    assert_eq!(oc(auto, "", Level::A2b), [("6.9", "An optional content configuration has an auto state (AS)".to_owned())]);
+    assert_eq!(oc(auto, "", Level::A4), none);
+    assert_eq!(oc("<< /Name (View) /AS null >>", "", Level::A2b), none);
 }
