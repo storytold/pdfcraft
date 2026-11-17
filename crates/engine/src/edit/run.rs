@@ -85,6 +85,17 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Err(EditError::NotPermitted("filling in form fields"))
             }
         }
+        // An import brings in field values, comments or both, which Table 22 allows by their own
+        // bits: filling in existing fields (bit 9, or 6), comments (bit 6). Changes to the
+        // document (bit 4) allow either, as they always have here. It goes ahead when any of them
+        // is set, and what it brought in is checked once the file is read ([`check_import_permission`]).
+        Edit::ImportData { .. } => {
+            if p.modify() || p.fill_forms() || p.annotate() {
+                Ok(())
+            } else {
+                Err(EditError::NotPermitted("importing form data or comments"))
+            }
+        }
         Edit::Protect(_) | Edit::RemoveProtection => {
             if unrestricted(p) {
                 Ok(())
@@ -125,7 +136,6 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::PasteObjects { .. }
         | Edit::ClearRedactions
         | Edit::RemoveHidden { .. }
-        | Edit::ImportData { .. }
         | Edit::AddLink { .. }
         | Edit::SetLink { .. }
         | Edit::DeleteLink { .. }
@@ -174,6 +184,21 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         }
         Edit::Batch { edits, .. } => edits.iter().try_for_each(|e| check_permission(e, p)),
     }
+}
+
+/// Whether the opening password (`None`: no restrictions) allows what an import brought in
+/// (Table 22): field values need filling in forms (bits 9 or 6), comments need bit 6; changes to
+/// the document (bit 4) allow both, as [`check_permission`] allowed any import before it judged
+/// them apart. A file holding both is refused as a whole where either part is.
+fn check_import_permission(p: Option<&pdfcraft_cos::Permissions>, comments: bool, fields: bool) -> Result<(), EditError> {
+    let Some(p) = p else { return Ok(()) };
+    if comments && !(p.annotate() || p.modify()) {
+        return Err(EditError::NotPermitted("comments"));
+    }
+    if fields && !(p.fill_forms() || p.modify()) {
+        return Err(EditError::NotPermitted("filling in form fields"));
+    }
+    Ok(())
 }
 
 /// What a comment import left out of comments it did import (an appearance it could not read),
@@ -266,6 +291,9 @@ pub(crate) struct EditCtx {
     /// What [`Edit::PrepareText`] prepared, repaired and left grouped, for
     /// [`Session::prepare_text`](crate::Session::prepare_text).
     pub(crate) prepared: Option<pdfcraft_edit::text::forms::Preparation>,
+    /// What the opening password allows (`None`: no restrictions): an import is checked against
+    /// it by what it brought in ([`check_import_permission`]).
+    pub(crate) permissions: Option<pdfcraft_cos::Permissions>,
 }
 
 impl EditCtx {
@@ -319,6 +347,7 @@ impl EditCtx {
             redaction_elsewhere: None,
             redaction_identification: pdfcraft_redact::Identification::default(),
             prepared: None,
+            permissions: None,
         }
     }
 
@@ -1038,6 +1067,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
         }
         Edit::ImportData { name, bytes } if bytes.starts_with(b"%PDF-") => {
+            check_import_permission(cx.permissions.as_ref(), true, false)?;
             let src = comment_source(bytes).map_err(|p| EditError::Source(format!("{name}: {p}")))?;
             import_pdf_comments(doc, &src)?;
         }
@@ -1048,6 +1078,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             match text {
                 Some(Ok(text)) if is_xfa_data_file(&text) => {
                     let expect_root = cx.xfa.as_ref().and_then(|t| t.root.common.name.clone());
+                    check_import_permission(cx.permissions.as_ref(), false, true)?;
                     let r = pdfcraft_xfa::import_data(doc, &text, expect_root.as_deref(), cx.xfa_datasets)
                         .map_err(|e| EditError::Write(e.to_string()))?;
                     cx.xfa_datasets = r.stream.or(cx.xfa_datasets);
@@ -1063,11 +1094,15 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     let mut data = doc.clone();
                     match pdfcraft_xfdf::import(&mut data, bytes) {
                         Ok(report) => {
+                            check_import_permission(cx.permissions.as_ref(), report.comments > 0, report.fields > 0 || !report.rejected.is_empty())?;
                             note_skipped(&mut data, &report);
                             *doc = data;
                         }
                         Err(e) if bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => match comment_source(bytes) {
-                            Ok(src) => import_pdf_comments(doc, &src)?,
+                            Ok(src) => {
+                                check_import_permission(cx.permissions.as_ref(), true, false)?;
+                                import_pdf_comments(doc, &src)?
+                            }
                             Err(SourceProblem::Unreadable(_)) => return Err(e.into()),
                             Err(p) => return Err(EditError::Source(format!("{name}: {p}"))),
                         },

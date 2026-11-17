@@ -2925,6 +2925,47 @@ fn form_fixture() -> Vec<u8> {
     out
 }
 
+/// Import Data brings in what the permissions allow by their own bits (ISO 32000-2 Table 22):
+/// field values on a file that allows filling in fields only (bit 9, not 4 or 6), but not the
+/// comments of a file that holds them too, and nothing on a file that allows no changes. A
+/// refused import leaves the document as it was.
+#[test]
+fn import_data_follows_the_permission_to_fill_in_fields() {
+    let protect = |changes: Changes| {
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(form_fixture())).unwrap();
+        let protection = Protection { permissions_password: Some("boss".into()), changes, ..Protection::default() };
+        doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: "",
+            owner_password: "boss",
+            permissions: protection.permission_bits(),
+            encrypt_metadata: true,
+            seed: [3; 32],
+        })
+        .unwrap();
+        Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap())
+    };
+    let values =
+        "<?xml version=\"1.0\"?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><fields><field name=\"name\"><value>Ada</value></field></fields></xfdf>";
+    let with_note = "<?xml version=\"1.0\"?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><annots><text page=\"0\" rect=\"10,10,30,30\" name=\"n1\"><contents>Hi</contents></text></annots><fields><field name=\"name\"><value>Bob</value></field></fields></xfdf>";
+    let import =
+        |s: &mut Session, id, text: &str| s.apply(id, Edit::ImportData { name: "data.xfdf".into(), bytes: Arc::new(text.as_bytes().to_vec()) });
+    let name = |s: &Session, id| s.get(id).unwrap().form.iter().find(|f| f.name == "name").map(|f| f.value.clone()).unwrap();
+
+    let mut s = Session::new();
+    let id = s.open("fill.pdf", None, protect(Changes::FillSign), None).unwrap();
+    let p = s.get(id).unwrap().permissions().unwrap();
+    assert!(p.fill_forms() && !p.modify() && !p.annotate(), "/P={:#x}", p.bits);
+    import(&mut s, id, values).expect("field values on a file that allows filling in fields");
+    assert_eq!(name(&s, id), vec!["Ada".to_string()]);
+    assert_eq!(import(&mut s, id, with_note), Err(EditError::NotPermitted("comments")));
+    assert_eq!(name(&s, id), vec!["Ada".to_string()], "the refused import changed nothing");
+
+    let id = s.open("locked.pdf", None, protect(Changes::None), None).unwrap();
+    assert_eq!(import(&mut s, id, values), Err(EditError::NotPermitted("importing form data or comments")));
+    assert!(name(&s, id).is_empty());
+}
+
 /// Whether `needle` appears in `bytes`, or in any stream of the PDF they hold once decoded (so
 /// compressed object streams are searched too), as literal or hex string bytes.
 fn appears_in_pdf(bytes: &Arc<Vec<u8>>, needle: &str) -> bool {

@@ -4902,8 +4902,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.import_data"]
 tools = ["doc_import_data"]
-evidence = ["crates/xfdf/src/tests.rs::xfdf_import_keeps_text_around_xml_comments_and_instructions", "crates/xfdf/src/tests.rs::xfdf_round_trips_comments_and_values", "crates/xfdf/src/tests.rs::fdf_round_trips_values_and_comments", "crates/automation/tests/it/automation.rs::comments_and_form_data_travel_as_xfdf_fdf_and_text"]
-notes = "XFDF, FDF; XFDF text survives XML comments and processing instructions; values go through formats and validation; read-only fields take data; XFA forms also take XDP/XML data files (form.xfa-data)"
+evidence = ["crates/xfdf/src/tests.rs::xfdf_import_keeps_text_around_xml_comments_and_instructions", "crates/xfdf/src/tests.rs::xfdf_round_trips_comments_and_values", "crates/xfdf/src/tests.rs::fdf_round_trips_values_and_comments", "crates/automation/tests/it/automation.rs::comments_and_form_data_travel_as_xfdf_fdf_and_text", "crates/engine/src/tests.rs::import_data_follows_the_permission_to_fill_in_fields"]
+notes = "XFDF, FDF; XFDF text survives XML comments and processing instructions; values go through formats and validation; read-only fields take data; on an encrypted file field values need the permission to fill in fields and comments the permission to comment (ISO 32000-2 Table 22), as each edit would; XFA forms also take XDP/XML data files (form.xfa-data)"
 
 [[feature]]
 id = "form.export-data"
