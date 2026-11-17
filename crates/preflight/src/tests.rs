@@ -2477,4 +2477,32 @@ endstream";
     let selects = "<< /Type /ExtGState /Font [5 0 R 12] >>";
     assert_eq!(name_findings("", "/ExtGState << /GS 4 0 R >>", "", &[selects, &font("/F#E4MonoBold")]), bad_font);
     assert_eq!(name_findings("", "/ExtGState << /GS << /SMask /None /Font 4 >> >>", "", &[]), Vec::<String>::new());
+    // A shading pattern's own graphics state (ISO 32000-2 Table 76).
+    let pattern = "/Pattern << /P << /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 1 1] >> /ExtGState 4 0 R >> >>";
+    assert_eq!(name_findings("", pattern, "", &[selects, &font("/F#E4MonoBold")]), bad_font);
+}
+
+/// An object the walk reached first too deep to read all of is read again when another path
+/// reaches it less deep.
+#[test]
+fn a_name_reached_again_less_deep_is_read_clause_6_1_8() {
+    // Forms 4 to 34 in a chain, the last holding a Type 0 font (35) whose descendant (36) has a
+    // name that isn't UTF-8. The page's graphics state reaches form 4 as a soft mask's group, one
+    // level deeper than its /XObject entry does, and is read first: from there the descendant is
+    // one level past the depth limit; from /XObject it is at the limit.
+    let mut more: Vec<String> = (4..34).map(|n| form_with(&format!("/XObject << /X {} 0 R >>", n + 1))).collect();
+    more.push(form_with("/Font << /F 35 0 R >>"));
+    more.push("<< /Type /Font /Subtype /Type0 /BaseFont /Good /Encoding /Identity-H /DescendantFonts [36 0 R] >>".to_owned());
+    more.push("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /C#E4 >>".to_owned());
+    let more: Vec<&str> = more.iter().map(String::as_str).collect();
+    let resources = "/ExtGState << /GS << /SMask << /Type /Mask /S /Luminosity /G 4 0 R >> >> >> /XObject << /X 4 0 R >>";
+    assert_eq!(name_findings("", resources, "", &more), ["The font name C#E4 isn't valid UTF-8"]);
+    // Through the graphics state alone it is past the limit.
+    let deep = "/ExtGState << /GS << /SMask << /Type /Mask /S /Luminosity /G 4 0 R >> >> >>";
+    assert_eq!(name_findings("", deep, "", &more), Vec::<String>::new());
+}
+
+/// A form XObject with the resources `resources`.
+fn form_with(resources: &str) -> String {
+    format!("<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << {resources} >> /Length 0 >>\nstream\n\nendstream")
 }

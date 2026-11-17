@@ -18,7 +18,7 @@
 //! states and the keys of private data, aren't read: they name parts of the file, not text a reader
 //! shows.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use pdfcraft_cos::{Document, ObjRef, Object};
 
@@ -36,7 +36,7 @@ pub(crate) struct Findings {
 }
 
 pub(crate) fn check(doc: &Document) -> Findings {
-    let mut walk = Walk { doc, seen: HashSet::new(), visits: 0, found: Findings::default() };
+    let mut walk = Walk { doc, seen: HashMap::new(), visits: 0, found: Findings::default() };
     for p in pdfcraft_model::pages(doc) {
         if let Some(r) = p.dict.get(b"Resources") {
             walk.visit(r, 0, Walk::resources);
@@ -85,22 +85,25 @@ type Read<'a> = fn(&mut Walk<'a>, &Object, usize);
 
 struct Walk<'a> {
     doc: &'a Document,
-    /// The indirect objects read, each once.
-    seen: HashSet<ObjRef>,
+    /// The indirect objects read, each with the least depth it was read at: one reached again
+    /// less deep is read again, since the depth limit may have cut off what lies under it before.
+    seen: HashMap<ObjRef, usize>,
     visits: usize,
     found: Findings,
 }
 
 impl<'a> Walk<'a> {
-    /// Read `o` with `read`, once for an indirect object, within the budget and the depth.
+    /// Read `o` with `read`, once for an indirect object unless it is reached again less deep,
+    /// within the budget and the depth. A cycle reaches an object again deeper, so it ends.
     fn visit(&mut self, o: &Object, depth: usize, read: Read<'a>) {
         if self.visits >= MAX_VISITS || depth > MAX_DEPTH {
             return;
         }
-        if let Object::Ref(r) = o
-            && !self.seen.insert(*r)
-        {
-            return;
+        if let Object::Ref(r) = o {
+            if self.seen.get(r).is_some_and(|&read_at| read_at <= depth) {
+                return;
+            }
+            self.seen.insert(*r, depth);
         }
         self.visits = self.visits.saturating_add(1);
         let held = self.doc.resolve(o);
@@ -182,7 +185,8 @@ impl<'a> Walk<'a> {
         }
     }
 
-    /// A tiling pattern's resources, or a shading pattern's shading.
+    /// A tiling pattern's resources, or a shading pattern's shading and graphics state (ISO
+    /// 32000-2 Table 76).
     fn pattern(&mut self, p: &Object, depth: usize) {
         let d = match p {
             Object::Stream(s) => &s.dict,
@@ -194,6 +198,9 @@ impl<'a> Walk<'a> {
         }
         if let Some(sh) = d.get(b"Shading") {
             self.visit(sh, depth.saturating_add(1), Self::shading);
+        }
+        if let Some(gs) = d.get(b"ExtGState") {
+            self.visit(gs, depth.saturating_add(1), Self::graphics_state);
         }
     }
 
