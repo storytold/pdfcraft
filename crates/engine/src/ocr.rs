@@ -301,10 +301,53 @@ fn probe_fresh(found: bool, at: Instant, now: Instant) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 static TESSERACT_PROBE: Mutex<Option<CachedTesseract>> = Mutex::new(None);
 
-/// Whether a background probe, started for the UI by [`tesseract_engine_now`], is running now.
-/// At most one runs at a time.
+/// The background probe [`tesseract_engine_now`] starts for the UI: whether it runs, and whether
+/// an answer it landed has not been read since. At most one runs at a time.
 #[cfg(not(target_arch = "wasm32"))]
-static PROBING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static PROBE: ProbeFlags = ProbeFlags::new();
+
+/// See [`PROBE`]. The interface reads the status and then asks [`engine_probe_running`] whether to
+/// look again; a probe that lands between the two would otherwise leave it showing "still
+/// checking" until the next input, since the probe thread can't wake it. So the answer counts as
+/// news until a status read has seen it.
+#[cfg(not(target_arch = "wasm32"))]
+struct ProbeFlags {
+    running: std::sync::atomic::AtomicBool,
+    unread: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ProbeFlags {
+    const fn new() -> Self {
+        Self { running: std::sync::atomic::AtomicBool::new(false), unread: std::sync::atomic::AtomicBool::new(false) }
+    }
+
+    /// Claim the one probe; false when one is running already.
+    fn start(&self) -> bool {
+        !self.running.swap(true, std::sync::atomic::Ordering::AcqRel)
+    }
+
+    /// The probe filled the cache. Marked unread before it stops counting as running, so no
+    /// moment shows neither.
+    fn landed(&self) {
+        self.unread.store(true, std::sync::atomic::Ordering::Release);
+        self.running.store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    /// The probe could not be started: nothing landed.
+    fn gave_up(&self) {
+        self.running.store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    /// A status read returned the cached answer.
+    fn read(&self) {
+        self.unread.store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    fn look_again(&self) -> bool {
+        self.running.load(std::sync::atomic::Ordering::Acquire) || self.unread.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
 
 /// The Tesseract engine: found once (it answers `--list-langs` through a process) and then
 /// remembered, per configured path; a failed probe is retried after [`NEGATIVE_TTL`]. No
@@ -358,29 +401,33 @@ enum Cached {
 #[cfg(not(target_arch = "wasm32"))]
 fn tesseract_engine_now(configured: Option<&str>) -> Probe {
     let known = match cached_tesseract(configured) {
-        Cached::Fresh(found) => return Probe::Known(found),
+        Cached::Fresh(found) => {
+            PROBE.read();
+            return Probe::Known(found);
+        }
         Cached::Stale(found) => Some(found),
         Cached::Missing => None,
     };
-    if !PROBING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+    if PROBE.start() {
         let configured = configured.map(str::to_string);
         let started = std::thread::Builder::new().name("pdfcraft-tesseract-probe".into()).spawn(move || {
             let _ = tesseract_engine(configured.as_deref());
-            PROBING.store(false, std::sync::atomic::Ordering::Release);
+            PROBE.landed();
         });
         if started.is_err() {
-            PROBING.store(false, std::sync::atomic::Ordering::Release);
+            PROBE.gave_up();
         }
     }
     known.map_or(Probe::Pending, Probe::Known)
 }
 
-/// Whether the Tesseract probe is running in the background right now. The interface asks it
-/// while it shows an engine choice that read as "still checking", to look again soon.
+/// Whether the interface should read the engine status again soon: the Tesseract probe is running
+/// in the background, or it has landed an answer no status read has seen yet. Asked after showing
+/// an engine choice that may read "still checking".
 pub fn engine_probe_running() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        PROBING.load(std::sync::atomic::Ordering::Acquire)
+        PROBE.look_again()
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -1297,6 +1344,29 @@ fn open_file(name: &str, bytes: Arc<Vec<u8>>, password: Option<&str>, javascript
 mod tests {
     use super::*;
     use crate::export;
+
+    /// #4866 review: the interface reads the status ("still checking"), then asks whether to look
+    /// again. A probe that lands in between must still say yes, until a status read has seen its
+    /// answer; asking only "is it running" said no there and left the dialog stale.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_probe_that_lands_between_the_status_and_the_question_still_asks_for_a_look() {
+        let p = ProbeFlags::new();
+        assert!(!p.look_again(), "nothing to look at before a probe");
+        assert!(p.start());
+        assert!(!p.start(), "one probe at a time");
+        // The status read answered "still checking" here; then the probe lands.
+        p.landed();
+        assert!(p.look_again(), "the answer is news until it is read");
+        assert!(p.look_again(), "asking does not consume it");
+        p.read();
+        assert!(!p.look_again(), "read: no more frames needed");
+        // A probe that could not start leaves nothing to read.
+        assert!(p.start());
+        p.gave_up();
+        assert!(!p.look_again());
+        assert!(p.start(), "and the next read may try again");
+    }
 
     /// #5080: [`recognize_file`] opens each file with the caller's JavaScript preference, so an
     /// XFA initialize script (it sets an empty `qty` to 2) runs only when that is on. This checks
