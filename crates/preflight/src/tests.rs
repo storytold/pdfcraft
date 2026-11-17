@@ -2893,8 +2893,13 @@ fn optional_content_configurations_are_checked_clause_6_9() {
         assert_eq!(oc(&d, "", Level::A2b), none, "{order}");
         assert_eq!(oc(&d, "", Level::A4), none, "{order}");
     }
-    // No Order at all asks for nothing.
+    // No Order at all asks for nothing, nor does a null one, direct or indirect (6 0 R is no object).
     assert_eq!(oc("<< /Name (View) >>", "", Level::A2b), none);
+    assert_eq!(oc("<< /Name (View) /Order null >>", "", Level::A2b), none);
+    assert_eq!(oc("<< /Name (View) /Order 6 0 R >>", "", Level::A2b), none);
+    // An Order nested deeper than is read isn't judged; a shallower one missing a group is.
+    let deep = format!("{}3 0 R{}", "[".repeat(40), "]".repeat(40));
+    assert_eq!(oc(&format!("<< /Name (View) /Order {deep} >>"), "", Level::A2b), none);
     let missing = "An optional content configuration's Order doesn't list every optional content group";
     assert_eq!(oc("<< /Name (View) /Order [3 0 R] >>", "", Level::A2b), [("6.9", missing.to_owned())]);
     assert_eq!(oc("<< /Name (View) /Order [3 0 R] >>", "", Level::A4), [("6.10", missing.to_owned())]);

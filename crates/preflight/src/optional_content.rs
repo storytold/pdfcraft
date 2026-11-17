@@ -20,31 +20,38 @@ const MAX_ORDER_DEPTH: usize = 32;
 /// How many entries of one `/Order` array, at every depth, are read.
 const MAX_ORDER_ENTRIES: usize = 1 << 16;
 
-/// The groups an `/Order` array lists, at every depth of its nesting.
-fn ordered(doc: &Document, order: &Object) -> HashSet<ObjRef> {
+/// The groups an `/Order` array lists, at every depth of its nesting, or `None` when it is larger or
+/// deeper than is read: then which groups it lists isn't known.
+fn ordered(doc: &Document, order: &Object) -> Option<HashSet<ObjRef>> {
     let mut found = HashSet::new();
     let mut stack: Vec<(Object, usize)> = vec![(order.clone(), 0)];
     let mut read = 0usize;
     while let Some((o, depth)) = stack.pop() {
         read = read.saturating_add(1);
         if read > MAX_ORDER_ENTRIES {
-            break;
+            return None;
         }
-        match o {
+        let entries = match o {
             Object::Ref(r) => match &*doc.resolve(&Object::Ref(r)) {
                 // An array kept as an object of its own is followed like a direct one.
-                Object::Array(a) if depth < MAX_ORDER_DEPTH => stack.extend(a.iter().map(|x| (x.clone(), depth.saturating_add(1)))),
-                Object::Array(_) => {}
+                Object::Array(a) => a.clone(),
+                // A reference to null, or to no object, names no group (ISO 32000-2 7.3.10).
+                Object::Null => continue,
                 _ => {
                     found.insert(r);
+                    continue;
                 }
             },
-            Object::Array(a) if depth < MAX_ORDER_DEPTH => stack.extend(a.into_iter().map(|x| (x, depth.saturating_add(1)))),
+            Object::Array(a) => a,
             // A label (a text string) or anything else names no group.
-            _ => {}
+            _ => continue,
+        };
+        if depth >= MAX_ORDER_DEPTH {
+            return None;
         }
+        stack.extend(entries.into_iter().map(|x| (x, depth.saturating_add(1))));
     }
-    found
+    Some(found)
 }
 
 /// The optional content rules for `level`, cited as PDF/A-2 numbers them (6.9): the caller gives
@@ -78,8 +85,11 @@ pub(crate) fn check(
             Some(name) => repeated |= !names.insert(name),
             None => unnamed = true,
         }
-        if let Some(order) = configuration.get(b"Order").filter(|o| !matches!(**o, Object::Null)) {
-            let listed = ordered(doc, order);
+        // A null /Order, direct or through a reference, is none (7.3.9); one too large or deep to
+        // read in full isn't judged.
+        if let Some(order) = configuration.get(b"Order").filter(|o| !matches!(*doc.resolve(o), Object::Null))
+            && let Some(listed) = ordered(doc, order)
+        {
             unordered |= groups.iter().any(|g| !listed.contains(g));
         }
         auto_state |= configuration.get(b"AS").is_some_and(|a| !matches!(*doc.resolve(a), Object::Null));
