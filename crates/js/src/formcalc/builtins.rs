@@ -433,10 +433,11 @@ impl Interp<'_> {
                 // The margin covers rounding only: the three inputs, `annual / 12.0` and `pv * r`
                 // each round by at most half an epsilon, so four epsilons of the interest absorb
                 // them. `IPmt(35, 0.12, 0.35, 1, 12)` has `pv * r` = 0.35000000000000003, and its
-                // payment still covers the interest. An infinite or NaN product keeps a zero
+                // payment still covers the interest. The epsilons multiply first, so an interest
+                // near `f64::MAX` keeps a finite margin. An infinite or NaN product keeps a zero
                 // margin, so it compares as before.
                 let first_interest = pv * r;
-                let margin = if first_interest.is_finite() { first_interest.abs() * 4.0 * f64::EPSILON } else { 0.0 };
+                let margin = if first_interest.is_finite() { first_interest.abs() * (4.0 * f64::EPSILON) } else { 0.0 };
                 if pmt < first_interest - margin {
                     return Ok(Some(Val::Num(0.0)));
                 }

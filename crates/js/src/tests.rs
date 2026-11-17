@@ -1667,6 +1667,9 @@ mod formcalc {
         // The margin forgives rounding, not a real shortfall: 0.03125 short of 62,500,000,000.
         assert_eq!(calc("IPmt(1000000000000, 0.75, 62499999999.96875, 1, 1)"), "0");
         assert_eq!(calc("PPmt(1000000000000, 0.75, 62499999999.96875, 1, 1)"), "0");
+        // An interest of 1e308 is finite, and so is its margin: a payment of 1 still answers 0.
+        assert_eq!(calc("IPmt(1e308, 12, 1, 1, 1)"), "0");
+        assert_eq!(calc("PPmt(1e308, 12, 1, 1, 1)"), "0");
     }
 
     #[test]
