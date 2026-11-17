@@ -7956,21 +7956,88 @@ fn group_moves_preserve_encoded_glyphs_and_refuse_vertical_cmaps() {
     assert_eq!(encoded(&doc).as_string().unwrap().bytes, [0, 65, 0, 66, 0, 67]);
     let after = text::text_lines(&doc, 0).unwrap();
     assert_eq!(original[0].text, after[0].text);
+    let (one, zero) = (doc.add(Object::Int(1)), doc.add(Object::Int(0)));
+    // Horizontal, and the text moves: a CMap whose `/WMode` is 0, in its program and by reference in
+    // its dictionary; and one that uses a vertical CMap, by name or as a stream, but says no `/WMode`
+    // of its own, which the renderer lays out as a row.
+    let ranges = b"1 begincodespacerange <0000> <FFFF> endcodespacerange 1 begincidrange <0000> <FFFF> 0 endcidrange";
+    let vertical = doc.add(Object::Stream(Stream::flate(Dict::from_iter([(b"WMode".to_vec(), Object::Int(1))]), b"/WMode 1 def")));
+    let vertical_program = doc.add(Object::Stream(Stream::flate(Dict::new(), b"/WMode 1 def")));
+    let missing = Object::Ref(pdfcraft_cos::ObjRef::new(999, 0));
+    // A used CMap that gives `/WMode 1` by its dictionary, directly or by reference, ends the chain
+    // before a CMap that is missing.
+    let stops_by_dictionary = |doc: &mut Document, mode: Object| {
+        doc.add(Object::Stream(Stream::flate(Dict::from_iter([(b"WMode".to_vec(), mode), (b"UseCMap".to_vec(), missing.clone())]), b"")))
+    };
+    let stops_at_one = stops_by_dictionary(&mut doc, Object::Int(1));
+    let stops_at_one_by_reference = stops_by_dictionary(&mut doc, Object::Ref(one));
+    let stops = doc.add(Object::Stream(Stream::flate(
+        Dict::from_iter([(b"UseCMap".to_vec(), Object::Ref(pdfcraft_cos::ObjRef::new(999, 0)))]),
+        &[b"/WMode 0 def ".as_slice(), ranges].concat(),
+    )));
+    let program = b"/WMode 1 def";
+    let deltas: Vec<u8> = program.iter().enumerate().map(|(i, b)| b.wrapping_sub(if i == 0 { 0 } else { program[i - 1] })).collect();
+    let parms =
+        doc.add(Object::Dict(Dict::from_iter([(b"Predictor".to_vec(), Object::Int(2)), (b"Columns".to_vec(), Object::Int(program.len() as i64))])));
+    let mut predicted = Stream::flate(Dict::new(), &deltas);
+    predicted.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+    let predicted = Object::Stream(predicted);
     for encoding in [
-        Object::name("Identity-V"),
-        Object::Stream(Stream::flate(Dict::new(), b"/WMode 1 def")),
-        Object::Stream(Stream::flate(Dict::from_iter([(b"WMode".to_vec(), Object::Int(1))]), b"")),
+        Object::Stream(Stream::flate(Dict::from_iter([(b"WMode".to_vec(), Object::Ref(zero))]), &[b"/WMode 0 def ".as_slice(), ranges].concat())),
+        Object::Stream(Stream::flate(Dict::new(), &[b"/V usecmap ".as_slice(), ranges].concat())),
+        Object::Stream(Stream::flate(Dict::from_iter([(b"UseCMap".to_vec(), Object::name("V"))]), ranges)),
+        Object::Stream(Stream::flate(Dict::new(), b"/Identity-V usecmap")),
+        Object::Stream(Stream::flate(Dict::from_iter([(b"UseCMap".to_vec(), Object::Ref(vertical))]), ranges)),
+        Object::Stream(Stream::flate(Dict::from_iter([(b"UseCMap".to_vec(), Object::Ref(vertical_program))]), ranges)),
+        // A chain read as far as the first CMap that gives a writing mode, not past it to a CMap
+        // that is missing, as on `main`.
+        Object::Stream(Stream::flate(Dict::from_iter([(b"UseCMap".to_vec(), Object::Ref(stops))]), ranges)),
+        Object::Stream(Stream::flate(Dict::from_iter([(b"UseCMap".to_vec(), Object::Ref(stops_at_one))]), ranges)),
+        Object::Stream(Stream::flate(Dict::from_iter([(b"UseCMap".to_vec(), Object::Ref(stops_at_one_by_reference))]), ranges)),
     ] {
         let mut f = font.clone();
-        f.set(b"Encoding".to_vec(), encoding);
+        f.set(b"Encoding".to_vec(), encoding.clone());
+        let mut fonts = Dict::new();
+        fonts.set(b"F1".to_vec(), Object::Dict(f));
+        resources.set(b"Font".to_vec(), Object::Dict(fonts));
+        doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(resources.clone()))).unwrap();
+        move_objects(&mut doc, 0, &[ObjectTarget { kind: ObjectKind::Text, index: 0 }], [5.0, 5.0]).unwrap_or_else(|e| panic!("{encoding:?}: {e}"));
+    }
+    for encoding in [
+        Object::name("Identity-V"),
+        Object::name("V"),
+        Object::Stream(Stream::flate(Dict::new(), b"/WMode 1 def")),
+        Object::Stream(Stream::flate(Dict::from_iter([(b"WMode".to_vec(), Object::Int(1))]), b"")),
+        Object::Stream(Stream::flate(Dict::from_iter([(b"WMode".to_vec(), Object::Ref(one))]), b"/WMode 1 def")),
+        // The program decides where the dictionary says 0, as it does for the renderer.
+        Object::Stream(Stream::flate(Dict::from_iter([(b"WMode".to_vec(), Object::Int(0))]), b"/WMode 1 def")),
+        // A program behind a predictor whose `/DecodeParms` is given by reference.
+        predicted,
+    ] {
+        let mut f = font.clone();
+        f.set(b"Encoding".to_vec(), encoding.clone());
         let mut fonts = Dict::new();
         fonts.set(b"F1".to_vec(), Object::Dict(f));
         resources.set(b"Font".to_vec(), Object::Dict(fonts));
         doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(resources.clone()))).unwrap();
         let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
-        assert!(move_objects(&mut doc, 0, &[ObjectTarget { kind: ObjectKind::Text, index: 0 }], [5.0, 5.0]).is_err());
+        let refused = move_objects(&mut doc, 0, &[ObjectTarget { kind: ObjectKind::Text, index: 0 }], [5.0, 5.0]).unwrap_err();
+        assert!(refused.to_string().contains("vertical"), "{encoding:?}: {refused}");
         assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
     }
+    // A chain that breaks before any CMap gives a writing mode is still refused, as on `main`: the
+    // font's own CMap uses one that gives none, which uses one that is missing.
+    let gives_none = doc.add(Object::Stream(Stream::flate(Dict::from_iter([(b"UseCMap".to_vec(), missing)]), ranges)));
+    let mut f = font.clone();
+    f.set(b"Encoding".to_vec(), Object::Stream(Stream::flate(Dict::from_iter([(b"UseCMap".to_vec(), Object::Ref(gives_none))]), ranges)));
+    let mut fonts = Dict::new();
+    fonts.set(b"F1".to_vec(), Object::Dict(f));
+    resources.set(b"Font".to_vec(), Object::Dict(fonts));
+    doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(resources.clone()))).unwrap();
+    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    let refused = move_objects(&mut doc, 0, &[ObjectTarget { kind: ObjectKind::Text, index: 0 }], [5.0, 5.0]).unwrap_err();
+    assert!(refused.to_string().contains("invalid"), "{refused}");
+    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
 }
 
 #[test]

@@ -1010,6 +1010,52 @@ fn an_image_a_type3_glyph_draws_after_a_surplus_operand_is_found() {
     assert_eq!(proof.entries[0].status, Status::Unverifiable, "{}", proof.to_text());
 }
 
+/// The proof's text reader lays out text in a vertical CMap as a column, as the renderer does and
+/// as the redaction walk asks: the predefined `V`, Identity-V, and an embedded CMap whose program
+/// says `/WMode 1` and whose dictionary does too, directly or by reference. Their glyphs, shown down from (100, 200), reach a region
+/// below the start, which the same glyphs laid out as a row would miss; text in `H` does.
+#[test]
+fn the_proofs_text_reader_lays_out_vertical_cmaps_as_a_column() {
+    // 7: the font; 8: an embedded CMap, when the row has one; 9: the number 1; 10: its /ToUnicode.
+    let cmap = |wmode: &str| {
+        stream(
+            &format!("/Type /CMap /WMode {wmode}"),
+            b"/WMode 1 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 begincidrange <0000> <FFFF> 0 endcidrange",
+        )
+    };
+    let to_unicode = stream(
+        "",
+        b"1 begincodespacerange <0000> <FFFF> endcodespacerange 4 beginbfchar <3021> <0041> <3022> <0042> <3023> <0043> <3024> <0044> endbfchar",
+    );
+    for (encoding, embedded, vertical) in [
+        ("/V", b"null".to_vec(), true),
+        ("/Identity-V", b"null".to_vec(), true),
+        ("8 0 R", cmap("1"), true),
+        ("8 0 R", cmap("9 0 R"), true),
+        ("/H", b"null".to_vec(), false),
+    ] {
+        let font = format!(
+            "<< /Type /Font /Subtype /Type0 /BaseFont /X /Encoding {encoding} /ToUnicode 10 0 R /DescendantFonts [<< /Type /Font /Subtype /CIDFontType2 /BaseFont /X /DW 1000 >>] >>"
+        );
+        let spec = Spec {
+            resources: "/Font << /F1 5 0 R /F2 7 0 R >>",
+            extra: vec![font.into_bytes(), embedded.clone(), b"1".to_vec(), to_unicode.clone()],
+            ..Spec::default()
+        };
+        let mut doc = open(build_with(b"BT /F1 10 Tf 10 250 Td (Public) Tj ET BT /F2 10 Tf 1 0 0 1 100 200 Tm <3021302230233024> Tj ET", spec));
+        mark(&mut doc, &[[90.0, 150.0, 110.0, 196.0]]);
+        let proof = prove_unapplied(&mut doc);
+        let expected = if vertical { Status::Failed } else { Status::VerifiedNoTextInRegion };
+        assert_eq!(
+            proof.entries[0].status,
+            expected,
+            "{encoding} {}: {}",
+            String::from_utf8_lossy(&embedded[..embedded.len().min(30)]),
+            proof.to_text()
+        );
+    }
+}
+
 #[test]
 fn an_ambiguous_needle_is_still_swept_outside_page_content() {
     // The word also stays on the page legitimately (so page text, the raw file and decoded

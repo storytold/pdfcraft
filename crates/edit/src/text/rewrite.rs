@@ -1262,39 +1262,48 @@ pub(super) fn vertical_advance(doc: &Document, font: &Dict) -> Result<Option<f64
     Ok(Some(w1 / 1000.0))
 }
 
-/// Detect vertical CMaps before moving horizontal text. A broken/cyclic embedded CMap is
-/// refused rather than guessing which direction TJ advances its text matrix.
+/// Detect vertical CMaps before moving horizontal text. The font's own `/Encoding` decides: a
+/// predefined CMap by its name ([`pdfcraft_fonts::pdf::vertical_cmap_name`]), an embedded one by its
+/// dictionary's `/WMode` when that is 1 and otherwise by its program's. The renderer reads only the
+/// program, so a dictionary's 1 over a program's 0 is refused here where it draws a row. A CMap the
+/// font's uses (`/UseCMap`, `usecmap`) lends it no writing mode, as the renderer reads it; the chain
+/// is read to the first CMap that gives one, so a broken or cyclic chain before it, or a writing
+/// mode that is neither 0 nor 1, is refused rather than guessing which direction TJ advances its
+/// text matrix.
 fn vertical_encoding(doc: &Document, font: &Dict) -> Result<bool, EditError> {
     if font.name(b"Subtype") != Some(b"Type0") {
         return Ok(false);
     }
     let mut next = font.get(b"Encoding").cloned();
     let mut seen = std::collections::BTreeSet::new();
-    for _ in 0..8 {
+    for hop in 0..8 {
         let Some(o) = next.take() else { return Ok(false) };
         if let Some(r) = o.as_ref()
             && !seen.insert(r)
         {
             return Err(EditError::Invalid("the text encoding is cyclic".into()));
         }
+        // Only the font's own CMap gives the writing mode.
+        let own = hop == 0;
         match &*doc.resolve(&o) {
-            Object::Name(n) => return Ok(n.ends_with(b"-V")),
+            Object::Name(n) => return Ok(own && pdfcraft_fonts::pdf::vertical_cmap_name(n)),
             Object::Stream(stream) => {
                 if let Some(mode) = stream.dict.get(b"WMode") {
-                    match mode.as_int() {
-                        Some(1) => return Ok(true),
+                    match doc.resolve(mode).as_int() {
+                        Some(1) => return Ok(own),
                         Some(0) => {}
                         _ => return Err(EditError::Invalid("the text writing mode is invalid".into())),
                     }
                 }
-                let bytes = stream
+                let bytes = doc
+                    .with_direct_parms(stream)
                     .decoded_within(8 * 1024 * 1024)
                     .map_err(|_| EditError::Invalid("the text encoding cannot be decoded within its size limit".into()))?;
                 let ops = parse(&bytes).ops;
                 if let Some(mode) = ops.iter().rev().find(|op| op.is("def") && op.name(0) == Some(b"WMode")) {
                     return match mode.num(1) {
                         Some(0.0) => Ok(false),
-                        Some(1.0) => Ok(true),
+                        Some(1.0) => Ok(own),
                         _ => Err(EditError::Invalid("the text writing mode is invalid".into())),
                     };
                 }

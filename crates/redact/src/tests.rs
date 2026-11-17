@@ -819,6 +819,60 @@ fn vertical_writing_text_under_a_mark_fails_closed() {
     assert_eq!(r.glyphs, 2, "the horizontal control is redacted: {r:?}");
 }
 
+/// The predefined CMap `V`, the vertical form of `H`, writes vertically, as every predefined CMap
+/// named `…-V` does: the renderer lays out its text as a column. So does an embedded CMap whose
+/// program says `/WMode 1` and whose dictionary gives it by reference. With a mark on the page,
+/// Apply Redactions refuses either, as it does Identity-V; an embedded CMap whose `/WMode` is 0
+/// in its program and a reference to 0 in its dictionary is redacted.
+#[test]
+fn text_in_the_cmap_v_or_with_its_writing_mode_by_reference_fails_closed() {
+    let make = |encoding: &dyn Fn(&mut Document) -> Object, codes: &str| -> Document {
+        let src = format!("BT /F2 10 Tf 0 1 -1 0 100 50 Tm <{codes}> Tj ET");
+        let mut doc = one_page(src.as_bytes(), "", vec![]);
+        let encoding = encoding(&mut doc);
+        let mut font = pdfcraft_cos::Lexer::new(
+            b"<< /Type /Font /Subtype /Type0 /BaseFont /X /DescendantFonts [<< /Type /Font /Subtype /CIDFontType2 /BaseFont /X /DW 1000 /W [1 [500 500] 3 4 250] >>] >>",
+            0,
+        )
+        .object()
+        .unwrap()
+        .as_dict()
+        .cloned()
+        .unwrap();
+        font.set(b"Encoding".to_vec(), encoding);
+        let font_ref = doc.add(Object::Dict(font));
+        let page = pdfcraft_model::pages(&doc)[0].obj;
+        doc.update_dict(page, |d| {
+            let mut res = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap();
+            let mut fonts = res.get(b"Font").and_then(Object::as_dict).cloned().unwrap();
+            fonts.set(b"F2".to_vec(), Object::Ref(font_ref));
+            res.set(b"Font".to_vec(), Object::Dict(fonts));
+            d.set(b"Resources".to_vec(), Object::Dict(res));
+        })
+        .unwrap();
+        mark(&mut doc, 0, &[[85.0, 55.5, 105.0, 61.0]], "");
+        doc
+    };
+    let cmap = |mode: i64| {
+        move |doc: &mut Document| {
+            let body = format!(
+                "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Codes def /WMode {mode} def 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 begincidrange <0000> <FFFF> 0 endcidrange endcmap CMapName currentdict /CMap defineresource pop end end"
+            );
+            let mode = doc.add(Object::Int(mode));
+            let dict = Dict::from_iter([(b"Type".to_vec(), Object::name("CMap")), (b"WMode".to_vec(), Object::Ref(mode))]);
+            Object::Ref(doc.add(Object::Stream(Stream::flate(dict, body.as_bytes()))))
+        }
+    };
+    // Codes in `V`'s codespace, which the renderer draws.
+    let mut doc = make(&|_: &mut Document| Object::name("V"), "2422242424262428");
+    assert_eq!(apply(&mut doc, None).unwrap_err(), RedactError::VerticalText(1), "the CMap V");
+    let mut doc = make(&cmap(1), "0001000200030004");
+    assert_eq!(apply(&mut doc, None).unwrap_err(), RedactError::VerticalText(1), "/WMode 1 by reference");
+    let mut doc = make(&cmap(0), "0001000200030004");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.glyphs, 2, "/WMode 0 by reference is horizontal: {r:?}");
+}
+
 #[test]
 fn images_are_removed_or_have_their_pixels_cleared() {
     // Image 1 is fully covered; image 2 (4×1 gray, all white) is half covered.

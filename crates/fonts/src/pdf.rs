@@ -825,6 +825,15 @@ fn number(t: &Tok) -> Option<u32> {
     }
 }
 
+/// Does `name` name a CMap that writes vertically? Every predefined CMap that does (ISO 32000-2
+/// §9.7.5.2, Table 116) is named `V`, the vertical form of `H`, or ends in `-V` (`Identity-V`,
+/// `UniJIS-UCS2-V` and the like), and the renderer lays out its text as a column. A name that
+/// isn't predefined but ends in `-V` is taken as vertical too, though the renderer can't load it
+/// and lays out its text as a row or draws none.
+pub fn vertical_cmap_name(name: &[u8]) -> bool {
+    name == b"V" || name.ends_with(b"-V")
+}
+
 /// The font's `/BaseFont` (a Type 3 font's descriptor `/FontName` when it has none), read without
 /// building its metrics, so it decodes no CMap.
 pub fn base_font_name(doc: &Document, font: &Dict) -> String {

@@ -82,8 +82,8 @@ pub(crate) struct Removed {
 struct Gs {
     ctm: Matrix,
     font: Rc<Metrics>,
-    /// The current font writes vertically (a Type0 font with an `-V` encoding or a CMap whose
-    /// `/WMode` is 1). Glyph layout here is horizontal, so such text cannot be placed under a
+    /// The current font writes vertically (a Type0 font whose encoding is a CMap that does: see
+    /// [`is_vertical`]). Glyph layout here is horizontal, so such text cannot be placed under a
     /// region; apply fails closed when it meets any (see `show`).
     vertical: bool,
     size: f64,
@@ -339,15 +339,17 @@ fn res_dict(doc: &Document, res: &Dict, key: &[u8]) -> Dict {
 }
 
 /// Does this font write vertically? Only a Type0 (composite) font can: its `/Encoding` is a
-/// predefined CMap name ending in `-V` (Identity-V and the like), or an embedded CMap stream
-/// whose `/WMode` is 1 (ISO 32000-2 §9.7.5).
-fn is_vertical(doc: &Document, font: &Dict) -> bool {
+/// predefined CMap that does (`V`, or a name ending in `-V`: Identity-V and the like), or an
+/// embedded CMap stream whose `/WMode`, given directly or by reference, is 1 (ISO 32000-2 §9.7.5).
+/// The redaction proof's text reader asks it too, so the two agree on which fonts write
+/// vertically.
+pub(crate) fn is_vertical(doc: &Document, font: &Dict) -> bool {
     if font.name(b"Subtype") != Some(b"Type0".as_slice()) {
         return false;
     }
     match font.get(b"Encoding").map(|e| doc.resolve(e)).as_deref() {
-        Some(Object::Name(n)) => n.ends_with(b"-V"),
-        Some(Object::Stream(s)) => s.dict.int(b"WMode") == Some(1),
+        Some(Object::Name(n)) => pdfcraft_fonts::pdf::vertical_cmap_name(n),
+        Some(Object::Stream(s)) => s.dict.get(b"WMode").is_some_and(|w| doc.resolve(w).as_int() == Some(1)),
         _ => false,
     }
 }
