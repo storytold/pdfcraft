@@ -3029,7 +3029,7 @@ fn notdef_is_found_in_forms_drawn_and_read_on_their_own() {
 fn notdef_is_found_in_an_appearance_that_takes_its_font_from_the_form_defaults() {
     let file = |appearance: &str| {
         let objs = [
-            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DR << /Font << /Helv 6 0 R >> >> >> >>".to_owned(),
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DR << /Font << /Helv 6 0 R >> /ExtGState << /G << /Font [6 0 R 10] >> /Plain << /LW 1 >> >> >> >> >>".to_owned(),
             "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
             "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] /Resources << >> >>".to_owned(),
             "<< /Type /Annot /Subtype /Widget /FT /Tx /T (f) /Rect [0 0 20 20] /F 4 /P 3 0 R /AP << /N 5 0 R >> >>".to_owned(),
@@ -3046,6 +3046,11 @@ fn notdef_is_found_in_an_appearance_that_takes_its_font_from_the_form_defaults()
         assert!(notdef_said(&file("BT /Helv 10 Tf 2 2 Td (x) Tj ET"), level).is_empty(), "{level:?}");
         // A name the default resources don't hold is no font that is known.
         assert!(notdef_said(&file("BT /Other 10 Tf 2 2 Td <00> Tj ET"), level).is_empty(), "{level:?}");
+        // A graphics state of the default resources that selects the font; one without /Font
+        // leaves the font as it was.
+        let said = ["Text refers to the .notdef glyph of the font Sans"];
+        assert_eq!(notdef_said(&file("BT /G gs 2 2 Td <00> Tj ET"), level), said, "{level:?}");
+        assert_eq!(notdef_said(&file("BT /Helv 10 Tf /Plain gs <00> Tj ET"), level), said, "{level:?}");
     }
 }
 

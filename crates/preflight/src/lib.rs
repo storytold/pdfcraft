@@ -901,8 +901,12 @@ impl Fonts<'_> {
                                 }
                             }
                             // Whether it sets a font isn't known, nor whether the text after it
-                            // shows: its font counts.
+                            // shows: its font counts. One of the form's default resources that
+                            // sets a font gives the font text is shown with (ISO 32000-2 12.7.3).
                             None => {
+                                if self.defaults.contains_key(&selection) {
+                                    state.font = Some(Current::Named(selection.clone()));
+                                }
                                 self.anywhere.insert(selection);
                             }
                         }
