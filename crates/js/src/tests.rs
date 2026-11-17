@@ -1664,6 +1664,9 @@ mod formcalc {
         assert_eq!(calc("PPmt(35, 0.12, 0.35, 1, 12)"), "0");
         // A cent short of the interest still answers 0.
         assert_eq!(calc("IPmt(35, 0.12, 0.34, 1, 12)"), "0");
+        // The margin forgives rounding, not a real shortfall: 0.03125 short of 62,500,000,000.
+        assert_eq!(calc("IPmt(1000000000000, 0.75, 62499999999.96875, 1, 1)"), "0");
+        assert_eq!(calc("PPmt(1000000000000, 0.75, 62499999999.96875, 1, 1)"), "0");
     }
 
     #[test]
