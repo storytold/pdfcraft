@@ -79,7 +79,7 @@ pub use renderer::{OffscreenDraws, offscreen_draws};
 #[derive(Clone, Default)]
 pub struct RenderCache<'a> {
     pub(crate) interpreter_cache: InterpreterCache<'a>,
-    pub(crate) outline_cache: Rc<RefCell<HashMap<u128, Rc<kurbo::BezPath>>>>,
+    pub(crate) outline_cache: Rc<RefCell<HashMap<u128, Rc<(kurbo::BezPath, Rect)>>>>,
 }
 
 impl<'a> RenderCache<'a> {
