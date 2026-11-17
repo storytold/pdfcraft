@@ -2423,3 +2423,44 @@ fn rendering_intents_are_standard_wherever_given_clause_6_2_6() {
     // Strings and image data aren't operators.
     assert_eq!(intents("", "BT (/Custom ri) Tj ET", ""), none);
 }
+
+/// Content whose `/DecodeParms` is an object of its own is decoded with them: a PNG predictor left
+/// undone would hide the `ri` operator.
+#[test]
+fn rendering_intents_are_read_through_indirect_decode_parameters() {
+    use std::io::Write as _;
+    let raw = b"/Custom ri";
+    // PNG Sub predictor (ISO 32000-2 Table 10, PNG type 1), one row: each byte less the one before.
+    let mut row = vec![1u8];
+    row.extend(raw.iter().enumerate().map(|(i, b)| b.wrapping_sub(if i == 0 { 0 } else { raw[i - 1] })));
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    z.write_all(&row).unwrap();
+    let data = z.finish().unwrap();
+    let mut objects: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".to_vec(),
+    ];
+    let mut content = format!("<< /Filter /FlateDecode /DecodeParms 5 0 R /Length {} >>\nstream\n", data.len()).into_bytes();
+    content.extend_from_slice(&data);
+    content.extend_from_slice(b"\nendstream");
+    objects.push(content);
+    objects.push(format!("<< /Predictor 12 /Columns {} >>", raw.len()).into_bytes());
+    let mut out = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    let doc = Document::open(std::sync::Arc::new(out)).unwrap();
+    let found: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.6").map(|i| i.message).collect();
+    assert_eq!(found, ["Content sets the rendering intent Custom, which isn't a standard one"]);
+}

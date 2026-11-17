@@ -7,7 +7,8 @@
 //! Content is read as the implementation limits scan reads it ([`crate::limits`]): a page's
 //! `/Contents` streams joined, as one content stream (ISO 32000-1 7.8.2), and every other content
 //! stream on its own, operator by operator, so strings and image data are never taken for
-//! operators. Content is decoded within one allowance for the whole document.
+//! operators. Content is decoded within one allowance for the whole document, with `/DecodeParms`
+//! given by reference read too; what decodes of a damaged stream is read.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -96,7 +97,7 @@ pub(crate) fn check(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], c
         let mut joined = Vec::new();
         for r in &refs {
             if let Object::Stream(s) = &*doc.get(*r)
-                && let Ok(data) = budget.decode(s)
+                && let Ok((data, _)) = budget.decode_with_damage(doc, s, usize::MAX)
             {
                 joined.extend_from_slice(&data);
                 joined.push(b' ');
@@ -112,7 +113,7 @@ pub(crate) fn check(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], c
         if let Object::Stream(s) = &**o
             && !read.contains(r)
             && (content.contains(r) || crate::is_content(&s.dict))
-            && let Ok(data) = budget.decode(s)
+            && let Ok((data, _)) = budget.decode_with_damage(doc, s, usize::MAX)
         {
             found.content(&data);
         }
