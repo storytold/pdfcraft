@@ -19,6 +19,7 @@ mod autotag_roles;
 mod content;
 mod headings;
 mod layout_table;
+mod parent_tree;
 mod report;
 mod structure;
 mod tags;

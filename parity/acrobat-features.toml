@@ -8870,8 +8870,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["a11y.check"]
 tools = ["accessibility_check"]
-evidence = ["crates/a11y/src/tests.rs::page_content_and_annotation_problems_are_found"]
-notes = "rule tagged-content: painting outside MCID or Artifact marked content, through form XObjects; counted per page"
+evidence = ["crates/a11y/src/tests.rs::page_content_and_annotation_problems_are_found", "crates/a11y/src/tests.rs::tagged_content_and_annotations_need_an_element_in_the_parent_tree", "crates/a11y/src/tests.rs::marked_content_in_a_form_xobject_is_owned_through_the_forms_own_entry"]
+notes = "rule tagged-content: painting outside Artifact marked content and outside MCID marked content that a structure element owns, through form XObjects; counted per page. Ownership goes through the parent tree (ISO 32000-2 14.7.5.4): the page's or form XObject's /StructParents entry names, at the MCID, an element whose /P parents reach the structure tree root"
 
 [[feature]]
 id = "a11y.rule-tagged-annotations"
@@ -8882,8 +8882,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["a11y.check"]
 tools = ["accessibility_check"]
-evidence = ["crates/a11y/src/tests.rs::page_content_and_annotation_problems_are_found"]
-notes = "rule tagged-annotations: annotations other than popups, widgets and multimedia need /StructParent"
+evidence = ["crates/a11y/src/tests.rs::page_content_and_annotation_problems_are_found", "crates/a11y/src/tests.rs::an_annotation_belongs_in_the_element_type_that_holds_its_kind"]
+notes = "rule tagged-annotations: annotations other than popups, widgets and multimedia need a /StructParent whose parent-tree entry is an element of the structure hierarchy, Link for a link and Annot for the others (ISO 32000-2 14.8.2.5.2)"
 
 [[feature]]
 id = "a11y.rule-tab-order"
@@ -8919,7 +8919,7 @@ status = "shipped"
 commands = ["a11y.check"]
 tools = ["accessibility_check"]
 evidence = ["crates/a11y/src/tests.rs::a_well_tagged_document_passes"]
-notes = "rule tagged-multimedia: Screen, Movie, Sound, RichMedia and 3D annotations need /StructParent"
+notes = "rule tagged-multimedia: Screen, Movie, Sound, RichMedia and 3D annotations need a /StructParent whose parent-tree entry is an Annot element of the structure hierarchy"
 
 [[feature]]
 id = "a11y.rule-screen-flicker"
@@ -8978,8 +8978,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["a11y.check"]
 tools = ["accessibility_check"]
-evidence = ["crates/a11y/src/tests.rs::a_well_tagged_document_passes"]
-notes = "rule tagged-form-fields: widgets need /StructParent"
+evidence = ["crates/a11y/src/tests.rs::a_well_tagged_document_passes", "crates/a11y/src/tests.rs::an_annotation_belongs_in_the_element_type_that_holds_its_kind"]
+notes = "rule tagged-form-fields: a widget's /StructParent entry in the parent tree must be a Form element of the structure hierarchy (ISO 32000-2 14.8.2.5.2)"
 
 [[feature]]
 id = "a11y.rule-field-descriptions"

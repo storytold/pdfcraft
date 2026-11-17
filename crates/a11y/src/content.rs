@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object};
 use pdfcraft_model::Page;
 
+use crate::parent_tree::ParentTree;
 use crate::{Finding, Rule};
 
 /// What the page content holds, per checked page.
@@ -22,13 +23,15 @@ pub(crate) struct Scan {
     pub fonts: BTreeMap<usize, BTreeSet<ObjRef>>,
     /// Pages read only in part: content or forms past the page's decode budget are missing.
     pub incomplete: BTreeSet<usize>,
+    /// The structure parent tree: which element owns each tagged item.
+    pub tree: ParentTree,
 }
 
 const MAX_FORM_DEPTH: usize = 12;
 
 impl Scan {
     pub fn run(doc: &Document, pages: &[Page], list: &[usize]) -> Scan {
-        let mut s = Scan::default();
+        let mut s = Scan { tree: ParentTree::read(doc), ..Scan::default() };
         for &p in list {
             let Some(page) = pages.get(p) else { continue };
             let res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
@@ -37,7 +40,8 @@ impl Scan {
             if budget.remaining() == 0 {
                 s.incomplete.insert(p);
             }
-            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget };
+            let key = struct_parents(doc, &page.dict);
+            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget, key };
             w.content(&data, &res, false, 0);
         }
         s
@@ -51,15 +55,35 @@ struct Walk<'a> {
     forms: HashSet<ObjRef>,
     /// Decoded bytes and form entries left for this page.
     budget: DecodeBudget,
+    /// The parent-tree key (/StructParents) of the content stream being walked: the page's, or a
+    /// form XObject's own.
+    key: Option<i64>,
 }
 
-fn bdc_marks(doc: &Document, op: &pdfcraft_content::Op, props: &Dict) -> bool {
-    op.name(0) == Some(b"Artifact")
-        || match op.operands.get(1) {
-            Some(Object::Dict(d)) => d.contains(b"MCID"),
-            Some(Object::Name(n)) => props.get(n).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().map(|d| d.contains(b"MCID"))).unwrap_or(false),
+/// The /StructParents of a page or form XObject: the key of its entry in the parent tree.
+fn struct_parents(doc: &Document, d: &Dict) -> Option<i64> {
+    d.get(b"StructParents").and_then(|k| doc.resolve(k).as_int())
+}
+
+impl Walk<'_> {
+    /// Whether a BDC opens an artifact, or tagged content: marked content whose MCID belongs to a
+    /// structure element through the parent tree entry `self.key` names (ISO 32000-2 §14.7.5.4).
+    /// An MCID that no element owns is not tagged: no tag in the tree answers it.
+    fn bdc_marks(&self, op: &pdfcraft_content::Op, props: &Dict) -> bool {
+        if op.name(0) == Some(b"Artifact") {
+            return true;
+        }
+        let mcid_of = |d: &Dict| d.get(b"MCID").and_then(|m| self.doc.resolve(m).as_int());
+        let mcid = match op.operands.get(1) {
+            Some(Object::Dict(d)) => mcid_of(d),
+            Some(Object::Name(n)) => props.get(n).map(|x| self.doc.resolve(x)).and_then(|x| x.as_dict().and_then(mcid_of)),
+            _ => None,
+        };
+        match (mcid, self.key) {
+            (Some(mcid), Some(key)) => self.scan.tree.owns(self.doc, key, mcid),
             _ => false,
         }
+    }
 }
 
 impl Walk<'_> {
@@ -78,7 +102,7 @@ impl Walk<'_> {
             let inside = covered || stack.last().copied().unwrap_or(false);
             match op.op.as_slice() {
                 b"BMC" => stack.push(inside || op.name(0) == Some(b"Artifact")),
-                b"BDC" => stack.push(inside || bdc_marks(self.doc, &op, &props)),
+                b"BDC" => stack.push(inside || self.bdc_marks(&op, &props)),
                 b"EMC" => {
                     stack.pop();
                 }
@@ -120,6 +144,8 @@ impl Walk<'_> {
                                 }
                             };
                             self.forms.insert(r);
+                            // The form's marked content is keyed by its own /StructParents.
+                            let key = std::mem::replace(&mut self.key, struct_parents(self.doc, &x.dict));
                             let inner = x
                                 .dict
                                 .get(b"Resources")
@@ -127,6 +153,7 @@ impl Walk<'_> {
                                 .and_then(|o| o.as_dict().cloned())
                                 .unwrap_or_else(|| res.clone());
                             self.content(&data, &inner, inside, depth + 1);
+                            self.key = key;
                             self.forms.remove(&r);
                         }
                         _ => {}
@@ -260,6 +287,22 @@ fn annotation_rect(doc: &Document, annot: &Dict) -> Option<[f64; 4]> {
     Some([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])
 }
 
+/// Whether annotation `a`, of subtype `st`, is tagged: its /StructParent names, in the parent tree,
+/// the structure element that holds it, and that element is of the type that holds annotations of
+/// its kind (ISO 32000-2 §14.8.2.5.2, §14.8.4.7.2 Table 368): Form for a widget, Link for a link,
+/// Annot for any other.
+fn annotation_tagged(doc: &Document, tree: &ParentTree, role_map: &Dict, a: &Dict, st: &[u8]) -> bool {
+    let Some(key) = a.get(b"StructParent").and_then(|k| doc.resolve(k).as_int()) else { return false };
+    let Some(element) = tree.element(doc, key) else { return false };
+    let Some(ty) = element.as_dict().and_then(|e| e.name(b"S")).map(|s| crate::alt::standard(doc, role_map, s)) else { return false };
+    let want: &[u8] = match st {
+        b"Widget" => b"Form",
+        b"Link" => b"Link",
+        _ => b"Annot",
+    };
+    ty == want
+}
+
 pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usize], scan: &Scan, tagged: bool) -> Vec<Finding> {
     let mut out = Vec::new();
     // The annotation objects are shared, never deep-copied: a reference repeated across a page's
@@ -284,6 +327,10 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
             }
         }
         Rule::TaggedAnnotations | Rule::TaggedMultimedia | Rule::TaggedFormFields => {
+            let role_map = crate::alt::tree_root(doc)
+                .and_then(|r| r.get(b"RoleMap").map(|o| doc.resolve(o)))
+                .and_then(|o| o.as_dict().cloned())
+                .unwrap_or_default();
             for &p in list {
                 let Some(page) = pages.get(p) else { continue };
                 for (_, obj) in annots(page) {
@@ -294,7 +341,7 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
                         Rule::TaggedMultimedia => MULTIMEDIA.contains(&st),
                         _ => st != b"Widget" && !MULTIMEDIA.contains(&st) && st != b"PrinterMark",
                     };
-                    if applies && !(tagged && a.contains(b"StructParent")) {
+                    if applies && !(tagged && annotation_tagged(doc, &scan.tree, &role_map, a, st)) {
                         // A whole sentence each way, rather than a noun put in front of one: a form
                         // field and an annotation of some subtype read differently in other
                         // languages. The subtype itself is the PDF's own name and goes in as it is.

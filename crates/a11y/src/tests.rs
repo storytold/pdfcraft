@@ -418,16 +418,11 @@ fn good() -> Vec<String> {
         ),
         FONT.into(),
         // 6 struct tree root, 7 Document element, 8 info
-        "<< /Type /StructTreeRoot /K 7 0 R /RoleMap << /Heading1 /H1 >> >>".into(),
-        "<< /S /Document /P 6 0 R /Pg 3 0 R /K [\
-         << /S /Heading1 /Pg 3 0 R /K 0 >> \
-         << /S /Figure /Pg 3 0 R /Alt (A red square) /K 1 >> \
+        "<< /Type /StructTreeRoot /K 7 0 R /RoleMap << /Heading1 /H1 >> /ParentTree 22 0 R /ParentTreeNextKey 3 >>".into(),
+        "<< /S /Document /P 6 0 R /Pg 3 0 R /K [12 0 R 13 0 R \
          << /S /Table /Pg 3 0 R /A << /O /Table /Summary (Two columns) >> /K [\
-            << /S /TR /K [ << /S /TH /K 2 >> << /S /TH /K 3 >> ] >> \
-            << /S /TR /K [ << /S /TD /K 4 >> << /S /TD /K 5 >> ] >> ] >> \
-         << /S /L /K [ << /S /LI /K [ << /S /Lbl /K 6 >> << /S /LBody /K 7 >> ] >> ] >> \
-         << /S /Link /K << /Type /OBJR /Obj 9 0 R >> >> \
-         << /S /Form /K << /Type /OBJR /Obj 10 0 R >> >> ] >>"
+            << /S /TR /K [14 0 R 15 0 R] >> << /S /TR /K [16 0 R 17 0 R] >> ] >> \
+         << /S /L /K [ << /S /LI /K [18 0 R 19 0 R] >> ] >> 20 0 R 21 0 R] >>"
             .into(),
         "<< /Title (Quarterly report) >>".into(),
         // 9 link, 10 field, 11 image
@@ -435,6 +430,21 @@ fn good() -> Vec<String> {
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /TU (Your name) /Rect [20 60 120 80] /StructParent 2 >>".into(),
         "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream"
             .into(),
+        // 12 to 21: the elements the parent tree names, owners of marked content 0 to 7 on the
+        // page, of the link and of the field. The cells' parents (/P) are written as the Document,
+        // since their rows are direct objects.
+        "<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K 0 >>".into(),
+        "<< /S /Figure /P 7 0 R /Pg 3 0 R /Alt (A red square) /K 1 >>".into(),
+        "<< /S /TH /P 7 0 R /Pg 3 0 R /K 2 >>".into(),
+        "<< /S /TH /P 7 0 R /Pg 3 0 R /K 3 >>".into(),
+        "<< /S /TD /P 7 0 R /Pg 3 0 R /K 4 >>".into(),
+        "<< /S /TD /P 7 0 R /Pg 3 0 R /K 5 >>".into(),
+        "<< /S /Lbl /P 7 0 R /Pg 3 0 R /K 6 >>".into(),
+        "<< /S /LBody /P 7 0 R /Pg 3 0 R /K 7 >>".into(),
+        "<< /S /Link /P 7 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>".into(),
+        "<< /S /Form /P 7 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 10 0 R >> >>".into(),
+        // 22: the parent tree, by the page's /StructParents and the annotations' /StructParent.
+        "<< /Nums [0 [12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R] 1 20 0 R 2 21 0 R] >>".into(),
     ]
 }
 
@@ -1920,4 +1930,94 @@ fn checker_reports_each_untagged_annotation_without_copying_shared_dictionaries(
     let pages = pdfcraft_model::pages(&doc);
     let found = content::page_rule(&doc, Rule::TaggedAnnotations, &pages, &[0], &Default::default(), false);
     assert_eq!(found.len(), 2, "the popup is skipped, each listed text annotation reported");
+}
+
+/// The automatic rules that fail on `good()` with its parent tree (object 22) replaced by `tree`.
+fn failed_with_parent_tree(tree: &str) -> Vec<Rule> {
+    let mut objs = good();
+    objs[21] = tree.to_string();
+    let mut got = failed(&check(&pdf(&objs, "/Info 8 0 R"), &Options::default()));
+    got.sort();
+    got
+}
+
+#[test]
+fn tagged_content_and_annotations_need_an_element_in_the_parent_tree() {
+    // ISO 32000-2 §14.7.5.4: the parent tree leads from marked content and from annotations to
+    // the elements that own them. Without an entry, or with one that names no element, the item
+    // has an MCID or a /StructParent but no tag answers it.
+    let all = "[12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R]";
+    let owned = format!("<< /Nums [0 {all} 1 20 0 R 2 21 0 R] >>");
+    assert_eq!(failed_with_parent_tree(&owned), []);
+    // A two-level number tree, its kids given in an array by reference, with a kid listed twice.
+    let kids = "<< /Kids [23 0 R 24 0 R 23 0 R] >>";
+    let mut objs = good();
+    objs[21] = kids.into();
+    objs.push(format!("<< /Limits [0 1] /Nums [0 {all} 1 20 0 R] >>"));
+    objs.push("<< /Limits [2 2] /Nums [2 21 0 R] /Kids [22 0 R] >>".into());
+    assert!(failed(&check(&pdf(&objs, "/Info 8 0 R"), &Options::default())).is_empty());
+    // No parent tree, no entry for the page, or an MCID whose slot is null or past the array.
+    let annotations = [Rule::TaggedContent, Rule::TaggedAnnotations, Rule::TaggedFormFields];
+    assert_eq!(failed_with_parent_tree("<< >>"), annotations);
+    assert_eq!(failed_with_parent_tree("<< /Nums [1 20 0 R 2 21 0 R] >>"), [Rule::TaggedContent]);
+    let short = "<< /Nums [0 [12 0 R 13 0 R null 15 0 R 16 0 R 17 0 R 18 0 R] 1 20 0 R 2 21 0 R] >>";
+    assert_eq!(failed_with_parent_tree(short), [Rule::TaggedContent]);
+    // An element without a parent, or whose parents go round without reaching the root, is in
+    // no structure hierarchy (ISO 32000-2 Table 355: /P is required).
+    let mut objs = good();
+    objs[11] = "<< /S /Heading1 /Pg 3 0 R /K 0 >>".into();
+    objs[19] = "<< /S /Link /P 24 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>".into();
+    objs.push("<< /S /Sect /P 24 0 R >>".into());
+    objs.push("<< /S /Sect /P 23 0 R >>".into());
+    let mut got = failed(&check(&pdf(&objs, "/Info 8 0 R"), &Options::default()));
+    got.sort();
+    assert_eq!(got, [Rule::TaggedContent, Rule::TaggedAnnotations]);
+    // The link's entry names the field's Form element, and the field's a missing object.
+    assert_eq!(failed_with_parent_tree(&format!("<< /Nums [0 {all} 1 21 0 R 2 99 0 R] >>")), [Rule::TaggedAnnotations, Rule::TaggedFormFields]);
+}
+
+#[test]
+fn an_annotation_belongs_in_the_element_type_that_holds_its_kind() {
+    // ISO 32000-2 §14.8.2.5.2: Annot, Link and Form elements hold annotations; Form a widget,
+    // Link a link, Annot any other (Table 368). A role-mapped type counts as the one it maps to.
+    let check_with = |link: &str, field: &str| {
+        let mut objs = good();
+        objs[19] = format!("<< /S /{link} /P 7 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>");
+        objs[20] = format!("<< /S /{field} /P 7 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 10 0 R >> >>");
+        objs[5] = objs[5].replace("/RoleMap << /Heading1 /H1 >>", "/RoleMap << /Heading1 /H1 /Field /Form /Hyperlink /Link >>");
+        let mut got = failed(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedAnnotations, Rule::TaggedFormFields]));
+        got.sort();
+        got
+    };
+    assert_eq!(check_with("Hyperlink", "Field"), []);
+    assert_eq!(check_with("Span", "P"), [Rule::TaggedAnnotations, Rule::TaggedFormFields]);
+    assert_eq!(check_with("Annot", "Annot"), [Rule::TaggedAnnotations, Rule::TaggedFormFields]);
+    // Any other annotation goes in Annot.
+    for (element, tagged) in [("Annot", true), ("Link", false), ("Span", false)] {
+        let mut objs = good();
+        objs[8] = "<< /Type /Annot /Subtype /Text /Contents (Note) /Rect [20 20 40 40] /StructParent 1 >>".into();
+        objs[19] = format!("<< /S /{element} /P 7 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>");
+        let r = checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedAnnotations]);
+        let want = if tagged { Status::Passed } else { Status::Failed };
+        assert_eq!(status(&r, Rule::TaggedAnnotations), want, "{element}");
+    }
+}
+
+#[test]
+fn marked_content_in_a_form_xobject_is_owned_through_the_forms_own_entry() {
+    // A form XObject's marked content is keyed by its own /StructParents, not the page's.
+    let doc_with = |form_key: &str, nums: &str| {
+        let mut objs = good();
+        objs[2] = objs[2].replace("/XObject << /Im 11 0 R >>", "/XObject << /Im 11 0 R /Fm 23 0 R >>");
+        objs[3] = objs[3].replace("/Artifact BMC", "/Fm Do /Artifact BMC");
+        objs[21] = format!("<< /Nums [0 [12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R] 1 20 0 R 2 21 0 R {nums}] >>");
+        let content = "/P << /MCID 0 >> BDC BT /F1 12 Tf (In a form) Tj ET EMC";
+        objs.push(format!("<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] {form_key} /Resources << /Font << /F1 5 0 R >> >> /Length {} >>\nstream\n{content}\nendstream", content.len()));
+        objs.push("<< /S /P /P 7 0 R /K << /Type /MCR /Stm 23 0 R /MCID 0 >> >>".into());
+        status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedContent]), Rule::TaggedContent)
+    };
+    assert_eq!(doc_with("/StructParents 3", "3 [24 0 R]"), Status::Passed);
+    // Read through the page's key instead, MCID 0 would be the heading's: it is not.
+    assert_eq!(doc_with("", "3 [24 0 R]"), Status::Failed);
+    assert_eq!(doc_with("/StructParents 3", ""), Status::Failed);
 }
