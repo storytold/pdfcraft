@@ -2891,6 +2891,8 @@ fn streams_use_only_standard_filters_clause_6_1_7_2() {
                 "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /X 4 0 R >> >> /Contents 5 0 R >>",
                 &format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {dict} /Length 0 >>\nstream\n\nendstream"),
                 "<< /Length 6 >>\nstream\n/X Do\nendstream",
+                "/Identity",
+                "/StdCF",
             ],
             "",
         );
@@ -2913,6 +2915,12 @@ fn streams_use_only_standard_filters_clause_6_1_7_2() {
         assert_eq!(found("/Filter [/Crypt] /DecodeParms [<< /Name /Identity >>]", level), Vec::<String>::new());
         assert_eq!(
             found("/Filter [/FlateDecode /Crypt] /DecodeParms [null << /Name /StdCF >>]", level),
+            ["A stream uses the Crypt filter with a crypt filter other than Identity"]
+        );
+        // The name written as a reference to it (objects 6 and 7).
+        assert_eq!(found("/Filter [/Crypt] /DecodeParms [<< /Name 6 0 R >>]", level), Vec::<String>::new());
+        assert_eq!(
+            found("/Filter /Crypt /DecodeParms << /Name 7 0 R >>", level),
             ["A stream uses the Crypt filter with a crypt filter other than Identity"]
         );
     }

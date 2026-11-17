@@ -2075,8 +2075,9 @@ fn check_filters(
             _ => parameters,
         };
         // Without decode parameters, or a Name in them, the crypt filter is Identity (Table 14).
-        let identity =
-            parameters.as_deref().and_then(Object::as_dict).is_none_or(|p| p.get(b"Name").is_none() || p.name(b"Name") == Some(b"Identity"));
+        // The name may be written as a reference to it.
+        let name = parameters.as_deref().and_then(Object::as_dict).and_then(|p| p.get(b"Name")).map(|n| doc.resolve(n));
+        let identity = name.is_none_or(|n| n.as_name() == Some(b"Identity"));
         if !identity {
             issue("6.1.7.2", "A stream uses the Crypt filter with a crypt filter other than Identity", None, None, false);
         }
