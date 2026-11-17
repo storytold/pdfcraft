@@ -595,6 +595,9 @@ fn the_word_preview_is_what_apply_does() {
     let smyth = lines.iter().find(|l| l.text == "Smyth").unwrap();
     assert!((preview.drawn[0].rect[0] - smyth.rect[0]).abs() < 0.01, "{:?} against {:?}", preview.drawn[0].rect, smyth.rect);
     assert!((preview.drawn[0].rect[2] - smyth.rect[2]).abs() < 0.01, "{:?} against {:?}", preview.drawn[0].rect, smyth.rect);
+    // Smyth is drawn at the phrase's 11 pt, not Smith's 9: its box is the drawn word's, top and bottom too.
+    assert!((preview.drawn[0].rect[1] - smyth.rect[1]).abs() < 0.01, "{:?} against {:?}", preview.drawn[0].rect, smyth.rect);
+    assert!((preview.drawn[0].rect[3] - smyth.rect[3]).abs() < 0.01, "{:?} against {:?}", preview.drawn[0].rect, smyth.rect);
     assert!((preview.drawn[0].baseline - smyth.baseline()[1]).abs() < 0.01);
 }
 
