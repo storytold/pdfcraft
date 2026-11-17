@@ -282,6 +282,16 @@ fn javascript_is_allowed_and_forbidden_actions_are_not() {
     };
     reports(&kid, Level::A4, "6.6.1", "A Launch action");
     passes(&File { more: vec![o("<< /Names [(a) << /S /JavaScript /JS (1;) >>] >>"), o("[6 0 R]")], ..kid }, Level::A4);
+    // A tree deeper than PdfCraft reads says so rather than passing what it didn't read.
+    let deep = |levels: usize| File {
+        more: (0..levels)
+            .map(|i| o(&format!("<< /Kids [{} 0 R] >>", i + 7)))
+            .chain([o(&format!("<< /Limits [(a) (a)] /Names [(a) {chained}] >>"))])
+            .collect(),
+        ..with_catalog("/Names << /JavaScript 6 0 R >>")
+    };
+    reports(&deep(32), Level::A4, "6.6.1", "A Launch action");
+    reports(&deep(33), Level::A4, "6.6.1", "Some document-level JavaScript could not be read");
     let optional = with_catalog("/OpenAction << /S /SetOCGState /State [] >>");
     reports(&optional, Level::A4, "6.6.1", "SetOCGState");
     reports(&File { packet: packet("4", Some("2020"), Some("F")), ..optional.clone() }, Level::A4f, "6.6.1", "SetOCGState");
@@ -603,6 +613,60 @@ fn output_intents_share_one_local_output_or_monitor_profile() {
 /// PDF/A-4 6.2.4.3 where pages have output intents and blending spaces of their own: device colour
 /// is judged against those of the page it is drawn on (ISO 32000-2 14.11.5 and 11.4.7), so pages
 /// may differ.
+/// 6.2.4.3: what a page draws is judged on that page however the file reaches it: through an
+/// indirect `/Contents` array, resources the page inherits from the page tree (ISO 32000-2 7.7.3.4),
+/// or an annotation the page lists that the form's `/Fields` lists too. The page tree node holding
+/// the resources and the catalog's form don't draw anything themselves.
+#[test]
+fn device_colour_reaches_its_page_through_arrays_inherited_resources_and_fields() {
+    let intent =
+        |n: u8| format!("/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (x) /DestOutputProfile {n} 0 R >>]");
+    // An RGB page (object 4, intent 8) and a CMYK one (object 6, intent 9); objects 10 on are `extra`.
+    let two = |catalog: &str, tree: &str, first: &str, contents: &str, second: &str, extra: Vec<Vec<u8>>| {
+        let mut objects = vec![
+            o(&format!("<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R {catalog} >>")),
+            o(&format!("<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 {tree} >>")),
+            stream("/Type /Metadata /Subtype /XML", &packet("4", Some("2020"), None)),
+            o(&format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents {contents} {first} {} >>", intent(8))),
+            stream("", contents_rgb()),
+            o(&format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 7 0 R {second} {} >>", intent(9))),
+            stream("", b"1 0 0 0 k 0 0 10 10 re f /Im Do"),
+            srgb_profile(),
+            profile_of(4, b"CMYK"),
+        ];
+        objects.extend(extra);
+        let found = verify(&Document::open(std::sync::Arc::new(raw("%PDF-2.0", &objects, "", b""))).unwrap(), Level::A4);
+        found.into_iter().map(|i| i.message).collect::<Vec<_>>()
+    };
+    fn contents_rgb() -> &'static [u8] {
+        b"1 0 0 rg 0 0 10 10 re f /Im Do"
+    }
+    let own = "/Resources << >>";
+    let none: [&str; 0] = [];
+    let image = || stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceRGB", b"\xff\0\0");
+    // The first page's content in an indirect array.
+    assert_eq!(two("", "", "/Resources << /XObject << /Im 11 0 R >> >>", "10 0 R", own, vec![o("[5 0 R]"), image()]), none);
+    // An RGB image in resources the first page inherits and the second overrides.
+    let inherited = "/Resources << /XObject << /Im 10 0 R >> >>";
+    assert_eq!(two("", inherited, "", "5 0 R", own, vec![image()]), none);
+    // An RGB widget appearance on the first page, listed by the form too.
+    let widget = "<< /Type /Annot /Subtype /Widget /FT /Tx /T (a) /F 4 /Rect [0 0 10 10] /P 4 0 R /AP << /N 11 0 R >> >>";
+    let appearance = stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", b"0 1 0 rg 0 0 10 10 re f");
+    assert_eq!(
+        two(
+            "/AcroForm << /Fields [10 0 R] >>",
+            "",
+            "/Annots [10 0 R] /Resources << /XObject << /Im 12 0 R >> >>",
+            "5 0 R",
+            own,
+            vec![o(widget), appearance, image()]
+        ),
+        none
+    );
+    // The inherited image drawn on the CMYK page too is reported there.
+    assert_eq!(two("", inherited, "", "5 0 R", "", vec![image()]), ["DeviceRGB is used, but the PDF/A output intent isn't an RGB profile"]);
+}
+
 #[test]
 fn device_colour_is_judged_on_the_page_it_is_drawn_on() {
     let rgb = "1 0 0 rg 0 0 10 10 re f";
