@@ -39,6 +39,12 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
 
 ## Behaviour
 
+- `fields` and `fields_with_adopted` keep their last reading on each thread with the state of the
+  document it read (`pdfcraft_cos::ReadState`, which any change to the document replaces), and
+  give a copy of it to a document that still reads as that state. A form edit reads the fields in
+  several steps (filling, recalculating, the XFA data, the view), most with nothing changed in
+  between, so it walks a form once (twice on a laid-out XFA form, whose data is written in
+  between); `form_reads_on_this_thread` counts the walks, for tests.
 - Inheritable attributes (`/FT`, `/Ff`, `/V`, `/DV`, `/DA`, `/Q`, `/MaxLen`) are resolved down the
   field tree; the form's `/DA` and `/Q` are the last fallback.
 - Text and choice fields get new appearance streams (`/Tx BMC … EMC`): auto-size (`0 Tf`), comb
