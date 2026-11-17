@@ -234,6 +234,28 @@ mod tests {
         app
     }
 
+    /// Offers `release` as the app would and waits for its prompt. The updater reads whether it can
+    /// install the release on a thread of its own, which wakes the context when it answers; the next
+    /// tick opens the prompt.
+    fn offer_and_wait(app: &mut PdfCraftApp, release: craft_update::Release) {
+        let ctx = egui::Context::default();
+        // Consume the context's initial repaint demand so only the offer's thread can wake it.
+        for _ in 0..2 {
+            let _ = ctx.run_logic(&egui::RawInput::default(), |_| {});
+        }
+        app.updates.updater.tick(&ctx);
+        let (wake, woken) = std::sync::mpsc::channel();
+        ctx.set_request_repaint_callback(move |_| {
+            let _ = wake.send(());
+        });
+        app.updates.updater.offer(release);
+        // Without its thread the updater opens the prompt at once.
+        if !app.updates.updater.prompt_open() {
+            woken.recv().expect("the offer's thread answers");
+        }
+        app.updates.updater.tick(&ctx);
+    }
+
     /// An app with an unsaved change to a document in a new temporary folder, which Save writes
     /// without asking where. Returns the document's path too.
     fn app_with_file(test: &str) -> (PdfCraftApp, PathBuf) {
@@ -320,13 +342,16 @@ mod tests {
     #[test]
     fn restart_to_update_with_the_startup_prompt_open_leaves_the_app_open() {
         let mut app = app(true);
-        app.updates.updater.offer(craft_update::Release {
-            tag: "v99.0.0".into(),
-            version: craft_update::parse_version("99.0.0"),
-            name: "PdfCraft 99.0.0".into(),
-            html_url: "https://github.com/storytold/pdfcraft/releases/tag/v99.0.0".into(),
-            ..Default::default()
-        });
+        offer_and_wait(
+            &mut app,
+            craft_update::Release {
+                tag: "v99.0.0".into(),
+                version: craft_update::parse_version("99.0.0"),
+                name: "PdfCraft 99.0.0".into(),
+                html_url: "https://github.com/storytold/pdfcraft/releases/tag/v99.0.0".into(),
+                ..Default::default()
+            },
+        );
         assert!(app.updates.updater.prompt_open());
         answer_result(&mut app, &egui::Context::default(), CheckResultResponse::RestartToUpdate);
         assert!(!app.updates.open, "the result dialog closes");
