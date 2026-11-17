@@ -3326,6 +3326,78 @@ fn current_view_destination_uses_single_viewport_observation_across_fits_ignorin
     assert_eq!(v.current_view_destination(&info), Some(pdfcraft_engine::ViewDestination::Fit { page: 1 }));
 }
 
+#[test]
+fn current_view_destination_preserves_scroll_on_quarter_turned_pages() {
+    let to_dest_view = |dest: &pdfcraft_engine::ViewDestination| -> DestView {
+        match *dest {
+            pdfcraft_engine::ViewDestination::Xyz { left, top, zoom, .. } => {
+                DestView::Xyz { left: left.map(|v| v as f32), top: top.map(|v| v as f32), zoom: zoom.map(|v| v as f32) }
+            }
+            pdfcraft_engine::ViewDestination::Fit { .. } => DestView::Fit,
+            pdfcraft_engine::ViewDestination::FitH { top, .. } => DestView::FitH { top: top.map(|v| v as f32) },
+            pdfcraft_engine::ViewDestination::FitV { left, .. } => DestView::FitV { left: left.map(|v| v as f32) },
+            _ => DestView::Top,
+        }
+    };
+
+    // `/Rotate=90` turns a portrait [600x800] user page into an [800x600] view page.
+    let info = pdfcraft_render::DocInfo {
+        pages: vec![pdfcraft_render::PageInfo { width: 800.0, height: 600.0, label: String::new(), crop: [0.0, 0.0, 600.0, 800.0], rotation: 90 }],
+        ..Default::default()
+    };
+
+    // 1) Fit::Width at view_rotation=0 scrolled halfway vertically (600 px of 1200 px height): fits horizontally, overflows vertically.
+    let mut v = view(1, PageLayout::Single, true);
+    v.fit = Fit::Width;
+    v.zoom = 1.5;
+    v.viewport_screen = Rect::from_min_size(Pos2::ZERO, vec2(1800.0, 500.0));
+    v.screen_xforms = vec![(0, PageXform { rect: Rect::from_min_size(pos2(SIDE, -600.0), vec2(1600.0, 1200.0)), rot: 0, pw: 800.0, ph: 600.0 })];
+    let dest = v.current_view_destination(&info).unwrap();
+    assert!(
+        matches!(dest, pdfcraft_engine::ViewDestination::Xyz { page: 0, left: Some(l), top: None, zoom: Some(z) } if (l - 300.0).abs() < 1e-2 && (z - 1.5).abs() < 1e-6),
+        "{dest:?}"
+    );
+    let mut nav = view(1, PageLayout::Single, true);
+    nav.fit = Fit::Page;
+    nav.go_to_dest(0, to_dest_view(&dest), &info);
+    let (page, fx, fy, _) = nav.goto_point.expect("restores vertical scroll on /Rotate=90 Fit::Width");
+    assert_eq!((page, fx), (0, None));
+    assert!((nav.zoom - 1.5).abs() < 1e-6 && fy.is_some_and(|f| (f - 0.5).abs() < 1e-4), "{:?} zoom={}", fy, nav.zoom);
+
+    // 2) Fit::Height at view_rotation=0 scrolled horizontally (400 px of 1600 px width): fits vertically, overflows horizontally.
+    v.fit = Fit::Height;
+    v.zoom = 2.0;
+    v.viewport_screen = Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 1300.0));
+    v.screen_xforms = vec![(0, PageXform { rect: Rect::from_min_size(pos2(SIDE - 400.0, 0.0), vec2(1600.0, 1200.0)), rot: 0, pw: 800.0, ph: 600.0 })];
+    let dest_h = v.current_view_destination(&info).unwrap();
+    assert!(
+        matches!(dest_h, pdfcraft_engine::ViewDestination::Xyz { page: 0, left: None, top: Some(t), zoom: Some(z) } if (t - 200.0).abs() < 1e-2 && (z - 2.0).abs() < 1e-6),
+        "{dest_h:?}"
+    );
+    let mut nav_h = view(1, PageLayout::Single, true);
+    nav_h.fit = Fit::Page;
+    nav_h.go_to_dest(0, to_dest_view(&dest_h), &info);
+    let (page_h, fx_h, fy_h, _) = nav_h.goto_point.expect("restores horizontal scroll on /Rotate=90 Fit::Height");
+    assert_eq!((page_h, fy_h), (0, None));
+    assert!(fx_h.is_some_and(|f| (f - 0.25).abs() < 1e-4), "{fx_h:?}");
+
+    // 3) `/Rotate=90` with matching `view_rotation=90` has net 180°, so Fit::Width uses FitH directly.
+    let mut v_rot90 = view(1, PageLayout::Single, true);
+    v_rot90.rotation = 90;
+    v_rot90.fit = Fit::Width;
+    v_rot90.viewport_screen = Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 500.0));
+    v_rot90.screen_xforms =
+        vec![(0, PageXform { rect: Rect::from_min_size(pos2(SIDE, -400.0), vec2(1200.0, 1600.0)), rot: 90, pw: 800.0, ph: 600.0 })];
+    let dest_rot90 = v_rot90.current_view_destination(&info).unwrap();
+    assert!(matches!(dest_rot90, pdfcraft_engine::ViewDestination::FitH { page: 0, top: Some(t) } if (t - 200.0).abs() < 1e-2), "{dest_rot90:?}");
+    let mut nav_rot90 = view(1, PageLayout::Single, true);
+    nav_rot90.rotation = 90;
+    nav_rot90.go_to_dest(0, to_dest_view(&dest_rot90), &info);
+    let (_, fx_90, fy_90, _) = nav_rot90.goto_point.expect("restores vertical scroll on net-180 FitH");
+    assert_eq!((nav_rot90.fit, fx_90), (Fit::Width, None));
+    assert!(fy_90.is_some_and(|f| (f - 0.25).abs() < 1e-4), "{fy_90:?}");
+}
+
 /// A camera corner at the page's edge is hit on the page only: a press off the page is no page's,
 /// so its grab cursor does not show there.
 #[test]

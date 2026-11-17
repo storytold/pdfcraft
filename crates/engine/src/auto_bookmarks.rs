@@ -351,7 +351,7 @@ struct HeadingCandidate {
 
 fn extract_typography_headings(pages: &[Vec<NormLine>], total_pages: usize, max_depth: u8) -> Vec<OutlineEntry> {
     let (top_counts, bot_counts) = collect_repeating_margin_counts(pages);
-    let numbered_re = build_regex(r"^(?:(?P<num>\d+(?:\.\d+)*)[.)]?\s+\S|(?:Chapter|Section|Part|Appendix)\s+[\dIVXLCDMA-Z])", true);
+    let numbered_re = build_regex(r"^(?:(?P<num>\d+(?:\.\d+)*)[.)]?\s+\S|(?i:chapter|section|part|appendix)\s+(?:\d+|[IVXLCDM]+\b|[A-Z]\b))", false);
     let url_re = build_regex(r"^(?:https?://|www\.)", true);
 
     // Stage B: character-weighted body font baseline (half-point buckets).

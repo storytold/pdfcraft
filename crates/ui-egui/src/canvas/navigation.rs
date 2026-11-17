@@ -89,7 +89,7 @@ impl DocView {
 
     /// Capture the exact active viewport zoom/fit and position for `"Set Destination to Current View"`.
     pub(crate) fn current_view_destination(&self, info: &DocInfo) -> Option<pdfcraft_engine::ViewDestination> {
-        let (page, corner_left, corner_top, pos_top) = if let Some((page, xf)) = self.topmost_visible_page() {
+        let (page, corner_left, corner_top, vert_left, vert_top, horiz_left, horiz_top) = if let Some((page, xf)) = self.topmost_visible_page() {
             let p = info.pages.get(page)?;
             let area = self.viewport_screen;
             let corner = area.min + vec2(SIDE, 0.0);
@@ -97,30 +97,48 @@ impl DocView {
             let (x, y) = (x.clamp(0.0, p.width.max(0.0)), y.clamp(0.0, p.height.max(0.0)));
             let wide = xf.rect.width() + 2.0 * SIDE > area.width();
             let tall = xf.rect.height() > area.height();
-            let (keep_x, keep_y) = if xf.rot.is_multiple_of(180) { (wide, tall) } else { (tall, wide) };
-            let [corner_left, corner_top] = p.xyz_for_view(keep_x.then_some(x), keep_y.then_some(y));
-            let [_, pos_top] = if xf.rot.is_multiple_of(180) { p.xyz_for_view(None, Some(y)) } else { p.xyz_for_view(Some(x), None) };
-            (page, corner_left, corner_top, pos_top)
+            let pin_view = |pin_horiz: bool, pin_vert: bool| -> [Option<f32>; 2] {
+                if xf.rot.is_multiple_of(180) {
+                    p.xyz_for_view(pin_horiz.then_some(x), pin_vert.then_some(y))
+                } else {
+                    p.xyz_for_view(pin_vert.then_some(x), pin_horiz.then_some(y))
+                }
+            };
+            let [corner_left, corner_top] = pin_view(wide, tall);
+            let [vert_left, vert_top] = pin_view(false, true);
+            let [horiz_left, horiz_top] = pin_view(wide, false);
+            (page, corner_left, corner_top, vert_left, vert_top, horiz_left, horiz_top)
         } else {
             let page = self.current;
             if page >= info.pages.len() {
                 return None;
             }
-            (page, None, None, None)
+            (page, None, None, None, None, None, None)
         };
+        let zoom = self.zoom.is_finite().then(|| f64::from(self.zoom)).filter(|z| *z > 0.0);
         match self.fit {
             Fit::Page => Some(pdfcraft_engine::ViewDestination::Fit { page }),
-            Fit::Width => Some(pdfcraft_engine::ViewDestination::FitH { page, top: pos_top.map(f64::from) }),
-            Fit::Height => Some(pdfcraft_engine::ViewDestination::FitV { page, left: corner_left.map(f64::from) }),
-            Fit::None => {
-                let zoom = self.zoom.is_finite().then(|| f64::from(self.zoom)).filter(|z| *z > 0.0);
-                Some(pdfcraft_engine::ViewDestination::Xyz {
-                    page,
-                    left: corner_left.map(f64::from),
-                    top: corner_top.or(pos_top).map(f64::from),
-                    zoom,
-                })
+            Fit::Width => {
+                if vert_top.is_none()
+                    && let Some(left) = vert_left
+                {
+                    // `/FitH` only carries `top`; on quarter-turned pages screen-vertical maps to user `left`.
+                    Some(pdfcraft_engine::ViewDestination::Xyz { page, left: Some(f64::from(left)), top: None, zoom })
+                } else {
+                    Some(pdfcraft_engine::ViewDestination::FitH { page, top: vert_top.map(f64::from) })
+                }
             }
+            Fit::Height => {
+                if horiz_left.is_none()
+                    && let Some(top) = horiz_top
+                {
+                    // `/FitV` only carries `left`; on quarter-turned pages screen-horizontal maps to user `top`.
+                    Some(pdfcraft_engine::ViewDestination::Xyz { page, left: None, top: Some(f64::from(top)), zoom })
+                } else {
+                    Some(pdfcraft_engine::ViewDestination::FitV { page, left: horiz_left.map(f64::from) })
+                }
+            }
+            Fit::None => Some(pdfcraft_engine::ViewDestination::Xyz { page, left: corner_left.map(f64::from), top: corner_top.map(f64::from), zoom }),
         }
     }
 
