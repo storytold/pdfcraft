@@ -66,13 +66,14 @@ fn is_delim(b: u8) -> bool {
 
 /// Reads the syntax `data` holds, from its start up to `until`, and records what its hexadecimal
 /// strings break in `found`. `inline` gives the bytes of the inline image that starts at a `BI`
-/// keyword (content only): its dictionary is read up to `ID`, and the rest skipped. A `BI` with no
-/// image found there ends the scan, since where its data ends isn't known. So does a string that
-/// isn't closed. Returns how many bytes were read.
+/// keyword (content only): its dictionary is read up to `ID`, and the rest skipped. Where no image
+/// is found for a `BI` (the content parser reads none from a dictionary it can't parse), its
+/// dictionary is read all the same, and the scan ends at its `ID`, since where its data ends isn't
+/// known. A string that isn't closed ends the scan too. Returns how many bytes were read.
 fn scan(data: &[u8], until: Until, found: &mut Found, inline: &mut dyn FnMut(usize) -> Option<usize>) -> usize {
     let mut i = 0;
-    // Where the inline image being read ends, once its `BI` is passed.
-    let mut image_end: Option<usize> = None;
+    // Once a `BI` is passed: where its image ends, if the content parser found one there.
+    let mut image_end: Option<Option<usize>> = None;
     while let Some(&b) = data.get(i) {
         if found.all() {
             return i;
@@ -133,15 +134,12 @@ fn scan(data: &[u8], until: Until, found: &mut Found, inline: &mut dyn FnMut(usi
                 match word {
                     b"stream" | b"endobj" if until == Until::Object => return i,
                     b"startxref" if until == Until::Trailer => return i,
-                    b"BI" if image_end.is_none() => match inline(start) {
-                        Some(end) => image_end = Some(end),
-                        None => return i,
+                    b"BI" if image_end.is_none() => image_end = Some(inline(start)),
+                    b"ID" => match image_end.take() {
+                        Some(Some(end)) => i = end.max(i),
+                        Some(None) => return i,
+                        None => {}
                     },
-                    b"ID" => {
-                        if let Some(end) = image_end.take() {
-                            i = end.max(i);
-                        }
-                    }
                     _ => {}
                 }
             }

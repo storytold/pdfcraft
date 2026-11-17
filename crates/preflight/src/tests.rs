@@ -2438,6 +2438,8 @@ fn hexadecimal_strings_are_read_as_written_clause_6_1_6() {
     // After an inline image, and in its dictionary, before its data.
     assert_eq!(found(&with_content("BI /W 1 /H 1 /BPC 8 /CS /G ID <\nEI BT <414> Tj ET", "")), vec![odd_content.clone()]);
     assert_eq!(found(&with_content("BI /W 1 /H 1 /BPC 8 /CS [/I /RGB 0 <00000>] ID \0\nEI", "")), vec![odd_content]);
+    // A dictionary the content parser reads no image from is read all the same.
+    assert_eq!(found(&with_content("BI /W 1 /H 1 /BPC 8 /CS [/I /RGB 0 <0G>] ID \0\nEI", "")), vec![bad_content.clone()]);
     // In the file: an object and the trailer.
     assert_eq!(found(&with_content("", "/X <ABC>")), vec![odd_file.clone()]);
     assert_eq!(found(&with_content("", "/X /endobj /Y /stream /Z <ABC>")), vec![odd_file.clone()]);
