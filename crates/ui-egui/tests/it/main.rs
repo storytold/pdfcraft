@@ -46,6 +46,7 @@ mod editor_taps;
 mod export;
 mod field_triggers;
 mod fill_sign;
+mod find_focus;
 mod find_replace;
 mod folders;
 mod fonts;
