@@ -4674,8 +4674,10 @@ fn a_comment_without_text_is_saved_without_contents() {
     assert_eq!(text(&saved[noted], b"Contents"), "hello");
 
     // A note opened on it (a double-click) gives it a pop-up; still no text, so still no key.
-    set_popup(&mut doc, 0, plain, None, Some(false), &meta("h1")).unwrap();
-    assert_eq!(list(&reopen(&doc), 0)[plain].get(b"Contents"), None, "with a pop-up");
+    set_popup(&mut doc, 0, plain, None, Some(true), &meta("h1")).unwrap();
+    let popup = summaries(&doc).into_iter().find(|s| s.index == plain).unwrap().popup;
+    assert_eq!(popup.map(|p| p.open), Some(true), "the pop-up is open");
+    assert_eq!(list(&reopen(&doc), 0)[plain].get(b"Contents"), None, "with an open pop-up");
 
     set_contents(&mut doc, 0, noted, "", &meta("h2")).unwrap();
     assert_eq!(list(&reopen(&doc), 0)[noted].get(b"Contents"), None, "its text cleared");
