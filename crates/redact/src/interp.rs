@@ -149,6 +149,9 @@ pub(crate) struct Output {
     /// property lists into the content past what is left of the run's [`MAX_PROPERTY_COPIES`]: the
     /// operation must fail closed rather than build content that large.
     pub property_copies: bool,
+    /// Apply mode met text in a font whose CMap dropped codespace ranges while a redaction region
+    /// was in force: which text its strings hold is a guess, so the operation must fail closed.
+    pub dropped_codes: bool,
     /// The content holds an inline image the renderer reads no image for
     /// ([`pdfcraft_content::Parsed::ambiguous_images`]): what this scope placed after it may not
     /// be what the page shows, so a redaction must not trust it.
@@ -866,6 +869,14 @@ impl Walk {
         {
             self.out.vertical = true;
         }
+        if self.gs.font.codespaces_dropped
+            && scope.mode == Mode::Apply
+            && scope.hidden_text.is_none()
+            && !scope.rects.is_empty()
+            && items.iter().any(|o| matches!(o, Object::String(s) if !s.bytes.is_empty()))
+        {
+            self.out.dropped_codes = true;
+        }
         let (new_items, removed) = show(scope, &self.gs, &mut self.tm, &items);
         if removed == 0 {
             return Some(op);
@@ -1385,6 +1396,7 @@ fn xobject(
             out.residue += inner.residue;
             out.vertical |= inner.vertical;
             out.property_copies |= inner.property_copies;
+            out.dropped_codes |= inner.dropped_codes;
             out.ambiguous |= inner.ambiguous;
             out.unparsed |= inner.unparsed;
             out.doomed.extend_from_slice(&inner.doomed);
