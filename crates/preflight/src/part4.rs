@@ -985,10 +985,18 @@ fn references(objs: &[Indirect], pages: &[pdfcraft_model::Page]) -> (Vec<Vec<usi
             _ => None,
         };
         for resources in [b"Resources".as_slice(), b"DR"].iter().filter_map(|key| holder?.get(key)) {
-            let resources = match resources {
-                Object::Ref(t) => object(t.num).and_then(Object::as_dict),
-                other => other.as_dict(),
-            };
+            // Through objects that only refer to another, to the resource dictionary itself.
+            let mut resources = resources;
+            for _ in 0..MAX_GROUP_DEPTH {
+                match resources {
+                    Object::Ref(t) => match object(t.num) {
+                        Some(next) => resources = next,
+                        None => break,
+                    },
+                    _ => break,
+                }
+            }
+            let resources = resources.as_dict();
             for map in RESOURCE_MAPS.iter().filter_map(|key| resources?.get(key)?.as_ref()) {
                 // Through objects that only refer to another, to the map itself, each counted.
                 let mut at = map;
