@@ -844,10 +844,33 @@ fn size_bucket((w, h): (u32, u32)) -> (u32, u32) {
     (w.checked_next_power_of_two().unwrap_or(u32::MAX), h.checked_next_power_of_two().unwrap_or(u32::MAX))
 }
 
+/// Partition `0..src` into `dst` contiguous source intervals matching
+/// `centre(i, src, dst) = ((2 * i + 1) * dst / (2 * src)).min(dst - 1)`.
+fn shrink_axis_spans(src: usize, dst: usize) -> Option<Vec<(usize, usize)>> {
+    let mut spans = Vec::new();
+    spans.try_reserve_exact(dst).ok()?;
+    let mut start = 0usize;
+    let src128 = src as u128;
+    let dst128 = dst as u128;
+    let denom = 2 * dst128;
+    for t in 0..dst {
+        let end = if t + 1 == dst {
+            src
+        } else {
+            let num = 2 * (t as u128 + 1) * src128 - dst128;
+            (num.div_ceil(denom) as usize).min(src)
+        };
+        spans.push((start, end));
+        start = end;
+    }
+    Some(spans)
+}
+
 /// PdfCraft patch (82): `luma` averaged down to `to` (no larger than it on either side): each
 /// target sample is the mean of the source samples whose centres fall in it. Source sample `x`
-/// of `sw`, centred at `x + ½`, falls in target sample `⌊(2x + 1)·tw / 2sw⌋`. The only buffers are
-/// the target's sums and counts, reserved fallibly; nothing is sized by the source's width.
+/// of `sw`, centred at `x + ½`, falls in target sample `⌊(2x + 1)·tw / 2sw⌋`. Processed one
+/// target row at a time using only a `tw`-entry accumulator row (`row_sums`) and precomputed
+/// axis spans, avoiding full `tw × th` sum/count buffers and per-pixel division.
 fn shrink_luma(luma: LumaData, to: (u32, u32)) -> Option<LumaData> {
     let (sw, sh) = (luma.width as usize, luma.height as usize);
     let (tw, th) = (to.0 as usize, to.1 as usize);
@@ -855,28 +878,37 @@ fn shrink_luma(luma: LumaData, to: (u32, u32)) -> Option<LumaData> {
         return None;
     }
     let cells = tw.checked_mul(th)?;
-    let (mut sums, mut counts): (Vec<u64>, Vec<u32>) = (Vec::new(), Vec::new());
-    sums.try_reserve_exact(cells).ok()?;
-    counts.try_reserve_exact(cells).ok()?;
-    sums.resize(cells, 0);
-    counts.resize(cells, 0);
-    // The target sample a source sample's centre falls in, along an axis of `src` samples
-    // shrunk to `dst`. `2·i + 1 < 2·src` and `dst ≤ src ≤ 2^32`, so the product fits a u64.
-    let centre = |i: usize, src: usize, dst: usize| -> usize {
-        let at = (2 * i as u64 + 1) * dst as u64 / (2 * src as u64);
-        (at as usize).min(dst - 1)
-    };
-    for (y, row) in luma.data.chunks_exact(sw).enumerate() {
-        let base = centre(y, sh, th) * tw;
-        for (x, &v) in row.iter().enumerate() {
-            let i = base + centre(x, sw, tw);
-            if let (Some(sum), Some(count)) = (sums.get_mut(i), counts.get_mut(i)) {
-                *sum += u64::from(v);
-                *count += 1;
+    let x_spans = shrink_axis_spans(sw, tw)?;
+    let y_spans = shrink_axis_spans(sh, th)?;
+    let mut row_sums = Vec::new();
+    row_sums.try_reserve_exact(tw).ok()?;
+    row_sums.resize(tw, 0u64);
+    let mut data = Vec::new();
+    data.try_reserve_exact(cells).ok()?;
+    let use_u32_row_acc = sw <= (u32::MAX / u32::from(u8::MAX)) as usize;
+
+    for (y0, y1) in y_spans {
+        let row_h = y1 - y0;
+        row_sums.fill(0);
+        if let Some(band) = luma.data.get(y0 * sw..y1 * sw) {
+            for row in band.chunks_exact(sw) {
+                for (sum, &(x0, x1)) in row_sums.iter_mut().zip(&x_spans) {
+                    if let Some(span) = row.get(x0..x1) {
+                        *sum += if use_u32_row_acc {
+                            u64::from(span.iter().map(|&v| u32::from(v)).sum::<u32>())
+                        } else {
+                            span.iter().map(|&v| u64::from(v)).sum::<u64>()
+                        };
+                    }
+                }
             }
         }
+        for (&sum, &(x0, x1)) in row_sums.iter().zip(&x_spans) {
+            let count = (row_h as u64).saturating_mul((x1 - x0) as u64);
+            data.push(if count == 0 { 0 } else { (sum / count) as u8 });
+        }
     }
-    let data = sums.iter().zip(&counts).map(|(&sum, &count)| if count == 0 { 0 } else { (sum / u64::from(count)) as u8 }).collect();
+
     Some(LumaData { data, width: to.0, height: to.1, ..luma })
 }
 
