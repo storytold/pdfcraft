@@ -6,8 +6,8 @@
 use super::as_docx::{MAX_MEDIA, rgb8};
 use super::as_html::{allowed, language_tag};
 use super::layout::{Image, Item, Page, Table, items};
-use craft_wordmodel::para::{Float, OBJ};
-use craft_wordmodel::props::{Border, BorderStyle, Borders, CellProps, LineSpacing, TableLook, TableProps};
+use craft_wordmodel::para::Float;
+use craft_wordmodel::props::{Border, BorderStyle, Borders, CellProps, LineSpacing, TableProps};
 use craft_wordmodel::{Block, CharProps, Document, InlineObject, ParaProps, Paragraph, Rgb, SectionProps, Style, StyleSheet, TextColor};
 
 /// A run's formatting: its size, bold, italic and colour (none for black, the default).
@@ -24,36 +24,15 @@ fn chr(size: f64, bold: bool, italic: bool, color: [f64; 3]) -> CharProps {
     }
 }
 
-/// Appends `text` to `p` as a run, merged into the last one when the formatting is the same. Only
-/// the characters Word and RTF readers accept, and never U+FFFC, the model's object mark: in the
-/// PDF's text it is a character, not an object. Appending to the fields takes constant time, where
-/// `Paragraph::insert_text` walks every run on each call.
+/// Appends `text` to `p` as a run (`Paragraph::push_text` drops U+FFFC, the model's object mark,
+/// which in the PDF's text is a character, not an object), keeping only the characters Word and
+/// RTF readers accept.
 fn push_text(p: &mut Paragraph, text: &str, props: CharProps) {
     // A hard line ending in the text (LF, CR or CRLF) is a line break, the model's `\n`, which the
     // writers keep inside its paragraph or cell (storytold/pdfcraft#4723).
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
-    let text: String = text.chars().filter(|c| allowed(*c) && *c != OBJ).collect();
-    if text.is_empty() {
-        return;
-    }
-    p.text.push_str(&text);
-    match p.runs.last_mut() {
-        Some(last) if last.props == props => last.len += text.len(),
-        _ => p.runs.push(craft_wordmodel::Run { len: text.len(), props }),
-    }
-}
-
-/// Appends an object to `p` in constant time (`Paragraph::insert_object` counts the objects before
-/// its offset).
-fn push_object(p: &mut Paragraph, obj: InlineObject) {
-    let props = CharProps::default();
-    p.text.push(OBJ);
-    p.objects.push(obj);
-    let len = OBJ.len_utf8();
-    match p.runs.last_mut() {
-        Some(last) if last.props == props => last.len += len,
-        _ => p.runs.push(craft_wordmodel::Run { len, props }),
-    }
+    let text: String = text.chars().filter(|c| allowed(*c)).collect();
+    p.push_text(&text, &props);
 }
 
 /// A table: its grid from the column edges, ruled where the PDF draws rules, one paragraph per
@@ -75,9 +54,6 @@ fn table(t: &Table) -> craft_wordmodel::Table {
             between: rule(inside),
             inside_v: rule(inside),
         }),
-        // No table style, so none of its options: no header row, bands or first column. (craft-flow
-        // made the first row of a table with no style a header row from the default look.)
-        look: TableLook { header_row: false, total_row: false, banded_rows: false, first_column: false, last_column: false, banded_columns: false },
         ..TableProps::default()
     };
     let rows = t
@@ -163,8 +139,7 @@ fn picture(doc: &mut Document, im: &Image, sec: &SectionProps) -> Paragraph {
     let k = (text_w / w).min(1.0);
     let media = doc.add_media(im.bytes.to_vec(), im.ext);
     let mut p = Paragraph::new();
-    push_object(
-        &mut p,
+    p.push_object(
         InlineObject::Image {
             media,
             w: (w * k) as f32,
@@ -175,6 +150,7 @@ fn picture(doc: &mut Document, im: &Image, sec: &SectionProps) -> Paragraph {
             fx: Default::default(),
             ole: None,
         },
+        &CharProps::default(),
     );
     p
 }
