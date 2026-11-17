@@ -250,8 +250,10 @@ fn stream_layout(doc: &Document, data: &[u8], body: usize, end: usize, raw_len: 
         Some((e, 0)) => (e, e == start || !is_eol(e.checked_sub(1).and_then(|p| data.get(p)))),
         Some((e, _)) => (e, true),
         None => {
-            // The stream data never holds `endstream` itself, so the search starts just inside it.
-            let past = start.saturating_add(raw_len).saturating_sub(b"endstream".len()).max(start);
+            // The search starts past the data: data its /Length gives may end in the bytes
+            // `endstream`, and data the reader recovered ends before the end-of-line marker
+            // ahead of `endstream`.
+            let past = start.saturating_add(raw_len);
             (find_endstream(data, past.min(end), end)?, false)
         }
     };
