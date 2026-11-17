@@ -36,8 +36,9 @@ impl Automation {
     pub(crate) fn pdfa_verify(&self, a: &Args) -> Result<Value> {
         let level = self.pdfa_level(a)?;
         let doc = self.doc(a)?;
+        // A document that could not be read was not checked: an error, never `compliant`.
         let issues: Vec<Value> = doc
-            .pdfa_verify(level)
+            .pdfa_verify(level)?
             .iter()
             .map(|i| json!({ "clause": i.clause, "message": i.message, "page": i.page.map(|p| p + 1), "fixable": i.fixable }))
             .collect();
