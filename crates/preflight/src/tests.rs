@@ -2367,3 +2367,47 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// 6.1.4: `xref` is followed by a single end-of-line marker and then the first subsection header,
+/// in every cross-reference table of the file; Save as PDF/A has the table written afresh.
+#[test]
+fn xref_keyword_is_followed_by_one_end_of_line_clause_6_1_4() {
+    let objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"];
+    let table = |after: &str| {
+        let bytes = build(&objs, "/ID [<0011> <0011>]").bytes().to_vec();
+        let at = bytes.windows(6).rposition(|w| w == b"xref\n0").unwrap();
+        let mut out = bytes[..at + 4].to_vec();
+        out.extend_from_slice(after.as_bytes());
+        out.extend_from_slice(&bytes[at + 5..]);
+        // The table moved by as many bytes as were added: startxref still points at `xref`.
+        Document::open(std::sync::Arc::new(out)).unwrap()
+    };
+    let found = |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.4").map(|i| i.message).collect() };
+    let message = ["The xref keyword isn't followed by a single end-of-line marker and the subsection header"];
+    for good in ["\n", "\r", "\r\n"] {
+        assert!(found(&table(good)).is_empty(), "{good:?}");
+    }
+    // The patterns of veraPDF's two test files, and others.
+    for bad in [" \n", "\n\n", "\r\n\n", "\r\r", " ", "\t\n", "\n "] {
+        assert_eq!(found(&table(bad)), message, "{bad:?}");
+    }
+    // An update whose own table is right doesn't hide an earlier one that isn't.
+    let mut bytes = table("\n\n").bytes().to_vec();
+    let prev = bytes.windows(9).rposition(|w| w == b"startxref").unwrap();
+    let prev: usize = String::from_utf8_lossy(&bytes[prev + 10..]).lines().next().unwrap().trim().parse().unwrap();
+    let at = bytes.len();
+    bytes.extend_from_slice(
+        format!("xref\n0 1\n0000000000 65535 f \ntrailer\n<< /Size 3 /Root 1 0 R /ID [<0011> <0011>] /Prev {prev} >>\nstartxref\n{at}\n%%EOF\n")
+            .as_bytes(),
+    );
+    let updated = Document::open(std::sync::Arc::new(bytes)).unwrap();
+    assert_eq!(found(&updated), message);
+    // Save as PDF/A writes the file afresh, and the saved file passes.
+    let mut doc = updated;
+    let report = convert(&mut doc, Level::A2b).unwrap();
+    assert!(report.fixed.iter().any(|f| f == "Rewrote the cross-reference table"), "{:?}", report.fixed);
+    assert!(found(&doc).is_empty());
+    let saved = pdfcraft_cos::write_incremental(&doc, &Default::default()).unwrap();
+    let saved = Document::open(std::sync::Arc::new(saved)).unwrap();
+    assert!(found(&saved).is_empty());
+}

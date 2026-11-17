@@ -33,6 +33,7 @@ mod transparency;
 mod xmp;
 mod xmp_extension;
 mod xmp_types;
+mod xref;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
@@ -176,6 +177,7 @@ pub const WORDINGS: &[&str] = &[
     "The trailer has no file identifier (ID)",
     "The file identifier (ID) in the trailer isn't two non-empty strings",
     "The document is encrypted",
+    "The xref keyword isn't followed by a single end-of-line marker and the subsection header",
     "An integer is outside the 32-bit range",
     "A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸",
     "A CMap maps a character code to a CID above 65535",
@@ -742,6 +744,10 @@ fn check_identification(doc: &Document, level: Level, issue: &mut impl FnMut(&'s
     }
     if doc.trailer().get(b"Encrypt").is_some() {
         issue("6.1.3", "The document is encrypted", None, None, true);
+    }
+    // 6.1.4: the cross-reference table.
+    if xref::check(doc) {
+        issue("6.1.4", "The xref keyword isn't followed by a single end-of-line marker and the subsection header", None, None, true);
     }
 }
 
@@ -1473,6 +1479,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
     // A full save writes the header afresh, with the version it keeps and a binary comment.
     fixed.extend(header::rewrite(doc));
     fixed.extend(trailer::fix(doc));
+    fixed.extend(xref::rewrite(doc));
     let root = doc.root().ok_or(pdfcraft_cos::CosError::Syntax { offset: 0, detail: "no catalog".into() })?;
     // Catalog: actions, JavaScript, NeedAppearances, output intent, metadata.
     let mut cat = catalog(doc);
