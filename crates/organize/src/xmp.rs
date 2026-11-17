@@ -169,19 +169,31 @@ pub(crate) fn set_mirror(doc: &mut Document, key: &str, value: &str) -> Result<O
         let has_stream = doc.root().is_some_and(|root| doc.get(root).as_dict().is_some_and(|c| c.get(b"Metadata").is_some()));
         return Ok(Some(value.is_empty() && !has_stream));
     };
-    let tags = names(&xmp);
-    let ours = prefixes_for(&tags, ns);
-    // The prefixes under which the packet names the property.
-    let mut held = tags.iter().filter_map(|(n, _)| n.split_once(':').filter(|(p, l)| *l == local && (*p == prefix || ours.contains(p))));
-    let elsewhere = held.clone().any(|(p, _)| p != prefix);
-    if !xmp.contains("</rdf:RDF>") || binds_prefix_elsewhere(&xmp, prefix, ns) || elsewhere {
+    // The prefixes under which the packet names the property, as an element or an attribute.
+    let held = |xmp: &str| -> Vec<String> {
+        let tags = names(xmp);
+        let ours = prefixes_for(&tags, ns);
+        let found = tags.iter().filter_map(|(n, _)| n.split_once(':').filter(|(p, l)| *l == local && (*p == prefix || ours.contains(p))));
+        found.map(|(p, _)| p.to_string()).collect()
+    };
+    let before = held(&xmp);
+    let elsewhere = before.iter().any(|p| p != prefix);
+    // The packet's own `</rdf:RDF>`, not one written in a comment: a property is added before it.
+    if !markup_only(&xmp).contains("</rdf:RDF>") || binds_prefix_elsewhere(&xmp, prefix, ns) || elsewhere {
         // A removal is still done when the packet holds no copy of the property at all. A copy
         // under the property's own prefix counts even where that prefix is also bound elsewhere:
         // which binding applies to it isn't resolved here.
-        return Ok(Some(value.is_empty() && held.next().is_none()));
+        return Ok(Some(value.is_empty() && before.is_empty()));
     }
-    edit_packet(doc, |xmp| if value.is_empty() { remove_all(xmp, &[name]) } else { set_property(xmp, name, ns, shape, value) })?;
-    Ok(Some(true))
+    let changed = edit_packet(doc, |xmp| if value.is_empty() { remove_all(xmp, &[name]) } else { set_property(xmp, name, ns, shape, value) })?;
+    if !value.is_empty() {
+        // Written, or refused with the packet as it was.
+        return Ok(Some(changed));
+    }
+    // A clear holds only when the packet now has no copy of the property, as an element or an
+    // attribute: one this couldn't take out (an element that never ends) refuses it.
+    let after = if changed { packet(doc).map(|(_, _, xmp)| held(&xmp)) } else { Some(before) };
+    Ok(Some(after.is_some_and(|left| left.is_empty())))
 }
 
 /// Record in the catalog's XMP packet that the document was changed at `date` (an XMP date):
@@ -340,7 +352,8 @@ fn get_property(xmp: &str, name: &str, shape: Shape) -> Option<String> {
         if element.get(..open_end)?.ends_with('/') {
             return None;
         }
-        let inner = element.get(open_end + 1..)?.strip_suffix(&format!("</{name}>"))?;
+        // Up to its end tag, which may hold whitespace before its `>` (XML 1.0 §3.1 `ETag`).
+        let inner = element.get(open_end + 1..element.rfind("</")?)?;
         let items = list_items(inner);
         if items.is_empty() {
             // An empty `<rdf:Alt/>` or `<rdf:Seq></rdf:Seq>` has no value, not its markup.
@@ -455,14 +468,23 @@ fn set_property(xmp: &str, name: &str, ns: &str, shape: Shape, value: &str) -> O
     // binds its prefix. Such a declaration scopes only this element (Namespaces in XML 1.0 §6.1),
     // whose content is now ours: an `xmlns:rdf` there binds the `rdf:Alt` or `rdf:Seq` written
     // inside it, so it is written bound to RDF, whatever it said.
+    //
+    // An `rdf` bound on an ancestor applies inside it too, so a packet that binds `rdf` anywhere to
+    // another namespace, or never to RDF, gets an `xmlns:rdf` for RDF on the replaced element
+    // when its new value is an `rdf:Alt` or `rdf:Seq`. Other packets are written as before.
     if let Some((start, end)) = element_span(xmp, name) {
         let tag = xmp.get(start..end)?;
         let tag = tag.get(..=tag.find('>')?)?;
-        let decls: String = names(tag)
-            .into_iter()
+        let own = names(tag);
+        let mut decls: String = own
+            .iter()
             .filter(|(n, _)| *n == "xmlns" || n.starts_with("xmlns:"))
-            .filter_map(|(n, v)| Some(format!(" {n}=\"{}\"", if n == "xmlns:rdf" { RDF } else { v? }.replace('"', "&quot;"))))
+            .filter_map(|(n, v)| Some(format!(" {n}=\"{}\"", if *n == "xmlns:rdf" { RDF } else { (*v)? }.replace('"', "&quot;"))))
             .collect();
+        let rdf_in_scope = || !binds_prefix_elsewhere(xmp, "rdf", RDF) && names(xmp).iter().any(|(n, v)| *n == "xmlns:rdf" && *v == Some(RDF));
+        if shape != Shape::Text && !value.is_empty() && !own.iter().any(|(n, _)| *n == "xmlns:rdf") && !rdf_in_scope() {
+            decls.push_str(&format!(" xmlns:rdf=\"{RDF}\""));
+        }
         let mut out = String::with_capacity(xmp.len());
         out.push_str(xmp.get(..start)?);
         out.push_str(make(&decls).as_deref().unwrap_or_default());
@@ -551,9 +573,24 @@ fn element_span(xmp: &str, name: &str) -> Option<(usize, usize)> {
         if xmp.get(..tag_end)?.ends_with('/') {
             return Some((i, tag_end + 1));
         }
-        let close = format!("</{name}>");
-        let end = tag_end + xmp.get(tag_end..)?.find(&close)? + close.len();
+        let end = tag_end + end_tag(xmp.get(tag_end..)?, name)?;
         return Some((i, end));
+    }
+    None
+}
+
+/// Where the first end tag of the element `name` in `text` ends: past `</name>`, which may hold
+/// whitespace before its `>` (XML 1.0 §3.1 `ETag ::= '</' Name S? '>'`).
+fn end_tag(text: &str, name: &str) -> Option<usize> {
+    let close = format!("</{name}");
+    let mut from = 0;
+    while let Some(i) = text.get(from..).and_then(|s| s.find(&close)).map(|i| i + from) {
+        from = i + close.len();
+        let rest = text.get(from..)?;
+        let trimmed = rest.trim_start();
+        if trimmed.starts_with('>') {
+            return Some(from + (rest.len() - trimmed.len()) + 1);
+        }
     }
     None
 }
@@ -695,9 +732,11 @@ mod tests {
 
     #[test]
     fn lookalike_names_and_text_are_not_matched() {
-        let packet = "<rdf:RDF xmlns:rdf=\"r\"><rdf:Description rdf:about=\"\"><dc:titles>keep</dc:titles>\
-                      <dc:subject>say dc:title=\"no\"</dc:subject><dc:title/></rdf:Description></rdf:RDF>";
-        let out = set_property(packet, "dc:title", DC, Shape::LangAlt, "New").unwrap();
+        let packet = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\"><rdf:Description rdf:about=\"\"><dc:titles>keep</dc:titles>\
+             <dc:subject>say dc:title=\"no\"</dc:subject><dc:title/></rdf:Description></rdf:RDF>"
+        );
+        let out = set_property(&packet, "dc:title", DC, Shape::LangAlt, "New").unwrap();
         assert!(out.contains("<dc:titles>keep</dc:titles>") && out.contains("say dc:title=\"no\""), "{out}");
         assert!(out.contains("<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">New</rdf:li></rdf:Alt></dc:title></rdf:Description>"), "{out}");
     }
@@ -849,5 +888,49 @@ mod tests {
         assert!(out.ends_with(&tail), "{out}");
         assert_eq!(get_property(&out, "xmp:ModifyDate", Shape::Text).as_deref(), Some("2026-11-18"));
         assert_eq!(get_property(&out, "xmp:MetadataDate", Shape::Text).as_deref(), Some("2026-11-18"));
+    }
+
+    /// An `rdf` that an ancestor of the property binds to another namespace would apply to the
+    /// `rdf:Alt` and `rdf:Seq` written in its place, so the replaced element binds `rdf` itself.
+    /// A packet whose `rdf` is RDF's throughout is written as before.
+    #[test]
+    fn a_replaced_value_is_rdf_even_where_an_ancestor_binds_rdf_elsewhere() {
+        for (key, shape, inner) in [
+            ("dc:title", Shape::LangAlt, "<r:Alt><r:li xml:lang=\"x-default\">Old</r:li></r:Alt>"),
+            ("dc:creator", Shape::Seq, "<r:Seq><r:li>Old</r:li></r:Seq>"),
+        ] {
+            let packet = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:r=\"{RDF}\"><r:Description r:about=\"\" xmlns:rdf=\"urn:other\" xmlns:dc=\"{DC}\">\
+                 <{key}>{inner}</{key}></r:Description></rdf:RDF>"
+            );
+            let out = set_property(&packet, key, DC, shape, "New").unwrap();
+            let start = format!("<{key} xmlns:rdf=\"{RDF}\"><rdf:");
+            assert!(out.contains(&start), "{out}");
+            assert_eq!(get_property(&out, key, shape).as_deref(), Some("New"), "{out}");
+        }
+        // Plain text holds no RDF markup, and a packet whose `rdf` is RDF's is written as before.
+        let packet = "<rdf:RDF xmlns:rdf=\"urn:other\"><rdf:Description><pdf:Keywords>a</pdf:Keywords></rdf:Description></rdf:RDF>";
+        let out = set_property(packet, "pdf:Keywords", PDF, Shape::Text, "b").unwrap();
+        assert!(out.contains("<pdf:Keywords>b</pdf:Keywords>"), "{out}");
+        let out = set_property(PACKET, "dc:title", DC, Shape::LangAlt, "New").unwrap();
+        assert_eq!(out.replace(">New<", ">Untitled 1<"), PACKET);
+    }
+
+    /// An end tag may hold whitespace before its `>` (XML 1.0 §3.1): the element is still found,
+    /// replaced and removed, and its value read.
+    #[test]
+    fn an_end_tag_with_whitespace_ends_the_element() {
+        let packet = PACKET.replace("</dc:title>", "</dc:title \n >");
+        assert_eq!(get_property(&packet, "dc:title", Shape::LangAlt).as_deref(), Some("Untitled 1"));
+        let out = set_property(&packet, "dc:title", DC, Shape::LangAlt, "New").unwrap();
+        assert_eq!(out.matches("<dc:title").count(), 1, "{out}");
+        assert_eq!(get_property(&out, "dc:title", Shape::LangAlt).as_deref(), Some("New"));
+        let out = set_property(&packet, "dc:title", DC, Shape::LangAlt, "").unwrap();
+        assert!(!out.contains("dc:title"), "{out}");
+        assert_eq!(end_tag("</a></a >", "a"), Some(4));
+        assert_eq!(end_tag("</ab></a\t>", "a"), Some(10));
+        for hostile in ["", "</a", "</a ", "</a x>", "</\u{e9}"] {
+            assert_eq!(end_tag(hostile, "a"), None, "{hostile}");
+        }
     }
 }

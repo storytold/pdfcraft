@@ -325,6 +325,36 @@ mod tests {
         }
     }
 
+    /// A change the packet doesn't take leaves `/Info` as it was. An `r:RDF` packet whose only
+    /// `</rdf:RDF>` is in a comment has no end tag to add a title before, and a clear that would
+    /// leave a copy of the property behind (an element that never ends) is refused. A clear of a
+    /// title whose end tag holds whitespace takes it out of both.
+    #[test]
+    fn a_change_the_packet_doesnt_take_keeps_info() {
+        let home = MetadataHome::Xmp { piece_info: false };
+        let ids = "xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\" pdfaid:part=\"4\" pdfaid:rev=\"2020\"";
+        let commented = format!(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><r:RDF xmlns:r=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+             <r:Description r:about=\"\" {ids}/></r:RDF><!-- </rdf:RDF> --></x:xmpmeta>"
+        );
+        let unended = packet(PDFA4, "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title>Old");
+        for (xmp, value) in [(&commented, "New"), (&unended, "")] {
+            let mut d = doc(xmp, &[], &[("Title", "Old")]);
+            let before = written(&d);
+            assert!(set_info_in(&mut d, home, "Title", value).is_err(), "{value:?} in {xmp}");
+            assert_eq!(written(&d), before, "nothing changed: {value:?} in {xmp}");
+        }
+        let spaced = packet(
+            PDFA4,
+            "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+             <dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">Old</rdf:li></rdf:Alt></dc:title ></rdf:Description>",
+        );
+        let mut d = doc(&spaced, &[], &[("Title", "Old")]);
+        set_info_in(&mut d, home, "Title", "").unwrap();
+        let x = xmp_of(&d);
+        assert!(!x.contains("dc:title") && d.trailer().get(b"Info").is_none(), "{x}");
+    }
+
     /// The save's date check reads element and attribute names: a title that mentions
     /// `xap:ModifyDate` doesn't stop the dates being recorded, and an `xmp:ModifyDate` that binds
     /// its own prefix keeps that binding when rewritten.
