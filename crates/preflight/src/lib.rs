@@ -1019,10 +1019,11 @@ fn check_images(
     let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_JPX_PREFIX_DECODED, 0);
     for (_, o) in objs {
         let Object::Stream(s) = &**o else { continue };
-        if s.dict.name(b"Subtype") != Some(b"Image") {
+        // With a colour space of its own, the image's data isn't read for one (ISO 32000-2 7.4.9).
+        if s.dict.name(b"Subtype") != Some(b"Image") || s.dict.get(b"ColorSpace").is_some_and(|cs| !matches!(cs, Object::Null)) {
             continue;
         }
-        let Some(found) = jpx::check(s, &mut budget) else { continue };
+        let Some(found) = jpx::check(doc, s, &mut budget) else { continue };
         if let Some(channels) = found.channels {
             issue("6.2.8.3", "A JPEG 2000 image has {} colour channels: only 1, 3 or 4 are allowed", Some(channels.to_string()), None, false);
         }
@@ -1064,7 +1065,7 @@ fn check_associated_files(
     objs: &[(ObjRef, std::sync::Arc<Object>)],
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
-    let associated = associated::associated(doc, objs);
+    let associated = associated::associated(doc, objs, &referenced_content(doc, objs));
     if embedded_file_specs(objs).any(|r| !associated.contains(&r)) {
         issue("6.8", "An embedded file isn't associated with the document or a part of it (AF)", None, None, true);
     }
@@ -1074,7 +1075,7 @@ fn check_associated_files(
 /// whole: their file specifications go in the catalog's `/AF` array. How many it added.
 fn associate_embedded_files(doc: &mut Document, root: ObjRef) -> Result<usize, pdfcraft_cos::CosError> {
     let objs = objects(doc);
-    let associated = associated::associated(doc, &objs);
+    let associated = associated::associated(doc, &objs, &referenced_content(doc, &objs));
     let missing: Vec<Object> = embedded_file_specs(&objs).filter(|r| !associated.contains(r)).map(Object::Ref).collect();
     if missing.is_empty() {
         return Ok(0);

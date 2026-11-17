@@ -1,13 +1,18 @@
 //! PDF/A-2 and -3 6.2.8.3: JPEG 2000 images (`JPXDecode`, ISO 32000-1 7.4.9). The data has 1, 3 or
-//! 4 colour channels; of several colour specifications (`colr` boxes) exactly one is marked as the
-//! best (`APPROX` 1); the one used has the method (`METH`) 1, 2 or 3 and, when enumerated, isn't
-//! colour space 19 (CIEJab); and the bit depth is 1 to 38, the same for every channel.
+//! 4 colour channels (an opacity channel isn't one); of several colour specifications (`colr`
+//! boxes) exactly one is marked as the best (`APPROX` 1); the one used has the method (`METH`) 1, 2
+//! or 3 and, when enumerated, isn't colour space 19 (CIEJab); and the bit depth is 1 to 38, the
+//! same for every channel.
+//!
+//! An image whose dictionary has `/ColorSpace` isn't checked: that colour space then decides how the
+//! samples read, and the data's own colour specifications are ignored (ISO 32000-2 7.4.9).
 //!
 //! The values are read from the JP2 header box (ITU-T T.800 Annex I: `ihdr`, `bpcc` and `colr`,
-//! I.5.3), or, for data that is a bare codestream without one, from its `SIZ` marker segment
-//! (A.5.1), which has no colour specifications. Only the headers are read, never the image.
+//! I.5.3, with `cdef` and `pclr` for the channels), or, for data that is a bare codestream
+//! without one, from its `SIZ` marker segment (A.5.1), which has no colour specifications. Only
+//! the headers are read, never the image.
 
-use pdfcraft_cos::{DecodeBudget, Dict, Object, Stream};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, Object, Stream};
 
 /// How many boxes are read before the header is given up on, at the top level and in `jp2h`.
 const MAX_BOXES: usize = 64;
@@ -82,8 +87,9 @@ pub(crate) fn check_data(data: &[u8]) -> Option<Jpx> {
     let top = boxes(data);
     let header = top.iter().find(|(kind, _)| kind == b"jp2h").map(|(_, c)| boxes(c))?;
     let ihdr = header.iter().find(|(kind, _)| kind == b"ihdr").map(|(_, c)| *c)?;
-    let channels = u16::from_be_bytes(*ihdr.get(8..10)?.first_chunk::<2>()?);
+    let components = u16::from_be_bytes(*ihdr.get(8..10)?.first_chunk::<2>()?);
     let bpc = *ihdr.get(10)?;
+    let channels = colour_channels(&header).unwrap_or(components);
     let mut out = Jpx { channels: (!matches!(channels, 1 | 3 | 4)).then_some(channels), ..Jpx::default() };
     // T.800 I.5.3.1: 255 means the channels differ, and the `bpcc` box gives each one's.
     out.depth = if bpc == 0xFF {
@@ -117,6 +123,21 @@ pub(crate) fn check_data(data: &[u8]) -> Option<Jpx> {
     Some(out)
 }
 
+/// How many colour channels the header box's contents `header` describe, when a box other than
+/// `ihdr` says: the channel definitions (`cdef`, T.800 I.5.3.6) count those of type 0, colour,
+/// and not opacity; failing that, a palette (`pclr`, I.5.3.4) makes its columns the channels.
+/// Otherwise every component of `ihdr` is one.
+fn colour_channels(header: &[([u8; 4], &[u8])]) -> Option<u16> {
+    if let Some((_, cdef)) = header.iter().find(|(kind, _)| kind == b"cdef") {
+        let n = usize::from(u16::from_be_bytes(*cdef.first_chunk::<2>()?));
+        // Each definition is a channel, a type and an association, two bytes each.
+        let types = (0..n).map_while(|i| cdef.get(i.checked_mul(6)?.checked_add(4)?..i.checked_mul(6)?.checked_add(6)?));
+        return u16::try_from(types.filter(|typ| *typ == [0, 0]).count()).ok();
+    }
+    let (_, pclr) = header.iter().find(|(kind, _)| kind == b"pclr")?;
+    pclr.get(2).map(|&columns| u16::from(columns))
+}
+
 /// A component's bit depth, as `ihdr`, `bpcc` and `SIZ` write it (the depth less one, with the
 /// top bit for signed samples), within 1 to 38.
 fn in_range(written: u8) -> bool {
@@ -133,19 +154,21 @@ fn codestream(data: &[u8]) -> Option<Jpx> {
     Some(Jpx { channels: (!matches!(components, 1 | 3 | 4)).then_some(components), depth, ..Jpx::default() })
 }
 
-/// The names of a stream's filters, as written: one name or an array of them.
-fn filter_names(dict: &Dict) -> Vec<Vec<u8>> {
-    match dict.get(b"Filter") {
-        Some(Object::Name(n)) => vec![n.clone()],
-        Some(Object::Array(a)) => a.iter().filter_map(|f| f.as_name().map(<[u8]>::to_vec)).collect(),
+/// The names of a stream's filters: one name or an array of them, each given directly or by
+/// reference.
+fn filter_names(doc: &Document, dict: &Dict) -> Vec<Vec<u8>> {
+    let Some(filter) = dict.get(b"Filter").map(|f| doc.resolve(f)) else { return Vec::new() };
+    match &*filter {
+        Object::Name(n) => vec![n.clone()],
+        Object::Array(a) => a.iter().filter_map(|f| doc.resolve(f).as_name().map(<[u8]>::to_vec)).collect(),
         _ => Vec::new(),
     }
 }
 
 /// What an image XObject `s` breaks of 6.2.8.3, when its last filter is `JPXDecode` and its data
 /// has a header to read. Filters before `JPXDecode` are undone first, within `budget`.
-pub(crate) fn check(s: &Stream, budget: &mut DecodeBudget) -> Option<Jpx> {
-    let mut filters = filter_names(&s.dict);
+pub(crate) fn check(doc: &Document, s: &Stream, budget: &mut DecodeBudget) -> Option<Jpx> {
+    let mut filters = filter_names(doc, &s.dict);
     if filters.pop().as_deref() != Some(b"JPXDecode".as_slice()) {
         return None;
     }
@@ -155,7 +178,9 @@ pub(crate) fn check(s: &Stream, budget: &mut DecodeBudget) -> Option<Jpx> {
     // The stages before `JPXDecode`, with their parameters.
     let mut dict = s.dict.clone();
     dict.set(b"Filter".to_vec(), Object::Array(filters.iter().map(|f| Object::Name(f.clone())).collect()));
-    if let Some(Object::Array(parms)) = s.dict.get(b"DecodeParms") {
+    if let Some(parms) = s.dict.get(b"DecodeParms").map(|p| doc.resolve(p))
+        && let Object::Array(parms) = &*parms
+    {
         dict.set(b"DecodeParms".to_vec(), Object::Array(parms.iter().take(filters.len()).cloned().collect()));
     }
     let data = budget.decode_within(&Stream::from_raw(dict, s.raw.to_vec()), MAX_PREFIX_DECODED).ok()?;
