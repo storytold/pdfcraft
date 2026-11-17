@@ -2426,6 +2426,15 @@ fn a_null_docmdp_or_other_permission_is_no_entry_clause_6_1_12() {
     assert!(permissions_said(&signed("/Perms << /DocMDP 6 0 R >>", sig, &["null"])).is_empty());
     assert!(permissions_said(&signed("/Perms << /UR3 5 0 R /Other null >>", sig, &[])).is_empty());
     assert!(permissions_said(&signed("/Perms << /UR3 5 0 R /Other 6 0 R >>", sig, &["null"])).is_empty());
+    // So is a null digest entry in a signature reference dictionary.
+    let digests = |entries: &str| format!("<< /Type /Sig /Reference [<< /TransformMethod /DocMDP {entries} >>] >>");
+    assert!(permissions_said(&signed("/Perms << /DocMDP 5 0 R >>", &digests("/DigestMethod null"), &[])).is_empty());
+    let by_reference = digests("/DigestMethod 6 0 R /DigestValue 7 0 R");
+    assert!(permissions_said(&signed("/Perms << /DocMDP 5 0 R >>", &by_reference, &["null"])).is_empty());
+    assert_eq!(
+        permissions_said(&signed("/Perms << /DocMDP 5 0 R >>", &digests("/DigestMethod null /DigestValue (x)"), &[])),
+        ["With DocMDP permissions, a signature reference dictionary holds DigestValue"]
+    );
 }
 
 #[test]

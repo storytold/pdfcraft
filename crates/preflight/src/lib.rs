@@ -1016,7 +1016,8 @@ fn check_permissions(
             let reference = doc.resolve(reference);
             let Some(reference) = reference.as_dict() else { continue };
             for key in DIGEST_ENTRIES {
-                if reference.get(key).is_some() && !found.contains(key) {
+                // A null digest entry, direct or by reference, is no entry (7.3.7).
+                if reference.get(key).is_some_and(present) && !found.contains(key) {
                     found.push(key);
                 }
             }
