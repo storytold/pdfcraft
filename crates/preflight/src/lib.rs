@@ -384,8 +384,9 @@ struct DeviceColour {
     gray: bool,
     rgb: bool,
     cmyk: bool,
-    /// Resources that define `DefaultRGB` / `DefaultCMYK`: device colour there is drawn in that
-    /// space, which PDF/A accepts whatever the output intent (ISO 19005-2 6.2.4.3).
+    /// Resources that define `DefaultGray` / `DefaultRGB` / `DefaultCMYK`: device colour there is
+    /// drawn in that space, which PDF/A accepts whatever the output intent (ISO 19005-2 6.2.4.3).
+    default_gray: bool,
     default_rgb: bool,
     default_cmyk: bool,
     /// Content that could not be read (undecodable, or past [`MAX_COLOUR_DECODED`]) may use
@@ -394,8 +395,14 @@ struct DeviceColour {
 }
 
 impl DeviceColour {
-    fn any(self) -> bool {
-        self.gray || self.rgb || self.cmyk
+    /// Whether a device colour space is used that no default colour space stands in for: what
+    /// needs a PDF/A output intent (6.2.4.3).
+    fn uncovered(self) -> bool {
+        (self.gray && !self.default_gray) || (self.rgb && !self.default_rgb) || self.uncovered_cmyk()
+    }
+
+    fn uncovered_cmyk(self) -> bool {
+        self.cmyk && !self.default_cmyk
     }
 
     /// Note the device colour space `name`, if it is one. Inline images may also use the
@@ -609,8 +616,9 @@ fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
             if let Some(spaces) = holder.get(b"ColorSpace").map(|c| doc.resolve(c))
                 && let Some(spaces) = spaces.as_dict()
             {
-                used.default_rgb |= spaces.get(b"DefaultRGB").is_some();
-                used.default_cmyk |= spaces.get(b"DefaultCMYK").is_some();
+                used.default_gray |= covers(doc, spaces.get(b"DefaultGray"));
+                used.default_rgb |= covers(doc, spaces.get(b"DefaultRGB"));
+                used.default_cmyk |= covers(doc, spaces.get(b"DefaultCMYK"));
                 for (k, entry) in spaces.iter() {
                     if !matches!(k.as_slice(), b"DefaultGray" | b"DefaultRGB" | b"DefaultCMYK") {
                         mark_cs_object(doc, entry, &mut used, 0);
@@ -637,6 +645,14 @@ fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
         }
     }
     used
+}
+
+/// Whether a resource dictionary's `DefaultGray`, `DefaultRGB` or `DefaultCMYK` entry stands in
+/// for its device space: present, not null, and not a bare device space itself (ISO 32000-1
+/// 8.6.5.6).
+fn covers(doc: &Document, default: Option<&Object>) -> bool {
+    let Some(default) = default else { return false };
+    !matches!(&*doc.resolve(default), Object::Null | Object::Name(_))
 }
 
 #[cfg(test)]
@@ -868,7 +884,7 @@ fn report_xmp_extension(
     }
 }
 
-/// 6.2.3 and 6.2.4.3: the output intent device colour needs.
+/// 6.2.4.3: the output intent device colour needs.
 fn check_output_intent(
     doc: &Document,
     objs: &[(ObjRef, std::sync::Arc<Object>)],
@@ -876,18 +892,20 @@ fn check_output_intent(
 ) {
     let used = uses_device_colour(doc, objs);
     if used.incomplete {
-        issue("6.2.3", "Some content could not be read for device colour", None, None, false);
+        issue("6.2.4.3", "Some content could not be read for device colour", None, None, false);
     }
     match pdfa_intent_profile(doc) {
-        None if used.any() => {
-            issue("6.2.3", "Device colour is used, but there is no PDF/A output intent", None, None, !used.cmyk);
-            if used.cmyk {
+        // 6.2.4.3: device colour needs a PDF/A output intent, unless a default colour space stands
+        // in for it. 6.2.3 is about the output intent itself, not the colour that needs one.
+        None if used.uncovered() => {
+            issue("6.2.4.3", "Device colour is used, but there is no PDF/A output intent", None, None, !used.uncovered_cmyk());
+            if used.uncovered_cmyk() {
                 issue("6.2.4.3", "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)", None, None, false);
             }
         }
         // 6.2.4.3: DeviceRGB needs an RGB output intent and DeviceCMYK a CMYK one (#667).
         Some(n) => {
-            if used.cmyk && !used.default_cmyk && n != Some(4) {
+            if used.uncovered_cmyk() && n != Some(4) {
                 issue("6.2.4.3", "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile", None, None, false);
             }
             if used.rgb && !used.default_rgb && n != Some(3) {

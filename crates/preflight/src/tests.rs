@@ -2367,3 +2367,52 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// A content stream object holding `content`.
+fn content_stream(content: &str) -> String {
+    format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len())
+}
+
+/// The device-colour findings `verify` makes at 2b, as (clause, message).
+fn device_colour_findings(doc: &Document) -> Vec<(&'static str, String)> {
+    verify(doc, Level::A2b)
+        .into_iter()
+        .filter(|i| i.message.starts_with("Device") || i.message.contains("for device colour"))
+        .map(|i| (i.clause, i.message))
+        .collect()
+}
+
+const NO_INTENT: &str = "Device colour is used, but there is no PDF/A output intent";
+const CAL_RGB: &str = "[/CalRGB << /WhitePoint [0.9505 1 1.089] >>]";
+const CAL_GRAY: &str = "[/CalGray << /WhitePoint [0.9505 1 1.089] >>]";
+
+/// ISO 19005-2 6.2.4.3: without a PDF/A output intent, device colour is reported under 6.2.4.3 (6.2.3
+/// is about the output intent itself), except where a default colour space of the resources it is
+/// painted through stands in for it (ISO 32000-1 8.6.5.6), including as an indexed space's base.
+#[test]
+fn device_colour_without_an_output_intent_is_6_2_4_3_unless_a_default_covers_it() {
+    let check = |resources: &str, content: &str, extra: &[&str]| {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Contents 3 0 R /Resources << {resources} >> >>");
+        let stream = content_stream(content);
+        // Object 3 is the content stream, so the page is object 4 and extra objects start at 5.
+        let mut objs: Vec<&str> =
+            vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &stream, &page];
+        objs.extend_from_slice(extra);
+        device_colour_findings(&build(&objs, ""))
+    };
+    let reported = vec![("6.2.4.3", NO_INTENT.to_owned())];
+    let red = "1 0 0 rg 0 0 10 10 re f";
+    let grey = "0.5 g 0 0 10 10 re f";
+    assert_eq!(check("", red, &[]), reported, "DeviceRGB, under 6.2.4.3");
+    assert!(check(&format!("/ColorSpace << /DefaultRGB {CAL_RGB} >>"), red, &[]).is_empty(), "DefaultRGB");
+    assert!(check(&format!("/ColorSpace << /DefaultGray {CAL_GRAY} >>"), grey, &[]).is_empty(), "DefaultGray");
+    assert!(check("/ColorSpace << /DefaultRGB 5 0 R >>", red, &[CAL_RGB]).is_empty(), "a DefaultRGB by reference");
+    assert_eq!(check("/ColorSpace << /DefaultGray null >>", grey, &[]), reported, "a null DefaultGray");
+    assert_eq!(check("/ColorSpace << /DefaultRGB /DeviceRGB >>", red, &[]), reported, "a DefaultRGB that is DeviceRGB");
+    assert_eq!(check(&format!("/ColorSpace << /DefaultRGB {CAL_RGB} >>"), "0.5 g 1 0 0 rg", &[]), reported, "DefaultRGB doesn't cover DeviceGray");
+    // The base of an indexed image is remapped too.
+    let image = "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace [/Indexed /DeviceRGB 0 <FF0000>] /Length 1 >>\nstream\n\u{0}\nendstream";
+    assert_eq!(check("/XObject << /Im0 5 0 R >>", "/Im0 Do", &[image]), reported, "an indexed image");
+    let covered = format!("/XObject << /Im0 5 0 R >> /ColorSpace << /DefaultRGB {CAL_RGB} >>");
+    assert!(check(&covered, "/Im0 Do", &[image]).is_empty(), "an indexed image under DefaultRGB");
+}
