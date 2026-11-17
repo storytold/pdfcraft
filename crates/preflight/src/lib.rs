@@ -776,6 +776,10 @@ enum Current {
 struct TextState {
     font: Option<Current>,
     invisible: bool,
+    /// A `Q` past [`MAX_SAVED_STATES`] restored a font that wasn't kept, and no font has been
+    /// selected since: `font` is one that may have been replaced, which the `.notdef` check
+    /// doesn't read text with.
+    font_lost: bool,
 }
 
 /// The walk [`drawing_fonts`] makes.
@@ -866,14 +870,16 @@ impl Fonts<'_> {
                 b"q" => unsaved = unsaved.saturating_add(1),
                 // The font and mode it restores aren't known: the mode is taken as visible, and
                 // every font that could be current then counts, those of these resources and the
-                // one the content started with.
+                // one the content started with. Text isn't checked for `.notdef` until a font is
+                // selected again, here or in a form drawn from here.
                 b"Q" if unsaved > 0 => {
                     unsaved -= 1;
                     state.invisible = false;
+                    state.font_lost = true;
                     if !lost {
                         lost = true;
                         self.unread(holder);
-                        self.shows(&TextState { font: start_font.clone(), invisible: false });
+                        self.shows(&TextState { font: start_font.clone(), ..TextState::default() });
                     }
                 }
                 b"Q" => {
@@ -884,6 +890,7 @@ impl Fonts<'_> {
                 b"Tf" => {
                     if let Some(name) = op.name_back(1) {
                         let selection = (Selector::Tf, name.to_vec());
+                        state.font_lost = false;
                         state.font = match &fonts {
                             Some(by_name) => by_name.get(&selection).map(|r| Current::Font(*r)),
                             None => Some(Current::Named(selection)),
@@ -898,6 +905,7 @@ impl Fonts<'_> {
                             Some(by_name) => {
                                 if let Some(r) = by_name.get(&selection) {
                                     state.font = Some(Current::Font(*r));
+                                    state.font_lost = false;
                                 }
                             }
                             // Whether it sets a font isn't known, nor whether the text after it
@@ -906,6 +914,7 @@ impl Fonts<'_> {
                             None => {
                                 if self.defaults.contains_key(&selection) {
                                     state.font = Some(Current::Named(selection.clone()));
+                                    state.font_lost = false;
                                 }
                                 self.anywhere.insert(selection);
                             }
@@ -920,6 +929,7 @@ impl Fonts<'_> {
                 b"Tj" | b"TJ" | b"'" | b"\"" => {
                     self.shows(&state);
                     let font = match &state.font {
+                        _ if state.font_lost => None,
                         Some(Current::Font(font)) => Some(*font),
                         // Content without resources of its own: a field's appearance, whose font a
                         // reader takes from the form's default resources (ISO 32000-2 12.7.3).
@@ -953,7 +963,7 @@ impl Fonts<'_> {
     /// Content that isn't read, drawn in `state`: it may set a visible mode and show text with the
     /// current font, so that font draws whatever the mode is.
     fn may_show(&mut self, state: &TextState) {
-        self.shows(&TextState { font: state.font.clone(), invisible: false });
+        self.shows(&TextState { font: state.font.clone(), ..TextState::default() });
     }
 
     /// Text shown in `state`: its font draws, unless the mode is 3.

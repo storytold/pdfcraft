@@ -3054,6 +3054,43 @@ fn notdef_is_found_in_an_appearance_that_takes_its_font_from_the_form_defaults()
     }
 }
 
+/// Past the saved states [`Fonts::read`] keeps, a `Q` restores a font that wasn't kept (ISO
+/// 32000-2 8.4.2): the text after it isn't checked for `.notdef` with the font selected before that
+/// `Q`, which may have been replaced, until content selects a font again.
+#[test]
+fn notdef_is_not_judged_with_a_font_a_restore_past_the_kept_saves_may_have_replaced() {
+    // `/Good` maps code 0 to a glyph, `/Bad` doesn't; both are embedded.
+    let good = "<< /Type /Font /Subtype /Type1 /BaseFont /Good /Encoding << /Differences [0 /A] >> /FontDescriptor 8 0 R >>";
+    let bad = "<< /Type /Font /Subtype /Type1 /BaseFont /Bad /Encoding /WinAnsiEncoding /FontDescriptor 8 0 R >>";
+    let descriptor = "<< /Type /FontDescriptor /FontName /Good /Flags 32 /FontFile 9 0 R >>";
+    let program = "<< /Length 0 >>
+stream
+
+endstream";
+    let form = "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 13 >>
+stream
+BT <00> Tj ET
+endstream";
+    let said = |content: &str| {
+        let resources = "/Font << /F1 5 0 R /F2 6 0 R >> /XObject << /X 10 0 R >>";
+        notdef_said(&drawing(content, resources, &[good, bad, descriptor, program, form]), Level::A2b)
+    };
+    let bad_said = ["Text refers to the .notdef glyph of the font Bad"];
+    let deep = "q ".repeat(MAX_SAVED_STATES);
+    assert!(said("BT /F1 10 Tf <00> Tj ET").is_empty());
+    assert_eq!(said("BT /F2 10 Tf <00> Tj ET"), bad_said);
+    // The `Q` brings back `/Good`, which the walk didn't keep: `/Bad` isn't the font judged.
+    assert!(said(&format!("BT /F1 10 Tf {deep} q /F2 10 Tf Q <00> Tj ET")).is_empty());
+    // Nor in a form drawn from there, before it selects a font of its own.
+    assert!(said(&format!("BT /F1 10 Tf {deep} q /F2 10 Tf Q ET /X Do")).is_empty());
+    // A font selected after that `Q` is known again.
+    assert_eq!(said(&format!("BT /F1 10 Tf {deep} q Q /F2 10 Tf <00> Tj ET")), bad_said);
+    // Within the kept saves the font is still followed.
+    let shallow = "q ".repeat(MAX_SAVED_STATES - 1);
+    assert!(said(&format!("BT /F1 10 Tf {shallow} q /F2 10 Tf Q <00> Tj ET")).is_empty());
+    assert_eq!(said(&format!("BT /F2 10 Tf {shallow} q /F1 10 Tf Q <00> Tj ET")), bad_said);
+}
+
 /// A PDF/A-4 file (ISO 19005-4) without pages whose objects from 4 on are `more`.
 fn pdfa4_file(more: &[Vec<u8>]) -> Vec<u8> {
     let packet = "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\
