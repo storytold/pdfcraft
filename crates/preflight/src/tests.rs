@@ -2702,3 +2702,41 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// PDF/A-2 and 3, 6.2.9: a form XObject has no OPI dictionary, refers to no other file (`/Ref`)
+/// and carries no PostScript (`/Subtype2 /PS`, `/PS`). PDF/A-4 cites its own 6.2.8.1 and 6.2.8.2
+/// for the first two, and allows the PostScript keys ISO 32000-2 no longer defines.
+#[test]
+fn form_xobjects_have_no_opi_reference_or_postscript_clause_6_2_9() {
+    let found = |form: &str, level: Level| -> Vec<(&'static str, String)> {
+        let doc = build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /X 4 0 R >> >> /Contents 5 0 R >>",
+                &format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {form} /Length 0 >>\nstream\n\nendstream"),
+                "<< /Length 6 >>\nstream\n/X Do\nendstream",
+                "<< /Length 0 >>\nstream\n\nendstream",
+            ],
+            "",
+        );
+        verify(&doc, level)
+            .into_iter()
+            .filter(|i| i.clause.starts_with("6.2.8") || i.clause == "6.2.9")
+            .inspect(|i| assert!(!i.fixable && WORDINGS.contains(&i.pattern), "{i:?}"))
+            .map(|i| (i.clause, i.message))
+            .collect()
+    };
+    let opi = "A form XObject has OPI information".to_owned();
+    let reference = "A form XObject refers to another file (Ref)".to_owned();
+    let postscript = "A form XObject holds PostScript (Subtype2 PS or PS)".to_owned();
+    for level in [Level::A2b, Level::A3b] {
+        assert_eq!(found("", level), []);
+        assert_eq!(found("/OPI << /1.3 << >> >>", level), [("6.2.9", opi.clone())]);
+        assert_eq!(found("/Ref << /F (other.pdf) /Page 0 >>", level), [("6.2.9", reference.clone())]);
+        assert_eq!(found("/Subtype2 /PS", level), [("6.2.9", postscript.clone())]);
+        assert_eq!(found("/PS 6 0 R", level), [("6.2.9", postscript.clone())]);
+        // Another Subtype2 is no PostScript.
+        assert_eq!(found("/Subtype2 /Other", level), []);
+    }
+}

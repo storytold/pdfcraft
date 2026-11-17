@@ -760,6 +760,8 @@ fn form_xobjects_and_3d_streams_are_checked() {
     passes(&drawn("/Type /3D /Subtype /PRC"), Level::A4);
     // PDF 2.0 doesn't define PostScript XObjects, and PDF/A-4 says nothing of them.
     passes(&drawn("/Type /XObject /Subtype /PS"), Level::A4);
+    passes(&drawn("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Subtype2 /PS"), Level::A4);
+    passes(&drawn("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /PS << >>"), Level::A4);
 }
 
 #[test]

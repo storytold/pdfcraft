@@ -146,11 +146,10 @@ const FILTERS: &[&[u8]] = &[
     b"Crypt",
 ];
 
-/// 6.1.6.1, 6.1.6.2, 6.2.8.1 and 6.2.8.2: a stream's `filters` are the standard ones (LZW, which
-/// PDF/A-2 forbids too, is reported with its rules), a Crypt filter only the Identity one (ISO
-/// 32000-2 7.4.10, Table 14); a 3D stream is U3D or PRC (ISO 32000-2 13.6.3, Table 311); and a
-/// form XObject has no OPI dictionary and refers to no other file (`/Ref`, a reference XObject,
-/// ISO 32000-2 8.10.4).
+/// 6.1.6.1 and 6.1.6.2: a stream's `filters` are the standard ones (LZW, which PDF/A-2 forbids
+/// too, is reported with its rules), a Crypt filter only the Identity one (ISO 32000-2 7.4.10,
+/// Table 14); a 3D stream is U3D or PRC (ISO 32000-2 13.6.3, Table 311). What a form XObject may
+/// not hold is [`check_form_xobject`](crate::check_form_xobject)'s, for every part.
 pub(crate) fn stream(doc: &Document, dict: &Dict, subtype: Option<&[u8]>, filters: &[Vec<u8>], issue: &mut Report<'_>) {
     for filter in filters.iter().filter(|f| !FILTERS.contains(&f.as_slice())) {
         let shown = String::from_utf8_lossy(filter.get(..filter.len().min(64)).unwrap_or_default()).into_owned();
@@ -171,15 +170,6 @@ pub(crate) fn stream(doc: &Document, dict: &Dict, subtype: Option<&[u8]>, filter
     }
     if dict.name(b"Type") == Some(b"3D") && !matches!(subtype, Some(b"U3D" | b"PRC")) {
         issue("6.1.6.1", "A 3D stream's Subtype isn't U3D or PRC", None, None, false);
-    }
-    if subtype != Some(b"Form") {
-        return;
-    }
-    if dict.get(b"OPI").is_some() {
-        issue("6.2.8.1", "A form XObject has OPI information", None, None, false);
-    }
-    if dict.get(b"Ref").is_some() {
-        issue("6.2.8.2", "A form XObject refers to another file (Ref)", None, None, false);
     }
 }
 
