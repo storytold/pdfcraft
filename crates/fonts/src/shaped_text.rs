@@ -21,6 +21,11 @@ pub fn is_thai(c: char) -> bool {
 }
 
 /// Hiragana, katakana, CJK ideographs and full-width forms a text box draws from the Japanese face.
+///
+/// Hangul syllables (U+AC00–U+D7A3) and halfwidth Hangul (U+FFA0–U+FFDC) stay out of this set.
+/// The Japanese document face has no Korean, and a text box that sent them through
+/// [`shape_japanese`] was refused with a Japanese font error. They stay with the standard font
+/// and are stored and marked, like any other script these faces cannot draw.
 pub fn is_cjk_markup(c: char) -> bool {
     matches!(
         u32::from(c),
@@ -30,9 +35,9 @@ pub fn is_cjk_markup(c: char) -> bool {
             | 0x31F0..=0x31FF
             | 0x3400..=0x4DBF
             | 0x4E00..=0x9FFF
-            | 0xAC00..=0xD7A3
             | 0xF900..=0xFAFF
-            | 0xFF00..=0xFFEF
+            | 0xFF00..=0xFF9F
+            | 0xFFE0..=0xFFEF
             | 0x20000..=0x3FFFD
     )
 }
@@ -750,5 +755,20 @@ mod tests {
         let text: String = clusters([pieces.as_slice()]).map(|c| c.text.as_str()).collect();
         assert_eq!(text, "ชื่อบุญฤทธิ์");
         assert!(thai_width("น้ำ", 10.0, |_, _| 0.0) > 0.0);
+    }
+
+    /// A text box stores Hangul and marks the first syllable. The Japanese face has no Korean,
+    /// so these characters stay with the standard font, like any other script it cannot draw.
+    #[test]
+    fn hangul_is_stored_rather_than_refused_as_japanese() {
+        assert!(!is_cjk_markup('한') && !is_cjk_markup('\u{AC00}') && !is_cjk_markup('\u{D7A3}'));
+        assert!(!is_cjk_markup('\u{FFA0}') && !is_cjk_markup('\u{FFA1}') && !is_cjk_markup('\u{FFDC}'));
+        assert!(is_cjk_markup('こ') && is_cjk_markup('漢') && is_cjk_markup('Ａ') && is_cjk_markup('｡') && is_cjk_markup('￥'));
+        assert!(cjk_refusal("한글").is_none());
+        assert!(cjk_refusal("ﾡ").is_none());
+        assert!(matches!(markup_pieces("안녕").as_deref(), Ok([Piece::Latin(s)]) if s == "안녕"));
+        assert_eq!(first_undrawable("안녕 Ada"), Some('안'));
+        // Japanese beside Hangul is still the Japanese face's job. A refusal does not blame the Hangul.
+        assert!(cjk_refusal("안녕 こんにちは").is_none_or(|m| !m.contains("안녕")));
     }
 }

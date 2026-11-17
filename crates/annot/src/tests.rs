@@ -2727,6 +2727,20 @@ fn a_text_box_does_not_draw_japanese_as_question_marks() {
     }
 }
 
+/// A text box stores Hangul syllables and marks the first one, the same way it keeps Cyrillic.
+/// The Japanese face has no Korean, so the box is kept with that mark.
+#[test]
+fn a_text_box_stores_hangul_and_marks_it() {
+    let mut doc = fixture();
+    let mut boxed = new(0, Shape::TextBox { rect: [72.0, 120.0, 372.0, 200.0], font_size: 14.0 });
+    boxed.contents = "안녕 Ada".into();
+    let i = add_annotation(&mut doc, &boxed, &meta("k")).expect("Hangul is stored");
+    let d = &list(&doc, 0)[i];
+    assert_eq!(text(d, b"Contents"), "안녕 Ada");
+    assert_eq!(pdfcraft_fonts::undrawn_mark(d), Some('안'));
+    assert!(ap_content(&doc, d).contains("(?? Ada)"), "{}", ap_content(&doc, d));
+}
+
 /// Content edits rebuild the display copy on every commit but leave annotations alone: the
 /// cached appearance is drawn once and reused after that, byte-identical.
 #[test]
