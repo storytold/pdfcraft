@@ -86,6 +86,8 @@ struct Pending {
     scan_clean_now: bool,
     compare_now: bool,
     images_now: bool,
+    portfolio_now: bool,
+    portfolio_add: bool,
     stamp_now: bool,
     alt_now: bool,
     close: bool,
@@ -161,6 +163,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::Preferences => 610.0,
             Dialog::About => 820.0,
+            Dialog::CreatePortfolio => 760.0,
             Dialog::PinTool => 540.0,
             _ => 520.0,
         });
@@ -182,6 +185,13 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             let (go, cancel) = crate::create_ui::image_import_body(ui, app);
             req.images_now = go;
             req.close = go || cancel;
+            return false;
+        }
+        Dialog::CreatePortfolio => {
+            let ask = crate::portfolio_ui::body(ui, app);
+            req.portfolio_now = ask.create;
+            req.portfolio_add = ask.add_files;
+            req.close = ask.create || ask.cancel;
             return false;
         }
         Dialog::Properties(tab) => {
@@ -2252,6 +2262,14 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
         app.finish_image_import();
     } else if dialog == Dialog::CreateImages && app.dialog != Some(Dialog::CreateImages) {
         app.image_import = None;
+    }
+    // A portfolio that can't be made reopens the dialog with the reason, keeping its files.
+    if req.portfolio_now {
+        app.finish_portfolio();
+    } else if req.portfolio_add {
+        app.create_portfolio_dialog();
+    } else if dialog == Dialog::CreatePortfolio && app.dialog != Some(Dialog::CreatePortfolio) {
+        app.portfolio_draft = None;
     }
     if req.ocr_now {
         app.start_ocr();

@@ -27,6 +27,8 @@ pub enum FilePurpose {
     CreateMultipleSeparate,
     /// Find text and redact ▸ Import list: a text file with one word or phrase per line.
     RedactWords,
+    /// Create a PDF ▸ PDF portfolio: files of any type, embedded unchanged.
+    Portfolio,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -98,6 +100,10 @@ fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
     }
     if purpose == FilePurpose::RedactWords {
         return dialog.add_filter_any_case(tl!("Text"), &["txt"]);
+    }
+    if purpose == FilePurpose::Portfolio {
+        // A portfolio holds any kind of file: no filter.
+        return dialog.set_title(tl!("Choose files for the portfolio"));
     }
     if !matches!(purpose, FilePurpose::CreateMultiple | FilePurpose::CreateMultipleSeparate | FilePurpose::InsertPages | FilePurpose::Combine) {
         return dialog.add_filter_any_case("PDF", &["pdf"]);
@@ -396,6 +402,25 @@ impl PdfCraftApp {
             }
             return;
         }
+        if purpose == FilePurpose::Portfolio {
+            let mut files = Vec::with_capacity(paths.len());
+            for p in paths {
+                let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
+                match std::fs::read(p) {
+                    Ok(bytes) => {
+                        let modified = std::fs::metadata(p)
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .and_then(|d| i64::try_from(d.as_secs()).ok());
+                        files.push((name, bytes, modified));
+                    }
+                    Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
+                }
+            }
+            self.begin_portfolio(files);
+            return;
+        }
         if purpose == FilePurpose::CreateMultipleSeparate {
             if !paths.is_empty() {
                 let paths = paths.to_vec();
@@ -597,6 +622,7 @@ impl PdfCraftApp {
                 let dir = self.export_dir_override.as_ref().map(std::path::PathBuf::from);
                 self.stage_create_separate(files.into_iter().map(Ok), dir);
             }
+            FilePurpose::Portfolio => self.begin_portfolio(files.into_iter().map(|(name, bytes)| (name, bytes, None)).collect()),
             FilePurpose::RedactWords => {
                 let Some((name, bytes)) = files.into_iter().next() else { return };
                 if bytes.len() > crate::redact_ui::MAX_WORD_LIST_BYTES {

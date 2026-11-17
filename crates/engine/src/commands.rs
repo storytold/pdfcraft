@@ -194,6 +194,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("create.file", "Create PDF from file…", FILE, None, Nothing, "file-input"),
     c("create.multiple", "Create PDF from multiple files…", FILE, None, Nothing, "files"),
     c("create.multiple_separate", "Create separate PDFs…", FILE, None, Nothing, "files"),
+    c("create.portfolio", "Create PDF portfolio…", FILE, None, Nothing, "folder"),
     c("create.images", "Create PDF from images…", FILE, None, Nothing, "image"),
     c("create.clipboard", "Create PDF from clipboard", FILE, None, Nothing, "copy-plus"),
     c("page.combine", "Combine files…", FILE, None, Nothing, "files"),

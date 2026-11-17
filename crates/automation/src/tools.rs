@@ -381,6 +381,24 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["paths"],
             )),
+        t("doc_create_portfolio", "Create a PDF portfolio", "Bundle several files of any type (PDFs, Word and Excel files, images, emails…), unchanged and in order, into one PDF portfolio, as for a case file or an exhibit packet. Its own page is a cover sheet with title, note and an index of the files; each file is embedded and listed with its exhibit label (exhibits: \"letters\" (default) gives Exhibit A, B…; \"numbers\" 1, 2…; \"none\"; prefix replaces the word \"Exhibit\"), its description and its document date (descriptions and dates go with paths, item for item, a string or null; dates like 2026-03-01, 3/1/2026 or March 1, 2026). view is how the file list first shows (details, tile or hidden); initial is the file (1-based) presented first instead of the cover sheet.")
+            .cmd("create.portfolio")
+            .with(schema(
+                json!({
+                    "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+                    "title": { "type": "string", "description": "Cover sheet heading and document title." },
+                    "note": { "type": "string", "description": "Lines under the heading: case number, court, prepared by." },
+                    "descriptions": { "type": "array", "items": { "type": ["string", "null"] } },
+                    "dates": { "type": "array", "items": { "type": ["string", "null"] } },
+                    "exhibits": { "type": "string", "enum": ["letters", "numbers", "none"] },
+                    "prefix": { "type": "string", "description": "The word before each exhibit mark; default \"Exhibit\"." },
+                    "view": { "type": "string", "enum": ["details", "tile", "hidden"] },
+                    "initial": { "type": "integer", "minimum": 1 },
+                    "out": save_out.clone(),
+                    "open": open.clone(),
+                }),
+                &["paths"],
+            )),
         t("doc_split", "Split a document", "Split into several files written to out_dir: every N pages, before given pages, at top-level bookmarks (bookmarks: true; files named after them, repeated titles get -2, -3), or by file size (max_mb). Files are <name>-partK.pdf.")
             .cmd("page.split")
             .with(schema(

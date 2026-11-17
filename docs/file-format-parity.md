@@ -28,7 +28,7 @@ features total).
 | Damaged PDF | R (repair) | R (repair, logged) | high | `core.repair-broken-files`, nightly fuzzing |
 | PDF/A-1, 2, 3, 4 | R W, verify | R; verify/convert 2b and 3b (partial) | basic | `optimize.pdfa-*`; veraPDF not yet used as oracle |
 | PDF/X, PDF/UA, PDF/E, PDF/VT | R W, verify | R only | none | [pdf-spec-parity.md](pdf-spec-parity.md) |
-| PDF Portfolio (collection) | R W | R as a PDF with attachments; no portfolio view | none | `organize.portfolio-*` planned |
+| PDF Portfolio (collection) | R W | R as a PDF with attachments, its initial document in a tab; W: Create a PDF ▸ PDF portfolio and `doc_create_portfolio` (cover sheet, exhibit labels, descriptions, document dates; no folders) | none | `organize.portfolio-view`, `organize.portfolio-create` partial |
 | XFA forms (in PDF) | R W (fill) | R, lay out dynamic forms, fill, save datasets (partial) | basic | `form.xfa-*` partial; `crates/xfa` tests |
 
 ## Data and interchange formats

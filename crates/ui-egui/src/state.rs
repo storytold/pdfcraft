@@ -103,6 +103,8 @@ pub(crate) type GridFile = (String, Result<Vec<u8>, std::path::PathBuf>);
 pub enum Dialog {
     WordCount,
     CreateImages,
+    /// Create a PDF ▸ PDF portfolio.
+    CreatePortfolio,
     Properties(PropsTab),
     About,
     Shortcuts,
