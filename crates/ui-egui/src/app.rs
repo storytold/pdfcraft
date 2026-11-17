@@ -85,6 +85,8 @@ impl PdfCraftApp {
             left_open: true,
             right: None,
             last_right: RightPanel::Comments,
+            #[cfg(not(target_arch = "wasm32"))]
+            ai: Default::default(),
             right_before_read: None,
             comments_panel_closed: false,
             right_panel_closed: false,
@@ -747,6 +749,9 @@ impl PdfCraftApp {
         }
         self.poll_updates();
         self.poll_print();
+        // The AI tab's workers: downloads, provider tests and translations report here.
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::ai::tick(self, ctx);
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
         self.native_menu_clicks(ctx);

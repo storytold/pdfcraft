@@ -34,6 +34,9 @@ craft-zip = { git = "https://github.com/storytold/craft-libs", version = "0.1.0"
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "e2dc681a3", features = ["egui"] }
+# AI providers (BYO endpoint + local models). Pinned to the feat/craft-ai
+# branch until the craft-libs PR lands upstream — then repin to storytold.
+craft-ai = { git = "https://github.com/NibrasAz7/craft-libs", version = "0.1.0", rev = "c4599af4b074cbd48f93723612513ab4067f1a5b" }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "8e03cd016d42032b867fef6bad86bc69bf2c1920", features = ["cos", "crypt", "filters"] }
 # The writer the RTF export maps onto (storytold/craft-libs#793), at storytold/craft-libs#1467:
 # its font and colour lookups take constant time, as PdfCraft's own writer did.

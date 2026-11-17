@@ -77,6 +77,8 @@ const PANELS: &[(RightPanel, &str, &str)] = &[
     (RightPanel::Tags, "tags", "Tags"),
     (RightPanel::Search, "search", "Search"),
     (RightPanel::Compare, "compare", "Compare"),
+    #[cfg(not(target_arch = "wasm32"))]
+    (RightPanel::Ai, "ai", "AI"),
 ];
 
 /// The English titles of the menus and submenus, for the bar's mnemonics in languages whose
