@@ -630,7 +630,6 @@ fn inline_images(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], max:
         data.windows(2).any(|w| w == b"BI") && pdfcraft_content::ops(data).any(|op| op.inline.as_ref().is_some_and(|(image, _)| interpolates(image)))
     };
     // Each page's `/Contents`, its parts joined; pages sharing the same parts are read once.
-    let mut page_parts = std::collections::HashSet::new();
     let mut sequences = std::collections::HashSet::new();
     for p in pdfcraft_model::pages(doc) {
         let parts: Vec<ObjRef> = match p.dict.get(b"Contents") {
@@ -641,15 +640,17 @@ fn inline_images(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], max:
             Some(Object::Array(a)) => a.iter().filter_map(Object::as_ref).collect(),
             _ => Vec::new(),
         };
-        page_parts.extend(parts.iter().copied());
         if !sequences.insert(parts.clone()) {
             continue;
         }
         let mut data = Vec::new();
         for r in parts {
             let Object::Stream(s) = &*doc.get(r) else { continue };
-            match budget.decode(s) {
-                Ok(part) => {
+            // The document's parameters, given by reference too; a stream damaged partway gives
+            // what decoded before the damage, and the rest may hold such an image.
+            match budget.decode_with_damage(doc, s, usize::MAX) {
+                Ok((part, damaged)) => {
+                    found.incomplete |= damaged;
                     data.extend_from_slice(&part);
                     // A space between parts, as between any two tokens, and as the content
                     // library joins them: a comment that a part ends in goes on into the next.
@@ -663,19 +664,28 @@ fn inline_images(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], max:
             return found;
         }
     }
-    // Type 3 glyph procedures, and streams whose dictionary says they hold content, each alone.
-    let referenced = referenced_content(doc, objs);
+    // Type 3 glyph procedures, and streams whose dictionary says they hold content, each alone,
+    // also when a page lists them among its parts too. A part that is only a part was read above.
+    let mut glyphs = std::collections::HashSet::new();
+    let mut read = std::collections::HashSet::new();
+    for (_, o) in objs {
+        if let Some(d) = dict_of(o) {
+            type3_procs(doc, d, 0, &mut read, &mut glyphs);
+        }
+    }
     for (r, o) in objs {
         let Object::Stream(s) = &**o else { continue };
-        if page_parts.contains(r) || !(referenced.contains(r) || is_content(&s.dict)) {
+        if !(glyphs.contains(r) || is_content(&s.dict)) {
             continue;
         }
-        match budget.decode(s) {
-            Ok(data) if holds(&data) => {
-                found.interpolate = true;
-                return found;
+        match budget.decode_with_damage(doc, s, usize::MAX) {
+            Ok((data, damaged)) => {
+                found.incomplete |= damaged;
+                if holds(&data) {
+                    found.interpolate = true;
+                    return found;
+                }
             }
-            Ok(_) => {}
             Err(_) => found.incomplete = true,
         }
     }

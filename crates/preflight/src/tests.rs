@@ -2428,6 +2428,65 @@ fn an_inline_image_split_across_content_parts_is_read_whole() {
         second.as_str(),
     ];
     assert!(interpolation_said(&build(&objs, "")).is_empty());
+    // A form a page lists among its parts is still read alone when another page draws it: the
+    // image commented out on page 3 is drawn on page 6.
+    let form = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 42 >>\nstream\n{}\nendstream",
+        "BI /W 1 /H 1 /CS /G /BPC 8 /I true ID x EI"
+    );
+    let (comment, draw) = (stream("q %"), stream("/X Do"));
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 /MediaBox [0 0 200 200] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] >>",
+        comment.as_str(),
+        form.as_str(),
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources << /XObject << /X 5 0 R >> >> >>",
+        draw.as_str(),
+    ];
+    assert_eq!(interpolation_said(&build(&objs, "")), ["An inline image asks to be interpolated"]);
+}
+
+/// Content is decoded with the document's decode parameters, given by reference too, and a stream
+/// damaged partway, read up to the damage, is reported as not read in full.
+#[test]
+fn inline_images_are_read_with_indirect_decode_parameters_and_past_damage() {
+    use std::io::Write as _;
+    let zlib = |data: &[u8]| {
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        z.write_all(data).unwrap();
+        z.finish().unwrap()
+    };
+    // The page's content (4), hex-encoded and compressed, with the stream entries `entries`.
+    let page = |entries: &str, data: &[u8], more: &[&str]| {
+        let hex: String = data.iter().map(|b| format!("{b:02X}")).chain([">".to_owned()]).collect();
+        let content = format!("<< /Filter [/ASCIIHexDecode /FlateDecode] {entries} /Length {} >>\nstream\n{hex}\nendstream", hex.len());
+        let mut objs = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
+            content.as_str(),
+        ];
+        objs.extend_from_slice(more);
+        build(&objs, "")
+    };
+    // The PNG Sub predictor (ISO 32000-2 7.4.4.4): one row, each byte less the one before it.
+    let image = b"BI /W 1 /H 1 /CS /G /BPC 8 /I true ID x EI";
+    let mut row = vec![1u8];
+    row.extend(image.iter().zip([0u8].iter().chain(image.iter())).map(|(b, before)| b.wrapping_sub(*before)));
+    let parms = format!("<< /Predictor 11 /Columns {} >>", image.len());
+    let said = ["An inline image asks to be interpolated"];
+    assert_eq!(interpolation_said(&page(&format!("/DecodeParms [null {parms}]"), &zlib(&row), &[])), said);
+    assert_eq!(interpolation_said(&page("/DecodeParms [null 5 0 R]", &zlib(&row), &[&parms])), said);
+    // Content cut short partway through its compressed data, with no inline image before the cut.
+    let content: String = (0..4000).map(|i| format!("{i} {i} 1 1 re f\n")).collect();
+    let mut cut = zlib(content.as_bytes());
+    cut.truncate(cut.len() / 2);
+    let doc = page("", &cut, &[]);
+    let Object::Stream(s) = &*doc.get(ObjRef::new(4, 0)) else { panic!("object 4 is the page's content") };
+    let read = pdfcraft_cos::DecodeBudget::new(usize::MAX, usize::MAX).decode_with_damage(&doc, s, usize::MAX);
+    assert!(matches!(read, Ok((_, true))), "the fixture is read up to its damage");
+    assert_eq!(interpolation_said(&doc), ["Some content could not be read for inline images"]);
 }
 
 /// Content that cannot be read may hold an interpolated inline image: the report says it was not
