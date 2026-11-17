@@ -1509,11 +1509,13 @@ fn rtf_headings_have_heading_styles() {
     assert_eq!(style, Some(Some(0)), "Annual Report is a level 1 heading: {r}");
 }
 
-/// The document's title goes into the RTF's information group.
+/// The document's title goes into the RTF's information group, and PdfCraft is named as the
+/// application that wrote it.
 #[test]
-fn rtf_names_the_title() {
+fn rtf_names_the_title_and_pdfcraft() {
     let r = crate::rtf_with_title(&[page()], "Annual Report");
     assert_eq!(craft_rtf::doc::import(r.as_bytes()).unwrap().core.title, "Annual Report", "{r}");
+    assert!(r.contains(r"{\*\generator PdfCraft;}") && !r.contains("WordCraft"), "{r}");
 }
 
 /// Two tables one under the other stay two tables: in RTF, rows that follow each other are one
