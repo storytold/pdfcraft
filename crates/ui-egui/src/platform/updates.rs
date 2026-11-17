@@ -236,8 +236,11 @@ mod tests {
 
     /// Offers `release` as the app would and waits for its prompt. The updater reads whether it can
     /// install the release on a thread of its own, which wakes the context when it answers; the next
-    /// tick opens the prompt.
+    /// tick opens the prompt. The updater reads version choices from a file that does not exist,
+    /// so a launcher's choice on this machine cannot keep the offer from opening a prompt.
     fn offer_and_wait(app: &mut PdfCraftApp, release: craft_update::Release) {
+        let no_pins = std::env::temp_dir().join("pdfcraft-ui-updates-no-such-dir").join("versions.json");
+        app.updates.updater = Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_pins_path(no_pins);
         let ctx = egui::Context::default();
         // Consume the context's initial repaint demand so only the offer's thread can wake it.
         for _ in 0..2 {
@@ -249,11 +252,12 @@ mod tests {
             let _ = wake.send(());
         });
         app.updates.updater.offer(release);
-        // Without its thread the updater opens the prompt at once.
-        if !app.updates.updater.prompt_open() {
+        // Without its thread the updater opens the prompt at once. Any repaint request wakes this
+        // loop, so a tick that comes before the thread's answer waits for the next one.
+        while !app.updates.updater.prompt_open() {
             woken.recv().expect("the offer's thread answers");
+            app.updates.updater.tick(&ctx);
         }
-        app.updates.updater.tick(&ctx);
     }
 
     /// An app with an unsaved change to a document in a new temporary folder, which Save writes

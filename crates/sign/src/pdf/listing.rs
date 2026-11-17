@@ -85,7 +85,7 @@ impl DigestCache {
         let modified = doc.modified_objects();
         // Reconstructed/unknown input and output-security changes take the original path.
         let eligible = slot.is_some()
-            && doc.repair_log().is_empty()
+            && !doc.structure_repaired()
             && !doc.revisions().is_empty()
             && !doc.encryption_changed()
             && modified.len() <= DISCOVERY_CACHE_LIMIT;

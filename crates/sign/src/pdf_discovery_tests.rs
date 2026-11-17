@@ -45,6 +45,35 @@ fn unchanged_source_and_clones_skip_the_full_discovery_scan() {
     assert_eq!(scans(&cache), 1);
 }
 
+/// A `/Perms` whose byte 8 disagrees with `/EncryptMetadata` is noted in the repair log, but
+/// nothing read changes: the cache still serves a file whose log holds only that note.
+#[test]
+fn a_perms_note_alone_keeps_the_discovery_cache() {
+    let mut doc = fixture(&[STAMP]);
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: false,
+        seed: [5; 32],
+    })
+    .unwrap();
+    let saved = write_full(&doc, &pdfcraft_cos::SaveOptions { object_streams: false, ..pdfcraft_cos::SaveOptions::default() }).unwrap();
+    // `/Perms` says F; the dictionary now says true, in as many bytes.
+    let at = saved.windows(21).position(|w| w == b"/EncryptMetadata fals").expect("/EncryptMetadata false");
+    let mut edited = saved.clone();
+    edited.splice(at..at + 22, b"/EncryptMetadata true ".iter().copied());
+    let doc = Document::open(Arc::new(edited)).unwrap();
+    assert_eq!(doc.repair_log().len(), 1, "{:?}", doc.repair_log());
+    let cache = DigestCache::default();
+    // A full write numbers the objects again, so the stamp's number is the one the first scan finds.
+    let expected = cache.timestamp_candidates(&doc);
+    assert_eq!(expected.len(), 1, "{expected:?}");
+    assert_eq!(cache.timestamp_candidates(&doc), expected);
+    assert_eq!(scans(&cache), 1);
+}
+
 #[test]
 fn empty_discovery_is_cached_until_an_unknown_dictionary_becomes_a_timestamp() {
     let mut doc = fixture(&["<< /Unknown /Preserved >>"]);
