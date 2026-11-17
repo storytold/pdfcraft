@@ -444,6 +444,77 @@ fn move_shifts_all_geometry_and_the_popup() {
     assert_eq!(rect(popup)[0], 140.0);
 }
 
+/// A comment whose `/Rect` or `/QuadPoints` is an indirect object still moves, and the object it
+/// shared stays put so another comment using it does not (#7253). A rectangle that cannot be
+/// read is refused instead of a success that changes nothing.
+#[test]
+fn moving_a_comment_with_indirect_geometry_moves_it() {
+    let mut doc = fixture();
+    let square = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [50.0, 200.0, 200.0, 220.0] }), &meta("s")).unwrap();
+    let other = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [1.0, 1.0, 2.0, 2.0] }), &meta("o")).unwrap();
+    let highlight = add_annotation(
+        &mut doc,
+        &new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![[50.0, 220.0, 200.0, 220.0, 50.0, 200.0, 200.0, 200.0]] }),
+        &meta("h"),
+    )
+    .unwrap();
+    let ink = add_annotation(&mut doc, &new(0, Shape::Ink { strokes: vec![vec![[10.0, 10.0], [30.0, 40.0]]] }), &meta("i")).unwrap();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 100.0], icon: NoteIcon::Note }), &meta("n")).unwrap();
+
+    let rect_obj = doc.add(num_array(&[50.0, 200.0, 200.0, 220.0]));
+    let quads_obj = doc.add(num_array(&[50.0, 220.0, 200.0, 220.0, 50.0, 200.0, 200.0, 200.0]));
+    let stroke_obj = doc.add(num_array(&[10.0, 10.0, 30.0, 40.0]));
+    let ink_obj = doc.add(Object::Array(vec![Object::Ref(stroke_obj)]));
+    let (_, square_ref) = annot_ref(&mut doc, 0, square).unwrap();
+    let (_, other_ref) = annot_ref(&mut doc, 0, other).unwrap();
+    doc.update_dict(square_ref, |d| d.set(b"Rect".to_vec(), Object::Ref(rect_obj))).unwrap();
+    doc.update_dict(other_ref, |d| d.set(b"Rect".to_vec(), Object::Ref(rect_obj))).unwrap();
+    let (_, highlight_ref) = annot_ref(&mut doc, 0, highlight).unwrap();
+    doc.update_dict(highlight_ref, |d| d.set(b"QuadPoints".to_vec(), Object::Ref(quads_obj))).unwrap();
+    let (_, ink_ref) = annot_ref(&mut doc, 0, ink).unwrap();
+    doc.update_dict(ink_ref, |d| d.set(b"InkList".to_vec(), Object::Ref(ink_obj))).unwrap();
+    let (_, note_ref) = annot_ref(&mut doc, 0, note).unwrap();
+    let popup_ref = annot_dict(&doc, note_ref).reference(b"Popup").unwrap();
+    let popup_rect = annot_dict(&doc, popup_ref).get(b"Rect").cloned().unwrap();
+    let popup_obj = doc.add(popup_rect);
+    doc.update_dict(popup_ref, |d| d.set(b"Rect".to_vec(), Object::Ref(popup_obj))).unwrap();
+    let popup_before = doc.resolve(&doc.get(popup_obj)).as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect::<Vec<_>>();
+
+    move_annotation(&mut doc, 0, square, 100.0, -100.0, &meta("m")).unwrap();
+    move_annotation(&mut doc, 0, highlight, 10.0, -20.0, &meta("m")).unwrap();
+    move_annotation(&mut doc, 0, ink, 5.0, 5.0, &meta("m")).unwrap();
+    move_annotation(&mut doc, 0, note, 10.0, -5.0, &meta("m")).unwrap();
+
+    let points = |doc: &Document, value: &Object| -> Vec<f64> {
+        doc.resolve(value).as_array().unwrap().iter().map(|o| doc.resolve(o).as_f64().unwrap()).collect()
+    };
+    assert_eq!(points(&doc, &Object::Ref(rect_obj)), vec![50.0, 200.0, 200.0, 220.0], "the shared rectangle object stays");
+    assert_eq!(annot_dict(&doc, other_ref).get(b"Rect"), Some(&Object::Ref(rect_obj)));
+    assert_eq!(points(&doc, &Object::Ref(quads_obj)), vec![50.0, 220.0, 200.0, 220.0, 50.0, 200.0, 200.0, 200.0]);
+    assert_eq!(points(&doc, &Object::Ref(stroke_obj)), vec![10.0, 10.0, 30.0, 40.0]);
+    assert_eq!(points(&doc, &Object::Ref(popup_obj)), popup_before);
+    assert_eq!(points(&doc, annot_dict(&doc, square_ref).get(b"Rect").unwrap()), vec![150.0, 100.0, 300.0, 120.0]);
+    assert_eq!(points(&doc, annot_dict(&doc, highlight_ref).get(b"QuadPoints").unwrap()), vec![60.0, 200.0, 210.0, 200.0, 60.0, 180.0, 210.0, 180.0]);
+    let stroke = doc.resolve(annot_dict(&doc, ink_ref).get(b"InkList").unwrap()).as_array().unwrap()[0].clone();
+    assert_eq!(points(&doc, &stroke), vec![15.0, 15.0, 35.0, 45.0]);
+    assert_eq!(
+        points(&doc, annot_dict(&doc, popup_ref).get(b"Rect").unwrap()),
+        popup_before.iter().enumerate().map(|(i, v)| v + if i % 2 == 0 { 10.0 } else { -5.0 }).collect::<Vec<_>>()
+    );
+
+    let doc = reopen(&doc);
+    let (_, square_ref) = annot_ref(&mut doc.clone(), 0, square).unwrap();
+    assert_eq!(points(&doc, annot_dict(&doc, square_ref).get(b"Rect").unwrap()), vec![150.0, 100.0, 300.0, 120.0]);
+
+    let mut doc = fixture();
+    let broken = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 20.0, 20.0] }), &meta("b")).unwrap();
+    let (_, broken_ref) = annot_ref(&mut doc, 0, broken).unwrap();
+    doc.update_dict(broken_ref, |d| d.set(b"Rect".to_vec(), Object::name("Nope"))).unwrap();
+    let before = annot_dict(&doc, broken_ref);
+    assert!(move_annotation(&mut doc, 0, broken, 10.0, 10.0, &meta("m")).is_err());
+    assert_eq!(annot_dict(&doc, broken_ref), before, "an unreadable rectangle is left unchanged");
+}
+
 #[test]
 fn restyle_and_resize_redraw_the_appearance() {
     let mut doc = fixture();
