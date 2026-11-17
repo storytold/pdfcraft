@@ -2977,6 +2977,38 @@ fn notdef_in_identity_type0_fonts() {
 }
 
 #[test]
+fn notdef_reads_a_cid_to_gid_map_with_decode_parameters_given_by_reference() {
+    // The map `01 01 01 01` (CIDs 0 and 1 to glyph 257) written with TIFF predictor 2
+    // over four one-byte columns (ISO 32000-2 7.4.4.4), so its stored row is `01 00 00 00`. Read
+    // without its `/DecodeParms`, which a reference gives, CID 1 would select glyph 0.
+    use std::io::Write as _;
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    z.write_all(&[1, 0, 0, 0]).unwrap();
+    let hex: String = z.finish().unwrap().iter().map(|byte| format!("{byte:02X}")).collect();
+    let data = format!("{hex}>");
+    let map = format!("<< /Filter [/ASCIIHexDecode /FlateDecode] /DecodeParms 8 0 R /Length {} >>\nstream\n{data}\nendstream", data.len());
+    let type0 = "<< /Type /Font /Subtype /Type0 /BaseFont /Mincho /Encoding /Identity-H /DescendantFonts [6 0 R] >>";
+    let cid_font = "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Mincho /CIDToGIDMap 7 0 R >>";
+    let parms = "[null << /Predictor 2 /Columns 4 >>]";
+    assert!(notdef_page("BT /F1 10 Tf <00000001> Tj ET", type0, &[cid_font, &map, parms]).is_empty());
+    // Given directly, the same.
+    let direct = map.replace("8 0 R", "[null << /Predictor 2 /Columns 4 >>]");
+    assert!(notdef_page("BT /F1 10 Tf <00000001> Tj ET", type0, &[cid_font, &direct]).is_empty());
+}
+
+#[test]
+fn notdef_is_found_after_every_unembedded_font_is_found_drawing() {
+    // The walk for fonts that must be embedded could end at the first `Tj` with `Other`, the one
+    // font not embedded: the text after it, in the embedded `Sans`, still has to be read.
+    let embedded = "<< /Type /Font /Subtype /Type1 /BaseFont /Sans /Encoding /WinAnsiEncoding /FontDescriptor 7 0 R >>";
+    let unembedded = "<< /Type /Font /Subtype /Type1 /BaseFont /Other /Encoding /WinAnsiEncoding >>";
+    let descriptor = "<< /Type /FontDescriptor /FontName /Sans /Flags 32 /FontFile 8 0 R >>";
+    let program = "<< /Length 0 >>\nstream\n\nendstream";
+    let doc = drawing("BT /F2 10 Tf (A) Tj /F1 10 Tf <00> Tj ET", "/Font << /F1 5 0 R /F2 6 0 R >>", &[embedded, unembedded, descriptor, program]);
+    assert_eq!(notdef_said(&doc, Level::A2b), ["Text refers to the .notdef glyph of the font Sans"]);
+}
+
+#[test]
 fn notdef_is_found_in_forms_drawn_and_read_on_their_own() {
     let type1 = "<< /Type /Font /Subtype /Type1 /BaseFont /Sans /Encoding /WinAnsiEncoding >>";
     let form = |resources: &str| {

@@ -190,7 +190,9 @@ fn composite(doc: &Document, font: &Dict, budget: &mut DecodeBudget) -> Glyphs {
         Some(b"CIDFontType2") => match cid_font.get(b"CIDToGIDMap").map(|m| doc.resolve(m)).as_deref() {
             None => Glyphs::Identity { map: None },
             Some(Object::Name(n)) if n.as_slice() == b"Identity" => Glyphs::Identity { map: None },
-            Some(Object::Stream(s)) => match budget.decode(s) {
+            // Its `/DecodeParms` may be given by reference: a predictor changes every byte of the
+            // map (ISO 32000-2 7.4.4.4).
+            Some(Object::Stream(s)) => match budget.decode(&doc.with_direct_parms(s)) {
                 Ok(mut data) => {
                     data.truncate(MAX_CID_TO_GID);
                     Glyphs::Identity { map: Some(data) }
