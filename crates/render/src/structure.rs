@@ -146,7 +146,7 @@ impl LazyStructure {
         let source = Document::open_with_stream_limit(bytes, password, 256 << 20).map_err(|e| e.to_string())?;
         // A file rebuilt because its last update has no `/Prev` is read here as rebuilt: the
         // renderer rebuilds it too, and the fallback reader would follow the cut-off chain.
-        if !source.repair_log().is_empty() && !source.rebuilt_unlinked_update() {
+        if source.structure_repaired() && !source.rebuilt_unlinked_update() {
             return Err("the structure requires compatibility repair".into());
         }
         let trailer = convert_dict(source.trailer(), 0).map_err(|e| e.to_string())?;

@@ -3002,6 +3002,38 @@ fn efopen_filters_named_by_the_file_open_and_older_handlers_do_not() {
     assert!(matches!(check_pages(legacy, None, 1), Err(OpenError::NeedsPassword)));
 }
 
+/// A `/Perms` whose byte 8 disagrees with `/EncryptMetadata` (Algorithm 13, ISO 32000-2
+/// §7.6.4.4.12, a "should") is noted in the document model's repair log, but nothing it reads
+/// changes: the lazy structure reader still takes the file, as it takes any file read as it is.
+#[test]
+fn a_perms_note_leaves_the_lazy_structure_reader_in_use() {
+    use pdfcraft_cos::{Algorithm, NewEncryption, SaveOptions, write_full};
+    let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF";
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(pdf.as_bytes().to_vec())).unwrap();
+    let params = NewEncryption {
+        algorithm: Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: false,
+        seed: [5; 32],
+    };
+    doc.set_encryption(&params).unwrap();
+    let saved = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    // `/Perms` says F; the dictionary now says true, in as many bytes.
+    let at = saved.windows(21).position(|w| w == b"/EncryptMetadata fals").expect("/EncryptMetadata false");
+    let mut edited = saved.clone();
+    edited.splice(at..at + 22, b"/EncryptMetadata true ".iter().copied());
+    for (bytes, notes) in [(saved, 0), (edited, 1)] {
+        let model = pdfcraft_cos::Document::open(Arc::new(bytes.clone())).unwrap();
+        assert_eq!(model.repair_log().len(), notes, "{:?}", model.repair_log());
+        assert!(LazyStructure::new(Arc::new(bytes), None).is_ok(), "{notes}");
+    }
+}
+
 #[cfg(test)]
 mod javascript_links_tests {
     use super::*;
