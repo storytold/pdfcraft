@@ -656,7 +656,7 @@ thread_local! {
 
 /// What [`embedded_pdfa`] finds an embedded file to be.
 enum Embedded {
-    /// Not a PDF, or one that declares no PDF/A part 1, 2 or 4.
+    /// Not a PDF, or one that declares no level of PDF/A part 1, 2 or 4.
     NotPdfa,
     /// A PDF that declares PDF/A-1, 2 or 4, and passes verification at that level when it is one
     /// [`verify`](crate::verify) checks (PDF/A-2b, 4, 4e or 4f) and the file isn't nested deeper
@@ -684,7 +684,17 @@ fn embedded_pdfa(s: &pdfcraft_cos::Stream) -> Embedded {
     let Some((part, conformance)) = crate::declared(&inner).pdfa.filter(|(part, _)| matches!(part, 1 | 2 | 4)) else {
         return Embedded::NotPdfa;
     };
-    let Some(level) = Level::from_declared(part, &conformance) else { return Embedded::Declares };
+    // A declaration PdfCraft doesn't verify counts only when it names a level of its part: PDF/A-1a
+    // or 1b, 2a or 2u (ISO 19005-1 and -2 6.7.11 and 6.6.4). The letter is compared as the direct
+    // checks compare it: in either case for parts 1 and 2, as written for part 4.
+    let Some(level) = Level::from_declared(part, &conformance) else {
+        let named = match part {
+            1 => matches!(conformance.to_ascii_uppercase().as_str(), "A" | "B"),
+            2 => matches!(conformance.to_ascii_uppercase().as_str(), "A" | "B" | "U"),
+            _ => false,
+        };
+        return if named { Embedded::Declares } else { Embedded::NotPdfa };
+    };
     if NESTED_VERIFY.with(std::cell::Cell::get) >= MAX_NESTED_VERIFY {
         return Embedded::Declares;
     }
@@ -745,7 +755,7 @@ type Indirect = (pdfcraft_cos::ObjRef, std::sync::Arc<Object>);
 /// it inherits from the page tree included (ISO 32000-2 7.7.3.4). What a page leads to is drawn only
 /// where pages draw it, even when the catalog, its form fields or its structure tree lead to it too;
 /// what no page leads to (an object nothing refers to, and what only such objects lead to) is drawn
-/// at `elsewhere`. A reference back up (`/Parent`, `/P`) leads nowhere: it draws nothing.
+/// at `elsewhere`. A reference back up (`/Parent`, `/P`) to a dictionary leads nowhere: it draws nothing.
 pub(crate) fn colour_places(
     doc: &Document,
     objs: &[Indirect],
@@ -837,36 +847,42 @@ pub(crate) fn colour_places(
 
 /// What each of `objs` refers to, as positions in `objs`, and whether anything refers to it. A
 /// page refers to what its dictionary in `pages`, with the attributes it inherits, does. A
-/// reference back up (`/Parent`, `/P`) isn't counted.
+/// reference back up (`/Parent`, `/P`) isn't counted unless it leads to a stream.
 fn references(objs: &[Indirect], pages: &[pdfcraft_model::Page]) -> (Vec<Vec<usize>>, Vec<bool>) {
     use std::collections::{HashMap, HashSet};
     let index: HashMap<u32, usize> = objs.iter().enumerate().map(|(i, (r, _))| (r.num, i)).collect();
     let page_dicts: HashMap<u32, &Dict> = pages.iter().map(|p| (p.obj.num, &p.dict)).collect();
-    // A dictionary's values, but for references back up.
-    fn entries(d: &Dict) -> Vec<(&Object, usize)> {
-        d.iter().filter(|(k, _)| !matches!(k.as_slice(), b"Parent" | b"P")).map(|(_, v)| (v, 1)).collect()
+    // A dictionary's values. `/Parent` and `/P` refer back up to a dictionary (a page tree node, a
+    // field, a page, a structure element), so they are marked: a stream they lead to is content, as
+    // in a resource dictionary that names a form `/P`, and is kept.
+    fn entries(d: &Dict) -> Vec<(&Object, usize, bool)> {
+        d.iter().map(|(k, v)| (v, 1, matches!(k.as_slice(), b"Parent" | b"P"))).collect()
     }
     let mut refers: Vec<Vec<usize>> = vec![Vec::new(); objs.len()];
     let mut referred = vec![false; objs.len()];
     for (i, (r, o)) in objs.iter().enumerate() {
-        let mut stack: Vec<(&Object, usize)> = match (page_dicts.get(&r.num), &**o) {
+        let mut stack: Vec<(&Object, usize, bool)> = match (page_dicts.get(&r.num), &**o) {
             (Some(page), _) => entries(page),
             (None, Object::Stream(s)) => entries(&s.dict),
             (None, Object::Dict(d)) => entries(d),
             // An array of its own, such as a page's `/Contents` (ISO 32000-2 7.7.3.3).
-            (None, Object::Array(a)) => a.iter().map(|x| (x, 1)).collect(),
+            (None, Object::Array(a)) => a.iter().map(|x| (x, 1, false)).collect(),
+            // An object whose value is a reference to another stands for it.
+            (None, Object::Ref(_)) => vec![(&**o, 1, false)],
             _ => continue,
         };
         let mut found = HashSet::new();
-        while let Some((v, depth)) = stack.pop() {
+        while let Some((v, depth, up)) = stack.pop() {
             match v {
                 Object::Ref(t) if t.num != r.num => {
-                    if let Some(&j) = index.get(&t.num) {
+                    if let Some(&j) = index.get(&t.num)
+                        && (!up || objs.get(j).is_some_and(|(_, target)| matches!(**target, Object::Stream(_))))
+                    {
                         found.insert(j);
                     }
                 }
-                Object::Array(a) if depth < MAX_GROUP_DEPTH => stack.extend(a.iter().map(|x| (x, depth + 1))),
-                Object::Dict(d) if depth < MAX_GROUP_DEPTH => stack.extend(d.iter().map(|(_, x)| (x, depth + 1))),
+                Object::Array(a) if depth < MAX_GROUP_DEPTH => stack.extend(a.iter().map(|x| (x, depth + 1, false))),
+                Object::Dict(d) if depth < MAX_GROUP_DEPTH => stack.extend(d.iter().map(|(_, x)| (x, depth + 1, false))),
                 _ => {}
             }
         }
