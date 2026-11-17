@@ -338,7 +338,13 @@ mod tests {
              <r:Description r:about=\"\" {ids}/></r:RDF><!-- </rdf:RDF> --></x:xmpmeta>"
         );
         let unended = packet(PDFA4, "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title>Old");
-        for (xmp, value) in [(&commented, "New"), (&unended, "")] {
+        // A complete title the clear could take out, then one it can't: the whole clear is refused.
+        let after_one = packet(
+            PDFA4,
+            "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+             <dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">Old</rdf:li></rdf:Alt></dc:title><dc:title>Old",
+        );
+        for (xmp, value) in [(&commented, "New"), (&unended, ""), (&after_one, "")] {
             let mut d = doc(xmp, &[], &[("Title", "Old")]);
             let before = written(&d);
             assert!(set_info_in(&mut d, home, "Title", value).is_err(), "{value:?} in {xmp}");
