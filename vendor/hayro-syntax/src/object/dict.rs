@@ -443,7 +443,16 @@ where
             // attempt to read an object stream before having resolved the encryption dictionary).
             on_entry(name, offset, r)?;
 
-            if ctx.in_content_stream() {
+            if ctx.in_content_stream() && start_tag.is_none() {
+                // PdfCraft patch (49): an inline image's value may be a reference (`/CS 40 0 R`),
+                // which ISO 32000-2 §7.8.3 and §8.9.7 rule out: content-stream operands are direct
+                // objects. Skipped as `40`, the reference left `0` where a key belongs, the
+                // dictionary failed, and the content stream ended there, losing the rest of the
+                // page. Stepped over whole, it is resolved where the image is drawn
+                // (hayro-interpret patch 107). No key can follow `N G R` in a well-formed inline
+                // dictionary, so reading a reference here changes nothing else.
+                r.skip::<MaybeRef<Object<'_>>>(ctx.in_content_stream())?;
+            } else if ctx.in_content_stream() {
                 r.skip::<Object<'_>>(ctx.in_content_stream())?;
             } else {
                 r.skip::<MaybeRef<Object<'_>>>(ctx.in_content_stream())?;

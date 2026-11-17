@@ -10848,6 +10848,57 @@ fn a_rebuilt_table_finds_an_object_whose_header_names_another_generation() {
     assert_eq!((page.width, page.height), (200, 100));
 }
 
+/// An inline image whose colour space is given by reference is drawn in that space, and the page
+/// goes on after it (hayro-syntax patch 49, hayro-interpret patch 107).
+///
+/// `PDFBOX-6064-0111938-BadInlineImageDict.pdf`, attached to PDFBOX-6064, writes its logos as
+/// inline images with `/CS 40 0 R`, an Indexed space. ISO 32000-2 §8.9.7 allows a device space, a
+/// limited Indexed space or a resource name there, and §7.8.3 no reference anywhere in a content
+/// stream, so the file is malformed. The dictionary failed to read at `0 R`, which ended the
+/// content stream: most of the page was missing.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn an_inline_image_with_a_colour_space_by_reference_draws_and_the_page_goes_on() {
+    for (space, samples) in [
+        // An Indexed space, as in the reported file: index 0 red, 1 green.
+        ("[/Indexed /DeviceRGB 1 <FF000000FF00>]", "0001"),
+        // A device space by reference.
+        ("/DeviceRGB", "FF000000FF00"),
+    ] {
+        let content = format!("q 100 0 0 50 0 50 cm BI /W 2 /H 1 /BPC 8 /CS 5 0 R /F /AHx ID {samples}> EI Q 0 0 1 rg 0 0 200 50 re f");
+        let bodies = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+            space.to_string(),
+        ];
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for body in &bodies {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", offsets.len()).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
+
+        let mut r = PageRenderer::new(Arc::new(out), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        assert!(page.error.is_none(), "{space}: {:?}", page.error);
+        let at = |x: usize, y: usize| {
+            let start = (y * page.width as usize + x) * 4;
+            page.rgba.get(start..start + 4).map(<[u8]>::to_vec)
+        };
+        assert_eq!(at(25, 25), Some(vec![255, 0, 0, 255]), "{space}: the image's first sample, in its space");
+        assert_eq!(at(75, 25), Some(vec![0, 255, 0, 255]), "{space}: and its second");
+        assert_eq!(at(100, 75), Some(vec![0, 0, 255, 255]), "{space}: what follows the image is drawn");
+    }
+}
+
 /// A one-page file: a 200 x 100 page, its offsets right.
 fn one_page_file() -> Vec<u8> {
     one_page_file_with(false)

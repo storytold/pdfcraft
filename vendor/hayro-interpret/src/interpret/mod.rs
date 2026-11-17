@@ -1069,9 +1069,17 @@ fn interpret_window<'a>(
                 // PdfCraft patch: inline images are not cached (see `DecodedImageKey`).
                 // PdfCraft patch (38): an inline image in a device space, named directly or by a
                 // resource, draws in its default.
+                // PdfCraft patch (107): a colour space given by reference (`/CS 40 0 R`), which ISO
+                // 32000-2 §8.9.7 rules out, is read from the document, as readers that draw such a
+                // page do; the inline dictionary itself cannot resolve it.
+                let referenced_cs = inline_dict
+                    .get_ref(hayro_syntax::object::dict::keys::CS)
+                    .or_else(|| inline_dict.get_ref(hayro_syntax::object::dict::keys::COLORSPACE))
+                    .and_then(|r| context.xref.get::<Object<'_>>(r.into()));
                 if let Some(x_object) = ImageXObject::new(
                     i.0,
                     |name| named_color_space(name, resources, &defaults, context),
+                    referenced_cs,
                     &warning_sink,
                     &cache,
                     None,

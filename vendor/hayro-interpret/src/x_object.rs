@@ -46,6 +46,7 @@ impl<'a> XObject<'a> {
             IMAGE => Some(Self::ImageXObject(ImageXObject::new(
                 stream,
                 |_| None,
+                None,
                 warning_sink,
                 cache,
                 decoded_cache,
@@ -518,6 +519,7 @@ impl<'a> ImageXObject<'a> {
     pub(crate) fn new(
         stream: &Stream<'a>,
         resolve_cs: impl FnOnce(&Name<'_>) -> Option<ColorSpace>,
+        referenced_cs: Option<Object<'a>>,
         warning_sink: &WarningSinkFn,
         cache: &Cache,
         decoded_cache: Option<&DecodedImageCache>,
@@ -540,9 +542,13 @@ impl<'a> ImageXObject<'a> {
             // Masks are always single-channel.
             Some(ColorSpace::device_gray())
         } else {
+            // PdfCraft patch (107): an inline image whose colour space is given by reference
+            // (`/CS 40 0 R`) is drawn in the space that names, as given in place. Its dictionary
+            // reads in the content stream, where no reference resolves, so the caller resolves it.
             let cs_obj = dict
                 .get::<Object<'_>>(CS)
-                .or_else(|| dict.get::<Object<'_>>(COLORSPACE));
+                .or_else(|| dict.get::<Object<'_>>(COLORSPACE))
+                .or(referenced_cs);
 
             let default = cs_obj
                 .as_ref()
@@ -1383,7 +1389,7 @@ fn resolve_alpha(
         .get::<Stream<'_>>(SMASK)
         .or_else(|| dict.get::<Stream<'_>>(MASK))
     {
-        let obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
+        let obj = ImageXObject::new(&s_mask, |_| None, None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
 
         // PdfCraft patch (82): averaged down when far larger than where it is drawn, and cached.
         obj.decoded_soft_mask(target_dimension, (width, *height)).map(|decoded| decoded.luma)
@@ -1444,7 +1450,7 @@ fn resolve_matte(
     let mut matte_rgb = [0_u8; 3];
     color_space.convert_f32(&matte, &mut matte_rgb, false);
 
-    let mask_obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
+    let mask_obj = ImageXObject::new(&s_mask, |_| None, None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
     let alpha = decode_mask(&mask_obj, target_dimension)?.luma;
 
     Some((alpha, matte_rgb))
