@@ -356,7 +356,7 @@ fn han_candidates(traditional: bool) -> Vec<PathBuf> {
     } else if cfg!(target_os = "macos") {
         macos_han_candidates(traditional)
     } else {
-        unix_fonts(&[
+        let mut files: Vec<&str> = vec![
             "truetype/wqy/wqy-microhei.ttc",
             "wenquanyi/wqy-microhei/wqy-microhei.ttc",
             "wqy-microhei/wqy-microhei.ttc",
@@ -368,17 +368,40 @@ fn han_candidates(traditional: bool) -> Vec<PathBuf> {
             "droid/DroidSansFallbackFull.ttf",
             "truetype/arphic/uming.ttc",
             "arphic-uming/uming.ttc",
-            "opentype/noto/NotoSansCJKsc-Regular.otf",
-            "noto-cjk/NotoSansCJKsc-Regular.otf",
-            "NotoSansCJKsc-Regular.otf",
-            "opentype/noto/NotoSansCJK-Regular.ttc",
-            "noto-cjk/NotoSansCJK-Regular.ttc",
-            "google-noto-cjk/NotoSansCJK-Regular.ttc",
-            "NotoSansCJK-Regular.ttc",
-            "opentype/noto/NotoSansCJKtc-Regular.otf",
-            "noto-cjk/NotoSansCJKtc-Regular.otf",
-            "NotoSansCJKtc-Regular.otf",
-        ])
+        ];
+        // Noto's language-specific OTFs cover the full CJK repertoire, so the
+        // glyph probe cannot tell Simplified from Traditional: whichever OTF
+        // comes first wins for both. Try the interface language's own face
+        // first, and the multi-language collection (Japanese first) last.
+        let noto = if traditional {
+            &[
+                "opentype/noto/NotoSansCJKtc-Regular.otf",
+                "noto-cjk/NotoSansCJKtc-Regular.otf",
+                "NotoSansCJKtc-Regular.otf",
+                "opentype/noto/NotoSansCJKsc-Regular.otf",
+                "noto-cjk/NotoSansCJKsc-Regular.otf",
+                "NotoSansCJKsc-Regular.otf",
+                "opentype/noto/NotoSansCJK-Regular.ttc",
+                "noto-cjk/NotoSansCJK-Regular.ttc",
+                "google-noto-cjk/NotoSansCJK-Regular.ttc",
+                "NotoSansCJK-Regular.ttc",
+            ]
+        } else {
+            &[
+                "opentype/noto/NotoSansCJKsc-Regular.otf",
+                "noto-cjk/NotoSansCJKsc-Regular.otf",
+                "NotoSansCJKsc-Regular.otf",
+                "opentype/noto/NotoSansCJKtc-Regular.otf",
+                "noto-cjk/NotoSansCJKtc-Regular.otf",
+                "NotoSansCJKtc-Regular.otf",
+                "opentype/noto/NotoSansCJK-Regular.ttc",
+                "noto-cjk/NotoSansCJK-Regular.ttc",
+                "google-noto-cjk/NotoSansCJK-Regular.ttc",
+                "NotoSansCJK-Regular.ttc",
+            ]
+        };
+        files.extend_from_slice(noto);
+        unix_fonts(&files)
     }
 }
 
@@ -430,7 +453,7 @@ fn windows_fonts() -> PathBuf {
     dir.join("Fonts")
 }
 
-fn unix_fonts(files: &'static [&'static str]) -> Vec<PathBuf> {
+fn unix_fonts(files: &[&str]) -> Vec<PathBuf> {
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
     static INSTALLED: OnceLock<Vec<PathBuf>> = OnceLock::new();
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
@@ -609,6 +632,20 @@ mod tests {
                 ttc.is_none_or(|j| i < j),
                 "Simplified Chinese candidates must try NotoSansCJKsc-Regular.otf before NotoSansCJK-Regular.ttc: {list:?}"
             );
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn hant_candidates_try_tc_before_sc() {
+        // For Traditional Chinese, the TC Noto face must precede the SC one:
+        // both cover the Traditional probe, so whichever comes first wins, and
+        // the SC face would give the wrong regional glyph shapes.
+        let list = han_candidates(true);
+        let tc_otf = list.iter().position(|p| p.file_name().is_some_and(|n| n == "NotoSansCJKtc-Regular.otf"));
+        let sc_otf = list.iter().position(|p| p.file_name().is_some_and(|n| n == "NotoSansCJKsc-Regular.otf"));
+        if let (Some(i), Some(j)) = (tc_otf, sc_otf) {
+            assert!(i < j, "Traditional Chinese candidates must try NotoSansCJKtc-Regular.otf before NotoSansCJKsc-Regular.otf: {list:?}");
         }
     }
 
