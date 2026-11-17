@@ -90,8 +90,12 @@ fn redraw_tolerance(rect: &[f32; 4]) -> f32 {
     0.2 * (rect[3] - rect[1]).max(0.1)
 }
 
-/// One glyph carrying `text`, boxed around `drawn` in their writing direction; `None` when they
-/// span several lines or writing directions (one box would break selection and line grouping).
+/// One glyph carrying `text`, boxed around the glyphs of `drawn` on the line of the first, in its
+/// writing direction: those up to the first glyph that turns away from it or leaves its line.
+/// ActualText replaces the whole marked-content sequence (ISO 32000-2 §14.9.4), so a replacement
+/// spanning several lines or writing directions still reads once, from its first line, and the
+/// glyphs after that line stand for nothing of their own. One box over several lines would break
+/// selection and line grouping. `None` when the first glyph's box isn't finite.
 fn merge(drawn: &[Drawn], text: String) -> Option<Drawn> {
     let first = drawn.first()?;
     let (quarter, u) = (first.0, first.1);
@@ -101,12 +105,23 @@ fn merge(drawn: &[Drawn], text: String) -> Option<Drawn> {
     let across = |p: &[f32; 2]| f64::from(p[0]) * n[0] + f64::from(p[1]) * n[1];
     let height = across(&first.2.quad[0]) - across(&first.2.quad[3]);
     let (mut s0, mut s1, mut t0, mut t1) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
-    for p in drawn.iter().flat_map(|d| d.2.quad.iter()) {
-        (s0, s1) = (s0.min(along(p)), s1.max(along(p)));
-        (t0, t1) = (t0.min(across(p)), t1.max(across(p)));
+    for d in drawn {
+        if !compatible(u, d.1) {
+            break;
+        }
+        let (mut a0, mut a1, mut b0, mut b1) = (s0, s1, t0, t1);
+        for p in &d.2.quad {
+            (a0, a1) = (a0.min(along(p)), a1.max(along(p)));
+            (b0, b1) = (b0.min(across(p)), b1.max(across(p)));
+        }
+        // Past two line heights across (or NaN) the glyph is on another line.
+        let on_line = b1 - b0 <= 2.0 * height.abs();
+        if !on_line {
+            break;
+        }
+        (s0, s1, t0, t1) = (a0, a1, b0, b1);
     }
-    let one_line = drawn.iter().all(|d| compatible(u, d.1)) && t1 - t0 <= 2.0 * height.abs();
-    if !(one_line && s0.is_finite() && s1.is_finite() && t0.is_finite() && t1.is_finite()) {
+    if !(s0.is_finite() && s1.is_finite() && t0.is_finite() && t1.is_finite()) {
         return None;
     }
     // The edge towards the next line is the one the first glyph's quad starts on.
@@ -238,10 +253,10 @@ impl TextDevice {
     /// a ligature) have no Unicode of their own, so without it those marks are lost and the
     /// words can't be found.
     ///
-    /// A replacement spanning several lines or writing directions stays per glyph (each glyph's own
-    /// Unicode). An empty one (a soft hyphen at a line break, say) stands for no text at all. One
-    /// that marks no glyph reads where it paints, as far as that can be seen: words drawn as
-    /// outlines or pictures.
+    /// A replacement spanning several lines or writing directions reads once, at its first line
+    /// (see [`merge`]). An empty one (a soft hyphen at a line break, say), or one of
+    /// control characters only (a tab), stands for no text at all. One that marks no glyph reads where
+    /// it paints, as far as that can be seen: words drawn as outlines or pictures.
     fn end_actual_text(&mut self) {
         let Some((_, text, mut drawn)) = self.actual.take() else { return };
         let painted = self.painted.take();

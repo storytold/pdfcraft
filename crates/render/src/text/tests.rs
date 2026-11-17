@@ -269,7 +269,7 @@ fn actual_text_follows_the_pdf_rules_for_marked_content() {
         // Empty: the marked glyphs stand for no text (a soft hyphen at a line break); the gap
         // the hyphen leaves still reads as one.
         "BT /F1 20 Tf 1 0 0 1 100 150 Tm (co) Tj /Span <</ActualText ()>> BDC (-) Tj EMC (op) Tj ET",
-        // Across two lines: each glyph keeps its own text, so selection and lines still work.
+        // Across two lines: the replacement still stands for both, read once at the first line.
         "BT /F1 20 Tf 1 0 0 1 100 150 Tm /Span <</ActualText (Q)>> BDC (x) Tj 0 -40 Td (y) Tj EMC ET",
         // Unbalanced: a stray EMC first, and a replacement the page never closes.
         "EMC BT /F1 20 Tf 1 0 0 1 100 150 Tm (a) Tj /Span <</ActualText (fi)>> BDC (xy) Tj ET",
@@ -277,7 +277,33 @@ fn actual_text_follows_the_pdf_rules_for_marked_content() {
         "BT /F1 20 Tf 1 0 0 1 100 150 Tm /P <</MCID 0>> BDC (ab) Tj EMC /Artifact BMC (c) Tj EMC ET",
     ]);
     let plain: Vec<String> = (0..6).map(|p| marked_text(&pdf, p).plain_text()).collect();
-    assert_eq!(plain, ["ofice", "AB", "co op", "x\ny", "afi", "abc"]);
+    assert_eq!(plain, ["ofice", "AB", "co op", "Q", "afi", "abc"]);
+}
+
+/// ISO 32000-2 §14.9.4: `/ActualText` replaces the whole marked-content sequence, however many lines it
+/// spans (PDFBOX-5868 wraps groups of lines in a tab replacement). The replacement reads once, boxed on its
+/// first line, so selection, lines and Find still work; the glyphs of its other lines read as nothing.
+#[test]
+fn actual_text_across_several_lines_replaces_all_of_them() {
+    let pdf = marked_pages(&[
+        "BT /F1 20 Tf 1 0 0 1 20 250 Tm (Before) Tj ET /Span <</ActualText (Replaced)>> BDC \
+         BT /F1 20 Tf 1 0 0 1 20 200 Tm (Shown one) Tj 0 -30 Td (Shown two) Tj ET EMC BT /F1 20 Tf 1 0 0 1 20 100 Tm (After) Tj ET",
+        // A tab stands for nothing, as an empty replacement does.
+        "BT /F1 20 Tf 1 0 0 1 20 250 Tm (Before) Tj ET /Span <</ActualText <FEFF0009>>> BDC \
+         BT /F1 20 Tf 1 0 0 1 20 200 Tm (Hidden one) Tj 0 -30 Td (Hidden two) Tj ET EMC BT /F1 20 Tf 1 0 0 1 20 100 Tm (After) Tj ET",
+        // Turning away from the first glyph's direction ends its line too.
+        "BT /F1 20 Tf /Span <</ActualText (Up)>> BDC 1 0 0 1 20 200 Tm (ab) Tj 0 1 -1 0 150 100 Tm (cd) Tj EMC ET",
+    ]);
+    let text = marked_text(&pdf, 0);
+    assert_eq!(text.plain_text(), "Before\nReplaced\nAfter");
+    // The replacement is boxed on its first line (view space, y down: the line at y = 200 sits near 100).
+    let at = text.glyphs.iter().position(|g| g.text == "Replaced").unwrap();
+    let r = text.glyphs[at].rect;
+    assert!(r[1] > 70.0 && r[3] < 110.0, "{r:?}");
+    assert_eq!(text.find("Replaced").len(), 1);
+    assert!(text.find("Shown").is_empty());
+    assert_eq!(marked_text(&pdf, 1).plain_text(), "Before\nAfter");
+    assert_eq!(marked_text(&pdf, 2).plain_text(), "Up");
 }
 
 #[test]
