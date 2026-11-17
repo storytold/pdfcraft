@@ -351,7 +351,7 @@ thread_local! {
 fn get_property(xmp: &str, name: &str, shape: Shape) -> Option<String> {
     let value = if let Some((start, end)) = element_span(xmp, name) {
         let element = xmp.get(start..end)?;
-        let open_end = element.find('>')?;
+        let open_end = tag_end(element)?;
         // `<dc:title/>`: no value.
         if element.get(..open_end)?.ends_with('/') {
             return None;
@@ -393,15 +393,15 @@ fn list_items(inner: &str) -> Vec<(Option<String>, &str)> {
             rest = after;
             continue;
         }
-        let Some(tag_end) = after.find('>') else { break };
-        let tag = after.get(..tag_end).unwrap_or_default();
+        let Some(open_end) = tag_end(after) else { break };
+        let tag = after.get(..open_end).unwrap_or_default();
         let lang = tag.find("xml:lang=").and_then(|at| {
             let v = tag.get(at + "xml:lang=".len()..)?;
             let quote = v.chars().next().filter(|c| matches!(c, '"' | '\''))?;
             let v = v.get(1..)?;
             Some(v.get(..v.find(quote)?)?.to_string())
         });
-        let Some(body) = after.get(tag_end + 1..) else { break };
+        let Some(body) = after.get(open_end + 1..) else { break };
         if tag.ends_with('/') {
             items.push((lang, ""));
             rest = body;
@@ -478,7 +478,7 @@ fn set_property(xmp: &str, name: &str, ns: &str, shape: Shape, value: &str) -> O
     // when its new value is an `rdf:Alt` or `rdf:Seq`. Other packets are written as before.
     if let Some((start, end)) = element_span(xmp, name) {
         let tag = xmp.get(start..end)?;
-        let tag = tag.get(..=tag.find('>')?)?;
+        let tag = tag.get(..=tag_end(tag)?)?;
         let own = names(tag);
         let mut decls: String = own
             .iter()
@@ -573,12 +573,29 @@ fn element_span(xmp: &str, name: &str) -> Option<(usize, usize)> {
             Some(c) if c.is_whitespace() => {}
             _ => continue,
         }
-        let tag_end = after + xmp.get(after..)?.find('>')?;
-        if xmp.get(..tag_end)?.ends_with('/') {
-            return Some((i, tag_end + 1));
+        let open_end = after + tag_end(xmp.get(after..)?)?;
+        if xmp.get(..open_end)?.ends_with('/') {
+            return Some((i, open_end + 1));
         }
-        let end = tag_end + end_tag(xmp.get(tag_end..)?, name)?;
+        let end = open_end + end_tag(xmp.get(open_end..)?, name)?;
         return Some((i, end));
+    }
+    None
+}
+
+/// Where the `>` that ends the start tag `tag` is: the first one outside a quoted attribute value,
+/// which may hold a `>` of its own (XML 1.0 §2.3 `AttValue` excludes only `<` and `&`). `None`
+/// when the tag never ends.
+fn tag_end(tag: &str) -> Option<usize> {
+    let mut quote = None;
+    for (i, c) in tag.char_indices() {
+        match (quote, c) {
+            (Some(q), _) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '>') => return Some(i),
+            _ => {}
+        }
     }
     None
 }
@@ -918,6 +935,34 @@ mod tests {
         assert!(out.contains("<pdf:Keywords>b</pdf:Keywords>"), "{out}");
         let out = set_property(PACKET, "dc:title", DC, Shape::LangAlt, "New").unwrap();
         assert_eq!(out.replace(">New<", ">Untitled 1<"), PACKET);
+    }
+
+    /// A `>` inside a quoted attribute value doesn't end a start tag (XML 1.0 §2.3 `AttValue`): a
+    /// replaced element keeps the namespace declaration written after that value, in its paired
+    /// and its empty form, and its value is read past it.
+    #[test]
+    fn a_quoted_gt_does_not_end_a_start_tag() {
+        let pdf = "http://ns.adobe.com/pdf/1.3/";
+        for property in [
+            format!("<pdf:Keywords rdf:value=\"a>b\" xmlns:pdf=\"{pdf}\">old</pdf:Keywords>"),
+            format!("<pdf:Keywords rdf:value='a/>b' xmlns:pdf='{pdf}'/>"),
+        ] {
+            let packet = format!("<rdf:RDF xmlns:rdf=\"r\"><rdf:Description rdf:about=\"\">{property}</rdf:Description></rdf:RDF>");
+            let out = set_property(&packet, "pdf:Keywords", pdf, Shape::Text, "new").unwrap();
+            assert!(
+                out.contains(&format!("<rdf:Description rdf:about=\"\"><pdf:Keywords xmlns:pdf=\"{pdf}\">new</pdf:Keywords></rdf:Description>")),
+                "{out}"
+            );
+            let out = set_property(&packet, "pdf:Keywords", pdf, Shape::Text, "").unwrap();
+            assert!(out.contains("<rdf:Description rdf:about=\"\"></rdf:Description>"), "{out}");
+        }
+        let packet = "<rdf:li xml:lang=\"x-default\" a=\"1>2\">One</rdf:li>";
+        assert_eq!(list_items(packet), vec![(Some("x-default".to_string()), "One")]);
+        assert_eq!(get_property("<dc:format a=\"x>y\">text/pdf</dc:format>", "dc:format", Shape::Text).as_deref(), Some("text/pdf"));
+        assert_eq!(tag_end("a='>'\">\">"), Some(8));
+        for unended in ["", "a=\">", "a='>\"'"] {
+            assert_eq!(tag_end(unended), None, "{unended}");
+        }
     }
 
     /// An end tag may hold whitespace before its `>` (XML 1.0 §3.1): the element is still found,

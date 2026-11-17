@@ -361,6 +361,24 @@ mod tests {
         assert!(!x.contains("dc:title") && d.trailer().get(b"Info").is_none(), "{x}");
     }
 
+    /// A `>` inside a quoted attribute value of a property's start tag doesn't end the tag (XML 1.0
+    /// §2.3 `AttValue`): the rewritten property keeps the `xmlns:pdf` declared after it, so its
+    /// prefix stays bound when `/Info` gives up its copy.
+    #[test]
+    fn a_quoted_gt_in_a_start_tag_keeps_its_namespace() {
+        let home = MetadataHome::Xmp { piece_info: false };
+        let pdf = "http://ns.adobe.com/pdf/1.3/";
+        let xmp = packet(
+            PDFA4,
+            &format!("<rdf:Description rdf:about=\"\"><pdf:Keywords rdf:value=\"a>b\" xmlns:pdf=\"{pdf}\">old</pdf:Keywords></rdf:Description>"),
+        );
+        let mut d = doc(&xmp, &[], &[("Keywords", "old")]);
+        set_info_in(&mut d, home, "Keywords", "new").unwrap();
+        let x = xmp_of(&d);
+        assert!(x.contains(&format!("<pdf:Keywords xmlns:pdf=\"{pdf}\">new</pdf:Keywords>")), "{x}");
+        assert!(d.trailer().get(b"Info").is_none(), "{x}");
+    }
+
     /// The save's date check reads element and attribute names: a title that mentions
     /// `xap:ModifyDate` doesn't stop the dates being recorded, and an `xmp:ModifyDate` that binds
     /// its own prefix keeps that binding when rewritten.
