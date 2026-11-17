@@ -2935,3 +2935,26 @@ fn a_field_that_inherits_its_type_is_checked_for_actions() {
     assert!(fields(&doc).is_empty());
     assert!(doc.get(ObjRef::new(5, 0)).as_dict().is_some_and(|d| d.get(b"AA").is_none()));
 }
+
+/// A null `/FT` is no entry (ISO 32000-2 7.3.9), so the field type is still inherited from the
+/// parent: the field is checked for 6.4.1 and Save as PDF/A takes its additional actions away.
+#[test]
+fn a_null_field_type_is_inherited_from_the_parent() {
+    let uri = "<< /S /URI /URI (https://example.com) >>";
+    let mut doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>",
+            "<< /FT /Tx /T (address) /Kids [5 0 R] >>",
+            &format!("<< /Parent 4 0 R /FT null /T (street) /Kids [6 0 R] /AA << /K {uri} >> >>"),
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [0 0 20 20] /F 4 >>",
+        ],
+        "",
+    );
+    let fields = |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.4.1").map(|i| i.message).collect() };
+    assert_eq!(fields(&doc), ["A form field has additional actions"]);
+    convert(&mut doc, Level::A2b).unwrap();
+    assert!(fields(&doc).is_empty());
+    assert!(doc.get(ObjRef::new(5, 0)).as_dict().is_some_and(|d| d.get(b"AA").is_none()));
+}
