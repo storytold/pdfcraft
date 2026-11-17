@@ -59,10 +59,19 @@ enum Subtable {
 /// A GSUB table whose one feature, tagged `feature`, is in the `DFLT` script's default language
 /// system and replaces glyph `from` with glyph `to`.
 fn gsub(feature: &[u8; 4], from: u16, to: u16, subtable: Subtable) -> Vec<u8> {
-    // DFLT script; its default language system lists feature 0.
+    // No required feature (0xFFFF); one optional feature, feature 0.
+    gsub_listing(feature, from, to, subtable, &[0xFFFF, 1, 0])
+}
+
+/// [`gsub`] with the default language system's `requiredFeatureIndex`, `featureIndexCount` and
+/// `featureIndices` given by `language`.
+fn gsub_listing(feature: &[u8; 4], from: u16, to: u16, subtable: Subtable, language: &[u16]) -> Vec<u8> {
+    // DFLT script (offset 8); its default language system (offset 4, no other language systems;
+    // no lookup order) lists the features as `language` says.
     let mut scripts = u16s(&[1]);
     scripts.extend(b"DFLT");
-    scripts.extend(u16s(&[8, 4, 0, 0, 0xFFFF, 1, 0]));
+    scripts.extend(u16s(&[8, 4, 0, 0]));
+    scripts.extend(u16s(language));
     // Feature 0: `feature`, lookup 0.
     let mut features = u16s(&[1]);
     features.extend(feature);
@@ -186,5 +195,34 @@ fn a_face_without_a_vertical_glyph_draws_the_ordinary_one() {
     let plain = Arc::new(pdfcraft_fonts::INTER_REGULAR.to_vec());
     for (face, which) in [(&other, "a vert lookup for other glyphs"), (&other_feature, "another feature"), (&plain, "Inter's own GSUB")] {
         assert_eq!(glyphs(pdf("UniJIS-UCS2-V", "2026"), face), [u32::from(ellipsis)], "{which}: the ordinary ellipsis");
+    }
+}
+
+/// A language system may list `vert` only as its required feature (`requiredFeatureIndex`, with
+/// no optional features): its lookups apply too (CodeRabbit on #7665).
+#[test]
+fn a_vert_feature_the_language_system_requires_applies() {
+    let (ellipsis, bar) = (inter_glyph('…'), inter_glyph('|'));
+    // Required feature 0, no optional features.
+    let required = Arc::new(with_table(pdfcraft_fonts::INTER_REGULAR, b"GSUB", &gsub_listing(b"vert", ellipsis, bar, Subtable::List, &[0, 0])));
+    assert_eq!(glyphs(pdf("UniJIS-UCS2-V", "2026"), &required), [u32::from(bar)], "the required vert feature applies");
+    assert_eq!(glyphs(pdf("UniJIS-UCS2-H", "2026"), &required), [u32::from(ellipsis)], "a horizontal CID keeps its glyph");
+}
+
+/// Adobe-Japan1 gives “ (U+201C) CID 108 and its vertical form CID 8279 (0x2057), which only the
+/// older UCS-2 CMaps name: `UniJIS-UCS2-V` picks 8279 for U+201C, while `UniJIS-UTF16-V` keeps
+/// 108 (CodeRabbit on #7665). 8279, through that CMap or as an `Identity-H` CID, is a vertical
+/// form; 108 is not.
+#[test]
+fn a_vertical_cid_only_the_ucs2_cmaps_name_draws_the_vertical_glyph() {
+    let (quote, bar) = (inter_glyph('\u{201C}'), inter_glyph('|'));
+    let face = Arc::new(with_table(pdfcraft_fonts::INTER_REGULAR, b"GSUB", &gsub(b"vert", quote, bar, Subtable::List)));
+    for (encoding, code, expected, form) in [
+        ("UniJIS-UCS2-V", "201C", bar, "vertical"),
+        ("Identity-H", "2057", bar, "vertical"),
+        ("UniJIS-UCS2-H", "201C", quote, "horizontal"),
+        ("Identity-H", "006C", quote, "horizontal"),
+    ] {
+        assert_eq!(glyphs(pdf(encoding, code), &face), [u32::from(expected)], "{encoding} <{code}> is the {form} “");
     }
 }

@@ -628,20 +628,57 @@ const MAX_VERTICAL_LOOKUPS: usize = 32;
 ///
 /// A CID is a vertical form when the collection's Unicode `-V` CMap gives it for its character
 /// and the `-H` CMap gives another: those CMaps say which CID each writing mode uses for a
-/// character, and are among the bundled ones, so no table is added. Such a CID draws the
-/// substitute's glyph for the character through the substitute's OpenType `vert` substitution
-/// (`vrt2` when it has no `vert`), as a vertical line set in that face would; a face without
-/// one draws the character's ordinary glyph, as before.
+/// character, and are among the bundled ones, so no table is added. The UTF-16 CMaps are read
+/// first; the older UCS-2 ones too, for the few vertical forms only they name (Adobe-Japan1's
+/// “ ‘ 〓, CIDs 8279, 8281 and 8270, which `UniJIS-UTF16-V` gives their horizontal CIDs). Such a
+/// CID draws the substitute's glyph for the character through the substitute's OpenType `vert`
+/// substitution (`vrt2` when it has no `vert`), as a vertical line set in that face would; a
+/// face without one draws the character's ordinary glyph, as before.
 struct VerticalForms {
-    horizontal: &'static [u8],
-    vertical: &'static [u8],
+    /// The UTF-16 `-H` and `-V` CMaps.
+    unicode: CMapPair,
+    /// The UCS-2 `-H` and `-V` CMaps, when the resolver has them.
+    legacy: Option<CMapPair>,
     /// The script whose `vert` lookups apply first (`kana`, `hani` or `hang`).
     script: Tag,
-    resolver: CMapResolverFn,
-    /// The `-H` and `-V` CMaps, parsed the first time a glyph is drawn.
-    maps: OnceLock<Option<(CMap, CMap)>>,
     /// The substitute's `vert` lookups, read the first time a vertical form is drawn.
     lookups: OnceLock<Vec<u16>>,
+}
+
+/// A horizontal and a vertical CMap of one collection, parsed the first time they are read.
+struct CMapPair {
+    horizontal: &'static [u8],
+    vertical: &'static [u8],
+    resolver: CMapResolverFn,
+    maps: OnceLock<Option<(CMap, CMap)>>,
+}
+
+impl CMapPair {
+    fn new(
+        horizontal: hayro_cmap::CMapName<'_>,
+        vertical: hayro_cmap::CMapName<'_>,
+        resolver: &CMapResolverFn,
+    ) -> Option<Self> {
+        Some(Self {
+            horizontal: resolver(horizontal)?,
+            vertical: resolver(vertical)?,
+            resolver: resolver.clone(),
+            maps: OnceLock::new(),
+        })
+    }
+
+    /// The horizontal and the vertical CMap.
+    fn maps(&self) -> Option<&(CMap, CMap)> {
+        self.maps
+            .get_or_init(|| {
+                let resolver = self.resolver.clone();
+                let horizontal = CMap::parse(self.horizontal, move |n| (resolver)(n))?;
+                let resolver = self.resolver.clone();
+                let vertical = CMap::parse(self.vertical, move |n| (resolver)(n))?;
+                Some((horizontal, vertical))
+            })
+            .as_ref()
+    }
 }
 
 impl VerticalForms {
@@ -649,26 +686,40 @@ impl VerticalForms {
     /// resolver doesn't have them.
     fn new(family: &CidFamily, resolver: &CMapResolverFn) -> Option<Self> {
         use hayro_cmap::CMapName;
-        let (horizontal, vertical, script) = match family {
-            CidFamily::AdobeJapan1 => (CMapName::UniJisUtf16H, CMapName::UniJisUtf16V, b"kana"),
-            CidFamily::AdobeGB1 => (CMapName::UniGbUtf16H, CMapName::UniGbUtf16V, b"hani"),
-            CidFamily::AdobeCNS1 => (CMapName::UniCnsUtf16H, CMapName::UniCnsUtf16V, b"hani"),
-            CidFamily::AdobeKorea1 => (CMapName::UniKsUtf16H, CMapName::UniKsUtf16V, b"hang"),
+        let (unicode, legacy, script) = match family {
+            CidFamily::AdobeJapan1 => (
+                (CMapName::UniJisUtf16H, CMapName::UniJisUtf16V),
+                (CMapName::UniJisUcs2H, CMapName::UniJisUcs2V),
+                b"kana",
+            ),
+            CidFamily::AdobeGB1 => (
+                (CMapName::UniGbUtf16H, CMapName::UniGbUtf16V),
+                (CMapName::UniGbUcs2H, CMapName::UniGbUcs2V),
+                b"hani",
+            ),
+            CidFamily::AdobeCNS1 => (
+                (CMapName::UniCnsUtf16H, CMapName::UniCnsUtf16V),
+                (CMapName::UniCnsUcs2H, CMapName::UniCnsUcs2V),
+                b"hani",
+            ),
+            CidFamily::AdobeKorea1 => (
+                (CMapName::UniKsUtf16H, CMapName::UniKsUtf16V),
+                (CMapName::UniKsUcs2H, CMapName::UniKsUcs2V),
+                b"hang",
+            ),
             CidFamily::AdobeIdentity | CidFamily::Custom { .. } => return None,
         };
         Some(Self {
-            horizontal: resolver(horizontal)?,
-            vertical: resolver(vertical)?,
+            unicode: CMapPair::new(unicode.0, unicode.1, resolver)?,
+            legacy: CMapPair::new(legacy.0, legacy.1, resolver),
             script: Tag::new(script),
-            resolver: resolver.clone(),
-            maps: OnceLock::new(),
             lookups: OnceLock::new(),
         })
     }
 
     /// Whether `cid` is the vertical form of `character`, its character in the UCS2 CMap.
     fn is_vertical_form(&self, cid: u32, character: char) -> bool {
-        let Some((horizontal, vertical)) = self.maps.get_or_init(|| self.parse()) else {
+        let Some((horizontal, vertical)) = self.unicode.maps() else {
             return false;
         };
         // The UTF-16 CMaps take a character as its UTF-16 code units, one or two.
@@ -678,16 +729,22 @@ impl VerticalForms {
             [high, low] => ((u32::from(high) << 16) | u32::from(low), 4),
             _ => return false,
         };
-        vertical.lookup_cid_code(code, len) == Some(cid)
-            && horizontal.lookup_cid_code(code, len) != Some(cid)
-    }
-
-    fn parse(&self) -> Option<(CMap, CMap)> {
-        let resolver = self.resolver.clone();
-        let horizontal = CMap::parse(self.horizontal, move |n| (resolver)(n))?;
-        let resolver = self.resolver.clone();
-        let vertical = CMap::parse(self.vertical, move |n| (resolver)(n))?;
-        Some((horizontal, vertical))
+        // The character's horizontal CID is no vertical form, and most CIDs drawn are that one:
+        // they never read the UCS-2 CMaps.
+        if horizontal.lookup_cid_code(code, len) == Some(cid) {
+            return false;
+        }
+        if vertical.lookup_cid_code(code, len) == Some(cid) {
+            return true;
+        }
+        // The UCS-2 CMaps cover the Basic Multilingual Plane, a character's one code unit.
+        len == 2
+            && self.legacy.as_ref().and_then(CMapPair::maps).is_some_and(
+                |(horizontal, vertical)| {
+                    vertical.lookup_cid_code(code, 2) == Some(cid)
+                        && horizontal.lookup_cid_code(code, 2) != Some(cid)
+                },
+            )
     }
 
     /// `glyph`, the face's glyph for a character, as the face's `vert` lookups substitute it.
@@ -731,7 +788,15 @@ fn vertical_lookups(gsub: &Gsub<'_>, script: Tag) -> Vec<u16> {
                 .ok()?
                 .default_lang_sys()?
                 .ok()?;
-            Some(language.feature_indices().iter().map(|i| i.get()).collect())
+            // The language system's required feature (0xFFFF: none) and its other features
+            // (OpenType `LangSys`): a face may list `vert` as either.
+            let required = Some(language.required_feature_index()).filter(|&i| i != 0xFFFF);
+            Some(
+                required
+                    .into_iter()
+                    .chain(language.feature_indices().iter().map(|i| i.get()))
+                    .collect(),
+            )
         })
     });
     for tag in [Tag::new(b"vert"), Tag::new(b"vrt2")] {
