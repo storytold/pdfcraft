@@ -404,10 +404,13 @@ impl LineEditor {
     }
 
     /// Whether a draft of this paragraph can keep the words it doesn't change: an OCR phrase upright
-    /// on an unrotated page, with nothing changed but its text.
-    pub(crate) fn keeps_words(&self, info: &DocInfo) -> bool {
+    /// on an unrotated page shown unturned, with nothing changed but its text. The words it paints
+    /// are laid out across the page, so a turned page or view (Rotate View) keeps the editor's own
+    /// preview.
+    pub(crate) fn keeps_words(&self, info: &DocInfo, view_rotation: u16) -> bool {
         self.source.as_ref().is_some_and(|(block, _)| block.invisible)
             && info.pages.get(self.page).is_some_and(|page| page.rotation == 0)
+            && view_rotation.is_multiple_of(360)
             && self.look == self.look0
             && self.extras == self.extras0
             && !self.family_chosen
@@ -417,14 +420,24 @@ impl LineEditor {
 
     /// The word plan for `text`, asked of the engine once per text; `None` when Apply will redraw
     /// the whole phrase.
-    fn words_for(&self, doc: &pdfcraft_engine::Document, info: &DocInfo, text: &str) -> (String, Option<Arc<pdfcraft_engine::WordPreview>>) {
+    fn words_for(
+        &self,
+        doc: &pdfcraft_engine::Document,
+        info: &DocInfo,
+        view_rotation: u16,
+        text: &str,
+    ) -> (String, Option<Arc<pdfcraft_engine::WordPreview>>) {
+        // Whether the draft may keep words comes first: a plan asked for the same text before the
+        // formatting changed, or the view turned, no longer says what Apply will do.
+        if !self.keeps_words(info, view_rotation) || text == self.original {
+            return (text.to_owned(), None);
+        }
         if let Some((asked, words)) = &self.words
             && asked == text
         {
             return (asked.clone(), words.clone());
         }
-        let words = (self.keeps_words(info) && text != self.original).then(|| doc.ocr_word_preview(self.page, self.block, text)).flatten();
-        (text.to_owned(), words.map(Arc::new))
+        (text.to_owned(), doc.ocr_word_preview(self.page, self.block, text).map(Arc::new))
     }
 
     /// The word plan for the draft as it stands, when the last frame found one.
@@ -1062,6 +1075,7 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, d
     // tool bars (#3061).
     let viewport = view.viewport_rect();
     let page_clip = xf.rect.intersect(viewport);
+    let view_rotation = view.rotation;
     let ed = view.line_editor.as_mut()?;
     if hold {
         ed.focus = true;
@@ -1076,7 +1090,7 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, d
     }
     ed.rect = xf.user_rect(info, ed.page, ed.source_rect);
     ed.max_width = ed.rect.width();
-    ed.words = Some(ed.words_for(doc, info, &ed.text));
+    ed.words = Some(ed.words_for(doc, info, view_rotation, &ed.text));
     let scale = (ed.rect.width() / (ed.source_rect[2] - ed.source_rect[0]).abs().max(0.01)).max(0.01);
     ed.size = (ed.look.size as f32 * scale).clamp(1.0, 300.0);
     // egui draws the caret at least one row of this font tall. Each row already has its source
@@ -1177,7 +1191,7 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, d
                 let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
                     let text = text.as_str();
                     let current = asked.borrow().as_ref().filter(|(about, _)| about == text).cloned();
-                    let (about, words) = current.unwrap_or_else(|| snapshot.words_for(doc, info, text));
+                    let (about, words) = current.unwrap_or_else(|| snapshot.words_for(doc, info, view_rotation, text));
                     *asked.borrow_mut() = Some((about, words.clone()));
                     let galley = editor_galley(ui, &snapshot, text, scale, wrap_width, words.as_deref());
                     if words.is_none() && snapshot.changes_with(text) { galley } else { unseen(galley) }
@@ -1949,6 +1963,33 @@ C", &picked
         let lines = doc.text_lines(0);
         ed.source = Some((block, lines));
         (app, ed)
+    }
+
+    /// A word plan is only for a text-only draft: once the formatting changes, Apply redraws the
+    /// whole phrase, so the editor must stop keeping the scan, even for the same text.
+    #[test]
+    fn a_formatting_change_drops_the_word_plan() {
+        let (app, mut ed) = ocr_editor();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        ed.text = "JOHN SMYTH EXAMPLE".into();
+        let asked = ed.words_for(doc, &doc.info, 0, &ed.text);
+        assert!(asked.1.is_some(), "a text-only draft has a plan");
+        ed.words = Some(asked);
+        ed.look.size += 2.0;
+        assert!(ed.words_for(doc, &doc.info, 0, &ed.text).1.is_none(), "a new size: Apply redraws the whole phrase");
+    }
+
+    /// Rotate View turns the boxes but not the words the editor paints, so a turned view keeps the
+    /// editor's own preview.
+    #[test]
+    fn a_turned_view_has_no_word_plan() {
+        let (app, mut ed) = ocr_editor();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        ed.text = "JOHN SMYTH EXAMPLE".into();
+        assert!(ed.words_for(doc, &doc.info, 0, &ed.text).1.is_some());
+        for turn in [90, 180, 270] {
+            assert!(ed.words_for(doc, &doc.info, turn, &ed.text).1.is_none(), "a view turned {turn}°");
+        }
     }
 
     /// Backspacing over a word leaves a space either side of the caret. The caret stays by the word

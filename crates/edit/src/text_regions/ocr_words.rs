@@ -150,10 +150,13 @@ fn key(line: &TextLine) -> (&str, [i64; 4]) {
     (line.text.as_str(), line.rect.map(|v| (v * 100.0).round() as i64))
 }
 
-/// How far right a rewrite of the runs `indices` drew (`None` when it drew nothing), or an error
+/// The box each change of a plan was drawn in (`None` for one that drew nothing), in plan order.
+type DrawnBoxes = Vec<Option<[f64; 4]>>;
+
+/// The box a rewrite of the runs `indices` drew in (`None` when it drew nothing), or an error
 /// when it moved or lost any other text on the page: text positioned after the end of the words
 /// that went, say, when their advance couldn't be left behind (see `dropped_advances`).
-fn drawn_right(before: &[TextLine], indices: &[usize], after: &[TextLine]) -> Result<Option<f64>, EditError> {
+fn drawn_box(before: &[TextLine], indices: &[usize], after: &[TextLine]) -> Result<Option<[f64; 4]>, EditError> {
     let mut unmatched: HashMap<_, usize> = HashMap::new();
     for line in before {
         let count = unmatched.entry(key(line)).or_default();
@@ -180,7 +183,7 @@ fn drawn_right(before: &[TextLine], indices: &[usize], after: &[TextLine]) -> Re
     if moved {
         return Err(EditError::Invalid("rewriting these words alone would move the text around them".into()));
     }
-    Ok(drawn.iter().map(|line| line.rect[2]).reduce(f64::max))
+    Ok(drawn.iter().map(|line| line.rect).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]))
 }
 
 /// The edges of the words either side of the stretch `runs`, which a cover stops at. `box_of` gives
@@ -191,7 +194,7 @@ fn cover_limits(runs: &Range<usize>, box_of: impl Fn(usize) -> Option<[f64; 4]>)
 
 /// Rewrite each change of `plan` in `doc`, last first: a rewrite goes where its words were or at
 /// the end of the page, so the words before it keep their indexes (an error if they don't). Gives
-/// how far right each drew.
+/// the box each drew in.
 fn apply(
     doc: &mut Document,
     page: usize,
@@ -200,11 +203,11 @@ fn apply(
     plan: &[Change],
     style: &BlockStyle,
     max_glyphs: usize,
-) -> Result<(Vec<Option<f64>>, Option<String>), EditError> {
+) -> Result<(DrawnBoxes, Option<String>), EditError> {
     // The stretch starts where its words did. Its own box would centre a word that happens to
     // sit in the middle of the page.
     let mut style = BlockStyle { align: Some(crate::added::Align::Left), changed_words_only: false, ..style.clone() };
-    let mut rights = vec![None; plan.len()];
+    let mut rights: DrawnBoxes = vec![None; plan.len()];
     let mut substituted = None;
     let original = word_lines(doc, page)?;
     for (at, change) in plan.iter().enumerate().rev() {
@@ -225,12 +228,12 @@ fn apply(
         style.cover_between = Some(cover_limits(&change.runs, |run| members.get(run).and_then(|i| before.get(*i)).map(|line| line.rect)));
         let edit = rewrite_styled_block(doc, page, &part, &before, Some(&change.text), &style, max_glyphs)?;
         substituted = substituted.or(edit.substituted);
-        let right = drawn_right(&before, indices, &word_lines(doc, page)?)?;
-        if right.is_none() && !change.text.is_empty() {
+        let drawn = drawn_box(&before, indices, &word_lines(doc, page)?)?;
+        if drawn.is_none() && !change.text.is_empty() {
             return Err(EditError::Invalid("the new words were not drawn".into()));
         }
         if let Some(slot) = rights.get_mut(at) {
-            *slot = right;
+            *slot = drawn;
         }
     }
     Ok((rights, substituted))
@@ -273,7 +276,7 @@ struct Fitted {
     boxes: Vec<[f64; 4]>,
     baselines: Vec<f64>,
     plan: Vec<Change>,
-    rights: Vec<Option<f64>>,
+    rights: DrawnBoxes,
 }
 
 /// Fit `draft` to the invisible phrase `phrase` on a copy of `doc`, or `None` when this edit can't
@@ -326,8 +329,8 @@ fn fit(doc: &Document, page: usize, phrase: &TextBlock, joined: &[TextLine], dra
         let (rights, substituted) = apply(&mut trial, page, phrase, &members, &plan, style, max_glyphs).ok()?;
         let mut again = false;
         for (change, right) in plan.iter().zip(&rights) {
-            if let Some(right) = right {
-                again |= make_room(change, *right, &boxes, &mut squeezes, &mut redrawn);
+            if let Some(drawn) = right {
+                again |= make_room(change, drawn[2], &boxes, &mut squeezes, &mut redrawn);
             }
         }
         if !again {
@@ -395,8 +398,9 @@ impl Fitted {
             out.covers.extend(self.boxes.get(change.runs.clone()).unwrap_or_default().iter().map(|rect| cover_box(*rect, Some(between))));
             let (Some(first), Some(baseline)) = (self.boxes.get(change.runs.start), self.baselines.get(change.runs.start)) else { continue };
             let Some(span) = span_of(&ranges, change.words.clone()) else { continue };
-            let right = right.unwrap_or(first[2]);
-            let rect = [first[0], first[1], right, first[3]];
+            // From where its words started to the box it was drawn in: it is drawn at the phrase's
+            // size, not the first word's.
+            let rect = right.map_or(*first, |drawn| [first[0], drawn[1], drawn[2], drawn[3]]);
             out.drawn.push(DrawnWords { text: change.text.clone(), rect, baseline: *baseline });
             out.placed.push((span, rect));
         }
