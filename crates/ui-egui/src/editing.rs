@@ -689,10 +689,22 @@ impl PdfCraftApp {
             restore(self);
             return;
         }
-        let result = self.session.enhance_camera_page_with(id, done.page, done.straighten(), done.look, done.level).and_then(|()| {
-            let turn = done.turns.rem_euclid(360);
-            if turn == 0 { Ok(1) } else { self.session.apply(id, Edit::RotatePages { pages: vec![done.page], degrees: turn }).map(|()| 2) }
-        });
+        let result = match self.session.enhance_camera_page_with(id, done.page, done.straighten(), done.look, done.level) {
+            // Enhancing applies nothing when it fails, so the steps undone above are still there
+            // to redo: the page shows the enhancement the tool records again, not the photo.
+            Err(e) => {
+                for _ in 0..undone {
+                    if self.session.redo(id).is_err() {
+                        break;
+                    }
+                }
+                Err(e)
+            }
+            Ok(()) => {
+                let turn = done.turns.rem_euclid(360);
+                if turn == 0 { Ok(1) } else { self.session.apply(id, Edit::RotatePages { pages: vec![done.page], degrees: turn }).map(|()| 2) }
+            }
+        };
         if let (Some(doc), Some(view)) = (self.session.get(id), self.views.get_mut(i)) {
             view.document_changed(&doc.info);
             if let Some(d) = view.camera_done.as_mut() {

@@ -120,6 +120,38 @@ fn the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn() {
     assert_eq!((p.width, p.height), (300.0, 400.0), "back to the photo");
 }
 
+/// When enhancing again fails, the run it took back is put back: the page keeps the enhancement
+/// and the turn the tool records, and the history still holds them (#5148 review).
+#[test]
+fn a_failed_new_level_keeps_the_enhanced_page() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("ocr.enhance_camera"));
+    h.run_steps(3);
+    h.get_by_label("Enhance page").click();
+    h.run_steps(4);
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(4);
+    let turned = size(&h, 0);
+    let applied = h.state().views[0].camera_done.unwrap().applied;
+
+    // A page that is gone by now makes enhancing again fail.
+    let view = &mut h.state_mut().views[0];
+    if let Some(d) = view.camera_done.as_mut() {
+        d.level = 100;
+        d.page = 99;
+    }
+    view.pending_action = Some(pdfcraft_ui_egui::canvas::ViewAction::CameraLevel);
+    h.run_steps(4);
+    assert_eq!(size(&h, 0), turned, "still enhanced and turned, not the photo");
+    let done = h.state().views[0].camera_done.unwrap();
+    assert_eq!((done.level, done.applied, done.steps), (applied.1, applied, 2), "the slider goes back");
+    let s = h.state_mut();
+    let id = s.views[0].id;
+    assert_eq!(s.session.undo(id).unwrap().as_str(), "Rotate page");
+    assert_eq!(s.session.undo(id).unwrap().as_str(), "Enhance camera image");
+    assert_eq!(s.session.get(id).unwrap().can_undo(), None);
+}
+
 #[test]
 fn choosing_a_look_enhances_again() {
     use pdfcraft_engine::camera_clean::Look;
