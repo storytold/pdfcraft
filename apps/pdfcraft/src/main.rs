@@ -30,6 +30,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::cell::Cell;
+use std::ffi::OsStr;
 use std::rc::Rc;
 
 use pdfcraft_ui_egui::PdfCraftApp;
@@ -451,6 +452,11 @@ fn set_taskbar_icon(window: &winit::window::Window) {
     }
 }
 
+/// A deployment can disable the automatic check for each launch.
+fn startup_update_check_enabled(disable: Option<&OsStr>) -> bool {
+    disable != Some(OsStr::new("1"))
+}
+
 /// Build the [`eframe::AppCreator`] closure that initializes [`PdfCraftApp`] once the window and renderer are ready.
 fn app_creator<'a>(
     launch: Launch,
@@ -484,7 +490,7 @@ fn app_creator<'a>(
             }
             app.motion.source = Some(motion::source());
         }
-        app.set_startup_update_check(true);
+        app.set_startup_update_check(startup_update_check_enabled(std::env::var_os("PDFCRAFT_NO_UPDATE_CHECK").as_deref()));
         app.printer_source = Some(pdfcraft_ui_egui::system_printers());
         app.two_sided_source = Some(pdfcraft_ui_egui::system_two_sided());
         app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
