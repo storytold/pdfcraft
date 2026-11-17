@@ -10,7 +10,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use pdfcraft_engine::pdfa::Issue;
 use pdfcraft_engine::{DocId, PdfaCheck};
 use serde_json::{Value, json};
 
@@ -26,8 +25,8 @@ pub(crate) struct Before {
 /// What the gate remembers between calls about a document that declares PDF/A.
 #[derive(Default)]
 pub(crate) struct Reported {
-    /// The breaks the last result for the document named.
-    by_doc: HashMap<DocId, Vec<Issue>>,
+    /// The last check a result named the breaks of, for each document.
+    by_doc: HashMap<DocId, PdfaCheck>,
 }
 
 impl Automation {
@@ -39,10 +38,11 @@ impl Automation {
     /// Adds the gate's findings to `content`, the result of a call that started with `before`:
     /// for every document the call changed, opened or saved that declares PDF/A.
     pub(crate) fn report_pdfa(&mut self, before: &[Before], content: &mut Vec<Content>) {
-        let open: Vec<(DocId, u64, Arc<Vec<u8>>)> = self.session.docs().iter().map(|d| (d.id, d.edit_generation(), d.saved_bytes())).collect();
-        self.reported.by_doc.retain(|id, _| open.iter().any(|(o, _, _)| o == id));
+        let open: Vec<(DocId, u64, Arc<Vec<u8>>, bool)> =
+            self.session.docs().iter().map(|d| (d.id, d.edit_generation(), d.saved_bytes(), d.dirty)).collect();
+        self.reported.by_doc.retain(|id, _| open.iter().any(|(o, _, _, _)| o == id));
         let (mut entries, mut warnings) = (Vec::new(), Vec::new());
-        for (id, generation, saved) in open {
+        for (id, generation, saved, dirty) in open {
             let was = before.iter().find(|b| b.id == id);
             if was.is_some_and(|b| b.generation == generation) {
                 continue;
@@ -51,26 +51,31 @@ impl Automation {
                 self.reported.by_doc.remove(&id);
                 continue;
             };
-            let first = !self.reported.by_doc.contains_key(&id);
-            let earlier = self.reported.by_doc.get(&id).map(Vec::as_slice).unwrap_or_default();
+            let earlier = self.reported.by_doc.get(&id);
             let label = check.claim.label();
             match check.checked_as {
-                None if first => warnings
+                None if earlier.is_none() => warnings
                     .push(format!("the document declares {label}, which PdfCraft doesn't check, so its changes may break its conformance unnoticed")),
                 None => {}
                 Some(_) => {
-                    for b in check.breaks_since(earlier) {
+                    let new = earlier.map_or_else(|| check.breaks.clone(), |e| check.breaks_since(e));
+                    for b in new {
                         warnings.push(format!("{label}: this change breaks ISO 19005-{} {}: {}", check.claim.part, b.clause, b.message));
                     }
                 }
             }
-            // A save writes them into the file: said once more, all of them.
+            // A save writes them into the file: said once more, all of them. The file written is
+            // the document as it is now unless the call changed it again after saving (a batch
+            // that saves and then edits, or undoes): then the bytes written are checked.
             let saved_now = was.is_some_and(|b| !Arc::ptr_eq(&b.saved, &saved));
-            if saved_now && !check.breaks.is_empty() {
-                warnings.push(saved_breaking(&check, "the saved file"));
+            if saved_now {
+                let written = if dirty { self.session.pdfa_check_copy(id, &saved) } else { Some(check.clone()) };
+                if let Some(written) = written.filter(|w| !w.breaks.is_empty()) {
+                    warnings.push(saved_breaking(&written, "the saved file"));
+                }
             }
             entries.push(entry(id, &check, None));
-            self.reported.by_doc.insert(id, check.breaks);
+            self.reported.by_doc.insert(id, check);
         }
         add(content, entries, warnings);
     }

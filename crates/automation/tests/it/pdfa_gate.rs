@@ -113,6 +113,34 @@ fn a_tool_run_through_a_command_reports_once() {
     assert_eq!(pdfa_warnings(&batch).len(), 1, "{batch}");
 }
 
+/// The saved-file notice is about the bytes the save wrote, even when the same call changes the
+/// document again after saving.
+#[test]
+fn the_saved_file_notice_is_about_the_file_written() {
+    let saved_notice = |v: &Value| pdfa_warnings(v).into_iter().filter(|w| w.starts_with("the saved file")).collect::<Vec<_>>();
+    // Saved, then broken: the file written breaks nothing.
+    let (_dir, mut a, doc, _) = setup(Some(PDFA4));
+    let steps = json!([
+        { "id": "file.save", "params": { "doc": doc, "path": "out.pdf" } },
+        { "id": "edit.attach", "params": { "doc": doc, "path": "note.txt" } },
+    ]);
+    let batch = tool(&mut a, "command_batch", json!({ "steps": steps }));
+    assert!(!batch["pdfa"][0]["breaks"].as_array().unwrap().is_empty(), "the document breaks rules now: {batch}");
+    assert!(saved_notice(&batch).is_empty(), "{batch}");
+    // Broken, saved, then undone: the file written breaks them.
+    let (_dir, mut a, doc, _) = setup(Some(PDFA4));
+    let steps = json!([
+        { "id": "edit.attach", "params": { "doc": doc, "path": "note.txt" } },
+        { "id": "file.save", "params": { "doc": doc, "path": "out.pdf" } },
+        { "id": "edit.undo", "params": { "doc": doc } },
+    ]);
+    let batch = tool(&mut a, "command_batch", json!({ "steps": steps }));
+    assert_eq!(batch["pdfa"][0]["breaks"], json!([]), "the document breaks nothing now: {batch}");
+    let said = saved_notice(&batch);
+    assert_eq!(said.len(), 1, "{batch}");
+    assert!(said[0].ends_with("(ISO 19005-4 6.9)"), "{said:?}");
+}
+
 #[test]
 fn a_part_pdfcraft_does_not_check_is_said_once() {
     let (_dir, mut a, doc, opened) = setup(Some("pdfaid:part=\"1\" pdfaid:conformance=\"B\""));

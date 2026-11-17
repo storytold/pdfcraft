@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use pdfcraft_cos::{Document as Cos, ReadState};
+use pdfcraft_cos::{Document as Cos, ObjRef, ReadState};
 use pdfcraft_preflight::{Issue, Level};
 
 use crate::{DocId, Session};
@@ -67,18 +67,29 @@ pub struct PdfaCheck {
     /// The rules the document breaks now that it didn't break when it first declared PDF/A in
     /// this session, in the order [`pdfcraft_preflight::verify`] lists them.
     pub breaks: Vec<Issue>,
+    /// The page objects of the state checked, in page order: whether an issue's
+    /// [`page`](Issue::page) number still names the page it named in an earlier check.
+    pub pages: Arc<Vec<ObjRef>>,
 }
 
 impl PdfaCheck {
-    /// The breaks `earlier` (what an earlier check of the same document found broken) doesn't
-    /// account for, matched as the baseline is: what has broken since.
-    pub fn breaks_since(&self, earlier: &[Issue]) -> Vec<Issue> {
-        breaks(earlier, &self.breaks)
+    /// The breaks `earlier` (an earlier check of the same document) doesn't account for, matched
+    /// as the baseline is: what has broken since.
+    pub fn breaks_since(&self, earlier: &PdfaCheck) -> Vec<Issue> {
+        breaks((&earlier.breaks, &earlier.pages), (&self.breaks, &self.pages))
     }
 }
 
 /// Issues of one check, shared between the cache and its callers.
 type Issues = Arc<Vec<Issue>>;
+
+/// The page objects of a state, in page order ([`PdfaCheck::pages`]).
+type Pages = Arc<Vec<ObjRef>>;
+
+/// The page objects of `cos`, in the order [`pdfcraft_preflight::verify`] numbers pages.
+fn page_objects(cos: &Cos) -> Pages {
+    Arc::new(pdfcraft_model::pages(cos).into_iter().map(|p| p.obj).collect())
+}
 
 /// The gate's state for one open document.
 #[derive(Default)]
@@ -93,8 +104,8 @@ pub(crate) struct Gate {
 /// Checks already run, so asking again after a change that wasn't one costs nothing.
 #[derive(Default)]
 struct Cache {
-    baseline: Option<(Level, Issues)>,
-    current: Option<(ReadState, Level, Issues)>,
+    baseline: Option<(Level, Issues, Pages)>,
+    current: Option<(ReadState, Level, Issues, Pages)>,
 }
 
 impl Gate {
@@ -116,49 +127,57 @@ impl Gate {
     pub(crate) fn check(&self, cos: &Cos) -> Option<PdfaCheck> {
         let claim = PdfaClaim::of(cos)?;
         let Some(level) = claim.checked_as() else {
-            return Some(PdfaCheck { claim, checked_as: None, breaks: Vec::new() });
+            return Some(PdfaCheck { claim, checked_as: None, breaks: Vec::new(), pages: Pages::default() });
         };
-        let cached = self.lock().current.as_ref().filter(|(s, l, _)| s.matches(cos) && *l == level).map(|(_, _, i)| i.clone());
-        let now = match cached {
-            Some(issues) => issues,
+        let cached = self.lock().current.as_ref().filter(|(s, l, _, _)| s.matches(cos) && *l == level).map(|(_, _, i, p)| (i.clone(), p.clone()));
+        let (now, pages) = match cached {
+            Some(found) => found,
             None => {
                 let issues: Issues = Arc::new(pdfcraft_preflight::verify(cos, level));
-                self.lock().current = Some((cos.read_state(), level, issues.clone()));
-                issues
+                let pages = page_objects(cos);
+                self.lock().current = Some((cos.read_state(), level, issues.clone(), pages.clone()));
+                (issues, pages)
             }
         };
         // Not changed since the baseline (just opened, or every edit undone): nothing is new,
         // and the baseline's own check is this one.
         if self.baseline.as_ref().is_some_and(|b| b.read_state().matches(cos)) {
-            self.lock().baseline = Some((level, now));
-            return Some(PdfaCheck { claim, checked_as: Some(level), breaks: Vec::new() });
+            self.lock().baseline = Some((level, now, pages.clone()));
+            return Some(PdfaCheck { claim, checked_as: Some(level), breaks: Vec::new(), pages });
         }
-        let breaks = breaks(&self.baseline_issues(level), &now);
-        Some(PdfaCheck { claim, checked_as: Some(level), breaks })
+        let (was, was_pages) = self.baseline_issues(level);
+        let breaks = breaks((&was, &was_pages), (&now, &pages));
+        Some(PdfaCheck { claim, checked_as: Some(level), breaks, pages })
     }
 
-    /// The check of a copy of the document about to be written on its own (an optimized or
-    /// reduced copy), measured from the same baseline. Not cached: each copy is new.
-    pub(crate) fn check_copy(&self, copy: &Cos) -> Option<PdfaCheck> {
+    /// The check of a copy of the document written on its own (an optimized or reduced copy, or
+    /// the bytes a save wrote), measured from the same baseline. Not cached: each copy is new. A
+    /// copy may number its objects anew, but it has the pages of the document it was written from
+    /// (`from`) in the same order, so those stand for its pages.
+    pub(crate) fn check_copy(&self, copy: &Cos, from: &Cos) -> Option<PdfaCheck> {
         let claim = PdfaClaim::of(copy)?;
         let Some(level) = claim.checked_as() else {
-            return Some(PdfaCheck { claim, checked_as: None, breaks: Vec::new() });
+            return Some(PdfaCheck { claim, checked_as: None, breaks: Vec::new(), pages: Pages::default() });
         };
         let now = pdfcraft_preflight::verify(copy, level);
-        let breaks = breaks(&self.baseline_issues(level), &now);
-        Some(PdfaCheck { claim, checked_as: Some(level), breaks })
+        let pages = page_objects(from);
+        let (was, was_pages) = self.baseline_issues(level);
+        let breaks = breaks((&was, &was_pages), (&now, &pages));
+        Some(PdfaCheck { claim, checked_as: Some(level), breaks, pages })
     }
 
-    /// What the baseline breaks at `level` (nothing without a baseline: every issue is then new).
-    fn baseline_issues(&self, level: Level) -> Issues {
-        if let Some((l, issues)) = &self.lock().baseline
+    /// What the baseline breaks at `level`, with its pages (nothing without a baseline: every
+    /// issue is then new).
+    fn baseline_issues(&self, level: Level) -> (Issues, Pages) {
+        if let Some((l, issues, pages)) = &self.lock().baseline
             && *l == level
         {
-            return issues.clone();
+            return (issues.clone(), pages.clone());
         }
         let issues: Issues = Arc::new(self.baseline.as_ref().map(|b| pdfcraft_preflight::verify(b, level)).unwrap_or_default());
-        self.lock().baseline = Some((level, issues.clone()));
-        issues
+        let pages = self.baseline.as_ref().map(page_objects).unwrap_or_default();
+        self.lock().baseline = Some((level, issues.clone(), pages.clone()));
+        (issues, pages)
     }
 
     /// The cache. A check that panicked while holding it left at worst a stale entry, which is
@@ -168,14 +187,19 @@ impl Gate {
     }
 }
 
-/// The issues of `now` that `before` doesn't account for.
+/// The issues of `now` that `before` doesn't account for, each list with the page objects of its
+/// state in page order ([`PdfaCheck::pages`]).
 ///
-/// Each issue of `before` accounts for one issue of `now`: first one with the same clause and
-/// message, then, among those left, an issue on a page with the same clause and wording
-/// ([`Issue::pattern`]), so an issue that only names another page after pages were deleted or
-/// moved stays accounted for. An issue that names no page (a font, an object) is matched by its
-/// message alone. What is left over is new.
-pub(crate) fn breaks(before: &[Issue], now: &[Issue]) -> Vec<Issue> {
+/// Each issue of `before` accounts for one issue of `now` with the same clause and message.
+/// When the pages are no longer the same objects in the same order (pages were added, deleted or
+/// moved, or a full save numbered them anew), an issue on a page may name another page number
+/// than before: then, among those left, an issue on a page also accounts for one with the same
+/// clause and wording ([`Issue::pattern`]) on another page. While the pages stay as they were,
+/// a page number names the same page, so an issue a change fixed on one page doesn't hide the
+/// same issue a change made on another. An issue that names no page (a font, an object) is
+/// matched by its message alone. What is left over is new.
+pub(crate) fn breaks(before: (&[Issue], &[ObjRef]), now: (&[Issue], &[ObjRef])) -> Vec<Issue> {
+    let ((before, before_pages), (now, now_pages)) = (before, now);
     let mut exact: HashMap<(&str, &str), usize> = HashMap::new();
     for i in before {
         *exact.entry((i.clause, i.message.as_str())).or_default() += 1;
@@ -186,6 +210,9 @@ pub(crate) fn breaks(before: &[Issue], now: &[Issue]) -> Vec<Issue> {
             Some(n) if *n > 0 => *n -= 1,
             _ => unmatched.push(i),
         }
+    }
+    if before_pages == now_pages {
+        return unmatched.into_iter().cloned().collect();
     }
     // What `before` has left over on pages, by clause and wording.
     let mut loose: HashMap<(&str, &str), usize> = HashMap::new();
@@ -227,7 +254,7 @@ impl Session {
         let doc = self.get(id)?;
         let password = doc.editor.as_ref().and_then(|e| e.keys.reopen.clone());
         let copy = Cos::open_with_password(bytes.clone(), password.as_deref()).ok()?;
-        doc.pdfa_gate.check_copy(&copy)
+        doc.pdfa_gate.check_copy(&copy, &doc.editor.as_ref()?.cos)
     }
 }
 
@@ -257,25 +284,33 @@ mod tests {
     fn only_what_the_earlier_issues_dont_account_for_is_new() {
         let font = |n| issue("6.2.10.4.1", "The font {} isn't embedded", n);
         let actions = |p| issue("6.5.2", "Page {} has additional actions", p);
-        assert!(breaks(&[], &[]).is_empty());
-        assert_eq!(clauses(&breaks(&[], &[font("Helvetica")])), ["The font Helvetica isn't embedded"]);
-        assert!(breaks(&[font("Helvetica")], &[font("Helvetica")]).is_empty(), "the same issue");
-        assert!(breaks(&[font("Helvetica"), actions("3")], &[]).is_empty(), "fixed issues are not breaks");
+        // Eight pages, as they were, and after the first was deleted.
+        let pages: Vec<ObjRef> = (10..18).map(|n| ObjRef::new(n, 0)).collect();
+        let after_delete = pages.get(1..).unwrap_or_default().to_vec();
+        let same = |before: &[Issue], now: &[Issue]| breaks((before, &pages), (now, &pages));
+        let moved = |before: &[Issue], now: &[Issue]| breaks((before, &pages), (now, &after_delete));
+        assert!(same(&[], &[]).is_empty());
+        assert_eq!(clauses(&same(&[], &[font("Helvetica")])), ["The font Helvetica isn't embedded"]);
+        assert!(same(&[font("Helvetica")], &[font("Helvetica")]).is_empty(), "the same issue");
+        assert!(same(&[font("Helvetica"), actions("3")], &[]).is_empty(), "fixed issues are not breaks");
         // One earlier issue accounts for one issue now: a second of the same is new.
-        assert_eq!(clauses(&breaks(&[font("Helvetica")], &[font("Helvetica"), font("Helvetica")])), ["The font Helvetica isn't embedded"]);
+        assert_eq!(clauses(&same(&[font("Helvetica")], &[font("Helvetica"), font("Helvetica")])), ["The font Helvetica isn't embedded"]);
         // An issue that names another page after page 1 was deleted is the same issue.
-        assert!(breaks(&[actions("3")], &[actions("2")]).is_empty(), "renumbered");
+        assert!(moved(&[actions("3")], &[actions("2")]).is_empty(), "renumbered");
         // But not twice, and not for another wording or clause.
-        assert_eq!(clauses(&breaks(&[actions("3")], &[actions("2"), actions("4")])).len(), 1);
-        assert_eq!(clauses(&breaks(&[actions("3")], &[font("Times")])), ["The font Times isn't embedded"]);
+        assert_eq!(clauses(&moved(&[actions("3")], &[actions("2"), actions("4")])).len(), 1);
+        assert_eq!(clauses(&moved(&[actions("3")], &[font("Times")])), ["The font Times isn't embedded"]);
+        // While no page has moved, a page number names the same page: an issue fixed on page 3
+        // doesn't hide the same issue made on page 2.
+        assert_eq!(clauses(&same(&[actions("3")], &[actions("2")])), ["Page 2 has additional actions"]);
         // An issue on no page is matched by its message alone: one font fixed doesn't hide another,
         // and an issue on a page that went away doesn't hide one of the same wording on no page.
         let mut elsewhere = actions("x");
         elsewhere.page = None;
-        assert_eq!(clauses(&breaks(&[actions("3")], &[elsewhere])), ["Page x has additional actions"]);
-        assert_eq!(clauses(&breaks(&[font("A")], &[font("B")])), ["The font B isn't embedded"]);
+        assert_eq!(clauses(&moved(&[actions("3")], &[elsewhere])), ["Page x has additional actions"]);
+        assert_eq!(clauses(&same(&[font("A")], &[font("B")])), ["The font B isn't embedded"]);
         // An exact match is used first, so a renumbered match never takes a new issue's place.
-        assert_eq!(clauses(&breaks(&[actions("2"), actions("7")], &[actions("2"), actions("5"), actions("6")])), ["Page 6 has additional actions"]);
+        assert_eq!(clauses(&moved(&[actions("2"), actions("7")], &[actions("2"), actions("5"), actions("6")])), ["Page 6 has additional actions"]);
     }
 
     #[test]
