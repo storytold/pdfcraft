@@ -248,6 +248,17 @@ impl Session {
         doc.pdfa_gate.check(&doc.editor.as_ref()?.cos)
     }
 
+    /// The same for the file document `id` was last saved to (or opened from), whatever undo or
+    /// edits did after the save: its pages are those of the state the save wrote, read from the
+    /// file itself, so an issue on a page is matched to the page it was on when the file was
+    /// written. `None` when the file declares no PDF/A part or can't be read back.
+    pub fn pdfa_check_saved(&self, id: DocId) -> Option<PdfaCheck> {
+        let doc = self.get(id)?;
+        let editor = doc.editor.as_ref()?;
+        let file = Cos::open_with_password(editor.saved.clone(), editor.saved_keys.reopen.as_deref()).ok()?;
+        doc.pdfa_gate.check_copy(&file, &file)
+    }
+
     /// The same for `bytes`, a copy of document `id` written on its own (optimized, reduced):
     /// `None` when the copy declares no PDF/A part or can't be read back.
     pub fn pdfa_check_copy(&self, id: DocId, bytes: &Arc<Vec<u8>>) -> Option<PdfaCheck> {

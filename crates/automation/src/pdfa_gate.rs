@@ -66,10 +66,11 @@ impl Automation {
             }
             // A save writes them into the file: said once more, all of them. The file written is
             // the document as it is now unless the call changed it again after saving (a batch
-            // that saves and then edits, or undoes): then the bytes written are checked.
+            // that saves and then edits, or undoes): then the file written is checked, with the
+            // pages it was written with.
             let saved_now = was.is_some_and(|b| !Arc::ptr_eq(&b.saved, &saved));
             if saved_now {
-                let written = if dirty { self.session.pdfa_check_copy(id, &saved) } else { Some(check.clone()) };
+                let written = if dirty { self.session.pdfa_check_saved(id) } else { Some(check.clone()) };
                 if let Some(written) = written.filter(|w| !w.breaks.is_empty()) {
                     warnings.push(saved_breaking(&written, "the saved file"));
                 }

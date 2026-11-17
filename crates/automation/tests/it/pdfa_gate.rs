@@ -141,6 +141,43 @@ fn the_saved_file_notice_is_about_the_file_written() {
     assert!(said[0].ends_with("(ISO 19005-4 6.9)"), "{said:?}");
 }
 
+/// The saved-file notice matches an issue on a page to the page it was on when the file was
+/// written, not to the pages an undo after the save brought back.
+#[test]
+fn the_saved_file_is_checked_with_its_own_pages() {
+    // A PDF/A-2b file of two pages whose second has additional actions (ISO 19005-2 6.5.2).
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+               <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\" pdfaid:part=\"2\" pdfaid:conformance=\"B\"/>\
+               </rdf:RDF></x:xmpmeta>";
+    let bytes = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Metadata 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /AA << /O << /S /JavaScript /JS (1) >> >> >> endobj
+5 0 obj << /Type /Metadata /Subtype /XML /Length {} >> stream\n{xmp}\nendstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        xmp.len()
+    );
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("in.pdf"), bytes).unwrap();
+    let mut a = Automation::new().with_root(dir.path()).unwrap();
+    let opened = tool(&mut a, "doc_open", json!({ "path": "in.pdf" }));
+    let doc = opened["doc"].as_u64().unwrap();
+    // Page 1 deleted, saved, and the deletion undone: the file written has the issue on its page
+    // 1, the one that was page 2, so it breaks nothing new.
+    let steps = json!([
+        { "id": "page.delete", "params": { "doc": doc, "pages": [1] } },
+        { "id": "file.save", "params": { "doc": doc, "path": "out.pdf" } },
+        { "id": "edit.undo", "params": { "doc": doc } },
+    ]);
+    let batch = tool(&mut a, "command_batch", json!({ "steps": steps }));
+    assert_eq!(batch["pdfa"][0]["declares"], "PDF/A-2b", "{batch}");
+    let saved: Vec<String> = pdfa_warnings(&batch).into_iter().filter(|w| w.starts_with("the saved file")).collect();
+    assert!(saved.is_empty(), "{batch}");
+}
+
 #[test]
 fn a_part_pdfcraft_does_not_check_is_said_once() {
     let (_dir, mut a, doc, opened) = setup(Some("pdfaid:part=\"1\" pdfaid:conformance=\"B\""));
