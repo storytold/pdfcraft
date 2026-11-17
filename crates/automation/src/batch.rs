@@ -100,10 +100,10 @@ impl Automation {
             if dry_run {
                 let planned: Result<PathBuf> = (|| {
                     let target = batch::output_path(&out, &relative);
-                    let target = self.resolve(target.to_str().ok_or_else(|| failed("output path is not UTF-8"))?, true)?;
-                    if !target.starts_with(&out) {
-                        return Err(failed("output path leaves out_dir"));
-                    }
+                    // The write root gets its say on the name. Without a root, resolve hands the
+                    // name back unchanged, so it is not what confinement may be checked against.
+                    self.resolve(target.to_str().ok_or_else(|| failed("output path is not UTF-8"))?, true)?;
+                    let target = batch::confined_output(&out, &relative).map_err(failed)?;
                     let dir = target.parent().ok_or_else(|| failed("output has no parent"))?;
                     let stem = target.file_stem().ok_or_else(|| failed("output has no stem"))?.to_string_lossy().into_owned();
                     for n in 1..=10_000 {
@@ -141,10 +141,10 @@ impl Automation {
                 batch::unchanged(&path).map_err(failed)?;
                 let (bytes, log) = recipe.process(&current, |_, _| true).map_err(failed)?;
                 let target = batch::output_path(&out, &relative);
-                let target = self.resolve(target.to_str().ok_or_else(|| failed("output path is not UTF-8"))?, true)?;
-                if !target.starts_with(&out) {
-                    return Err(failed("output path leaves out_dir"));
-                }
+                // The write root gets its say on the name; the links under out are what decide
+                // where the result really lands, so confinement is checked against those.
+                self.resolve(target.to_str().ok_or_else(|| failed("output path is not UTF-8"))?, true)?;
+                let target = batch::confined_output(&out, &relative).map_err(failed)?;
                 let output = batch::publish(&target, &bytes).map_err(failed)?;
                 Ok((output, bytes.len(), log))
             }))

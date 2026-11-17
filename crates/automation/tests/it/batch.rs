@@ -183,6 +183,40 @@ fn directory_links_are_not_followed_and_output_links_cannot_escape() {
     assert_eq!(std::fs::read_dir(dir.path().join("outside")).unwrap().count(), 0);
 }
 
+/// The same escape with no automation root. `resolve` follows links only when a root is set,
+/// so there the confinement check has to come from the links themselves — and the rooted tests
+/// above never reach that path. Both the preview and the real publish are covered: they compute
+/// the target separately.
+#[cfg(unix)]
+#[test]
+fn an_unrooted_batch_refuses_an_output_subfolder_that_links_outside() {
+    for dry_run in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("input/sub")).unwrap();
+        std::fs::create_dir(dir.path().join("outside")).unwrap();
+        std::fs::create_dir(dir.path().join("out")).unwrap();
+        std::fs::write(dir.path().join("input/a.pdf"), pdf()).unwrap();
+        std::fs::write(dir.path().join("input/sub/page.pdf"), pdf()).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("outside"), dir.path().join("out/sub")).unwrap();
+        // No root, so the names are read as given and have to be absolute.
+        let mut auto = Automation::new();
+        let report = result(
+            &mut auto,
+            json!({
+                "paths": [dir.path().join("input").to_str().unwrap()],
+                "steps": ["optimize"],
+                "out_dir": dir.path().join("out").to_str().unwrap(),
+                "recursive": true,
+                "dry_run": dry_run,
+            }),
+        );
+        assert_eq!(report["failed"], 1, "dry_run={dry_run}: {report}");
+        let escaped = report["files"].as_array().unwrap().iter().any(|f| f["error"].as_str().is_some_and(|e| e.contains("leaves the output folder")));
+        assert!(escaped, "dry_run={dry_run}: the linked subfolder was refused for another reason: {report}");
+        assert_eq!(std::fs::read_dir(dir.path().join("outside")).unwrap().count(), 0, "dry_run={dry_run}: something was written outside out_dir");
+    }
+}
+
 #[test]
 fn batch_ocr_uses_existing_models_or_reports_the_missing_models_per_file() {
     let dir = tempfile::tempdir().unwrap();
