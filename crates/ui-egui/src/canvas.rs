@@ -2864,7 +2864,11 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
         tip.fixed_pos(pos + vec2(14.0, 16.0)).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_max_width(320.0);
-                ui.label(text);
+                let text = egui::WidgetText::from(text);
+                let mut job = Arc::unwrap_or_clone(text.into_layout_job(ui.style(), egui::FontSelection::Default, ui.text_valign()));
+                // A preview should cover only a few lines, including lines made by wrapping.
+                job.wrap.max_rows = 6;
+                ui.add(egui::Label::new(job).wrap().show_tooltip_when_elided(false));
             });
         });
     }

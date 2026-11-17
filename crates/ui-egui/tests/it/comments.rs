@@ -3125,6 +3125,22 @@ fn hovering_a_comment_shows_its_author_and_text() {
 }
 
 #[test]
+fn hovering_long_text_keeps_the_preview_compact() {
+    for body in ["Long preview starts here.\n".repeat(60), "Long preview starts here and wraps at the available width. ".repeat(60)] {
+        let pdf = String::from_utf8_lossy(TEXT_FIXTURE).replace("/Contents 5 0 R /Resources", "/Contents 5 0 R /Annots [8 0 R] /Resources").replace(
+            "trailer",
+            &format!("8 0 obj << /Type /Annot /Subtype /FreeText /Rect [50 50 150 120] /T (Ada) /Contents ({body}) >> endobj\ntrailer"),
+        );
+        let mut h = harness_with_bytes(pdf.into_bytes(), |app| app.set_option("panel", "none").unwrap());
+        h.hover_at(at(&h, 100.0, 85.0));
+        h.run_steps(3);
+        let preview = h.get_by_label_contains("Ada\nLong preview starts here");
+        assert!(preview.rect().height() < 140.0, "hover preview should fit in a few lines: {:?}", preview.rect());
+        assert_eq!(comments(&h)[0].contents.as_deref(), Some(body.as_str()), "the annotation keeps all of its text");
+    }
+}
+
+#[test]
 fn preference_hides_author_only_highlight_hover_previews() {
     // A highlight annotation with author Ada and empty contents over the first page.
     let pdf = String::from_utf8_lossy(TEXT_FIXTURE).replace("/Contents 5 0 R /Resources", "/Contents 5 0 R /Annots [8 0 R] /Resources").replace(
