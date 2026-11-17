@@ -766,7 +766,23 @@ impl Fonts<'_> {
     /// which one it is, or with none known, from the state `start`, `depth` forms deep.
     fn read(&mut self, data: &[u8], holder: Option<(&Dict, Holder)>, start: TextState, depth: usize) {
         let (which, holder) = (holder.map(|(_, w)| w), holder.map(|(h, _)| h));
-        let fonts = holder.map(|h| resource_fonts(self.doc, h));
+        let doc = self.doc;
+        // The fonts by how and by what name content selects them, the first one listed under a
+        // name, and the resources' `/XObject` dictionary: looked up once for the whole content,
+        // not once per operator, and borrowed where they are written directly. A dictionary of
+        // tens of thousands of images copied at each `Do` made a 20 MB file take minutes.
+        let fonts = holder.map(|h| {
+            let mut by_name = std::collections::HashMap::new();
+            for (selection, font) in resource_fonts(doc, h) {
+                by_name.entry(selection).or_insert(font);
+            }
+            by_name
+        });
+        let resources = holder.and_then(|h| h.get(b"Resources")).map(|r| transparency::held(doc, r));
+        let xobjects = resources.as_deref().and_then(Object::as_dict).and_then(|r| r.get(b"XObject")).map(|x| transparency::held(doc, x));
+        #[cfg(test)]
+        XOBJECT_LOOKUPS.with(|n| n.set(n.get().saturating_add(1)));
+        let xobjects = xobjects.as_deref().and_then(Object::as_dict);
         let start_font = start.font.clone();
         let mut state = start;
         let mut saved: Vec<TextState> = Vec::new();
@@ -799,7 +815,7 @@ impl Fonts<'_> {
                     if let Some(name) = op.name_back(1) {
                         let selection = (Selector::Tf, name.to_vec());
                         state.font = match &fonts {
-                            Some(list) => list.iter().find(|(s, _)| *s == selection).map(|(_, r)| Current::Font(*r)),
+                            Some(by_name) => by_name.get(&selection).map(|r| Current::Font(*r)),
                             None => Some(Current::Named(selection)),
                         };
                     }
@@ -809,8 +825,8 @@ impl Fonts<'_> {
                         let selection = (Selector::Gs, name.to_vec());
                         match &fonts {
                             // A graphics state without `/Font` leaves the font as it was.
-                            Some(list) => {
-                                if let Some((_, r)) = list.iter().find(|(s, _)| *s == selection) {
+                            Some(by_name) => {
+                                if let Some(r) = by_name.get(&selection) {
                                     state.font = Some(Current::Font(*r));
                                 }
                             }
@@ -830,7 +846,7 @@ impl Fonts<'_> {
                 b"Tj" | b"TJ" | b"'" | b"\"" => self.shows(&state),
                 b"Do" => {
                     if let Some(name) = op.last_name() {
-                        self.draw(name, holder.zip(which), &state, depth);
+                        self.draw(name, holder.zip(which), xobjects, &state, depth);
                     }
                 }
                 _ => {}
@@ -879,17 +895,14 @@ impl Fonts<'_> {
         }
     }
 
-    /// `/name Do` in `state`, in content whose resource dictionary `holder` holds: a form XObject
-    /// is read in that state, with its own resources or, without them, those of the content
-    /// drawing it (ISO 32000-2 7.8.3). What can't be followed may show text with the current font.
-    fn draw(&mut self, name: &[u8], holder: Option<(&Dict, Holder)>, state: &TextState, depth: usize) {
+    /// `/name Do` in `state`, in content whose resource dictionary `holder` holds, with the
+    /// `/XObject` dictionary `xobjects` of those resources: a form XObject is read in that state,
+    /// with its own resources or, without them, those of the content drawing it (ISO 32000-2
+    /// 7.8.3). What can't be followed may show text with the current font.
+    fn draw(&mut self, name: &[u8], holder: Option<(&Dict, Holder)>, xobjects: Option<&Dict>, state: &TextState, depth: usize) {
         let (which, holder) = (holder.map(|(_, w)| w), holder.map(|(h, _)| h));
         let doc = self.doc;
-        let target = holder
-            .and_then(|h| h.get(b"Resources"))
-            .map(|r| doc.resolve(r))
-            .and_then(|r| r.as_dict().and_then(|r| r.get(b"XObject")).map(|x| doc.resolve(x)))
-            .and_then(|x| x.as_dict().and_then(|x| x.get(name)).and_then(Object::as_ref));
+        let target = xobjects.and_then(|x| x.get(name)).and_then(Object::as_ref);
         let Some(r) = target else {
             if holder.is_none() {
                 self.may_show(state);
@@ -932,26 +945,32 @@ impl Fonts<'_> {
 /// at: those listed in `/Font`, and those the graphics states in `/ExtGState` hold in their
 /// `/Font` entry (`[font size]`, the font an indirect reference, ISO 32000-2 Table 57).
 fn resource_fonts(doc: &Document, holder: &Dict) -> Vec<(Selection, ObjRef)> {
-    let Some(resources) = holder.get(b"Resources").map(|r| doc.resolve(r)) else { return Vec::new() };
+    let Some(resources) = holder.get(b"Resources").map(|r| transparency::held(doc, r)) else { return Vec::new() };
     let Some(resources) = resources.as_dict() else { return Vec::new() };
     let mut out = Vec::new();
-    if let Some(fonts) = resources.get(b"Font").map(|f| doc.resolve(f))
+    if let Some(fonts) = resources.get(b"Font").map(|f| transparency::held(doc, f))
         && let Some(fonts) = fonts.as_dict()
     {
         out.extend(fonts.iter().filter_map(|(k, f)| Some(((Selector::Tf, k.to_vec()), font_object(doc, f.as_ref()?)))));
     }
-    if let Some(states) = resources.get(b"ExtGState").map(|g| doc.resolve(g))
+    if let Some(states) = resources.get(b"ExtGState").map(|g| transparency::held(doc, g))
         && let Some(states) = states.as_dict()
     {
         for (k, state) in states.iter() {
-            let state = doc.resolve(state);
-            let Some(font) = state.as_dict().and_then(|s| s.get(b"Font")).map(|f| doc.resolve(f)) else { continue };
+            let state = transparency::held(doc, state);
+            let Some(font) = state.as_dict().and_then(|s| s.get(b"Font")).map(|f| transparency::held(doc, f)) else { continue };
             if let Some(r) = font.as_array().and_then(|a| a.first()).and_then(Object::as_ref) {
                 out.push(((Selector::Gs, k.to_vec()), font_object(doc, r)));
             }
         }
     }
     out
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times [`Fonts::read`] has looked up a resource dictionary's `/XObject` entry.
+    pub(crate) static XOBJECT_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How many references [`font_object`] follows, as the document's own `resolve` does.

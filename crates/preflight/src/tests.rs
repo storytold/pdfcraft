@@ -2071,6 +2071,33 @@ fn a_form_not_read_counts_the_current_font_in_mode_3() {
     assert_eq!(found("", alone), ["The font Helvetica isn't embedded"]);
 }
 
+/// A page that draws thousands of images listed in one `/XObject` dictionary written in its
+/// resources (PDFBOX-5530 has two pages of some 25,000 each) has that dictionary looked up once for
+/// its content, not once per `Do`: copying it at each one took minutes. The fonts are still found.
+#[test]
+fn a_page_drawing_many_images_looks_up_its_xobjects_once() {
+    const IMAGES: usize = 3000;
+    let names: String = (0..IMAGES).map(|i| format!("/Im{i} 5 0 R ")).collect();
+    let content: String = (0..IMAGES).map(|i| format!("/Im{i} Do\n")).collect::<String>() + "BT /F1 10 Tf (x) Tj ET";
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 6 0 R >> /XObject << {names}>> >> >>"),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len() + 1),
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream"
+            .to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+    ];
+    let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+    let doc = build(&objects, "");
+    XOBJECT_LOOKUPS.with(|n| n.set(0));
+    let fonts: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect();
+    assert_eq!(fonts, ["The font Helvetica isn't embedded"]);
+    // One content stream read (the page's), whatever the number of `Do`s in it.
+    let lookups = XOBJECT_LOOKUPS.with(std::cell::Cell::get);
+    assert!(lookups <= 2, "the /XObject dictionary was looked up {lookups} times");
+}
+
 /// PDF/A-2 6.1.2: the file starts with `%PDF-1.0` to `%PDF-1.7` and an end-of-line marker, then a
 /// comment of `%` and four bytes above 127; Save as PDF/A rewrites a header that doesn't.
 #[test]
