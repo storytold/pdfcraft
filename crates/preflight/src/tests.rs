@@ -2572,6 +2572,10 @@ fn embedded_files_are_associated_files_clause_6_8() {
         let doc = listed(content);
         assert_eq!(found(&doc, Level::A3b), [(said.to_string(), true)], "{content}");
     }
+    // Past the names kept, the names aren't all known, and every property list counts: /MC0 is
+    // tagged after 4,096 others.
+    let many: String = (0..4096).map(|i| format!("/AF /N{i} BDC EMC ")).chain(["/AF /MC0 BDC EMC".to_string()]).collect();
+    assert_eq!(found(&listed(&many), Level::A3b), Vec::<(String, bool)>::new());
     // Save as PDF/A associates it with the document.
     let mut doc = with("", "", plain);
     let report = convert(&mut doc, Level::A3b).unwrap();
