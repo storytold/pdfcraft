@@ -1319,6 +1319,29 @@ fn decode_mask_bytes(
         }
 
         decoded_data.into_owned()
+    } else if (1..=8).contains(&bits_per_component)
+        && color_space.num_components() == 1
+        && !decode_arr.is_empty()
+    {
+        if width == 0 || *height == 0 {
+            return None;
+        }
+        let lut = mask_byte_lut(bits_per_component, decode_arr[0], invert);
+        if bits_per_component == 8 {
+            let owned = decoded_data.to_mut();
+            for b in owned.iter_mut() {
+                *b = lut[usize::from(*b)];
+            }
+            decoded_data.into_owned()
+        } else {
+            unpack_subbyte_mask(
+                &decoded_data,
+                width as usize,
+                *height as usize,
+                bits_per_component,
+                &lut,
+            )?
+        }
     } else {
         let components = get_components(
             &decoded_data,
@@ -1347,6 +1370,94 @@ fn decode_mask_bytes(
     fix_image_length(&mut data, width, height, 0, color_space)?;
 
     Some(data)
+}
+
+/// Precompute the `[0..=255]` output byte for each possible raw sample value (`0..1 << bpc`) of a
+/// single-channel mask with `bits_per_component <= 8`.
+fn mask_byte_lut(bits_per_component: u8, range: (f32, f32), invert: bool) -> [u8; 256] {
+    let mut lut = [0u8; 256];
+    let entries = 1usize << bits_per_component;
+    for (sample, slot) in lut[..entries].iter_mut().enumerate() {
+        let alpha = decode_sample(sample as u16, bits_per_component, range);
+        *slot = if invert {
+            ((1.0 - alpha) * 255.0 + 0.5) as u8
+        } else {
+            (alpha * 255.0 + 0.5) as u8
+        };
+    }
+    lut
+}
+
+fn unpack_packed_mask<const SPB: usize, const BPC: u8>(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    lut: &[u8; 256],
+    out: &mut Vec<u8>,
+) {
+    let mask = (1u8 << BPC) - 1;
+    let mut byte_lut = [[0u8; SPB]; 256];
+    for (byte, entry) in byte_lut.iter_mut().enumerate() {
+        for (k, dst) in entry.iter_mut().enumerate() {
+            let shift = 8 - usize::from(BPC) * (k + 1);
+            let sample = ((byte as u8) >> shift) & mask;
+            *dst = lut[usize::from(sample)];
+        }
+    }
+
+    let row_bytes = width.div_ceil(SPB);
+    let whole_bytes = width / SPB;
+    let rem_samples = width % SPB;
+    for row in 0..height {
+        let start = row * row_bytes;
+        let row_slice = data.get(start..).unwrap_or(&[]);
+        let whole_avail = whole_bytes.min(row_slice.len());
+        for &b in &row_slice[..whole_avail] {
+            out.extend_from_slice(&byte_lut[usize::from(b)]);
+        }
+        if whole_avail < whole_bytes {
+            out.extend(iter::repeat_n(
+                lut[0],
+                (whole_bytes - whole_avail) * SPB + rem_samples,
+            ));
+        } else if rem_samples > 0 {
+            if let Some(&b) = row_slice.get(whole_bytes) {
+                out.extend_from_slice(&byte_lut[usize::from(b)][..rem_samples]);
+            } else {
+                out.extend(iter::repeat_n(lut[0], rem_samples));
+            }
+        }
+    }
+}
+
+fn unpack_subbyte_mask(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    bpc: u8,
+    lut: &[u8; 256],
+) -> Option<Vec<u8>> {
+    let total = width.checked_mul(height)?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(total).ok()?;
+
+    match bpc {
+        1 => unpack_packed_mask::<8, 1>(data, width, height, lut, &mut out),
+        2 => unpack_packed_mask::<4, 2>(data, width, height, lut, &mut out),
+        4 => unpack_packed_mask::<2, 4>(data, width, height, lut, &mut out),
+        _ => {
+            let mut reader = BitReader::new(data);
+            for _ in 0..height {
+                for _ in 0..width {
+                    let sample = reader.read(bpc).unwrap_or(0) as usize;
+                    out.push(lut[sample]);
+                }
+                reader.align();
+            }
+        }
+    }
+
+    Some(out)
 }
 
 fn resolve_alpha(

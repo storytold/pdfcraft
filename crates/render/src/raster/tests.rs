@@ -11923,3 +11923,84 @@ fn a_to_unicode_cmap_reads_its_mappings_past_a_token_it_cannot_parse() {
     let unclosed = format!("{body}{}{}", "(".repeat(4096), "x".repeat(1 << 16));
     assert!(CMap::parse(unclosed.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x48).is_some()));
 }
+
+#[test]
+fn subbyte_and_custom_decode_masks_render_identically() {
+    fn render_masked(mask_dict: &str, mask_bytes: &[u8]) -> Vec<u8> {
+        let content = b"q 100 0 0 100 0 0 cm /Im0 Do Q\n";
+        let mut pdf = format!(
+            "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+4 0 obj << /Length {} >> stream\n",
+            content.len()
+        )
+        .into_bytes();
+        pdf.extend_from_slice(content);
+        pdf.extend_from_slice(
+            b"endstream endobj\n\
+5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Interpolate false /SMask 6 0 R /Length 3 >> stream\n\xff\x00\x00\nendstream endobj\n",
+        );
+        pdf.extend_from_slice(format!("6 0 obj << {mask_dict} /Length {} >> stream\n", mask_bytes.len()).as_bytes());
+        pdf.extend_from_slice(mask_bytes);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        render_first_page(pdf).rgba.to_vec()
+    }
+
+    // 1-bpc mask (width 9 = 1 whole byte + 1 remainder bit per row; second row truncated at EOF -> 0 padding).
+    let rgba_1 = render_masked(
+        "/Type /XObject /Subtype /Image /Width 9 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 1 /Interpolate false",
+        &[0b1010_1010, 0b1000_0000],
+    );
+    assert_eq!(rgb_at(&rgba_1, 100, 5, 25), [255, 0, 0], "1-bpc bit=1 -> opaque red");
+    assert_eq!(rgb_at(&rgba_1, 100, 16, 25), [255, 255, 255], "1-bpc bit=0 -> white bg");
+    assert_eq!(rgb_at(&rgba_1, 100, 94, 25), [255, 0, 0], "1-bpc rem bit=1 -> opaque red");
+    assert_eq!(rgb_at(&rgba_1, 100, 5, 75), [255, 255, 255], "1-bpc truncated EOF row -> alpha 0");
+
+    // 2-bpc mask with custom /Decode [0.2 0.8] (sample 0 -> 0.2 alpha, sample 3 -> 0.8 alpha).
+    let rgba_2 = render_masked(
+        "/Type /XObject /Subtype /Image /Width 5 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 2 /Decode [0.2 0.8] /Interpolate false",
+        &[0b00_01_10_11, 0b11_00_00_00],
+    );
+    let p_low = rgb_at(&rgba_2, 100, 10, 50);
+    let p_high = rgb_at(&rgba_2, 100, 90, 50);
+    assert!(p_low[1] > 190 && p_low[1] < 220, "2-bpc sample=0 decode=0.2 green={}", p_low[1]);
+    assert!(p_high[1] > 40 && p_high[1] < 65, "2-bpc sample=3 decode=0.8 green={}", p_high[1]);
+
+    // 4-bpc mask (samples 15 and 0).
+    let rgba_4 = render_masked(
+        "/Type /XObject /Subtype /Image /Width 3 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 4 /Interpolate false",
+        &[0xF0, 0xF0],
+    );
+    assert_eq!(rgb_at(&rgba_4, 100, 15, 50), [255, 0, 0]);
+    assert_eq!(rgb_at(&rgba_4, 100, 50, 50), [255, 255, 255]);
+    assert_eq!(rgb_at(&rgba_4, 100, 85, 50), [255, 0, 0]);
+
+    // 8-bpc mask with custom /Decode [0.25 0.75] (sample 0 -> 0.25 alpha, sample 255 -> 0.75 alpha).
+    let rgba_8 = render_masked(
+        "/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Decode [0.25 0.75] /Interpolate false",
+        &[0, 255],
+    );
+    let p8_l = rgb_at(&rgba_8, 100, 25, 50);
+    let p8_r = rgb_at(&rgba_8, 100, 75, 50);
+    assert!((185..=200).contains(&p8_l[1]), "8-bpc custom decode left green={}", p8_l[1]);
+    assert!((55..=72).contains(&p8_r[1]), "8-bpc custom decode right green={}", p8_r[1]);
+
+    // 1-bpc stencil /ImageMask (inverted semantics: bit 0 draws, bit 1 transparent).
+    let content = b"0 1 0 rg q 100 0 0 100 0 0 cm /Mk0 Do Q\n";
+    let mut pdf = format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Mk0 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+4 0 obj << /Length {} >> stream\n",
+        content.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(content);
+    pdf.extend_from_slice(b"endstream endobj\n5 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 1 /ImageMask true /Interpolate false /Length 1 >> stream\n\x40\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+    let stencil = render_first_page(pdf).rgba;
+    assert_eq!(rgb_at(&stencil, 100, 25, 50), [0, 255, 0], "stencil bit=0 draws green");
+    assert_eq!(rgb_at(&stencil, 100, 75, 50), [255, 255, 255], "stencil bit=1 stays white");
+}
