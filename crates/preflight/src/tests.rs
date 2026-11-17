@@ -2456,27 +2456,48 @@ fn jpeg2000_images_are_checked_clause_6_2_8_3() {
     }
     assert_eq!(found(&jp2(5, 7, &[], &[srgb])), ["A JPEG 2000 image has 5 colour channels: only 1, 3 or 4 are allowed"]);
     // An opacity channel isn't a colour one (`cdef`); a palette's columns are the channels (`pclr`).
-    let with_box = |kind: &[u8; 4], body: &[u8], channels: u8| -> Vec<u8> {
-        let mut data = jp2(channels, 7, &[], &[srgb]);
-        // The new box goes at the end of `jp2h`, whose length grows by its own.
+    // `jp2` with `boxes` added at the end of `jp2h`, whose length grows by theirs.
+    let with_boxes = |data: Vec<u8>, boxes: &[(&[u8; 4], &[u8])]| -> Vec<u8> {
+        let mut data = data;
         let at = data.windows(4).position(|w| w == b"jp2h").unwrap();
         let end = at + 4 + usize::from(data[at - 1]) - 8;
-        let mut new = vec![0, 0, 0, u8::try_from(body.len() + 8).unwrap()];
-        new.extend_from_slice(kind);
-        new.extend_from_slice(body);
+        let mut new = Vec::new();
+        for (kind, body) in boxes {
+            new.extend([0, 0, 0, u8::try_from(body.len() + 8).unwrap()]);
+            new.extend_from_slice(*kind);
+            new.extend_from_slice(body);
+        }
         data[at - 1] += u8::try_from(new.len()).unwrap();
         data.splice(end..end, new);
         data
     };
-    assert_eq!(found(&with_box(b"cdef", &[0, 2, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0], 2)), Vec::<String>::new());
+    let grey_opacity = [0, 2, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0];
+    assert_eq!(found(&with_boxes(jp2(2, 7, &[], &[srgb]), &[(b"cdef", &grey_opacity)])), Vec::<String>::new());
+    let two_colours = [0, 2, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 2];
     assert_eq!(
-        found(&with_box(b"cdef", &[0, 2, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 2], 2)),
+        found(&with_boxes(jp2(2, 7, &[], &[srgb]), &[(b"cdef", &two_colours)])),
         ["A JPEG 2000 image has 2 colour channels: only 1, 3 or 4 are allowed"]
     );
-    assert_eq!(found(&with_box(b"pclr", &[0, 2, 3, 7, 7, 7, 0, 0, 0, 1, 1, 1], 1)), Vec::<String>::new());
-    // A component mapping gives the channels: here two palette columns and one component direct.
-    assert_eq!(found(&with_box(b"cmap", &[0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0], 2)), Vec::<String>::new());
-    assert_eq!(found(&with_box(b"cmap", &[0, 0, 1, 0, 0, 0, 1, 1], 1)), ["A JPEG 2000 image has 2 colour channels: only 1, 3 or 4 are allowed"]);
+    // A palette of two entries, three 8-bit columns.
+    let palette = [0, 2, 3, 7, 7, 7, 0, 0, 0, 1, 1, 1];
+    assert_eq!(found(&with_boxes(jp2(1, 7, &[], &[srgb]), &[(b"pclr", &palette)])), Vec::<String>::new());
+    // A component mapping gives the channels: two palette columns and one component direct.
+    let mapping = [0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0];
+    assert_eq!(found(&with_boxes(jp2(2, 7, &[], &[srgb]), &[(b"pclr", &palette), (b"cmap", &mapping)])), Vec::<String>::new());
+    let mapping_two = [0, 0, 1, 0, 0, 0, 1, 1];
+    assert_eq!(
+        found(&with_boxes(jp2(1, 7, &[], &[srgb]), &[(b"pclr", &palette), (b"cmap", &mapping_two)])),
+        ["A JPEG 2000 image has 2 colour channels: only 1, 3 or 4 are allowed"]
+    );
+    // Depths: a palette column's is its own, so 8- and 16-bit columns differ.
+    let mixed = [0, 2, 3, 7, 15, 7, 0, 0, 0, 0, 1, 1, 1, 1];
+    assert!(jpx::check_data(&with_boxes(jp2(2, 7, &[], &[srgb]), &[(b"pclr", &mixed), (b"cmap", &mapping)])).is_some_and(|j| j.depth));
+    // A mapping to a palette the header doesn't have can't be read for its depths.
+    assert!(jpx::check_data(&with_boxes(jp2(2, 7, &[], &[srgb]), &[(b"cmap", &mapping)])).is_some_and(|j| j.depth));
+    // An opacity channel's depth may differ from the colour channels', within range.
+    let grey_and_opacity = |depths: &[u8]| jpx::check_data(&with_boxes(jp2(2, 0xFF, depths, &[srgb]), &[(b"cdef", &grey_opacity)]));
+    assert_eq!(grey_and_opacity(&[7, 0]), Some(jpx::Jpx::default()));
+    assert!(grey_and_opacity(&[7, 40]).is_some_and(|j| j.depth));
     // With a colour space of its own, the image's data isn't read for one.
     let bad = jp2(5, 40, &[], &[(4, 0, 0)]);
     let text: String = bad.iter().copied().map(char::from).collect();

@@ -87,17 +87,23 @@ pub(crate) fn check_data(data: &[u8]) -> Option<Jpx> {
     let top = boxes(data);
     let header = top.iter().find(|(kind, _)| kind == b"jp2h").map(|(_, c)| boxes(c))?;
     let ihdr = header.iter().find(|(kind, _)| kind == b"ihdr").map(|(_, c)| *c)?;
-    let components = u16::from_be_bytes(*ihdr.get(8..10)?.first_chunk::<2>()?);
+    let components = usize::from(u16::from_be_bytes(*ihdr.get(8..10)?.first_chunk::<2>()?));
     let bpc = *ihdr.get(10)?;
-    let channels = colour_channels(&header).unwrap_or(components);
-    let mut out = Jpx { channels: (!matches!(channels, 1 | 3 | 4)).then_some(channels), ..Jpx::default() };
-    // T.800 I.5.3.1: 255 means the channels differ, and the `bpcc` box gives each one's.
-    out.depth = if bpc == 0xFF {
-        let depths = header.iter().find(|(kind, _)| kind == b"bpcc").map(|(_, c)| *c).unwrap_or_default();
-        depths.is_empty() || depths.iter().any(|d| d != depths.first().unwrap_or(d) || !in_range(*d))
+    // T.800 I.5.3.1: 255 means the components' depths differ, and the `bpcc` box gives each one's.
+    let depths: Vec<u8> = if bpc == 0xFF {
+        header.iter().find(|(kind, _)| kind == b"bpcc").map(|(_, c)| c.get(..components).unwrap_or(c).to_vec()).unwrap_or_default()
     } else {
-        !in_range(bpc)
+        vec![bpc; components.min(MAX_CHANNELS)]
     };
+    let (channels, unreadable) = channels(&header, &depths, components);
+    let colour: Vec<u8> = channels.iter().filter(|c| c.colour).map(|c| c.depth).collect();
+    let count = u16::try_from(colour.len()).unwrap_or(u16::MAX);
+    let mut out = Jpx { channels: (!matches!(count, 1 | 3 | 4)).then_some(count), ..Jpx::default() };
+    // Every channel's depth is within range, and the colour channels' are the same.
+    out.depth = unreadable
+        || (bpc == 0xFF && depths.len() != components)
+        || channels.iter().any(|c| !in_range(c.depth))
+        || colour.iter().any(|d| colour.first().is_some_and(|first| (first & 0x7F) != (d & 0x7F)));
     let colours: Vec<Colour> = header
         .iter()
         .filter(|(kind, _)| kind == b"colr")
@@ -123,24 +129,60 @@ pub(crate) fn check_data(data: &[u8]) -> Option<Jpx> {
     Some(out)
 }
 
-/// How many colour channels the header box's contents `header` describe, when a box other than
-/// `ihdr` says: the channel definitions (`cdef`, T.800 I.5.3.6) count those of type 0, colour,
-/// and not opacity; failing that, the component mapping (`cmap`, I.5.3.5) has one entry, four
-/// bytes, per channel, whether a component goes to it directly or through a palette's column;
-/// failing that, a palette (`pclr`, I.5.3.4) makes its columns the channels. Otherwise every
-/// component of `ihdr` is one.
-fn colour_channels(header: &[([u8; 4], &[u8])]) -> Option<u16> {
-    if let Some((_, cdef)) = header.iter().find(|(kind, _)| kind == b"cdef") {
-        let n = usize::from(u16::from_be_bytes(*cdef.first_chunk::<2>()?));
+/// The most channels read from a header.
+const MAX_CHANNELS: usize = 16384;
+
+/// One channel the decoded image has: its depth, as `bpcc` writes it, and whether it holds colour.
+struct Channel {
+    depth: u8,
+    colour: bool,
+}
+
+/// The channels the header box's contents `header` describe, from the components' depths
+/// `depths`, and whether a box that says how they are made couldn't be read.
+///
+/// - The component mapping (`cmap`, T.800 I.5.3.5) makes one channel of each four-byte entry: a
+///   component directly, at its own depth, or through a column of the palette (`pclr`, I.5.3.4),
+///   at that column's depth. Without one, a palette's columns are the channels, and otherwise each
+///   component is one.
+/// - The channel definitions (`cdef`, I.5.3.6) say which hold colour: type 0, and not opacity. A
+///   channel they leave out doesn't. Without them, every channel holds colour.
+fn channels(header: &[([u8; 4], &[u8])], depths: &[u8], components: usize) -> (Vec<Channel>, bool) {
+    let find = |name: &[u8; 4]| header.iter().find(|(kind, _)| kind == name).map(|(_, c)| *c);
+    // The palette's column depths: NE (2 bytes), NPC (1), then NPC depths.
+    let palette: Option<&[u8]> = find(b"pclr").and_then(|p| p.get(3..3usize.saturating_add(usize::from(*p.get(2)?))));
+    let mut unreadable = false;
+    let mut out: Vec<Channel> = match (find(b"cmap"), palette) {
+        (Some(cmap), _) => cmap
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .take(MAX_CHANNELS)
+            .map(|[c0, c1, mtyp, pcol]| {
+                let component = usize::from(u16::from_be_bytes([*c0, *c1]));
+                let depth = if *mtyp == 1 { palette.and_then(|p| p.get(usize::from(*pcol))) } else { depths.get(component) };
+                unreadable |= depth.is_none();
+                Channel { depth: depth.copied().unwrap_or(0), colour: true }
+            })
+            .collect(),
+        (None, Some(palette)) => palette.iter().map(|&depth| Channel { depth, colour: true }).collect(),
+        (None, None) => depths.iter().take(components.min(MAX_CHANNELS)).map(|&depth| Channel { depth, colour: true }).collect(),
+    };
+    if let Some(cdef) = find(b"cdef")
+        && let Some(n) = cdef.first_chunk::<2>().map(|n| usize::from(u16::from_be_bytes(*n)))
+    {
+        for channel in &mut out {
+            channel.colour = false;
+        }
         // Each definition is a channel, a type and an association, two bytes each.
-        let types = (0..n).map_while(|i| cdef.get(i.checked_mul(6)?.checked_add(4)?..i.checked_mul(6)?.checked_add(6)?));
-        return u16::try_from(types.filter(|typ| *typ == [0, 0]).count()).ok();
+        for definition in cdef.get(2..).unwrap_or_default().as_chunks::<6>().0.iter().take(n) {
+            let [c0, c1, t0, t1, _, _] = *definition;
+            if let Some(channel) = out.get_mut(usize::from(u16::from_be_bytes([c0, c1]))) {
+                channel.colour = [t0, t1] == [0, 0];
+            }
+        }
     }
-    if let Some((_, cmap)) = header.iter().find(|(kind, _)| kind == b"cmap") {
-        return u16::try_from(cmap.len() / 4).ok();
-    }
-    let (_, pclr) = header.iter().find(|(kind, _)| kind == b"pclr")?;
-    pclr.get(2).map(|&columns| u16::from(columns))
+    (out, unreadable)
 }
 
 /// A component's bit depth, as `ihdr`, `bpcc` and `SIZ` write it (the depth less one, with the

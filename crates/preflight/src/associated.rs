@@ -21,7 +21,8 @@ const MAX_CONTENT_BYTES: usize = 256 << 20;
 const MAX_TAGGED: usize = 4096;
 
 /// The file specifications `objs` list as associated files. `content` are the content streams
-/// only a reference identifies, read for the property lists `AF` sequences name.
+/// only a reference identifies, read for the property lists `AF` sequences name. When there are
+/// more such names than are kept, every property list counts, so that none is missed.
 pub(crate) fn associated(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], content: &HashSet<ObjRef>) -> HashSet<ObjRef> {
     let reader = Reader { doc, tagged: tagged(doc, objs, content) };
     let mut out = HashSet::new();
@@ -37,9 +38,10 @@ pub(crate) fn associated(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>
 }
 
 /// The names of the property lists marked-content sequences tagged `AF` begin with: `/AF /Name
-/// BDC` (14.13.5).
-fn tagged(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], content: &HashSet<ObjRef>) -> HashSet<Vec<u8>> {
+/// BDC` (14.13.5). `None` when there are more than [`MAX_TAGGED`]: the names aren't all known.
+fn tagged(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], content: &HashSet<ObjRef>) -> Option<HashSet<Vec<u8>>> {
     let mut out = HashSet::new();
+    let mut complete = true;
     crate::contents::each(doc, objs, content, MAX_CONTENT_BYTES, &mut |data| {
         // Only content that begins a marked-content sequence with a property list is parsed. The tag
         // is looked for in the parsed name, which may be written with escapes (`/A#46`).
@@ -48,21 +50,26 @@ fn tagged(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], content: &H
                 if op.op == b"BDC"
                     && op.operands.first().and_then(Object::as_name) == Some(b"AF".as_slice())
                     && let Some(name) = op.operands.get(1).and_then(Object::as_name)
-                    && out.len() < MAX_TAGGED
+                    && !out.contains(name)
                 {
+                    if out.len() >= MAX_TAGGED {
+                        complete = false;
+                        return false;
+                    }
                     out.insert(name.to_vec());
                 }
             }
         }
-        out.len() < MAX_TAGGED
+        true
     });
-    out
+    complete.then_some(out)
 }
 
 struct Reader<'a> {
     doc: &'a Document,
-    /// The property list names `AF` sequences use.
-    tagged: HashSet<Vec<u8>>,
+    /// The property list names `AF` sequences use, or `None` when there were too many to keep, and
+    /// every property list counts.
+    tagged: Option<HashSet<Vec<u8>>>,
 }
 
 impl Reader<'_> {
@@ -81,12 +88,12 @@ impl Reader<'_> {
         if let Some(af) = d.get(b"AF") {
             self.listed(af, out);
         }
-        if !self.tagged.is_empty()
+        if self.tagged.as_ref().is_none_or(|t| !t.is_empty())
             && let Some(properties) = d.get(b"Properties").map(|p| self.doc.resolve(p))
             && let Some(properties) = properties.as_dict()
         {
             for (name, list) in properties.iter() {
-                if self.tagged.contains(name.as_slice()) {
+                if self.tagged.as_ref().is_none_or(|t| t.contains(name.as_slice())) {
                     self.listed(list, out);
                 }
             }
