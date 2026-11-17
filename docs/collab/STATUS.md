@@ -6353,3 +6353,13 @@ CJK font on the host. collab-pdf and collab-server: 75 + 35, 0 failed.
 **Awaiting the owner's push:** `68682dba4` and `1cb097407` (this agent's `git
 push` is denied). The PR head stays `64026298` until then: no approve, no
 merge, no CI change here.
+
+**Pushed (2026-11-17T13:15Z):** the protocol branch pushed `64026298 ->
+87c896426` to the fork, so `#6622` now carries the merge and the fixes above
+(the `docs` commit that wrote this note is the third). Re-gated on `agents` at
+the pushed head: fmt 0, clippy `--no-deps -D warnings` 0 on the five collab
+crates, `cargo build -p pdfcraft-web --features collab --target
+wasm32-unknown-unknown` 0, collab-pdf 75 + collab-server 35 passed, `cargo
+metadata --locked` 0. `cargo deny check` is red on `chrono`
+(RUSTSEC-2026-0543) exactly as on `origin/main` `271e479c5`; untouched here.
+No approve, no merge, no CI change from this side.
