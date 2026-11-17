@@ -849,10 +849,15 @@ pub(crate) fn apply_values(doc: &mut Document, values: &[(String, Vec<String>)],
     for (name, vals) in values {
         let Some(f) = all.iter().find(|f| &f.name == name) else { continue };
         let first = vals.first().cloned().unwrap_or_default();
+        // Form data names a button by its export value, its `/Opt` entry where the field has one
+        // per button, as export writes it; an on-state name is read only where no export value
+        // matches (Field::state_for_export). With `/Opt [(1) (2)]` and states `/0 /1`, "1" is the
+        // first button, not the state `/1` of the second (ISO 32000-2 Table 230).
+        let button = (!first.is_empty() && first != "Off").then(|| f.state_for_export(&first)).flatten().map(str::to_owned);
         let v = match f.kind {
             FieldKind::Text => FieldValue::Text(first),
-            FieldKind::CheckBox => f.check_box_value(Some(first.as_str())),
-            FieldKind::Radio => FieldValue::Radio((!first.is_empty() && first != "Off").then_some(first)),
+            FieldKind::CheckBox => button.map_or_else(|| f.check_box_value(Some(first.as_str())), FieldValue::Text),
+            FieldKind::Radio => FieldValue::Radio((!first.is_empty() && first != "Off").then(|| button.unwrap_or(first))),
             // XML, CSV and text hold a multi-select list's values in one cell, joined by ", "
             // (as export_data writes them); split it unless the whole cell is one option.
             FieldKind::List if f.has(pdfcraft_forms::flags::MULTI_SELECT) && vals.len() == 1 && !f.options.iter().any(|(e, _)| *e == first) => {
