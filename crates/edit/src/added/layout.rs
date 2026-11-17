@@ -1,6 +1,7 @@
 use super::types::{AddedImage, AddedText};
 use super::{
-    Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedScript, shape_arabic, shape_hebrew, shape_thai,
+    Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedScript, shape_arabic, shape_hebrew, shape_inter,
+    shape_thai,
 };
 
 pub(super) fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
@@ -39,6 +40,7 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
         // Arabic or Hebrew: laid out with the bidirectional algorithm and shaped.
         let rtl_script = para.chars().any(|c| is_arabic(c) || is_hebrew(c));
         let thai = para.chars().any(is_thai);
+        let inter = para.chars().any(is_inter);
         if thai
             && !rtl_script
             && let Ok(lines) = thai_lines(t, para, width)
@@ -51,7 +53,7 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
         // sum of its words' and shaping stays linear in the paragraph's length. The space is the
         // paragraph's; a space between Latin words is drawn in the item's font, a few hundredths
         // of an em apart.
-        let measure = |s: &str| if rtl_script || thai { shaped_width(t, s, rtl) } else { latin_width(t, s) };
+        let measure = |s: &str| if rtl_script || thai || inter { shaped_width(t, s, rtl) } else { latin_width(t, s) };
         let space = measure(" ");
         let (mut line, mut line_w) = (String::new(), 0.0);
         // Widths add up (the standard-14 widths have no kerning), so each word is measured once
@@ -189,6 +191,18 @@ pub(super) fn is_hebrew(c: char) -> bool {
     matches!(u32::from(c), 0x0591..=0x05F4 | 0xFB1D..=0xFB4F)
 }
 
+/// A letter the standard fonts can't encode that the bundled Inter face draws: Greek, Cyrillic,
+/// or Latin beyond WinAnsiEncoding (ř, ș, ő). Arabic, Hebrew and Thai keep their own faces.
+pub(super) fn is_inter(c: char) -> bool {
+    !pdfcraft_fonts::win_ansi_encodable(c)
+        && !is_arabic(c)
+        && !is_hebrew(c)
+        && !is_thai(c)
+        && !is_bidi_control(c)
+        && !c.is_control()
+        && pdfcraft_fonts::inter_has(c)
+}
+
 /// The first character of `t` that would be drawn as `?`: outside WinAnsiEncoding and not drawn
 /// with the craft-fonts Arabic (#125) or Hebrew (#128) face, or Arabic or Hebrew that the face can't
 /// draw (or that has no face to draw it). Page-content tools refuse such text; the Add-text editor
@@ -227,6 +241,7 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
 fn shaped_by_a_face(t: &AddedText) -> bool {
     (pdfcraft_fonts::document_arabic_font().is_some() && t.text.chars().any(is_arabic))
         || (pdfcraft_fonts::document_hebrew_font(false).is_some() && t.text.chars().any(is_hebrew))
+        || t.text.chars().any(is_inter)
 }
 
 /// An Arabic character the face shapes and draws (U+061C, a direction mark, is dropped).
@@ -282,6 +297,8 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
                 Some(ShapedScript::Hebrew)
             } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c)) {
                 Some(ShapedScript::Arabic)
+            } else if is_inter(c) {
+                Some(ShapedScript::Inter)
             } else {
                 None
             };
@@ -299,6 +316,7 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
                     ShapedScript::Arabic => shape_arabic(&s, run_rtl).map_err(|e| arabic_error(e, &s))?,
                     ShapedScript::Hebrew => shape_hebrew(&s, run_rtl).map_err(|e| hebrew_error(e, &s))?,
                     ShapedScript::Thai => shape_thai(&s).map_err(|e| thai_error(e, &s))?,
+                    ShapedScript::Inter => shape_inter(&s).map_err(|e| inter_error(e, &s))?,
                 };
                 Piece::Shaped(shaped)
             } else if run_rtl {
@@ -335,6 +353,14 @@ pub(super) fn hebrew_error(e: GlyphError, text: &str) -> EditError {
             .into(),
         GlyphError::Missing => format!("the Hebrew font can't show \"{text}\""),
         GlyphError::TooComplex => format!("the Hebrew font's glyphs for \"{text}\" are too complex"),
+    })
+}
+
+pub(super) fn inter_error(e: GlyphError, text: &str) -> EditError {
+    EditError::Invalid(match e {
+        GlyphError::NoFont => "the bundled Inter font couldn't be loaded".into(),
+        GlyphError::Missing => format!("the Inter font can't show \"{text}\""),
+        GlyphError::TooComplex => format!("the Inter font's glyphs for \"{text}\" are too complex"),
     })
 }
 
