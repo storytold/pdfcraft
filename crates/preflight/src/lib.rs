@@ -26,6 +26,7 @@
 mod gstate;
 mod header;
 pub mod icc;
+mod intents;
 mod limits;
 mod spot;
 mod trailer;
@@ -202,6 +203,10 @@ pub const WORDINGS: &[&str] = &[
     "The halftone for the colorant {} has no transfer function",
     "A graphics state has the rendering intent {}, which isn't a standard one",
     "A graphics state has a rendering intent that isn't a name",
+    "An image has the rendering intent {}, which isn't a standard one",
+    "An image has a rendering intent that isn't a name",
+    "Content sets the rendering intent {}, which isn't a standard one",
+    "Content sets a rendering intent that isn't a name",
     "The form asks viewers to make appearances (NeedAppearances)",
     "Some content could not be read for device colour",
     // Pages, actions, annotations and fields.
@@ -698,6 +703,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     check_limits(doc, &objs, &pages, &mut issue);
     check_spots(doc, &objs, &mut issue);
     check_graphics_states(doc, &mut issue);
+    check_intents(doc, &objs, &mut issue);
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
     let mut out = out.into_inner();
     let mut seen = std::collections::HashSet::new();
@@ -1026,11 +1032,34 @@ fn check_graphics_states(doc: &Document, issue: &mut impl FnMut(&'static str, &'
     for colorant in gs.missing_transfer {
         issue("6.2.5", "The halftone for the colorant {} has no transfer function", Some(colorant), None, false);
     }
+    // 6.2.6: rendering intents, in graphics states and everywhere else.
     for intent in gs.intents {
-        issue("6.2.5", "A graphics state has the rendering intent {}, which isn't a standard one", Some(intent), None, false);
+        issue("6.2.6", "A graphics state has the rendering intent {}, which isn't a standard one", Some(intent), None, false);
     }
     if gs.intent_not_name {
-        issue("6.2.5", "A graphics state has a rendering intent that isn't a name", None, None, false);
+        issue("6.2.6", "A graphics state has a rendering intent that isn't a name", None, None, false);
+    }
+}
+
+/// 6.2.6: the rendering intents images and content give. Neither can be fixed without rewriting
+/// the image or the content.
+fn check_intents(
+    doc: &Document,
+    objs: &[(ObjRef, std::sync::Arc<Object>)],
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    let found = intents::check(doc, objs, &referenced_content(doc, objs));
+    for intent in found.image {
+        issue("6.2.6", "An image has the rendering intent {}, which isn't a standard one", Some(intent), None, false);
+    }
+    if found.image_not_name {
+        issue("6.2.6", "An image has a rendering intent that isn't a name", None, None, false);
+    }
+    for intent in found.content {
+        issue("6.2.6", "Content sets the rendering intent {}, which isn't a standard one", Some(intent), None, false);
+    }
+    if found.content_not_name {
+        issue("6.2.6", "Content sets a rendering intent that isn't a name", None, None, false);
     }
 }
 

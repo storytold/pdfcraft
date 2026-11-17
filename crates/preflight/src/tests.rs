@@ -1816,7 +1816,8 @@ fn extended_graphics_states_are_checked() {
             ],
             "",
         );
-        let issues = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.5");
+        // 6.2.6 is the rendering intent's.
+        let issues = verify(&doc, Level::A2b).into_iter().filter(|i| matches!(i.clause, "6.2.5" | "6.2.6"));
         issues.inspect(|i| assert!(!i.fixable, "{}", i.message)).map(|i| i.message).collect()
     };
     let tr = "A graphics state has a transfer function (TR)";
@@ -2366,4 +2367,59 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
+}
+
+/// 6.2.6: a rendering intent is one of the four of ISO 32000-1 Table 70, wherever it is given: a
+/// graphics state's /RI, an image XObject's or an inline image's /Intent, and the ri operator.
+#[test]
+fn rendering_intents_are_standard_wherever_given_clause_6_2_6() {
+    let intents = |resources: &str, content: &str, image: &str| -> Vec<String> {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] /Resources << /XObject << /Im 6 0 R >> {resources} >> >>");
+        let (first, second) = content.split_at(content.find('|').unwrap_or(content.len()));
+        let second = second.trim_start_matches('|');
+        let image = format!(
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 {image} /Length 1 >>\nstream\n\u{0}\nendstream"
+        );
+        let doc = build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                &page,
+                &format!("<< /Length {} >>\nstream\n{first}\nendstream", first.len()),
+                &format!("<< /Length {} >>\nstream\n{second}\nendstream", second.len()),
+                &image,
+            ],
+            "",
+        );
+        let issues = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.6");
+        issues.inspect(|i| assert!(!i.fixable, "{}", i.message)).map(|i| i.message).collect()
+    };
+    let none: [&str; 0] = [];
+    // The four, wherever given.
+    for intent in ["AbsoluteColorimetric", "RelativeColorimetric", "Saturation", "Perceptual"] {
+        let gs = format!("/ExtGState << /G << /RI /{intent} >> >>");
+        let inline = format!("/{intent} ri BI /W 1 /H 1 /CS /G /BPC 8 /Intent /{intent} ID \u{0} EI");
+        assert_eq!(intents(&gs, &inline, &format!("/Intent /{intent}")), none, "{intent}");
+    }
+    // An image XObject's, an inline image's, the operator's, a graphics state's.
+    assert_eq!(intents("", "", "/Intent /Custom"), ["An image has the rendering intent Custom, which isn't a standard one"]);
+    assert_eq!(
+        intents("", "BI /W 1 /H 1 /CS /G /BPC 8 /Intent /Mine ID \u{0} EI", ""),
+        ["An image has the rendering intent Mine, which isn't a standard one"]
+    );
+    assert_eq!(intents("", "/Custom ri", ""), ["Content sets the rendering intent Custom, which isn't a standard one"]);
+    assert_eq!(
+        intents("/ExtGState << /G << /RI /Custom >> >>", "", ""),
+        ["A graphics state has the rendering intent Custom, which isn't a standard one"]
+    );
+    // Not names; a null /Intent is none.
+    assert_eq!(
+        intents("", "(Perceptual) ri", "/Intent 3"),
+        ["An image has a rendering intent that isn't a name", "Content sets a rendering intent that isn't a name"]
+    );
+    assert_eq!(intents("", "", "/Intent null"), none);
+    // A page's Contents parts are one stream: the operand ends one part, the operator starts the next.
+    assert_eq!(intents("", "/Custom|ri", ""), ["Content sets the rendering intent Custom, which isn't a standard one"]);
+    // Strings and image data aren't operators.
+    assert_eq!(intents("", "BT (/Custom ri) Tj ET", ""), none);
 }
