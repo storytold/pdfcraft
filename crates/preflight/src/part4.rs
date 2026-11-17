@@ -726,9 +726,11 @@ type Indirect = (pdfcraft_cos::ObjRef, std::sync::Arc<Object>);
 /// what is painted inside it in that space (ISO 32000-2 11.4.7, Table 145 `/CS`, 11.6.6 and Annex
 /// P), so what it refers to is drawn where it is, but in that blending space: a device-independent
 /// RGB or CMYK one, or one that allows no device colour. A non-isolated group, or one without
-/// `/CS`, blends in its parent's. What no page leads to (the catalog, its form fields and structure
-/// tree, an object nothing refers to) is drawn at `elsewhere`. A reference back up (`/Parent`, `/P`)
-/// leads nowhere: it draws nothing.
+/// `/CS`, blends in its parent's. A page leads to what its resolved dictionary refers to, resources
+/// it inherits from the page tree included (ISO 32000-2 7.7.3.4). What a page leads to is drawn only
+/// where pages draw it, even when the catalog, its form fields or its structure tree lead to it too;
+/// what no page leads to (an object nothing refers to, and what only such objects lead to) is drawn
+/// at `elsewhere`. A reference back up (`/Parent`, `/P`) leads nowhere: it draws nothing.
 pub(crate) fn colour_places(
     doc: &Document,
     objs: &[Indirect],
@@ -758,31 +760,29 @@ pub(crate) fn colour_places(
         return vec![(vec![elsewhere], objs.to_vec())];
     }
     let page_at: HashMap<u32, Place> = pages.iter().zip(page_places).map(|(p, place)| (p.obj.num, *place)).collect();
-    let (refers, referred) = references(objs);
-    // The places go down the references from the pages and from what nothing refers to. An object
-    // gains each place at most once, and there are few places, so the walk is linear in the
-    // references.
+    let (refers, referred) = references(objs, pages);
+    // The places go down the references: first from the pages, then, into what no page leads to,
+    // from what nothing refers to, and last from what only a cycle of objects nothing else refers
+    // to leads to. An object gains each place at most once, and there are few places, so the walk
+    // is linear in the references.
     let mut places: Vec<Vec<Place>> = vec![Vec::new(); objs.len()];
     let mut work = Vec::new();
     for (i, (r, _)) in objs.iter().enumerate() {
-        let start = match page_at.get(&r.num) {
-            Some(place) => Some(*place),
-            None if !referred.get(i).copied().unwrap_or(true) => Some(elsewhere),
-            None => None,
-        };
-        if let (Some(place), Some(list)) = (start, places.get_mut(i)) {
-            list.push(place);
+        if let (Some(place), Some(list)) = (page_at.get(&r.num), places.get_mut(i)) {
+            list.push(*place);
             work.push(i);
         }
     }
-    let mut first_pass = true;
-    loop {
+    // Whether a page leads to each object, known once the pages' walk is done.
+    let mut on_page: Vec<bool> = Vec::new();
+    for round in 0..3 {
         while let Some(i) = work.pop() {
             let from = places.get(i).cloned().unwrap_or_default();
             for &j in refers.get(i).map(Vec::as_slice).unwrap_or_default() {
                 let Some((target, _)) = objs.get(j) else { continue };
-                // A page is drawn in its own place only.
-                if page_at.contains_key(&target.num) {
+                // A page is drawn in its own place only, and what a page leads to only where pages
+                // draw it.
+                if page_at.contains_key(&target.num) || on_page.get(j).copied().unwrap_or(false) {
                     continue;
                 }
                 let blend = own.get(&target.num).copied();
@@ -800,13 +800,11 @@ pub(crate) fn colour_places(
                 }
             }
         }
-        if !first_pass {
-            break;
+        if round == 0 {
+            on_page = places.iter().map(|list| !list.is_empty()).collect();
         }
-        // What only a cycle of objects that nothing else refers to leads to is drawn elsewhere.
-        first_pass = false;
         for (i, list) in places.iter_mut().enumerate() {
-            if list.is_empty() {
+            if list.is_empty() && (round == 1 || !referred.get(i).copied().unwrap_or(true)) {
                 list.push(elsewhere);
                 work.push(i);
             }
@@ -823,20 +821,28 @@ pub(crate) fn colour_places(
 }
 
 /// What each of `objs` refers to, as positions in `objs`, and whether anything refers to it. A
+/// page refers to what its dictionary in `pages`, with the attributes it inherits, does. A
 /// reference back up (`/Parent`, `/P`) isn't counted.
-fn references(objs: &[Indirect]) -> (Vec<Vec<usize>>, Vec<bool>) {
+fn references(objs: &[Indirect], pages: &[pdfcraft_model::Page]) -> (Vec<Vec<usize>>, Vec<bool>) {
     use std::collections::{HashMap, HashSet};
     let index: HashMap<u32, usize> = objs.iter().enumerate().map(|(i, (r, _))| (r.num, i)).collect();
+    let page_dicts: HashMap<u32, &Dict> = pages.iter().map(|p| (p.obj.num, &p.dict)).collect();
+    // A dictionary's values, but for references back up.
+    fn entries(d: &Dict) -> Vec<(&Object, usize)> {
+        d.iter().filter(|(k, _)| !matches!(k.as_slice(), b"Parent" | b"P")).map(|(_, v)| (v, 1)).collect()
+    }
     let mut refers: Vec<Vec<usize>> = vec![Vec::new(); objs.len()];
     let mut referred = vec![false; objs.len()];
     for (i, (r, o)) in objs.iter().enumerate() {
-        let top = match &**o {
-            Object::Stream(s) => &s.dict,
-            Object::Dict(d) => d,
+        let mut stack: Vec<(&Object, usize)> = match (page_dicts.get(&r.num), &**o) {
+            (Some(page), _) => entries(page),
+            (None, Object::Stream(s)) => entries(&s.dict),
+            (None, Object::Dict(d)) => entries(d),
+            // An array of its own, such as a page's `/Contents` (ISO 32000-2 7.7.3.3).
+            (None, Object::Array(a)) => a.iter().map(|x| (x, 1)).collect(),
             _ => continue,
         };
         let mut found = HashSet::new();
-        let mut stack: Vec<(&Object, usize)> = top.iter().filter(|(k, _)| !matches!(k.as_slice(), b"Parent" | b"P")).map(|(_, v)| (v, 1)).collect();
         while let Some((v, depth)) = stack.pop() {
             match v {
                 Object::Ref(t) if t.num != r.num => {
