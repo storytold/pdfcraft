@@ -682,6 +682,11 @@ impl Document {
         self.editor.as_ref().and_then(|e| pdfcraft_annot::props(&e.cos, page, index))
     }
 
+    /// The formatted body of a comment, when it has one (#3737).
+    pub fn comment_rich_body(&self, page: usize, index: usize) -> Option<Vec<pdfcraft_annot::Run>> {
+        self.editor.as_ref().and_then(|e| pdfcraft_annot::rich_contents(&e.cos, page, index).ok().flatten())
+    }
+
     /// A form field's Appearance-tab look (borders, colours, font).
     pub fn field_look(&self, name: &str) -> Option<pdfcraft_forms::Look> {
         let e = self.editor.as_ref()?;
