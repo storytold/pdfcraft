@@ -2097,6 +2097,93 @@ fn a_fractional_zoom_is_remembered_exactly() {
     assert_eq!((v.fit, v.zoom), (Fit::None, 0.625));
 }
 
+/// Let the pages lay out at the place they were sent to, so what the reader is looking at can
+/// be read back from the last drawn frame.
+fn settle_layout(h: &mut Harness<'static, PdfCraftApp>) {
+    for _ in 0..3000 {
+        h.run_steps(2);
+        if !h.state().render_pending() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(2);
+}
+
+/// Reopening a file comes back to where the reader was in the page, not just to the page: the
+/// remembered view keeps the `/XYZ` place at the window's top-left (ISO 32000-2 §12.3.2.2),
+/// the place a bookmark made there would go.
+#[test]
+fn a_file_opened_again_comes_back_to_its_scroll_position() {
+    use egui::Key;
+    use egui::Modifiers;
+    use pdfcraft_render::DestView;
+
+    let path = std::env::temp_dir().join(format!("pdfcraft-last-view-scroll-{}.pdf", std::process::id())).to_string_lossy().into_owned();
+    let p = path.clone();
+    let mut h = harness(move |app| app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens"));
+    // Scroll page 2 so its 250 pt line sits at the window's top; the 200 pt page fits across,
+    // so the horizontal place is the reader's.
+    {
+        let app = h.state_mut();
+        let info = app.session.get(app.views[0].id).unwrap().info.clone();
+        app.views[0].go_to_dest(1, DestView::Xyz { left: None, top: Some(250.0), zoom: None }, &info);
+    }
+    settle_layout(&mut h);
+    // Saved with the tab still open, as quitting does. The place is what the layout snaps to
+    // whole pixels, so within a point of the 250 pt line asked for.
+    let saved = h.state().persist();
+    let remembered: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(remembered["last_views"][0]["page"], 1);
+    let remembered = &remembered["last_views"][0]["xyz"];
+    assert!(remembered[0].is_null(), "left is the reader's, the page fitting across: {remembered}");
+    let remembered_top = remembered[1].as_f64().unwrap_or(f64::NAN);
+    assert!((remembered_top - 250.0).abs() < 1.0, "the place at the window's top-left: {remembered_top} vs 250");
+    let p = path.clone();
+    let mut h = harness(move |app| {
+        app.restore(&saved);
+        app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens");
+    });
+    settle_layout(&mut h);
+    // Where the reader is now, said the way a bookmark would say it (⌘B).
+    h.key_press_modifiers(Modifiers::COMMAND, Key::B);
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let outline = &h.state().session.get(id).unwrap().info.outline;
+    let made = outline.iter().find(|b| b.title == "Untitled").expect("the new bookmark");
+    assert_eq!(made.page, Some(1), "the page at the top of the window");
+    let DestView::Xyz { left, top, zoom } = made.view else { panic!("expected /XYZ, got {:?}", made.view) };
+    assert_eq!(zoom, None, "the reader's zoom is kept");
+    let top = top.expect("top is set");
+    assert!((top - 250.0).abs() < 1.0, "back to the scroll position: {top} vs 250");
+    assert_eq!(left, None, "the horizontal position is the reader's");
+}
+
+/// Settings are untrusted: a scroll position that isn't two numbers is dropped to the page top,
+/// and an entry without one (older settings, or a page-top view) keeps working.
+#[test]
+fn an_unusable_scroll_position_in_settings_is_dropped() {
+    let path = std::env::temp_dir().join("pdfcraft-last-view-bad-xyz.pdf").to_string_lossy().into_owned();
+    let mut app = PdfCraftApp::new();
+    app.restore(&format!(
+        r#"{{"last_views": [
+            {{"path": "{}", "page": 1, "zoom": "50%", "display": "single", "xyz": [null, "high"]}},
+            {{"path": "{}", "page": 1, "zoom": "50%", "display": "single", "xyz": "nope"}},
+            {{"path": "{}", "page": 1, "zoom": "50%", "display": "single", "xyz": [4, 250]}},
+            {{"path": "{}", "page": 1, "zoom": "50%", "display": "single"}}
+        ]}}"#,
+        path.replace('\\', "/"),
+        path.replace('\\', "/"),
+        path.replace('\\', "/"),
+        path.replace('\\', "/")
+    ));
+    assert_eq!(app.last_views.len(), 4, "every entry with a usable path, zoom and display is kept");
+    assert_eq!(app.last_views[0].xyz, [None, None], "a string is not a coordinate");
+    assert_eq!(app.last_views[1].xyz, [None, None], "a non-array is not a position");
+    assert_eq!(app.last_views[2].xyz, [Some(4.0), Some(250.0)]);
+    assert_eq!(app.last_views[3].xyz, [None, None], "older settings have no position");
+}
+
 /// #1767 with full screen: the view remembered while presenting is the one full screen will go
 /// back to, and a file reopened in full screen presents one fitted page, then leaves full
 /// screen for the remembered view.

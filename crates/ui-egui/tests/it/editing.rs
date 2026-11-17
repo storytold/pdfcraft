@@ -902,6 +902,59 @@ fn the_last_session_reopens_its_files_pages_and_active_tab() {
     assert_eq!(app.views[1].current, 3, "at the page it showed");
 }
 
+/// A remembered page that was never applied does not stop the session's navigation: with the
+/// last view off, reopening from the session still comes back to the page it saved.
+#[test]
+fn the_last_session_reopens_at_its_page_when_the_last_view_is_off() {
+    use pdfcraft_ui_egui::last_session::{LastSession, SessionFile};
+    use pdfcraft_ui_egui::last_view::LastView;
+
+    let dir = TempPdfs::new("reopen-last-view-off");
+    let path = dir.file("a.pdf", 5);
+    let p = path.clone();
+    let mut h = session_harness(move |app| {
+        app.restore_last_view = false;
+        app.last_views.push(LastView {
+            path: p.clone(),
+            page: 3,
+            zoom: "fit-width".into(),
+            display: "single".into(),
+            cover: false,
+            xyz: [None, None],
+        });
+        app.last_session = LastSession { files: vec![SessionFile { path: p.clone(), page: 3 }], active: Some(p.clone()) };
+        app.reopen_last_files(&[]);
+    });
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 3, "the session's page, though the last view is off");
+}
+
+/// A remembered page past the end of the document (it has shrunk since) does not stop the
+/// session's navigation either: `go_to_page` clamps it to the document's last page.
+#[test]
+fn the_last_session_clamps_its_page_when_the_last_view_cannot_apply() {
+    use pdfcraft_ui_egui::last_session::{LastSession, SessionFile};
+    use pdfcraft_ui_egui::last_view::LastView;
+
+    let dir = TempPdfs::new("reopen-shrunk");
+    let path = dir.file("a.pdf", 2);
+    let p = path.clone();
+    let mut h = session_harness(move |app| {
+        app.last_views.push(LastView {
+            path: p.clone(),
+            page: 4,
+            zoom: "fit-width".into(),
+            display: "single".into(),
+            cover: false,
+            xyz: [None, None],
+        });
+        app.last_session = LastSession { files: vec![SessionFile { path: p.clone(), page: 4 }], active: Some(p.clone()) };
+        app.reopen_last_files(&[]);
+    });
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 1, "the session's page, clamped to the document's last");
+}
+
 #[test]
 fn quitting_with_unsaved_changes_still_remembers_every_file() {
     let dir = TempPdfs::new("quit");
