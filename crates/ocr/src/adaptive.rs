@@ -16,12 +16,33 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 use crate::OcrError;
 
-/// Maximum allowable chroma difference for dark/ink content (lum < 225).
+/// Maximum allowable chroma difference for dark/ink content (lum < 225) without counting as fringe.
 const CHROMA_TOLERANCE: u8 = 15;
 
-/// Absolute chroma ceiling for bright pixels (lum >= 225): colored highlighters or paper stains
-/// must never be treated as paper background.
+/// Absolute chroma ceiling for bright pixels (lum >= 225) without counting as fringe.
 const BRIGHT_CHROMA_LIMIT: u8 = 30;
+
+/// Any single pixel above this chroma difference is treated as intentional color (red stamp,
+/// blue signature, highlighter) and immediately aborts binarization.
+const VIVID_CHROMA_LIMIT: u8 = 80;
+
+/// Maximum fraction of pixels allowed to carry mild JPEG chroma-subsampling fringe (0.8%).
+const MAX_CHROMA_FRINGE_RATIO: f64 = 0.008;
+
+/// Maximum fraction of midtone pixels (lum 66..=214) from anti-aliased text edges and JPEG ringing (6.0%).
+const MAX_MIDTONE_RATIO: f64 = 0.06;
+
+/// Minimum fraction of dark ink + bright paper pixels (94.0%).
+const MIN_EXTREME_RATIO: f64 = 0.94;
+
+/// Minimum fraction of dark ink pixels (0.5%).
+const MIN_DARK_RATIO: f64 = 0.005;
+
+/// Minimum fraction of bright paper background pixels (50.0%).
+const MIN_BRIGHT_RATIO: f64 = 0.50;
+
+/// Maximum fraction of pixels in `[threshold..215)` that may be bleached to white (2.0%).
+const MAX_CONTENT_LOSS_RATIO: f64 = 0.02;
 
 /// Options for adaptive scan compression.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -101,6 +122,7 @@ pub fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: 
     let mut dark = 0usize;
     let mut bright = 0usize;
     let mut mid = 0usize;
+    let mut chroma_fringe = 0usize;
 
     for row in samples.chunks(row_len).take(h) {
         let row_pixels = row.get(..w.checked_mul(n)?)?;
@@ -113,9 +135,16 @@ pub fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: 
                 let max_c = r.max(g).max(b);
                 let min_c = r.min(g).min(b);
                 let chroma = max_c - min_c;
-                if chroma > BRIGHT_CHROMA_LIMIT || (lum < 225 && chroma > CHROMA_TOLERANCE) {
-                    // Color detail detected! Reject to preserve color appearance.
+                if chroma > VIVID_CHROMA_LIMIT {
+                    // Vivid color detail (stamp, blue ink, photo): immediately reject.
                     return None;
+                }
+                if chroma > BRIGHT_CHROMA_LIMIT || (lum < 225 && chroma > CHROMA_TOLERANCE) {
+                    chroma_fringe += 1;
+                    // Early exit if mild chroma fringe exceeds 0.8% (chroma_fringe / total > 0.008).
+                    if (chroma_fringe as u64).saturating_mul(125) > total as u64 {
+                        return None;
+                    }
                 }
                 lum
             };
@@ -128,8 +157,8 @@ pub fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: 
                 215..=255 => bright += 1,
                 66..=214 => {
                     mid += 1;
-                    // Early exit if midtones exceed 0.5% (mid / total > 0.005)
-                    if (mid as u64).saturating_mul(200) > total as u64 {
+                    // Early exit if midtones exceed 6.0% (mid / total > 0.06)
+                    if (mid as u64).saturating_mul(100) > (total as u64).saturating_mul(6) {
                         return None;
                     }
                 }
@@ -141,12 +170,15 @@ pub fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: 
     let midtone_ratio = mid as f64 / total as f64;
     let dark_ratio = dark as f64 / total as f64;
     let bright_ratio = bright as f64 / total as f64;
+    let chroma_fringe_ratio = chroma_fringe as f64 / total as f64;
 
-    // Scope: Pristine near-bilevel scans.
-    // Must be strictly two-tone (at least 98% in dark ink or paper-bright extremes),
-    // with virtually no midtones (at most 0.5%), containing actual dark text content
-    // (at least 0.5%), and white paper background (at least 50%).
-    if extreme_ratio < 0.98 || midtone_ratio > 0.005 || dark_ratio < 0.005 || bright_ratio < 0.50 {
+    // Scope: Near-bilevel scans (allowing anti-aliased text edges and mild JPEG chroma ringing).
+    if chroma_fringe_ratio > MAX_CHROMA_FRINGE_RATIO
+        || extreme_ratio < MIN_EXTREME_RATIO
+        || midtone_ratio > MAX_MIDTONE_RATIO
+        || dark_ratio < MIN_DARK_RATIO
+        || bright_ratio < MIN_BRIGHT_RATIO
+    {
         return None;
     }
 
@@ -156,7 +188,7 @@ pub fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: 
 
     // Guard against bleaching faint text strokes (lum in [threshold..215)).
     let bleached_ink: u32 = hist.get(usize::from(threshold)..215).map_or(0, |slice| slice.iter().sum());
-    if (bleached_ink as f64 / total as f64) > 0.0005 {
+    if (bleached_ink as f64 / total as f64) > MAX_CONTENT_LOSS_RATIO {
         return None;
     }
 
@@ -421,6 +453,84 @@ mod tests {
     }
 
     #[test]
+    fn chroma_guard_allows_mild_jpeg_fringe_but_rejects_vivid_pixel() {
+        let (w, h) = (100usize, 100usize);
+        // 95% white background, 4.6% black ink, 0.4% mild chroma fringe (chroma=25 <= 80, <= 0.8%) -> passes
+        let mut samples = vec![245u8; w * h * 3];
+        for chunk in samples.as_chunks_mut::<3>().0.iter_mut().take(460) {
+            chunk[0] = 25;
+            chunk[1] = 25;
+            chunk[2] = 25;
+        }
+        for chunk in samples.as_chunks_mut::<3>().0.iter_mut().skip(460).take(40) {
+            chunk[0] = 45;
+            chunk[1] = 20;
+            chunk[2] = 20;
+        }
+        assert!(try_binarize_scan(&samples, w * 3, w, h, 3).is_some());
+
+        // Mild chroma (chroma = 35 <= 80) exceeding 0.8% (1.2%) must also reject.
+        let mut over_fringe = samples.clone();
+        for chunk in over_fringe.as_chunks_mut::<3>().0.iter_mut().skip(460).take(120) {
+            chunk[0] = 55;
+            chunk[1] = 20;
+            chunk[2] = 20;
+        }
+        assert_eq!(try_binarize_scan(&over_fringe, w * 3, w, h, 3), None);
+
+        // Even a single vivid pixel (chroma = 90 > 80) must reject the whole image.
+        samples[0] = 150;
+        samples[1] = 60;
+        samples[2] = 60;
+        assert_eq!(try_binarize_scan(&samples, w * 3, w, h, 3), None);
+    }
+
+    #[test]
+    fn binarizes_anti_aliased_scan_with_mild_jpeg_fringe() {
+        let (w, h) = (100usize, 100usize);
+        let mut samples = vec![245u8; w * h * 3];
+        // 5.0% dark ink
+        for chunk in samples.as_chunks_mut::<3>().0.iter_mut().take(500) {
+            chunk[0] = 25;
+            chunk[1] = 25;
+            chunk[2] = 25;
+        }
+        // 0.4% mild JPEG fringe (chroma = 40 <= 80, <= 0.8%)
+        for chunk in samples.as_chunks_mut::<3>().0.iter_mut().skip(500).take(40) {
+            chunk[0] = 50;
+            chunk[1] = 10;
+            chunk[2] = 10;
+        }
+        // 2.5% dark anti-aliased edge (lum = 90 < T)
+        for chunk in samples.as_chunks_mut::<3>().0.iter_mut().skip(540).take(250) {
+            chunk[0] = 90;
+            chunk[1] = 90;
+            chunk[2] = 90;
+        }
+        // 1.0% light anti-aliased halo (lum = 190 >= T, <= 2.0% content-loss guard)
+        for chunk in samples.as_chunks_mut::<3>().0.iter_mut().skip(790).take(100) {
+            chunk[0] = 190;
+            chunk[1] = 190;
+            chunk[2] = 190;
+        }
+        assert!(try_binarize_scan(&samples, w * 3, w, h, 3).is_some());
+    }
+
+    #[test]
+    fn refuses_gray_graphic_above_midtone_budget() {
+        let (w, h) = (100usize, 100usize);
+        let mut samples = vec![245u8; w * h];
+        for s in samples.iter_mut().take(500) {
+            *s = 25;
+        }
+        // 10% midtone shading (lum = 120) exceeds the 6% midtone budget.
+        for s in samples.iter_mut().skip(500).take(1000) {
+            *s = 120;
+        }
+        assert_eq!(try_binarize_scan(&samples, w, w, h, 1), None);
+    }
+
+    #[test]
     fn content_loss_guard_protects_faint_strokes() {
         let (w, h) = (200usize, 200usize);
         let total = w * h;
@@ -428,8 +538,8 @@ mod tests {
         for s in samples.iter_mut().take(2000) {
             *s = 25;
         }
-        // Add 0.1% faint pencil strokes at lum 190
-        for s in samples.iter_mut().skip(2000).take(40) {
+        // Add 2.5% faint pencil strokes at lum 190 (passes <= 6% midtone guard, triggers > 2% content-loss guard)
+        for s in samples.iter_mut().skip(2000).take(1000) {
             *s = 190;
         }
         assert_eq!(try_binarize_scan(&samples, w, w, h, 1), None);
