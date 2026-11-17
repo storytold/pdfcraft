@@ -91,7 +91,8 @@ pub(crate) fn check(doc: &Document) -> Findings {
     let mut out = Findings::default();
     for (i, &(at, num)) in placed.iter().enumerate() {
         let end = placed.get(i.saturating_add(1)).map_or(data.len(), |&(next, _)| next);
-        // An object with an unsaved edit is written again when the file is saved.
+        // An object with an unsaved edit is written again when the file is saved, so its old
+        // bytes aren't what is judged; the document's copy of it isn't what they hold either.
         if doc.is_edited(num) {
             continue;
         }
@@ -123,9 +124,9 @@ pub(crate) fn check(doc: &Document) -> Findings {
         if !is_eol(data.get(body)) {
             note(&mut out.after_obj);
         }
-        // Where to look for `endobj`: past the stream data when the object is a stream, else past
-        // its value and any comments after it, so `endobj` in a string, name or comment isn't
-        // taken for it.
+        // Where to look for `endobj`: past the stream data and any comments after `endstream`
+        // when the object is a stream, else past its value and any comments after it, so `endobj`
+        // in a string, name or comment isn't taken for it.
         let layout = match &*doc.get(ObjRef::new(num, doc.generation(num))) {
             Object::Stream(s) => stream_layout(doc, data, body, end, s.raw.len()),
             _ => None,
@@ -141,7 +142,7 @@ pub(crate) fn check(doc: &Document) -> Findings {
                 if !layout.eol_before_endstream {
                     note(&mut out.before_endstream);
                 }
-                layout.endstream.saturating_add(b"endstream".len())
+                past_space(data, layout.endstream.saturating_add(b"endstream".len()), end)
             }
             None => past_value(data, body, end).unwrap_or(body),
         };
@@ -173,6 +174,14 @@ fn past_value(data: &[u8], body: usize, end: usize) -> Option<usize> {
     lx.object().ok()?;
     lx.skip_ws();
     Some(lx.pos)
+}
+
+/// Where the white space and comments at `at` end, read no further than `end`.
+fn past_space(data: &[u8], at: usize, end: usize) -> usize {
+    let Some(data) = data.get(..end) else { return at };
+    let mut lx = Lexer::new(data, at);
+    lx.skip_ws();
+    lx.pos
 }
 
 /// How a stream is laid out in the file around its data.
