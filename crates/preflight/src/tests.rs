@@ -2445,6 +2445,25 @@ fn indirect_objects_are_written_as_pdfa_asks_clause_6_1_9() {
     assert_eq!(with_page("\n", stream), Vec::<String>::new());
     let stream_bad = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 22 >>\nstream\n4 0 obj<< >>endobj x\n\nendstream endobj";
     assert_eq!(with_page("\n", stream_bad).len(), 1);
+    // A literal string in the stream dictionary may hold `stream` and an end-of-line marker: the
+    // stream data starts after the real keyword.
+    let stream_note = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Note (stream\n) /Length 18 >>\nstream\nendstream endobj x\nendstream\nendobj";
+    assert_eq!(with_page("\n", stream_note), Vec::<String>::new());
+
+    // `endobj` inside a literal string, a name or a comment isn't the object's `endobj`.
+    assert_eq!(with_page("\n", "3 0 obj\n<< /Type /Page /Parent 2 0 R /T (endobj) >>\nendobj"), Vec::<String>::new());
+    assert_eq!(with_page("\n", "3 0 obj\n<< /Type /Page /Parent 2 0 R /endobj 1 >>\nendobj"), Vec::<String>::new());
+    assert_eq!(with_page("\n", "3 0 obj\n<< /Type /Page /Parent 2 0 R >> %endobj\nendobj"), Vec::<String>::new());
+
+    // A comment in the header is a white-space character of its own (ISO 32000-2 7.2.4), so the
+    // gap holding it isn't a single one; the header's other findings are still made.
+    assert_eq!(
+        with_page("\n", "3 0 %c\nobj<< /Type /Page /Parent 2 0 R >>\nendobj"),
+        [
+            "Object 3 doesn't separate its object number, generation number and obj keyword by single white-space characters",
+            "The obj keyword of object 3 isn't followed by an end-of-line marker"
+        ]
+    );
 
     // Each problem is named once, with the first object that has it.
     let twice = syntax(&[
