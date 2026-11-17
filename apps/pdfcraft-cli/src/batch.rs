@@ -73,17 +73,17 @@ pub(super) fn run(args: &[String]) -> Result<(), CliError> {
                 pdfcraft_automation::Content::Json(v) => v["files"].as_array().map(|files| {
                     files
                         .iter()
-                        .filter_map(|f| {
+                        .map(|f| {
                             let mut names = Vec::new();
                             if let Some(p) = f.get("path").and_then(|v| v.as_str()) {
                                 names.push(PathBuf::from(p));
                             }
-                            if f.get("status").and_then(|v| v.as_str()) == Some("ok") {
-                                if let Some(p) = f.get("output").and_then(|v| v.as_str()) {
-                                    names.push(PathBuf::from(p));
-                                }
+                            if f.get("status").and_then(|v| v.as_str()) == Some("ok")
+                                && let Some(p) = f.get("output").and_then(|v| v.as_str())
+                            {
+                                names.push(PathBuf::from(p));
                             }
-                            Some(names)
+                            names
                         })
                         .flatten()
                 }),
