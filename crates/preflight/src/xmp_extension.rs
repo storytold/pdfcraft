@@ -85,11 +85,16 @@ pub(crate) struct Undescribed {
     pub(crate) value_type: String,
 }
 
-/// A value type a packet describes: its namespace and the names of its fields.
+/// A value type a packet describes: its namespace and its fields, each by its name and, when the
+/// description gives it, its value type.
 struct Described {
     namespace: Option<String>,
-    fields: Vec<String>,
+    fields: Vec<(String, Option<String>)>,
 }
+
+/// How many structure values deep, each a field of the one before, [`Findings::undescribed_in`]
+/// checks fields against the value types the packet describes.
+const MAX_NESTED: usize = 8;
 
 /// A description without an entry it needs, or with the entry empty.
 #[derive(Debug, PartialEq, Eq)]
@@ -185,7 +190,9 @@ impl Findings {
                     {
                         let fields = entries(value_type, &vtscope, TYPE, "field")
                             .flat_map(|(e, es)| items(e, &es))
-                            .filter_map(|(field, fscope)| raw_value(field, &fscope, FIELD, "name"))
+                            .filter_map(|(field, fscope)| {
+                                Some((raw_value(field, &fscope, FIELD, "name")?, raw_value(field, &fscope, FIELD, "valueType")))
+                            })
                             .take(MAX_DESCRIBED)
                             .collect();
                         let namespace = raw_value(value_type, &vtscope, TYPE, "namespaceURI");
@@ -244,27 +251,47 @@ impl Findings {
             let Some((_, _, ty)) = properties.iter().find(|(n, name, _)| n == ns && name == property.local()) else { continue };
             let (array, item_type) = array_item(ty);
             let Some((ty_name, described)) = types.iter().find(|(name, _)| name == item_type) else { continue };
-            let holders = if array {
-                // A qualified array's items are in its `rdf:value`.
-                let (value, vscope) = qualified_value(property, &pscope);
-                items(value, &vscope)
-            } else {
-                vec![(property, pscope.clone())]
-            };
-            for (value, vscope) in holders {
-                for (written, field_ns, local) in fields(value, &vscope) {
-                    // A type the XMP Specification defines keeps its fields, whatever a packet's
-                    // description of it lists (TechNote 0009, 4.5: the list is optional).
-                    let known = (described.namespace.as_deref() == field_ns && described.fields.iter().any(|f| f == local))
-                        || crate::xmp_types::predefined_field(ty_name, field_ns, local) == Some(true);
-                    if known || !self.room() {
-                        continue;
-                    }
-                    let found = Undescribed { object, property: shown(&property.name), field: shown(written), value_type: shown(ty_name) };
-                    if !self.undescribed.contains(&found) {
-                        self.undescribed.push(found);
-                    }
+            for (value, vscope) in holders(property, &pscope, array) {
+                self.undescribed_fields(object, property, value, &vscope, (ty_name, described), types, 0);
+            }
+        }
+    }
+
+    /// Notes the fields of `value`, a structure value of `property`, that its value type `ty`
+    /// doesn't describe, and of each field's value whose type the packet describes in turn, up to
+    /// [`MAX_NESTED`] values deep.
+    #[allow(clippy::too_many_arguments)]
+    fn undescribed_fields(
+        &mut self,
+        object: ObjRef,
+        property: &El,
+        value: &El,
+        vscope: &NsScope<'_>,
+        ty: (&str, &Described),
+        types: &[(String, Described)],
+        depth: usize,
+    ) {
+        let (ty_name, described) = ty;
+        for field in fields(value, vscope) {
+            let own = (described.namespace.as_deref() == field.ns).then(|| described.fields.iter().find(|(f, _)| f == field.local)).flatten();
+            // A type the XMP Specification defines keeps its fields, whatever a packet's
+            // description of it lists (TechNote 0009, 4.5: the list is optional).
+            if own.is_none() && crate::xmp_types::predefined_field(ty_name, field.ns, field.local) != Some(true) {
+                let found = Undescribed { object, property: shown(&property.name), field: shown(field.written), value_type: shown(ty_name) };
+                if self.room() && !self.undescribed.contains(&found) {
+                    self.undescribed.push(found);
                 }
+                continue;
+            }
+            // A field whose value type the packet describes: its value's fields are that type's.
+            let (Some((_, Some(field_type))), Some((element, escope))) = (own, field.element) else { continue };
+            let (array, item_type) = array_item(field_type);
+            let Some((nested_name, nested)) = types.iter().find(|(name, _)| name == item_type) else { continue };
+            if depth >= MAX_NESTED {
+                continue;
+            }
+            for (value, vscope) in holders(element, &escope, array) {
+                self.undescribed_fields(object, property, value, &vscope, (nested_name, nested), types, depth.saturating_add(1));
             }
         }
     }
@@ -381,7 +408,7 @@ fn array_item(ty: &str) -> (bool, &str) {
 /// of an empty element, other than RDF and XML syntax (ISO 16684-1 7.9.2.5). A value that isn't a
 /// structure has none. A qualified value's fields are those of its `rdf:value` (7.9.2.5, the
 /// qualifiers beside it are no fields), read up to [`MAX_QUALIFIED`] values deep.
-fn fields<'a>(value: &'a El, scope: &NsScope<'a>) -> Vec<(&'a str, Option<&'a str>, &'a str)> {
+fn fields<'a>(value: &'a El, scope: &NsScope<'a>) -> Vec<Field<'a>> {
     let (mut value, mut scope) = (value, scope.clone());
     for _ in 0..MAX_QUALIFIED {
         match structure_fields(value, &scope) {
@@ -395,10 +422,20 @@ fn fields<'a>(value: &'a El, scope: &NsScope<'a>) -> Vec<(&'a str, Option<&'a st
 /// How many `rdf:value` elements deep [`fields`] reads a qualified value.
 const MAX_QUALIFIED: usize = 8;
 
+/// A field of a structure value, as [`fields`] reads it.
+struct Field<'a> {
+    /// Its name as the packet writes it.
+    written: &'a str,
+    ns: Option<&'a str>,
+    local: &'a str,
+    /// The element that holds its value, when it is written as one rather than as an attribute.
+    element: Option<(&'a El, NsScope<'a>)>,
+}
+
 /// What [`structure_fields`] finds in a value.
 enum Fields<'a> {
     /// Its fields.
-    Of(Vec<(&'a str, Option<&'a str>, &'a str)>),
+    Of(Vec<Field<'a>>),
     /// It is qualified: its value is this `rdf:value` element.
     Qualified(&'a El, NsScope<'a>),
 }
@@ -428,13 +465,26 @@ fn structure_fields<'a>(value: &'a El, scope: &NsScope<'a>) -> Fields<'a> {
     }
     let attributes = holder.attrs.iter().filter(|(k, _)| k != "xmlns" && !k.starts_with("xmlns:")).filter_map(|(k, _)| {
         let ns = hscope.attr_ns(k);
-        (!syntax(ns)).then(|| (k.as_str(), ns, k.split_once(':').map_or(k.as_str(), |(_, l)| l)))
+        (!syntax(ns)).then(|| Field { written: k.as_str(), ns, local: k.split_once(':').map_or(k.as_str(), |(_, l)| l), element: None })
     });
     let elements = holder.elements().filter_map(|c| {
-        let ns = hscope.child(c).el_ns(c);
-        (!syntax(ns)).then(|| (c.name.as_str(), ns, c.local()))
+        let cscope = hscope.child(c);
+        let ns = cscope.el_ns(c);
+        (!syntax(ns)).then(|| Field { written: c.name.as_str(), ns, local: c.local(), element: Some((c, cscope)) })
     });
     Fields::Of(attributes.chain(elements).collect())
+}
+
+/// The structure values `e`, of a property or field, holds: the items of its array, in its
+/// `rdf:value` when it is qualified, or `e` itself.
+fn holders<'a>(e: &'a El, scope: &NsScope<'a>, array: bool) -> Vec<(&'a El, NsScope<'a>)> {
+    if array {
+        // A qualified array's items are in its `rdf:value`.
+        let (value, vscope) = qualified_value(e, scope);
+        items(value, &vscope)
+    } else {
+        vec![(e, scope.clone())]
+    }
 }
 
 /// The `rdf:value` of the qualified property `e` (ISO 16684-1 7.9.2.5), written in it with

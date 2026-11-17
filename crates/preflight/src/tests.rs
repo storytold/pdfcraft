@@ -1551,6 +1551,36 @@ fn xmp_extension_value_types_describe_the_fields_of_values_clause_6_6_2_3_1() {
     assert!(!issues[0].fixable);
 }
 
+/// PDF/A-2 6.6.2.3.1: the value of a field whose value type the packet describes has only the
+/// fields that type describes, however deep.
+#[test]
+fn xmp_extension_field_values_have_their_types_fields_clause_6_6_2_3_1() {
+    let undescribed = |found: xmp_extension::Findings| -> Vec<(String, String, String)> {
+        assert!(found.missing.is_empty(), "{:?}", found.missing);
+        found.undescribed.into_iter().map(|u| (u.property, u.field, u.value_type)).collect()
+    };
+    // C's child is a D, and D describes only ok, also for the items of an array of D, and a D
+    // inside a D.
+    let typed = |name: &str, fields: &[(&str, &str)]| {
+        let fields: String = fields
+            .iter()
+            .map(|(f, t)| format!(r#"<rdf:li rdf:parseType="Resource"><pdfaField:name>{f}</pdfaField:name><pdfaField:valueType>{t}</pdfaField:valueType><pdfaField:description>d</pdfaField:description></rdf:li>"#))
+            .collect();
+        format!(
+            r#"<rdf:li rdf:parseType="Resource"><pdfaType:type>{name}</pdfaType:type><pdfaType:namespaceURI>http://c.example/</pdfaType:namespaceURI><pdfaType:prefix>c</pdfaType:prefix><pdfaType:description>d</pdfaType:description><pdfaType:field><rdf:Seq>{fields}</rdf:Seq></pdfaType:field></rdf:li>"#
+        )
+    };
+    let nested = |child_type: &str| format!("{}{}", typed("C", &[("child", child_type)]), typed("D", &[("ok", "Text"), ("inner", "D")]));
+    let d = |field: &str| vec![("t:p".to_owned(), field.to_owned(), "D".to_owned())];
+    let child = r#"<t:p rdf:parseType="Resource"><c:child rdf:parseType="Resource"><c:ok>v</c:ok><c:bad>v</c:bad></c:child></t:p>"#;
+    assert_eq!(undescribed(described_values("C", &nested("D"), child)), d("c:bad"));
+    assert_eq!(undescribed(described_values("C", &nested("Text"), child)), []);
+    let children = r#"<t:p rdf:parseType="Resource"><c:child><rdf:Bag><rdf:li c:ok="v"/><rdf:li c:bad="v"/></rdf:Bag></c:child></t:p>"#;
+    assert_eq!(undescribed(described_values("C", &nested("bag D"), children)), d("c:bad"));
+    let deeper = r#"<t:p rdf:parseType="Resource"><c:child rdf:parseType="Resource"><c:inner rdf:parseType="Resource"><c:bad>v</c:bad></c:inner></c:child></t:p>"#;
+    assert_eq!(undescribed(described_values("C", &nested("D"), deeper)), d("c:bad"));
+}
+
 /// PDF/A-2 6.6.2.3.3: an entry that names something is incomplete when it is empty, while the
 /// human-readable descriptions may be empty (TechNote 0009, 4.3 to 4.6).
 #[test]
