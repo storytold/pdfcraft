@@ -300,7 +300,8 @@ fn local_selection(view: &DocView, info: &DocInfo, form: &[FormField], epoch: u6
             field: None,
         });
     }
-    let (page, quads) = view.selection_quads(info)?;
+    // A selection across pages carries its first page (presence shows one range).
+    let (page, quads) = view.selection_quads(info).into_iter().next()?;
     let page_ref = PageRef { index: u32::try_from(page).ok()?, epoch };
     Some(text_selection(quads, page_ref, view.selection_caret(info).filter(|(caret_page, _)| *caret_page == page).map(|(_, point)| point)))
 }
@@ -591,7 +592,7 @@ impl CollabUi {
                     epoch: 0,
                     participants: BTreeMap::new(),
                     color: "#3366cc".into(),
-                    status: "Connecting…".into(),
+                    status: tl!("Connecting…").into(),
                     error: None,
                     history: Vec::new(),
                     redo: Vec::new(),
@@ -862,8 +863,8 @@ impl PdfCraftApp {
     /// The cabinet committed the session: it owns the stored document now.
     pub fn collab_committed(&mut self, version: u64, etag: &str) {
         if let Some(collab) = self.collab.as_mut() {
-            collab.committed = Some(format!("version {version} · {etag}"));
-            collab.status = format!("Committed version {version}");
+            collab.committed = Some(crate::i18n::fmt(tl!("version {version} · {etag}"), &[("version", &version.to_string()), ("etag", etag)]));
+            collab.status = crate::i18n::fmt(tl!("Committed version {version}"), &[("version", &version.to_string())]);
         }
     }
 
@@ -873,7 +874,7 @@ impl PdfCraftApp {
         if let Some(hook) = self.host_commit.as_mut() {
             hook();
             if let Some(collab) = self.collab.as_mut() {
-                collab.status = "Commit requested from the cabinet".into();
+                collab.status = tl!("Commit requested from the cabinet").into();
             }
             return;
         }
@@ -969,7 +970,10 @@ impl PdfCraftApp {
                 collab.version = welcome.version;
                 collab.epoch = welcome.epoch;
                 collab.color = color_of(welcome.actor_id.as_str());
-                collab.status = format!("Connected as {} · {}", welcome.actor_id.as_str(), role_name(welcome.role));
+                collab.status = crate::i18n::fmt(
+                    tl!("Connected as {actor} · {role}"),
+                    &[("actor", welcome.actor_id.as_str()), ("role", role_text(welcome.role))],
+                );
                 collab.error = None;
             }
             Event::Applied { applied, own } => {
@@ -987,7 +991,9 @@ impl PdfCraftApp {
                         let keeps = keeps_page_addresses(&applied.op);
                         refresh_view(&mut self.views, &self.session, doc, index, keeps);
                     }
-                    Err(e) => collab.error = Some(format!("A shared change could not be applied: {e}")),
+                    Err(e) => {
+                        collab.error = Some(crate::i18n::fmt(tl!("A shared change could not be applied: {error}"), &[("error", &e.to_string())]))
+                    }
                 }
                 // A split the user asked for takes a part out of the room: keep
                 // the pages by opening the part as a document of its own, in the
@@ -1003,9 +1009,9 @@ impl PdfCraftApp {
                 match collab.combine_advance(&applied) {
                     CombineAdvance::Send(op) => {
                         if collab.sink.enqueue(op) {
-                            collab.status = "Joining the parts…".into();
+                            collab.status = tl!("Joining the parts…").into();
                         } else {
-                            collab.error = Some("The collaboration session is closed".into());
+                            collab.error = Some(tl!("The collaboration session is closed").into());
                             collab.combine = None;
                         }
                     }
@@ -1015,7 +1021,7 @@ impl PdfCraftApp {
                 if let Some(op) = collab.sequence_advance(&applied)
                     && !collab.sink.enqueue(op)
                 {
-                    collab.error = Some("The collaboration session is closed".into());
+                    collab.error = Some(tl!("The collaboration session is closed").into());
                     collab.sequence = None;
                 }
                 ctx.request_repaint();
@@ -1038,7 +1044,7 @@ impl PdfCraftApp {
                     if collab.combine_is_rolling_back() {
                         // A split taking the confirmation back was refused too:
                         // leave the room as it is and say so.
-                        collab.error = Some("The combine could not be fully taken back; check the pages".into());
+                        collab.error = Some(tl!("The combine could not be fully taken back; check the pages").into());
                         collab.combine = None;
                     } else {
                         let why = format!("{}: {} The combine was taken back; try again.", code_name(rejected.code), rejected.message);
@@ -1050,10 +1056,12 @@ impl PdfCraftApp {
                     // cannot follow, so the sequence stops here.
                     collab.sequence = None;
                     if rejected.code != ErrorCode::Lease {
-                        collab.error = Some(format!("{}: {}", code_name(rejected.code), rejected.message));
+                        collab.error =
+                            Some(crate::i18n::fmt(tl!("{code}: {message}"), &[("code", code_name(rejected.code)), ("message", &rejected.message)]));
                     }
                 } else if rejected.code != ErrorCode::Lease {
-                    collab.error = Some(format!("{}: {}", code_name(rejected.code), rejected.message));
+                    collab.error =
+                        Some(crate::i18n::fmt(tl!("{code}: {message}"), &[("code", code_name(rejected.code)), ("message", &rejected.message)]));
                 }
             }
             Event::Snapshot { version, epoch, base, tail } => {
@@ -1062,7 +1070,7 @@ impl PdfCraftApp {
                 collab.history.clear();
                 collab.redo.clear();
                 if base.is_some() {
-                    collab.error = Some("The server compacted the journal; reopen the document to catch up.".into());
+                    collab.error = Some(tl!("The server compacted the journal; reopen the document to catch up.").into());
                 } else {
                     // A tail that only turns pages or merges touches no page list; a
                     // structural page operation in it may move or remove pages, so the
@@ -1070,7 +1078,8 @@ impl PdfCraftApp {
                     let keeps = tail.iter().all(keeps_page_addresses);
                     for op in tail {
                         if let Err(e) = apply(&mut self.session, doc, &op) {
-                            collab.error = Some(format!("A snapshot operation could not be applied: {e}"));
+                            collab.error =
+                                Some(crate::i18n::fmt(tl!("A snapshot operation could not be applied: {error}"), &[("error", &e.to_string())]));
                             break;
                         }
                     }
@@ -1093,42 +1102,43 @@ impl PdfCraftApp {
                 }
             }
             Event::Committed(result) => {
-                collab.committed = Some(format!("{} · {} bytes", result.sha256, result.bytes));
-                collab.status = format!("Committed version {version}", version = result.version);
+                collab.committed =
+                    Some(crate::i18n::fmt(tl!("{sha256} · {bytes} bytes"), &[("sha256", &result.sha256), ("bytes", &result.bytes.to_string())]));
+                collab.status = crate::i18n::fmt(tl!("Committed version {version}"), &[("version", &result.version.to_string())]);
             }
             Event::Disconnected => {
                 // The room's presence is gone with the socket: keeping what the old
                 // connection learned would draw a cursor or a selection the author may
                 // no longer have (and a reconnect would show it until the TTL).
                 collab.participants.clear();
-                collab.status = "Reconnecting…".into();
+                collab.status = tl!("Reconnecting…").into();
                 collab.connected = false;
             }
-            Event::Gap => collab.status = "Catching up…".into(),
+            Event::Gap => collab.status = tl!("Catching up…").into(),
             Event::Retry { op_id } => {
-                collab.status = "Catching up…".into();
+                collab.status = tl!("Catching up…").into();
                 if collab.combine_has(&op_id) {
                     if collab.combine_is_rolling_back() {
                         // A split taking the confirmation back went stale too:
                         // stop here and say what is left.
                         collab.combine = None;
-                        collab.error = Some("The combine could not be fully taken back; check the pages".into());
+                        collab.error = Some(tl!("The combine could not be fully taken back; check the pages").into());
                     } else {
                         // A structural operation cannot be re-addressed blindly:
                         // the page set may have moved. Take the parts that joined
                         // out again, after the snapshot the retry asked for, so
                         // the confirmation is all or nothing.
-                        collab.combine_mark_rollback("The document changed; the combine was taken back. Try again.".into(), true);
+                        collab.combine_mark_rollback(tl!("The document changed; the combine was taken back. Try again.").into(), true);
                     }
                 } else if collab.sequence_has(&op_id) {
                     // A structural step of an undo/redo cannot be re-addressed
                     // blindly: stop the sequence and say so.
                     collab.sequence = None;
-                    collab.error = Some("The document changed; the undo did not finish. Try again.".into());
+                    collab.error = Some(tl!("The document changed; the undo did not finish. Try again.").into());
                 }
             }
             Event::Error(error) => {
-                collab.error = Some(format!("{}: {}", code_name(error.code), error.message));
+                collab.error = Some(crate::i18n::fmt(tl!("{code}: {message}"), &[("code", code_name(error.code)), ("message", &error.message)]));
                 if error.code == ErrorCode::Auth {
                     collab.connected = false;
                     self.collab_off = true;
@@ -1166,7 +1176,7 @@ impl PdfCraftApp {
             match split_pages_op(document, part.at, part.count, collab.doc_key.clone(), &collab.client_id, collab.version, collab.epoch, &mut counter)
             {
                 Ok(op) => ops.push(op),
-                Err(e) => collab.error = Some(format!("The combine could not be taken back: {e}")),
+                Err(e) => collab.error = Some(crate::i18n::fmt(tl!("The combine could not be taken back: {error}"), &[("error", &e.to_string())])),
             }
         }
         collab.counter = counter;
@@ -1181,12 +1191,12 @@ impl PdfCraftApp {
         }
         let failed = first.is_some() && !sent;
         if failed {
-            collab.error = Some("The collaboration session is closed".into());
+            collab.error = Some(tl!("The collaboration session is closed").into());
         }
         if first.is_none() || failed {
             collab.combine = None;
         } else {
-            collab.status = "Taking the combine back…".into();
+            collab.status = tl!("Taking the combine back…").into();
         }
     }
 
@@ -1260,11 +1270,11 @@ impl PdfCraftApp {
             return None;
         }
         if !collab.connected {
-            collab.error = Some("Waiting for the collaboration session".into());
+            collab.error = Some(tl!("Waiting for the collaboration session").into());
             return Some(false);
         }
         if !collab.role.can_write() {
-            collab.error = Some("This role cannot change the document".into());
+            collab.error = Some(tl!("This role cannot change the document").into());
             return Some(false);
         }
         let structural = matches!(
@@ -1309,7 +1319,7 @@ impl PdfCraftApp {
                 | Edit::SetPagesLinks { .. }
         );
         if structural && !collab.role.can_structural() {
-            collab.error = Some("This role cannot change pages".into());
+            collab.error = Some(tl!("This role cannot change pages").into());
             return Some(false);
         }
         let Some(document) = self.session.get(doc) else { return Some(false) };
@@ -1330,14 +1340,14 @@ impl PdfCraftApp {
         let Some(document) = self.session.get(doc) else { return Some(false) };
         for op in &ops {
             let Some(id) = collab.next_op_id() else {
-                collab.error = Some("Could not allocate an operation id".into());
+                collab.error = Some(tl!("Could not allocate an operation id").into());
                 return Some(false);
             };
             inverses.push(inverse_for(document, op, id).ok().flatten());
         }
         for op in &ops {
             if !collab.sink.enqueue(op.clone()) {
-                collab.error = Some("The collaboration session is closed".into());
+                collab.error = Some(tl!("The collaboration session is closed").into());
                 return Some(false);
             }
         }
@@ -1381,15 +1391,15 @@ impl PdfCraftApp {
             return None;
         }
         if !collab.connected {
-            collab.error = Some("Waiting for the collaboration session".into());
+            collab.error = Some(tl!("Waiting for the collaboration session").into());
             return Some(false);
         }
         if !collab.role.can_structural() {
-            collab.error = Some("This role cannot change pages".into());
+            collab.error = Some(tl!("This role cannot change pages").into());
             return Some(false);
         }
         if collab.combine.is_some() {
-            collab.error = Some("The previous combine is still joining its parts".into());
+            collab.error = Some(tl!("The previous combine is still joining its parts").into());
             return Some(false);
         }
         let document = self.session.get(doc)?;
@@ -1410,7 +1420,7 @@ impl PdfCraftApp {
         let mut inverses = Vec::with_capacity(ops.len());
         for op in &ops {
             let Some(id) = collab.next_op_id() else {
-                collab.error = Some("Could not allocate an operation id".into());
+                collab.error = Some(tl!("Could not allocate an operation id").into());
                 return Some(false);
             };
             inverses.push(self.session.get(doc).and_then(|document| inverse_for(document, op, id).ok().flatten()));
@@ -1418,7 +1428,7 @@ impl PdfCraftApp {
         let mut queue: std::collections::VecDeque<Op> = ops.iter().cloned().collect();
         let Some(first) = queue.pop_front() else { return Some(false) };
         if !collab.sink.enqueue(first.clone()) {
-            collab.error = Some("The collaboration session is closed".into());
+            collab.error = Some(tl!("The collaboration session is closed").into());
             return Some(false);
         }
         let group_op = first.op_id.clone();
@@ -1452,11 +1462,11 @@ impl PdfCraftApp {
             return None;
         }
         if !collab.connected {
-            collab.error = Some("Waiting for the collaboration session".into());
+            collab.error = Some(tl!("Waiting for the collaboration session").into());
             return Some(false);
         }
         if !collab.role.can_structural() {
-            collab.error = Some("This role cannot change pages".into());
+            collab.error = Some(tl!("This role cannot change pages").into());
             return Some(false);
         }
         let document = self.session.get(doc)?;
@@ -1475,7 +1485,7 @@ impl PdfCraftApp {
         };
         let inverse = self.session.get(doc).and_then(|document| collab.next_op_id().and_then(|id| inverse_for(document, &op, id).ok().flatten()));
         if !collab.sink.enqueue(op.clone()) {
-            collab.error = Some("The collaboration session is closed".into());
+            collab.error = Some(tl!("The collaboration session is closed").into());
             return Some(false);
         }
         collab.history.push(HistoryGroup { label: label.to_string(), originals: vec![op], inverses: vec![inverse], forward: Vec::new() });
@@ -1498,7 +1508,7 @@ impl PdfCraftApp {
         // undo) changes the head under the next one, so nothing else may take
         // the history until it has answered.
         if collab.combine.is_some() || collab.sequence.is_some() {
-            collab.status = "Wait for the previous change to finish".into();
+            collab.status = tl!("Wait for the previous change to finish").into();
             return true;
         }
         let group = if undo { collab.history.pop() } else { collab.redo.pop() };
@@ -1512,7 +1522,7 @@ impl PdfCraftApp {
             // parts before it are still the ones they joined at.
             let available: Vec<Op> = group.inverses.iter().flatten().rev().cloned().collect();
             if available.is_empty() {
-                collab.status = format!("{} cannot be undone", group.label);
+                collab.status = crate::i18n::fmt(tl!("{label} cannot be undone"), &[("label", &group.label)]);
                 collab.history.push(group);
                 return true;
             }
@@ -1540,7 +1550,7 @@ impl PdfCraftApp {
         let Some(mut first) = queue.pop_front() else { return true };
         readdress(&mut first, collab.version, collab.epoch);
         if !collab.sink.enqueue(first.clone()) {
-            collab.error = Some("The collaboration session is closed".into());
+            collab.error = Some(tl!("The collaboration session is closed").into());
             if undo {
                 collab.history.push(group);
             } else {
@@ -1567,30 +1577,33 @@ impl PdfCraftApp {
     pub(crate) fn show_collab(&mut self, ctx: &egui::Context) {
         let Some(collab) = self.collab.as_mut() else { return };
         let mut commit = false;
-        egui::Window::new("Collaboration").resizable(false).collapsible(true).anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0]).show(ctx, |ui| {
-            ui.label(format!("{} · v{} · epoch {}", role_name(collab.role), collab.version, collab.epoch));
+        egui::Window::new(tl!("Collaboration")).resizable(false).collapsible(true).anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0]).show(ctx, |ui| {
+            ui.label(crate::i18n::fmt(
+                tl!("{role} · v{version} · epoch {epoch}"),
+                &[("role", role_text(collab.role)), ("version", &collab.version.to_string()), ("epoch", &collab.epoch.to_string())],
+            ));
             ui.label(&collab.status);
             if let Some(error) = &collab.error {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
             ui.separator();
-            ui.label("Participants");
+            ui.label(tl!("Participants"));
             if collab.participants.is_empty() {
-                ui.weak("Only you");
+                ui.weak(tl!("Only you"));
             }
             let now = Instant::now();
             for (actor, seen) in &collab.participants {
                 let active = now.duration_since(seen.at) < PRESENCE_TTL;
                 let where_ = if seen.presence.page.epoch == collab.epoch {
-                    format!("page {}", seen.presence.page.index + 1)
+                    crate::i18n::fmt(tl!("page {n}"), &[("n", &(seen.presence.page.index + 1).to_string())])
                 } else {
-                    "another page set".to_owned()
+                    tl!("another page set").to_owned()
                 };
-                let state = if active { "" } else { " · inactive" };
-                ui.label(format!("{actor} · {} · {where_}{state}", role_name(seen.presence.role)));
+                let state = if active { String::new() } else { format!(" · {}", tl!("inactive")) };
+                ui.label(format!("{actor} · {} · {where_}{state}", role_text(seen.presence.role)));
             }
             ui.separator();
-            if collab.role.can_structural() && ui.button("Commit to the cabinet").clicked() {
+            if collab.role.can_structural() && ui.button(tl!("Commit to the cabinet")).clicked() {
                 commit = true;
             }
             if let Some(result) = &collab.committed {
@@ -1638,18 +1651,29 @@ fn role_name(role: Role) -> &'static str {
     }
 }
 
+/// The role as the window and a status line show it: a translated label, while
+/// [`role_name`] stays the wire word the protocol and the host page carry.
+fn role_text(role: Role) -> &'static str {
+    match role {
+        Role::Owner => tl!("Owner"),
+        Role::Editor => tl!("Editor"),
+        Role::Commenter => tl!("Commenter"),
+        Role::Viewer => tl!("Viewer"),
+    }
+}
+
 fn code_name(code: ErrorCode) -> &'static str {
     match code {
-        ErrorCode::Auth => "Not authorised",
-        ErrorCode::Lease => "Another editor is changing pages",
-        ErrorCode::Stale => "Out of date",
-        ErrorCode::Conflict => "Conflict",
-        ErrorCode::Forbidden => "Not allowed",
-        ErrorCode::Invalid => "Invalid request",
-        ErrorCode::Limit => "Limit reached",
-        ErrorCode::Unsupported => "Not shared yet",
-        ErrorCode::Busy => "A save is in progress; try again",
-        ErrorCode::Internal => "Server error",
+        ErrorCode::Auth => tl!("Not authorised"),
+        ErrorCode::Lease => tl!("Another editor is changing pages"),
+        ErrorCode::Stale => tl!("Out of date"),
+        ErrorCode::Conflict => tl!("Conflict"),
+        ErrorCode::Forbidden => tl!("Not allowed"),
+        ErrorCode::Invalid => tl!("Invalid request"),
+        ErrorCode::Limit => tl!("Limit reached"),
+        ErrorCode::Unsupported => tl!("Not shared yet"),
+        ErrorCode::Busy => tl!("A save is in progress; try again"),
+        ErrorCode::Internal => tl!("Server error"),
     }
 }
 
@@ -2075,6 +2099,7 @@ mod tests {
             tooltip: None,
             widgets: vec![pdfcraft_engine::FormWidget {
                 mouse_up_script: None,
+                mouse_down: false,
                 obj: pdfcraft_cos::ObjRef::new(4, 0),
                 page: Some(0),
                 rect: [72.0, 640.0, 300.0, 660.0],

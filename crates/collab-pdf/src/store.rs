@@ -216,9 +216,14 @@ impl Store {
         let mut file = OpenOptions::new().create(true).append(true).open(&path).map_err(|e| io_error(&path, "open", e))?;
         file.write_all(&line).map_err(|e| io_error(&path, "append", e))?;
         file.sync_data().map_err(|e| io_error(&path, "sync", e))?;
+        // Windows cannot open a directory as a file to sync it (os error 5); NTFS
+        // journals the directory entry itself, so the sync is a Unix matter.
+        #[cfg(unix)]
         if created {
             File::open(&self.dir).and_then(|dir| dir.sync_all()).map_err(|e| io_error(&self.dir, "sync", e))?;
         }
+        #[cfg(not(unix))]
+        let _ = created;
         Ok(())
     }
 
