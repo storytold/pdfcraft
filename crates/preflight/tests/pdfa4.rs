@@ -756,6 +756,11 @@ fn embedded_files_follow_the_level() {
     reports(&file(None, good, pdf(&failing2b), listed), Level::A4, "6.9", "declares PDF/A-2b but doesn't conform to it");
     let failing4 = bytes(&File { after: b"junk", ..File::default() });
     reports(&file(None, good, pdf(&failing4), listed), Level::A4, "6.9", "declares PDF/A-4 but doesn't conform to it");
+    // A part and letter that name no level aren't a PDF/A declaration.
+    for (part, conformance) in [("4", Some("B")), ("2", Some("Z")), ("1", Some("U"))] {
+        let wrong = bytes(&File { header: "%PDF-1.7", packet: packet(part, None, conformance), ..File::default() });
+        reports(&file(None, good, pdf(&wrong), listed), Level::A4, "6.9", "must be PDF/A-1, PDF/A-2 or PDF/A-4 files");
+    }
     for (part, conformance) in [("1", Some("B")), ("2", Some("U"))] {
         let declared = bytes(&File { header: "%PDF-1.7", packet: packet(part, None, conformance), content: red, ..File::default() });
         passes(&file(None, good, pdf(&declared), listed), Level::A4);
@@ -793,8 +798,13 @@ fn component_metadata_streams_are_well_formed_utf8_packets() {
     let cut = cut.get(..cut.len() / 2).unwrap();
     reports(&filtered("/FlateDecode", cut), Level::A4, "6.7.2.1", "Metadata stream 6 0 R's data is damaged");
     reports(&filtered("/JBIG2Decode", b"x"), Level::A4, "6.7.2.1", "Metadata stream 6 0 R can't be decoded");
+    // A packet past the 8 MiB PdfCraft parses isn't read, well-formed or not, and isn't reported:
+    // the file is judged by what can be read.
     let huge = [good.as_slice(), vec![b' '; 9 << 20].as_slice()].concat();
     let found = issues(&filtered("/FlateDecode", &flated(&huge)), Level::A4);
+    assert!(!found.iter().any(|i| i.message.contains("6 0 R")), "{found:#?}");
+    let malformed = [b"<x:xmpmeta".as_slice(), vec![b' '; 9 << 20].as_slice()].concat();
+    let found = issues(&filtered("/FlateDecode", &flated(&malformed)), Level::A4);
     assert!(!found.iter().any(|i| i.message.contains("6 0 R")), "{found:#?}");
     // The catalog's too.
     let mut objects = vec![
@@ -980,4 +990,56 @@ mod never_panics {
             }
         }
     }
+}
+
+/// Forms and patterns reached through an alias, or named `/P` in a resource name map of their own,
+/// are drawn on the page that draws them, and are judged against that page's output intent.
+#[test]
+fn forms_reached_through_an_alias_or_named_p_are_judged_on_their_page() {
+    let rgb = "1 0 0 rg 0 0 10 10 re f";
+    let intent =
+        |n: u8| format!("/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (x) /DestOutputProfile {n} 0 R >>]");
+    // An RGB-intent page drawing `content` with `resources`, a CMYK-intent page drawing nothing, then
+    // the sRGB profile (8), a CMYK one (9), and `more` from object 10.
+    let two = |resources: &str, content: &str, more: Vec<Vec<u8>>| {
+        let page = |entries: &str, resources: &str, content: u8| {
+            o(&format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents {content} 0 R /Resources << {resources} >> {entries} >>"))
+        };
+        let mut objects = vec![
+            o("<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>"),
+            o("<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 >>"),
+            stream("/Type /Metadata /Subtype /XML", &packet("4", Some("2020"), None)),
+            page(&intent(8), resources, 5),
+            stream("", content.as_bytes()),
+            page(&intent(9), "", 7),
+            stream("", b""),
+            srgb_profile(),
+            profile_of(4, b"CMYK"),
+        ];
+        objects.extend(more);
+        let found = verify(&Document::open(std::sync::Arc::new(raw("%PDF-2.0", &objects, "", b""))).unwrap(), Level::A4);
+        found.into_iter().filter(|i| i.clause == "6.2.4.3").map(|i| i.message).collect::<Vec<String>>()
+    };
+    let form = |content: &str| stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", content.as_bytes());
+    let none: [&str; 0] = [];
+    // Object 10 is a reference to the form, 11.
+    assert_eq!(two("/XObject << /X 10 0 R >>", "/X Do", vec![o("11 0 R"), form(rgb)]), none);
+    // Object 10 is a resource dictionary of its own that names the form /P.
+    assert_eq!(two("/XObject 10 0 R", "/P Do", vec![o("<< /P 11 0 R >>"), form(rgb)]), none);
+    // A name map's /P that is an alias of the form (12 stands for 11).
+    assert_eq!(two("/XObject 10 0 R", "/P Do", vec![o("<< /P 12 0 R >>"), form(rgb), o("11 0 R")]), none);
+    // A name map that is itself reached through an alias (10 stands for 12, which names the form /P).
+    assert_eq!(two("/XObject 10 0 R", "/P Do", vec![o("12 0 R"), form(rgb), o("<< /P 11 0 R >>")]), none);
+    // A name map's /P that is a dictionary: a shading pattern whose shading paints DeviceRGB.
+    let shading = vec![
+        o("<< /P 11 0 R >>"),
+        o("<< /PatternType 2 /Shading 12 0 R >>"),
+        o("<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 1 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 1 1] /N 1 >> >>"),
+    ];
+    assert_eq!(two("/Pattern 10 0 R", "/Pattern cs /P scn 0 0 10 10 re f", shading), none);
+    // The form still counts as drawn there: CMYK in it is judged against the RGB intent.
+    assert_eq!(
+        two("/XObject 10 0 R", "/P Do", vec![o("<< /P 11 0 R >>"), form("1 0 0 0 k 0 0 10 10 re f")]),
+        ["DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile"]
+    );
 }
