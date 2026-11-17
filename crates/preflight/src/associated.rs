@@ -41,8 +41,9 @@ pub(crate) fn associated(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>
 fn tagged(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], content: &HashSet<ObjRef>) -> HashSet<Vec<u8>> {
     let mut out = HashSet::new();
     crate::contents::each(doc, objs, content, MAX_CONTENT_BYTES, &mut |data| {
-        // Only content that writes the tag is parsed.
-        if data.windows(3).any(|w| w == b"/AF") {
+        // Only content that begins a marked-content sequence with a property list is parsed. The tag
+        // is looked for in the parsed name, which may be written with escapes (`/A#46`).
+        if data.windows(3).any(|w| w == b"BDC") {
             for op in pdfcraft_content::ops(data) {
                 if op.op == b"BDC"
                     && op.operands.first().and_then(Object::as_name) == Some(b"AF".as_slice())

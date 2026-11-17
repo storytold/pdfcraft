@@ -2371,14 +2371,15 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
 /// A page whose content is `content`, with the catalog entries `catalog` and the further objects
 /// `more`, numbered from 5.
 fn page_with(content: &str, catalog: &str, more: &[&str]) -> Document {
+    page_with_resources(content, "", catalog, more)
+}
+
+/// [`page_with`], with the page's resource dictionary holding `resources` too.
+fn page_with_resources(content: &str, resources: &str, catalog: &str, more: &[&str]) -> Document {
     let catalog = format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>");
+    let page = format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im 5 0 R >> {resources} >> >>");
     let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
-    let mut objs: Vec<&str> = vec![
-        &catalog,
-        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
-        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im 5 0 R >> >> >>",
-        &stream,
-    ];
+    let mut objs: Vec<&str> = vec![&catalog, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page, &stream];
     objs.extend_from_slice(more);
     build(&objs, "")
 }
@@ -2473,6 +2474,9 @@ fn jpeg2000_images_are_checked_clause_6_2_8_3() {
         ["A JPEG 2000 image has 2 colour channels: only 1, 3 or 4 are allowed"]
     );
     assert_eq!(found(&with_box(b"pclr", &[0, 2, 3, 7, 7, 7, 0, 0, 0, 1, 1, 1], 1)), Vec::<String>::new());
+    // A component mapping gives the channels: here two palette columns and one component direct.
+    assert_eq!(found(&with_box(b"cmap", &[0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0], 2)), Vec::<String>::new());
+    assert_eq!(found(&with_box(b"cmap", &[0, 0, 1, 0, 0, 0, 1, 1], 1)), ["A JPEG 2000 image has 2 colour channels: only 1, 3 or 4 are allowed"]);
     // With a colour space of its own, the image's data isn't read for one.
     let bad = jp2(5, 40, &[], &[(4, 0, 0)]);
     let text: String = bad.iter().copied().map(char::from).collect();
@@ -2516,11 +2520,12 @@ fn jpeg2000_images_are_checked_clause_6_2_8_3() {
 fn embedded_files_are_associated_files_clause_6_8() {
     let spec = "<< /Type /Filespec /F (a.xml) /UF (a.xml) /AFRelationship /Data /EF << /F 6 0 R >> >>";
     let file = "<< /Type /EmbeddedFile /Subtype /text#2Fxml /Length 3 >>\nstream\n<a/>\nendstream";
-    let with = |content: &str, catalog: &str, image: &str| {
-        page_with(content, &format!("/Names << /EmbeddedFiles << /Names [(a.xml) 7 0 R] >> >> {catalog}"), &[image, file, spec, "[7 0 R]"])
-    };
+    let names = "/Names << /EmbeddedFiles << /Names [(a.xml) 7 0 R] >> >>";
+    let with = |content: &str, catalog: &str, image: &str| page_with(content, &format!("{names} {catalog}"), &[image, file, spec, "[7 0 R]"]);
     let plain =
         "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray /Length 1 >>\nstream\n\0\nendstream";
+    // The page's property list /MC0 is the array of the file's specification.
+    let listed = |content: &str| page_with_resources(content, "/Properties << /MC0 [7 0 R] >>", names, &[plain, file, spec, "[7 0 R]"]);
     let said = "An embedded file isn't associated with the document or a part of it (AF)";
     let found = |doc: &Document, level: Level| -> Vec<(String, bool)> {
         verify(doc, level).into_iter().filter(|i| i.message == said).map(|i| (i.message, i.fixable)).collect()
@@ -2535,13 +2540,15 @@ fn embedded_files_are_associated_files_clause_6_8() {
         with("", "/AF [7 0 R]", plain),
         with("", "/AF 8 0 R", plain),
         with("/Im Do", "", image_af),
-        with("/AF /MC0 BDC EMC", "/Foo << /Resources << /Properties << /MC0 [7 0 R] >> >> >>", plain),
+        listed("/AF /MC0 BDC EMC"),
+        // A name may be written with escapes (ISO 32000-2 7.3.5).
+        listed("/A#46 /MC0 BDC EMC"),
     ] {
         assert_eq!(found(&doc, Level::A3b), Vec::<(String, bool)>::new());
     }
     // A property list no `AF` sequence names associates nothing.
     for content in ["", "/Span /MC0 BDC EMC", "/AF /MC1 BDC EMC"] {
-        let doc = with(content, "/Foo << /Resources << /Properties << /MC0 [7 0 R] >> >> >>", plain);
+        let doc = listed(content);
         assert_eq!(found(&doc, Level::A3b), [(said.to_string(), true)], "{content}");
     }
     // Save as PDF/A associates it with the document.

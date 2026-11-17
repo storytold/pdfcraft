@@ -125,14 +125,19 @@ pub(crate) fn check_data(data: &[u8]) -> Option<Jpx> {
 
 /// How many colour channels the header box's contents `header` describe, when a box other than
 /// `ihdr` says: the channel definitions (`cdef`, T.800 I.5.3.6) count those of type 0, colour,
-/// and not opacity; failing that, a palette (`pclr`, I.5.3.4) makes its columns the channels.
-/// Otherwise every component of `ihdr` is one.
+/// and not opacity; failing that, the component mapping (`cmap`, I.5.3.5) has one entry, four
+/// bytes, per channel, whether a component goes to it directly or through a palette's column;
+/// failing that, a palette (`pclr`, I.5.3.4) makes its columns the channels. Otherwise every
+/// component of `ihdr` is one.
 fn colour_channels(header: &[([u8; 4], &[u8])]) -> Option<u16> {
     if let Some((_, cdef)) = header.iter().find(|(kind, _)| kind == b"cdef") {
         let n = usize::from(u16::from_be_bytes(*cdef.first_chunk::<2>()?));
         // Each definition is a channel, a type and an association, two bytes each.
         let types = (0..n).map_while(|i| cdef.get(i.checked_mul(6)?.checked_add(4)?..i.checked_mul(6)?.checked_add(6)?));
         return u16::try_from(types.filter(|typ| *typ == [0, 0]).count()).ok();
+    }
+    if let Some((_, cmap)) = header.iter().find(|(kind, _)| kind == b"cmap") {
+        return u16::try_from(cmap.len() / 4).ok();
     }
     let (_, pclr) = header.iter().find(|(kind, _)| kind == b"pclr")?;
     pclr.get(2).map(|&columns| u16::from(columns))
