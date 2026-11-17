@@ -23,20 +23,21 @@ impl PdfCraftApp {
             if !covered && let Some(choice) = dialogs::save_prompt_key(ctx, &mut self.save_prompt_button) {
                 self.resolve_close(ctx, choice);
             }
-            self.space_tap = None;
+            self.cancel_space_tap(ctx);
             return;
         }
         // The other dialogs and prompts are modal too (⌘W closed the file behind Preferences,
         // #870).
         if self.modal_open() {
-            // A Space let go under the dialog is no tap: the pages never see it released.
-            self.space_tap = None;
+            // A Space let go under the dialog is no tap: the pages never see it released. One
+            // still held when it closes stays no tap until it is let go.
+            self.cancel_space_tap(ctx);
             return;
         }
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
             && view.auto_scroll.escape(ctx)
         {
-            self.space_tap = None;
+            self.cancel_space_tap(ctx);
             return;
         }
         // The in-window menu bar holds the keys while one of its menus is open or it has the
@@ -111,6 +112,13 @@ impl PdfCraftApp {
         }
     }
 
+    /// Space's tap is cancelled: something other than the pages had the keyboard. A Space still
+    /// down stays no tap (`Some(false)`) until it is let go, so neither its repeats nor its
+    /// release step the pages once they have the keyboard again.
+    fn cancel_space_tap(&mut self, ctx: &egui::Context) {
+        self.space_tap = PageKeys::held(ctx, egui::Key::Space).then_some(false);
+    }
+
     /// The quick tools' keys, as in Acrobat: V selects, H pans, and holding Space pans until it
     /// is released. Plain letters, so not while a text field, a form field, a dialog, the palette
     /// or a menu has the keyboard.
@@ -127,7 +135,7 @@ impl PdfCraftApp {
         // Only a Space the pages see go down and come back up is a tap: one let go while something
         // else had the keyboard is not.
         if !free {
-            self.space_tap = None;
+            self.cancel_space_tap(ctx);
         }
         let (plain, space) = (ctx.input(|input| input.modifiers.is_none()), PageKeys::held(ctx, Key::Space));
         // Space going down starts a tap, once: the key's repeats while it is held start none.

@@ -1964,6 +1964,49 @@ fn space_scrolls_a_screen_as_page_down_does() {
     assert_eq!(press(&mut h, Modifiers::NONE, Key::Space), at, "a space typed in the find bar");
 }
 
+#[test]
+fn space_held_through_a_dialog_steps_nothing_more_on_its_repeats() {
+    // #7483 review: a dialog that opened while Space was down cancelled its press outright, so once
+    // it closed with the key still held, the key's next repeat counted as a new press: Shift+Space
+    // stepped back a second time, and Space started a tap that scrolled on release.
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::canvas::Fit;
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].fit = Fit::Width;
+    h.run_steps(4);
+    let top = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).map(|r| r.top());
+    let key = |pressed, repeat, modifiers| egui::Event::Key { key: Key::Space, physical_key: None, pressed, repeat, modifiers };
+    // Held through a dialog that opens and closes, repeating after it, then let go.
+    let through_a_dialog = |h: &mut Harness<'static, PdfCraftApp>, modifiers| {
+        h.event(egui::Event::ModifiersChanged(modifiers));
+        h.event(key(true, false, modifiers));
+        h.run_steps(2);
+        h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::Shortcuts);
+        h.run_steps(2);
+        h.state_mut().dialog = None;
+        h.run_steps(2);
+        for _ in 0..3 {
+            h.event(key(true, true, modifiers));
+            h.run_steps(2);
+        }
+        h.event(key(false, false, modifiers));
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(4);
+        top(h)
+    };
+    let start = top(&h);
+    // Two screens down, so that a second step back would still show.
+    h.key_press(Key::PageDown);
+    h.run_steps(4);
+    let one = top(&h);
+    assert!(one.is_some() && one != start, "Page Down scrolls a screen: {one:?} from {start:?}");
+    h.key_press(Key::PageDown);
+    h.run_steps(4);
+    assert_eq!(through_a_dialog(&mut h, Modifiers::SHIFT), one, "Shift+Space goes back one screen, not two");
+    assert_eq!(through_a_dialog(&mut h, Modifiers::NONE), one, "Space held through the dialog is no tap");
+}
+
 /// Like [`fixture`], with each page's size given.
 fn sized_fixture(sizes: &[(u32, u32)]) -> Vec<u8> {
     let n = sizes.len();
