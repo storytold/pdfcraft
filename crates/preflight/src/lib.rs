@@ -6,6 +6,8 @@
 //! - identification: XMP metadata with `pdfaid:part` and `pdfaid:conformance`, consistent with
 //!   the document information dictionary;
 //! - no encryption; no LZW; no external streams;
+//! - file syntax: nothing after the last `%%EOF` but an end-of-line marker; hexadecimal strings
+//!   with an even number of digits and nothing else, in the file and in content streams;
 //! - an output intent (`GTS_PDFA1`) with an ICC profile when device colour is used;
 //! - every font embedded;
 //! - annotations: allowed types, printable, not hidden, with appearance streams;
@@ -23,11 +25,13 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod contents;
 mod gstate;
 mod header;
 pub mod icc;
 mod limits;
 mod spot;
+mod strings;
 mod trailer;
 mod transparency;
 mod xmp;
@@ -176,6 +180,11 @@ pub const WORDINGS: &[&str] = &[
     "The trailer has no file identifier (ID)",
     "The file identifier (ID) in the trailer isn't two non-empty strings",
     "The document is encrypted",
+    "Data follows the last end-of-file marker (%%EOF)",
+    "A hexadecimal string in the file has an odd number of digits",
+    "A hexadecimal string in the file holds a character other than a hexadecimal digit or white space",
+    "A hexadecimal string in a content stream has an odd number of digits",
+    "A hexadecimal string in a content stream holds a character other than a hexadecimal digit or white space",
     "An integer is outside the 32-bit range",
     "A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸",
     "A CMap maps a character code to a CID above 65535",
@@ -696,6 +705,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     let drawing = drawing_fonts(doc, &objs);
     check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
     check_limits(doc, &objs, &pages, &mut issue);
+    check_strings(doc, &objs, &mut issue);
     check_spots(doc, &objs, &mut issue);
     check_graphics_states(doc, &mut issue);
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
@@ -742,6 +752,9 @@ fn check_identification(doc: &Document, level: Level, issue: &mut impl FnMut(&'s
     }
     if doc.trailer().get(b"Encrypt").is_some() {
         issue("6.1.3", "The document is encrypted", None, None, true);
+    }
+    if trailer::data_after_end(doc) {
+        issue("6.1.3", "Data follows the last end-of-file marker (%%EOF)", None, None, true);
     }
 }
 
@@ -981,6 +994,29 @@ fn check_limits(
         if limits::page_box_out_of_range(doc, &p.dict) {
             issue("6.1.13", "Page {} has a boundary smaller than 3 or larger than 14400 units", Some((i + 1).to_string()), Some(i), false);
         }
+    }
+}
+
+/// 6.1.6: hexadecimal strings, as written in the file and in content streams.
+fn check_strings(
+    doc: &Document,
+    objs: &[(ObjRef, std::sync::Arc<Object>)],
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    let hex = strings::check(doc, objs, &referenced_content(doc, objs));
+    // A full save writes each string of the file afresh, with an even number of digits; a string
+    // with a character that isn't a digit leaves its object unreadable, and content is kept as it is.
+    if hex.file.odd {
+        issue("6.1.6", "A hexadecimal string in the file has an odd number of digits", None, None, true);
+    }
+    if hex.file.not_hex {
+        issue("6.1.6", "A hexadecimal string in the file holds a character other than a hexadecimal digit or white space", None, None, false);
+    }
+    if hex.content.odd {
+        issue("6.1.6", "A hexadecimal string in a content stream has an odd number of digits", None, None, false);
+    }
+    if hex.content.not_hex {
+        issue("6.1.6", "A hexadecimal string in a content stream holds a character other than a hexadecimal digit or white space", None, None, false);
     }
 }
 
@@ -1473,6 +1509,8 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
     // A full save writes the header afresh, with the version it keeps and a binary comment.
     fixed.extend(header::rewrite(doc));
     fixed.extend(trailer::fix(doc));
+    fixed.extend(trailer::rewrite_end(doc));
+    fixed.extend(strings::rewrite(doc));
     let root = doc.root().ok_or(pdfcraft_cos::CosError::Syntax { offset: 0, detail: "no catalog".into() })?;
     // Catalog: actions, JavaScript, NeedAppearances, output intent, metadata.
     let mut cat = catalog(doc);
