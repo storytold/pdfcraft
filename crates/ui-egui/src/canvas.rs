@@ -344,12 +344,24 @@ pub struct ViewDefaults {
     /// Highlight existing fields: a preference in Acrobat, so it carries over to the next
     /// document and the next session. On for new settings; a stored choice wins.
     pub highlight_fields: bool,
+    /// The most a fit (width, page or height) zooms to (1.0 = 100%); unlimited by default. A
+    /// host that previews files in a wide window sets 1.0, so a page shows at its actual size
+    /// there instead of filling the window.
+    pub max_fit_zoom: f32,
 }
 
 impl Default for ViewDefaults {
     fn default() -> Self {
         // Single page, scrolling continuously at fit width: the earlier "continuous" default.
-        Self { layout: PageLayout::Single, continuous: true, show_page_gaps: true, fit: Fit::Width, zoom: 1.0, highlight_fields: true }
+        Self {
+            layout: PageLayout::Single,
+            continuous: true,
+            show_page_gaps: true,
+            fit: Fit::Width,
+            zoom: 1.0,
+            highlight_fields: true,
+            max_fit_zoom: f32::INFINITY,
+        }
     }
 }
 
@@ -493,6 +505,8 @@ pub struct DocView {
     pub from_attachment: Option<(DocId, String)>,
     pub zoom: f32,
     pub fit: Fit,
+    /// [`ViewDefaults::max_fit_zoom`].
+    pub max_fit_zoom: f32,
     pub layout: PageLayout,
     /// Whether the base layout scrolls continuously (independent of `layout`, as in Acrobat).
     pub continuous: bool,
@@ -1050,6 +1064,7 @@ impl DocView {
             from_attachment: None,
             zoom: defaults.zoom,
             fit: defaults.fit,
+            max_fit_zoom: defaults.max_fit_zoom,
             layout: defaults.layout,
             continuous: defaults.continuous,
             show_page_gaps: defaults.show_page_gaps,
@@ -1252,6 +1267,7 @@ impl DocView {
         let mut fresh = Self::new(self.id, info, ViewDefaults::default());
         fresh.zoom = self.zoom;
         fresh.fit = self.fit;
+        fresh.max_fit_zoom = self.max_fit_zoom;
         fresh.layout = self.layout;
         fresh.continuous = self.continuous;
         fresh.show_page_gaps = self.show_page_gaps;
@@ -1304,6 +1320,7 @@ impl DocView {
         let mut v = Self::new(self.id, info, ViewDefaults::default());
         v.zoom = self.zoom;
         v.fit = self.fit;
+        v.max_fit_zoom = self.max_fit_zoom;
         v.layout = self.layout;
         v.continuous = self.continuous;
         v.show_page_gaps = self.show_page_gaps;

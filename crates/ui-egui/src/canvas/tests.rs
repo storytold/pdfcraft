@@ -2614,6 +2614,28 @@ fn fit_width_fits_the_shown_page_in_single_page_view_only() {
 }
 
 #[test]
+fn a_fit_zooms_no_further_than_max_fit_zoom() {
+    let page = pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let info = DocInfo { pages: vec![page], ..Default::default() };
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults { max_fit_zoom: 1.0, ..ViewDefaults::default() });
+    (v.viewport_w, v.viewport_h) = (2000.0, 2000.0);
+    for fit in [Fit::Width, Fit::Page, Fit::Height] {
+        v.fit = fit;
+        v.fit_zoom(&info);
+        assert_eq!(v.zoom, 1.0, "{fit:?} in a large window shows the page at its actual size");
+    }
+    (v.fit, v.viewport_w) = (Fit::Width, 300.0);
+    v.fit_zoom(&info);
+    assert!(v.zoom < 1.0, "a narrow window still shrinks the page to fit, got {}", v.zoom);
+    (v.fit, v.zoom, v.viewport_w) = (Fit::None, 2.0, 2000.0);
+    v.fit_zoom(&info);
+    assert_eq!(v.zoom, 2.0, "a zoom the reader chose isn't capped");
+    v.document_replaced(&info);
+    assert_eq!(v.max_fit_zoom, 1.0, "a reloaded document keeps the cap");
+    assert_eq!(v.twin(&info).max_fit_zoom, 1.0, "so does split view's second pane");
+}
+
+#[test]
 fn layouts_match_their_commands_and_names() {
     for l in PageLayout::ORDER {
         let spec = pdfcraft_engine::commands::command(l.command()).expect("registered");
