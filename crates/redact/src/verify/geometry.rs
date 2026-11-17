@@ -1,14 +1,16 @@
 //! The non-text content under the regions: images, paths and shadings, and the placement of the
 //! glyphs still shown, checked independently of the interpreter.
 
+use std::cell::Cell;
 use std::collections::HashSet;
 
 use pdfcraft_content::{Matrix, contains, overlaps, parse};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
+use sha2::{Digest, Sha256};
 
 use super::extract::{appearance_matrix, bbox_of, matrix_of, page_content, res_dict};
 use super::util::{Ctx, image_codec};
-use crate::verify::limits::{MAX_CLIP_SUBPATHS, MAX_DEPTH, MAX_GS_STACK, MAX_HOLES, MAX_PIXELS};
+use crate::verify::limits::{MAX_CLIP_SUBPATHS, MAX_DEPTH, MAX_GS_STACK, MAX_HOLES, MAX_PIXELS, MAX_SEARCHED, SEARCH_COST};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Finding {
@@ -36,8 +38,92 @@ pub(super) struct Geo<'a> {
     /// What `found` already holds: each finding is recorded once per region, so a page that
     /// paints thousands of times cannot grow the report (or the memory) with repeats.
     reported: HashSet<(usize, Finding)>,
-    /// Pattern, soft-mask and Type3 resources already searched for images.
-    pub(super) searched: HashSet<ObjRef>,
+    /// Patterns, soft-mask groups, Type3 glyphs and the forms they draw already searched for
+    /// images, each with where it looked its names up (at most [`MAX_SEARCHED`]).
+    pub(super) searched: HashSet<(ObjRef, Within)>,
+}
+
+/// Where a stream searched for images looks up the names it draws: in resources of its own, or
+/// in the XObjects of the place it is drawn from, told apart by a digest of their names and the
+/// objects they name. A Type 3 glyph shared by two fonts, or a pattern or form without resources
+/// of its own, can draw an image from one place and not from another, so it is searched for each.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum Within {
+    Own,
+    Caller([u8; 32]),
+}
+
+/// The key of a set of XObjects, once worked out: `Err` when the proof's work allowance ran out.
+type Key = Result<Option<[u8; 32]>, ()>;
+
+/// The XObjects a stream without resources of its own looks its names up in: a Type 3 font's own
+/// (`font`), where they give a stream, then those of the place it is drawn from (`from`), each with
+/// a slot for the key, worked out at the first search that needs it.
+#[derive(Clone, Copy)]
+struct Names<'a> {
+    font: Option<(&'a Dict, &'a Cell<Option<Key>>)>,
+    from: (&'a Dict, &'a Cell<Option<Key>>),
+}
+
+impl<'a> Names<'a> {
+    fn get(&self, doc: &Document, name: &[u8]) -> Option<&'a Object> {
+        if let Some(x) = self.font.and_then(|(font, _)| font.get(name))
+            && matches!(&*doc.resolve(x), Object::Stream(_))
+        {
+            return Some(x);
+        }
+        self.from.0.get(name)
+    }
+
+    /// The key of these XObjects: that of `from`, or, with a font's, a digest of the key of the
+    /// font's own and that of `from`. Each is worked out once, so a font's costs its own entries
+    /// and not those of `from` again. `None` when either has none.
+    fn key(&self, geo: &Geo<'_>) -> Key {
+        let from = once(self.from.1, || geo.xobjects_key(self.from.0))?;
+        let Some((font, slot)) = self.font else { return Ok(from) };
+        once(slot, || {
+            Ok(match (geo.xobjects_key(font)?, from) {
+                (Some(own), Some(from)) => Some(Sha256::new().chain_update(own).chain_update(from).finalize().into()),
+                _ => None,
+            })
+        })
+    }
+}
+
+/// What `slot` holds, or what `work` gives, kept there.
+fn once(slot: &Cell<Option<Key>>, work: impl FnOnce() -> Key) -> Key {
+    if let Some(k) = slot.get() {
+        return k;
+    }
+    let k = work();
+    slot.set(Some(k));
+    k
+}
+
+/// A dictionary written in place, or given by reference, read where it is held rather than
+/// copied.
+enum Held<'a> {
+    In(&'a Dict),
+    At(std::sync::Arc<Object>),
+    Not,
+}
+
+impl<'a> Held<'a> {
+    fn of(doc: &Document, o: Option<&'a Object>) -> Self {
+        match o {
+            Some(Object::Dict(d)) => Held::In(d),
+            Some(o @ Object::Ref(_)) => Held::At(doc.resolve(o)),
+            _ => Held::Not,
+        }
+    }
+
+    fn dict(&self) -> Option<&Dict> {
+        match self {
+            Held::In(d) => Some(d),
+            Held::At(o) => o.as_dict(),
+            Held::Not => None,
+        }
+    }
 }
 
 /// What still paints inside `regions` on a page of the output (the overlay boxes excepted):
@@ -287,94 +373,105 @@ impl Geo<'_> {
     }
 
     /// Images drawn from tiling patterns, soft-mask groups and Type3 glyph procedures can't be
-    /// placed or cleared by this check: if `res` reaches any, every region is unverifiable.
+    /// placed or cleared by this check: if `res` reaches any, every region is unverifiable. Each is
+    /// searched as it is found, its dictionaries read where they are held.
     fn hidden_images(&mut self, res: &Dict, depth: usize) {
         let doc = self.doc;
-        // Each stream with the resources it looks names up in when it has none of its own: `res`
-        // (`None`), or a Type 3 font's.
-        type Found = Vec<(Option<ObjRef>, Stream, Option<std::rc::Rc<Dict>>)>;
-        let mut streams: Found = Vec::new();
-        let take = |o: &Object, own: Option<&std::rc::Rc<Dict>>, streams: &mut Found| {
-            if let Object::Stream(s) = &*doc.resolve(o) {
-                streams.push((o.as_ref(), s.clone(), own.cloned()));
-            }
-        };
-        for (_, p) in res_dict(doc, res, b"Pattern").iter() {
-            take(p, None, &mut streams);
+        let none = Dict::new();
+        let xobjects = Held::of(doc, res.get(b"XObject"));
+        let from_key = Cell::new(None);
+        let from = (xobjects.dict().unwrap_or(&none), &from_key);
+        let patterns = Held::of(doc, res.get(b"Pattern"));
+        for (_, p) in patterns.dict().unwrap_or(&none).iter() {
+            self.search(p, Names { font: None, from }, depth);
         }
-        for (_, g) in res_dict(doc, res, b"ExtGState").iter() {
-            if let Some(Object::Dict(sm)) = doc.resolve(g).as_dict().and_then(|g| g.get(b"SMask")).map(|m| (*doc.resolve(m)).clone()).as_ref()
-                && let Some(group) = sm.get(b"G")
-            {
-                take(group, None, &mut streams);
+        let states = Held::of(doc, res.get(b"ExtGState"));
+        for (_, g) in states.dict().unwrap_or(&none).iter() {
+            let state = Held::of(doc, Some(g));
+            let mask = Held::of(doc, state.dict().and_then(|g| g.get(b"SMask")));
+            if let Some(group) = mask.dict().and_then(|m| m.get(b"G")) {
+                self.search(group, Names { font: None, from }, depth);
             }
         }
-        for (_, f) in res_dict(doc, res, b"Font").iter() {
-            let Some(font) = doc.resolve(f).as_dict().cloned() else { continue };
-            if crate::subtype(doc, &font).as_deref() != Some(b"Type3") {
+        let fonts = Held::of(doc, res.get(b"Font"));
+        for (_, f) in fonts.dict().unwrap_or(&none).iter() {
+            let font = Held::of(doc, Some(f));
+            let Some(font) = font.dict() else { continue };
+            if crate::subtype(doc, font).as_deref() != Some(b"Type3") {
                 continue;
             }
             // A glyph looks its names up in its font's /Resources (ISO 32000-2 §9.6.4). The renderer
-            // falls back to these for a name the font's lack or give no stream for (null, a missing
-            // object, a dictionary), and for every name when the font has none, so its XObjects
-            // are searched in both, the font's first.
-            let font_res = font.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).map(|mut own| {
-                let mut xobjects = res_dict(doc, res, b"XObject");
-                for (name, x) in res_dict(doc, &own, b"XObject").iter() {
-                    if matches!(&*doc.resolve(x), Object::Stream(_)) {
-                        xobjects.set(name.to_vec(), x.clone());
-                    }
-                }
-                own.set(b"XObject".to_vec(), Object::Dict(xobjects));
-                std::rc::Rc::new(own)
-            });
-            if let Some(procs) = font.get(b"CharProcs").and_then(|c| doc.resolve(c).as_dict().cloned()) {
-                for (_, p) in procs.iter() {
-                    take(p, font_res.as_ref(), &mut streams);
-                }
-            }
-        }
-        for (id, s, own) in streams {
-            if let Some(r) = id
-                && !self.searched.insert(r)
-            {
-                continue;
-            }
-            match self.has_image(&s, own.as_deref().unwrap_or(res), depth + 1) {
-                Ok(false) => {}
-                Ok(true) => self.unverifiable("an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared"),
-                Err(()) => self.unverifiable("a pattern, soft mask or Type3 glyph can't be read in full"),
+            // falls back from these to `res` for a name the font's lack or give no stream for (null, a
+            // missing object, a dictionary), and for every name when the font has none.
+            let own = Held::of(doc, font.get(b"Resources"));
+            let own = own.dict().map(|r| Held::of(doc, r.get(b"XObject")));
+            let font_key = Cell::new(None);
+            let names = Names { font: own.as_ref().map(|x| (x.dict().unwrap_or(&none), &font_key)), from };
+            let procs = Held::of(doc, font.get(b"CharProcs"));
+            for (_, p) in procs.dict().unwrap_or(&none).iter() {
+                self.search(p, names, depth);
             }
         }
     }
 
-    /// Does the content of `s` (forms it draws included) draw an image?
-    fn has_image(&mut self, s: &Stream, parent: &Dict, depth: usize) -> Result<bool, ()> {
+    /// Search the stream `o` gives, if it gives one, for images, and say what is found.
+    fn search(&mut self, o: &Object, names: Names<'_>, depth: usize) {
+        let held = self.doc.resolve(o);
+        let Object::Stream(s) = &*held else { return };
+        match self.has_image(o.as_ref(), s, names, depth + 1) {
+            Ok(false) => {}
+            Ok(true) => self.unverifiable("an image inside a pattern, soft mask or Type3 glyph can't be placed or cleared"),
+            Err(()) => self.unverifiable("a pattern, soft mask or Type3 glyph can't be read in full"),
+        }
+    }
+
+    /// Does the content of `s` (forms it draws included) draw an image? `id` is `s`'s reference. A
+    /// stream without resources of its own looks its names up in `names`, so it is searched once
+    /// for each set of XObjects it is drawn with; one with resources of its own, once. Each search
+    /// is charged [`SEARCH_COST`] of the proof's work allowance.
+    fn has_image(&mut self, id: Option<ObjRef>, s: &Stream, names: Names<'_>, depth: usize) -> Result<bool, ()> {
         if depth > MAX_DEPTH {
             return Err(());
         }
-        let data = self.ctx.decode(self.doc, s)?;
-        let own = s.dict.get(b"Resources").and_then(|r| self.doc.resolve(r).as_dict().cloned());
-        let res = own.as_ref().unwrap_or(parent);
-        let xobjects = res_dict(self.doc, res, b"XObject");
+        let doc = self.doc;
+        let own = Held::of(doc, s.dict.get(b"Resources"));
+        let own = own.dict();
+        let within = match own {
+            Some(_) => Some(Within::Own),
+            None => names.key(self)?.map(Within::Caller),
+        };
+        if let (Some(r), Some(w)) = (id, within) {
+            if self.searched.contains(&(r, w)) {
+                return Ok(false);
+            }
+            if self.searched.len() >= MAX_SEARCHED {
+                return Err(());
+            }
+            self.searched.insert((r, w));
+        }
+        if !self.ctx.charge(SEARCH_COST) {
+            return Err(());
+        }
+        let data = self.ctx.decode(doc, s)?;
+        let none = Dict::new();
+        let xobjects = own.map(|r| Held::of(doc, r.get(b"XObject")));
+        let own_key = Cell::new(None);
+        // Where the names drawn here are looked up, a form drawn without resources of its own
+        // included: this stream's own XObjects, or `names`.
+        let here = match &xobjects {
+            Some(x) => Names { font: None, from: (x.dict().unwrap_or(&none), &own_key) },
+            None => names,
+        };
         for op in parse(&data).ops {
             match op.op.as_slice() {
                 b"BI" => return Ok(true),
                 b"Do" => {
-                    let Some(entry) = op.last_name().and_then(|n| xobjects.get(n)) else { continue };
-                    let Object::Stream(x) = &*self.doc.resolve(entry) else { continue };
-                    match crate::subtype(self.doc, &x.dict).as_deref() {
+                    let Some(entry) = op.last_name().and_then(|n| here.get(doc, n)) else { continue };
+                    let held = doc.resolve(entry);
+                    let Object::Stream(x) = &*held else { continue };
+                    match crate::subtype(doc, &x.dict).as_deref() {
                         Some(b"Image") => return Ok(true),
-                        Some(b"Form") => {
-                            if let Some(r) = entry.as_ref()
-                                && !self.searched.insert(r)
-                            {
-                                continue;
-                            }
-                            if self.has_image(x, res, depth + 1)? {
-                                return Ok(true);
-                            }
-                        }
+                        Some(b"Form") if self.has_image(entry.as_ref(), x, here, depth + 1)? => return Ok(true),
                         _ => {}
                     }
                 }
@@ -382,6 +479,33 @@ impl Geo<'_> {
             }
         }
         Ok(false)
+    }
+
+    /// A key of `xobjects`, telling apart the places a stream without resources of its own is
+    /// drawn from: two places that give the same names to the same objects draw alike. `None`
+    /// when one of them is a stream written in place, which has no object number to tell it by.
+    /// Each entry is charged to the proof's work allowance before it is digested, so a digest stops
+    /// where the allowance does, with an error.
+    fn xobjects_key(&self, xobjects: &Dict) -> Result<Option<[u8; 32]>, ()> {
+        let mut h = Sha256::new();
+        let mut direct = false;
+        for (name, x) in xobjects.iter() {
+            if !self.ctx.charge(name.len().saturating_add(16)) {
+                return Err(());
+            }
+            h.update((name.len() as u64).to_be_bytes());
+            h.update(name);
+            match x {
+                Object::Ref(r) => {
+                    h.update([1]);
+                    h.update(r.num.to_be_bytes());
+                    h.update(r.generation.to_be_bytes());
+                }
+                Object::Stream(_) => direct = true,
+                _ => h.update([0]),
+            }
+        }
+        Ok((!direct).then(|| h.finalize().into()))
     }
 }
 
@@ -521,4 +645,157 @@ pub(super) fn image_cleared(doc: &Document, ctx: &Ctx, s: &Stream, ctm: &Matrix,
         }
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::collections::HashSet;
+
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+
+    use super::{Geo, Names, Within};
+    use crate::tests_verify::{open, pdf_bytes, stream};
+    use crate::verify::limits::{MAX_SEARCHED, MAX_TOTAL_DECODED, MAX_WORK, SEARCH_COST};
+    use crate::verify::util::Ctx;
+
+    /// The search for images reads at most [`MAX_SEARCHED`] streams in a page's check, each once
+    /// for each place it is drawn from: one more is an error, which leaves the page unverifiable,
+    /// and a stream already searched where it is drawn is still passed over.
+    #[test]
+    fn the_search_for_images_stops_at_its_allowance() {
+        let objects = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(), b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(), stream("", b"0 0 d0")];
+        let doc = open(pdf_bytes(objects, ""));
+        let glyph = ObjRef::new(3, 0);
+        let held = doc.get(glyph);
+        let Object::Stream(s) = &*held else { panic!("the glyph program is a stream") };
+        let ctx = Ctx::with_decode_left(MAX_TOTAL_DECODED);
+        let (none, key) = (Dict::new(), Cell::new(Some(Ok(Some([7; 32])))));
+        let here = Names { font: None, from: (&none, &key) };
+        for (searched, expected) in [(MAX_SEARCHED - 1, Ok(false)), (MAX_SEARCHED, Err(()))] {
+            let others = (0..searched).map(|i| (ObjRef::new(100 + i as u32, 0), Within::Own)).collect();
+            let mut geo = Geo { doc: &doc, ctx: &ctx, regions: &[], found: Vec::new(), reported: HashSet::new(), searched: others };
+            assert_eq!(geo.has_image(Some(glyph), s, here, 0), expected, "{searched} searched before");
+            geo.searched.insert((glyph, Within::Caller([7; 32])));
+            assert_eq!(geo.has_image(Some(glyph), s, here, 0), Ok(false), "{searched} searched before, then this one");
+        }
+    }
+
+    /// A stream with resources of its own is searched once, wherever it is drawn from: from
+    /// another place it doesn't count again towards [`MAX_SEARCHED`].
+    #[test]
+    fn a_stream_with_resources_of_its_own_is_searched_once() {
+        let objects = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(),
+            stream("/Resources << >>", b"0 0 5 5 re f"),
+        ];
+        let doc = open(pdf_bytes(objects, ""));
+        let tile = ObjRef::new(3, 0);
+        let held = doc.get(tile);
+        let Object::Stream(s) = &*held else { panic!("the pattern is a stream") };
+        let ctx = Ctx::with_decode_left(MAX_TOTAL_DECODED);
+        let others = (0..MAX_SEARCHED - 1).map(|i| (ObjRef::new(100 + i as u32, 0), Within::Own)).collect();
+        let mut geo = Geo { doc: &doc, ctx: &ctx, regions: &[], found: Vec::new(), reported: HashSet::new(), searched: others };
+        let none = Dict::new();
+        let (one, two) = (Cell::new(Some(Ok(Some([1; 32])))), Cell::new(Some(Ok(Some([2; 32])))));
+        assert_eq!(geo.has_image(Some(tile), s, Names { font: None, from: (&none, &one) }, 0), Ok(false));
+        assert_eq!(geo.has_image(Some(tile), s, Names { font: None, from: (&none, &two) }, 0), Ok(false), "drawn from another place");
+    }
+
+    /// Each search for images is charged [`SEARCH_COST`] of the proof's work allowance, past which
+    /// it is an error, whatever little it decodes.
+    #[test]
+    fn each_search_for_images_is_charged() {
+        let objects = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(), b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(), stream("", b"")];
+        let doc = open(pdf_bytes(objects, ""));
+        let glyph = ObjRef::new(3, 0);
+        let held = doc.get(glyph);
+        let Object::Stream(s) = &*held else { panic!("the glyph program is a stream") };
+        let ctx = Ctx::with_decode_left(MAX_TOTAL_DECODED);
+        let mut geo = Geo { doc: &doc, ctx: &ctx, regions: &[], found: Vec::new(), reported: HashSet::new(), searched: HashSet::new() };
+        assert!(ctx.charge(MAX_WORK as usize - SEARCH_COST));
+        let none = Dict::new();
+        let (one, two) = (Cell::new(Some(Ok(Some([1; 32])))), Cell::new(Some(Ok(Some([2; 32])))));
+        assert_eq!(geo.has_image(Some(glyph), s, Names { font: None, from: (&none, &one) }, 0), Ok(false), "within what is left");
+        assert_eq!(geo.has_image(Some(glyph), s, Names { font: None, from: (&none, &two) }, 0), Err(()), "past it");
+    }
+
+    /// The key of a Type 3 font's XObjects over those of the place its glyphs are drawn from costs
+    /// the font's own entries: those of the place are digested once for all its fonts. Fonts with
+    /// the same own XObjects have the same key, and fonts with other ones, or none, another.
+    #[test]
+    fn the_key_of_a_fonts_xobjects_costs_its_own() {
+        let doc = open(pdf_bytes(vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(), b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec()], ""));
+        let ctx = Ctx::with_decode_left(MAX_TOTAL_DECODED);
+        let geo = Geo { doc: &doc, ctx: &ctx, regions: &[], found: Vec::new(), reported: HashSet::new(), searched: HashSet::new() };
+        let mut page = Dict::new();
+        for i in 0..1000u32 {
+            page.set(format!("X{i:04}").into_bytes(), Object::Ref(ObjRef::new(100 + i, 0)));
+        }
+        let mut own = Dict::new();
+        own.set(b"Im0".to_vec(), Object::Ref(ObjRef::new(9, 0)));
+        let mut other = Dict::new();
+        other.set(b"Im0".to_vec(), Object::Ref(ObjRef::new(11, 0)));
+        // 1,000 entries of 5 bytes for the page, then 8 fonts of one 3-byte entry.
+        assert!(ctx.charge(MAX_WORK as usize - (1000 * 21 + 8 * 19)));
+        let from = Cell::new(None);
+        let slots: Vec<_> = (0..9).map(|_| Cell::new(None)).collect();
+        let keys: Vec<_> = slots[..8]
+            .iter()
+            .enumerate()
+            .map(|(i, slot)| Names { font: Some((if i == 7 { &other } else { &own }, slot)), from: (&page, &from) }.key(&geo))
+            .collect();
+        assert!(keys.iter().all(|k| matches!(k, Ok(Some(_)))), "{keys:?}");
+        assert_eq!(keys[0], keys[6], "the same own XObjects");
+        assert_ne!(keys[0], keys[7], "other own XObjects");
+        assert_ne!(keys[0], Names { font: None, from: (&page, &from) }.key(&geo), "none of its own");
+        assert_eq!(Names { font: Some((&own, &slots[8])), from: (&page, &from) }.key(&geo), Err(()), "past the allowance");
+        // The same font drawn from another place.
+        let ctx = Ctx::with_decode_left(MAX_TOTAL_DECODED);
+        let geo = Geo { doc: &doc, ctx: &ctx, regions: &[], found: Vec::new(), reported: HashSet::new(), searched: HashSet::new() };
+        let elsewhere = Dict::new();
+        let key = |from: &Dict| Names { font: Some((&own, &Cell::new(None))), from: (from, &Cell::new(None)) }.key(&geo);
+        assert_eq!(key(&page), keys[0]);
+        assert_ne!(key(&page), key(&elsewhere), "drawn from another place");
+    }
+
+    /// The key of a set of XObjects tells apart two that give a name to another object, or an
+    /// object another name; a stream written in place gives none; and past the proof's work
+    /// allowance it is an error.
+    #[test]
+    fn the_key_of_a_set_of_xobjects() {
+        let doc = open(pdf_bytes(vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(), b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec()], ""));
+        let ctx = Ctx::with_decode_left(MAX_TOTAL_DECODED);
+        let geo = Geo { doc: &doc, ctx: &ctx, regions: &[], found: Vec::new(), reported: HashSet::new(), searched: HashSet::new() };
+        let xobjects = |entries: &[(&[u8], Object)]| {
+            let mut d = Dict::new();
+            for (name, x) in entries {
+                d.set(name.to_vec(), x.clone());
+            }
+            d
+        };
+        let at = |n| Object::Ref(ObjRef::new(n, 0));
+        let key = |d: &Dict| geo.xobjects_key(d).ok().flatten();
+        let one = key(&xobjects(&[(b"Im0", at(9))]));
+        assert!(one.is_some());
+        assert_eq!(one, key(&xobjects(&[(b"Im0", at(9))])), "the same objects under the same names");
+        assert_ne!(one, key(&xobjects(&[(b"Im0", at(11))])), "another object");
+        assert_ne!(one, key(&xobjects(&[(b"Im1", at(9))])), "another name");
+        assert_ne!(one, key(&xobjects(&[(b"Im0", at(9)), (b"X", Object::Null)])), "a name more");
+        let written_in_place = Object::Stream(Stream { dict: Dict::new(), raw: Default::default() });
+        assert_eq!(geo.xobjects_key(&xobjects(&[(b"Im0", written_in_place)])), Ok(None));
+        // Each entry costs its name's length and 16 of the proof's work allowance.
+        let ctx = Ctx::with_decode_left(MAX_TOTAL_DECODED);
+        let geo = Geo { doc: &doc, ctx: &ctx, regions: &[], found: Vec::new(), reported: HashSet::new(), searched: HashSet::new() };
+        assert!(ctx.charge(MAX_WORK as usize - 19));
+        assert!(geo.xobjects_key(&xobjects(&[(b"Im0", at(9))])).is_ok(), "within what is left");
+        assert_eq!(geo.xobjects_key(&xobjects(&[(b"Im0", at(9))])), Err(()), "past it");
+        // With the allowance spent, a digest stops at its first entry, not after the last.
+        let many: Vec<(Vec<u8>, Object)> = (0..1000).map(|i| (format!("X{i:04}").into_bytes(), at(100 + i))).collect();
+        let many = xobjects(&many.iter().map(|(n, x)| (n.as_slice(), x.clone())).collect::<Vec<_>>());
+        let before = ctx.work.get();
+        assert_eq!(geo.xobjects_key(&many), Err(()));
+        assert_eq!(ctx.work.get() - before, 21, "one entry of five bytes charged");
+    }
 }

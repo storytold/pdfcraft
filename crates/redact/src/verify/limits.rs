@@ -17,6 +17,15 @@ pub(crate) const MAX_GS_STACK: usize = 4096;
 /// Most clip holes one walk may cut (each is kept until the state that made it is restored).
 /// More is unverifiable.
 pub(crate) const MAX_HOLES: usize = 4096;
+/// Most patterns, soft-mask groups, Type 3 glyphs and the forms they draw that the search for
+/// images in one page's check reads, each once for each set of XObjects it looks its names up in.
+/// More is unverifiable.
+pub(crate) const MAX_SEARCHED: usize = 1 << 20;
+/// What one search for images of a pattern, soft-mask group, Type 3 glyph or form costs of
+/// [`MAX_WORK`] whatever it decodes: setting up the decoding and recording the search, about as
+/// long as the sweep takes over 4 KiB. Its parse, and the lookups of the names it draws, grow with
+/// what it decodes, which [`MAX_TOTAL_DECODED`] bounds, as for every content stream the proof reads.
+pub(crate) const SEARCH_COST: usize = 4096;
 /// Most subpaths of one even-odd clip the hole rule examines (it compares them pairwise).
 /// More, and no hole is cut: what the clip lets through is reported as paint.
 pub(crate) const MAX_CLIP_SUBPATHS: usize = 64;
