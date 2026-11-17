@@ -93,9 +93,9 @@ pub(crate) fn forbids_annotation(level: Level, subtype: &[u8]) -> bool {
     }
 }
 
-/// 6.3.3 and 6.4.1: an annotation's appearance dictionary holds only `/N`, which for a button
-/// widget is a dictionary of appearance states and for every other annotation an appearance stream
-/// (ISO 32000-2 12.5.5), and a widget has no `/A` action.
+/// 6.3.3: an annotation's appearance dictionary holds only `/N`, which for a button widget is a
+/// dictionary of appearance states and for every other annotation an appearance stream (ISO 32000-2
+/// 12.5.5).
 pub(crate) fn annotation(doc: &Document, dict: &Dict, subtype: Option<&[u8]>, name: &str, page: Option<usize>, issue: &mut Report<'_>) {
     let appearance = dict.get(b"AP").map(|ap| doc.resolve(ap));
     let appearance = appearance.as_deref().and_then(Object::as_dict);
@@ -109,9 +109,6 @@ pub(crate) fn annotation(doc: &Document, dict: &Dict, subtype: Option<&[u8]>, na
         } else if !button && !matches!(&*normal, Object::Stream(_)) {
             issue("6.3.3", "A {} annotation's normal appearance isn't an appearance stream", Some(name.to_owned()), page, false);
         }
-    }
-    if subtype == Some(b"Widget") && dict.get(b"A").is_some() {
-        issue("6.4.1", "A widget annotation has an action (A)", None, page, false);
     }
 }
 

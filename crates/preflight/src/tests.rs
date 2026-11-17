@@ -2870,3 +2870,45 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// 6.4.1 of PDF/A-2 and 3: a widget and a form field have no action (`/A`) and no additional
+/// actions (`/AA`), whatever the actions do; PDF/A-4 still forbids a widget's `/A` but lets both
+/// have additional actions.
+#[test]
+fn widget_and_field_actions_are_reported_clause_6_4_1() {
+    let uri = "<< /S /URI /URI (https://example.com) >>";
+    let doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 7 0 R] >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R 8 0 R 9 0 R] >>",
+            &format!("<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (go) /Rect [0 0 20 20] /F 4 /A {uri} >>"),
+            &format!("<< /FT /Tx /T (parent) /Kids [6 0 R] /AA << /K {uri} >> /A {uri} >>"),
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [30 0 50 20] /F 4 >>",
+            "<< /FT /Tx /T (plain) /Kids [8 0 R] /A null /AA null >>",
+            &format!("<< /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [60 0 80 20] /F 4 /AA << /Fo {uri} >> >>"),
+            &format!("<< /Type /Annot /Subtype /Link /Rect [90 0 110 20] /F 4 /A {uri} >>"),
+        ],
+        "",
+    );
+    let at = |level| {
+        let mut found: Vec<(&str, String)> =
+            verify(&doc, level).into_iter().filter(|i| matches!(i.clause, "6.4.1" | "6.5.2")).map(|i| (i.clause, i.message)).collect();
+        found.sort();
+        found
+    };
+    let part2 = vec![
+        ("6.4.1", "A Widget annotation has additional actions".to_owned()),
+        ("6.4.1", "A form field has additional actions".to_owned()),
+        ("6.4.1", "A form field has an action (A)".to_owned()),
+        ("6.4.1", "A widget annotation has an action (A)".to_owned()),
+    ];
+    assert_eq!(at(Level::A2b), part2);
+    assert_eq!(at(Level::A3b), part2);
+    assert_eq!(at(Level::A4), vec![("6.4.1", "A widget annotation has an action (A)".to_owned())]);
+    // Additional actions go with conversion; a widget's or a field's own action stays reported.
+    let mut converted = doc.clone();
+    let left: Vec<String> =
+        convert(&mut converted, Level::A2b).unwrap().remaining.into_iter().filter(|i| i.clause == "6.4.1").map(|i| i.message).collect();
+    assert_eq!(left, ["A widget annotation has an action (A)", "A form field has an action (A)"]);
+}

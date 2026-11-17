@@ -242,6 +242,7 @@ pub const WORDINGS: &[&str] = &[
     "A {} annotation has no appearance stream",
     "A {} annotation has additional actions",
     "A form field has additional actions",
+    "A form field has an action (A)",
     // Fonts, streams, images and embedded files.
     "The font {} isn't embedded",
     "A font isn't embedded",
@@ -1869,9 +1870,15 @@ fn check_one_object(
         // and embedded file below all came after that `continue`.
         return;
     }
-    // PDF/A-4 lets form fields have additional actions.
-    if dict.get(b"FT").is_some() && dict.get(b"AA").is_some() && !is_annot && level.part() != 4 {
-        issue("6.5.2", "A form field has additional actions", None, None, true);
+    // 6.4.1: a form field has neither an action nor additional actions in PDF/A-2 and 3. PDF/A-4
+    // lets it have additional actions. A field merged with its widget is checked as the widget.
+    if dict.get(b"FT").is_some() && !is_annot && level.part() != 4 {
+        if entry(doc, dict, b"AA") {
+            issue("6.4.1", "A form field has additional actions", None, None, true);
+        }
+        if entry(doc, dict, b"A") {
+            issue("6.4.1", "A form field has an action (A)", None, None, false);
+        }
     }
     // A Type 0 font's descendant is checked through it.
     if draws && is_font(dict) {
@@ -1916,6 +1923,12 @@ fn is_annotation(doc: &Document, dict: &Dict, ty: Option<&[u8]>, subtype: Option
         || (subtype.is_some() && dict.get(b"Rect").is_some_and(|r| doc.resolve(r).as_array().is_some()) && (on_page || dict.get(b"P").is_some()))
 }
 
+/// Whether `dict` has `key` with a value other than null, which counts as no entry (ISO 32000-2
+/// 7.3.9).
+fn entry(doc: &Document, dict: &Dict, key: &[u8]) -> bool {
+    dict.get(key).is_some_and(|v| !matches!(*doc.resolve(v), Object::Null))
+}
+
 fn check_annotation(
     doc: &Document,
     level: Level,
@@ -1941,14 +1954,22 @@ fn check_annotation(
     if part4 {
         part4::annotation(doc, dict, subtype, &name, page, issue);
     }
+    let widget = subtype == Some(b"Widget");
+    // 6.4.1, in every part: a widget has no action of its own.
+    if widget && entry(doc, dict, b"A") {
+        issue("6.4.1", "A widget annotation has an action (A)", None, page, false);
+    }
     match dict.get(b"AA") {
         // PDF/A-4 lets a widget have any additional actions, and other annotations those of pointer
         // and focus.
         Some(aa) if part4 => {
-            if subtype != Some(b"Widget") && part4::forbidden_trigger(doc, aa).is_some() {
+            if !widget && part4::forbidden_trigger(doc, aa).is_some() {
                 issue("6.5.2", "A {} annotation's additional actions use a trigger PDF/A-4 doesn't allow", Some(name), page, false);
             }
         }
+        // PDF/A-2 and 3 put a widget's additional actions under 6.4.1 with the form's.
+        Some(_) if widget && entry(doc, dict, b"AA") => issue("6.4.1", "A {} annotation has additional actions", Some(name), page, true),
+        Some(_) if widget => {}
         Some(_) => issue("6.5.2", "A {} annotation has additional actions", Some(name), page, true),
         None => {}
     }
