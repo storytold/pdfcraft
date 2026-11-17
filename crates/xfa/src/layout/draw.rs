@@ -354,13 +354,17 @@ impl Layouter<'_> {
                 if !edge.visible() {
                     return Ok(());
                 }
-                // A line without a width is vertical and one without a height is horizontal, as is
-                // one too narrow (or too flat) for its stroke, whatever its slope says.
+                // A line without a width is vertical and one without a height is horizontal,
+                // whatever its slope says; one too narrow or too flat for its stroke runs along its
+                // box's longer side (a zero-height line is horizontal).
                 let width = edge.thickness.clamp(0.1, 20.0);
-                let (from, to) = if d.common.w.is_none() || (d.common.h.is_some() && inner.w <= width * 2.0) {
+                let thin = inner.w <= width * 2.0 || inner.h <= width * 2.0;
+                let vertical = d.common.w.is_none() || (d.common.h.is_some() && thin && inner.h > inner.w);
+                let horizontal = !vertical && (d.common.h.is_none() || thin);
+                let (from, to) = if vertical {
                     let x = inner.x + inner.w / 2.0;
                     ((x, inner.y), (x, inner.bottom()))
-                } else if d.common.h.is_none() || inner.h <= width * 2.0 {
+                } else if horizontal {
                     let y = inner.y + inner.h / 2.0;
                     ((inner.x, y), (inner.right(), y))
                 } else if *slope_up {
