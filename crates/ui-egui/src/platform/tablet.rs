@@ -104,11 +104,18 @@ struct PenInput {
     frame_eraser: AtomicBool,
 }
 
-/// The receiving frame's zoom (`ctx.pixels_per_point()`) guarded the way
+/// The receiving frame's zoom (`ctx.zoom_factor()`) guarded the way
 /// `drag_pointer::in_window` guards it: a zoom that is not a positive finite number
-/// (before the host's first scale event reaches egui) leaves the coordinates alone.
+/// leaves the coordinates alone.
+///
+/// The zoom factor, not `pixels_per_point`: tablet-v2's `motion` is surface-local, the
+/// compositor's *logical* space — the native scale is already out of it — and egui's
+/// points are winit's physical pixels over `pixels_per_point`, which is the zoom factor
+/// times the native scale (`egui_winit::pixels_per_point`). Surface-local into points is
+/// the zoom factor alone: dividing by `pixels_per_point` would divide the native scale
+/// in a second time, and on a HiDPI display the pen would land at half the mouse.
 fn frame_zoom(ctx: &egui::Context) -> Option<f32> {
-    let zoom = ctx.pixels_per_point();
+    let zoom = ctx.zoom_factor();
     (zoom.is_finite() && zoom > 0.0).then_some(zoom)
 }
 
@@ -298,11 +305,13 @@ fn current_modifiers(ctx: &egui::Context) -> egui::Modifiers {
 /// Positions: tablet-v2's `motion` coordinates are surface-local in the compositor's
 /// global space — exactly what `wl_pointer.motion` reports (both are "surface-local"
 /// per tablet-v2.xml and wayland.xml) — and that is not egui's point space. The
-/// division by the zoom happens at drain time ([`PenInput::take_events`]) with the
-/// zoom the receiving frame holds (egui's `pixels_per_point`, which the pinned
-/// egui-winit keeps from the host's scale factor), not with one the reader thread
-/// saw first: the zoom can change between the reader's conversion and this frame's
-/// drain. So the events here carry the surface coordinates as they came.
+/// division happens at drain time ([`PenInput::take_events`]) with the zoom factor the
+/// receiving frame holds (`egui::Context::zoom_factor`): egui's points are winit's
+/// physical pixels over `pixels_per_point`, and `pixels_per_point` is the zoom factor
+/// times the native scale (`egui_winit::pixels_per_point`) — so surface-local, which is
+/// already logical, divides by the zoom factor alone. Not in the reader thread: the
+/// zoom can change between the reader's conversion and this frame's drain. So the
+/// events here carry the surface coordinates as they came.
 fn to_egui(ev: &PenEvent, modifiers: egui::Modifiers) -> (Vec<egui::Event>, SnapshotUpdate) {
     let mut out = Vec::new();
     let mut update = SnapshotUpdate::default();
@@ -539,6 +548,31 @@ mod tests {
         }
         let raw = drain_at(&input, None);
         assert_eq!(raw.events, vec![egui::Event::PointerMoved(egui::pos2(200.0, 100.0))], "{:?}", raw.events);
+    }
+
+    /// Native scale 2 with zoom 1: the surface coordinates are logical already, so the
+    /// conversion divides by the zoom factor alone (`frame_zoom`, which reads
+    /// `ctx.zoom_factor()`) — (200, 100) stays (200, 100). Dividing by
+    /// `pixels_per_point` (the zoom factor times the native scale) would halve it, and
+    /// the pen would land at half the mouse on a HiDPI display.
+    #[test]
+    fn native_scale_2_with_zoom_1_leaves_the_surface_position_unchanged() {
+        let ctx = egui::Context::default();
+        let mut raw = egui::RawInput::default();
+        raw.viewports.entry(raw.viewport_id).and_modify(|v| v.native_pixels_per_point = Some(2.0));
+        ctx.run_ui(raw, |_| {}).drop_without_applying_deltas();
+        assert_eq!(ctx.native_pixels_per_point(), Some(2.0));
+        assert_eq!(ctx.zoom_factor(), 1.0);
+        assert_eq!(ctx.pixels_per_point(), 2.0);
+        assert_eq!(frame_zoom(&ctx), Some(1.0), "zoom 1: the surface coordinates pass through");
+
+        let input = PenInput::default();
+        {
+            let mut stash = input.stash.lock().unwrap();
+            stash.push(stashed(&PenEvent::Move { frame: frame(ToolKind::Pen, 200.0, 100.0) }));
+        }
+        let drained = drain_at(&input, frame_zoom(&ctx));
+        assert_eq!(drained.events, vec![egui::Event::PointerMoved(egui::pos2(200.0, 100.0))], "{:?}", drained.events);
     }
 
     /// The eraser tap whose whole life fits between two frames — enter, press,
