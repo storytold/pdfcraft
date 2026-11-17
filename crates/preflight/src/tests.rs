@@ -2402,3 +2402,39 @@ fn an_interpolated_inline_image_is_reported_clause_6_2_8() {
     let doc = drawing("BI /W 1 /H 1 /CS /G /BPC 8 /I true ID \u{0} EI", "", &[]);
     assert!(verify(&doc, Level::A2b).iter().any(|i| i.message == "An inline image asks to be interpolated" && !i.fixable));
 }
+
+/// A page's `/Contents` parts are one stream: a part may end inside an inline image's dictionary
+/// (ISO 32000-2 7.8.2), and the `/I true` in the next part still belongs to that image.
+#[test]
+fn an_inline_image_split_across_content_parts_is_read_whole() {
+    let stream = |content: &str| format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let (first, second) = (stream("q BI /W 1 /H 1 /CS /G /BPC 8"), stream("/I true ID \u{0} EI Q"));
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] >>",
+        first.as_str(),
+        second.as_str(),
+    ];
+    assert_eq!(interpolation_said(&build(&objs, "")), ["An inline image asks to be interpolated"]);
+}
+
+/// Content that cannot be read may hold an interpolated inline image: the report says it was not
+/// read rather than saying nothing, whether the decode allowance ran out or a filter is unknown.
+#[test]
+fn unreadable_content_is_reported_for_inline_images() {
+    let unreadable = ["Some content could not be read for inline images"];
+    // Past the allowance: 40 bytes allowed, the page's content is longer.
+    let doc = drawing("BI /W 1 /H 1 /CS /G /BPC 8 ID \u{0} EI 0 0 10 10 re f 0 0 20 20 re f", "", &[]);
+    let found = inline_images(&doc, &objects(&doc), 40);
+    assert!(found.incomplete && !found.interpolate);
+    assert!(!inline_images(&doc, &objects(&doc), MAX_INLINE_DECODED).incomplete);
+    // A form XObject with a filter no reader knows.
+    let form = "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 3 /Filter /NoSuchDecode >>\nstream\nabc\nendstream";
+    assert_eq!(interpolation_said(&drawing("/X Do", "/XObject << /X 5 0 R >>", &[form])), unreadable);
+    // An interpolated image that was read is reported as such, whatever else could not be.
+    let doc = drawing("BI /W 1 /H 1 /CS /G /BPC 8 /I true ID \u{0} EI /X Do", "/XObject << /X 5 0 R >>", &[form]);
+    assert_eq!(interpolation_said(&doc), ["An inline image asks to be interpolated"]);
+    // Readable content says nothing.
+    assert!(interpolation_said(&drawing("0 0 1 1 re f", "", &[])).is_empty());
+}
