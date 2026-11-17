@@ -8738,8 +8738,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["a11y.check"]
 tools = ["accessibility_check"]
-evidence = ["crates/a11y/src/tests.rs::an_untagged_document_fails_the_document_rules", "crates/a11y/src/tests.rs::a_well_tagged_document_passes", "crates/a11y/src/tests.rs::structure_findings_identify_indirect_elements_without_guessing_inline_objects", "crates/a11y/src/tests.rs::figures_are_listed_with_their_alt_text_and_place", "crates/a11y/src/tests.rs::annotation_findings_only_locate_valid_rectangles", "crates/automation/tests/it/automation.rs::accessibility_check_locates_field_description_on_page", "crates/ui-egui/tests/it/accessibility.rs::checking_fixing_skipping_and_reporting", "crates/ui-egui/tests/it/accessibility.rs::checker_shows_a_figure_finding_on_its_page", "crates/ui-egui/tests/it/accessibility.rs::checker_summary_does_not_hide_manual_review", "crates/automation/tests/it/automation.rs::accessibility_check_report_and_fixes_through_tools"]
-notes = "full check: options dialog (report, page range, 32 rules by category, 31 on by default), results panel by category with Passed / Failed / Needs manual check / Skipped and findings that go to their page. A zero-failure check reports manual or skipped rules rather than claiming no issues. Locatable figure, annotation and form-widget findings flash their bounds on the page; accessibility_check exposes those bounds in PDF user space. Other findings navigate to their page. Structure findings expose the indirect tag object number and generation through accessibility_check, when available, for precise follow-up in the Tags Panel."
+evidence = ["crates/a11y/src/tests.rs::an_untagged_document_fails_the_document_rules", "crates/a11y/src/tests.rs::a_well_tagged_document_passes", "crates/a11y/src/tests.rs::structure_findings_identify_indirect_elements_without_guessing_inline_objects", "crates/a11y/src/tests.rs::figures_are_listed_with_their_alt_text_and_place", "crates/a11y/src/tests.rs::annotation_findings_only_locate_valid_rectangles", "crates/automation/tests/it/automation.rs::accessibility_check_locates_field_description_on_page", "crates/ui-egui/tests/it/accessibility.rs::checking_fixing_skipping_and_reporting", "crates/ui-egui/tests/it/accessibility.rs::checker_shows_a_figure_finding_on_its_page", "crates/ui-egui/tests/it/accessibility.rs::checker_summary_does_not_hide_manual_review", "crates/automation/tests/it/automation.rs::accessibility_check_report_and_fixes_through_tools", "crates/a11y/src/tests.rs::types_in_a_namespace_are_role_mapped_through_its_role_map"]
+notes = "full check: options dialog (report, page range, 32 rules by category, 31 on by default), results panel by category with Passed / Failed / Needs manual check / Skipped and findings that go to their page. A zero-failure check reports manual or skipped rules rather than claiming no issues. Locatable figure, annotation and form-widget findings flash their bounds on the page; accessibility_check exposes those bounds in PDF user space. Other findings navigate to their page. Structure findings expose the indirect tag object number and generation through accessibility_check, when available, for precise follow-up in the Tags Panel. The structure rules read a tag's type through the tree root's /RoleMap, or, for a tag in a PDF 2.0 namespace (/NS), through that namespace's /RoleMapNS, across namespaces (ISO 32000-2 §14.7.4.2, §14.8.6.2); the tag tools (Tags panel, alternate text, headings) still read /RoleMap only."
 
 [[feature]]
 id = "a11y.checker-report"
@@ -9134,8 +9134,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["a11y.check"]
 tools = ["accessibility_check"]
-evidence = ["crates/a11y/src/tests.rs::structure_problems_are_found"]
-notes = "rule lbl-lbody: Lbl/LBody parent is LI (TOCI and notes allowed)"
+evidence = ["crates/a11y/src/tests.rs::structure_problems_are_found", "crates/a11y/src/tests.rs::a_pdf_2_label_may_label_more_than_a_list_item"]
+notes = "rule lbl-lbody: Lbl/LBody parent is LI (TOCI and notes allowed); a Lbl in the PDF 2.0 namespace also labels headings, form fields and keys (ISO 32000-2 Table 368), so only LBody and the PDF 1.7 Lbl need an LI"
 
 [[feature]]
 id = "a11y.rule-heading-nesting"

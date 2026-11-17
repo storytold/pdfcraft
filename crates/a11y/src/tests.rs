@@ -1921,3 +1921,69 @@ fn checker_reports_each_untagged_annotation_without_copying_shared_dictionaries(
     let found = content::page_rule(&doc, Rule::TaggedAnnotations, &pages, &[0], &Default::default(), false);
     assert_eq!(found.len(), 2, "the popup is skipped, each listed text annotation reported");
 }
+
+/// A tagged PDF 2.0 list, figure and table whose types are XHTML names in their own namespace
+/// (object 4), role mapped through its /RoleMapNS: `li` to LI and `td` to TD in the PDF 2.0
+/// standard namespace (object 5), `img` to Figure in the default one, and `ol` through a third
+/// namespace (object 6) that maps it on to L. `kids` are the Document element's kids.
+fn namespaced_doc(kids: &str) -> Document {
+    structure_doc(&[
+        format!("<< /S /Document /K [{kids}] >>"),
+        "<< /Type /Namespace /NS (http://www.w3.org/1999/xhtml) /RoleMapNS << /ol [/list 6 0 R] /li [/LI 5 0 R] /span [/Lbl 5 0 R] \
+         /div [/LBody 5 0 R] /img /Figure /table [/Table 5 0 R] /tr [/TR 5 0 R] /td [/TD 5 0 R] /loop [/loop 4 0 R] >> >>"
+            .into(),
+        "<< /Type /Namespace /NS (http://iso.org/pdf2/ssn) >>".into(),
+        "<< /Type /Namespace /NS (http://example.com/lists) /RoleMapNS << /list [/L 5 0 R] >> >>".into(),
+    ])
+}
+
+#[test]
+fn types_in_a_namespace_are_role_mapped_through_its_role_map() {
+    // ISO 32000-2 §14.7.4.2 and §14.8.6.2: an element with /NS takes its role map from that
+    // namespace's /RoleMapNS, not from the tree root's /RoleMap.
+    // The labels, bodies and one cell are standard types in the PDF 2.0 namespace; their parents
+    // are XHTML.
+    let (x, ssn) = ("/NS 4 0 R", "/NS 5 0 R");
+    let list = format!("<< /S /ol {x} /K [ << /S /li {x} /K [ << /S /Lbl {ssn} /K 0 >> << /S /LBody {ssn} /K 1 >> ] >> ] >>");
+    let table =
+        format!("<< /S /table {x} /A << /O /Table /Summary (s) >> /K [ << /S /tr {x} /K [ << /S /td {x} /K 2 >> << /S /TD {ssn} /K 4 >> ] >> ] >>");
+    let doc = namespaced_doc(&format!("{list} {table} << /S /img {x} /K 3 >>"));
+    let rules = [Rule::LblLBody, Rule::ListItems, Rule::TableCells, Rule::TableRows, Rule::FiguresAltText];
+    let r = checked(&doc, &rules);
+    for rule in [Rule::LblLBody, Rule::ListItems, Rule::TableCells, Rule::TableRows] {
+        assert_eq!(status(&r, rule), Status::Passed, "{rule:?}: {:?}", r.result(rule));
+    }
+    // The img is a Figure, so its missing alternate text is found.
+    let figures = &r.result(Rule::FiguresAltText).unwrap().findings;
+    assert_eq!(figures.iter().map(|f| f.message.as_str()).collect::<Vec<_>>(), ["Figure element: no alternate text"]);
+}
+
+#[test]
+fn a_pdf_2_label_may_label_more_than_a_list_item() {
+    // ISO 32000-2 Table 368: in the PDF 2.0 namespace Lbl also labels a form field, a heading or a
+    // key. The PDF 1.7 Lbl (the default namespace, or the 1.7 namespace named) and any LBody still
+    // belong in a list item.
+    let doc = structure_doc(&[
+        "<< /S /Document /K [ << /S /Form /K [ << /S /Lbl /NS 4 0 R /K 0 >> ] >> << /S /Form /K [ << /S /Lbl /K 1 >> ] >>          << /S /Form /K [ << /S /Lbl /NS 5 0 R /K 2 >> ] >> << /S /Div /K [ << /S /LBody /NS 4 0 R /K 3 >> ] >> ] >>"
+            .into(),
+        "<< /Type /Namespace /NS (http://iso.org/pdf2/ssn) >>".into(),
+        "<< /Type /Namespace /NS (http://iso.org/pdf/ssn) >>".into(),
+    ]);
+    let r = checked(&doc, &[Rule::LblLBody]);
+    let found: Vec<&str> = r.result(Rule::LblLBody).unwrap().findings.iter().map(|f| f.message.as_str()).collect();
+    assert_eq!(found, ["Lbl element: not in an LI (list item)", "Lbl element: not in an LI (list item)", "LBody element: not in an LI (list item)"]);
+}
+
+#[test]
+fn namespace_role_maps_that_loop_or_lead_nowhere_end_on_a_non_standard_type() {
+    // `loop` maps to itself in its own namespace, `nowhere` is not in the role map at all, and a
+    // /NS that names no dictionary leaves the element in the default namespace (its /RoleMap).
+    let doc = namespaced_doc(
+        "<< /S /loop /NS 4 0 R /K [ << /S /Lbl /K 0 >> ] >> << /S /nowhere /NS 4 0 R /K [ << /S /LBody /K 1 >> ] >> \
+         << /S /LI /NS 99 0 R /K [ << /S /Lbl /K 2 >> ] >>",
+    );
+    let r = checked(&doc, &[Rule::LblLBody]);
+    let found: Vec<&str> = r.result(Rule::LblLBody).unwrap().findings.iter().map(|f| f.message.as_str()).collect();
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(found.iter().all(|m| m.contains("not in an LI")), "{found:?}");
+}
