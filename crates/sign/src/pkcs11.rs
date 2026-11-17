@@ -29,6 +29,15 @@ use zeroize::Zeroizing;
 use crate::keys::{DigestAlg, ExternalKey, PrivateKey, PublicKey, Scheme};
 use crate::{Certificate, DigitalId, SignError};
 
+/// `DigestInfo ::= SEQUENCE { AlgorithmIdentifier, OCTET STRING }`, the standard
+/// RSA PKCS #1 v1.5 preimage the token signs. The shared `craft-pkcs7` verifier
+/// owns the same encoding, but it keeps the writer private.
+fn digest_info(alg: DigestAlg, digest: &[u8]) -> Vec<u8> {
+    let alg = crate::keys::shared_digest(alg);
+    let id = craft_pkcs7::der::algorithm(alg.oid(), Some(craft_pkcs7::der::null().as_slice()));
+    craft_pkcs7::der::seq(&[&id, &craft_pkcs7::der::octets(digest)])
+}
+
 /// Loads a PKCS #11 module and initializes it for multi-threaded use.
 fn load(path: &str) -> Result<Pkcs11, SignError> {
     let client = Pkcs11::new(path).map_err(|e| SignError::Crypto(format!("{}: {e}", module_name(path))))?;
@@ -337,7 +346,7 @@ impl Pkcs11Key {
             return Err(SignError::Crypto("the token lost its private key".into()));
         };
         let digest = alg.digest(&[msg]);
-        let data: Vec<u8> = if rsa { crate::rsa_pad::digest_info(alg, &digest, true) } else { digest.clone() };
+        let data: Vec<u8> = if rsa { digest_info(alg, &digest) } else { digest.clone() };
         let mechanism = if rsa { Mechanism::RsaPkcs } else { Mechanism::Ecdsa };
         let signature = session.sign(&mechanism, key, &data).map_err(|e| match e {
             Error::Pkcs11(RvError::UserNotLoggedIn, _) => SignError::Crypto("the token requires its PIN to sign".into()),
