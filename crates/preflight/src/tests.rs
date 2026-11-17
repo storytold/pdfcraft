@@ -3023,6 +3023,32 @@ fn notdef_is_found_in_forms_drawn_and_read_on_their_own() {
     assert_eq!(notdef_said(&alone, Level::A2b), ["Text refers to the .notdef glyph of the font Sans"]);
 }
 
+/// A field appearance without resources of its own shows text in the font the interactive form's
+/// default resources (`/AcroForm /DR`, ISO 32000-2 12.7.3) give the name it selects, embedded or not.
+#[test]
+fn notdef_is_found_in_an_appearance_that_takes_its_font_from_the_form_defaults() {
+    let file = |appearance: &str| {
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DR << /Font << /Helv 6 0 R >> >> >> >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] /Resources << >> >>".to_owned(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (f) /Rect [0 0 20 20] /F 4 /P 3 0 R /AP << /N 5 0 R >> >>".to_owned(),
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length {} >>\nstream\n{appearance}\nendstream", appearance.len() + 1),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Sans /Encoding /WinAnsiEncoding /FontDescriptor 7 0 R >>".to_owned(),
+            "<< /Type /FontDescriptor /FontName /Sans /Flags 32 /FontFile 8 0 R >>".to_owned(),
+            "<< /Length 0 >>\nstream\n\nendstream".to_owned(),
+        ];
+        let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+        build(&objs, "")
+    };
+    for level in [Level::A2b, Level::A4] {
+        assert_eq!(notdef_said(&file("BT /Helv 10 Tf 2 2 Td <00> Tj ET"), level), ["Text refers to the .notdef glyph of the font Sans"], "{level:?}");
+        assert!(notdef_said(&file("BT /Helv 10 Tf 2 2 Td (x) Tj ET"), level).is_empty(), "{level:?}");
+        // A name the default resources don't hold is no font that is known.
+        assert!(notdef_said(&file("BT /Other 10 Tf 2 2 Td <00> Tj ET"), level).is_empty(), "{level:?}");
+    }
+}
+
 /// A PDF/A-4 file (ISO 19005-4) without pages whose objects from 4 on are `more`.
 fn pdfa4_file(more: &[Vec<u8>]) -> Vec<u8> {
     let packet = "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\

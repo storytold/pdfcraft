@@ -626,9 +626,24 @@ fn drawing_fonts(
     objs: &[(ObjRef, std::sync::Arc<Object>)],
     wanted: &std::collections::HashSet<ObjRef>,
 ) -> (std::collections::HashSet<ObjRef>, Vec<ObjRef>) {
+    // The interactive form's default resources (`/AcroForm /DR`, ISO 32000-2 12.7.3), which hold the
+    // fonts an appearance without resources of its own names.
+    let form_defaults = {
+        let form = catalog(doc).get(b"AcroForm").map(|f| doc.resolve(f));
+        form.as_deref().and_then(Object::as_dict).and_then(|f| f.get(b"DR")).map(|dr| {
+            let mut holder = Dict::new();
+            holder.set(b"Resources".to_vec(), dr.clone());
+            holder
+        })
+    };
+    let mut defaults = std::collections::HashMap::new();
+    for (selection, font) in form_defaults.as_ref().map(|d| resource_fonts(doc, d)).unwrap_or_default() {
+        defaults.entry(selection).or_insert(font);
+    }
     let mut fonts = Fonts {
         doc,
         notdef: notdef::Notdef::new(doc),
+        defaults,
         budget: pdfcraft_cos::DecodeBudget::new(MAX_FONT_CONTENT_DECODED, usize::MAX),
         wanted,
         found: 0,
@@ -710,16 +725,10 @@ fn drawing_fonts(
     }
     let Fonts { mut out, anywhere, every_font, found, notdef, .. } = fonts;
     if found < wanted.len() && (every_font || !anywhere.is_empty()) {
-        // The interactive form's default resources (`/AcroForm /DR`, ISO 32000-2 12.7.3) are where
-        // a reader looks for the font a field's appearance names when the appearance has no
-        // resources of its own: they count as one more resource dictionary here.
-        let form = catalog(doc).get(b"AcroForm").map(|f| doc.resolve(f));
-        let defaults = form.as_deref().and_then(Object::as_dict).and_then(|f| f.get(b"DR")).map(|dr| {
-            let mut holder = Dict::new();
-            holder.set(b"Resources".to_vec(), dr.clone());
-            holder
-        });
-        let holders = objs.iter().filter_map(|(_, o)| dict_of(o)).chain(defaults.as_ref());
+        // The interactive form's default resources are where a reader looks for the font a field's
+        // appearance names when the appearance has no resources of its own: they count as one more
+        // resource dictionary here.
+        let holders = objs.iter().filter_map(|(_, o)| dict_of(o)).chain(form_defaults.as_ref());
         for d in holders {
             for (name, font) in resource_fonts(doc, d) {
                 if every_font || anywhere.contains(&name) {
@@ -774,6 +783,10 @@ struct Fonts<'a> {
     doc: &'a Document,
     /// The text that refers to `.notdef`, whatever the mode.
     notdef: notdef::Notdef<'a>,
+    /// The fonts of the interactive form's default resources, by how and by what name content
+    /// selects them: the font text shows `.notdef` with when content without resources of its own
+    /// selects it by name, as a field's appearance does.
+    defaults: std::collections::HashMap<Selection, ObjRef>,
     budget: pdfcraft_cos::DecodeBudget,
     /// The fonts asked about.
     wanted: &'a std::collections::HashSet<ObjRef>,
@@ -902,8 +915,15 @@ impl Fonts<'_> {
                 }
                 b"Tj" | b"TJ" | b"'" | b"\"" => {
                     self.shows(&state);
-                    if let Some(Current::Font(font)) = &state.font {
-                        self.notdef.shows(*font, &op);
+                    let font = match &state.font {
+                        Some(Current::Font(font)) => Some(*font),
+                        // Content without resources of its own: a field's appearance, whose font a
+                        // reader takes from the form's default resources (ISO 32000-2 12.7.3).
+                        Some(Current::Named(selection)) => self.defaults.get(selection).copied(),
+                        None => None,
+                    };
+                    if let Some(font) = font {
+                        self.notdef.shows(font, &op);
                     }
                 }
                 b"Do" => {
