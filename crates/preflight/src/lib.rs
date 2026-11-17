@@ -236,6 +236,7 @@ pub const WORDINGS: &[&str] = &[
     // Pages, actions, annotations and fields.
     "Page {} has additional actions",
     "A {} action isn't allowed",
+    "Some document-level JavaScript could not be read for the actions it runs",
     "{} annotations aren't allowed",
     "A {} annotation isn't set to print, or is hidden",
     "A {} annotation has no appearance stream",
@@ -1625,11 +1626,14 @@ fn check_catalog_actions(doc: &Document, level: Level, issue: &mut impl FnMut(&'
     match javascript {
         // PDF/A-4 allows JavaScript actions, not every action their `/Next` chains run.
         Some(tree) if part4 => {
-            let mut read = (std::collections::HashSet::new(), 0usize);
+            let mut read = (std::collections::HashSet::new(), 0usize, false);
             let mut forbidden = Vec::new();
             javascript_tree(doc, level, tree, 0, &mut read, &mut forbidden);
             for name in forbidden {
                 issue("6.5.1", "A {} action isn't allowed", Some(name), None, true);
+            }
+            if read.2 {
+                issue("6.5.1", "Some document-level JavaScript could not be read for the actions it runs", None, None, false);
             }
         }
         Some(_) => issue("6.5.1", "The document has document-level JavaScript", None, None, true),
@@ -1662,24 +1666,22 @@ pub fn page_uses_transparency(doc: &Document, page: &Dict) -> bool {
 const MAX_NAME_TREE_NODES: usize = 1 << 16;
 const MAX_NAME_TREE_DEPTH: usize = 32;
 
+/// What [`javascript_tree`] has read: the nodes and arrays by reference, how many nodes, and
+/// whether a limit left some unread.
+type NameTreeRead = (std::collections::HashSet<ObjRef>, usize, bool);
+
 /// The forbidden actions (by `/S`) that the document-level JavaScript actions written in place in
 /// the name tree `node` (the catalog's `/Names /JavaScript`, ISO 32000-2 7.7.4, Table 32, and
 /// 7.9.6) run in their `/Next` chains, at `level`. An action that is an object of its own is checked
-/// as one. `read` holds the nodes and arrays read by reference and how many nodes were read, so a
-/// node or array that many nodes share is read once.
-fn javascript_tree(
-    doc: &Document,
-    level: Level,
-    node: &Object,
-    depth: usize,
-    read: &mut (std::collections::HashSet<ObjRef>, usize),
-    forbidden: &mut Vec<String>,
-) {
+/// as one. `read` holds the nodes and arrays read by reference, so a node or array that many nodes
+/// share is read once, how many nodes were read, and whether the limits left any unread.
+fn javascript_tree(doc: &Document, level: Level, node: &Object, depth: usize, read: &mut NameTreeRead, forbidden: &mut Vec<String>) {
     if depth > MAX_NAME_TREE_DEPTH || read.1 >= MAX_NAME_TREE_NODES {
+        read.2 = true;
         return;
     }
     read.1 = read.1.saturating_add(1);
-    let once = |o: &Object, read: &mut (std::collections::HashSet<ObjRef>, usize)| o.as_ref().is_none_or(|r| read.0.insert(r));
+    let once = |o: &Object, read: &mut NameTreeRead| o.as_ref().is_none_or(|r| read.0.insert(r));
     if !once(node, read) {
         return;
     }
