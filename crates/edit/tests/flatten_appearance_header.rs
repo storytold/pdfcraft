@@ -62,7 +62,7 @@ fn fixture() -> Document {
 
 /// The object numbers the page's `/XObject` dictionary places, in placement order.
 fn placed(doc: &Document) -> Vec<(Vec<u8>, ObjRef)> {
-    let page = pdfcraft_model::pages(doc).swap_remove(0);
+    let page = pdfcraft_model::pages(doc).remove(0);
     let resources = doc.resolve(page.dict.get(b"Resources").unwrap());
     let xobjects = doc.resolve(resources.as_dict().unwrap().get(b"XObject").unwrap());
     let mut placed: Vec<(Vec<u8>, ObjRef)> = xobjects.as_dict().unwrap().iter().filter_map(|(k, v)| v.as_ref().map(|r| (k.clone(), r))).collect();
@@ -90,6 +90,7 @@ fn appearances_without_xobject_keys_flatten_as_conformant_copies() {
         let d = stream_dict(&doc, *r);
         assert_eq!(d.name(b"Type"), Some(b"XObject".as_slice()), "{name:?}: /Type");
         assert_eq!(d.name(b"Subtype"), Some(b"Form".as_slice()), "{name:?}: /Subtype");
+        assert!(matches!(d.get(b"FormType"), Some(Object::Int(1))), "{name:?}: /FormType");
         assert!(d.get(b"BBox").is_some(), "{name:?}: /BBox kept");
     }
     let by_name = |n: &[u8]| placed.iter().find(|(k, _)| k == n).map(|(_, r)| *r).unwrap();
@@ -97,10 +98,15 @@ fn appearances_without_xobject_keys_flatten_as_conformant_copies() {
     assert_eq!(by_name(b"PCFl0"), by_name(b"PCFl3"), "two fields share one conformant copy");
     assert_ne!(by_name(b"PCFl0"), ObjRef::new(5, 0), "the deficient original is not placed");
     assert_ne!(by_name(b"PCFl1"), ObjRef::new(7, 0));
+    if let (Object::Stream(copy), Object::Stream(source)) = (&*doc.get(by_name(b"PCFl0")), &*doc.get(ObjRef::new(5, 0))) {
+        assert_eq!(copy.raw, source.raw, "the placed copy keeps the source stream's bytes");
+    } else {
+        panic!("placed copy and source are streams");
+    }
     for (n, original) in [5usize, 7, 9].into_iter().zip(originals) {
         assert_eq!(*doc.get(ObjRef::new(n as u32, 0)), original, "stored appearance {n} is never edited");
     }
-    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    let page = pdfcraft_model::pages(&doc).remove(0);
     if let Some(annots) = page.dict.get(b"Annots") {
         assert_eq!(doc.resolve(annots).as_array().map(|l| l.len()), Some(0));
     }
