@@ -196,8 +196,8 @@ fn rebuild(doc: &mut Document, order: &[(ObjRef, Dict)]) -> Result<(), OrganizeE
     Ok(())
 }
 
-/// Gather the document's `/Type /Page` objects into a new page tree when the catalog leads to no
-/// page (its `/Pages` is missing or points at a lost object). Readers then find the pages by
+/// Gather the document's `/Type /Page` objects that have `/Contents` into a new page tree when the
+/// catalog leads to no page (its `/Pages` is missing or points at a lost object). Readers then find the pages by
 /// scanning the file, in file order, and edits must address those same pages. Returns how many
 /// pages were gathered; 0 leaves the document unchanged.
 pub fn recover_page_tree(doc: &mut Document) -> Result<usize, OrganizeError> {
@@ -215,7 +215,9 @@ pub fn recover_page_tree(doc: &mut Document) -> Result<usize, OrganizeError> {
     };
     let mut found: Vec<((u64, u32), ObjRef)> = doc
         .scan_objects()
-        .filter(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"Type") == Some(b"Page")))
+        // As the renderer's scan takes them: a page dictionary with content. A page without
+        // `/Contents` isn't shown, so gathering it would give a tree of more pages than are shown.
+        .filter(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"Type") == Some(b"Page") && d.get(b"Contents").is_some()))
         .map(|(r, _)| (position(r.num), r))
         .collect();
     if found.is_empty() {

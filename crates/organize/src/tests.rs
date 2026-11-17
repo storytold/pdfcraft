@@ -4982,3 +4982,23 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
     assert_eq!(source_bookmarks(&all), [("Chapter one".to_string(), vec!["Section".to_string()])]);
     assert!(attachments(&all));
 }
+
+/// A page tree that leads to no page (its root is its own only kid), and three page dictionaries
+/// that name it as their `/Parent`: the one without `/Contents` is left out of the new tree, as
+/// the renderer's scan leaves it out, so both find the same two pages.
+#[test]
+fn a_recovered_page_tree_takes_only_pages_with_content() {
+    let bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [2 0 R] /Count 1 /MediaBox [0 0 300 200] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>".to_string(),
+        body("One"),
+        body("Two"),
+    ];
+    let mut doc = open(build(&bodies, "/Root 1 0 R"));
+    assert_eq!(page_count(&doc).unwrap(), 0);
+    assert_eq!(recover_page_tree(&mut doc).unwrap(), 2);
+    assert_eq!(labels(&doc), ["One", "Two"]);
+}
