@@ -101,6 +101,11 @@ pub enum EditNotice {
     /// said the file conforms to PDF/A or PDF/UA: each claim was written back in a packet of its
     /// own, or lost (see [`RedactionIdentification`](crate::RedactionIdentification)).
     RedactionIdentification(pdfcraft_redact::Identification),
+    /// The content list of these pages (0-based, ascending), which the edit rewrote, named
+    /// `entries` things that are not content streams in all: objects missing from the file,
+    /// `null`s, objects of another type. They draw nothing, and were left out of the list
+    /// (ISO 32000-2 §7.7.3.3), not carried into it for a save to write as `null`.
+    ContentsLeftOut { pages: Vec<usize>, entries: usize },
 }
 
 /// The standards whose identification `id` has as `claim`: "PDF/A", "PDF/UA" or both, joined.
@@ -122,6 +127,16 @@ impl std::fmt::Display for EditNotice {
                 )
             }
             EditNotice::RedactionElsewhere(e) => elsewhere_text(e, f),
+            EditNotice::ContentsLeftOut { pages, entries } => {
+                let (what, was) = if *entries == 1 { ("entry", "was") } else { ("entries", "were") };
+                let which = if pages.len() == 1 { "page" } else { "pages" };
+                write!(
+                    f,
+                    "{entries} {what} in the content list of {which} {} named no content stream (an object missing from the file, or not a stream) and {was} left out; {} drew nothing",
+                    page_runs(pages),
+                    if *entries == 1 { "it" } else { "they" }
+                )
+            }
             EditNotice::RedactionIdentification(id) => {
                 use pdfcraft_redact::Claim;
                 write!(f, "the document's XMP metadata held the redacted text and was removed")?;

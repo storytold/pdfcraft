@@ -287,6 +287,7 @@ impl PdfCraftApp {
                         pdfcraft_engine::EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
                         pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
                         pdfcraft_engine::EditNotice::RedactionElsewhere(e) => crate::dialogs::still_holding_note(e).unwrap_or_else(|| n.to_string()),
+                        pdfcraft_engine::EditNotice::ContentsLeftOut { .. } => n.to_string(),
                         pdfcraft_engine::EditNotice::RedactionIdentification(id) => {
                             crate::dialogs::identification_note(id).unwrap_or_else(|| n.to_string())
                         }
