@@ -25,9 +25,9 @@ mod clip;
 mod flow;
 mod layout;
 
-pub(crate) use as_docx::hex;
 #[cfg(test)]
-use as_docx::{MAX_MEDIA, docx_table};
+use as_docx::MAX_MEDIA;
+pub(crate) use as_docx::hex;
 pub use as_docx::{docx, docx_with_language};
 pub(crate) use as_html::esc;
 #[cfg(test)]
