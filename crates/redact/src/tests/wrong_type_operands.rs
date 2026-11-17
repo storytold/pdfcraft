@@ -231,14 +231,15 @@ fn type3_kept(show: &str) -> bool {
 
 /// A lone `-` is the number 0 to the renderer, as to the content parser: `- Tc` sets the spacing
 /// to 0 and `- Tr` the mode to fill, not left as they were, and a `"` with it among its spacings
-/// draws. With the sign dropped, the B was taken for 70 points on, the visible text for hidden and
-/// removed, and the quoted text for not drawn.
+/// draws. Read as no number, the sign was a byte the parser skipped, and Apply Redactions and
+/// Remove Hidden Information refused the page as unreadable.
 #[test]
 fn a_lone_minus_is_zero() {
     use crate::sanitize::{Hidden, remove_hidden};
     assert_eq!(glyphs(b"BT /F1 10 Tf 70 Tc - Tc 20 20 Td (AB) Tj ET", [26.0, 15.0, 29.0, 35.0]), 1);
     assert_eq!(glyphs(b"BT /F1 10 Tf 20 100 Td 50 TL 0 - (AB) \" ET", [15.0, 45.0, 40.0, 65.0]), 2);
     let mut doc = one_page(b"BT /F1 10 Tf 3 Tr - Tr 20 260 Td (VISIBLE) Tj ET", "", vec![]);
-    let _ = remove_hidden(&mut doc, &[Hidden::HiddenText]);
+    let removed = remove_hidden(&mut doc, &[Hidden::HiddenText]);
+    assert!(matches!(removed, Err(RedactError::NothingToApply)), "{removed:?}");
     assert!(content(&doc, 0).contains("VISIBLE"), "{}", content(&doc, 0));
 }

@@ -279,21 +279,18 @@ fn both_parsers_read_a_doubled_minus_as_one_number() {
     assert_eq!(pdfcraft_content::parse(data).skipped, 0, "--280 is read as one number, not recovered from -280");
 }
 
-/// A lone sign is a number to the renderer: up to two signs with no digit after them are 0 when
-/// one is a minus, as PDF.js reads a lone `-` (its bugs 1753983 and 1953099, the second before a
-/// show-text string).
-/// The content crate skipped such a token, so `3 Tr - Tr` kept mode 3 where the renderer fills,
-/// and `0 - (a) "` lost the operand the renderer shows `a` with. A `+` or `++` alone is no number:
-/// the renderer reads it as an operator, which drops the operands before it, and the content crate
-/// drops them too.
+/// A lone sign is a number to the renderer: a token of one or two signs with a minus among them is
+/// 0, as PDF.js reads a lone `-` (its bugs 1753983 and 1953099, the second before a show-text
+/// string). The content crate skipped such a token, so the `Tr` of `3 Tr - Tr` came without an
+/// operand, and the `"` of `0 - (a) "` without one the renderer reads. craft-pdf's parser reads it
+/// as 0 since craft-libs #1958. Other sign tokens are pinned below.
 #[test]
 fn both_parsers_read_a_lone_sign_as_the_renderer_does() {
     agree("lone minus", b"3 Tr - Tr 0 - (a) \" 70 Tc -(x) Tj", &["Tr", "Tr", "\"", "Tc", "Tj"]);
     assert_eq!(content(b"3 Tr - Tr")[1].operands, ["0"]);
     assert_eq!(content(b"0 - (a) \"")[0].operands, ["0", "0", format!("({})", hex(b"a")).as_str()]);
-    agree("two signs", b"-- w +- w -+ w --- w - /N gs -x", &["w", "w", "w", "w", "gs", "x"]);
-    agree("lone plus", b"5 + Tc 5 ++ Tc 5 +x Tc 5 w", &["Tc", "Tc", "Tc", "w"]);
-    assert!(content(b"5 + Tc").iter().all(|t| t.operands.is_empty()), "the operands before a lone plus are dropped");
+    agree("two signs", b"-- w +- w -+ w - /N gs 5 -- - w", &["w", "w", "w", "gs", "w"]);
+    assert_eq!(content(b"5 -- - w")[0].operands, ["5", "0", "0"]);
     agree("signs of a number", b"-5 w +5 w --5 w +-5 w -.5 w +.5 w - 5 w", &["w", "w", "w", "w", "w", "w", "w"]);
 }
 
@@ -309,6 +306,30 @@ fn a_sign_run_after_a_digit_is_part_of_its_number_to_hayro_and_no_number_to_the_
         assert_eq!(content(data), [tok("Tc", &[])], "{}", String::from_utf8_lossy(data));
         assert_eq!(hayro(data), [tok("Tc", &["5"])], "{}", String::from_utf8_lossy(data));
     }
+}
+
+/// No issue filed. The sign tokens craft-pdf's parser doesn't read as 0 (craft-libs #1958), which it
+/// skips as before, keeping the operands before them, but for a sign before a letter, where it reads
+/// the letter as an operator that takes them. The two hayro-syntax copies read `+`, `++`, `---`,
+/// `----` and `-x` differently: craft-libs' copy reads `+` and `++` as 0 and `---` as an operator it
+/// doesn't know, PdfCraft's the other way round. Both read `+++`, `-++` and `+x` as, or as ending
+/// in, such an operator, which drops the operands before it. The renderer, on PdfCraft's copy, reads
+/// signs two at a time, a pair with a minus as 0, so `---` is two zeros and `-x` a zero before the
+/// operator `x`. Malformed; pinned on both sides.
+#[test]
+fn the_sign_tokens_the_content_crate_skips_are_read_otherwise_by_hayro() {
+    for data in [&b"5 + Tc"[..], b"5 ++ Tc", b"5 +++ Tc", b"5 -++ Tc"] {
+        assert_eq!(content(data), [tok("Tc", &["5"])], "{}", String::from_utf8_lossy(data));
+        assert_eq!(hayro(data), [tok("Tc", &[])], "{}", String::from_utf8_lossy(data));
+    }
+    assert_eq!(content(b"5 +x Tc"), [tok("x", &["5"]), tok("Tc", &[])]);
+    assert_eq!(hayro(b"5 +x Tc"), [tok("Tc", &[])]);
+    for data in [&b"5 --- w"[..], b"5 ---- w"] {
+        assert_eq!(content(data), [tok("w", &["5"])], "{}", String::from_utf8_lossy(data));
+        assert_eq!(hayro(data), [tok("w", &["5", "0", "0"])], "{}", String::from_utf8_lossy(data));
+    }
+    assert_eq!(content(b"5 -x w"), [tok("x", &["5"]), tok("w", &[])]);
+    assert_eq!(hayro(b"5 -x w"), [tok("x", &["5", "0"]), tok("w", &[])]);
 }
 
 /// No issue filed; #2877 (open) changes number reading in cos and render. ISO 32000-2 §7.3.3
