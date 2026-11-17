@@ -59,6 +59,21 @@ impl TextLine {
     pub(crate) fn frame_rect(&self) -> [f64; 4] {
         self.frame
     }
+
+    /// How far it is from a run after it, described by its `ink` and `size`, along the baseline:
+    /// the boxes' `gap`, widened by the ink-to-ink gap when the boxes themselves are apart. The
+    /// spaces a run ends or starts with lie inside its box, so where the boxes touch the ink gap
+    /// is only that padding — a word space, no ink moved apart (#7086).
+    pub(crate) fn gap_to(&self, ink: &[[f64; 4]], gap: f64, size: f64) -> f64 {
+        // Boxes this close touch: the gap is at most floating-point noise.
+        if !self.upright() || gap <= self.size.max(size).max(1.0) * 0.02 {
+            return gap;
+        }
+        match (self.ink.iter().map(|b| b[2]).fold(f64::NEG_INFINITY, f64::max), ink.iter().map(|b| b[0]).fold(f64::INFINITY, f64::min)) {
+            (end, start) if end.is_finite() && start.is_finite() => gap.max(start - end),
+            _ => gap,
+        }
+    }
 }
 
 /// One entry of a page's `/Contents`, and what it decoded to.
@@ -495,9 +510,11 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool, in
                 && near
                 // Across text objects only a word space apart still reads as one line; table
                 // cells in their own text objects sit a column gutter apart (#7086). Shows in
-                // one text object keep the wider window they always joined within.
+                // one text object keep the wider window they always joined within. A gap that
+                // is only a run's own leading or trailing spaces is a word space too: the boxes
+                // touch, so the line keeps the wider window ([`TextLine::gap_to`]).
                 && (bt == s.bt
-                    || lines.last().is_some_and(|l| join_gap(l, &s, gap) <= word_window(doc, &fonts, &mut spaces, l, &s, pen.size)))
+                    || lines.last().is_some_and(|l| l.gap_to(&s.ink, gap, s.size) <= word_window(doc, &fonts, &mut spaces, l, &s, pen.size)))
                 // An OCR layer is one text object over the whole scan: its words continue a line
                 // only across a word space, not across a table cell or a tab stop.
                 && (s.state.render_mode != 3 || (gap < pen.size * 0.6 && !invisible_apart))
@@ -602,20 +619,6 @@ fn space_em(doc: &Document, fonts: &Dict, cache: &mut HashMap<Vec<u8>, f64>, fon
         .unwrap_or(0.33);
     cache.insert(font.to_vec(), space);
     space
-}
-
-/// How far apart `line` and the run `s` are along the baseline, ignoring padding spaces: the
-/// pen-to-pen `gap`, or the ink-to-ink gap when both sides draw ink on an upright baseline,
-/// whichever is wider. Padding spaces inside table cells shrink the pen's gap without moving
-/// the glyphs, which once read the cells as one word (#7086).
-fn join_gap(line: &TextLine, s: &Shown, gap: f64) -> f64 {
-    if !line.upright() {
-        return gap;
-    }
-    match (line.ink.iter().map(|b| b[2]).fold(f64::NEG_INFINITY, f64::max), s.ink.iter().map(|b| b[0]).fold(f64::INFINITY, f64::min)) {
-        (end, start) if end.is_finite() && start.is_finite() => gap.max(start - end),
-        _ => gap,
-    }
 }
 
 /// How far apart two shows on one baseline may be and still read as one line: the line's own
