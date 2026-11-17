@@ -1921,3 +1921,73 @@ fn checker_reports_each_untagged_annotation_without_copying_shared_dictionaries(
     let found = content::page_rule(&doc, Rule::TaggedAnnotations, &pages, &[0], &Default::default(), false);
     assert_eq!(found.len(), 2, "the popup is skipped, each listed text annotation reported");
 }
+
+/// The clear text of a Type 1 font program whose built-in encoding is `encoding`, followed by
+/// stand-in encrypted bytes.
+fn type1_program(encoding: &str) -> String {
+    stream(&format!("%!PS-AdobeFont-1.0: Test-Math 001.000\n/FontName /Test-Math def\n{encoding}\ncurrentfile eexec\n\u{1}\u{2}\u{3}"))
+}
+
+/// A page showing `content` with fonts /F1 (object 5) and /F2 (object 7): symbolic Type 1 fonts
+/// without /Encoding or /ToUnicode whose embedded programs (objects 6 and 9) have the built-in
+/// encodings `first` and `second`; a form XObject /X (object 8) shows `(+)` in the font in effect.
+fn symbolic_type1_doc(content: &str, first: &str, second: &str) -> Document {
+    let font = |name: &str, descriptor: u32| format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name} /FontDescriptor {descriptor} 0 R >>");
+    let descriptor = |file: u32| format!("<< /Type /FontDescriptor /FontName /Test-Math /Flags 4 /FontFile {file} 0 R >>");
+    pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 7 0 R >> /XObject << /X 8 0 R >> >> >>"
+                .into(),
+            stream(content),
+            font("ABCDEF+Test-Math", 10),
+            type1_program(first),
+            font("GHIJKL+Other-Math", 11),
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 13 >>\nstream\nBT (+) Tj ET\nendstream".into(),
+            type1_program(second),
+            descriptor(6),
+            descriptor(9),
+        ],
+        "",
+    )
+}
+
+#[test]
+fn a_symbolic_type1_font_maps_through_its_built_in_glyph_names() {
+    // ISO 32000-2 §9.10.2: a simple font whose glyphs are selected by name maps them to Unicode
+    // through those names. These fonts name `plus` and `minus` by the glyph lists' rules, while
+    // `geqslant` and an unnamed code are not.
+    let math =
+        "/Encoding 256 array\n0 1 255 {1 index exch /.notdef put} for\ndup 43 /plus put\ndup 45 /minus put\ndup 202 /geqslant put\nreadonly def";
+    let other = "/Encoding 256 array\ndup 43 /geqslant put\ndup 45 /uni2212 put\nreadonly def";
+    let cases = [
+        // Codes with standard names, in F1.
+        ("BT /F1 12 Tf (+-) Tj [(+) 120 (-)] TJ ET", None),
+        // A name no rule reads, and a code with no name at all.
+        ("BT /F1 12 Tf <CA> Tj ET", Some("ABCDEF+Test-Math")),
+        ("BT /F1 12 Tf (A) ' ET", Some("ABCDEF+Test-Math")),
+        ("BT /F1 12 Tf 0 0 (A) \" ET", Some("ABCDEF+Test-Math")),
+        // F2's `+` is geqslant; `uni2212` reads as U+2212. Q brings back F1 for the `+`.
+        ("BT /F2 12 Tf (-) Tj ET", None),
+        ("BT /F1 12 Tf q /F2 12 Tf Q (+) Tj ET", None),
+        ("BT /F1 12 Tf q /F2 12 Tf (+) Tj Q ET", Some("GHIJKL+Other-Math")),
+        // A form XObject shows its `+` in the font set where it is drawn, and restores none.
+        ("BT /F2 12 Tf ET /X Do", Some("GHIJKL+Other-Math")),
+        ("BT /F1 12 Tf ET /X Do BT /F2 12 Tf (-) Tj ET", None),
+    ];
+    for (content, unmapped) in cases {
+        let r = checked(&symbolic_type1_doc(content, math, other), &[Rule::CharacterEncoding]);
+        let found: Vec<&str> = r.result(Rule::CharacterEncoding).unwrap().findings.iter().map(|f| f.message.as_str()).collect();
+        match unmapped {
+            None => assert!(found.is_empty(), "{content}: {found:?}"),
+            Some(name) => assert_eq!(found, [format!("Font {name} on page 1 doesn't map its characters to Unicode")], "{content}"),
+        }
+    }
+    // A program built on StandardEncoding has Latin names; one without an encoding has none, and
+    // nor has a font whose program isn't embedded.
+    let standard = checked(&symbolic_type1_doc("BT /F1 12 Tf (A) Tj ET", "/Encoding StandardEncoding def", other), &[Rule::CharacterEncoding]);
+    assert_eq!(status(&standard, Rule::CharacterEncoding), Status::Passed);
+    let none = checked(&symbolic_type1_doc("BT /F1 12 Tf (+) Tj ET", "/CharStrings 1 dict", other), &[Rule::CharacterEncoding]);
+    assert_eq!(status(&none, Rule::CharacterEncoding), Status::Failed);
+}

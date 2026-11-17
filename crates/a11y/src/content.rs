@@ -4,7 +4,7 @@
 //! Every sentence a rule here can say is listed in [`crate::WORDINGS`], so interfaces can say it in
 //! their own language; a test in this crate keeps that list complete.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object};
 use pdfcraft_model::Page;
@@ -20,11 +20,17 @@ pub(crate) struct Scan {
     pub untagged: BTreeMap<usize, usize>,
     /// Page → fonts used.
     pub fonts: BTreeMap<usize, BTreeSet<ObjRef>>,
+    /// Font → the one-byte codes its text shows, on any checked page: bit `c` of the set is code `c`.
+    pub codes: HashMap<ObjRef, [u64; 4]>,
     /// Pages read only in part: content or forms past the page's decode budget are missing.
     pub incomplete: BTreeSet<usize>,
 }
 
 const MAX_FORM_DEPTH: usize = 12;
+
+/// `q` saves nested deeper than this keep no font of their own to restore: `Q` then leaves the
+/// current one.
+const MAX_SAVES: usize = 4096;
 
 impl Scan {
     pub fn run(doc: &Document, pages: &[Page], list: &[usize]) -> Scan {
@@ -37,7 +43,7 @@ impl Scan {
             if budget.remaining() == 0 {
                 s.incomplete.insert(p);
             }
-            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget };
+            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget, font: None };
             w.content(&data, &res, false, 0);
         }
         s
@@ -51,6 +57,9 @@ struct Walk<'a> {
     forms: HashSet<ObjRef>,
     /// Decoded bytes and form entries left for this page.
     budget: DecodeBudget,
+    /// The current font (Tf), part of the graphics state: `q` saves it and `Q` restores it, and a
+    /// form XObject starts with the one in effect where it is drawn.
+    font: Option<ObjRef>,
 }
 
 fn bdc_marks(doc: &Document, op: &pdfcraft_content::Op, props: &Dict) -> bool {
@@ -67,16 +76,41 @@ impl Walk<'_> {
         res.get(key).map(|x| self.doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default()
     }
 
+    /// Notes the codes a text-showing operator shows in the current font, one byte each: what a
+    /// simple font's encoding reads (ISO 32000-2 §9.6.5).
+    fn shown(&mut self, op: &pdfcraft_content::Op) {
+        let Some(font) = self.font else { return };
+        let strings: Vec<&[u8]> = match (op.op.as_slice(), op.operands.as_slice()) {
+            (b"Tj" | b"'", [Object::String(s), ..]) => vec![&s.bytes],
+            (b"\"", [_, _, Object::String(s), ..]) => vec![&s.bytes],
+            (b"TJ", [Object::Array(items), ..]) => items.iter().filter_map(|x| x.as_string().map(|s| s.bytes.as_slice())).collect(),
+            _ => return,
+        };
+        let set = self.scan.codes.entry(font).or_default();
+        for &b in strings.iter().flat_map(|s| s.iter()) {
+            if let Some(word) = set.get_mut(usize::from(b >> 6)) {
+                *word |= 1 << (b & 63);
+            }
+        }
+    }
+
     /// Walk a content stream; `covered`: already inside tagged or artifact content.
     fn content(&mut self, data: &[u8], res: &Dict, covered: bool, depth: usize) {
         let (fonts, xobjects, props) = (self.sub(res, b"Font"), self.sub(res, b"XObject"), self.sub(res, b"Properties"));
         // Marked-content stack: whether each level is tagged or an artifact.
         let mut stack: Vec<bool> = Vec::new();
         let mut untagged = 0;
+        let mut saved: Vec<Option<ObjRef>> = Vec::new();
         // One operator at a time: the walk keeps counts, never the stream's operators.
         for op in pdfcraft_content::ops(data) {
             let inside = covered || stack.last().copied().unwrap_or(false);
             match op.op.as_slice() {
+                b"q" if saved.len() < MAX_SAVES => saved.push(self.font),
+                b"Q" => {
+                    if let Some(font) = saved.pop() {
+                        self.font = font;
+                    }
+                }
                 b"BMC" => stack.push(inside || op.name(0) == Some(b"Artifact")),
                 b"BDC" => stack.push(inside || bdc_marks(self.doc, &op, &props)),
                 b"EMC" => {
@@ -85,11 +119,14 @@ impl Walk<'_> {
                 b"Tj" | b"TJ" | b"'" | b"\"" => {
                     self.scan.has_text = true;
                     untagged += usize::from(!inside);
+                    self.shown(&op);
                 }
                 b"Tf" => {
-                    if let Some(r) = op.name(0).and_then(|n| fonts.get(n)).and_then(Object::as_ref) {
+                    let font = op.name(0).and_then(|n| fonts.get(n)).and_then(Object::as_ref);
+                    if let Some(r) = font {
                         self.scan.fonts.entry(self.page).or_default().insert(r);
                     }
+                    self.font = font;
                 }
                 b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s" | b"sh" => untagged += usize::from(!inside),
                 b"BI" => {
@@ -120,6 +157,7 @@ impl Walk<'_> {
                                 }
                             };
                             self.forms.insert(r);
+                            let font = self.font;
                             let inner = x
                                 .dict
                                 .get(b"Resources")
@@ -127,6 +165,7 @@ impl Walk<'_> {
                                 .and_then(|o| o.as_dict().cloned())
                                 .unwrap_or_else(|| res.clone());
                             self.content(&data, &inner, inside, depth + 1);
+                            self.font = font;
                             self.forms.remove(&r);
                         }
                         _ => {}
@@ -322,11 +361,14 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
         }
         Rule::CharacterEncoding => {
             let mut seen = HashSet::new();
+            // What the embedded font programs read here may decode, all together.
+            let mut programs = DecodeBudget::new(MAX_FONT_PROGRAMS, 0);
             for (p, fonts) in &scan.fonts {
                 for r in fonts {
                     if seen.insert(*r)
                         && let Some(f) = doc.get(*r).as_dict()
                         && !maps_to_unicode(doc, f)
+                        && !built_in_names_map(doc, f, scan.codes.get(r), &mut programs)
                     {
                         // A font with no name gets its own whole sentence, so another language can
                         // word that rather than translate a parenthesis. The name itself is the
@@ -390,6 +432,81 @@ fn full_name(doc: &Document, field: ObjRef) -> String {
     }
     parts.reverse();
     parts.join(".")
+}
+
+/// The most bytes one embedded Type 1 font program may decode to when its built-in encoding is
+/// read, and the most all of them may decode to in one check.
+const MAX_FONT_PROGRAM: usize = 4 << 20;
+const MAX_FONT_PROGRAMS: usize = 64 << 20;
+
+/// The clear-text part of a Type 1 font program read for its encoding, at most: the encoding comes
+/// before `eexec`, a few kilobytes in.
+const MAX_CLEAR_TEXT: usize = 256 << 10;
+
+/// Whether a Type 1 font without an /Encoding entry, which reads its codes through the built-in
+/// encoding of its embedded program, names a glyph for every code `codes` shows whose name gives
+/// its Unicode value: ISO 32000-2 §9.10.2's route through glyph names, open to a simple font
+/// whose glyph selection uses a glyph name (§9.6.5.2). A symbolic font's built-in names are often
+/// standard ones (`plus`, `minus`), and are then read like those of any other encoding. A name
+/// counts when [`pdfcraft_fonts::pdf::glyph_text`] reads it. A program that can't be read, or
+/// codes without a name, leave the font without a route.
+fn built_in_names_map(doc: &Document, f: &Dict, codes: Option<&[u64; 4]>, budget: &mut DecodeBudget) -> bool {
+    if !matches!(f.name(b"Subtype"), Some(b"Type1" | b"MMType1")) || f.contains(b"Encoding") {
+        return false;
+    }
+    let descriptor = f.get(b"FontDescriptor").map(|d| doc.resolve(d));
+    let program = descriptor.as_deref().and_then(Object::as_dict).and_then(|d| d.get(b"FontFile")).map(|x| doc.resolve(x));
+    let Some(Object::Stream(program)) = program.as_deref() else { return false };
+    let Ok(data) = budget.decode_within(program, MAX_FONT_PROGRAM) else { return false };
+    let names = match built_in_encoding(&data) {
+        Some(BuiltIn::Standard) => return true,
+        Some(BuiltIn::Names(names)) => names,
+        None => return false,
+    };
+    let Some(codes) = codes else { return true };
+    (0..=u8::MAX).filter(|&c| codes.get(usize::from(c >> 6)).is_some_and(|w| w & (1 << (c & 63)) != 0)).all(|c| {
+        names
+            .get(usize::from(c))
+            .and_then(|n| n.as_deref())
+            .and_then(|n| std::str::from_utf8(n).ok())
+            .is_some_and(|n| pdfcraft_fonts::pdf::glyph_text(n).is_some())
+    })
+}
+
+/// A Type 1 font program's built-in encoding.
+enum BuiltIn {
+    /// `/Encoding StandardEncoding def`: Adobe's standard Latin names (ISO 32000-2 Annex D.2).
+    Standard,
+    /// The glyph name of each code, from `dup code /name put`; `None` for a code it doesn't name.
+    Names(Vec<Option<Vec<u8>>>),
+}
+
+/// The built-in encoding of a Type 1 font program, from the `/Encoding` its clear text defines
+/// before `eexec` (Adobe Type 1 Font Format, 2.3): StandardEncoding, or an array filled with
+/// `dup code /name put`. `None` when the program defines neither.
+fn built_in_encoding(program: &[u8]) -> Option<BuiltIn> {
+    let clear = program.get(..program.len().min(MAX_CLEAR_TEXT))?;
+    let clear = clear.windows(5).position(|w| w == b"eexec").and_then(|end| clear.get(..end)).unwrap_or(clear);
+    let at = clear.windows(9).position(|w| w == b"/Encoding")?;
+    let rest = clear.get(at.saturating_add(9)..)?;
+    let mut tokens = rest.split(|b| b.is_ascii_whitespace() || *b == 0).filter(|t| !t.is_empty()).peekable();
+    if tokens.peek().is_some_and(|t| *t == b"StandardEncoding") {
+        return Some(BuiltIn::Standard);
+    }
+    let mut names: Vec<Option<Vec<u8>>> = vec![None; 256];
+    let mut any = false;
+    // `dup 33 /arrowright put`, until the array is defined (`readonly def` or `def`).
+    let tokens: Vec<&[u8]> = tokens.take_while(|t| *t != b"def").collect();
+    for w in tokens.windows(4) {
+        if let [b"dup", code, name, b"put"] = w
+            && let Some(name) = name.strip_prefix(b"/")
+            && let Some(slot) = std::str::from_utf8(code).ok().and_then(|c| c.parse::<usize>().ok()).and_then(|c| names.get_mut(c))
+        {
+            *slot = Some(name.to_vec());
+            any = true;
+        }
+    }
+    any.then_some(BuiltIn::Names(names))
 }
 
 /// Predefined CJK CMaps (ISO 32000-2 §9.7.5.2, Table 116), excluding Identity-H/V.
