@@ -130,6 +130,11 @@ impl OcrDraft {
         if let Some(o) = v["output"].as_str().and_then(OcrOutput::from_name) {
             self.output = o;
         }
+        // Only a resolution the dialog offers: anything else keeps the default, so a damaged or
+        // foreign value can't make a run reduce the scans below what was chosen.
+        if let Some(dpi) = v["dpi"].as_u64().and_then(|d| u32::try_from(d).ok()).filter(|d| DPI_CHOICES.contains(d)) {
+            self.dpi = dpi;
+        }
         for (key, flag) in
             [("auto_rotate", &mut self.auto_rotate), ("deskew", &mut self.deskew), ("denoise", &mut self.denoise), ("binarize", &mut self.binarize)]
         {
@@ -161,6 +166,7 @@ impl OcrDraft {
             },
             "output_mode": self.output_mode.name(),
             "output": self.output.name(),
+            "dpi": self.dpi,
             "auto_rotate": self.auto_rotate,
             "deskew": self.deskew,
             "denoise": self.denoise,
@@ -245,6 +251,10 @@ pub(crate) fn keep_asking_while_probing(ctx: &egui::Context) {
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
     }
 }
+
+/// The resolutions Searchable Image (downsampled) offers, and the only ones restored from the
+/// preferences.
+const DPI_CHOICES: [u32; 4] = [600, 300, 150, 72];
 
 /// The dialog's height outside its scrolling settings: the title, a notice of up to two lines,
 /// the Cancel / Recognize text row and the modal's own margins.
@@ -373,7 +383,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     ui.end_row();
                     ui.label(tl!("Downsample to"));
                     craft_ui::ComboBox::from_id_salt("ocr-dpi").selected_text(format!("{} dpi", d.dpi)).width(220.0).show_ui(ui, |ui| {
-                        for v in [600, 300, 150, 72] {
+                        for v in DPI_CHOICES {
                             ui.selectable_value(&mut d.dpi, v, format!("{v} dpi"));
                         }
                     });
@@ -1692,6 +1702,25 @@ mod tests {
         e.output_folder = Some("kept".into());
         e.apply_pref(&serde_json::json!({ "output_folder": "" }));
         assert_eq!(e.output_folder.as_deref(), Some("kept"), "an empty value is not a folder");
+    }
+
+    /// The downsampling resolution is remembered with the output it belongs to: Downsampled at
+    /// 600 dpi comes back at 600, not at the 300 default. Only an offered resolution is restored
+    /// (#5126 review).
+    #[test]
+    fn the_downsampling_resolution_is_persisted_with_the_output() {
+        let mut d = OcrDraft { output: OcrOutput::Downsampled, dpi: 600, ..OcrDraft::default() };
+        let mut r = OcrDraft::default();
+        r.apply_pref(&d.to_pref());
+        assert_eq!((r.output, r.dpi), (OcrOutput::Downsampled, 600));
+        d.dpi = 72;
+        r.apply_pref(&d.to_pref());
+        assert_eq!(r.dpi, 72);
+        for odd in [serde_json::json!(301), serde_json::json!(0), serde_json::json!(-300), serde_json::json!("600"), serde_json::json!(1u64 << 40)] {
+            let mut e = OcrDraft::default();
+            e.apply_pref(&serde_json::json!({ "dpi": odd }));
+            assert_eq!(e.dpi, 300, "{odd} is not an offered resolution");
+        }
     }
 
     /// "Automatic" saved without a strategy reads the way Automatic reads by default (the
