@@ -61,6 +61,7 @@ pdfcraft-cos = { path = "crates/cos", version = "0.21.0" }
 pdfcraft-crypt = { path = "crates/crypt", version = "0.21.0" }
 pdfcraft-organize = { path = "crates/organize", version = "0.21.0" }
 pdfcraft-measure = { path = "crates/measure", version = "0.21.0" }
+pdfcraft-spell = { path = "crates/spell", version = "0.21.0" }
 pdfcraft-annot = { path = "crates/annot", version = "0.21.0" }
 pdfcraft-audit = { path = "crates/audit", version = "0.21.0" }
 pdfcraft-fonts = { path = "crates/fonts", version = "0.21.0" }

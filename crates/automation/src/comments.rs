@@ -147,7 +147,7 @@ impl Automation {
     }
 
     /// Comments of a document, optionally only of one 0-based page.
-    fn comments(&self, a: &Args) -> Result<Vec<Annotation>> {
+    pub(crate) fn comments(&self, a: &Args) -> Result<Vec<Annotation>> {
         let doc = self.doc(a)?;
         Ok(doc.info.annotations.iter().filter(|x| x.subtype != "Popup").cloned().collect())
     }
