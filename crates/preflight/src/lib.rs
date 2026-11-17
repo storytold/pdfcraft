@@ -1334,6 +1334,9 @@ fn check_identification(
             if part.as_deref() != Some(&level.part().to_string()) || conf.as_deref().map(str::to_uppercase).as_deref() != Some("B") {
                 issue("6.6.4", "The metadata doesn't identify the file as {}", Some(level.label().to_owned()), None, true);
             }
+            for property in xmp::other_prefixes(&x, &["part", "conformance"]) {
+                issue("6.6.4", "The identification property {} isn't written with the prefix pdfaid", Some(property.to_owned()), None, true);
+            }
             if let Some(title) = info(doc, "Title")
                 && xmp::value(&x, "dc:title").is_some_and(|t| t != title)
             {

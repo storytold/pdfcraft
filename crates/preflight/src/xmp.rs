@@ -113,6 +113,38 @@ fn parsed_identifier(xmp: &str, namespace: &str, local: &str) -> Result<Option<S
     walk(&root, &NsScope::root(), namespace, local)
 }
 
+/// The identification properties among `properties` that the packet `x` writes with a prefix other
+/// than `pdfaid` (ISO 19005-2 and -3 6.6.4, ISO 19005-4 6.7.3), each named once. A packet that can't
+/// be parsed reports none: it is read by the prefix anyway.
+pub(crate) fn other_prefixes(x: &str, properties: &[&'static str]) -> Vec<&'static str> {
+    fn walk(el: &craft_xml::El, parent: &NsScope<'_>, properties: &[&'static str], found: &mut Vec<&'static str>, depth: usize) {
+        // The parser already bounds the depth; this keeps the walk total on its own.
+        if depth > 1024 {
+            return;
+        }
+        let scope = parent.child(el);
+        for &property in properties {
+            let element = scope.is(el, PDFA_ID, property) && el.prefix() != "pdfaid";
+            let attribute = el.attrs.iter().any(|(k, _)| {
+                k.split_once(':').is_some_and(|(prefix, local)| local == property && prefix != "pdfaid" && scope.attr_ns(k) == Some(PDFA_ID))
+            });
+            if (element || attribute) && !found.contains(&property) {
+                found.push(property);
+            }
+        }
+        for child in el.elements() {
+            walk(child, &scope, properties, found, depth.saturating_add(1));
+        }
+    }
+    let mut found = Vec::new();
+    if x.len() <= MAX_XMP_BYTES
+        && let Some(root) = parse(x)
+    {
+        walk(&root, &NsScope::root(), properties, &mut found, 0);
+    }
+    found
+}
+
 /// Reject deep XML and start tags with too many attributes before parsing.
 /// Each unquoted `=` in a valid start tag introduces an attribute, including namespace bindings.
 /// Every `b[i]` and `hay[p..]` below is guarded by `i < b.len()` / `p < hay.len()`.

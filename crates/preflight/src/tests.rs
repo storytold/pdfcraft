@@ -391,7 +391,15 @@ fn standards_identification_uses_namespace_not_prefix() {
     for xml in [attribute, element] {
         let doc = with_xmp(xml);
         assert_eq!(declared(&doc).pdfa, Some((2, "B".into())));
-        assert!(!verify(&doc, Level::A2b).iter().any(|i| i.clause == "6.6.4"));
+        // Identified by namespace; 6.6.4 still asks for the prefix pdfaid.
+        let found: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.4").map(|i| i.message).collect();
+        assert_eq!(
+            found,
+            [
+                "The identification property part isn't written with the prefix pdfaid",
+                "The identification property conformance isn't written with the prefix pdfaid"
+            ]
+        );
     }
     assert_eq!(declared(&with_xmp(attribute)).pdfua, Some(1));
     let wrong = r#"<root xmlns:pdfaid="urn:wrong" pdfaid:part="2" pdfaid:conformance="B"/>"#;
@@ -2869,4 +2877,56 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
+}
+
+/// 6.6.4 of PDF/A-2 and 3: the identification properties `part` and `conformance` are written with
+/// the prefix `pdfaid`, as attributes or as elements, whatever prefix their namespace is bound to
+/// elsewhere; Save as PDF/A writes them afresh.
+#[test]
+fn identification_properties_need_the_prefix_pdfaid_clause_6_6_4() {
+    fn with_xmp(xmp: &str) -> Document {
+        let stream = format!(
+            "<< /Type /Metadata /Subtype /XML /Length {} >>
+stream
+{xmp}
+endstream",
+            xmp.len()
+        );
+        build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "")
+    }
+    fn prefixes(doc: &Document, level: Level) -> Vec<String> {
+        verify(doc, level).into_iter().filter(|i| i.clause == "6.6.4").map(|i| i.message).collect()
+    }
+    let rdf = |inner: &str| format!(r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">{inner}</rdf:RDF>"#);
+    let ns = "http://www.aiim.org/pdfa/ns/id/";
+    // The prefix veraPDF's 6-6-4-t01-fail-b uses, as attributes.
+    let pdfa = with_xmp(&rdf(&format!(r#"<rdf:Description xmlns:pdfa="{ns}" rdf:about="" pdfa:part="3" pdfa:conformance="B"/>"#)));
+    assert_eq!(
+        prefixes(&pdfa, Level::A3b),
+        [
+            "The identification property part isn't written with the prefix pdfaid",
+            "The identification property conformance isn't written with the prefix pdfaid"
+        ]
+    );
+    // One property of each kind: an element with another prefix, an attribute with pdfaid.
+    let mixed = with_xmp(&rdf(&format!(
+        r#"<rdf:Description xmlns:pdfaid="{ns}" xmlns:id="{ns}" pdfaid:part="2"><id:conformance>B</id:conformance></rdf:Description>"#
+    )));
+    assert_eq!(prefixes(&mixed, Level::A2b), ["The identification property conformance isn't written with the prefix pdfaid"]);
+    // pdfaid itself, as attributes and as elements; another schema's part property doesn't count.
+    for inner in [
+        format!(r#"<rdf:Description xmlns:pdfaid="{ns}" pdfaid:part="2" pdfaid:conformance="B"/>"#),
+        format!(
+            r#"<rdf:Description xmlns:pdfaid="{ns}" xmlns:o="urn:other"><pdfaid:part>2</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance><o:part>9</o:part></rdf:Description>"#
+        ),
+    ] {
+        assert!(prefixes(&with_xmp(&rdf(&inner)), Level::A2b).is_empty(), "{inner}");
+    }
+    // PDF/A-4 checks part and rev under its own clause, not conformance.
+    let four =
+        with_xmp(&rdf(&format!(r#"<rdf:Description xmlns:pdfaid="{ns}" xmlns:p="{ns}" pdfaid:part="4" pdfaid:rev="2020" p:conformance="F"/>"#)));
+    assert!(!verify(&four, Level::A4f).iter().any(|i| i.message.contains("prefix pdfaid")));
+    let mut converted = pdfa.clone();
+    let report = convert(&mut converted, Level::A3b).unwrap();
+    assert!(!report.remaining.iter().any(|i| i.clause == "6.6.4"), "{:#?}", report.remaining);
 }

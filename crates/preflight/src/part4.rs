@@ -220,38 +220,9 @@ pub(crate) fn identification(x: &str, level: Level, issue: &mut Report<'_>) {
         }
         Some(_) => {}
     }
-    for property in other_prefixes(x) {
+    for property in xmp::other_prefixes(x, &["part", "rev"]) {
         issue("6.7.3", "The identification property {} isn't written with the prefix pdfaid", Some(property.to_owned()), None, false);
     }
-}
-
-/// The identification properties among `part` and `rev` that the packet `x` writes with a prefix
-/// other than `pdfaid`. A packet that can't be parsed reports none: it is read by the prefix anyway.
-fn other_prefixes(x: &str) -> Vec<&'static str> {
-    fn walk(el: &craft_xml::El, parent: &xmp::NsScope<'_>, found: &mut Vec<&'static str>, depth: usize) {
-        // The parser already bounds the depth; this keeps the walk total on its own.
-        if depth > 1024 {
-            return;
-        }
-        let scope = parent.child(el);
-        for property in ["part", "rev"] {
-            let element = scope.is(el, xmp::PDFA_ID, property) && el.prefix() != "pdfaid";
-            let attribute = el.attrs.iter().any(|(k, _)| {
-                k.split_once(':').is_some_and(|(prefix, local)| local == property && prefix != "pdfaid" && scope.attr_ns(k) == Some(xmp::PDFA_ID))
-            });
-            if (element || attribute) && !found.contains(&property) {
-                found.push(property);
-            }
-        }
-        for child in el.elements() {
-            walk(child, &scope, found, depth.saturating_add(1));
-        }
-    }
-    let mut found = Vec::new();
-    if let Some(root) = xmp::parse(x) {
-        walk(&root, &xmp::NsScope::root(), &mut found, 0);
-    }
-    found
 }
 
 /// The rules for the document as a whole: the information dictionary, the catalog's version and
