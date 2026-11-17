@@ -2449,6 +2449,20 @@ fn indirect_objects_are_written_as_pdfa_asks_clause_6_1_9() {
     // stream data starts after the real keyword.
     let stream_note = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Note (stream\n) /Length 18 >>\nstream\nendstream endobj x\nendstream\nendobj";
     assert_eq!(with_page("\n", stream_note), Vec::<String>::new());
+    // So may a comment after `endstream`.
+    let stream_comment = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 2 >>\nstream\nxx\nendstream % endobj\nendobj";
+    assert_eq!(with_page("\n", stream_comment), Vec::<String>::new());
+    assert_eq!(with_page("\n", "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 2 >>\nstream\nxx\nendstream % c\n endobj").len(), 1);
+    // An object with an unsaved edit is written again on saving, so its old bytes aren't read,
+    // nor taken to hold the data of its replacement, which would find `endstream` in the old data.
+    let old = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 18 >>\nstream\nendstream endobj x\nendstream\nendobj";
+    let mut file = laid_out(&[("\n", CATALOG), ("\n", PAGES), ("\n", old)]);
+    assert!(verify(&file, Level::A2b).iter().all(|i| i.clause != "6.1.9"));
+    let mut emptied = Dict::new();
+    emptied.set(b"Type".to_vec(), Object::name("Page"));
+    emptied.set(b"Parent".to_vec(), Object::Ref(ObjRef::new(2, 0)));
+    file.set(ObjRef::new(3, 0), Object::Stream(pdfcraft_cos::Stream::from_raw(emptied, Vec::new())));
+    assert!(verify(&file, Level::A2b).iter().all(|i| i.clause != "6.1.9"));
 
     // `endobj` inside a literal string, a name or a comment isn't the object's `endobj`.
     assert_eq!(with_page("\n", "3 0 obj\n<< /Type /Page /Parent 2 0 R /T (endobj) >>\nendobj"), Vec::<String>::new());

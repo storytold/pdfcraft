@@ -73,6 +73,11 @@ pub(crate) fn check(doc: &Document) -> Findings {
     let mut out = Findings::default();
     for (i, &(at, num)) in placed.iter().enumerate() {
         let end = placed.get(i.saturating_add(1)).map_or(data.len(), |&(next, _)| next);
+        // An object with an unsaved edit is written again when the file is saved, so its old
+        // bytes aren't what is judged; the document's copy of it isn't what they hold either.
+        if doc.is_edited(num) {
+            continue;
+        }
         let note = |slot: &mut Option<u32>| {
             slot.get_or_insert(num);
         };
@@ -101,9 +106,9 @@ pub(crate) fn check(doc: &Document) -> Findings {
         if !is_eol(data.get(body)) {
             note(&mut out.after_obj);
         }
-        // Where to look for `endobj`: past the stream data when the object is a stream, else past
-        // its value and any comments after it, so `endobj` in a string, name or comment isn't
-        // taken for it.
+        // Where to look for `endobj`: past the stream data and any comments after `endstream`
+        // when the object is a stream, else past its value and any comments after it, so `endobj`
+        // in a string, name or comment isn't taken for it.
         let past = match &*doc.get(ObjRef::new(num, doc.generation(num))) {
             Object::Stream(s) => past_stream(data, body, end, s.raw.len()),
             _ => None,
@@ -139,7 +144,8 @@ fn past_value(data: &[u8], body: usize, end: usize) -> Option<usize> {
     Some(lx.pos)
 }
 
-/// Where the stream whose object body starts at `body` ends: just past its `endstream`. The
+/// Where the stream whose object body starts at `body` ends: past its `endstream` and the white
+/// space and comments after it, as [`past_value`] reads past those after a value. The
 /// `stream` keyword is the one after the dictionary as the lexer reads it, so `stream` in a string
 /// of the dictionary isn't taken for it. `raw_len` is how long the document reads the data to be.
 /// `None` when the dictionary, the `stream` keyword or `endstream` isn't there to read before
@@ -158,5 +164,8 @@ fn past_stream(data: &[u8], body: usize, end: usize, raw_len: usize) -> Option<u
     });
     // The stream data never holds `endstream` itself, so the search starts just inside it.
     let past = start.saturating_add(raw_len).saturating_sub(b"endstream".len()).max(start);
-    find(data, b"endstream", past.min(end), end).map(|e| e.saturating_add(b"endstream".len()))
+    let after = find(data, b"endstream", past.min(end), end)?.saturating_add(b"endstream".len());
+    let mut lx = Lexer::new(data.get(..end)?, after);
+    lx.skip_ws();
+    Some(lx.pos)
 }
