@@ -840,7 +840,17 @@ fn references(objs: &[Indirect], pages: &[pdfcraft_model::Page]) -> (Vec<Vec<usi
                 other => other.as_dict(),
             };
             for map in RESOURCE_MAPS.iter().filter_map(|key| resources?.get(key)?.as_ref()) {
-                maps.insert(map.num);
+                // Through objects that only refer to another, to the map itself, each counted.
+                let mut at = map;
+                for _ in 0..MAX_GROUP_DEPTH {
+                    if !maps.insert(at.num) {
+                        break;
+                    }
+                    match object(at.num) {
+                        Some(Object::Ref(next)) => at = *next,
+                        _ => break,
+                    }
+                }
             }
         }
     }
