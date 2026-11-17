@@ -726,7 +726,7 @@ type Indirect = (pdfcraft_cos::ObjRef, std::sync::Arc<Object>);
 /// it inherits from the page tree included (ISO 32000-2 7.7.3.4). What a page leads to is drawn only
 /// where pages draw it, even when the catalog, its form fields or its structure tree lead to it too;
 /// what no page leads to (an object nothing refers to, and what only such objects lead to) is drawn
-/// at `elsewhere`. A reference back up (`/Parent`, `/P`) to a dictionary leads nowhere: it draws nothing.
+/// at `elsewhere`. A reference back up (`/Parent`, `/P`) leads nowhere: it draws nothing.
 pub(crate) fn colour_places(
     doc: &Document,
     objs: &[Indirect],
@@ -816,44 +816,67 @@ pub(crate) fn colour_places(
     groups
 }
 
+/// The name maps a resource dictionary holds (ISO 32000-2 7.8.3, Table 34).
+const RESOURCE_MAPS: [&[u8]; 7] = [b"ExtGState", b"ColorSpace", b"Pattern", b"Shading", b"XObject", b"Font", b"Properties"];
+
 /// What each of `objs` refers to, as positions in `objs`, and whether anything refers to it. A
 /// page refers to what its dictionary in `pages`, with the attributes it inherits, does. A
-/// reference back up (`/Parent`, `/P`) isn't counted unless it leads to a stream.
+/// reference back up (`/Parent`, `/P`) isn't counted, but for a key of a resource name map.
 fn references(objs: &[Indirect], pages: &[pdfcraft_model::Page]) -> (Vec<Vec<usize>>, Vec<bool>) {
     use std::collections::{HashMap, HashSet};
     let index: HashMap<u32, usize> = objs.iter().enumerate().map(|(i, (r, _))| (r.num, i)).collect();
     let page_dicts: HashMap<u32, &Dict> = pages.iter().map(|p| (p.obj.num, &p.dict)).collect();
-    // A dictionary's values. `/Parent` and `/P` refer back up to a dictionary (a page tree node, a
-    // field, a page, a structure element), so they are marked: a stream they lead to is content, as
-    // in a resource dictionary that names a form `/P`, and is kept.
-    fn entries(d: &Dict) -> Vec<(&Object, usize, bool)> {
-        d.iter().map(|(k, v)| (v, 1, matches!(k.as_slice(), b"Parent" | b"P"))).collect()
+    let object = |num: u32| index.get(&num).and_then(|&j| objs.get(j)).map(|(_, o)| &**o);
+    // The name maps of resource dictionaries (ISO 32000-2 7.8.3, Table 34), and of an interactive
+    // form's default resources (`/DR`), held as objects of their own. Their keys are the names
+    // content uses, so a form or a pattern named `/P` or `/Parent` there is no reference back up.
+    let mut maps: HashSet<u32> = HashSet::new();
+    for (r, o) in objs {
+        let holder = match (page_dicts.get(&r.num), &**o) {
+            (Some(page), _) => Some(*page),
+            (None, Object::Dict(d)) => Some(d),
+            (None, Object::Stream(s)) => Some(&s.dict),
+            _ => None,
+        };
+        for resources in [b"Resources".as_slice(), b"DR"].iter().filter_map(|key| holder?.get(key)) {
+            let resources = match resources {
+                Object::Ref(t) => object(t.num).and_then(Object::as_dict),
+                other => other.as_dict(),
+            };
+            for map in RESOURCE_MAPS.iter().filter_map(|key| resources?.get(key)?.as_ref()) {
+                maps.insert(map.num);
+            }
+        }
+    }
+    // A dictionary's values. `/Parent` and `/P` refer back up (to a page tree node, a field, a page,
+    // a structure element) everywhere but in a name map, and lead nowhere.
+    fn entries(d: &Dict, map: bool) -> Vec<(&Object, usize)> {
+        d.iter().filter(|(k, _)| map || !matches!(k.as_slice(), b"Parent" | b"P")).map(|(_, v)| (v, 1)).collect()
     }
     let mut refers: Vec<Vec<usize>> = vec![Vec::new(); objs.len()];
     let mut referred = vec![false; objs.len()];
     for (i, (r, o)) in objs.iter().enumerate() {
-        let mut stack: Vec<(&Object, usize, bool)> = match (page_dicts.get(&r.num), &**o) {
-            (Some(page), _) => entries(page),
-            (None, Object::Stream(s)) => entries(&s.dict),
-            (None, Object::Dict(d)) => entries(d),
+        let map = maps.contains(&r.num);
+        let mut stack: Vec<(&Object, usize)> = match (page_dicts.get(&r.num), &**o) {
+            (Some(page), _) => entries(page, false),
+            (None, Object::Stream(s)) => entries(&s.dict, map),
+            (None, Object::Dict(d)) => entries(d, map),
             // An array of its own, such as a page's `/Contents` (ISO 32000-2 7.7.3.3).
-            (None, Object::Array(a)) => a.iter().map(|x| (x, 1, false)).collect(),
+            (None, Object::Array(a)) => a.iter().map(|x| (x, 1)).collect(),
             // An object whose value is a reference to another stands for it.
-            (None, Object::Ref(_)) => vec![(&**o, 1, false)],
+            (None, Object::Ref(_)) => vec![(&**o, 1)],
             _ => continue,
         };
         let mut found = HashSet::new();
-        while let Some((v, depth, up)) = stack.pop() {
+        while let Some((v, depth)) = stack.pop() {
             match v {
                 Object::Ref(t) if t.num != r.num => {
-                    if let Some(&j) = index.get(&t.num)
-                        && (!up || objs.get(j).is_some_and(|(_, target)| matches!(**target, Object::Stream(_))))
-                    {
+                    if let Some(&j) = index.get(&t.num) {
                         found.insert(j);
                     }
                 }
-                Object::Array(a) if depth < MAX_GROUP_DEPTH => stack.extend(a.iter().map(|x| (x, depth + 1, false))),
-                Object::Dict(d) if depth < MAX_GROUP_DEPTH => stack.extend(d.iter().map(|(_, x)| (x, depth + 1, false))),
+                Object::Array(a) if depth < MAX_GROUP_DEPTH => stack.extend(a.iter().map(|x| (x, depth + 1))),
+                Object::Dict(d) if depth < MAX_GROUP_DEPTH => stack.extend(d.iter().map(|(_, x)| (x, depth + 1))),
                 _ => {}
             }
         }
