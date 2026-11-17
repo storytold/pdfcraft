@@ -42,7 +42,8 @@ impl Skippable for ObjRef {
         // PdfCraft patch: (hayro-syntax (33)) a comment counts as white space, here too.
         r.skip::<i32>(false)?;
         r.skip_white_spaces_and_comments();
-        r.skip::<i32>(false)?;
+        // PdfCraft patch (48): the generation is stepped over as `read_generation` reads it.
+        read_generation(r)?;
         r.skip_white_spaces_and_comments();
         r.forward_tag(b"R")?;
 
@@ -54,12 +55,39 @@ impl Readable<'_> for ObjRef {
     fn read(r: &mut Reader<'_>, _: &ReaderContext<'_>) -> Option<Self> {
         let obj_ref = r.read_without_context::<i32>()?;
         r.skip_white_spaces_and_comments();
-        let gen_num = r.read_without_context::<i32>()?;
+        // PdfCraft patch (48): see `read_generation`.
+        let gen_num = read_generation(r)?;
         r.skip_white_spaces_and_comments();
         r.forward_tag(b"R")?;
 
         Some(Self::new(obj_ref, gen_num))
     }
+}
+
+/// PdfCraft patch (48): the generation number of a reference `N G R`, with one that does not fit
+/// an `i32` read as 0.
+///
+/// A generation number is at most 65,535 (ISO 32000-2 §7.5.4), so `58 4285904753 R` is
+/// malformed. Skipping steps over any run of digits as a number, though, so the first pass of an
+/// array or dictionary took it for a reference, and reading it as one then failed: the item was
+/// lost, or read as the three items `58`, `4285904753` and `R`. A page's `/Contents` array
+/// written that way lost the streams it names, and with them whatever they drew
+/// (`GHOSTSCRIPT-691345-0.pdf`, attached to PDFBOX-5456: the black boxes a later update draws
+/// over a fax cover's text). No object can carry such a generation, so the object number is
+/// what identifies the object: generation 0 is the key a rebuilt table files such a header under
+/// (see `read_object_header` in `xref.rs`, #5580), and the generation of almost every object.
+///
+/// Only the digits skipping already accepts are read this way, so reading and skipping agree.
+fn read_generation(r: &mut Reader<'_>) -> Option<i32> {
+    let mut strict = r.clone();
+    if let Some(generation) = strict.read_without_context::<i32>() {
+        *r = strict;
+        return Some(generation);
+    }
+    let mut lenient = r.clone();
+    lenient.skip::<i32>(false)?;
+    *r = lenient;
+    Some(0)
 }
 
 /// A struct that is either an object or a reference to an object.
@@ -147,6 +175,24 @@ mod tests {
     use crate::object::ObjRef;
     use crate::reader::Reader;
     use crate::reader::ReaderExt;
+
+    /// PdfCraft patch (48): a generation past 32 bits reads as 0, where skipping already took the
+    /// whole reference; one that is not an integer is still no reference.
+    #[test]
+    fn a_generation_past_32_bits_reads_as_0() {
+        for text in ["58 4285904753 R", "58 18446744073709551616 R", "58 4285904753\n%c\nR"] {
+            let mut read = Reader::new(text.as_bytes());
+            assert_eq!(read.read_without_context::<ObjRef>(), Some(ObjRef::new(58, 0)), "{text:?}");
+            let mut skipped = Reader::new(text.as_bytes());
+            assert!(skipped.skip::<ObjRef>(false).is_some(), "{text:?}");
+            assert_eq!(read.offset(), skipped.offset(), "{text:?}: read and skip end in the same place");
+        }
+        for text in ["58 4285904753.5 R", "58 4285904753x R", "58 4285904753"] {
+            assert_eq!(Reader::new(text.as_bytes()).read_without_context::<ObjRef>(), None, "{text:?}");
+            assert!(Reader::new(text.as_bytes()).skip::<ObjRef>(false).is_none(), "{text:?}");
+        }
+        assert_eq!(Reader::new(b"58 65535 R").read_without_context::<ObjRef>(), Some(ObjRef::new(58, 65535)));
+    }
 
     #[test]
     fn ref_1() {
