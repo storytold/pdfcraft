@@ -3797,6 +3797,17 @@ evidence = ["crates/annot/src/tests.rs::text_boxes_take_an_oval_or_a_circle_arou
 notes = "Comment Properties ▸ Border shape (text boxes, typewriter text) and Fill & Sign's toolbar beside Border (typed text and dates, for new text and the selected one, and showing the selected one's) choose Rectangle, Oval or Circle: a position number in a circle, a label in an oval on a plan. The text box keeps its place and the shape goes around it, centred: an oval through its corners (√2 its size), a point clear of the border; the text is centred in it. A circle goes snug around its text: the text box is no wider than its text needs (typed text with a circle skips the 40 pt a box to type into keeps; choosing Circle shrinks an existing box to its lines), the circle a point clear of the text's lines and touching the box's longer sides, so a 10 pt \"3\" gets a 20 pt circle; a snug circle follows its text and font size, one made larger by hand keeps its size. /Rect grows to hold the shape and /RD keeps the text box inside it (§12.5.6.6, as a callout's; 0 where a circle touches the box, a hair below 0 read as 0), with PdfCraft's /PCBorderShape; background and border take the shape, the appearance draws it so every viewer shows it, and an app that redraws the comment from its keys draws a rectangle. Resizing the frame takes the text box along (a circle's keeping its proportions); a thicker border leaves the text where it is. Make Properties Default carries it into the Text box tool, and on typed text into Fill & Sign's new text. Headless: comment_add / comment_edit / fill_sign_add `border_shape` (rectangle, oval, circle); comment_list reports an oval or a circle. Callouts keep a rectangle. Acrobat's text boxes have a rectangular border only."
 
 [[feature]]
+id = "comment.body-formatting"
+title = "Bold, italic, underline, super/subscript, colour and size inside a comment's body"
+area = "E"
+tier = "P1"
+milestone = "M5"
+status = "partial"
+tools = ["comment_edit", "comment_list"]
+evidence = ["crates/annot/src/tests.rs::a_comment_body_keeps_bold_colour_size_italic_underline_and_scripts_after_saving", "crates/annot/src/tests.rs::a_comment_body_refuses_what_it_cannot_hold_and_stays_as_it_was", "crates/annot/src/tests.rs::a_hostile_rc_is_read_without_panicking", "crates/automation/tests/it/automation.rs::a_comment_body_takes_formatting_through_the_tools_and_keeps_it_when_saved"]
+notes = "comment_edit `body` gives a comment (not a text box) runs of text with bold, italic, underline, superscript, subscript, colour and size; /Contents holds the plain text every viewer reads and /RC the XHTML formatting (ISO 32000-2 12.7.4.3), read back by comment_list `body`. A body another program changed in /Contents, or a plain edit, drops the formatting. No editor controls in the pop-up or Comments panel yet; unified text replacements (#5929) are not part of this"
+
+[[feature]]
 id = "comment.text-box"
 title = "Text box comment with rich text"
 area = "E"
@@ -3806,7 +3817,7 @@ status = "partial"
 commands = ["comment.freetext"]
 tools = ["comment_add"]
 evidence = ["crates/ui-egui/tests/it/comments.rs::sticky_note_composer_posts_and_returns_to_select", "crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn", "crates/annot/src/tests.rs::thai_in_fill_sign_text_and_text_boxes_is_drawn_from_the_thai_face", "crates/automation/tests/it/automation.rs::thai_in_fill_sign_text_comments_fields_and_page_marks_is_drawn_and_found"]
-notes = "Helvetica text with colour, size and alignment; Thai is shaped and drawn from the craft-fonts Thai face as Add text draws it (Type 3 glyphs with a ToUnicode map, in the appearance's resources), the box growing to hold the ink of its stacked marks and descenders, and refused, saying what to do, in a build without a Thai face (#2354); /RC (XHTML) and /DS are written and kept in step with edits; per-run formatting (bold/italic spans) is not yet"
+notes = "Helvetica text with colour, size and alignment; Thai is shaped and drawn from the craft-fonts Thai face as Add text draws it (Type 3 glyphs with a ToUnicode map, in the appearance's resources), the box growing to hold the ink of its stacked marks and descenders, and refused, saying what to do, in a build without a Thai face (#2354); /RC (XHTML) and /DS are written and kept in step with edits; per-run formatting of a text box's own text (bold/italic spans) is not yet; other comments take it in their bodies (comment.body-formatting)"
 
 [[feature]]
 id = "comment.callout"

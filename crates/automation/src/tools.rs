@@ -1119,6 +1119,9 @@ pub fn tools() -> Vec<ToolDef> {
         t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity (the whole comment's, or its fill's and text's own), line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), border colour (`border_color`, text box/typewriter/callout; \"text\" gives it the text's colour again), rectangle (rectangle/oval/text box/stamp, or a callout's text box: its arrow point stays and its leader line re-attaches), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, the corners of connected lines, a polygon or a cloud, or a callout's arrow point and knee, as comment_list gives them). Stamps keep their original appearance when resized. One undo step.").with(schema(
             comment_ref(json!({
                 "contents": { "type": "string" },
+                "body": { "type": "array", "description": "A formatted body (not for a text box): runs of text, each with its own look. /Contents gets the plain text, /RC the formatting.", "items": { "type": "object", "properties": {
+                    "text": { "type": "string" }, "bold": { "type": "boolean" }, "italic": { "type": "boolean" }, "underline": { "type": "boolean" },
+                    "script": { "type": "string", "enum": ["normal", "super", "sub"] }, "color": color(), "size": { "type": "number", "minimum": 1, "maximum": 400 } }, "required": ["text"] } },
                 "color": color(),
                 "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "The whole comment's opacity: its fill and text drop opacities of their own." },
                 "fill_opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "The fill's own opacity (rectangle, oval, polygon, cloud, text box, typewriter text, callout); the line or border keeps the comment's." },

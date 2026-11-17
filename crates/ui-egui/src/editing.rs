@@ -1246,6 +1246,7 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         Edit::AddAnnotation(a) => Some(a.page),
         Edit::DeleteAnnotation { page, .. }
         | Edit::SetAnnotationContents { page, .. }
+        | Edit::SetAnnotationRichContents { page, .. }
         | Edit::ReplyToAnnotation { page, .. }
         | Edit::SetAnnotationStatus { page, .. }
         | Edit::MoveAnnotation { page, .. }
