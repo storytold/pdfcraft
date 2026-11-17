@@ -4,6 +4,13 @@ use crate::page_keys::PageKeys;
 impl PdfCraftApp {
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
         use egui::Key;
+        // A Space let go under a dialog or prompt is no tap: the pages never see it released. One
+        // still held when it closes stays no tap until it is let go. Cancelled here, ahead of
+        // every return below, whichever modal (the save prompt, a script's prompt over it, the
+        // others) has the keyboard.
+        if self.modal_open() {
+            self.cancel_space_tap(ctx);
+        }
         // "Save changes?" is modal: its keys are its own (⌘D is Don't save there, not Document
         // properties; Escape cancels it rather than clearing a selection), and nothing may run
         // underneath it. They are read here, before the canvas can consume them.
@@ -23,15 +30,11 @@ impl PdfCraftApp {
             if !covered && let Some(choice) = dialogs::save_prompt_key(ctx, &mut self.save_prompt_button) {
                 self.resolve_close(ctx, choice);
             }
-            self.cancel_space_tap(ctx);
             return;
         }
         // The other dialogs and prompts are modal too (⌘W closed the file behind Preferences,
         // #870).
         if self.modal_open() {
-            // A Space let go under the dialog is no tap: the pages never see it released. One
-            // still held when it closes stays no tap until it is let go.
-            self.cancel_space_tap(ctx);
             return;
         }
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
