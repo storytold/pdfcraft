@@ -41,6 +41,8 @@ pub struct Session {
     pub(crate) captions: Arc<StatusCaptions>,
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).
     pub(crate) js_off: bool,
+    /// Documents are opened to be inspected, not shown (see [`Session::set_inspection`]).
+    pub(crate) inspection: bool,
     /// Preferences ▸ Date format, when not the default (see [`dates`]).
     pub(crate) date_format: Option<String>,
     /// Preferences ▸ Date format ▸ Language, when not following the interface language.
