@@ -2461,6 +2461,13 @@ fn indirect_objects_are_written_as_pdfa_asks_clause_6_1_9() {
         assert_eq!(with_page("\n", page), Vec::<String>::new(), "{page:?}");
     }
     assert_eq!(with_page("\n", "3 0 obj\n<< /Type /Page /Parent 2 0 R /Note (endobj) >> endobj").len(), 1);
+    // A value written up against `endobj` is read as one token with it: the keyword is still there,
+    // without an end-of-line marker before it.
+    let around = ["The endobj keyword of object 4 isn't both preceded and followed by an end-of-line marker"];
+    for value in ["1.0endobj", "/Nendobj", "12endobj"] {
+        assert_eq!(syntax(&[("\n", CATALOG), ("\n", PAGES), ("\n", PAGE), ("\n", &format!("4 0 obj\n{value}\n"))]), around, "{value}");
+    }
+    assert_eq!(syntax(&[("\n", CATALOG), ("\n", PAGES), ("\n", PAGE), ("\n", "4 0 obj\n1.0\nendobj")]), Vec::<String>::new());
     // So may a comment after `endstream`.
     let stream_comment = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 2 >>\nstream\nxx\nendstream % endobj\nendobj";
     assert_eq!(with_page("\n", stream_comment), Vec::<String>::new());

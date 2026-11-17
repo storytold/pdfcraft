@@ -131,6 +131,7 @@ pub(crate) fn check(doc: &Document) -> Findings {
             Object::Stream(s) => stream_layout(doc, data, body, end, s.raw.len()),
             _ => None,
         };
+        let stream = layout.is_some();
         let from = match layout {
             Some(layout) => {
                 if !layout.keyword_eol {
@@ -146,7 +147,11 @@ pub(crate) fn check(doc: &Document) -> Findings {
             }
             None => past_value(data, body, end).unwrap_or(body),
         };
-        let Some(endobj) = find(data, b"endobj", from.min(end), end) else { continue };
+        // A value written up against `endobj` (`1.0endobj`, `/Nendobj`) is one token with it (7.2.3),
+        // so no `endobj` follows the value: the first one after the header is then the object's,
+        // with no end-of-line marker before it.
+        let found = find(data, b"endobj", from.min(end), end).or_else(|| (!stream).then(|| find(data, b"endobj", body.min(end), end)).flatten());
+        let Some(endobj) = found else { continue };
         let before = endobj.checked_sub(1).and_then(|p| data.get(p));
         let after = data.get(endobj.saturating_add(6));
         // The last object of a file without a cross-reference table after it may end the file.
