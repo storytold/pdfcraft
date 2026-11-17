@@ -124,6 +124,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     app.ocr_batch_draft.refresh();
     // The non-blocking status: drawing must not wait for an external probe. The worker checks again.
     let unavailable = pdfcraft_engine::ocr::engine_unavailable_reason(app.ocr_draft.engine);
+    // The probe thread doesn't wake the interface when it lands, so look again soon while it runs.
+    crate::ocr_ui::keep_asking_while_probing(ui.ctx());
     let available = unavailable.is_none();
     // The cards scroll between the title and the action row. Only the input list scrolled on its
     // own, so in a short window or at a large display scale an unbounded body pushed the
@@ -454,6 +456,29 @@ fn failed(e: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A dialog that shows whether the engine is available reads a non-blocking answer that a
+    /// background probe fills in, and the probe wakes nobody when it lands: each such dialog asks
+    /// for a frame while it runs, or "Recognize text" stays disabled until the next input (#4866
+    /// review).
+    #[test]
+    fn every_dialog_that_shows_the_engine_status_looks_again_while_the_probe_runs() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/workflows");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).unwrap();
+            let code = source.split("#[cfg(test)]\nmod tests").next().unwrap_or_default();
+            if code.contains("engine_unavailable_reason(") {
+                checked += 1;
+                assert!(code.contains("keep_asking_while_probing("), "{} shows the engine status without looking again", path.display());
+            }
+        }
+        assert!(checked >= 3, "the dialogs were found ({checked})");
+    }
 
     #[test]
     fn a_long_path_keeps_its_end() {
