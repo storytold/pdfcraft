@@ -760,6 +760,11 @@ pub(crate) fn glyph_name_to_text(name: &str) -> Option<BfString> {
 /// hex `A9`); nothing for any other name. Everything from the first `.` is dropped first, as
 /// `glyph_name_to_text` drops it.
 fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
+    glyph_name_radix_numbers(name).map(|(_, n)| n)
+}
+
+/// `glyph_name_numbers` with the radix (10 or 16) each number was read in.
+fn glyph_name_radix_numbers(name: &str) -> impl Iterator<Item = (u32, u32)> + '_ {
     let base = name.split('.').next().unwrap_or_default();
     (1..=3).flat_map(move |prefix| {
         // `from_str_radix` would also take a leading `+`: the number is digits only, and at
@@ -774,9 +779,11 @@ fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
                 .then_some(digits)
             });
         digits.into_iter().flat_map(|d| {
-            [10, 16]
-                .into_iter()
-                .filter_map(move |radix| u32::from_str_radix(d, radix).ok())
+            [10, 16].into_iter().filter_map(move |radix| {
+                u32::from_str_radix(d, radix)
+                    .ok()
+                    .map(|n| (radix, n))
+            })
         })
     })
 }
@@ -791,10 +798,21 @@ fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
 /// (`/Differences [1 /C1 /C2 … /C80]`) names its own codes too, but the counter says nothing
 /// about the characters (`/C65` is the 65th glyph used, not `A`): a numbered name at a C0
 /// control code (below 32), which no text shows, gives such a counter away and fails the font.
+///
+/// A font that names every code by itself in hexadecimal (`/Differences [0 /x0 /x1 … /xff]`,
+/// TeX's dvips Type 3 fonts) has names at control codes too, but no counter: there every control
+/// code, 0 through 31, has a numbered name, and each names its code in hexadecimal (`/xa` at 10,
+/// `/x1f` at 31). A decimal counter writes `/C10` at 10, which reads 16 in hexadecimal, and a
+/// counter from code 1 leaves code 0 out. Subsets that number their glyphs in hexadecimal and
+/// happen to keep some at their own control codes (`/G0A` at 10, `/G0D` at 13), where the
+/// numbers name no characters, don't fill the block and still fail.
 pub(crate) fn numbered_names_name_their_codes<'a>(
     names: impl IntoIterator<Item = (u8, &'a str)>,
 ) -> bool {
-    names
+    // The control codes with a numbered name, one bit each; each of them must name its code in
+    // hexadecimal.
+    let mut at_control = 0u32;
+    let own_codes = names
         .into_iter()
         .filter(|(_, name)| {
             glyph_names::get(name).is_none()
@@ -802,9 +820,19 @@ pub(crate) fn numbered_names_name_their_codes<'a>(
                 && glyph_name_to_text(name).is_none()
         })
         .all(|(code, name)| {
-            let mut numbers = glyph_name_numbers(name).peekable();
-            numbers.peek().is_none() || (code >= 0x20 && numbers.any(|n| n == u32::from(code)))
-        })
+            let code = u32::from(code);
+            let mut numbers = glyph_name_radix_numbers(name).peekable();
+            if numbers.peek().is_none() {
+                return true;
+            }
+            if code >= 0x20 {
+                return numbers.any(|(_, n)| n == code);
+            }
+            // `code` is below 32, so the shift can't overflow.
+            at_control |= 1 << code;
+            numbers.any(|(radix, n)| radix == 16 && n == code)
+        });
+    own_codes && (at_control == 0 || at_control == u32::MAX)
 }
 
 /// PdfCraft patch: the text of a glyph name outside the glyph list that only numbers its glyph
