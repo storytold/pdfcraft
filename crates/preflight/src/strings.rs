@@ -118,10 +118,14 @@ fn scan(data: &[u8], until: Until, found: &mut Found, inline: &mut dyn FnMut(usi
                 found.odd |= !not_hex && count % 2 == 1;
                 i = body.saturating_add(len).saturating_add(1);
             }
+            b'/' => {
+                // A name, up to white space or a delimiter: never a keyword, whatever it spells.
+                let len = data.get(i.saturating_add(1)..).and_then(|rest| rest.iter().position(|&c| is_ws(c) || is_delim(c)));
+                i = len.map_or(data.len(), |len| i.saturating_add(1).saturating_add(len));
+            }
             _ if is_ws(b) || is_delim(b) => i = i.saturating_add(1),
             _ => {
-                // A keyword, a number or the rest of a name: regular characters up to white space
-                // or a delimiter.
+                // A keyword or a number: regular characters up to white space or a delimiter.
                 let len = data.get(i..).and_then(|rest| rest.iter().position(|&c| is_ws(c) || is_delim(c))).unwrap_or(data.len().saturating_sub(i));
                 let word = data.get(i..i.saturating_add(len)).unwrap_or_default();
                 let start = i;
@@ -153,7 +157,10 @@ fn scan_content(data: &[u8], found: &mut Found) {
         // The content parser finds where each inline image ends; it is asked only when a `BI` is
         // met, and once per stream.
         let spans = images.get_or_insert_with(|| pdfcraft_content::ops(data).filter(|op| op.inline.is_some()).map(|op| op.span).collect());
-        spans.iter().find(|span| span.start <= at && at < span.end).map(|span| span.end)
+        // The spans follow one another, in order: the one holding `at` is the last that starts at
+        // or before it.
+        let after = spans.partition_point(|span| span.start <= at);
+        after.checked_sub(1).and_then(|k| spans.get(k)).filter(|span| at < span.end).map(|span| span.end)
     };
     scan(data, Until::End, found, &mut inline);
 }

@@ -2432,11 +2432,15 @@ fn hexadecimal_strings_are_read_as_written_clause_6_1_6() {
     }
     assert_eq!(found(&with_content("BT <48656C6C6> Tj ET", "")), vec![odd_content.clone()]);
     assert_eq!(found(&with_content("BT <4G> Tj ET", "")), vec![bad_content.clone()]);
+    // A name is never a keyword, whatever it spells: `/BI` isn't an inline image, and `/endobj`
+    // and `/stream` don't end an object.
+    assert_eq!(found(&with_content("/BI Do BT <414> Tj ET", "")), vec![odd_content.clone()]);
     // After an inline image, and in its dictionary, before its data.
     assert_eq!(found(&with_content("BI /W 1 /H 1 /BPC 8 /CS /G ID <\nEI BT <414> Tj ET", "")), vec![odd_content.clone()]);
     assert_eq!(found(&with_content("BI /W 1 /H 1 /BPC 8 /CS [/I /RGB 0 <00000>] ID \0\nEI", "")), vec![odd_content]);
     // In the file: an object and the trailer.
     assert_eq!(found(&with_content("", "/X <ABC>")), vec![odd_file.clone()]);
+    assert_eq!(found(&with_content("", "/X /endobj /Y /stream /Z <ABC>")), vec![odd_file.clone()]);
     assert_eq!(found(&with_content("", "/X (<ABC>) /Y <0A0b 0C>")), Vec::<(String, bool)>::new());
     let doc = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"], "/ID [<ABC> <ABCD>]");
     assert_eq!(found(&doc), vec![odd_file.clone()]);
@@ -2495,7 +2499,8 @@ fn nothing_follows_the_end_of_file_marker_clause_6_1_3() {
         assert_eq!(found(&with_tail(fine)), Vec::<String>::new(), "{fine:?}");
     }
     let want = vec!["6.1.3 Data follows the last end-of-file marker (%%EOF) true".to_string()];
-    for wrong in [&b"\n\n"[..], b"\r\n\r\n", b" ", b"\n%PaperPortPDFversion", b"\0"] {
+    // `%%EOF` inside the data after the marker isn't one: the marker is a line of its own.
+    for wrong in [&b"\n\n"[..], b"\r\n\r\n", b" ", b"\n%PaperPortPDFversion", b"\0", b"\njunk%%EOF\n"] {
         assert_eq!(found(&with_tail(wrong)), want, "{wrong:?}");
     }
     // Save as PDF/A writes the file afresh, ending at its marker.

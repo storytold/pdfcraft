@@ -64,7 +64,10 @@ pub(crate) fn data_after_end(doc: &Document) -> bool {
         return false;
     }
     let data = doc.bytes();
-    let Some(end) = data.windows(5).rposition(|w| w == b"%%EOF") else { return false };
+    // The marker is a line of its own (ISO 32000-1 7.5.5): `%%EOF` written inside other data after
+    // it is that data, not the marker.
+    let at_line_start = |p: usize| p == 0 || matches!(data.get(p.saturating_sub(1)), Some(b'\r' | b'\n'));
+    let Some(end) = data.windows(5).enumerate().rev().find(|&(p, w)| w == b"%%EOF" && at_line_start(p)).map(|(p, _)| p) else { return false };
     let after = data.get(end.saturating_add(5)..).unwrap_or_default();
     let rest = match after {
         [b'\r', b'\n', rest @ ..] | [b'\r' | b'\n', rest @ ..] => rest,
