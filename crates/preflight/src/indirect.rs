@@ -25,8 +25,9 @@
 //! one not found at its offset is left out, since where it is written isn't known. A stream's
 //! dictionary is read as written, and its `endstream` is where `/Length` puts it or, when `/Length`
 //! is wrong, the first one past the data the document reads. An object's `endobj` is looked for
-//! between its header and the next object the cross-reference sections place, after `endstream`
-//! when it is a stream, so each byte of the file is searched at most once.
+//! between its header and the next object the cross-reference sections place, after its value and
+//! any comments after that (after `endstream` when it is a stream), so `endobj` inside a string,
+//! name or comment isn't taken for it.
 
 use pdfcraft_cos::{Document, Lexer, ObjRef, Object, XrefEntry, is_whitespace};
 
@@ -120,22 +121,28 @@ pub(crate) fn check(doc: &Document) -> Findings {
         if !is_eol(data.get(body)) {
             note(&mut out.after_obj);
         }
-        // Where to look for `endobj`: past the stream data, when the object is a stream.
-        let mut from = body;
-        if let Object::Stream(s) = &*doc.get(ObjRef::new(num, doc.generation(num)))
-            && let Some(layout) = stream_layout(doc, data, body, end, s.raw.len())
-        {
-            if !layout.keyword_eol {
-                note(&mut out.after_stream);
+        // Where to look for `endobj`: past the stream data when the object is a stream, else past
+        // its value and any comments after it, so `endobj` in a string, name or comment isn't
+        // taken for it.
+        let layout = match &*doc.get(ObjRef::new(num, doc.generation(num))) {
+            Object::Stream(s) => stream_layout(doc, data, body, end, s.raw.len()),
+            _ => None,
+        };
+        let from = match layout {
+            Some(layout) => {
+                if !layout.keyword_eol {
+                    note(&mut out.after_stream);
+                }
+                if !layout.length_matches {
+                    note(&mut out.length);
+                }
+                if !layout.eol_before_endstream {
+                    note(&mut out.before_endstream);
+                }
+                layout.endstream.saturating_add(b"endstream".len())
             }
-            if !layout.length_matches {
-                note(&mut out.length);
-            }
-            if !layout.eol_before_endstream {
-                note(&mut out.before_endstream);
-            }
-            from = layout.endstream.saturating_add(b"endstream".len());
-        }
+            None => past_value(data, body, end).unwrap_or(body),
+        };
         let Some(endobj) = find(data, b"endobj", from.min(end), end) else { continue };
         let before = endobj.checked_sub(1).and_then(|p| data.get(p));
         let after = data.get(endobj.saturating_add(6));
@@ -145,6 +152,16 @@ pub(crate) fn check(doc: &Document) -> Findings {
         }
     }
     out
+}
+
+/// Where the object value starting at `body` ends, past the white space and comments after it:
+/// `endobj` when the object is written as ISO 32000-2 7.3.10 asks. `None` when the value can't be
+/// read before `end`, the next object.
+fn past_value(data: &[u8], body: usize, end: usize) -> Option<usize> {
+    let mut lx = Lexer::new(data.get(..end)?, body);
+    lx.object().ok()?;
+    lx.skip_ws();
+    Some(lx.pos)
 }
 
 /// How a stream is laid out in the file around its data.

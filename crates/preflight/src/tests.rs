@@ -2445,6 +2445,15 @@ fn indirect_objects_are_written_as_pdfa_asks_clause_6_1_9() {
     assert_eq!(with_page("\n", stream), Vec::<String>::new());
     let stream_bad = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 22 >>\nstream\n4 0 obj<< >>endobj x\n\nendstream endobj";
     assert_eq!(with_page("\n", stream_bad).len(), 1);
+    // So may a string, a name or a comment in any object: the `endobj` after the value counts.
+    for page in [
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R /Note (endobj) >>\nendobj",
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R /Note /endobj >>\nendobj",
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R >> % endobj\nendobj",
+    ] {
+        assert_eq!(with_page("\n", page), Vec::<String>::new(), "{page:?}");
+    }
+    assert_eq!(with_page("\n", "3 0 obj\n<< /Type /Page /Parent 2 0 R /Note (endobj) >> endobj").len(), 1);
 
     // Each problem is named once, with the first object that has it.
     let twice = syntax(&[
