@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use egui::epaint::text::{FontTweak, HintingTarget, SmoothHinting};
+use egui::epaint::text::{FallbackAlign, FontTweak, HintingTarget, SmoothHinting};
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Rect, Response, Stroke, Vec2, Visuals};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -13,11 +13,12 @@ pub enum ThemeKind {
     Dark,
 }
 
-/// The saved user choice, independent of the light/dark colours currently displayed.
+/// The saved user choice, independent of the light/dark colours currently displayed. A fresh
+/// install follows the system (#1248); a desktop that says nothing gets Light.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ThemePreference {
-    System,
     #[default]
+    System,
     Light,
     Dark,
 }
@@ -121,8 +122,9 @@ impl Tokens {
         }
     }
 
+    /// Return the cached theme tokens, falling back to the light palette before the first apply.
     pub fn get(ctx: &egui::Context) -> Self {
-        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::new("pdfcraft-theme"))).unwrap_or_else(|| Self::for_kind(ThemeKind::Light))
+        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::unique("pdfcraft-theme"))).unwrap_or_else(|| Self::for_kind(ThemeKind::Light))
     }
 
     pub fn dark(&self) -> bool {
@@ -229,14 +231,34 @@ pub const SYSTEM_HEBREW_FALLBACK: &str = "system-hebrew-fallback";
 /// The name of the installed Hangul (Korean) face [`installed_font_definitions`] may add.
 pub const SYSTEM_HANGUL_FALLBACK: &str = "system-hangul-fallback";
 
+/// Which installed face an interface language needs, given whether the build embeds a `Hans`
+/// face.
+///
+/// A bundled `Hans` face serves Simplified Chinese, so the installed face stays last there. It
+/// cannot serve Traditional Chinese: a Traditional interface keeps an installed `Hant` face
+/// before the Japanese faces even when a Simplified-only face is embedded, or Traditional-only
+/// characters would fall through to a Japanese face first.
+#[cfg(not(target_arch = "wasm32"))]
+fn installed_fallback_need(cjk: CjkPreference, has_embedded_hans: bool) -> crate::system_fonts::Need {
+    use crate::system_fonts::Need;
+    match cjk {
+        CjkPreference::SimplifiedChinese if has_embedded_hans => Need::Other,
+        CjkPreference::SimplifiedChinese => Need::Hans,
+        CjkPreference::TraditionalChinese => Need::Hant,
+        CjkPreference::Default => Need::Other,
+    }
+}
+
 /// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
 /// already installed on this machine. It only draws characters no embedded face has.
 ///
-/// - In a Chinese interface built without a `Hans` craft-fonts face (every release so far,
-///   #826), it is a Chinese system face (Microsoft YaHei, PingFang, …), placed before the
-///   Japanese craft-fonts faces: they lack hundreds of the catalog's characters (欢, 导, 签, …),
-///   and one line drawn from two faces with different vertical metrics would not sit on one
-///   baseline.
+/// - In a Simplified Chinese interface built without an embedded `Hans` face (#826), it is a
+///   Simplified Chinese system face (Microsoft YaHei, PingFang SC, …), placed before the Japanese
+///   craft-fonts faces: they lack hundreds of the catalog's characters (欢, 导, 签, …), and one
+///   line drawn from two faces with different vertical metrics would not sit on one baseline.
+/// - A Traditional Chinese interface always uses an installed `Hant` face before the Japanese
+///   faces, even when a Simplified-only `Hans` face is embedded: that face cannot supply
+///   Traditional-only characters (說, 體, …).
 /// - Otherwise it is the last fallback of every family (an Arabic file name in a build without
 ///   craft-fonts).
 ///
@@ -267,12 +289,7 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
                 stack.push(name.to_owned());
             }
         }
-        let need = match cjk {
-            _ if !pdfcraft_fonts::ui_chinese_fonts().is_empty() => Need::Other,
-            CjkPreference::SimplifiedChinese => Need::Hans,
-            CjkPreference::TraditionalChinese => Need::Hant,
-            CjkPreference::Default => Need::Other,
-        };
+        let need = installed_fallback_need(cjk, !pdfcraft_fonts::ui_chinese_fonts().is_empty());
         if let Some(data) = fallback(need) {
             fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
             let japanese: Vec<String> = pdfcraft_fonts::ui_japanese_fonts().iter().map(|f| f.name()).collect();
@@ -322,37 +339,14 @@ fn primary_font_tweak(platform: FontPolicyPlatform, name: &str) -> FontTweak {
     tweak
 }
 
-/// A face's vertical metrics in em, as egui reads them: skrifa's ascent, descent (negative) and
-/// line gap at the default location. `None` when the face doesn't parse.
-fn vertical_metrics(bytes: &[u8], index: u32) -> Option<[f32; 3]> {
-    use skrifa::MetadataProvider as _;
-    let font = skrifa::FontRef::from_index(bytes, index).ok()?;
-    let m = font.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
-    let em = f32::from(m.units_per_em);
-    let metrics = [m.ascent / em, m.descent / em, m.leading / em];
-    (em > 0.0 && metrics.iter().all(|v| v.is_finite())).then_some(metrics)
-}
-
-/// How far below the primary face's baseline egui draws a fallback face's, in em of the font size
-/// (negative: above). egui centres the fallback's line box (ascent − descent + gap) on the
-/// primary's rather than lining up their baselines, so the baseline moves by half the difference
-/// of ascent + descent, less half the difference of the line gaps (epaint `text_layout`).
-fn baseline_drop(primary: [f32; 3], fallback: [f32; 3]) -> f32 {
-    let [pa, pd, pg] = primary;
-    let [a, d, g] = fallback;
-    ((a + d) - (pa + pd) + pg - g) / 2.0
-}
-
-/// `data` with its glyphs moved onto Inter's baseline (#1676). Without this, Chinese next to Latin
-/// in one label sits higher or lower than the Latin by a few percent of the font size, depending on
-/// the installed Chinese face (PingFang, Microsoft JhengHei, SimSun…). Inter is the first face of
-/// every proportional family; the monospace family's JetBrains Mono differs from it by 0.004 em,
-/// well under a pixel. A face that doesn't parse is left as it is (egui will skip it anyway).
+/// `data` with its glyphs placed on the row's baseline (#1676). epaint 0.37 otherwise centres a
+/// fallback face's line box on the primary's, so Chinese next to Latin in one label sits higher or
+/// lower than the Latin by a few percent of the font size, depending on the installed or embedded
+/// face (PingFang, Microsoft JhengHei, LXGW WenKai Lite…). `FallbackAlign::Baseline` makes epaint
+/// position every face's glyphs from the primary face's ascent, which is exactly the existing
+/// baseline-alignment intent without metric-derived offsets that go stale across egui versions.
 pub(crate) fn on_interface_baseline(mut data: FontData) -> FontData {
-    let primary = vertical_metrics(pdfcraft_fonts::INTER_REGULAR, 0);
-    if let (Some(primary), Some(fallback)) = (primary, vertical_metrics(&data.font, data.index)) {
-        data.tweak.y_offset_factor = -baseline_drop(primary, fallback);
-    }
+    data.tweak.fallback_align = FallbackAlign::Baseline;
     data
 }
 
@@ -428,13 +422,15 @@ pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("semibold".into()))
 }
 
+/// Install the palette, widget styling, text sizes and right-to-left flag for the chosen theme.
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     // Keep the native window inherited. A concrete egui theme pins macOS's
     // NSWindow appearance and prevents winit from delivering ThemeChanged.
     // Our saved choice owns the palette; both egui branches receive it below.
     ctx.set_theme(egui::ThemePreference::System);
+    let rtl = crate::i18n::current().rtl();
     let t = Tokens::for_kind(kind);
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("pdfcraft-theme"), t));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("pdfcraft-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.panel;
     v.window_fill = t.card;
@@ -476,6 +472,9 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     }
     ctx.set_visuals(v);
     ctx.global_style_mut(|s| {
+        // RTL languages mirror stock chrome (menus, combo boxes, scroll bars, headers).
+        // Labels still get their paragraph direction explicitly from `bidi::ui_direction`.
+        s.right_to_left = rtl;
         s.spacing.item_spacing = egui::vec2(8.0, 6.0);
         s.spacing.button_padding = egui::vec2(10.0, 5.0);
         s.spacing.menu_margin = egui::Margin::same(6);
@@ -492,6 +491,30 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     let style = ctx.global_style();
     ctx.set_style_of(egui::Theme::Light, style.clone());
     ctx.set_style_of(egui::Theme::Dark, style);
+    ctx.data_mut(|d| d.insert_temp(direction_key(), rtl));
+}
+
+/// Return the stable egui id holding the current right-to-left style flag.
+fn direction_key() -> egui::Id {
+    egui::Id::unique("pdfcraft-style-right-to-left")
+}
+
+/// Keep stock egui chrome's direction in step with the drawing language, after a language
+/// change as well as at startup. Setting a flag on both concrete themes is cheap; this avoids
+/// rebuilding the whole visuals and font state every frame.
+pub fn sync_direction(ctx: &egui::Context) {
+    let rtl = crate::i18n::current().rtl();
+    let changed = ctx.data_mut(|d| {
+        if d.get_temp::<bool>(direction_key()) == Some(rtl) {
+            false
+        } else {
+            d.insert_temp(direction_key(), rtl);
+            true
+        }
+    });
+    if changed {
+        ctx.all_styles_mut(|s| s.right_to_left = rtl);
+    }
 }
 
 /// WCAG 2 contrast ratio between two opaque colours.
@@ -516,283 +539,4 @@ pub fn readable(color: Color32, background: Color32, text: Color32) -> Color32 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// #3193: a bookmark's own colour is kept where it reads on the panel, and moved towards the
-    /// theme's text colour where it doesn't (dark blue on the dark panel), never past it.
-    #[test]
-    fn a_document_colour_is_kept_where_it_reads() {
-        let (light, dark) = (Tokens::for_kind(ThemeKind::Light), Tokens::for_kind(ThemeKind::Dark));
-        let red = Color32::from_rgb(255, 0, 0);
-        assert_eq!(readable(red, light.panel, light.text), red, "red reads on white");
-        let navy = Color32::from_rgb(0, 0, 128);
-        assert_eq!(readable(navy, light.panel, light.text), navy);
-        let lifted = readable(navy, dark.panel, dark.text);
-        assert_ne!(lifted, navy, "navy is lost on the dark panel");
-        assert!(contrast(lifted, dark.panel) >= 3.0, "{lifted:?}");
-        assert_ne!(lifted, dark.text, "only as far as it needs");
-        // Even the panel's own colour comes out readable.
-        assert!(contrast(readable(dark.panel, dark.panel, dark.text), dark.panel) >= 3.0);
-        assert!(contrast(readable(light.panel, light.panel, light.text), light.panel) >= 3.0);
-    }
-    use egui::epaint::text::{Fonts, TextOptions};
-
-    const HINTING_CORPUS: [&str; 4] = ["Il1MWmw", "Hamburgefonts", "0123456789 .,;:!?()[]{}+-=/\\", "Café Ångström déjà-vu Ωμέγα Ελληνικά Журнал"];
-    const HINTING_SIZES: [f32; 6] = [10.0, 11.0, 12.0, 13.0, 14.0, 16.0];
-    const HINTING_PPPS: [f32; 4] = [1.0, 1.25, 1.5, 2.0];
-
-    fn primary_families() -> [(FontFamily, &'static str); 4] {
-        [
-            (FontFamily::Proportional, "Inter"),
-            (FontFamily::Name("medium".into()), "Inter-Medium"),
-            (FontFamily::Name("semibold".into()), "Inter-SemiBold"),
-            (FontFamily::Monospace, "JetBrainsMono"),
-        ]
-    }
-
-    fn raster_edge_and_ink(fonts: &mut Fonts, id: FontId, text: &str, ppp: f32) -> (u64, u64) {
-        let galley = {
-            let mut view = fonts.with_pixels_per_point(ppp);
-            view.layout_no_wrap(text.to_owned(), id, Color32::BLACK).as_ref().clone()
-        };
-        let image = fonts.image();
-        let mut edge = 0u64;
-        let mut ink = 0u64;
-        for glyph in galley.rows.iter().flat_map(|row| &row.glyphs) {
-            let [x0, y0] = glyph.uv_rect.min.map(usize::from);
-            let [x1, y1] = glyph.uv_rect.max.map(usize::from);
-            for y in y0..y1 {
-                for x in x0..x1 {
-                    let alpha = image.pixels[y * image.size[0] + x].a();
-                    ink += u64::from(alpha);
-                    if x > x0 {
-                        let left = image.pixels[y * image.size[0] + x - 1].a();
-                        edge += u64::from(alpha.abs_diff(left));
-                    }
-                }
-            }
-        }
-        (edge, ink)
-    }
-
-    fn mono_raster_measure(fonts: &mut Fonts, ppp: f32) -> (u64, u64) {
-        let mut edge = 0;
-        let mut ink = 0;
-        for size in HINTING_SIZES {
-            for text in HINTING_CORPUS {
-                let (glyph_edge, glyph_ink) = raster_edge_and_ink(fonts, FontId::monospace(size), text, ppp);
-                edge += glyph_edge;
-                ink += glyph_ink;
-            }
-        }
-        (edge, ink)
-    }
-
-    fn layout_signature(galley: &egui::Galley) -> Vec<u32> {
-        let mut signature = vec![
-            galley.rect.min.x.to_bits(),
-            galley.rect.min.y.to_bits(),
-            galley.rect.max.x.to_bits(),
-            galley.rect.max.y.to_bits(),
-            u32::from(galley.elided),
-            galley.rows.len() as u32,
-        ];
-        for row in &galley.rows {
-            signature.extend([
-                u32::from(row.ends_with_newline),
-                row.pos.x.to_bits(),
-                row.pos.y.to_bits(),
-                row.size.x.to_bits(),
-                row.size.y.to_bits(),
-                row.glyphs.len() as u32,
-            ]);
-            for glyph in &row.glyphs {
-                signature.extend([
-                    glyph.chr as u32,
-                    glyph.pos.x.to_bits(),
-                    glyph.pos.y.to_bits(),
-                    glyph.advance_width.to_bits(),
-                    glyph.line_height.to_bits(),
-                    glyph.font_ascent.to_bits(),
-                    glyph.font_height.to_bits(),
-                    glyph.font_face_ascent.to_bits(),
-                    glyph.font_face_height.to_bits(),
-                ]);
-            }
-        }
-        signature
-    }
-
-    fn galley(fonts: &mut Fonts, family: FontFamily, size: f32, ppp: f32, text: &str) -> egui::Galley {
-        let mut view = fonts.with_pixels_per_point(ppp);
-        view.layout_no_wrap(text.to_owned(), FontId::new(size, family), Color32::BLACK).as_ref().clone()
-    }
-
-    fn hinting_test_fonts(platform: FontPolicyPlatform) -> Fonts {
-        Fonts::new(
-            TextOptions {
-                subpixel_binning: false,
-                color_transfer_function: egui::epaint::FontColorTransferFunction::Gamma(0.75),
-                ..TextOptions::default()
-            },
-            font_definitions_for_platform(false, platform),
-        )
-    }
-
-    /// The baseline of each glyph of `text` laid out by egui at `size` points, in points from the
-    /// top of the row: its position plus its face's `y_offset_factor`, as epaint draws it.
-    fn baselines(fallback: FontData, size: f32, text: &str) -> Vec<f32> {
-        let factor = fallback.tweak.y_offset_factor;
-        let mut defs = FontDefinitions::empty();
-        defs.font_data.insert("Inter".into(), Arc::new(FontData::from_static(pdfcraft_fonts::INTER_REGULAR)));
-        defs.font_data.insert("fallback".into(), Arc::new(fallback));
-        defs.families.insert(FontFamily::Proportional, vec!["Inter".into(), "fallback".into()]);
-        let mut fonts = Fonts::new(TextOptions::default(), defs);
-        let g = galley(&mut fonts, FontFamily::Proportional, size, 1.0, text);
-        let inter_has = |c: char| c.is_ascii();
-        g.rows[0].glyphs.iter().map(|gl| gl.pos.y + if inter_has(gl.chr) { 0.0 } else { size * factor }).collect()
-    }
-
-    #[test]
-    fn fallback_faces_share_the_interface_baseline() {
-        // Dancing Script's metrics differ from Inter's the way a Chinese face's do (by 0.044 em),
-        // and it has letters Inter doesn't (Ǆ), which egui then takes from it.
-        let dancing: &'static [u8] = include_bytes!("../../../assets/fonts/DancingScript.ttf");
-        let size = 100.0;
-        // As egui lays it out by itself, Ǆ sits ~4 pt off H's baseline: the bug (#1676).
-        let raw = baselines(FontData::from_static(dancing), size, "HǄ");
-        assert!((raw[1] - raw[0]).abs() > 3.0, "the test fonts must differ: {raw:?}");
-        let drop = baseline_drop(vertical_metrics(pdfcraft_fonts::INTER_REGULAR, 0).unwrap(), vertical_metrics(dancing, 0).unwrap());
-        assert!((raw[1] - raw[0] - size * drop).abs() <= 1.0, "baseline_drop predicts egui: {raw:?} vs {drop}");
-        // On the interface baseline, to the pixel.
-        let aligned = baselines(on_interface_baseline(FontData::from_static(dancing)), size, "HǄ");
-        assert!((aligned[1] - aligned[0]).abs() <= 1.0, "{aligned:?}");
-        // A face that doesn't parse is left alone rather than guessed at.
-        assert_eq!(on_interface_baseline(FontData::from_static(b"not a font")).tweak, FontTweak::default());
-        assert_eq!(vertical_metrics(b"", 0), None);
-    }
-
-    #[test]
-    fn windows_hinting_changes_only_the_jetbrains_symmetric_rendering_field() {
-        let baseline = font_definitions_for_platform(false, FontPolicyPlatform::Other);
-        let windows = font_definitions_for_platform(false, FontPolicyPlatform::Windows);
-
-        assert_eq!(baseline.families, windows.families);
-        assert_eq!(baseline.font_data.keys().collect::<Vec<_>>(), windows.font_data.keys().collect::<Vec<_>>());
-        for (family, name) in primary_families() {
-            let baseline_data = &baseline.font_data[name];
-            let windows_data = &windows.font_data[name];
-            assert_eq!(baseline_data.tweak, FontTweak::default(), "baseline {name}");
-            if name == "JetBrainsMono" {
-                assert_eq!(
-                    windows_data.tweak,
-                    FontTweak {
-                        hinting_target: HintingTarget::Smooth(SmoothHinting { symmetric_rendering: false, ..SmoothHinting::default() }),
-                        ..FontTweak::default()
-                    },
-                    "Windows {name}"
-                );
-            } else {
-                assert_eq!(windows_data.tweak, baseline_data.tweak, "Windows {name}");
-            }
-            assert_eq!(primary_font_tweak(FontPolicyPlatform::Other, name), baseline_data.tweak, "non-Windows policy for {family:?}");
-        }
-        for (name, data) in &baseline.font_data {
-            if !["Inter", "Inter-Medium", "Inter-SemiBold", "JetBrainsMono"].contains(&name.as_str()) {
-                assert_eq!(windows.font_data[name].tweak, data.tweak, "Windows fallback {name}");
-            }
-        }
-        assert_eq!(
-            font_definitions_for(false).font_data["JetBrainsMono"].tweak,
-            font_definitions_for_platform(false, current_font_policy_platform()).font_data["JetBrainsMono"].tweak
-        );
-    }
-
-    #[test]
-    #[ignore = "measurement probe: asserts exact egui rasterisation deltas, which change with egui upgrades; run with --ignored when retuning the hinting"]
-    fn windows_hinting_improves_low_dpi_mono_raster_without_changing_layout_or_coverage() {
-        let mut baseline = hinting_test_fonts(FontPolicyPlatform::Other);
-        let mut windows = hinting_test_fonts(FontPolicyPlatform::Windows);
-
-        for ppp in HINTING_PPPS {
-            let (baseline_edge, baseline_ink) = mono_raster_measure(&mut baseline, ppp);
-            let (windows_edge, windows_ink) = mono_raster_measure(&mut windows, ppp);
-            // Compare horizontal alpha-edge energy per ink alpha; this is a deterministic
-            // vertical-stem sharpness proxy, not an absolute typography quality score.
-            let baseline_sharpness = baseline_edge as f64 / baseline_ink as f64;
-            let windows_sharpness = windows_edge as f64 / windows_ink as f64;
-            let sharpness_change = windows_sharpness / baseline_sharpness - 1.0;
-            let weight_change = windows_ink as f64 / baseline_ink as f64 - 1.0;
-            if ppp < 2.0 {
-                assert!(sharpness_change > 0.002, "{ppp} ppp sharpness change: {sharpness_change:.2}%", sharpness_change = sharpness_change * 100.0);
-            } else {
-                assert!(sharpness_change >= -0.01, "{ppp} ppp sharpness change: {sharpness_change:.2}%", sharpness_change = sharpness_change * 100.0);
-            }
-            assert!(weight_change.abs() < 0.05, "{ppp} ppp ink change: {weight_change:.2}%", weight_change = weight_change * 100.0);
-        }
-
-        for ppp in HINTING_PPPS {
-            for size in HINTING_SIZES {
-                for (family, _) in primary_families() {
-                    for text in HINTING_CORPUS {
-                        assert_eq!(
-                            baseline.has_glyphs(&FontId::new(size, family.clone()), text),
-                            windows.has_glyphs(&FontId::new(size, family.clone()), text),
-                            "{family:?} {text:?}"
-                        );
-                        assert_eq!(
-                            layout_signature(&galley(&mut baseline, family.clone(), size, ppp, text)),
-                            layout_signature(&galley(&mut windows, family.clone(), size, ppp, text)),
-                            "{family:?}, {size} pt, {ppp} ppp, {text:?}"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    /// "Use system setting" draws what the operating system says, dark or light.
-    #[test]
-    fn following_the_system_draws_what_the_system_says() {
-        assert_eq!(ThemePreference::System.resolve(Some(true), ThemeKind::Light), ThemeKind::Dark);
-        assert_eq!(ThemePreference::System.resolve(Some(false), ThemeKind::Dark), ThemeKind::Light);
-    }
-
-    /// An operating system that says nothing leaves the last choice standing, and an explicit
-    /// Light or Dark is never overridden by what the system says.
-    #[test]
-    fn an_answerless_system_leaves_the_choice_and_an_explicit_one_stands() {
-        assert_eq!(ThemePreference::System.resolve(None, ThemeKind::Light), ThemeKind::Light);
-        assert_eq!(ThemePreference::System.resolve(None, ThemeKind::Dark), ThemeKind::Dark);
-        assert_eq!(ThemePreference::Light.resolve(Some(true), ThemeKind::Dark), ThemeKind::Light);
-        assert_eq!(ThemePreference::Dark.resolve(Some(false), ThemeKind::Light), ThemeKind::Dark);
-    }
-
-    #[test]
-    fn press_darkens_then_sinks() {
-        let rest = Color32::from_rgb(0xFF, 0xFF, 0xFF);
-        let hover = Color32::from_rgb(0xF0, 0xF0, 0xF3);
-        let pressed = Color32::from_rgb(0xE4, 0xE4, 0xE9);
-        let idle = Press { hover: 0.0, down: 0.0 };
-        assert_eq!(idle.fill(rest, hover, pressed), rest);
-        assert_eq!(idle.offset(), Vec2::ZERO);
-        let held = Press { hover: 1.0, down: 1.0 };
-        assert_eq!(held.fill(rest, hover, pressed), pressed);
-        assert_eq!(held.offset(), Vec2::new(0.0, 1.0));
-    }
-
-    #[test]
-    fn text_is_readable_on_every_surface() {
-        // #76: the faintest text (hints, zoom level, captions) was 3.3:1 in the light theme.
-        for kind in [ThemeKind::Light, ThemeKind::Dark] {
-            let t = Tokens::for_kind(kind);
-            for (name, fg) in [("text", t.text), ("text_muted", t.text_muted), ("text_faint", t.text_faint)] {
-                for bg in [t.chrome, t.panel, t.card, t.pasteboard] {
-                    let r = contrast(fg, bg);
-                    assert!(r >= 4.5, "{kind:?} {name} on {bg:?}: {r:.2}:1, WCAG AA needs 4.5:1");
-                }
-            }
-        }
-    }
-}
+mod tests;

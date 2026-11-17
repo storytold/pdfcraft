@@ -71,8 +71,11 @@ The PDF object graph *is* the model (`crates/engine/README.md` §The editing mod
 ## File I/O
 
 - PDF in: any revision chain, xref tables or streams, hybrid files, damaged files (repaired and
-  logged), all standard-security revisions. Image codecs (DCT, JPX, JBIG2, CCITT) decode through
-  the bootstrap renderer.
+  logged), all standard-security revisions. Image codecs (DCT, JPX) decode through the bootstrap
+  renderer; CCITT and JBIG2 decode through `pdfcraft-filters` (`decode_ccitt_within`,
+  `decode_jbig2_within`, behind `ImageBudget::decode`, the only way to decode an image outside
+  the renderer, which shares one allowance across an operation's images) for export, redaction
+  and the optimizer, and through the renderer for display. Export ▸ Images decodes JPEG itself.
 - PDF out: incremental or full saves, object streams, re-encryption, resource de-duplication when
   combining.
 - Other formats: images and text in (`create`); PNG/JPEG/TIFF, text, RTF, Word and HTML out

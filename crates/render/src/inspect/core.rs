@@ -1,0 +1,570 @@
+use super::annotations::{FieldWalk, MAX_LINK_ATTACHMENT_TEXT_BYTES};
+use super::model::{Attachment, AttachmentSource, PageInfo, Portfolio, PortfolioView, Xfa};
+use super::navigation::text_string;
+use super::{
+    Arc, AssertUnwindSafe, DecryptionError, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, LoadPdfError, Object,
+    ObjectId, OnceCell, OpenError, Pdf, Structure, catch_unwind,
+};
+
+/// lopdf decodes object and cross-reference streams while it loads, with no limit unless one is
+/// set: a few hundred bytes of nested FlateDecode then inflate to gigabytes. Real object and
+/// xref streams are far below this.
+const LOAD_STREAM_LIMIT: usize = 256 << 20;
+
+pub(super) fn load_options(password: Option<&str>) -> LoadOptions {
+    LoadOptions { password: password.map(str::to_owned), max_decompressed_size: Some(LOAD_STREAM_LIMIT), ..LoadOptions::default() }
+}
+
+/// Check that `bytes` still open as the same document: the parser reads them and the page
+/// count matches. Content-only edits skip the full [`inspect`] (seconds on very large files)
+/// but must still catch an edit that produced something the viewer cannot display, so the
+/// caller can roll it back. Never panics: parser crashes are caught and reported.
+pub fn check_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, expected: usize) -> Result<(), OpenError> {
+    let pdf = catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes, password.unwrap_or(""))))
+        .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))?
+        .map_err(|e| match e {
+            LoadPdfError::Decryption(DecryptionError::PasswordProtected) => {
+                if password.is_some() {
+                    OpenError::WrongPassword
+                } else {
+                    OpenError::NeedsPassword
+                }
+            }
+            LoadPdfError::Decryption(other) => OpenError::Unsupported(format!("encryption not supported: {other:?}")),
+            LoadPdfError::Invalid => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
+        })?;
+    let pages = catch_unwind(AssertUnwindSafe(|| pdf.pages().len()))
+        .map_err(|p| OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p))))?;
+    if pages != expected {
+        return Err(OpenError::Invalid(format!("the edit changed the page count from {expected} to {pages}")));
+    }
+    Ok(())
+}
+
+/// Inspect a document. Fails only if the renderer itself cannot open the file (or needs a
+/// password). Never panics: parser crashes are caught and reported.
+pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, OpenError> {
+    let pdf = catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes.clone(), password.unwrap_or(""))))
+        .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))?
+        .map_err(|e| match e {
+            LoadPdfError::Decryption(DecryptionError::PasswordProtected) => {
+                if password.is_some() {
+                    OpenError::WrongPassword
+                } else {
+                    OpenError::NeedsPassword
+                }
+            }
+            LoadPdfError::Decryption(other) => OpenError::Unsupported(format!("encryption not supported: {other:?}")),
+            LoadPdfError::Invalid => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
+        })?;
+    let mut info = DocInfo { file_size: bytes.len(), pdf_version: version_label(&format!("{:?}", pdf.version())), ..Default::default() };
+    let pages = catch_unwind(AssertUnwindSafe(|| {
+        let mut out = Vec::new();
+        for (i, page) in pdf.pages().iter().enumerate() {
+            let (w, h) = page.render_dimensions();
+            let c = page.intersected_crop_box();
+            let rotation = match page.rotation() {
+                hayro::hayro_syntax::page::Rotation::None => 0,
+                hayro::hayro_syntax::page::Rotation::Horizontal => 90,
+                hayro::hayro_syntax::page::Rotation::Flipped => 180,
+                hayro::hayro_syntax::page::Rotation::FlippedHorizontal => 270,
+            };
+            let crop = [c.x0 as f32, c.y0 as f32, c.x1 as f32, c.y1 as f32];
+            // Degenerate boxes still get a usable placeholder size so layout never divides by zero.
+            let (w, h) = if w.is_finite() && h.is_finite() && w >= 1.0 && h >= 1.0 { (w, h) } else { (612.0, 792.0) };
+            out.push(PageInfo { width: w, height: h, label: (i + 1).to_string(), crop, rotation });
+        }
+        out
+    }));
+    match pages {
+        Ok(p) => info.pages = p,
+        Err(p) => return Err(OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p)))),
+    }
+    // Never silent: the pages of a file whose last update has no `/Prev` were found by rebuilding
+    // its cross-reference data (`pdfcraft-cos` rebuilds it under the same conditions and logs it).
+    let unlinked = pdf.rebuilt_unlinked_update();
+    let options = load_options(password);
+    // Geometry no longer needs the renderer parser. Do not overlap its allocations with
+    // structural inspection, including the compatibility fallback for damaged files.
+    drop(pdf);
+    inspect_structure(&mut info, |tmp| {
+        // The lazy reader first; lopdf's repair/tolerance path when it can't expose the same
+        // page tree or an object a panel needs. No partial result is published.
+        let lazy = catch_unwind(AssertUnwindSafe(|| {
+            let doc = LazyStructure::new(bytes.clone(), password).ok()?;
+            let mut t = DocInfo { pages: tmp.pages.clone(), ..Default::default() };
+            let inspector = Inspector::new(&doc);
+            if inspector.page_index.len() != t.pages.len() {
+                return None;
+            }
+            inspector.fill(&mut t);
+            (!doc.failed()).then_some(t)
+        }))
+        .ok()
+        .flatten();
+        if let Some(t) = lazy {
+            *tmp = t;
+            return Ok(());
+        }
+        let doc = Document::load_mem_with_options(&bytes, options).map_err(|e| e.to_string())?;
+        Inspector::new(&doc).fill(tmp);
+        Ok(())
+    });
+    if info.pages.is_empty() {
+        return Err(OpenError::Invalid("the document has no pages".into()));
+    }
+    if unlinked {
+        info.warnings.push(UNLINKED_UPDATE.into());
+    }
+    Ok(info)
+}
+
+/// The warning for a file whose pages were found by rebuilding its cross-reference data because its
+/// last update has no `/Prev` (ISO 32000-2 §7.5.6, §7.5.8.2).
+const UNLINKED_UPDATE: &str =
+    "This file's last update has no link (/Prev) to its earlier revisions; its pages were found by rebuilding the cross-reference data.";
+
+// Commit auxiliary metadata only after inspection succeeds; renderer geometry is the fallback.
+pub(super) fn inspect_structure(info: &mut DocInfo, fill: impl FnOnce(&mut DocInfo) -> Result<(), String>) {
+    let structure = catch_unwind(AssertUnwindSafe(|| {
+        let mut tmp = DocInfo { pages: info.pages.clone(), ..Default::default() };
+        fill(&mut tmp)?;
+        Ok::<_, String>(tmp)
+    }));
+    match structure {
+        Ok(Ok(mut filled)) => {
+            filled.file_size = info.file_size;
+            filled.pdf_version = std::mem::take(&mut info.pdf_version);
+            *info = filled;
+        }
+        Ok(Err(e)) => info.warnings.push(format!("Some document structure (bookmarks, comments, fields) could not be read: {e}")),
+        Err(p) => {
+            info.warnings.push(format!("Document structure inspection crashed and was skipped: {}", crate::raster::panic_message(&p)));
+        }
+    }
+}
+
+pub(super) struct Inspector<'a> {
+    pub(super) doc: &'a dyn Structure,
+    pub(super) page_ids: Vec<ObjectId>,
+    pub(super) page_index: HashMap<ObjectId, usize>,
+    /// Named destinations (`/Names /Dests` tree), keyed by raw string bytes, built once.
+    /// Looking each name up by walking the tree was O(links × names): minutes on manuals.
+    pub(super) named: HashMap<Vec<u8>, &'a Object>,
+    /// The page of each annotation (the first page that lists it), built when a field's widget
+    /// has no `/P`. Searching every page's `/Annots` for each such field was O(fields ×
+    /// annotations): a second on a form of 8,000 fields.
+    pub(super) annotation_pages: OnceCell<HashMap<ObjectId, usize>>,
+    /// What is left of [`MAX_FIELD_TEXT_BYTES`]: names, values and tooltips of form fields and
+    /// layer names, which many entries can share one string of.
+    pub(super) field_text: std::cell::Cell<usize>,
+    /// Set when a field with an action went unlisted because the text allowance was spent, so the
+    /// document still reports JavaScript.
+    pub(super) field_actions: std::cell::Cell<bool>,
+    /// The first page widget naming each field as its `/Parent`, built when a field has no widget
+    /// among its `/Kids`.
+    pub(super) parent_widgets: OnceCell<HashMap<ObjectId, ObjectId>>,
+}
+
+/// Bytes of field and layer text one inspection reads and keeps together.
+pub(super) const MAX_FIELD_TEXT_BYTES: usize = 64 << 20;
+
+impl<'a> Inspector<'a> {
+    pub(super) fn new(doc: &'a dyn Structure) -> Self {
+        let page_ids = doc.page_ids();
+        let page_index = page_ids.iter().copied().enumerate().map(|(index, id)| (id, index)).collect();
+        let mut me = Self {
+            doc,
+            page_ids,
+            page_index,
+            named: HashMap::new(),
+            annotation_pages: OnceCell::new(),
+            field_text: MAX_FIELD_TEXT_BYTES.into(),
+            field_actions: false.into(),
+            parent_widgets: OnceCell::new(),
+        };
+        let mut named = HashMap::new();
+        if let Some(tree) =
+            doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| me.dict(o)).and_then(|n| n.get(b"Dests").ok()).and_then(|o| me.dict(o))
+        {
+            let mut key_budget = MAX_LINK_ATTACHMENT_TEXT_BYTES;
+            me.name_tree_raw(tree, &mut HashSet::new(), 0, &mut named, &mut key_budget);
+        }
+        me.named = named;
+        me
+    }
+
+    /// Reads what `info` holds beyond the page list: encryption, document information, tagging,
+    /// page labels, bookmarks, annotations, transitions, form fields, layers, fonts, attachments
+    /// (and, for a PDF portfolio, how it presents them), JavaScript and the opening destination.
+    pub(super) fn fill(&self, info: &mut DocInfo) {
+        // lopdf drops /Encrypt from the trailer once it has decrypted the file.
+        info.encrypted = self.doc.encrypted();
+        if let Some(d) = self.doc.trailer().get(b"Info").ok().and_then(|o| self.dict(o)) {
+            info.title = self.text(d, b"Title");
+            info.author = self.text(d, b"Author");
+            info.subject = self.text(d, b"Subject");
+            info.keywords = self.text(d, b"Keywords");
+            info.creator = self.text(d, b"Creator");
+            info.producer = self.text(d, b"Producer");
+            const STANDARD: [&[u8]; 9] =
+                [b"Title", b"Author", b"Subject", b"Keywords", b"Creator", b"Producer", b"CreationDate", b"ModDate", b"Trapped"];
+            // The same rule as the engine's list after an edit (`pdfcraft_organize::custom_info`,
+            // trimmed and without empty values): text strings only, so a name value is not a
+            // custom property, and the cap counts listed entries.
+            info.custom = d
+                .iter()
+                .filter(|(k, _)| !STANDARD.contains(&k.as_slice()))
+                .filter_map(|(k, v)| match self.resolve(v) {
+                    Object::String(bytes, _) => {
+                        let v = text_string(bytes).trim_matches(|c: char| c == '\0' || c.is_whitespace()).to_string();
+                        (!v.is_empty()).then(|| (String::from_utf8_lossy(k).into_owned(), v))
+                    }
+                    _ => None,
+                })
+                .take(256)
+                .collect();
+        }
+        let Ok(catalog) = self.doc.catalog() else { return };
+        info.tagged = catalog
+            .get(b"MarkInfo")
+            .ok()
+            .and_then(|o| self.dict(o))
+            .and_then(|m| m.get(b"Marked").ok())
+            // Any value may be written as an indirect reference, `/Marked 9 0 R` included, so the
+            // flag is resolved before it is read as a boolean (#3671).
+            .map(|o| self.resolve(o))
+            .and_then(|o| o.as_bool().ok())
+            .unwrap_or(false);
+        match self.page_labels(catalog, &mut info.pages) {
+            Ok(notes) => info.warnings.extend(notes.into_iter().map(|note| format!("Page labels: {note}."))),
+            Err(reason) => info.warnings.push(format!("Page labels were skipped: {reason}; using physical page numbers.")),
+        }
+        info.uri_base = catalog.get(b"URI").ok().and_then(|o| self.dict(o)).and_then(|d| match d.get(b"Base").map(|o| self.resolve(o)) {
+            Ok(Object::String(bytes, _)) if bytes.len() <= crate::MAX_URI_BASE_BYTES => std::str::from_utf8(bytes).ok().map(str::to_owned),
+            _ => None,
+        });
+        let mut text_budget = MAX_LINK_ATTACHMENT_TEXT_BYTES;
+        if let Some(first) = catalog.get(b"Outlines").ok().and_then(|o| self.dict(o)).and_then(|d| d.get(b"First").ok()) {
+            (info.outline, info.outline_more) = self.outline_window(first, &mut text_budget);
+        }
+        self.annotations(info, &mut text_budget);
+        self.transitions(info);
+        let mut walk = FieldWalk::default();
+        if let Some(form) = catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o))
+            && let Ok(fields) = form.get(b"Fields").and_then(|o| self.resolve(o).as_array())
+        {
+            walk.roots = fields.iter().filter_map(|f| if let Object::Reference(id) = f { Some(*id) } else { None }).collect();
+            for f in fields {
+                self.field(f, None, &mut info.fields, &mut walk, 0);
+            }
+        }
+        // Widgets no `/Fields` entry reaches are fields too (Acrobat and the browsers fill them);
+        // each is adopted through its topmost unlisted `/Parent`, so a split field stays one.
+        for &pid in &self.page_ids {
+            let Ok(page_dict) = self.doc.get_dictionary(pid) else { continue };
+            let Ok(Object::Array(annots)) = page_dict.get(b"Annots").map(|o| self.resolve(o)) else { continue };
+            for a in annots {
+                let Some(d) = self.dict(a) else { continue };
+                if self.name(d, b"Subtype").as_deref() != Some("Widget")
+                    || (d.get(b"FT").is_err() && d.get(b"T").is_err() && d.get(b"Parent").is_err())
+                {
+                    continue;
+                }
+                if let Object::Reference(id) = a
+                    && let Some(root) = self.unlisted_field(*id, &walk.seen)
+                {
+                    self.field(&Object::Reference(root), None, &mut info.fields, &mut walk, 0);
+                }
+            }
+        }
+        info.has_javascript |= info.fields.iter().any(|f| f.has_actions) || self.field_actions.get();
+        let needs_rendering = catalog.get(b"NeedsRendering").ok().and_then(|o| self.resolve(o).as_bool().ok()).unwrap_or(false);
+        if let Some(xfa) = catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o)).and_then(|form| form.get(b"XFA").ok()) {
+            // A form with no fields is taken to be laid out from its template, unless its
+            // configuration says it is a static form (#3180): Designer writes
+            // `<dynamicRender>forbidden</dynamicRender>` for one, whose pages are the form.
+            let static_form = self.xfa_dynamic_render(xfa).as_deref() == Some("forbidden");
+            info.xfa = Some(if needs_rendering || (info.fields.is_empty() && !static_form) { Xfa::Dynamic } else { Xfa::Static });
+        }
+        self.layers(catalog, &mut info.layers);
+        info.layer_groups = self.layer_groups(catalog);
+        info.layer_order = self.layer_order(catalog, &info.layers);
+        self.fonts(&mut info.fonts);
+        if let Some(names) = catalog.get(b"Names").ok().and_then(|o| self.dict(o)) {
+            if let Some(ef) = names.get(b"EmbeddedFiles").ok().and_then(|o| self.dict(o)) {
+                let mut seen = HashSet::new();
+                for (name, spec) in self.name_tree(ef, &mut seen, 0, &mut text_budget) {
+                    // The key is kept a second time when it is also the name.
+                    let fallback = |budget: &mut usize| spend(name.as_bytes(), budget, |_| name.clone());
+                    info.attachments.push(self.attachment(spec, AttachmentSource::Document { key: name.clone() }, &mut text_budget, fallback));
+                }
+            }
+            info.has_javascript |= names.get(b"JavaScript").is_ok();
+        }
+        info.portfolio = catalog.get(b"Collection").ok().and_then(|o| self.dict(o)).map(|c| self.portfolio(c, &info.attachments));
+        if let Ok(action) = catalog.get(b"OpenAction")
+            && let Some(dict) = self.dict(action)
+            && dict.get(b"S").ok().and_then(|o| self.resolve(o).as_name().ok()) == Some(&b"JavaScript"[..])
+        {
+            info.has_javascript = true;
+        }
+        info.open_dest = catalog.get(b"OpenAction").ok().and_then(|o| self.open_dest(o));
+    }
+
+    /// A portfolio's collection dictionary (Table 153). `/D` names the initial document's key in
+    /// the `/EmbeddedFiles` name tree, decoded as the keys are.
+    fn portfolio(&self, collection: &Dictionary, attachments: &[Attachment]) -> Portfolio {
+        let view = match self.name(collection, b"View").as_deref() {
+            Some("T") => PortfolioView::Tile,
+            Some("H") => PortfolioView::Hidden,
+            Some("C") => PortfolioView::Custom,
+            _ => PortfolioView::Details,
+        };
+        let initial = match collection.get(b"D").map(|o| self.resolve(o)) {
+            Ok(Object::String(bytes, _)) => {
+                let name = text_string(bytes);
+                attachments.iter().position(|a| matches!(&a.source, AttachmentSource::Document { key } if *key == name))
+            }
+            _ => None,
+        };
+        Portfolio { initial, view }
+    }
+
+    /// The object a reference points at, or `o` itself for a direct object or a broken reference.
+    pub(super) fn resolve(&self, o: &'a Object) -> &'a Object {
+        self.doc.dereference(o).map(|(_, o)| o).unwrap_or(o)
+    }
+
+    /// The object a reference ends at after following any chain of references; `None` for a
+    /// direct object or a broken reference.
+    pub(super) fn resolved_id(&self, o: &Object) -> Option<ObjectId> {
+        self.doc.dereference(o).ok().and_then(|(id, _)| id)
+    }
+
+    pub(super) fn dict(&self, o: &'a Object) -> Option<&'a Dictionary> {
+        match self.resolve(o) {
+            Object::Dictionary(d) => Some(d),
+            Object::Stream(s) => Some(&s.dict),
+            _ => None,
+        }
+    }
+
+    pub(super) fn text(&self, d: &Dictionary, key: &[u8]) -> Option<String> {
+        // Typewriter outer whitespace belongs to the text (keep in step with annot's summaries).
+        let s = if key == b"Contents"
+            && self.name(d, b"Subtype").as_deref() == Some("FreeText")
+            && self.name(d, b"IT").as_deref() == Some("FreeTextTypeWriter")
+        {
+            match self.resolve(d.get(key).ok()?) {
+                Object::String(bytes, _) => text_string(bytes).trim_matches('\0').to_owned(),
+                Object::Name(bytes) => String::from_utf8_lossy(bytes).trim_matches('\0').to_owned(),
+                _ => return None,
+            }
+        } else {
+            trimmed_text(self.resolve(d.get(key).ok()?))?
+        };
+        (!s.trim().is_empty()).then_some(s)
+    }
+
+    /// Whitespace-trimmed metadata, spent from `budget` as [`spend`] does, so text that trims
+    /// short or to nothing still spends its raw length.
+    /// [`Self::budgeted_text`] against the shared field and layer text allowance.
+    pub(super) fn field_text(&self, d: &Dictionary, key: &[u8]) -> Option<String> {
+        let mut left = self.field_text.get();
+        let text = self.budgeted_text(d, key, &mut left);
+        self.field_text.set(left);
+        text
+    }
+
+    /// Converts `bytes` against the field and layer text allowance, as [`spend`] does.
+    pub(super) fn field_spend(&self, bytes: &[u8], convert: impl FnOnce(&[u8]) -> String) -> Option<String> {
+        let mut left = self.field_text.get();
+        let text = spend(bytes, &mut left, convert);
+        self.field_text.set(left);
+        text
+    }
+
+    /// Spends `n` bytes of the field and layer text allowance; `false` when too few are left.
+    pub(super) fn field_charge(&self, n: usize) -> bool {
+        let left = self.field_text.get();
+        self.field_text.set(left.saturating_sub(n));
+        n <= left
+    }
+
+    pub(super) fn budgeted_text(&self, d: &Dictionary, key: &[u8], budget: &mut usize) -> Option<String> {
+        self.budgeted_text_within(d, key, budget).ok().flatten()
+    }
+
+    /// [`Self::budgeted_text`], but `Err` when the text is there and does not fit `budget`
+    /// (against `Ok(None)`: no text, or none that trims to anything).
+    pub(super) fn budgeted_text_within(&self, d: &Dictionary, key: &[u8], budget: &mut usize) -> Result<Option<String>, ()> {
+        let Ok(o) = d.get(key) else { return Ok(None) };
+        let o = self.resolve(o);
+        let (Object::String(bytes, _) | Object::Name(bytes)) = o else { return Ok(None) };
+        let text = spend(bytes, budget, |_| trimmed_text(o).unwrap_or_default()).ok_or(())?;
+        Ok((!text.is_empty()).then_some(text))
+    }
+
+    /// [`Self::field_text`], but `Err` when the text does not fit the allowance.
+    pub(super) fn field_text_within(&self, d: &Dictionary, key: &[u8]) -> Result<Option<String>, ()> {
+        let mut left = self.field_text.get();
+        let text = self.budgeted_text_within(d, key, &mut left);
+        self.field_text.set(left);
+        text
+    }
+
+    pub(super) fn name(&self, d: &Dictionary, key: &[u8]) -> Option<String> {
+        self.resolve(d.get(key).ok()?).as_name().ok().map(|n| String::from_utf8_lossy(n).into_owned())
+    }
+}
+
+/// A string or name value as text, without surrounding NULs and white space.
+fn trimmed_text(o: &Object) -> Option<String> {
+    let s = match o {
+        Object::String(bytes, _) => text_string(bytes),
+        Object::Name(n) => String::from_utf8_lossy(n).into_owned(),
+        _ => return None,
+    };
+    Some(s.trim_matches('\0').trim().to_string())
+}
+
+/// `convert(bytes)` when the result fits in `budget`, which it then spends by the longer of the raw
+/// and converted lengths. Bytes longer than the budget are not converted. A conversion that comes
+/// out too long spends the raw length, so a string many entries share is converted only until the
+/// budget runs out.
+pub(super) fn spend(bytes: &[u8], budget: &mut usize, convert: impl FnOnce(&[u8]) -> String) -> Option<String> {
+    if bytes.len() > *budget {
+        return None;
+    }
+    let text = convert(bytes);
+    if text.len() > *budget {
+        *budget = budget.saturating_sub(bytes.len());
+        return None;
+    }
+    // The conversion's work follows the raw length, even when the text it keeps is shorter.
+    *budget = budget.saturating_sub(text.len().max(bytes.len()));
+    Some(text)
+}
+
+pub(super) fn limited_pdf_string(bytes: &[u8], max_bytes: usize) -> Option<String> {
+    if bytes.len() > max_bytes {
+        return None;
+    }
+    let text = text_string(bytes);
+    (text.len() <= max_bytes).then_some(text)
+}
+
+/// `D:20260930104512-04'00'` → `2026-09-30 10:45`.
+/// A PDF date (`D:20261001123000Z`) as "2026-10-01 12:30"; other strings unchanged.
+pub fn pretty_date(s: &str) -> String {
+    let d = s.trim_start_matches("D:");
+    if let Some(d) = d.get(..12).filter(|d| d.bytes().all(|b| b.is_ascii_digit())) {
+        // Twelve ASCII digits make every slice below a UTF-8 character boundary.
+        format!("{}-{}-{} {}:{}", &d[0..4], &d[4..6], &d[6..8], &d[8..10], &d[10..12])
+    } else {
+        s.to_string()
+    }
+}
+
+/// "1.7" from the parser's version name ("Pdf17", "V1_7", …).
+fn version_label(name: &str) -> String {
+    let digits: Vec<char> = name.chars().filter(char::is_ascii_digit).collect();
+    match digits[..] {
+        [a, b] => format!("{a}.{b}"),
+        _ => name.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    #[test]
+    fn version_labels_read_as_numbers() {
+        assert_eq!(super::version_label("Pdf17"), "1.7");
+        assert_eq!(super::version_label("V2_0"), "2.0");
+        assert_eq!(super::version_label("Unknown"), "Unknown");
+    }
+}
+
+#[cfg(test)]
+mod open_action_javascript_tests {
+    use std::sync::Arc;
+
+    use super::inspect;
+
+    /// One-page PDF whose catalog points its /OpenAction at object 4 (written by the caller).
+    fn pdf_with_open_action(action: &[u8]) -> Vec<u8> {
+        let objs: Vec<&[u8]> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R /OpenAction 4 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>",
+            action,
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend_from_slice(o);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    #[test]
+    fn open_action_javascript_sets_has_javascript() {
+        let bytes = pdf_with_open_action(b"<< /S /JavaScript /JS (app.alert('hi')) >>");
+        let info = inspect(Arc::new(bytes), None).expect("inspects");
+        assert!(info.has_javascript, "an /OpenAction /JavaScript is JavaScript");
+    }
+
+    #[test]
+    fn open_action_goto_does_not_set_has_javascript() {
+        let bytes = pdf_with_open_action(b"<< /S /GoTo /D [3 0 R /Fit] >>");
+        let info = inspect(Arc::new(bytes), None).expect("inspects");
+        assert!(!info.has_javascript, "a /GoTo /OpenAction is not JavaScript");
+    }
+}
+
+#[cfg(test)]
+mod unlinked_update_tests {
+    use super::*;
+
+    /// An update without `/Prev` cuts the page tree off the chain; the pages come from the
+    /// rebuilt table, the page tree's pages in its order, and the file says it was rebuilt.
+    #[test]
+    fn an_update_without_prev_shows_the_page_tree_and_says_it_was_rebuilt() {
+        let info = inspect(Arc::new(pdfcraft_testkit::update_without_prev(false)), None).expect("the unlinked file opens");
+        assert_eq!(info.pages.len(), 3, "{:?}", info.pages);
+        assert_eq!(info.pages.iter().map(|p| p.width).collect::<Vec<_>>(), [200.0, 300.0, 400.0]);
+        assert_eq!(info.warnings, [UNLINKED_UPDATE]);
+        // The structure is read from the rebuilt table as well: the second page's link.
+        assert_eq!(info.links.len(), 1, "{:?}", info.links);
+        let linked = inspect(Arc::new(pdfcraft_testkit::update_without_prev(true)), None).expect("the linked file opens");
+        assert_eq!(linked.pages.len(), 3);
+        assert!(linked.warnings.is_empty(), "{:?}", linked.warnings);
+        assert_eq!(linked.links.len(), 1);
+    }
+
+    /// A hybrid update's `/XRefStm` stream is part of that update, not an earlier section: without
+    /// `/Prev` the file is rebuilt as the document model rebuilds it, and with it, it isn't.
+    #[test]
+    fn a_hybrid_update_without_prev_is_rebuilt_as_the_document_model_rebuilds_it() {
+        let bytes = Arc::new(pdfcraft_testkit::hybrid_update_without_prev(false));
+        let info = inspect(bytes.clone(), None).expect("the unlinked hybrid file opens");
+        assert_eq!(info.pages.iter().map(|p| p.width).collect::<Vec<_>>(), [200.0, 300.0, 400.0]);
+        assert_eq!(info.warnings, [UNLINKED_UPDATE]);
+        assert!(pdfcraft_cos::Document::open(bytes).expect("cos opens it").rebuilt_unlinked_update());
+        let bytes = Arc::new(pdfcraft_testkit::hybrid_update_without_prev(true));
+        let linked = inspect(bytes.clone(), None).expect("the linked hybrid file opens");
+        assert_eq!(linked.pages.len(), 3);
+        assert!(linked.warnings.is_empty(), "{:?}", linked.warnings);
+        assert!(!pdfcraft_cos::Document::open(bytes).expect("cos opens it").rebuilt_unlinked_update());
+    }
+}

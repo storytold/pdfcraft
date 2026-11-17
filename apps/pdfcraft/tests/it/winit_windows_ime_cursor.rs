@@ -1,7 +1,10 @@
-//! vendor/winit patch (3) (vendor/README.md).
+//! Provenance-only: reads the retained `vendor/` copy, not the resolved dependency, so it is
+//! not runtime coverage. `vendor_graph.rs` checks the resolved graph identity.
+//! Retained vendor provenance for winit patch (3) (vendor/README.md); `vendor_graph.rs` checks the resolved graph.
 
+/// Regression test: the vendored winit reads the Windows IME cursor only when the composition reports it.
 #[test]
-fn winit_reads_the_windows_ime_cursor_only_when_it_is_reported() {
+fn vendor_provenance_winit_reads_the_windows_ime_cursor_only_when_it_is_reported() {
     // winit 0.30.13 reads `GCS_CURSORPOS` for every composition without a target clause, whether
     // or not `WM_IME_COMPOSITION` says the IME set it. The Microsoft Korean IME never sets it, so
     // the composition's cursor read as 0, before the syllable being composed. vendor/winit puts it

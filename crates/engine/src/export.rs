@@ -1,16 +1,55 @@
 //! Export a PDF ▸ Image and Text (execution plan M10.3, the first formats).
 //!
 //! [`Exporter`] renders pages to PNG, JPEG or TIFF at a resolution and extracts reading-order
-//! text, from a
-//! document's working file (so unsaved edits and hidden layers are respected, as on screen).
+//! text, from the copy a document displays ([`Document::export_source`]): its working file, so
+//! unsaved edits and hidden layers are respected, with what is drawn for display only.
+
+use std::collections::BTreeMap;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex, PoisonError, mpsc};
 
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 
 use crate::Document;
 
+/// At most this many pages are drawn at once by [`Exporter::images`].
+const MAX_IMAGE_WORKERS: usize = 8;
+/// Bytes of rasters [`Exporter::images`] may hold at once: 1 GiB, about 16 Letter pages at 300 dpi.
+/// Each worker holds one page (the raster, its RGB copy and the encoded file), so large pages run
+/// on fewer workers; a page over the cap still exports, on one worker, as it did before.
+const IMAGE_MEMORY: f64 = 1024.0 * 1024.0 * 1024.0;
+
+/// Page `page` drawn at `dpi` and encoded as `format`, saying it was drawn at `used` dpi.
+fn draw_image(renderer: &mut PageRenderer, page: usize, dpi: f64, format: ImageFormat, used: f64) -> Result<Vec<u8>, String> {
+    let r = renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });
+    if let Some(e) = r.error {
+        return Err(format!("page {}: {e}", page + 1));
+    }
+    encode_image(r.width, r.height, &r.rgba, format, used)
+}
+
+/// Tells the workers of [`Exporter::images`] to stop when dropped.
+struct StopWorkers<'a> {
+    stop: &'a AtomicBool,
+    handed_over: &'a (Mutex<usize>, Condvar),
+}
+
+impl Drop for StopWorkers<'_> {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        // Taken under the lock, so a worker between its check and its wait still sees it.
+        drop(self.handed_over.0.lock().unwrap_or_else(PoisonError::into_inner));
+        self.handed_over.1.notify_all();
+    }
+}
+
 /// Renders and extracts pages of one document state.
 pub struct Exporter {
     renderer: PageRenderer,
+    /// What the renderer draws, for the extra renderers [`Exporter::images`] starts.
+    bytes: std::sync::Arc<Vec<u8>>,
+    config: pdfcraft_render::RenderConfig,
     pages: usize,
     /// Each page's displayed size in points, for [`Exporter::dpi_used`].
     sizes: Vec<(f32, f32)>,
@@ -28,9 +67,10 @@ pub struct ExportSource {
 
 impl Document {
     /// What an export reads, for exporting on another thread. These are the displayed
-    /// bytes, so they may carry missing comment appearances PdfCraft drew. Signature
-    /// artwork stays original; viewer validation badges are not document content and
-    /// do not enter image/text exports or Print as Image. Saving uses the working file.
+    /// bytes, so they may carry appearances PdfCraft drew that the file itself does not hold:
+    /// missing comment appearances, and the signature states of named-layer signature
+    /// appearances. Exports and Print as Image follow the page as shown; the viewer's badges
+    /// are not document content and never enter them. Saving uses the working file.
     pub fn export_source(&self) -> ExportSource {
         ExportSource {
             bytes: self.display.clone(),
@@ -65,7 +105,13 @@ impl Exporter {
     /// resolution they allow, as the interactive Export does; [`Exporter::dpi_used`] says at what.
     /// A source whose `config.reject_oversize` is set refuses such pages instead.
     pub fn from_source(src: ExportSource) -> Self {
-        Self { renderer: PageRenderer::new(src.bytes, src.config), pages: src.pages, sizes: src.sizes }
+        Self {
+            renderer: PageRenderer::new(src.bytes.clone(), src.config.clone()),
+            bytes: src.bytes,
+            config: src.config,
+            pages: src.pages,
+            sizes: src.sizes,
+        }
     }
 
     /// The resolution page `page` is actually exported at when asked for `dpi`: lower than asked
@@ -96,11 +142,146 @@ impl Exporter {
     /// Page `page` as an image file of `format`, which says the resolution it was drawn at.
     pub fn image(&mut self, page: usize, dpi: f64, format: ImageFormat) -> Result<Vec<u8>, String> {
         self.check(page)?;
-        let r = self.renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });
-        if let Some(e) = r.error {
-            return Err(format!("page {}: {e}", page + 1));
+        let used = self.dpi_used(page, dpi);
+        draw_image(&mut self.renderer, page, dpi, format, used)
+    }
+
+    /// Pages `pages` as image files of `format`, handed to `sink` in order with their page
+    /// number: the same files as [`Exporter::image`] for each page in turn. Encoding a page costs
+    /// several times what drawing it does, so several pages are drawn and encoded at once on
+    /// worker threads, each with its own renderer, while `sink` runs on the calling thread.
+    /// Workers draw at most one page each ahead of `sink`, and fewer run when the pages are
+    /// large, so memory stays bounded. Stops at the first page that fails or the first error `sink`
+    /// returns, and returns it; every page before it has been handed to `sink`.
+    pub fn images(
+        &mut self,
+        pages: &[usize],
+        dpi: f64,
+        format: ImageFormat,
+        sink: impl FnMut(usize, Vec<u8>) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let workers = self.image_workers(pages, dpi);
+        self.images_on(workers, pages, dpi, format, sink)
+    }
+
+    /// [`Exporter::images`] with `workers` pages drawn at once (one: in turn, on this thread).
+    pub(crate) fn images_on(
+        &mut self,
+        workers: usize,
+        pages: &[usize],
+        dpi: f64,
+        format: ImageFormat,
+        mut sink: impl FnMut(usize, Vec<u8>) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if workers <= 1 {
+            for &p in pages {
+                let img = self.image(p, dpi, format)?;
+                sink(p, img)?;
+            }
+            return Ok(());
         }
-        encode_image(r.width, r.height, &r.rgba, format, self.dpi_used(page, dpi))
+        let used: Vec<f64> = pages.iter().map(|p| self.dpi_used(*p, dpi)).collect();
+        let count = self.pages;
+        let (bytes, config) = (&self.bytes, &self.config);
+        let next = AtomicUsize::new(0);
+        let stop = AtomicBool::new(false);
+        // How many pages `sink` has taken; a worker waits while its page is `workers` past it.
+        let handed_over = (Mutex::new(0usize), Condvar::new());
+        let (tx, rx) = mpsc::channel::<(usize, Result<Vec<u8>, String>)>();
+        let mut first = Some(&mut self.renderer);
+        std::thread::scope(|s| {
+            let handles: Vec<_> = (0..workers)
+                .map(|_| {
+                    let tx = tx.clone();
+                    let (first, used, next, stop, handed_over) = (first.take(), &used, &next, &stop, &handed_over);
+                    s.spawn(move || {
+                        let mut own = None;
+                        let renderer = match first {
+                            Some(r) => r,
+                            None => own.insert(PageRenderer::new(bytes.clone(), config.clone())),
+                        };
+                        loop {
+                            let i = next.fetch_add(1, Ordering::Relaxed);
+                            let (Some(&page), Some(&used)) = (pages.get(i), used.get(i)) else { break };
+                            let mut taken = handed_over.0.lock().unwrap_or_else(PoisonError::into_inner);
+                            while i >= taken.saturating_add(workers) && !stop.load(Ordering::Relaxed) {
+                                taken = handed_over.1.wait(taken).unwrap_or_else(PoisonError::into_inner);
+                            }
+                            drop(taken);
+                            if stop.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            let img = if page < count {
+                                catch_unwind(AssertUnwindSafe(|| draw_image(renderer, page, dpi, format, used)))
+                                    .unwrap_or_else(|_| Err(format!("page {}: the export crashed", page + 1)))
+                            } else {
+                                Err(format!("page {} does not exist", page + 1))
+                            };
+                            if tx.send((i, img)).is_err() {
+                                break;
+                            }
+                        }
+                    })
+                })
+                .collect();
+            drop(tx);
+            // Stops the workers however this ends, a panicking `sink` included: waiting ones
+            // would otherwise keep the scope from returning.
+            let stopper = StopWorkers { stop: &stop, handed_over: &handed_over };
+            let mut ready = BTreeMap::new();
+            let mut result = Ok(());
+            let mut taken = 0;
+            while let Some(&page) = pages.get(taken) {
+                let Some(img) = ready.remove(&taken) else {
+                    match rx.recv() {
+                        Ok((i, img)) => {
+                            ready.insert(i, img);
+                        }
+                        Err(_) => {
+                            result = Err(format!("page {}: the export stopped unexpectedly", page + 1));
+                            break;
+                        }
+                    }
+                    continue;
+                };
+                if let Err(e) = img.and_then(|img| sink(page, img)) {
+                    result = Err(e);
+                    break;
+                }
+                taken += 1;
+                *handed_over.0.lock().unwrap_or_else(PoisonError::into_inner) = taken;
+                handed_over.1.notify_all();
+            }
+            drop(stopper);
+            // Joined here, so a worker that panicked outside a page is not re-raised by the scope.
+            for h in handles {
+                let _ = h.join();
+            }
+            result
+        })
+    }
+
+    /// How many pages [`Exporter::images`] draws at once: one per core but one, up to
+    /// [`MAX_IMAGE_WORKERS`], as many as [`IMAGE_MEMORY`] holds of the largest page, and one
+    /// when there is nothing to share or no threads (wasm).
+    fn image_workers(&self, pages: &[usize], dpi: f64) -> usize {
+        if cfg!(target_arch = "wasm32") || pages.len() < 2 {
+            return 1;
+        }
+        // One core is left for the interface, which keeps drawing while an export runs.
+        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get).saturating_sub(1).min(MAX_IMAGE_WORKERS);
+        // The raster (RGBA), the RGB copy the encoders take, and room for the encoded file.
+        let largest = pages
+            .iter()
+            .filter_map(|p| {
+                let (w, h) = *self.sizes.get(*p)?;
+                let k = self.dpi_used(*p, dpi) / 72.0;
+                Some((f64::from(w) * k).ceil() * (f64::from(h) * k).ceil() * 8.0)
+            })
+            .fold(0.0, f64::max);
+        // A float-to-integer cast saturates (and NaN is 0).
+        let by_memory = if largest > 0.0 { (IMAGE_MEMORY / largest) as usize } else { cores };
+        cores.min(by_memory).min(pages.len()).max(1)
     }
 
     /// The reading-order text of a page.
@@ -150,8 +331,8 @@ pub fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u
     check_raster(width, height, premultiplied)?;
     let pixels = premultiplied.as_chunks::<4>().0;
     let opaque = pixels.iter().all(|px| px[3] == 255);
-    let (color, data) = if opaque {
-        (png::ColorType::Rgb, pixels.iter().flat_map(|px| [px[0], px[1], px[2]]).collect::<Vec<u8>>())
+    let (layout, data) = if opaque {
+        (craft_image_codecs::ChannelLayout::Rgb, pixels.iter().flat_map(|px| [px[0], px[1], px[2]]).collect::<Vec<u8>>())
     } else {
         let mut rgba = premultiplied.to_vec();
         for px in rgba.as_chunks_mut::<4>().0 {
@@ -162,18 +343,11 @@ pub fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u
                 }
             }
         }
-        (png::ColorType::Rgba, rgba)
+        (craft_image_codecs::ChannelLayout::Rgba, rgba)
     };
-    let mut out = Vec::new();
-    let mut enc = png::Encoder::new(&mut out, width, height);
-    enc.set_color(color);
-    enc.set_depth(png::BitDepth::Eight);
-    enc.set_deflate_compression(png::DeflateCompression::Level(3));
-    enc.set_filter(png::Filter::Adaptive);
-    let mut w = enc.write_header().map_err(|e| e.to_string())?;
-    w.write_image_data(&data).map_err(|e| e.to_string())?;
-    w.finish().map_err(|e| e.to_string())?;
-    Ok(out)
+    let img = craft_image_codecs::Image::from_u8(width, height, layout, data).map_err(|e| e.to_string())?;
+    let opts = craft_image_codecs::EncodeOptions { png_compression: craft_image_codecs::PngCompression::Fast, ..Default::default() };
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &opts).map_err(|e| e.to_string())
 }
 
 /// Image file formats for Export ▸ Image.
@@ -236,38 +410,25 @@ fn over_white(premultiplied: &[u8]) -> Vec<u8> {
 
 /// Premultiplied RGBA → baseline JPEG at `dpi` (pages are opaque: transparency becomes white paper).
 pub fn encode_jpeg(width: u32, height: u32, premultiplied: &[u8], quality: u8, dpi: f64) -> Result<Vec<u8>, String> {
-    use image::ImageEncoder;
-    use image::codecs::jpeg::{JpegEncoder, PixelDensity};
     check_raster(width, height, premultiplied)?;
     let rgb = over_white(premultiplied);
-    let mut out = Vec::new();
-    let mut enc = JpegEncoder::new_with_quality(&mut out, quality.clamp(1, 100));
-    // The JFIF density is whole dots per inch.
-    enc.set_pixel_density(PixelDensity::dpi(dpi.round() as u16));
-    enc.write_image(&rgb, width, height, image::ExtendedColorType::Rgb8).map_err(|e| e.to_string())?;
-    Ok(out)
+    let mut img = craft_image_codecs::Image::from_u8(width, height, craft_image_codecs::ChannelLayout::Rgb, rgb).map_err(|e| e.to_string())?;
+    let d = dpi.round() as f32;
+    img.meta.dpi = Some((d, d));
+    let opts = craft_image_codecs::EncodeOptions { jpeg_quality: quality.clamp(1, 100), embed_metadata: true, ..Default::default() };
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &opts).map_err(|e| e.to_string())
 }
 
-/// Premultiplied RGBA → TIFF (RGB, LZW-compressed) at `dpi`. Written with `tiff` directly:
-/// `image`'s `TiffEncoder` always says 1 × 1 with no unit and leaves the strips uncompressed.
-/// No predictor: LZW alone is the compression TIFF readers support most widely after none.
+/// Premultiplied RGBA → TIFF (RGB, LZW-compressed) at `dpi`.
 pub fn encode_tiff(width: u32, height: u32, premultiplied: &[u8], dpi: f64) -> Result<Vec<u8>, String> {
-    use tiff::encoder::{Compression, Rational, TiffEncoder, colortype::RGB8};
-    use tiff::tags::{ResolutionUnit, Tag};
-    let err = |e: tiff::TiffError| e.to_string();
     check_raster(width, height, premultiplied)?;
     let rgb = over_white(premultiplied);
-    let mut out = std::io::Cursor::new(Vec::new());
-    let mut tiff = TiffEncoder::new(&mut out).map_err(err)?.with_compression(Compression::Lzw);
-    let mut image = tiff.new_image::<RGB8>(width, height).map_err(err)?;
-    // In hundredths: a page drawn at a lowered resolution (`Exporter::dpi_used`) is rarely a whole number.
-    let resolution = Rational { n: (dpi * 100.0).round() as u32, d: 100 };
-    let tags = image.encoder();
-    tags.write_tag(Tag::ResolutionUnit, ResolutionUnit::Inch).map_err(err)?;
-    tags.write_tag(Tag::XResolution, resolution.clone()).map_err(err)?;
-    tags.write_tag(Tag::YResolution, resolution).map_err(err)?;
-    image.write_data(&rgb).map_err(err)?;
-    Ok(out.into_inner())
+    let mut img = craft_image_codecs::Image::from_u8(width, height, craft_image_codecs::ChannelLayout::Rgb, rgb).map_err(|e| e.to_string())?;
+    let d = dpi as f32;
+    img.meta.dpi = Some((d, d));
+    let opts =
+        craft_image_codecs::EncodeOptions { tiff_compression: craft_image_codecs::TiffCompression::Lzw, embed_metadata: true, ..Default::default() };
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Tiff, &opts).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -303,12 +464,9 @@ mod raster_tests {
     const FORMATS: [ImageFormat; 3] = [ImageFormat::Png, ImageFormat::Jpeg { quality: 90 }, ImageFormat::Tiff];
 
     /// The colour type and pixels of a PNG.
-    fn decode(png: &[u8]) -> (png::ColorType, Vec<u8>) {
-        let mut reader = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
-        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
-        let frame = reader.next_frame(&mut pixels).unwrap();
-        pixels.truncate(frame.buffer_size());
-        (frame.color_type, pixels)
+    fn decode(png: &[u8]) -> (craft_image_codecs::ChannelLayout, Vec<u8>) {
+        let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Png, png, &craft_image_codecs::DecodeOptions::default()).unwrap();
+        (img.layout(), img.as_u8().unwrap().to_vec())
     }
 
     /// A rendered page has no translucent pixel: it is written as RGB, each pixel exactly as
@@ -317,7 +475,7 @@ mod raster_tests {
     fn opaque_rasters_are_written_as_rgb_with_their_exact_pixels() {
         let rgba = [[255, 255, 255, 255], [0, 0, 0, 255], [200, 30, 90, 255], [1, 2, 3, 255], [17, 250, 128, 255], [90, 90, 90, 255]];
         let (color, pixels) = decode(&encode_png(3, 2, rgba.as_flattened()).unwrap());
-        assert_eq!(color, png::ColorType::Rgb);
+        assert_eq!(color, craft_image_codecs::ChannelLayout::Rgb);
         assert_eq!(pixels, rgba.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<_>>());
     }
 
@@ -326,7 +484,7 @@ mod raster_tests {
     fn translucent_rasters_keep_straight_alpha() {
         let rgba = [[64, 0, 32, 128], [0, 0, 0, 0], [10, 20, 30, 255]];
         let (color, pixels) = decode(&encode_png(3, 1, rgba.as_flattened()).unwrap());
-        assert_eq!(color, png::ColorType::Rgba);
+        assert_eq!(color, craft_image_codecs::ChannelLayout::Rgba);
         assert_eq!(pixels, [128, 0, 64, 128, 0, 0, 0, 0, 10, 20, 30, 255]);
     }
 

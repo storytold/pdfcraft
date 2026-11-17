@@ -100,6 +100,26 @@ fn every_registered_command_is_implemented() {
         if spec.id == "edit.redo" {
             app.undo();
         }
+        if spec.id == "prepress.marks.remove" {
+            use pdfcraft_engine::{Edit, PrinterMarks};
+            app.apply_edit(Edit::AddPrinterMarks { pages: vec![0], settings: PrinterMarks::default(), replace: false });
+        }
+        // Copying comments needs a selected comment; pasting needs copied ones.
+        if matches!(spec.id, "comment.copy" | "comment.paste") {
+            let shape = pdfcraft_engine::Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] };
+            let style = pdfcraft_engine::Style::default_for(&shape);
+            assert!(app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+                page: 0,
+                shape,
+                style,
+                contents: String::new(),
+                author: String::new(),
+            })));
+            app.views[0].comments.select_only((0, 0));
+            if spec.id == "comment.paste" {
+                assert!(app.copy_selected_comments(0));
+            }
+        }
         if spec.id.starts_with("edit.") && (spec.id.ends_with(".update") || spec.id.ends_with(".remove")) {
             use pdfcraft_engine::{Background, Edit, HeaderFooter, Watermark};
             let mut hf = HeaderFooter::default();
@@ -263,6 +283,58 @@ fn shortcuts_run_registered_commands() {
 }
 
 #[test]
+fn ctrl_m_opens_the_comments_panel_and_keeps_it_open() {
+    for os in [OperatingSystem::Windows, OperatingSystem::Nix] {
+        let mut h = harness();
+        // Real Windows/Linux Ctrl events set both ctrl and command.
+        h.ctx.set_os(os);
+        h.state_mut().right = None;
+        h.run_steps(2);
+        for _ in 0..2 {
+            h.key_press_modifiers(Modifiers::CTRL | Modifiers::COMMAND, Key::M);
+            h.run_steps(2);
+            assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Comments), "{os:?}: opens rather than toggles");
+        }
+        h.state_mut().execute("help.shortcuts");
+        h.run_steps(3);
+        h.get_by_label("Ctrl+M");
+    }
+}
+
+#[test]
+fn mac_command_m_stays_available_for_minimize() {
+    let mut h = harness();
+    h.ctx.set_os(OperatingSystem::Mac);
+    h.state_mut().right = None;
+    h.run_steps(2);
+    let command_m = Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE };
+    h.input_mut().events.push(egui::Event::Key { key: Key::M, physical_key: None, pressed: true, repeat: false, modifiers: command_m });
+    h.step();
+    let available = h.ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::M, pressed: true, .. })));
+    assert_eq!((h.state().right, available), (None, true), "Comments must leave Command+M unconsumed for Minimize");
+
+    let bar = h.state().menu_bar(&h.ctx);
+    assert!(bar.find(&craft_menu::CommandRef::new("comment.list")).unwrap().shortcut.is_none());
+    let layout = craft_menu::mac_layout(&bar, &craft_menu::LayoutOptions::new("PdfCraft"));
+    assert!(!layout.clashes.iter().any(|clash| clash.system == "Minimize"));
+    assert!(
+        layout
+            .bar
+            .menu(craft_menu::MenuRole::Window)
+            .unwrap()
+            .children
+            .iter()
+            .any(|node| { matches!(node, craft_menu::Node::Standard { kind: craft_menu::Standard::Minimize, .. }) }),
+        "the native layout keeps AppKit's standard Minimize item"
+    );
+    h.state_mut().execute("help.shortcuts");
+    h.run_steps(3);
+    h.get_by_label("⌘S"); // Positive control: the macOS shortcut rows really rendered.
+    assert!(h.query_by_label("⌘M").is_none());
+    assert!(h.query_by_label("Comments panel").is_none(), "an unbound command has no shortcuts-help row");
+}
+
+#[test]
 fn the_palette_lists_commands_with_shortcuts_and_runs_them() {
     let mut h = harness();
     h.state_mut().set_option("palette", "rotate pages clockwise").unwrap();
@@ -293,19 +365,21 @@ fn palette_arrow_keys_select_results_and_enter_runs_the_selection() {
     assert_eq!(app.session.get(app.views[0].id).unwrap().info.pages[0].rotation, 270);
 }
 
+/// Check that choosing Edit ▸ Pages ▸ Delete pages in the menu bar reduces the page count once.
 #[test]
 fn the_pages_menu_comes_from_the_registry() {
     let mut h = harness();
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_by_label("Pages ⏵").hover();
+    support::open_menu(&mut h, "Edit");
+    support::menu_row(&h, "Pages").hover();
     h.run_steps(3);
-    h.get_by_label_contains("Delete pages").click();
+    support::menu_row(&h, "Delete pages").click();
     h.run_steps(3);
     let app = h.state();
     assert_eq!(app.session.get(app.views[0].id).unwrap().info.pages.len(), 2);
 }
 
+/// Check that Open Recent lists a recorded file and opens it in a new active tab without replacing the
+/// original.
 #[test]
 fn the_open_recent_menu_lists_files_and_opens_one() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-recent-{}", std::process::id()));
@@ -324,14 +398,11 @@ fn the_open_recent_menu_lists_files_and_opens_one() {
         }
     });
     h.run_steps(4);
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_by_label("File ⏵").hover();
-    h.run_steps(3);
-    h.get_by_label("Open Recent ⏵").hover();
+    support::open_menu(&mut h, "File");
+    support::menu_row(&h, "Open Recent").hover();
     h.run_steps(3);
     let original = h.state().views[0].id;
-    h.get_by_label_contains("recent.pdf").click();
+    support::menu_row(&h, "recent.pdf").click();
     support::wait_until(&mut h, "recent document", |app| app.views.len() == 2 && app.password_prompt.is_none());
     let app = h.state();
     let active = app.active.unwrap();
@@ -341,13 +412,11 @@ fn the_open_recent_menu_lists_files_and_opens_one() {
     assert_eq!(app.session.get(original).unwrap().bytes.as_slice(), fixture(3).as_slice());
 }
 
+/// Check that Open Recent is disabled while no file has been opened.
 #[test]
 fn the_open_recent_menu_is_disabled_while_the_list_is_empty() {
     let mut h = harness();
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_by_label("File ⏵").hover();
-    h.run_steps(3);
+    support::open_menu(&mut h, "File");
     assert!(
         h.query_by(|n| n.label().as_deref() == Some("Open Recent") && n.is_disabled()).is_some(),
         "Open Recent is disabled while no file has been opened"
@@ -358,6 +427,7 @@ fn recent_file(name: &str) -> pdfcraft_ui_egui::RecentFile {
     pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0 }
 }
 
+/// Check that Clear Recent Files empties the list and disables Open Recent.
 #[test]
 fn clear_recent_files_at_the_foot_of_open_recent_empties_the_list() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
@@ -368,19 +438,13 @@ fn clear_recent_files_at_the_foot_of_open_recent_empties_the_list() {
         app
     });
     h.run_steps(4);
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_by_label("File ⏵").hover();
+    support::open_menu(&mut h, "File");
+    support::menu_row(&h, "Open Recent").hover();
     h.run_steps(3);
-    h.get_by_label("Open Recent ⏵").hover();
-    h.run_steps(3);
-    h.get_by_label("Clear Recent Files").click();
+    support::menu_row(&h, "Clear Recent Files").click();
     h.run_steps(3);
     assert!(h.state().recent.is_empty(), "the list is empty");
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_by_label("File ⏵").hover();
-    h.run_steps(3);
+    support::open_menu(&mut h, "File");
     assert!(h.query_by(|n| n.label().as_deref() == Some("Open Recent") && n.is_disabled()).is_some(), "and Open Recent is disabled");
 }
 
@@ -423,6 +487,9 @@ fn the_shortcuts_dialog_lists_the_real_bindings() {
 
 #[test]
 fn localized_shortcuts_update_immediately_and_keep_command_ids_and_key_bindings() {
+    if crate::support::skip_without_catalogs("localized_shortcuts_update_immediately_and_keep_command_ids_and_key_bindings") {
+        return;
+    }
     let mut h = harness();
     h.ctx.set_os(OperatingSystem::Windows);
     h.state_mut().set_option("language", "de").unwrap();
@@ -453,13 +520,13 @@ fn localized_shortcuts_update_immediately_and_keep_command_ids_and_key_bindings(
     assert!(!doc.dirty);
 }
 
-/// Menu ▸ View open, with egui told the app runs on `os`.
+/// View ▸ Zoom open in the menu bar, with egui told the app runs on `os`.
 fn view_menu(os: OperatingSystem) -> Harness<'static, PdfCraftApp> {
     let mut h = harness();
     h.ctx.set_os(os);
-    h.get_by_label("Menu").click();
     h.run_steps(2);
-    h.get_by_label("View ⏵").hover();
+    support::open_menu(&mut h, "View");
+    support::menu_row(&h, "Zoom").hover();
     h.run_steps(3);
     h
 }
@@ -468,21 +535,14 @@ fn view_menu(os: OperatingSystem) -> Harness<'static, PdfCraftApp> {
 fn view_menu_and_tooltips_write_shortcuts_for_the_platform() {
     // On Linux, View ▸ Zoom and Page navigation showed ⌘1, ⌘[ … (hard-coded) while the
     // registered items under them showed Ctrl+K; tooltips showed ⌘ too.
+    // The menu bar writes its shortcuts for the build's platform (craft-menu tests that).
     let h = view_menu(OperatingSystem::Nix);
-    h.get_by_label("Actual size Ctrl+1");
-    h.get_by_label("Zoom to page level Ctrl+0");
-    h.get_by_label("Rotate view counterclockwise Ctrl+Shift+−");
-    h.get_by_label("Previous view Ctrl+[");
-    h.get_by_label("Find tools and commands… Ctrl+K");
     h.get_by_label("Zoom in (Ctrl++)");
     h.get_by_label("Print (Ctrl+P)");
     assert_eq!(h.query_all_by_label_contains("⌘").count(), 0, "no ⌘ outside macOS");
     assert_eq!(h.query_all_by_label_contains("Fit visible").count(), 1, "View lists Fit visible once");
-    h.get_by_label("Fit visible Ctrl+3");
 
     let h = view_menu(OperatingSystem::Mac);
-    h.get_by_label("Actual size ⌘1");
-    h.get_by_label("Fit visible ⌘3");
     h.get_by_label("Rotate view clockwise (⇧⌘+)");
     assert_eq!(h.query_all_by_label_contains("Ctrl+").count(), 0, "no Ctrl+ on macOS");
 }
@@ -530,6 +590,8 @@ fn the_about_dialog_shows_the_running_version() {
     h.get_by_label_contains(&format!("Version {}", env!("CARGO_PKG_VERSION")));
 }
 
+/// Check that the quit shortcut needs exact platform modifiers and that unsaved work opens the save prompt
+/// instead of closing.
 #[test]
 fn quit_shortcut_requires_exact_modifiers_and_preserves_unsaved_work() {
     for (os, modifiers) in [
@@ -550,6 +612,9 @@ fn quit_shortcut_requires_exact_modifiers_and_preserves_unsaved_work() {
             let closes = h.output().viewport_output.values().any(|v| v.commands.contains(&egui::ViewportCommand::Close));
             assert_eq!(closes, should_close, "{os:?}, extra={extra:?}, dirty={dirty}");
             if dirty {
+                // The save prompt is a modal laid out after the key pass; let that pass settle
+                // before looking it up.
+                h.run_steps(2);
                 h.get_by_label("Cancel").click();
                 h.run_steps(2);
                 assert_eq!(h.state().views.len(), 1);
@@ -613,6 +678,9 @@ fn palette_ime_idle_frames_and_reopen_do_not_interrupt_composition() {
 
 #[test]
 fn palette_ime_chinese_preedit_commit_and_cancel_remain_uninterrupted() {
+    if crate::support::skip_without_glyphs("palette_ime_chinese_preedit_commit_and_cancel_remain_uninterrupted", "en", "你") {
+        return;
+    }
     let mut h = harness();
     let mut interruptions = Vec::new();
     h.state_mut().run_command("view.palette");

@@ -359,8 +359,9 @@ const MAX_NESTING_DEPTH: u32 = 16;
 #[derive(Debug, Clone)]
 pub struct CMap {
     metadata: Metadata,
-    // Note that we don't actually use this, because Acrobat _seems_ to ignore
-    // it, too.
+    // Note that the CID lookup doesn't check this, because Acrobat _seems_ to
+    // ignore it, too. PdfCraft patch (4): the `bfchar` fallback of
+    // `lookup_cid_code` does check it (see there).
     _codespace_ranges: Vec<CodespaceRange>,
     cid_ranges: PartitionedRanges,
     notdef_ranges: PartitionedRanges,
@@ -449,7 +450,20 @@ impl CMap {
         // See pdfjs_bug920426, it uses bf chars for encoding the characters
         // of a text-showing operator, so try that as well. We don't want to
         // recurse though, only check the bf chars of this level.
-        if let Some(BfString::Char(lookup)) = self.lookup_bf_string_inner(code, false) {
+        //
+        // PdfCraft patch (4): bf entries don't record how many bytes their code
+        // has, so the fallback only applies when the codespace ranges give
+        // the code `byte_len` bytes (ISO 32000-2 §9.7.6.2). Otherwise the
+        // first byte of `<fe96>` matched a `<00fe>` entry and a two-byte code
+        // drew as two glyphs. A CMap with no codespace ranges anywhere uses
+        // the length the entry's own source code was written with instead.
+        let length_fits = match self.codespace_allows(code, byte_len, 0) {
+            Some(allowed) => allowed,
+            None => self.bf_code_has_length(code, byte_len),
+        };
+        if length_fits
+            && let Some(BfString::Char(lookup)) = self.lookup_bf_string_inner(code, false)
+        {
             return Some(lookup as u32);
         }
 
@@ -457,6 +471,40 @@ impl CMap {
         self.base
             .as_ref()
             .and_then(|b| b.lookup_cid_code(code, byte_len))
+    }
+
+    /// PdfCraft patch (4): whether this level's bf entry for `code` was written with `byte_len`
+    /// bytes (`<00fe>` is a two-byte code, not the one-byte `<fe>`), or doesn't record its length.
+    /// Used where no codespace range gives the code its length.
+    fn bf_code_has_length(&self, code: u32, byte_len: u8) -> bool {
+        find_in_ranges(&self.bf_entries, code)
+            .is_some_and(|entry| entry.code_len == 0 || entry.code_len == byte_len)
+    }
+
+    /// PdfCraft patch (4): whether a code of `byte_len` bytes lies in a codespace range of that
+    /// length (each byte within the range's bounds for its position, ISO
+    /// 32000-2 §9.7.6.2). A CMap without codespace ranges defers to its base,
+    /// and with none anywhere the answer is `None`.
+    fn codespace_allows(&self, code: u32, byte_len: u8, depth: u32) -> Option<bool> {
+        if self._codespace_ranges.is_empty() {
+            return match &self.base {
+                Some(base) if depth < MAX_NESTING_DEPTH => {
+                    base.codespace_allows(code, byte_len, depth.saturating_add(1))
+                }
+                _ => None,
+            };
+        }
+
+        Some(self._codespace_ranges.iter().any(|range| {
+            range.number_bytes == byte_len
+                && (0..u32::from(byte_len)).all(|i| {
+                    // `byte_len` is at most 4 here (the range's own length),
+                    // so `shift` is at most 24.
+                    let shift = (u32::from(byte_len) - 1 - i) * 8;
+                    let byte = |v: u32| v.checked_shr(shift).map_or(0, |b| b & 0xFF);
+                    byte(range.low) <= byte(code) && byte(code) <= byte(range.high)
+                })
+        }))
     }
 
     /// Look up a bf string in the cmap. This is usually
@@ -584,6 +632,9 @@ impl PartitionedRanges {
 pub(crate) struct BfRange {
     pub(crate) range: Range,
     pub(crate) dst_base: Vec<u16>,
+    /// PdfCraft patch (4): how many bytes the entry's source code was written with (1 to 4),
+    /// or 0 where that isn't recorded (a binary CMap).
+    pub(crate) code_len: u8,
 }
 
 impl HasRange for BfRange {
@@ -594,7 +645,6 @@ impl HasRange for BfRange {
 
 /// A codespace range defining valid character code byte sequences.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct CodespaceRange {
     pub(crate) number_bytes: u8,
     pub(crate) low: u32,
@@ -735,6 +785,17 @@ endcodespacerange
         data.extend_from_slice(PREAMBLE);
         data.extend_from_slice(body);
         CMap::parse(&data, |_| None).unwrap()
+    }
+
+    /// PdfCraft patch test: a binary CMap whose `usecmap` names itself stops at the nesting limit.
+    #[cfg(feature = "embed-cmaps")]
+    #[test]
+    fn self_referencing_binary_usecmap_stops_at_the_nesting_limit() {
+        // Header (magic, version, file length 19), then one usecmap segment (length 9) naming "Self".
+        const SELF_REF: &[u8] = &[
+            b'b', b'c', b'm', b'a', b'p', 1, 0, 0, 0, 19, 0x09, 0, 0, 0, 9, b'S', b'e', b'l', b'f',
+        ];
+        assert!(CMap::parse(SELF_REF, |_| Some(SELF_REF)).is_none());
     }
 
     #[test]
@@ -1117,6 +1178,96 @@ endbfchar
         );
     }
 
+    /// Parse `body` after the metadata of [`PREAMBLE`] but without its
+    /// codespace ranges.
+    fn parse_without_codespace(body: &[u8]) -> CMap {
+        let mut data = Vec::new();
+        data.extend_from_slice(
+            br#"/CIDSystemInfo 3 dict dup begin
+  /Registry (Adobe) def
+  /Ordering (Identity) def
+  /Supplement 0 def
+end def
+/CMapName /Test def
+"#,
+        );
+        data.extend_from_slice(body);
+        CMap::parse(&data, |_| None).unwrap()
+    }
+
+    /// PdfCraft patch (4) test: a `bfchar` entry used as a CID mapping matches only
+    /// codes of the length the codespace ranges give it (ISO 32000-2 §9.7.6.2).
+    #[test]
+    fn bfchar_cid_fallback_takes_the_codespace_length() {
+        let cmap = parse_without_codespace(
+            br#"
+1 begincodespacerange
+<0000> <FFFF>
+endcodespacerange
+2 beginbfchar
+<0020> <0020>
+<2041> <0042>
+endbfchar
+"#,
+        );
+        // The first byte of <2041> alone is not a code of this CMap.
+        assert_eq!(cmap.lookup_cid_code(0x20, 1), None);
+        assert_eq!(cmap.lookup_cid_code(0x2041, 2), Some(0x42));
+        assert_eq!(cmap.lookup_cid_code(0x0020, 2), Some(0x20));
+        // ToUnicode-style lookups are unchanged.
+        assert_eq!(cmap.lookup_bf_string(0x20), Some(BfString::Char(' ')));
+    }
+
+    /// PdfCraft patch (4) test: mixed codespaces give each code its own length,
+    /// byte by byte, and a CMap without codespace ranges keeps the fallback.
+    #[test]
+    fn bfchar_cid_fallback_checks_each_byte_of_the_codespace() {
+        let cmap = parse_without_codespace(
+            br#"
+2 begincodespacerange
+<00> <80>
+<8140> <9FFC>
+endcodespacerange
+3 beginbfchar
+<41> <0041>
+<8141> <0100>
+<8220> <0101>
+endbfchar
+"#,
+        );
+        assert_eq!(cmap.lookup_cid_code(0x41, 1), Some(0x41));
+        assert_eq!(cmap.lookup_cid_code(0x8141, 2), Some(0x100));
+        // 0x8220 lies numerically between 0x8140 and 0x9FFC, but its second
+        // byte 0x20 is below 0x40.
+        assert_eq!(cmap.lookup_cid_code(0x8220, 2), None);
+
+        let no_codespace = parse_without_codespace(b"1 beginbfchar <20> <0020> endbfchar\n");
+        assert_eq!(no_codespace.lookup_cid_code(0x20, 1), Some(0x20));
+    }
+
+    /// PdfCraft patch (4) test: without codespace ranges, a `bfchar` entry used as a CID
+    /// mapping matches only codes of the length its source was written with, so the first
+    /// byte of `<fe96>` is not taken for `<00fe>`.
+    #[test]
+    fn bfchar_cid_fallback_without_codespace_takes_the_source_length() {
+        let cmap = parse_without_codespace(
+            br#"
+2 beginbfchar
+<00fe> <0041>
+<fe96> <0042>
+endbfchar
+1 beginbfrange
+<0100> <0102> <0050>
+endbfrange
+"#,
+        );
+        assert_eq!(cmap.lookup_cid_code(0xfe, 1), None);
+        assert_eq!(cmap.lookup_cid_code(0xfe96, 2), Some(0x42));
+        assert_eq!(cmap.lookup_cid_code(0x00fe, 2), Some(0x41));
+        assert_eq!(cmap.lookup_cid_code(0x0101, 2), Some(0x51));
+        assert_eq!(cmap.lookup_cid_code(0x0101, 3), None);
+    }
+
     #[test]
     fn stream_cut_off_inside_a_block_keeps_the_entries_before_it() {
         let cmap = parse_with_preamble(b"1 beginbfchar <41> <0058>\n<42> <00");
@@ -1163,6 +1314,60 @@ endbfchar
         )
         .expect("local mappings survive an unresolved usecmap");
         assert!(cmap.lookup_bf_string(0x41).is_some());
+    }
+
+    // PdfCraft patch (3): a token the scanner can't read (a stray `>` after a CMap name, a name
+    // with spaces in it) is stepped over, so the mappings after it are still read; at most
+    // `MAX_SKIPPED` of them per CMap.
+
+    #[test]
+    fn mappings_after_an_unreadable_token_are_read() {
+        for header in [
+            &b"/CMapName /Adobe-Identity-UC> def"[..],
+            b"/CMapName /-usr-share-fonts-Panton Family - Panton.otf,000-UTF16 def",
+        ] {
+            let mut data = header.to_vec();
+            data.extend_from_slice(
+                b"\n1 beginbfchar <41> <0058> endbfchar\n1 beginbfrange <50> <52> <0061> endbfrange",
+            );
+            let cmap = parse_with_preamble(&data);
+            assert_eq!(cmap.lookup_bf_string(0x41), Some(BfString::Char('X')));
+            assert_eq!(cmap.lookup_bf_string(0x51), Some(BfString::Char('b')));
+        }
+    }
+
+    #[test]
+    fn a_number_run_into_an_operator_does_not_start_its_mappings() {
+        // `1beginbfchar` is one token, not `1` and `beginbfchar`: the pairs after it are not
+        // mappings, and the well-formed block after them still reads.
+        let cmap = parse_with_preamble(
+            b"1beginbfchar <41> <0058> endbfchar\n1 beginbfchar <42> <0059> endbfchar",
+        );
+        assert_eq!(cmap.lookup_bf_string(0x41), None);
+        assert_eq!(cmap.lookup_bf_string(0x42), Some(BfString::Char('Y')));
+    }
+
+    /// A CMap with `count` unreadable tokens, each after a space, before one `bfchar` mapping.
+    fn mapping_after_unreadable_tokens(count: usize) -> Option<CMap> {
+        let mut data = PREAMBLE.to_vec();
+        data.extend_from_slice(&b" >".repeat(count));
+        data.extend_from_slice(b"\n1 beginbfchar <41> <0058> endbfchar");
+        CMap::parse(&data, |_| None)
+    }
+
+    #[test]
+    fn the_scan_steps_over_at_most_max_skipped_unreadable_tokens() {
+        let limit = parse::MAX_SKIPPED;
+        let cmap = mapping_after_unreadable_tokens(limit).expect("read up to the limit");
+        assert_eq!(cmap.lookup_bf_string(0x41), Some(BfString::Char('X')));
+        // One more ends the scan before the mapping, and a CMap with no mappings fails.
+        assert!(mapping_after_unreadable_tokens(limit + 1).is_none());
+    }
+
+    #[test]
+    fn a_cmap_of_unreadable_tokens_only_reports_failure() {
+        assert!(CMap::parse(b"> ) >", |_| None).is_none());
+        assert!(CMap::parse(&b" >".repeat(4 * parse::MAX_SKIPPED), |_| None).is_none());
     }
 
     #[test]
