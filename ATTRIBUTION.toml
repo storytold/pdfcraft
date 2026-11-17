@@ -2009,7 +2009,7 @@ source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 asse
 licence = "BSD-3-Clause"
 licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret); PDF/A conversion embeds it for the standard font it substitutes (crates/preflight/src/embed.rs)"
 sha256 = "b6c8fe53f134b8b6d4578cd2d544df4cee9624c4efa8d51a560fb40ea296101b"
 
 [[asset]]
@@ -2020,7 +2020,7 @@ source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 asse
 licence = "BSD-3-Clause"
 licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret); PDF/A conversion embeds it for the standard font it substitutes (crates/preflight/src/embed.rs)"
 sha256 = "f1b7159702973f54fc86254ea38bcf3712b2a736eb3a0995751e9f4bb45ad603"
 
 [[asset]]
@@ -2031,7 +2031,7 @@ source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 asse
 licence = "BSD-3-Clause"
 licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret); PDF/A conversion embeds it for the standard font it substitutes (crates/preflight/src/embed.rs)"
 sha256 = "8a000945843bd31add06aee63bf9fd41b7578b4f3242a4b7cd46349ad9d24d4d"
 
 [[asset]]
@@ -2042,7 +2042,7 @@ source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 asse
 licence = "BSD-3-Clause"
 licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret); PDF/A conversion embeds it for the standard font it substitutes (crates/preflight/src/embed.rs)"
 sha256 = "5007faf8320fa1fcc08b8894b356ad976f60b992ba29ee5272578bbdebaf3876"
 
 [[asset]]
@@ -2053,7 +2053,7 @@ source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 asse
 licence = "BSD-3-Clause"
 licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret); PDF/A conversion embeds it for the standard font it substitutes (crates/preflight/src/embed.rs)"
 sha256 = "a02339e95d20db14cbdfc1c6baf359cd36a091d5434925c3a4040f60e1a1af9e"
 
 [[asset]]
@@ -2064,7 +2064,7 @@ source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 asse
 licence = "BSD-3-Clause"
 licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret); PDF/A conversion embeds it for the standard font it substitutes (crates/preflight/src/embed.rs)"
 sha256 = "7bdfa36de1d5757dcfaf8b8a4be95c6e41c40fa70dbed9d78bf979a7b9959054"
 
 [[asset]]
@@ -2075,7 +2075,7 @@ source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 asse
 licence = "BSD-3-Clause"
 licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret); PDF/A conversion embeds it for the standard font it substitutes (crates/preflight/src/embed.rs)"
 sha256 = "555ce45924338e2e4b32821910221ce85da691fd59a9723c4c971a7c5627fc8b"
 
 [[asset]]
@@ -2086,7 +2086,7 @@ source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 asse
 licence = "BSD-3-Clause"
 licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret); PDF/A conversion embeds it for the standard font it substitutes (crates/preflight/src/embed.rs)"
 sha256 = "7751cbefeda351708dae8c4a88db043411bc39ab2ae2097685da845d4d16f307"
 
 [[asset]]
@@ -2097,7 +2097,7 @@ source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 asse
 licence = "BSD-3-Clause"
 licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret); PDF/A conversion embeds it for the standard font it substitutes (crates/preflight/src/embed.rs)"
 sha256 = "4f57d2b9d884af8f907bf22df6019b52d86cbf6214fdbd02b1ae05472a543f35"
 
 [[asset]]
@@ -2108,7 +2108,7 @@ source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 asse
 licence = "BSD-3-Clause"
 licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret); PDF/A conversion embeds it for the standard font it substitutes (crates/preflight/src/embed.rs)"
 sha256 = "0bdf4b04e964139818d51eda03d566ba999fc3ba2421b1c6c51f9dc969022e80"
 
 [[asset]]
@@ -2119,7 +2119,7 @@ source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 asse
 licence = "BSD-3-Clause"
 licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret); PDF/A conversion embeds it for the standard font it substitutes (crates/preflight/src/embed.rs)"
 sha256 = "a406cac82583bf98175cb62c87ed5e95c45fbb34eece63a10b0a13e793cb2e10"
 
 [[asset]]
@@ -2130,7 +2130,7 @@ source = "https://pdfium.googlesource.com/pdfium (via hayro-interpret 0.7.0 asse
 licence = "BSD-3-Clause"
 licence_file = "vendor/hayro-interpret/assets/LICENSE_FOXIT"
 kind = "font"
-usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret)"
+usage = "Renders non-embedded standard-14 fonts (vendored hayro-interpret); PDF/A conversion embeds it for the standard font it substitutes (crates/preflight/src/embed.rs)"
 sha256 = "610ae0687198045c4db5d1a6650fd5e92536631706382eb8b72e38df578d0ae9"
 
 [[asset]]

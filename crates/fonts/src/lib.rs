@@ -166,6 +166,21 @@ pub fn win_ansi_byte(c: char) -> Option<u8> {
     }
 }
 
+/// The character code `code` stands for in the predefined simple-font encoding `encoding`
+/// (ISO 32000-2 Annex D): `WinAnsiEncoding`, `MacRomanEncoding` or `StandardEncoding`, the last
+/// being a Latin font's built-in encoding. `None` for any other encoding name, and for a code the
+/// encoding leaves undefined. WinAnsi 0xA0 and 0xAD are the space and the hyphen, as Annex D
+/// names their glyphs.
+pub fn base_encoding_char(encoding: &[u8], code: u8) -> Option<char> {
+    let table = match encoding {
+        b"WinAnsiEncoding" => &encodings::WIN_ANSI,
+        b"MacRomanEncoding" => &encodings::MAC_ROMAN,
+        b"StandardEncoding" => &encodings::STANDARD,
+        _ => return None,
+    };
+    table.get(usize::from(code)).copied().filter(|&u| u != 0).and_then(char::from_u32)
+}
+
 /// Encode text in WinAnsiEncoding (ISO 32000-2 Annex D); tabs become spaces and unmappable
 /// characters become `?`.
 pub fn win_ansi(s: &str) -> Vec<u8> {

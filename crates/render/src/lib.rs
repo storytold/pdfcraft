@@ -13,6 +13,7 @@ mod link_area;
 mod pixels;
 mod raster;
 mod reading;
+mod standard_font;
 mod structure;
 mod system_font;
 pub mod text;
@@ -30,6 +31,7 @@ pub use raster::{
     Retiring, Tile, device_pixels, effective_scale,
 };
 pub use reading::{ReadingColors, ReadingParams};
+pub use standard_font::standard_font_program;
 pub use text::{PageText, TextGlyph};
 
 /// Errors surfaced to the user when a document cannot be opened.
