@@ -2506,6 +2506,21 @@ fn jpeg2000_images_are_checked_clause_6_2_8_3() {
         text.len()
     );
     assert!(verify(&page_with("/Im Do", "", &[&own]), Level::A2b).iter().all(|i| i.clause != "6.2.8.3"));
+    // Filters before `JPXDecode` are undone first, their parameters given directly or by reference;
+    // data they can't undo isn't read.
+    let five: String = jp2(5, 7, &[], &[srgb]).iter().map(|b| format!("{b:02X}")).collect::<String>() + ">";
+    let prefixed = |data: &str, parms: &str| {
+        let image = format!(
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /Filter [/AHx /JPXDecode] {parms} /Length {} >>\nstream\n{data}\nendstream",
+            data.len()
+        );
+        let doc = page_with("/Im Do", "", &[&image, "[null null]"]);
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.8.3").map(|i| i.message).collect::<Vec<_>>()
+    };
+    let channels = ["A JPEG 2000 image has 5 colour channels: only 1, 3 or 4 are allowed"];
+    assert_eq!(prefixed(&five, ""), channels);
+    assert_eq!(prefixed(&five, "/DecodeParms 6 0 R"), channels);
+    assert_eq!(prefixed("ZZ>", ""), Vec::<String>::new());
     // A /Filter given by reference is followed.
     let referred = format!("<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /Filter 6 0 R /Length {} >>\nstream\n{text}\nendstream", text.len());
     let doc = page_with("/Im Do", "", &[&referred, "/JPXDecode"]);
@@ -2572,10 +2587,10 @@ fn embedded_files_are_associated_files_clause_6_8() {
         let doc = listed(content);
         assert_eq!(found(&doc, Level::A3b), [(said.to_string(), true)], "{content}");
     }
-    // Past the names kept, the names aren't all known, and every property list counts: /MC0 is
-    // tagged after 4,096 others.
-    let many: String = (0..4096).map(|i| format!("/AF /N{i} BDC EMC ")).chain(["/AF /MC0 BDC EMC".to_string()]).collect();
-    assert_eq!(found(&listed(&many), Level::A3b), Vec::<(String, bool)>::new());
+    // However many other names content tags, /MC0 counts when it is tagged too, and only then.
+    let others: String = (0..5000).map(|i| format!("/AF /N{i} BDC EMC ")).collect();
+    assert_eq!(found(&listed(&format!("{others}/AF /MC0 BDC EMC")), Level::A3b), Vec::<(String, bool)>::new());
+    assert_eq!(found(&listed(&others), Level::A3b), [(said.to_string(), true)]);
     // Save as PDF/A associates it with the document.
     let mut doc = with("", "", plain);
     let report = convert(&mut doc, Level::A3b).unwrap();
