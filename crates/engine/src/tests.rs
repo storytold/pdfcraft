@@ -15489,4 +15489,15 @@ trailer << /Root 1 0 R >>
     assert_eq!((&inspected.0, &inspected.1, inspected.2), (&shown.0, &shown.1, shown.2), "the same notes, standards and form");
     assert!(!shown.3, "the app draws the comment into its display copy");
     assert!(inspected.3, "inspection draws no display copy");
+
+    // A signed document: the app validates its signature, inspection doesn't (noted in review).
+    let signatures = |inspection: bool| {
+        let mut s = Session::new();
+        s.set_javascript(false);
+        s.set_inspection(inspection);
+        let id = s.open("form.pdf", None, Arc::new(signed_field_named(8)), None).unwrap();
+        s.get(id).unwrap().signatures.len()
+    };
+    assert_eq!(signatures(false), 1, "the app lists the signature");
+    assert_eq!(signatures(true), 0, "inspection validates no signature");
 }
