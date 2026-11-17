@@ -481,6 +481,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn external_signer_receives_legacy_attributes_once_and_preserves_error() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::keys::ExternalKey;
+        use crate::x509::Name;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Provider {
+            expected: Vec<u8>,
+            calls: AtomicUsize,
+        }
+        impl ExternalKey for Provider {
+            fn sign(&self, alg: DigestAlg, msg: &[u8]) -> Result<Vec<u8>, SignError> {
+                assert_eq!(alg, DigestAlg::Sha256);
+                assert_eq!(msg, self.expected);
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Err(SignError::Crypto("provider declined".into()))
+            }
+        }
+        let software = PrivateKey::generate_p256()?;
+        let name = Name::build("External signer", "", "", "", "");
+        let from = Time { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0 };
+        let cert = Certificate::self_signed(&name, &software, from, 1, &[1])?;
+        let alg = DigestAlg::Sha256;
+        let content = b"detached or encapsulated";
+        let digest = alg.digest(&[content]);
+        // Pin the former app writer's signed-attribute construction independently of the
+        // shared helper. Both entry points must send these exact bytes, not a double hash.
+        let hash = alg.digest(&[&cert.raw]);
+        let names = der::seq(&[&der::explicit(4, &cert.issuer.raw)]);
+        let serial = der::tlv(tag::INTEGER, &cert.serial);
+        let ess = der::seq(&[&der::seq(&[&der::seq(&[&der::octets(&hash), &der::seq(&[&names, &serial])])])]);
+        let expected = der::set_of(&[
+            &attribute(CONTENT_TYPE, &der::oid(DATA)),
+            &attribute(MESSAGE_DIGEST, &der::octets(&digest)),
+            &attribute(SIGNING_CERT_V2, &ess),
+        ]);
+        let provider = Arc::new(Provider { expected, calls: AtomicUsize::new(0) });
+        let external = PrivateKey::external(cert.public_key.clone(), provider.clone());
+        for result in [sign_detached(&external, &cert, &[], alg, &digest), sign_encapsulated(&external, &cert, &[], alg, DATA, content)] {
+            assert!(matches!(result, Err(SignError::Crypto(message)) if message == "provider declined"));
+        }
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2, "exactly once per request, no retries");
+        Ok(())
+    }
+
+    #[test]
     fn strip_removes_multiple_leading_zero_bytes() {
         assert_eq!(strip(&[0, 0, 0, 0x42]), &[0x42]);
         assert_eq!(strip(&[0, 0, 0]), &[0]);
