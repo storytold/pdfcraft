@@ -103,7 +103,12 @@ pub(crate) fn check(doc: &Document) -> Findings {
         // The parts of a page's contents are one stream cut in pieces (ISO 32000-2 7.8.2).
         let mut data = Vec::new();
         for part in &parts {
-            let Some(bytes) = walk.decode(part, None) else { continue };
+            // Each part is read on every page and every time it is listed, as the page draws it.
+            let Some(bytes) = walk.data(part) else { continue };
+            // A part read again isn't decoded again, so the read budget bounds what is joined.
+            if walk.read.saturating_add(data.len()).saturating_add(bytes.len()) > MAX_READ {
+                break;
+            }
             data.extend_from_slice(&bytes);
             data.push(b'\n');
         }
@@ -156,6 +161,12 @@ impl Walk<'_> {
         {
             return None;
         }
+        self.data(o)
+    }
+
+    /// The decoded data of the stream `o` refers to, decoded once and kept, within the budgets,
+    /// however often it is read.
+    fn data(&mut self, o: &Object) -> Option<Arc<[u8]>> {
         if self.streams >= MAX_STREAMS {
             return None;
         }
@@ -328,8 +339,10 @@ impl Walk<'_> {
                 _ => None,
             };
             let glyph_own = glyph_entry.as_ref().map(|r| doc.resolve(r));
+            // A glyph without resources of its own is read once for each dictionary it is read
+            // with, the font's own among them: two fonts may share it.
+            let Some(data) = self.decode(p, if glyph_own.is_some() { None } else { context }) else { continue };
             let explicit = explicit || glyph_own.is_some();
-            let Some(data) = self.decode(p, if explicit { None } else { context }) else { continue };
             let context = match &glyph_entry {
                 Some(entry) => entry.as_ref().or_else(|| p.as_ref()),
                 None => context,

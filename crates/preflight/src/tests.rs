@@ -2470,6 +2470,36 @@ fn content_without_resources_is_read_with_each_dictionary_it_is_drawn_with_claus
     let holder = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /B 6 0 R >> >>", "/B Do");
     let found = content_findings("", "/Resources << /XObject << /P 5 0 R >> >>", "/P Do", &[&holder, &looping]);
     assert_eq!(found, ["A form XObject refers to resources by name but has no Resources dictionary"]);
+
+    // Pages that share a content stream (4) each draw it with their own resources: page 5 names
+    // /X a form (7) with an undefined operator, page 3 a clean one (6).
+    let unknown = "Content uses the operator UnknownOperator, which ISO 32000 doesn't define";
+    let page = |contents: &str, x: u32| {
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Contents {contents} /Resources << /XObject << /X {x} 0 R >> >> >>")
+    };
+    let clean = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >>", "0 g");
+    let bad = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >>", "UnknownOperator");
+    let two_pages = |a: &str, part: &str, b: &str, more: &[&str]| {
+        let mut objs = vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>", a, part, b, &clean, &bad];
+        objs.extend_from_slice(more);
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.2").map(|i| i.message).collect::<Vec<_>>()
+    };
+    assert_eq!(two_pages(&page("4 0 R", 6), &content("", "/X Do"), &page("4 0 R", 7), &[]), [unknown]);
+    // A part listed twice on one page is drawn twice: parts `Do`, `/X` and `Do` again paint /X.
+    let found = two_pages(&page("[4 0 R 8 0 R 4 0 R]", 7), &content("", "Do"), &page("[]", 6), &[&content("", "/X")]);
+    assert_eq!(found, [unknown]);
+
+    // Type 3 fonts with resources of their own that share a glyph (6) without them: font 7 names
+    // /Y a form (9) with an undefined operator, font 5 a clean one (8).
+    let type3 = |y: u32| {
+        format!(
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 6 0 R >> /Resources << /XObject << /Y {y} 0 R >> >> >>"
+        )
+    };
+    let glyph = content("", "1000 0 d0 /Y Do");
+    let fonts = "/Resources << /Font << /F 5 0 R /G 7 0 R >> >>";
+    let found = content_findings("", fonts, "BT /F 1 Tf (a) Tj /G 1 Tf (a) Tj ET", &[&type3(8), &glyph, &type3(9), &clean, &bad]);
+    assert_eq!(found, [unknown]);
 }
 
 #[test]
