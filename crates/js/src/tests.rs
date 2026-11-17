@@ -1659,6 +1659,11 @@ mod formcalc {
         near("PPmt(160000, 0.0475, 980, 24, 12)", 4656.19166430515);
         assert_eq!(calc("IPmt(15000, 0.065, 65.50, 15, 1)"), "0");
         assert_eq!(calc("PPmt(15000, 0.065, 65.50, 15, 1)"), "0");
+        // A payment equal to the monthly interest pays interest only, though `pv * r` rounds up.
+        near("IPmt(35, 0.12, 0.35, 1, 12)", 4.2);
+        assert_eq!(calc("PPmt(35, 0.12, 0.35, 1, 12)"), "0");
+        // A cent short of the interest still answers 0.
+        assert_eq!(calc("IPmt(35, 0.12, 0.34, 1, 12)"), "0");
     }
 
     #[test]

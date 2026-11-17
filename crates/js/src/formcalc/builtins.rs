@@ -430,7 +430,12 @@ impl Interp<'_> {
                 // The rate is annual and the payments monthly (FormCalc specification, IPmt and PPmt).
                 let r = annual / 12.0;
                 // A payment below the first month's interest repays nothing, and both answer 0.
-                if pmt < pv * r {
+                // The margin absorbs rounding in `pv * r`: `IPmt(35, 0.12, 0.35, 1, 12)` has
+                // `pv * r` = 0.35000000000000003, and its payment still covers the interest.
+                // An infinite or NaN product keeps a zero margin, so it compares as before.
+                let first_interest = pv * r;
+                let margin = if first_interest.is_finite() { first_interest.abs() * 1e-12 } else { 0.0 };
+                if pmt < first_interest - margin {
                     return Ok(Some(Val::Num(0.0)));
                 }
                 let (mut balance, mut interest, mut principal) = (pv, 0.0, 0.0);
