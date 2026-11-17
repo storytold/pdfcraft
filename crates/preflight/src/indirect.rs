@@ -17,7 +17,7 @@
 //! header and the next object the cross-reference sections place, after the end of its stream
 //! data when it is a stream, so each byte of the file is searched at most once.
 
-use pdfcraft_cos::{Document, ObjRef, Object, XrefEntry, is_whitespace};
+use pdfcraft_cos::{Document, Lexer, ObjRef, Object, XrefEntry, is_whitespace};
 
 /// The ways an object can break the rule, each reported once with the first object that does.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -78,11 +78,11 @@ pub(crate) fn check(doc: &Document) -> Findings {
         };
         let Some(header) = data.get(at..end) else { continue };
         let number = digits(header);
-        let (gap_1, comment_1) = header.get(number..).map_or((0, false), space);
+        let (gap_1, comment_1) = space(header, number);
         let generation_at = number.saturating_add(gap_1);
         let generation = header.get(generation_at..).map_or(0, digits);
         let gap_2_at = generation_at.saturating_add(generation);
-        let (gap_2, comment_2) = header.get(gap_2_at..).map_or((0, false), space);
+        let (gap_2, comment_2) = space(header, gap_2_at);
         let obj_at = gap_2_at.saturating_add(gap_2);
         if generation == 0 || header.get(obj_at..obj_at.saturating_add(3)) != Some(b"obj".as_slice()) {
             // Not an object header after all: nothing more is known of it.
@@ -101,24 +101,15 @@ pub(crate) fn check(doc: &Document) -> Findings {
         if !is_eol(data.get(body)) {
             note(&mut out.after_obj);
         }
-        // Where to look for `endobj`: past the stream data, when the object is a stream.
-        let mut from = body;
-        if let Object::Stream(s) = &*doc.get(ObjRef::new(num, doc.generation(num)))
-            && let Some(keyword) = token(data, b"stream", body, end)
-        {
-            let start = keyword.saturating_add(6);
-            let start = start.saturating_add(match data.get(start..start.saturating_add(2)) {
-                Some(b"\r\n") => 2,
-                Some([b'\r' | b'\n', ..]) => 1,
-                _ => 0,
-            });
-            // The stream data never holds `endstream` itself, so the search starts just inside it.
-            let past = start.saturating_add(s.raw.len()).saturating_sub(b"endstream".len()).max(start);
-            if let Some(e) = find(data, b"endstream", past.min(end), end) {
-                from = e.saturating_add(b"endstream".len());
-            }
-        }
-        let Some(endobj) = token(data, b"endobj", from.min(end), end) else { continue };
+        // Where to look for `endobj`: past the stream data when the object is a stream, else past
+        // its value and any comments after it, so `endobj` in a string, name or comment isn't
+        // taken for it.
+        let past = match &*doc.get(ObjRef::new(num, doc.generation(num))) {
+            Object::Stream(s) => past_stream(data, body, end, s.raw.len()),
+            _ => None,
+        };
+        let from = past.or_else(|| past_value(data, body, end)).unwrap_or(body);
+        let Some(endobj) = find(data, b"endobj", from.min(end), end) else { continue };
         let before = endobj.checked_sub(1).and_then(|p| data.get(p));
         let after = data.get(endobj.saturating_add(6));
         // The last object of a file without a cross-reference table after it may end the file.
@@ -129,81 +120,43 @@ pub(crate) fn check(doc: &Document) -> Findings {
     out
 }
 
-/// The white space and comments at the start of `data`: how many bytes they take, and whether a
+/// The white space and comments at `at` in `data`: how many bytes they take, and whether a
 /// comment is among them.
-fn space(data: &[u8]) -> (usize, bool) {
-    let mut at = 0usize;
-    let mut comment = false;
-    while let Some(&b) = data.get(at) {
-        if is_whitespace(b) {
-            at = at.saturating_add(1);
-        } else if b == b'%' {
-            comment = true;
-            at = at.saturating_add(comment_len(data.get(at..).unwrap_or_default()));
-        } else {
-            break;
-        }
+fn space(data: &[u8], at: usize) -> (usize, bool) {
+    let mut lx = Lexer::new(data, at);
+    lx.skip_ws();
+    // Past white space, a `%` can only start a comment.
+    (lx.pos.saturating_sub(at), data.get(at..lx.pos).is_some_and(|gap| gap.contains(&b'%')))
+}
+
+/// Where the object value starting at `body` ends, past the white space and comments after it:
+/// `endobj` when the object is written as ISO 32000-2 7.3.10 asks. `None` when the value can't be
+/// read before `end`, the next object.
+fn past_value(data: &[u8], body: usize, end: usize) -> Option<usize> {
+    let mut lx = Lexer::new(data.get(..end)?, body);
+    lx.object().ok()?;
+    lx.skip_ws();
+    Some(lx.pos)
+}
+
+/// Where the stream whose object body starts at `body` ends: just past its `endstream`. The
+/// `stream` keyword is the one after the dictionary as the lexer reads it, so `stream` in a string
+/// of the dictionary isn't taken for it. `raw_len` is how long the document reads the data to be.
+/// `None` when the dictionary, the `stream` keyword or `endstream` isn't there to read before
+/// `end`, the next object.
+fn past_stream(data: &[u8], body: usize, end: usize, raw_len: usize) -> Option<usize> {
+    let mut lx = Lexer::new(data.get(..end)?, body);
+    let Ok(Object::Dict(_)) = lx.object() else { return None };
+    if !lx.eat_keyword(b"stream") {
+        return None;
     }
-    (at, comment)
-}
-
-/// The length of the comment at the start of `data`, up to its end-of-line marker.
-fn comment_len(data: &[u8]) -> usize {
-    data.iter().position(|&b| matches!(b, b'\r' | b'\n')).unwrap_or(data.len())
-}
-
-fn is_delimiter(b: u8) -> bool {
-    matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
-}
-
-/// Where the first `keyword` token in `from..to` starts. Literal and hexadecimal strings, names
-/// and comments are skipped, so the keyword's bytes inside one of them don't count (ISO 32000-2
-/// 7.2 and 7.3).
-fn token(data: &[u8], keyword: &[u8], from: usize, to: usize) -> Option<usize> {
-    let span = data.get(from..to)?;
-    let mut at = 0usize;
-    while let Some(&b) = span.get(at) {
-        let rest = span.get(at..).unwrap_or_default();
-        let len = match b {
-            b'%' => comment_len(rest),
-            b'(' => literal_len(rest),
-            // `<<` opens a dictionary; a single `<` a hexadecimal string, up to its `>`.
-            b'<' if rest.get(1) == Some(&b'<') => 2,
-            b'<' => rest.iter().position(|&c| c == b'>').map_or(rest.len(), |p| p.saturating_add(1)),
-            b'/' => rest.iter().skip(1).take_while(|&&c| !is_whitespace(c) && !is_delimiter(c)).count().saturating_add(1),
-            _ if is_whitespace(b) || is_delimiter(b) => 1,
-            _ => {
-                let n = rest.iter().take_while(|&&c| !is_whitespace(c) && !is_delimiter(c)).count();
-                if rest.get(..n) == Some(keyword) {
-                    return Some(from.saturating_add(at));
-                }
-                n
-            }
-        };
-        at = at.saturating_add(len.max(1));
-    }
-    None
-}
-
-/// The length of the literal string at the start of `data`, up to its balancing `)` (7.3.4.2); all
-/// of `data` when it isn't closed.
-fn literal_len(data: &[u8]) -> usize {
-    let mut depth = 0u32;
-    let mut at = 0usize;
-    while let Some(&b) = data.get(at) {
-        at = at.saturating_add(1);
-        match b {
-            // The escaped byte is never a parenthesis that counts.
-            b'\\' => at = at.saturating_add(1),
-            b'(' => depth = depth.saturating_add(1),
-            b')' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return at;
-                }
-            }
-            _ => {}
-        }
-    }
-    data.len()
+    let start = lx.pos;
+    let start = start.saturating_add(match data.get(start..start.saturating_add(2)) {
+        Some(b"\r\n") => 2,
+        Some([b'\r' | b'\n', ..]) => 1,
+        _ => 0,
+    });
+    // The stream data never holds `endstream` itself, so the search starts just inside it.
+    let past = start.saturating_add(raw_len).saturating_sub(b"endstream".len()).max(start);
+    find(data, b"endstream", past.min(end), end).map(|e| e.saturating_add(b"endstream".len()))
 }
