@@ -960,6 +960,177 @@ fn character_encoding_resolves_indirect_cid_metadata() {
     assert_eq!(status(&report, Rule::CharacterEncoding), Status::Passed);
 }
 
+/// A tagged one-page document whose content shows text in Helvetica, with `annots` on its page
+/// and `extra` objects from number 6 on (object 5 is the page content).
+fn annotated_pdf(annots: &str, extra: &[String]) -> Document {
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 4 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 5 0 R /Resources << /Font << /F1 {FONT} >> >> /Annots [{annots}] >>"),
+        "<< /Type /StructTreeRoot >>".into(),
+        stream("/P << /MCID 0 >> BDC BT /F1 12 Tf 10 10 Td (Hello) Tj ET EMC"),
+    ];
+    objects.extend_from_slice(extra);
+    pdf(&objects, "")
+}
+
+/// A check box whose appearance states draw the check mark in `font`, which the page content
+/// never uses: objects 6 (the widget), 7 and 8 (its On and Off appearances) and 9 (the font).
+fn check_box(font: &str) -> Vec<String> {
+    vec![
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (Agree) /Rect [10 10 30 30] /AS /On /AP << /N << /On 7 0 R /Off 8 0 R >> >> >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Resources << /Font << /ZaDb 9 0 R >> >> /Length 31 >>\nstream\nBT /ZaDb 12 Tf 4 4 Td (4) Tj ET\nendstream"
+            .into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length 0 >>\nstream\n\nendstream".into(),
+        font.into(),
+    ]
+}
+
+/// The PDFBox corpus' AcroForm files (PDFBOX-3828, PDFBOX-4066, PDFBOX-2419 and 33 more) draw
+/// their check marks in ZapfDingbats, in the check boxes' appearance streams only, without a
+/// ToUnicode map. The rule read page content alone, so those fonts were never looked at.
+#[test]
+fn character_encoding_reads_the_fonts_of_annotation_appearances() {
+    let zapf = "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>";
+    let doc = annotated_pdf("6 0 R", &check_box(zapf));
+    let report = check(&doc, &Options::default());
+    let result = report.result(Rule::CharacterEncoding).unwrap();
+    assert_eq!(result.status, Status::Failed, "{:?}", result.findings);
+    assert_eq!(result.findings.len(), 1);
+    assert!(result.findings[0].message.contains("ZapfDingbats"), "{}", result.findings[0].message);
+    assert_eq!(result.findings[0].page, Some(0));
+    // What an appearance paints is the annotation's, not untagged page content.
+    assert_eq!(status(&report, Rule::TaggedContent), Status::Passed);
+    assert_eq!(status(&report, Rule::ImageOnly), Status::Passed);
+
+    // A font that no name excuses: an Identity-H font of no known collection.
+    let identity = "<< /Type /Font /Subtype /Type0 /BaseFont /AppearanceCID /Encoding /Identity-H /DescendantFonts [<< /Type /Font /Subtype /CIDFontType2 /BaseFont /AppearanceCID /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >>] >>";
+    let doc = annotated_pdf("6 0 R", &check_box(identity));
+    let report = checked(&doc, &[Rule::CharacterEncoding]);
+    let result = report.result(Rule::CharacterEncoding).unwrap();
+    assert_eq!(result.status, Status::Failed, "{:?}", result.findings);
+    assert!(result.findings[0].message.contains("AppearanceCID"));
+
+    // The down appearance is read too, and a state dictionary given by reference.
+    let mut objects = check_box(identity);
+    objects[0] = "<< /Type /Annot /Subtype /Widget /FT /Btn /T (Agree) /Rect [10 10 30 30] /AS /Off /AP << /N 8 0 R /D 10 0 R >> >>".into();
+    objects.push("<< /On 7 0 R >>".into());
+    let doc = annotated_pdf("6 0 R", &objects);
+    assert_eq!(status(&checked(&doc, &[Rule::CharacterEncoding]), Rule::CharacterEncoding), Status::Failed, "down appearance");
+
+    // With a ToUnicode map, the same appearance passes.
+    let mapped = "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats /ToUnicode 10 0 R >>";
+    let mut objects = check_box(mapped);
+    objects.push(stream(
+        "/CIDInit /ProcSet findresource begin 12 dict begin begincmap 1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <34> <2714> endbfchar endcmap end end",
+    ));
+    let doc = annotated_pdf("6 0 R", &objects);
+    assert_eq!(status(&checked(&doc, &[Rule::CharacterEncoding]), Rule::CharacterEncoding), Status::Passed);
+}
+
+/// Appearances that refer to themselves, to nothing, or to things that aren't streams end the
+/// walk; appearances past their decode budget leave the rule to a person, without touching the
+/// page content's rules.
+#[test]
+fn appearance_oddities_and_budgets_end_without_a_guess() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let odd = vec![
+        "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /AP << /N 8 0 R /R 3 0 R /D << /On 99 0 R /Off 3 0 R >> >> >>".to_string(),
+        "<< /Type /Annot /Subtype /Square /Rect [0 0 10 10] /AP 9 0 R >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << /Me 8 0 R >> >> /Length 6 >>\nstream\n/Me Do\nendstream".into(),
+        "<< /N 9 0 R >>".into(),
+    ];
+    let doc = annotated_pdf("6 0 R 7 0 R 99 0 R 4 0 R", &odd);
+    let report = check(&doc, &Options::default());
+    assert_eq!(status(&report, Rule::CharacterEncoding), Status::Passed);
+
+    // One appearance draws a 1 MiB form 300 times: more than a page's decode budget.
+    let mut doc = annotated_pdf("6 0 R", &check_box("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"));
+    let mut filler = Dict::new();
+    filler.set(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()));
+    let filler = doc.add(Stream::flate(filler, &vec![b' '; 1 << 20]));
+    let mut xobjects = Dict::new();
+    xobjects.set(b"Fm".to_vec(), Object::Ref(filler));
+    let mut resources = Dict::new();
+    resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()));
+    form.set(b"Resources".to_vec(), Object::Dict(resources));
+    let heavy = doc.add(Stream::from_raw(form, "/Fm Do ".repeat(300).into_bytes()));
+    doc.update_dict(ObjRef::new(6, 0), |w| {
+        let mut states = Dict::new();
+        states.set(b"On".to_vec(), Object::Ref(heavy));
+        let mut ap = Dict::new();
+        ap.set(b"N".to_vec(), Object::Dict(states));
+        w.set(b"AP".to_vec(), Object::Dict(ap));
+    })
+    .unwrap();
+    let report = check(&doc, &Options::default());
+    assert_eq!(status(&report, Rule::CharacterEncoding), Status::Manual);
+    assert_eq!(status(&report, Rule::TaggedContent), Status::Passed, "the page content was read whole");
+
+    // A page of one image, with a check box: the check mark's text is not page text.
+    let mut doc = annotated_pdf("6 0 R", &check_box("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"));
+    let image = doc.add(Stream::from_raw(
+        {
+            let mut d = Dict::new();
+            for (k, v) in [("Subtype", "Image"), ("ColorSpace", "DeviceGray")] {
+                d.set(k.as_bytes().to_vec(), Object::Name(v.as_bytes().to_vec()));
+            }
+            for k in ["Width", "Height"] {
+                d.set(k.as_bytes().to_vec(), Object::Int(1));
+            }
+            d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+            d
+        },
+        vec![0],
+    ));
+    let content = doc.add(Stream::from_raw(Dict::new(), b"/Artifact BMC q 200 0 0 200 0 0 cm /Im Do Q EMC".to_vec()));
+    doc.update_dict(ObjRef::new(3, 0), |p| {
+        let mut xobjects = Dict::new();
+        xobjects.set(b"Im".to_vec(), Object::Ref(image));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        p.set(b"Resources".to_vec(), Object::Dict(resources));
+        p.set(b"Contents".to_vec(), Object::Ref(content));
+    })
+    .unwrap();
+    assert_eq!(status(&check(&doc, &Options::default()), Rule::ImageOnly), Status::Failed);
+}
+
+/// ZapfDingbats' built-in glyph names (a1 to a191) map to no Unicode value, and a symbolic
+/// TrueType font has no glyph names to go by, so neither passes by its name alone (PDFBOX-2710,
+/// PDFBOX-2164 and PDFBOX-2543 in the PDFBox corpus). Symbol, as a Type 1 font, still does: ISO
+/// 14289-1 7.21.7 accepts the Symbol font's named characters.
+#[test]
+fn character_encoding_needs_a_map_for_zapfdingbats_and_symbolic_truetype() {
+    let one = |font: &str| {
+        let doc = pdf(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>".into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+                stream("BT /F1 12 Tf 10 10 Td (4) Tj ET"),
+                font.into(),
+            ],
+            "",
+        );
+        status(&checked(&doc, &[Rule::CharacterEncoding]), Rule::CharacterEncoding)
+    };
+    for (font, expected) in [
+        ("<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>", Status::Failed),
+        ("<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats /FontDescriptor << /Flags 32 >> >>", Status::Failed),
+        ("<< /Type /Font /Subtype /TrueType /BaseFont /Symbol /FontDescriptor << /Flags 4 >> >>", Status::Failed),
+        ("<< /Type /Font /Subtype /Type1 /BaseFont /Symbol >>", Status::Passed),
+        ("<< /Type /Font /Subtype /Type1 /BaseFont /Symbol /FontDescriptor << /Flags 4 >> >>", Status::Passed),
+        ("<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats /Encoding /WinAnsiEncoding >>", Status::Passed),
+        ("<< /Type /Font /Subtype /TrueType /BaseFont /ZapfDingbats /FontDescriptor << /Flags 32 >> >>", Status::Passed),
+        ("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", Status::Passed),
+    ] {
+        assert_eq!(one(font), expected, "{font}");
+    }
+}
+
 #[test]
 fn rules_have_ids_and_the_report_lists_them() {
     assert_eq!(Rule::ALL.len(), 32);

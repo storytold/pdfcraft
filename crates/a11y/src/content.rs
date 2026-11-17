@@ -18,10 +18,13 @@ pub(crate) struct Scan {
     pub has_images: bool,
     /// Page → painting operations outside tagged or artifact content.
     pub untagged: BTreeMap<usize, usize>,
-    /// Page → fonts used.
+    /// Page → fonts used, in its content or in its annotations' appearances.
     pub fonts: BTreeMap<usize, BTreeSet<ObjRef>>,
     /// Pages read only in part: content or forms past the page's decode budget are missing.
     pub incomplete: BTreeSet<usize>,
+    /// Pages whose annotation appearances were read only in part, past their own decode budget:
+    /// fonts may be missing, but the page content was read.
+    pub incomplete_appearances: BTreeSet<usize>,
 }
 
 const MAX_FORM_DEPTH: usize = 12;
@@ -29,6 +32,8 @@ const MAX_FORM_DEPTH: usize = 12;
 impl Scan {
     pub fn run(doc: &Document, pages: &[Page], list: &[usize]) -> Scan {
         let mut s = Scan::default();
+        // An appearance stream shared by several annotations, or pages, is read once.
+        let mut appearances_seen = HashSet::new();
         for &p in list {
             let Some(page) = pages.get(p) else { continue };
             let res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
@@ -37,11 +42,47 @@ impl Scan {
             if budget.remaining() == 0 {
                 s.incomplete.insert(p);
             }
-            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget };
+            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget, appearance: false };
             w.content(&data, &res, false, 0);
+            // Text an annotation shows is drawn by its appearance streams, whose fonts must map
+            // to Unicode like any other (ISO 32000-2 §14.8.2.6; ISO 14289-1 7.21.7 names all
+            // fonts): a check box's ZapfDingbats check mark is the common case. They have a
+            // budget of their own, so they never cut the page content's reading short.
+            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget: DecodeBudget::page(), appearance: true };
+            for r in appearance_streams(doc, &page.dict) {
+                if appearances_seen.insert(r) {
+                    w.appearance_stream(r, &res);
+                }
+            }
         }
         s
     }
+}
+
+/// The appearance streams of a page's annotations (ISO 32000-2 §12.5.5): the normal, rollover
+/// and down appearances, each a stream or a dictionary of streams by appearance state.
+fn appearance_streams(doc: &Document, page: &Dict) -> Vec<ObjRef> {
+    let annots = page.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+    let mut out = Vec::new();
+    for annot in &annots {
+        let annot = doc.resolve(annot);
+        let Some(ap) = annot.as_dict().and_then(|a| a.get(b"AP")).map(|ap| doc.resolve(ap)) else { continue };
+        let Some(ap) = ap.as_dict() else { continue };
+        for key in [b"N".as_slice(), b"R", b"D"] {
+            let Some(entry) = ap.get(key) else { continue };
+            if let Some(r) = entry.as_ref()
+                && matches!(&*doc.get(r), Object::Stream(_))
+            {
+                out.push(r);
+                continue;
+            }
+            // A dictionary of states, given directly or by reference; its streams are references.
+            if let Some(states) = doc.resolve(entry).as_dict() {
+                out.extend(states.iter().filter_map(|(_, s)| s.as_ref()));
+            }
+        }
+    }
+    out
 }
 
 struct Walk<'a> {
@@ -51,6 +92,9 @@ struct Walk<'a> {
     forms: HashSet<ObjRef>,
     /// Decoded bytes and form entries left for this page.
     budget: DecodeBudget,
+    /// Walking annotation appearances: only their fonts are recorded, since what they paint is
+    /// not page content (it is tagged through the annotation, not by marked content).
+    appearance: bool,
 }
 
 fn bdc_marks(doc: &Document, op: &pdfcraft_content::Op, props: &Dict) -> bool {
@@ -65,6 +109,37 @@ fn bdc_marks(doc: &Document, op: &pdfcraft_content::Op, props: &Dict) -> bool {
 impl Walk<'_> {
     fn sub(&self, res: &Dict, key: &[u8]) -> Dict {
         res.get(key).map(|x| self.doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default()
+    }
+
+    /// This page was read only in part: its content, or (walking appearances) its annotations'.
+    fn cut_short(&mut self) {
+        let pages = if self.appearance { &mut self.scan.incomplete_appearances } else { &mut self.scan.incomplete };
+        pages.insert(self.page);
+    }
+
+    /// Walk one annotation appearance stream for its fonts. `res` stands in for resources the
+    /// stream doesn't give, as for a form XObject.
+    fn appearance_stream(&mut self, r: ObjRef, res: &Dict) {
+        let obj = self.doc.get(r);
+        let Object::Stream(x) = &*obj else { return };
+        if !self.budget.enter_form() {
+            self.cut_short();
+            return;
+        }
+        let data = match self.budget.decode(x) {
+            Ok(data) => data,
+            Err(_) => {
+                if self.budget.exhausted() {
+                    self.cut_short();
+                }
+                return;
+            }
+        };
+        let inner = x.dict.get(b"Resources").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_else(|| res.clone());
+        self.forms.insert(r);
+        // Covered: nothing an appearance paints is counted as untagged page content.
+        self.content(&data, &inner, true, 1);
+        self.forms.remove(&r);
     }
 
     /// Walk a content stream; `covered`: already inside tagged or artifact content.
@@ -83,7 +158,7 @@ impl Walk<'_> {
                     stack.pop();
                 }
                 b"Tj" | b"TJ" | b"'" | b"\"" => {
-                    self.scan.has_text = true;
+                    self.scan.has_text |= !self.appearance;
                     untagged += usize::from(!inside);
                 }
                 b"Tf" => {
@@ -93,7 +168,7 @@ impl Walk<'_> {
                 }
                 b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s" | b"sh" => untagged += usize::from(!inside),
                 b"BI" => {
-                    self.scan.has_images = true;
+                    self.scan.has_images |= !self.appearance;
                     untagged += usize::from(!inside);
                 }
                 b"Do" => {
@@ -102,19 +177,19 @@ impl Walk<'_> {
                     let Object::Stream(x) = &*obj else { continue };
                     match x.dict.name(b"Subtype") {
                         Some(b"Image") => {
-                            self.scan.has_images = true;
+                            self.scan.has_images |= !self.appearance;
                             untagged += usize::from(!inside);
                         }
                         Some(b"Form") if depth < MAX_FORM_DEPTH && !self.forms.contains(&r) => {
                             if !self.budget.enter_form() {
-                                self.scan.incomplete.insert(self.page);
+                                self.cut_short();
                                 continue;
                             }
                             let data = match self.budget.decode(x) {
                                 Ok(data) => data,
                                 Err(_) => {
                                     if self.budget.exhausted() {
-                                        self.scan.incomplete.insert(self.page);
+                                        self.cut_short();
                                     }
                                     continue;
                                 }
@@ -458,13 +533,23 @@ fn maps_to_unicode(doc: &Document, f: &Dict) -> bool {
                 && matches!(ordering.as_deref(), Some(Object::String(s)) if matches!(s.bytes.as_slice(), b"Japan1" | b"GB1" | b"CNS1" | b"Korea1" | b"KR"))
         }
         Some(b"Type3") => enc.is_some(),
-        _ => match enc.as_deref() {
+        subtype => match enc.as_deref() {
             Some(Object::Name(_) | Object::Dict(_)) => true,
             _ => {
                 // No encoding: the font's built-in one, which is standard unless it is symbolic.
-                let flags = f.get(b"FontDescriptor").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().and_then(|d| d.int(b"Flags"))).unwrap_or(32);
                 let base = f.name(b"BaseFont").unwrap_or(b"");
-                flags & 4 == 0 || matches!(base, b"Symbol" | b"ZapfDingbats")
+                // ZapfDingbats' built-in encoding names its glyphs a1 to a191 (ISO 32000-2
+                // Annex D.6), which no glyph list maps to Unicode, so it needs a ToUnicode map
+                // whatever its descriptor says (§9.10.2; ISO 14289-1 7.21.7). It is the font of
+                // a check box's check mark, usually without a descriptor at all.
+                let type1 = matches!(subtype, Some(b"Type1" | b"MMType1"));
+                if type1 && base == b"ZapfDingbats" {
+                    return false;
+                }
+                // Symbol's built-in names are those of Annex D.5, which ISO 14289-1 7.21.7 accepts
+                // for a Type 1 font. A symbolic TrueType font has no names to go by.
+                let flags = f.get(b"FontDescriptor").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().and_then(|d| d.int(b"Flags"))).unwrap_or(32);
+                flags & 4 == 0 || (type1 && base == b"Symbol")
             }
         },
     }
