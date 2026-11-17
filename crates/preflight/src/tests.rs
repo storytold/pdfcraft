@@ -2452,6 +2452,9 @@ fn indirect_objects_are_written_as_pdfa_asks_clause_6_1_9() {
     // So may a comment after `endstream`.
     let stream_comment = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 2 >>\nstream\nxx\nendstream % endobj\nendobj";
     assert_eq!(with_page("\n", stream_comment), Vec::<String>::new());
+    // Also when the data itself ends in the bytes `endstream`: the keyword is the one after it.
+    let stream_suffix = "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 9 >>\nstream\nendstream\nendstream % endobj\nendobj";
+    assert_eq!(with_page("\n", stream_suffix), Vec::<String>::new());
     assert_eq!(with_page("\n", "3 0 obj\n<< /Type /Page /Parent 2 0 R /Length 2 >>\nstream\nxx\nendstream % c\n endobj").len(), 1);
     // An object with an unsaved edit is written again on saving, so its old bytes aren't read,
     // nor taken to hold the data of its replacement, which would find `endstream` in the old data.

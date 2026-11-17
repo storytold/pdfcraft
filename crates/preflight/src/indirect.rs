@@ -162,8 +162,9 @@ fn past_stream(data: &[u8], body: usize, end: usize, raw_len: usize) -> Option<u
         Some([b'\r' | b'\n', ..]) => 1,
         _ => 0,
     });
-    // The stream data never holds `endstream` itself, so the search starts just inside it.
-    let past = start.saturating_add(raw_len).saturating_sub(b"endstream".len()).max(start);
+    // The search starts past the data: data its /Length gives may end in the bytes `endstream`,
+    // and data the reader recovered ends before the end-of-line marker ahead of `endstream`.
+    let past = start.saturating_add(raw_len);
     let after = find(data, b"endstream", past.min(end), end)?.saturating_add(b"endstream".len());
     let mut lx = Lexer::new(data.get(..end)?, after);
     lx.skip_ws();
