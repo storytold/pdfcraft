@@ -2480,6 +2480,10 @@ endstream";
     // A shading pattern's own graphics state (ISO 32000-2 Table 76).
     let pattern = "/Pattern << /P << /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 1 1] >> /ExtGState 4 0 R >> >>";
     assert_eq!(name_findings("", pattern, "", &[selects, &font("/F#E4MonoBold")]), bad_font);
+    // One dictionary (4) that is both the pattern's /Shading and its /ExtGState is read as each.
+    let shared = "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 1 1] /Font [5 0 R 12] >>";
+    let both = "/Pattern << /P << /PatternType 2 /Shading 4 0 R /ExtGState 4 0 R >> >>";
+    assert_eq!(name_findings("", both, "", &[shared, &font("/F#E4MonoBold")]), bad_font);
 }
 
 /// An object the walk reached first too deep to read all of is read again when another path

@@ -85,25 +85,31 @@ type Read<'a> = fn(&mut Walk<'a>, &Object, usize);
 
 struct Walk<'a> {
     doc: &'a Document,
-    /// The indirect objects read, each with the least depth it was read at: one reached again
-    /// less deep is read again, since the depth limit may have cut off what lies under it before.
-    seen: HashMap<ObjRef, usize>,
+    /// The indirect objects read, by how each was read, each with the least depth it was read at:
+    /// one reached again less deep is read again, since the depth limit may have cut off what lies
+    /// under it before. One object may be read as two kinds, such as a dictionary that is both a
+    /// pattern's `/Shading` and its `/ExtGState`, and each reading finds names of its own.
+    seen: HashMap<(ObjRef, usize), usize>,
     visits: usize,
     found: Findings,
 }
 
 impl<'a> Walk<'a> {
-    /// Read `o` with `read`, once for an indirect object unless it is reached again less deep,
-    /// within the budget and the depth. A cycle reaches an object again deeper, so it ends.
+    /// Read `o` with `read`, once for an indirect object and each way of reading it unless it is
+    /// reached again less deep, within the budget and the depth. A cycle reaches an object again
+    /// deeper, so it ends.
     fn visit(&mut self, o: &Object, depth: usize, read: Read<'a>) {
         if self.visits >= MAX_VISITS || depth > MAX_DEPTH {
             return;
         }
         if let Object::Ref(r) = o {
-            if self.seen.get(r).is_some_and(|&read_at| read_at <= depth) {
+            // The reader's address tells the kinds apart. Two readers the compiler merged into one
+            // read alike, and one given two addresses is only read twice, within the budget.
+            let key = (*r, read as usize);
+            if self.seen.get(&key).is_some_and(|&read_at| read_at <= depth) {
                 return;
             }
-            self.seen.insert(*r, depth);
+            self.seen.insert(key, depth);
         }
         self.visits = self.visits.saturating_add(1);
         let held = self.doc.resolve(o);
