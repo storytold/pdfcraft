@@ -2461,3 +2461,20 @@ fn names_that_stand_for_text_are_utf8_clause_6_1_8() {
     );
     assert!(verify(&doc, Level::A2b).iter().filter(|i| i.clause == "6.1.8").all(|i| !i.fixable));
 }
+
+#[test]
+fn fonts_a_graphics_state_reaches_are_utf8_clause_6_1_8() {
+    let font = |base: &str| format!("<< /Type /Font /Subtype /Type1 /BaseFont {base} >>");
+    let bad_font = ["The font name F#E4MonoBold isn't valid UTF-8"];
+    // A soft mask's group, a form XObject (11.6.5.2), and the font a graphics state selects
+    // (ISO 32000-2 Table 57).
+    let form = "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /Font << /F1 5 0 R >> >> /Length 0 >>
+stream
+
+endstream";
+    let masked = "/ExtGState << /GS << /SMask << /Type /Mask /S /Luminosity /G 4 0 R >> >> >>";
+    assert_eq!(name_findings("", masked, "", &[form, &font("/F#E4MonoBold")]), bad_font);
+    let selects = "<< /Type /ExtGState /Font [5 0 R 12] >>";
+    assert_eq!(name_findings("", "/ExtGState << /GS 4 0 R >>", "", &[selects, &font("/F#E4MonoBold")]), bad_font);
+    assert_eq!(name_findings("", "/ExtGState << /GS << /SMask /None /Font 4 >> >>", "", &[]), Vec::<String>::new());
+}

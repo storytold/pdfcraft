@@ -11,7 +11,8 @@
 //!   (14.7.2, 14.7.3).
 //!
 //! Fonts and colour spaces are those the pages reach: their resources, those of the form
-//! XObjects, tiling patterns and Type 3 fonts in them, the colour spaces of their images and
+//! XObjects, tiling patterns and Type 3 fonts in them, of the soft masks' groups and the fonts of
+//! their graphics state parameter dictionaries (Table 57), the colour spaces of their images and
 //! shadings, and the appearance streams of their annotations. Structure elements are those the
 //! structure tree reaches from `/StructTreeRoot`. Other names, such as resource names, annotation
 //! states and the keys of private data, aren't read: they name parts of the file, not text a reader
@@ -109,8 +110,9 @@ impl<'a> Walk<'a> {
     fn resources(&mut self, r: &Object, depth: usize) {
         let doc = self.doc;
         let Some(res) = r.as_dict() else { return };
-        let reads: [(&[u8], Read<'a>); 5] = [
+        let reads: [(&[u8], Read<'a>); 6] = [
             (b"Font", Self::font),
+            (b"ExtGState", Self::graphics_state),
             (b"XObject", Self::xobject),
             (b"ColorSpace", Self::colour_space),
             (b"Pattern", Self::pattern),
@@ -148,6 +150,21 @@ impl<'a> Walk<'a> {
                 }
             }
             None => {}
+        }
+    }
+
+    /// A graphics state parameter dictionary's font, `[font size]`, and its soft mask's group,
+    /// a form XObject (ISO 32000-2 Table 57, 11.6.5.2).
+    fn graphics_state(&mut self, gs: &Object, depth: usize) {
+        let doc = self.doc;
+        let Some(d) = gs.as_dict() else { return };
+        let font = d.get(b"Font").map(|f| doc.resolve(f));
+        if let Some(f) = font.as_deref().and_then(Object::as_array).and_then(|a| a.first()) {
+            self.visit(f, depth.saturating_add(1), Self::font);
+        }
+        let mask = d.get(b"SMask").map(|m| doc.resolve(m));
+        if let Some(g) = mask.as_deref().and_then(Object::as_dict).and_then(|m| m.get(b"G")) {
+            self.visit(g, depth.saturating_add(1), Self::xobject);
         }
     }
 
