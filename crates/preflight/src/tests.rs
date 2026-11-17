@@ -2923,6 +2923,10 @@ fn streams_use_only_standard_filters_clause_6_1_7_2() {
             found("/Filter /Crypt /DecodeParms << /Name 7 0 R >>", level),
             ["A stream uses the Crypt filter with a crypt filter other than Identity"]
         );
+        // A null Name, or a reference to an object that doesn't exist, is no Name (ISO 32000-2
+        // 7.3.9): the Identity crypt filter.
+        assert_eq!(found("/Filter [/Crypt] /DecodeParms [<< /Name null >>]", level), Vec::<String>::new());
+        assert_eq!(found("/Filter /Crypt /DecodeParms << /Name 99 0 R >>", level), Vec::<String>::new());
     }
 }
 
