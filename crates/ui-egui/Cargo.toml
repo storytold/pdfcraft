@@ -19,7 +19,7 @@ craft-keymap = { workspace = true }
 craft-i18n = { workspace = true }
 # Quit from the menus asks the window to close, so the unsaved-changes check runs; on macOS a window
 # close also quits through `terminate:` (the Touch Bar crash, #1136).
-craft-quit = { workspace = true, features = ["egui"] }
+craft-quit = { workspace = true, features = ["ui"] }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-engine = { workspace = true }
 pdfcraft-cos = { workspace = true }
