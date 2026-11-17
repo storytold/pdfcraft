@@ -19,11 +19,11 @@ fn greek_and_cyrillic_added_text_is_drawable() {
 #[test]
 fn greek_added_text_draws_inter_glyphs_and_keeps_its_text() {
     let mut doc = Document::new_empty();
-    let t = item("Καλημέρα Semra");
+    let t = item("Καλημέρα Hello");
     let (content, res) = draw::draw(&mut doc, &Content::Text(t), [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], &Dict::new(), false).unwrap();
     let content = String::from_utf8_lossy(&content);
     // The line keeps its typed text for copy and search.
-    let logical: String = "Καλημέρα Semra".encode_utf16().map(|u| format!("{u:04X}")).collect();
+    let logical: String = "Καλημέρα Hello".encode_utf16().map(|u| format!("{u:04X}")).collect();
     assert!(content.contains(&logical), "{content}");
     let fonts = match res.get(b"Font") {
         Some(Object::Dict(f)) => f.clone(),
@@ -32,5 +32,5 @@ fn greek_added_text_draws_inter_glyphs_and_keeps_its_text() {
     let type3 = fonts.iter().filter(|(_, f)| doc.dict(f).as_ref().is_some_and(|d| d.name(b"Subtype") == Some(b"Type3"))).count();
     assert!(type3 >= 1, "Greek is drawn with a generated Type 3 font");
     // The Latin word stays in the item's standard font.
-    assert!(content.contains("(Semra) Tj") || content.contains("( Semra) Tj"), "{content}");
+    assert!(content.contains("(Hello) Tj") || content.contains("( Hello) Tj"), "{content}");
 }
