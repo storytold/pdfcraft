@@ -1442,3 +1442,15 @@ fn shared_base64_keeps_padded_unwrapped_export_bytes() {
     assert!(!encoded.contains(['\r', '\n']));
     assert!(encoded.ends_with("/w=="));
 }
+
+/// Each place a picture is drawn embeds it whole in the HTML, so the places count against the
+/// media limits: past them, pictures are left out instead of multiplying one into gigabytes.
+#[test]
+fn html_bounds_the_pictures_it_embeds() {
+    let mut p = page();
+    let one = p.images[0].clone();
+    p.images = std::iter::repeat_n(one, MAX_MEDIA + 10).collect();
+    for h in [html(std::slice::from_ref(&p), "Report"), html_simple(std::slice::from_ref(&p), "Report")] {
+        assert_eq!(h.matches("<img").count(), MAX_MEDIA);
+    }
+}
