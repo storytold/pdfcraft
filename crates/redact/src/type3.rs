@@ -106,7 +106,7 @@ fn resolve_font_in_res(doc: &Document, res: &Dict, font_name: &[u8]) -> Option<(
     // A direct Type 3 font is refused during discovery, so none reaches the scan.
     let font_ref = font_obj.as_ref()?;
     let dict = doc.resolve(font_obj).as_dict()?.clone();
-    (dict.name(b"Subtype") == Some(b"Type3")).then_some((FontKey::Ref(font_ref), dict))
+    Some((FontKey::Ref(font_ref), dict))
 }
 
 fn resolve_extgstate_font(doc: &Document, res: &Dict, gs_name: &[u8]) -> Option<(FontKey, Dict)> {
@@ -116,7 +116,7 @@ fn resolve_extgstate_font(doc: &Document, res: &Dict, gs_name: &[u8]) -> Option<
     let font_obj = font_entry.first()?;
     let font_ref = font_obj.as_ref()?;
     let dict = doc.resolve(font_obj).as_dict()?.clone();
-    (dict.name(b"Subtype") == Some(b"Type3")).then_some((FontKey::Ref(font_ref), dict))
+    Some((FontKey::Ref(font_ref), dict))
 }
 
 #[derive(Default)]
@@ -298,6 +298,16 @@ struct ScanContext<'a> {
     /// A form scanned with its inherited font and the resources it draws through: the same form
     /// drawn in another context is scanned again.
     seen_forms: &'a mut HashSet<(ObjRef, Option<FontKey>, ObjRef)>,
+    /// When collecting them ([`shown_codes`]), the bytes each font's text shows, and the scan
+    /// follows every font; otherwise only Type 3 fonts.
+    codes: Option<&'a mut HashMap<ObjRef, HashSet<u32>>>,
+}
+
+impl ScanContext<'_> {
+    /// The font the scan follows text in.
+    fn follows(&self, (key, dict): (FontKey, Dict)) -> Option<FontKey> {
+        (self.codes.is_some() || dict.name(b"Subtype") == Some(b"Type3")).then_some(key)
+    }
 }
 
 fn scan_content_stream(
@@ -358,12 +368,12 @@ fn apply_text_op(ctx: &mut ScanContext<'_>, res: &Dict, op: &pdfcraft_content::O
     match op.op.as_slice() {
         b"Tf" => {
             if let Some(name) = op.name_back(1) {
-                *current_font = resolve_font_in_res(ctx.doc, res, name).map(|(k, _)| k);
+                *current_font = resolve_font_in_res(ctx.doc, res, name).and_then(|f| ctx.follows(f));
             }
         }
         b"gs" => {
             if let Some(name) = op.last_name()
-                && let Some((k, _)) = resolve_extgstate_font(ctx.doc, res, name)
+                && let Some(k) = resolve_extgstate_font(ctx.doc, res, name).and_then(|f| ctx.follows(f))
             {
                 *current_font = Some(k);
             }
@@ -386,9 +396,12 @@ fn apply_text_op(ctx: &mut ScanContext<'_>, res: &Dict, op: &pdfcraft_content::O
     }
 }
 
-/// Record every glyph of `font` that the shown string `bytes` uses.
+/// Record every glyph of `font` that the shown string `bytes` uses, and the bytes when collecting them.
 fn mark_shown(ctx: &mut ScanContext<'_>, font: Option<FontKey>, bytes: &[u8]) {
     let Some(fk) = font else { return };
+    if let (FontKey::Ref(r), Some(codes)) = (fk, ctx.codes.as_deref_mut()) {
+        codes.entry(r).or_default().extend(bytes.iter().map(|&b| u32::from(b)));
+    }
     let Some(map) = ctx.font_maps.get(&fk) else { return };
     for b in bytes {
         if let Some(g) = &map[*b as usize] {
@@ -431,6 +444,22 @@ fn scan_soft_mask(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, nam
     let Some(mask) = state.get(b"SMask").and_then(|m| ctx.doc.resolve(m).as_dict().cloned()) else { return Ok(()) };
     let Some(group) = mask.get(b"G").and_then(Object::as_ref) else { return Ok(()) };
     scan_stream_object(ctx, res, holder_ref, group, None, depth)
+}
+
+/// The bytes the text of each font object shows (a simple font's codes) on `pages` (every page
+/// when `None`), their annotations' appearances included. `None` when the content can't be read in
+/// full, or when a Type 3 font shows text: its glyphs can show text of their own, not read here.
+pub(crate) fn shown_codes(doc: &Document, pages: Option<&[usize]>) -> Option<HashMap<ObjRef, HashSet<u32>>> {
+    let (font_maps, mut used_glyphs, mut seen_forms, mut codes) = (HashMap::new(), HashMap::new(), HashSet::new(), HashMap::new());
+    let mut ctx = ScanContext { doc, font_maps: &font_maps, used_glyphs: &mut used_glyphs, seen_forms: &mut seen_forms, codes: Some(&mut codes) };
+    for (pi, p) in pdfcraft_model::pages(doc).iter().enumerate().filter(|(pi, _)| pages.is_none_or(|marked| marked.contains(pi))) {
+        let (_, content) = page_streams(doc, &p.dict, pi).ok()?;
+        let res = res_dict(doc, &p.dict, b"Resources");
+        scan_content_stream(&mut ctx, &content, p.obj, &res, None, 0).ok()?;
+        scan_appearances(&mut ctx, &p.dict, p.obj, &res).ok()?;
+    }
+    let type3 = |r: &ObjRef| doc.get(*r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type3"));
+    (!codes.keys().any(type3)).then_some(codes)
 }
 
 /// Scan the appearance streams of a page's annotations. A comment, stamp or field can show glyphs
@@ -721,7 +750,7 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
     let mut used_glyphs: HashMap<FontKey, HashSet<Vec<u8>>> = HashMap::new();
     let mut seen_drawn_forms = HashSet::new();
 
-    let mut ctx = ScanContext { doc, font_maps: &font_maps, used_glyphs: &mut used_glyphs, seen_forms: &mut seen_drawn_forms };
+    let mut ctx = ScanContext { doc, font_maps: &font_maps, used_glyphs: &mut used_glyphs, seen_forms: &mut seen_drawn_forms, codes: None };
 
     for (pi, p) in page_list.iter().enumerate() {
         let (_, content) = page_streams(ctx.doc, &p.dict, pi)?;
