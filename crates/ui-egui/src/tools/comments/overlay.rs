@@ -1,28 +1,25 @@
 use craft::behavior::kurbo::{BezPath, Point, Rect as DocRect, Shape as _};
+use craft::behavior::{Input, Sense};
 use craft::pages::ui::PageBody;
 use craft::review::annotate::pick_at;
 use craft::review::ui::annotate::{AnnotationOverlay, BodyPaint};
 use craft::review::{Annotation as Marked, AnnotationId, AnnotationKind, HandleRule};
 use craft::ui::canvas::ToolContext;
 use craft::ui::canvas_controls::{HoverOutline, HoverShape};
-use craft::ui::contract::Show as _;
+use craft::ui::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Role, Show as _};
 use craft::ui::primitives::{Draw, PaintShape, StrokeWidth, TextRun};
-use craft::ui::style::{DataColor, StyleColor};
-use egui::{Color32, Pos2, Rect, vec2};
+use craft::ui::style::{ComponentStyle, DataColor, Metrics, StyleColor, StyleCx};
+use egui::{Color32, Pos2, Rect, Response, Vec2, vec2};
 use pdfcraft_engine::CommentOutline as O;
 
 use super::bridge::{self, PageMap};
 use super::state::Settling;
 use super::tool::PastePlacement;
-use super::{Annotation, CommentPrefs, DocInfo, DocView, QuickTool, color32};
+use super::{Annotation, CommentPrefs, DocInfo, QuickTool, color32};
+use crate::canvas::PageSession;
 
-/// What the overlay needs besides the document: where it paints and what the pointer is over.
-// PLAN: assumed the "comments after text" slot of canvas-w5's `PageOverlays` hands a `Draw` (the redaction fill is
-// data painted through it); `pointer` is the tool host's last pointer sample, `None` while a button is down (the page
-// body's `ToolPass` carries no position); pdf-canvas-w8/w9 build this.
-pub(crate) struct Hover<'a, 'b> {
-    /// The slot's painter.
-    pub draw: &'a Draw<'b>,
+/// What the overlay needs besides the document: what the pointer is over.
+pub(crate) struct Hover {
     /// The pointer on screen, when it is over the pages with no button down.
     pub pointer: Option<Pos2>,
     /// The user's Redaction Tool Properties fill and opacity.
@@ -39,26 +36,26 @@ pub(crate) struct Hover<'a, 'b> {
 pub(crate) fn show(
     ui: &mut egui::Ui,
     body: &PageBody<'_>,
-    view: &DocView,
+    session: &PageSession,
     rotation: u16,
     info: &DocInfo,
     prefs: &CommentPrefs,
     tool: QuickTool,
-    hover: Hover<'_, '_>,
+    hover: Hover,
 ) {
     let map = PageMap::new(info, body.pages, rotation);
     let all = bridge::annotations(info, &map, QuickTool::Select, hover.allowed);
     let reached = bridge::annotations(info, &map, tool, hover.allowed);
     let markers = bridge::markers(info, &map, hover.pick.1);
-    let selected: Vec<AnnotationId> = view.session.comments.tool.selected.clone();
-    let in_flight = view.session.comments.tool.in_flight();
-    let idle = in_flight.is_none() && view.session.comments.tool.drawing().is_empty() && !body.pass.is_some_and(|p| p.press.phase.is_press());
+    let selected: Vec<AnnotationId> = session.comments.tool.selected.clone();
+    let in_flight = session.comments.tool.in_flight();
+    let idle = in_flight.is_none() && session.comments.tool.drawing().is_empty() && !body.pass.is_some_and(|p| p.press.phase.is_press());
     for page in body.pages {
         let mut on_page: Vec<Marked> = all.iter().filter(|a| a.page == page.page).cloned().collect();
         // The settling strokes are drawn by the overlay until their page is drawn again; their ids sit at the top of
         // the id space, which `id_of(page, index)` never reaches.
         let mut settling_ids = Vec::new();
-        for (n, s) in view.session.comments.settling.iter().filter(|s| s.page == page.page).enumerate() {
+        for (n, s) in session.comments.settling.iter().filter(|s| s.page == page.page).enumerate() {
             let id = bridge::id_of(page.page, u32::MAX as usize - n);
             if let Some(a) = settling_annotation(s, prefs, id, &map) {
                 settling_ids.push(id);
@@ -78,7 +75,7 @@ pub(crate) fn show(
             && let (page_of, index) = bridge::key_of(a.id)
             && info.annotations.iter().any(|e| e.page == page_of && e.index == index && e.subtype == "Redact")
         {
-            paint_redaction(&hover, &map, info, page_of, index);
+            RedactionHover::new(redact_areas(&map, info, page_of, index), redaction_fill(hover.redact)).show_at(ui, body.rect);
         }
         let shape = under
             .filter(|a| !selected.contains(&a.id) && matches!(tool, QuickTool::Select | QuickTool::Fill(_)) && reached.iter().any(|r| r.id == a.id))
@@ -137,12 +134,73 @@ fn settling_annotation(s: &Settling, prefs: &CommentPrefs, id: AnnotationId, map
 }
 
 /// A redaction mark's fill in the user's colour and opacity, a data colour and not a theme value.
-fn paint_redaction(hover: &Hover<'_, '_>, map: &PageMap<'_>, info: &DocInfo, page: usize, index: usize) {
-    let (rgb, opacity) = hover.redact;
+fn redaction_fill((rgb, opacity): ([f64; 3], f64)) -> DataColor {
     let [r, g, b] = rgb.map(|c| (c.clamp(0.0, 1.0) * 255.0) as u8);
-    let fill = DataColor::new(Color32::from_rgba_unmultiplied(r, g, b, (opacity.clamp(0.0, 1.0) * 255.0) as u8));
-    for area in redact_areas(map, info, page, index) {
-        hover.draw.data_fill(&PaintShape::Polygon(vec![area.left_top(), area.right_top(), area.right_bottom(), area.left_bottom()]), fill);
+    DataColor::new(Color32::from_rgba_unmultiplied(r, g, b, (opacity.clamp(0.0, 1.0) * 255.0) as u8))
+}
+
+/// The style of the redaction hover: it paints the user's own colour and nothing of the theme.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub struct RedactionHoverStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+/// A redaction mark's areas filled while the pointer is over the mark, so the marked area reads before anything is
+/// applied. Paint only.
+// `unregistered`: it needs a live document with a redaction mark, so the suite has no sample of it.
+#[derive(craft::ui::contract::Component)]
+#[component(canvas_control, unregistered)]
+struct RedactionHover {
+    #[common]
+    common: Common,
+    areas: Vec<Rect>,
+    fill: DataColor,
+}
+
+impl RedactionHover {
+    fn new(areas: Vec<Rect>, fill: DataColor) -> Self {
+        RedactionHover { common: Common::new(), areas, fill }
+    }
+}
+
+impl Component for RedactionHover {
+    const ROLE: Role = Role::GROUP;
+    const ALT_ROLES: &'static [Role] = &[Role::None];
+    const INPUT: Input = Input::Display;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    const OVERLAYS: bool = false;
+    const SHOWS_LABEL: bool = false;
+    type Style = RedactionHoverStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: RedactionHoverStyleKey) -> RedactionHoverStyle {
+        RedactionHoverStyle { metrics: Metrics::new() }
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::ZERO
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, _: &Cx<'_, Self>) {
+        let draw = ui.draw();
+        for area in &self.areas {
+            draw.data_fill(&PaintShape::Polygon(rect_corners(*area)), self.fill);
+        }
+    }
+
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        access.role(Role::None);
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
     }
 }
 

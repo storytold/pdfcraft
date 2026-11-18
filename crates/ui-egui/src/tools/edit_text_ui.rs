@@ -20,9 +20,8 @@ use craft::text::ui::editor::{CaretLine, EditKind, EditorEnd, HostLine, HostRun,
 use craft::ui::canvas_controls::SelectionOutline;
 use craft::ui::contract::{Bind, Props as _, Show as _};
 use craft::ui::fonts::FontRef;
-use craft::ui::primitives::ContentPainterCx;
 use egui::epaint::text::CharIndex;
-use egui::{CornerRadius, Pos2, Rect, Vec2, pos2, vec2};
+use egui::{Pos2, Rect, Vec2, pos2, vec2};
 use pdfcraft_engine::{Edit, ObjectKind, ObjectTarget};
 use pdfcraft_render::DocInfo;
 
@@ -32,16 +31,18 @@ use crate::canvas::{PageGeometry, PageSession, PageXform};
 // PLAN: at the base `image.rs` imports `ACCENT`, `Color32`, `Stroke` and `PagePointer` from here; they
 // leave with the old overlay (pdf-edit-w9's rewrite takes theme roles instead).
 mod background;
+mod draft;
 mod image;
 mod layout;
 
 pub(crate) use background::TextBackground;
+use draft::{ParagraphCover, ParagraphText};
 pub use image::{CropMode, ImageAction, ImageSelection};
 pub(crate) use image::{PictureMenu, delete_picture, picture_controls, picture_menu, picture_parts, picture_press, user_to_screen};
+pub(crate) use layout::editor_font;
 #[cfg(test)]
-use layout::{DARK_EDITOR_FILL, contrast};
-use layout::{color32, editor_galley, editor_job, look_of, source_look};
-pub(crate) use layout::{editor_fill, editor_font, source_faces};
+use layout::{DARK_EDITOR_FILL, contrast, editor_fill, editor_job};
+use layout::{color32, editor_galley, look_of, source_look};
 
 /// What an edit box shows text for: a page paragraph, or text added in this session.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -874,13 +875,11 @@ fn rect_path(rect: DocRect) -> BezPath {
 /// paragraph's editor. The press and the hover are the pass's part output's (`parts`): the press when
 /// its owner is a paragraph, and the `(page, block)` of the paragraph under the pointer. Returns the
 /// edit a rewrap or an applied paragraph gives.
-// PLAN: assumed caller (pdf-canvas-w8): `content` is the page body's content painter, which gives the
-// editor its faces and its paint. A paragraph's width-frame handles count as that paragraph for the
-// hover, so the frame stays shown while the pointer crosses onto a handle and through its drag.
+// A paragraph's width-frame handles count as that paragraph for the hover, so the frame stays shown
+// while the pointer crosses onto a handle and through its drag.
 pub(crate) fn paragraph_controls(
     ui: &mut egui::Ui,
     body: &PageBody<'_>,
-    content: &ContentPainterCx<'_>,
     session: &mut PageSession,
     doc: &pdfcraft_engine::Document,
     parts: &PagePartsOutput,
@@ -904,7 +903,7 @@ pub(crate) fn paragraph_controls(
             hovered.filter(|(p, _)| *p == page).and_then(|(_, block)| blocks.get(block).zip(boxes.get(block).copied()).map(|(l, b)| (block, l, b)));
         edit = edit.or_else(|| width_frame(ui, body, session, doc, page, framed, geo));
     }
-    edit.or_else(|| editor_session(ui, body, content, session, doc, geo))
+    edit.or_else(|| editor_session(ui, body, session, doc, geo))
 }
 
 /// Opens the paragraph a switching click, or a click on grouped text, asked for once the document is
@@ -1209,7 +1208,6 @@ impl TextEditorHost for ParagraphHost<'_> {
 fn editor_session(
     ui: &mut egui::Ui,
     body: &PageBody<'_>,
-    content: &ContentPainterCx<'_>,
     session: &mut PageSession,
     doc: &pdfcraft_engine::Document,
     geo: PageGeometry<'_>,
@@ -1233,7 +1231,6 @@ fn editor_session(
     // tool bars (#3061).
     let page_clip = xf.rect.intersect(geo.viewport);
     let ctx = ui.ctx().clone();
-    let faces = source_faces(content, doc, page);
     let ed = session.line_editor.as_mut()?;
     // Reproject the source box every frame. The page may have been zoomed, scrolled or rotated
     // while the format panel was open.
@@ -1242,32 +1239,14 @@ fn editor_session(
     let scale = (ed.rect.width() / (ed.source_rect[2] - ed.source_rect[0]).abs().max(0.01)).max(0.01);
     ed.size = (ed.look.size as f32 * scale).clamp(1.0, 300.0);
     let text_color = color32(ed.look.color);
-    // The editor opens at the source size. Once text changes, show the real draft extent: single
-    // rows grow toward the page edge, paragraphs rewrap at their source width, and the visible
-    // frame grows/shrinks vertically with their rows. An OCR phrase (several stretched words on
-    // one scanned line) also grows rightwards.
-    let single_run = ed.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible);
-    let width = if !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
-        let job = editor_job(&ctx, ed, &faces, &ed.text, scale, f32::INFINITY);
-        let natural = ctx.fonts_mut(|f| f.layout_job(job)).size().x;
-        natural.max(ed.size * 0.4).min((xf.rect.right() - ed.rect.left() - 36.0 * scale).max(ed.rect.width()))
-    } else {
-        ed.rect.width().max(1.0)
-    };
-    let measured = editor_galley(&ctx, ed, &faces, &ed.text, scale, width);
-    ed.overflow = ed.has_changes() && (measured.rect.width() > ed.rect.width() + 1.5 || measured.rect.height() > ed.rect.height() + 1.5);
-    let visible = Rect::from_min_size(ed.rect.min, measured.rect.size().max(vec2(1.0, 1.0)));
-    // Unsupported source programs use an interface fallback whose glyph advances can differ from the
-    // PDF's. Keep every visible row inside the growing frame.
-    let live = draft_rect.map_or(visible, |bounds| bounds.union(visible));
-    let painter = content.painter.with_clip_rect(ui.clip_rect().intersect(page_clip));
-    // White, unless the text is too pale to read on white (white text from a coloured banner, #913):
-    // then a dark box. An unchanged paragraph is the page's own text, and a changed one has the textless
-    // page under it; until that is ready, a cover over the entire source box, including lines the draft
-    // no longer occupies, so shrinking the text never exposes a copy.
-    if ed.has_changes() && !background_ready {
-        painter.rect_filled(ed.rect.expand(1.0).union(live), CornerRadius::ZERO, editor_fill(text_color));
-    }
+    // A one-row draft grows toward the page's right edge.
+    let room = (xf.rect.right() - ed.rect.left() - 36.0 * scale).max(ed.rect.width());
+    // The layout in the paragraph's source faces, and the cover under the editor until the textless
+    // page is ready.
+    let cover = ed.has_changes() && !background_ready;
+    let laid = ParagraphCover::new(doc, ed, scale, room, draft_rect, cover).show_at(ui, page_clip);
+    let (faces, width, live) = (laid.faces, laid.width, laid.live);
+    ed.overflow = laid.overflow;
     let len = ed.text.chars().count();
     let mut selection = ed.selection.map_or_else(|| TextSelection::caret_at(len), |s| TextSelection::new(s.anchor.min(len), s.caret.min(len)));
     let origin = ed.rect.min;
@@ -1284,7 +1263,7 @@ fn editor_session(
     // on the paragraph's part takes the keys only with a press on it.
     ed.focus = false;
     if ed.has_changes() {
-        painter.galley(origin, Arc::clone(&galley), text_color);
+        ParagraphText::new(origin, Arc::clone(&galley), text_color).show_at(ui, page_clip);
     }
     let ended = output.ended;
     session.text_background.remember(&xf, page, block, galley, origin, text_color);

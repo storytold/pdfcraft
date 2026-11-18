@@ -48,7 +48,7 @@ pub(crate) use geometry::{caret_snap, snapped_caret};
 pub use geometry::{drawn_text_box_rect, snug_text_box_rect, text_box_rect};
 pub use menu::CanvasAction;
 pub(crate) use menu::{CommentMenuCx, MenuRights, QuickBarPick, attachment_items, context_rows, quick_bar_controls};
-pub(crate) use overlay::show;
+pub(crate) use overlay::{Hover, show};
 pub(crate) use popups::note_popups;
 pub(crate) use state::PageCx;
 #[cfg(test)]

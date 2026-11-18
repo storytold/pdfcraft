@@ -66,7 +66,6 @@ pub fn ui_fonts(lang: Lang) -> UiFonts<'static> {
         .app_face("Inter-SemiBold", own_face(platform, "Inter-SemiBold", INTER_SEMIBOLD), &[FontRef::named(SEMIBOLD)])
         .family(Family::named(MEDIUM).weight(500))
         .family(Family::named(SEMIBOLD).weight(600))
-        // PLAN: assumed `pdfcraft_fonts::CRAFT_FONTS: &[craft::ui::fonts::EmbeddedFace]` (pdf-shell-w1 contract head).
         .craft_faces(pdfcraft_fonts::CRAFT_FONTS)
         .languages(&codes)
         .ui_language(lang.code())

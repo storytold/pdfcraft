@@ -17,7 +17,7 @@ mod cjk_scripts;
 fn main() {
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");
-    let mut src = String::from("pub static CRAFT_FONTS: &[CraftFont] = &[\n");
+    let mut src = String::from("pub static CRAFT_FONTS: &[EmbeddedFace] = &[\n");
     let required = std::env::var_os("CRAFT_FONTS_REQUIRED").is_some();
     if let Some(dir) = std::env::var_os("CRAFT_FONTS_DIR").map(PathBuf::from) {
         match craft_fonts(&dir, required) {
@@ -62,7 +62,7 @@ fn craft_fonts(dir: &std::path::Path, required: bool) -> Result<String, String> 
     Ok(out)
 }
 
-/// One `CraftFont { .. }` initialiser per manifest line.
+/// One `EmbeddedFace { .. }` initialiser per manifest line, with the line's face index and role.
 ///
 /// `strict_cap` is set for the required native Simplified Chinese manifest: a face that does not
 /// fit its cap must fail the build rather than be silently left out, so a required build cannot
@@ -70,20 +70,19 @@ fn craft_fonts(dir: &std::path::Path, required: bool) -> Result<String, String> 
 fn manifest(dir: &std::path::Path, manifest: &std::path::Path, wasm: bool, strict_cap: bool) -> Result<String, String> {
     println!("cargo::rerun-if-changed={}", manifest.display());
     let text = std::fs::read_to_string(manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    let entries = craft_fonts_build::parse_manifest(&text).map_err(|e| format!("{}: {e}", manifest.display()))?;
     let mut out = String::new();
     // A required native Chinese manifest must add the Hans face itself, not merely some other
     // CJK face that happens to fit: otherwise CRAFT_FONTS_REQUIRED would pass while the promised
     // Simplified Chinese fallback is still absent.
     let mut has_hans = false;
-    for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
-        let f: Vec<&str> = line.split(" | ").map(str::trim).collect();
-        let [family, style, file, scripts, ..] = f.as_slice() else {
-            return Err(format!("malformed manifest line: {line}"));
-        };
+    for entry in &entries {
+        let (family, style, file) = (entry.family.as_str(), entry.style.as_str(), entry.file.as_str());
+        let has = |script: &str| entry.scripts.iter().any(|s| s == script);
         // Keep the upstream general CJK size cap. The separately pinned native Chinese UI
         // face has its own bound; web builds retain the smaller general limit. A required
         // Chinese face over its cap fails the build instead of being silently omitted.
-        let cjk = scripts.split(',').any(cjk_scripts::is_cjk_script);
+        let cjk = entry.scripts.iter().any(|s| cjk_scripts::is_cjk_script(s));
         if cjk && let Ok(metadata) = std::fs::metadata(dir.join(file)) {
             match cjk_scripts::cjk_size_decision(family, metadata.len(), wasm, strict_cap) {
                 cjk_scripts::CjkSizeDecision::Embed => {}
@@ -96,32 +95,24 @@ fn manifest(dir: &std::path::Path, manifest: &std::path::Path, wasm: bool, stric
                 }
             }
         }
-        // Arabic interface faces are small, so the web build keeps them too.
-        let arabic = scripts.split(',').any(|s| s.trim() == "Arab");
-        // Telugu faces too, for the Telugu interface.
-        let telugu = scripts.split(',').any(|s| s.trim() == "Telu");
-        // And the Hebrew ones (small), for Hebrew text and Edit text on the web.
-        let hebrew = scripts.split(',').any(|s| s.trim() == "Hebr");
-        // Devanagari too, for the Hindi interface (one small face).
-        let devanagari = scripts.split(',').any(|s| s.trim() == "Deva");
-        let web_face = (*family == "BIZ UDPGothic" && *style == "Regular")
-            || arabic
-            || telugu
-            || hebrew
-            || scripts.split(',').any(|s| s.trim() == "Thai")
-            || devanagari;
+        // Arabic interface faces are small, so the web build keeps them too. Telugu faces too, for
+        // the Telugu interface; the Hebrew ones (small), for Hebrew text and Edit text on the web;
+        // and Devanagari, for the Hindi interface (one small face).
+        let web_face = (family == "BIZ UDPGothic" && style == "Regular") || ["Arab", "Telu", "Hebr", "Thai", "Deva"].into_iter().any(has);
         if wasm && !web_face {
             continue;
         }
-        has_hans |= cjk_scripts::has_script_tag(scripts, "Hans");
+        has_hans |= cjk_scripts::has_script_tag(&entry.scripts, "Hans");
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
         println!("cargo::rerun-if-changed={}", path.display());
-        let scripts: Vec<String> = scripts.split(',').map(|s| format!("{:?}", s.trim())).collect();
+        let scripts: Vec<String> = entry.scripts.iter().map(|s| format!("{s:?}")).collect();
         let _ = writeln!(
             out,
-            "    CraftFont {{ family: {family:?}, style: {style:?}, scripts: &[{}], bytes: include_bytes!({:?}) }},",
+            "    EmbeddedFace {{ family: {family:?}, style: {style:?}, scripts: &[{}], index: {}, bytes: include_bytes!({:?}), role: {:?} }},",
             scripts.join(", "),
+            entry.index,
             path.display().to_string(),
+            entry.role.as_deref(),
         );
     }
     if strict_cap && !has_hans {
@@ -145,13 +136,14 @@ mod manifest_tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("face.ttf"), b"synthetic manifest fixture").unwrap();
         let path = root.join("manifest.txt");
+        let line = |scripts: &str| format!("Fixture | Regular | face.ttf | {scripts} | OFL-1.1 | OFL.txt | 00 | fixture\n");
         for scripts in ["Hant,Latn", "Hans-HK,Latn", "Latn"] {
-            std::fs::write(&path, format!("Fixture | Regular | face.ttf | {scripts}\n")).unwrap();
+            std::fs::write(&path, line(scripts)).unwrap();
             assert!(manifest(&root, &path, false, true).unwrap_err().contains("no Hans face"), "{scripts}");
-            assert!(manifest(&root, &path, false, false).unwrap().contains("CraftFont {"), "optional input stays usable");
+            assert!(manifest(&root, &path, false, false).unwrap().contains("EmbeddedFace {"), "optional input stays usable");
         }
-        std::fs::write(&path, "Fixture | Regular | face.ttf | Latn, Hans\n").unwrap();
-        assert!(manifest(&root, &path, false, true).unwrap().contains("CraftFont {"));
+        std::fs::write(&path, line("Latn, Hans")).unwrap();
+        assert!(manifest(&root, &path, false, true).unwrap().contains("EmbeddedFace {"));
         std::fs::remove_file(root.join("face.ttf")).unwrap();
         assert!(manifest(&root, &path, false, true).is_err(), "a missing Hans asset cannot satisfy required input");
         std::fs::remove_dir_all(root).unwrap();
