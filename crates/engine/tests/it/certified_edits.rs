@@ -269,3 +269,105 @@ fn growing_xfa_fill_keeps_the_signed_pages(scripted: bool) {
     let verdict = saved_verdict(&mut s, id);
     assert!(matches!(verdict, Modification::Allowed(_)), "the certification stays valid: {verdict:?}");
 }
+
+/// A measurement scale is a viewport in the page dictionary (`/VP`), not a comment: no
+/// certification allows it, while a measurement (a comment) is allowed at level 3.
+#[test]
+fn a_measurement_scale_is_a_page_change_under_a_certification() {
+    let (mut s, id) = certified(Some(3));
+    let scale = Edit::SetMeasurementScale {
+        page: 0,
+        bbox: [0.0, 0.0, 100.0, 100.0],
+        name: "Detail".into(),
+        scale: pdfcraft_engine::measure::Scale::default(),
+    };
+    assert_eq!(refused(s.apply(id, scale)), "page changes");
+    assert!(s.get(id).unwrap().can_undo().is_none(), "nothing was changed");
+}
+
+/// A script can move or resize a field's widget while filling the form in (here the changes it
+/// handed back), which changes its page: refused under a certification that allows filling in,
+/// while the value it sets the same way goes ahead and keeps the certification valid.
+#[test]
+fn a_fill_that_moves_a_field_is_refused_under_a_certification() {
+    let (mut s, id) = certified(Some(2));
+    let moved = pdfcraft_engine::FieldChange { name: "name".into(), rect: Some([30.0, 240.0, 190.0, 260.0]), ..Default::default() };
+    assert_eq!(refused(s.apply(id, Edit::ApplyScriptChanges { changes: vec![moved] })), "moving or resizing form fields");
+    assert!(s.get(id).unwrap().can_undo().is_none(), "nothing was changed");
+    let valued = pdfcraft_engine::FieldChange { name: "name".into(), value: Some(vec!["Ada".into()]), ..Default::default() };
+    s.apply(id, Edit::ApplyScriptChanges { changes: vec![valued] }).expect("a value is filling in");
+    let verdict = saved_verdict(&mut s, id);
+    assert!(matches!(verdict, Modification::Allowed(_)), "the certification stays valid: {verdict:?}");
+}
+
+/// A certified scripted XFA form, filled and signed with certification `level` 2, its text field
+/// holding `text`: the session and the document.
+fn certified_xfa(text: &str) -> (Session, DocId) {
+    let template = pdfcraft_xfa::fixtures::growable_text_template(true);
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("growing.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    let opts = SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), certify: Some(2), ..SignOptions::default() };
+    let signed = s.sign(id, &digital_id(), opts).unwrap();
+    s.mark_signed(id, signed, None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "ACTIVIDADES".into(), value: FieldValue::Text(text.into()) }).expect("filling is allowed");
+    (s, id)
+}
+
+/// Data imported into a certified XFA form replaces the form's data, so a field the new data
+/// doesn't hold is emptied, as on a form that isn't laid out again: the field and the data agree,
+/// and the signed pages stay.
+#[test]
+fn a_certified_xfa_import_empties_the_fields_its_data_leaves_out() {
+    let (mut s, id) = certified_xfa("Filled before");
+    let pages = s.get(id).unwrap().info.pages.len();
+    s.apply(id, import("data.xml", b"<form><Page3></Page3></form>")).expect("importing the form's data is allowed");
+    let doc = s.get(id).unwrap();
+    let value = doc.form.iter().find(|f| f.name == "ACTIVIDADES").map(|f| f.value.clone());
+    assert!(value.as_ref().is_some_and(|v| v.iter().all(String::is_empty)), "{value:?}");
+    assert_eq!(doc.info.pages.len(), pages);
+    let verdict = saved_verdict(&mut s, id);
+    assert!(matches!(verdict, Modification::Allowed(_)), "the certification stays valid: {verdict:?}");
+}
+
+/// A form whose initialize script hides the section `extra` (a second page) once `flag` reads
+/// "hide": filling `flag` in changes nothing until the form is opened again.
+fn hiding_template() -> String {
+    r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="master"><occur max="-1"/>
+  <contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><medium short="612pt" long="792pt"/>
+ </pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <event activity="initialize"><script contentType="application/x-javascript">extra.presence = (flag.rawValue == "hide") ? "hidden" : "visible";</script></event>
+  <field name="flag" w="200pt" h="20pt"><ui><textEdit/></ui></field>
+  <subform name="extra" layout="tb"><breakBefore targetType="pageArea"/>
+   <draw name="more" w="500pt" h="20pt"><value><text>Second page</text></value></draw>
+  </subform>
+ </subform>
+</subform></template>
+</xdp:xdp>"#
+        .to_string()
+}
+
+/// Reopening a certified XFA form runs its scripts but doesn't lay it out again: a value filled in
+/// under the certification that makes an initialize script hide a page doesn't take the page away
+/// on opening (that would replace the signed pages, which no level allows), and the
+/// certification stays valid.
+#[test]
+fn reopening_a_certified_xfa_form_keeps_its_signed_pages() {
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("hiding.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&hiding_template())), None).unwrap();
+    let pages = s.get(id).unwrap().info.pages.len();
+    assert_eq!(pages, 2, "the fixture lays out the second page");
+    let opts = SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), certify: Some(2), ..SignOptions::default() };
+    let signed = s.sign(id, &digital_id(), opts).unwrap();
+    s.mark_signed(id, signed, None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "flag".into(), value: FieldValue::Text("hide".into()) }).expect("filling is allowed");
+    let bytes = s.save_bytes(id).unwrap();
+    let mut again = Session::new().with_clock(|| 1_800_000_000);
+    let reopened = again.open("hiding.pdf", None, bytes, None).unwrap();
+    let doc = again.get(reopened).unwrap();
+    assert_eq!(doc.info.pages.len(), pages, "{:?}", doc.info.warnings);
+    let verdict = saved_verdict(&mut again, reopened);
+    assert!(matches!(verdict, Modification::Allowed(_)), "the certification stays valid: {verdict:?}");
+}

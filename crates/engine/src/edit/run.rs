@@ -226,8 +226,7 @@ pub(crate) fn check_certification(edit: &Edit, level: u8) -> Result<(), EditErro
         | Edit::FontSizeAnnotation { .. }
         | Edit::BorderColorAnnotation { .. }
         | Edit::BorderShapeAnnotation { .. }
-        | Edit::SetAnnotationInfo { .. }
-        | Edit::SetMeasurementScale { .. } => {
+        | Edit::SetAnnotationInfo { .. } => {
             if level >= 3 {
                 Ok(())
             } else {
@@ -243,7 +242,9 @@ pub(crate) fn check_certification(edit: &Edit, level: u8) -> Result<(), EditErro
         | Edit::ReplacePages { .. }
         | Edit::SetPageBox { .. }
         | Edit::InsertPagesFrom { .. }
-        | Edit::NumberPages { .. } => refuse("page changes"),
+        | Edit::NumberPages { .. }
+        // A scale is a viewport in the page dictionary's `/VP`, not a comment.
+        | Edit::SetMeasurementScale { .. } => refuse("page changes"),
         // Field values, comments or both, depending on the file: [`check_import`] decides on
         // what the import read from it.
         Edit::ImportData { .. } => {

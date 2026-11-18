@@ -36,6 +36,18 @@ fn prepare_ocr_text_edit(editor: &mut crate::history::Editor, info: &pdfcraft_re
     })
 }
 
+/// Whether a widget of `before`'s form has another `/Rect` in `after`.
+fn widgets_moved(before: &pdfcraft_cos::Document, after: &pdfcraft_cos::Document) -> bool {
+    let rects = |doc: &pdfcraft_cos::Document| {
+        pdfcraft_forms::fields(doc)
+            .into_iter()
+            .flat_map(|f| f.widgets.into_iter().map(|w| (w.obj, w.rect)))
+            .collect::<std::collections::HashMap<_, _>>()
+    };
+    let was = rects(before);
+    rects(after).into_iter().any(|(obj, rect)| was.get(&obj).is_some_and(|r| *r != rect))
+}
+
 /// Whether the edit, or any edit inside a batch, deletes pages.
 fn deletes_pages(edit: &Edit) -> bool {
     match edit {
@@ -337,6 +349,15 @@ impl Session {
         // unsigned files in full. Signed files must retain their signed bytes.
         if !signed && deletes_pages(&edit) {
             next.require_full_save();
+        }
+        // A script run by a fill (a value's callbacks, or the changes it handed back) can move or
+        // resize a field's widget, which changes the page it is on: no certification allows
+        // that (ISO 32000-2 Table 257). Checked on what the edit did, whatever ran it.
+        if let Some(level) = cx.certification
+            && widgets_moved(&editor.cos, &next)
+        {
+            discard_edit_callbacks(&cx);
+            return Err(EditError::Certified { level, what: "moving or resizing form fields" });
         }
         let rewrites = |c: &pdfcraft_cos::Document| c.full_save_required() || c.encryption_changed();
         if signed && ((rewrites(&next) && !rewrites(&editor.cos)) || (next.is_modified() && next.revisions().is_empty())) {

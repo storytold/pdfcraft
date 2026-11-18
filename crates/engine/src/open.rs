@@ -217,6 +217,11 @@ impl Session {
                 Some(tpl) => {
                     let mut work = cos.clone();
                     let pages = info.pages.len();
+                    // A certified form keeps its signed pages here as in an edit: its scripts
+                    // run, but don't lay it out again (ISO 32000-2 Table 257).
+                    let certified = pdfcraft_sign::pdf::list_cached(&cos, &bytes, &context.trust, &pdfcraft_sign::DigestCache::default())
+                        .iter()
+                        .any(|s| s.signed && s.certify.is_some());
                     let ran = guard(|| {
                         let mut run = xfa::XfaRun {
                             page_count: pages,
@@ -225,7 +230,7 @@ impl Session {
                             ran_away: false,
                             highlight: context.highlight,
                             time_scale: context.xfa_time_scale,
-                            keep_layout: false,
+                            keep_layout: certified,
                         };
                         let changes = xfa::on_open(&mut work, &tpl, &mut run);
                         if run.ran_away {
