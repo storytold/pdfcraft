@@ -1569,9 +1569,9 @@ dependencies = [
 [[package]]
 name = "craft-xfa"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=1a0d5d607859a2e529851482de09b8e53aaeec3e#1a0d5d607859a2e529851482de09b8e53aaeec3e"
+source = "git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3#23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3"
 dependencies = [
- "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=1a0d5d607859a2e529851482de09b8e53aaeec3e)",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3)",
 ]
 
 [[package]]
@@ -1586,7 +1586,7 @@ dependencies = [
 [[package]]
 name = "craft-xml"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=1a0d5d607859a2e529851482de09b8e53aaeec3e#1a0d5d607859a2e529851482de09b8e53aaeec3e"
+source = "git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3#23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",
