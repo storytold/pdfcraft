@@ -1,5 +1,6 @@
 use crate::parser;
-use crate::{Document, Error, Object, ObjectId, Result, Stream};
+use crate::{DecompressError, Document, Error, Object, ObjectId, Result, Stream};
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::num::TryFromIntError;
@@ -9,6 +10,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use log::warn;
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
+
+mod streaming;
 
 /// PdfCraft patch: index entries read from one object stream (the same clamp `pdfcraft_cos`
 /// applies to `/N`). Entries past it are ignored, so a huge index block cannot allocate an entry
@@ -62,8 +65,8 @@ impl NodeBudget {
         self.0.fetch_add(nodes, Ordering::Relaxed);
     }
 
-    /// The nodes not yet reserved.
-    fn left(&self) -> usize {
+    /// The nodes not yet reserved. Public so PdfCraft's tests can check what loads spent.
+    pub fn left(&self) -> usize {
         self.0.load(Ordering::Relaxed)
     }
 
@@ -71,6 +74,102 @@ impl NodeBudget {
     pub fn spent(&self) -> bool {
         self.left() == 0
     }
+}
+
+/// PdfCraft patch: a member to parse, as its object number and the range of its bytes (after any
+/// leading whitespace) in the decoded content it is parsed from.
+type Member = (u32, usize, usize);
+
+/// PdfCraft patch: what [`parse_members`] spent.
+struct Parsed {
+    /// A member was skipped because the budget was spent.
+    skipped: bool,
+    /// The nodes the members built, which stay reserved from the budget.
+    used: usize,
+}
+
+/// PdfCraft patch: parse `members` from `content` into `objects`, a later member replacing an
+/// earlier one of the same number. Each member builds at most `MAX_OBJECT_NODES` objects, reserved
+/// from `budget`; once that is spent the remaining members are skipped unparsed. Every object
+/// takes at least one byte, so a member reserves no more than its length.
+///
+/// When the budget holds enough for every member, they are parsed in parallel from a share
+/// reserved for them alone, which no member can run out; otherwise they are parsed in order from
+/// `budget`. Either way every member is given its whole share while the budget lasts, so parsing
+/// one stream's members in consecutive groups builds and skips the same members as parsing them
+/// together (`streaming` relies on this).
+fn parse_members(
+    content: &[u8], members: &[Member], budget: &NodeBudget, objects: &mut BTreeMap<ObjectId, Object>,
+) -> Parsed {
+    let share = |&(_, start, end): &Member| parser::MAX_OBJECT_NODES.min(end.saturating_sub(start));
+    let skipped = AtomicBool::new(false);
+    let used = AtomicUsize::new(0);
+    let parse_member = |from: &NodeBudget, member: &Member| -> Option<(ObjectId, Object)> {
+        let &(id, start, end) = member;
+        let granted = from.reserve(share(member));
+        if granted == 0 {
+            skipped.store(true, Ordering::Relaxed);
+            return None;
+        }
+        let nodes = Cell::new(granted);
+        let object = content
+            .get(start..end)
+            .and_then(|bytes| parser::direct_object_within(bytes, &nodes));
+        from.refund(nodes.get());
+        used.fetch_add(granted.saturating_sub(nodes.get()), Ordering::Relaxed);
+        if object.is_none() && nodes.get() == 0 {
+            warn!("object stream: member {id} exceeds the object budget and was skipped");
+        }
+        Some(((id, 0), object?))
+    };
+
+    let want = members.iter().map(&share).fold(0, usize::saturating_add);
+    let granted = budget.reserve(want);
+    if granted == want {
+        // Every member fits, so they are parsed in parallel from their own share: their
+        // reservations add up to it, so none is refused whatever the order.
+        let own = NodeBudget::new(granted);
+        #[cfg(feature = "rayon")]
+        let parsed: Vec<_> = members
+            .par_iter()
+            .filter_map(|member| parse_member(&own, member))
+            .collect();
+        #[cfg(not(feature = "rayon"))]
+        let parsed: Vec<_> = members.iter().filter_map(|member| parse_member(&own, member)).collect();
+        budget.refund(own.left());
+        objects.extend(parsed);
+    } else {
+        // The budget may run out part-way, so the members are parsed in index order and the
+        // ones skipped are the same on every load.
+        budget.refund(granted);
+        objects.extend(members.iter().filter_map(|member| parse_member(budget, member)));
+    }
+    Parsed {
+        skipped: skipped.load(Ordering::Relaxed),
+        used: used.load(Ordering::Relaxed),
+    }
+}
+
+/// The decoded offset of an object stream's first member, `/First`.
+fn first_offset(stream: &Stream) -> Result<usize> {
+    stream
+        .dict
+        .get(b"First")
+        .and_then(Object::as_i64)?
+        .try_into()
+        .map_err(|e: TryFromIntError| Error::NumericCast(e.to_string()))
+}
+
+/// Read `/N`, warning when the index read `words` numbers rather than two per object.
+fn check_member_count(stream: &Stream, words: usize) -> Result<()> {
+    let n = stream.dict.get(b"N").and_then(Object::as_i64)?;
+    if words.try_into().ok() != n.checked_mul(2) {
+        warn!("object stream: the object stream dictionary specifies a wrong number of objects")
+    }
+    if usize::try_from(n).is_ok_and(|n| n > MAX_OBJECT_STREAM_MEMBERS) {
+        warn!("object stream: /N {n} exceeds {MAX_OBJECT_STREAM_MEMBERS}; later members are ignored")
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -128,7 +227,8 @@ impl ObjectStream {
     /// When the budget holds enough for every member, they are parsed in parallel from a share
     /// reserved for this stream alone, which no member can run out; otherwise they are parsed in
     /// index order from `budget`. Either way which members are built doesn't depend on the order
-    /// in which rayon's workers reach them.
+    /// in which rayon's workers reach them. A `/FlateDecode` stream does this for each batch of
+    /// about 1 MiB of members as it is decoded, which builds the same members.
     pub fn new_within(
         stream: &Stream, max_decompressed_size: Option<usize>, budget: &NodeBudget,
     ) -> Result<ObjectStream> {
@@ -142,27 +242,58 @@ impl ObjectStream {
     pub(crate) fn new_members_within(
         stream: &Stream, max_decompressed_size: Option<usize>, budget: &NodeBudget, keep: impl Fn(u32) -> bool,
     ) -> Result<ObjectStream> {
-        let content = match max_decompressed_size {
+        // PdfCraft patch: a stream with one plain /FlateDecode filter, as nearly every object stream
+        // has, is decoded as it is read: its members are parsed in batches and the bytes of the
+        // others never kept (see `streaming`). Other filter chains are decoded whole.
+        let objects = if streaming::is_streamable(stream) {
+            streaming::members_within(stream, max_decompressed_size, budget, &keep)?
+        } else {
+            Self::whole_members_within(stream, max_decompressed_size, budget, keep)?
+        };
+        Ok(ObjectStream {
+            objects,
+            max_objects: 100,
+            compression_level: 6,
+        })
+    }
+
+    /// PdfCraft patch: the members of [`ObjectStream::new_members_within`] from the whole decoded
+    /// stream, which every filter chain can produce.
+    fn whole_members_within(
+        stream: &Stream, max_decompressed_size: Option<usize>, budget: &NodeBudget, keep: impl Fn(u32) -> bool,
+    ) -> Result<BTreeMap<ObjectId, Object>> {
+        // PdfCraft patch: a stream without filters is parsed from its own bytes rather than a copy
+        // of them (the limit still applies, as in `Stream::get_plain_content_with_limit`).
+        let content: Cow<'_, [u8]> = match stream.filters() {
             // Object streams are decoded while the document is loaded, so
             // enforcing the limit here bounds the memory a single stream can use.
-            Some(max) => stream.get_plain_content_with_limit(max)?,
-            None => stream.get_plain_content()?,
+            Ok(filters) if !filters.is_empty() => Cow::Owned(match max_decompressed_size {
+                Some(max) => stream.decompressed_content_with_limit(max)?,
+                None => stream.decompressed_content()?,
+            }),
+            _ => {
+                if let Some(max) = max_decompressed_size
+                    && stream.content.len() > max
+                {
+                    return Err(DecompressError::MemoryLimitExceeded { limit: max }.into());
+                }
+                Cow::Borrowed(stream.content.as_slice())
+            }
         };
 
+        Self::members_of(stream, &content, budget, keep)
+    }
+
+    /// PdfCraft patch: the members `keep` accepts of an object stream whose whole decoded content
+    /// is `content`, built from `budget`.
+    fn members_of(
+        stream: &Stream, content: &[u8], budget: &NodeBudget, keep: impl Fn(u32) -> bool,
+    ) -> Result<BTreeMap<ObjectId, Object>> {
         if content.is_empty() {
-            return Ok(ObjectStream {
-                objects: BTreeMap::new(),
-                max_objects: 100,
-                compression_level: 6,
-            });
+            return Ok(BTreeMap::new());
         }
 
-        let first_offset = stream
-            .dict
-            .get(b"First")
-            .and_then(Object::as_i64)?
-            .try_into()
-            .map_err(|e: TryFromIntError| Error::NumericCast(e.to_string()))?;
+        let first_offset = first_offset(stream)?;
         let index_block = content.get(..first_offset).ok_or(Error::InvalidOffset(first_offset))?;
 
         let numbers_str = std::str::from_utf8(index_block).map_err(|e| Error::InvalidObjectStream(e.to_string()))?;
@@ -174,13 +305,7 @@ impl ObjectStream {
             .collect();
         let len = numbers.len() / 2 * 2; // Ensure only pairs.
 
-        let n = stream.dict.get(b"N").and_then(Object::as_i64)?;
-        if numbers.len().try_into().ok() != n.checked_mul(2) {
-            warn!("object stream: the object stream dictionary specifies a wrong number of objects")
-        }
-        if usize::try_from(n).is_ok_and(|n| n > MAX_OBJECT_STREAM_MEMBERS) {
-            warn!("object stream: /N {n} exceeds {MAX_OBJECT_STREAM_MEMBERS}; later members are ignored")
-        }
+        check_member_count(stream, numbers.len())?;
 
         // PdfCraft patch: bound members by the next distinct offset and parse each offset
         // only once, so overlapping or duplicate entries cannot amplify decoded content.
@@ -232,62 +357,11 @@ impl ObjectStream {
             members.push((id, start, extent_end));
         }
 
-        // PdfCraft patch: each member builds at most `MAX_OBJECT_NODES` objects, reserved from
-        // `from`; once that is spent the remaining members are skipped unparsed. Every object
-        // takes at least one byte, so a member reserves no more than its length.
-        let share = |&(_, start, end): &(u32, usize, usize)| parser::MAX_OBJECT_NODES.min(end - start);
-        let skipped = AtomicBool::new(false);
-        let parse_member = |from: &NodeBudget, member: &(u32, usize, usize)| -> Option<(ObjectId, Object)> {
-            let &(id, start, end) = member;
-            let granted = from.reserve(share(member));
-            if granted == 0 {
-                skipped.store(true, Ordering::Relaxed);
-                return None;
-            }
-            let nodes = Cell::new(granted);
-            let object = content
-                .get(start..end)
-                .and_then(|bytes| parser::direct_object_within(bytes, &nodes));
-            from.refund(nodes.get());
-            if object.is_none() && nodes.get() == 0 {
-                warn!("object stream: member {id} exceeds the object budget and was skipped");
-            }
-            Some(((id, 0), object?))
-        };
-
-        let want = members.iter().map(&share).fold(0, usize::saturating_add);
-        let granted = budget.reserve(want);
-        let objects: BTreeMap<ObjectId, Object> = if granted == want {
-            // Every member fits, so they are parsed in parallel from this stream's own share:
-            // its members' reservations add up to it, so none is refused whatever the order.
-            let own = NodeBudget::new(granted);
-            #[cfg(feature = "rayon")]
-            let objects = members
-                .par_iter()
-                .filter_map(|member| parse_member(&own, member))
-                .collect();
-            #[cfg(not(feature = "rayon"))]
-            let objects = members.iter().filter_map(|member| parse_member(&own, member)).collect();
-            budget.refund(own.left());
-            objects
-        } else {
-            // The budget may run out part-way, so the members are parsed in index order and the
-            // ones skipped are the same on every load.
-            budget.refund(granted);
-            members
-                .iter()
-                .filter_map(|member| parse_member(budget, member))
-                .collect()
-        };
-        if skipped.load(Ordering::Relaxed) {
+        let mut objects = BTreeMap::new();
+        if parse_members(content, &members, budget, &mut objects).skipped {
             warn!("object stream: the object budget is spent; remaining members were skipped");
         }
-
-        Ok(ObjectStream {
-            objects,
-            max_objects: 100,
-            compression_level: 6,
-        })
+        Ok(objects)
     }
 
     /// Create a builder for constructing new object streams
