@@ -1331,7 +1331,7 @@ dependencies = [
 [[package]]
 name = "craft-pdf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=528cb08675fa75f845af5c0ca60255dea72bf41f#528cb08675fa75f845af5c0ca60255dea72bf41f"
+source = "git+https://github.com/storytold/craft-libs?rev=670c4191159157ca975ff641b2a6edffe6f8493d#670c4191159157ca975ff641b2a6edffe6f8493d"
 dependencies = [
  "aes",
  "chrono",
@@ -1426,11 +1426,11 @@ dependencies = [
 [[package]]
 name = "craft-stream-codecs"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=528cb08675fa75f845af5c0ca60255dea72bf41f#528cb08675fa75f845af5c0ca60255dea72bf41f"
+source = "git+https://github.com/storytold/craft-libs?rev=670c4191159157ca975ff641b2a6edffe6f8493d#670c4191159157ca975ff641b2a6edffe6f8493d"
 dependencies = [
  "fax",
  "hayro-ccitt",
- "hayro-jbig2 0.3.0 (git+https://github.com/storytold/craft-libs?rev=528cb08675fa75f845af5c0ca60255dea72bf41f)",
+ "hayro-jbig2 0.3.0 (git+https://github.com/storytold/craft-libs?rev=670c4191159157ca975ff641b2a6edffe6f8493d)",
  "thiserror 2.0.21",
 ]
 
@@ -2985,7 +2985,7 @@ dependencies = [
 [[package]]
 name = "hayro-jbig2"
 version = "0.3.0"
-source = "git+https://github.com/storytold/craft-libs?rev=528cb08675fa75f845af5c0ca60255dea72bf41f#528cb08675fa75f845af5c0ca60255dea72bf41f"
+source = "git+https://github.com/storytold/craft-libs?rev=670c4191159157ca975ff641b2a6edffe6f8493d#670c4191159157ca975ff641b2a6edffe6f8493d"
 dependencies = [
  "hayro-ccitt",
 ]
