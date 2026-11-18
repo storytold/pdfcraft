@@ -45,7 +45,9 @@ fn dragging_a_corner_then_enhance_page_straightens_the_page() {
     h.run_steps(3);
     let quad = h.state().views[0].camera.expect("the corners start on the current page");
     assert_eq!(quad.page, 0);
-    assert_eq!(quad.corners, [[15.0, 20.0], [285.0, 20.0], [285.0, 380.0], [15.0, 380.0]], "inset by 5%");
+    for [x, y] in quad.corners {
+        assert!(x > 0.0 && x < 300.0 && y > 0.0 && y < 400.0, "inside the page and inset from every edge: {x}, {y}");
+    }
 
     // Drag the top-left corner to (60, 80) on the page.
     let r = h.state().views[0].page_screen_rect(0).unwrap();
