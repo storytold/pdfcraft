@@ -5127,6 +5127,7 @@ dependencies = [
  "pdfcraft-ocr",
  "pdfcraft-platform",
  "pdfcraft-render",
+ "pdfcraft-testkit",
  "pdfcraft-xfa",
  "plist",
  "pollster 1.0.1",

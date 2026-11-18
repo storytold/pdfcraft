@@ -64,7 +64,7 @@ impl PdfCraftApp {
         }
     }
 
-    /// Construct default session, panels, theme and control state with no active property-edit session.
+    /// Construct the default session, panels, theme and control state with ordinary form reminders enabled and no active property-edit session.
     pub fn new() -> Self {
         Self {
             panes: Default::default(),
@@ -76,6 +76,7 @@ impl PdfCraftApp {
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
             view_defaults: Default::default(),
+            show_form_field_reminder: true,
             units: Default::default(),
             blank_paper: crate::paper::Paper::system(),
             date_format_draft: None,
