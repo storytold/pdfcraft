@@ -216,6 +216,27 @@ pub(crate) fn focused_field<'a>(focus: &Focus, form: &'a [FormField]) -> Option<
     focus.obj.and_then(|o| form.iter().find(|f| f.obj == o && f.name == focus.name)).or_else(|| form.iter().find(|f| f.name == focus.name))
 }
 
+/// The page part of the field the focus is on, for the page parts' focus.
+pub(crate) fn focus_owner(forms: &FormView, form: &[FormField]) -> Option<Owner> {
+    let focus = forms.focus.as_ref()?;
+    let field = form.iter().position(|f| f.name == focus.name && focus.obj.is_none_or(|o| o == f.obj))?;
+    Some(Owner::Field { field, widget: focus.widget })
+}
+
+/// Focus arrived on a field's part (Tab, a focus request or a click): the field opens, unless it is open already,
+/// with its whole value selected so typing replaces it, as Tab between fields opens it.
+pub(crate) fn field_focused(session: &mut PageSession, form: &[FormField], owner: &Owner) {
+    let Owner::Field { field, widget } = *owner else { return };
+    let Some(f) = form.get(field) else { return };
+    if session.forms.focus.as_ref().is_some_and(|x| x.is_on(f, widget)) {
+        return;
+    }
+    commit(session, form);
+    let mut opened = open_focus(f, widget);
+    opened.selection = TextSelection::new(0, opened.text.chars().count());
+    session.forms.focus = Some(opened);
+}
+
 /// The edit picking the options at `picked` (positions in `f`'s options) in the list box `f`.
 /// The edit names the field, and positions are read in the first field of that name: a same-name
 /// twin listing its options in another order gives its picks as positions there. One option

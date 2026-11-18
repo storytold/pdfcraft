@@ -1,4 +1,4 @@
-use super::{Arc, DocInfo, DocView, Edit, PageSession, PageText, Pos2, Range, Rect, comments};
+use super::{Arc, DocInfo, DocView, Edit, PageGeometry, PageSession, PageText, Pos2, Range, Rect, comments};
 use crate::QuickTool;
 use craft::behavior::Selection;
 use craft::behavior::kurbo::{self, Point};
@@ -241,6 +241,60 @@ impl PageSession {
         self.marks_waiting = None;
     }
 
+    /// Whether a page the selection covers is still to be read, so a selection is never copied or marked short.
+    fn selection_unread(&self, geo: PageGeometry<'_>) -> bool {
+        self.text.selection.is_some_and(|s| !s.unread_pages(&self.doc_texts(geo.rotation, geo.sizes)).is_empty())
+    }
+
+    /// Whether the selection covers a page whose text could not be read ([`DocView::selection_has_unreadable_page`]).
+    fn selection_has_unreadable_page(&self) -> bool {
+        self.text.selection.is_some_and(|s| s.pages().any(|p| self.text_failed.contains(&p)))
+    }
+
+    /// What a marking tool marks for the text selection, with the pages placed by `geo`
+    /// ([`DocView::tool_marks`]).
+    pub(crate) fn tool_marks(
+        &mut self,
+        tool: QuickTool,
+        finished: bool,
+        page: Option<usize>,
+        whole: bool,
+        info: &DocInfo,
+        geo: PageGeometry<'_>,
+    ) -> ToolMarks {
+        let Some(sel) = self.text.selection else {
+            self.marks_waiting = None;
+            return ToolMarks::None;
+        };
+        if finished {
+            self.marks_waiting = Some((tool, sel));
+        }
+        if !self.marks_waiting.as_ref().is_some_and(|(t, s)| *t == tool && *s == sel) {
+            // The selection or the tool changed: the wait is over, so a drag passing back through
+            // the selection it was for doesn't mark it before it is released.
+            self.marks_waiting = None;
+            return ToolMarks::None;
+        }
+        if whole && self.selection_has_unreadable_page() {
+            self.marks_waiting = None;
+            return ToolMarks::Unreadable;
+        }
+        if self.selection_unread(geo) {
+            return ToolMarks::None;
+        }
+        let marks = self.selection_quads(info, geo.rotation);
+        if marks.is_empty() {
+            // Every page is read and nothing is selected: nothing to wait for.
+            self.marks_waiting = None;
+            return ToolMarks::None;
+        }
+        if page.is_some_and(|page| !marks.iter().any(|(p, _)| *p == page)) {
+            return ToolMarks::None;
+        }
+        self.marks_waiting = None;
+        ToolMarks::Marks(marks, head_page_of(&sel))
+    }
+
     /// The edit adding what a tool marks on a text selection ([`DocView::selection_marks_edit`]).
     pub(crate) fn selection_marks_edit(&mut self, edits: Vec<Edit>, head: usize) -> Option<Edit> {
         let edit = one_undo_step(edits);
@@ -257,7 +311,7 @@ impl DocView {
 
     /// Whether a page the selection covers is still to be read, so a selection is never copied or marked short.
     fn selection_unread(&self) -> bool {
-        self.session.text.selection.is_some_and(|s| !s.unread_pages(&self.doc_texts()).is_empty())
+        self.session.selection_unread(self.geometry())
     }
 
     /// The text selection as markup quadrilaterals in user space, one entry per page with
@@ -277,7 +331,7 @@ impl DocView {
     /// selected, so a redaction of the rest would leave that page's content in place: Redact
     /// refuses such a selection rather than mark it short.
     pub(crate) fn selection_has_unreadable_page(&self) -> bool {
-        self.session.text.selection.is_some_and(|s| s.pages().any(|p| self.session.text_failed.contains(&p)))
+        self.session.selection_has_unreadable_page()
     }
 
     /// What a marking tool (a markup tool, Redact) marks for the text selection a drag, a
@@ -289,37 +343,8 @@ impl DocView {
     /// changed meanwhile. With `whole`, a selection over a page whose text could not be read is
     /// refused instead ([`Self::selection_has_unreadable_page`]).
     pub(crate) fn tool_marks(&mut self, tool: QuickTool, finished: bool, page: Option<usize>, whole: bool, info: &DocInfo) -> ToolMarks {
-        let Some(sel) = self.session.text.selection else {
-            self.session.marks_waiting = None;
-            return ToolMarks::None;
-        };
-        if finished {
-            self.session.marks_waiting = Some((tool, sel));
-        }
-        if !self.session.marks_waiting.as_ref().is_some_and(|(t, s)| *t == tool && *s == sel) {
-            // The selection or the tool changed: the wait is over, so a drag passing back through
-            // the selection it was for doesn't mark it before it is released.
-            self.session.marks_waiting = None;
-            return ToolMarks::None;
-        }
-        if whole && self.selection_has_unreadable_page() {
-            self.session.marks_waiting = None;
-            return ToolMarks::Unreadable;
-        }
-        if self.selection_unread() {
-            return ToolMarks::None;
-        }
-        let marks = self.selection_quads(info);
-        if marks.is_empty() {
-            // Every page is read and nothing is selected: nothing to wait for.
-            self.session.marks_waiting = None;
-            return ToolMarks::None;
-        }
-        if page.is_some_and(|page| !marks.iter().any(|(p, _)| *p == page)) {
-            return ToolMarks::None;
-        }
-        self.session.marks_waiting = None;
-        ToolMarks::Marks(marks, head_page_of(&sel))
+        let geo = PageGeometry { sizes: &self.page_sizes, rotation: self.view.rotation, viewport: self.viewport };
+        self.session.tool_marks(tool, finished, page, whole, info, geo)
     }
 
     /// The edit adding what a tool marks on a text selection, one edit per page, as one undo

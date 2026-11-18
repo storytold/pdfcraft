@@ -12,9 +12,10 @@ use egui::Pos2;
 
 use super::bridge::{self, PageMap};
 use super::state::{Composer, ComposerKind, PageCx};
-use super::{CommentPrefs, CommentTool, CommentView, DocInfo, DocView, Edit, MAX_LINE_WIDTH, QuickTool};
+use super::{CommentPrefs, CommentTool, CommentView, DocInfo, Edit, MAX_LINE_WIDTH, QuickTool};
 use crate::canvas::page_parts::{Owner, PagePress};
 use crate::canvas::page_select::PageSelectTool;
+use crate::canvas::{PageGeometry, PageSession};
 
 /// Copied comments hanging on the pointer, waiting for a click to place them.
 pub(crate) struct PastePlacement {
@@ -388,19 +389,20 @@ fn settled_points(a: &Marked, map: &PageMap<'_>) -> Vec<[f64; 2]> {
 /// After text selection ran: a markup tool turns a finished selection into a comment; Replace Text asks for the
 /// replacement. `finished` is true in the pass the selection's release came (a drag release or a double click); the
 /// call runs on every pass a markup tool is active, since a selection on pages still being read is marked later.
-pub(crate) fn page_after_text(cx: &PageCx<'_>, tool: QuickTool, finished: bool, view: &mut DocView) {
+/// `geo` places the pages of the pass.
+pub(crate) fn page_after_text(cx: &PageCx<'_>, tool: QuickTool, finished: bool, session: &mut PageSession, geo: PageGeometry<'_>) {
     let QuickTool::Comment(tool) = tool else { return };
     if tool == CommentTool::ReplaceText && cx.allowed && finished {
         // A replacement sits on one page: a selection across pages stays selected for the bar's
         // markup or Copy.
-        if let Ok([(page, quads)]) = <[_; 1]>::try_from(view.selection_quads(cx.info))
+        if let Ok([(page, quads)]) = <[_; 1]>::try_from(session.selection_quads(cx.info, geo.rotation))
             && page == cx.page
         {
-            view.clear_selection();
+            session.clear_selection();
             let last = quads.last().copied().unwrap_or_default();
             let at = [last[2].max(last[6]), last[1].max(last[3])];
-            view.session.comments.replace = Some(quads);
-            view.session.comments.composer = Some(Composer { page, at, kind: ComposerKind::Replace, text: String::new(), focus: true });
+            session.comments.replace = Some(quads);
+            session.comments.composer = Some(Composer { page, at, kind: ComposerKind::Replace, text: String::new(), focus: true });
         }
         return;
     }
@@ -408,8 +410,8 @@ pub(crate) fn page_after_text(cx: &PageCx<'_>, tool: QuickTool, finished: bool, 
     // Once, from whichever of the selection's pages is drawn: after an edge scroll its first page
     // may be out of view. Every page it covers gets its own markup, in one undo step, once all
     // of them are read.
-    if let crate::canvas::ToolMarks::Marks(marks, head) = view.tool_marks(QuickTool::Comment(tool), finished, Some(cx.page), false, cx.info) {
-        view.clear_selection();
+    if let crate::canvas::ToolMarks::Marks(marks, head) = session.tool_marks(QuickTool::Comment(tool), finished, Some(cx.page), false, cx.info, geo) {
+        session.clear_selection();
         let edits = marks.into_iter().map(|(page, quads)| {
             Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
                 page,
@@ -419,6 +421,6 @@ pub(crate) fn page_after_text(cx: &PageCx<'_>, tool: QuickTool, finished: bool, 
                 author: cx.prefs.author.clone(),
             })
         });
-        view.session.pending_edit = view.selection_marks_edit(edits.collect(), head);
+        session.pending_edit = session.selection_marks_edit(edits.collect(), head);
     }
 }

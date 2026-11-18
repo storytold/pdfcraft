@@ -12,7 +12,7 @@ use pdfcraft_render::DocInfo;
 use crate::QuickTool;
 use crate::canvas::PageXform;
 use crate::canvas::page_select::PageSelectTool;
-use crate::canvas::{DocView, PageBoxDrag, ToolMarks};
+use crate::canvas::{PageBoxDrag, PageGeometry, PageSession, ToolMarks};
 
 /// The smallest box, in screen points on each side, that counts as a mark.
 const LEAST_BOX: f32 = 3.0;
@@ -32,6 +32,28 @@ pub(crate) enum RedactResult {
     Area { page: usize, quad: [f64; 8] },
     /// A text selection that ended; the selection holds what to mark.
     Text { page: usize },
+}
+
+impl RedactResult {
+    /// Hands the finished gesture to the session as a pending redaction, or as a refusal when a
+    /// selected page's text could not be read; `geo` places the pages of the pass.
+    pub(crate) fn land(self, session: &mut PageSession, info: &DocInfo, geo: PageGeometry<'_>) {
+        match self {
+            Self::Area { page, quad } => {
+                session.pending_redaction = Some((QuickTool::Redact, vec![(page, vec![quad])], page));
+            }
+            // Across pages: a mark on each page it covers, once all are read; refused when one of
+            // them could not be read, rather than leave it unmarked.
+            Self::Text { page } => match session.tool_marks(QuickTool::Redact, true, Some(page), true, info, geo) {
+                ToolMarks::Marks(marks, head) => {
+                    session.clear_selection();
+                    session.pending_redaction = Some((QuickTool::Redact, marks, head));
+                }
+                ToolMarks::Unreadable => session.redaction_refused = true,
+                ToolMarks::None => {}
+            },
+        }
+    }
 }
 
 /// The Redact tool for one pass.
@@ -71,25 +93,10 @@ impl<'a> RedactTool<'a> {
         }
     }
 
-    /// After the host ran: hands a finished gesture to the view as a pending redaction, or as a
-    /// refusal when a selected page's text could not be read.
-    pub(crate) fn finished(self, view: &mut DocView) {
-        match self.finished {
-            Some(RedactResult::Area { page, quad }) => {
-                view.session.pending_redaction = Some((QuickTool::Redact, vec![(page, vec![quad])], page));
-            }
-            // Across pages: a mark on each page it covers, once all are read; refused when one of
-            // them could not be read, rather than leave it unmarked.
-            Some(RedactResult::Text { page }) => match view.tool_marks(QuickTool::Redact, true, Some(page), true, self.info) {
-                ToolMarks::Marks(marks, head) => {
-                    view.clear_selection();
-                    view.session.pending_redaction = Some((QuickTool::Redact, marks, head));
-                }
-                ToolMarks::Unreadable => view.session.redaction_refused = true,
-                ToolMarks::None => {}
-            },
-            None => {}
-        }
+    /// After the host ran: the gesture the pass finished, which [`RedactResult::land`] applies once the tool's
+    /// borrows of the session end.
+    pub(crate) fn finished(self) -> Option<RedactResult> {
+        self.finished
     }
 
     fn placed_at(&self, p: Pos2) -> Option<&'a PlacedPage> {

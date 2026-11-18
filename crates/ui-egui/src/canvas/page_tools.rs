@@ -98,6 +98,8 @@ pub(crate) struct PageToolCx<'a> {
     pub(crate) wake: &'a Wake,
     /// The comment author, written on stamps and Fill & Sign marks.
     pub(crate) author: &'a str,
+    /// The comment preferences: the style and author of the markup a selection becomes.
+    pub(crate) comment_prefs: &'a comments::CommentPrefs,
     /// The date as Fill & Sign's date field writes it, or why it cannot.
     pub(crate) date_text: &'a Result<String, String>,
     /// The Fill & Sign choices.
@@ -161,7 +163,7 @@ pub(crate) struct PageTool<'a> {
     released: bool,
     /// Full screen: the presenter's keys the tool took for it in this pass, applied after the run.
     presenting: bool,
-    presenter_keys: Vec<ToolKey>,
+    presenter_keys: Vec<(ToolKey, bool)>,
 }
 
 /// What the page tool finished in a pass. The fields the page body reads are public; the rest are applied to the
@@ -180,11 +182,14 @@ pub(crate) struct ToolFinish {
     pub(crate) open_signature: Option<bool>,
     /// Fill & Sign refused a click, and why.
     pub(crate) refused: Option<String>,
+    /// Full screen: a page key turned the page, forward when `true`.
+    pub(crate) turn: Option<bool>,
     edit: Option<Edit>,
     camera_page: Option<usize>,
     sign_drawn: Option<(usize, [f64; 4])>,
     redaction: Option<RedactResult>,
-    presenter_keys: Vec<ToolKey>,
+    /// The presenter's keys of the pass, each with whether Shift was held.
+    presenter_keys: Vec<(ToolKey, bool)>,
     /// The quick tool, when it selects text.
     text_tool: Option<QuickTool>,
     text_finished: bool,
@@ -392,7 +397,7 @@ impl<'a> PageTool<'a> {
                 finish.edit = tool.placed();
                 finish.back_to_select = finish.edit.is_some();
             }
-            Arm::Redact(mut tool) => finish.redaction = tool.finished(),
+            Arm::Redact(tool) => finish.redaction = tool.finished(),
             Arm::SignArea(mut tool) => finish.sign_drawn = tool.finished(),
             Arm::Snapshot(mut tool) => finish.snapshot = tool.take_result(),
             Arm::Crop(mut tool) => {
@@ -426,34 +431,29 @@ impl ToolFinish {
         if let Some(drawn) = self.sign_drawn.take() {
             session.sign.drawn = Some(drawn);
         }
-        match self.redaction.take() {
-            Some(RedactResult::Marks(marks, page)) => session.pending_redaction = Some((QuickTool::Redact, marks, page)),
-            Some(RedactResult::Refused) => session.redaction_refused = true,
-            None => {}
+        if let Some(redaction) = self.redaction.take() {
+            redaction.land(session, cx.info, cx.geometry());
         }
         match fill {
             Some(FillOutcome::Edit(edit)) => session.pending_edit = Some(*edit),
-            // PLAN: forms-w5's `FillOutcome::Signature(Box<Edit>)` carries no page, which `fill_signature_page` needs
-            // (production set the clicked page); assumed `Signature(Box<Edit>, usize)`.
-            Some(FillOutcome::Signature(edit, page)) => {
+            Some(FillOutcome::Signature(edit)) => {
                 session.pending_edit = Some(*edit);
-                session.fill_signature_page = Some(page);
+                session.fill_signature = true;
             }
             Some(FillOutcome::CreateSignature) => self.open_signature = Some(false),
             Some(FillOutcome::CreateInitials) => self.open_signature = Some(true),
             Some(FillOutcome::Refused(why)) => self.refused = Some(why),
             None => {}
         }
-        for key in self.presenter_keys.drain(..) {
-            // PLAN: assumed `Presenter::key(&mut self, &ToolKey)` (pdf-canvas-w18 names the keys it takes).
-            session.presenter.key(&key);
-        }
+        // The first page key of the pass turns the page; the rest wait for the next pass's keys.
+        self.turn = self.presenter_keys.drain(..).find_map(|(key, shift)| session.presenter.key(&key, shift));
         if let Some(tool @ QuickTool::Comment(_)) = self.text_tool {
+            let geo = cx.geometry();
+            let hidden = cx.doc.comments_hidden();
             for placed in cx.pages {
-                // PLAN: assumed `comments::PageCx::of(page, info)` for the per-page cx of `page_after_text` (pdf-comments-w8
-                // decided `page_after_text(cx: &PageCx, tool, finished, view)` and pdf-comments-w7 rewrites `PageCx`).
-                let page_cx = comments::PageCx::of(placed.page, cx.info);
-                comments::page_after_text(&page_cx, tool, self.text_finished, session);
+                let xf = geo.xform_of(placed);
+                let page_cx = comments::PageCx { page: placed.page, xf: &xf, info: cx.info, prefs: cx.comment_prefs, allowed: cx.allowed, hidden };
+                comments::page_after_text(&page_cx, tool, self.text_finished, session, geo);
             }
         }
     }
@@ -536,7 +536,7 @@ impl CanvasTool for PageTool<'_> {
                 _ => false,
             }
         {
-            self.presenter_keys.push(key.clone());
+            self.presenter_keys.push((key.clone(), cx.mods.shift));
             return true;
         }
         self.tool_mut().key(key, cx)
