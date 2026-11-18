@@ -4,7 +4,7 @@
 use egui::Pos2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp, SaveTarget};
+use pdfcraft_ui_egui::{PdfCraftApp, SaveTarget};
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
@@ -65,7 +65,7 @@ fn marking_applying_and_clearing() {
     // Redact all asks first; Apply removes the marks (and the page's fields under them).
     h.get_by_label("Redact all").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, Some(Dialog::RedactApply));
+    h.get_by_label("Apply");
     h.get_by_label("Apply").click();
     h.run_steps(4);
     let s = h.state();
@@ -475,7 +475,6 @@ fn reverting_after_apply_redactions_saves_in_place_again() {
     assert_eq!(h.state().views[0].redactions_applied, 1);
     assert!(h.state_mut().execute("file.revert"));
     h.run_steps(2);
-    assert_eq!(h.state().dialog, Some(Dialog::Revert));
     h.get_all_by_label("Revert").last().expect("the button").click();
     h.run_steps(3);
     assert_eq!(h.state().views[0].redactions_applied, 0);
@@ -493,7 +492,10 @@ fn redaction_codes_become_the_overlay_text() {
     h.get_by_label("Redaction Tool Properties");
     h.get_by_label("Use overlay text").click();
     h.run_steps(2);
-    h.state_mut().redact_prefs.overlay = "CONFIDENTIAL".into();
+    h.get_by_label("Custom text").click();
+    h.run_steps(1);
+    h.get_by_label("Custom text").type_text("CONFIDENTIAL");
+    h.run_steps(2);
     h.get_by_label("Redaction code:").click();
     h.run_steps(2);
     h.get_by_label("(b)(7)(C)").click();
@@ -561,12 +563,14 @@ fn redaction_properties_survive_a_restart() {
     // dropped, the rest kept.
     let mut odd = PdfCraftApp::new();
     odd.restore(
-        r#"{"redact_prefs":{"outline":[2,0,0],"opacity":0.7,"code_set":"nope","codes":["(b)(6)","bogus"],"use_overlay":true,"use_code":true}}"#,
+        r#"{"redact_prefs":{"outline":[2,0,0],"opacity":0.7,"code_set":"nope","codes":["(b)(6)","bogus"],"use_overlay":true,"use_code":true,"size":500,"align":3}}"#,
     );
     let p = &odd.redact_prefs;
     assert_eq!((p.outline, p.opacity), ([0.89, 0.13, 0.13], 0.7));
     assert_eq!(p.code_set.id, pdfcraft_engine::REDACTION_CODE_SETS[0].id);
     assert_eq!(p.overlay_text(), "(b)(6)");
+    let look = pdfcraft_engine::OverlayLook::default();
+    assert_eq!((p.look.size, p.look.align), (look.size, look.align), "an out-of-range size and alignment keep the defaults");
 }
 
 /// "Make properties default" off: OK keeps the values for this run only, the saved defaults
@@ -582,8 +586,8 @@ fn redaction_properties_for_this_run_only_and_cancel() {
     h.get_by_label("Opacity:");
     h.get_by_label("Make properties default").click();
     h.run_steps(3);
-    assert!(!h.state().redact_prefs.remember);
-    h.state_mut().redact_prefs.outline = [0.0, 0.0, 1.0];
+    assert!(!h.state().redact_props.as_ref().unwrap().remember);
+    h.state_mut().redact_props.as_mut().unwrap().outline = [0.0, 0.0, 1.0];
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().redact_prefs.outline, [0.0, 0.0, 1.0], "used for this run");
@@ -594,7 +598,7 @@ fn redaction_properties_for_this_run_only_and_cancel() {
     // Cancel discards the edits made while the dialog was open.
     assert!(h.state_mut().execute("redact.properties"));
     h.run_steps(2);
-    h.state_mut().redact_prefs.opacity = 0.2;
+    h.state_mut().redact_props.as_mut().unwrap().opacity = 0.2;
     h.get_by_label("Cancel").click();
     h.run_steps(2);
     assert_eq!(h.state().redact_prefs.opacity, 1.0, "cancelled");
@@ -657,7 +661,7 @@ fn removing_hidden_information_and_sanitizing() {
     h.run_steps(2);
     h.get_by_label("Remove hidden information");
     {
-        let d = &h.state().hidden_draft;
+        let d = h.state().hidden_draft.as_ref().unwrap();
         let fields = d.found.iter().find(|f| f.0 == pdfcraft_engine::Hidden::FormFields).unwrap();
         assert_eq!((fields.1, fields.2), (5, true), "five fields, checked");
     }
