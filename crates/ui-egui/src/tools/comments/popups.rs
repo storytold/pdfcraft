@@ -82,7 +82,6 @@ fn flatten<'a>(nodes: &[(&'a Annotation, Vec<usize>)], at: usize, depth: usize, 
     }
 }
 
-
 /// One message of a window, owned until the window is built.
 struct Owned {
     key: (usize, usize),
@@ -120,7 +119,12 @@ fn messages(
     let mut holder = info
         .annotations
         .iter()
-        .find(|r| r.grouped && r.parent == Some(key) && a.contents.as_deref().unwrap_or("").is_empty() && r.contents.as_deref().is_some_and(|c| !c.is_empty()))
+        .find(|r| {
+            r.grouped
+                && r.parent == Some(key)
+                && a.contents.as_deref().unwrap_or("").is_empty()
+                && r.contents.as_deref().is_some_and(|c| !c.is_empty())
+        })
         .cloned()
         .unwrap_or_else(|| a.clone());
     holder.locked |= a.locked;
@@ -214,11 +218,12 @@ pub(crate) fn note_popups(
             let selected = view.comments.is_selected((page, a.index));
             // PLAN: A-2 `popup_drafts: HashMap<(usize, usize), NoteDrafts>`, one per open window (lead ruling, review 1).
             let drafts: &mut NoteDrafts = view.comments.popup_drafts.entry((page, a.index)).or_default();
-            let mut window = NotePopup::new(super::bridge::id_of(page, a.index).0, owned.first().map_or("", |m| m.title.as_str()), rect, &msgs, drafts)
-                .color(color)
-                .selected(selected)
-                .now(now)
-                .allowed(allowed);
+            let mut window =
+                NotePopup::new(super::bridge::id_of(page, a.index).0, owned.first().map_or("", |m| m.title.as_str()), rect, &msgs, drafts)
+                    .color(color)
+                    .selected(selected)
+                    .now(now)
+                    .allowed(allowed);
             if let Some(mark) = mark {
                 window = window.anchor(mark, hovered == Some((page, a.index)));
             }

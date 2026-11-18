@@ -6,10 +6,10 @@ use craft::behavior::{CursorIcon, EditEvent, HitShape, IconId, PointerButton};
 use craft::draw::ui::transform::{RotateZone, TransformBox};
 use craft::imaging::ui::transform_preview::{PreviewMap, PreviewPixels, PreviewTextures, TransformPreview};
 use craft::pages::ui::{PageBody, PlacedPage};
-use craft::ui::canvas::crop::{CropOutside, CropOverlay};
+use craft::ui::buttons::Button;
+use craft::ui::canvas::{CropOutside, CropOverlay};
 use craft::ui::canvas_controls::{SelectionOutline, TaskBar};
 use craft::ui::contract::{Bind, Props as _, Show as _};
-use craft::ui::buttons::Button;
 use craft::ui::display::Divider;
 use craft::ui::menu::{Menu, MenuIcon, MenuIconRow, MenuItem};
 
@@ -151,7 +151,12 @@ fn least_side(ui: &egui::Ui, placed: &PlacedPage) -> f64 {
 fn bounds_of(q: &[Point; 4]) -> DocRect {
     let xs = q.iter().map(|p| p.x);
     let ys = q.iter().map(|p| p.y);
-    DocRect::new(xs.clone().fold(f64::INFINITY, f64::min), ys.clone().fold(f64::INFINITY, f64::min), xs.fold(f64::NEG_INFINITY, f64::max), ys.fold(f64::NEG_INFINITY, f64::max))
+    DocRect::new(
+        xs.clone().fold(f64::INFINITY, f64::min),
+        ys.clone().fold(f64::INFINITY, f64::min),
+        xs.fold(f64::NEG_INFINITY, f64::max),
+        ys.fold(f64::NEG_INFINITY, f64::max),
+    )
 }
 
 fn corners_of(r: DocRect) -> [Point; 4] {
@@ -211,7 +216,13 @@ fn path_of(q: &[Point; 4]) -> BezPath {
 
 /// The controls of the selected picture on every page shown, and the faint outlines of the
 /// pictures beside it. The edit a gesture commits comes back for the caller to queue.
-pub(crate) fn picture_controls(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, doc: &pdfcraft_engine::Document, info: &DocInfo) -> Option<Edit> {
+pub(crate) fn picture_controls(
+    ui: &mut egui::Ui,
+    body: &PageBody<'_>,
+    view: &mut DocView,
+    doc: &pdfcraft_engine::Document,
+    info: &DocInfo,
+) -> Option<Edit> {
     let mut edit = None;
     for placed in body.pages {
         let Some(xf) = view.page_xform(placed.page) else { continue };
@@ -391,7 +402,13 @@ fn picture_edit(
     Some(Edit::EditPageImage { page, index, change })
 }
 
-fn picture_change(matrix: [f64; 6], rect: [f64; 4], start: [Point; 4], end: [Point; 4], to_user: &dyn Fn(Point) -> (f64, f64)) -> Option<pdfcraft_engine::ImageEdit> {
+fn picture_change(
+    matrix: [f64; 6],
+    rect: [f64; 4],
+    start: [Point; 4],
+    end: [Point; 4],
+    to_user: &dyn Fn(Point) -> (f64, f64),
+) -> Option<pdfcraft_engine::ImageEdit> {
     use pdfcraft_engine::ImageEdit as E;
     let (s, e) = (start.map(to_user), end.map(to_user));
     if s.iter().chain(&e).any(|p| !p.0.is_finite() || !p.1.is_finite()) {
@@ -695,8 +712,14 @@ mod screen_orientation_tests {
         assert!(matches!(change(moved), Some(E::Move(r)) if r == [15.0, 77.0, 35.0, 87.0]), "a translation is a move");
         assert!(change(start).is_none(), "no movement is no edit");
         assert!(change(quad((10.0, 10.0), 20.0, 10.0, 0.01)).is_none(), "a turn under 0.05 degrees is none");
-        assert!(matches!(change(quad((10.0, 10.0), 20.0, 10.0, 30.0)), Some(E::RotateBy(d)) if (d - 30.0).abs() < 1e-6), "a clockwise turn is positive");
-        assert!(matches!(change(quad((10.0, 10.0), 40.0, 20.0, 0.0)), Some(E::Move(r)) if r == [10.0, 70.0, 50.0, 90.0]), "an upright resize is a move");
+        assert!(
+            matches!(change(quad((10.0, 10.0), 20.0, 10.0, 30.0)), Some(E::RotateBy(d)) if (d - 30.0).abs() < 1e-6),
+            "a clockwise turn is positive"
+        );
+        assert!(
+            matches!(change(quad((10.0, 10.0), 40.0, 20.0, 0.0)), Some(E::Move(r)) if r == [10.0, 70.0, 50.0, 90.0]),
+            "an upright resize is a move"
+        );
 
         let turned = quad((10.0, 10.0), 20.0, 10.0, 30.0);
         let tm = frame(turned);

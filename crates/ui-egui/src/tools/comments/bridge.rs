@@ -15,7 +15,9 @@ use craft::review::{Annotation as Marked, AnnotationEdit, AnnotationId, Annotati
 use super::geometry::{CARET_SIZE, clamp_to, frame, is_callout, on_text, reshapable, resizable};
 use super::popups::has_popup;
 use super::state::{CommentView, Composer, ComposerKind, PageCx};
-use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, LineEnding, NewAnnotation, PageInfo, QuickTool, Shape, tool_for};
+use super::{
+    Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, LineEnding, NewAnnotation, PageInfo, QuickTool, Shape, tool_for, tool_for_default,
+};
 // PLAN: assumed `PagePart::new(owner, page, shape: Vec<egui::Rect>, layer)` with `.passes_drag()`, `.tip(String)` and
 // `.cursor(CursorIcon)`, and `Owner::Comment { index }` (pdf-canvas-w9, `canvas/page_parts.rs`).
 use crate::canvas::page_parts::{Owner, PageLayer, PagePart};
@@ -332,7 +334,8 @@ pub(crate) fn parts(
     let markers = marker_boxes(info, &anns, icon_side);
     let Some(id) = pick_at(&anns, at, tolerance, icon_side, &markers) else { return Vec::new() };
     let Some(found) = anns.iter().find(|a| a.id == id) else { return Vec::new() };
-    let mut shapes: Vec<Rect> = if found.kind.is_markup() { found.points.chunks(4).filter_map(bounds).collect() } else { vec![found.extent(icon_side)] };
+    let mut shapes: Vec<Rect> =
+        if found.kind.is_markup() { found.points.chunks(4).filter_map(bounds).collect() } else { vec![found.extent(icon_side)] };
     shapes.extend(markers.iter().filter(|(m, _)| *m == id).map(|(_, r)| *r));
     let screen_shapes: Vec<egui::Rect> = shapes
         .iter()
