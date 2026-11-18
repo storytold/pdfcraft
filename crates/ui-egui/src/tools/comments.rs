@@ -20,7 +20,6 @@ use craft::review::ui::annotate::{AnnotateCommand, AnnotateIcons};
 use craft::review::{AnnotationKind, AnnotationTool};
 
 use crate::canvas::{DocView, PageXform};
-use crate::theme::{self, Tokens};
 use crate::{QuickTool, icons};
 
 mod bridge;
@@ -33,32 +32,29 @@ mod popups;
 mod state;
 mod tool;
 
+#[cfg(test)]
+use bridge::hover_tip;
 pub(crate) use bridge::{
     PageMap, annotations, delete_selected, edit, edit_anchor, id_of, key_of, kind_of, markers, parts, pdf_date_seconds, rgb8, screen_to_user_rect,
     thread_id, thread_key, tips, tips_shown,
 };
-#[cfg(test)]
-use bridge::hover_tip;
-// PLAN: assumed colours exports (pdf-comments-w10): the colour pickers and buttons that `menu` exported before.
-pub use colours::{fill_picker, recent_custom_colours, remember_custom_colour, status_badge, swatch_grid};
 pub(crate) use colours::{RecentColours, border_choice, fill_choice, palette, to_rgb};
-pub(crate) use colours::{border_colour_button, quick_bar_colour};
 pub(crate) use composer::composer;
 #[cfg(test)]
 use composer::edited_in_view;
+pub(crate) use geometry::page_rotation;
 #[cfg(test)]
 pub(crate) use geometry::{caret_snap, snapped_caret};
-pub(crate) use geometry::page_rotation;
 pub use geometry::{drawn_text_box_rect, snug_text_box_rect, text_box_rect};
 pub use menu::CanvasAction;
 pub(crate) use menu::{CommentMenuCx, MenuRights, QuickBarPick, attachment_items, context_rows, quick_bar_controls};
 pub(crate) use overlay::show;
 pub(crate) use popups::note_popups;
+pub(crate) use state::PageCx;
 #[cfg(test)]
 use state::after_delete;
 use state::login_name;
 pub use state::{CommentView, Composer, ComposerKind};
-pub(crate) use state::PageCx;
 pub(crate) use tool::{CommentsTool, PastePlacement, context_target, page_after_text, part_pressed};
 
 /// Maximum stroke thickness offered by commenting controls, in PDF points.

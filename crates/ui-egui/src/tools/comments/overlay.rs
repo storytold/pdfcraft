@@ -35,7 +35,15 @@ pub(crate) struct Hover<'a, 'b> {
 /// Paints the page's comments: the annotation overlay over the pages `body` places, the outline of the comment a
 /// press under the pointer would take, and a redaction mark's fill while the pointer is over it, as Acrobat's does,
 /// so the marked area reads before anything is applied.
-pub(crate) fn show(ui: &mut egui::Ui, body: &PageBody<'_>, view: &DocView, info: &DocInfo, prefs: &CommentPrefs, tool: QuickTool, hover: Hover<'_, '_>) {
+pub(crate) fn show(
+    ui: &mut egui::Ui,
+    body: &PageBody<'_>,
+    view: &DocView,
+    info: &DocInfo,
+    prefs: &CommentPrefs,
+    tool: QuickTool,
+    hover: Hover<'_, '_>,
+) {
     let map = PageMap::new(body.pages, info);
     let all = bridge::annotations(info, &map, QuickTool::Select, hover.allowed);
     let reached = bridge::annotations(info, &map, tool, hover.allowed);
@@ -191,7 +199,11 @@ fn rect_corners(r: Rect) -> Vec<Pos2> {
 /// comment's colour, or `fallback` when it has none.
 fn paint_outline(draw: &Draw<'_>, outline: &O, at: &dyn Fn([f64; 2]) -> Pos2, fallback: StyleColor) {
     let width = StrokeWidth::Medium;
-    let own = |c: &Option<[f64; 3]>| c.map(|[r, g, b]| DataColor::new(Color32::from_rgb((r.clamp(0.0, 1.0) * 255.0) as u8, (g.clamp(0.0, 1.0) * 255.0) as u8, (b.clamp(0.0, 1.0) * 255.0) as u8)));
+    let own = |c: &Option<[f64; 3]>| {
+        c.map(|[r, g, b]| {
+            DataColor::new(Color32::from_rgb((r.clamp(0.0, 1.0) * 255.0) as u8, (g.clamp(0.0, 1.0) * 255.0) as u8, (b.clamp(0.0, 1.0) * 255.0) as u8))
+        })
+    };
     let stroke = |shape: PaintShape, c: &Option<[f64; 3]>| match own(c) {
         Some(color) => draw.stroke(&shape, width, color),
         None => draw.stroke(&shape, width, fallback),
@@ -201,7 +213,8 @@ fn paint_outline(draw: &Draw<'_>, outline: &O, at: &dyn Fn([f64; 2]) -> Pos2, fa
             let r = Rect::from_two_pos(at([rect[0], rect[1]]), at([rect[2], rect[3]]));
             if *round {
                 let (c, rx, ry) = (r.center(), r.width() / 2.0, r.height() / 2.0);
-                let points = (0..48).map(|i| i as f32 / 48.0 * std::f32::consts::TAU).map(|t| Pos2::new(c.x + rx * t.cos(), c.y + ry * t.sin())).collect();
+                let points =
+                    (0..48).map(|i| i as f32 / 48.0 * std::f32::consts::TAU).map(|t| Pos2::new(c.x + rx * t.cos(), c.y + ry * t.sin())).collect();
                 stroke(PaintShape::Polygon(points), color);
             } else {
                 stroke(PaintShape::Polygon(rect_corners(r)), color);

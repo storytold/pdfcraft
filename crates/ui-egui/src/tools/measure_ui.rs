@@ -15,11 +15,7 @@ use craft::ui::{
     list::{List, ListRow},
     notices::Notice,
     pickers::{ComboBox, UnitSelect},
-    primitives::{
-        Draw, TextRun,
-        draw::{PaintShape, StrokeWidth},
-        glyph,
-    },
+    primitives::{Draw, PaintShape, StrokeWidth, TextRun, glyph},
     runtime::env::UnitKind,
     text::{NumberField, TextField},
 };
@@ -338,9 +334,8 @@ impl<'a> MeasureTool<'a> {
             view.cancel();
             view.tool = Some(tool);
         }
-        view.reads.get_or_insert_with(|| {
-            JobQueue::new(host.jobs_shared().clone(), wake, QueueOptions { name: "measure-snap", ..QueueOptions::default() })
-        });
+        view.reads
+            .get_or_insert_with(|| JobQueue::new(host.jobs_shared().clone(), wake, QueueOptions { name: "measure-snap", ..QueueOptions::default() }));
         Self { view, doc, pages, info, tool, units, author: author.into(), hover: None, edit: None }
     }
 
@@ -605,11 +600,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         _ => None,
     };
     let mut tool = None;
-    let tools = [
-        Entry::new(Tool::Distance, tl!("Distance")),
-        Entry::new(Tool::Perimeter, tl!("Perimeter")),
-        Entry::new(Tool::Area, tl!("Area")),
-    ];
+    let tools = [Entry::new(Tool::Distance, tl!("Distance")), Entry::new(Tool::Perimeter, tl!("Perimeter")), Entry::new(Tool::Area, tl!("Area"))];
     let picked = Segmented::new(tl!("Measure"), Bind::given(current.unwrap_or(Tool::Distance)), &tools).show(ui);
     if let Some(t) = picked.value().copied()
         && Some(t) != current
@@ -644,10 +635,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .lines([tl!("Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.")])
         .show(ui);
     if let Some(reading) = &state.reading {
-        let mut lines = vec![
-            format!("X: {:.3}   Y: {:.3}", reading.delta_x, reading.delta_y),
-            format!("{}: {:.2}°", tl!("Angle"), reading.angle),
-        ];
+        let mut lines = vec![format!("X: {:.3}   Y: {:.3}", reading.delta_x, reading.delta_y), format!("{}: {:.2}°", tl!("Angle"), reading.angle)];
         if let Some(scale) = &state.scale {
             lines.push(scale.ratio.clone());
         }
@@ -727,23 +715,18 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     match state.listing.as_ref().map(|(_, l)| l) {
         None => {}
         Some(Ok(listing)) => {
-            Notice::new(
-                Tone::Neutral,
-                crate::i18n::fmt(tl!("Saved measurements: {n}"), &[("n", &listing.measurements.len().to_string())]),
-            )
-            .show(ui);
+            Notice::new(Tone::Neutral, crate::i18n::fmt(tl!("Saved measurements: {n}"), &[("n", &listing.measurements.len().to_string())])).show(ui);
             if !listing.unsupported.is_empty() {
                 let reasons: Vec<String> = listing
                     .unsupported
                     .iter()
-                    .map(|u| crate::i18n::fmt(tl!("Page {page}: {reason}"), &[("page", &u.page.saturating_add(1).to_string()), ("reason", &u.reason)]))
+                    .map(|u| {
+                        crate::i18n::fmt(tl!("Page {page}: {reason}"), &[("page", &u.page.saturating_add(1).to_string()), ("reason", &u.reason)])
+                    })
                     .collect();
-                Notice::new(
-                    Tone::Warn,
-                    crate::i18n::fmt(tl!("Unsupported measurements: {n}"), &[("n", &listing.unsupported.len().to_string())]),
-                )
-                .lines(reasons)
-                .show(ui);
+                Notice::new(Tone::Warn, crate::i18n::fmt(tl!("Unsupported measurements: {n}"), &[("n", &listing.unsupported.len().to_string())]))
+                    .lines(reasons)
+                    .show(ui);
             }
             if !listing.measurements.is_empty() {
                 let source = MeasurementRows(listing.measurements.len());
@@ -870,7 +853,9 @@ fn export_csv(app: &mut PdfCraftApp) {
                 let Some(path) = picked.first_path() else { return };
                 // A browser answers with a name, not a path to write: the files service hands the bytes over as a download.
                 let written = match picked {
-                    Picked::Paths(_) => craft::atomic::atomic_write(&path, csv.as_bytes()).map(|()| tl!("Saved measurements.")).map_err(|e| e.to_string()),
+                    Picked::Paths(_) => {
+                        craft::atomic::atomic_write(&path, csv.as_bytes()).map(|()| tl!("Saved measurements.")).map_err(|e| e.to_string())
+                    }
                     _ => app
                         .host
                         .files()

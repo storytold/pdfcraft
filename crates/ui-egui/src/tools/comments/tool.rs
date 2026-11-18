@@ -13,8 +13,8 @@ use egui::Pos2;
 use super::bridge::{self, PageMap};
 use super::state::{Composer, ComposerKind, PageCx};
 use super::{CommentPrefs, CommentTool, CommentView, DocInfo, DocView, Edit, MAX_LINE_WIDTH, QuickTool};
-use crate::canvas::PageSelectTool;
 use crate::canvas::page_parts::{Owner, PagePress};
+use crate::canvas::page_select::PageSelectTool;
 
 /// Copied comments hanging on the pointer, waiting for a click to place them.
 pub(crate) struct PastePlacement {
@@ -117,7 +117,7 @@ impl<'a> CommentsTool<'a> {
             let a = info.user_to_view((paste.bounds[0] + offset[0]) as f32, (paste.bounds[1] + offset[1]) as f32);
             let b = info.user_to_view((paste.bounds[2] + offset[0]) as f32, (paste.bounds[3] + offset[1]) as f32);
             let (w, h) = ((a[0] - b[0]).abs(), (a[1] - b[1]).abs());
-            if w > info.width + 1.0 || h > info.height + 1.0
+            if (w > info.width + 1.0 || h > info.height + 1.0)
                 && let Some(notice) = self.notice.as_deref_mut()
             {
                 *notice = Some("The copied comments are larger than this page; they were placed as they are");

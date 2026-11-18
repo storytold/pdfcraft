@@ -15,7 +15,7 @@ use craft::draw::ui::TransformBox;
 use craft::pages::ui::{PageBody, PlacedPage};
 use craft::platform::clipboard::{BITMAP, ClipboardImage, TEXT};
 use craft::text::ui::editor::{CaretLine, EditKind, EditorEnd, HostLine, HostRun, TextEditor, TextEditorHost, TextSelection};
-use craft::theme::Tone;
+use craft::theme::variant::Tone;
 use craft::ui::buttons::IconButton;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft::ui::canvas_controls::{HoverOutline, HoverShape, TaskBar};
@@ -153,10 +153,7 @@ impl PageFrame {
     }
 
     fn screen(&self, display: [f64; 2]) -> Pos2 {
-        Pos2::new(
-            self.origin.x + (display[0] * self.scale) as f32,
-            self.origin.y + ((self.height - display[1]) * self.scale) as f32,
-        )
+        Pos2::new(self.origin.x + (display[0] * self.scale) as f32, self.origin.y + ((self.height - display[1]) * self.scale) as f32)
     }
 
     fn screen_rect(&self, r: [f64; 4]) -> Rect {
@@ -689,7 +686,13 @@ pub(crate) fn after_refresh(view: &mut DocView, added: &[Added]) {
 /// pass that shows them, and the preview they leave is held fact, never replayed. `hovered` is the
 /// (page, item) of the added-text part under the pointer, as the page body reads it from the parts.
 // PLAN: assumed the page body passes `PageParts::hovered`'s `Owner::Added { index }` with its page (pdf-canvas-w9).
-pub(crate) fn content_controls(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, doc: &Document, hovered: Option<(usize, usize)>) -> Option<Edit> {
+pub(crate) fn content_controls(
+    ui: &mut egui::Ui,
+    body: &PageBody<'_>,
+    view: &mut DocView,
+    doc: &Document,
+    hovered: Option<(usize, usize)>,
+) -> Option<Edit> {
     if view.content.draft.is_none() {
         view.content.drawn = None;
     }
@@ -718,7 +721,14 @@ fn display_rect(view: &craft::behavior::CanvasView, frame: &PageFrame, state: &B
 }
 
 /// The selected text's frame and the hover outline on one page.
-fn item_controls(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, doc: &Document, frame: &PageFrame, hovered: Option<usize>) -> Option<Edit> {
+fn item_controls(
+    ui: &mut egui::Ui,
+    body: &PageBody<'_>,
+    view: &mut DocView,
+    doc: &Document,
+    frame: &PageFrame,
+    hovered: Option<usize>,
+) -> Option<Edit> {
     let page = frame.page;
     let items = on_page(doc.added(), page);
     let draft = view.content.draft.as_ref().filter(|d| d.page == page).and_then(|d| d.index);
@@ -855,7 +865,7 @@ impl TextEditorHost for AddedTextHost<'_> {
         &self.draft.text
     }
 
-    fn replace(&mut self, range: Range<usize>, text: &str, kind: EditKind) -> bool {
+    fn replace(&mut self, range: Range<usize>, text: &str, kind: EditKind) -> Option<usize> {
         let before = self.draft.text.clone();
         let start = byte_at(&before, range.start);
         let end = byte_at(&before, range.end).max(start);
@@ -867,7 +877,7 @@ impl TextEditorHost for AddedTextHost<'_> {
         self.draft.selection = Some(TextSelection::caret_at(range.start + text.chars().count()));
         let now = self.draft.typed();
         self.draft.history.record(kind, now);
-        true
+        Some(text.chars().count())
     }
 
     fn hit(&mut self, at: Point) -> (usize, usize) {
@@ -1731,7 +1741,7 @@ mod tests {
     fn review_cut_checks_modify_permission_before_writing_the_clipboard() {
         let mut app = crate::PdfCraftApp::for_unit_tests();
         app.create_blank();
-        let png =crate::create_ui::png_from_rgba(1, 1, &[255, 0, 0, 255]).unwrap();
+        let png = crate::create_ui::png_from_rgba(1, 1, &[255, 0, 0, 255]).unwrap();
         app.add_image("test.png".into(), png);
         app.apply_edit(Edit::Protect(pdfcraft_engine::Protection {
             permissions_password: Some("owner".into()),
@@ -1771,7 +1781,7 @@ mod tests {
             move |ui, out: &mut Option<pdfcraft_engine::AddedImage>| {
                 // The app's fonts (the semibold section title) take effect from the next frame.
                 if !fonts {
-                    ui.ctx().set_fonts(crate::theme::font_definitions());
+                    crate::fonts::ui_fonts(crate::i18n::Lang::EN).install(ui.ctx());
                     fonts = true;
                     return;
                 }
