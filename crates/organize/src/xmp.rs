@@ -14,7 +14,8 @@
 //! The packet is edited as text, touching only the property that changed: everything else in it
 //! (other schemas, padding, unknown properties) stays byte for byte. A file without XMP gets
 //! none, and a packet this can't edit safely (not UTF-8, no `rdf:RDF`, too large to decode) is
-//! left as it was.
+//! left as it was, unless Title or Author changes: then it would go on showing the old value, so
+//! it is dropped (see [`would_go_stale`]).
 
 use std::cell::RefCell;
 use std::sync::{Arc, Weak};
@@ -88,6 +89,35 @@ pub(crate) fn sync_info(doc: &mut Document, key: &str, value: &str) -> Result<()
     .map(|_| ())
 }
 
+/// Whether setting the information entry `key` to `value` would leave the catalog's XMP packet
+/// stating the old value, so it must go ([`drop_packet`]): Title or Author changes, and
+/// [`sync_info`] can't keep the packet right. It leaves a packet it can't read (not UTF-8, a
+/// filter it can't decode, past [`MAX_XMP`]) or with no `rdf:RDF` as it was, and adds the new
+/// `dc:` property beside the old one where the packet declares Dublin Core under another prefix.
+/// Asked before the change, while the old value can still be read.
+///
+/// Only Title and Author: they are what viewers that read XMP first show in their title bar and
+/// file lists, and dropping the packet also drops everything else it states.
+pub(crate) fn would_go_stale(doc: &Document, key: &str, value: &str) -> bool {
+    if !matches!(key, "Title" | "Author") || crate::info(doc, key).unwrap_or_default().trim() == value {
+        return false;
+    }
+    let Some(r) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|c| c.reference(b"Metadata"))) else { return false };
+    let obj = doc.get(r);
+    // Only a metadata stream is a packet; anything else there is left alone, as `edit_packet` does.
+    matches!(&*obj, Object::Stream(_))
+        && decoded_packet(&obj).is_none_or(|xmp| !xmp.contains("</rdf:RDF>") || binds_namespace_elsewhere(&xmp, DC, "dc"))
+}
+
+/// Remove the catalog's XMP packet (see [`would_go_stale`]); `/Info` holds the values.
+pub(crate) fn drop_packet(doc: &mut Document) -> Result<(), OrganizeError> {
+    let Some(root) = doc.root() else { return Ok(()) };
+    doc.update_dict(root, |c| {
+        c.remove(b"Metadata");
+    })?;
+    Ok(())
+}
+
 /// Remove the `pdfx:` copies of the custom properties `keys` (see [`sync_info`]), unless the packet
 /// binds `pdfx` to another namespace, whose properties are its own; whether any was there.
 pub(crate) fn remove_custom_properties(doc: &mut Document, keys: &[&str]) -> Result<bool, OrganizeError> {
@@ -114,6 +144,23 @@ fn binds_prefix_elsewhere(xmp: &str, prefix: &str, ns: &str) -> bool {
         };
         let Some(quote) = rest.chars().next().filter(|c| matches!(c, '"' | '\'')) else { return false };
         rest.get(1..).and_then(|v| v.get(..v.find(quote)?)).is_none_or(|value| value != ns)
+    })
+}
+
+/// Whether `xmp` declares the namespace `ns` anywhere with a prefix other than `prefix`, or as the
+/// default namespace, so a property written as `prefix:name` would not replace the one there.
+fn binds_namespace_elsewhere(xmp: &str, ns: &str, prefix: &str) -> bool {
+    // The attribute name is read back from each quoted value only to the first character a name
+    // can't hold, and a quote ends every earlier value, so this is linear in the packet.
+    xmp.match_indices(ns).any(|(i, _)| {
+        let Some(before) = xmp.get(..i) else { return false };
+        let Some(quote) = before.chars().next_back().filter(|c| matches!(c, '"' | '\'')) else { return false };
+        if !xmp.get(i..).and_then(|rest| rest.strip_prefix(ns)).is_some_and(|rest| rest.starts_with(quote)) {
+            return false;
+        }
+        let Some(attr) = before.strip_suffix(quote).and_then(|b| b.trim_end().strip_suffix('=')) else { return false };
+        let name = attr.trim_end().rsplit(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\'' | '=')).next().unwrap_or_default();
+        name == "xmlns" || name.strip_prefix("xmlns:").is_some_and(|p| p != prefix)
     })
 }
 
@@ -563,6 +610,23 @@ mod tests {
             ("", false),
         ] {
             assert_eq!(binds_prefix_elsewhere(xmp, "pdfx", PDFX), other, "{xmp}");
+        }
+    }
+
+    #[test]
+    fn a_namespace_under_another_prefix_is_found() {
+        for (xmp, other) in [
+            ("<d xmlns:dc=\"http://purl.org/dc/elements/1.1/\"/>", false),
+            ("<d xmlns:purl = 'http://purl.org/dc/elements/1.1/'/>", true),
+            ("<title xmlns='http://purl.org/dc/elements/1.1/'/>", true),
+            // The address as text, in another attribute, or as the start of another value is no
+            // declaration.
+            ("<a>http://purl.org/dc/elements/1.1/</a><b src=\"http://purl.org/dc/elements/1.1/\"/>", false),
+            ("<d xmlns:x=\"http://purl.org/dc/elements/1.1/terms\"/>", false),
+            ("http://purl.org/dc/elements/1.1/", false),
+            ("", false),
+        ] {
+            assert_eq!(binds_namespace_elsewhere(xmp, DC, "dc"), other, "{xmp}");
         }
     }
 
