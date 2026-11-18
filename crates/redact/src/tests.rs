@@ -1081,6 +1081,21 @@ fn an_emptied_pattern_is_counted_once_and_keeps_its_paint_type() {
     assert_p0_is_an_empty_pattern(&doc, 2);
     let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
     assert!(!saved.windows(8).any(|w| w == b"(SECRET)"), "the cell's text is gone from the saved file");
+
+    // An indirect /PaintType (ISO 32000-2 7.3.10 allows any value to be indirect) is read
+    // through its reference: object 8 holds 2, so the stand-in is uncoloured too.
+    let indirect = stream(
+        "/Type /Pattern /PatternType 1 /PaintType 8 0 R /TilingType 1 /BBox [0 0 300 300] /XStep 300 /YStep 300 /Resources << /Font << /F1 5 0 R >> >>",
+        b"BT /F1 10 Tf 10 150 Td (SECRET) Tj ET",
+    );
+    let mut doc = one_page(
+        b"/Cs0 cs 1 0 0 /P0 scn 20 140 100 30 re f",
+        "/Pattern << /P0 7 0 R >> /ColorSpace << /Cs0 [/Pattern /DeviceRGB] >>",
+        vec![indirect, b"2".to_vec()],
+    );
+    mark(&mut doc, 0, &[[15.0, 135.0, 130.0, 175.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().patterns_removed, 1);
+    assert_p0_is_an_empty_pattern(&doc, 2);
 }
 
 /// Pruning takes the pattern out of `/Resources` but leaves the `/P0 scn` that selected it, so

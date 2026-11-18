@@ -616,7 +616,8 @@ pub(crate) fn prune_patterns(doc: &mut Document, res: &mut Dict, seen: &[Vec<u8>
                 };
             }
             // A shading pattern has no /PaintType and is selected like a coloured one.
-            let uncoloured = doc.resolve(value).as_dict().and_then(|d| d.int(b"PaintType")) == Some(2);
+            // /PaintType can be an indirect integer (ISO 32000-2 7.3.10): resolve it first.
+            let uncoloured = doc.resolve(value).as_dict().and_then(|d| d.get(b"PaintType").and_then(|p| doc.resolve(p).as_int())) == Some(2);
             let slot = if uncoloured { &mut uncoloured_stand_in } else { &mut coloured };
             let stand_in = *slot.get_or_insert_with(|| doc.add(Object::Stream(empty_pattern(if uncoloured { 2 } else { 1 }))));
             pat.set(n.clone(), Object::Ref(stand_in));
