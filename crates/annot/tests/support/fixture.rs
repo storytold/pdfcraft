@@ -124,7 +124,6 @@ pub fn save(doc: &Document, path: Save) -> Vec<u8> {
         object_streams: path == Save::FullStreams,
         drop_unlinked: false,
         id_entropy: None,
-        ..SaveOptions::default()
     };
     match path {
         Save::Incremental => write_incremental(doc, &opts),
