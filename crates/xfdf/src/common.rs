@@ -8,6 +8,9 @@ use super::{DataError, Dict, Document, Object};
 const MAX_NODES: u32 = 2_000_000;
 
 pub(crate) const MAX_DEPTH: usize = 64;
+/// Most bytes of full field names and values one XFDF import expands to: a long parent name is
+/// written into every descendant's full name, so a small file can name far more than it holds.
+pub(crate) const MAX_XFDF_TEXT: usize = 64 << 20;
 
 /// The deepest element nesting accepted before the text reaches the XML parser.
 ///
@@ -253,26 +256,52 @@ pub(crate) fn xml_name(name: &str) -> String {
     s
 }
 
-pub(crate) fn walk_xfdf(node: &craft_xml::El, prefix: &str, out: &mut Vec<(String, Vec<String>)>, depth: usize) -> Result<(), DataError> {
+pub(crate) fn walk_xfdf(
+    node: &craft_xml::El,
+    prefix: &str,
+    out: &mut Vec<(String, Vec<String>)>,
+    depth: usize,
+    bytes: &mut usize,
+) -> Result<(), DataError> {
     if depth > MAX_DEPTH {
         return Err(DataError::Malformed(format!("XFDF fields nest more than {MAX_DEPTH} deep")));
     }
     for f in node.children(craft_xml::Local("field")) {
         let Some(name) = f.attr("name") else { continue };
+        // Charge temporary parent names too, before allocation/recursion can amplify them.
+        let full_len = if prefix.is_empty() { name.len() } else { prefix.len().saturating_add(1).saturating_add(name.len()) };
+        charge_xfdf_text(bytes, full_len)?;
         let full = if prefix.is_empty() { name.to_string() } else { format!("{prefix}.{name}") };
-        let vals: Vec<String> = f
-            .children(craft_xml::Local("value"))
-            // Comments and processing instructions can split a value into several text nodes.
-            .map(el_text)
-            .collect();
+        let mut vals = Vec::new();
+        for value in f.children(craft_xml::Local("value")) {
+            let len = value
+                .children
+                .iter()
+                .filter_map(|n| match n {
+                    craft_xml::Node::Text(t) => Some(t.len()),
+                    _ => None,
+                })
+                .fold(0, usize::saturating_add);
+            charge_xfdf_text(bytes, len)?;
+            vals.push(el_text(value));
+        }
         // A leaf with no `<value>` is an empty field (the export writes one that way), so it
         // clears the field like FDF's `/V ()`; a field with kids only names their parent. A
         // leaf holding only `<value-richtext>` is not read yet, so it leaves the field alone.
         let names_kids_or_rich = f.elements().any(|c| matches!(c.local(), "field" | "value-richtext"));
         if !vals.is_empty() || !names_kids_or_rich {
+            charge_xfdf_text(bytes, full.len())?; // The emitted name is a second owned copy.
             out.push((full.clone(), vals));
         }
-        walk_xfdf(f, &full, out, depth + 1)?;
+        walk_xfdf(f, &full, out, depth + 1, bytes)?;
+    }
+    Ok(())
+}
+
+fn charge_xfdf_text(bytes: &mut usize, amount: usize) -> Result<(), DataError> {
+    *bytes = bytes.saturating_add(amount);
+    if *bytes > MAX_XFDF_TEXT {
+        return Err(DataError::Malformed(format!("the file expands to more than {} MiB of field names and values", MAX_XFDF_TEXT >> 20)));
     }
     Ok(())
 }
