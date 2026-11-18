@@ -16,45 +16,49 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
 use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageText};
 
+use craft::review::ui::annotate::{AnnotateCommand, AnnotateIcons};
+use craft::review::{AnnotationKind, AnnotationTool};
+
 use crate::canvas::{DocView, PageXform};
-use crate::page_pointer::PagePointer;
 use crate::theme::{self, Tokens};
 use crate::{QuickTool, icons};
 
+mod bridge;
+mod colours;
 mod composer;
 mod geometry;
-mod input;
 mod menu;
-mod paint;
+mod overlay;
 mod popups;
 mod state;
+mod tool;
 
-pub(crate) use composer::{composer, submit_key};
+pub(crate) use bridge::{
+    PageMap, annotations, delete_selected, edit, edit_anchor, id_of, key_of, kind_of, markers, parts, pdf_date_seconds, screen_to_user_rect,
+    thread_id, thread_key, tips, tips_shown,
+};
 #[cfg(test)]
-use geometry::handle_pos;
+use bridge::hover_tip;
+// PLAN: assumed colours exports (pdf-comments-w10): the colour pickers and buttons that `menu` exported before.
+pub use colours::{fill_picker, recent_custom_colours, remember_custom_colour, status_badge, swatch_grid};
+pub(crate) use colours::{border_colour_button, quick_bar_colour};
+pub(crate) use composer::composer;
+#[cfg(test)]
+use composer::edited_in_view;
 #[cfg(test)]
 pub(crate) use geometry::{caret_snap, snapped_caret};
-pub(crate) use geometry::{corner_ratio, page_rotation, resized};
+pub(crate) use geometry::page_rotation;
 pub use geometry::{drawn_text_box_rect, snug_text_box_rect, text_box_rect};
-#[cfg(test)]
-use input::hover_tip;
-pub(crate) use input::{anchor, context, context_hit, describe, hit, keys, moving_on, nudge_keys, page_after_text, page_input, tips_shown};
-pub use menu::{CanvasAction, fill_picker, recent_custom_colours, remember_custom_colour, status_badge, swatch_grid};
-pub(crate) use menu::{MenuRights, attachment_items, border_colour_button, context_menu, quick_bar_colour, quick_bar_controls};
-#[cfg(test)]
-use menu::{RECENT_CUSTOM, same_colour};
-pub(crate) use paint::paint_page;
-#[cfg(test)]
-use paint::{changing_points, drawn_shape, edited_in_view};
-pub(crate) use popups::popups;
+pub use menu::CanvasAction;
+pub(crate) use menu::{CommentMenuCx, MenuRights, QuickBarPick, attachment_items, context_rows, quick_bar_controls};
+pub(crate) use overlay::show;
+pub(crate) use popups::note_popups;
 #[cfg(test)]
 use state::after_delete;
 use state::login_name;
-pub use state::{CommentView, Composer, ComposerKind, Gesture, SortBy};
-pub(crate) use state::{EditorFocus, PageCx};
-
-/// Acrobat's selection blue for annotation frames and handles (11-visual-spec §5).
-const SELECT_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
+pub use state::{CommentView, Composer, ComposerKind};
+pub(crate) use state::PageCx;
+pub(crate) use tool::{CommentsTool, PastePlacement, context_target, page_after_text, part_pressed};
 
 /// Maximum stroke thickness offered by commenting controls, in PDF points.
 pub const MAX_LINE_WIDTH: f64 = 100.0;
@@ -192,14 +196,50 @@ impl CommentTool {
         }
     }
 
-    /// Lucide icon name for this commenting tool.
+    /// The framework's annotation kind this tool draws; the Eraser draws none.
+    pub(crate) fn kind(self) -> Option<AnnotationKind> {
+        Some(match self {
+            Self::Note => AnnotationKind::Note,
+            Self::TextBox => AnnotationKind::TextBox,
+            Self::Highlight => AnnotationKind::Highlight,
+            Self::Underline => AnnotationKind::Underline,
+            Self::StrikeOut => AnnotationKind::StrikeOut,
+            Self::Squiggly => AnnotationKind::Squiggly,
+            Self::Ink => AnnotationKind::Ink,
+            Self::FreehandHighlight => AnnotationKind::FreehandHighlight,
+            Self::Line => AnnotationKind::Line,
+            Self::Arrow => AnnotationKind::Arrow,
+            Self::Rectangle => AnnotationKind::Rectangle,
+            Self::Oval => AnnotationKind::Oval,
+            Self::Polygon => AnnotationKind::Polygon,
+            Self::PolyLine => AnnotationKind::PolyLine,
+            Self::Cloud => AnnotationKind::Cloud,
+            Self::Callout => AnnotationKind::Callout,
+            Self::Caret => AnnotationKind::Caret,
+            Self::ReplaceText => AnnotationKind::ReplaceText,
+            Self::Attach => AnnotationKind::Attach,
+            Self::Eraser => return None,
+        })
+    }
+
+    /// The framework's tool for this one.
+    pub fn tool(self) -> AnnotationTool {
+        self.kind().map_or(AnnotationTool::Eraser, AnnotationTool::Draw)
+    }
+
+    /// The tool that draws `kind`.
+    pub fn from_kind(kind: AnnotationKind) -> Option<Self> {
+        ALL.into_iter().find(|t| t.kind() == Some(kind))
+    }
+
+    /// Icon name for this commenting tool: a catalogue name, or a Lucide name the app's icon set serves.
     pub fn icon(self) -> &'static str {
         match self {
             Self::Note => "message-square-plus",
             Self::TextBox => "type",
             Self::Highlight => "highlighter",
-            Self::Underline => "underline",
-            Self::StrikeOut => "strikethrough",
+            Self::Underline => "text_underline",
+            Self::StrikeOut => "text_strikethrough",
             Self::Squiggly => "spline",
             Self::FreehandHighlight => "highlighter",
             Self::Ink => "pencil",
@@ -295,6 +335,12 @@ impl CommentTool {
             Self::Attach => Shape::Attachment { at: [0.0; 2], icon: pdfcraft_engine::AttachIcon::PushPin, file: String::new(), data: Vec::new() },
         }
     }
+}
+
+/// Each comment tool's icon as the framework's annotate commands show it, on every surface (toolbar, flyouts,
+/// palette, menus): [`CommentTool::icon`] is the one map.
+pub(crate) fn annotate_icons() -> AnnotateIcons {
+    ALL.iter().fold(AnnotateIcons::new(), |set, t| set.with(AnnotateCommand::of(t.tool()), t.icon()))
 }
 
 /// The comment swatches (our palette, close to Acrobat's quick colours).
