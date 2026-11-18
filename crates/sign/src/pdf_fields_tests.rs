@@ -410,6 +410,12 @@ fn a_fields_entry_that_is_one_field_is_read_as_a_list_of_it() {
     }
     let (listed, whole) = walk_sig_fields(&doc("3 0 R", &["<< /T (top) /Kids [4 0 R] >>", "<< /T (name) /FT /Tx >>"]));
     assert!(listed.is_empty() && whole);
+    // Its `/Kids` a dictionary (here the signature field itself), not an array: the walk does not
+    // read it, so it is not whole. A null `/Kids` holds no kid.
+    let (_, whole) = walk_sig_fields(&doc("3 0 R", &["<< /T (top) /Kids 5 0 R >>", "<< /Type /Sig >>", "<< /T (s) /FT /Sig /V 4 0 R >>"]));
+    assert!(!whole, "a /Kids dictionary may hold a signature");
+    let (_, whole) = walk_sig_fields(&doc("3 0 R", &["<< /T (top) /Kids null >>"]));
+    assert!(whole, "a null /Kids holds none");
 }
 
 /// A kid with no /T is not always a widget. One with kids of its own is a field node, walked and

@@ -160,6 +160,7 @@ impl Session {
         }
         cx.xfa_time_scale = xfa_time_scale;
         cx.pages = doc.info.pages.len();
+        cx.xfa_dynamic = doc.info.xfa == Some(pdfcraft_render::Xfa::Dynamic);
         cx.highlight = highlight;
         cx.today = today;
         let reason = doc.read_only_reason.clone().unwrap_or_default();

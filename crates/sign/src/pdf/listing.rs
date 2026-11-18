@@ -323,6 +323,11 @@ pub(crate) fn walk_sig_fields(doc: &Document) -> (Vec<Field>, bool) {
         }
         let array = d.get(b"Kids").and_then(Object::as_ref);
         let kids = d.get(b"Kids").map(|k| doc.resolve(k));
+        // `/Kids` that is neither an array nor null (a dictionary, say) holds kids this walk does
+        // not read, and one of them may be signed.
+        if kids.as_deref().is_some_and(|k| !matches!(k, Object::Array(_) | Object::Null)) {
+            whole = false;
+        }
         let mut sub = Vec::new();
         for (i, k) in kids.as_deref().and_then(Object::as_array).into_iter().flatten().enumerate() {
             if !take(&mut entries_left) {

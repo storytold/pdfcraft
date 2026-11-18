@@ -9827,6 +9827,21 @@ fn flattening_a_static_xfa_form_that_lists_no_fields_takes_the_xfa_out() {
     }
 }
 
+/// The fields found on the pages make a form whose `/Fields` lists none strippable only while
+/// the document reader reads it as static. One the reader reads as dynamic (it walks field trees
+/// less deep than the form reader, so a widget deep in a tree is a field to one and not the
+/// other) would be laid out again from its template, so it keeps its XFA, as a dynamic form
+/// never laid out does.
+#[test]
+fn page_fields_make_an_unlisted_xfa_form_strippable_only_when_the_reader_reads_it_as_static() {
+    let mut bytes = pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name><agree>1</agree></page1></form1>");
+    let at = bytes.windows(15).position(|w| w == b"/Fields [6 0 R]").expect("the fixture lists its field");
+    bytes.splice(at..at + 15, *b"/Fields []     ");
+    let doc = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
+    assert!(crate::xfa_form::xfa_shape(&doc, false).unwrap().strippable(), "read as static: its page fields count");
+    assert!(!crate::xfa_form::xfa_shape(&doc, true).unwrap().strippable(), "read as dynamic: they don't");
+}
+
 #[test]
 fn a_dynamic_xfa_form_that_was_never_laid_out_keeps_its_xfa_and_the_user_is_told_what_went() {
     // A template that can't be read: the form keeps its placeholder page and its XFA.
