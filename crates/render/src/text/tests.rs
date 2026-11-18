@@ -293,6 +293,10 @@ fn actual_text_across_several_lines_replaces_all_of_them() {
          BT /F1 20 Tf 1 0 0 1 20 200 Tm (Hidden one) Tj 0 -30 Td (Hidden two) Tj ET EMC BT /F1 20 Tf 1 0 0 1 20 100 Tm (After) Tj ET",
         // Turning away from the first glyph's direction ends its line too.
         "BT /F1 20 Tf /Span <</ActualText (Up)>> BDC 1 0 0 1 20 200 Tm (ab) Tj 0 1 -1 0 150 100 Tm (cd) Tj EMC ET",
+        // Lines set closer than their glyph boxes are tall: the boxes overlap, the baselines don't.
+        "BT /F1 20 Tf 1 0 0 1 20 200 Tm /Span <</ActualText (Tight)>> BDC (ab) Tj 0 -15 Td (cd) Tj EMC ET",
+        // A small glyph, then large ones on its baseline: one line, boxed to the large glyphs' end.
+        "BT 1 0 0 1 20 200 Tm /Span <</ActualText (Mixed)>> BDC /F1 8 Tf (a) Tj /F1 20 Tf (bbbb) Tj EMC ET",
     ]);
     let text = marked_text(&pdf, 0);
     assert_eq!(text.plain_text(), "Before\nReplaced\nAfter");
@@ -304,6 +308,17 @@ fn actual_text_across_several_lines_replaces_all_of_them() {
     assert!(text.find("Shown").is_empty());
     assert_eq!(marked_text(&pdf, 1).plain_text(), "Before\nAfter");
     assert_eq!(marked_text(&pdf, 2).plain_text(), "Up");
+    // Each case's box (view space, y down): the first line's em box spans y 84-104.
+    let boxed = |page: usize, text: &str| {
+        let page = marked_text(&pdf, page);
+        assert_eq!(page.plain_text(), text);
+        page.glyphs.iter().find(|g| g.text == text).map(|g| g.rect).unwrap()
+    };
+    let tight = boxed(3, "Tight");
+    assert!(tight[3] < 105.0, "the second line's box reaches y 119: {tight:?}");
+    let mixed = boxed(4, "Mixed");
+    // "a" at 8 pt ends near x 24.4, the four "b"s at 20 pt near x 68.9.
+    assert!(mixed[2] > 68.0 && mixed[1] < 85.0, "{mixed:?}");
 }
 
 #[test]

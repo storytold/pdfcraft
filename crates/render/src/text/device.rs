@@ -104,22 +104,27 @@ fn merge(drawn: &[Drawn], text: String) -> Option<Drawn> {
     let along = |p: &[f32; 2]| f64::from(p[0]) * u[0] + f64::from(p[1]) * u[1];
     let across = |p: &[f32; 2]| f64::from(p[0]) * n[0] + f64::from(p[1]) * n[1];
     let height = across(&first.2.quad[0]) - across(&first.2.quad[3]);
+    // A glyph's baseline across the line and its height: its em box starts a fifth of its height
+    // below the baseline (`draw_glyph`'s em box runs from -200 to 800).
+    let baseline = |d: &Drawn| {
+        let (near, far) = (across(&d.2.quad[0]), across(&d.2.quad[3]));
+        (near + 0.2 * (far - near), (near - far).abs())
+    };
+    let (line, line_height) = baseline(first);
     let (mut s0, mut s1, mut t0, mut t1) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
     for d in drawn {
-        if !compatible(u, d.1) {
+        // A glyph is on the first one's line when its baseline lies within half the taller
+        // glyph's height of the first's, whatever its own height: a larger glyph on the same
+        // baseline stays (and widens the box), the next line's doesn't, even where the glyph
+        // boxes of lines set close together overlap. A NaN baseline is on no line.
+        let (at, h) = baseline(d);
+        if !(compatible(u, d.1) && (at - line).abs() <= 0.5 * line_height.max(h)) {
             break;
         }
-        let (mut a0, mut a1, mut b0, mut b1) = (s0, s1, t0, t1);
         for p in &d.2.quad {
-            (a0, a1) = (a0.min(along(p)), a1.max(along(p)));
-            (b0, b1) = (b0.min(across(p)), b1.max(across(p)));
+            (s0, s1) = (s0.min(along(p)), s1.max(along(p)));
+            (t0, t1) = (t0.min(across(p)), t1.max(across(p)));
         }
-        // Past two line heights across (or NaN) the glyph is on another line.
-        let on_line = b1 - b0 <= 2.0 * height.abs();
-        if !on_line {
-            break;
-        }
-        (s0, s1, t0, t1) = (a0, a1, b0, b1);
     }
     if !(s0.is_finite() && s1.is_finite() && t0.is_finite() && t1.is_finite()) {
         return None;
