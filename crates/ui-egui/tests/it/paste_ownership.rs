@@ -1,4 +1,5 @@
 //! Context paste coordinates, insertion identity and visible image ownership.
+use crate::support::AppHarness as _;
 use egui::{Key, Modifiers, PointerButton, Pos2};
 use egui_kittest::{
     Harness,
@@ -6,7 +7,6 @@ use egui_kittest::{
 };
 use pdfcraft_engine::{AddedContent, AddedImage, Edit};
 use pdfcraft_ui_egui::PdfCraftApp;
-use crate::support::AppHarness as _;
 
 fn fixture(rotation: u16, cropped: bool, shared: bool) -> Vec<u8> {
     fixture_at(rotation, cropped, shared, false)
@@ -45,7 +45,7 @@ fn harness(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(move |cc| {
         let mut app = crate::editing::clipboard_app(&cc.egui_ctx, &copies);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("ownership.pdf", None, bytes.clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "ownership.pdf", None, bytes.clone()).unwrap();
         app
     });
     h.run_steps(4);
@@ -80,7 +80,7 @@ fn reopened(app: &mut PdfCraftApp) -> PdfCraftApp {
     let id = app.views[0].id;
     let bytes = app.session.save_bytes(id).unwrap();
     let mut saved = crate::control::new_app();
-    saved.open_bytes("saved.pdf", None, bytes.as_ref().clone()).unwrap();
+    saved.open_bytes(&egui::Context::default(), "saved.pdf", None, bytes.as_ref().clone()).unwrap();
     saved
 }
 
@@ -89,13 +89,14 @@ fn check_placement(case: &str, rotation: u16, cropped: bool, view_rotation: u16,
     if existing_added {
         let mut png = Vec::new();
         image::RgbImage::from_pixel(40, 40, image::Rgb([0, 0, 255])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-        h.state_mut().add_image("existing.png".into(), png);
+        let ctx_h = h.ctx.clone();
+        h.state_mut().add_image(&ctx_h, "existing.png".into(), png);
         assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().added().len(), 1);
         h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Select;
-        h.state_mut().views[0].image_selection = None;
-        h.state_mut().views[0].content.selected = None;
+        h.state_mut().views[0].session.image_selection = None;
+        h.state_mut().views[0].session.content.selected = None;
     }
-    h.state_mut().views[0].rotation = view_rotation;
+    h.state_mut().views[0].view.rotation = view_rotation;
     h.run_steps(3);
     let id = h.state().views[0].id;
     let originals: Vec<_> = h.state().session.get(id).unwrap().page_images(0).iter().map(|image| image.object.unwrap()).collect();
@@ -113,10 +114,13 @@ fn check_placement(case: &str, rotation: u16, cropped: bool, view_rotation: u16,
         })
         .expect("a new image XObject was inserted");
     assert!(!originals.contains(&inserted), "embedding must allocate a fresh image identity");
-    let selected = &doc.page_images(0)[h.state().views[0].image_selection.as_ref().unwrap().index];
+    let selected = &doc.page_images(0)[h.state().views[0].session.image_selection.as_ref().unwrap().index];
     assert_eq!(selected.object, Some(inserted), "{case}: the visible selection must name the inserted XObject");
     let center = [(selected.rect[0] + selected.rect[2]) * 0.5, (selected.rect[1] + selected.rect[3]) * 0.5];
-    assert!((center[0] - at[0]).abs() < 0.001 && (center[1] - at[1]).abs() < 0.001, "{case}: rotation={rotation}, crop={cropped}: {center:?} vs {at:?}");
+    assert!(
+        (center[0] - at[0]).abs() < 0.001 && (center[1] - at[1]).abs() < 0.001,
+        "{case}: rotation={rotation}, crop={cropped}: {center:?} vs {at:?}"
+    );
     let saved = reopened(h.state_mut());
     let placed = saved.session.get(saved.views[0].id).unwrap().page_images(0).into_iter().find(|image| image.object == Some(inserted)).unwrap();
     assert!(((placed.rect[0] + placed.rect[2]) * 0.5 - at[0]).abs() < 0.001);
@@ -160,19 +164,24 @@ fn check_delete_owner(original: bool, shared_added: bool) {
     if shared_added {
         let object = h.state().session.get(id).unwrap().page_images(0)[0].object.unwrap();
         let (extension, bytes) = h.state().session.get(id).unwrap().page_image_copy_file(0, 0).unwrap();
-        assert!(h.state_mut().apply_edit(Edit::PasteContent {
-            page: 0,
-            content: AddedContent::Image(AddedImage::new([130.0, 130.0, 170.0, 170.0], object)),
-            file: Some((format!("shared.{extension}"), std::sync::Arc::new(bytes)))
-        }));
+        let ctx_h = h.ctx.clone();
+        assert!(h.state_mut().apply_edit(
+            &ctx_h,
+            Edit::PasteContent {
+                page: 0,
+                content: AddedContent::Image(AddedImage::new([130.0, 130.0, 170.0, 170.0], object)),
+                file: Some((format!("shared.{extension}"), std::sync::Arc::new(bytes)))
+            }
+        ));
         assert_eq!(h.state().session.get(id).unwrap().page_images(0).len(), 2);
         assert!(h.state().session.get(id).unwrap().page_images(0).iter().all(|image| image.object == Some(object)));
         h.execute("edit.edit_text");
-        h.state_mut().views[0].content.selected = Some((0, 0));
+        h.state_mut().views[0].session.content.selected = Some((0, 0));
     } else {
         let mut png = Vec::new();
         image::RgbImage::from_pixel(40, 40, image::Rgb([0, 0, 255])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-        h.state_mut().add_image("blue.png".into(), png);
+        let ctx_h = h.ctx.clone();
+        h.state_mut().add_image(&ctx_h, "blue.png".into(), png);
     }
     h.run_steps(3);
     let p = point(&h, [150.0, 150.0]);
@@ -183,12 +192,12 @@ fn check_delete_owner(original: bool, shared_added: bool) {
     h.drop_at(p);
     h.run_steps(2);
     // The legacy editor can retain the added-image selection while its frame is hidden.
-    h.state_mut().views[0].content.selected = Some((0, 0));
+    h.state_mut().views[0].session.content.selected = Some((0, 0));
     let target = if original { [35.0, 35.0] } else { [150.0, 150.0] };
     right_click(&mut h, target);
     h.get_by_label("Copy Image").click();
     h.run_steps(2);
-    let selection = h.state().views[0].image_selection.as_ref().unwrap();
+    let selection = h.state().views[0].session.image_selection.as_ref().unwrap();
     let selected = &h.state().session.get(id).unwrap().page_images(0)[selection.index];
     assert_eq!(selected.name == "Red", original, "the frame belongs to the requested occurrence");
     h.key_press(Key::Delete);
@@ -225,8 +234,11 @@ fn whole_page_actions_do_not_require_a_selection() {
 #[test]
 fn whole_page_actions_still_require_copy_permission() {
     let mut app = crate::control::new_app();
-    app.open_bytes("source.pdf", None, fixture(0, false, false)).unwrap();
-    assert!(app.apply_edit(Edit::Protect(pdfcraft_engine::Protection { permissions_password: Some("owner".into()), ..Default::default() })));
+    app.open_bytes(&egui::Context::default(), "source.pdf", None, fixture(0, false, false)).unwrap();
+    assert!(app.apply_edit(
+        &egui::Context::default(),
+        Edit::Protect(pdfcraft_engine::Protection { permissions_password: Some("owner".into()), ..Default::default() })
+    ));
     let bytes = app.session.save_bytes(app.views[0].id).unwrap();
     let mut h = harness(bytes.as_ref().clone());
     right_click(&mut h, [210.0, 80.0]);
@@ -241,13 +253,14 @@ fn legacy_text_delete_survives_switching_out_of_the_image_tool() {
     right_click(&mut h, [35.0, 35.0]);
     h.get_by_label("Copy Image").click();
     h.run_steps(2);
-    assert!(h.state().views[0].image_selection.is_some());
-    assert!(h.state_mut().apply_edit(Edit::AddText {
-        page: 0,
-        text: pdfcraft_engine::AddedText { text: "note".into(), rect: [100.0, 100.0, 180.0, 130.0], ..Default::default() }
-    }));
+    assert!(h.state().views[0].session.image_selection.is_some());
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(
+        &ctx_h,
+        Edit::AddText { page: 0, text: pdfcraft_engine::AddedText { text: "note".into(), rect: [100.0, 100.0, 180.0, 130.0], ..Default::default() } }
+    ));
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().added().len(), 1);
-    h.state_mut().views[0].content.selected = Some((0, 0));
+    h.state_mut().views[0].session.content.selected = Some((0, 0));
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Select;
     h.key_press(Key::Delete);
     h.run_steps(3);
@@ -262,11 +275,12 @@ fn leaving_image_controller_cannot_leave_hidden_image_owning_delete() {
     let mut h = harness(fixture(0, false, false));
     let mut png = Vec::new();
     image::RgbImage::from_pixel(40, 40, image::Rgb([0, 0, 255])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    h.state_mut().add_image("blue.png".into(), png);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().add_image(&ctx_h, "blue.png".into(), png);
     h.run_steps(3);
     // Start from no selection, then let the controller select the added image itself.
-    h.state_mut().views[0].image_selection = None;
-    h.state_mut().views[0].content.selected = None;
+    h.state_mut().views[0].session.image_selection = None;
+    h.state_mut().views[0].session.content.selected = None;
     let p = point(&h, [150.0, 150.0]);
     h.hover_at(p);
     h.run_steps(1);
@@ -274,11 +288,11 @@ fn leaving_image_controller_cannot_leave_hidden_image_owning_delete() {
     h.run_steps(1);
     h.drop_at(p);
     h.run_steps(2);
-    assert!(h.state().views[0].image_selection.is_some());
+    assert!(h.state().views[0].session.image_selection.is_some());
     h.key_press(Key::V);
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Select);
-    assert!(h.state().views[0].image_selection.is_none());
+    assert!(h.state().views[0].session.image_selection.is_none());
     h.key_press(Key::Delete);
     h.run_steps(3);
     let saved = reopened(h.state_mut());

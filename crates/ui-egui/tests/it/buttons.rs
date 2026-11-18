@@ -59,7 +59,7 @@ fn buttons_reset_navigate_and_print() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("buttons.pdf", Some(path_str), fixture()).unwrap();
+        app.open_bytes(&egui::Context::default(), "buttons.pdf", Some(path_str), fixture()).unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
@@ -86,7 +86,7 @@ fn buttons_reset_navigate_and_print() {
     assert_eq!(std::fs::read(&path).unwrap(), before, "the file is untouched");
     click_field(&mut h, "next");
     h.run_steps(4);
-    assert_eq!(h.state().views[0].current, 1, "the NextPage action");
+    assert_eq!(h.state().views[0].current(), 1, "the NextPage action");
 }
 
 /// One page: a text field "name" and two push buttons whose Hide actions hide it and show it again.
@@ -128,7 +128,7 @@ fn hide_actions_hide_and_show_fields() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("show-hide.pdf", None, show_hide_fixture()).unwrap();
+        app.open_bytes(&egui::Context::default(), "show-hide.pdf", None, show_hide_fixture()).unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
@@ -148,7 +148,7 @@ fn hide_actions_hide_and_show_fields() {
     assert!(name_hidden(&h), "the Hide action hid the field");
     // A hidden field takes no clicks: clicking where it was doesn't start editing it.
     click_field(&mut h, "name");
-    assert!(h.state().views[0].forms.focus.is_none(), "a hidden field can't be focused");
+    assert!(h.state().views[0].session.forms.focus.is_none(), "a hidden field can't be focused");
     click_field(&mut h, "show");
     assert!(!name_hidden(&h), "the Hide action with /H false showed it again");
 }

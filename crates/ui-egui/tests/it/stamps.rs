@@ -1,16 +1,16 @@
 //! Add a stamp: the palette and placing stamps on the page.
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
-use crate::support::AppHarness as _;
 
 #[test]
 fn choosing_and_placing_stamps() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
@@ -44,7 +44,7 @@ fn natural_image_stamps_keep_displayed_bounds_on_rotated_pages() {
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
             let mut app = crate::control::new_app();
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
             let id = app.views[0].id;
             app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees }).unwrap();
             app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
@@ -87,7 +87,7 @@ fn creating_placing_and_keeping_custom_stamps() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
@@ -147,7 +147,7 @@ fn a_dynamic_custom_stamp_keeps_its_line_and_fills_it_in_when_placed() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app.set_option(&egui::Context::default(), "author", "Ada").unwrap();
         app

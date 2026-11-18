@@ -8,8 +8,8 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
 
-use crate::support::input::touch_tap;
 use crate::support::AppHarness as _;
+use crate::support::input::touch_tap;
 
 /// A PDF of `objects`, numbered from 1 with the catalog first.
 fn pdf(objects: &[&str]) -> Vec<u8> {
@@ -63,7 +63,7 @@ fn open(pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("test.pdf", None, pdf).unwrap();
+        app.open_bytes(&egui::Context::default(), "test.pdf", None, pdf).unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
@@ -105,7 +105,7 @@ fn value(h: &Harness<'_, PdfCraftApp>, name: &str) -> Vec<String> {
 
 /// The field whose editor or list is open.
 fn focus(h: &Harness<'_, PdfCraftApp>) -> Option<String> {
-    h.state().views[0].forms.focus.as_ref().map(|f| f.name.clone())
+    h.state().views[0].session.forms.focus.as_ref().map(|f| f.name.clone())
 }
 
 /// The Green row of the list box: the second, rows being 11.5 pt under a 2 pt inset.
@@ -185,12 +185,16 @@ const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "Jun
 
 /// Adds a date field `due` at x 40..160, y 240..260, its calendar under it.
 fn add_date_field(h: &mut Harness<'_, PdfCraftApp>) {
-    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
-        page: 0,
-        rect: [40.0, 240.0, 160.0, 260.0],
-        kind: pdfcraft_engine::NewField::Date,
-        name: Some("due".into()),
-    });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(
+        &ctx_h,
+        pdfcraft_engine::Edit::AddField {
+            page: 0,
+            rect: [40.0, 240.0, 160.0, 260.0],
+            kind: pdfcraft_engine::NewField::Date,
+            name: Some("due".into()),
+        },
+    );
     h.run_steps(4);
 }
 
@@ -313,14 +317,14 @@ fn edit_paragraph(h: &mut Harness<'_, PdfCraftApp>) {
     let k = r.width() / 300.0;
     let p = r.min + egui::vec2(60.0 * k, (400.0 - 304.0) * k);
     mouse_click(h, p);
-    assert!(h.state().views[0].line_editor.is_some(), "the paragraph opens for typing");
+    assert!(h.state().views[0].session.line_editor.is_some(), "the paragraph opens for typing");
     let input = egui::Id::unique(("edit-text-line-input", h.state().views[0].place()));
     assert!(h.ctx.memory(|m| m.has_focus(input)), "with the keyboard");
 }
 
 /// The open paragraph's line spacing, if a paragraph is open.
 fn line_spacing(h: &Harness<'_, PdfCraftApp>) -> Option<f64> {
-    h.state().views[0].line_editor.as_ref().map(|e| e.extras.line_spacing)
+    h.state().views[0].session.line_editor.as_ref().map(|e| e.extras.line_spacing)
 }
 
 #[test]

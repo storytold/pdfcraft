@@ -9,6 +9,7 @@ use crate::support;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
+use crate::support::AppHarness as _;
 use craft::host::{AppInfo, Host, ManualJobs, PickKind, Picked, ScriptedFiles, Wake};
 use craft::platform::clipboard::{Clipboard, EventClipboard};
 use craft::platform::open::{FileIntake, IntakeSender};
@@ -17,7 +18,6 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
-use crate::support::AppHarness as _;
 
 /// An `n`-page document with a proper xref table.
 fn fixture(n: usize) -> Vec<u8> {
@@ -120,7 +120,7 @@ fn rig(docs: &[usize], files: ScriptedFiles) -> Rig {
         let mut app = PdfCraftApp::with_host(host, services);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         for (i, n) in docs.iter().enumerate() {
-            app.open_bytes(&format!("doc{i}.pdf"), None, fixture(*n)).unwrap();
+            app.open_bytes(&egui::Context::default(), &format!("doc{i}.pdf"), None, fixture(*n)).unwrap();
         }
         run.run_all();
         app
@@ -222,7 +222,7 @@ fn dirty(app: &PdfCraftApp, view: usize) -> bool {
 }
 
 fn rotate_first_page(app: &mut PdfCraftApp) {
-    app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
 }
 
 #[test]
@@ -235,7 +235,8 @@ fn save_as_writes_on_a_later_frame_including_edits_made_meanwhile() {
     assert!(!out.exists(), "the command must not wait for the picker");
     assert_eq!(h.files.open(), 1, "the Save picker is open");
     // The user keeps working while the panel is open.
-    h.state_mut().apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
     h.answer(Picked::Paths(vec![out.clone()]));
     assert_eq!(page_count(std::fs::read(&out).unwrap()), 2, "the edit made while choosing is saved too");
     assert!(!dirty(h.state(), 0));
@@ -505,7 +506,8 @@ fn extracted_pages_are_not_deleted_if_the_document_was_edited_while_choosing_the
     confirm_extract(&mut h);
     // While the folder picker is open the user deletes page 1 themselves: the page that would
     // now be deleted is the original page 2, which was never written out.
-    h.state_mut().apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
     h.answer(Picked::Paths(vec![dir.clone()]));
     assert!(dir.join("doc0 (page 1).pdf").exists(), "the extracted file is still written");
     assert_eq!(pages(h.state(), 0), 2, "nothing more is deleted");
@@ -650,7 +652,8 @@ fn a_late_startup_url_preserves_the_current_edit_workspace_and_save_target() {
 
     let mut h = harness(&[3]);
     let active = h.state().active_ids().unwrap().1;
-    h.state_mut().apply_edit(Edit::DeletePages { pages: vec![1] });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::DeletePages { pages: vec![1] });
     h.state_mut().mode = Mode::Edit;
     h.state_mut().right = Some(RightPanel::Pages);
     h.state_mut().left = LeftPanel::AllTools;
@@ -667,7 +670,7 @@ fn a_late_startup_url_preserves_the_current_edit_workspace_and_save_target() {
     assert_eq!(h.state().quick_tool, QuickTool::Hand);
     assert!(dirty(h.state(), 0));
     assert_eq!(h.state().views.len(), 2, "the startup file remains available in its own tab");
-    assert_eq!(h.state().views[1].zoom, 1.75);
+    assert_eq!(h.state().views[1].zoom(), 1.75);
 
     let dir = scratch("startup-save");
     let path = dir.join("saved.pdf");
@@ -759,7 +762,8 @@ fn a_startup_url_does_not_replace_another_documents_password_prompt() {
         let mut h = harness(&[]);
         let local_bytes = encrypted_fixture();
         let late_bytes = fixture(2);
-        h.state_mut().open_bytes("local-encrypted.pdf", None, local_bytes.clone()).unwrap();
+        let ctx_h = h.ctx.clone();
+        h.state_mut().open_bytes(&ctx_h, "local-encrypted.pdf", None, local_bytes.clone()).unwrap();
         h.deliver("late.pdf", late_bytes.clone());
         h.steps(2);
         assert_eq!(h.state().password_prompt.as_ref().unwrap().name, "local-encrypted.pdf");
@@ -881,13 +885,13 @@ fn a_background_forms_highlight_request_applies_at_once() {
     let mut h = harness(&[3]);
     // Highlighting is on by default: start from a user who turned it off.
     h.state_mut().view_defaults.highlight_fields = false;
-    h.state_mut().views[0].highlight_fields = false;
+    h.state_mut().views[0].session.highlight_fields = false;
     h.steps(1);
     h.deliver("late-form.pdf", pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::layout_ready_template()));
     h.steps(2);
     assert_eq!(h.state().active, Some(0), "it opened behind the current document");
-    assert!(h.state().views[1].highlight_fields, "the background form is highlighted");
-    assert!(!h.state().views[0].highlight_fields, "the current document is left as it was");
+    assert!(h.state().views[1].session.highlight_fields, "the background form is highlighted");
+    assert!(!h.state().views[0].session.highlight_fields, "the current document is left as it was");
     assert!(h.state().view_defaults.highlight_fields, "the next document opens highlighted");
 }
 
@@ -956,12 +960,14 @@ fn attachment_save_preserves_bytes_metadata_and_selected_destination() {
     let chosen = dir.0.join("user chosen 資料.bin");
     let original = attachment_fixture();
     let mut h = harness(&[]);
-    h.state_mut().open_bytes("attachment.pdf", None, original.clone()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "attachment.pdf", None, original.clone()).unwrap();
     h.steps(2);
     let id = h.state().views[0].id;
     let raw_name = "invoice\u{202e}fdp.exe";
     let index = h.state().session.get(id).unwrap().info.attachments.iter().position(|a| a.name == raw_name).unwrap();
-    h.state_mut().attachment_action(id, index, false);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().attachment_action(&ctx_h, id, index, false);
     h.answer(Picked::Paths(vec![chosen.clone()]));
     assert_eq!(std::fs::read(&chosen).unwrap(), b"hello notes");
     let doc = h.state().session.get(id).unwrap();
@@ -969,7 +975,8 @@ fn attachment_save_preserves_bytes_metadata_and_selected_destination() {
     assert_eq!(doc.bytes.as_ref(), &original);
     assert!(!dir.0.join("invoicefdp.exe").exists());
     std::fs::remove_file(&chosen).unwrap();
-    h.state_mut().attachment_action(id, index, false);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().attachment_action(&ctx_h, id, index, false);
     h.answer(Picked::Cancelled);
     assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 0);
     let doc = h.state().session.get(id).unwrap();
@@ -1023,13 +1030,16 @@ fn files_written_from_an_attachment_tab_stay_inside_the_chosen_folder() {
         let out = dir.0.join("a").join("b").join("out");
         std::fs::create_dir_all(&out).unwrap();
         let mut h = harness(&[]);
-        h.state_mut().open_bytes("outer.pdf", None, attachment_pdf(name, &fixture(2))).unwrap();
+        let ctx_h = h.ctx.clone();
+        h.state_mut().open_bytes(&ctx_h, "outer.pdf", None, attachment_pdf(name, &fixture(2))).unwrap();
         h.steps(2);
         let id = h.state().views[0].id;
-        h.state_mut().attachment_action(id, 0, true);
+        let ctx_h = h.ctx.clone();
+        h.state_mut().attachment_action(&ctx_h, id, 0, true);
         h.steps(2);
         assert_eq!(h.state().views.len(), 2, "{name}: the attachment opens as a tab");
-        h.state_mut().split_active(&pdfcraft_ui_egui::SplitPlan::By(pdfcraft_engine::SplitBy::PageCount(1)));
+        let ctx_h = h.ctx.clone();
+        h.state_mut().split_active(&ctx_h, &pdfcraft_ui_egui::SplitPlan::By(pdfcraft_engine::SplitBy::PageCount(1)));
         h.answer(Picked::Paths(vec![out.clone()]));
         let written = files_under(&dir.0);
         assert_eq!(written.len(), 2, "{name}: two split parts, got {written:?}");

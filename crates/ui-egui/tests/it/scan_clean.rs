@@ -1,6 +1,7 @@
 //! Scan & OCR ▸ Enhance scanned file in the real shell (egui_kittest): the dialog, the run and
 //! its report, and that the page keeps its comment while its scan is cleaned in place.
 
+use crate::support::AppHarness as _;
 use craft::pages::ui::PageRangeOptions;
 use craft::pages::{PageRange, PageScope};
 use craft::ui::dialog::dialog_id;
@@ -8,7 +9,6 @@ use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use egui_kittest::Harness;
 use pdfcraft_engine::{Edit, NewAnnotation, NoteIcon, Session, Shape, Style};
 use pdfcraft_ui_egui::PdfCraftApp;
-use crate::support::AppHarness as _;
 
 /// A two-page PDF: page 1 a grey scan with a darker gutter and text bars (and a sticky note),
 /// page 2 the same scan again.
@@ -33,7 +33,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
         app
     });
     h.run_steps(4);
@@ -77,7 +77,8 @@ fn nothing_to_enhance_is_said_not_done() {
     let id = h.state().active_ids().unwrap().1;
     h.state_mut().scan_clean_draft.settings = pdfcraft_engine::scan_clean::ScanCleanSettings { level: 0, edge_shadows: false, despeckle: false };
     // With every filter off the dialog's OK is disabled; starting anyway changes nothing.
-    h.state_mut().start_scan_clean();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().start_scan_clean(&ctx_h);
     run_jobs(&mut h);
     let app = h.state();
     assert!(app.toast.is_some(), "a notice says nothing was cleaned");

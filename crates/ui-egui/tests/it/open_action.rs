@@ -41,7 +41,7 @@ fn harness(catalog: &str) -> Harness<'static, PdfCraftApp> {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.open_bytes("open.pdf", None, bytes).expect("opens");
+        app.open_bytes(&egui::Context::default(), "open.pdf", None, bytes).expect("opens");
         app
     });
     h.run_steps(4);
@@ -140,7 +140,7 @@ fn always_my_default_view_keeps_the_zoom_and_goes_to_the_page_top() {
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.always_default_view = true;
-        app.open_bytes("open.pdf", None, bytes).expect("opens");
+        app.open_bytes(&egui::Context::default(), "open.pdf", None, bytes).expect("opens");
         app
     });
     h.run_steps(4);

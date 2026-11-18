@@ -11,7 +11,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
         let mut app = crate::control::new_app();
         app.run_inline = true;
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         // The whole 300×400 pt page in either pane.
         app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
@@ -70,7 +70,7 @@ fn typing_in_one_pane_survives_an_edit_in_the_other() {
 
     click(&mut h, name);
     assert_eq!(h.state().active, Some(second));
-    assert!(h.state().views[second].forms.focus.is_some(), "the editor opened");
+    assert!(h.state().views[second].session.forms.focus.is_some(), "the editor opened");
     h.event(egui::Event::Text("Typed in the second pane".into()));
     h.run_steps(2);
     assert!(value(&h, "name").is_empty(), "not committed yet");
@@ -80,7 +80,7 @@ fn typing_in_one_pane_survives_an_edit_in_the_other() {
     assert_eq!(h.state().active, Some(first), "the click made the first pane active");
     assert_eq!(value(&h, "agree"), ["Yes"], "the click's own edit");
     assert_eq!(value(&h, "name"), ["Typed in the second pane"], "the typing in the other pane went into the document");
-    assert!(h.state().views[second].pending_edit.is_none(), "nothing left queued");
+    assert!(h.state().views[second].session.pending_edit.is_none(), "nothing left queued");
 }
 
 /// Save from the second pane, with the same document in both: what is typed there goes into the

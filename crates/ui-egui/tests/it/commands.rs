@@ -8,6 +8,7 @@ use std::sync::Arc;
 use crate::control::{ControlClient, app_with_files, new_app, ok};
 use crate::support;
 
+use crate::support::AppHarness as _;
 use craft::host::{Picked, ScriptedFiles};
 use egui::os::OperatingSystem;
 use egui::{Key, Modifiers};
@@ -16,7 +17,6 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::commands::COMMANDS;
 use pdfcraft_ui_egui::PdfCraftApp;
 use serde_json::json;
-use crate::support::AppHarness as _;
 
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
@@ -50,7 +50,7 @@ fn harness_controlled() -> (Harness<'static, PdfCraftApp>, ControlClient) {
         let mut app = new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.attach_control(rx, None);
-        app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(3)).unwrap();
         app
     });
     h.run_steps(4);
@@ -120,7 +120,7 @@ fn every_registered_command_is_implemented() {
         let mut app = app_with_files(Arc::new(ScriptedFiles::new()));
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         if spec.id.starts_with("form.") || spec.id == "comment.flatten" {
-            app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
         } else if spec.id == "protect.unlock" {
             // Only a permissions password: opens restricted, and can be unlocked.
             let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(3))).unwrap();
@@ -133,31 +133,34 @@ fn every_registered_command_is_implemented() {
                 seed: [5; 32],
             })
             .unwrap();
-            app.open_bytes("restricted.pdf", None, pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()).unwrap();
+            app.open_bytes(&egui::Context::default(), "restricted.pdf", None, pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()).unwrap();
         } else {
-            app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(3)).unwrap();
         }
         // Give undo/redo something to do.
-        app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+        app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
         if spec.id == "edit.redo" {
             app.undo();
         }
         if spec.id == "prepress.marks.remove" {
             use pdfcraft_engine::{Edit, PrinterMarks};
-            app.apply_edit(Edit::AddPrinterMarks { pages: vec![0], settings: PrinterMarks::default(), replace: false });
+            app.apply_edit(&egui::Context::default(), Edit::AddPrinterMarks { pages: vec![0], settings: PrinterMarks::default(), replace: false });
         }
         // Copying comments needs a selected comment; pasting needs copied ones.
         if matches!(spec.id, "comment.copy" | "comment.paste") {
             let shape = pdfcraft_engine::Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] };
             let style = pdfcraft_engine::Style::default_for(&shape);
-            assert!(app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
-                page: 0,
-                shape,
-                style,
-                contents: String::new(),
-                author: String::new(),
-            })));
-            app.views[0].comments.select_only((0, 0));
+            assert!(app.apply_edit(
+                &egui::Context::default(),
+                pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+                    page: 0,
+                    shape,
+                    style,
+                    contents: String::new(),
+                    author: String::new(),
+                })
+            ));
+            app.views[0].session.comments.select_only((0, 0));
             if spec.id == "comment.paste" {
                 assert!(app.copy_selected_comments(0));
             }
@@ -166,46 +169,53 @@ fn every_registered_command_is_implemented() {
             use pdfcraft_engine::{Background, Edit, HeaderFooter, Watermark};
             let mut hf = HeaderFooter::default();
             hf.text[1] = "x".into();
-            app.apply_edit(Edit::AddHeaderFooter { pages: vec![0], settings: hf, replace: false });
-            app.apply_edit(Edit::AddWatermark {
-                pages: vec![0],
-                settings: Watermark { text: "x".into(), ..Watermark::default() },
-                replace: false,
-                file: None,
-            });
-            app.apply_edit(Edit::AddBackground {
-                pages: vec![0],
-                settings: Background { color: [1.0; 3], opacity: 1.0, ..Background::default() },
-                replace: false,
-                file: None,
-            });
+            app.apply_edit(&egui::Context::default(), Edit::AddHeaderFooter { pages: vec![0], settings: hf, replace: false });
+            app.apply_edit(
+                &egui::Context::default(),
+                Edit::AddWatermark { pages: vec![0], settings: Watermark { text: "x".into(), ..Watermark::default() }, replace: false, file: None },
+            );
+            app.apply_edit(
+                &egui::Context::default(),
+                Edit::AddBackground {
+                    pages: vec![0],
+                    settings: Background { color: [1.0; 3], opacity: 1.0, ..Background::default() },
+                    replace: false,
+                    file: None,
+                },
+            );
         }
         if matches!(spec.id, "comment.flatten" | "comment.export" | "comment.summarize") {
             use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
             let shape = Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] };
-            app.apply_edit(Edit::AddAnnotation(NewAnnotation {
-                page: 0,
-                style: Style::default_for(&shape),
-                shape,
-                contents: String::new(),
-                author: String::new(),
-            }));
+            app.apply_edit(
+                &egui::Context::default(),
+                Edit::AddAnnotation(NewAnnotation {
+                    page: 0,
+                    style: Style::default_for(&shape),
+                    shape,
+                    contents: String::new(),
+                    author: String::new(),
+                }),
+            );
         }
         if spec.id.starts_with("redact.") {
             use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
             let shape =
                 Shape::Redact { quads: vec![pdfcraft_engine::rect_quad([10.0, 10.0, 50.0, 50.0])], overlay: String::new(), look: Default::default() };
-            app.apply_edit(Edit::AddAnnotation(NewAnnotation {
-                page: 0,
-                style: Style::default_for(&shape),
-                shape,
-                contents: String::new(),
-                author: String::new(),
-            }));
+            app.apply_edit(
+                &egui::Context::default(),
+                Edit::AddAnnotation(NewAnnotation {
+                    page: 0,
+                    style: Style::default_for(&shape),
+                    shape,
+                    contents: String::new(),
+                    author: String::new(),
+                }),
+            );
         }
         if spec.id == "protect.remove" {
             let p = pdfcraft_engine::Protection { open_password: Some("pw".into()), ..Default::default() };
-            app.apply_edit(pdfcraft_engine::Edit::Protect(p));
+            app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::Protect(p));
         }
         // The cover toggle needs two-page view first (it is disabled elsewhere).
         if spec.id == "view.layout.cover" {
@@ -235,7 +245,8 @@ fn disabled_commands_explain_themselves() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::S);
     h.run_steps(3);
     assert_eq!(support::shown_notice(&h).as_deref(), Some("Open a document first"));
-    h.state_mut().open_bytes("doc.pdf", None, fixture(2)).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "doc.pdf", None, fixture(2)).unwrap();
     h.run_steps(3);
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run_steps(3);
@@ -376,8 +387,10 @@ fn mac_cmd_w_closes_the_tab(h: &mut Harness<'static, PdfCraftApp>, _c: &ControlC
 /// end and include the Combine files tab after the documents (#1542). A Windows or Linux Ctrl
 /// press is both `ctrl` and `command`.
 fn ctrl_tab_steps_and_wraps(h: &mut Harness<'static, PdfCraftApp>, _c: &ControlClient) {
-    h.state_mut().open_bytes("second.pdf", None, fixture(1)).unwrap();
-    h.state_mut().open_bytes("third.pdf", None, fixture(1)).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "second.pdf", None, fixture(1)).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "third.pdf", None, fixture(1)).unwrap();
     h.run_steps(3);
     let ctrl = Modifiers::CTRL | Modifiers::COMMAND;
     let press = |h: &mut Harness<'static, PdfCraftApp>, modifiers: Modifiers| {
@@ -449,7 +462,7 @@ fn the_open_recent_menu_lists_files_and_opens_one() {
         move |_cc| {
             let mut app = new_app();
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(3)).unwrap();
             app.recent.push(pdfcraft_ui_egui::RecentFile { name: "recent.pdf".into(), path, pages: 2, size: 0 });
             app
         }

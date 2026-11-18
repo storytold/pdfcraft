@@ -42,7 +42,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
         let mut app = PdfCraftApp::with_host(crate::support::host());
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.open_bytes("triggers.pdf", None, form()).unwrap();
+        app.open_bytes(&egui::Context::default(), "triggers.pdf", None, form()).unwrap();
         app
     });
     crate::support::settle(&mut h);

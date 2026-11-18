@@ -1,6 +1,7 @@
 //! Prepare a form in the real shell (egui_kittest): field tools, placing, selecting, moving,
 //! Field Properties and deleting.
 
+use crate::support::AppHarness as _;
 use craft::ui::dialog::StackDialog;
 use craft::ui::runtime::env::WindowKey;
 use craft::ui::runtime::toast;
@@ -11,7 +12,6 @@ use egui_kittest::kittest::{Queryable, by};
 use pdfcraft_ui_egui::field_table_ui::FieldTableDialog;
 use pdfcraft_ui_egui::prepare::FieldPropsDialog;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
-use crate::support::AppHarness as _;
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     harness_with("form.pdf", include_bytes!("../data/form.pdf").to_vec())
@@ -22,7 +22,7 @@ fn harness_with(name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraft
         cc.egui_ctx.options_mut(|options| options.warn_on_id_clash = true);
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(name, None, bytes).unwrap();
+        app.open_bytes(&egui::Context::default(), name, None, bytes).unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
@@ -172,7 +172,7 @@ fn shift_selected_small_widgets_have_blue_tags_and_visible_outlines() {
     }
     h.event(Event::ModifiersChanged(Modifiers::NONE));
     h.run_steps(2);
-    assert_eq!(h.state().views[0].prepare.names().len(), 2);
+    assert_eq!(h.state().views[0].session.prepare.names().len(), 2);
     let shapes = &h.output().shapes;
     // The name tag over a widget: the smallest filled rectangle under its centre, with where it was
     // painted in the frame.
@@ -205,8 +205,13 @@ fn shift_selected_small_widgets_have_blue_tags_and_visible_outlines() {
     }
     assert!(outline(unselected, ink).is_none(), "unselected text field has no selection outline");
     // The anchor, the first one picked, shows a box of corner handles only.
-    let handles: Vec<Pos2> =
-        shapes.iter().filter_map(|s| match &s.shape { Shape::Circle(c) if c.stroke.color == ink => Some(c.center), _ => None }).collect();
+    let handles: Vec<Pos2> = shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            Shape::Circle(c) if c.stroke.color == ink => Some(c.center),
+            _ => None,
+        })
+        .collect();
     assert_eq!(handles.len(), 4, "only the primary has resize handles, at its corners");
     let distinct = |value: fn(&Pos2) -> f32| {
         let mut v: Vec<i32> = handles.iter().map(|p| value(p).round() as i32).collect();
@@ -232,7 +237,7 @@ fn placing_moving_editing_and_deleting_a_field() {
     assert_eq!(all.last().map(String::as_str), Some("Text1"));
     assert_eq!(h.state().quick_tool, QuickTool::Select, "back to Select after one field");
     h.run_steps(2);
-    assert_eq!(h.state().views[0].prepare.selected.as_ref().map(|s| s.0.as_str()), Some("Text1"), "the new field is selected");
+    assert_eq!(h.state().views[0].session.prepare.selected.as_ref().map(|s| s.0.as_str()), Some("Text1"), "the new field is selected");
     let r = rect_of(&h, "Text1");
     assert!((r[2] - r[0] - 160.0).abs() < 2.0 && (r[3] - r[1] - 22.0).abs() < 2.0, "{r:?}");
     // Move it 20 pt right.
@@ -257,7 +262,7 @@ fn placing_moving_editing_and_deleting_a_field() {
         let doc = s.session.get(s.views[0].id).unwrap();
         assert_eq!(doc.can_undo(), Some("Change field properties"));
         assert!(doc.form.iter().find(|f| f.name == "email").unwrap().has(pdfcraft_engine::field_flags::REQUIRED));
-        assert_eq!(s.views[0].prepare.selected.as_ref().map(|s| s.0.as_str()), Some("email"));
+        assert_eq!(s.views[0].session.prepare.selected.as_ref().map(|s| s.0.as_str()), Some("email"));
     }
     // Delete removes the selected field.
     h.key_press(egui::Key::Delete);
@@ -276,7 +281,7 @@ fn placing_moving_editing_and_deleting_a_field() {
     let r = rect_of(&h, "Check Box1");
     assert_eq!((r[2] - r[0], r[3] - r[1]), (14.0, 14.0));
     h.run_steps(2);
-    assert_eq!(h.state().views[0].prepare.selected.as_ref().map(|s| s.0.as_str()), Some("Check Box1"), "the clicked check box is selected");
+    assert_eq!(h.state().views[0].session.prepare.selected.as_ref().map(|s| s.0.as_str()), Some("Check Box1"), "the clicked check box is selected");
 }
 
 #[test]
@@ -328,7 +333,8 @@ fn with_calculate_script(js: &str) -> Harness<'static, PdfCraftApp> {
 /// Sets `city`'s calculate script, as form_set_script does.
 fn set_calculate_script(h: &mut Harness<'static, PdfCraftApp>, js: &str) {
     let edit = pdfcraft_engine::Edit::SetFieldScript { name: "city".into(), event: "calculate".into(), script: Some(js.into()) };
-    assert!(h.state_mut().apply_edit(edit));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, edit));
     h.run_steps(2);
 }
 
@@ -658,12 +664,16 @@ fn options_tab_sets_the_check_box_style() {
     // #94: Check Box Style on the Options tab.
     use pdfcraft_engine::CheckStyle;
     let mut h = harness();
-    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
-        page: 0,
-        rect: [40.0, 300.0, 56.0, 316.0],
-        kind: pdfcraft_engine::NewField::CheckBox,
-        name: Some("agree".into()),
-    });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(
+        &ctx_h,
+        pdfcraft_engine::Edit::AddField {
+            page: 0,
+            rect: [40.0, 300.0, 56.0, 316.0],
+            kind: pdfcraft_engine::NewField::CheckBox,
+            name: Some("agree".into()),
+        },
+    );
     open_props(&mut h, "agree");
     tab(&mut h, "Options");
     h.get_by_value("Check");
@@ -681,12 +691,16 @@ fn button_label_is_editable_without_renaming_the_field() {
     // The byte comparisons below must not vary with the save's /ModDate.
     let session = &mut h.state_mut().session;
     *session = std::mem::take(session).with_clock(|| 1_700_000_000);
-    h.state_mut().apply_edit(Edit::AddField {
-        page: 0,
-        rect: [40.0, 300.0, 190.0, 330.0],
-        kind: NewField::Button { caption: String::new() },
-        name: Some("clear_button".into()),
-    });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(
+        &ctx_h,
+        Edit::AddField {
+            page: 0,
+            rect: [40.0, 300.0, 190.0, 330.0],
+            kind: NewField::Button { caption: String::new() },
+            name: Some("clear_button".into()),
+        },
+    );
     open_props(&mut h, "clear_button");
     tab(&mut h, "Options");
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Label").click();
@@ -736,10 +750,14 @@ fn dropdown_alignment_is_editable_and_preserved() {
 fn choice_alignment(kind: pdfcraft_engine::NewField, label: &str, quadding: i64) {
     use pdfcraft_engine::{Edit, FieldProps, FieldValue};
     let mut h = harness();
-    h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [40.0, 260.0, 240.0, 310.0], kind, name: Some("aligned_choice".into()) });
-    h.state_mut()
-        .apply_edit(Edit::SetFieldProps { name: "aligned_choice".into(), props: Box::new(FieldProps { quadding: Some(2), ..Default::default() }) });
-    h.state_mut().apply_edit(Edit::SetFieldValue { name: "aligned_choice".into(), value: FieldValue::Choice(vec!["Two".into()]) });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::AddField { page: 0, rect: [40.0, 260.0, 240.0, 310.0], kind, name: Some("aligned_choice".into()) });
+    h.state_mut().apply_edit(
+        &egui::Context::default(),
+        Edit::SetFieldProps { name: "aligned_choice".into(), props: Box::new(FieldProps { quadding: Some(2), ..Default::default() }) },
+    );
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::SetFieldValue { name: "aligned_choice".into(), value: FieldValue::Choice(vec!["Two".into()]) });
     let field = |h: &Harness<'static, PdfCraftApp>| {
         let app = h.state();
         app.session.get(app.views[0].id).unwrap().form.iter().find(|f| f.name == "aligned_choice").unwrap().clone()
@@ -846,7 +864,7 @@ fn tab_numbers_follow_fill_order_without_dirtying_the_document() {
             .collect::<Vec<_>>();
         (order, rects, doc.can_undo())
     };
-    assert!(h.state().views[0].prepare.show_tab_numbers);
+    assert!(h.state().views[0].session.prepare.show_tab_numbers);
     assert_eq!(undo, None, "displaying the numbers does not edit the PDF");
     let size_widgets = order
         .iter()
@@ -901,7 +919,7 @@ fn tab_badge_tracks_its_widget_during_a_drag() {
     h.run_steps(1);
     h.drop_at(start);
     h.run_steps(3);
-    assert_eq!(h.state().views[0].prepare.selected.as_ref().map(|selected| (selected.0.as_str(), selected.1)), Some((name.as_str(), widget)));
+    assert_eq!(h.state().views[0].session.prepare.selected.as_ref().map(|selected| (selected.0.as_str(), selected.1)), Some((name.as_str(), widget)));
 
     let delta = egui::vec2(24.0, 16.0);
     h.hover_at(start);
@@ -921,7 +939,8 @@ fn tab_badge_tracks_its_widget_during_a_drag() {
 #[test]
 fn duplicating_a_field_onto_every_page() {
     let mut h = harness();
-    h.state_mut().apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 300.0, height: 400.0 });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 300.0, height: 400.0 });
     h.execute("form.prepare");
     h.run_steps(3);
     let (n, p) = {
@@ -955,12 +974,16 @@ fn aligning_distributing_and_sizing_several_fields() {
     use pdfcraft_ui_egui::prepare::{Arrange, arrange};
     let mut h = harness();
     for (name, x, y, w) in [("a", 20.0, 300.0, 60.0), ("b", 120.0, 280.0, 80.0), ("c", 260.0, 260.0, 30.0)] {
-        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
-            page: 0,
-            rect: [x, y, x + w, y + 20.0],
-            kind: pdfcraft_engine::NewField::Text { multiline: false },
-            name: Some(name.into()),
-        });
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(
+            &ctx_h,
+            pdfcraft_engine::Edit::AddField {
+                page: 0,
+                rect: [x, y, x + w, y + 20.0],
+                kind: pdfcraft_engine::NewField::Text { multiline: false },
+                name: Some(name.into()),
+            },
+        );
     }
     h.run_steps(2);
     let form = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().form.as_ref().clone();
@@ -969,17 +992,20 @@ fn aligning_distributing_and_sizing_several_fields() {
     let others = vec![("b".to_string(), 0), ("c".to_string(), 0)];
     // Align tops with a.
     let e = arrange(&form(&h), &a, &others, Arrange::AlignTop).unwrap();
-    h.state_mut().apply_edit(e);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, e);
     assert!(["b", "c"].iter().all(|n| rect(&h, n)[3] == 320.0));
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Align fields"));
     // Distribute horizontally: equal gaps between a, b and c.
     let e = arrange(&form(&h), &a, &others, Arrange::DistributeH).unwrap();
-    h.state_mut().apply_edit(e);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, e);
     let (ra, rb, rc) = (rect(&h, "a"), rect(&h, "b"), rect(&h, "c"));
     assert!(((rb[0] - ra[2]) - (rc[0] - rb[2])).abs() < 1e-6, "{ra:?} {rb:?} {rc:?}");
     // Same width as a.
     let e = arrange(&form(&h), &a, &others, Arrange::SameWidth).unwrap();
-    h.state_mut().apply_edit(e);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, e);
     assert!(["b", "c"].iter().all(|n| (rect(&h, n)[2] - rect(&h, n)[0] - 60.0).abs() < 1e-6));
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Match field sizes"));
     assert!(arrange(&form(&h), &a, &[("b".into(), 0)], Arrange::DistributeV).is_none(), "distributing needs three");
@@ -989,12 +1015,16 @@ fn aligning_distributing_and_sizing_several_fields() {
 fn deleting_several_selected_fields_and_detecting_fields_from_the_panel() {
     let mut h = harness();
     for (name, x) in [("a", 20.0), ("b", 120.0), ("c", 220.0)] {
-        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
-            page: 0,
-            rect: [x, 300.0, x + 60.0, 320.0],
-            kind: pdfcraft_engine::NewField::Text { multiline: false },
-            name: Some(name.into()),
-        });
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(
+            &ctx_h,
+            pdfcraft_engine::Edit::AddField {
+                page: 0,
+                rect: [x, 300.0, x + 60.0, 320.0],
+                kind: pdfcraft_engine::NewField::Text { multiline: false },
+                name: Some(name.into()),
+            },
+        );
     }
     assert!(h.execute("form.prepare"));
     h.run_steps(2);
@@ -1002,7 +1032,7 @@ fn deleting_several_selected_fields_and_detecting_fields_from_the_panel() {
     h.get_by_label("Detect form fields");
     // #95: Delete removes every selected field, as one undoable step.
     {
-        let p = &mut h.state_mut().views[0].prepare;
+        let p = &mut h.state_mut().views[0].session.prepare;
         p.selected = Some(("a".into(), 0));
         p.also = vec![("b".into(), 0), ("c".into(), 0)];
     }
@@ -1011,7 +1041,7 @@ fn deleting_several_selected_fields_and_detecting_fields_from_the_panel() {
     let left = names(&h);
     assert!(!["a", "b", "c"].iter().any(|n| left.iter().any(|l| l == n)), "{left:?}");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Delete 3 fields"));
-    assert!(h.state().views[0].prepare.selected.is_none() && h.state().views[0].prepare.also.is_empty());
+    assert!(h.state().views[0].session.prepare.selected.is_none() && h.state().views[0].session.prepare.also.is_empty());
 }
 
 #[test]
@@ -1032,7 +1062,7 @@ fn preview_fills_the_form_and_locked_fields_keep_their_properties() {
     h.run_steps(1);
     h.get_by_label("OK").click();
     h.run_steps(3);
-    let locked =|h: &Harness<'static, PdfCraftApp>| {
+    let locked = |h: &Harness<'static, PdfCraftApp>| {
         let s = h.state();
         s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "city").unwrap().locked()
     };
@@ -1235,7 +1265,7 @@ fn a_radio_button_joining_a_group_by_name_stays_selected() {
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(names(&h), ["Group1"]);
-    assert_eq!(h.state().views[0].prepare.selected, Some(("Group1".to_string(), 1)), "the moved button");
+    assert_eq!(h.state().views[0].session.prepare.selected, Some(("Group1".to_string(), 1)), "the moved button");
     h.key_press(egui::Key::ArrowRight);
     h.run_steps(2);
     let nudged = rects(&h);
@@ -1381,7 +1411,8 @@ fn enter_in_a_number_field_does_not_add_the_table() {
 fn the_table_window_closes_when_its_document_is_left() {
     let mut h = harness();
     let blank = pdfcraft_engine::Session::new().create_blank(300.0, 400.0, 1).unwrap().to_vec();
-    h.state_mut().open_bytes("other.pdf", None, blank).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "other.pdf", None, blank).unwrap();
     h.state_mut().active = Some(0);
     h.run_steps(4);
     let before = names(&h).len();
@@ -1436,7 +1467,8 @@ fn the_table_window_closes_when_the_document_changes_under_it() {
     let mut h = harness();
     let before = names(&h);
     draw_table(&mut h);
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
     h.run_steps(2);
     assert!(!table_open(&h), "closed by the rotation");
     assert_eq!(names(&h), before, "nothing added");
@@ -1541,21 +1573,28 @@ fn the_calculation_order_is_moved_dragged_and_fixed() {
     for (i, name) in ["qty", "sub", "total", "other"].into_iter().enumerate() {
         let y = 200.0 + 30.0 * i as f64;
         let kind = NewField::Text { multiline: false };
-        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(&ctx_h, Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
     }
     let calculate = |name: &str, c: Calculate| Edit::SetFieldProps {
         name: name.into(),
         props: Box::new(FieldProps { calculate: Some(c), ..Default::default() }),
     };
     // Defined backwards: total, which reads sub, calculates first.
-    h.state_mut().apply_edit(calculate("total", Calculate::Simple { op: CalcOp::Sum, fields: vec!["sub".into()] }));
-    h.state_mut().apply_edit(calculate("sub", Calculate::Notation("qty * 2".into())));
-    h.state_mut().apply_edit(calculate("other", Calculate::Notation("qty + 1".into())));
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, calculate("total", Calculate::Simple { op: CalcOp::Sum, fields: vec!["sub".into()] }));
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, calculate("sub", Calculate::Notation("qty * 2".into())));
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, calculate("other", Calculate::Notation("qty + 1".into())));
     // other shows its value as currency.
     let currency = Format::Number { decimals: 2, sep: 0, neg: 0, currency: "$".into(), prepend: true };
-    h.state_mut()
-        .apply_edit(Edit::SetFieldProps { name: "other".into(), props: Box::new(FieldProps { format: Some(currency), ..Default::default() }) });
-    h.state_mut().apply_edit(Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("3".into()) });
+    h.state_mut().apply_edit(
+        &egui::Context::default(),
+        Edit::SetFieldProps { name: "other".into(), props: Box::new(FieldProps { format: Some(currency), ..Default::default() }) },
+    );
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("3".into()) });
     h.execute("form.prepare");
     h.run_steps(3);
     h.get_by_label("Calculation order").click();
@@ -1620,7 +1659,7 @@ fn the_calculation_order_is_moved_dragged_and_fixed() {
     // A row selects its field.
     order_row(&h, "sub").click();
     h.run_steps(2);
-    assert_eq!(h.state().views[0].prepare.selected.as_ref().map(|s| s.0.as_str()), Some("sub"));
+    assert_eq!(h.state().views[0].session.prepare.selected.as_ref().map(|s| s.0.as_str()), Some("sub"));
 }
 
 /// Fields that read each other get a card of their own, which Fix order leaves alone, and its
@@ -1633,9 +1672,11 @@ fn a_loop_has_its_own_card_that_opens_the_formula() {
     for (i, (name, formula)) in [("a", "b + 1"), ("b", "a + 1")].into_iter().enumerate() {
         let y = 200.0 + 30.0 * i as f64;
         let kind = NewField::Text { multiline: false };
-        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(&ctx_h, Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
         let props = Box::new(FieldProps { calculate: Some(Calculate::Notation(formula.into())), ..Default::default() });
-        h.state_mut().apply_edit(Edit::SetFieldProps { name: name.into(), props });
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(&ctx_h, Edit::SetFieldProps { name: name.into(), props });
     }
     h.execute("form.prepare");
     h.run_steps(3);
@@ -1655,15 +1696,21 @@ fn a_loop_has_its_own_card_that_opens_the_formula() {
 fn radio_group_harness() -> Harness<'static, PdfCraftApp> {
     let mut h = harness();
     for (x, export) in [(20.0, "S"), (60.0, "M"), (100.0, "L")] {
-        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
-            page: 0,
-            rect: [x, 300.0, x + 14.0, 314.0],
-            kind: pdfcraft_engine::NewField::Radio { group: Some("shirt".into()), export: export.into() },
-            name: Some("shirt".into()),
-        });
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(
+            &ctx_h,
+            pdfcraft_engine::Edit::AddField {
+                page: 0,
+                rect: [x, 300.0, x + 14.0, 314.0],
+                kind: pdfcraft_engine::NewField::Radio { group: Some("shirt".into()), export: export.into() },
+                name: Some("shirt".into()),
+            },
+        );
     }
-    h.state_mut()
-        .apply_edit(pdfcraft_engine::Edit::SetFieldValue { name: "shirt".into(), value: pdfcraft_engine::FieldValue::Radio(Some("L".into())) });
+    h.state_mut().apply_edit(
+        &egui::Context::default(),
+        pdfcraft_engine::Edit::SetFieldValue { name: "shirt".into(), value: pdfcraft_engine::FieldValue::Radio(Some("L".into())) },
+    );
     assert!(h.execute("form.prepare"));
     h.run_steps(3);
     h
@@ -1693,7 +1740,7 @@ fn deleting_one_radio_button_keeps_the_rest_of_its_group() {
     h.run_steps(1);
     h.drop_at(p);
     h.run_steps(3);
-    assert_eq!(h.state().views[0].prepare.selected, Some(("shirt".into(), 1)), "the middle button is selected");
+    assert_eq!(h.state().views[0].session.prepare.selected, Some(("shirt".into(), 1)), "the middle button is selected");
     h.key_press(egui::Key::Delete);
     h.run_steps(3);
     assert_eq!(buttons(&h), (vec!["S".into(), "L".into()], vec!["L".into()]), "only M is gone; L stays chosen");
@@ -1708,7 +1755,7 @@ fn deleting_one_radio_button_keeps_the_rest_of_its_group() {
 fn deleting_two_radio_buttons_of_a_group_at_once() {
     let mut h = radio_group_harness();
     {
-        let p = &mut h.state_mut().views[0].prepare;
+        let p = &mut h.state_mut().views[0].session.prepare;
         p.selected = Some(("shirt".into(), 0));
         p.also = vec![("shirt".into(), 2)];
     }
@@ -1717,7 +1764,7 @@ fn deleting_two_radio_buttons_of_a_group_at_once() {
     assert_eq!(buttons(&h), (vec!["M".into()], vec![]), "M is left, and nothing is chosen");
     // Selecting every button deletes the group.
     {
-        let p = &mut h.state_mut().views[0].prepare;
+        let p = &mut h.state_mut().views[0].session.prepare;
         p.selected = Some(("shirt".into(), 0));
     }
     h.key_press(egui::Key::Delete);
@@ -1760,7 +1807,7 @@ fn fields_sharing_a_name_each_show_their_own_formula() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("dup.pdf", None, bytes.clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "dup.pdf", None, bytes.clone()).unwrap();
         app
     });
     h.run_steps(4);
@@ -1786,10 +1833,12 @@ fn a_notation_that_cannot_be_stored_keeps_field_properties_open() {
     for (i, name) in ["qty", "sub"].into_iter().enumerate() {
         let y = 200.0 + 30.0 * i as f64;
         let kind = NewField::Text { multiline: false };
-        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(&ctx_h, Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
     }
     let props = Box::new(FieldProps { calculate: Some(Calculate::Notation("qty * 2".into())), ..Default::default() });
-    h.state_mut().apply_edit(Edit::SetFieldProps { name: "sub".into(), props });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::SetFieldProps { name: "sub".into(), props });
     let formula = |h: &Harness<'static, PdfCraftApp>| {
         let s = h.state();
         s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "sub").unwrap().actions.calculate.clone()
@@ -1825,25 +1874,30 @@ fn a_formula_reading_a_missing_field_has_its_own_card() {
     for (i, name) in ["qty", "discount", "sub", "rows"].into_iter().enumerate() {
         let y = 200.0 + 30.0 * i as f64;
         let kind = NewField::Text { multiline: false };
-        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(&ctx_h, Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
     }
     let props = Box::new(FieldProps { calculate: Some(Calculate::Notation("qty - discount".into())), ..Default::default() });
-    h.state_mut().apply_edit(Edit::SetFieldProps { name: "sub".into(), props });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::SetFieldProps { name: "sub".into(), props });
     let script = Some("event.value = getField(\"row\" + 1).value;".to_owned());
-    h.state_mut().apply_edit(Edit::SetFieldScript { name: "rows".into(), event: "calculate".into(), script });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::SetFieldScript { name: "rows".into(), event: "calculate".into(), script });
     h.execute("form.prepare");
     h.run_steps(3);
     h.get_by_label("Calculation order").click();
     h.run_steps(3);
     assert!(h.query_by_label("Every field calculates after the fields it reads.").is_some(), "nothing is missing yet");
     assert!(h.query_by_label("rows builds some field names as it runs, so those reads aren't checked.").is_some());
-    h.state_mut().apply_edit(Edit::DeleteField { name: "discount".into() });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::DeleteField { name: "discount".into() });
     h.run_steps(3);
     assert!(h.query_by_label("1 formula reads a field the form doesn't have").is_some());
     assert!(h.query_by_label("sub reads discount, which the form doesn't have.").is_some());
     assert!(h.query_by_label("Every field calculates after the fields it reads.").is_none(), "no all-clear while a formula is broken");
     // Reordered, the order can be undone from the missing-field card; the all-clear still stays away.
-    h.state_mut().apply_edit(Edit::SetCalculationOrder { names: vec!["rows".into(), "sub".into()] });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::SetCalculationOrder { names: vec!["rows".into(), "sub".into()] });
     h.run_steps(3);
     assert!(h.query_by_label("Every field calculates after the fields it reads.").is_none(), "still no all-clear");
     h.get_by_label("Undo").click();
@@ -1970,5 +2024,5 @@ fn with_prepare_open_a_double_click_on_a_field_leaves_the_polygon_unfinished() {
     let s = h.state();
     let polygons = s.session.get(s.views[0].id).unwrap().info.annotations.iter().filter(|a| a.subtype == "Polygon").count();
     assert_eq!(polygons, 0, "the polygon is not finished");
-    assert!(!s.views[0].comments.tool.drawing().is_empty(), "it is still being clicked out");
+    assert!(!s.views[0].session.comments.tool.drawing().is_empty(), "it is still being clicked out");
 }

@@ -39,7 +39,7 @@ fn open(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 800.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("form.pdf", None, bytes).expect("opens");
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, bytes).expect("opens");
         app
     });
     h.run_steps(4);
@@ -161,7 +161,7 @@ fn xfa_enter_and_exit_scripts_run_whenever_the_focus_moves() {
         let v = |n: &str| doc.form.iter().find(|f| f.name == n).and_then(|f| f.value.first().cloned()).unwrap_or_default();
         (v("enters"), v("exits"))
     };
-    let focus = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].forms.focus.as_ref().map(|f| f.name.clone());
+    let focus = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].session.forms.focus.as_ref().map(|f| f.name.clone());
     let press = |h: &mut Harness<'static, PdfCraftApp>, modifiers, key| {
         h.key_press_modifiers(modifiers, key);
         h.run_steps(4);
@@ -205,7 +205,7 @@ fn an_enter_script_that_changes_its_field_shows_in_the_editor() {
     assert_eq!(value(&h), "Type here");
     click_field(&mut h, "hint");
     assert_eq!(value(&h), "", "the enter script cleared it");
-    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.text.clone()).as_deref(), Some(""), "and the editor shows that");
+    assert_eq!(h.state().views[0].session.forms.focus.as_ref().map(|f| f.text.clone()).as_deref(), Some(""), "and the editor shows that");
     h.key_press_modifiers(Modifiers::NONE, Key::Tab);
     h.run_steps(4);
     assert_eq!(value(&h), "", "leaving it doesn't write \"Type here\" back");
@@ -220,7 +220,11 @@ fn an_enter_script_that_changes_its_field_shows_in_the_editor() {
     click_field(&mut h, "relay");
     click_field(&mut h, "hint");
     assert_eq!(value(&h), "", "relay's exit, then hint's enter");
-    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.text.clone()).as_deref(), Some(""), "the editor holds the enter script's value");
+    assert_eq!(
+        h.state().views[0].session.forms.focus.as_ref().map(|f| f.text.clone()).as_deref(),
+        Some(""),
+        "the editor holds the enter script's value"
+    );
     h.key_press_modifiers(Modifiers::NONE, Key::Tab);
     h.run_steps(4);
     assert_eq!(value(&h), "");
@@ -359,11 +363,11 @@ fn opening_another_document_keeps_the_highlight_the_one_in_front_reads() {
     let app = h.state_mut();
     // The document in front has Highlight fields on; the remembered setting is off.
     app.view_defaults.highlight_fields = false;
-    app.views[0].highlight_fields = true;
+    app.views[0].session.highlight_fields = true;
     h.run_steps(2);
     let app = h.state_mut();
     let first = app.views[0].id;
-    app.open_bytes("next.pdf", None, pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(1))).unwrap();
+    app.open_bytes(&egui::Context::default(), "next.pdf", None, pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(1))).unwrap();
     // Before the next frame, the first document's script reads its own setting.
     app.session.apply(first, pdfcraft_engine::Edit::XfaEvent { som: "form[0].look[0]".into(), activity: "click".into() }).unwrap();
     let seen = app.session.get(first).unwrap().form.iter().find(|f| f.name == "seen").map(|f| f.value.clone()).unwrap_or_default();
@@ -376,8 +380,9 @@ fn opening_another_document_keeps_the_highlight_the_one_in_front_reads() {
 fn a_form_that_turns_field_highlighting_on_gets_it() {
     let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::layout_ready_template()));
     h.run_steps(4);
-    assert!(h.state().views[0].highlight_fields, "the form's fields are highlighted");
-    h.state_mut().open_bytes("next.pdf", None, pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(1))).unwrap();
+    assert!(h.state().views[0].session.highlight_fields, "the form's fields are highlighted");
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "next.pdf", None, pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::template(1))).unwrap();
     h.run_steps(4);
-    assert!(h.state().views[1].highlight_fields, "the next document opens highlighted");
+    assert!(h.state().views[1].session.highlight_fields, "the next document opens highlighted");
 }

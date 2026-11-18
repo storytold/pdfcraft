@@ -2,10 +2,10 @@
 
 use crate::support;
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{By, NodeT, Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
-use crate::support::AppHarness as _;
 
 /// A tiny PDF with two pages, two bookmarks and one sticky note.
 const FIXTURE: &[u8] = b"%PDF-1.7
@@ -215,13 +215,13 @@ fn opening_a_document_puts_the_expanded_all_tools_away() {
     // All tools as the default workspace: no workspace change, but the document must show.
     let mut app = crate::control::new_app();
     app.set_option(&egui::Context::default(), "tools", "full").unwrap();
-    app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
+    app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
     assert!(!app.all_tools_full, "the document shows, not the catalogue over it");
     // Read as the default workspace: coming back to All tools later shows the sidebar.
     let mut app = crate::control::new_app();
     app.set_option(&egui::Context::default(), "default-mode", "read").unwrap();
     app.set_option(&egui::Context::default(), "tools", "full").unwrap();
-    app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
+    app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
     assert_eq!(app.mode, Mode::Read);
     assert!(!app.all_tools_full);
 }
@@ -239,7 +239,7 @@ fn choosing_a_tool_puts_the_expanded_all_tools_away() {
 #[test]
 fn another_tab_coming_forward_puts_the_expanded_all_tools_away() {
     // Home, through the control option.
-    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     h.set_option("tools", "full").unwrap();
     h.run_steps(3);
     assert!(h.state().all_tools_full, "the document's own tab keeps it");
@@ -249,8 +249,8 @@ fn another_tab_coming_forward_puts_the_expanded_all_tools_away() {
     h.get_by_label_contains("Welcome to PdfCraft");
     // Another document's tab.
     let mut h = harness(|app| {
-        app.open_bytes("one.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
-        app.open_bytes("two.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
+        app.open_bytes(&egui::Context::default(), "one.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
+        app.open_bytes(&egui::Context::default(), "two.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
     });
     h.set_option("tools", "full").unwrap();
     h.run_steps(3);
@@ -272,7 +272,7 @@ fn going_home_with_no_document_puts_the_expanded_all_tools_away() {
 #[test]
 fn expanding_all_tools_from_read_mode_restores_the_right_panel() {
     use pdfcraft_ui_egui::{Mode, RightPanel};
-    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     h.set_option("panel", "bookmarks").unwrap();
     h.execute("view.read_mode");
     h.run_steps(3);
@@ -286,7 +286,7 @@ fn expanding_all_tools_from_read_mode_restores_the_right_panel() {
 #[test]
 fn expanding_all_tools_from_edit_puts_edit_text_down() {
     use pdfcraft_ui_egui::{LeftPanel, Mode, QuickTool};
-    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     support::outside_menus(&h, "Edit").click();
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::EditText);
@@ -299,7 +299,7 @@ fn expanding_all_tools_from_edit_puts_edit_text_down() {
 
 #[test]
 fn opening_a_pdf_shows_comments_and_bookmarks() {
-    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     // Documents with comments open on the Comments panel, like Acrobat.
     h.get_by_label_contains("Check the numbers");
     h.get_by_label("Bookmarks").click();
@@ -313,7 +313,7 @@ fn opening_a_pdf_shows_comments_and_bookmarks() {
 #[test]
 fn closed_side_panes_stay_closed_after_a_restart_and_opening_a_pdf() {
     use pdfcraft_ui_egui::RightPanel;
-    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     assert_eq!(h.state().right, Some(RightPanel::Comments));
     assert!(h.state().left_open);
     h.state_mut().choose_right_panel(None);
@@ -322,13 +322,14 @@ fn closed_side_panes_stay_closed_after_a_restart_and_opening_a_pdf() {
     let saved = h.state().settings_snapshot();
     let mut h = harness(move |app| {
         app.apply_settings(&saved);
-        app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
+        app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
     });
     assert_eq!(h.state().right, None, "the closed right pane reopened");
     assert!(!h.state().left_open, "the closed left pane reopened");
     assert!(h.query_by_label_contains("Check the numbers").is_none());
     // Within a session too: another document opens with them closed.
-    h.state_mut().open_bytes("again.pdf", None, FIXTURE.to_vec()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "again.pdf", None, FIXTURE.to_vec()).unwrap();
     h.run_steps(3);
     assert_eq!(h.state().right, None);
     assert!(!h.state().left_open);
@@ -340,23 +341,24 @@ fn closed_side_panes_stay_closed_after_a_restart_and_opening_a_pdf() {
 fn closed_right_panel_stays_closed_for_a_document_asking_for_its_outline() {
     use pdfcraft_ui_egui::RightPanel;
     let pdf = || String::from_utf8(FIXTURE.to_vec()).unwrap().replace("/Outlines 6 0 R", "/Outlines 6 0 R /PageMode /UseOutlines").into_bytes();
-    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     assert_eq!(h.state().right, Some(RightPanel::Comments));
     h.state_mut().choose_right_panel(None);
-    h.state_mut().open_bytes("outline.pdf", None, pdf()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "outline.pdf", None, pdf()).unwrap();
     h.run_steps(3);
     assert_eq!(h.state().right, None, "the outline request reopened the closed right panel");
     let saved = h.state().settings_snapshot();
     let h = harness(move |app| {
         app.apply_settings(&saved);
-        app.open_bytes("outline.pdf", None, pdf()).expect("outline PDF opens");
+        app.open_bytes(&egui::Context::default(), "outline.pdf", None, pdf()).expect("outline PDF opens");
     });
     assert_eq!(h.state().right, None, "the closed right panel reopened after a restart");
 }
 
 #[test]
 fn navigation_rail_toggles_between_right_and_left_and_persists() {
-    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     assert_eq!(side(&mut h, "rail_side"), "right");
     h.get_by_label("Dock navigation rail on Left").click();
     h.run_steps(3);
@@ -385,7 +387,7 @@ fn read_mode_rail_buttons_open_their_panels() {
     use pdfcraft_ui_egui::{Mode, RightPanel};
     let mut h = harness(|app| {
         app.default_mode = Mode::Read;
-        app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
+        app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
     });
     assert_eq!(h.state().mode, Mode::Read);
     assert_eq!(h.state().right, None, "Read mode opens with the panes closed");
@@ -404,19 +406,19 @@ fn read_mode_rail_buttons_open_their_panels() {
     // unless the user closed the panel (#2884), so forget that closing here.
     h.state_mut().right_panel_closed = false;
     let pdf = String::from_utf8(FIXTURE.to_vec()).unwrap().replace("/Outlines 6 0 R", "/Outlines 6 0 R /PageMode /UseOutlines");
-    h.state_mut().open_bytes("outline.pdf", None, pdf.into_bytes()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "outline.pdf", None, pdf.into_bytes()).unwrap();
     h.run_steps(3);
     assert_eq!(h.state().mode, Mode::Read);
     h.get_by_label("Alpha section");
 }
-
 
 /// A document that asks to open in Full Screen mode (`/PageMode /FullScreen`) is asked about
 /// first, as in Acrobat: "Not now" leaves the window as it is, "Full Screen" enters it.
 #[test]
 fn a_document_asking_for_full_screen_is_asked_about_first() {
     let deck = || String::from_utf8(FIXTURE.to_vec()).unwrap().replace("/Outlines 6 0 R", "/Outlines 6 0 R /PageMode /FullScreen").into_bytes();
-    let mut h = harness(move |app| app.open_bytes("deck.pdf", None, deck()).expect("opens"));
+    let mut h = harness(move |app| app.open_bytes(&egui::Context::default(), "deck.pdf", None, deck()).expect("opens"));
     h.run_steps(3);
     assert!(!h.state().full_screen(), "nothing happens before the answer");
     h.get_by_label("Open in Full Screen mode?");
@@ -426,7 +428,8 @@ fn a_document_asking_for_full_screen_is_asked_about_first() {
     assert!(h.query_by_label("Open in Full Screen mode?").is_none(), "the prompt is gone");
     // Asked again for the next such document; Full Screen enters it.
     let again = String::from_utf8(FIXTURE.to_vec()).unwrap().replace("/Outlines 6 0 R", "/Outlines 6 0 R /PageMode /FullScreen").into_bytes();
-    h.state_mut().open_bytes("deck2.pdf", None, again).expect("opens");
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "deck2.pdf", None, again).expect("opens");
     h.run_steps(3);
     h.get_by_label("Full Screen").click();
     h.run_steps(3);
@@ -435,7 +438,8 @@ fn a_document_asking_for_full_screen_is_asked_about_first() {
     // A plain document asks nothing.
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
-    h.state_mut().open_bytes("plain.pdf", None, FIXTURE.to_vec()).expect("opens");
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "plain.pdf", None, FIXTURE.to_vec()).expect("opens");
     h.run_steps(3);
     assert!(h.query_by_label("Open in Full Screen mode?").is_none() && !h.state().full_screen());
 }
@@ -444,7 +448,7 @@ fn a_document_asking_for_full_screen_is_asked_about_first() {
 #[test]
 fn read_mode_closes_the_panes_and_leaving_it_brings_them_back() {
     use pdfcraft_ui_egui::{Mode, RightPanel};
-    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     assert_eq!(h.state().right, Some(RightPanel::Comments));
     h.state_mut().run_command("view.read_mode");
     h.run_steps(3);
@@ -469,7 +473,7 @@ fn read_mode_closes_the_panes_and_leaving_it_brings_them_back() {
 #[test]
 fn read_mode_hides_the_quick_toolbar() {
     use pdfcraft_ui_egui::{Mode, QuickTool};
-    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     h.get_by_label("Hand (H)").click();
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Hand);
@@ -488,7 +492,7 @@ fn read_mode_hides_the_quick_toolbar() {
 #[test]
 fn edit_a_pdf_from_all_tools_turns_on_editing() {
     use pdfcraft_ui_egui::{Mode, QuickTool};
-    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     assert_eq!(h.state().mode, Mode::AllTools);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
     h.get_by_label("Edit a PDF").click();
@@ -521,11 +525,12 @@ fn edit_a_pdf_from_all_tools_turns_on_editing() {
 #[test]
 fn opening_into_read_mode_puts_the_tool_down() {
     use pdfcraft_ui_egui::{Mode, QuickTool};
-    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     assert_eq!(h.state().mode, Mode::AllTools);
     h.set_option("quick", "hand").unwrap();
     h.set_option("default-mode", "read").unwrap();
-    h.state_mut().open_bytes("again.pdf", None, FIXTURE.to_vec()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "again.pdf", None, FIXTURE.to_vec()).unwrap();
     h.run_steps(3);
     assert_eq!(h.state().mode, Mode::Read, "the new document opens in the default mode");
     assert_eq!(h.state().quick_tool, QuickTool::Select, "no tool stays active behind the hidden toolbar");
@@ -536,7 +541,7 @@ fn opening_into_read_mode_puts_the_tool_down() {
 #[test]
 fn a_pane_closed_in_read_mode_stays_closed_when_leaving_it() {
     use pdfcraft_ui_egui::{Mode, RightPanel};
-    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     assert_eq!(h.state().right, Some(RightPanel::Comments));
     h.state_mut().run_command("view.read_mode");
     h.run_steps(3);
@@ -569,14 +574,13 @@ fn a_pane_closed_in_read_mode_stays_closed_when_leaving_it() {
     assert!(h.state().comments_panel_closed);
 }
 
-
 /// A middle click on a tab closes it, as in Acrobat and browsers (#1853); a tab with unsaved
 /// changes asks first, as its close button does.
 #[test]
 fn a_middle_click_closes_the_tab() {
     let mut h = harness(|app| {
-        app.open_bytes("first.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("second.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "first.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "second.pdf", None, FIXTURE.to_vec()).unwrap();
     });
     h.get_by_label("first.pdf").click_button(egui::PointerButton::Middle);
     h.run_steps(3);
@@ -584,7 +588,8 @@ fn a_middle_click_closes_the_tab() {
     assert_eq!(app.views.len(), 1);
     assert_eq!(app.session.get(app.views[0].id).unwrap().name, "second.pdf");
     assert!(h.query_by_label("Cancel").is_none(), "a clean document closes without asking");
-    h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
     h.run_steps(2);
     h.get_by_label("second.pdf (edited)").click_button(egui::PointerButton::Middle);
     h.run_steps(3);
@@ -596,8 +601,8 @@ fn a_middle_click_closes_the_tab() {
 fn a_link_prompt_above_a_save_prompt_owns_its_keys() {
     for key in [egui::Key::Escape, egui::Key::Enter] {
         let mut h = harness(|app| {
-            app.open_bytes("first.pdf", None, FIXTURE.to_vec()).unwrap();
-            app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+            app.open_bytes(&egui::Context::default(), "first.pdf", None, FIXTURE.to_vec()).unwrap();
+            app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
         });
         h.run_steps(3);
         // The save prompt is the close dialog the tab's close action opens.
@@ -617,7 +622,6 @@ fn a_link_prompt_above_a_save_prompt_owns_its_keys() {
     }
 }
 
-
 /// Whether a node labelled `label` is there and enabled (`None`: not there).
 fn enabled(h: &Harness<'static, PdfCraftApp>, label: &str) -> Option<bool> {
     h.query_by_label(label)?;
@@ -631,7 +635,7 @@ fn tabs_shrink_to_fit_then_arrows_step_through_them_and_open_stays_in_sight() {
     let name = |i: usize| format!("Statement {i} for the office records, scanned.pdf");
     let mut h = harness(move |app| {
         for i in 0..5 {
-            app.open_bytes(&name(i), None, FIXTURE.to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), &name(i), None, FIXTURE.to_vec()).unwrap();
         }
     });
     let open = h.get_by_label("Open").rect();
@@ -646,13 +650,15 @@ fn tabs_shrink_to_fit_then_arrows_step_through_them_and_open_stays_in_sight() {
     }
     // Seven and twenty tabs: Open stays in sight left of Discord.
     for i in 5..7 {
-        h.state_mut().open_bytes(&name(i), None, FIXTURE.to_vec()).unwrap();
+        let ctx_h = h.ctx.clone();
+        h.state_mut().open_bytes(&ctx_h, &name(i), None, FIXTURE.to_vec()).unwrap();
     }
     h.run_steps(6);
     let (open, discord) = (h.get_by_label("Open").rect(), h.get_by_label("Discord").rect());
     assert!(open.right() <= discord.left(), "Open {open:?} stays left of Discord {discord:?} with seven tabs");
     for i in 0..13 {
-        h.state_mut().open_bytes(&format!("more-{i:02}.pdf"), None, FIXTURE.to_vec()).unwrap();
+        let ctx_h = h.ctx.clone();
+        h.state_mut().open_bytes(&ctx_h, &format!("more-{i:02}.pdf"), None, FIXTURE.to_vec()).unwrap();
     }
     h.run_steps(4);
     let open = h.get_by_label("Open").rect();
@@ -660,23 +666,22 @@ fn tabs_shrink_to_fit_then_arrows_step_through_them_and_open_stays_in_sight() {
     assert!(open.left() > 0.0 && open.right() <= discord.left(), "Open {open:?} stays in sight left of Discord {discord:?}");
 }
 
-
 #[test]
 fn garbage_input_is_rejected_without_panicking() {
     let mut app = crate::control::new_app();
     app.set_option(&egui::Context::default(), "language", "en").unwrap();
-    assert!(app.open_bytes("junk.pdf", None, b"this is not a pdf".to_vec()).is_err());
-    assert!(app.open_bytes("empty.pdf", None, Vec::new()).is_err());
+    assert!(app.open_bytes(&egui::Context::default(), "junk.pdf", None, b"this is not a pdf".to_vec()).is_err());
+    assert!(app.open_bytes(&egui::Context::default(), "empty.pdf", None, Vec::new()).is_err());
     let mut truncated = FIXTURE.to_vec();
     truncated.truncate(FIXTURE.len() / 3);
     // A truncated file either repairs or fails cleanly; it must not panic.
-    let _ = app.open_bytes("truncated.pdf", None, truncated);
+    let _ = app.open_bytes(&egui::Context::default(), "truncated.pdf", None, truncated);
 }
 
 #[test]
 fn theme_and_view_options_apply() {
     let mut h = harness(|app| {
-        app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
+        app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
         app.set_option(&egui::Context::default(), "theme", "dark").unwrap();
         app.set_option(&egui::Context::default(), "panel", "pages").unwrap();
         app.set_option(&egui::Context::default(), "page", "2").unwrap();
@@ -705,7 +710,7 @@ trailer << /Root 1 0 R >>
 #[test]
 fn find_counts_matches_across_pages() {
     let mut h = harness(|app| {
-        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option(&egui::Context::default(), "find", "brown").unwrap();
     });
     crate::support::settle(&mut h);
@@ -718,7 +723,7 @@ fn find_counts_matches_across_pages() {
 #[test]
 fn find_reports_no_matches() {
     let mut h = harness(|app| {
-        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option(&egui::Context::default(), "find", "zebra").unwrap();
     });
     crate::support::settle(&mut h);
@@ -728,7 +733,7 @@ fn find_reports_no_matches() {
 #[test]
 fn drag_selects_text_and_copy_returns_it() {
     let mut h = harness(|app| {
-        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
     });
     crate::support::settle(&mut h);
@@ -851,15 +856,16 @@ fn part_opacity_defaults_persist_and_clamp() {
     assert_eq!(parts(&b, CommentTool::Rectangle), (Some(0.3), None));
     assert_eq!(parts(&b, CommentTool::TextBox), (Some(0.2), Some(1.0)));
     assert_eq!(parts(&b, CommentTool::Line), (None, None), "a line has no fill or text of its own");
-    b.apply_settings(&pdfcraft_ui_egui::settings::import_json(r#"{"comment_styles":[{"tool":"comment.freetext","fill_opacity":7,"text_opacity":-1}]}"#).0);
+    b.apply_settings(
+        &pdfcraft_ui_egui::settings::import_json(r#"{"comment_styles":[{"tool":"comment.freetext","fill_opacity":7,"text_opacity":-1}]}"#).0,
+    );
     assert_eq!(parts(&b, CommentTool::TextBox), (Some(1.0), Some(0.1)), "clamped; the text stays visible");
 }
-
 
 #[test]
 fn trackpad_pinch_zooms_the_pdf_under_the_pointer() {
     let mut h = harness(|app| {
-        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "panel", "none").unwrap();
     });
@@ -884,7 +890,7 @@ fn trackpad_pinch_zooms_the_pdf_under_the_pointer() {
 fn selection_works_in_every_view_rotation() {
     for deg in ["90", "180", "270"] {
         let mut h = harness(move |app| {
-            app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+            app.open_bytes(&egui::Context::default(), "text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
             app.set_option(&egui::Context::default(), "left", "closed").unwrap();
             app.set_option(&egui::Context::default(), "rotate", deg).unwrap();
             // Keep the whole rotated page on screen.
@@ -983,7 +989,7 @@ fn a_file_dropped_on_the_page_grid_is_read_from_disk_and_inserted() {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         let grid = app.session.create_from_text("grid", "one page").unwrap();
-        app.open_bytes("grid.pdf", None, grid.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "grid.pdf", None, grid.to_vec()).unwrap();
         app.views[0].organize = true;
         app
     });
@@ -1064,7 +1070,8 @@ fn combine_tab_with_one_file() -> Harness<'static, PdfCraftApp> {
     h.run_steps(3);
     h.set_option("combine-view", "list").unwrap();
     h.execute("page.combine");
-    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("first.pdf".into(), FIXTURE.to_vec())]);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().use_files(&ctx_h, pdfcraft_ui_egui::FilePurpose::Combine, vec![("first.pdf".into(), FIXTURE.to_vec())]);
     h.run_steps(2);
     h
 }
@@ -1126,7 +1133,8 @@ fn a_file_combine_does_not_take_is_left_out_of_a_drop_and_named() {
 #[test]
 fn a_pdf_dropped_on_a_document_opens_while_the_combine_tab_waits_behind_it() {
     let mut h = combine_tab_with_one_file();
-    h.state_mut().open_bytes("open.pdf", None, FIXTURE.to_vec()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "open.pdf", None, FIXTURE.to_vec()).unwrap();
     h.run_steps(2);
     assert!(!h.state().combine_showing() && h.state().combine_tab.open);
     let file: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: "dropped.pdf".into(), bytes: FIXTURE.to_vec() });
@@ -1278,7 +1286,7 @@ fn default_workspace_mode_persists_and_tolerates_invalid_settings() {
         restored.set_option(&egui::Context::default(), "language", "en").unwrap();
         restored.apply_settings(&app.settings_snapshot());
         assert_eq!(restored.default_mode, mode);
-        restored.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).unwrap();
+        restored.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).unwrap();
         assert_eq!(restored.mode, mode, "session override must not be persisted");
     }
     for json in ["{}", "{not json", r#"{"default_mode": null}"#, r#"{"default_mode": 5}"#, r#"{"default_mode": "unknown"}"#] {
@@ -1286,7 +1294,7 @@ fn default_workspace_mode_persists_and_tolerates_invalid_settings() {
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.apply_settings(&pdfcraft_ui_egui::settings::import_json(json).0);
         assert_eq!(app.default_mode, Mode::AllTools);
-        app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).unwrap();
         assert_eq!(app.mode, Mode::AllTools);
     }
     // Chosen in Preferences, the default applies to the next open.
@@ -1301,7 +1309,8 @@ fn default_workspace_mode_persists_and_tolerates_invalid_settings() {
     h.run_steps(2);
     assert_eq!(h.state().default_mode, Mode::Read);
     assert_eq!(h.state().mode, Mode::AllTools);
-    h.state_mut().open_bytes("fixture.pdf", None, FIXTURE.to_vec()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "fixture.pdf", None, FIXTURE.to_vec()).unwrap();
     assert_eq!(h.state().mode, Mode::Read);
 }
 
@@ -1311,17 +1320,17 @@ fn newly_opened_pdfs_use_the_default_workspace() {
     let mut app = crate::control::new_app();
     app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app.apply_settings(&pdfcraft_ui_egui::settings::import_json(r#"{"default_mode": "edit"}"#).0);
-    app.open_bytes("first.pdf", None, FIXTURE.to_vec()).unwrap();
+    app.open_bytes(&egui::Context::default(), "first.pdf", None, FIXTURE.to_vec()).unwrap();
     assert_eq!(app.mode, Mode::Edit);
     assert_eq!(app.left, LeftPanel::Tool("edit"));
     app.default_mode = Mode::Read;
     assert_eq!(app.mode, Mode::Edit, "changing the preference affects future opens");
-    app.open_bytes("second.pdf", None, FIXTURE.to_vec()).unwrap();
+    app.open_bytes(&egui::Context::default(), "second.pdf", None, FIXTURE.to_vec()).unwrap();
     assert_eq!(app.mode, Mode::Read);
     // PDF Initial View is independent of the workspace preference.
     let pdf =
         String::from_utf8(FIXTURE.to_vec()).unwrap().replace("/Outlines 6 0 R", "/Outlines 6 0 R /PageLayout /TwoColumnLeft /PageMode /UseOutlines");
-    app.open_bytes("initial-view.pdf", None, pdf.into_bytes()).unwrap();
+    app.open_bytes(&egui::Context::default(), "initial-view.pdf", None, pdf.into_bytes()).unwrap();
     assert_eq!(app.mode, Mode::Read);
     assert_eq!(app.views.last().unwrap().view.display, craft::pages::PageDisplay::TwoUp);
     assert_eq!(app.right, Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
@@ -1338,37 +1347,33 @@ fn explicit_mode_overrides_default_before_and_after_open() {
             if before {
                 app.set_option(&egui::Context::default(), "mode", value).unwrap();
             }
-            app.open_bytes("first.pdf", None, FIXTURE.to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), "first.pdf", None, FIXTURE.to_vec()).unwrap();
             if !before {
                 // Desktop startup applies CLI options after the initial files open.
                 app.set_option(&egui::Context::default(), "mode", value).unwrap();
             }
             assert_eq!(app.mode, mode);
             app.set_option(&egui::Context::default(), "default-mode", "edit").unwrap();
-            app.open_bytes("second.pdf", None, FIXTURE.to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), "second.pdf", None, FIXTURE.to_vec()).unwrap();
             assert_eq!(app.mode, mode);
             assert_eq!(app.default_mode, Mode::Edit);
         }
     }
 }
 
-
 /// Preferences ▸ Animation effects: the system's animation setting until the user chooses On or
 /// Off. The choice is saved, and settings holding anything else leave it alone.
 #[test]
 fn preferences_choose_animation_effects_and_the_choice_is_saved() {
-    use egui::accesskit::Role;
     use craft::theme::MotionChoice;
+    use egui::accesskit::Role;
     let mut h = harness(|app| app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap());
     // PLAN: assumed the app keeps the choice in `animation_effects: MotionChoice` and the settings JSON key `animation_effects` (pdf-shell-w9)
     assert_eq!(h.state().animation_effects, MotionChoice::System);
     h.get_by_label("Animation effects");
-    for (label, choice) in [
-        ("Off", MotionChoice::Off),
-        ("On", MotionChoice::Full),
-        ("Use system setting", MotionChoice::System),
-        ("Off", MotionChoice::Off),
-    ] {
+    for (label, choice) in
+        [("Off", MotionChoice::Off), ("On", MotionChoice::Full), ("Use system setting", MotionChoice::System), ("Off", MotionChoice::Off)]
+    {
         h.get_by_role_and_label(Role::RadioButton, label).scroll_to_me();
         h.run_steps(4);
         h.get_by_role_and_label(Role::RadioButton, label).click();
@@ -1405,7 +1410,7 @@ fn explicit_mode_preserves_independent_tool_and_panel_options() {
     app.set_option(&egui::Context::default(), "mode", "edit").unwrap();
     assert_eq!(app.left, LeftPanel::Tool("export"));
     assert!(!app.left_open);
-    app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).unwrap();
+    app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).unwrap();
     assert_eq!(app.left, LeftPanel::Tool("export"));
     assert!(!app.left_open);
 }
@@ -1418,15 +1423,15 @@ fn opening_a_pdf_keeps_a_closed_left_panel_and_the_chosen_tool() {
     app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app.default_mode = Mode::Edit;
     app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-    app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).unwrap();
+    app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).unwrap();
     assert_eq!(app.mode, Mode::Edit);
     assert!(!app.left_open);
     // Default All Tools: opening another PDF leaves the tool panel the user picked.
     let mut app = crate::control::new_app();
     app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app.set_option(&egui::Context::default(), "tool", "export").unwrap();
-    app.open_bytes("first.pdf", None, FIXTURE.to_vec()).unwrap();
-    app.open_bytes("second.pdf", None, FIXTURE.to_vec()).unwrap();
+    app.open_bytes(&egui::Context::default(), "first.pdf", None, FIXTURE.to_vec()).unwrap();
+    app.open_bytes(&egui::Context::default(), "second.pdf", None, FIXTURE.to_vec()).unwrap();
     assert_eq!(app.mode, Mode::AllTools);
     assert_eq!(app.left, LeftPanel::Tool("export"));
 }
@@ -1434,7 +1439,7 @@ fn opening_a_pdf_keeps_a_closed_left_panel_and_the_chosen_tool() {
 fn three_tab_harness() -> Harness<'static, PdfCraftApp> {
     harness(|app| {
         for name in ["first.pdf", "middle.pdf", "last.pdf"] {
-            app.open_bytes(name, None, FIXTURE.to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), name, None, FIXTURE.to_vec()).unwrap();
         }
     })
 }
@@ -1498,7 +1503,8 @@ fn cancelling_then_discarding_an_earlier_dirty_tab_preserves_the_selected_docume
     let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
     h.get_by_label("first.pdf").click();
     h.run_steps(3);
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Unsaved title".into() }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Unsaved title".into() }));
     h.run_steps(3);
     h.get_by_label("middle.pdf").click();
     h.run_steps(3);
@@ -1527,7 +1533,7 @@ fn long_german_tool_labels_stay_within_the_sidebar() {
     if crate::support::skip_without_catalogs("long_german_tool_labels_stay_within_the_sidebar") {
         return;
     }
-    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     h.set_option("language", "de").unwrap();
     h.set_option("mode", "all").unwrap();
     h.set_option("left", "open").unwrap();
@@ -1554,7 +1560,8 @@ fn document_tab_identity_survives_dirty_labels_and_removing_an_earlier_document(
     h.get_by_role_and_label(Role::Tab, "middle.pdf").focus();
     h.run_steps(2);
     let middle_id = h.get_by_role_and_label(Role::Tab, "middle.pdf").accesskit_node().id();
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Unsaved title".into() }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Unsaved title".into() }));
     h.run_steps(3);
     let dirty = h.get_by_role_and_label(Role::Tab, "middle.pdf (edited)");
     assert_eq!(dirty.accesskit_node().id(), middle_id);
@@ -1663,7 +1670,7 @@ fn the_combine_tab_does_not_move_and_documents_stay_in_order() {
 #[test]
 fn the_edit_tab_turns_on_edit_text_and_images() {
     use pdfcraft_ui_egui::{Mode, QuickTool};
-    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     assert_eq!(h.state().quick_tool, QuickTool::Select);
     support::outside_menus(&h, "Edit").click();
     h.run_steps(3);
@@ -1687,7 +1694,7 @@ fn the_edit_tab_turns_on_edit_text_and_images() {
 #[test]
 fn organize_pages_from_the_edit_panel_opens_its_panel() {
     use pdfcraft_ui_egui::LeftPanel;
-    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     support::outside_menus(&h, "Edit").click();
     h.run_steps(3);
     assert_eq!(h.state().left, LeftPanel::Tool("edit"));
@@ -1705,7 +1712,7 @@ fn organize_pages_from_the_edit_panel_opens_its_panel() {
 /// panel, as under All tools: Update and Remove wait for the document to have that kind of mark.
 #[test]
 fn the_edit_panel_keeps_the_add_update_remove_menu() {
-    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     support::outside_menus(&h, "Edit").click();
     h.run_steps(3);
     h.get_by_label("Watermark").click();
@@ -1728,7 +1735,7 @@ fn short_window_rail_buttons_scroll_clear_of_page_navigation() {
         let mut h = Harness::builder().with_size(egui::vec2(width, height)).build_eframe(move |_cc| {
             let mut app = crate::control::new_app();
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes("short.pdf", None, FIXTURE.to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), "short.pdf", None, FIXTURE.to_vec()).unwrap();
             app
         });
         crate::support::settle(&mut h);
@@ -1802,7 +1809,7 @@ fn a_file_opened_again_shows_its_last_view() {
     use pdfcraft_ui_egui::canvas::Fit;
     let path = std::env::temp_dir().join(format!("pdfcraft-last-view-{}.pdf", std::process::id())).to_string_lossy().into_owned();
     let p = path.clone();
-    let mut h = harness(move |app| app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens"));
+    let mut h = harness(move |app| app.open_bytes(&egui::Context::default(), "doc.pdf", Some(p), pages_fixture(3)).expect("opens"));
     let p = path.clone();
     assert!(h.state().restore_last_view, "on by default");
     {
@@ -1825,7 +1832,7 @@ fn a_file_opened_again_shows_its_last_view() {
         let p = p.clone();
         let h = harness(move |app| {
             app.apply_settings(&saved);
-            app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens");
+            app.open_bytes(&egui::Context::default(), "doc.pdf", Some(p), pages_fixture(3)).expect("opens");
         });
         let v = &h.state().views[0];
         assert_eq!(
@@ -1840,7 +1847,7 @@ fn a_file_opened_again_shows_its_last_view() {
     let h = harness(move |app| {
         app.apply_settings(&saved);
         app.restore_last_view = false;
-        app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens");
+        app.open_bytes(&egui::Context::default(), "doc.pdf", Some(p), pages_fixture(3)).expect("opens");
     });
     let v = &h.state().views[0];
     assert_eq!((v.current(), v.fit(), v.view.display, v.view.continuous, v.view.cover), (0, Fit::Width, PageDisplay::Single, true, false));
@@ -1862,7 +1869,7 @@ fn a_fractional_zoom_is_remembered_exactly() {
     use pdfcraft_ui_egui::canvas::Fit;
     let path = std::env::temp_dir().join(format!("pdfcraft-last-view-frac-{}.pdf", std::process::id())).to_string_lossy().into_owned();
     let p = path.clone();
-    let mut h = harness(move |app| app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens"));
+    let mut h = harness(move |app| app.open_bytes(&egui::Context::default(), "doc.pdf", Some(p), pages_fixture(3)).expect("opens"));
     h.state_mut().views[0].set_zoom(0.625);
     h.run_steps(3);
     h.state_mut().close_tab(0);
@@ -1870,7 +1877,7 @@ fn a_fractional_zoom_is_remembered_exactly() {
     let saved = h.state().settings_snapshot();
     let h = harness(move |app| {
         app.apply_settings(&saved);
-        app.open_bytes("doc.pdf", Some(path), pages_fixture(3)).expect("opens");
+        app.open_bytes(&egui::Context::default(), "doc.pdf", Some(path), pages_fixture(3)).expect("opens");
     });
     let v = &h.state().views[0];
     assert_eq!((v.fit(), v.zoom()), (Fit::None, 0.625));
@@ -1885,7 +1892,7 @@ fn full_screen_neither_is_remembered_nor_hides_the_last_view() {
     use pdfcraft_ui_egui::canvas::Fit;
     let path = std::env::temp_dir().join(format!("pdfcraft-last-view-fs-{}.pdf", std::process::id())).to_string_lossy().into_owned();
     let p = path.clone();
-    let mut h = harness(move |app| app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens"));
+    let mut h = harness(move |app| app.open_bytes(&egui::Context::default(), "doc.pdf", Some(p), pages_fixture(3)).expect("opens"));
     {
         let app = h.state_mut();
         app.set_option(&egui::Context::default(), "zoom", "50").unwrap();
@@ -1907,14 +1914,18 @@ fn full_screen_neither_is_remembered_nor_hides_the_last_view() {
     let mut h = harness(move |app| {
         app.apply_settings(&saved);
         app.apply_full_screen(true);
-        app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens");
+        app.open_bytes(&egui::Context::default(), "doc.pdf", Some(p), pages_fixture(3)).expect("opens");
     });
     let v = &h.state().views[0];
     assert!(v.presenting(), "opened in full screen");
     assert_eq!((v.fit(), v.view.continuous, v.current()), (Fit::Page, false, 2), "one fitted page, where the reader left off");
     let view = &mut h.state_mut().views[0];
     view.leave_presentation();
-    assert_eq!((view.fit(), view.zoom(), view.view.display, view.view.continuous), (Fit::None, 0.5, PageDisplay::TwoUp, false), "the remembered view");
+    assert_eq!(
+        (view.fit(), view.zoom(), view.view.display, view.view.continuous),
+        (Fit::None, 0.5, PageDisplay::TwoUp, false),
+        "the remembered view"
+    );
 }
 
 #[cfg(not(target_arch = "wasm32"))]

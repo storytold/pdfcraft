@@ -1,9 +1,9 @@
 //! Crop tool and Set Page Boxes in the real shell (egui_kittest).
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
-use crate::support::AppHarness as _;
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -17,7 +17,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, FIXTURE.to_vec()).unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
@@ -104,7 +104,6 @@ fn set_page_boxes_dialog_applies_margins_to_the_chosen_pages() {
     h.run_steps(4);
     assert_eq!(size(&h, 0), (300.0, 400.0));
 }
-
 
 #[test]
 fn the_crop_tool_leaves_the_page_grid_so_a_page_can_be_cropped() {

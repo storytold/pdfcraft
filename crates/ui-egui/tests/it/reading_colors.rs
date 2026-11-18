@@ -1,12 +1,12 @@
 //! Preferences ▸ Reading colours: the app-wide preference (Acrobat's Replace Document Colors),
 //! how it survives a restart, and how documents open with it.
 
+use crate::support::AppHarness as _;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_render::ReadingColors;
 use pdfcraft_ui_egui::PdfCraftApp;
-use crate::support::AppHarness as _;
 
 /// One valid page (proper xref, so no repair banner covers the dialog): black text on white.
 fn pdf() -> Vec<u8> {
@@ -28,7 +28,7 @@ fn pending_pages_use_document_reading_background() {
     ] {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("pending.pdf", None, crate::support::fixtures::pdf_pages(3)).unwrap();
+        app.open_bytes(&egui::Context::default(), "pending.pdf", None, crate::support::fixtures::pdf_pages(3)).unwrap();
         let id = app.views[0].id;
         // Deliberately differ from the app preference: the document is the source of truth.
         app.session.set_reading_colors(id, colors);
@@ -67,7 +67,7 @@ fn reading_colours_preference_round_trips() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, pdf()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf()).expect("opens");
         app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
         app
     });
@@ -142,7 +142,7 @@ fn reading_colours_seed_on_open() {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.reading_colors = ReadingColors::WHITE_ON_BLACK;
-        app.open_bytes("doc.pdf", None, pdf()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf()).expect("opens");
         app
     });
     h.run_steps(4);

@@ -1,10 +1,10 @@
 //! Side panels: the Tools panel, the rail and the open side panel.
 
+use crate::support::AppHarness as _;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
-use crate::support::AppHarness as _;
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -20,7 +20,7 @@ fn harness_sized(size: egui::Vec2, setup: impl FnOnce(&mut PdfCraftApp) + 'stati
     let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, FIXTURE.to_vec()).unwrap();
         setup(&mut app);
         app
     });

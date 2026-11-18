@@ -5,8 +5,8 @@ use egui::{Event, Modifiers, MouseWheelUnit, PointerButton, Pos2, TouchPhase};
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
 
-use crate::support::RecordingClipboard;
 use crate::support::AppHarness as _;
+use crate::support::RecordingClipboard;
 
 /// One 300×200 page with two lines of Helvetica text.
 fn two_lines() -> Vec<u8> {
@@ -42,11 +42,15 @@ fn harness_with(pdf: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'static) ->
 }
 
 /// `harness_with` on the injected `clipboard`, whose recorded writes a test reads.
-fn harness_clip(pdf: Vec<u8>, clipboard: RecordingClipboard, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> (Harness<'static, PdfCraftApp>, Pos2) {
+fn harness_clip(
+    pdf: Vec<u8>,
+    clipboard: RecordingClipboard,
+    setup: impl FnOnce(&mut PdfCraftApp) + 'static,
+) -> (Harness<'static, PdfCraftApp>, Pos2) {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
         let mut app = app_on(clipboard);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("lines.pdf", None, pdf).expect("opens");
+        app.open_bytes(&egui::Context::default(), "lines.pdf", None, pdf).expect("opens");
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
         setup(&mut app);
@@ -86,7 +90,6 @@ fn click(h: &mut Harness<'static, PdfCraftApp>, pos: Pos2) {
     }
     h.run_steps(1);
 }
-
 
 #[test]
 fn quick_clicks_with_the_highlighter_mark_only_the_word() {
@@ -167,7 +170,6 @@ fn drag(h: &mut Harness<'static, PdfCraftApp>, from: Pos2, to: Pos2) {
     h.run_steps(1);
 }
 
-
 // Issue #1225: page-text Copy belongs in both menus and observes PDF permissions.
 fn copied(h: &Harness<'static, PdfCraftApp>, want: &str) -> bool {
     h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == want))
@@ -208,7 +210,6 @@ fn selected_text_copy_edit_and_context_menus() {
     assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
 }
 
-
 #[test]
 fn selected_text_copy_command_requires_selection() {
     let (mut h, at) = harness(|_| {});
@@ -240,7 +241,7 @@ fn selected_text_copy_floating_button_honours_permissions() {
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
             let mut app = app_on(RecordingClipboard::default());
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes("no-copy.pdf", None, bytes).unwrap();
+            app.open_bytes(&egui::Context::default(), "no-copy.pdf", None, bytes).unwrap();
             app.submit_password(Some(password.into()));
             app.set_option(&egui::Context::default(), "left", "closed").unwrap();
             app
@@ -266,7 +267,6 @@ fn selected_text_copy_floating_button_honours_permissions() {
         assert_eq!(h.execute("edit.copy"), password == "owner");
     }
 }
-
 
 fn any_copy_text(h: &Harness<'static, PdfCraftApp>) -> bool {
     h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(_)))
@@ -357,7 +357,7 @@ fn selected_text_copy_preserves_unicode_and_page_clipboard() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = app_on(RecordingClipboard::default());
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("unicode.pdf", None, text_pdf(r"BT /F1 14 Tf 20 150 Td (caf\351) Tj ET")).unwrap();
+        app.open_bytes(&egui::Context::default(), "unicode.pdf", None, text_pdf(r"BT /F1 14 Tf 20 150 Td (caf\351) Tj ET")).unwrap();
         app
     });
     let mut loaded = false;
@@ -516,7 +516,6 @@ fn glyph_on(h: &Harness<'static, PdfCraftApp>, page: usize, g: usize) -> Pos2 {
     h.state().views[0].glyph_screen_pos(page, g).expect("glyph on screen")
 }
 
-
 /// Marking a selection that runs across pages puts one markup on each page, in one undo step.
 #[test]
 fn a_selection_across_pages_is_marked_on_every_page_in_one_step() {
@@ -534,12 +533,11 @@ fn a_selection_across_pages_is_marked_on_every_page_in_one_step() {
     };
     assert_eq!(marks(&h), [(0, "Underline".to_string()), (1, "Underline".to_string())]);
     assert!(h.state().views[0].selected_text().is_none(), "the selection is consumed");
-    assert!(h.state().views[0].comments.primary().is_some_and(|(page, _)| page == 1), "its last part is selected, as one markup is");
+    assert!(h.state().views[0].session.comments.primary().is_some_and(|(page, _)| page == 1), "its last part is selected, as one markup is");
     h.state_mut().undo();
     h.run_steps(3);
     assert_eq!(marks(&h), [], "one undo removes both");
 }
-
 
 /// Review on #2070: a click on the page in full screen waits out the double-click time before
 /// it turns the page, and a link clicked meanwhile used to leave that turn pending: the link
@@ -735,8 +733,8 @@ fn a_highlight_across_pages_selects_its_last_part_and_opens_its_note() {
     let app = h.state();
     let doc = app.session.get(app.views[0].id).unwrap();
     let on_page_2 = doc.info.annotations.iter().find(|a| a.page == 1 && a.subtype == "Highlight").map(|a| a.index).expect("a highlight on page 2");
-    assert_eq!(app.views[0].comments.primary(), Some((1, on_page_2)), "the part where the selection ends is selected");
-    assert!(app.views[0].comments.panel.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == (1, on_page_2)), "its note is open");
+    assert_eq!(app.views[0].session.comments.primary(), Some((1, on_page_2)), "the part where the selection ends is selected");
+    assert!(app.views[0].session.comments.panel.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == (1, on_page_2)), "its note is open");
 }
 
 /// Review of #5017: dragged back up, from page 2 to page 1, the selection ends on page 1: the
@@ -752,8 +750,8 @@ fn a_highlight_dragged_back_across_pages_selects_its_part_where_the_drag_ended()
     let app = h.state();
     let doc = app.session.get(app.views[0].id).unwrap();
     let on_page_1 = doc.info.annotations.iter().find(|a| a.page == 0 && a.subtype == "Highlight").map(|a| a.index).expect("a highlight on page 1");
-    assert_eq!(app.views[0].comments.primary(), Some((0, on_page_1)), "the part where the drag ended is selected");
-    assert!(app.views[0].comments.panel.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == (0, on_page_1)), "its note is open");
+    assert_eq!(app.views[0].session.comments.primary(), Some((0, on_page_1)), "the part where the drag ended is selected");
+    assert!(app.views[0].session.comments.panel.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == (0, on_page_1)), "its note is open");
 }
 
 /// Review of #5017: only markup on a text selection across pages is followed up as one markup.
@@ -762,11 +760,12 @@ fn a_highlight_dragged_back_across_pages_selects_its_part_where_the_drag_ended()
 #[test]
 fn a_page_range_redaction_is_not_followed_up_as_a_selection() {
     let mut h = three_pages();
-    h.state_mut().redact_pages(&[0, 1, 2]);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().redact_pages(&ctx_h, &[0, 1, 2]);
     h.run_steps(3);
     let app = h.state();
     let doc = app.session.get(app.views[0].id).unwrap();
     assert_eq!(doc.redaction_marks(), 3, "a mark on every page");
-    assert_eq!(app.views[0].comments.primary(), None, "no mark selected");
-    assert!(app.views[0].comments.panel.editing.is_none(), "no editor opened");
+    assert_eq!(app.views[0].session.comments.primary(), None, "no mark selected");
+    assert!(app.views[0].session.comments.panel.editing.is_none(), "no editor opened");
 }

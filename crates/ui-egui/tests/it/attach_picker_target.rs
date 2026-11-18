@@ -56,8 +56,8 @@ fn harness() -> (Harness<'static, PdfCraftApp>, Arc<ScriptedFiles>) {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::with_host(host, services);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("a.pdf", None, fixture()).unwrap();
-        app.open_bytes("b.pdf", None, fixture()).unwrap();
+        app.open_bytes(&egui::Context::default(), "a.pdf", None, fixture()).unwrap();
+        app.open_bytes(&egui::Context::default(), "b.pdf", None, fixture()).unwrap();
         jobs.run_all();
         app
     });

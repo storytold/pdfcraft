@@ -1,12 +1,13 @@
 //! Header & footer, watermark and background dialogs in the real shell (egui_kittest).
 
 use crate::support;
+use crate::support::AppHarness as _;
 use craft::host::{AppInfo, ManualJobs, Wake};
+use craft::pages::ui::PageRangeOptions;
+use craft::pages::{PageRange, PageScope, Subset};
 use craft::platform::open::FileIntake;
 use craft::platform::watch::FileWatch;
-use craft::pages::ui::PageRangeOptions;
 use craft::ui::dialog::{DialogId, dialog_id};
-use craft::pages::{PageRange, PageScope, Subset};
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -15,7 +16,6 @@ use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
 use serde_json::json;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
-use crate::support::AppHarness as _;
 
 const BOX_LABELS: [&str; 6] =
     ["Header left text", "Header center text", "Header right text", "Footer left text", "Footer center text", "Footer right text"];
@@ -87,14 +87,8 @@ impl Rig {
 fn app_on(jobs: Arc<ManualJobs>) -> PdfCraftApp {
     let info = AppInfo { id: "pdfcraft", name: "PdfCraft", version: env!("CARGO_PKG_VERSION") };
     let host = craft::host::Host::builder(info).jobs(jobs).build();
-    let services = AppServices::new(
-        Wake::none(),
-        Box::new(support::RecordingClipboard::default()),
-        None,
-        None,
-        FileIntake::for_tests(),
-        FileWatch::inline(),
-    );
+    let services =
+        AppServices::new(Wake::none(), Box::new(support::RecordingClipboard::default()), None, None, FileIntake::for_tests(), FileWatch::inline());
     PdfCraftApp::with_host(Arc::new(host), services)
 }
 
@@ -109,7 +103,7 @@ fn harness_with(pdf: Vec<u8>) -> Rig {
     let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).renderer(uploads.clone()).build_eframe(move |_cc| {
         let mut app = app_on(on.clone());
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, pdf.clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf.clone()).unwrap();
         app
     });
     let mut rig = Rig { h, jobs, uploads };
@@ -470,7 +464,10 @@ fn preview_picture(h: &Rig) -> Option<Picture> {
         .filter_map(|(at, s)| {
             let egui::Shape::Mesh(m) = &s.shape else { return None };
             let rect = m.calc_bounds();
-            let over = rect.width() > 50.0 && rect.bottom() <= pager_rect.top() + 4.0 && rect.left() < pager_rect.right() && rect.right() > pager_rect.left();
+            let over = rect.width() > 50.0
+                && rect.bottom() <= pager_rect.top() + 4.0
+                && rect.left() < pager_rect.right()
+                && rect.right() > pager_rect.left();
             if !over {
                 return None;
             }

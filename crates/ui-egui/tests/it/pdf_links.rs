@@ -1,19 +1,19 @@
 //! Edit a PDF ▸ Link: drawing a link, Link Properties, editing and deleting links.
 
+use crate::support::AppHarness as _;
 use egui::Pos2;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::LinkAction;
 use pdfcraft_ui_egui::PdfCraftApp;
-use crate::support::AppHarness as _;
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     // 60 fps steps, so two clicks fall inside egui's double-click window.
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
@@ -134,7 +134,7 @@ fn an_appearance_edit_keeps_the_destination_as_written() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("positioned.pdf", None, POSITIONED.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "positioned.pdf", None, POSITIONED.to_vec()).unwrap();
         app
     });
     h.run_steps(6);
@@ -197,7 +197,7 @@ fn the_link_context_menu_shows_only_for_a_right_click_on_a_link() {
     h.event(egui::Event::PointerButton { pos: on_link, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
     h.event(egui::Event::PointerButton { pos: on_link, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
     h.run_steps(3);
-    assert!(h.state().views[0].links.selected.is_some());
+    assert!(h.state().views[0].session.links.selected.is_some());
     right_click(&mut h, away);
     assert!(h.query_by_label("Remove all links").is_none(), "a right-click away from the link got the link menu");
     h.key_press(egui::Key::Escape);

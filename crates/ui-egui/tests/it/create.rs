@@ -3,10 +3,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::support::AppHarness as _;
 use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles};
 use egui_kittest::{Harness, kittest::Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
-use crate::support::AppHarness as _;
 
 fn png() -> Vec<u8> {
     let img = craft_image_codecs::Image::from_u8(8, 4, craft_image_codecs::ChannelLayout::Rgb, vec![120u8; 8 * 4 * 3]).unwrap();
@@ -79,8 +79,8 @@ fn image_import_dialog_chooses_dpi_and_cancels() {
 fn opening_images_and_text_converts_them_to_new_pdfs() {
     let mut app = crate::control::new_app();
     app.set_option(&egui::Context::default(), "language", "en").unwrap();
-    app.open_bytes("photo.png", Some("/tmp/photo.png".into()), png()).unwrap();
-    app.open_bytes("notes.txt", None, b"first line\nsecond line".to_vec()).unwrap();
+    app.open_bytes(&egui::Context::default(), "photo.png", Some("/tmp/photo.png".into()), png()).unwrap();
+    app.open_bytes(&egui::Context::default(), "notes.txt", None, b"first line\nsecond line".to_vec()).unwrap();
     app.create_from_images(vec![("a.png".into(), png()), ("b.png".into(), png())]);
     assert!(app.execute(&egui::Context::default(), "create.blank"));
     let docs = app.session.docs();
@@ -90,7 +90,7 @@ fn opening_images_and_text_converts_them_to_new_pdfs() {
         [("photo.pdf".to_string(), 1, true), ("notes.pdf".into(), 1, true), ("Images.pdf".into(), 2, true), ("Untitled.pdf".into(), 1, true)]
     );
     assert!(docs[0].path.is_none(), "a converted file has no PDF path yet: Save asks where");
-    assert!(app.open_bytes("junk.png", None, b"\x89PNG\r\n\x1a\nnot really".to_vec()).is_err());
+    assert!(app.open_bytes(&egui::Context::default(), "junk.png", None, b"\x89PNG\r\n\x1a\nnot really".to_vec()).is_err());
 }
 
 /// Open `name` and run Reduce File Size on it, saving to a place the script answers with.
@@ -101,7 +101,7 @@ fn reduce(name: &'static str, bytes: Vec<u8>) -> (Harness<'static, PdfCraftApp>,
     let mut h = scripted(files.clone(), jobs.clone(), egui::vec2(1200.0, 800.0), move |app| {
         // Keep metadata identical: changing ModDate can make a compact PDF one byte smaller.
         app.session = std::mem::take(&mut app.session).with_clock(|| 1_700_000_000);
-        app.open_bytes(name, None, bytes).unwrap();
+        app.open_bytes(&egui::Context::default(), name, None, bytes).unwrap();
     });
     h.run_steps(2);
     assert!(h.execute("optimize.reduce"));
@@ -157,7 +157,7 @@ fn the_pdf_optimizer_dialog_saves_an_optimized_copy() {
     let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![out.clone()])]));
     let jobs = Arc::new(ManualJobs::new());
     let mut h = scripted(files.clone(), jobs.clone(), egui::vec2(1200.0, 800.0), |app| {
-        app.open_bytes("notes.txt", None, "lorem ipsum ".repeat(500).into_bytes()).unwrap();
+        app.open_bytes(&egui::Context::default(), "notes.txt", None, "lorem ipsum ".repeat(500).into_bytes()).unwrap();
     });
     h.run_steps(4);
     assert!(h.execute("optimize.advanced"));
@@ -189,7 +189,7 @@ fn the_pdf_optimizer_dialog_picks_a_preset() {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("notes.txt", None, b"lorem ipsum".to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "notes.txt", None, b"lorem ipsum".to_vec()).unwrap();
         app
     });
     h.run_steps(4);
@@ -243,7 +243,8 @@ fn separate_batch_creates_one_pdf_per_source_without_replacing_existing_files() 
     h.run_steps(2);
     let mut sources = mixed_files(h.state());
     sources.push(("notes.txt".into(), b"another text file".to_vec()));
-    h.state_mut().use_files(FilePurpose::CreateMultipleSeparate, sources);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().use_files(&ctx_h, FilePurpose::CreateMultipleSeparate, sources);
     h.run_steps(3);
 
     assert_eq!(files.file(&dir.join("notes.pdf")).unwrap(), b"keep this file");
@@ -260,7 +261,8 @@ fn separate_batch_command_picks_files_and_writes_to_the_chosen_folder() {
     let source = PathBuf::from("/in/letter.txt");
     let dir = PathBuf::from("/out");
     let files = Arc::new(
-        ScriptedFiles::answering([Picked::Paths(vec![source.clone()]), Picked::Paths(vec![dir.clone()])]).with_file(source, b"A separate PDF".to_vec()),
+        ScriptedFiles::answering([Picked::Paths(vec![source.clone()]), Picked::Paths(vec![dir.clone()])])
+            .with_file(source, b"A separate PDF".to_vec()),
     );
     let jobs = Arc::new(ManualJobs::new());
     let mut h = scripted(files.clone(), jobs.clone(), egui::vec2(1000.0, 720.0), |_| {});
@@ -279,7 +281,7 @@ fn multiple_files_open_as_one_document_in_the_page_grid() {
     let jobs = Arc::new(ManualJobs::new());
     let mut h = scripted(files.clone(), jobs, egui::vec2(1000.0, 720.0), |app| {
         let sources = mixed_files(app);
-        app.use_files(pdfcraft_ui_egui::FilePurpose::CreateMultiple, sources);
+        app.use_files(&egui::Context::default(), pdfcraft_ui_egui::FilePurpose::CreateMultiple, sources);
     });
     h.run_steps(4);
     {
@@ -318,7 +320,8 @@ fn multiple_files_that_cannot_be_converted_open_nothing() {
     let jobs = Arc::new(ManualJobs::new());
     let mut h = scripted(files, jobs, egui::vec2(1000.0, 720.0), |_| {});
     h.run_steps(2);
-    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::CreateMultiple, vec![("report.docx".into(), b"PK\x03\x04".to_vec())]);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().use_files(&ctx_h, pdfcraft_ui_egui::FilePurpose::CreateMultiple, vec![("report.docx".into(), b"PK\x03\x04".to_vec())]);
     h.run_steps(3);
     assert!(h.state().views.is_empty());
     // PLAN: assumed `support::shown_notice(&Harness<PdfCraftApp>) -> Option<String>` (pdf-chrome-w9)
@@ -331,7 +334,7 @@ fn multiple_files_past_a_thousand_are_all_used() {
     app.set_option(&egui::Context::default(), "language", "en").unwrap();
     let pdf = app.session.create_from_text("a", "from a pdf").unwrap();
     let files: Vec<(String, Vec<u8>)> = (0..1001).map(|i| (format!("f{i}.pdf"), pdf.to_vec())).collect();
-    app.use_files(pdfcraft_ui_egui::FilePurpose::CreateMultiple, files);
+    app.use_files(&egui::Context::default(), pdfcraft_ui_egui::FilePurpose::CreateMultiple, files);
     assert_eq!(app.views.len(), 1);
     let doc = app.session.get(app.views[0].id).unwrap();
     assert_eq!(doc.info.pages.len(), 1001, "every picked file is used, in order");

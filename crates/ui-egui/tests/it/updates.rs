@@ -187,8 +187,8 @@ fn app_with_unsaved_file(test: &str) -> (Harness<'static, PdfCraftApp>, PathBuf)
     let mut h = harness(Ok(None));
     h.run_steps(2);
     let app = h.state_mut();
-    app.open_bytes("source.pdf", Some(path.to_string_lossy().into_owned()), bytes).unwrap();
-    assert!(app.apply_edit(Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text("Changed".into()) }));
+    app.open_bytes(&egui::Context::default(), "source.pdf", Some(path.to_string_lossy().into_owned()), bytes).unwrap();
+    assert!(app.apply_edit(&egui::Context::default(), Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text("Changed".into()) }));
     assert!(h.execute("help.check_updates"));
     settle(&mut h);
     assert!(h.state().dialogs.is_open::<UpdateCheckDialog>(), "the check's result is on screen");
@@ -242,7 +242,7 @@ fn saving_at_the_restart_question_writes_the_file_and_quits() {
     assert!(quit, "the app quits once the document is saved");
 
     let mut reopened = crate::control::new_app();
-    reopened.open_bytes("source.pdf", Some(path.to_string_lossy().into_owned()), std::fs::read(&path).unwrap()).unwrap();
+    reopened.open_bytes(&egui::Context::default(), "source.pdf", Some(path.to_string_lossy().into_owned()), std::fs::read(&path).unwrap()).unwrap();
     let doc = reopened.session.get(reopened.views[0].id).unwrap();
     let name = doc.form.iter().find(|f| f.name == "name").and_then(|f| f.value.first().cloned());
     assert_eq!(name.as_deref(), Some("Changed"), "the change is in the file");

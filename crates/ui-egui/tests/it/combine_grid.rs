@@ -3,6 +3,7 @@
 
 use std::time::Duration;
 
+use crate::support::AppHarness as _;
 use craft::ui::primitives::textures::TextureState;
 use craft::ui::tile_grid::TileZoom;
 use egui::{Key, Modifiers, Pos2, vec2};
@@ -10,7 +11,6 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::{CombineView, FilePurpose, PdfCraftApp};
-use crate::support::AppHarness as _;
 
 /// An `n`-page document with a proper xref table; page `i` shows "Page i+1".
 fn fixture(n: usize) -> Vec<u8> {
@@ -82,7 +82,7 @@ fn grid_after(files: Vec<(&str, Vec<u8>)>, size: egui::Vec2, steps: usize) -> Ha
     let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.use_files(FilePurpose::Combine, files);
+        app.use_files(&egui::Context::default(), FilePurpose::Combine, files);
         app
     });
     h.run_steps(steps);
@@ -108,7 +108,8 @@ fn check_duplicate_warnings(view: &str) {
     h.run_steps(2);
     let warnings = |h: &Harness<'static, PdfCraftApp>| h.query_all_by_label_contains("Added more than once").count();
     assert_eq!(warnings(&h), 0, "different equal-sized PDFs are not duplicates in {view}");
-    h.state_mut().use_files(FilePurpose::Combine, vec![("report.pdf".into(), first)]);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().use_files(&ctx_h, FilePurpose::Combine, vec![("report.pdf".into(), first)]);
     h.run_steps(3);
     assert_eq!(warnings(&h), 2, "only the two identical files are warned in {view}");
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
@@ -268,7 +269,11 @@ fn thumbnails_show_the_first_page_each_file_takes() {
     let pages = fixture_pages(&[(200.0, 300.0), (200.0, 300.0), (300.0, 200.0)]);
     let mut h = grid_of(vec![("three.pdf", pages), ("one.pdf", fixture(1))], vec2(1400.0, 900.0));
     h.state_mut().combine_draft[0].range = "3, 1".into();
-    assert!(settle(&mut h, |app| app.combine_thumbnails().iter().all(ready) && landscape(&app.combine_thumbnails()[0])), "{:?}", h.state().combine_thumbnails());
+    assert!(
+        settle(&mut h, |app| app.combine_thumbnails().iter().all(ready) && landscape(&app.combine_thumbnails()[0])),
+        "{:?}",
+        h.state().combine_thumbnails()
+    );
     let thumbs = h.state().combine_thumbnails();
     assert!(landscape(&thumbs[0]), "\"3, 1\" starts with page 3: {:?}", thumbs[0]);
     assert!(portrait(&thumbs[1]), "{:?}", thumbs[1]);
@@ -867,7 +872,7 @@ fn open_documents_already_in_the_list_are_not_added_again() {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         for (name, pages) in [("a.pdf", 1), ("b.pdf", 2), ("report.pdf", 3)] {
-            app.open_bytes(name, None, fixture(pages)).unwrap();
+            app.open_bytes(&egui::Context::default(), name, None, fixture(pages)).unwrap();
         }
         app
     });
@@ -885,7 +890,8 @@ fn open_documents_already_in_the_list_are_not_added_again() {
     add_all(&mut h);
     assert_eq!(names(&h), ["a.pdf", "b.pdf", "report.pdf"], "nothing is added twice");
     // Another report.pdf, opened while the first is listed: a different document all the same.
-    h.state_mut().open_bytes("report.pdf", None, fixture(3)).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "report.pdf", None, fixture(3)).unwrap();
     h.execute("page.combine");
     h.run_steps(3);
     add_all(&mut h);

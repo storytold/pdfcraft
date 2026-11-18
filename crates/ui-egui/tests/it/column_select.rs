@@ -1,10 +1,10 @@
 //! Issue #740: column select, as in Acrobat. Alt-drag (Option-drag on macOS) with the Select tool,
 //! or a plain drag with Edit ▸ Column select, selects only the text inside the rectangle drawn.
 
+use crate::support::AppHarness as _;
 use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
-use crate::support::AppHarness as _;
 
 /// One 300×200 page with a three-row table, "Name Qty / Apple 12 / Pear 7". Its columns sit far
 /// enough apart that reading order takes one column, then the other: glyphs 0–3 "Name", 4–8
@@ -271,7 +271,7 @@ fn opened(name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(name, None, bytes).expect("opens");
+        app.open_bytes(&egui::Context::default(), name, None, bytes).expect("opens");
         app
     });
     crate::support::wait_until(&mut h, "the page's text layer", |app| app.views[0].glyph_screen_pos(0, 0).is_some() && !app.render_pending());

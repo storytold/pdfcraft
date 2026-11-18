@@ -36,7 +36,6 @@ fn at_the_minimum_width_the_menus_the_modes_and_search_stay_reachable() {
     assert!(!bar.intersects(search), "the menus and the search do not overlap: {bar:?} {search:?}");
 }
 
-
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
@@ -86,7 +85,7 @@ fn the_stacked_notice_keeps_its_buttons_in_view() {
     let mut h = Harness::builder().with_size(egui::vec2(MIN_WINDOW_SIZE[0], MIN_WINDOW_SIZE[1])).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
+        app.open_bytes(&egui::Context::default(), "locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
         app
     });
     h.run_steps(8);

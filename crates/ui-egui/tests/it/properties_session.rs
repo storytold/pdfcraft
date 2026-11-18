@@ -1,5 +1,6 @@
 //! Properties drafts belong to the document revision on which the user opened them.
 
+use crate::support::AppHarness as _;
 use craft::ui::dialog::dialog_id;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
@@ -7,7 +8,6 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::Edit;
 use pdfcraft_ui_egui::PdfCraftApp;
 use serde_json::{Value, json};
-use crate::support::AppHarness as _;
 
 /// Set one row of the open Properties dialog, as automation does.
 fn set_field(h: &mut Harness<'static, PdfCraftApp>, field: &str, value: Value) {
@@ -29,7 +29,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
-        app.open_bytes("properties.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "properties.pdf", None, bytes.as_ref().clone()).unwrap();
         app.set_option(&egui::Context::default(), "dialog", "properties").unwrap();
         app
     });

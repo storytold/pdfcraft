@@ -182,7 +182,7 @@ fn harness(bytes: Vec<u8>, lang: &'static str) -> Harness<'static, PdfCraftApp> 
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", lang).unwrap();
-        app.open_bytes("signed.pdf", None, bytes).expect("opens");
+        app.open_bytes(&egui::Context::default(), "signed.pdf", None, bytes).expect("opens");
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         // Field highlights tint the widget; these tests read the colours its appearance draws.
         app.set_option(&egui::Context::default(), "fields", "off").unwrap();
@@ -211,11 +211,11 @@ fn named_layers_follow_trust_and_language_and_keep_the_badge() {
     );
     // Trusted: the same page, at the same zoom, redraws in the valid state. The badge stays:
     // whether the layers are visible is the document's to decide.
-    let zoom = h.state().views[0].zoom;
+    let zoom = h.state().views[0].zoom();
     h.state_mut().apply_trusted_certificates(vec![anchor]);
     settle(&mut h);
     assert_eq!(h.state().session.get(doc_id).unwrap().signatures[0].status, SignatureStatus::Valid);
-    assert_eq!(h.state().views[0].zoom, zoom);
+    assert_eq!(h.state().views[0].zoom(), zoom);
     let (valid, unknown) = (in_n1_square(&mut h, green), in_n1_square(&mut h, amber));
     assert!(valid > 100 && unknown < 10, "n1 redraws in the valid state: {valid} green, {unknown} amber pixels");
     assert!(hovered(&mut h, "Signature is valid") > h.query_all_by_label("Signature is valid").count(), "a valid signature keeps its badge");
@@ -336,7 +336,8 @@ fn an_edit_on_another_page_that_changes_the_verdict_redraws_the_signature() {
         contents: String::new(),
         author: "Tester".into(),
     };
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(note)));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::AddAnnotation(note)));
     settle(&mut h);
     assert_eq!(h.state().session.get(doc_id).unwrap().signatures[0].status, SignatureStatus::Invalid);
     let (invalid, valid) = (in_n1_square(&mut h, red), in_n1_square(&mut h, green));
@@ -382,9 +383,10 @@ fn a_value_typed_against_a_certification_shows_while_every_page_redraws() {
     assert_eq!(h.state().session.get(doc_id).unwrap().signatures[0].status, SignatureStatus::Valid);
 
     let value = pdfcraft_engine::FieldValue::Text("Ada".into());
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldValue { name: "name".into(), value }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::SetFieldValue { name: "name".into(), value }));
     assert_eq!(h.state().session.get(doc_id).unwrap().signatures[0].status, SignatureStatus::Invalid);
-    assert!(h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)), "the value typed is pending until page 1 redraws");
+    assert!(h.state().views[0].session.forms.unbaked.contains(&("name".to_string(), 0)), "the value typed is pending until page 1 redraws");
 }
 
 #[test]
@@ -414,14 +416,16 @@ fn values_still_waiting_on_their_page_stay_pending_when_a_later_edit_redraws_eve
         };
         let before = states(&h);
         let value = pdfcraft_engine::FieldValue::Text("Ada".into());
-        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldValue { name: "name".into(), value }));
+        let ctx_h = h.ctx.clone();
+        assert!(h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::SetFieldValue { name: "name".into(), value }));
         assert_eq!(states(&h), before, "the certification allows filling in a field");
-        assert!(h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)));
+        assert!(h.state().views[0].session.forms.unbaked.contains(&("name".to_string(), 0)));
 
         let label = second.label();
-        assert!(h.state_mut().apply_edit(second), "{label}");
+        let ctx_h = h.ctx.clone();
+        assert!(h.state_mut().apply_edit(&ctx_h, second), "{label}");
         assert_ne!(states(&h), before, "{label} changes the list");
-        assert!(h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)), "{label}: the value typed first is still pending");
+        assert!(h.state().views[0].session.forms.unbaked.contains(&("name".to_string(), 0)), "{label}: the value typed first is still pending");
     }
 }
 
@@ -436,7 +440,7 @@ fn a_file_opened_before_the_first_frame_is_drawn_in_the_interface_language() {
     let id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
     let mut app = crate::control::new_app();
     app.set_option(&egui::Context::default(), "language", "de").unwrap();
-    app.open_bytes("named.pdf", None, signed(&id)).expect("opens");
+    app.open_bytes(&egui::Context::default(), "named.pdf", None, signed(&id)).expect("opens");
     let doc = app.session.get(app.views[0].id).unwrap();
     let text = pdfcraft_engine::export::Exporter::new(doc).text_of(&[0]).unwrap();
     assert!(text.contains("Gültigkeit unbekannt"), "{text:?}");

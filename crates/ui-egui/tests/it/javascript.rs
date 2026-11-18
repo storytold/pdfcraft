@@ -6,8 +6,8 @@ use craft::ui::runtime::{env::WindowKey, toast};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 // PLAN: assumed `pdfcraft_ui_egui::JsDialog` with `DocumentScripts(DocJsDraft)` and `Console` (pdf-forms-w17)
-use pdfcraft_ui_egui::{JsDialog, PdfCraftApp};
 use crate::support::AppHarness as _;
+use pdfcraft_ui_egui::{JsDialog, PdfCraftApp};
 
 /// A form with a text field and a push button whose Mouse Up script fills it in.
 fn form() -> Vec<u8> {
@@ -43,7 +43,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("form.pdf", None, form()).unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, form()).unwrap();
         app
     });
     h.run_steps(4);
@@ -99,7 +99,7 @@ fn text_widget_mouse_up_runs_its_menu_and_keeps_the_result() {
         let bytes = form_with_text_action(
             r"/AA << /U << /S /JavaScript /JS (var choice = app.popUpMenuEx\({cName:'Choose test value',cReturn:'selected'}\); if \(choice\) getField\('greeting'\).value = choice;) >> >>",
         );
-        app.open_bytes("text-action.pdf", None, bytes).unwrap();
+        app.open_bytes(&egui::Context::default(), "text-action.pdf", None, bytes).unwrap();
         app
     });
     crate::support::settle(&mut h);
@@ -165,7 +165,8 @@ fn every_message_a_script_shows_takes_the_toast_in_turn() {
         .session
         .run_javascript(id, "app.alert('First', 1, 0, 'Order form'); app.alert('Second', 3); app.alert('Third');", None)
         .unwrap();
-    h.state_mut().handle_js(id, pdfcraft_engine::js::JsOutput { alerts: out.alerts, ..Default::default() });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().handle_js(&ctx_h, id, pdfcraft_engine::js::JsOutput { alerts: out.alerts, ..Default::default() });
     h.run_steps(2);
     assert_eq!(cards(&h), [(Some("Order form".to_owned()), "First".to_owned(), Tone::Warn)]);
     assert_eq!(h.state().script_messages.len(), 2, "the others wait");
@@ -179,7 +180,8 @@ fn every_message_a_script_shows_takes_the_toast_in_turn() {
     assert!(h.state().script_messages.is_empty());
     // A notice the same run raises first (its submit request) comes before the message.
     let out = h.state_mut().session.run_javascript(id, "this.submitForm('https://example.com/form'); app.alert('Fourth');", None).unwrap();
-    h.state_mut().handle_js(id, pdfcraft_engine::js::JsOutput { alerts: out.alerts, requests: out.requests, ..Default::default() });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().handle_js(&ctx_h, id, pdfcraft_engine::js::JsOutput { alerts: out.alerts, requests: out.requests, ..Default::default() });
     h.run_steps(2);
     let shown = texts(&h);
     assert!(shown.len() == 2 && shown[0].contains("submitted") && shown[1] == "Fourth", "{shown:?}");
@@ -270,7 +272,7 @@ fn prepare_a_form_detects_fields_on_a_paper_form() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("paper.pdf", None, paper.clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "paper.pdf", None, paper.clone()).unwrap();
         app
     });
     h.run_steps(4);
@@ -459,7 +461,6 @@ fn native_button_events_match_headless_will_commit() {
     wait_value(&mut h, "greeting", "false");
 }
 
-
 /// A real pointer click must retain the second same-named button through native completion.
 #[test]
 fn clicking_duplicate_named_buttons_targets_the_clicked_object() {
@@ -504,7 +505,7 @@ fn clicking_duplicate_named_buttons_targets_the_clicked_object() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("duplicate-buttons.pdf", None, bytes).unwrap();
+        app.open_bytes(&egui::Context::default(), "duplicate-buttons.pdf", None, bytes).unwrap();
         app
     });
     h.run_steps(6);
@@ -618,7 +619,7 @@ fn clicking_duplicate_image_buttons_imports_only_into_the_clicked_field() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("images.pdf", None, bytes).unwrap();
+        app.open_bytes(&egui::Context::default(), "images.pdf", None, bytes).unwrap();
         app.save_override = Some(path.to_string_lossy().into_owned());
         app
     });

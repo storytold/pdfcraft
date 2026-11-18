@@ -4,6 +4,7 @@
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 
+use crate::support::AppHarness as _;
 use craft::automation::{ControlRequest, ControlResponse};
 use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles, Wake};
 use craft::platform::open::FileIntake;
@@ -14,7 +15,6 @@ use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::settings::import_json;
 use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
 use serde_json::{Value, json};
-use crate::support::AppHarness as _;
 
 /// Where a test sends its requests: the other end is attached to the app with `attach_control`.
 pub(crate) type ControlClient = Sender<ControlRequest>;
@@ -142,7 +142,7 @@ fn harness_on(app: PdfCraftApp, pages: usize, width: f32, scale: f32) -> (Harnes
         let mut app = app;
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.attach_control(rx, None);
-        app.open_bytes("doc.pdf", None, fixture(pages)).unwrap();
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(pages)).unwrap();
         app
     });
     h.run_steps(4);
@@ -319,7 +319,9 @@ fn control_button_focus_preserves_document_undo_redo_shortcuts() {
 #[test]
 fn control_text_focus_retains_text_undo_ownership() {
     let (mut h, c) = harness_pages(2);
-    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark { parent: vec![], index: 0, title: "Target".into(), page: 0, left: None, top: None });
+    let ctx_h = h.ctx.clone();
+    h.state_mut()
+        .apply_edit(&ctx_h, pdfcraft_engine::Edit::AddBookmark { parent: vec![], index: 0, title: "Target".into(), page: 0, left: None, top: None });
     ok(&mut h, &c, "ui.command", json!({"id": "page.insert_blank"}));
     ok(&mut h, &c, "ui.set", json!({"key": "panel", "value": "bookmarks"}));
     let widgets = ok(&mut h, &c, "ui.inspect", json!({"query": "Search", "role": "TextInput"}));
@@ -375,7 +377,9 @@ fn control_quit_preserves_dirty_documents_and_cancel_keeps_them_open() {
 fn bookmark_titles_can_be_searched_over_control() {
     let (mut h, c) = harness();
     for (index, title, page) in [(0, "Background", 0), (1, "Target chapter", 3)] {
-        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark { parent: vec![], index, title: title.into(), page, left: None, top: None });
+        let ctx_h = h.ctx.clone();
+        h.state_mut()
+            .apply_edit(&ctx_h, pdfcraft_engine::Edit::AddBookmark { parent: vec![], index, title: title.into(), page, left: None, top: None });
     }
     ok(&mut h, &c, "ui.set", json!({ "key": "panel", "value": "bookmarks" }));
     h.run_steps(3);
@@ -389,7 +393,7 @@ fn bookmark_titles_can_be_searched_over_control() {
     h.get_by_label("Target chapter");
     assert!(h.query_by_label("Background").is_none());
     ok(&mut h, &c, "ui.click", json!({ "label": "Target chapter" }));
-    assert_eq!(h.state().views[0].current, 3);
+    assert_eq!(h.state().views[0].current(), 3);
     if let Ok(dir) = std::env::var("PDFCRAFT_BOOKMARK_SHOTS") {
         let _gpu = crate::gpu();
         h.render().unwrap().save(format!("{dir}/control-filtered-bookmarks.png")).unwrap();
@@ -741,7 +745,8 @@ fn autoscroll_cancels_on_click_wheel_focus_loss_and_pointer_exit() {
 fn autoscroll_is_scoped_to_the_active_view_and_cannot_start_under_a_dialog() {
     let (mut h, c) = harness();
     let p = start_autoscroll(&mut h, &c);
-    h.state_mut().open_bytes("other.pdf", None, fixture(2)).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "other.pdf", None, fixture(2)).unwrap();
     h.run_steps(2);
     assert!(!h.state().views[0].auto_scrolling());
     h.state_mut().active = Some(0);
@@ -935,7 +940,8 @@ fn ukrainian_preferences_and_search_keep_command_ids() {
         assert!(found["count"].as_u64().unwrap() > 0, "{dialog}: {found}");
     }
     ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "none" }));
-    assert!(!h.state_mut().apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
     let state = ok(&mut h, &c, "ui.state", json!({}));
     assert_eq!(state["language"], "uk");
     assert_eq!(state["notice"], "Помилка «Видалити сторінки»: a document must keep at least one page");
@@ -1027,7 +1033,8 @@ fn japanese_dialogs_errors_and_custom_action_names() {
         assert!(found["count"].as_u64().unwrap() > 0, "{dialog}: {found}");
     }
     ok(&mut h, &c, "ui.set", json!({"key": "dialog", "value": "none"}));
-    assert!(!h.state_mut().apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
     let state = ok(&mut h, &c, "ui.state", json!({}));
     // The frame is translated; the engine's own error text is shown as it is.
     assert_eq!(state["notice"], "操作「ページを削除」に失敗しました: a document must keep at least one page");
@@ -1078,7 +1085,8 @@ fn simplified_chinese_signature_prompts_and_errors_keep_document_state() {
     let drawn = ok(&mut h, &c, "ui.inspect", json!({"query": "请在下方绘制您的签名。"}));
     assert!(drawn["count"].as_u64().unwrap() > 0, "{drawn}");
     ok(&mut h, &c, "ui.click", json!({"label": "取消"}));
-    assert!(!h.state_mut().apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0, 1, 2, 3, 4] }));
     let state = ok(&mut h, &c, "ui.state", json!({}));
     assert_eq!(state["notice"], "删除页面失败：a document must keep at least one page");
     assert_eq!(state["documents"], documents, "a language change and failed edit must preserve the document");
@@ -1095,7 +1103,7 @@ fn cover_page_command_needs_two_page_view() {
     ok(&mut h, &c, "ui.command", json!({ "id": "view.layout.two_up" }));
     assert_eq!(enabled(ok(&mut h, &c, "ui.commands", json!({}))), true);
     ok(&mut h, &c, "ui.command", json!({ "id": "view.layout.cover" }));
-    assert!(h.state().views[0].cover);
+    assert!(h.state().views[0].view.cover);
 }
 
 #[test]
@@ -1232,10 +1240,12 @@ fn control_default_workspace_and_session_override() {
     ok(&mut h, &c, "ui.set", json!({"key": "default-mode", "value": "edit"}));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["default_mode"], "edit");
     assert!(call(&mut h, &c, "ui.set", json!({"key": "default-mode", "value": "unknown"})).is_err());
-    h.state_mut().open_bytes("next.pdf", None, fixture(1)).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "next.pdf", None, fixture(1)).unwrap();
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Edit");
     ok(&mut h, &c, "ui.set", json!({"key": "mode", "value": "read"}));
-    h.state_mut().open_bytes("another.pdf", None, fixture(1)).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "another.pdf", None, fixture(1)).unwrap();
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["mode"], "Read");
 }
 
@@ -1251,10 +1261,10 @@ fn measurement_tools_draw_live_calibrate_save_and_export() {
     h.set_option("zoom", "100").unwrap();
     ok(&mut h, &c, "ui.command", json!({"id":"measure.scale"}));
     h.run_steps(3);
-    h.state_mut().views[0].measure.drawing_points = 10.0;
-    h.state_mut().views[0].measure.page_unit = Some(pdfcraft_engine::measure::PageUnit::Pt);
-    h.state_mut().views[0].measure.real_distance = 1.0;
-    h.state_mut().views[0].measure.unit = "m".into();
+    h.state_mut().views[0].session.measure.drawing_points = 10.0;
+    h.state_mut().views[0].session.measure.page_unit = Some(pdfcraft_engine::measure::PageUnit::Pt);
+    h.state_mut().views[0].session.measure.real_distance = 1.0;
+    h.state_mut().views[0].session.measure.unit = "m".into();
     h.get_by_label("Apply scale").click();
     h.run_steps(3);
     let scale = h.state().session.get(doc).unwrap().measurement_scale(0, [20.0, 20.0]).unwrap();
@@ -1298,7 +1308,7 @@ fn measurement_tools_draw_live_calibrate_save_and_export() {
     h.set_option("quick", "measure-calibrate").unwrap();
     click(&mut h, &c, 30.0, 50.0);
     click(&mut h, &c, 130.0, 50.0);
-    assert!((h.state().views[0].measure.drawing_points - 100.0).abs() < 0.01);
+    assert!((h.state().views[0].session.measure.drawing_points - 100.0).abs() < 0.01);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -1312,7 +1322,7 @@ fn a_1_to_50_scale_in_millimetres_measures_a_10_mm_line_as_500_mm() {
     h.set_option("zoom", "100").unwrap();
     ok(&mut h, &c, "ui.command", json!({"id":"measure.scale"}));
     h.run_steps(3);
-    let m = &mut h.state_mut().views[0].measure;
+    let m = &mut h.state_mut().views[0].session.measure;
     (m.drawing_points, m.real_distance, m.unit) = (1.0, 50.0, "mm".into());
     h.get_by_label("Apply scale").click();
     h.run_steps(3);
@@ -1352,7 +1362,7 @@ fn a_plan_scale_picked_or_typed_applies_at_once() {
     let doc = h.state().views[0].id;
     ok(&mut h, &c, "ui.command", json!({"id":"measure.scale"}));
     h.run_steps(3);
-    h.state_mut().views[0].measure.unit = "m".into();
+    h.state_mut().views[0].session.measure.unit = "m".into();
     h.run_steps(2);
     // 60 mm of paper.
     let line = [[20.0, 20.0], [20.0 + 60.0 / 25.4 * 72.0, 20.0]];
@@ -1373,7 +1383,7 @@ fn a_plan_scale_picked_or_typed_applies_at_once() {
     for (typed, label) in [("1/50", "3.00 m"), ("1:100", "6.00 m")] {
         field(&h).click();
         h.run_steps(1);
-        h.state_mut().views[0].measure.ratio_text.clear();
+        h.state_mut().views[0].session.measure.ratio_text.clear();
         field(&h).type_text(typed);
         h.run_steps(2);
         h.key_press(egui::Key::Enter);
@@ -1384,13 +1394,13 @@ fn a_plan_scale_picked_or_typed_applies_at_once() {
     let before = read(&h);
     field(&h).click();
     h.run_steps(1);
-    h.state_mut().views[0].measure.ratio_text.clear();
+    h.state_mut().views[0].session.measure.ratio_text.clear();
     field(&h).type_text("1:0");
     h.run_steps(2);
     h.key_press(egui::Key::Enter);
     h.run_steps(3);
     assert_eq!(read(&h), before);
-    assert!(h.state().views[0].measure.error.is_some());
+    assert!(h.state().views[0].session.measure.error.is_some());
     // The scale is one undoable edit.
     ok(&mut h, &c, "ui.command", json!({"id":"edit.undo"}));
     h.run_steps(2);
@@ -1540,7 +1550,7 @@ fn rail_opens_a_panel_then_closes_the_open_one() {
 #[test]
 fn control_quit_retains_inactive_fill_sign_typing_after_cancel() {
     let (mut h, c) = harness();
-    h.state_mut().views[0].fill_text = Some(pdfcraft_ui_egui::fill_sign::TypeBox {
+    h.state_mut().views[0].session.fill_text = Some(pdfcraft_ui_egui::fill_sign::TypeBox {
         page: 0,
         at: [40.0, 200.0],
         text: "Unsaved signature note".into(),
@@ -1555,7 +1565,7 @@ fn control_quit_retains_inactive_fill_sign_typing_after_cancel() {
     assert!(!close_requested(&h));
     h.run_steps(3);
     ok(&mut h, &c, "ui.click", json!({"label":"Cancel"}));
-    assert_eq!(h.state().views[0].fill_text.as_ref().unwrap().text, "Unsaved signature note");
+    assert_eq!(h.state().views[0].session.fill_text.as_ref().unwrap().text, "Unsaved signature note");
     assert_eq!(h.state().views.len(), 1);
     assert!(!close_requested(&h));
 }
@@ -1572,13 +1582,13 @@ fn control_quit_retains_blocked_content_typing_after_cancel() {
     ok(&mut h, &c, "ui.click", json!({"x":point.x,"y":point.y}));
     h.event(egui::Event::Text("Keep 世界".into()));
     h.run_steps(3);
-    assert_eq!(h.state().views[0].content.draft.as_ref().unwrap().text, "Keep 世界");
+    assert_eq!(h.state().views[0].session.content.draft.as_ref().unwrap().text, "Keep 世界");
     h.state_mut().active = None;
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
     assert_eq!(ok(&mut h, &c, "ui.quit", json!({})), json!({"quitting":false,"needs_confirmation":true}));
     h.run_steps(3);
     ok(&mut h, &c, "ui.click", json!({"label":"Cancel"}));
-    assert_eq!(h.state().views[0].content.draft.as_ref().unwrap().text, "Keep 世界");
+    assert_eq!(h.state().views[0].session.content.draft.as_ref().unwrap().text, "Keep 世界");
     assert_eq!(h.state().views.len(), 1);
     assert!(!close_requested(&h));
 }
@@ -1707,21 +1717,21 @@ fn ctrl_wheel_anchors_visible_page_and_plain_wheel_only_scrolls() {
             let visible = before.intersect(viewport).shrink(15.0);
             let p = egui::pos2(visible.left() + fraction * visible.width(), visible.top() + fraction * visible.height());
             let normalised = (p - before.min) / before.size();
-            let old_zoom = h.state().views[0].zoom;
+            let old_zoom = h.state().views[0].zoom();
             navigation_wheel(&mut h, p, 20.0, true);
             let enlarged = h.state().views[0].page_screen_rect(0).unwrap();
             let anchored = enlarged.min + normalised * enlarged.size();
-            assert!(h.state().views[0].zoom > old_zoom);
+            assert!(h.state().views[0].zoom() > old_zoom);
             assert!((anchored.y - p.y).abs() < 2.0, "percent={percent}, fraction={fraction}");
             if before.width() > viewport.width() {
                 assert!((anchored.x - p.x).abs() < 2.0);
             }
             navigation_wheel(&mut h, p, -20.0, true);
-            assert!((h.state().views[0].zoom - old_zoom).abs() < 0.01);
-            let zoom = h.state().views[0].zoom;
+            assert!((h.state().views[0].zoom() - old_zoom).abs() < 0.01);
+            let zoom = h.state().views[0].zoom();
             let top = h.state().views[0].page_screen_rect(0).unwrap().top();
             navigation_wheel(&mut h, p, -80.0, false);
-            assert_eq!(h.state().views[0].zoom, zoom);
+            assert_eq!(h.state().views[0].zoom(), zoom);
             assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < top - 20.0);
         }
     }
@@ -1731,15 +1741,15 @@ fn ctrl_wheel_anchors_visible_page_and_plain_wheel_only_scrolls() {
 fn wheel_zoom_is_scoped_to_the_viewport_and_respects_existing_limits() {
     let (mut h, c) = harness();
     let outside = egui::pos2(5.0, 5.0);
-    let zoom = h.state().views[0].zoom;
+    let zoom = h.state().views[0].zoom();
     navigation_wheel(&mut h, outside, 40.0, true);
-    assert_eq!(h.state().views[0].zoom, zoom);
+    assert_eq!(h.state().views[0].zoom(), zoom);
     for (percent, delta, expected) in [(6400, 80.0, 64.0), (8, -80.0, 0.08)] {
         ok(&mut h, &c, "ui.set", json!({"key":"zoom", "value":percent.to_string()}));
         h.run_steps(4);
         let p = h.state().views[0].viewport_rect().center();
         navigation_wheel(&mut h, p, delta, true);
-        assert_eq!(h.state().views[0].zoom, expected);
+        assert_eq!(h.state().views[0].zoom(), expected);
     }
 }
 
@@ -1748,12 +1758,12 @@ fn initial_zoom_option_is_applied_before_the_first_viewport_layout() {
     for percent in [50, 100, 200, 400] {
         let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
             let mut app = new_app();
-            app.open_bytes("initial-zoom.pdf", None, fixture(3)).unwrap();
+            app.open_bytes(&egui::Context::default(), "initial-zoom.pdf", None, fixture(3)).unwrap();
             app.set_option(&egui::Context::default(), "zoom", &percent.to_string()).unwrap();
-            assert_eq!(app.views[0].zoom, percent as f32 / 100.0, "initial options must work before the viewport exists");
+            assert_eq!(app.views[0].zoom(), percent as f32 / 100.0, "initial options must work before the viewport exists");
             app
         });
-        assert_eq!(h.state().views[0].zoom, percent as f32 / 100.0);
+        assert_eq!(h.state().views[0].zoom(), percent as f32 / 100.0);
     }
 }
 
@@ -1807,28 +1817,30 @@ fn navigation_history_for_os(os: egui::os::OperatingSystem) {
     // The real rail button is accessible and invokes the same history, not the adjacent page.
     let shortcut = if h.ctx.os() == egui::os::OperatingSystem::Mac { "⌘[" } else { "Ctrl+[" };
     ok(&mut h, &c, "ui.click", json!({"label": &format!("Previous view ({shortcut})")}));
-    assert_eq!(h.state().views[0].current, 0);
+    assert_eq!(h.state().views[0].current(), 0);
     assert!(enabled(ok(&mut h, &c, "ui.commands", json!({})), "view.next_view"));
     ok(&mut h, &c, "ui.command", json!({"id": "view.next_view"}));
-    assert_eq!(h.state().views[0].current, 3);
+    assert_eq!(h.state().views[0].current(), 3);
     ok(&mut h, &c, "ui.set", json!({"key": "page", "value": "5"}));
     ok(&mut h, &c, "ui.key", json!({"key": "[", "modifiers": ["command"]}));
-    assert_eq!(h.state().views[0].current, 3, "shortcut traverses exactly one history entry");
+    assert_eq!(h.state().views[0].current(), 3, "shortcut traverses exactly one history entry");
     ok(&mut h, &c, "ui.key", json!({"key": "]", "modifiers": ["command"]}));
-    assert_eq!(h.state().views[0].current, 4);
+    assert_eq!(h.state().views[0].current(), 4);
     ok(&mut h, &c, "ui.command", json!({"id": "view.previous_view"}));
-    h.state_mut().open_bytes("other.pdf", None, fixture(5)).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "other.pdf", None, fixture(5)).unwrap();
     assert!(!enabled(ok(&mut h, &c, "ui.commands", json!({})), "view.previous_view"));
     ok(&mut h, &c, "ui.set", json!({"key": "page", "value": "2"}));
     ok(&mut h, &c, "ui.command", json!({"id": "view.previous_view"}));
-    assert_eq!(h.state().views[1].current, 0);
-    assert_eq!(h.state().views[0].current, 3, "other tab's history does not move this document");
+    assert_eq!(h.state().views[1].current(), 0);
+    assert_eq!(h.state().views[0].current(), 3, "other tab's history does not move this document");
     h.state_mut().active = Some(0);
     ok(&mut h, &c, "ui.command", json!({"id": "view.previous_view"}));
-    assert_eq!(h.state().views[0].current, 0);
+    assert_eq!(h.state().views[0].current(), 0);
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().bytes, before);
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
-    h.state_mut().open_bytes("reopened.pdf", None, before.as_ref().clone()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "reopened.pdf", None, before.as_ref().clone()).unwrap();
     assert!(h.state().views.last().unwrap().back.is_empty());
     assert!(h.state().views.last().unwrap().forward.is_empty());
 }
@@ -1846,7 +1858,7 @@ fn routine_continuous_scrolling_does_not_add_navigation_history() {
         source: egui::MouseWheelSource::Unknown,
     });
     h.run_steps(8);
-    assert!(h.state().views[0].current > 0, "the wheel really moved to a later page");
+    assert!(h.state().views[0].current() > 0, "the wheel really moved to a later page");
     assert!(h.state().views[0].back.is_empty());
     assert!(h.state().views[0].forward.is_empty());
 }

@@ -3,13 +3,13 @@
 
 use std::sync::Arc;
 
+use crate::support::AppHarness as _;
 use craft::host::{InlineJobs, Picked, ScriptedFiles, Wake};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::ocr::{OcrPage, OcrSettings, PlacedWord};
 use pdfcraft_engine::{AddedText, Edit, Session, export};
 use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
-use crate::support::AppHarness as _;
 
 /// The app on a host whose jobs run at once and whose pickers answer from `files`.
 fn app_on(files: Arc<ScriptedFiles>) -> PdfCraftApp {
@@ -54,7 +54,7 @@ fn recognize_text_dialog_adds_searchable_text() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = app_on(Arc::new(ScriptedFiles::new()));
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
         app
     });
     h.run_steps(4);
@@ -94,7 +94,8 @@ fn recognize_text_in_multiple_files_writes_searchable_copies() {
         app
     });
     h.run_steps(2);
-    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::Ocr, vec![("one.pdf".into(), scan()), ("two.pdf".into(), scan())]);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().use_files(&ctx_h, pdfcraft_ui_egui::FilePurpose::Ocr, vec![("one.pdf".into(), scan()), ("two.pdf".into(), scan())]);
     h.run_steps(4);
     assert!(h.state().ocr_batch.is_none(), "finished");
     let toast = notice(&h);
@@ -124,7 +125,7 @@ fn recognize_text_can_read_pictures_on_pages_with_text() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = app_on(Arc::new(ScriptedFiles::new()));
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("hybrid.pdf", None, hybrid).unwrap();
+        app.open_bytes(&egui::Context::default(), "hybrid.pdf", None, hybrid).unwrap();
         app
     });
     h.run_steps(4);
@@ -162,7 +163,7 @@ fn an_ocr_word_opens_for_editing_and_stays_open() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
         let id = app.views[0].id;
         let ph = app.session.get(id).unwrap().info.pages[0].height as f64;
         let words = vec![PlacedWord {
@@ -194,20 +195,19 @@ fn an_ocr_word_opens_for_editing_and_stays_open() {
         h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
     }
     h.run_steps(4);
-    let opened = |h: &Harness<'_, PdfCraftApp>| h.state().views[0].line_editor.as_ref().map(|e| e.text.clone());
+    let opened = |h: &Harness<'_, PdfCraftApp>| h.state().views[0].session.line_editor.as_ref().map(|e| e.text.clone());
     assert_eq!(opened(&h).as_deref(), Some("Recognize"));
-    assert!(h.state().views[0].image_selection.is_none(), "the scan under the word isn't selected");
+    assert!(h.state().views[0].session.image_selection.is_none(), "the scan under the word isn't selected");
     h.hover_at(r.min + egui::vec2(300.0, 400.0) * k);
     h.run_steps(4);
     assert_eq!(opened(&h).as_deref(), Some("Recognize"), "moving the pointer away keeps the word open");
 }
 
-
 fn edit_harness(pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = app_on(Arc::new(ScriptedFiles::new()));
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, pdf).unwrap();
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf).unwrap();
         app
     });
     h.run_steps(4);
@@ -382,7 +382,7 @@ fn placed(text: &str, confidence: f32) -> PlacedWord {
 fn ocr_verify_screen_controls_keyboard_and_accept() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
-        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
         app
     });
     h.run_steps(4);
@@ -446,7 +446,7 @@ fn ocr_verify_screen_controls_keyboard_and_accept() {
 fn ocr_verify_screen_empty_walk() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
-        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
         app
     });
     h.run_steps(4);

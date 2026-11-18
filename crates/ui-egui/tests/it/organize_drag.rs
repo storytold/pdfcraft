@@ -31,7 +31,7 @@ fn organize() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("pages.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "pages.pdf", None, bytes.as_ref().clone()).unwrap();
         app.set_option(&egui::Context::default(), "organize", "on").unwrap();
         app
     });
@@ -87,13 +87,14 @@ fn assert_saved_order(h: &Harness<'static, PdfCraftApp>, expected: &[&str]) {
     let app = h.state();
     let bytes = app.session.save_bytes(app.views[0].id).unwrap();
     let mut reopened = crate::control::new_app();
-    reopened.open_bytes("saved.pdf", None, bytes.as_ref().clone()).unwrap();
+    reopened.open_bytes(&egui::Context::default(), "saved.pdf", None, bytes.as_ref().clone()).unwrap();
     assert_eq!(page_texts(&reopened), expected, "save/reopen preserves the post-edit order");
 }
 
 fn check_undo_cancels_drag(copying: bool) {
     let mut h = organize();
-    assert!(h.state_mut().apply_edit(Edit::MovePages { pages: vec![0], to: 3 }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, Edit::MovePages { pages: vec![0], to: 3 }));
     h.run_steps(2);
     assert_eq!(page_texts(h.state()), ["Page 2", "Page 3", "Page 4", "Page 1"]);
     let (to, modifiers) = start_drag(&mut h, copying);
@@ -142,7 +143,8 @@ fn undo_cancels_an_organize_copy_before_pointer_release() {
 #[test]
 fn redo_cancels_an_organize_drag_before_pointer_release() {
     let mut h = organize();
-    assert!(h.state_mut().apply_edit(Edit::MovePages { pages: vec![0], to: 3 }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, Edit::MovePages { pages: vec![0], to: 3 }));
     h.state_mut().undo();
     h.run_steps(2);
     let (to, modifiers) = start_drag(&mut h, false);
@@ -158,7 +160,8 @@ fn redo_cancels_an_organize_drag_before_pointer_release() {
 fn deleting_a_page_cancels_an_organize_drag_before_pointer_release() {
     let mut h = organize();
     let (to, modifiers) = start_drag(&mut h, false);
-    assert!(h.state_mut().apply_edit(Edit::DeletePages { pages: vec![0] }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, Edit::DeletePages { pages: vec![0] }));
     h.run_steps(2);
     release(&mut h, to, modifiers);
     let expected = ["Page 2", "Page 3", "Page 4"];

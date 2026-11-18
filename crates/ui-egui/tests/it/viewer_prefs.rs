@@ -2,12 +2,12 @@
 //! toolbars, menu and window controls in its tab, with F8 to bring them back; fitting and
 //! centring the window; and the zoom a one-page-at-a-time layout opens at.
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::canvas::Fit;
 use pdfcraft_ui_egui::viewer_prefs::HiddenInterface;
-use crate::support::AppHarness as _;
 
 /// Two 200 × 300 pages; `catalog` is added to the catalog dictionary.
 fn fixture(catalog: &str) -> Vec<u8> {
@@ -41,7 +41,7 @@ fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static, files: &'static [&'st
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         setup(&mut app);
         for (i, catalog) in files.iter().enumerate() {
-            app.open_bytes(&format!("{i}.pdf"), None, fixture(catalog)).unwrap();
+            app.open_bytes(&egui::Context::default(), &format!("{i}.pdf"), None, fixture(catalog)).unwrap();
         }
         app
     });
@@ -195,7 +195,7 @@ fn hiding_the_interface_is_never_saved() {
 fn opening_fit(catalog: &str, own_view: bool) -> Fit {
     let mut app = crate::control::new_app();
     app.always_default_view = own_view;
-    app.open_bytes("x.pdf", None, fixture(catalog)).unwrap();
+    app.open_bytes(&egui::Context::default(), "x.pdf", None, fixture(catalog)).unwrap();
     app.views[0].fit()
 }
 
@@ -215,7 +215,7 @@ fn one_page_at_a_time_opens_at_fit_page() {
     // A zoom the document names wins.
     assert_eq!(opening_fit("/PageLayout /SinglePage /OpenAction [3 0 R /FitH 300]", false), Fit::Width);
     let mut app = crate::control::new_app();
-    app.open_bytes("x.pdf", None, fixture("/PageLayout /SinglePage /OpenAction [3 0 R /XYZ 0 300 2]")).unwrap();
+    app.open_bytes(&egui::Context::default(), "x.pdf", None, fixture("/PageLayout /SinglePage /OpenAction [3 0 R /XYZ 0 300 2]")).unwrap();
     assert_eq!((app.views[0].fit(), app.views[0].zoom()), (Fit::None, 2.0));
 }
 
@@ -226,9 +226,14 @@ fn a_remembered_zoom_wins_over_the_layouts_fit_page() {
     let path = std::env::temp_dir().join(format!("pdfcraft-viewer-prefs-last-view-{}.pdf", std::process::id())).to_string_lossy().into_owned();
     let mut app = crate::control::new_app();
     let json_path = serde_json::to_string(&path).unwrap();
-    app.apply_settings(&pdfcraft_ui_egui::settings::import_json(&format!(r#"{{"last_views": [{{"path": {json_path}, "page": 1, "zoom": "62.5%", "display": "single"}}]}}"#)).0);
+    app.apply_settings(
+        &pdfcraft_ui_egui::settings::import_json(&format!(
+            r#"{{"last_views": [{{"path": {json_path}, "page": 1, "zoom": "62.5%", "display": "single"}}]}}"#
+        ))
+        .0,
+    );
     assert!(app.restore_last_view);
-    app.open_bytes("x.pdf", Some(path), fixture("/PageLayout /SinglePage")).unwrap();
+    app.open_bytes(&egui::Context::default(), "x.pdf", Some(path), fixture("/PageLayout /SinglePage")).unwrap();
     let v = &app.views[0];
     assert_eq!((v.fit(), v.zoom(), v.current()), (Fit::None, 0.625, 1));
 }
@@ -246,7 +251,7 @@ fn always_default_view_wins_over_a_remembered_view() {
     );
     assert!(app.always_default_view);
     assert!(app.restore_last_view);
-    app.open_bytes("x.pdf", Some(path), fixture("/PageLayout /SinglePage")).unwrap();
+    app.open_bytes(&egui::Context::default(), "x.pdf", Some(path), fixture("/PageLayout /SinglePage")).unwrap();
     let v = &app.views[0];
     assert_eq!((v.fit(), v.view.display, v.view.continuous, v.current()), (Fit::Width, craft::pages::PageDisplay::Single, true, 1));
 }
@@ -285,7 +290,8 @@ fn windowed(files: &'static [&'static str]) -> Harness<'static, PdfCraftApp> {
     on_monitor(&mut h);
     h.run_steps(2);
     for (i, catalog) in files.iter().enumerate() {
-        h.state_mut().open_bytes(&format!("{i}.pdf"), None, fixture(catalog)).unwrap();
+        let ctx_h = h.ctx.clone();
+        h.state_mut().open_bytes(&ctx_h, &format!("{i}.pdf"), None, fixture(catalog)).unwrap();
     }
     h
 }
@@ -323,7 +329,8 @@ fn a_maximized_window_or_a_second_tab_is_left_alone() {
     on_monitor(&mut h);
     h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().maximized = Some(true);
     h.run_steps(2);
-    h.state_mut().open_bytes("0.pdf", None, fixture("/ViewerPreferences << /FitWindow true /CenterWindow true >>")).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "0.pdf", None, fixture("/ViewerPreferences << /FitWindow true /CenterWindow true >>")).unwrap();
     assert_eq!(window_commands(&mut h, 12), (None, None), "maximized");
 
     let mut h = windowed(&["", "/ViewerPreferences << /FitWindow true /CenterWindow true >>"]);
@@ -332,7 +339,8 @@ fn a_maximized_window_or_a_second_tab_is_left_alone() {
     // A tab opened behind the document before its page is laid out (a late startup file) leaves
     // the window alone too, though the document stays active.
     let mut h = windowed(&["/ViewerPreferences << /FitWindow true /CenterWindow true >>"]);
-    h.state_mut().open_bytes("1.pdf", None, fixture("")).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "1.pdf", None, fixture("")).unwrap();
     h.state_mut().active = Some(0);
     assert_eq!(window_commands(&mut h, 12), (None, None), "a tab opened behind it");
 }
@@ -349,7 +357,8 @@ fn the_user_is_told_which_key_brings_the_interface_back() {
     // Nor when the user opens documents their own way.
     let mut h = windowed(&[]);
     h.state_mut().always_default_view = true;
-    h.state_mut().open_bytes("0.pdf", None, fixture(HIDE_ALL)).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "0.pdf", None, fixture(HIDE_ALL)).unwrap();
     h.run_steps(3);
     assert!(h.query_by_label_contains("Press F8").is_none());
 }

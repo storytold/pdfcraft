@@ -23,8 +23,13 @@ fn harness() -> H {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("form.pdf", None, PDF.to_vec()).unwrap();
-        app.recent.extend((0..5).map(|n| pdfcraft_ui_egui::RecentFile { name: format!("{n}.pdf"), path: format!("/nowhere/{n}.pdf"), pages: 1, size: 0 }));
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, PDF.to_vec()).unwrap();
+        app.recent.extend((0..5).map(|n| pdfcraft_ui_egui::RecentFile {
+            name: format!("{n}.pdf"),
+            path: format!("/nowhere/{n}.pdf"),
+            pages: 1,
+            size: 0,
+        }));
         app
     });
     h.run_steps(4);
@@ -74,21 +79,31 @@ fn cases() -> Vec<Case> {
             },
             applied: |a| a.side_panels.tools_on_right() && !a.side_panels.rail_on_right(),
         },
-        Case { name: "animation effects", page: "General & Interface", edit: |h| click(h, "Off"), applied: |a| a.animation_effects == MotionChoice::Off },
+        Case {
+            name: "animation effects",
+            page: "General & Interface",
+            edit: |h| click(h, "Off"),
+            applied: |a| a.animation_effects == MotionChoice::Off,
+        },
         Case {
             name: "recent limit truncates",
             page: "General & Interface",
             edit: |h| type_into(h, "Recent files to keep", "2"),
             applied: |a| a.recent_limit == 2 && a.recent.len() == 2,
         },
-        Case { name: "comment author", page: "Comment", edit: |h| type_into(h, "Name on new comments", "Ada"), applied: |a| a.comment_prefs.author == "Ada" },
-        Case { name: "date format", page: "Fill & Sign", edit: |h| type_into(h, "Pattern", "dd.mm.yyyy"), applied: |a| a.session.date_format() == "dd.mm.yyyy" },
         Case {
-            name: "javascript",
-            page: "JavaScript",
-            edit: |h| click(h, "Enable Acrobat JavaScript"),
-            applied: |a| !a.session.javascript(),
+            name: "comment author",
+            page: "Comment",
+            edit: |h| type_into(h, "Name on new comments", "Ada"),
+            applied: |a| a.comment_prefs.author == "Ada",
         },
+        Case {
+            name: "date format",
+            page: "Fill & Sign",
+            edit: |h| type_into(h, "Pattern", "dd.mm.yyyy"),
+            applied: |a| a.session.date_format() == "dd.mm.yyyy",
+        },
+        Case { name: "javascript", page: "JavaScript", edit: |h| click(h, "Enable Acrobat JavaScript"), applied: |a| !a.session.javascript() },
     ]
 }
 

@@ -2,18 +2,18 @@
 //! image…), so what the menu does is about that tab's area; leaving Snapshot puts away the area in
 //! every tab, not only the one on screen.
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
-use crate::support::AppHarness as _;
 
 /// Two tabs, a.pdf (0) and b.pdf (1), with Snapshot chosen and the system clipboard left alone.
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("a.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
-        app.open_bytes("b.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
+        app.open_bytes(&egui::Context::default(), "a.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
+        app.open_bytes(&egui::Context::default(), "b.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
         // PLAN: the injected clipboard of pdf-shell-w17 replaces `system_clipboard`.
         app
     });
@@ -28,7 +28,7 @@ fn snapshot_in(h: &mut Harness<'static, PdfCraftApp>, index: usize, area: [f32; 
     h.state_mut().active = Some(index);
     h.run_steps(2);
     h.state_mut().snapshot(index, 0, area).expect("a snapshot");
-    h.state_mut().views[index].area_pick = Some((0, area));
+    h.state_mut().views[index].session.area_pick = Some((0, area));
     h.run_steps(2);
     let (w, hgt, px) = h.state().last_snapshot.clone().expect("kept");
     (w, hgt, px.to_vec())
@@ -46,7 +46,7 @@ fn save_as_image_writes_this_tabs_area() {
     // Back to A: its area is still outlined with its menu.
     h.state_mut().active = Some(0);
     h.run_steps(3);
-    assert_eq!(h.state().views[0].area_pick, Some((0, [10.0, 130.0, 150.0, 170.0])));
+    assert_eq!(h.state().views[0].session.area_pick, Some((0, [10.0, 130.0, 150.0, 170.0])));
     let dir = std::env::temp_dir().join(format!("pdfcraft-snapshot-tabs-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("a area.png");
@@ -72,7 +72,7 @@ fn the_area_stays_after_print_area() {
     h.get_by_label("Print area…").click();
     h.run_steps(4);
     assert!(h.state().dialogs.is_open::<craft::print::ui::HostedPrint>());
-    assert_eq!(h.state().views[0].area_pick, Some((0, area)));
+    assert_eq!(h.state().views[0].session.area_pick, Some((0, area)));
 }
 
 /// An area is picked in each of two tabs while Snapshot is on; choosing another tool puts both
@@ -84,24 +84,24 @@ fn leaving_snapshot_clears_every_tab() {
     for index in 0..2 {
         h.state_mut().active = Some(index);
         h.run_steps(2);
-        h.state_mut().views[index].area_pick = Some((0, [10.0, 130.0, 150.0, 170.0]));
+        h.state_mut().views[index].session.area_pick = Some((0, [10.0, 130.0, 150.0, 170.0]));
         h.run_steps(2);
         // Still Snapshot: the area stays outlined.
-        assert!(h.state().views[index].area_pick.is_some(), "tab {index} keeps its area under Snapshot");
+        assert!(h.state().views[index].session.area_pick.is_some(), "tab {index} keeps its area under Snapshot");
     }
     // Tab B is on screen; choose another tool.
     h.state_mut().quick_tool = QuickTool::Select;
     h.run_steps(3);
-    assert!(h.state().views[1].area_pick.is_none(), "the tab on screen");
-    assert!(h.state().views[0].area_pick.is_none(), "the other tab");
+    assert!(h.state().views[1].session.area_pick.is_none(), "the tab on screen");
+    assert!(h.state().views[0].session.area_pick.is_none(), "the other tab");
 }
 
 /// A change to the page list leaves no area behind: its page index would name another page.
 #[test]
 fn a_document_change_puts_the_area_away() {
     let mut h = harness();
-    h.state_mut().views[0].area_pick = Some((0, [10.0, 130.0, 150.0, 170.0]));
+    h.state_mut().views[0].session.area_pick = Some((0, [10.0, 130.0, 150.0, 170.0]));
     let info = h.state().session.get(h.state().views[0].id).unwrap().info.clone();
-    h.state_mut().views[0].document_changed(&info);
-    assert!(h.state().views[0].area_pick.is_none());
+    h.state_mut().views[0].document_changed(&egui::Context::default(), &info);
+    assert!(h.state().views[0].session.area_pick.is_none());
 }

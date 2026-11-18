@@ -49,7 +49,7 @@ fn harness(rotate: u16) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("text.pdf", None, fixture(rotate)).expect("opens");
+        app.open_bytes(&egui::Context::default(), "text.pdf", None, fixture(rotate)).expect("opens");
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
         app
@@ -89,7 +89,8 @@ fn a_new_bookmark_goes_to_the_top_of_the_window_not_the_top_of_the_page() {
     let mut h = harness(0);
     // A bookmark that scrolls page 2 to 250 pt up its height puts that line at the top of the
     // window; a bookmark made there then goes to the same place.
-    h.state_mut().apply_edit(Edit::AddBookmark { parent: vec![], index: 0, title: "Mid".into(), page: 1, left: None, top: Some(250.0) });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::AddBookmark { parent: vec![], index: 0, title: "Mid".into(), page: 1, left: None, top: Some(250.0) });
     h.run_steps(3);
     h.get_by_label("Mid").click();
     crate::support::settle(&mut h);
@@ -174,7 +175,7 @@ fn a_bookmark_in_a_spread_of_unequal_pages_goes_to_the_page_crossing_the_top_of_
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("spread.pdf", None, fixture_of(&[(300, 200), (300, 400), (300, 400)], 0)).expect("opens");
+        app.open_bytes(&egui::Context::default(), "spread.pdf", None, fixture_of(&[(300, 200), (300, 400), (300, 400)], 0)).expect("opens");
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
         app
@@ -183,7 +184,8 @@ fn a_bookmark_in_a_spread_of_unequal_pages_goes_to_the_page_crossing_the_top_of_
     h.run_steps(4);
     crate::support::settle(&mut h);
     // 20 pt below page 2's top is at the window's top, where page 1 has not started.
-    h.state_mut().apply_edit(Edit::AddBookmark { parent: vec![], index: 0, title: "Right".into(), page: 1, left: None, top: Some(380.0) });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::AddBookmark { parent: vec![], index: 0, title: "Right".into(), page: 1, left: None, top: Some(380.0) });
     h.run_steps(3);
     h.get_by_label("Right").click();
     crate::support::settle(&mut h);

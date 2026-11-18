@@ -15,7 +15,7 @@ use pdfcraft_ui_egui::panes::Place;
 /// The size of view `i`'s first page picture once it is drawn; a stand-in for a page still loading
 /// is not a drawn page.
 fn page_size(s: &PdfCraftApp, i: usize) -> Option<egui::Vec2> {
-    match &s.views[i].placed.first()?.picture {
+    match &s.views[i].session.placed.first()?.picture {
         TextureState::Ready(texture) => Some(texture.size_vec2()),
         _ => None,
     }
@@ -62,7 +62,7 @@ fn harness(names: &'static [&'static str]) -> Harness<'static, PdfCraftApp> {
         app.run_inline = true;
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         for name in names {
-            app.open_bytes(name, None, fixture(3)).unwrap();
+            app.open_bytes(&egui::Context::default(), name, None, fixture(3)).unwrap();
         }
         app
     });
@@ -135,11 +135,11 @@ fn split_right_from_the_tab_menu_shows_two_panes_each_with_its_own_zoom() {
     assert_eq!(h.query_all_by_role_and_label(Role::Tab, "quote.pdf").count(), 1);
     assert_eq!(h.state().active, Some(quote), "the tab split into the pane is active");
     // ⌘+ zooms the active pane only.
-    let before = (h.state().views[order].zoom, h.state().views[quote].zoom);
+    let before = (h.state().views[order].zoom(), h.state().views[quote].zoom());
     h.key_press_modifiers(Modifiers::COMMAND, Key::Plus);
     h.run_steps(3);
-    assert_eq!(h.state().views[order].zoom, before.0, "the other pane keeps its zoom");
-    assert!(h.state().views[quote].zoom > before.1, "the active pane zoomed in");
+    assert_eq!(h.state().views[order].zoom(), before.0, "the other pane keeps its zoom");
+    assert!(h.state().views[quote].zoom() > before.1, "the active pane zoomed in");
     // Split down turns the panes.
     h.get_by_role_and_label(Role::Tab, "quote.pdf").click_secondary();
     h.run_steps(2);
@@ -167,8 +167,8 @@ fn the_same_document_in_both_panes_is_one_document_with_one_undo() {
     // Each pane scrolls on its own: the second goes to page 3.
     h.state_mut().views[second].go_to_page(2);
     h.run_steps(4);
-    assert_eq!(h.state().views[first].current, 0);
-    assert_eq!(h.state().views[second].current, 2);
+    assert_eq!(h.state().views[first].current(), 0);
+    assert_eq!(h.state().views[second].current(), 2);
     // An edit made in the first pane shows in the second pane too. (The second view of the
     // document is the one the app's own edit code doesn't find by the document's id.)
     h.state_mut().views[second].go_to_page(0);
@@ -197,7 +197,8 @@ fn the_same_document_in_both_panes_is_one_document_with_one_undo() {
     use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
     let shape = Shape::Rectangle { rect: [40.0, 40.0, 200.0, 200.0] };
     let comment = NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: String::new() };
-    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(comment)));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, Edit::AddAnnotation(comment)));
     h.run_steps(1);
     assert!(page_size(h.state(), second).is_none(), "the second pane's page is being drawn again");
     wait(&mut h, "both panes drawn again", |s| portrait(s, first) && portrait(s, second));
@@ -226,7 +227,8 @@ fn split_again_or_closing_a_panes_last_tab_ends_split_view() {
     h.run_steps(3);
     assert_eq!(h.state().views[index(&h, "a.pdf")].place(), Place::Second);
     let a = index(&h, "a.pdf");
-    h.state_mut().request_close_tab(a);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().request_close_tab(&ctx_h, a);
     h.run_steps(3);
     assert!(h.state().panes.split.is_none());
     assert_eq!(h.state().views.len(), 1);
@@ -237,7 +239,8 @@ fn split_again_or_closing_a_panes_last_tab_ends_split_view() {
     assert!(h.execute("page.rotate"));
     h.run_steps(2);
     let second = h.state().views.iter().position(|v| v.place() == Place::Second).unwrap();
-    h.state_mut().request_close_tab(second);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().request_close_tab(&ctx_h, second);
     h.run_steps(3);
     assert!(h.query_by_role_and_label(Role::Button, &dont_save()).is_none(), "no save prompt: the document is still open");
     assert!(h.state().panes.split.is_none());
@@ -258,8 +261,9 @@ fn split_again_or_closing_a_panes_last_tab_ends_split_view() {
         border: Default::default(),
         focus: false,
     };
-    h.state_mut().views[second].fill_text = Some(typed);
-    h.state_mut().request_close_tab(second);
+    h.state_mut().views[second].session.fill_text = Some(typed);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().request_close_tab(&ctx_h, second);
     h.run_steps(3);
     assert!(h.query_by_role_and_label(Role::Button, &dont_save()).is_some(), "the typing is asked about");
     h.get_by_role_and_label(Role::Button, &dont_save()).click();

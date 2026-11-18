@@ -46,7 +46,7 @@ fn harness(limit: usize, files: &[&str]) -> Harness<'static, PdfCraftApp> {
 
 /// Open a document with a file behind it, as a file on disk is recorded.
 fn open(app: &mut PdfCraftApp, name: &str) {
-    app.open_bytes(name, Some(format!("/nowhere/{name}")), PDF.to_vec()).unwrap();
+    app.open_bytes(&egui::Context::default(), name, Some(format!("/nowhere/{name}")), PDF.to_vec()).unwrap();
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn the_longest_list_scrolls_in_the_smallest_window_down_to_clear() {
         move |_cc| {
             let mut app = app_with(&files.iter().map(String::as_str).collect::<Vec<_>>());
             app.recent_limit = 50;
-            app.open_bytes("doc.pdf", None, PDF.to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, PDF.to_vec()).unwrap();
             app
         }
     });

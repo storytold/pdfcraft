@@ -1,11 +1,11 @@
 //! Preferences ▸ Identity: the name new comments are signed with.
 
+use crate::support::AppHarness as _;
 use egui::accesskit::Role;
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
-use crate::support::AppHarness as _;
 
 const PDF: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -23,7 +23,7 @@ fn the_identity_name_signs_new_comments_and_is_remembered() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, PDF.to_vec()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, PDF.to_vec()).expect("opens");
         app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
         app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
         app

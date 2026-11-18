@@ -19,13 +19,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use egui::{Key, Modifiers};
 use egui::accesskit::Role;
+use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
 use serde::Deserialize;
-use crate::support::AppHarness as _;
 
 #[derive(Debug, Deserialize)]
 struct Session {
@@ -339,7 +338,7 @@ fn open_letter(name: &str, content: &str, desk: &Desk) -> Harness<'static, PdfCr
     let bytes = letter_pdf(content);
     let title = name.to_string();
     let mut h = Harness::builder().with_size(egui::vec2(desk.width, desk.height)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
+        let mut app = new_app();
         let _ = app.set_option(&egui::Context::default(), "language", "en");
         let _ = app.open_bytes(&title, None, bytes);
         app
@@ -369,4 +368,41 @@ fn letter_pdf(content: &str) -> Vec<u8> {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     out
+}
+
+/// An app on the default host with test services: no wake-ups, no autosave folder, the GitHub update
+/// source, a fresh intake and an inline watch (as `tests/it/control.rs`' `new_app`).
+fn new_app() -> pdfcraft_ui_egui::PdfCraftApp {
+    use craft::host::{AppInfo, Host, Wake};
+    use craft::platform::clipboard::{Clipboard, SystemClipboard};
+    use craft::platform::open::FileIntake;
+    use craft::platform::watch::FileWatch;
+    let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "test" }).build();
+    let services = pdfcraft_ui_egui::AppServices::new(
+        Wake::none(),
+        Clipboard::new(SystemClipboard::new()),
+        None,
+        None,
+        FileIntake::new(Wake::none()).0,
+        FileWatch::new(Wake::none()).inline(),
+    );
+    pdfcraft_ui_egui::PdfCraftApp::with_host(std::sync::Arc::new(host), services)
+}
+
+/// The app's command and option entry points with the harness's own context (L-208).
+trait AppHarness {
+    fn execute(&mut self, id: &str) -> bool;
+    fn set_option(&mut self, key: &str, value: &str) -> Result<(), String>;
+}
+
+impl AppHarness for egui_kittest::Harness<'_, pdfcraft_ui_egui::PdfCraftApp> {
+    fn execute(&mut self, id: &str) -> bool {
+        let ctx = self.ctx.clone();
+        self.state_mut().execute(&ctx, id)
+    }
+
+    fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
+        let ctx = self.ctx.clone();
+        self.state_mut().set_option(&ctx, key, value)
+    }
 }
