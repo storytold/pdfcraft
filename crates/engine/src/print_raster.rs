@@ -14,6 +14,8 @@ use pdfcraft_render::{PRINT_TAG, PageRenderer, RenderRequest};
 use crate::export::encode_png;
 use crate::{Document, guard, print_layer_states};
 
+pub mod native_output;
+
 /// `doc`'s pages `pages` (0-based, each once, in the order given) as an image-only PDF, one
 /// page per entry, the size of the source page as displayed, drawing what `content` prints.
 /// Pages too large for the renderer at `raster.dpi` render at the largest resolution it allows.

@@ -8,6 +8,11 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Enables the safe file-target API in the reviewed, prepared native dependency copies.
+# Off by default so stock and wasm builds need no patched dependencies.
+dxgi-file-output = []
+
 [dependencies]
 craft-cms = { workspace = true }
 craft-print = { workspace = true }
