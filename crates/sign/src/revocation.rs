@@ -266,7 +266,7 @@ impl OcspResponse {
             if t.tag == tag::ctx(0) {
                 for c in t.children()? {
                     if c.tag == tag::SEQUENCE
-                        && let Ok(cert) = Certificate::parse(c.raw)
+                        && let Ok(cert) = Certificate::parse_legacy(c.raw)
                     {
                         responder_cert.get_or_insert(cert);
                     }
