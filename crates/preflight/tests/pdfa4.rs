@@ -368,6 +368,9 @@ fn annotations_print_show_and_have_only_a_normal_appearance() {
     passes(&widget("/FT /Tx /AP << /N 7 0 R >>"), Level::A4);
     reports(&widget("/FT /Tx /AP << /N << /Off 7 0 R >> >>"), Level::A4, "6.3.3", "Widget annotation's normal appearance isn't an appearance stream");
     reports(&widget("/FT /Tx /AP << /N 7 0 R >> /A << /S /GoTo /D [4 0 R /Fit] >>"), Level::A4, "6.4.1", "widget annotation has an action");
+    // A null action, or one referring to no object, is no entry (ISO 32000-2 7.3.9, 7.3.10).
+    passes(&widget("/FT /Tx /AP << /N 7 0 R >> /A null"), Level::A4);
+    passes(&widget("/FT /Tx /AP << /N 7 0 R >> /A 99 0 R"), Level::A4);
 }
 
 /// A null `/FT` is no entry (ISO 32000-2 7.3.9), so a widget whose `/FT` is null takes its parent's
