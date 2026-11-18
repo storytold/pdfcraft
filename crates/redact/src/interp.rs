@@ -164,6 +164,8 @@ pub(crate) struct Output {
 pub(crate) struct Scope<'a> {
     pub rects: &'a [[f64; 4]],
     pub mode: Mode,
+    /// Apply: widen the space removed text leaves on its line to whole points (see [`show`]).
+    pub whole_point_gaps: bool,
     pub report: &'a mut Report,
     /// What the images it clears may spend, shared by all the pages of a run.
     pub images: &'a mut ImageBudget,
@@ -219,6 +221,7 @@ impl<'a> Scope<'a> {
         Scope {
             rects,
             mode,
+            whole_point_gaps: false,
             report,
             images,
             hidden_text: None,
@@ -987,6 +990,8 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
     let size = gs.size;
     let mut out: Vec<Object> = Vec::new();
     let mut removed = 0;
+    // The items in `out` that move the text past removed glyphs.
+    let mut gaps: Vec<usize> = Vec::new();
     scope.shown += 1;
     let op = scope.shown;
     let push_num = |out: &mut Vec<Object>, v: f64| {
@@ -1088,6 +1093,11 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
                         // A TJ number moves by -n/1000 × size (× Th): the removed advance.
                         if size != 0.0 {
                             push_num(&mut out, -g.advance * 1000.0 / size);
+                            if let Some(at) = out.len().checked_sub(1)
+                                && gaps.last() != Some(&at)
+                            {
+                                gaps.push(at);
+                            }
                         }
                     } else {
                         run.extend_from_slice(&bytes[g.bytes.clone()]);
@@ -1105,7 +1115,34 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
             }
         }
     }
+    if scope.whole_point_gaps {
+        widen_to_whole_points(&mut out, &gaps, size * gs.scale, &tm.then(&gs.ctm));
+    }
     (out, removed)
+}
+
+/// Widen the `TJ` numbers at `at` (indexes in `items`) to whole points of default user space.
+/// The removed glyphs' exact advance, with the font's widths, narrows down what the text was. A
+/// number n moves the text back n / 1000 times `size` (the font size times `Th`), and `m` (the text
+/// matrix then the CTM) scales that. Rounding towards more space moves the text after the gap
+/// less than a point, and only away from the mark.
+fn widen_to_whole_points(items: &mut [Object], at: &[usize], size: f64, m: &Matrix) {
+    let [a, b, ..] = m.0;
+    let unit = size * a.hypot(b) / 1000.0;
+    if !(unit.is_normal() && unit > 0.0) {
+        return;
+    }
+    for &i in at {
+        if let Some(item) = items.get_mut(i)
+            && let Some(v) = item.as_f64()
+        {
+            // The tolerance keeps a gap that is already whole points where it is.
+            let wider = (v * unit + 1e-6).floor() / unit;
+            if wider.is_finite() {
+                *item = num(wider);
+            }
+        }
+    }
 }
 
 /// `Do`: `None` = leave the operator alone; `Some(None)` = drop it; `Some(Some(op))` = replace it.

@@ -465,7 +465,15 @@ fn localize_resources(doc: &mut Document, selected: &[usize]) -> Result<(), pdfc
 /// are shared) that replaces `doc` only on success.
 pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, RedactError> {
     let mut work = doc.clone();
-    let report = apply_to(&mut work, pages)?;
+    // The space removed text leaves on its line is widened to whole points. Where that moves the
+    // rest of the line under another mark, the check refuses it: then the gaps stay exact.
+    let report = match apply_to(&mut work, pages, true) {
+        Err(RedactError::Residue(_)) => {
+            work = doc.clone();
+            apply_to(&mut work, pages, false)?
+        }
+        report => report?,
+    };
     *doc = work;
     Ok(report)
 }
@@ -502,14 +510,20 @@ fn appearance_refs(doc: &Document, annotation: &Dict) -> Option<HashSet<ObjRef>>
     Some(references)
 }
 
-/// [`apply`] without the copy: an error can leave `doc` part redacted.
-fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, RedactError> {
+/// [`apply`] without the copy: an error can leave `doc` part redacted. `whole_point_gaps` widens
+/// the space removed text leaves to whole points ([`Scope::whole_point_gaps`]).
+fn apply_to(doc: &mut Document, pages: Option<&[usize]>, whole_point_gaps: bool) -> Result<Report, RedactError> {
     let images = pdfcraft_cos::ImageBudget::new(doc);
-    apply_within(doc, pages, images)
+    apply_within(doc, pages, images, whole_point_gaps)
 }
 
 /// [`apply_to`], its images decoded within `images`.
-fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_cos::ImageBudget) -> Result<Report, RedactError> {
+fn apply_within(
+    doc: &mut Document,
+    pages: Option<&[usize]>,
+    images: pdfcraft_cos::ImageBudget,
+    whole_point_gaps: bool,
+) -> Result<Report, RedactError> {
     let (all_marks, unreadable) = marks_checked(doc);
     // A mark with no readable area is not applied, and applying the others would look complete:
     // refuse before anything changes. Only the pages being applied count.
@@ -558,6 +572,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     let listed_before = listed_annotations(doc);
     let mut applying = Applying {
         report,
+        whole_point_gaps,
         doomed_fields: Vec::new(),
         doomed_xobjects: Vec::new(),
         retired_properties: Vec::new(),
@@ -801,6 +816,8 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
 /// What applying the marks collects across pages.
 struct Applying {
     report: Report,
+    /// Widen the space removed text leaves to whole points ([`Scope::whole_point_gaps`]).
+    whole_point_gaps: bool,
     doomed_fields: Vec<ObjRef>,
     /// The original image and form XObjects the rewrite drops or replaces, on any page.
     doomed_xobjects: Vec<ObjRef>,
@@ -841,6 +858,7 @@ fn redact_page_content(
     // What the walk leaves of the page's allowance, the cleanups below spend.
     let (out, mut budget) = {
         let mut scope = Scope::new(rects, Mode::Apply, report, budget, images).with_removed_room(*removed_room);
+        scope.whole_point_gaps = applying.whole_point_gaps;
         let out = process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY);
         scope.flush();
         removed_text.append(&mut scope.removed_text);

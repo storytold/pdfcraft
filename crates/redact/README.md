@@ -11,8 +11,10 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
 
 `apply` removes, under every marked area:
 
-- **text**: glyphs are cut out of `Tj`/`TJ`/`'`/`"` and replaced by a `TJ` displacement of the
-  same advance, so the rest of the line keeps its exact position. Widths come from `/Widths`,
+- **text**: glyphs are cut out of `Tj`/`TJ`/`'`/`"` and replaced by a `TJ` displacement of their
+  advance widened to whole points, so the exact width of what was removed doesn't stay in the
+  file and the rest of the line moves less than a point, away from the mark (where that would
+  move it under another mark, the exact advance is kept). Widths come from `/Widths`,
   `/W`/`/DW` (composite fonts, embedded CMaps with codespace and CID ranges), Type 3 font
   matrices, and approximations for the standard 14. A glyph goes when it overlaps an area by
   more than a fifth of its size (or a point) both ways; zero-size text goes when its origin is
