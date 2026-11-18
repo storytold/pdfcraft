@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 edit-session = { workspace = true }
-craft-ui = { workspace = true }
+craft-ui = { workspace = true, features = ["system_fonts"] }
 # The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
 craft-menu = { workspace = true }
 craft-keymap = { workspace = true }

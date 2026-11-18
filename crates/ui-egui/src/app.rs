@@ -320,7 +320,7 @@ impl PdfCraftApp {
             window_state: Default::default(),
             styled: false,
             fonts_ready: false,
-            fonts_cjk: theme::CjkPreference::Default,
+            fonts_language: "",
             control: None,
             bookmark_rename: None,
             bookmark_clipboard: None,
@@ -621,15 +621,16 @@ impl PdfCraftApp {
         if !self.styled {
             egui_extras::install_image_loaders(ctx);
             theme::install_fonts_for(ctx, cjk);
-            self.fonts_cjk = cjk;
+            self.fonts_language = lang.code();
             theme::apply(ctx, self.theme);
             self.styled = true;
         } else {
             self.fonts_ready = true;
-            if cjk != self.fonts_cjk {
-                // Same family names as before, so named fonts stay valid while the new set loads.
+            if lang.code() != self.fonts_language {
+                // The system provider also needs the new locale for switches such as en -> ko,
+                // even though both use the same embedded CJK order. Family names stay valid.
                 theme::install_fonts_for(ctx, cjk);
-                self.fonts_cjk = cjk;
+                self.fonts_language = lang.code();
             }
         }
         self.sync_theme(ctx);

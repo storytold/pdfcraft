@@ -788,8 +788,8 @@ pub struct PdfCraftApp {
     pub window_state: window_state::WindowState,
     styled: bool,
     fonts_ready: bool,
-    /// The CJK fallback order the installed fonts follow (see `theme::installed_font_definitions`).
-    fonts_cjk: theme::CjkPreference,
+    /// The language used for the installed CJK order and the system font provider's locale.
+    fonts_language: &'static str,
     /// The window title last sent to the platform.
     pub window_title: String,
     /// The web page's title last set: the window title, but always with the file's name.

@@ -13,6 +13,9 @@ use std::sync::{Arc, OnceLock};
 
 use egui::FontData;
 
+mod providers;
+pub(crate) use providers::install;
+
 #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
 mod fontconfig;
 

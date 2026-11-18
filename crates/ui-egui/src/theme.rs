@@ -214,6 +214,8 @@ impl CjkPreference {
 /// faces take effect next frame.
 pub fn install_fonts_for(ctx: &egui::Context, cjk: CjkPreference) {
     ctx.set_fonts(installed_font_definitions(cjk));
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::system_fonts::install(ctx, crate::i18n::current().code());
 }
 
 /// The name of the installed face [`installed_font_definitions`] may add after the embedded ones.
@@ -249,7 +251,7 @@ fn installed_fallback_need(cjk: CjkPreference, has_embedded_hans: bool) -> crate
     }
 }
 
-/// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
+/// The static stack [`install_fonts_for`] installs before its dynamic providers: [`font_definitions_for`], then, on desktop, one face
 /// already installed on this machine. It only draws characters no embedded face has.
 ///
 /// - In a Simplified Chinese interface built without an embedded `Hans` face (#826), it is a
