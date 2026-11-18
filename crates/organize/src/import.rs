@@ -501,12 +501,13 @@ pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRe
     let mut all = list(&props, b"OCGs", dst);
     let mut config = props.get(b"D").map(|d| dst.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap_or_default();
     let (mut on, mut off) = (list(&config, b"ON", dst), list(&config, b"OFF", dst));
-    // The destination's own presentation order. Without one (or a null one), its layers were
-    // presented in the order of /OCGs, as the source's are without one: they stay listed, first,
-    // and the copied ones follow.
+    // The destination's own presentation order. Without one (or a null one) the default
+    // configuration's is an empty array, and a group it does not list is not presented
+    // (ISO 32000-2 §8.11.4.3, Table 99): the destination's own layers are not added to it, so
+    // they stay as presented as they were.
     let mut order = match config.get(b"Order").map(|o| dst.resolve(o)) {
         Some(o) if !matches!(&*o, Object::Null) => o.as_array().cloned().unwrap_or_default(),
-        _ => all.clone(),
+        _ => Vec::new(),
     };
     // The groups this call adds, source reference to destination references: a page copied twice
     // copies its layers twice, and both copies keep the source's settings.

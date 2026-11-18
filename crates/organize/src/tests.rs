@@ -5106,10 +5106,11 @@ fn copied_layer_auto_state_names_its_categories() {
     assert_eq!(usage.get(b"Category"), Some(&Object::Array(vec![Object::name("View")])));
 }
 
-/// A destination with layers and no `/Order` of its own presented them all: inserting pages with
-/// layers keeps them listed, first, and lists the copied ones after them.
+/// A destination with layers and no `/Order` of its own presents none of them (its default
+/// `/Order` is an empty array, ISO 32000-2 §8.11.4.3, Table 99): inserting pages with layers
+/// lists only the copied ones, and does not start presenting the destination's own.
 #[test]
-fn inserting_layers_keeps_the_destinations_own_listed() {
+fn inserting_layers_leaves_the_destinations_own_unlisted() {
     let dst_b: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R] /D << /ON [4 0 R] >> >> >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
@@ -5120,7 +5121,7 @@ fn inserting_layers_keeps_the_destinations_own_listed() {
     crate::import_pages(&mut dst, &layered_source("<< /ON [5 0 R 6 0 R] >>", &[]), &[0], 1).unwrap();
     let out = full_roundtrip(&dst);
     let (d, _) = layer_config(&out);
-    assert_eq!(ordered_names(&out, &d), ["Own", "A", "B"]);
+    assert_eq!(ordered_names(&out, &d), ["A", "B"]);
 }
 
 /// A page extracted twice copies the layer one of its comments uses twice: both copies keep the
