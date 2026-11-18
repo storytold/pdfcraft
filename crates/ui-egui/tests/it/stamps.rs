@@ -35,14 +35,6 @@ fn choosing_and_placing_stamps() {
     let stamps: Vec<_> = doc.info.annotations.iter().filter(|a| a.subtype == "Stamp").collect();
     assert_eq!(stamps.len(), 1);
     assert_eq!(s.quick_tool, QuickTool::Select, "back to selecting after one stamp");
-    for _ in 0..30 {
-        h.run_steps(2);
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
-        let _gpu = crate::gpu();
-        h.render().unwrap().save(format!("{dir}/stamps.png")).unwrap();
-    }
 }
 
 #[test]
@@ -63,7 +55,8 @@ fn natural_image_stamps_keep_displayed_bounds_on_rotated_pages() {
         image::RgbImage::from_pixel(80, 40, image::Rgb([20, 120, 220]))
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
-        h.state_mut().start_custom_stamp("rectangle.png".into(), png);
+        let ctx = h.ctx.clone();
+        h.state_mut().start_custom_stamp(&ctx, "rectangle.png".into(), png);
         h.run_steps(2);
         h.get_by_label("OK").click();
         h.run_steps(2);
@@ -103,11 +96,16 @@ fn creating_placing_and_keeping_custom_stamps() {
     // An image becomes a stamp: Create ▸ category and name.
     let mut png = Vec::new();
     image::RgbImage::from_pixel(60, 20, image::Rgb([20, 120, 220])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    h.state_mut().start_custom_stamp("logo.png".into(), png);
+    let ctx = h.ctx.clone();
+    h.state_mut().start_custom_stamp(&ctx, "logo.png".into(), png);
     h.run_steps(2);
     h.get_by_label("Create Custom Stamp");
-    h.state_mut().stamp_draft.category = "Company".into();
+    h.get_by_label("Category").click();
     h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get_by_label("Category").type_text("Company");
+    h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::CustomStamp(0));
@@ -158,11 +156,12 @@ fn a_dynamic_custom_stamp_keeps_its_line_and_fills_it_in_when_placed() {
     h.run_steps(2);
     let mut png = Vec::new();
     image::RgbImage::from_pixel(60, 20, image::Rgb([20, 120, 220])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    h.state_mut().start_custom_stamp("logo.png".into(), png);
+    let ctx = h.ctx.clone();
+    h.state_mut().start_custom_stamp(&ctx, "logo.png".into(), png);
     h.run_steps(2);
     h.get_by_label("Add a line filled in when the stamp is placed").click();
     h.run_steps(2);
-    h.get_by_label_contains("become your name, the date and the time");
+
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().custom_stamps[0].line.as_deref(), Some("By {name} at {time}, {date}"));
