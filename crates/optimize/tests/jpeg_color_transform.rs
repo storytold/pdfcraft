@@ -27,9 +27,9 @@ fn photo(w: u32, h: u32) -> Vec<u8> {
 }
 
 fn rgb_jpeg(px: &[u8], w: u32, h: u32) -> Vec<u8> {
-    let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 100).encode(px, w, h, image::ExtendedColorType::Rgb8).unwrap();
-    out
+    let img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgb, px.to_vec()).unwrap();
+    let opts = craft_image_codecs::EncodeOptions { jpeg_quality: 100, ..Default::default() };
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &opts).unwrap()
 }
 
 /// The JPEG's segments before its first scan: (marker, start of the marker, end of the segment).
@@ -395,9 +395,9 @@ fn a_jpeg_header_that_takes_more_than_a_few_steps_to_read_is_left_as_it_is() {
 #[test]
 fn cancelling_works_from_the_first_call_with_a_jpeg_drawn_many_times() {
     // One JPEG with 8 MB of stray bytes after SOI, drawn 64 times at the same place (the case
-    // reported on #3012). Fragment merging reads its header for each group it tries, before the
-    // first progress call. The header scan stops at the first stray byte, so that call is the
-    // first image, and cancelling there stops Optimize.
+    // reported on #3012). Fragment merging reads its header for each group it tries. The header
+    // scan stops at the first stray byte, so the first image comes soon, and cancelling there stops
+    // Optimize. Cancelling while pages are read stops it sooner still.
     let (w, h) = (128, 8);
     let jpeg = after_soi(&rgb_jpeg(&photo(w, h), w, h), &vec![0; 8_000_000]);
     let mut doc = Document::new_empty();
@@ -411,8 +411,16 @@ fn cancelling_works_from_the_first_call_with_a_jpeg_drawn_many_times() {
     let mut stages = Vec::new();
     let result = optimize_with_progress(&mut doc, &Settings::default(), &mut |stage| {
         stages.push(stage);
+        !matches!(stage, Stage::Images { .. })
+    });
+    assert!(matches!(result, Err(OptimizeError::Cancelled)), "{result:?}");
+    assert_eq!(stages.last(), Some(&Stage::Images { done: 0, total: 1 }));
+    assert_eq!(stages.first(), Some(&Stage::Reading { done: 0, total: 1 }), "it can be stopped from the first call");
+    let mut stages = 0;
+    let result = optimize_with_progress(&mut doc, &Settings::default(), &mut |_| {
+        stages += 1;
         false
     });
     assert!(matches!(result, Err(OptimizeError::Cancelled)), "{result:?}");
-    assert_eq!(stages, [Stage::Images { done: 0, total: 1 }]);
+    assert_eq!(stages, 1);
 }

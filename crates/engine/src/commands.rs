@@ -18,8 +18,10 @@ pub enum Needs {
     Nothing,
     /// A document is open.
     Document,
-    /// The open document's security allows page changes (insert, delete, rotate, extract…).
+    /// The open document's security allows page changes (insert, delete, rotate…).
     Assembly,
+    /// The open document's security allows taking pages out into new files (extract, split).
+    PageExtraction,
     /// The open document's security allows content and metadata changes.
     Modification,
     /// The open document's security allows adding and changing comments.
@@ -122,12 +124,20 @@ pub struct CommandSpec {
     pub label: &'static str,
     /// Top-level menu it appears in (`File`, `Edit`, `View`, `Pages`, `Help`), if any.
     pub menu: Option<&'static str>,
-    pub shortcut: Option<Shortcut>,
+    shortcut: Option<Shortcut>,
+    shortcut_on_mac: bool,
     pub needs: Needs,
     /// The shortcut also works while a text field has focus.
     pub in_text: bool,
     /// Lucide icon name for palettes and toolbars.
     pub icon: &'static str,
+}
+
+impl CommandSpec {
+    /// The binding for this platform. A command can leave a macOS system shortcut unbound.
+    pub const fn shortcut_for(&self, mac: bool) -> Option<Shortcut> {
+        if mac && !self.shortcut_on_mac { None } else { self.shortcut }
+    }
 }
 
 const fn c(
@@ -138,7 +148,7 @@ const fn c(
     needs: Needs,
     icon: &'static str,
 ) -> CommandSpec {
-    CommandSpec { id, label, menu, shortcut, needs, in_text: true, icon }
+    CommandSpec { id, label, menu, shortcut, shortcut_on_mac: true, needs, in_text: true, icon }
 }
 
 /// Like `c`, but the shortcut is left to text fields while one has focus (⌘Z, ⌘A…).
@@ -150,7 +160,7 @@ const fn ct(
     needs: Needs,
     icon: &'static str,
 ) -> CommandSpec {
-    CommandSpec { id, label, menu, shortcut, needs, in_text: false, icon }
+    CommandSpec { id, label, menu, shortcut, shortcut_on_mac: true, needs, in_text: false, icon }
 }
 
 use Needs::*;
@@ -198,6 +208,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     ct("edit.undo", "Undo", EDIT, Some(Shortcut::cmd("Z")), Undo, "undo-2"),
     ct("edit.redo", "Redo", EDIT, Some(Shortcut::cmd_shift("Z")), Redo, "redo-2"),
     c("edit.find", "Find…", EDIT, Some(Shortcut::cmd("F")), Document, "search"),
+    // Find and replace, in Edit text mode (the Find box's Replace row). Not ⌘H/Ctrl+H: macOS
+    // takes ⌘H to hide the app, and Ctrl+H is Read mode on Windows and Linux (as in Acrobat).
+    c("edit.replace", "Replace…", EDIT, Some(Shortcut::cmd_shift("H")), Modification, "replace"),
     c("edit.advanced_search", "Advanced search…", EDIT, Some(Shortcut::cmd_shift("F")), Document, "search"),
     c("view.palette", "Find tools and commands…", VIEW, Some(Shortcut::cmd("K")), Nothing, "search"),
     // Page display: View ▸ Page display and the rail's button list the base layouts as radios and
@@ -220,10 +233,27 @@ pub const COMMANDS: &[CommandSpec] = &[
     // Alt-drag for moving windows (several Linux window managers).
     // Copy events stay with the frontend so focused text inputs and page clipboard routing keep ownership.
     c("edit.copy", "Copy", EDIT, None, Copying, "copy"),
+    // Comments travel between documents as XFDF (M14): ⌘C with comments selected copies them,
+    // ⌘V pastes the copies onto the current page; the strip's Copy/Paste in the menus too.
+    c("comment.copy", "Copy comments", EDIT, None, Document, "copy"),
+    c("comment.paste", "Paste comments", EDIT, None, Annotate, "clipboard-paste"),
     c("edit.column_select", "Column select", EDIT, None, Document, "text-select"),
     c("edit.snapshot", "Take a snapshot", EDIT, None, Copying, "camera"),
     c("view.full_screen", "Full screen mode", VIEW, Some(Shortcut::cmd("L")), Document, "maximize"),
     c("view.read_mode", "Read mode", VIEW, Some(Shortcut { command: true, shift: false, mac_ctrl: true, key: "H" }), Document, "book-open"),
+    // Split view (Acrobat's Window ▸ Split): the current document in two panes, or back to one;
+    // a tab's right-click menu also splits right or down with any tab.
+    c("view.split", "Split", VIEW, Some(Shortcut::cmd("\\")), Document, "columns-2"),
+    // A document can hide the toolbars, menu and panels (ISO 32000-2 Table 147); this brings them
+    // back for its tab, and with nothing hidden hides them.
+    c(
+        "view.toggle_interface",
+        "Show or hide toolbars and panels",
+        VIEW,
+        Some(Shortcut { command: false, shift: false, mac_ctrl: false, key: "F8" }),
+        Document,
+        "panel-left",
+    ),
     // Browsers' tab keys (#1542): Ctrl+Tab on every platform, ⌃Tab rather than ⌘Tab on macOS,
     // where the system takes ⌘Tab. They follow the tabs' order on screen and wrap around, and
     // also run from Combine files, which has no document open.
@@ -254,7 +284,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("view.theme.system", "Use system setting", None, None, Nothing, "settings"),
     c("view.theme.light", "Light gray", None, None, Nothing, "sun"),
     c("view.theme.dark", "Dark gray", None, None, Nothing, "moon"),
-    c("comment.list", "Comments panel", VIEW, None, Document, "message-square-text"),
+    // Command+M belongs to Minimize on macOS; Ctrl+M opens Comments elsewhere (#3741).
+    CommandSpec { shortcut_on_mac: false, ..c("comment.list", "Comments panel", VIEW, Some(Shortcut::cmd("M")), Document, "message-square-text") },
     c("comment.note", "Add a sticky note", None, None, Annotate, "sticky-note"),
     c("comment.freetext", "Add a text box", None, None, Annotate, "type"),
     c("comment.highlight", "Highlight text", None, None, Annotate, "highlighter"),
@@ -271,7 +302,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("comment.polyline", "Draw connected lines", None, None, Annotate, "spline"),
     c("comment.cloud", "Draw a cloud", None, None, Annotate, "cloud"),
     c("comment.callout", "Add a callout", None, None, Annotate, "message-square-quote"),
-    c("comment.caret", "Insert text", None, None, Annotate, "text-cursor-input"),
+    c("comment.caret", "Insert text", None, None, Annotate, "message-square-text"),
     c("comment.replace", "Replace text", None, None, Annotate, "replace"),
     c("comment.attach", "Attach a file", None, None, Annotate, "paperclip"),
     c("comment.eraser", "Erase drawings", None, None, Annotate, "eraser"),
@@ -356,7 +387,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("tools.document_js", "Document JavaScripts…", None, None, Modification, "file-code"),
     c("ocr.recognize", "Recognize text…", None, None, Modification, "scan-text"),
     c("ocr.enhance_camera", "Enhance camera image", None, None, Modification, "camera"),
+    c("ocr.enhance", "Enhance scanned file…", None, None, Modification, "sparkles"),
     c("ocr.recognize_batch", "Recognize text in multiple files…", None, None, Nothing, "files"),
+    c("ocr.correct", "Correct recognized text…", None, None, Document, "text-select"),
     c("a11y.check", "Check for accessibility…", None, None, Document, "accessibility"),
     c("a11y.find_untagged", "Find untagged content", None, None, Document, "search"),
     c("a11y.autotag", "Automatically tag PDF", None, None, Document, "tag"),
@@ -395,9 +428,13 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.boxes", "Set page boxes…", PAGES, None, Assembly, "square-dashed-mouse-pointer"),
     c("page.insert", "Insert pages from file…", PAGES, None, Assembly, "file-input"),
     c("page.replace", "Replace pages…", PAGES, None, Assembly, "replace"),
-    c("page.extract", "Extract pages…", PAGES, None, Assembly, "file-output"),
-    c("page.split", "Split document…", PAGES, None, Assembly, "scissors"),
+    c("page.extract", "Extract pages…", PAGES, None, PageExtraction, "file-output"),
+    c("page.split", "Split document…", PAGES, None, PageExtraction, "scissors"),
     c("page.number", "Number pages…", PAGES, None, Assembly, "hash"),
+    c("prepress.marks", "Add printer marks…", None, None, Modification, "ruler"),
+    c("prepress.marks.remove", "Remove printer marks", None, None, Marks(crate::MarkKind::PrinterMarks), "ruler"),
+    c("prepress.convert_colors", "Convert colours…", None, None, Modification, "palette"),
+    c("prepress.hairlines", "Fix hairlines…", None, None, Modification, "minus"),
     c("page.properties", "Page properties…", PAGES, None, Modification, "info"),
     c("help.shortcuts", "Keyboard shortcuts", HELP, None, Nothing, "circle-help"),
     c("help.discord", "Join the ArtCraft Discord", HELP, None, Nothing, "messages-square"),
@@ -424,6 +461,7 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
         Nothing => true,
         Document | TwoPageView => doc.is_some(),
         Assembly => doc.is_some_and(|d| d.allows_assembly()),
+        PageExtraction => doc.is_some_and(|d| d.allows_page_extraction()),
         Modification => doc.is_some_and(|d| d.allows_modification()),
         Annotate => doc.is_some_and(|d| d.allows_annotation()),
         Copying => doc.is_some_and(|d| d.allows_copying()),
@@ -467,11 +505,15 @@ mod tests {
     #[test]
     fn ids_and_shortcuts_are_unique() {
         let mut ids = std::collections::HashSet::new();
-        let mut keys = std::collections::HashSet::new();
         for c in COMMANDS {
             assert!(ids.insert(c.id), "duplicate id {}", c.id);
-            if let Some(s) = c.shortcut {
-                assert!(keys.insert(s), "duplicate shortcut {} ({})", s.label(true), c.id);
+        }
+        for mac in [false, true] {
+            let mut keys = std::collections::HashSet::new();
+            for c in COMMANDS {
+                if let Some(s) = c.shortcut_for(mac) {
+                    assert!(keys.insert(s.label(mac)), "duplicate shortcut {} ({})", s.label(mac), c.id);
+                }
             }
         }
     }
@@ -495,11 +537,20 @@ mod tests {
         assert_eq!(s.label(true), "⇧⌘S");
         assert_eq!(s.label(false), "Ctrl+Shift+S");
         assert_eq!(command("view.read_mode").unwrap().shortcut.unwrap().label(true), "⌃⌘H");
+        assert_eq!(command("comment.list").unwrap().shortcut_for(false).unwrap().label(false), "Ctrl+M");
         assert_eq!(Shortcut::cmd("+").label(false), "Ctrl++");
         assert_eq!(Shortcut::cmd_shift("−").label(true), "⇧⌘−");
         assert_eq!(Shortcut::cmd_shift("−").label(false), "Ctrl+Shift+−");
         assert_eq!(Shortcut::command_name(true), "⌘");
         assert_eq!(Shortcut::command_name(false), "Ctrl");
+    }
+
+    #[test]
+    fn comments_shortcut_preserves_macos_minimize() {
+        let comments = command("comment.list").unwrap();
+        assert_eq!(comments.shortcut_for(false), Some(Shortcut::cmd("M")));
+        assert_eq!(comments.shortcut_for(true), None, "macOS Command+M is reserved for Minimize");
+        assert_eq!(command("file.save_as").unwrap().shortcut_for(true), Some(Shortcut::cmd_shift("S")));
     }
 
     #[test]
