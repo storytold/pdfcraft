@@ -344,6 +344,16 @@ fn streams_must_not_read_external_files_clause_6_1_7_1() {
     let external = "<< /Length 4 /F (data.bin) >>\nstream\nabcd\nendstream";
     let doc = page_document(page, Some(packet.as_str()), "", &[external], "");
     assert_reported(&doc, Level::A2b, "6.1.7.1");
+    // Its filters or their parameters say the same, each on its own (ISO 32000-2 Table 5); a null
+    // value is no entry (7.3.9).
+    for entry in ["/FFilter /FlateDecode", "/FDecodeParms << >>"] {
+        let external = format!("<< /Length 4 {entry} >>\nstream\nabcd\nendstream");
+        let doc = page_document(page, Some(packet.as_str()), "", &[external.as_str()], "");
+        assert_reported(&doc, Level::A2b, "6.1.7.1");
+    }
+    let null = "<< /Length 4 /F null /FFilter null /FDecodeParms null >>\nstream\nabcd\nendstream";
+    let doc = page_document(page, Some(packet.as_str()), "", &[null], "");
+    assert_not_reported(&doc, Level::A2b, "6.1.7.1");
 }
 
 #[test]
