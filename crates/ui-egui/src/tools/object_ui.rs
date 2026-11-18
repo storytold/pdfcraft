@@ -8,7 +8,8 @@ use craft::behavior::hit::HitShape;
 use craft::behavior::item_marquee::MarqueeSelect;
 use craft::behavior::kurbo::BezPath;
 use craft::behavior::press::{PressPhase, PressStart};
-use craft::pages::ui::PageBody;
+use craft::keymap::Mods;
+use craft::pages::ui::{PageBody, PlacedPage};
 use craft::ui::canvas_controls::SelectionOutline;
 use craft::ui::contract::Show as _;
 use egui::{Pos2, Rect, Ui, Vec2};
@@ -193,7 +194,7 @@ fn leave_single(view: &mut DocView) {
 /// them (paragraphs, pictures and added content), instead of the page's text. A page whose
 /// objects can't be selected together, or has too many, says so and keeps what was selected.
 pub(crate) fn select_all(view: &mut DocView, doc: &Document) {
-    let page = view.current;
+    let page = view.current();
     match view.session.objects.inventory(doc, page) {
         Ok(objects) if objects.len() > MAX_MOVE_OBJECTS => view.session.objects.notice = Some(tl!("Select at most 1000 objects at a time.").into()),
         Ok(objects) => {
@@ -256,7 +257,7 @@ pub(crate) fn modified_press_at(view: &mut DocView, doc: &Document, info: &DocIn
         s.notice = Some(tl!("Select at most 1000 objects at a time.").into());
     }
     leave_single(view);
-    view.current = page;
+    view.go_to_page(page);
     true
 }
 
@@ -276,7 +277,7 @@ pub(crate) fn modified_press(view: &mut DocView, doc: &Document, info: &DocInfo,
 /// press's span, read from each pass's press phase.
 pub(crate) fn begin_marquee(view: &mut DocView, page: usize) {
     leave_single(view);
-    view.current = page;
+    view.go_to_page(page);
 }
 
 /// The swept rectangle on screen while the press `phase` drags, whatever it started from.
@@ -291,10 +292,10 @@ pub(crate) fn marquee_rect(phase: &PressPhase) -> Option<Rect> {
 /// says (Shift adds, ⌘ or Ctrl toggles, none replaces), when it is over 3 points each way. A smaller sweep
 /// (a click) sweeps nothing: it clears the selection, or with Shift or ⌘ leaves it as it was. A double click
 /// within 3 points clears. More than [`MAX_MOVE_OBJECTS`] keeps the selection and says so.
-pub(crate) fn end_marquee(view: &mut DocView, doc: &Document, info: &DocInfo, start: PressStart, pos: Pos2) {
+pub(crate) fn end_marquee(view: &mut DocView, doc: &Document, info: &DocInfo, start: PressStart, mods: Mods, pos: Pos2) {
     let Some((page, xf)) = view.page_xforms().into_iter().find(|(_, xf)| xf.rect.contains(start.origin)) else { return };
     let base = view.session.objects.selection().filter(|(on, _)| *on == page).map(|(_, targets)| targets).unwrap_or_default();
-    let mut sweep = MarqueeSelect::begin(start.origin, start.mods, base);
+    let mut sweep = MarqueeSelect::begin(start.origin, mods, base);
     sweep.update(pos);
     let rect = sweep.rect();
     if start.clicks >= 2 && rect.min.distance(rect.max) <= 3.0 {
@@ -357,25 +358,10 @@ fn open_block(view: &DocView, page: usize) -> Option<usize> {
 /// its release is [`objects_press`]'s.
 // PLAN: contract A-6 has no `presses` parameter; the live drag offset is read from the pass's presses of the
 // parts (pdf-canvas-w9 calls this with the `PagePress`es `PageParts` reported)
-pub(crate) fn object_controls(
-    ui: &mut Ui,
-    body: &PageBody<'_>,
-    view: &mut DocView,
-    doc: &Document,
-    info: &DocInfo,
-    presses: &[PagePress],
-) -> Option<Edit> {
+pub(crate) fn object_controls(ui: &mut Ui, body: &PageBody<'_>, view: &mut DocView, info: &DocInfo, presses: &[PagePress]) -> Option<Edit> {
     for placed in body.pages {
         let page = placed.page;
         let Some(xf) = view.page_xform(page) else { continue };
-        if let Some(block) = open_block(view, page)
-            && let Ok(objects) = view.session.objects.inventory(doc, page)
-            && let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
-        {
-            for band in frame_band(screen(&xf, info, page, object)) {
-                PagePart::new(Owner::Frame { block }, page, HitShape::Rect(band), PageLayer::Handle).cursor(CursorIcon::Move).show(ui);
-            }
-        }
         let s = &view.session.objects;
         if s.page != Some(page) || s.selected.is_empty() {
             continue;
@@ -396,11 +382,36 @@ pub(crate) fn object_controls(
             let group = [outline_path(body, union)];
             SelectionOutline::faint(tl!("Selected objects"), &group).show(ui);
         }
-        for rect in rects {
-            PagePart::new(Owner::Objects, page, HitShape::Rect(rect), PageLayer::Placed).cursor(CursorIcon::Move).show(ui);
-        }
     }
     None
+}
+
+/// The parts of the objects selected together on each page shown: one per object that a drag moves, and the frame
+/// band of the paragraph open for typing. [`object_controls`] draws their outlines and [`objects_press`] takes their
+/// presses.
+pub(crate) fn page_parts(out: &mut Vec<PagePart>, view: &mut DocView, doc: &Document, info: &DocInfo, pages: &[PlacedPage]) {
+    for placed in pages {
+        let page = placed.page;
+        let Some(xf) = view.page_xform(page) else { continue };
+        if let Some(block) = open_block(view, page)
+            && let Ok(objects) = view.session.objects.inventory(doc, page)
+            && let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
+        {
+            out.extend(
+                frame_band(screen(&xf, info, page, object))
+                    .map(|band| PagePart::new(Owner::Frame { block }, page, HitShape::Rect(band), PageLayer::Handle).cursor(CursorIcon::Move)),
+            );
+        }
+        let s = &view.session.objects;
+        if s.page != Some(page) || s.selected.is_empty() {
+            continue;
+        }
+        out.extend(
+            s.selected
+                .iter()
+                .map(|o| PagePart::new(Owner::Objects, page, HitShape::Rect(screen(&xf, info, page, o)), PageLayer::Placed).cursor(CursorIcon::Move)),
+        );
+    }
 }
 
 /// A press of a part [`object_controls`] registered: the objects selected together, or the frame of
@@ -422,7 +433,7 @@ pub(crate) fn objects_press(view: &mut DocView, doc: &Document, info: &DocInfo, 
                 view.session.objects.page = Some(page);
                 view.session.objects.selected.push(object);
                 leave_single(view);
-                view.current = page;
+                view.go_to_page(page);
             }
             None
         }

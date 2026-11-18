@@ -76,7 +76,7 @@ pub(crate) fn show_quad(ui: &mut Ui, body: &PageBody<'_>, view: &mut DocView, al
         return;
     }
     if view.session.camera.is_none()
-        && let Some(placed) = body.pages.iter().find(|p| p.page == view.current)
+        && let Some(placed) = body.pages.iter().find(|p| p.page == view.current())
     {
         let (w, h) = page_points(placed);
         view.session.camera = Some(CameraQuad::inset(placed.page, w, h));

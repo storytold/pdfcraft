@@ -99,7 +99,7 @@ pub(crate) struct ColourChoice {
 fn choice(ui: &mut egui::Ui, none_label: &str, current: Option<Rgb>, key: &str, recent: &RecentColours) -> ColourChoice {
     let was = current.is_none();
     let mut on = was;
-    ToggleButton::new(none_label, Bind::bound(&mut on)).show(ui);
+    ToggleButton::new(none_label.to_string(), Bind::bound(&mut on)).show(ui);
     let pick = palette(ui, tl!("Colour"), current, key, recent);
     // Turning the row off does nothing: it stands for no colour, which only another pick replaces.
     let choice = if on && !was { Some(None) } else { pick.picked.map(Some) };

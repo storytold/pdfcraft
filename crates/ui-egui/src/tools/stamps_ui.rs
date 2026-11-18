@@ -10,7 +10,7 @@ use craft::host::{PickRequest, Picked};
 use craft::pages::ui::PlacedPage;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
-use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::dialog::DialogId;
 use craft::ui::list::{List, ListRow};
 use craft::ui::menu::Menu;
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
@@ -350,7 +350,7 @@ impl PdfCraftApp {
         let request = PickRequest::open("stamp")
             .title(tl!("Select a file for the stamp"))
             .filter(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"]);
-        self.pick_file(request, None, |app, picked| match picked {
+        self.pick_file(request, None, move |app, picked| match picked {
             Picked::Paths(paths) => {
                 let Some(path) = paths.into_iter().next() else { return };
                 match std::fs::read(&path) {
@@ -392,14 +392,15 @@ impl PdfCraftApp {
     /// Takes the Create Custom Stamp dialog's answer: OK saves the stamp in the library and chooses it.
     pub(crate) fn create_stamp_pass(&mut self, _ctx: &egui::Context) {
         let Some(id) = self.stamp_dialog.as_ref().map(|d| d.id) else { return };
-        match self.dialogs.take_by_id::<HostedParamDialog>(id) {
-            Some(DialogResult::Ok(result)) => {
+        // `DialogResult` is `#[non_exhaustive]`: whatever is not an OK closes the dialog without a stamp.
+        let Some(answer) = self.dialogs.take_by_id::<HostedParamDialog>(id) else { return };
+        match answer.ok() {
+            Some(result) => {
                 if let Some(d) = self.stamp_dialog.take() {
                     self.save_custom_stamp(d, &result.fields);
                 }
             }
-            Some(DialogResult::Cancel) => self.stamp_dialog = None,
-            None => {}
+            None => self.stamp_dialog = None,
         }
     }
 
