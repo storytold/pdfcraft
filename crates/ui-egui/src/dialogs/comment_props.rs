@@ -463,7 +463,8 @@ impl PdfCraftApp {
         let Some((i, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let Some(p) = doc.comment_props(page, index) else { return };
-        let selection = self.views.get(i).map(|v| &v.session.comments).filter(|c| c.is_selected((page, index))).map(|c| c.selection()).unwrap_or_default();
+        let selection =
+            self.views.get(i).map(|v| &v.session.comments).filter(|c| c.is_selected((page, index))).map(|c| c.selection()).unwrap_or_default();
         let others: Vec<(usize, usize, CommentProps)> =
             selection.into_iter().filter(|k| *k != (page, index)).filter_map(|(pg, ix)| doc.comment_props(pg, ix).map(|c| (pg, ix, c))).collect();
         let me = doc.info.annotations.iter().find(|a| a.page == page && a.index == index && !a.is_reply());
@@ -507,7 +508,6 @@ impl PdfCraftApp {
         }
         match self.dialogs.take_by_id::<HostedParamDialog>(id) {
             None => {}
-            Some(DialogResult::Cancel) => self.comment_props = None,
             Some(DialogResult::Ok(result)) => {
                 let Some(open) = self.comment_props.take() else { return };
                 let draft = open.draft;
@@ -527,6 +527,7 @@ impl PdfCraftApp {
                     self.make_props_default(draft.page, draft.index, &e);
                 }
             }
+            Some(_) => self.comment_props = None,
         }
     }
 }

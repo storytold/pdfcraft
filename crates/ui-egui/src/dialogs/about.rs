@@ -21,11 +21,12 @@ fn info() -> AboutInfo {
     .mark(AboutImage::svg("ArtCraft", MARK))
     .part_of(AboutImage::svg("ArtCraft", LOGO).dark(LOGO_WHITE))
     .built_with("Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)");
-    let (community, others): (Vec<_>, Vec<_>) = pdfcraft_engine::links::LINKS.iter().partition(|l| l.url == pdfcraft_engine::links::DISCORD);
+    let (community, others): (Vec<&pdfcraft_engine::links::Link>, Vec<&pdfcraft_engine::links::Link>) =
+        pdfcraft_engine::links::LINKS.iter().partition(|l| l.url == pdfcraft_engine::links::DISCORD);
     if let Some(l) = community.first() {
-        info = info.community(AboutLink::new(tl!(l.label), l.url));
+        info = info.community(AboutLink::new(tl!(l.label).to_string(), l.url));
     }
-    info.links(others.into_iter().map(|l| AboutLink::new(tl!(l.label), l.url)))
+    info.links(others.into_iter().map(|l| AboutLink::new(tl!(l.label).to_string(), l.url)))
 }
 
 impl PdfCraftApp {
