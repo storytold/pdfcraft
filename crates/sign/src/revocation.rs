@@ -2,7 +2,9 @@
 //! status lookup for evidence embedded in a DSS or supplied by the caller. Never fetches:
 //! the transport and the choice of evidence stay with the caller.
 
-use crate::der::{Tlv, tag};
+use crate::der::Tlv;
+#[cfg(test)]
+use crate::der::tag;
 use crate::keys::{self, DigestAlg, PublicKey};
 use crate::x509::Certificate;
 use crate::{SignError, Time};
@@ -26,6 +28,7 @@ pub enum RevocationStatus {
     Unknown,
 }
 
+#[cfg(test)]
 fn bad(what: impl Into<String>) -> SignError {
     SignError::Malformed(format!("revocation: {}", what.into()))
 }
