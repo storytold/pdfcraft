@@ -786,12 +786,19 @@ fn a_title_change_keeps_what_the_packet_holds() {
     let mut doc = doc_with_xmp(LIBREOFFICE_XMP.replace("</rdf:RDF>", "</rdf:RDF >").as_bytes());
     set_info(&mut doc, "Title", "New").unwrap();
     assert_eq!(xmp_text(&save_and_reopen(&doc)).map(|x| xmp_values(&x, "dc:title")), Some(vec!["New".to_string()]));
+    // So is space before the `>` of the title's end tag.
+    let mut doc = doc_with_xmp(LIBREOFFICE_XMP.replace("</dc:title>", "</dc:title >").as_bytes());
+    set_info(&mut doc, "Title", "New").unwrap();
+    let xmp = xmp_text(&save_and_reopen(&doc)).unwrap();
+    assert!(xmp.matches("<dc:title").count() == 1 && xmp.contains(">New<") && !xmp.contains("Untitled 1"), "{xmp}");
     // The title under purl:, the author under dc: and only there.
     let both = LIBREOFFICE_XMP.replace("dc:title", "purl:title").replace(" xmlns:dc=", " xmlns:purl=\"http://purl.org/dc/elements/1.1/\" xmlns:dc=");
     let mut doc = doc_with_xmp(both.as_bytes());
     let r = doc.trailer().get(b"Info").and_then(Object::as_ref).unwrap();
+    let producer = doc.add(Object::String(PdfString::text("Writer 1.0")));
     doc.update_dict(r, |d| {
         d.remove(b"Author");
+        d.set(b"Producer".to_vec(), Object::Ref(producer));
     })
     .unwrap();
     set_info(&mut doc, "Title", "New").unwrap();
@@ -799,6 +806,8 @@ fn a_title_change_keeps_what_the_packet_holds() {
     let kept = ["Author", "Subject", "Producer"].map(|k| info(&doc, k));
     assert_eq!(kept, [Some("Old Author".into()), Some("Old subject".into()), Some("Writer 1.0".into())]);
     assert!(xmp_stream(&doc).is_none());
+    let own = doc.resolve(doc.trailer().get(b"Info").unwrap()).as_dict().and_then(|d| d.get(b"Producer").cloned());
+    assert_eq!(own, Some(Object::Ref(producer)), "a value /Info has of its own stays as it is");
 }
 
 /// Acrobat keeps each custom property in the XMP packet too, as `pdfx:<name>` (the

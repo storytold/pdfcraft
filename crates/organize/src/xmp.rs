@@ -115,10 +115,10 @@ pub(crate) fn would_go_stale(doc: &Document, key: &str, value: &str) -> bool {
 
 /// Remove the catalog's XMP packet (see [`would_go_stale`]), after `key` changed in `/Info`. What
 /// [`crate::info`] reads from the packet for the other keys it mirrors moves to `/Info` first, so
-/// it isn't lost; a value `/Info` has already wins there.
+/// it isn't lost; the values `/Info` has of its own stay as they are.
 pub(crate) fn drop_packet(doc: &mut Document, key: &str) -> Result<(), OrganizeError> {
     for k in crate::STANDARD_INFO_KEYS.into_iter().filter(|k| *k != key) {
-        let Some(v) = info_value(doc, k).filter(|v| crate::info(doc, k).as_ref() == Some(v)) else { continue };
+        let Some(v) = info_value(doc, k).filter(|_| crate::info_entry(doc, k).is_none()) else { continue };
         crate::set_info_entry(doc, k.as_bytes(), Some(Object::String(PdfString::text(&v))))?;
     }
     let Some(root) = doc.root() else { return Ok(()) };
@@ -451,9 +451,16 @@ fn element_span(xmp: &str, name: &str) -> Option<(usize, usize)> {
         if xmp.get(..tag_end)?.ends_with('/') {
             return Some((i, tag_end + 1));
         }
-        let close = format!("</{name}>");
-        let end = tag_end + xmp.get(tag_end..)?.find(&close)? + close.len();
-        return Some((i, end));
+        // The end tag may have white space before its `>` (XML 1.0 3.1).
+        let close = format!("</{name}");
+        let mut at = tag_end;
+        while let Some(j) = xmp.get(at..).and_then(|s| s.find(&close)).map(|j| at + j + close.len()) {
+            if let Some(rest) = xmp.get(j..)?.trim_start().strip_prefix('>') {
+                return Some((i, xmp.len() - rest.len()));
+            }
+            at = j;
+        }
+        return None;
     }
     None
 }
