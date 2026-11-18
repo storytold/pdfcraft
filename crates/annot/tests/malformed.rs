@@ -382,7 +382,8 @@ fn a_link_area_that_is_too_small_or_broken_is_refused_before_it_is_written() {
     ];
     for (label, rect, want_in_message) in cases {
         let mut doc = blank(2);
-        let e = links::add(&mut doc, 0, rect, &links::LinkAction::Page(1), &links::LinkStyle::default()).err();
+        let e =
+            links::add(&mut doc, 0, rect, &links::LinkAction::Page { page: 1, zoom: links::LinkZoom::FitPage }, &links::LinkStyle::default()).err();
         let msg = match &e {
             Some(AnnotError::Invalid(m)) => m.clone(),
             other => panic!("{label}: expected Invalid, got {other:?}"),
@@ -440,10 +441,10 @@ fn non_finite_builder_input_is_refused_and_leaves_the_document_untouched() {
     }
 
     for (label, style) in [
-        ("nan opacity", Style { color: [0.0, 0.0, 0.0], opacity: f64::NAN, width: 1.0, fill: None }),
-        ("infinite opacity", Style { color: [0.0, 0.0, 0.0], opacity: f64::INFINITY, width: 1.0, fill: None }),
-        ("nan colour", Style { color: [f64::NAN, 0.0, 0.0], opacity: 1.0, width: 1.0, fill: None }),
-        ("nan width", Style { color: [0.0, 0.0, 0.0], opacity: 1.0, width: f64::NAN, fill: None }),
+        ("nan opacity", Style { color: [0.0, 0.0, 0.0], opacity: f64::NAN, width: 1.0, fill: None, ..Style::default() }),
+        ("infinite opacity", Style { color: [0.0, 0.0, 0.0], opacity: f64::INFINITY, width: 1.0, fill: None, ..Style::default() }),
+        ("nan colour", Style { color: [f64::NAN, 0.0, 0.0], opacity: 1.0, width: 1.0, fill: None, ..Style::default() }),
+        ("nan width", Style { color: [0.0, 0.0, 0.0], opacity: 1.0, width: f64::NAN, fill: None, ..Style::default() }),
     ] {
         let mut doc = blank(1);
         let e = add_annotation(
@@ -593,7 +594,14 @@ fn unvalidated_stamp_size_and_signature_contours_are_rewritten_silently_in_the_f
         &mut doc,
         &NewAnnotation {
             page: 0,
-            shape: Shape::CustomStamp { rect: [10.0, 20.0, 60.0, 50.0], name: "Sig".into(), picture, image: true, size: (1e300, f64::NAN) },
+            shape: Shape::CustomStamp {
+                rect: [10.0, 20.0, 60.0, 50.0],
+                name: "Sig".into(),
+                picture,
+                image: true,
+                size: (1e300, f64::NAN),
+                line: None,
+            },
             style: Style::default(),
             contents: String::new(),
             author: "A".into(),
@@ -656,7 +664,7 @@ fn a_nan_fill_is_accepted_on_create_and_refused_on_edit() {
         &NewAnnotation {
             page: 0,
             shape: Shape::Rectangle { rect: [10.0, 20.0, 60.0, 40.0] },
-            style: Style { color: [0.9, 0.1, 0.1], opacity: 1.0, width: 2.0, fill: Some(nan) },
+            style: Style { color: [0.9, 0.1, 0.1], opacity: 1.0, width: 2.0, fill: Some(nan), ..Style::default() },
             contents: String::new(),
             author: "A".into(),
         },
@@ -842,7 +850,7 @@ fn the_same_huge_fill_is_accepted_on_create_and_refused_on_edit() {
             &NewAnnotation {
                 page: 0,
                 shape: Shape::Rectangle { rect: [10.0, 20.0, 60.0, 40.0] },
-                style: Style { color: [0.9, 0.1, 0.1], opacity: 1.0, width: 2.0, fill: Some(probe) },
+                style: Style { color: [0.9, 0.1, 0.1], opacity: 1.0, width: 2.0, fill: Some(probe), ..Style::default() },
                 contents: String::new(),
                 author: "A".into(),
             },

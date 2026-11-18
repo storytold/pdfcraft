@@ -48,7 +48,7 @@ fn ann(page: usize, shape: Shape, contents: &str) -> NewAnnotation {
 }
 
 fn styled(page: usize, shape: Shape, contents: &str, color: [f64; 3], opacity: f64, width: f64, fill: Option<[f64; 3]>) -> NewAnnotation {
-    NewAnnotation { page, shape, style: Style { color, opacity, width, fill }, contents: contents.into(), author: "Ada".into() }
+    NewAnnotation { page, shape, style: Style { color, opacity, width, fill, ..Style::default() }, contents: contents.into(), author: "Ada".into() }
 }
 
 /// The dictionary of the `k`-th `/Annots` entry of a page.
@@ -714,7 +714,7 @@ fn links_keep_page_targets_uri_and_dash_structure_across_renumbering() {
         &mut doc,
         0,
         [120.0, 700.0, 240.0, 720.0],
-        &links::LinkAction::Page(2),
+        &links::LinkAction::Page { page: 2, zoom: links::LinkZoom::FitPage },
         &links::LinkStyle { visible: true, width: 2.0, dashed: true, ..Default::default() },
     )
     .expect("links to page 3");
@@ -735,7 +735,7 @@ fn links_keep_page_targets_uri_and_dash_structure_across_renumbering() {
             .into_iter()
             .map(|l| {
                 let a = match l.action {
-                    links::LinkAction::Page(p) => format!("page {p}"),
+                    links::LinkAction::Page { page: p, zoom: _ } => format!("page {p}"),
                     links::LinkAction::Uri(u) => u,
                     links::LinkAction::Other(o) => format!("other:{o}"),
                 };
@@ -770,7 +770,14 @@ fn links_keep_page_targets_uri_and_dash_structure_across_renumbering() {
 fn removing_all_links_keeps_comments() {
     let mut doc = blank(2);
     add_annotation(&mut doc, &ann(0, Shape::Note { at: [50.0, 700.0], icon: NoteIcon::Help }, "note"), &meta("n")).expect("adds");
-    links::add(&mut doc, 0, [200.0, 700.0, 300.0, 715.0], &links::LinkAction::Page(0), &links::LinkStyle::default()).expect("links");
+    links::add(
+        &mut doc,
+        0,
+        [200.0, 700.0, 300.0, 715.0],
+        &links::LinkAction::Page { page: 0, zoom: links::LinkZoom::FitPage },
+        &links::LinkStyle::default(),
+    )
+    .expect("links");
     let removed = links::remove_all(&mut doc, None).expect("removes all links");
     assert_eq!(removed, 1);
 
@@ -980,7 +987,7 @@ fn a_full_rewrite_into_object_streams_describes_the_same_comments_as_a_plain_tab
     assert_eq!(summaries(&plain).len(), summaries(&packed).len());
 
     // The plain-table output is bigger here: object streams compress, which is the point of them.
-    let opts = SaveOptions { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, drop_unlinked: false };
+    let opts = SaveOptions { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, drop_unlinked: false, id_entropy: None };
     let packed_bytes = pdfcraft_cos::write_full(&doc, &opts).expect("writes");
     assert!(
         packed_bytes.len() < pdfcraft_cos::write_full(&doc, &SaveOptions { object_streams: false, ..opts }).expect("writes").len(),
