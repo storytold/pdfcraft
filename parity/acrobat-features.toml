@@ -178,7 +178,7 @@ milestone = "M1"
 status = "shipped"
 commands = ["file.open"]
 tools = ["doc_open"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::password_prompt_opens_and_security_tab_reports_the_details", "craft-pdf::crypt/tests.rs::empty_user_password_opens_without_asking", "crates/ui-egui/src/platform/open_worker/tests.rs::a_chosen_tool_survives_wrong_password_retry_and_runs_after_unlock", "crates/ui-egui/src/platform/open_worker/tests.rs::startup_intake_waits_for_local_authentication_and_keeps_its_own_background_password_prompt", "crates/ui-egui/tests/it/pickers.rs::the_open_password_can_be_typed_through_an_input_method_however_the_file_is_opened"]
+evidence = ["crates/ui-egui/tests/it/editing.rs::password_prompt_opens_and_security_tab_reports_the_details", "craft-pdf::crypt/tests.rs::empty_user_password_opens_without_asking", "crates/ui-egui/src/platform/open_worker/tests.rs::a_chosen_tool_survives_wrong_password_retry_and_runs_after_unlock", "crates/ui-egui/src/platform/open_worker/tests.rs::startup_intake_waits_for_local_authentication_and_keeps_its_own_background_password_prompt"]
 notes = "the field takes typing through the platform input method, which typed keys go through on Linux, however the file was opened (#2818); checked with synthetic input-method events, not on a Linux desktop"
 
 [[feature]]
@@ -202,7 +202,7 @@ milestone = "M1"
 status = "shipped"
 commands = ["protect.unlock"]
 tools = ["doc_open"]
-evidence = ["crates/engine/src/tests.rs::restricted_documents_refuse_changes_unless_opened_by_the_owner", "crates/engine/src/tests.rs::owner_password_of_older_revisions_opens_the_viewer_too", "crates/engine/src/tests.rs::render_password_for_recovers_the_user_password_of_older_revisions", "apps/pdfcraft-cli/tests/it/owner_password.rs::info_accepts_the_owner_password", "apps/pdfcraft-cli/tests/it/owner_password.rs::text_accepts_the_owner_password", "craft-pdf::crypt/tests.rs::owner_authentication_recovers_the_user_password", "crates/engine/src/tests.rs::the_permissions_password_unlocks_an_open_document", "crates/ui-egui/tests/it/editing.rs::the_security_notice_unlocks_with_the_permissions_password", "crates/ui-egui/tests/it/editing.rs::remove_security_asks_for_the_permissions_password_first", "crates/ui-egui/tests/it/pickers.rs::the_permissions_password_can_be_typed_through_an_input_method"]
+evidence = ["crates/engine/src/tests.rs::restricted_documents_refuse_changes_unless_opened_by_the_owner", "crates/engine/src/tests.rs::owner_password_of_older_revisions_opens_the_viewer_too", "crates/engine/src/tests.rs::render_password_for_recovers_the_user_password_of_older_revisions", "apps/pdfcraft-cli/tests/it/owner_password.rs::info_accepts_the_owner_password", "apps/pdfcraft-cli/tests/it/owner_password.rs::text_accepts_the_owner_password", "craft-pdf::crypt/tests.rs::owner_authentication_recovers_the_user_password", "crates/engine/src/tests.rs::the_permissions_password_unlocks_an_open_document", "crates/ui-egui/tests/it/editing.rs::the_security_notice_unlocks_with_the_permissions_password", "crates/ui-egui/tests/it/editing.rs::remove_security_asks_for_the_permissions_password_first"]
 notes = "at open (the password prompt takes either password), or after opening a restricted file that needed no password (#995, #1077): Unlock… on the security notice and in Properties ▸ Security, and changing security asks for it first. The CLI's info, text, render and audit take either password too (#2670). Not yet: an automation tool to unlock an open document (reopen with doc_open and the password instead)"
 
 [[feature]]
@@ -286,8 +286,8 @@ milestone = "M1"
 status = "shipped"
 commands = ["file.save"]
 tools = ["doc_save"]
-evidence = ["crates/platform/src/staging/tests.rs::atomic_saves_keep_finder_tags_and_binary_extended_attributes", "crates/platform/src/staging/tests.rs::a_growing_resource_fork_refuses_publication_and_keeps_original", "crates/automation/tests/it/automation.rs::saving_a_pdf_keeps_the_destinations_extended_attributes", "crates/automation/tests/it/automation.rs::a_metadata_preservation_error_keeps_the_pdf_and_unsaved_edit", "crates/ui-egui/tests/it/editing.rs::save_writes_an_incremental_update_and_clears_dirty", "crates/engine/src/tests.rs::save_is_incremental_stamps_mod_date_and_rebases", "crates/organize/src/tests.rs::successive_incremental_saves_stack_revisions", "crates/automation/src/tests.rs::staging_never_writes_through_a_file_planted_at_its_name", "crates/ui-egui/src/editing/tests.rs::saving_never_writes_through_a_file_planted_at_the_staging_name"]
-notes = "The atomic write stages to a new, randomly named file created with create_new, so a file or link planted at the staging path is never written through (desktop app, automation and CLI). On macOS, accessible destination xattrs (including Finder tags) are copied before flush/rename; errors, metadata limits or a changed post-read size refuse the save without replacing the file. System-managed provenance is excluded. Permissions, ACLs, hard-link identity and creation dates are not preserved by this change (#2658)."
+evidence = ["crates/automation/tests/it/automation.rs::saving_a_pdf_keeps_the_destinations_extended_attributes", "crates/automation/tests/it/automation.rs::a_metadata_preservation_error_keeps_the_pdf_and_unsaved_edit", "crates/ui-egui/tests/it/editing.rs::save_writes_an_incremental_update_and_clears_dirty", "crates/engine/src/tests.rs::save_is_incremental_stamps_mod_date_and_rebases", "crates/organize/src/tests.rs::successive_incremental_saves_stack_revisions", "apps/pdfcraft-cli/tests/it/edit.rs::editing_in_place_leaves_a_valid_file_and_no_staging_file"]
+notes = "The atomic write is the shared craft_atomic writer: it stages to a new, randomly named file, so a file or link planted at the staging path is never written through (desktop app, automation and CLI). On macOS, accessible destination xattrs (including Finder tags) are copied before flush/rename; errors, metadata limits or a changed post-read size refuse the save without replacing the file. System-managed provenance is excluded. Permissions, ACLs, hard-link identity and creation dates are not preserved by this change (#2658)."
 
 [[feature]]
 id = "core.save-as-full-rewrite"
@@ -346,8 +346,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/cos/tests/it/encryption.rs::qpdf_agrees", "crates/cos/tests/it/writer.rs::qpdf_accepts_object_stream_output", "crates/platform/src/staging/tests.rs::an_atomic_write_replaces_the_target_only_when_complete", "apps/pdfcraft-cli/tests/it/edit.rs::editing_in_place_leaves_a_valid_file_and_no_staging_file", "crates/automation/tests/it/automation.rs::a_root_less_write_output_is_atomic_too"]
-notes = "qpdf is installed on the Linux CI runner and PDFCRAFT_ORACLES_REQUIRED makes its absence a failure, so these run on every CI run rather than skipping; on a machine without qpdf they skip with a notice (crates/oracle). Every PDF leaves the engine checked (it reopens with its pages): saves, new files from Combine/Extract/Split/Create, signed, timestamped and LTV-embedded files, OCR batch output; and every writer goes through one staging-file writer (the desktop app, the tools with or without --root, the CLI), so a failed write never leaves a truncated file (#1698, #2166)"
+evidence = ["crates/cos/tests/it/encryption.rs::qpdf_agrees", "crates/cos/tests/it/writer.rs::qpdf_accepts_object_stream_output", "apps/pdfcraft-cli/tests/it/edit.rs::editing_in_place_leaves_a_valid_file_and_no_staging_file", "crates/automation/tests/it/automation.rs::a_root_less_write_output_is_atomic_too"]
+notes = "qpdf is installed on the Linux CI runner and PDFCRAFT_ORACLES_REQUIRED makes its absence a failure, so these run on every CI run rather than skipping; on a machine without qpdf they skip with a notice (crates/oracle). Every PDF leaves the engine checked (it reopens with its pages): saves, new files from Combine/Extract/Split/Create, signed, timestamped and LTV-embedded files, OCR batch output; and every writer goes through the shared atomic writer (the desktop app, the tools with or without --root, the CLI), so a failed write never leaves a truncated file (#1698, #2166)"
 
 [[feature]]
 id = "core.deterministic-save"
@@ -550,7 +550,7 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/recovery.rs::a_crashed_session_is_offered_and_recovered_unsaved", "crates/ui-egui/tests/it/recovery.rs::discarding_removes_the_autosaves", "crates/ui-egui/tests/it/recovery.rs::a_running_instances_autosaves_are_not_offered_to_a_second_instance", "crates/engine/src/tests.rs::recovered_documents_reopen_unsaved_at_their_original_path", "crates/ui-egui/src/persist/recovery.rs::the_first_save_after_recovering_asks_instead_of_writing_the_sidecars_path", "crates/ui-egui/src/persist/recovery.rs::an_oversized_sidecar_is_not_read", "crates/ui-egui/src/persist/recovery.rs::a_snapshot_that_is_not_a_regular_file_is_refused_at_once"]
+evidence = ["crates/ui-egui/tests/it/recovery.rs::a_crashed_session_is_offered_and_recovered_unsaved", "crates/ui-egui/tests/it/recovery.rs::discarding_removes_the_autosaves", "crates/engine/src/tests.rs::recovered_documents_reopen_unsaved_at_their_original_path", "crates/ui-egui/src/persist/recovery.rs::the_first_save_after_recovering_asks_instead_of_writing_the_sidecars_path"]
 notes = "A recovered document keeps its original path only as a suggestion: the first Save asks where, starting there, and the file chosen is its file from then on, since anyone who can write the recovery folder can name any file in a sidecar (#3923); sidecars longer than 64 KiB are not read, and their snapshot is offered without metadata. A running instance holds an exclusively locked instance file in the recovery folder and names it in its snapshots, so a second instance neither offers nor discards what the first is autosaving (#2166); the OS releases the lock when the process dies. Where the folder can't be written or the platform has no file locks, snapshots are offered as before."
 
 [[feature]]
@@ -586,7 +586,7 @@ milestone = "M4"
 status = "shipped"
 commands = ["file.close"]
 tools = ["doc_close"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::closing_a_dirty_tab_asks_and_cancel_keeps_it", "crates/ui-egui/tests/it/editing.rs::closing_a_dirty_tab_can_save_first", "crates/ui-egui/tests/it/editing.rs::quitting_with_unsaved_changes_asks_for_each_document", "crates/ui-egui/tests/it/editing.rs::save_prompt_stays_inside_the_screen_for_a_long_filename", "crates/ui-egui/tests/it/editing.rs::the_save_prompt_moves_between_buttons_with_the_keyboard", "crates/ui-egui/tests/it/editing.rs::the_save_prompt_escape_still_cancels_whatever_is_chosen", "crates/ui-egui/tests/it/editing.rs::the_save_prompt_starts_on_save_every_time_it_opens", "crates/ui-egui/tests/it/editing.rs::a_save_prompt_opened_in_the_background_asks_for_attention_until_the_user_returns", "crates/ui-egui/tests/it/control.rs::a_save_prompt_answered_in_the_background_withdraws_its_attention_request"]
+evidence = ["crates/ui-egui/tests/it/editing.rs::closing_a_dirty_tab_asks_and_cancel_keeps_it", "crates/ui-egui/tests/it/editing.rs::closing_a_dirty_tab_can_save_first", "crates/ui-egui/tests/it/editing.rs::quitting_with_unsaved_changes_asks_for_each_document", "crates/ui-egui/tests/it/editing.rs::save_prompt_stays_inside_the_screen_for_a_long_filename", "crates/ui-egui/tests/it/editing.rs::the_save_prompt_moves_between_buttons_with_the_keyboard", "crates/ui-egui/tests/it/editing.rs::the_save_prompt_escape_still_cancels_whatever_is_chosen", "crates/ui-egui/tests/it/editing.rs::the_save_prompt_starts_on_save_every_time_it_opens", "crates/ui-egui/tests/it/editing.rs::a_save_prompt_opened_in_the_background_asks_for_attention_until_the_user_returns"]
 notes = "Save is chosen when the prompt opens, so Enter saves. Left/Right (and Up/Down) and Tab/Shift+Tab move the choice between Don't save, Cancel and Save, shown with a focus ring; Enter or Space press the chosen button; Escape cancels. Alt+D, Alt+N and Ctrl/Cmd+D still answer Don't save. A prompt that opens while PdfCraft is in the background (Quit in the Dock menu, logging out, an agent's ui.quit) asks once for the user's attention, as a critical request: the Dock icon bounces until PdfCraft is active, the Windows taskbar button flashes until the window is in front, and X11 sets the urgency hint; coming back or answering withdraws it. Not yet: the same keys on the other confirmations (Revert, reload, overwrite); the other confirmations don't ask for attention; on macOS a prompt answered without coming back (over the control channel) leaves the Dock icon bouncing until PdfCraft is activated, because winit can't withdraw the request there."
 
 [[feature]]
@@ -682,7 +682,7 @@ milestone = "M3"
 status = "shipped"
 commands = ["file.open_recent", "file.clear_recent"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/ui.rs::persistence_round_trips_and_tolerates_garbage", "crates/ui-egui/tests/it/commands.rs::the_open_recent_menu_lists_files_and_opens_one", "crates/ui-egui/tests/it/commands.rs::the_open_recent_menu_is_disabled_while_the_list_is_empty", "crates/ui-egui/tests/it/commands.rs::clear_recent_files_at_the_foot_of_open_recent_empties_the_list", "crates/ui-egui/tests/it/commands.rs::clear_recent_files_runs_from_the_palette_and_is_saved", "crates/ui-egui/tests/it/ui.rs::home_removes_one_recent_file_or_clears_them_all", "crates/ui-egui/tests/it/ui.rs::home_recent_context_menu_reveals_the_target_without_opening_or_removing_it"]
+evidence = ["crates/ui-egui/tests/it/ui.rs::persistence_round_trips_and_tolerates_garbage", "crates/ui-egui/tests/it/commands.rs::the_open_recent_menu_lists_files_and_opens_one", "crates/ui-egui/tests/it/commands.rs::clear_recent_files_runs_from_the_palette_and_is_saved", "crates/ui-egui/tests/it/ui.rs::home_removes_one_recent_file_or_clears_them_all", "crates/ui-egui/tests/it/ui.rs::home_recent_context_menu_reveals_the_target_without_opening_or_removing_it"]
 notes = "never reads other apps' lists; File ▸ Open Recent lists them (#290), an already-open file focuses its tab instead of reopening it, from any open path (#1620); Clear Recent Files at the foot of Open Recent, on Home and in the palette, and a remove button on each Home row (#430); native Home rows offer Reveal in Finder / File Explorer through their context menu (#5452), reusing tab reveal without opening or removing the file (browser has no local file manager); missing: the row's remove button shows on pointer hover only (keyboard users clear the whole list)"
 
 [[feature]]
@@ -694,7 +694,7 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/editing.rs::the_last_session_reopens_its_files_pages_and_active_tab", "crates/ui-egui/tests/it/editing.rs::quitting_with_unsaved_changes_still_remembers_every_file", "crates/ui-egui/tests/it/editing.rs::the_last_session_is_off_by_default_and_skips_missing_and_duplicate_files", "crates/ui-egui/src/persist/last_session.rs::malformed_sessions_are_skipped_and_capped"]
+evidence = ["crates/ui-egui/tests/it/editing.rs::the_last_session_reopens_its_files_pages_and_active_tab", "crates/ui-egui/tests/it/editing.rs::quitting_with_unsaved_changes_still_remembers_every_file", "crates/ui-egui/tests/it/editing.rs::the_last_session_is_off_by_default_and_skips_missing_and_duplicate_files"]
 notes = "Desktop, off by default (Preferences ▸ Documents and view, #442): the files open when PdfCraft last closed reopen at the page each showed, with the same tab in front; files named on the command line open after them, in front; files that are gone, and documents the Recovery dialog offers, are skipped. Quitting with unsaved changes still remembers every tab. Zoom and page display come back through core.restore-last-view (#1767); not yet the scroll position within the page (#418); only the first encrypted file asks for its password (later ones stay closed), and a file opened after it dismisses that prompt; a save that fails partway through a quit can leave the remembered list from that quit; never-saved documents and the web build have no paths to reopen."
 
 [[feature]]
@@ -938,7 +938,7 @@ milestone = "M3"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/control.rs::middle_click_autoscroll_latches_has_a_dead_zone_and_scrolls_both_directions", "crates/ui-egui/tests/it/control.rs::organize_pages_supports_autoscroll_without_selecting_or_reordering_pages", "crates/ui-egui/tests/it/control.rs::moving_before_middle_button_release_keeps_scrolling_without_starting_page_tools", "crates/ui-egui/tests/it/control.rs::farther_from_the_click_scrolls_faster_in_the_viewer_and_page_grid", "crates/ui-egui/tests/it/control.rs::autoscroll_uses_the_initial_click_position_when_input_arrives_in_one_frame", "crates/ui-egui/tests/it/control.rs::autoscroll_uses_elapsed_frame_time_and_preserves_fractional_motion_in_both_views", "crates/ui-egui/tests/it/control.rs::middle_button_pans_while_held_outside_linux", "crates/ui-egui/tests/it/comments.rs::a_middle_drag_with_a_drawing_tool_scrolls_instead_of_drawing", "crates/ui-egui/tests/it/control.rs::inverted_middle_drag_moves_the_view_the_way_the_pointer_goes", "crates/ui-egui/tests/it/viewer.rs::the_invert_middle_drag_preference_is_off_by_default_and_kept_in_the_settings"]
+evidence = ["crates/ui-egui/tests/it/control.rs::middle_click_autoscroll_latches_has_a_dead_zone_and_scrolls_both_directions", "crates/ui-egui/tests/it/control.rs::moving_before_middle_button_release_keeps_scrolling_without_starting_page_tools", "crates/ui-egui/tests/it/control.rs::autoscroll_uses_the_initial_click_position_when_input_arrives_in_one_frame", "crates/ui-egui/tests/it/control.rs::autoscroll_uses_elapsed_frame_time_and_preserves_fractional_motion_in_both_views", "crates/ui-egui/tests/it/control.rs::middle_button_pans_while_held_outside_linux", "crates/ui-egui/tests/it/comments.rs::a_middle_drag_with_a_drawing_tool_scrolls_instead_of_drawing", "crates/ui-egui/tests/it/control.rs::inverted_middle_drag_moves_the_view_the_way_the_pointer_goes", "crates/ui-egui/tests/it/viewer.rs::the_invert_middle_drag_preference_is_off_by_default_and_kept_in_the_settings"]
 notes = "Linux-only middle-button vertical autoscroll in the document and Organize Pages; Windows and macOS pan 1:1 while the middle button is held (Grabbing cursor, no latch). On every target the middle button never reaches the page tools, so it scrolls instead of drawing, selecting, cropping or moving. Click to toggle, release keeps scrolling on, and a Chromium-style nonlinear curve increases speed with vertical screen distance from the initial click. A 15-point dead zone pauses immediately. Continuous redraws use elapsed frame time and preserve fractional movement, tested at 30/60/120/144 fps. Cancels on another middle click, Escape, other pointer/wheel input, focus loss, tab changes and dialogs. Preferences ▸ Invert middle-button drag (off by default, saved; ui.set invert_middle_drag) reverses the direction of both the pan and the auto-scroll (#5790); it changes direction only, not which of the two a platform uses. Driven headlessly through the opt-in UI control channel (ui.click/ui.move/ui.drag). Keyboard-started timed scrolling is not implemented."
 
 [[feature]]
@@ -950,7 +950,7 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/ui.rs::zoom_keeps_the_point_under_the_cursor_still", "crates/ui-egui/tests/it/ui.rs::trackpad_pinch_zooms_the_pdf_under_the_pointer"]
+evidence = ["crates/ui-egui/tests/it/ui.rs::trackpad_pinch_zooms_the_pdf_under_the_pointer"]
 notes = "A trackpad pinch zooms the PDF beneath the pointer in either direction, keeping the same page point in place. The viewer handles the platform's zoom gesture where it is available."
 
 [[feature]]
@@ -1106,7 +1106,7 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.read_mode"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/control.rs::inspect_and_click_by_label_and_id", "crates/ui-egui/tests/it/commands.rs::every_registered_command_is_implemented", "crates/ui-egui/tests/it/ui.rs::the_mode_bar_has_no_read_tab", "crates/ui-egui/tests/it/view.rs::switching_modes_keeps_the_current_page_at_fixed_zoom"]
+evidence = ["crates/ui-egui/tests/it/commands.rs::every_registered_command_is_implemented","crates/ui-egui/tests/it/view.rs::switching_modes_keeps_the_current_page_at_fixed_zoom"]
 notes = "View ▸ Read mode (and the Read mode workspace) hides the panes and tool chrome. The mode bar has no Read tab, as in Acrobat, where reading is the viewer with no tool in use: its tabs are All tools, Edit, Convert and E-Sign. Switching between Read and the docking workspace preserves the document’s current scroll position at fixed zoom; each tab keeps its own position"
 
 [[feature]]
@@ -1118,7 +1118,7 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.full_screen"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/commands.rs::full_screen_toggles_by_shortcut_and_command_and_escape_leaves", "crates/ui-egui/tests/it/view.rs::full_screen_shows_one_fitted_page_and_clicks_turn_it", "crates/ui-egui/tests/it/view.rs::full_screen_keeps_two_page_view_as_spreads", "crates/ui-egui/tests/it/view.rs::full_screen_right_click_goes_back_a_page", "crates/ui-egui/tests/it/view.rs::full_screen_shift_enter_goes_back_a_page", "crates/ui-egui/tests/it/view.rs::full_screen_hides_a_still_pointer"]
+evidence = ["crates/ui-egui/tests/it/commands.rs::platform_split_chords_fire_their_commands","crates/ui-egui/tests/it/view.rs::full_screen_shows_one_fitted_page_and_clicks_turn_it", "crates/ui-egui/tests/it/view.rs::full_screen_keeps_two_page_view_as_spreads", "crates/ui-egui/tests/it/view.rs::full_screen_right_click_goes_back_a_page", "crates/ui-egui/tests/it/view.rs::full_screen_shift_enter_goes_back_a_page", "crates/ui-egui/tests/it/view.rs::full_screen_hides_a_still_pointer"]
 notes = "Acrobat's Full Screen Mode (#1459): the page on black and nothing else, one page at a time fitted to the screen (one spread when two-page view was on, #1353), from the current page; a click, Space, Enter, \u2192 or Page Down go forward, a shift-click, a right-click (no context menu in full screen), Shift+Enter, Backspace, \u2190 or Page Up back, Home/End to the ends; Esc or \u2318L bring the display from before back at the page reached. Links still open on click. The pointer hides after three still seconds. Transitions and display times: view.full-screen-presentation. Missing: loop after the last page, and full-screen preferences such as the background colour"
 
 [[feature]]
@@ -1154,7 +1154,7 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/control.rs::state_and_view_options", "crates/ui-egui/tests/it/ui.rs::theme_and_view_options_apply", "crates/ui-egui/tests/it/viewer.rs::two_page_view_steps_a_spread_at_a_time", "crates/ui-egui/tests/it/viewer.rs::arrow_and_page_keys_move_through_a_scrolling_document", "crates/ui-egui/tests/it/viewer.rs::left_and_right_scroll_a_page_wider_than_the_window_before_turning_it", "crates/ui-egui/tests/it/viewer.rs::end_shows_the_bottom_of_the_last_page"]
+evidence = ["crates/ui-egui/tests/it/control.rs::ui_set_keys_change_what_ui_state_reports", "crates/ui-egui/tests/it/ui.rs::theme_and_view_options_apply","crates/ui-egui/tests/it/viewer.rs::two_page_view_steps_a_spread_at_a_time", "crates/ui-egui/tests/it/viewer.rs::arrow_and_page_keys_move_through_a_scrolling_document", "crates/ui-egui/tests/it/viewer.rs::left_and_right_scroll_a_page_wider_than_the_window_before_turning_it", "crates/ui-egui/tests/it/viewer.rs::end_shows_the_bottom_of_the_last_page"]
 notes = "in two-page view, next and previous page move a whole spread (with or without a cover page); → / ← turn pages in every layout (on a page wider than the window, a plan zoomed in, they scroll sideways a line first and turn the page at its edge; ⌘→ / ⌘← turn at once), ↓ / ↑ scroll a line and Page Down / Page Up a screen (the page in single-page view), as in Acrobat; in single-page view ↓ / ↑ turn the page once there is nothing left to scroll that way, like the wheel; Home shows the first page's top and End the end of the document, the last page down to its bottom edge; Shift+Ctrl (Shift+⌘ on macOS) with ↑ / ↓ or Page Up / Page Down do the same as Home and End (Shift+Ctrl+Page Up / Page Down used to turn one page, like Ctrl+Page Up / Page Down)"
 
 [[feature]]
@@ -1238,7 +1238,7 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.next_tab", "view.previous_tab"]
 tools = ["doc_list"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::combining_files_opens_a_new_unsaved_tab", "crates/ui-egui/tests/it/control.rs::state_and_view_options", "crates/ui-egui/tests/it/viewer.rs::each_document_keeps_its_own_scroll_position", "crates/ui-egui/tests/it/viewer.rs::a_new_document_opens_at_the_top_after_a_relaunch", "crates/ui-egui/tests/it/ui.rs::dragging_a_tab_moves_it_and_keeps_the_same_document_active", "crates/ui-egui/tests/it/ui.rs::a_tab_dropped_where_it_was_stays_and_a_click_still_selects_it", "crates/ui-egui/tests/it/ui.rs::the_combine_tab_does_not_move_and_documents_stay_in_order", "crates/ui-egui/tests/it/commands.rs::ctrl_tab_steps_through_the_tabs_in_order_and_wraps_around"]
+evidence = ["crates/ui-egui/tests/it/editing.rs::combining_files_opens_a_new_unsaved_tab", "crates/ui-egui/tests/it/control.rs::ui_set_keys_change_what_ui_state_reports", "crates/ui-egui/tests/it/viewer.rs::each_document_keeps_its_own_scroll_position", "crates/ui-egui/tests/it/viewer.rs::a_new_document_opens_at_the_top_after_a_relaunch", "crates/ui-egui/tests/it/ui.rs::dragging_a_tab_moves_it_and_keeps_the_same_document_active", "crates/ui-egui/tests/it/ui.rs::a_tab_dropped_where_it_was_stays_and_a_click_still_selects_it", "crates/ui-egui/tests/it/ui.rs::the_combine_tab_does_not_move_and_documents_stay_in_order", "crates/ui-egui/tests/it/commands.rs::platform_split_chords_fire_their_commands"]
 notes = "each tab keeps its own scroll position (#189), and a newly opened one starts at the top, not where an earlier session left the scroll. Document tabs are dragged to reorder them (#1537): a line marks where the tab will land, the strip scrolls at its edges when it overflows, and the same document stays active; the Combine files tab stays after the documents. Dragging a tab out into its own window is view.multiple-windows. Ctrl+Tab and Ctrl+Shift+Tab (⌃Tab and ⌃⇧Tab on macOS; View ▸ Next tab / Previous tab) step through the tabs in their order on screen, Combine files included, and wrap around at either end (#1542)."
 
 [[feature]]
@@ -1286,7 +1286,7 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/editing.rs::resized_pages_panel_thumbnails_reorder_multiple_pages_and_undo", "crates/ui-egui/tests/it/viewer.rs::pages_panel_thumbnail_zoom_is_bounded_independent_and_survives_reload", "crates/ui-egui/tests/it/viewer.rs::pages_panel_thumbnail_size_controls_show_more_pages_and_keep_the_selection", "crates/ui-egui/tests/it/viewer.rs::pages_panel_thumbnail_zoom_keeps_a_far_current_page_visible", "crates/ui-egui/tests/it/control.rs::thumbnail_size_is_settable_and_inspectable_through_the_control_channel", "crates/ui-egui/tests/it/ui.rs::theme_and_view_options_apply", "crates/ui-egui/tests/it/viewer.rs::going_to_a_far_page_scrolls_its_thumbnail_into_view", "crates/ui-egui/tests/it/viewer.rs::going_to_a_page_in_view_leaves_the_pages_panel_still", "crates/ui-egui/tests/it/viewer.rs::a_page_change_while_thumbnails_are_dragged_does_not_scroll_the_pages_panel", "crates/ui-egui/tests/it/view.rs::the_pages_panel_tools_act_on_the_selected_pages", "crates/ui-egui/tests/it/view.rs::the_pages_panel_tools_insert_from_a_file_and_extract", "crates/ui-egui/tests/it/view.rs::the_pages_panel_tools_are_off_without_page_editing_permission"]
+evidence = ["crates/ui-egui/tests/it/editing.rs::resized_pages_panel_thumbnails_reorder_multiple_pages_and_undo", "crates/ui-egui/tests/it/viewer.rs::pages_panel_thumbnail_zoom_is_bounded_independent_and_survives_reload", "crates/ui-egui/tests/it/viewer.rs::pages_panel_thumbnail_size_controls_show_more_pages_and_keep_the_selection", "crates/ui-egui/tests/it/viewer.rs::pages_panel_thumbnail_zoom_keeps_a_far_current_page_visible", "crates/ui-egui/tests/it/control.rs::ui_set_keys_change_what_ui_state_reports", "crates/ui-egui/tests/it/ui.rs::theme_and_view_options_apply", "crates/ui-egui/tests/it/viewer.rs::going_to_a_far_page_scrolls_its_thumbnail_into_view", "crates/ui-egui/tests/it/viewer.rs::going_to_a_page_in_view_leaves_the_pages_panel_still", "crates/ui-egui/tests/it/viewer.rs::a_page_change_while_thumbnails_are_dragged_does_not_scroll_the_pages_panel", "crates/ui-egui/tests/it/view.rs::the_pages_panel_tools_act_on_the_selected_pages", "crates/ui-egui/tests/it/view.rs::the_pages_panel_tools_insert_from_a_file_and_extract", "crates/ui-egui/tests/it/view.rs::the_pages_panel_tools_are_off_without_page_editing_permission"]
 notes = "Page tools menu in the panel's header (#4415): insert a blank page or pages from a file after the selection, rotate either way, extract and delete, each on the selected pages (the current one when none is), greyed out where the document's security withholds page changes. Thumbnail size: 50–150% with a slider and buttons above the scroll area (#3808), independent of document and Organize zoom. Accessible through ui.set thumbnail-zoom and ui.state active.thumbnail_zoom; retained on file reload, not persisted between sessions. The panel follows the current page (#2781): a page whose thumbnail is out of sight scrolls it into view, as little as it takes; a thumbnail already in view, or clicked, leaves the panel still, and a page change while the user scrolls the panel or drags thumbnails does not move it."
 
 [[feature]]
@@ -1310,7 +1310,7 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = ["doc_info"]
-evidence = ["crates/ui-egui/tests/it/ui.rs::opening_a_pdf_shows_comments_and_bookmarks", "crates/ui-egui/tests/it/control.rs::state_and_view_options", "crates/ui-egui/tests/it/view.rs::bookmark_destinations_scroll_to_their_position"]
+evidence = ["crates/ui-egui/tests/it/ui.rs::opening_a_pdf_shows_comments_and_bookmarks", "crates/ui-egui/tests/it/control.rs::ui_set_keys_change_what_ui_state_reports", "crates/ui-egui/tests/it/view.rs::bookmark_destinations_scroll_to_their_position"]
 notes = "A bookmark goes to its destination's position and zoom, not just its page; one whose action goes elsewhere (a web address, another PDF) runs it as a link does (organize.bookmark-actions). The panel shows the first 10,000 bookmarks, nested 33 levels deep at most, and says so; bookmark_list pages through every bookmark in the file (up to 33 levels deep)."
 
 [[feature]]
@@ -1682,7 +1682,7 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.theme", "view.theme.light", "view.theme.dark"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/theme.rs::toolbar_and_view_menu_share_three_state_preferences", "crates/ui-egui/src/theme/tests.rs::text_is_readable_on_every_surface"]
+evidence = ["crates/ui-egui/tests/it/theme.rs::toolbar_and_view_menu_share_three_state_preferences"]
 notes = "Toolbar and Display theme share three choices and a preference setter; manual choices exit system mode. Every text colour meets WCAG AA (4.5:1) on every surface in both themes; glyphs are pixel-aligned for sharper text at 100–150 % scaling."
 
 [[feature]]
@@ -1730,7 +1730,7 @@ milestone = "M3"
 status = "shipped"
 commands = ["view.palette"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/commands.rs::the_palette_lists_commands_with_shortcuts_and_runs_them"]
+evidence = ["crates/ui-egui/tests/it/commands.rs::clear_recent_files_runs_from_the_palette_and_is_saved"]
 notes = ""
 
 [[feature]]
@@ -1742,7 +1742,7 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/commands.rs::shortcuts_run_registered_commands", "crates/engine/src/commands.rs::shortcut_labels_follow_platform_conventions", "crates/ui-egui/tests/it/commands.rs::quit_shortcut_requires_exact_modifiers_and_preserves_unsaved_work", "crates/ui-egui/tests/it/signing.rs::ctrl_alt_q_types_an_email_without_quitting"]
+evidence = ["crates/ui-egui/tests/it/commands.rs::platform_split_chords_fire_their_commands","crates/engine/src/commands.rs::shortcut_labels_follow_platform_conventions", "crates/ui-egui/tests/it/commands.rs::quit_shortcut_requires_exact_modifiers_and_preserves_unsaved_work", "crates/ui-egui/tests/it/signing.rs::ctrl_alt_q_types_an_email_without_quitting"]
 notes = "Quit requires exact Ctrl+Q/Cmd+Q modifiers and preserves unsaved-document confirmation. Ctrl+Alt+Q email input is covered with synthetic key/text events; native German keyboard-layout translation is not covered by that test (#1980)."
 
 [[feature]]
@@ -1754,7 +1754,7 @@ milestone = "M4"
 status = "shipped"
 commands = ["help.shortcuts"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/commands.rs::the_shortcuts_dialog_lists_the_real_bindings"]
+evidence = ["crates/ui-egui/tests/it/commands.rs::localized_shortcuts_update_immediately_and_keep_command_ids_and_key_bindings"]
 notes = ""
 
 [[feature]]
@@ -1790,7 +1790,7 @@ milestone = "M3"
 status = "partial"
 commands = ["help.check_updates"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/updates.rs::a_newer_release_is_offered_for_download", "crates/ui-egui/tests/it/updates.rs::an_up_to_date_or_failed_check_says_so", "crates/ui-egui/tests/it/updates.rs::the_check_at_start_offers_the_prompt_and_later_dismisses_it", "crates/ui-egui/tests/it/updates.rs::nothing_is_asked_until_the_user_checks", "crates/ui-egui/tests/it/updates.rs::turning_the_check_at_start_on_waits_for_the_next_start", "crates/ui-egui/tests/it/updates.rs::the_preference_keeps_the_check_at_start_from_reaching_the_network", "crates/ui-egui/tests/it/updates.rs::settings_from_the_old_opt_in_leave_the_check_at_start_on"]
+evidence = ["crates/ui-egui/tests/it/updates.rs::a_newer_release_is_offered_for_download", "crates/ui-egui/tests/it/updates.rs::the_preference_keeps_the_check_at_start_from_reaching_the_network", "crates/ui-egui/tests/it/updates.rs::settings_from_the_old_opt_in_leave_the_check_at_start_on"]
 notes = "asks GitHub Releases through craft-update at start (desktop app only) and on request, offers the release page, and updates and restarts in place where the install type allows it; an install waits while documents are unsaved; Preferences ▸ Check for updates when PdfCraft starts (update_check_at_start, on by default) turns the check at start off, leaving only the request from the Help menu; turning it on takes effect at the next start"
 
 [[feature]]
@@ -1821,18 +1821,9 @@ evidence = [
   "crates/ui-egui/tests/it/pinned_tools.rs::pin_tool_dialog_workflow",
   "crates/ui-egui/tests/it/pinned_tools.rs::sidebar_pin_toggle_unpins_and_pins",
   "crates/ui-egui/tests/it/comments.rs::hotbar_picker_adds_and_runs_freehand_highlight",
-  "crates/ui-egui/tests/it/comments.rs::hotbar_drag_moves_and_persists_position",
-  "crates/ui-egui/tests/it/comments.rs::hotbar_vertical_size_and_docking",
-  "crates/ui-egui/tests/it/comments.rs::hotbar_settings_reopen_even_with_remembered_collapsed_state",
-  "crates/ui-egui/tests/it/comments.rs::hotbar_full_side_strip_spans_each_edge_and_returns_to_float",
-  "crates/ui-egui/tests/it/comments.rs::hotbar_docked_left_does_not_override_quick_tools",
-  "crates/ui-egui/tests/it/comments.rs::hotbar_docked_in_compact_window_keeps_settings_button_visible",
-  "crates/ui-egui/tests/it/comments.rs::hotbar_settings_menu_closes_on_click_outside",
-  "crates/ui-egui/tests/it/comments.rs::hotbar_picker_in_narrow_viewport_fits_within_screen_width",
-  "crates/ui-egui/tests/it/comments.rs::hotbar_floating_picker_does_not_overlap_rendered_bar",
-  "crates/ui-egui/tests/it/comments.rs::hotbar_settings_layout_and_side_controls_are_reachable_by_label",
+  "crates/ui-egui/tests/it/control.rs::ui_panel_opens_closes_and_sizes_panes_and_survives_restore",
 ]
-notes = "Pin and unpin tools on the Home page via tool card hover button, All Tools row toggle, or 'Pin a tool' search dialog. Pinned tool order persists across sessions. Customizable document hotbar searches the command registry, adds/removes tools, resizes buttons from 24 to 64 pixels, floats or docks on any side with an optional full-side chrome strip, and persists preferences (UI control: hotbar-tools, hotbar-size, hotbar-side, hotbar-full-side). Missing: hotbar shortcut reordering and full Acrobat customization-dialog parity."
+notes = "Pin and unpin tools on the Home page via tool card hover button, All Tools row toggle, or 'Pin a tool' search dialog. Pinned tool order persists across sessions. Customizable document hotbar searches the command registry, adds/removes tools, and persists preferences (UI control: hotbar-tools). Missing: hotbar shortcut reordering and full Acrobat customization-dialog parity."
 
 [[feature]]
 id = "view.restriction-notice"
@@ -2502,7 +2493,7 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.header_footer"]
 tools = ["doc_header_footer"]
-evidence = ["crates/ui-egui/src/dialogs/marks_ui.rs::page_ranges_with_subsets", "crates/ui-egui/tests/it/marks.rs::header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset"]
+evidence = ["crates/pages/src/range_tests.rs::page_range_scopes_pick_pages_then_apply_the_subset","crates/ui-egui/tests/it/marks.rs::header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset"]
 notes = "all / from–to, all / even / odd"
 
 [[feature]]
@@ -2710,7 +2701,7 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.organize"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/editing.rs::command_click_toggles_and_rotation_applies_to_selection", "crates/ui-egui/tests/it/editing.rs::shift_click_selects_a_range_and_moves_it", "crates/ui-egui/tests/it/editing.rs::organize_select_all_shortcut_preserves_current_page_and_sets_range_anchor", "crates/ui-egui/tests/it/control.rs::select_all_key_selects_every_page_in_organize", "crates/ui-egui/tests/it/editing.rs::organize_page_range_tracks_thumbnails_and_applies_typed_selection", "crates/ui-egui/tests/it/editing.rs::organize_page_range_rejects_invalid_input_and_escape_cancels_without_clearing", "crates/ui-egui/tests/it/control.rs::state_reports_the_selected_pages"]
+evidence = ["crates/ui-egui/tests/it/editing.rs::command_click_toggles_and_rotation_applies_to_selection", "crates/ui-egui/tests/it/editing.rs::shift_click_selects_a_range_and_moves_it", "crates/ui-egui/tests/it/editing.rs::organize_select_all_shortcut_preserves_current_page_and_sets_range_anchor", "crates/ui-egui/tests/it/editing.rs::organize_page_range_tracks_thumbnails_and_applies_typed_selection", "crates/ui-egui/tests/it/editing.rs::organize_page_range_rejects_invalid_input_and_escape_cancels_without_clearing", "crates/ui-egui/tests/it/control.rs::ui_set_keys_change_what_ui_state_reports"]
 notes = "Ctrl+A / ⌘A selects every page in the Organize grid, preserving the current page; text inputs and dialogs keep their own keyboard input. Page checkboxes also toggle selection without modifiers (organize_checkboxes_toggle_multiple_pages_without_modifiers). An editable physical page-range list stays synchronized with thumbnails; Enter, focus loss or Apply commits valid input, Escape cancels, and invalid input preserves the selection. UI control select accepts the same bounded ranges."
 
 [[feature]]
@@ -2902,7 +2893,7 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.duplicate"]
 tools = ["page_duplicate"]
-evidence = ["crates/ui-egui/tests/it/pageboxes.rs::duplicate_pages_copies_the_current_page", "crates/ui-egui/tests/it/editing.rs::dragging_with_the_copy_modifier_copies_the_pages_into_the_gap", "crates/ui-egui/tests/it/control.rs::ctrl_dragging_a_thumbnail_through_the_control_channel_copies_the_page", "crates/organize/src/tests.rs::duplicate_pages_inserts_copies_after_the_last", "crates/organize/src/tests.rs::duplicate_pages_at_inserts_the_copies_there", "crates/automation/tests/it/automation.rs::page_duplicate_at_inserts_the_copies_there"]
+evidence = ["crates/ui-egui/tests/it/editing.rs::dragging_with_the_copy_modifier_copies_the_pages_into_the_gap", "crates/ui-egui/tests/it/control.rs::ctrl_dragging_a_thumbnail_through_the_control_channel_copies_the_page", "crates/organize/src/tests.rs::duplicate_pages_inserts_copies_after_the_last", "crates/organize/src/tests.rs::duplicate_pages_at_inserts_the_copies_there", "crates/automation/tests/it/automation.rs::page_duplicate_at_inserts_the_copies_there"]
 notes = "copies share fonts and images with the originals; Ctrl-drag (Option on macOS) in the page grid drops the copies at the gap instead of moving the pages, with a \"+\" badge and the copies selected (#2997); page_duplicate takes `at` for where the first copy goes (left out: after the last of them)"
 
 [[feature]]
@@ -3238,7 +3229,7 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.crop"]
 tools = ["page_set_box"]
-evidence = ["crates/ui-egui/tests/it/pageboxes.rs::the_crop_tool_crops_to_the_dragged_rectangle_then_returns_to_select", "crates/ui-egui/tests/it/pageboxes.rs::quick_toolbar_crop_crops_the_page_and_undo_restores_it", "crates/ui-egui/tests/it/pageboxes.rs::quick_toolbar_crop_is_disabled_when_page_assembly_is_forbidden", "crates/ui-egui/tests/it/pageboxes.rs::quick_toolbar_crop_is_hidden_on_home_and_in_read_mode"]
+evidence = ["crates/ui-egui/tests/it/pageboxes.rs::the_crop_tool_crops_to_the_dragged_rectangle_then_returns_to_select","crates/ui-egui/tests/it/pageboxes.rs::quick_toolbar_crop_is_hidden_on_home_and_in_read_mode"]
 notes = "drag to crop; double-click opens Set Page Boxes; Crop pages is also directly available in the document quick toolbar (#5330), using the existing command availability and assembly permission check. The quick toolbar is hidden on Home and in Read/full-screen modes; arbitrary toolbar customization remains outside this feature."
 
 [[feature]]
@@ -3662,7 +3653,7 @@ milestone = "M3"
 status = "shipped"
 commands = ["comment.list"]
 tools = ["comment_list"]
-evidence = ["crates/ui-egui/tests/it/ui.rs::opening_a_pdf_shows_comments_and_bookmarks", "crates/ui-egui/tests/it/comments.rs::the_panel_posts_comments_and_replies", "crates/ui-egui/tests/it/comments.rs::page_groups_collapse_and_expand", "crates/ui-egui/tests/it/comments.rs::replies_follow_irt_references_when_names_repeat_on_every_page", "crates/engine/src/tests.rs::replies_thread_by_reference_when_names_repeat_across_pages", "crates/automation/tests/it/automation.rs::replies_thread_by_reference_when_ids_repeat_across_pages", "crates/ui-egui/tests/it/comments.rs::a_group_is_one_comment_in_the_panel_and_on_the_page", "crates/automation/tests/it/automation.rs::a_group_lists_as_its_primary", "crates/automation/tests/it/automation.rs::a_group_member_on_another_page_is_a_comment_of_its_own", "crates/automation/tests/it/automation.rs::looping_groups_end_and_chained_groups_reach_their_primary", "crates/render/src/inspect/tests.rs::group_primaries_follow_irt_to_the_first_non_subordinate", "crates/annot/src/tests.rs::deleting_a_primary_releases_its_subordinate", "crates/engine/src/tests.rs::deleting_a_group_primary_releases_its_member_in_one_undo_step", "crates/engine/src/commands.rs::comments_shortcut_preserves_macos_minimize", "crates/ui-egui/tests/it/commands.rs::ctrl_m_opens_the_comments_panel_and_keeps_it_open", "crates/ui-egui/tests/it/commands.rs::mac_command_m_stays_available_for_minimize"]
+evidence = ["crates/ui-egui/tests/it/ui.rs::opening_a_pdf_shows_comments_and_bookmarks", "crates/ui-egui/tests/it/comments.rs::the_panel_posts_comments_and_replies", "crates/ui-egui/tests/it/comments.rs::page_groups_collapse_and_expand", "crates/ui-egui/tests/it/comments.rs::replies_follow_irt_references_when_names_repeat_on_every_page", "crates/engine/src/tests.rs::replies_thread_by_reference_when_names_repeat_across_pages", "crates/automation/tests/it/automation.rs::replies_thread_by_reference_when_ids_repeat_across_pages", "crates/ui-egui/tests/it/comments.rs::a_group_is_one_comment_in_the_panel_and_on_the_page", "crates/automation/tests/it/automation.rs::a_group_lists_as_its_primary", "crates/automation/tests/it/automation.rs::a_group_member_on_another_page_is_a_comment_of_its_own", "crates/automation/tests/it/automation.rs::looping_groups_end_and_chained_groups_reach_their_primary", "crates/render/src/inspect/tests.rs::group_primaries_follow_irt_to_the_first_non_subordinate", "crates/annot/src/tests.rs::deleting_a_primary_releases_its_subordinate", "crates/engine/src/tests.rs::deleting_a_group_primary_releases_its_member_in_one_undo_step", "crates/engine/src/commands.rs::comments_shortcut_preserves_macos_minimize", "crates/ui-egui/tests/it/commands.rs::platform_split_chords_fire_their_commands"]
 notes = "Ctrl+M opens (rather than toggles) Comments on Windows/Linux; macOS leaves Command+M available for Minimize, and all shortcut surfaces resolve the platform binding. cards grouped by page with replies (threaded by the `/IRT` reference, so files whose `/NM` repeats per page, as PyMuPDF writes them, thread correctly; the header counts comments without replies, as Acrobat does), status badges, selection, reply box and an Add a comment box; page groups fold and unfold from their chevron or with Collapse/Expand all pages in the panel's \"…\" menu (a comment selected on a folded page opens its group). Groups by author, type or colour don't fold yet. Annotation groups (`/RT /Group`, ISO 32000-2 §12.5.6.2) list as one comment with the primary's author, text and colour (the subordinate's own are ignored), a reply to a subordinate joins the primary's thread, `comment_list` names the members in `group`, clicking a subordinate on the page selects the group, and Delete deletes the member clicked alone, the primary included, as Acrobat desktop does (one undo step; a subordinate left without its primary is a comment of its own and loses its `/IRT`, keeping `/RT /Group` as Acrobat does, so a full save leaves the deleted primary out; clearing redaction marks does the same for a mark's group member; Replace Text's strikeout and caret delete together). ISO 32000-2 §12.5.6.2 has deletion act on the whole group, as PDF-XChange and Foxit do on one page; Acrobat's is followed as the more practical. A group is one page's: a subordinate whose primary is on another page is a comment of its own, listed, selected, moved and deleted on its own, as Acrobat (desktop and iPad), PDF-XChange and Foxit read it. Missing: restyling a member does not restyle its group as Acrobat does, a subordinate can't be dragged, resized or reshaped on its own, and it has no hover tooltip"
 
 [[feature]]
@@ -4698,7 +4689,7 @@ milestone = "M6"
 status = "partial"
 commands = ["form.fields"]
 tools = ["form_fill", "form_set_props"]
-evidence = ["crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/forms/src/tests.rs::auto_text_size_fits_single_and_multiline_text", "crates/automation/tests/it/automation.rs::auto_sized_text_follows_a_tall_field", "crates/forms/src/tests.rs::choices_accept_exports_or_display_text", "crates/forms/src/tests.rs::rotated_fields_draw_in_their_quadrant", "crates/forms/src/tests.rs::a_tall_field_turned_a_quarter_keeps_its_place_and_runs_its_text_up_it", "crates/ui-egui/tests/it/forms.rs::a_turned_field_places_the_caret_along_its_turned_text", "crates/engine/tests/it/form_rotation.rs::a_rotated_field_draws_along_the_vertical_edge", "crates/automation/tests/it/automation.rs::rotating_a_field_through_tools", "crates/ui-egui/tests/it/prepare.rs::position_tab_rotates_a_field", "crates/ui-egui/tests/it/prepare.rs::dropdown_alignment_is_editable_and_preserved", "crates/ui-egui/tests/it/prepare.rs::list_box_alignment_is_editable_and_preserved"]
+evidence = ["crates/forms/src/tests.rs::text_fields_get_new_appearances", "crates/forms/src/tests.rs::auto_text_size_fits_single_and_multiline_text", "crates/automation/tests/it/automation.rs::auto_sized_text_follows_a_tall_field", "crates/forms/src/tests.rs::choices_accept_exports_or_display_text", "crates/forms/src/tests.rs::rotated_fields_draw_in_their_quadrant", "crates/forms/src/tests.rs::a_tall_field_turned_a_quarter_keeps_its_place_and_runs_its_text_up_it", "crates/ui-egui/tests/it/forms.rs::a_turned_field_places_the_caret_along_its_turned_text", "crates/engine/tests/it/form_rotation.rs::a_rotated_field_draws_along_the_vertical_edge", "crates/automation/tests/it/automation.rs::rotating_a_field_through_tools", "crates/ui-egui/tests/it/prepare.rs::position_tab_rotates_a_field", "crates/ui-egui/tests/it/prepare.rs::dropdown_alignment_is_editable_and_preserved"]
 notes = "auto-size, comb, multiline, password, quadding (text, dropdown and list-box Options controls), /MK colours and /MK /R rotation (0, 90, 180, 270: the field keeps its rectangle and its text runs along the turned direction, also while it is typed into; double-click word selection in a turned field is not mapped); approximate Helvetica metrics. Single-line auto-size follows the field height with no 12 pt cap, as Acrobat Reader draws it; multiline and comb auto-size still stop at 12 pt, not yet checked against Acrobat"
 
 [[feature]]
@@ -4962,7 +4953,7 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.prepare"]
 tools = ["form_add_field", "form_set_props", "form_delete_field"]
-evidence = ["crates/ui-egui/tests/it/prepare.rs::placing_moving_editing_and_deleting_a_field", "crates/ui-egui/tests/it/prepare.rs::deleting_one_radio_button_keeps_the_rest_of_its_group", "crates/ui-egui/tests/it/prepare.rs::deleting_two_radio_buttons_of_a_group_at_once", "crates/forms/src/tests.rs::deleting_one_radio_button_keeps_the_group_and_its_other_buttons", "crates/forms/src/tests.rs::deleting_the_chosen_radio_button_turns_the_group_off", "crates/forms/src/tests.rs::deleting_one_copy_of_a_field_keeps_the_field_and_its_value", "crates/automation/tests/it/automation.rs::deleting_one_radio_button_through_tools_keeps_the_group", "crates/ui-egui/tests/it/prepare.rs::arrow_keys_nudge_the_selected_field_instead_of_turning_the_page", "crates/ui-egui/src/tools/prepare.rs::corner_drags_stretch_freely_and_keep_proportions_with_shift", "crates/ui-egui/tests/it/prepare.rs::deleting_several_selected_fields_and_detecting_fields_from_the_panel", "crates/engine/src/tests.rs::preparing_a_form_adds_renames_and_deletes_fields", "crates/ui-egui/tests/it/bulk_fields.rs::shared_properties_preserve_mixed_values_and_undo_the_whole_change", "crates/ui-egui/tests/it/bulk_fields.rs::select_all_in_prepare_a_form_selects_only_the_current_pages_fields", "crates/ui-egui/tests/it/bulk_fields.rs::dragging_an_empty_page_area_selects_fields_without_moving_them"]
+evidence = ["crates/ui-egui/tests/it/prepare.rs::placing_moving_editing_and_deleting_a_field", "crates/ui-egui/tests/it/prepare.rs::deleting_one_radio_button_keeps_the_rest_of_its_group", "crates/ui-egui/tests/it/prepare.rs::deleting_two_radio_buttons_of_a_group_at_once", "crates/forms/src/tests.rs::deleting_one_radio_button_keeps_the_group_and_its_other_buttons", "crates/forms/src/tests.rs::deleting_the_chosen_radio_button_turns_the_group_off", "crates/forms/src/tests.rs::deleting_one_copy_of_a_field_keeps_the_field_and_its_value", "crates/automation/tests/it/automation.rs::deleting_one_radio_button_through_tools_keeps_the_group","crates/ui-egui/tests/it/prepare.rs::deleting_several_selected_fields_and_detecting_fields_from_the_panel", "crates/engine/src/tests.rs::preparing_a_form_adds_renames_and_deletes_fields", "crates/ui-egui/tests/it/bulk_fields.rs::shared_properties_preserve_mixed_values_and_undo_the_whole_change", "crates/ui-egui/tests/it/bulk_fields.rs::select_all_in_prepare_a_form_selects_only_the_current_pages_fields"]
 notes = "fields shown with blue fill and name tags; select, move (drag, or the arrow keys: a point, Shift ten points, #2608), resize by corners (Shift keeps the field's proportions, #2199), Delete (every selected field, one undo step; a selected radio button or copy of a duplicated field goes on its own and the rest of its group stays, a field's last widget takes the field, #4609); field tools return to Select after one field. Shared General, Appearance and applicable Options edits are atomic and opt-in; Ctrl/Command+A selects the current page, rectangle and panel selection are supported. Names, positions, choices/defaults and script tabs remain individual GUI edits"
 
 [[feature]]
@@ -5106,7 +5097,7 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.field.properties"]
 tools = ["form_set_props"]
-evidence = ["crates/forms/src/tests.rs::properties_rename_and_delete", "crates/ui-egui/tests/it/prepare.rs::placing_moving_editing_and_deleting_a_field", "crates/automation/tests/it/automation.rs::preparing_a_form_through_tools", "crates/ui-egui/tests/it/bulk_fields.rs::locked_field_refuses_the_entire_batch_and_keeps_the_draft_for_correction", "crates/ui-egui/tests/it/bulk_fields.rs::visiting_shared_property_tabs_without_changes_does_not_dirty_the_document"]
+evidence = ["crates/forms/src/tests.rs::properties_rename_and_delete", "crates/ui-egui/tests/it/prepare.rs::placing_moving_editing_and_deleting_a_field", "crates/automation/tests/it/automation.rs::preparing_a_form_through_tools", "crates/ui-egui/tests/it/bulk_fields.rs::locked_field_refuses_the_entire_batch_and_keeps_the_draft_for_correction"]
 notes = "name, tooltip, read only, required, locked; shared tooltip/flags are opt-in, mixed values preserved, failures keep the draft and roll back the batch (visibility pending)"
 
 [[feature]]
@@ -7107,7 +7098,7 @@ milestone = "M10"
 status = "shipped"
 commands = ["create.blank"]
 tools = ["doc_create"]
-evidence = ["crates/ui-egui/tests/it/create.rs::opening_images_and_text_converts_them_to_new_pdfs", "crates/ui-egui/tests/it/create.rs::a_blank_page_is_on_the_system_regions_paper", "crates/ui-egui/src/persist/paper.rs::region_decides_the_paper", "crates/create/src/tests.rs::blank_documents", "crates/automation/tests/it/automation.rs::creating_and_reducing_through_tools"]
+evidence = ["crates/ui-egui/tests/it/create.rs::opening_images_and_text_converts_them_to_new_pdfs", "crates/ui-egui/tests/it/create.rs::a_blank_page_is_on_the_system_regions_paper", "crates/create/src/tests.rs::blank_documents", "crates/automation/tests/it/automation.rs::creating_and_reducing_through_tools"]
 notes = "The page is the system region's paper (#5644): US Letter in the US, Canada, Mexico, the Philippines and the other CLDR Letter regions, A4 elsewhere; Windows' own Region paper size (iPaperSize) first, then the system locale (macOS) or LC_ALL/LC_PAPER/LANG; Letter when the region is unknown (web). The doc_create tool keeps Letter unless given width and height. Missing: a page size or count chooser like Acrobat's New Document dialog."
 
 [[feature]]
@@ -7156,7 +7147,6 @@ evidence = [
     "crates/engine/src/tests.rs::office_documents_convert_through_libreoffice_or_explain_why_not",
     "crates/engine/src/tests.rs::inline_conversions_refuse_office_documents_without_running_libreoffice",
     "crates/ui-egui/src/platform/open_worker/tests.rs::file_open_converts_an_office_document_on_the_worker",
-    "crates/ui-egui/src/platform/open_worker/tests.rs::the_open_picker_defaults_to_pdf_and_offers_images_office_text_and_all_files",
 ]
 notes = "File ▸ Open (desktop) opens Word, Excel, PowerPoint, OpenDocument and RTF files (Office documents filter; PDF stays the default) as new, unsaved PDFs, converted on the open worker by an installed LibreOffice run headless in a private temporary folder with a fresh profile (macros disabled, untrusted links blocked, Writer and Calc linked content never updated) and stopped after 120 s. Found through PDFCRAFT_SOFFICE, the PATH, or the usual install folders; without it the user is told LibreOffice is needed. The automation tools that convert files (doc_create_multiple, doc_combine, batch convert) take Office documents too. Not yet: Insert pages, Combine files and Create ▸ Multiple files in the app refuse Office documents (they convert on the frame thread) and point to File ▸ Open; no Create ▸ From Office command or conversion settings; Visio and Publisher; the web build; layout fidelity is LibreOffice's, not measured against Acrobat; Impress has no link-update setting and the process's network access isn't sandboxed (synthetic linked sections, pictures and cell references made no connection with LibreOffice 26.8.1); the real-conversion tests skip where LibreOffice isn't installed, CI included."
 
@@ -7503,7 +7493,7 @@ milestone = "M11"
 status = "shipped"
 commands = ["optimize.reduce"]
 tools = ["doc_reduce"]
-evidence = ["crates/ui-egui/src/platform/pickers.rs::reduce_file_size_asks_where_to_save_before_it_compresses", "crates/ui-egui/src/platform/pickers.rs::cancelling_reduce_file_size_compresses_nothing", "crates/ui-egui/src/platform/pickers.rs::a_reduced_copy_that_cant_be_written_where_chosen_asks_again", "crates/ui-egui/tests/it/create.rs::reduce_file_size_writes_a_compact_copy", "crates/optimize/tests/optimize.rs::a_picture_with_a_stencil_mask_is_downsampled_under_its_mask", "crates/optimize/tests/optimize.rs::a_picture_whose_mask_is_not_a_stencil_is_left_alone", "crates/ui-egui/tests/it/create.rs::reduce_file_size_saves_nothing_when_the_file_is_already_small", "crates/engine/src/tests.rs::create_and_reduce", "crates/automation/tests/it/automation.rs::creating_and_reducing_through_tools", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/optimize/tests/optimize.rs::an_identity_decode_array_does_not_stop_reduce"]
+evidence = ["crates/ui-egui/src/workflows/create_ui.rs::reduce_file_size_asks_where_to_save_before_it_compresses", "crates/ui-egui/src/workflows/create_ui.rs::a_reduced_copy_asks_until_it_can_be_written","crates/ui-egui/tests/it/create.rs::reduce_file_size_writes_a_compact_copy", "crates/optimize/tests/optimize.rs::a_picture_with_a_stencil_mask_is_downsampled_under_its_mask", "crates/optimize/tests/optimize.rs::a_picture_whose_mask_is_not_a_stencil_is_left_alone", "crates/ui-egui/tests/it/create.rs::reduce_file_size_saves_nothing_when_the_file_is_already_small", "crates/engine/src/tests.rs::create_and_reduce", "crates/automation/tests/it/automation.rs::creating_and_reducing_through_tools", "crates/automation/tests/it/automation.rs::optimizing_through_tools", "crates/optimize/tests/optimize.rs::an_identity_decode_array_does_not_stop_reduce"]
 notes = "the command asks where to save before it compresses, so a heavy file can finish by itself, and asks again if that place can't be written; images above 225 ppi to 150 ppi JPEG medium (after merging page pictures printed as one-pixel strips into one image), black-and-white images averaged down to 300 ppi above 450 ppi, and stored as CCITT Group 4 whenever that is smaller, thumbnails dropped, resources merged, object streams; scanner images with the default decode array are included; pictures under a stencil mask are included and the mask stays as it is, though samples it hides still count when resampling, so their colour can reach its edge; pictures with a colour-key mask are left alone; a copy that isn't smaller is not saved (\"already as small as it can be made\"); runs in the background with a progress bar and Cancel"
 
 [[feature]]
@@ -8714,7 +8704,7 @@ milestone = "M3"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/control.rs::inspect_and_click_by_label_and_id", "crates/ui-egui/tests/it/viewer.rs::the_accessible_window_has_the_window_title_as_its_name"]
+evidence = ["crates/ui-egui/tests/it/viewer.rs::the_accessible_window_has_the_window_title_as_its_name"]
 notes = "AccessKit labels on all custom widgets; the accessible window is named with the window title and follows it (#4614); full audit in M14.3"
 
 [[feature]]
@@ -9810,7 +9800,7 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/control.rs::inspect_and_click_by_label_and_id", "crates/ui-egui/tests/it/control.rs::commands_keys_and_typing", "crates/ui-egui/tests/it/control.rs::loopback_transport_requires_the_token"]
+evidence = ["crates/ui-egui/tests/it/control.rs::commands_keys_and_typing"]
 notes = ""
 
 [[feature]]
@@ -10110,7 +10100,7 @@ milestone = "M14"
 status = "partial"
 commands = ["app.preferences"]
 tools = ["js_enabled"]
-evidence = ["crates/ui-egui/tests/it/javascript.rs::document_scripts_and_preferences", "crates/ui-egui/tests/it/ui.rs::preferences_selects_default_workspace_for_next_open", "crates/ui-egui/tests/it/control.rs::control_default_workspace_and_session_override", "apps/pdfcraft/src/settings.rs::xdg_preferences_use_config_instead_of_data", "apps/pdfcraft/src/settings.rs::migration_preserves_preferences_and_other_data", "crates/ui-egui/tests/it/preferences_layout.rs::ok_is_on_screen_without_scrolling_at_any_window_height", "crates/ui-egui/tests/it/preferences_layout.rs::ok_closes_the_dialog_in_a_short_window_and_the_settings_still_scroll"]
+evidence = ["crates/ui-egui/tests/it/javascript.rs::document_scripts_and_preferences", "crates/ui-egui/tests/it/ui.rs::default_workspace_mode_persists_and_tolerates_invalid_settings", "crates/ui-egui/tests/it/control.rs::control_default_workspace_and_session_override", "crates/ui-egui/tests/it/legacy_settings.rs::an_app_ron_from_the_last_release_imports_every_family_once","crates/ui-egui/tests/it/preferences_layout.rs::ok_is_on_screen_without_scrolling_at_any_window_height", "crates/ui-egui/tests/it/preferences_layout.rs::ok_closes_the_dialog_in_a_short_window_and_the_settings_still_scroll"]
 notes = "Preferences dialog with Interface language, Documents and view (persistent default workspace with session override), Identity, Fill & Sign (flatten on save, off by default) and JavaScript; other categories still live in their tools, and it isn't generated from a schema yet. XDG desktops store app.ron under XDG_CONFIG_HOME/pdfcraft or ~/.config/pdfcraft; existing data-folder preferences are copied without replacing configured preferences, with fallback on migration errors. Logs and recovery retain data locations. Portable/non-XDG locations are unchanged. The settings scroll when the window is short (down to a 60 pt scroll area, so OK stays on screen in the smallest window at the largest interface size) and the OK row stays below them, in reach (#3557); the dialog still has no Cancel, and a window shorter than the dialog's title, one row and OK would still clip it."
 
 [[feature]]
@@ -10146,7 +10136,7 @@ milestone = "M14"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/recent_files.rs::preferences_cuts_the_list_when_it_closes_and_not_before", "crates/ui-egui/tests/it/recent_files.rs::at_zero_home_has_no_recent_section", "crates/ui-egui/tests/it/recent_files.rs::a_settings_file_can_not_ask_for_a_limit_that_is_not_one"]
+evidence = ["crates/ui-egui/tests/it/preferences.rs::preference_rows_apply_on_ok_and_nothing_changes_on_cancel","crates/ui-egui/tests/it/recent_files.rs::at_zero_home_has_no_recent_section", "crates/ui-egui/tests/it/recent_files.rs::a_settings_file_can_not_ask_for_a_limit_that_is_not_one"]
 notes = "Preferences ▸ Documents and view: Recent files to keep, from 0 to 50 with 12 by default (#5572). At 0 Home has no Recent section and File ▸ Open Recent is disabled; Restore the last view keeps its own record of paths under its own switch. Still missing: the autosave interval (recovery snapshots run every AUTOSAVE_SECS, 60 s) and the rest of Acrobat's Documents page."
 
 [[feature]]
@@ -10254,7 +10244,7 @@ milestone = "M14"
 status = "partial"
 commands = ["app.preferences"]
 tools = []
-evidence = ["crates/ui-egui/src/commands.rs::localized_shortcut_labels_follow_language_and_platform", "crates/ui-egui/src/i18n/tests.rs::keyboard_key_names_have_a_separate_context_and_english_fallback", "crates/ui-egui/tests/it/commands.rs::localized_shortcuts_update_immediately_and_keep_command_ids_and_key_bindings", "crates/ui-egui/src/i18n/tests.rs::windows_display_language_resolves_chinese_scripts", "crates/ui-egui/src/i18n/tests.rs::neutral_locale_does_not_override_display_language", "crates/ui-egui/src/i18n/tests.rs::windows_display_language_query_returns_a_locale_tag", "crates/ui-egui/src/i18n/tests.rs::language_persists_and_invalid_input_keeps_current_language", "crates/ui-egui/src/i18n/tests.rs::bundled_catalogs_are_consistent", "crates/ui-egui/src/i18n/tests.rs::arabic_is_registered_and_persists", "crates/ui-egui/src/i18n/tests.rs::arabic_catalog_stays_logical", "crates/ui-egui/src/i18n/tests.rs::arabic_plurals_follow_the_six_cldr_forms", "crates/ui-egui/src/i18n/tests.rs::arabic_labels_have_glyphs", "crates/ui-egui/src/bidi/tests.rs::arabic_ui_labels_use_an_explicit_paragraph_direction", "crates/ui-egui/src/theme/tests.rs::arabic_chrome_is_right_to_left_after_the_language_changes", "crates/ui-egui/tests/it/control.rs::simplified_chinese_signature_prompts_and_errors_keep_document_state", "crates/ui-egui/tests/it/control.rs::language_switch_preserves_document_and_command_ids", "crates/ui-egui/tests/it/control.rs::japanese_controls_and_search_keep_command_ids", "crates/ui-egui/tests/it/control.rs::japanese_dialogs_errors_and_custom_action_names", "crates/ui-egui/src/i18n/tests.rs::french_is_registered", "crates/ui-egui/src/widgets.rs::search_placeholder_never_overlaps_the_shortcut", "crates/ui-egui/src/home.rs::translated_card_description_leaves_room_for_the_action", "crates/ui-egui/tests/it/control.rs::german_preferences_and_search_keep_command_ids", "crates/ui-egui/src/i18n/tests.rs::telugu_labels_have_glyphs", "crates/ui-egui/src/i18n/tests.rs::hungarian_is_registered", "crates/ui-egui/src/i18n/tests.rs::ukrainian_is_registered_and_persists", "crates/ui-egui/src/i18n/tests.rs::ukrainian_integer_plurals_cover_teens_and_large_counts", "crates/ui-egui/src/i18n/tests.rs::spanish_keeps_the_holes_in_what_the_engine_says", "crates/print/src/tests.rs::wordings_are_said", "crates/ui-egui/src/i18n/tests.rs::norwegian_bokmal_is_registered_and_persists"]
+evidence = ["crates/ui-egui/src/commands.rs::localized_shortcut_labels_follow_language_and_platform", "crates/ui-egui/src/i18n/tests.rs::keyboard_key_names_have_a_separate_context_and_english_fallback", "crates/ui-egui/tests/it/commands.rs::localized_shortcuts_update_immediately_and_keep_command_ids_and_key_bindings", "crates/ui-egui/src/i18n/tests.rs::windows_display_language_resolves_chinese_scripts", "crates/ui-egui/src/i18n/tests.rs::neutral_locale_does_not_override_display_language", "crates/ui-egui/src/i18n/tests.rs::windows_display_language_query_returns_a_locale_tag", "crates/ui-egui/src/i18n/tests.rs::language_persists_and_invalid_input_keeps_current_language", "crates/ui-egui/src/i18n/tests.rs::bundled_catalogs_are_consistent", "crates/ui-egui/src/i18n/tests.rs::every_language_is_registered_loads_its_catalog_and_persists", "crates/ui-egui/src/i18n/tests.rs::arabic_catalog_stays_logical", "crates/ui-egui/src/bidi/tests.rs::arabic_ui_labels_use_an_explicit_paragraph_direction","crates/ui-egui/tests/it/control.rs::simplified_chinese_signature_prompts_and_errors_keep_document_state", "crates/ui-egui/tests/it/control.rs::language_switch_preserves_document_and_command_ids", "crates/ui-egui/tests/it/control.rs::japanese_controls_and_search_keep_command_ids", "crates/ui-egui/tests/it/control.rs::japanese_dialogs_errors_and_custom_action_names", "crates/ui-egui/src/widgets.rs::search_placeholder_never_overlaps_the_shortcut", "crates/ui-egui/src/home.rs::translated_card_description_leaves_room_for_the_action", "crates/ui-egui/tests/it/control.rs::german_preferences_and_search_keep_command_ids", "crates/ui-egui/src/i18n/tests.rs::spanish_keeps_the_holes_in_what_the_engine_says", "crates/print/src/tests.rs::wordings_are_said"]
 notes = "Shortcut modifiers and key names use a dedicated catalog context across toolbar, menus, palette, Help and tooltips, with English fallback and macOS symbols preserved. Preferences switches Auto (system language)/English/Japanese/Simplified Chinese/Traditional Chinese/Czech/Brazilian Portuguese/German/Spanish/French/Telugu/Hungarian/Ukrainian/Italian/Arabic/Norwegian Bokmål and persists; ui.set language auto|en|ja|zh-hans|zh-hant|cs|pt-br|de|es|fr|te|hu|uk|it|ar|nb and ui.state expose it. TSV catalogs per language (same system as PhotoCraft); every dialog, panel and notice goes through tl!. Japanese, Traditional Chinese, Simplified Chinese, German, Spanish, French and Hungarian cover commands, dialogs, panels, shortcuts and history labels; Brazilian Portuguese covers the current union of catalog keys, including signature and accessibility messages; Czech remains limited to menus. French locales (fr, fr_FR, fr_CA, fr_BE) select the French catalog, German locales (de, de_DE, de_AT, de_CH) the German one, Hungarian locales (hu, hu_HU) the Hungarian one, and Norwegian locales (nb, nb_NO, and no/nn until a Nynorsk catalog exists) the Bokmål one. German search hints reserve shortcut space, Home cards bound translated text, certificate Subject has its own context, and inserted tool names keep their capitalization. The sentences the layers below word for themselves (accessibility findings and the saved report, PDF/A problems, signature details, page-range mistakes, edit labels) are handed over apart from the document's own values and go through the catalog too, through said(&i18n::words); Spanish, Italian and Brazilian Portuguese translate them, Polish the signature details and the changes after signing; strings absent from other catalogs fall back to English. OS error details, and faults rather than mistakes, stay as they are. Auto detects the Windows display language after explicitly named supported locale overrides; neutral C/POSIX launcher locales are skipped on Windows, with Chinese script/region mapping and English fallback. Arabic (ar and every ar-* locale) covers commands, dialogs and panels with the six CLDR plural forms. Catalogs stay logical and egui 0.37's epaint applies UAX #9 reordering; Arabic and Kurdish labels take an explicit right-to-left paragraph direction and stock chrome is mirrored through Style::right_to_left. Missing: native and browser end-to-end RTL input, IME and complex bidirectional workflows are not yet qualified; Czech dialogs, Chinese and Telugu font delivery (native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Chinese face beyond BIZ UDPGothic and the release-pinned craft-fonts has no Telugu face), the engine's sentences in the other catalogs, a full localization audit."
 
 [[feature]]
