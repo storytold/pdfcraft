@@ -740,6 +740,84 @@ fn may_paint_canvas(
     paints_canvas(device, width, height)
 }
 
+/// PdfCraft patch (#7097): `path` with each point moved, on the device, to the centre of the pixel
+/// it falls in, for a stroke widened to the one-pixel hairline. Such a stroke is one pixel wide,
+/// so where its centre line runs along a pixel edge it covered the two pixels beside it by half
+/// each: thin lines of a drawing turned grey and blurred, and lines two pixels apart merged into
+/// one grey band, while a zoom step that put them on pixel centres showed them sharp. Snapped,
+/// every horizontal and vertical hairline covers one whole row or column at any zoom (what the
+/// PDF specification calls automatic stroke adjustment). A curve's control points move with the
+/// end beside them, so its tangents keep their direction. Each point moves less than a pixel. A
+/// subpath that snapping would shrink to a single point keeps its own points: a stroke of no
+/// length with butt caps draws nothing, and a short stroke or small mark must still draw. `None`
+/// when the transform can't be inverted or a point isn't finite (the path is drawn as given).
+fn snap_hairline(path: &BezPath, transform: Affine) -> Option<BezPath> {
+    let det = transform.determinant();
+    if !det.is_finite() || det.abs() < 1e-12 {
+        return None;
+    }
+    let inverse = transform.inverse();
+    let mut out = BezPath::new();
+    // The current subpath, as given and snapped, and its on-curve points' pixel centres.
+    let mut given: Vec<kurbo::PathEl> = Vec::new();
+    let mut snapped: Vec<kurbo::PathEl> = Vec::new();
+    let mut ends: Vec<Point> = Vec::new();
+    // The device offset that moves `p` to the centre of its pixel; that centre is kept in `ends`.
+    let offset = |p: Point, ends: &mut Vec<Point>| {
+        let d = transform * p;
+        let centre = Point::new(d.x.floor() + 0.5, d.y.floor() + 0.5);
+        ends.push(centre);
+        centre - d
+    };
+    let moved = |p: Point, by: Vec2| inverse * (transform * p + by);
+    let flush = |out: &mut BezPath,
+                 given: &mut Vec<kurbo::PathEl>,
+                 snapped: &mut Vec<kurbo::PathEl>,
+                 ends: &mut Vec<Point>| {
+        let collapsed = ends.windows(2).all(|w| w[0] == w[1]);
+        let els = if collapsed { &*given } else { &*snapped };
+        for el in els {
+            out.push(*el);
+        }
+        given.clear();
+        snapped.clear();
+        ends.clear();
+    };
+    // The offset of the last on-curve point, which a curve's first control point moves by.
+    let mut last = Vec2::ZERO;
+    for el in path.elements() {
+        let el = *el;
+        let snapped_el = match el {
+            kurbo::PathEl::MoveTo(p) => {
+                flush(&mut out, &mut given, &mut snapped, &mut ends);
+                last = offset(p, &mut ends);
+                kurbo::PathEl::MoveTo(moved(p, last))
+            }
+            kurbo::PathEl::LineTo(p) => {
+                last = offset(p, &mut ends);
+                kurbo::PathEl::LineTo(moved(p, last))
+            }
+            kurbo::PathEl::QuadTo(c, p) => {
+                let by = offset(p, &mut ends);
+                let c = moved(c, (last + by) * 0.5);
+                last = by;
+                kurbo::PathEl::QuadTo(c, moved(p, by))
+            }
+            kurbo::PathEl::CurveTo(c1, c2, p) => {
+                let by = offset(p, &mut ends);
+                let c1 = moved(c1, last);
+                last = by;
+                kurbo::PathEl::CurveTo(c1, moved(c2, by), moved(p, by))
+            }
+            kurbo::PathEl::ClosePath => kurbo::PathEl::ClosePath,
+        };
+        given.push(el);
+        snapped.push(snapped_el);
+    }
+    flush(&mut out, &mut given, &mut snapped, &mut ends);
+    out.is_finite().then_some(out)
+}
+
 /// PdfCraft patch: whether a `rect` drawn with `transform` can paint a pixel of a `width` ×
 /// `height` canvas. Used for images: decoded data can only shrink against the stream-size box
 /// (subsampled `scale_factors`), so the box over-approximates what is drawn and skipping it
@@ -1018,13 +1096,14 @@ impl Renderer {
         }
     }
 
-    /// PdfCraft patch: returns the stroke's reach for [`may_paint_canvas`].
+    /// PdfCraft patch: returns the stroke's reach for [`may_paint_canvas`], and whether the
+    /// stroke was widened to the one-pixel hairline (for [`snap_hairline`]).
     fn set_stroke_properties(
         &mut self,
         stroke_props: &StrokeProps,
         is_text: bool,
         path: &BezPath,
-    ) -> f64 {
+    ) -> (f64, bool) {
         let threshold = if is_text { 0.25 } else { 1.0 };
 
         // Best-effort attempt to ensure a line width of at least 1.0, as required by the PDF
@@ -1035,7 +1114,8 @@ impl Renderer {
         let transformed_width = line_width * min_factor;
 
         // Only enforce line width if not inside of pattern or type 3 glyph.
-        if transformed_width < threshold && !self.inside_pattern && !self.in_type3_glyph {
+        let widened = transformed_width < threshold && !self.inside_pattern && !self.in_type3_glyph;
+        if widened {
             line_width /= transformed_width;
             line_width *= threshold;
         }
@@ -1065,7 +1145,7 @@ impl Renderer {
 
         let reach = stroke_reach(&stroke);
         self.ctx.set_stroke(stroke);
-        reach
+        (reach, widened && !is_text)
     }
 
     fn draw_image_with_alpha_mask(&mut self, image_data: ImageData, mut alpha_data: LumaData) {
@@ -2126,7 +2206,10 @@ impl Renderer {
         is_text: bool,
     ) {
         self.ctx.set_transform(transform);
-        let reach = self.set_stroke_properties(stroke_props, is_text, path);
+        let (reach, hairline) = self.set_stroke_properties(stroke_props, is_text, path);
+        // PdfCraft patch: see `snap_hairline`.
+        let snapped = hairline.then(|| snap_hairline(path, transform)).flatten();
+        let path = snapped.as_ref().unwrap_or(path);
         // PdfCraft patch: see `may_paint_canvas`.
         if !may_paint_canvas(path, transform, reach, self.ctx.width(), self.ctx.height()) {
             return;
