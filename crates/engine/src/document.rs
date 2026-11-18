@@ -1079,15 +1079,15 @@ pub(crate) fn shown_under_redactions(
         }
         let (w, h) = (drawn.width as usize, drawn.height as usize);
         let (sx, sy) = (drawn.width as f32 / info.width.max(1e-3), drawn.height as f32 / info.height.max(1e-3));
+        // Marks that share their pixels are looked at once.
+        let mut looked: std::collections::HashMap<[usize; 4], bool> = std::collections::HashMap::new();
         for r in inner {
             let (a, b) = (info.user_to_view(r[0] as f32, r[1] as f32), info.user_to_view(r[2] as f32, r[3] as f32));
-            // The whole pixels inside it (a cast saturates, NaN to 0).
-            let x0 = ((a[0].min(b[0]) * sx).ceil().max(0.0) as usize).min(w);
-            let x1 = ((a[0].max(b[0]) * sx).floor().max(0.0) as usize).min(w);
-            let y0 = ((a[1].min(b[1]) * sy).ceil().max(0.0) as usize).min(h);
-            let y1 = ((a[1].max(b[1]) * sy).floor().max(0.0) as usize).min(h);
-            // Coverage above 16 of 255 counts as drawn.
-            if (y0..y1).any(|y| (x0..x1).any(|x| drawn.rgba.get((y * w + x) * 4 + 3).is_some_and(|alpha| *alpha > 16))) {
+            let (x0, x1) = pixels_of(a[0].min(b[0]) * sx, a[0].max(b[0]) * sx, w);
+            let (y0, y1) = pixels_of(a[1].min(b[1]) * sy, a[1].max(b[1]) * sy, h);
+            // Any coverage counts as drawn: faint paint still holds what it shows.
+            let painted = |y: usize, x: usize| drawn.rgba.get((y * w + x) * 4 + 3).is_some_and(|alpha| *alpha > 0);
+            if *looked.entry([x0, x1, y0, y1]).or_insert_with(|| (y0..y1).any(|y| (x0..x1).any(|x| painted(y, x)))) {
                 residue += 1;
             }
         }
@@ -1099,13 +1099,24 @@ pub(crate) fn shown_under_redactions(
 }
 
 /// The inner part of a mark (`r`, normalized user space) that must be drawn empty: a quarter of
-/// its smaller side in from each edge, at least 3 and at most 12 points. Redaction keeps a glyph
-/// that is less than a fifth under a mark, a glyph's paint can pass its box (an accent, an italic
-/// overhang), and anti-aliasing blurs every edge. `None` for a mark too small to have one.
+/// its smaller side in from each edge, at least 3 and at most 12 points, and the middle point of
+/// a mark under 7 points across. Redaction keeps a glyph that is less than a fifth under a mark,
+/// a glyph's paint can pass its box (an accent, an italic overhang), and anti-aliasing blurs
+/// every edge. `None` for a mark a point or less across.
 fn mark_interior(r: [f64; 4]) -> Option<[f64; 4]> {
-    let edge = ((r[2] - r[0]).min(r[3] - r[1]) / 4.0).clamp(3.0, 12.0);
+    let side = (r[2] - r[0]).min(r[3] - r[1]);
+    let edge = (side / 4.0).clamp(3.0, 12.0).min(side / 2.0 - 0.5);
     let i = [r[0] + edge, r[1] + edge, r[2] - edge, r[3] - edge];
-    (i[2] > i[0] && i[3] > i[1]).then_some(i)
+    (side > 1.0 && i[2] > i[0] && i[3] > i[1]).then_some(i)
+}
+
+/// The pixels from `lo` to `hi` (device pixels, clamped to `0..n`): the whole ones between them,
+/// or the ones they touch when no whole one is (a narrow mark on a page drawn at under 2 pixels a
+/// point). A cast saturates, NaN to 0.
+fn pixels_of(lo: f32, hi: f32, n: usize) -> (usize, usize) {
+    let at = |v: f32| (v.max(0.0) as usize).min(n);
+    let (a, b) = (at(lo.ceil()), at(hi.floor()));
+    if a < b { (a, b) } else { (at(lo.floor()), at(hi.ceil())) }
 }
 
 /// A one-pixel stencil mask that paints nothing.

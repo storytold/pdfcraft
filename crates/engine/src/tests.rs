@@ -3809,13 +3809,14 @@ fn the_renderer_check_refuses_text_still_shown_under_a_mark() {
     assert!(refused(&cos), "the labelled input stream was not checked");
 }
 
-/// A page 300 points square drawing `body` with `resources`, objects 6 on from `extra`, and a
-/// redaction mark over `mark` with no fill, so only what the page itself draws can be under it.
-fn page_with_mark(resources: &str, body: &str, extra: &[String], mark: [f64; 4]) -> Vec<u8> {
+/// A page `width` points wide and 300 high drawing `body` with `resources`, objects 6 on from
+/// `extra`, and a redaction mark over `mark` with no fill, so only what the page itself draws can
+/// be under it.
+fn page_with_mark(width: u32, resources: &str, body: &str, extra: &[String], mark: [f64; 4]) -> Vec<u8> {
     let [x0, y0, x1, y1] = mark;
     let mut objs = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>".to_string(),
+        format!("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 {width} 300] >>"),
         format!("<< /Type /Page /Parent 2 0 R /Resources << {resources} >> /Contents 4 0 R /Annots [5 0 R] >>"),
         format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
         format!("<< /Type /Annot /Subtype /Redact /Rect [{x0} {y0} {x1} {y1}] >>"),
@@ -3827,7 +3828,9 @@ fn page_with_mark(resources: &str, body: &str, extra: &[String], mark: [f64; 4])
 /// Paint redaction and the text layer place away from where the page draws it: a Type 3 glyph
 /// whose procedure paints 100 points above its box, and a letter whose outline is stroked 40
 /// points wide. Neither letter's box is under the mark over that paint, but the page as drawn
-/// still has it there: the apply is refused and the document is left as it was.
+/// still has it there: the apply is refused and the document is left as it was. So it is when
+/// the glyph paints at 5% opacity, under a mark 5 points wide, and on a page so wide that the
+/// inner part of a 7-point mark holds no whole pixel of the drawing.
 #[test]
 fn ink_left_under_a_mark_refuses_the_apply() {
     let glyph = "100 0 d0 0 1000 100 100 re f";
@@ -3836,9 +3839,13 @@ fn ink_left_under_a_mark_refuses_the_apply() {
         format!("<< /Length {} >>\nstream\n{glyph}\nendstream", glyph.len()),
     ];
     let helvetica = ["<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string()];
+    let (a, faint) = ("BT /T3 10 Tf 20 100 Td (a) Tj ET", "/Font << /T3 6 0 R >> /ExtGState << /G << /ca 0.05 >> >>");
     let pages = [
-        page_with_mark("/Font << /T3 6 0 R >>", "BT /T3 10 Tf 20 100 Td (a) Tj ET", &type3, [10.0, 190.0, 60.0, 220.0]),
-        page_with_mark("/Font << /F1 6 0 R >>", "40 w BT 1 Tr /F1 10 Tf 20 100 Td (I) Tj ET", &helvetica, [10.0, 115.0, 60.0, 145.0]),
+        page_with_mark(300, "/Font << /T3 6 0 R >>", a, &type3, [10.0, 190.0, 60.0, 220.0]),
+        page_with_mark(300, "/Font << /F1 6 0 R >>", "40 w BT 1 Tr /F1 10 Tf 20 100 Td (I) Tj ET", &helvetica, [10.0, 115.0, 60.0, 145.0]),
+        page_with_mark(300, faint, &format!("/G gs {a}"), &type3, [10.0, 190.0, 60.0, 220.0]),
+        page_with_mark(300, "/Font << /T3 6 0 R >>", a, &type3, [22.0, 190.0, 27.0, 220.0]),
+        page_with_mark(4000, "/Font << /T3 6 0 R >>", a, &type3, [21.952, 190.0, 28.852, 220.0]),
     ];
     let refused = pages.map(|page| {
         let mut s = Session::new();
@@ -3846,7 +3853,8 @@ fn ink_left_under_a_mark_refuses_the_apply() {
         let applied = s.apply(id, Edit::ApplyRedactions { pages: None });
         matches!(applied, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(1)))) && !s.get(id).unwrap().dirty
     });
-    assert_eq!(refused, [true, true], "an apply went through with ink under the mark (Type 3 glyph, stroked outline)");
+    let cases = "Type 3 glyph, stroked outline, faint paint, narrow mark, wide page";
+    assert_eq!(refused, [true; 5], "an apply went through with ink under the mark ({cases})");
 }
 
 /// The drawn-page check passes an ordinary apply: an image partly under the mark (its covered
@@ -3860,7 +3868,7 @@ fn an_ordinary_apply_passes_the_drawn_page_check() {
     );
     let extra = [image, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string()];
     let body = "q 200 0 0 200 20 20 cm /Im1 Do Q BT /F1 12 Tf 110 150 Td (Hidden words) Tj 0 132 Td (Typography kept) Tj ET";
-    let page = page_with_mark("/XObject << /Im1 6 0 R >> /Font << /F1 7 0 R >>", body, &extra, [100.0, 100.0, 280.0, 280.0]);
+    let page = page_with_mark(300, "/XObject << /Im1 6 0 R >> /Font << /F1 7 0 R >>", body, &extra, [100.0, 100.0, 280.0, 280.0]);
     let mut s = Session::new();
     let id = s.open("ordinary.pdf", None, Arc::new(page), None).unwrap();
     s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
