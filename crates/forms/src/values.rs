@@ -14,14 +14,26 @@ pub fn set_value(doc: &mut Document, name: &str, value: &FieldValue) -> Result<(
 
 /// [`set_value`], running the fields' JavaScript through `scripts`.
 pub fn set_value_with(doc: &mut Document, name: &str, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
+    fill_named(doc, name, value, scripts)?;
+    recalculate_with(doc, scripts)?;
+    Ok(())
+}
+
+/// [`set_value`] without the recalculation after it: for a caller that writes several values and
+/// then runs the calculated fields once itself ([`recalculate_with`]), in the calculation order,
+/// as after one value typed in. No calculation runs between the writes.
+pub fn set_value_without_calculation(doc: &mut Document, name: &str, value: &FieldValue) -> Result<(), FormError> {
+    fill_named(doc, name, value, &mut NoScripts)
+}
+
+/// Write `value` into the field `name`, reading the form first.
+fn fill_named(doc: &mut Document, name: &str, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
     let all = fields(doc);
     if all.is_empty() {
         return Err(FormError::NoForm);
     }
     let named: Vec<usize> = all.iter().enumerate().filter(|(_, f)| f.name == name).map(|(i, _)| i).collect();
-    fill(doc, &all, &named, name, value, scripts)?;
-    recalculate_with(doc, scripts)?;
-    Ok(())
+    fill(doc, &all, &named, name, value, scripts)
 }
 
 /// Fill several fields, as [`set_value`] fills each in turn, but reading the form once and

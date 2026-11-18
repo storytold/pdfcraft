@@ -222,6 +222,14 @@ fn note_rejected(doc: &mut pdfcraft_cos::Document, report: &pdfcraft_xfdf::Repor
     ));
 }
 
+/// Imports form data from `bytes` into `data`. With JavaScript on, the values are written without
+/// any calculation and [`take_form_data`] runs them all once, in the calculation order: a built-in
+/// pass after each value would run ahead of that order (a sum listed after the script that reads
+/// it would already hold the new total). With it off, the import runs the built-in calculations.
+fn import_form_data(data: &mut pdfcraft_cos::Document, bytes: &[u8], cx: &EditCtx) -> Result<pdfcraft_xfdf::Report, pdfcraft_xfdf::DataError> {
+    if cx.js.is_some() { pdfcraft_xfdf::import_without_calculation(data, bytes) } else { pdfcraft_xfdf::import(data, bytes) }
+}
+
 /// Puts what a form-data import read into `doc`: `data` is `doc` with the file imported, and
 /// `report` says what the import took and what the form refused.
 fn take_form_data(
@@ -237,10 +245,10 @@ fn take_form_data(
     }
     note_skipped(&mut data, report);
     note_rejected(&mut data, report);
-    // Imported values change fields, so the calculated ones run again in the calculation order
+    // Imported values change fields, so the calculated ones run in the calculation order
     // (ISO 32000-2 Table 199 /C, Table 224 /CO), their custom Calculate scripts included, as
-    // after a value typed in. The import itself ran the built-in calculations; with JavaScript
-    // off there is nothing more to run.
+    // after a value typed in. With JavaScript on the import wrote the values without calculating
+    // and this is the one pass; with it off the import ran the built-in calculations itself.
     if report.fields > 0
         && let Some(js) = cx.js.as_mut()
     {
@@ -1121,7 +1129,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     // as a PDF when it is not a data file. A file the PDF reader cannot open keeps
                     // the data importer's error.
                     let mut data = doc.clone();
-                    match pdfcraft_xfdf::import(&mut data, bytes) {
+                    match import_form_data(&mut data, bytes, cx) {
                         Ok(report) => take_form_data(doc, data, &report, cx)?,
                         Err(e) if bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => match comment_source(bytes) {
                             Ok(src) => import_pdf_comments(doc, &src)?,
