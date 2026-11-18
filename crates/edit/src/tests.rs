@@ -4473,7 +4473,7 @@ fn replacing_an_image_preserves_occupied_resource_names() {
     let mut doc = image_page();
     let original = pdfcraft_cos::ObjRef::new(6, 0);
     let image = doc.get(original);
-    let replacement = doc.add(Object::Stream(Stream::from_raw(image.as_dict().unwrap().clone(), vec![255; 8])));
+    let replacement = doc.add(Object::Stream(Stream::from_raw(image.as_dict().unwrap().clone(), vec![128; 8])));
     let base = format!("PCImg{}", replacement.num);
     let page = pdfcraft_model::pages(&doc)[0].obj;
     let mut xo = Dict::new();
@@ -4483,7 +4483,7 @@ fn replacing_an_image_preserves_occupied_resource_names() {
     let xo = doc.add(Object::Dict(xo));
     let mut resources = Dict::new();
     resources.set(b"XObject".to_vec(), Object::Ref(xo));
-    let content = format!("q 100 0 0 100 10 10 cm /Im0 Do Q q 100 0 0 100 200 10 cm /{base} Do Q");
+    let content = format!("q 100 0 0 100 10 10 cm /Im0 Do Q q 100 0 0 100 200 10 cm /{base} Do Q q 100 0 0 100 350 10 cm /{base}2 Do Q");
     let content = doc.add(Object::Stream(Stream::from_raw(Dict::new(), content.into_bytes())));
     doc.update_dict(page, |d| {
         d.set(b"Resources".to_vec(), Object::Dict(resources));
@@ -4497,15 +4497,16 @@ fn replacing_an_image_preserves_occupied_resource_names() {
         assert_eq!(images.len(), 2);
         assert_eq!(images[0].object, Some(replacement));
         assert_eq!(images[1].object, Some(original), "unselected picture must not change");
-        assert_eq!(images[0].name, format!("{base}2"), "reuse a name already pointing to the replacement");
+        assert_eq!(images[0].name, format!("{base}3"), "reuse a name already pointing to the replacement");
         assert_eq!(images[0].rect, [10.0, 10.0, 110.0, 110.0]);
         assert_eq!(images[1].rect, [200.0, 10.0, 300.0, 110.0]);
         let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
         let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(bytes), pdfcraft_render::RenderConfig::default());
         let page = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
         let pixel = |x: usize| &page.rgba[(750 * page.width as usize + x) * 4..(750 * page.width as usize + x) * 4 + 4];
-        assert_eq!(pixel(50), [255, 255, 255, 255], "selected image becomes white");
+        assert_eq!(pixel(50), [128, 128, 128, 255], "selected image becomes gray");
         assert_eq!(pixel(250), [0, 0, 0, 255], "unselected image stays black");
+        assert_eq!(pixel(400), [255, 255, 255, 255], "an unbound Do must stay invisible");
     }
 }
 

@@ -1703,9 +1703,16 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
             let base = format!("PCImg{}", r.num);
             let mut name = base.clone();
             let mut suffix = 0usize;
-            // Resource names need not match object numbers. Never redirect another placement
-            // using an occupied name, but reuse a name already pointing to this replacement.
-            while xo.get(name.as_bytes()).is_some_and(|o| o.as_ref() != Some(*r)) {
+            // An unbound Do must stay invisible: giving its name a resource would draw an
+            // unrelated placement. Collect once rather than rescan every operation per suffix.
+            let used: std::collections::HashSet<&[u8]> =
+                ops.iter().enumerate().filter(|(index, op)| *index != img.op && op.is("Do")).filter_map(|(_, op)| op.last_name()).collect();
+            // Resource names need not match object numbers. Only an existing binding to this
+            // replacement can be reused, even when other operations use the name too.
+            while match xo.get(name.as_bytes()) {
+                Some(o) => o.as_ref() != Some(*r),
+                None => used.contains(name.as_bytes()),
+            } {
                 suffix = suffix.saturating_add(1);
                 name = format!("{base}{suffix}");
             }
