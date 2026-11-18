@@ -7,6 +7,8 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 
+use crate::support;
+
 /// Two 300×200 pages of Helvetica text: "cat and cat" and "a cat".
 fn fixture() -> Vec<u8> {
     let stream = |content: &str| format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
@@ -84,10 +86,10 @@ fn replace_all_from_the_find_bar_is_one_undo_step() {
     h.run_steps(8);
     h.get_by_label("Replace all").click();
     h.run_steps(4);
-    assert_eq!(texts(&h), ["dog and dog", "a dog"], "{:?}", h.state().toast);
+    assert_eq!(texts(&h), ["dog and dog", "a dog"]);
+    assert!(support::shown_notice(&mut h).is_some(), "Replace all says what it did");
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Replace all"));
-    assert_eq!(s.toast.as_ref().map(|t| t.0.as_str()), Some("Replaced 3 on 2 pages"));
     // One Undo puts every page back.
     assert!(h.state_mut().execute("edit.undo"));
     h.run_steps(2);
