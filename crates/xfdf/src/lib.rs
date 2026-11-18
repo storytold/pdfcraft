@@ -216,7 +216,9 @@ pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
             out
         }
     };
-    let mut out = columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(",");
+    // An empty name is written as `""`, so a lone field with no name is still a column and not
+    // the empty header line of files without fields.
+    let mut out = columns.iter().map(|c| if c.is_empty() { "\"\"".to_string() } else { q(c) }).collect::<Vec<_>>().join(",");
     out.push('\n');
     for f in files {
         // The first value of a name repeated in one file wins, as the scan it replaces found it.
