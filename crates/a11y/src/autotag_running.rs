@@ -6,7 +6,8 @@
 //! each run of digits, and a roman numeral standing alone or after `Page`, matching any number, so
 //! page numbers repeat. 40% lets alternating left- and right-page headers qualify. A group whose
 //! text changes from page to page and is all heading-sized (`Chapter 1`, `Chapter 2`) is a
-//! sequence of headings, not running text. Position alone never makes running text.
+//! sequence of headings, not running text, unless it reads as a page number (`Page 3`, `3 of 9`).
+//! Each separate cluster of heights that qualifies counts. Position alone never makes running text.
 
 use std::collections::HashMap;
 
@@ -16,6 +17,8 @@ use crate::autotag_roles::{Evidence, HEADING_SIZE_RATIO, MAX_KEPT_CHARS};
 const BAND: f64 = 0.15;
 /// How far, in user-space units, the same running text may move from page to page.
 const TOLERANCE: f64 = 4.0;
+/// Height clusters kept per group of the same text, so the search stays linear in its size.
+const MAX_CLUSTERS: usize = 8;
 
 /// The page edge running text repeats at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -61,26 +64,47 @@ pub(crate) fn find(pages: &[PageText<'_>], body: Option<f64>) -> Vec<Vec<Option<
         return out;
     }
     let needed = pages.len().saturating_mul(2).div_ceil(5).max(2);
-    for ((edge, _), mut members) in groups(pages) {
+    for ((edge, key), mut members) in groups(pages) {
         members.sort_by(|a, b| a.distance.total_cmp(&b.distance));
-        let (best, distinct) = best_window(&members);
-        if distinct < needed {
-            continue;
-        }
-        // `Chapter 1`, `Chapter 2`: a numbered heading, unless it is only the number.
-        let texts_differ = best.windows(2).any(|w| matches!(w, [a, b] if a.evidence.text != b.evidence.text));
-        let heading_sized = body.is_some_and(|body| best.iter().all(|m| m.evidence.size >= body * HEADING_SIZE_RATIO));
-        let worded = best.iter().all(|m| m.evidence.letters && normalise(&m.evidence.text) != "#");
-        if texts_differ && heading_sized && worded {
-            continue;
-        }
-        for m in best {
-            if let Some(slot) = out.get_mut(m.page).and_then(|p| p.get_mut(m.object)) {
-                *slot = Some(edge);
+        // Each qualifying window splits what is left into the runs on either side of it, so every
+        // separate cluster of heights is found; a run that does not qualify holds none.
+        let mut pending: Vec<&[Member<'_>]> = vec![&members];
+        let mut clusters = 0usize;
+        while let Some(run) = pending.pop().filter(|_| clusters < MAX_CLUSTERS) {
+            let (start, end, distinct) = best_window(run);
+            let (Some(before), Some(window), Some(after)) = (run.get(..start), run.get(start..end), run.get(end..)) else {
+                continue;
+            };
+            if distinct < needed || window.is_empty() {
+                continue;
+            }
+            pending.extend([before, after]);
+            clusters = clusters.saturating_add(1);
+            if !is_heading_sequence(window, &key, body) {
+                for m in window {
+                    if let Some(slot) = out.get_mut(m.page).and_then(|p| p.get_mut(m.object)) {
+                        *slot = Some(edge);
+                    }
+                }
             }
         }
     }
     out
+}
+
+/// `Chapter 1`, `Chapter 2`: heading-sized text that changes, unless it reads as a page number.
+fn is_heading_sequence(window: &[Member<'_>], key: &str, body: Option<f64>) -> bool {
+    let texts_differ = window.windows(2).any(|w| matches!(w, [a, b] if a.evidence.text != b.evidence.text));
+    let heading_sized = body.is_some_and(|body| window.iter().all(|m| m.evidence.size >= body * HEADING_SIZE_RATIO));
+    let worded = window.iter().all(|m| m.evidence.letters) && !is_page_number(key);
+    texts_differ && heading_sized && worded
+}
+
+/// A normalised key that is a page number alone or with its label: `#`, `page #`, `p. #`,
+/// `# of #`, `page # of #`, `#/#`, optionally in dashes or brackets.
+fn is_page_number(key: &str) -> bool {
+    let bare = key.trim_matches(|c: char| matches!(c, '-' | '\u{2013}' | '\u{2014}' | '[' | ']' | '(' | ')' | ' '));
+    matches!(bare, "#" | "page #" | "p. #" | "# of #" | "page # of #" | "#/#" | "# / #")
 }
 
 /// Text objects inside a band, grouped by edge and normalised text.
@@ -111,9 +135,10 @@ fn groups<'a>(pages: &'a [PageText<'a>]) -> HashMap<(Edge, String), Vec<Member<'
     groups
 }
 
-/// The run of `members` (sorted by distance) spanning at most [`TOLERANCE`] that covers the most
-/// pages, and that number of pages.
-fn best_window<'m, 'a>(members: &'m [Member<'a>]) -> (&'m [Member<'a>], usize) {
+/// The run `start..end` of `members` (sorted by distance) spanning at most [`TOLERANCE`] that
+/// covers the most pages, and that number of pages. The run takes every member within the
+/// tolerance of its first, so further copies on pages it already covers belong to it.
+fn best_window(members: &[Member<'_>]) -> (usize, usize, usize) {
     let mut on_page: HashMap<usize, usize> = HashMap::new();
     let (mut low, mut best, mut most) = (0usize, (0usize, 0usize), 0usize);
     for (high, member) in members.iter().enumerate() {
@@ -132,7 +157,14 @@ fn best_window<'m, 'a>(members: &'m [Member<'a>]) -> (&'m [Member<'a>], usize) {
             (most, best) = (on_page.len(), (low, high.saturating_add(1)));
         }
     }
-    (members.get(best.0..best.1).unwrap_or(&[]), most)
+    let (start, mut end) = best;
+    while let (Some(first), Some(next)) = (members.get(start), members.get(end)) {
+        if next.distance - first.distance > TOLERANCE {
+            break;
+        }
+        end = end.saturating_add(1);
+    }
+    (start, end, most)
 }
 
 /// The bottom and top of a user-space box as the page displays it.
@@ -255,6 +287,8 @@ mod tests {
         assert_eq!(normalise("Page IX"), "page #");
         assert_eq!(normalise("mid"), "mid", "not a canonical numeral");
         assert_eq!(normalise("Chapter iv"), "chapter iv", "a numeral after another word is a word");
+        assert!(is_page_number("#") && is_page_number("page # of #") && is_page_number("- # -") && is_page_number("[p. #]"));
+        assert!(!is_page_number("chapter #") && !is_page_number("page") && !is_page_number("annual report #"));
         assert!(is_roman("mmmcmxcix") && !is_roman("iiii") && !is_roman("ic") && !is_roman(""));
     }
 
@@ -304,6 +338,21 @@ mod tests {
     }
 
     #[test]
+    fn each_qualifying_cluster_of_heights_counts() {
+        // Six pages need three: "Note" 20 units below the top on three pages and 40 below on the
+        // other three, plus a second copy on the first page just inside the first cluster.
+        let at = |distance: f64| line("Note", 792.0 - 10.0 - distance);
+        let pages = vec![vec![at(20.0), at(21.0)], vec![at(20.0)], vec![at(20.0)], vec![at(40.0)], vec![at(40.0)], vec![at(40.0)]];
+        let found = run(&pages, None);
+        assert!(found.iter().flatten().all(|e| *e == Some(Edge::Top)), "{found:?}");
+        // On two pages, a copy every 10 units from 20 down puts 9 clusters in the band, past the cap.
+        let column: Vec<Evidence> = (0..12u32).map(|i| at(20.0 + f64::from(i) * 10.0)).collect();
+        let found = run(&[column.clone(), column], None);
+        let marked = found.iter().flatten().filter(|e| e.is_some()).count();
+        assert_eq!(marked, 16, "8 clusters on 2 pages: {found:?}");
+    }
+
+    #[test]
     fn heading_sized_text_that_changes_is_a_heading_not_a_header() {
         let big = |text: &str| Evidence { size: 20.0, ..line(text, 750.0) };
         let found = run(&[vec![big("Chapter 1")], vec![big("Chapter 2")]], Some(10.0));
@@ -315,6 +364,8 @@ mod tests {
         assert_eq!(found, [[Some(Edge::Top)], [Some(Edge::Top)]], "a large page number is still a page number");
         let found = run(&[vec![big("xii")], vec![big("xiii")]], Some(10.0));
         assert_eq!(found, [[Some(Edge::Top)], [Some(Edge::Top)]], "so is a large roman one");
+        let found = run(&[vec![big("Page 1")], vec![big("Page 2")], vec![big("- 3 of 9 -")], vec![big("- 4 of 9 -")]], Some(10.0));
+        assert!(found.iter().flatten().all(|e| *e == Some(Edge::Top)), "a labelled page number is too: {found:?}");
     }
 
     #[test]

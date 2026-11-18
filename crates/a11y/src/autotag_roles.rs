@@ -107,6 +107,8 @@ struct State {
     tlm: Matrix,
     size: f64,
     leading: f64,
+    /// `Ts`, in unscaled text space units.
+    rise: f64,
     /// Text render mode 3 or 7: shown text that paints nothing, such as an OCR layer or a
     /// clip-only object.
     invisible: bool,
@@ -176,8 +178,9 @@ impl Shown {
             return;
         }
         self.keep(&text);
-        self.reach(e, f);
-        self.reach(e + state.size * c, f + state.size * d);
+        let (low, high) = (state.rise, state.rise + state.size);
+        self.reach(e + low * c, f + low * d);
+        self.reach(e + high * c, f + high * d);
         let entry = self.by_size.entry(half_points(size)).or_default();
         entry.0 = entry.0.saturating_add(chars);
         if metrics.bold {
@@ -226,8 +229,16 @@ impl Shown {
 /// `/Font` resource dictionary; `fonts` is shared by the document's pages.
 pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops: &[Op], spans: &[(usize, usize)]) -> Vec<Evidence> {
     let mut by_name: HashMap<Vec<u8>, Option<Rc<Metrics>>> = HashMap::new();
-    let mut state =
-        State { ctm: Matrix::IDENTITY, tm: Matrix::IDENTITY, tlm: Matrix::IDENTITY, size: 0.0, leading: 0.0, invisible: false, metrics: None };
+    let mut state = State {
+        ctm: Matrix::IDENTITY,
+        tm: Matrix::IDENTITY,
+        tlm: Matrix::IDENTITY,
+        size: 0.0,
+        leading: 0.0,
+        rise: 0.0,
+        invisible: false,
+        metrics: None,
+    };
     let (mut saved, mut unsaved) = (Vec::new(), 0usize);
     let mut out = Vec::with_capacity(spans.len());
     let mut spans = spans.iter().peekable();
@@ -259,6 +270,7 @@ pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops:
                     .and_then(|name| by_name.entry(name.to_vec()).or_insert_with(|| resources.get(name).and_then(|f| fonts.get(doc, f))).clone());
             }
             b"TL" => state.leading = op.num(0).unwrap_or(state.leading),
+            b"Ts" => state.rise = op.num(0).unwrap_or(state.rise),
             b"Tr" => state.invisible = matches!(op.num(0), Some(m) if m == 3.0 || m == 7.0),
             b"Td" | b"TD" => {
                 if let Some([x, y]) = op.nums::<2>() {
@@ -413,6 +425,15 @@ mod tests {
         assert_eq!(found[1].text, "one two three");
         assert_eq!(found[2], Evidence::default());
         assert_eq!(found.len(), 3);
+    }
+
+    #[test]
+    fn text_rise_moves_the_extent() {
+        // Ts is text space, so a 2x Tm doubles it; it outlives BT and is undone by Q.
+        let found = walk(b"q BT /F1 10 Tf 2 0 0 2 72 760 Tm -180 Ts (Body) Tj ET BT /F1 10 Tf 1 0 0 1 72 760 Tm (Still) Tj ET Q BT /F1 10 Tf 1 0 0 1 72 760 Tm (Back) Tj ET");
+        assert_eq!(found[0].extent, Some([72.0, 400.0, 72.0, 420.0]));
+        assert_eq!(found[1].extent, Some([72.0, 580.0, 72.0, 590.0]));
+        assert_eq!(found[2].extent, Some([72.0, 760.0, 72.0, 770.0]));
     }
 
     #[test]
