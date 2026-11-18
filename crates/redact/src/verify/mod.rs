@@ -72,7 +72,7 @@ mod util;
 
 #[cfg(test)]
 pub(crate) use extract::PATTERN_READS;
-pub(crate) use extract::matrix_of;
+pub(crate) use extract::{bbox_of, matrix_of};
 #[cfg(test)]
 pub(crate) use geometry::{HIDDEN_LOOKS, HIDDEN_SEARCHES};
 pub use snapshot::Snapshot;

@@ -217,7 +217,7 @@ impl Automation {
         let tags = self.accessibility_tags(a)?;
         let out = json!({
             "tags": tags["tags"], "count": tags["count"],
-            "note": "Text objects were tagged as paragraphs. Review heading roles, reading order and remaining accessibility findings manually.",
+            "note": "Text objects were tagged as headings (H1-H6, by size and weight against the body text) or paragraphs. Review heading roles, reading order and remaining accessibility findings manually.",
         });
         Ok(with_warnings(out, warnings))
     }
