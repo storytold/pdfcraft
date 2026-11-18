@@ -13,8 +13,8 @@ use craft::behavior::CanvasView;
 use craft::behavior::kurbo::Point;
 use craft::pages::ui::view::PageBody;
 use craft::text::ui::editor::{CaretLine, EditKind, EditorEnd, EditorMode, HostLine, HostRun, TextEditor, TextEditorHost};
-use craft::ui::contract::Bind;
-use egui::text::{CCursor, LayoutJob};
+use craft::ui::contract::{Bind, Show as _};
+use egui::text::{CCursor, CharIndex, LayoutJob};
 use egui::{Align, Color32, CornerRadius, FontId, Pos2, Rect, pos2, vec2};
 use pdfcraft_engine::{Document, FormField, FormFieldKind, FormWidget, field_flags, form_appearance};
 use pdfcraft_render::DocInfo;
@@ -87,7 +87,7 @@ impl FieldLayout {
         let chars: Vec<char> = text.chars().collect();
         let mut rows: Vec<Row> = Vec::new();
         for i in 0..=count {
-            let top = galley.pos_from_cursor(CCursor { index: i, prefer_next_row: true }).min.y;
+            let top = galley.pos_from_cursor(CCursor { index: CharIndex(i), prefer_next_row: true }).min.y;
             match rows.last_mut() {
                 Some(last) if (top - last.top).abs() < 0.5 => last.chars.end = i,
                 _ => rows.push(Row { chars: i..i, top }),
@@ -133,7 +133,7 @@ impl FieldLayout {
             let x = self.origin.x + offset as f32 * cell;
             return [pos2(x, self.origin.y), pos2(x, self.origin.y + self.row_height.max(self.font))];
         }
-        let at = self.galley.pos_from_cursor(CCursor { index: offset, prefer_next_row: row == self.row_of(offset) });
+        let at = self.galley.pos_from_cursor(CCursor { index: CharIndex(offset), prefer_next_row: row == self.row_of(offset) });
         let bottom = at.max.y.max(at.min.y + self.font);
         let x = self.origin.x + at.min.x;
         [pos2(x, self.origin.y + at.min.y), pos2(x, self.origin.y + bottom)]
@@ -153,7 +153,7 @@ impl FieldLayout {
             let at = (v.x / cell).round().max(0.0) as usize;
             return (at.min(line.chars.end), row);
         }
-        let at = self.galley.cursor_from_pos(vec2(v.x, line.top + self.row_height / 2.0)).index;
+        let at = self.galley.cursor_from_pos(vec2(v.x, line.top + self.row_height / 2.0)).index.0;
         (at.clamp(line.chars.start, line.chars.end), row)
     }
 
@@ -382,19 +382,21 @@ pub(crate) fn show(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, d
         Some(EditorEnd::Next) => view.session.pending_edit = super::tab_to_next_field(view, info, form, f, widget, true, None),
         Some(EditorEnd::Previous) => view.session.pending_edit = super::tab_to_next_field(view, info, form, f, widget, false, None),
         Some(EditorEnd::Cancel) => view.session.forms.focus = None,
-        None => {}
+        // `EditorEnd` is non-exhaustive: an end this code does not know leaves the session open.
+        Some(_) | None => {}
     }
     let Some(focus) = view.session.forms.focus.as_mut() else { return };
     // A list box is picked from in place on the page, so only a combo box has a drop-down list.
-    let picked = if combo { super::choice_list(ui, f, w, rect, zoom, &mut focus.list_open) } else { None };
+    let picked = if combo { super::choice_list(ui, f, rect, zoom, &mut focus.list_open) } else { None };
     let date = match &f.actions.format {
-        pdfcraft_engine::form_scripts::Format::Date(fmt) if types => super::calendar(ui, rect, &mut focus.text, fmt, &mut focus.calendar_open),
-        _ => false,
+        pdfcraft_engine::form_scripts::Format::Date(fmt) if types => super::calendar(ui, rect, &focus.text, fmt, &mut focus.calendar_open),
+        _ => None,
     };
     if let Some(i) = picked {
         view.session.pending_edit = Some(list_pick_edit(form, f, vec![i]));
         view.session.forms.focus = None;
-    } else if date {
+    } else if let Some(text) = date {
+        focus.text = text;
         commit(view, form);
     }
 }

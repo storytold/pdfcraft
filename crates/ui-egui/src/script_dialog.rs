@@ -342,14 +342,13 @@ impl PdfCraftApp {
     /// answer, or a cancellation.
     fn take_prompt_result(&mut self, id: DialogId, asked: Asked) -> Option<DialogResult<Option<String>>> {
         match asked {
-            Asked::Alert { proceed, .. } => self.dialogs.take_by_id::<StandardPrompt>(id).map(|result| match result {
-                DialogResult::Ok(answer) => match answer.choice {
-                    PromptChoice::Proceed => DialogResult::Ok(Some(proceed.to_owned())),
-                    PromptChoice::Alternate => DialogResult::Ok(Some("3".to_owned())),
+            Asked::Alert { proceed, .. } => {
+                self.dialogs.take_by_id::<StandardPrompt>(id).map(|result| match result.ok().map(|answer| answer.choice) {
+                    Some(PromptChoice::Proceed) => DialogResult::Ok(Some(proceed.to_owned())),
+                    Some(PromptChoice::Alternate) => DialogResult::Ok(Some("3".to_owned())),
                     _ => DialogResult::Cancel,
-                },
-                DialogResult::Cancel => DialogResult::Cancel,
-            }),
+                })
+            }
             Asked::Dialog => self.dialogs.take_by_id::<ScriptPromptDialog>(id),
         }
     }
@@ -427,7 +426,7 @@ impl PdfCraftApp {
                             if let Some(i) = self.views.iter().position(|v| v.id == id)
                                 && let Some(info) = self.session.get(id).map(|d| d.info.clone())
                             {
-                                self.views[i].document_changed(&info);
+                                self.views[i].document_changed(ctx, &info);
                             }
                             self.handle_js(
                                 id,
@@ -496,14 +495,29 @@ mod review_tests {
 #[cfg(test)]
 mod review13_ui_tests {
     use super::*;
-    /// Create a native app with a visible synthetic blank document and no renderer.
-    fn app() -> (PdfCraftApp, DocId) {
-        let mut app = PdfCraftApp::for_unit_tests();
-        app.set_option("language", "en").unwrap();
+    use craft::host::{AppInfo, Host, Picked, ScriptedFiles, Wake};
+    use craft::platform::clipboard::{Clipboard, EventClipboard};
+    use craft::platform::open::FileIntake;
+    use craft::platform::watch::FileWatch;
+    use craft::ui::notices::PostedNotice;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    /// Create a native app over `files` with a visible synthetic blank document and no renderer.
+    fn app_over(files: Arc<ScriptedFiles>) -> (PdfCraftApp, DocId) {
+        let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files).build();
+        let (intake, _) = FileIntake::new(Wake::none());
+        let clipboard = Clipboard::new(EventClipboard::new(|| 0, |_| Ok(0)));
+        let services = crate::AppServices::new(Wake::none(), clipboard, None, None, intake, FileWatch::new(Wake::none()).inline());
+        let mut app = PdfCraftApp::with_host(Arc::new(host), services);
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         let bytes = app.session.create_blank(200.0, 300.0, 2).unwrap();
         app.open_bytes("synthetic.pdf", None, bytes.to_vec()).unwrap();
         let id = app.active_ids().unwrap().1;
         (app, id)
+    }
+    fn app() -> (PdfCraftApp, DocId) {
+        app_over(Arc::new(ScriptedFiles::new()))
     }
     /// Refused clicks and execution/prompt timeouts are visible, while stale runs stay silent.
     #[test]
@@ -513,8 +527,8 @@ mod review13_ui_tests {
             let (mut app, id) = app();
             app.start_ui_script(id, "app.response({cQuestion:'Wait'});", None, None);
             app.start_ui_script(id, "var shouldNotRun=1;", None, None);
-            assert!(app.toast.as_ref().unwrap().0.contains("not run"));
-            app.toast = None;
+            assert!(app.posted_notices.contains(&PostedNotice::new("Another form script is active; this click was not run")));
+            app.posted_notices.clear();
             if prompt {
                 let deadline = Instant::now() + Duration::from_secs(5);
                 while app.script_pending.as_ref().unwrap().dialog.is_none() && Instant::now() < deadline {
@@ -531,9 +545,9 @@ mod review13_ui_tests {
             app.poll_script_dialog(&ctx);
             assert!(app.script_pending.is_none());
             if timeout {
-                assert_eq!(app.toast.as_ref().unwrap().0, "The form script timed out; its result was discarded");
+                assert_eq!(app.posted_notices, [PostedNotice::new("The form script timed out; its result was discarded")]);
             } else {
-                assert!(app.toast.is_none());
+                assert!(app.posted_notices.is_empty());
             }
         }
     }
@@ -541,7 +555,9 @@ mod review13_ui_tests {
     #[test]
     fn non_active_comparison_document_completes_native_script() {
         for request in ["", "app.execMenuItem('SaveAs');", "print();"] {
-            let (mut app, old) = app();
+            let saved = PathBuf::from("/scripted/source.pdf");
+            let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![saved.clone()])]));
+            let (mut app, old) = app_over(files.clone());
             app.views.iter_mut().find(|v| v.id == old).unwrap().view.current = 1;
             let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
             app.open_bytes("new.pdf", None, bytes.to_vec()).unwrap();
@@ -551,14 +567,6 @@ mod review13_ui_tests {
             app.compare_old = Some(old);
             app.run_compare();
             assert!(app.compare.as_ref().unwrap().side_by_side);
-            let dir = std::env::temp_dir().join(format!(
-                "pdfcraft-comparison-request-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-            ));
-            std::fs::create_dir(&dir).unwrap();
-            let saved = dir.join("source.pdf");
-            app.save_override = Some(saved.to_string_lossy().into_owned());
             app.printer_source = Some(std::sync::Arc::new(Vec::new));
             app.start_ui_script(old, &format!("var comparisonKept=42;{request}"), None, None);
             let ctx = egui::Context::default();
@@ -568,6 +576,8 @@ mod review13_ui_tests {
                 std::thread::sleep(Duration::from_millis(5));
             }
             assert!(app.script_pending.is_none());
+            // The Save As the script asked for takes the queued answer on this pass.
+            app.save_flow_pass(&ctx);
             assert_eq!(app.session.run_javascript(old, "comparisonKept", None).unwrap().result.as_deref(), Some("42"));
             assert_eq!(app.session.save_bytes(new).unwrap(), new_before);
             assert!(app.session.get(new).unwrap().path.is_none());
@@ -575,22 +585,17 @@ mod review13_ui_tests {
                 assert_eq!(app.active_ids().unwrap().1, new, "Save As need not change the comparison tab");
                 assert_eq!(app.session.get(old).unwrap().path.as_deref(), saved.to_str());
                 let mut reopened = pdfcraft_engine::Session::new();
-                let id = reopened.open("saved.pdf", None, std::sync::Arc::new(std::fs::read(&saved).unwrap()), None).unwrap();
+                let id = reopened.open("saved.pdf", None, std::sync::Arc::new(files.file(&saved).unwrap()), None).unwrap();
                 assert_eq!(reopened.get(id).unwrap().info.pages.len(), 2, "the saved file is the two-page source, not the one-page active file");
             } else if request == "print();" {
                 assert_eq!(app.active_ids().unwrap().1, old, "Print must retain its source as the active document");
                 assert!(app.dialogs.is_open::<craft::print::ui::HostedPrint>());
                 assert_eq!(app.print_draft.current_page, 1);
-                assert!(!saved.exists());
+                assert!(files.file(&saved).is_none());
             } else {
                 assert_eq!(app.active_ids().unwrap().1, new);
-                assert!(!saved.exists());
+                assert!(files.file(&saved).is_none());
             }
-            drop(app);
-            if saved.exists() {
-                std::fs::remove_file(saved).unwrap();
-            }
-            std::fs::remove_dir(dir).unwrap();
         }
     }
     /// Script focus reveals the requested field page before opening its editor.

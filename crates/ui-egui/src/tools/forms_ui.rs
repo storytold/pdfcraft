@@ -384,8 +384,7 @@ pub(crate) fn field_parts(view: &DocView, info: &DocInfo, doc: &pdfcraft_engine:
 /// The char offset in widget `wi` of field `fi`'s draft that the screen point `at` on `page` is over: the one mapping
 /// from a point to an offset is the editor's, which takes the screen point.
 fn press_offset(ctx: &egui::Context, view: &DocView, doc: &pdfcraft_engine::Document, info: &DocInfo, fi: usize, wi: usize, at: Pos2) -> usize {
-    // PLAN: `editor` is pdf-forms-w8's module; the lead declares `mod editor;` at combine.
-    editor::offset_at(ctx, view, &doc.form, info, fi, wi, at)
+    editor::offset_at(ctx, view, doc, &doc.form, info, fi, wi, at)
 }
 
 /// A press on a form widget part. `allowed`: whether the document lets its fields be filled. A text field opens on

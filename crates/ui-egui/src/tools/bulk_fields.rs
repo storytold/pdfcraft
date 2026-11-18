@@ -424,7 +424,7 @@ fn apply(app: &mut PdfCraftApp, draft: &Draft) -> Result<(), Label> {
 /// One property: a group box whose check box is `apply`, enclosing the control, which binds the value as a `Mixed`.
 /// An edit makes a mixed value concrete. `unknown` shows the control as mixed while the row is not applied, for a value the
 /// control cannot show.
-fn row<T: Value>(ui: &mut Ui, label: &str, c: &mut Change<T>, unknown: bool, control: impl FnOnce(&mut Ui, &mut Mixed<T>)) {
+fn row<T: Value>(ui: &mut Ui, label: &str, c: &mut Change<T>, unknown: bool, mut control: impl FnMut(&mut Ui, &mut Mixed<T>)) {
     let Change { value, mixed, apply } = c;
     let hidden = unknown && !*apply;
     GroupBox::apply(tl!(label).to_owned(), Bind::bound(apply)).show(ui, |ui, _| {
@@ -494,19 +494,24 @@ fn text_colour(ui: &mut Ui, label: &str, c: &mut Change<[f64; 3]>, recent: &Rece
     });
 }
 
-/// A colour that may be none: `choice` is the row's border or fill chooser.
+/// A colour that may be none: `choice` is the row's border or fill chooser. Its Other… request is parked in `request`.
 fn optional_colour(
     ui: &mut Ui,
     label: &str,
     c: &mut Change<Option<[f64; 3]>>,
-    choice: impl FnOnce(&mut Ui, &str, Option<[f64; 3]>) -> Option<Option<[f64; 3]>>,
+    request: &mut Option<ColorRequest>,
+    mut choice: impl FnMut(&mut Ui, Option<[f64; 3]>) -> colours::ColourChoice,
 ) {
     let Change { value, mixed, apply } = c;
     GroupBox::apply(tl!(label).to_owned(), Bind::bound(apply)).show(ui, |ui, _| {
         let current = if *mixed { None } else { *value };
-        if let Some(chosen) = choice(ui, tl!(label), current) {
+        let picked = choice(ui, current);
+        if let Some(chosen) = picked.choice {
             *value = chosen;
             *mixed = false;
+        }
+        if picked.request.is_some() {
+            *request = picked.request;
         }
     });
 }
@@ -574,14 +579,12 @@ fn appearance(ui: &mut Ui, d: &mut Draft, recent: &RecentColours, request: &mut 
         let shown_label = d.font.value.label() != d.font_label;
         let (font, placeholder) = (&mut d.font, d.font_label.clone());
         row(ui, "Font:", font, shown_label, |ui, shown| {
-            Select::new(tl!("Font:").to_owned(), Bind::bound_mixed(shown), &fonts).placeholder(placeholder).show(ui);
+            Select::new(tl!("Font:").to_owned(), Bind::bound_mixed(shown), &fonts).placeholder(placeholder.clone()).show(ui);
         });
         text_colour(ui, "Text Color:", &mut d.text, recent, request);
     }
-    // PLAN: `border_choice` and `fill_choice` return only the choice (`Option<Option<Rgb>>`), so their "Other colour..."
-    // cannot ask for the picker; the owner (pdf-comments-w10) adds the request, then these rows park it as `text_colour` does.
-    optional_colour(ui, "Border Color:", &mut d.border, |ui, label, current| colours::border_choice(ui, label, current, BORDER_KEY, recent));
-    optional_colour(ui, "Fill Color:", &mut d.fill, |ui, label, current| colours::fill_choice(ui, label, current, FILL_KEY, recent));
+    optional_colour(ui, "Border Color:", &mut d.border, request, |ui, current| colours::border_choice(ui, current, BORDER_KEY, recent));
+    optional_colour(ui, "Fill Color:", &mut d.fill, request, |ui, current| colours::fill_choice(ui, current, FILL_KEY, recent));
     number(ui, "Line Thickness:", &mut d.width, 0.0..=12.0, Some("pt"), |v| *v, |v| v);
     let styles: Vec<Entry<BorderStyle>> = BorderStyle::ALL.into_iter().map(|style| Entry::new(style, tl!(style.label()).to_owned())).collect();
     choose(ui, "Line Style:", &mut d.style, &styles);

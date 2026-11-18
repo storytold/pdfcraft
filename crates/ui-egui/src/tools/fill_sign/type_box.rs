@@ -268,5 +268,7 @@ pub(crate) fn show(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSes
                 typed_with(tb.page, tb.at, &tb.text, tb.size, crate::comments::page_rotation(info, tb.page), author, look)
             })
         }
+        // `EditorEnd` is non-exhaustive: an end this code does not know leaves the box open.
+        _ => None,
     }
 }
