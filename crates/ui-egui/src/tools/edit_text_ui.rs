@@ -26,8 +26,8 @@ use egui::{CornerRadius, Pos2, Rect, Vec2, pos2, vec2};
 use pdfcraft_engine::{Edit, ObjectKind, ObjectTarget};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageXform};
 use crate::canvas::page_parts::{Owner, PageLayer, PagePart, PagePress};
+use crate::canvas::{DocView, PageXform};
 
 // PLAN: at the base `image.rs` imports `ACCENT`, `Color32`, `Stroke` and `PagePointer` from here; they
 // leave with the old overlay (pdf-edit-w9's rewrite takes theme roles instead).
@@ -40,8 +40,8 @@ pub use image::{CropMode, ImageAction, ImageSelection};
 pub(crate) use image::{delete_picture, picture_controls, picture_menu, picture_parts, picture_press, user_to_screen};
 #[cfg(test)]
 use layout::{DARK_EDITOR_FILL, contrast};
-pub(crate) use layout::{editor_fill, editor_font, source_faces};
 use layout::{color32, editor_galley, editor_job, look_of, source_look};
+pub(crate) use layout::{editor_fill, editor_font, source_faces};
 
 /// What an edit box shows text for: a page paragraph, or text added in this session.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -725,9 +725,7 @@ pub(crate) fn page_parts(view: &DocView, doc: &pdfcraft_engine::Document, page: 
         .filter(|block| Some(*block) != open)
         .filter_map(|block| {
             let reach = reach_of(&boxes, block, upright).intersect(placed.rect);
-            reach
-                .is_positive()
-                .then(|| PagePart::new(Owner::Paragraph { block }, page, HitShape::Rect(reach), PageLayer::Text).cursor(cursor))
+            reach.is_positive().then(|| PagePart::new(Owner::Paragraph { block }, page, HitShape::Rect(reach), PageLayer::Text).cursor(cursor))
         })
         .collect()
 }
@@ -892,7 +890,8 @@ pub(crate) fn paragraph_controls(
         open_waiting(view, doc, page, &blocks, &boxes);
         outline_closed(ui, body, view, page, &boxes);
         draw_move(ui, body, view, page, &boxes, press);
-        let framed = hovered.filter(|(p, _)| *p == page).and_then(|(_, block)| blocks.get(block).zip(boxes.get(block).copied()));
+        let framed =
+            hovered.filter(|(p, _)| *p == page).and_then(|(_, block)| blocks.get(block).zip(boxes.get(block).copied()).map(|(l, b)| (block, l, b)));
         edit = edit.or_else(|| width_frame(ui, body, view, doc, page, framed));
     }
     edit.or_else(|| editor_session(ui, body, content, view, doc))
@@ -969,7 +968,7 @@ fn width_frame(
     view: &mut DocView,
     doc: &pdfcraft_engine::Document,
     page: usize,
-    framed: Option<(&pdfcraft_engine::TextBlock, Rect)>,
+    framed: Option<(usize, &pdfcraft_engine::TextBlock, Rect)>,
 ) -> Option<Edit> {
     let info = &doc.info;
     let xf = view.page_xform(page)?;
@@ -977,7 +976,7 @@ fn width_frame(
     if open_here || !has_edges(info, page) || view.objects.holds(page) || view.content.moving_on(page) {
         return None;
     }
-    let (l, b) = framed?;
+    let (block, l, b) = framed?;
     let start = doc_rect(&body.view, b);
     let state = BoxState::from_rect(start);
     // `TransformBox::text_frame`'s rules, showing the left and right handles only.
@@ -1005,7 +1004,7 @@ fn width_frame(
     let style = pdfcraft_engine::BlockStyle { width: Some(width), offset: (shift != 0.0).then_some([shift, 0.0]), ..Default::default() };
     // `editor_text` has a newline for every visual row, so a wrap would come back as a hard break and
     // a wider box would not reflow it. `reflow_text` rejoins a wrap and keeps a newline that was typed.
-    Some(Edit::EditTextBlock { page, block: framed_block(l, page, view, doc)?, text: l.reflow_text.clone(), style })
+    Some(Edit::EditTextBlock { page, block, text: l.reflow_text.clone(), style })
 }
 
 /// The open paragraph's text for [`TextEditor`]: the editor's text, laid out as the page lays it out
@@ -1105,7 +1104,7 @@ impl TextEditorHost for ParagraphHost<'_> {
         &self.ed.text
     }
 
-    fn replace(&mut self, range: Range<usize>, text: &str, kind: EditKind) -> bool {
+    fn replace(&mut self, range: Range<usize>, text: &str, kind: EditKind) -> Option<usize> {
         let before = self.ed.text.clone();
         let bytes = byte_of(&before, range.start)..byte_of(&before, range.end);
         self.ed.text.replace_range(bytes, text);
@@ -1120,7 +1119,7 @@ impl TextEditorHost for ParagraphHost<'_> {
         let now = self.ed.typed();
         self.ed.history.record(kind, now);
         self.galley = None;
-        true
+        Some(text.chars().count())
     }
 
     fn hit(&mut self, at: Point) -> (usize, usize) {
@@ -1154,10 +1153,7 @@ impl TextEditorHost for ParagraphHost<'_> {
         let mut lines = Vec::new();
         for (placed, chars) in galley.rows.iter().zip(row_ranges(&galley)) {
             let line: String = text.chars().skip(chars.start).take(chars.len()).collect();
-            let rect = Rect::from_two_pos(
-                doc_pos(self.to_doc(placed.pos.to_vec2())),
-                doc_pos(self.to_doc((placed.pos + placed.row.size).to_vec2())),
-            );
+            let rect = Rect::from_two_pos(doc_pos(self.to_doc(placed.pos.to_vec2())), doc_pos(self.to_doc((placed.pos + placed.row.size).to_vec2())));
             let baseline = placed.row.glyphs.first().map_or(placed.row.size.y, |g| g.pos.y);
             let baseline = doc_pos(self.to_doc(vec2(placed.pos.x, placed.pos.y + baseline))).y;
             let positions = placed.row.glyphs.iter().map(|g| self.view.doc_len(g.pos.x) as f32).collect();
@@ -1192,7 +1188,13 @@ impl TextEditorHost for ParagraphHost<'_> {
 
 /// The open paragraph's editor: its changed text over the page without it, and a [`TextEditor`] session
 /// for the selection, the caret and the keys. Returns the edit once the text is applied.
-fn editor_session(ui: &mut egui::Ui, body: &PageBody<'_>, content: &ContentPainterCx<'_>, view: &mut DocView, doc: &pdfcraft_engine::Document) -> Option<Edit> {
+fn editor_session(
+    ui: &mut egui::Ui,
+    body: &PageBody<'_>,
+    content: &ContentPainterCx<'_>,
+    view: &mut DocView,
+    doc: &pdfcraft_engine::Document,
+) -> Option<Edit> {
     let info = &doc.info;
     let page = view.line_editor.as_ref()?.page;
     let xf = view.page_xform(page)?;

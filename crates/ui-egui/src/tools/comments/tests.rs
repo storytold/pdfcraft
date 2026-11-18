@@ -268,6 +268,7 @@ fn away_from_upright_horizontal_text_the_caret_stays_at_the_click() {
 fn recent_custom_colours_dedupe_cap_and_skip_swatches() {
     use super::SWATCHES;
     use super::colours::{RecentColours, to_srgba};
+    use craft::theme::Srgba;
     let same = |a: &Srgba, b: [f64; 3]| {
         let b = to_srgba(b);
         (a.r - b.r).abs() < 1e-3 && (a.g - b.g).abs() < 1e-3 && (a.b - b.b).abs() < 1e-3
@@ -302,7 +303,7 @@ fn tools_round_trip_through_their_commands() {
         assert_eq!(CommentTool::from_command(t.command()), Some(t));
         assert!(pdfcraft_engine::commands::command(t.command()).is_some(), "{} is registered", t.command());
         let icon = supplied.icon(craft::review::ui::annotate::AnnotateCommand::of(t.tool())).expect("the app names every tool's icon");
-        assert!(icons::exists(icon), "icon {icon}");
+        assert!(craft::ui::primitives::has_icon(&craft::behavior::IconId::new(icon)), "icon {icon}");
         assert!(GROUPS[t.group()].contains(&t));
     }
 }
@@ -338,7 +339,10 @@ fn an_arrow_is_created_as_a_line_with_an_open_arrow_end() {
     };
     assert!(matches!(
         created(craft::review::AnnotationKind::Arrow),
-        Some(Edit::AddAnnotation(pdfcraft_engine::NewAnnotation { shape: Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. }, .. }))
+        Some(Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            shape: Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. },
+            ..
+        }))
     ));
     assert!(matches!(
         created(craft::review::AnnotationKind::Line),
@@ -441,7 +445,8 @@ fn stale_comment_state_is_cleared_and_delete_never_hits_non_comment_slots() {
         ..Default::default()
     };
     let thread = |index: usize| ThreadId(bridge::id_of(0, index).0);
-    let composer = |index: usize, text: &str| Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(index), text: text.into(), focus: false };
+    let composer =
+        |index: usize, text: &str| Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(index), text: text.into(), focus: false };
     let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
     view.comments.select_only((0, 2));
     view.comments.panel.editing = Some((thread(2), 0, "draft".into()));
@@ -589,7 +594,8 @@ fn an_annotation_round_trips_through_the_page_map_on_turned_and_zoomed_pages() {
         }
         let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
         let delta = Vec2::new(1.0, 0.0);
-        let moved = bridge::edit(AnnotationEdit::Move { ids: vec![bridge::id_of(0, 0)], delta }, &map, &mut view.comments, &info, &CommentPrefs::default());
+        let moved =
+            bridge::edit(AnnotationEdit::Move { ids: vec![bridge::id_of(0, 0)], delta }, &map, &mut view.comments, &info, &CommentPrefs::default());
         let Some(Edit::MoveAnnotation { dx, dy, .. }) = moved else { panic!("{case}: a move is one MoveAnnotation, got {moved:?}") };
         let origin = map.to_doc(0, [50.0, 80.0]);
         let (from, to) = (map.to_user(0, origin), map.to_user(0, origin + delta));

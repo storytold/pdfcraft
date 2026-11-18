@@ -5,7 +5,10 @@
 use craft::behavior::kurbo::{BezPath, Point};
 use craft::behavior::{CancelReason, Cursor, CursorIcon, PointerButton, PressPhase, PressState};
 use craft::pages::ui::{PageBody, PlacedPage};
+use craft::theme::Srgba;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
+use craft::ui::canvas_controls::SelectionOutline;
+use craft::ui::choice::{Radio, RadioGroup};
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft::ui::form::{Field, FieldGroup, Help};
@@ -13,19 +16,16 @@ use craft::ui::patterns::form_dialogs::FormDialog;
 use craft::ui::pickers::Select;
 use craft::ui::primitives::Draw;
 use craft::ui::runtime::requests::ColorRequest;
-use craft::theme::Srgba;
 use craft::ui::text::{NumberField, TextField};
-use craft::ui::choice::{Radio, RadioGroup};
-use craft::ui::canvas_controls::SelectionOutline;
 use egui::{Pos2, Rect};
 use pdfcraft_engine::{Edit, LinkAction, LinkHighlight, LinkItem, LinkStyle, LinkZoom};
 use pdfcraft_render::{DocInfo, LinkTarget};
 
+use crate::PdfCraftApp;
 use crate::canvas::DocView;
 use crate::canvas::page_overlays::LinkEvent;
-use crate::PdfCraftApp;
 use crate::colour_picker::PickerHost;
-use crate::colours::{RecentColours, to_rgb};
+use crate::comments::{RecentColours, palette, to_rgb};
 
 /// How far around a link (screen points) the Link tool finds it, so a thin one can be picked.
 pub(crate) const LINK_TOOL_MARGIN: f32 = 2.0;
@@ -318,7 +318,12 @@ fn entries<T: Clone + PartialEq + std::fmt::Debug + Send + Sync + 'static>(rows:
 }
 
 /// A row of a labelled select over `rows`: the value picked this pass, if it is not `current`.
-fn pick<T: Clone + PartialEq + std::fmt::Debug + Send + Sync + 'static>(ui: &mut egui::Ui, label: String, current: T, rows: Vec<(T, String)>) -> Option<T> {
+fn pick<T: Clone + PartialEq + std::fmt::Debug + Send + Sync + 'static>(
+    ui: &mut egui::Ui,
+    label: String,
+    current: T,
+    rows: Vec<(T, String)>,
+) -> Option<T> {
     let list = entries(rows);
     let mut picked = None;
     Field::new(label.clone()).show(ui, |ui, _| {
@@ -364,7 +369,7 @@ fn appearance(ui: &mut egui::Ui, d: &mut LinkDraft, request: &mut Option<ColorRe
             d.style.dashed = l == 1;
             d.style.underline = l == 2;
         }
-        let out = crate::colours::palette(ui, tl!("Color"), Some(d.style.color), "link.colour", recent);
+        let out = palette(ui, tl!("Color"), Some(d.style.color), "link.colour", recent);
         // A repeat click on the bound colour changes nothing.
         if let Some(picked) = out.picked.filter(|c| *c != d.style.color) {
             d.style.color = picked;
@@ -379,7 +384,9 @@ fn appearance(ui: &mut egui::Ui, d: &mut LinkDraft, request: &mut Option<ColorRe
 fn action(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize) {
     FieldGroup::new(tl!("Link Action").to_string()).show(ui, |ui, _| {
         if d.preserve_action {
-            Field::new(tl!("Action").to_string()).help(Help::Text(tl!("The existing action will be preserved.").to_string().into())).show(ui, |_, _| {});
+            Field::new(tl!("Action").to_string())
+                .help(Help::Text(tl!("The existing action will be preserved.").to_string().into()))
+                .show(ui, |_, _| {});
             return;
         }
         let web = d.web;
