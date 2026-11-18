@@ -152,7 +152,7 @@ impl PdfCraftApp {
     /// Opens Set Page Boxes over the active document; `current_only` starts on the current page alone.
     pub(crate) fn open_page_boxes(&mut self, ctx: &egui::Context, current_only: bool) {
         let Some((i, id)) = self.active_ids() else { return };
-        let current = self.views[i].current;
+        let current = self.views[i].current();
         let Some(doc) = self.session.get(id) else { return };
         let boxes = doc.page_boxes();
         let count = boxes.len().max(1);
@@ -192,7 +192,7 @@ impl PdfCraftApp {
         let Some(result) = answer.ok() else { return };
         let Some((i, id)) = self.active_ids() else { return };
         let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
-        let current = self.views[i].current;
+        let current = self.views[i].current();
         let f = &result.fields;
         let d = &mut self.boxes_draft;
         if let Some((b, ..)) = BOXES.iter().find(|(_, id, _)| Some(*id) == f.text("box")) {

@@ -508,7 +508,6 @@ impl PdfCraftApp {
         }
         match self.dialogs.take_by_id::<HostedParamDialog>(id) {
             None => {}
-            Some(DialogResult::Cancel) => self.comment_props = None,
             Some(DialogResult::Ok(result)) => {
                 let Some(open) = self.comment_props.take() else { return };
                 let draft = open.draft;
@@ -528,6 +527,7 @@ impl PdfCraftApp {
                     self.make_props_default(draft.page, draft.index, &e);
                 }
             }
+            Some(_) => self.comment_props = None,
         }
     }
 }

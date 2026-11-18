@@ -182,7 +182,7 @@ impl PdfCraftApp {
             self.dialogs.cancel::<WordCountDialog>(ctx);
             return;
         };
-        let current = self.views[view].current;
+        let current = self.views[view].current();
         let Some(doc) = self.session.get(id) else {
             self.dialogs.cancel::<WordCountDialog>(ctx);
             return;
@@ -201,7 +201,10 @@ impl PdfCraftApp {
 mod tests {
     use super::*;
     use craft::host::ManualJobs;
-    use egui_kittest::{Harness, kittest::Queryable};
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT as _, Queryable},
+    };
 
     /// An app whose background jobs wait on `jobs` until the test runs them.
     fn app_on(jobs: Arc<ManualJobs>) -> PdfCraftApp {
@@ -225,11 +228,11 @@ mod tests {
         let jobs = Arc::new(ManualJobs::new());
         let bytes = pdfcraft_engine::Session::new().create_from_text("Words", "Hello world\u{c}Another three words").unwrap();
         let build_jobs = jobs.clone();
-        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(move |_| {
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(move |cc| {
             let mut app = app_on(build_jobs);
-            app.set_option("language", "en").unwrap();
+            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
             app.open_bytes("words.pdf", None, bytes.as_ref().clone()).unwrap();
-            app.run_command("file.word_count");
+            app.run_command(&cc.egui_ctx, "file.word_count");
             app
         });
         // One frame submits the count, the job runs, the next frames take its result.

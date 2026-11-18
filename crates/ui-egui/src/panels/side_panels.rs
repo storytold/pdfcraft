@@ -449,6 +449,19 @@ pub(crate) fn set_rail_side(app: &mut PdfCraftApp, side: DockSide) -> Result<(),
     Ok(())
 }
 
+/// Whether the tools panel is docked at the end edge; `false` at the start edge and while it is closed.
+pub(crate) fn tools_on_right(app: &PdfCraftApp) -> bool {
+    edge_of(&app.dock, PanelId::Tools) == Some(DockEdge::End)
+}
+
+/// Docks the tools panel at the end (`on_right`) or the start edge. A closed panel has no edge to move: it stays closed.
+pub(crate) fn set_tools_on_right(app: &mut PdfCraftApp, on_right: bool) -> Result<(), String> {
+    if !app.dock.layout.contains(&PanelId::Tools) {
+        return Ok(());
+    }
+    move_to_edge(app, PanelId::Tools, if on_right { DockEdge::End } else { DockEdge::Start })
+}
+
 fn edge_param(value: &str, key: &str) -> Result<DockEdge, String> {
     match value {
         "left" => Ok(DockEdge::Start),

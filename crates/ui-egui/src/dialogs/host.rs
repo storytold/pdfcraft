@@ -86,13 +86,13 @@ fn results(app: &mut PdfCraftApp, ctx: &egui::Context) {
         super::duplicate_field::finish(app, &fields);
     }
     // Edit.
-    app.link_props_pass(ctx);
+    app.link_props_pass();
     // Print and OCR.
     app.print_pass(ctx);
     app.recognize_text_pass(ctx);
     app.enhance_scan_pass(ctx);
     // Workflows.
-    crate::optimize_ui::pass(app);
+    crate::optimize_ui::pass(app, ctx);
     crate::create_ui::pass(app);
     crate::a11y_ui::pass(app);
     crate::actions_ui::pass(app);
