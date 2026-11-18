@@ -2525,6 +2525,19 @@ fn a_redacted_scans_shared_jbig2_dictionary_leaves_the_file() {
     }
 }
 
+/// Optimize's "Discard all comments, forms and multimedia" takes a widget whose appearance draws a
+/// JBIG2 image sharing its `/JBIG2Globals` with an image that stays: the dictionary held the
+/// widget's symbols too, so the image left is stored again without it.
+#[test]
+fn discarding_a_widget_takes_the_jbig2_dictionary_it_shared() {
+    let scan = shared_scan();
+    let (.., pages) = ways_out(&scan).into_iter().find(|(way, ..)| *way == "a widget's appearance").unwrap();
+    let mut doc = pages.build(&scan);
+    assert_eq!(crate::sanitize::discard_forms_and_multimedia(&mut doc).unwrap(), 1);
+    assert_gone(&doc, b"LEAK_GLOBALS");
+    assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits, "the image left keeps its pixels");
+}
+
 /// A size given through a reference of another generation is null, as cos reads it (#1143), whatever
 /// another image read through the reference of that number's own: the image can't be stored again, so
 /// the redaction refuses, rather than storing it with the size the other reference read.

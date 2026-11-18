@@ -951,6 +951,9 @@ pub fn discard_forms_and_multimedia(doc: &mut Document) -> Result<usize, RedactE
         doc.resolve(a).as_dict().and_then(|d| crate::subtype(doc, d)).is_some_and(|s| s == b"Widget" || MULTIMEDIA.contains(&s.as_slice()))
     };
     let listed_before = listed_annotations(doc);
+    // What a full save keeps before anything goes: an image that leaves with a widget's appearance
+    // takes a `/JBIG2Globals` dictionary it shares with one that stays with it, as in `remove_counted`.
+    let kept_before = crate::globals::kept(doc)?;
     let mut removed = 0usize;
     for p in pdfcraft_model::pages(doc) {
         let list = annots_of(doc, &p.dict);
@@ -984,6 +987,7 @@ pub fn discard_forms_and_multimedia(doc: &mut Document) -> Result<usize, RedactE
     if removed == 0 && !form && !renditions {
         return Ok(0);
     }
+    unshare_unmarked(doc, &kept_before, &mut pdfcraft_cos::ImageBudget::new(doc))?;
     doc.require_full_save_with_new_id();
     Ok(removed.max(1))
 }
