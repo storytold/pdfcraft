@@ -68,6 +68,10 @@ pub struct Document {
     /// since they last gained focus: their exit on losing focus has run already
     /// ([`Session::field_focus`]).
     pub(crate) xfa_exited: std::collections::HashSet<String>,
+    /// An XFA button click run on a worker ([`Session::start_javascript_target`]) had a script
+    /// run away: the next edit turns the form's scripts off, as it would have had the click been
+    /// kept (it may have been dropped: the document changed, or the app stopped waiting).
+    pub(crate) xfa_ran_away: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// A content-only refresh keeps `info` from before the edit; an edit may have added or
     /// embedded fonts, so the font list is read again on demand ([`Session::refresh_fonts`]).
     pub(crate) fonts_stale: bool,

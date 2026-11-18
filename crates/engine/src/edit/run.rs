@@ -234,6 +234,8 @@ pub(crate) struct EditCtx {
     pub(crate) xfa_unchanged: bool,
     /// What the XFA scripts' time limits are multiplied by ([`Session::with_xfa_time_scale`]).
     pub(crate) xfa_time_scale: u32,
+    /// The answers the edit's XFA event takes ([`Session::xfa_answers`](crate::Session)).
+    pub(crate) xfa_answers: xfa::XfaAnswers,
     /// The edit took the XFA out of the form: what went with it, for the document's warnings.
     pub(crate) xfa_removed: Vec<String>,
     /// Pages in the document, for `xfa.layout.pageCount()`.
@@ -305,6 +307,7 @@ impl EditCtx {
             xfa_ran_away: false,
             xfa_unchanged: false,
             xfa_time_scale: 1,
+            xfa_answers: Default::default(),
             xfa_removed: Vec::new(),
             pages: 0,
             highlight: false,
@@ -765,6 +768,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 ran_away: false,
                 highlight,
                 time_scale: cx.xfa_time_scale,
+                answers: std::mem::take(&mut cx.xfa_answers),
             };
             let ran = if matches!(activity.as_str(), "enter" | "exit") {
                 xfa::on_focus(doc, &tpl, som, activity, &mut run).map(|changes| changes.is_empty())

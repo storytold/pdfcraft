@@ -249,10 +249,17 @@ impl Interp<'_> {
                     let title = Some(self.arg_str(args, 1)?).filter(|t| !t.is_empty());
                     let icon = MessageIcon::from_code(Some(self.arg_num(args, 2)?));
                     let buttons = MessageButtons::from_code(Some(self.arg_num(args, 3)?));
-                    self.h.push(XfaEffect::MessageBox(Message { text, title, icon, buttons }));
-                    // Always OK for now: the viewer can't ask the user and run the script on
-                    // with the answer yet (#4291).
-                    Ok(Val::Num(1.0))
+                    // The button picked: 1 OK, 2 Cancel, 3 No, 4 Yes. Time spent waiting for the
+                    // user isn't the script's: its deadline moves on by it.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let asked = std::time::Instant::now();
+                    let reply = self.h.message_box(Message { text, title, icon, buttons })?;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if crate::interaction::has_host() {
+                        let waited = asked.elapsed();
+                        self.deadline = self.deadline.and_then(|d| d.checked_add(waited));
+                    }
+                    Ok(Val::Num(f64::from(reply)))
                 }
                 "resetdata" => {
                     let list = self.arg_str(args, 0)?;

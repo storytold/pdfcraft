@@ -143,7 +143,8 @@ pub(crate) fn run_here(
     };
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
-    let host_state = XHost::new(root, reuse, &event.target, doc);
+    let mut host_state = XHost::new(root, reuse, &event.target, doc);
+    host_state.answers = event.answers.clone();
     let current = host_state.current;
     ctx.insert_data(RefCell::new(host_state));
     let mut out = XfaOutcome::default();
@@ -174,6 +175,7 @@ pub(crate) fn run_here(
         out.notes = h.notes();
         out.effects = h.effects;
         out.console = h.console;
+        out.messages = h.messages;
     }
     clip_result(&mut out);
     out
