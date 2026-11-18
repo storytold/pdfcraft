@@ -28,8 +28,14 @@ trailer << /Root 1 0 R >>
 }
 
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
+    harness_on(crate::support::RecordingClipboard::default(), setup)
+}
+
+/// `harness` on the injected `clipboard`, whose recorded writes a test reads.
+fn harness_on(clipboard: crate::support::RecordingClipboard, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        // PLAN: assumed support::app_with_clipboard(RecordingClipboard) -> PdfCraftApp (pdf-chrome-w9: `PdfCraftApp::with_host` over `AppServices` holding the clipboard)
+        let mut app = crate::support::app_with_clipboard(clipboard);
         app.set_option("language", "en").unwrap();
         app.open_bytes("table.pdf", None, table()).expect("opens");
         app.set_option("left", "closed").unwrap();
@@ -152,20 +158,15 @@ fn alt_drag_with_the_highlighter_marks_only_the_column() {
 /// the clipboard and no HTML, even where the clipboard would take it.
 #[test]
 fn a_column_selection_copies_plain_text_only() {
-    let offered = std::sync::Arc::new(std::sync::Mutex::new(0usize));
-    let seen = offered.clone();
-    let mut h = harness(move |app| {
-        app.system_clipboard = true;
-        app.html_clipboard_override = Some(Box::new(move |_, _| {
-            *seen.lock().unwrap() += 1;
-            true
-        }));
-    });
+    let clipboard = crate::support::RecordingClipboard::default();
+    let mut h = harness_on(clipboard.clone(), |_| {});
     let (from, to) = top_two_rows(&h);
     drag(&mut h, from, to, Modifiers::ALT);
     assert!(h.state_mut().execute("edit.copy"));
     h.step();
-    assert_eq!(*offered.lock().unwrap(), 0, "no HTML for a column selection");
+    // PLAN: assumed RecordingClipboard::writes() -> Vec<Vec<Flavor>> (each write's flavours, `mime` and `data`).
+    let html = clipboard.writes().iter().flatten().any(|flavor| flavor.mime.to_string() == "text/html");
+    assert!(!html, "no HTML for a column selection");
     let copied = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "Name\tQty\nApple\t12"));
     assert!(copied, "the plain text goes out the usual way");
 }
