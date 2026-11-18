@@ -466,9 +466,10 @@ fn localize_resources(doc: &mut Document, selected: &[usize]) -> Result<(), pdfc
 pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, RedactError> {
     let mut work = doc.clone();
     // The space removed text leaves on its line is widened to whole points. Where that moves the
-    // rest of the line under another mark, the check refuses it: then the gaps stay exact.
+    // rest of the line under another mark, the check refuses it, and a page whose longer numbers
+    // pass its decode allowance can't be read back: then the gaps stay exact.
     let report = match apply_to(&mut work, pages, true) {
-        Err(RedactError::Residue(_)) => {
+        Err(RedactError::Residue(_) | RedactError::Unreadable(_)) => {
             work = doc.clone();
             apply_to(&mut work, pages, false)?
         }

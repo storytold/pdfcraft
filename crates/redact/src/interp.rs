@@ -1093,7 +1093,9 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
                         // A TJ number moves by -n/1000 × size (× Th): the removed advance.
                         if size != 0.0 {
                             push_num(&mut out, -g.advance * 1000.0 / size);
+                            // A glyph that doesn't move the pen leaves the number before it as it was.
                             if let Some(at) = out.len().checked_sub(1)
+                                && g.advance != 0.0
                                 && gaps.last() != Some(&at)
                             {
                                 gaps.push(at);
@@ -1124,12 +1126,13 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
 /// Widen the `TJ` numbers at `at` (indexes in `items`) to whole points of default user space.
 /// The removed glyphs' exact advance, with the font's widths, narrows down what the text was. A
 /// number n moves the text back n / 1000 times `size` (the font size times `Th`), and `m` (the text
-/// matrix then the CTM) scales that. Rounding towards more space moves the text after the gap
-/// less than a point, and only away from the mark.
+/// matrix then the CTM) scales that. Rounding the distance up moves the text after the gap less
+/// than a point further, and only away from the mark, whichever way the gap runs.
 fn widen_to_whole_points(items: &mut [Object], at: &[usize], size: f64, m: &Matrix) {
     let [a, b, ..] = m.0;
-    let unit = size * a.hypot(b) / 1000.0;
-    if !(unit.is_normal() && unit > 0.0) {
+    // A negative size or `Th` mirrors the text and its gaps alike: a unit is as long either way.
+    let unit = size.abs() * a.hypot(b) / 1000.0;
+    if !unit.is_normal() {
         return;
     }
     for &i in at {
@@ -1137,7 +1140,8 @@ fn widen_to_whole_points(items: &mut [Object], at: &[usize], size: f64, m: &Matr
             && let Some(v) = item.as_f64()
         {
             // The tolerance keeps a gap that is already whole points where it is.
-            let wider = (v * unit + 1e-6).floor() / unit;
+            let points = v * unit;
+            let wider = points.signum() * (points.abs() - 1e-6).ceil() / unit;
             if wider.is_finite() {
                 *item = num(wider);
             }
