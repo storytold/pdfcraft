@@ -288,6 +288,20 @@ fn resolve_resources(doc: &Document, resources: &Object, page: ObjRef) -> Option
     }
 }
 
+/// The form's default resources (`/AcroForm /DR`), with their owner: the dictionary itself when
+/// it is an indirect object, else the catalog, which no page's resources can be.
+fn form_resources(doc: &Document) -> Option<(Dict, Owner)> {
+    let root = doc.root()?;
+    let catalog = doc.get(root).as_dict().cloned()?;
+    let form = catalog.get(b"AcroForm").map(|f| doc.resolve(f))?.as_dict().cloned()?;
+    let dr = form.get(b"DR")?;
+    match dr {
+        Object::Ref(r) => doc.get(*r).as_dict().cloned().map(|d| (d, Owner::Resources(*r))),
+        Object::Dict(d) => Some((d.clone(), Owner::Page(root))),
+        _ => None,
+    }
+}
+
 /// Drop the entries `names` never draws. Returns how many were removed.
 fn drop_unused(xobjects: &mut Dict, names: &HashSet<Vec<u8>>) -> usize {
     let unused: Vec<Vec<u8>> = xobjects.iter().map(|(k, _)| k.clone()).filter(|k| !names.contains(k)).collect();
@@ -365,6 +379,11 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
             Ok((data, false)) => pruner.content(&data, &res_dict, owner, 0),
             Ok((_, true)) | Err(_) => pruner.unread(&res_dict, owner, 0),
         }
+    }
+    // The form draws its fields with the fonts of `/AcroForm /DR`. A Type 3 font there draws its
+    // glyphs through resources that may be the very /XObject dictionary a page draws from.
+    if let Some((dr, owner)) = form_resources(pruner.doc) {
+        pruner.protect_type3_resources(&dr, owner);
     }
     let Pruner { used, unsure, glyph_budget_exhausted, too_deep, .. } = pruner;
     if glyph_budget_exhausted || too_deep {

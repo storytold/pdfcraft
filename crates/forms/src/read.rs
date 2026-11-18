@@ -233,13 +233,14 @@ fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Decode
 pub(crate) const MAX_VALUE_BYTES: usize = 64 << 20;
 
 /// A field's value or default value (`/V`, `/DV`). A text stream is decoded against `budget`, and
-/// reads as no value once it is spent, as one that won't decode does.
-fn values_of(doc: &Document, o: Option<&Object>, budget: &mut DecodeBudget) -> Vec<String> {
+/// reads as no value once it is spent, as one that won't decode does. `Off` is a button's off
+/// state, no value (ISO 32000-2 12.7.5.2.3); of a text or choice field it is the text `Off`.
+fn values_of(doc: &Document, o: Option<&Object>, button: bool, budget: &mut DecodeBudget) -> Vec<String> {
     let Some(o) = o else { return Vec::new() };
     match &*doc.resolve(o) {
         Object::Array(a) => a.iter().filter_map(|x| text_of(&doc.resolve(x))).collect(),
         Object::Stream(s) => budget.decode(s).ok().map(|b| PdfString::literal(b).to_text()).into_iter().collect(),
-        other => text_of(other).filter(|s| s != "Off" && !s.is_empty()).into_iter().collect(),
+        other => text_of(other).filter(|s| !(button && s == "Off") && !s.is_empty()).into_iter().collect(),
     }
 }
 
@@ -777,11 +778,12 @@ fn walk(
             other => text_of(other).map(|t| (t.clone(), t)),
         })
         .collect::<Vec<(String, String)>>();
-    let mut value = values_of(doc, inh.v.as_ref(), &mut seen.values);
+    let is_button = matches!(kind, FieldKind::CheckBox | FieldKind::Radio | FieldKind::PushButton);
+    let mut value = values_of(doc, inh.v.as_ref(), is_button, &mut seen.values);
     // A list box without MultiSelect selects one option: "if clear, at most one item shall be
     // selected" (ISO 32000-2 Table 233). Given an array /V or /DV anyway, it holds the first
     // value only, and shows and resets to it; the file keeps its entries until the field is filled.
-    let mut default = values_of(doc, inh.dv.as_ref(), &mut seen.values);
+    let mut default = values_of(doc, inh.dv.as_ref(), is_button, &mut seen.values);
     let single = kind == FieldKind::List && ff & flags::MULTI_SELECT == 0;
     let single_value_is_array = single && inh.v.as_ref().is_some_and(|v| doc.resolve(v).as_array().is_some());
     if single {

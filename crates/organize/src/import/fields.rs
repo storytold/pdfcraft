@@ -345,7 +345,10 @@ pub(super) fn carry_form_defaults(dst: &mut Document, src: &Document, copied: Ha
         let Some(value) = from.get(key).filter(|_| !form.contains(key)) else { continue };
         let value = match key {
             // The resource dictionary holds fonts by reference: copied, or shared with the pages'.
-            b"DR" => super::copy_object(dst, src, value, map.take().unwrap_or_default())?,
+            b"DR" => match copy_resources(dst, src, value, map.take().unwrap_or_default())? {
+                Some(dr) => dr,
+                None => continue,
+            },
             _ => (*src.resolve(value)).clone(),
         };
         if !matches!(value, Object::Null) {
@@ -364,6 +367,44 @@ pub(super) fn carry_form_defaults(dst: &mut Document, src: &Document, copied: Ha
         }
     }
     Ok(())
+}
+
+/// The kinds of resource a resource dictionary holds (ISO 32000-2 Table 34).
+const RESOURCE_KINDS: [&[u8]; 8] = [b"ExtGState", b"ColorSpace", b"Pattern", b"Shading", b"XObject", b"Font", b"ProcSet", b"Properties"];
+
+/// Resource dictionary `value` of `src` copied into `dst` as resources, reusing the copies in
+/// `map`; `None` when it is not one. Only the kinds of resource are copied, each a dictionary
+/// from names to resources (`/ProcSet` an array of names), and the dictionaries are built here,
+/// not copied whole: a name such as `/P` or `/Rect` is a resource's name, which copying the
+/// dictionary as an object could take for an annotation's entry and drop. A value that is the
+/// catalog or a page-tree node is no resource, and copying it would bring along pages left
+/// behind, so it is left out, as is a `/DR` that is one.
+fn copy_resources(dst: &mut Document, src: &Document, value: &Object, map: HashMap<ObjRef, ObjRef>) -> Result<Option<Object>, OrganizeError> {
+    let page_tree = |o: &Object| o.as_dict().is_some_and(|d| matches!(d.name(b"Type"), Some(b"Catalog" | b"Pages" | b"Page")));
+    let resolved = src.resolve(value);
+    let Some(dr) = resolved.as_dict().filter(|_| !page_tree(&resolved)) else { return Ok(None) };
+    let mut copier = super::Copier::new(src, map, HashMap::new());
+    let mut out = Dict::new();
+    for kind in RESOURCE_KINDS {
+        let Some(entries) = dr.get(kind).map(|e| src.resolve(e)) else { continue };
+        match &*entries {
+            Object::Dict(named) => {
+                let mut copied = Dict::new();
+                for (name, v) in named.iter() {
+                    if page_tree(&src.resolve(v)) {
+                        continue;
+                    }
+                    copied.set(name.clone(), copier.copy_value(dst, v, None)?);
+                }
+                out.set(kind.to_vec(), Object::Dict(copied));
+            }
+            Object::Array(names) if kind == b"ProcSet" => {
+                out.set(kind.to_vec(), Object::Array(names.iter().filter(|n| n.as_name().is_some()).cloned().collect()));
+            }
+            _ => {}
+        }
+    }
+    Ok(Some(Object::Dict(out)))
 }
 
 /// At most this many field nodes are read when matching copied widgets to their originals.

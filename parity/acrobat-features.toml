@@ -2854,7 +2854,7 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.extract"]
 tools = ["page_extract"]
-evidence = ["crates/ui-egui/tests/it/editing.rs::extract_button_copies_selected_pages_to_a_new_tab", "crates/automation/tests/it/automation.rs::combine_extract_and_split", "crates/organize/src/tests.rs::extract_and_split_keep_the_pdfx_output_intent_and_identification", "crates/organize/src/tests.rs::extracted_fields_keep_the_forms_drawing_settings", "crates/ui-egui/tests/it/pickers.rs::extract_pages_takes_the_page_ranges_typed_in_the_dialog"]
+evidence = ["crates/ui-egui/tests/it/editing.rs::extract_button_copies_selected_pages_to_a_new_tab", "crates/automation/tests/it/automation.rs::combine_extract_and_split", "crates/organize/src/tests.rs::extract_and_split_keep_the_pdfx_output_intent_and_identification", "crates/organize/src/tests.rs::extracted_fields_keep_the_forms_drawing_settings", "crates/organize/src/tests.rs::an_extracted_forms_resources_are_copied_as_resources", "crates/ui-egui/tests/it/pickers.rs::extract_pages_takes_the_page_ranges_typed_in_the_dialog"]
 notes = "Carries the PDF/X output intent and identification (#263) in a new XMP packet, and with the fields the form's /NeedAppearances, /DA, /DR and /Q; the source XMP (dates, other schemas) is not copied. The dialog's Pages field takes page ranges (\"1-5, 8, 11-13\", in the order typed, each page once) instead of the selection (#3593); page labels are not accepted there yet."
 
 [[feature]]
@@ -4950,8 +4950,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.flatten"]
 tools = ["doc_flatten"]
-evidence = ["crates/edit/src/tests.rs::flattening_draws_appearances_into_the_page_and_removes_the_comments", "crates/edit/src/tests.rs::flattening_keeps_a_valued_widget_it_cannot_draw", "crates/engine/src/tests.rs::flattening_keeps_the_look_and_drops_the_objects", "crates/engine/src/tests.rs::flattening_a_form_that_needs_appearances_bakes_the_fields_as_shown", "crates/automation/tests/it/automation.rs::flattening_through_tools"]
-notes = "widgets drawn into content and pruned from the field tree; on a form with /NeedAppearances the fields are baked as PdfCraft shows them, drawn from their values, not from their stored appearances (a widget left on its page keeps its own); a widget with no appearance to draw (none stored, or none for its selected state) stays a live field rather than losing its value, so a form with such fields is not fully flattened — Acrobat regenerates appearances first, which PdfCraft does not yet do here"
+evidence = ["crates/edit/src/tests.rs::flattening_draws_appearances_into_the_page_and_removes_the_comments", "crates/edit/src/tests.rs::flattening_keeps_a_valued_widget_it_cannot_draw", "crates/engine/src/tests.rs::flattening_keeps_the_look_and_drops_the_objects", "crates/engine/src/tests.rs::flattening_a_form_that_needs_appearances_bakes_the_fields_as_shown", "crates/engine/src/tests.rs::flattening_a_drawn_field_carries_the_drawings_own_question_mark", "crates/engine/src/tests.rs::flattening_uses_a_drawn_appearance_only_where_it_is_baked", "crates/automation/tests/it/automation.rs::flattening_through_tools"]
+notes = "widgets drawn into content and pruned from the field tree; on a form with /NeedAppearances the fields are first drawn from their values, as PdfCraft shows them, and baked from that drawing rather than from their stored appearances (a widget left on its page, on no page, or whose /Rect can't place it keeps its own; a value with a character the field's font can't draw is refused, as for a stored appearance); a widget that still has no appearance to draw (none stored on a form without /NeedAppearances, or none for its selected state) stays a live field rather than losing its value, so such a form is not fully flattened — Acrobat regenerates appearances first for every form, which PdfCraft does here only for /NeedAppearances"
 
 [[feature]]
 id = "form.prepare-form-mode"
