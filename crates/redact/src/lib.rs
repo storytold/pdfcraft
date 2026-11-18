@@ -665,6 +665,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         removed_appearances: HashSet::new(),
         appearance_scan_limit: false,
         pruned_patterns: Vec::new(),
+        patterns_under_marks: false,
     };
     for &(pi, page_marks) in &groups {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
@@ -687,6 +688,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         mut removed_appearances,
         mut appearance_scan_limit,
         pruned_patterns,
+        patterns_under_marks,
         ..
     } = applying;
 
@@ -873,7 +875,16 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         if shared_pattern_possible || shared_appearance_possible { (0..pdfcraft_model::pages(doc).len()).collect::<Vec<_>>() } else { by_page };
     // A pruned pattern may also stay named by a /Pages node no page inherits from, or by one a
     // page with a broken /Parent link still reaches: then every page-tree node is inspected too.
-    pattern_guard::check(doc, &check_pages, shared_pattern_possible || !pruned_patterns.is_empty())?;
+    // A cell that stays can only hold what a mark covers if the pattern painted something a mark
+    // reached. When no rewritten operator could have painted with a pattern, no form was removed
+    // unread, no annotation under a mark left with its appearance (the marks themselves are not
+    // content under a mark) and no pattern was pruned, the cells are as they were and showed
+    // nothing under a mark: a page that merely lists such a pattern, or paints with it elsewhere,
+    // is not refused (#7696).
+    let patterns_under_marks = patterns_under_marks || !pruned_patterns.is_empty();
+    if patterns_under_marks {
+        pattern_guard::check(doc, &check_pages, shared_pattern_possible || !pruned_patterns.is_empty())?;
+    }
     // Whatever reference keeps a pruned pattern in the file -- one no walk above follows -- the
     // full save would write it: prove it safe or refuse.
     pattern_guard::check_pruned_unreachable(doc, &pruned_patterns, first_page)?;
@@ -918,6 +929,9 @@ struct Applying {
     appearance_scan_limit: bool,
     /// Pattern objects pruned from a page's resources, which page-tree nodes may still name.
     pruned_patterns: Vec<ObjRef>,
+    /// Something a mark reached on some page may have been painted with a pattern
+    /// (`interp::Output::patterns_under_marks`), or an annotation under a mark was removed.
+    patterns_under_marks: bool,
 }
 
 /// Step 1 for one page: rewrites its content so nothing readable stays under a mark, and cleans the tags it no longer shows.
@@ -928,7 +942,18 @@ fn redact_page_content(
     page: &pdfcraft_model::Page,
     rects: &[[f64; 4]],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_xobjects, retired_properties, removed_text, removed_cut, removed_room, images, pruned_patterns, .. } = applying;
+    let Applying {
+        report,
+        doomed_xobjects,
+        retired_properties,
+        removed_text,
+        removed_cut,
+        removed_room,
+        images,
+        pruned_patterns,
+        patterns_under_marks,
+        ..
+    } = applying;
     // 1. Content.
     let mut budget = pdfcraft_cos::DecodeBudget::page();
     let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
@@ -937,6 +962,7 @@ fn redact_page_content(
     let (out, mut budget) = {
         let mut scope = Scope::new(rects, Mode::Apply, report, budget, images).with_removed_room(*removed_room);
         let out = process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY);
+        *patterns_under_marks |= out.patterns_under_marks;
         scope.flush();
         removed_text.append(&mut scope.removed_text);
         *removed_cut |= scope.removed_cut;
@@ -1053,7 +1079,9 @@ fn remove_page_annotations(
     rects: &[[f64; 4]],
     page_marks: &[&Mark],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_fields, widget_owner, removed_everywhere, removed_appearances, appearance_scan_limit, .. } = applying;
+    let Applying {
+        report, doomed_fields, widget_owner, removed_everywhere, removed_appearances, appearance_scan_limit, patterns_under_marks, ..
+    } = applying;
     // 2. Annotations: the marks, and whatever lies under them (with their pop-ups). An entry
     // written in place (a dictionary in `/Annots`, not a reference) is judged like any other: its
     // `/Contents` and `/IRT` stay in the file for as long as the page lists it.
@@ -1109,6 +1137,8 @@ fn remove_page_annotations(
         // than keep potentially sensitive annotation text or appearances after a successful apply.
         let bounds = rect_of(doc, d.get(b"Rect")).ok_or(RedactError::UnreadableAnnotation { page: pi + 1, annotation: i + 1 })?;
         if rects.iter().any(|x| pdfcraft_content::overlaps(*x, bounds, 0.0)) {
+            // Its appearance, a content stream nothing here reads, may paint with patterns.
+            *patterns_under_marks = true;
             match r {
                 Some(r) => removed.push(r),
                 None => inline_gone[i] = true,

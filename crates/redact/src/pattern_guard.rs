@@ -2,9 +2,16 @@
 //!
 //! Pattern cells paint through a path, not `Do`, so clipping/removing the path does not remove
 //! their bytes. Inspect the rewritten pages' resource graphs before committing the
-//! working copy. This is deliberately conservative: an unused text/image-bearing pattern is
-//! refused too. A plain vector pattern remains supported. The bounded read-only pass follows
-//! the fail-closed approach proposed in PR #162.
+//! working copy. This is deliberately conservative: once a mark may have reached anything a
+//! pattern painted, an unused text/image-bearing pattern is refused too. A plain vector pattern
+//! remains supported. The bounded read-only pass follows the fail-closed approach proposed in
+//! PR #162.
+//!
+//! The pass runs only when a pattern may have painted under a mark
+//! (`interp::Output::patterns_under_marks`, decided without trusting which pattern is current), a
+//! pattern was pruned, or an annotation under a mark left with its appearance. Otherwise the cells are as they
+//! were and none showed under a mark, so a page that only lists such a pattern in its resources,
+//! or paints with it away from every mark, is redacted (#7696).
 
 use std::collections::HashSet;
 
