@@ -104,7 +104,7 @@ pub(crate) fn finish(app: &mut PdfCraftApp) {
         let key = request.key.clone();
         app.open_colour_picker(&mut app.dialogs, request, move |app, colour: Srgba| {
             if let Some(dialog) = app.dialogs.get_mut::<FieldPropsDialog>() {
-                dialog.set_colour(&key, crate::comments::to_rgb(colour));
+                dialog.set_colour(&key, crate::comments::colours::to_rgb(colour));
             }
         });
     }
@@ -126,9 +126,8 @@ pub(crate) fn finish(app: &mut PdfCraftApp) {
         let prefix = field.rsplit_once('.').filter(|_| !typed.contains('.')).map(|(p, _)| format!("{p}.")).unwrap_or_default();
         let name = format!("{prefix}{typed}");
         let after = form(app);
-        let index = object
-            .and_then(|obj| after.as_ref()?.iter().find(|f| f.name == name)?.widgets.iter().position(|w| w.obj == obj))
-            .unwrap_or(widget);
+        let index =
+            object.and_then(|obj| after.as_ref()?.iter().find(|f| f.name == name)?.widgets.iter().position(|w| w.obj == obj)).unwrap_or(widget);
         if let (Some(before), Some(after)) = (before, after) {
             let n = pdfcraft_engine::form_calculations_changed(&before, &after).iter().filter(|f| **f != name).count();
             if n > 0 {
@@ -198,7 +197,9 @@ impl StackDialog for FieldPropsDialog {
             return None;
         }
         match out.closed {
-            Some(CloseReason::Activated) if finish_held && out.picked != Some(CANCEL_BUTTON) => Some(self.held.finish().map_or(DialogResult::Cancel, DialogResult::Ok)),
+            Some(CloseReason::Activated) if finish_held && out.picked != Some(CANCEL_BUTTON) => {
+                Some(self.held.finish().map_or(DialogResult::Cancel, DialogResult::Ok))
+            }
             Some(_) => Some(DialogResult::Cancel),
             None => None,
         }

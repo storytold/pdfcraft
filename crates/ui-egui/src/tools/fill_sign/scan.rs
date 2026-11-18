@@ -5,8 +5,8 @@ use craft::behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft::behavior::{CanvasView, EditEvent, PixelSize};
 use craft::host::queue::{JobQueue, Priority, QueueOptions};
 use craft::host::{Host, PickId, PickRequest, Picked, Wake};
-use craft::review::{SignatureDraft, SignatureImage as PadImage};
 use craft::review::ui::signature::DrawPad;
+use craft::review::{SignatureDraft, SignatureImage as PadImage};
 use craft::theme::variant::Tone;
 use craft::ui::buttons::{Button, IconButton};
 use craft::ui::canvas::{Canvas, CropOutside, CropOverlay, PixelRect, RasterDisplay, RasterSource};
@@ -333,18 +333,10 @@ impl ScanTabState {
         let mut crop = crop_of(scan.frame);
         let bounds = DocRect::new(0.0, 0.0, pw, ph);
         let corners = [Point::new(0.0, 0.0), Point::new(pw, 0.0), Point::new(pw, ph), Point::new(0.0, ph)];
-        let shown = Canvas::new(tl!("Photo"))
-            .view(Bind::bound(&mut self.view))
-
-            .document(Size::new(pw, ph))
-            .show_at(ui, room, |ui, body| {
-                RasterDisplay::new(tl!("Signature photo"), &source).show_at(ui, body.rect);
-                CropOverlay::new(tl!("Frame"), Bind::bound(&mut crop))
-                    .outside(CropOutside::NewFrame)
-                    .area(corners)
-                    .bounds(bounds)
-                    .show_at(ui, body.rect)
-            });
+        let shown = Canvas::new(tl!("Photo")).view(Bind::bound(&mut self.view)).document(Size::new(pw, ph)).show_at(ui, room, |ui, body| {
+            RasterDisplay::new(tl!("Signature photo"), &source).show_at(ui, body.rect);
+            CropOverlay::new(tl!("Frame"), Bind::bound(&mut crop)).outside(CropOutside::NewFrame).area(corners).bounds(bounds).show_at(ui, body.rect)
+        });
         let Some(overlay) = shown.inner else { return };
         let mut commit = false;
         for event in overlay.edit.events.iter() {

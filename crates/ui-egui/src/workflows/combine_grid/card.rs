@@ -63,7 +63,6 @@ impl Act {
             Act::Remove => "trash",
         })
     }
-
 }
 
 /// The page a file's tile shows, when one can be drawn: the first the range takes, in the file, with a size.

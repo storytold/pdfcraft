@@ -24,7 +24,7 @@ use crate::theme::{self, Tokens};
 use crate::{QuickTool, icons};
 
 mod bridge;
-mod colours;
+pub(crate) mod colours;
 mod composer;
 mod geometry;
 mod menu;

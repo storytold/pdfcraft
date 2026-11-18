@@ -1,7 +1,7 @@
+use super::BTreeSet;
 use super::files::{CombineKey, Preview, RowAction};
 use super::parts::{moved_pages, removed_pages};
 use super::view::expandable;
-use super::BTreeSet;
 use crate::PdfCraftApp;
 use craft::behavior::selection::Selection;
 

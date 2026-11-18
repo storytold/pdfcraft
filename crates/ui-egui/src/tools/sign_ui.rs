@@ -9,21 +9,21 @@ use craft::review::{SavedSignature, SignatureImage};
 use pdfcraft_engine::sign::{self, Appearance, AppearanceLabels, Certificate, DigitalId, Name, PrivateKey};
 use pdfcraft_engine::{SignOptions, SignatureInfo, SignatureStatus, StatusCaptions};
 
+use crate::FilePurpose;
 use crate::PdfCraftApp;
 use crate::canvas::{DocView, Snapshot, SnapshotKind};
-use crate::workflows::FilePurpose;
 
+pub(crate) mod cert_viewer;
 pub(crate) mod dialog;
 mod panel;
 pub(crate) mod tool;
-pub(crate) mod cert_viewer;
 
 #[cfg(test)]
 use dialog::detail_lines;
 use dialog::graphic_of;
 pub(crate) use dialog::{appearance_labels, status_captions};
-pub(crate) use panel::{banner, panel, status_tone};
 pub use panel::{CertTab, CertViewer, PanelAction, certificate_pem};
+pub(crate) use panel::{banner, panel, status_tone};
 
 /// A digital ID the app knows about (Acrobat: Digital ID files). The file stays where it is;
 /// its password is asked for at each signing.
@@ -186,7 +186,7 @@ pub struct SignView {
 /// Where new digital IDs are saved: next to the recovery folder (`…/PdfCraft/Digital IDs`, or
 /// `PdfCraftData/Digital IDs` in portable mode).
 fn id_dir() -> Option<PathBuf> {
-    crate::platform::portable::data_dir().map(|d| d.join("Digital IDs"))
+    crate::recovery::default_dir().and_then(|d| d.parent().map(|p| p.join("Digital IDs")))
 }
 
 /// Save a new digital ID as `<stem>.p12`, or `<stem> 2.p12`, … when the name is taken. The file
@@ -266,8 +266,7 @@ fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
 impl PdfCraftApp {
     /// Export certificate: write `c` as PEM into a chosen folder, named after its subject.
     pub(crate) fn export_certificate(&mut self, c: &Certificate) {
-        // PLAN: assumed `safe_file_name(&str, &str) -> String` (pdf-shell-w13).
-        let name = format!("{}.cer", crate::files::safe_file_name(&c.display_name(), "attachment"));
+        let name = format!("{}.cer", craft::docpath::names::safe_file_name(&c.display_name(), "attachment"));
         self.write_files(&[(name, std::sync::Arc::new(certificate_pem(c).into_bytes()))], "Export certificate");
     }
 
@@ -791,7 +790,6 @@ mod tests {
         assert!(pem.starts_with("-----BEGIN CERTIFICATE-----"), "{pem}");
         let _ = std::fs::remove_dir_all(&dir);
     }
-
 
     #[test]
     fn a_language_change_leaves_documents_without_a_drawn_state_alone() {

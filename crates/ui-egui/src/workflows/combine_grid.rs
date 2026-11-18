@@ -22,14 +22,13 @@ use crate::combine_ui::{CombineFile, CombineKey, CombineTab, RowAction};
 mod card;
 mod source;
 
-use card::{Act, Pictures};
 pub(crate) use card::preview;
+use card::{Act, Pictures};
 use source::CombineThumbs;
 pub(crate) use source::OpenDocuments;
 
 /// The most pages one file can be spread out into (each is a tile, laid out every frame).
 pub(crate) const MAX_EXPAND: usize = 2000;
-
 
 /// The pages an expanded file shows, in its range's order.
 #[derive(Clone, Debug)]
@@ -197,7 +196,6 @@ fn delete_action(selection: &Selection<CombineKey>, keys: &[CombineKey]) -> Opti
     })
 }
 
-
 /// The grid of files, in the card that holds the list. `checks` is what each entry's range takes and
 /// `twice` whether its file is in the list again, both in list order. Returns what the user did, in order.
 // PLAN: the signature is `(app, ui, checks, twice) -> Vec<RowAction>`: the table's colours and selection
@@ -209,7 +207,8 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, checks: &[Result<us
     let source = CombineThumbs::new(&app.combine_draft, &lists, app.combine_tab.open_documents.clone());
     let thumbs = source::thumbnails(&ctx);
     let pictures = Pictures { thumbs: &thumbs, source: &source };
-    let view = View { draft: &app.combine_draft, index: app.combine_draft.iter().enumerate().map(|(at, f)| (f.id, at)).collect(), lists: &lists, checks };
+    let view =
+        View { draft: &app.combine_draft, index: app.combine_draft.iter().enumerate().map(|(at, f)| (f.id, at)).collect(), lists: &lists, checks };
     let tiles = keyed(&rows.tiles, |key: &CombineKey| *key);
 
     let shown = TileGrid::<CombineKey>::new(tl!("Files").to_string())
@@ -364,7 +363,11 @@ impl PdfCraftApp {
         let Some(f) = self.combine_draft.get(file).filter(|f| self.combine_tab.expanded.contains(&f.id)) else { return Vec::new() };
         let source = self.combine_thumb_source();
         let pages = f.pages_taken().unwrap_or_default();
-        pages.into_iter().enumerate().map(|(nth, page)| (page, self.combine_thumb_state(ctx, &source, CombineKey::Page(f.id, nth), request))).collect()
+        pages
+            .into_iter()
+            .enumerate()
+            .map(|(nth, page)| (page, self.combine_thumb_state(ctx, &source, CombineKey::Page(f.id, nth), request)))
+            .collect()
     }
 
     /// Each listed file's grid thumbnail, in list order (tests and the control channel).

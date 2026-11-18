@@ -22,8 +22,11 @@ fn utc_stamp_is_utc_minutes_and_clamps_pre_epoch() {
     }
     // Past chrono's range every time gives one stamp, whatever the distance, and never panics.
     // (Windows' SystemTime can't hold the largest, so each is checked where it exists.)
-    let far: Vec<String> =
-        [10_000_000_000_000u64, u64::MAX / 2].into_iter().filter_map(|s| SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(s))).map(utc_stamp).collect();
+    let far: Vec<String> = [10_000_000_000_000u64, u64::MAX / 2]
+        .into_iter()
+        .filter_map(|s| SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(s)))
+        .map(utc_stamp)
+        .collect();
     assert!(far.windows(2).all(|w| w[0] == w[1]), "{far:?}");
     assert!(far.iter().all(|s| s.ends_with(" UTC")), "{far:?}");
 }

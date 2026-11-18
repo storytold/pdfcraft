@@ -3,6 +3,7 @@
 
 use craft::pages::ui::range::{PageRangeChoices, PageRangeOptions};
 use craft::pages::{PageRange, PageScope};
+use craft::theme::Srgba;
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
@@ -12,30 +13,50 @@ use craft::ui::form::{Field, FieldGroup};
 use craft::ui::patterns::form_dialogs::{DialogFields, FormDialog, HostedParamDialog, ParamDialog};
 use craft::ui::pickers::Select;
 use craft::ui::runtime::env::UnitKind;
+use craft::ui::runtime::requests::ColorRequest;
 use craft::ui::text::{NumberField, TextField};
 use egui::Ui;
 use pdfcraft_engine::{Edit, OverlayFont, REDACT_PATTERNS, REDACTION_CODE_SETS, RedactPattern, Rgb};
 
 use super::{HiddenDraft, RedactPrefs, SearchDraft, SearchMode};
+use crate::comments::colours::{self, RecentColours};
 use crate::{FilePurpose, PdfCraftApp};
 
-/// A labelled colour row: `palette` over `current`, `Some` when the user picked a colour.
-fn colour_row(ui: &mut Ui, label: &'static str, current: Rgb, key: &'static str, enabled: bool) -> Option<Rgb> {
+const FILL_KEY: &str = "redact.fill";
+const FONT_KEY: &str = "redact.font";
+const OUTLINE_KEY: &str = "redact.outline";
+const HOVER_KEY: &str = "redact.hover";
+
+/// A labelled colour row: `palette` over `current`, `Some` when the user picked a colour. An "Other colour…" request
+/// goes to `request`, which the dialog's owner answers with the app's picker.
+fn colour_row(
+    ui: &mut Ui,
+    label: &'static str,
+    current: Rgb,
+    key: &'static str,
+    enabled: bool,
+    recent: &RecentColours,
+    request: &mut Option<ColorRequest>,
+) -> Option<Rgb> {
     let mut picked = None;
     Field::new(label).enabled(enabled).show(ui, |ui, _| {
-        // PLAN: assumed `comments::palette(&mut Ui, &str, Rgb, &str, &[Rgb]) -> Option<Rgb>` (pdf-comments-w10)
-        let no_extras: &[Rgb] = &[];
-        picked = crate::comments::palette(ui, label, current, key, no_extras);
+        let pick = colours::palette(ui, label, Some(current), key, recent);
+        picked = pick.picked;
+        if pick.request.is_some() {
+            *request = pick.request;
+        }
     });
     picked
 }
 
-fn props_rows(ui: &mut Ui, d: &mut RedactPrefs) {
+fn props_rows(ui: &mut Ui, d: &mut RedactPrefs, recent: &RecentColours, request: &mut Option<ColorRequest>) {
     FieldGroup::new(tl!("Redacted area")).show(ui, |ui, _| {
-        // PLAN: assumed `comments::fill_choice(&mut Ui, &str, Option<Rgb>, &str, &[Rgb]) -> Option<Option<Rgb>>` (pdf-comments-w10)
-        let no_extras: &[Rgb] = &[];
-        if let Some(fill) = crate::comments::fill_choice(ui, tl!("Redacted area fill colour:"), d.fill, "redact.fill", no_extras) {
+        let choice = colours::fill_choice(ui, d.fill, FILL_KEY, recent);
+        if let Some(fill) = choice.choice {
             d.fill = fill;
+        }
+        if choice.request.is_some() {
+            *request = choice.request;
         }
         Checkbox::new(Bind::bound(&mut d.use_overlay)).label(tl!("Use overlay text")).show(ui);
         let on = d.use_overlay;
@@ -86,7 +107,7 @@ fn props_rows(ui: &mut Ui, d: &mut RedactPrefs) {
                 d.look.size = size.clamp(2.0, 144.0);
             }
         });
-        if let Some(c) = colour_row(ui, tl!("Font colour:"), d.look.color, "redact.font", on) {
+        if let Some(c) = colour_row(ui, tl!("Font colour:"), d.look.color, FONT_KEY, on, recent, request) {
             d.look.color = c;
         }
         Checkbox::new(Bind::bound(&mut d.look.repeat)).label(tl!("Repeat overlay text")).enabled(on).show(ui);
@@ -99,15 +120,18 @@ fn props_rows(ui: &mut Ui, d: &mut RedactPrefs) {
         });
     });
     FieldGroup::new(tl!("Redaction mark appearance")).show(ui, |ui, _| {
-        if let Some(c) = colour_row(ui, tl!("Outline colour:"), d.outline, "redact.outline", true) {
+        if let Some(c) = colour_row(ui, tl!("Outline colour:"), d.outline, OUTLINE_KEY, true, recent, request) {
             d.outline = c;
         }
-        if let Some(c) = colour_row(ui, tl!("Fill colour:"), d.hover_fill, "redact.hover", true) {
+        if let Some(c) = colour_row(ui, tl!("Fill colour:"), d.hover_fill, HOVER_KEY, true, recent, request) {
             d.hover_fill = c;
         }
         Text::new(tl!("Shown while the pointer is over a mark.")).shade(Shade::Muted).show(ui);
         Field::new(tl!("Opacity:")).show(ui, |ui, _| {
-            let field = NumberField::new(tl!("Opacity:"), Bind::given(Some(d.opacity * 100.0))).range(10.0..=100.0).commit_decimals(0).unit_kind(UnitKind::Percent);
+            let field = NumberField::new(tl!("Opacity:"), Bind::given(Some(d.opacity * 100.0)))
+                .range(10.0..=100.0)
+                .commit_decimals(0)
+                .unit_kind(UnitKind::Percent);
             if let Some(Some(pct)) = field.show(ui).value().copied() {
                 d.opacity = (pct / 100.0).clamp(0.1, 1.0);
             }
@@ -121,10 +145,26 @@ fn props_rows(ui: &mut Ui, d: &mut RedactPrefs) {
 pub(crate) fn show_props(app: &mut PdfCraftApp, ui: &mut Ui) {
     let Some(mut draft) = app.redact_props.take() else { return };
     let mut open = true;
+    let recent = app.recent_colours.clone();
+    let mut request = None;
     let shown = FormDialog::new(tl!("Redaction Tool Properties"), Bind::bound(&mut draft)).opened(Bind::bound(&mut open)).show(ui, |ui, _, d| {
-        props_rows(ui, d);
+        props_rows(ui, d, &recent, &mut request);
         true
     });
+    if let Some(request) = request {
+        let key = request.key.clone();
+        app.open_colour_picker(crate::colour_picker::PickerHost::App, request, move |app: &mut PdfCraftApp, colour: Srgba| {
+            let Some(draft) = app.redact_props.as_mut() else { return };
+            let colour = colours::to_rgb(colour);
+            match key.as_str() {
+                FILL_KEY => draft.fill = Some(colour),
+                FONT_KEY => draft.look.color = colour,
+                OUTLINE_KEY => draft.outline = colour,
+                HOVER_KEY => draft.hover_fill = colour,
+                _ => {}
+            }
+        });
+    }
     match (shown.accepted, shown.closed) {
         (Some(prefs), _) => {
             if prefs.remember {
@@ -171,7 +211,10 @@ fn search_rows(ui: &mut Ui, d: &mut SearchDraft, import: &mut bool) {
     FieldGroup::new(tl!("Find text and redact")).show(ui, |ui, _| {
         RadioGroup::new(tl!("Search for"), Bind::bound(&mut d.mode)).show(ui, |ui, _| {
             Radio::new(SearchMode::Phrase).label(tl!("Single word or phrase")).show(ui);
-            TextField::new(tl!("Text to find"), Bind::bound(&mut d.text)).placeholder(tl!("Text to find")).enabled(mode == SearchMode::Phrase).show(ui);
+            TextField::new(tl!("Text to find"), Bind::bound(&mut d.text))
+                .placeholder(tl!("Text to find"))
+                .enabled(mode == SearchMode::Phrase)
+                .show(ui);
             Radio::new(SearchMode::Words).label(tl!("Multiple words or phrases")).show(ui);
             TextField::new(tl!("Words or phrases to redact"), Bind::bound(&mut d.words))
                 .placeholder(tl!("One word or phrase per line"))
@@ -193,7 +236,11 @@ fn search_rows(ui: &mut Ui, d: &mut SearchDraft, import: &mut bool) {
         Checkbox::new(Bind::bound(&mut d.case_sensitive)).label(tl!("Case-sensitive")).enabled(phrase_or_words).show(ui);
         Text::new(tl!("Text in images isn't found; recognise text (OCR) first.")).shade(Shade::Muted).show(ui);
         if let Some(n) = d.found {
-            let line = if n == 0 { tl!("No matches.").to_string() } else { crate::i18n::fmt(tl!("{n} match(es) marked for redaction."), &[("n", &n.to_string())]) };
+            let line = if n == 0 {
+                tl!("No matches.").to_string()
+            } else {
+                crate::i18n::fmt(tl!("{n} match(es) marked for redaction."), &[("n", &n.to_string())])
+            };
             Text::new(line).show(ui);
         }
     });
@@ -236,7 +283,12 @@ pub(crate) fn open_apply(app: &mut PdfCraftApp) {
     let message = if marks == 1 {
         tl!("You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.").to_string()
     } else {
-        crate::i18n::fmt(tl!("You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently."), &[("n", &marks.to_string())])
+        crate::i18n::fmt(
+            tl!(
+                "You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently."
+            ),
+            &[("n", &marks.to_string())],
+        )
     };
     let prompt = StandardPrompt::custom(message)
         .title(tl!("Apply redactions"))

@@ -5,9 +5,9 @@
 
 use std::sync::Arc;
 
-use craft::host::{Jobs, Wake};
 #[cfg(not(target_arch = "wasm32"))]
 use craft::host::queue::{JobQueue, Priority, QueueOptions};
+use craft::host::{Jobs, Wake};
 #[cfg(not(target_arch = "wasm32"))]
 use craft::print::ui::HostedPrint;
 use pdfcraft_engine::print::{self, Binding, BookletSubset, Content, Layout, Orientation, PageOrder, SizeMode, Subset, spool};
@@ -83,7 +83,7 @@ pub(crate) struct RunningPrint {
     /// The printer the job goes to.
     pub(crate) printer: String,
     /// `(sent, sheets)`, set by the job as the spooler takes each sheet.
-    pub(crate) count: Arc<crate::JobCount>,
+    pub(crate) count: Arc<super::job_count::JobCount>,
 }
 
 /// The Print dialog's work in the background: the printer list, the per-printer reads and the
@@ -156,13 +156,7 @@ impl PrintTasks {
         {
             // A browser has no threads to queue on.
             let _ = jobs;
-            Self {
-                listed: Vec::new(),
-                wake,
-                web_job: None,
-                web_failed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-                web_last: None,
-            }
+            Self { listed: Vec::new(), wake, web_job: None, web_failed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())), web_last: None }
         }
     }
 }
@@ -484,7 +478,11 @@ impl PdfCraftApp {
             }
             _ => (crate::i18n::fmt(tl!("Sending to {printer}…"), &[("printer", printer)]), 0.0),
         };
-        crate::notices::set_progress(self, crate::notices::ProgressKey::Print, crate::notices::ProgressNotice { label, fraction, cancellable: false });
+        crate::notices::set_progress(
+            self,
+            crate::notices::ProgressKey::Print,
+            crate::notices::ProgressNotice { label, fraction, cancellable: false },
+        );
     }
 
     /// Pick up two-sided answers that arrived, and ask for the picked printer's when the list
@@ -585,7 +583,7 @@ impl PdfCraftApp {
     fn send_to_printer(&mut self, printer: String, bytes: Vec<u8>, mut job: spool::Job) -> Result<PrintStart, String> {
         let ticket = self.print_tasks.next_ticket;
         self.print_tasks.next_ticket = ticket.wrapping_add(1);
-        let count = Arc::new(crate::JobCount::default());
+        let count = Arc::new(super::job_count::JobCount::default());
         let progress = count.clone();
         let wake = self.print_tasks.wake.clone();
         let spooler = self.spooler.clone();
@@ -676,7 +674,9 @@ impl PdfCraftApp {
         // PLAN: assumed `Files::write(&self, path: &Path, bytes: &[u8]) -> Result<(), E: Display>` (SH-C35; a browser downloads under the file name).
         match self.host.files().write(std::path::Path::new(&file), &pdf, craft::host::WriteIntent::SaveAs) {
             // `false`: no host page took the bytes, so the browser downloaded them.
-            Ok(false) => self.notify_fmt("Couldn't print from the browser ({e}); downloaded {name} to print instead", &[("e", error), ("name", &file)]),
+            Ok(false) => {
+                self.notify_fmt("Couldn't print from the browser ({e}); downloaded {name} to print instead", &[("e", error), ("name", &file)])
+            }
             Ok(true) | Err(_) => self.notify_error(error),
         }
     }
@@ -937,7 +937,7 @@ mod tests {
         // PLAN: assumed `Notices::progress(&self, ProgressKey) -> Option<ProgressNotice>` and `Notices::posted(&self) -> Vec<String>` (the posted messages, oldest first), read through `app.notices` (pdf-chrome-w19, L-206).
         let card = |app: &PdfCraftApp| app.notices.progress(crate::notices::ProgressKey::Print);
 
-        let count = Arc::new(crate::JobCount::default());
+        let count = Arc::new(super::job_count::JobCount::default());
         app.print_tasks.running.push(RunningPrint { ticket: 0, printer: "Office".into(), count: count.clone() });
         app.show_print_progress("Office", None);
         let started = card(&app).expect("a card shows while the job runs");
@@ -964,7 +964,7 @@ mod tests {
         assert!(posted.last().is_some_and(|m| m.contains("Office")), "it names the printer: {posted:?}");
 
         // A job the spooler refuses ends its card too, and says why.
-        app.print_tasks.running.push(RunningPrint { ticket: 1, printer: "Office".into(), count: Arc::new(crate::JobCount::default()) });
+        app.print_tasks.running.push(RunningPrint { ticket: 1, printer: "Office".into(), count: Arc::new(super::job_count::JobCount::default()) });
         app.print_tasks.jobs.submit(1, Priority::VISIBLE, |_| Err("the spooler refused the job".into()));
         jobs.run_all();
         app.poll_print();

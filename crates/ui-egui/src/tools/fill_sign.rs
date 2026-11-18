@@ -4,14 +4,14 @@
 //! can be moved, deleted and undone like any comment.
 
 use base64::Engine as _;
-use craft::behavior::{CancelReason, Cursor, CursorIcon, IconId, keyed};
 use craft::behavior::selection::Selection;
+use craft::behavior::{CancelReason, Cursor, CursorIcon, IconId, keyed};
 use craft::keymap::CommandRef;
 use craft::review::ui::signature::{SignatureSettings, paint_signature};
 use craft::review::{SavedSignature, SignatureImage as SavedImage};
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
-use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, Show as _, ShowCollection as _};
-use craft::ui::list::{SelectMode, ThumbAspect};
+use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, SelectMode, Show as _, ShowCollection as _};
+use craft::ui::list::ThumbAspect;
 use craft::ui::primitives::Draw;
 use craft::ui::style::DataColor;
 use craft::ui::tile_grid::{Tile, TileActionPlace, TileGrid};
@@ -19,7 +19,8 @@ use egui::Pos2;
 use pdfcraft_engine::{BorderShape, Edit, FillMark, NewAnnotation, Rgb, Shape, Style};
 use pdfcraft_render::{DocInfo, PageInfo};
 
-use crate::canvas::{PageToolCx, PageXform};
+use crate::canvas::PageXform;
+use crate::canvas::page_tools::PageToolCx;
 use crate::comments::CommentView;
 
 pub(crate) mod scan;

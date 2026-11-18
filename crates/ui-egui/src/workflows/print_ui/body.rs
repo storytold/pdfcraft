@@ -19,8 +19,13 @@ use crate::units::Unit;
 
 const WHICH: [(Which, &str); 5] =
     [(Which::All, "all"), (Which::Current, "current"), (Which::Range, "range"), (Which::Area, "area"), (Which::Selected, "selected")];
-const HANDLING: [(Handling, &str); 5] =
-    [(Handling::Size, "size"), (Handling::Poster, "poster"), (Handling::Multiple, "multiple"), (Handling::Booklet, "booklet"), (Handling::Label, "label")];
+const HANDLING: [(Handling, &str); 5] = [
+    (Handling::Size, "size"),
+    (Handling::Poster, "poster"),
+    (Handling::Multiple, "multiple"),
+    (Handling::Booklet, "booklet"),
+    (Handling::Label, "label"),
+];
 const SUBSET: [(Subset, &str); 3] = [(Subset::All, "all"), (Subset::Odd, "odd"), (Subset::Even, "even")];
 const ORIENTATION: [(Orientation, &str); 3] =
     [(Orientation::Auto, "auto"), (Orientation::Portrait, "portrait"), (Orientation::Landscape, "landscape")];
@@ -138,10 +143,8 @@ fn handling_tabs(d: &PrintDraft) -> Param {
     let name = lbl(tl!("Page Sizing & Handling"));
     Param::custom("handling", name.clone(), move |ui, fields, _| {
         let now = fields.text("handling").unwrap_or("size").to_owned();
-        let entries: Vec<Entry<String>> = tabs
-            .iter()
-            .map(|(h, text)| Entry::new(id_of(&HANDLING, *h).to_owned(), text.clone()).enabled(!area || *h == Handling::Size))
-            .collect();
+        let entries: Vec<Entry<String>> =
+            tabs.iter().map(|(h, text)| Entry::new(id_of(&HANDLING, *h).to_owned(), text.clone()).enabled(!area || *h == Handling::Size)).collect();
         let shown = Segmented::new(name.clone(), Bind::given(now.clone()), &entries).show(ui);
         if let Some(picked) = shown.value().cloned()
             && picked != now
@@ -277,9 +280,11 @@ fn driver_section(d: &PrintDraft) -> Option<PrintSection> {
     let title = lbl(tl!("Printer properties"));
     let loading = d.driver_options.is_none() && d.driver_options_loading.is_some();
     let section = |params: Vec<Param>| {
-        PrintSection::new(title.clone(), params)
-            .button("driver.done", lbl(tl!("Done")), true)
-            .button("driver.reset", lbl(tl!("Reset to printer defaults")), !d.driver_choices.is_empty())
+        PrintSection::new(title.clone(), params).button("driver.done", lbl(tl!("Done")), true).button(
+            "driver.reset",
+            lbl(tl!("Reset to printer defaults")),
+            !d.driver_choices.is_empty(),
+        )
     };
     if loading {
         return Some(section(vec![note("note.driver_loading", tl!("Reading the printer's settings…"))]));
@@ -325,11 +330,7 @@ fn pages_section(d: &PrintDraft, count: usize, units: Unit, has_area: bool) -> P
     }
     let subset = options(
         &SUBSET,
-        vec![
-            (Subset::All, lbl(tl!("All pages in range"))),
-            (Subset::Odd, lbl(tl!("Odd pages only"))),
-            (Subset::Even, lbl(tl!("Even pages only"))),
-        ],
+        vec![(Subset::All, lbl(tl!("All pages in range"))), (Subset::Odd, lbl(tl!("Odd pages only"))), (Subset::Even, lbl(tl!("Even pages only")))],
     );
     PrintSection::new(
         lbl(tl!("Pages to Print")),
@@ -356,7 +357,9 @@ fn sizing_section(d: &PrintDraft) -> PrintSection {
     ];
     params.push(size(radio("size", lbl(tl!("Size")), sizing, print::names::size_mode(d.size))));
     let scale = (*CUSTOM_SCALE.start(), *CUSTOM_SCALE.end());
-    params.push(size(number("custom_scale", lbl(tl!("Custom scale")), scale, d.custom_scale, 1.0, 0, UnitKind::Percent).enabled_when("size", "custom")));
+    params.push(size(
+        number("custom_scale", lbl(tl!("Custom scale")), scale, d.custom_scale, 1.0, 0, UnitKind::Percent).enabled_when("size", "custom"),
+    ));
 
     params.push(label(note(
         "note.label",

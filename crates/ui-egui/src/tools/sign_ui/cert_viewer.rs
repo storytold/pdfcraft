@@ -134,7 +134,10 @@ fn body(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Certificate], trust: &
         }
         let Some(c) = v.chain.get(v.selected).cloned() else { return };
         Stack::new().show(ui, |ui, _| {
-            let out = TabStrip::new(tl!("Certificate details")).kind(TabKind::Text).shown(v.tab).show_items(ui, &Tabs, &mut |tab, _| Tab::new(tab_label(*tab)));
+            let out = TabStrip::new(tl!("Certificate details"))
+                .kind(TabKind::Text)
+                .shown(v.tab)
+                .show_items(ui, &Tabs, &mut |tab, _| Tab::new(tab_label(*tab)));
             for event in out.response.events {
                 if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
                     && let Some(tab) = keys.into_iter().last()
