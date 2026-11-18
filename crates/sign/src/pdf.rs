@@ -25,6 +25,7 @@ use crate::x509::{Certificate, build_chain, build_chain_noted};
 
 mod changes;
 mod listing;
+mod locks;
 mod signing;
 mod types;
 mod validate;
