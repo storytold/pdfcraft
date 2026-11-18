@@ -72,7 +72,7 @@ fn a_form_whose_matrix_is_not_six_numbers_is_refused() {
     }
 }
 
-/// The refusal names the page whose form can't be placed, and says nothing was changed: here the
+/// The refusal names the page whose form can't be placed, and says the operation was refused: here the
 /// second, which shares the first's resources and draws the form the first doesn't, for Apply
 /// Redactions and for Remove Hidden Information.
 #[test]
@@ -96,7 +96,7 @@ fn a_refusal_names_the_page_whose_form_can_t_be_placed() {
             stream("", b"/Fm Do"),
         ])
     };
-    let said = "page 2 can't be redacted safely: a form XObject's /Matrix isn't six numbers given directly or through one reference, so where it draws can't be told; nothing was changed";
+    let said = "page 2 can't be redacted safely: a form XObject's /Matrix isn't six numbers given directly or through one reference, so where it draws can't be told; the operation was refused";
     let mut doc = two_pages();
     mark(&mut doc, 1, &[MARK], "");
     let applied = apply(&mut doc, None);

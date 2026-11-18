@@ -606,7 +606,7 @@ fn unreadable_bytes_in_a_kept_type3_glyph_program_refuse_the_redaction() {
     assert!(refused_for(&out, None, "a Type 3 font's glyph has bytes that can't be read"), "{out:?}");
     assert_eq!(
         out.map(|_| ()).unwrap_err().to_string(),
-        "the document can't be redacted safely: a Type 3 font's glyph has bytes that can't be read; nothing was changed"
+        "the document can't be redacted safely: a Type 3 font's glyph has bytes that can't be read; the operation was refused"
     );
 }
 

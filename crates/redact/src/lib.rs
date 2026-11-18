@@ -125,12 +125,12 @@ pub enum RedactError {
     /// bytes the parser can't read, or past what one page may read or is followed, forms nesting
     /// past what is followed, a form whose placement can't be told. What it holds can't be shown
     /// gone.
-    #[error("page {page} can't be redacted safely: {reason}; nothing was changed")]
+    #[error("page {page} can't be redacted safely: {reason}; the operation was refused")]
     PageRefused { page: usize, reason: String },
     /// [`RedactError::PageRefused`] where no one page is the cause: a Type 3 font's own entries,
     /// glyphs or forms, forms and resources shared across the document, or a page the page tree
     /// doesn't list.
-    #[error("the document can't be redacted safely: {0}; nothing was changed")]
+    #[error("the document can't be redacted safely: {0}; the operation was refused")]
     Refused(String),
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),
