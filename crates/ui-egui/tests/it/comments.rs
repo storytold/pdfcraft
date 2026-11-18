@@ -5630,6 +5630,19 @@ fn edit_copy_and_paste_are_enabled_for_a_selected_comment() {
     assert!(!state(&h, "edit.copy"), "with nothing selected, Copy is greyed out again");
 }
 
+/// Prepare Form keeps ⌘C off the selected comments, so Edit ▸ Copy, which sends the same Copy,
+/// is greyed out there too rather than enabled and doing nothing (#7123).
+#[test]
+fn edit_copy_is_off_for_a_selected_comment_while_preparing_a_form() {
+    let mut h = selected_square();
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(2);
+    assert!(h.state().is_preparing());
+    assert!(h.state().views[0].comments.selected.is_some(), "the comment stays selected");
+    let copy = h.state().menu_state(&h.ctx, &craft_menu::CommandRef::new("edit.copy"));
+    assert!(!copy.enabled, "Edit ▸ Copy is greyed out while preparing a form");
+}
+
 /// A native menu's click never reaches the window, so Edit ▸ Delete closes the Hotbar tools window,
 /// as it closes egui's popups, and removes the selected comment. The window held the Delete.
 #[test]

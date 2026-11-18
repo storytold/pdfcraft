@@ -499,8 +499,12 @@ impl PdfCraftApp {
                 PASTE if edit_objects && self.object_clipboard.is_some() => doc.is_some_and(pdfcraft_engine::Document::allows_modification),
                 // Selected comments are what ⌘C copies when no text is selected, and ⌘V pastes
                 // copied ones onto the pages (#7123); the menu items send those same events.
-                // Selected text is ⌘C's first, and Prepare Form keeps pastes off the pages.
-                "edit.copy" if !organize && view.is_some_and(|v| v.comments.selected.is_some() && v.selected_text().is_none_or(|t| t.is_empty())) => {
+                // Selected text is ⌘C's first, and Prepare Form takes neither key (`clipboard_keys`).
+                "edit.copy"
+                    if !organize
+                        && !self.is_preparing()
+                        && view.is_some_and(|v| v.comments.selected.is_some() && v.selected_text().is_none_or(|t| t.is_empty())) =>
+                {
                     enabled_id("comment.copy")
                 }
                 PASTE if !organize && !self.is_preparing() && self.comment_clipboard.is_some() => enabled_id("comment.paste"),
