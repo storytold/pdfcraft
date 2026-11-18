@@ -455,8 +455,7 @@ impl PdfCraftApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            // PLAN: `pick_first(request, target, continuation)` assumed from pdf-shell-w14; the continuation gets the path.
-            let target = self.active_ids().map(|(_, id)| id);
+            let target = self.pick_target(self.active_ids().map(|(_, id)| id));
             self.pick_first(PickRequest::open("attachment").title(tl!("Attach a file").to_string()), target, |app, path| app.attach_file(&path));
         }
         #[cfg(target_arch = "wasm32")]
@@ -650,7 +649,11 @@ impl PdfCraftApp {
         } else {
             return;
         };
-        let output = PasswordDialog::new(purpose).error(error.map(craft::ui::runtime::env::Label::from)).show(ui);
+        let mut dialog = PasswordDialog::new(purpose);
+        if let Some(error) = error {
+            dialog = dialog.error(craft::ui::runtime::env::Label::from(error));
+        }
+        let output = dialog.show(ui);
         let password = match (output.answer, output.closed) {
             (Some(answer), _) => Some(answer.secret.expose().to_string()),
             (None, Some(_)) => None,

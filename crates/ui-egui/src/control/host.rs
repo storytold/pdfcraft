@@ -1,12 +1,15 @@
 use serde_json::json;
 
-use super::{Reply, Value};
+use super::Value;
+
+/// The side of the Combine thumbnails `ui.state` reports the state of, in points.
+const STATE_THUMB_SIDE: f32 = 160.0;
 
 impl crate::PdfCraftApp {
     /// Cancel any in-progress pointer gesture in every open view.
-    pub(crate) fn cancel_pointer_gestures(&mut self) {
+    pub(crate) fn cancel_pointer_gestures(&mut self, ctx: &egui::Context) {
         for view in &mut self.views {
-            view.cancel_pointer_gestures();
+            view.cancel_pointer_gestures(ctx);
         }
     }
 
@@ -51,7 +54,7 @@ impl crate::PdfCraftApp {
     }
 
     /// `ui.panel`: the dock's panel request.
-    pub(crate) fn panel(&mut self, reset: bool, params: &Value) -> Reply {
+    pub(crate) fn panel(&mut self, reset: bool, params: &Value) -> Result<Value, String> {
         crate::side_panels::command(self, reset, params)
     }
 
@@ -79,10 +82,10 @@ impl crate::PdfCraftApp {
         let pending_opens: Vec<Value> = Vec::new();
         let cards = craft::ui::runtime::toast::cards(ctx, &craft::ui::runtime::env::WindowKey::main());
         let notice = cards.last().map(|card| card.toast.message.as_str().to_string());
-        // PLAN: assumed `card.toast.progress: Option<f32>` is readable; L-206(2) names `Notices::progress(key)` as the reader (pdf-chrome-w19).
         let progress =
             cards.iter().rev().find_map(|card| card.toast.progress.map(|f| json!({ "label": card.toast.message.as_str(), "fraction": f })));
         let dock = crate::side_panels::state(self);
+        let thumb_request = craft::ui::primitives::textures::ThumbRequest::for_cell(STATE_THUMB_SIDE, ctx.pixels_per_point());
         json!({
             "side_panels": dock.clone(),
             "documents": docs,
@@ -92,15 +95,15 @@ impl crate::PdfCraftApp {
                 "page": v.current() + 1,
                 "zoom_percent": (v.view.zoom * 100.0).round(),
                 "fit": format!("{:?}", v.view.fit),
-                "layout": format!("{:?}", v.view.layout),
+                "layout": format!("{:?}", v.view.display),
                 "continuous": v.view.continuous,
-                "page_gaps": v.view.show_page_gaps,
+                "page_gaps": v.view.page_gaps,
                 "organize": v.organize,
                 "grid_zoom": self.organize_zoom,
                 "thumbnail_zoom": v.thumbnail_zoom(),
                 // Pages picked in the organize grid or the Pages panel (empty: the current page).
-                "selected_pages": v.selected.items().map(|p| p + 1).collect::<Vec<_>>(),
-                "auto_scrolling": v.view.auto_scrolling,
+                "selected_pages": v.selected.items.iter().map(|p| p + 1).collect::<Vec<_>>(),
+                "auto_scrolling": v.auto_scrolling(),
                 // The page store's texture counts as the last pass drew the view.
                 "raster_memory": json!({
                     "entries": v.textures.entries,
@@ -128,9 +131,9 @@ impl crate::PdfCraftApp {
                 "zoom": self.combine_zoom,
                 "files": self.combine_draft.iter().map(|f| f.name.clone()).collect::<Vec<_>>(),
                 "selected": self.combine_selection(),
-                "thumbnails": self.combine_thumbnails().iter().map(|t| format!("{t:?}")).collect::<Vec<_>>(),
+                "thumbnails": self.combine_thumbnails(ctx, &thumb_request).iter().map(|t| format!("{t:?}")).collect::<Vec<_>>(),
                 "expanded": self.combine_expanded().iter().filter_map(|i| self.combine_draft.get(*i).map(|f| f.name.clone())).collect::<Vec<_>>(),
-                "preview": self.combine_preview().map(|(file, page, render)| json!({ "file": file, "page": page + 1, "render": format!("{render:?}") })),
+                "preview": self.combine_preview().map(|(file, page)| json!({ "file": file, "page": page + 1 })),
             },
             "quick_tool": match self.quick_tool {
                 crate::QuickTool::Measure(t) => format!("measure-{}", t.name()),
@@ -174,7 +177,6 @@ impl crate::PdfCraftApp {
                 .or_else(|| self.preferences.is_some().then(|| "preferences".to_string()))
                 .or_else(|| self.shortcuts.is_some().then(|| "shortcuts".to_string())),
             "palette_open": self.palette_open,
-            // PLAN: assumed `PdfCraftApp::root_env(&self) -> RootEnv`, hub-w1's one builder (pdf-hub-w1).
             "theme": format!("{:?}", self.root_env().resolved(ctx).mode),
             "theme_preference": self.theme_preference,
             "show_page_edge_shadows": self.show_page_edge_shadows,
@@ -187,7 +189,7 @@ impl crate::PdfCraftApp {
     }
 
     /// `ui.command`: runs a registered command, refused while it is disabled.
-    pub(crate) fn command(&mut self, ctx: &egui::Context, id: &str) -> Reply {
+    pub(crate) fn command(&mut self, ctx: &egui::Context, id: &str) -> Result<Value, String> {
         let spec = pdfcraft_engine::commands::command(id).ok_or_else(|| format!("unknown command {id:?} (see ui.commands)"))?;
         if !self.command_enabled(spec) {
             return Err(format!("{id} is disabled right now"));
@@ -207,13 +209,13 @@ impl crate::PdfCraftApp {
     }
 
     /// `ui.set`: a named view option, as [`Self::set_option`] takes it.
-    pub(crate) fn set(&mut self, ctx: &egui::Context, key: &str, value: &str) -> Reply {
+    pub(crate) fn set(&mut self, ctx: &egui::Context, key: &str, value: &str) -> Result<Value, String> {
         self.set_option(ctx, key, value).map(|()| json!({ "set": key, "value": value }))
     }
 
     /// `ui.open`: opens a file as the user would; a failure replies with its error.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn open(&mut self, path: &str) -> Reply {
+    pub(crate) fn open(&mut self, path: &str) -> Result<Value, String> {
         match self.open_path(path) {
             crate::OpenOutcome::Opened => Ok(json!({ "opened": path, "password_prompt": self.password_prompt.is_some() })),
             crate::OpenOutcome::Focused => Ok(json!({ "opened": path, "focused": true })),
@@ -224,7 +226,7 @@ impl crate::PdfCraftApp {
 
     /// `ui.open` on the web: there is no file system to open from.
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn open(&mut self, _path: &str) -> Reply {
+    pub(crate) fn open(&mut self, _path: &str) -> Result<Value, String> {
         Err("ui.open needs a file system; on the web, drop the file on the page".into())
     }
 }

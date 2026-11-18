@@ -485,7 +485,7 @@ impl PdfCraftApp {
             "sign" | "certify" => {
                 // Sign with a Digital ID for an invisible signature on the current page.
                 let page = self.active.and_then(|i| self.views.get(i)).map_or(0, |v| v.current());
-                self.start_signing(page, None, None, (value == "certify").then_some(2));
+                self.start_signing(ctx, page, None, None, (value == "certify").then_some(2));
             }
             "number-pages" => self.open_number_pages(ctx),
             "convert-colours" => self.open_convert_colours(ctx),

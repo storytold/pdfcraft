@@ -398,7 +398,6 @@ impl PdfCraftApp {
                     }
                 }
                 if let Some(view) = self.views.get_mut(i) {
-                    view.session.comments.selected = None;
                     view.session.comments.history_stepped();
                 }
                 if label == (Edit::ApplyRedactions { pages: None }).label() {
@@ -501,7 +500,7 @@ impl PdfCraftApp {
 
     /// Apply any edit a view queued this frame (organize toolbar, keys).
     /// Returns false when a field refused the typing queued for it (its editor is open again).
-    pub(crate) fn process_pending_edits(&mut self) -> bool {
+    pub(crate) fn process_pending_edits(&mut self, ctx: &egui::Context) -> bool {
         let Some(i) = self.active else { return true };
         // Split view: the other pane's tab can hold an edit too (its field committed when the
         // click that brought this pane forward took the focus). It goes in first, as it came first.
@@ -523,10 +522,6 @@ impl PdfCraftApp {
         // its change has run the field's exit) before the focus scripts run.
         self.run_focus_scripts(i);
         self.run_field_triggers(i);
-        if !applied {
-            // Nor may a shortcut pressed with it (⌘S right after Enter) run behind the refusal.
-            self.deferred_commands.clear();
-        }
         match self.views.get_mut(i).and_then(|v| v.pending_action.take()) {
             Some(crate::canvas::ViewAction::InsertFromFile) => self.insert_from_file_dialog(),
             Some(crate::canvas::ViewAction::InsertFromFileAt(at)) => self.insert_from_file_at(Some(at)),
@@ -534,10 +529,10 @@ impl PdfCraftApp {
             Some(crate::canvas::ViewAction::Save) => {
                 self.save_active(SaveTarget::InPlace);
             }
-            Some(crate::canvas::ViewAction::Extract) => self.open_extract_dialog(),
-            Some(crate::canvas::ViewAction::Split) => self.open_split(false),
+            Some(crate::canvas::ViewAction::Extract) => self.open_extract(ctx),
+            Some(crate::canvas::ViewAction::Split) => self.open_split(ctx, false),
             // Split before the selected pages: the dialog opens over the selection scope.
-            Some(crate::canvas::ViewAction::SplitBeforeSelected) => self.open_split(true),
+            Some(crate::canvas::ViewAction::SplitBeforeSelected) => self.open_split(ctx, true),
             Some(crate::canvas::ViewAction::CopyPages { cut }) => self.copy_pages(cut),
             Some(crate::canvas::ViewAction::PastePages) => self.paste_pages(),
             Some(crate::canvas::ViewAction::EnhanceCamera) => self.enhance_camera(i),
@@ -561,7 +556,7 @@ impl PdfCraftApp {
             }
             Some(crate::canvas::ViewAction::CameraNext(command)) => {
                 self.leave_camera(i);
-                self.execute(command);
+                self.execute(ctx, command);
             }
             Some(crate::canvas::ViewAction::Replace { all }) => self.replace_found(i, all),
             None => {}
@@ -591,7 +586,7 @@ impl PdfCraftApp {
             .split
             .and_then(|_| self.pane_front(other))
             .filter(|&k| k != i)
-            .and_then(|k| self.views.get(k).filter(|v| v.pending_edit.is_some()).map(|v| (k, v.view_key(), v.id)))
+            .and_then(|k| self.views.get(k).filter(|v| v.session.pending_edit.is_some()).map(|v| (k, v.view_key(), v.id)))
         else {
             return (true, None);
         };
@@ -1255,7 +1250,7 @@ impl PdfCraftApp {
     pub fn bookmark_action(&mut self, action: crate::panels::BmAction) {
         use crate::panels::BmAction as A;
         let Some((i, id)) = self.active_ids() else { return };
-        let current = self.views[i].current;
+        let current = self.views[i].current();
         let parent_of = |p: &[usize]| p[..p.len() - 1].to_vec();
         let edit = match action {
             A::New => {
@@ -1378,15 +1373,14 @@ fn bookmark_at<'a>(items: &'a [pdfcraft_render::OutlineItem], path: &[usize]) ->
 /// The open box's own Undo or Redo, as its keys do it: the box's text, selection and line
 /// alignments one step back (or forward) in its typing history. False when the history has no
 /// such step, and then nothing changes.
-// PLAN: assumed `edit_text_ui::Typed { text: String, selection: Option<Range<usize>>, aligns: Vec<Option<TextAlign>> }` with fields the crate can build (pdf-edit-w8, A-3)
 fn step_typing(
     history: &mut crate::edit_text_ui::TypingHistory,
     text: &mut String,
-    selection: &mut Option<std::ops::Range<usize>>,
+    selection: &mut Option<craft::text::ui::editor::TextSelection>,
     aligns: &mut Vec<Option<pdfcraft_engine::TextAlign>>,
     step: Step,
 ) -> bool {
-    let mut now = crate::edit_text_ui::Typed { text: std::mem::take(text), selection: selection.take(), aligns: std::mem::take(aligns) };
+    let mut now = crate::edit_text_ui::Typed::of(std::mem::take(text), selection.take(), std::mem::take(aligns));
     let stepped = history.step(&mut now, step);
     *text = now.text;
     *selection = now.selection;
@@ -1576,11 +1570,12 @@ mod revert_draft_tests {
             app.session.get(id).unwrap().form.iter().find(|f| f.name == name).and_then(|f| f.value.first().cloned()).unwrap_or_default()
         };
         app.views[0].session.forms.focus = Some(Focus { name: "probe".into(), ..focus("") });
-        assert!(app.process_pending_edits());
+        let ctx = egui::Context::default();
+        assert!(app.process_pending_edits(&ctx));
         assert_eq!(count(&app, "enters"), "1", "reaching probe ran its enter");
         app.revert_active();
         assert_eq!(count(&app, "enters"), "0");
-        assert!(app.process_pending_edits());
+        assert!(app.process_pending_edits(&ctx));
         assert_eq!(count(&app, "exits"), "0", "no exit ran on the reverted document");
         assert!(!app.session.get(id).unwrap().dirty);
     }

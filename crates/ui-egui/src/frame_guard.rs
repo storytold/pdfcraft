@@ -160,7 +160,6 @@ mod tests {
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
             let mut app = app(Some(&dir));
             app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-            app.enable_recovery();
             app.open_bytes("a.pdf", None, pdf("First")).unwrap();
             app.open_bytes("b.pdf", None, pdf("Second")).unwrap();
             app
@@ -235,11 +234,12 @@ mod tests {
         // eframe runs `logic` without `ui` while the window is hidden: panics separated by
         // clean hidden frames are not "in a row" and must not end the app.
         let mut app = app(None);
+        let ctx = egui::Context::default();
         for _ in 0..MAX_PANICKING_FRAMES * 2 {
             app.begin_logic();
-            app.guarded_frame(|_| panic!("hidden logic panic"));
+            app.guarded_frame(&ctx, |_| panic!("hidden logic panic"));
             app.begin_logic();
-            app.guarded_frame(|_| {});
+            app.guarded_frame(&ctx, |_| {});
         }
         app.begin_logic();
         assert_eq!(app.panicking_frames, 0, "a clean hidden frame resets the count");
@@ -248,10 +248,11 @@ mod tests {
     #[test]
     fn hidden_frames_that_keep_panicking_still_end_the_app() {
         let mut app = app(None);
+        let ctx = egui::Context::default();
         let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             for _ in 0..MAX_PANICKING_FRAMES {
                 app.begin_logic();
-                app.guarded_frame(|_| panic!("hidden logic panic"));
+                app.guarded_frame(&ctx, |_| panic!("hidden logic panic"));
             }
         }));
         assert!(ended.is_err(), "panics in every hidden frame still reach the limit");
