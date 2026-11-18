@@ -23,9 +23,10 @@
 //! resources, or, when it has none, in those of the content that drew it. Content with resources
 //! of its own is read once; content without them once for each resource dictionary it is drawn
 //! with, since what its names find, and so what it is reported for and what it draws, depends on
-//! that dictionary.
+//! that dictionary. Content first reached so deep that what it draws lies past [`MAX_DEPTH`] is
+//! read again when it is reached less deep.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
@@ -80,7 +81,7 @@ pub(crate) struct Findings {
 pub(crate) fn check(doc: &Document) -> Findings {
     let mut walk = Walk {
         doc,
-        seen: HashSet::new(),
+        seen: HashMap::new(),
         decoded: HashMap::new(),
         streams: 0,
         read: 0,
@@ -110,7 +111,10 @@ pub(crate) fn check(doc: &Document) -> Findings {
                 break;
             }
             data.extend_from_slice(&bytes);
-            data.push(b'\n');
+            // At least one white-space character between parts (ISO 32000-2 Table 31, /Contents):
+            // a space, as the content library joins them, so a comment a part ends in goes on
+            // into the next.
+            data.push(b' ');
         }
         walk.run(&data, resources.as_deref(), context, explicit, Holder::Page, 0);
         let annots = p.dict.get(b"Annots").map(|a| doc.resolve(a));
@@ -137,11 +141,15 @@ pub(crate) fn check(doc: &Document) -> Findings {
 /// itself, or the page or stream it is written in), `None` when none is known.
 type Context = Option<ObjRef>;
 
+/// A content stream or Type 3 font as it is read: the object, the resource dictionary it is read
+/// with when it has none of its own (`None` when it has), and whether it counts as having its own
+/// (a glyph without them does when its font has them).
+type Visit = (ObjRef, Context, bool);
+
 struct Walk<'a> {
     doc: &'a Document,
-    /// The content streams and Type 3 fonts read, each with the resource dictionary it was read
-    /// with when it has none of its own (`None` when it has).
-    seen: HashSet<(ObjRef, Context)>,
+    /// The content streams and Type 3 fonts read, each with the shallowest depth it was read at.
+    seen: HashMap<Visit, usize>,
     /// The data of each content stream decoded, so one read again with other resources isn't
     /// decoded again (`None` when it can't be).
     decoded: HashMap<ObjRef, Option<Arc<[u8]>>>,
@@ -153,12 +161,27 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    /// The decoded data of the stream `o` refers to, read with the resources of `context` (`None`
-    /// when it has its own): once per stream and context, decoded once, within the budgets.
-    fn decode(&mut self, o: &Object, context: Context) -> Option<Arc<[u8]>> {
-        if let Object::Ref(r) = o
-            && !self.seen.insert((*r, context))
-        {
+    /// Whether to read `o` with the resources of `context` (`None` when it has its own), as
+    /// content with resources of its own when `explicit` ([`Visit`]), at `depth`: the first time,
+    /// or again when it is reached less deep than before, as content cut off below it at the
+    /// deeper visit is then read. Never at the same depth or deeper, so a cycle ends.
+    fn visit(&mut self, o: &Object, context: Context, explicit: bool, depth: usize) -> bool {
+        let Object::Ref(r) = o else { return true };
+        let key = (*r, context, explicit);
+        match self.seen.get(&key) {
+            Some(&before) if before <= depth => false,
+            _ => {
+                self.seen.insert(key, depth);
+                true
+            }
+        }
+    }
+
+    /// The decoded data of the stream `o` refers to, read as [`Self::visit`] says: once per stream,
+    /// context and `explicit`, unless it is reached less deep than before; decoded once, within
+    /// the budgets.
+    fn decode(&mut self, o: &Object, context: Context, explicit: bool, depth: usize) -> Option<Arc<[u8]>> {
+        if !self.visit(o, context, explicit, depth) {
             return None;
         }
         self.data(o)
@@ -223,13 +246,12 @@ impl Walk<'_> {
         let own_entry = s.dict.get(b"Resources");
         let own = own_entry.map(|r| self.doc.resolve(r));
         let explicit = own.is_some();
-        let Some(data) = self.decode(o, if explicit { None } else { context }) else { return };
+        let Some(data) = self.decode(o, if explicit { None } else { context }, explicit, depth) else { return };
         let context = match own_entry {
             Some(entry) => entry.as_ref().or_else(|| o.as_ref()),
             None => context,
         };
-        let resources = own.or_else(|| outer.map(|r| Arc::new(r.clone())));
-        self.run(&data, resources.as_deref(), context, explicit, holder, depth);
+        self.run(&data, own.as_deref().or(outer), context, explicit, holder, depth);
     }
 
     /// Read the operators of `data`, drawn with `resources`, those of `context`. `explicit` says
@@ -317,16 +339,14 @@ impl Walk<'_> {
         let explicit = own.is_some();
         // A font with resources of its own is read once, wherever it is selected; one without them
         // once for each resource dictionary it is selected with.
-        if let Object::Ref(r) = f
-            && !self.seen.insert((*r, if explicit { None } else { context }))
-        {
+        if !self.visit(f, if explicit { None } else { context }, explicit, depth) {
             return;
         }
         let context = match own_entry {
             Some(entry) => entry.as_ref().or_else(|| f.as_ref()),
             None => context,
         };
-        let resources = own.or_else(|| outer.map(|r| Arc::new(r.clone())));
+        let resources = own.as_deref().or(outer);
         let procs = d.get(b"CharProcs").map(|c| doc.resolve(c));
         for (_, p) in procs.as_deref().and_then(Object::as_dict).into_iter().flat_map(|d| d.iter()) {
             if depth > MAX_DEPTH {
@@ -340,14 +360,15 @@ impl Walk<'_> {
             };
             let glyph_own = glyph_entry.as_ref().map(|r| doc.resolve(r));
             // A glyph without resources of its own is read once for each dictionary it is read
-            // with, the font's own among them: two fonts may share it.
-            let Some(data) = self.decode(p, if glyph_own.is_some() { None } else { context }) else { continue };
-            let explicit = explicit || glyph_own.is_some();
+            // with, the font's own among them, and for whether its font has them: two fonts may
+            // share it.
+            let glyph_explicit = explicit || glyph_own.is_some();
+            let Some(data) = self.decode(p, if glyph_own.is_some() { None } else { context }, glyph_explicit, depth) else { continue };
             let context = match &glyph_entry {
                 Some(entry) => entry.as_ref().or_else(|| p.as_ref()),
                 None => context,
             };
-            self.run(&data, glyph_own.as_deref().or(resources.as_deref()), context, explicit, Holder::Type3, depth);
+            self.run(&data, glyph_own.as_deref().or(resources), context, glyph_explicit, Holder::Type3, depth);
         }
     }
 }

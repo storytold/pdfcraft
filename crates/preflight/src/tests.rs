@@ -2568,3 +2568,64 @@ fn content_streams_that_name_resources_have_their_own_clause_6_2_2() {
     assert_eq!(found.len(), 1);
     assert!(found.iter().all(|i| !i.fixable));
 }
+
+/// A comment that ends one part of a page's contents goes on into the next: the parts are joined
+/// with a space (ISO 32000-2 Table 31, /Contents), so the operator after it is commented out.
+#[test]
+fn a_comment_runs_on_across_content_parts_clause_6_2_2() {
+    let parts = |first: &str, second: &str| {
+        let (first, second) = (content("", first), content("", second));
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Contents [4 0 R 5 0 R] /Resources << >> >>",
+            first.as_str(),
+            second.as_str(),
+        ];
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.2").map(|i| i.message).collect::<Vec<_>>()
+    };
+    assert!(parts("q % a comment", "UnknownOperator\n0 g Q").is_empty());
+    assert_eq!(parts("q % a comment\n", "UnknownOperator\n0 g Q"), ["Content uses the operator UnknownOperator, which ISO 32000 doesn't define"]);
+}
+
+/// Content first reached so deep that what it draws lies past the depth limit is read again when
+/// it is reached less deep: a form S met at depth 32 through a chain of 31 forms, and drawn again
+/// by the page itself, still has its form T (or its Type 3 font F) read.
+#[test]
+fn content_reached_less_deep_is_read_again_clause_6_2_2() {
+    let unknown = ["Content uses the operator UnknownOperator, which ISO 32000 doesn't define"];
+    // Objects: 5 the shared resources; 6–36 forms A1–A31, each drawing the next, A31 drawing S
+    // (37); S draws T (38) or selects F (39), whose glyph is 40.
+    let found = |s: &str, page: &str| {
+        let form = |data: &str| content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources 5 0 R", data);
+        let names: String = (1..=31).map(|i| format!("/A{i} {} 0 R ", i + 5)).collect();
+        let resources = format!("<< /XObject << {names}/S 37 0 R /T 38 0 R >> /Font << /F 39 0 R >> >>");
+        let mut objs: Vec<String> = vec![resources];
+        objs.extend((1..=31).map(|i| form(&if i < 31 { format!("/A{} Do", i + 1) } else { "/S Do".to_owned() })));
+        objs.push(form(s));
+        objs.push(form("UnknownOperator"));
+        objs.push(
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 40 0 R >> /Resources 5 0 R >>".to_owned(),
+        );
+        objs.push(content("", "1000 0 d0 UnknownOperator"));
+        let more: Vec<&str> = objs.iter().map(String::as_str).collect();
+        content_findings("", "/Resources 5 0 R", page, &more)
+    };
+    assert_eq!(found("/T Do", "/A1 Do /S Do"), unknown);
+    assert_eq!(found("BT /F 1 Tf (a) Tj ET", "/A1 Do BT /F 1 Tf (a) Tj ET"), unknown);
+    // Past the limit only, it isn't read.
+    assert!(found("/T Do", "/A1 Do").is_empty());
+}
+
+/// A glyph two Type 3 fonts share is read for each font as it stands: font A has the page's
+/// resources (5) as its own, font B none, so B's glyph naming /C is reported whichever is first.
+#[test]
+fn a_shared_glyph_is_read_for_a_font_without_resources_too_clause_6_2_2() {
+    let resources = "<< /ColorSpace << /C [/CalGray << /WhitePoint [1 1 1] >>] >> /Font << /A 6 0 R /B 7 0 R >> >>";
+    let font = |own: &str| format!("<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 8 0 R >> {own} >>");
+    let (a, b, glyph) = (font("/Resources 5 0 R"), font(""), content("", "1000 0 d0 /C cs"));
+    let said = ["A Type 3 font's glyphs refer to resources by name, but the font has no Resources dictionary"];
+    for page in ["BT /A 1 Tf (a) Tj /B 1 Tf (a) Tj ET", "BT /B 1 Tf (a) Tj /A 1 Tf (a) Tj ET"] {
+        assert_eq!(content_findings("", "/Resources 5 0 R", page, &[resources, &a, &b, &glyph]), said, "{page}");
+    }
+}
