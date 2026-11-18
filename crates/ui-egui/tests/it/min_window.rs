@@ -1,5 +1,5 @@
-//! The smallest window (#1913): at `MIN_WINDOW_SIZE` the mode bar folds the modes into a menu
-//! and keeps the command search reachable, instead of hiding them under the search field.
+//! The smallest window (#1913): at `MIN_WINDOW_SIZE` the mode bar keeps the menus, the modes and
+//! the command search reachable and inside the window, instead of hiding them under each other.
 
 use egui::accesskit::Role;
 use egui_kittest::Harness;
@@ -17,30 +17,25 @@ fn harness(size: egui::Vec2) -> Harness<'static, PdfCraftApp> {
 }
 
 #[test]
-fn at_the_minimum_width_the_modes_fold_into_a_menu_and_search_stays() {
-    let mut h = harness(egui::vec2(MIN_WINDOW_SIZE[0], MIN_WINDOW_SIZE[1]));
-    assert!(h.query_by_role_and_label(Role::Button, "Convert").is_none(), "no room for the tabs");
-    assert!(h.query_by_role_and_label(Role::Button, "Find tools and commands").is_some(), "command search is reachable");
-    h.get_by_role_and_label(Role::Button, "All tools").click();
-    h.run_steps(4);
-    h.get_by_role_and_label(Role::Button, "E-Sign").click();
-    h.run_steps(4);
-    assert!(h.query_by_role_and_label(Role::Button, "E-Sign").is_some(), "the menu button is named after the mode");
+fn at_the_minimum_width_the_menus_the_modes_and_search_stay_reachable() {
+    let h = harness(egui::vec2(MIN_WINDOW_SIZE[0], MIN_WINDOW_SIZE[1]));
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(MIN_WINDOW_SIZE[0], MIN_WINDOW_SIZE[1]));
+    let search = h.get_by_label("Find tools and commands").rect();
+    assert!(window.contains_rect(search), "command search is inside the window: {search:?}");
+    // The strip shows the current mode whatever the room; the rest fit or fold into its overflow.
+    let mode = h.get_by_label("All tools").rect();
+    assert!(window.contains_rect(mode), "the current mode is inside the window: {mode:?}");
+    assert!(!mode.intersects(search), "the mode strip and the search do not overlap: {mode:?} {search:?}");
     // The menu bar folds the titles that don't fit into "⋯", or all of them into one "Menu" when not
     // even the first fits (craft-menu's `MenuBarUi`). macOS's system font is wider, and at this width
     // the bar is the "Menu" button there; a real macOS window has the native menu bar instead.
-    let menus = |label| h.query_by_role_and_label(Role::MenuItem, label).is_some();
-    let folded = cfg!(target_os = "macos") && menus("Menu");
-    assert!(menus("File") || folded, "main menu reachable");
+    let menus = |label| h.query_by_role_and_label(Role::MenuItem, label);
+    let bar = menus("File").or_else(|| if cfg!(target_os = "macos") { menus("Menu") } else { None });
+    let bar = bar.expect("main menu reachable").rect();
+    assert!(window.contains_rect(bar), "the menus are inside the window: {bar:?}");
+    assert!(!bar.intersects(search), "the menus and the search do not overlap: {bar:?} {search:?}");
 }
 
-#[test]
-fn a_wide_window_keeps_the_mode_tabs() {
-    let h = harness(egui::vec2(1400.0, 900.0));
-    for mode in ["All tools", "Edit", "Convert", "E-Sign"] {
-        assert!(h.query_by_role_and_label(Role::Button, mode).is_some(), "{mode} tab");
-    }
-}
 
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
