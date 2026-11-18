@@ -40,8 +40,8 @@ fn main() {
 /// set, so a required build can never pass the Chinese UI tests only by skipping them.
 fn craft_fonts(dir: &std::path::Path, required: bool) -> Result<String, String> {
     let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
-    let mut seen_files = std::collections::HashSet::new();
-    let mut out = manifest_dedup(dir, &dir.join("fonts/manifest.txt"), wasm, false, &mut seen_files)?;
+    let mut seen_file_scripts = std::collections::HashSet::new();
+    let mut out = manifest_dedup(dir, &dir.join("fonts/manifest.txt"), wasm, false, &mut seen_file_scripts)?;
     if !wasm {
         let chinese = dir.join("fonts/simplified-chinese-manifest.txt");
         println!("cargo::rerun-if-changed={}", chinese.display());
@@ -50,7 +50,7 @@ fn craft_fonts(dir: &std::path::Path, required: bool) -> Result<String, String> 
                 return Err(format!("{}: CRAFT_FONTS_REQUIRED is set but the simplified-Chinese font manifest is missing", chinese.display()));
             }
             Ok(false) => {}
-            Ok(true) => match manifest_dedup(dir, &chinese, false, required, &mut seen_files) {
+            Ok(true) => match manifest_dedup(dir, &chinese, false, required, &mut seen_file_scripts) {
                 Ok(entries) => out.push_str(&entries),
                 // A broken optional addition must never discard the main Japanese/symbol/RTL faces.
                 Err(e) if required => return Err(e),
@@ -63,7 +63,7 @@ fn craft_fonts(dir: &std::path::Path, required: bool) -> Result<String, String> 
         println!("cargo::rerun-if-changed={}", hebrew.display());
         match hebrew.try_exists() {
             Ok(false) => {}
-            Ok(true) => match manifest_dedup(dir, &hebrew, false, false, &mut seen_files) {
+            Ok(true) => match manifest_dedup(dir, &hebrew, false, false, &mut seen_file_scripts) {
                 Ok(entries) => out.push_str(&entries),
                 Err(e) => println!("cargo::warning=skipping optional Hebrew fonts: {e}"),
             },
@@ -81,8 +81,8 @@ fn craft_fonts(dir: &std::path::Path, required: bool) -> Result<String, String> 
 /// pass without the Chinese face it promises.
 #[cfg_attr(not(test), allow(dead_code))]
 fn manifest(dir: &std::path::Path, manifest: &std::path::Path, wasm: bool, strict_cap: bool) -> Result<String, String> {
-    let mut seen_files = std::collections::HashSet::new();
-    manifest_dedup(dir, manifest, wasm, strict_cap, &mut seen_files)
+    let mut seen_file_scripts = std::collections::HashSet::new();
+    manifest_dedup(dir, manifest, wasm, strict_cap, &mut seen_file_scripts)
 }
 
 fn manifest_dedup(
@@ -90,10 +90,11 @@ fn manifest_dedup(
     manifest: &std::path::Path,
     wasm: bool,
     strict_cap: bool,
-    seen_files: &mut std::collections::HashSet<String>,
+    seen_file_scripts: &mut std::collections::HashSet<(String, String)>,
 ) -> Result<String, String> {
     println!("cargo::rerun-if-changed={}", manifest.display());
     let text = std::fs::read_to_string(manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    let mut local_seen = seen_file_scripts.clone();
     let mut out = String::new();
     // A required native Chinese manifest must add the Hans face itself, not merely some other
     // CJK face that happens to fit: otherwise CRAFT_FONTS_REQUIRED would pass while the promised
@@ -137,13 +138,15 @@ fn manifest_dedup(
         if wasm && !web_face {
             continue;
         }
-        if !seen_files.insert((*file).to_string()) {
+        let new_scripts: Vec<&str> =
+            scripts.split(',').map(str::trim).filter(|s| !s.is_empty() && local_seen.insert(((*file).to_string(), (*s).to_string()))).collect();
+        if new_scripts.is_empty() {
             continue;
         }
         has_hans |= cjk_scripts::has_script_tag(scripts, "Hans");
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
         println!("cargo::rerun-if-changed={}", path.display());
-        let scripts: Vec<String> = scripts.split(',').map(|s| format!("{:?}", s.trim())).collect();
+        let scripts: Vec<String> = new_scripts.into_iter().map(|s| format!("{s:?}")).collect();
         let _ = writeln!(
             out,
             "    CraftFont {{ family: {family:?}, style: {style:?}, scripts: &[{}], bytes: include_bytes!({:?}) }},",
@@ -157,6 +160,7 @@ fn manifest_dedup(
             manifest.display()
         ));
     }
+    *seen_file_scripts = local_seen;
     Ok(out)
 }
 
@@ -195,6 +199,34 @@ mod manifest_tests {
         std::fs::write(&path, "Fixture | Regular | face.ttf | Latn\nFixture | Regular | face.ttf | Hebr,Latn\n").unwrap();
         let emitted = manifest(&root, &path, true, false).unwrap();
         assert!(emitted.contains("CraftFont {"), "Hebr row must still be emitted on wasm");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Regression test: a failed optional manifest must not mutate `seen_file_scripts`, and a
+    /// duplicate file row on native builds preserves new script tags (`Hebr`).
+    #[test]
+    fn native_manifest_dedup_is_transactional_and_preserves_new_script_tags() {
+        let root = std::env::temp_dir().join(format!("pdfcraft-native-dedup-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("face.ttf"), b"synthetic manifest fixture").unwrap();
+
+        let bad = root.join("bad-manifest.txt");
+        std::fs::write(&bad, "Fixture | Regular | face.ttf | Hebr\nmalformed line\n").unwrap();
+        let mut seen = std::collections::HashSet::new();
+        assert!(manifest_dedup(&root, &bad, false, false, &mut seen).is_err());
+        assert!(seen.is_empty(), "failed manifest must not commit deduplication state");
+
+        let main = root.join("manifest.txt");
+        std::fs::write(&main, "Fixture | Regular | face.ttf | Latn\n").unwrap();
+        let first = manifest_dedup(&root, &main, false, false, &mut seen).unwrap();
+        assert!(first.contains("&[\"Latn\"]"));
+
+        let hebrew = root.join("hebrew-manifest.txt");
+        std::fs::write(&hebrew, "Fixture | Regular | face.ttf | Hebr,Latn\n").unwrap();
+        let second = manifest_dedup(&root, &hebrew, false, false, &mut seen).unwrap();
+        assert!(second.contains("&[\"Hebr\"]"), "new Hebr script tag must be preserved: {second}");
+        assert!(!second.contains("\"Latn\""), "already-emitted Latn script tag should be deduplicated: {second}");
+
         std::fs::remove_dir_all(root).unwrap();
     }
 }
