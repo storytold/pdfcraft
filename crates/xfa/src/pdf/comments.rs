@@ -77,14 +77,18 @@ fn unmarked_layout_link(doc: &Document, d: &Dict) -> Option<Vec<u8>> {
     uri_of(doc, d)
 }
 
-/// The address of link `d`'s URI action.
+/// The address of link `d`'s URI action, when a layout could have written it: one longer than
+/// [`MAX_LINK`](super::MAX_LINK) characters of at most four bytes each is no layout's, and isn't
+/// copied (thousands of annotations may share one long address).
 fn uri_of(doc: &Document, d: &Dict) -> Option<Vec<u8>> {
     let action = doc.resolve(d.get(b"A")?);
     let action = action.as_dict()?;
     if action.name(b"S") != Some(b"URI".as_slice()) {
         return None;
     }
-    Some(doc.resolve(action.get(b"URI")?).as_string()?.bytes.clone())
+    let uri = doc.resolve(action.get(b"URI")?);
+    let bytes = &uri.as_string()?.bytes;
+    (bytes.len() <= super::MAX_LINK.saturating_mul(4)).then(|| bytes.clone())
 }
 
 /// Take note of the annotations on `doc`'s pages that a layout would not write again, in page
@@ -478,6 +482,28 @@ mod tests {
         assert!(warnings.is_empty(), "{warnings:?}");
         let annots = doc.get(new).as_dict().unwrap().get(b"Annots").cloned().unwrap();
         assert_eq!(annots, Object::Array(vec![Object::Ref(again), Object::Ref(by_hand)]));
+    }
+
+    /// A link of the layouts' earlier shape whose address is longer than any a layout writes is
+    /// a link of its own: its address is not copied for each annotation naming it, and the link is
+    /// carried over all the same.
+    #[test]
+    fn a_link_address_longer_than_a_layout_writes_is_not_copied() {
+        let mut doc = Document::new_empty();
+        let longest = format!("https://example.org/{}", "a".repeat(4 * super::super::MAX_LINK - 20));
+        let longer = format!("{longest}a");
+        let at_limit = doc.add(uri_link(&longest, 4));
+        let past = doc.add(uri_link(&longer, 4));
+        let old = page_with(&mut doc, vec![Object::Ref(at_limit), Object::Ref(past)]);
+        with_pages(&mut doc, &[old]);
+        let carried = take(&doc);
+        let unmarked: Vec<Option<usize>> = carried.annots.iter().map(|a| a.unmarked.as_ref().map(Vec::len)).collect();
+        assert_eq!(unmarked, [Some(longest.len()), None]);
+        let new = page_with(&mut doc, vec![]);
+        with_pages(&mut doc, &[new]);
+        put_back(&mut doc, carried).unwrap();
+        let annots = doc.get(new).as_dict().unwrap().get(b"Annots").cloned().unwrap();
+        assert_eq!(annots, Object::Array(vec![Object::Ref(at_limit), Object::Ref(past)]));
     }
 
     /// Links to pages lead, after a new layout, to the new page with the same index, the zoom
