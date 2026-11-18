@@ -585,7 +585,7 @@ fn unread_fields() -> SignatureInfo {
         modification: Modification::None,
         verdict_shown: false,
         details: vec![Detail::plain(
-            "This form has too many fields, or a field name too long, for PdfCraft to read them all. Any signature among the rest is not listed, so the document is treated as signed.",
+            "PdfCraft could not read all of this form's fields. Any signature among the rest is not listed, so the document is treated as signed.",
         )],
     }
 }

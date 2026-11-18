@@ -267,7 +267,7 @@ fn a_new_signature_field_is_added_only_where_the_walk_reads_it_back() {
     let (fields, whole) = walk_sig_fields(&Document::open(Arc::new(signed)).unwrap());
     assert!(whole && fields.iter().any(|f| f.name == "Signature1"), "the new field is read back");
     let refused = sign(&form_with_text_fields(MAX_FIELDS - 1), &id, &opts);
-    assert!(matches!(&refused, Err(SignError::Pdf(m)) if m.contains("too many fields")), "{:?}", refused.as_ref().err());
+    assert!(matches!(&refused, Err(SignError::Pdf(m)) if m.contains("could not read all of this form's fields")), "{:?}", refused.as_ref().err());
     let existing = SignOptions { field: Some("s".into()), ..opts };
     assert!(sign(&form_with_text_fields(MAX_FIELDS), &id, &existing).is_ok(), "a field the walk reads is signed as before");
 }
@@ -325,13 +325,23 @@ fn a_walk_cut_short_is_listed_as_a_signed_row_of_unknown_validity() {
     assert_eq!(rows, [("UnreadFields".to_string(), true, Status::Unknown)]);
 }
 
-/// The row says why it is there, in a sentence an interface can translate.
+/// The row says why it is there, in a sentence an interface can translate. The sentence names no
+/// cause: a cap reached and a `/Kids` the walk cannot read (a dictionary, here, with no cap near)
+/// both leave fields unread.
 #[test]
 fn the_row_for_a_walk_cut_short_says_why() {
-    let (doc, bytes) = signed_field_past_the_cap();
-    let rows = list(&doc, &bytes, &TrustStore::default());
-    let said: Vec<&str> = rows.iter().flat_map(|r| &r.details).map(|d| d.message.as_str()).collect();
-    assert!(matches!(said.as_slice(), [s] if s.starts_with("This form has too many fields")), "{said:?}");
+    let malformed = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [3 0 R] >> >>")
+        .obj("<< /Type /Pages /Kids [] /Count 0 >>")
+        .obj("<< /T (a) /Kids << /T (b) /FT /Sig >> >>")
+        .build();
+    let malformed = (Document::open(Arc::new(malformed.clone())).unwrap(), malformed);
+    for (doc, bytes) in [signed_field_past_the_cap(), malformed] {
+        let rows = list(&doc, &bytes, &TrustStore::default());
+        let said: Vec<&str> = rows.iter().flat_map(|r| &r.details).map(|d| d.message.as_str()).collect();
+        assert!(matches!(said.as_slice(), [s] if s.starts_with("PdfCraft could not read all of this form's fields.")), "{said:?}");
+        assert!(!said.iter().any(|s| s.contains("too many") || s.contains("too long")), "no cause it cannot vouch for: {said:?}");
+    }
 }
 
 /// A walk that reads the whole form adds no such row: a name at the cap is read.

@@ -11452,7 +11452,8 @@ fn a_signature_named_one_byte_past_the_cap_still_blocks_a_full_rewrite() {
     let (s, id) = open_signed_field_named(4097);
     let doc = s.get(id).unwrap();
     let unread = doc.signatures.iter().find(|r| r.field == "UnreadFields");
-    let said = unread.map(|r| (r.signed, r.status, r.details.first().is_some_and(|d| d.message.starts_with("This form has too many fields"))));
+    let said = unread
+        .map(|r| (r.signed, r.status, r.details.first().is_some_and(|d| d.message.starts_with("PdfCraft could not read all of this form's fields"))));
     assert_eq!(said, Some((true, SignatureStatus::Unknown, true)), "{:?}", doc.signatures);
     assert_eq!(s.save_full_bytes(id).unwrap_err(), EditError::Signed);
 }
