@@ -52,9 +52,12 @@ pub enum BoxSpec {
     Margins([f64; 4]),
 }
 
+/// The size of a page with no usable `/MediaBox`, US Letter, as the renderer and inspector use.
+pub(crate) const LETTER: [f64; 4] = [0.0, 0.0, 612.0, 792.0];
+
 /// Parses a 4-number PDF rectangle `[x0, y0, x1, y1]` into `[xmin, ymin, xmax, ymax]` when it has
 /// finite coordinates and positive width and height.
-fn rect_of(o: Option<&Object>, doc: &Document) -> Option<[f64; 4]> {
+pub(crate) fn rect_of(o: Option<&Object>, doc: &Document) -> Option<[f64; 4]> {
     let o = doc.resolve(o?);
     let v: Vec<f64> = o.as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
     if v.len() != 4 || !v.iter().all(|x| x.is_finite()) {
@@ -71,7 +74,7 @@ fn intersect(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
 }
 
 /// Clips rectangle `a` to `b`, returning `None` when their intersection has no positive area.
-fn clip(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
+pub(crate) fn clip(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
     let r = intersect(a, b);
     (r[2] > r[0] && r[3] > r[1]).then_some(r)
 }
@@ -84,7 +87,7 @@ pub fn page_boxes(doc: &Document) -> Result<Vec<[[f64; 4]; 5]>, OrganizeError> {
             let obj = doc.get(*page);
             let d = obj.as_dict().cloned().unwrap_or_default();
             let own = |k: &[u8]| rect_of(d.get(k).or_else(|| inherited.get(k)), doc);
-            let media = own(b"MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
+            let media = own(b"MediaBox").unwrap_or(LETTER);
             let crop = own(b"CropBox").and_then(|c| clip(c, media)).unwrap_or(media);
             let child = |k: &[u8]| rect_of(d.get(k), doc).and_then(|c| clip(c, media)).unwrap_or(crop);
             [media, crop, child(b"BleedBox"), child(b"TrimBox"), child(b"ArtBox")]

@@ -5002,3 +5002,26 @@ fn a_recovered_page_tree_takes_only_pages_with_content() {
     assert_eq!(recover_page_tree(&mut doc).unwrap(), 2);
     assert_eq!(labels(&doc), ["One", "Two"]);
 }
+
+/// A page gathered into a new page tree whose own `/MediaBox` has no area and whose own
+/// `/CropBox` lies outside the page takes the boxes it inherited through `/Parent`, as the renderer
+/// shows it with them; detached from that parent with its own boxes kept, it would have become US
+/// Letter. A usable own box stays.
+#[test]
+fn a_recovered_page_takes_inherited_boxes_over_unusable_own_ones() {
+    let bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [2 0 R] /Count 1 /MediaBox [0 0 300 200] /CropBox [10 10 290 190] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 0 0] /CropBox [500 500 600 600] /Contents 5 0 R >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 6 0 R >>".to_string(),
+        body("One"),
+        body("Two"),
+    ];
+    let mut doc = open(build(&bodies, "/Root 1 0 R"));
+    assert_eq!(recover_page_tree(&mut doc).unwrap(), 2);
+    let boxes = page_boxes(&doc).unwrap();
+    assert_eq!(boxes[0][0], [0.0, 0.0, 300.0, 200.0]);
+    assert_eq!(boxes[0][1], [10.0, 10.0, 290.0, 190.0]);
+    assert_eq!(boxes[1][0], [0.0, 0.0, 400.0, 300.0]);
+    assert_eq!(boxes[1][1], [10.0, 10.0, 290.0, 190.0]);
+}

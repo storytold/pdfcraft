@@ -227,8 +227,41 @@ pub fn recover_page_tree(doc: &mut Document) -> Result<usize, OrganizeError> {
     let root = doc.add(Dict::new());
     doc.update_dict(catalog, |d| d.set(b"Pages".to_vec(), Object::Ref(root)))?;
     let order: Vec<(ObjRef, Dict)> = found.into_iter().map(|(_, r)| (r, inherited_through_parents(doc, r))).collect();
+    for (page, inherited) in &order {
+        let unusable = unusable_own_boxes(doc, *page, inherited);
+        if !unusable.is_empty() {
+            doc.update_dict(*page, |d| {
+                for k in unusable {
+                    d.remove(k);
+                }
+            })?;
+        }
+    }
     rebuild(doc, &order)?;
     Ok(order.len())
+}
+
+/// The page's own `/MediaBox` and `/CropBox` entries that give way to the ones it inherits, for
+/// [`recover_page_tree`]: a media box without area, or a crop box with no area in the media box,
+/// is read as missing when the inherited one has area (ISO 32000-2 §14.11.2, Table 33; the
+/// renderer's hayro-syntax patch 38 does the same). Detached from its old parent, the page would
+/// otherwise lose the inherited box it is shown with. A usable own box is kept, and so is an
+/// unusable one when the inherited box is no better.
+fn unusable_own_boxes(doc: &Document, page: ObjRef, inherited: &Dict) -> Vec<&'static [u8]> {
+    let own = doc.get(page);
+    let Some(own) = own.as_dict() else { return Vec::new() };
+    let mut out: Vec<&'static [u8]> = Vec::new();
+    let own_media = boxes::rect_of(own.get(b"MediaBox"), doc);
+    let inherited_media = boxes::rect_of(inherited.get(b"MediaBox"), doc);
+    if own.contains(b"MediaBox") && own_media.is_none() && inherited_media.is_some() {
+        out.push(b"MediaBox");
+    }
+    let media = own_media.or(inherited_media).unwrap_or(boxes::LETTER);
+    let shows = |o: Option<&Object>| boxes::rect_of(o, doc).and_then(|c| boxes::clip(c, media)).is_some();
+    if own.contains(b"CropBox") && !shows(own.get(b"CropBox")) && shows(inherited.get(b"CropBox")) {
+        out.push(b"CropBox");
+    }
+    out
 }
 
 /// What page `page` inherits from the nodes its `/Parent` entries lead to, nearest first (ISO
