@@ -11481,7 +11481,7 @@ fn a_filters_parameters_are_read_in_either_form() {
 
     let plain = format!("4 0 obj << /Length {} >> stream\n{}\nendstream endobj", content.len(), String::from_utf8_lossy(content));
     let mut doc = Document::open(Arc::new(page(plain.as_bytes()))).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: Algorithm::Aes128,
         user_password: "",
         owner_password: "owner",
@@ -11558,7 +11558,7 @@ fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
     };
     for (algorithm, filters) in [(Algorithm::Rc4_128, false), (Algorithm::Aes128, true), (Algorithm::Aes256, true)] {
         let mut doc = Document::open(Arc::new(page.clone().into_bytes())).unwrap();
-        doc.set_encryption(&NewEncryption {
+        doc.set_encryption_legacy(&NewEncryption {
             algorithm,
             user_password: "",
             owner_password: "owner",
@@ -11691,7 +11691,7 @@ endobj
 fn an_encrypted_file_with_a_cut_off_update_still_needs_its_password() {
     use pdfcraft_cos::{Algorithm, Document, NewEncryption, SaveOptions, write_full};
     let mut doc = Document::open(Arc::new(one_page_file())).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: Algorithm::Aes128,
         user_password: "user",
         owner_password: "owner",
@@ -11730,7 +11730,7 @@ trailer << /Root 1 0 R >>
 %%EOF"
         .to_vec();
     let mut doc = Document::open(Arc::new(plain)).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: Algorithm::Aes128,
         user_password: "user",
         owner_password: "owner",
