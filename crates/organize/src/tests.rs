@@ -5047,6 +5047,24 @@ fn a_recovered_page_keeps_an_own_box_with_extra_numbers() {
 /// a nearer node's `/MediaBox (bad)` and `/Rotate /Ninety` are passed over for the farther node's
 /// values, as are the page's own unreadable ones. A readable nearer value still wins.
 #[test]
+fn a_recovered_page_takes_an_inherited_real_rotation_as_shown() {
+    // The renderer reads `/Rotate 90.5` as 90; the gathered page must carry that angle so a
+    // clockwise turn gives 180, not 90.
+    let bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [2 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Pages /Parent 2 0 R /Kids [] /Count 0 /MediaBox [0 0 300 200] /Rotate 90.5 >>".to_string(),
+        "<< /Type /Page /Parent 3 0 R /Contents 5 0 R >>".to_string(),
+        body("One"),
+    ];
+    let mut doc = open(build(&bodies, "/Root 1 0 R"));
+    assert_eq!(recover_page_tree(&mut doc).unwrap(), 1);
+    assert_eq!(page_rotation(&doc, 0).unwrap(), 90);
+    rotate_pages(&mut doc, &[0], 90).unwrap();
+    assert_eq!(page_rotation(&doc, 0).unwrap(), 180);
+}
+
+#[test]
 fn a_recovered_page_passes_over_unreadable_inherited_values() {
     let bodies = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),

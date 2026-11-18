@@ -297,7 +297,9 @@ fn renderer_reads_inherited(key: &[u8], value: &Object, doc: &Document) -> bool 
 /// tree no longer reaches still names its parent, and its size and resources may be there. The
 /// renderer's scan reads the same chain (hayro-syntax patch 59). Stops at a node already seen, at
 /// one that is not a dictionary, and after 256 nodes, as that scan does. A box or rotation that scan
-/// can't read is passed over, so a farther node's readable one is taken instead.
+/// can't read is passed over, so a farther node's readable one is taken instead. A rotation the
+/// renderer reads from a real number is copied as the integer it reads, so [`page_rotation`] and
+/// later rotations start from the angle the page is shown at.
 fn inherited_through_parents(doc: &Document, page: ObjRef) -> Dict {
     let mut inherited = Dict::new();
     let mut seen = std::collections::HashSet::from([page]);
@@ -315,7 +317,11 @@ fn inherited_through_parents(doc: &Document, page: ObjRef) -> Dict {
                 && let Some(v) = d.get(k)
                 && renderer_reads_inherited(k, v, doc)
             {
-                inherited.set(k.to_vec(), v.clone());
+                let value = match (k, &*doc.resolve(v)) {
+                    (b"Rotate", Object::Real(_)) => renderer_int(Some(v), doc).map_or_else(|| v.clone(), |r| Object::Int(i64::from(r))),
+                    _ => v.clone(),
+                };
+                inherited.set(k.to_vec(), value);
             }
         }
         next = d.reference(b"Parent");
