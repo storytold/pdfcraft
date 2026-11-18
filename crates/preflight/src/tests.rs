@@ -339,6 +339,62 @@ fn a_font_that_draws_a_glyph_the_substitute_widens_is_not_embedded() {
     assert!(render(&doc) == before, "the page changed when its fonts were embedded");
 }
 
+/// #7663 review: a code the font draws is laid out with the width the font gives it, even zero,
+/// or `/MissingWidth` outside `/FirstChar`..`/LastChar`; and WinAnsi's unassigned 0x7F names no
+/// glyph the substitute has. Embedding would write the substitute's advance (or `.notdef`'s) for
+/// each, moving the text after it, so a font that draws one stays unembedded.
+#[test]
+fn a_drawn_code_with_a_zero_missing_or_unassigned_width_is_not_embedded() {
+    use pdfcraft_fonts::Std14;
+    let standard = |face: Std14, zero: u8| -> String {
+        let w = (32..=255u8).map(|c| if c == zero { 0.0 } else { face.width(c) });
+        format!("/FirstChar 32 /LastChar 255 /Widths [{}]", w.map(|w| w.to_string()).collect::<Vec<_>>().join(" "))
+    };
+    let zero_a = format!("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding {} >>", standard(Std14::Helvetica, b'A'));
+    let content = "BT /F1 12 Tf 10 100 Td (AA) Tj /F2 12 Tf 0 20 Td (AA) Tj /F3 12 Tf 0 20 Td <7F41> Tj /F4 12 Tf 0 20 Td (AA) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let mut doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R /F4 8 0 R >> >> >>",
+            stream.as_str(),
+            // Draws an `A` its /Widths gives zero.
+            zero_a.as_str(),
+            // Draws an `A` outside /FirstChar../LastChar, so /MissingWidth.
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 32 /Widths [278] /FontDescriptor 9 0 R >>",
+            // Draws WinAnsi 0x7F, which Annex D leaves unassigned.
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >>",
+            // Draws only what keeps its width.
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold /Encoding /WinAnsiEncoding >>",
+            "<< /Type /FontDescriptor /FontName /Helvetica-Bold /Flags 32 /MissingWidth 100 /FontBBox [0 0 1 1] /ItalicAngle 0 /Ascent 718 /Descent -207 /CapHeight 718 /StemV 140 >>",
+        ],
+        "",
+    );
+    let fonts = |issues: &[Issue]| -> Vec<(String, bool)> {
+        let mut f: Vec<_> = issues.iter().filter(|i| i.clause == "6.2.11.4").map(|i| (i.message.clone(), i.fixable)).collect();
+        f.sort();
+        f
+    };
+    let left: Vec<(String, bool)> =
+        ["Helvetica", "Helvetica-Bold", "Times-Roman"].iter().map(|n| (format!("The font {n} isn't embedded"), false)).collect();
+    let mut want = left.clone();
+    want.push(("The font Times-Bold isn't embedded".to_string(), true));
+    want.sort();
+    assert_eq!(fonts(&verify(&doc, Level::A2b)), want);
+
+    let render = |doc: &Document| {
+        let bytes = pdfcraft_cos::write_full(doc, &Default::default()).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(std::sync::Arc::new(bytes), Default::default());
+        r.render(pdfcraft_render::RenderRequest { page: 0, scale: 2.0, ..Default::default() }).rgba
+    };
+    let before = render(&doc);
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.fixed.contains(&"Embedded PdfCraft's substitute font programs for Times-Bold".to_string()), "{:?}", r.fixed);
+    assert_eq!(fonts(&r.remaining), left);
+    assert!(render(&doc) == before, "the page changed when its fonts were embedded");
+}
+
 #[test]
 fn embedded_files_differ_between_parts() {
     let doc = build(
