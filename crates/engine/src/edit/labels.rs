@@ -162,6 +162,8 @@ pub const EDIT_LABELS: &[&str] = &[
     "Flatten Fill & Sign",
     "Protect with password",
     "Remove security",
+    // A plug-in run's one undo step (`Session::fold_edits`).
+    crate::PLUGIN_RUN_LABEL,
 ];
 
 /// The names of the batches built below L7, which an interface shows in the same places as

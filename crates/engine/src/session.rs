@@ -21,8 +21,11 @@ use crate::{
 
 mod editing;
 mod files;
+mod marks;
 mod save;
 mod view;
+
+pub use marks::{EditMark, PLUGIN_RUN_LABEL};
 
 #[derive(Default)]
 pub struct Session {
