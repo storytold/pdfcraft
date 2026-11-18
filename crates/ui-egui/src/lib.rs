@@ -762,6 +762,9 @@ pub struct PdfCraftApp {
     /// Recovered documents whose path came from a recovery sidecar and no save has confirmed
     /// yet: their first Save asks where, starting at that path, instead of writing it (#3923).
     recovered_paths: std::collections::HashSet<DocId>,
+    /// Documents made from a PDF opened or unlocked with a password (Extract pages, Summarize
+    /// comments, Combine). They aren't encrypted, so autosave leaves them out.
+    no_autosave: std::collections::HashSet<DocId>,
     last_autosave: Option<web_time::Instant>,
     allow_quit: bool,
     /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see

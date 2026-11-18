@@ -7,8 +7,8 @@ use egui::accesskit::Role;
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use pdfcraft_engine::Edit;
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp, RecoveryStore};
+use pdfcraft_engine::{Edit, NewAnnotation, NoteIcon, Shape, Style};
+use pdfcraft_ui_egui::{Dialog, FilePurpose, PdfCraftApp, RecoveryStore};
 
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
@@ -264,6 +264,57 @@ fn encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password()
     assert!(d.dirty);
     assert_eq!(d.info.pages.len(), 1);
     let _ = Modifiers::NONE;
+}
+
+/// Extract pages, Summarize comments and Combine open their result as a new document, which isn't
+/// encrypted. Made from a password-protected PDF, its snapshot would hold the protected content in
+/// plain text, so it is not autosaved. Made from an unprotected PDF, it still is.
+#[test]
+fn documents_made_from_a_protected_pdf_are_not_autosaved() {
+    for protected in [true, false] {
+        for how in ["extract", "summary", "combine"] {
+            let tag = format!("{how}-{protected}");
+            let s = store(&format!("made-{tag}"));
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.enable_recovery(s.clone());
+            let source = if protected { encrypted(fixture(2), "pw") } else { fixture(2) };
+            if how == "combine" {
+                app.use_files(FilePurpose::Combine, vec![("secret.pdf".into(), source), ("plain.pdf".into(), fixture(1))]);
+                if protected {
+                    assert!(app.combine_unlock_rows(&[0], "pw"), "{tag}");
+                }
+                app.combine_staged();
+            } else {
+                app.open_bytes("secret.pdf", None, source).unwrap();
+                if protected {
+                    app.submit_password(Some("pw".into()));
+                }
+                assert_eq!(app.views.len(), 1, "{tag}");
+                if how == "extract" {
+                    app.extract_selection();
+                } else {
+                    let shape = Shape::Note { at: [100.0, 100.0], icon: NoteIcon::Comment };
+                    let style = Style::default_for(&shape);
+                    let note = NewAnnotation { page: 0, shape, style, contents: "Secret note".into(), author: String::new() };
+                    assert!(app.apply_edit(Edit::AddAnnotation(note)), "{tag}");
+                    app.summarize_comments();
+                }
+            }
+            let (name, dirty) = app.views.last().and_then(|v| app.session.get(v.id)).map(|d| (d.name.clone(), d.dirty)).unwrap_or_default();
+            assert!(dirty && name != "secret.pdf", "{tag}: the new document opened ({name})");
+            app.autosave_now();
+            let snapshots = s.list();
+            if protected {
+                for m in &snapshots {
+                    assert!(m.encrypted, "{tag}: {} was autosaved in plain text", m.name);
+                }
+            } else {
+                assert!(snapshots.iter().any(|m| m.name == name), "{tag}: {name} has no snapshot");
+            }
+            s.clear();
+        }
+    }
 }
 
 /// #813: cancelling the password prompt of a recovered snapshot must not hand its path and

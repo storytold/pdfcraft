@@ -762,7 +762,7 @@ impl PdfCraftApp {
                 };
                 // Save As offers the tab's name, so a name typed in the dialog is kept.
                 let name = if renamed { format!("{base}.pdf") } else { format!("{stem} (extract).pdf") };
-                self.open_created(&name, bytes, &message)
+                self.open_created(&name, bytes, &message, self.opened_with_password(id))
             }
             Err(e) => {
                 self.notify_fmt("Couldn't extract pages: {e}", &[("e", &e.to_string())]);
@@ -900,14 +900,26 @@ impl PdfCraftApp {
         let stem =
             self.session.get(id).map(|d| std::path::Path::new(&d.name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
         match self.session.summarize_comments(id, self.summary_sort) {
-            Ok(bytes) => self.open_created(&format!("Summary of comments on {}.pdf", stem.unwrap_or_default()), bytes, "Created a comment summary"),
+            Ok(bytes) => self.open_created(
+                &format!("Summary of comments on {}.pdf", stem.unwrap_or_default()),
+                bytes,
+                "Created a comment summary",
+                self.opened_with_password(id),
+            ),
             Err(e) => self.notify_fmt("Couldn't summarize comments: {e}", &[("e", &e.to_string())]),
         }
     }
 
-    pub(crate) fn open_created(&mut self, name: &str, bytes: Arc<Vec<u8>>, message: &str) {
+    /// Open `bytes` (Extract pages, Summarize comments, Combine) as a new unsaved document.
+    /// `from_protected`: made from a PDF opened or unlocked with a password. The new document
+    /// isn't encrypted, so it is never autosaved: its recovery snapshot would hold the protected
+    /// content in plain text.
+    pub(crate) fn open_created(&mut self, name: &str, bytes: Arc<Vec<u8>>, message: &str, from_protected: bool) {
         match self.session.open_new(name, bytes) {
             Ok(id) => {
+                if from_protected {
+                    self.no_autosave.insert(id);
+                }
                 // The reading-colours preference is app-wide: the newly created document starts with it.
                 self.session.set_reading_colors(id, self.reading_colors);
                 let Some(doc) = self.session.get(id) else { return };
@@ -921,6 +933,11 @@ impl PdfCraftApp {
             }
             Err(e) => self.notify_fmt("Couldn't open the result: {e}", &[("e", &e.to_string())]),
         }
+    }
+
+    /// Whether `doc` was opened or unlocked with a password.
+    fn opened_with_password(&self, doc: DocId) -> bool {
+        self.session.get(doc).and_then(|d| d.password.as_deref()).is_some_and(|p| !p.is_empty())
     }
 }
 

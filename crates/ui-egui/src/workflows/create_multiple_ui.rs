@@ -144,7 +144,8 @@ impl PdfCraftApp {
             crate::i18n::fmt(tl!("Created a PDF from {n} files"), &[("n", &n)])
         };
         let before = self.views.len();
-        self.open_created("Combined.pdf", bytes, &message);
+        // The PDFs here are read without a password, so none was protected.
+        self.open_created("Combined.pdf", bytes, &message, false);
         if self.views.len() > before
             && let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
         {

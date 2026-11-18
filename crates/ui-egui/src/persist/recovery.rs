@@ -10,7 +10,9 @@
 //! asks where, starting at that path, and later saves write where the user chose (#3923).
 //!
 //! Encrypted documents are stored encrypted (the working file is), so recovery never writes
-//! plaintext of a protected document to disk. The web build has no recovery store yet.
+//! plaintext of a protected document to disk. A document made from one (Extract pages, Summarize
+//! comments, Combine) isn't encrypted, so it is not autosaved at all. The web build has no
+//! recovery store yet.
 //!
 //! On Unix the folder is owner-only (`0o700`), so other accounts on the machine can't read the
 //! snapshots of documents that aren't encrypted.
@@ -351,6 +353,9 @@ impl PdfCraftApp {
     pub fn autosave_now(&mut self) {
         let Some(store) = self.recovery.clone() else { return };
         for snap in self.session.autosave_snapshots() {
+            if self.no_autosave.contains(&snap.doc) {
+                continue;
+            }
             let key = self.recovery_keys.entry(snap.doc).or_insert_with(|| format!("{}-{}-{}", now_secs(), std::process::id(), snap.doc.0)).clone();
             let meta =
                 RecoveryMeta { key, name: snap.name, path: snap.path, saved_at: now_secs(), encrypted: snap.encrypted, instance: store.instance() };
