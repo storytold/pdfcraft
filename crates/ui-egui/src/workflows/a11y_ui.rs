@@ -169,7 +169,7 @@ fn options_dialog(fields: &mut DialogFields, pages: usize, current: usize) -> Pa
         .companions(shown_rule_keys(fields)),
     );
     params.push(Param::new("show_dialog", tl!("Show this dialog when the Checker starts"), ParamKind::bool(true)));
-    ParamDialog::new("a11y.options", tl!("Accessibility Checker Options"), params).ok_label(tl!("Start Checking"))
+    ParamDialog::new("a11y.options", tl!("Accessibility Checker Options"), params).ok_label(tl!("Start Checking").into())
 }
 
 /// Opens the Accessibility Checker Options dialog over the saved options.
@@ -502,7 +502,7 @@ impl PdfCraftApp {
         self.a11y.previous = None;
         self.a11y.options = Some(options);
         self.a11y.report = Some((id, report));
-        self.right = Some(RightPanel::Accessibility);
+        self.set_right(Some(RightPanel::Accessibility));
         self.notify(if failed == 0 {
             tl!("No untagged content was found.").to_string()
         } else {
@@ -547,7 +547,7 @@ impl PdfCraftApp {
             if self.a11y.options.as_ref() == Some(&options) { self.a11y.report.take().filter(|(prior_id, _)| *prior_id == id) } else { None };
         self.a11y.options = Some(options);
         self.a11y.report = Some((id, report));
-        self.right = Some(RightPanel::Accessibility);
+        self.set_right(Some(RightPanel::Accessibility));
         self.notify(if failed == 0 && manual == 0 && skipped == 0 {
             tl!("The checker found no problems in this document.").to_string()
         } else if failed == 1 {
@@ -612,7 +612,7 @@ impl PdfCraftApp {
                     return;
                 }
                 if self.tags_state.select(id, &tags, object) {
-                    self.right = Some(RightPanel::Tags);
+                    self.set_right(Some(RightPanel::Tags));
                     if let Some(page) = page {
                         self.a11y_show_on_page(index, page, bbox);
                     }

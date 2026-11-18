@@ -932,12 +932,12 @@ mod tests {
     fn the_progress_card_counts_the_sheets_of_a_print_job() {
         let jobs = Arc::new(craft::host::ManualJobs::new());
         let mut app = PdfCraftApp::for_unit_tests();
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.print_tasks = PrintTasks::new(jobs.clone(), Wake::none());
         // PLAN: assumed `Notices::progress(&self, ProgressKey) -> Option<ProgressNotice>` and `Notices::posted(&self) -> Vec<String>` (the posted messages, oldest first), read through `app.notices` (pdf-chrome-w19, L-206).
         let card = |app: &PdfCraftApp| app.notices.progress(crate::notices::ProgressKey::Print);
 
-        let count = Arc::new(super::job_count::JobCount::default());
+        let count = Arc::new(crate::JobCount::default());
         app.print_tasks.running.push(RunningPrint { ticket: 0, printer: "Office".into(), count: count.clone() });
         app.show_print_progress("Office", None);
         let started = card(&app).expect("a card shows while the job runs");
@@ -964,7 +964,7 @@ mod tests {
         assert!(posted.last().is_some_and(|m| m.contains("Office")), "it names the printer: {posted:?}");
 
         // A job the spooler refuses ends its card too, and says why.
-        app.print_tasks.running.push(RunningPrint { ticket: 1, printer: "Office".into(), count: Arc::new(super::job_count::JobCount::default()) });
+        app.print_tasks.running.push(RunningPrint { ticket: 1, printer: "Office".into(), count: Arc::new(crate::JobCount::default()) });
         app.print_tasks.jobs.submit(1, Priority::VISIBLE, |_| Err("the spooler refused the job".into()));
         jobs.run_all();
         app.poll_print();

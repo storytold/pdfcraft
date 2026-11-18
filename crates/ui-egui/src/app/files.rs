@@ -25,7 +25,7 @@ pub(crate) fn same_file(open: &str, path: &str) -> bool {
 
 impl PdfCraftApp {
     /// Shows `panel` as the right panel, or closes the one showing for `None`.
-    fn set_right(&mut self, panel: Option<RightPanel>) {
+    pub(crate) fn set_right(&mut self, panel: Option<RightPanel>) {
         use crate::side_panels::{PanelId, set_panel_visible};
         // PLAN: assumed `PanelId::from(RightPanel)` (pdf-chrome-w13)
         match panel {

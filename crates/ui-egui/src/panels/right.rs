@@ -84,7 +84,7 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _cx: &mut BodyCx<'_>
         app.a11y_action(index, a);
     }
     if let Some(a) = compare_action {
-        app.compare_action(index, a);
+        app.compare_action(ui.ctx(), index, a);
     }
     match sig_action {
         Some(crate::sign_ui::PanelAction::Validate) => app.run_command("sign.validate"),

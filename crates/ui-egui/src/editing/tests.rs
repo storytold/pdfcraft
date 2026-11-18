@@ -92,7 +92,7 @@ fn a_refused_text_box_is_put_back_whole() {
     app.open_bytes("a.pdf", None, no_changes_pdf()).unwrap();
     let style = crate::content_ui::default_style();
     app.views[0].session.content.draft = Some(crate::content_ui::TextDraft::new(0, None, [20.0, 20.0, 120.0, 40.0], "Typed".into(), style));
-    app.undo();
+    app.undo(&egui::Context::default());
     let content = &app.views[0].session.content;
     assert_eq!(content.draft.as_ref().map(|d| d.text.as_str()), Some("Typed"), "the refused box stays open");
     assert_eq!(content.select_added, None, "nothing was added to select");

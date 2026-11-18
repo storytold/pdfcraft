@@ -125,7 +125,7 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         // The list; files dropped over the window join it.
         DropVeil::new(tl!("Drop to add the files")).show(ui, |ui, files| {
             if let Some(files) = files {
-                dropped = Some(files.to_vec());
+                dropped = Some(files.files.clone());
             }
             if n == 0 {
                 Notice::new(Tone::Info, tl!("Add the files to combine"))
@@ -183,7 +183,7 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         if app.combine_draft.iter().any(CombineFile::unreadable) {
             app.combine_tab.confirm_skip = true;
         } else {
-            app.combine_staged();
+            app.combine_staged(ui.ctx());
         }
     }
     skip_prompt(app, ui);
@@ -258,7 +258,7 @@ fn skip_prompt(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if out.closed.is_some() {
         app.combine_tab.confirm_skip = false;
         if out.picked == Some(0) {
-            app.combine_staged();
+            app.combine_staged(ui.ctx());
         }
     }
 }
@@ -278,7 +278,7 @@ fn unlock_dialog(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     };
     let mut dialog = PasswordDialog::new(purpose).tag(rows.clone()).note(tl!("The password is only used to read the file; it isn't saved."));
     if let Some(error) = error {
-        dialog = dialog.error(error);
+        dialog = dialog.error(error.into());
     }
     let out = dialog.show(ui);
     if let Some(mut answer) = out.answer {

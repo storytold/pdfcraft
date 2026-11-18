@@ -67,7 +67,7 @@ pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, place: Place) {
                 app.combine_tab.focused = true;
             }
             DocumentTabsEvent::CloseRequested(StripTab::View(key)) => app.tab_action(Action::Close(key)),
-            DocumentTabsEvent::CloseRequested(StripTab::Combine) => app.close_combine_tab(),
+            DocumentTabsEvent::CloseRequested(StripTab::Combine) => app.close_combine_tab(ui.ctx()),
             DocumentTabsEvent::Reordered { documents, before } => {
                 for document in documents {
                     let StripTab::View(key) = document else { continue };

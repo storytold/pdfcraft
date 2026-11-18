@@ -86,7 +86,7 @@ impl PdfCraftApp {
     }
 
     /// Put `list` back (undo, redo).
-    fn combine_set_list(&mut self, list: CombineList) {
+    fn combine_set_list(&mut self, ctx: &egui::Context, list: CombineList) {
         let ids: BTreeSet<u64> = list.files.iter().map(|f| f.id).collect();
         let lead = list.selected.last().copied();
         self.combine_draft = list.files;
@@ -96,9 +96,7 @@ impl PdfCraftApp {
         self.combine_tab.revision = self.combine_tab.revision.wrapping_add(1);
         // A Pages field with the keyboard would otherwise keep typing into the restored list
         // without an undo step.
-        if let Some(ctx) = &self.ctx {
-            ctx.memory_mut(|m| m.stop_text_input());
-        }
+        ctx.memory_mut(|m| m.stop_text_input());
     }
 
     /// Run `change` on the list as one undo step named `label`; a change that leaves the list as it
@@ -133,7 +131,7 @@ impl PdfCraftApp {
     }
 
     /// Edit ▸ Undo / Redo (⌘Z, ⇧⌘Z) while the Combine files tab shows.
-    pub(crate) fn combine_history_step(&mut self, undo: bool) {
+    pub(crate) fn combine_history_step(&mut self, ctx: &egui::Context, undo: bool) {
         // ⌘Z in the password box is not about the list, and a Pages field being edited has its own
         // undo; the history never sees that edit's `Begin`, so `is_open` can't say so.
         if self.combine_tab.unlock.is_some() || self.combine_tab.range_edit.is_some() {
@@ -142,7 +140,7 @@ impl PdfCraftApp {
         let mut now = self.combine_list();
         let step = if undo { Step::Undo } else { Step::Redo };
         if self.combine_tab.history.step(&mut now, step) {
-            self.combine_set_list(now);
+            self.combine_set_list(ctx, now);
         }
     }
 
@@ -277,10 +275,9 @@ impl PdfCraftApp {
     }
 
     /// Close the Combine files tab and forget its list; the last document shows, if any.
-    pub fn close_combine_tab(&mut self) {
+    pub fn close_combine_tab(&mut self, ctx: &egui::Context) {
         let showing = self.combine_showing();
-        // PLAN: assumed `release_thumbnails(&CombineTab)` without a context (pdf-workflows-w7; L-208)
-        crate::combine_grid::release_thumbnails(&self.combine_tab);
+        crate::combine_grid::release_thumbnails(ctx, &self.combine_tab);
         // (Revisions keep counting: a drag begun before can never match a list made after.)
         let revision = self.combine_tab.revision.wrapping_add(1);
         self.combine_tab = CombineTab { revision, ..CombineTab::default() };
@@ -518,7 +515,7 @@ impl PdfCraftApp {
 
     /// Combine the listed files into a new, unsaved document; the tab makes way for it.
     /// Files that can't be read are left out (the user was asked).
-    pub fn combine_staged(&mut self) {
+    pub fn combine_staged(&mut self, ctx: &egui::Context) {
         let files: Vec<&CombineFile> = self.combine_draft.iter().filter(|f| !f.unreadable()).collect();
         if files.is_empty() {
             return;
@@ -531,7 +528,7 @@ impl PdfCraftApp {
         let passwords: Vec<Option<&str>> = files.iter().map(|f| f.password()).collect();
         match self.session.combine_grouped(&sources, &groups, &passwords) {
             Ok(bytes) => {
-                self.close_combine_tab();
+                self.close_combine_tab(ctx);
                 let message = crate::i18n::fmt(tl!("Combined {n} files"), &[("n", &count.to_string())]);
                 self.open_created("Combined.pdf", bytes, &message)
             }
