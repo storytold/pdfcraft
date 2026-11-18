@@ -1747,9 +1747,8 @@ mod tests {
     }
 
     /// What the app said to the user, from the notices it posted.
-    // PLAN: assumed `Notices::posted(&self) -> impl Iterator<Item = &Notice>` (pdf-chrome-w19, L-206) on `PdfCraftApp::notices`, and `Notice::text() -> &str`.
-    fn said(app: &PdfCraftApp) -> String {
-        app.notices.posted().map(|n| n.text().to_owned()).collect::<Vec<_>>().join("\n")
+    fn said(app: &mut PdfCraftApp) -> String {
+        crate::notices::texts(app, &egui::Context::default()).join("\n")
     }
 
     /// A re-read of page 1 in flight under ticket 1.
@@ -2014,7 +2013,7 @@ mod tests {
         with_state(&mut app, |v, app| v.start_reread(app, 0, Some([10.0, 10.0, 10.0, 60.0])));
         assert!(app.ocr_verify.reread.is_none(), "nothing runs");
         assert_eq!(app.ocr_verify.page(0).expect("page").words.len(), 1, "the existing words are intact");
-        assert!(said(&app).contains("empty or outside"));
+        assert!(said(&mut app).contains("empty or outside"));
         // Nor does one wholly outside the page.
         with_state(&mut app, |v, app| v.start_reread(app, 0, Some([-50.0, -50.0, -1.0, -1.0])));
         assert!(app.ocr_verify.reread.is_none());
@@ -2267,7 +2266,7 @@ mod tests {
         assert_eq!(app.active, Some(0), "and comes to the front");
         assert!(app.ocr_verify.open, "with its review");
         assert_eq!(app.ocr_verify.text_of((0, 0)), Some("Edited"), "as it was");
-        assert!(!said(&app).is_empty(), "a notice says to accept or reject it first");
+        assert!(!said(&mut app).is_empty(), "a notice says to accept or reject it first");
         app.ocr_verify.open = false;
         app.request_close_tab(2);
         assert_eq!(app.views.len(), 2, "another document closes as usual");
@@ -2377,7 +2376,7 @@ mod tests {
         assert!(matches!(app.close_requested(), CloseDecision::Hold), "the close is held");
         assert_eq!(app.active, Some(0), "the reviewed document comes to the front");
         assert!(app.ocr_verify.open, "with its review");
-        assert!(!said(&app).is_empty(), "a notice says to accept or reject it first");
+        assert!(!said(&mut app).is_empty(), "a notice says to accept or reject it first");
         assert_eq!(app.views.len(), 2, "nothing closed");
         assert!(app.ocr_verify.reject());
         assert!(matches!(app.close_requested(), CloseDecision::Close), "after Reject, the close goes ahead");

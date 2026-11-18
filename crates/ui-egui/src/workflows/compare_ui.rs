@@ -80,7 +80,8 @@ pub(crate) fn open_compare_dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let new_name = app.session.get(new).map(|d| d.name.clone()).unwrap_or_default();
     let count = app.views.get(active_i).map_or(0, |v| v.page_count());
     let fields = DialogFields::from_pairs([("old", old.unwrap_or_default()), ("pages", app.compare_pages.clone())]);
-    let build = move |fields: &mut DialogFields| {
+    // Passed inline: a closure made apart from the call gets one lifetime for its argument and result.
+    let dialog = HostedParamDialog::new(ctx, DIALOG_KEY, fields, move |fields: &mut DialogFields| {
         let chosen = fields.text("old").filter(|o| !o.is_empty()).map(str::to_owned);
         let pages_ok = parse_pages(fields.text("pages").unwrap_or_default(), count).is_ok();
         let options = others.iter().map(|(key, name)| (key.clone(), name.clone().into())).collect();
@@ -104,8 +105,8 @@ pub(crate) fn open_compare_dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
             .ok_enabled(chosen.is_some() && pages_ok)
             .ok_reason(reason.into())
             .footer_note(tl!("Text is compared word by word; the differences are shown on the new file.").to_string())
-    };
-    crate::dialogs::host::open(app, HostedParamDialog::new(ctx, DIALOG_KEY, fields, build));
+    });
+    crate::dialogs::host::open(app, dialog);
 }
 
 /// Once per frame: when the Compare Files dialog answered OK, runs the comparison it asked for.

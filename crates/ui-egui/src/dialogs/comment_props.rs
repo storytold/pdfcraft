@@ -306,7 +306,7 @@ fn comment_props_dialog<'b>(
     let review = if history.is_empty() {
         vec![PropertyRow::value(tl!("Status"), tl!("No status has been set."))]
     } else {
-        history.iter().map(|(state, line)| PropertyRow::value(tl!(state), line.clone())).collect()
+        history.iter().map(|(state, line)| PropertyRow::value(tl!(state).to_string(), line.clone())).collect()
     };
     let review = PropertiesTab::new(tl!("Review History"), review);
 

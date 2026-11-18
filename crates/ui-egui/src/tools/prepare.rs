@@ -405,8 +405,9 @@ pub(crate) fn delete_selected(session: &mut PageSession) -> Option<Edit> {
 
 /// Select every widget on the current page.
 pub(crate) fn select_all(view: &mut DocView, form: &[FormField]) {
+    let current = view.current();
     let mut selected =
-        form.iter().flat_map(|f| f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(view.current())).map(|(wi, _)| (f.name.clone(), wi)));
+        form.iter().flat_map(|f| f.widgets.iter().enumerate().filter(move |(_, w)| w.page == Some(current)).map(|(wi, _)| (f.name.clone(), wi)));
     view.session.prepare.selected = selected.next();
     view.session.prepare.also = selected.collect();
 }

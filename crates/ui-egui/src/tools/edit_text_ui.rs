@@ -1564,16 +1564,12 @@ mod tests {
         let (mut app, mut ed) = preview_app();
         ed.text = "Text preview".into();
         app.views[0].session.line_editor = Some(ed);
-        let dir = std::env::temp_dir().join(format!("pdfcraft-ui-open-paragraph-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        app.save_override = Some(dir.join("out.pdf").to_string_lossy().into_owned());
 
-        assert!(app.save_active(crate::SaveTarget::InPlace));
+        // A new document asks where to save; the paragraph is applied before it asks.
+        assert!(!app.save_active(crate::SaveTarget::InPlace));
         assert!(app.views[0].session.line_editor.is_none());
         let doc = app.session.get(app.views[0].id).unwrap();
         assert_eq!(doc.text_lines(0).iter().map(|l| l.text.as_str()).collect::<String>(), "Text preview");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
