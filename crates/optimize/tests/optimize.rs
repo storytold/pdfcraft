@@ -39,9 +39,10 @@ fn image(doc: &mut Document, w: u32, h: u32, n: usize, jpeg: bool, smask: Option
         d.set(b"SMask".to_vec(), Object::Ref(m));
     }
     let s = if jpeg {
-        let mut out = Vec::new();
-        let ty = if n == 1 { image::ExtendedColorType::L8 } else { image::ExtendedColorType::Rgb8 };
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 98).encode(&px, w, h, ty).unwrap();
+        let layout = if n == 1 { craft_image_codecs::ChannelLayout::Gray } else { craft_image_codecs::ChannelLayout::Rgb };
+        let img = craft_image_codecs::Image::from_u8(w, h, layout, px).unwrap();
+        let opts = craft_image_codecs::EncodeOptions { jpeg_quality: 98, ..Default::default() };
+        let out = craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &opts).unwrap();
         d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
         Stream::from_raw(d, out)
     } else {
@@ -3886,8 +3887,9 @@ fn strip(doc: &mut Document, w: u32, v: u8, jpeg: bool) -> ObjRef {
     d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
     let px = vec![v; w as usize];
     let s = if jpeg {
-        let mut out = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 95).encode(&px, w, 1, image::ExtendedColorType::L8).unwrap();
+        let img = craft_image_codecs::Image::from_u8(w, 1, craft_image_codecs::ChannelLayout::Gray, px).unwrap();
+        let opts = craft_image_codecs::EncodeOptions { jpeg_quality: 95, ..Default::default() };
+        let out = craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &opts).unwrap();
         d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
         Stream::from_raw(d, out)
     } else {
@@ -4437,6 +4439,36 @@ fn indirectly_referenced_destination_is_kept() {
     let left = named_dest_keys(&doc);
     assert!(left.contains(&b"target".to_vec()), "indirectly referenced destination was kept: {left:?}");
     assert!(!left.contains(&b"unused".to_vec()));
+}
+
+#[test]
+fn many_links_naming_one_destination_string_by_reference_keep_it() {
+    // The name string is copied once however many links name it by reference; it is still a use.
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    let s = |t: &str| Object::String(pdfcraft_cos::PdfString::literal(t.as_bytes().to_vec()));
+    let name_ref = Object::Ref(doc.add(s("target")));
+    let links: Vec<Object> = (0..50)
+        .map(|_| {
+            let mut link = Dict::new();
+            link.set(b"Subtype".to_vec(), Object::name("Link"));
+            link.set(b"Rect".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+            link.set(b"Dest".to_vec(), name_ref.clone());
+            Object::Ref(doc.add(Object::Dict(link)))
+        })
+        .collect();
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(links))).unwrap();
+    let fit = Object::Array(vec![Object::Ref(p), Object::name("Fit")]);
+    let mut tree = Dict::new();
+    tree.set(b"Names".to_vec(), Object::Array(vec![s("target"), fit.clone(), s("unused"), fit]));
+    let tree = doc.add(Object::Dict(tree));
+    let mut names = Dict::new();
+    names.set(b"Dests".to_vec(), Object::Ref(tree));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Names".to_vec(), Object::Dict(names))).unwrap();
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(report.unreferenced_dests, 1);
+    assert_eq!(named_dest_keys(&doc), vec![b"target".to_vec()]);
 }
 
 #[test]
@@ -5611,6 +5643,70 @@ fn a_picture_whose_mask_is_not_a_stencil_is_left_alone() {
         assert_eq!(report.images_resampled + report.images_recompressed, 0, "{what}: {report:?}");
         assert_eq!(stream(&doc, img), before, "{what}");
     }
+}
+
+/// A resource dictionary shared by reference between thousands of pages is walked once by the
+/// space audit, not once per page.
+#[test]
+fn space_audit_walks_a_shared_resource_dictionary_once() {
+    let mut doc = Document::new_empty();
+    let img = image(&mut doc, 4, 4, 3, false, None);
+    let mut x = Dict::new();
+    for i in 0..5_000 {
+        x.set(format!("Im{i}").into_bytes(), Object::Ref(img));
+    }
+    let mut res = Dict::new();
+    res.set(b"XObject".to_vec(), Object::Dict(x));
+    let shared = doc.add(Object::Dict(res));
+    let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
+    let mut kids = Vec::new();
+    for _ in 0..2_000 {
+        let mut p = Dict::new();
+        p.set(b"Type".to_vec(), Object::name("Page"));
+        p.set(b"Parent".to_vec(), Object::Ref(pages));
+        p.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]));
+        p.set(b"Resources".to_vec(), Object::Ref(shared));
+        kids.push(Object::Ref(doc.add(Object::Dict(p))));
+    }
+    doc.update_dict(pages, |d| {
+        d.set(b"Count".to_vec(), Object::Int(kids.len() as i64));
+        d.set(b"Kids".to_vec(), Object::Array(kids));
+    })
+    .unwrap();
+    let started = std::time::Instant::now();
+    let audit = audit_space(&doc, 1 << 20);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+    assert!(audit.iter().any(|u| u.category == SpaceCategory::Images && u.bytes > 0), "{audit:?}");
+}
+
+/// A name tree whose nodes all share one kids array (by reference) is read once per node, not
+/// once per node per kid: the queue can't grow to the nodes times the kids.
+#[test]
+fn a_name_tree_sharing_one_kids_array_is_walked_once() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "BT ET");
+    let s = |t: &str| Object::String(pdfcraft_cos::PdfString::literal(t.as_bytes().to_vec()));
+    let fit = Object::Array(vec![Object::Ref(p), Object::name("Fit")]);
+    let kids = doc.add(Object::Array(Vec::new()));
+    let mut nodes = Vec::new();
+    for i in 0..3_000 {
+        let mut node = Dict::new();
+        node.set(b"Kids".to_vec(), Object::Ref(kids));
+        node.set(b"Names".to_vec(), Object::Array(vec![s(&format!("d{i}")), fit.clone()]));
+        nodes.push(Object::Ref(doc.add(Object::Dict(node))));
+    }
+    doc.set(kids, Object::Array(nodes));
+    let mut tree = Dict::new();
+    tree.set(b"Kids".to_vec(), Object::Ref(kids));
+    let tree = doc.add(Object::Dict(tree));
+    let mut names = Dict::new();
+    names.set(b"Dests".to_vec(), Object::Ref(tree));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Names".to_vec(), Object::Dict(names))).unwrap();
+    let started = std::time::Instant::now();
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    assert_eq!(report.unreferenced_dests, 3_000, "every node's destination was found, once");
 }
 
 /// Pictures run on several threads: what comes out doesn't depend on how many.
