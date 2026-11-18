@@ -54,7 +54,7 @@ pub(super) struct Intents {
 /// The keys of the screen. They reach it while focus is inside it; a focused text field keeps
 /// Ctrl+T and Ctrl+Z (the typing scope), and F8 is the screen's either way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
-#[command(prefix = "ocr_verify", scope = "ocr_verify")]
+#[command(prefix = "ocrVerify", scope = "ocr_verify")]
 pub(super) enum OcrVerifyCommands {
     /// The next word that asks for review.
     #[command(label = "Next uncertain", default = "F8")]
@@ -93,7 +93,6 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
             }
         }
         Grid::new(COLUMNS).fill().show(ui, |ui, _| {
-
             Panel::new(tl!("Pages")).id(pages_id).least_width(LeastWidth::DockColumn).selected(focus_within(&ctx, pages_id)).show(ui, |ui, _| {
                 panes::pages(app, ui, &mut n);
             });
@@ -269,7 +268,11 @@ fn options_bar(app: &mut PdfCraftApp, ui: &mut Ui, n: &mut Intents) {
                 n.reject = true;
             }
             Divider::vertical().show(ui);
-            Checkbox::new(Bind::bound(&mut verified)).label(tl!("Page verified")).tooltip(tl!("Mark this page as reviewed (Ctrl+T)")).enabled(review).show(ui);
+            Checkbox::new(Bind::bound(&mut verified))
+                .label(tl!("Page verified"))
+                .tooltip(tl!("Mark this page as reviewed (Ctrl+T)"))
+                .enabled(review)
+                .show(ui);
             if Button::new(tl!("Next uncertain"))
                 .variant(Variant::GHOST)
                 .icon(craft::behavior::IconId::new("chevron_right"))

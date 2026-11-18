@@ -62,11 +62,7 @@ fn image_import_dialog(ctx: &egui::Context, count: usize) -> HostedParamDialog {
             ("custom".to_string(), tl!("Use custom DPI").into()),
         ];
         let params = vec![
-            Param::read_only_text(
-                "count",
-                tl!("Images"),
-                crate::i18n::fmt(tl!("Selected image files: {count}"), &[("count", &count.to_string())]),
-            ),
+            Param::read_only_text("count", tl!("Images"), crate::i18n::fmt(tl!("Selected image files: {count}"), &[("count", &count.to_string())])),
             Param::new("resolution", tl!("Resolution"), ParamKind::radio(options, Some("image".to_string()))),
             Param::read_only_text("embedded", tl!("Image resolution"), tl!("Use each image's embedded DPI; use 72 DPI when it is absent.")),
             Param::new("dpi", tl!("DPI"), ParamKind::int(Some(1), Some(1200), 300)).enabled_when("resolution", FieldValue::Text("custom".into())),
@@ -355,7 +351,13 @@ impl PdfCraftApp {
 
     /// Ask where an optimized copy goes and write it there, asking again until it is written or
     /// the question is cancelled.
-    fn ask_where_to_save_optimized(&mut self, name: String, folder: Option<PathBuf>, bytes: Arc<Vec<u8>>, saved: impl FnOnce(&mut Self, String) + 'static) {
+    fn ask_where_to_save_optimized(
+        &mut self,
+        name: String,
+        folder: Option<PathBuf>,
+        bytes: Arc<Vec<u8>>,
+        saved: impl FnOnce(&mut Self, String) + 'static,
+    ) {
         let mut request = PickRequest::save("reduce").file_name(name.clone()).filter("PDF", &["pdf"]);
         if let Some(folder) = &folder {
             request = request.default_directory(folder.clone());

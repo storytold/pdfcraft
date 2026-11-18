@@ -586,7 +586,13 @@ impl PdfCraftApp {
 
     /// Pages ▸ Rotate Pages: rotate the pages of `base` that pass the parity and orientation
     /// filters.
-    pub fn rotate_pages(&mut self, degrees: i64, base: Vec<usize>, parity: pdfcraft_engine::PageParity, orientation: pdfcraft_engine::PageOrientation) {
+    pub fn rotate_pages(
+        &mut self,
+        degrees: i64,
+        base: Vec<usize>,
+        parity: pdfcraft_engine::PageParity,
+        orientation: pdfcraft_engine::PageOrientation,
+    ) {
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let pages = pdfcraft_engine::filter_pages(&doc.info, &base, parity, orientation);
@@ -780,8 +786,9 @@ impl PdfCraftApp {
     /// Forms ▸ Merge data files into spreadsheet: choose data files (FDF, XFDF or filled-in PDF
     /// forms), then where to save the CSV.
     pub fn merge_data_dialog(&mut self) {
-        let request =
-            PickRequest::open_many("merge.data").title(tl!("Select data files to merge")).filter(tl!("Form data and PDF forms"), &["fdf", "xfdf", "pdf"]);
+        let request = PickRequest::open_many("merge.data")
+            .title(tl!("Select data files to merge"))
+            .filter(tl!("Form data and PDF forms"), &["fdf", "xfdf", "pdf"]);
         self.pick_file(request, None, |app, picked| match app.read_picked(picked) {
             // Asks where to save: a second picker, now that the first one has closed.
             Ok(files) if !files.is_empty() => app.merge_data_files(files),

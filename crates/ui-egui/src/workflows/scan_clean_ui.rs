@@ -13,10 +13,10 @@ use craft::ui::value_drag::SliderScale;
 use pdfcraft_engine::scan_clean::{ScanCleanReport, ScanCleanSettings, ScanCleaned};
 use pdfcraft_engine::{DocId, EditError};
 
-use crate::notices::{self, ProgressKey};
 use super::job_count::JobCount;
 use crate::PdfCraftApp;
 use crate::notices::ProgressNotice;
+use crate::notices::{self, ProgressKey};
 
 /// The key the dialog and its result share.
 const DIALOG_KEY: &str = "enhance-scan";

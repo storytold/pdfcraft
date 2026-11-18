@@ -195,14 +195,12 @@ fn line_row<'a>(s: &SignatureInfo, child: &Child, action: &'a RefCell<Option<Pan
                 }
             })
         }
-        Child::Status => row(
-            match s.status {
-                SignatureStatus::Valid => tl!("Signature is valid:"),
-                SignatureStatus::Unknown => tl!("Signature validity is UNKNOWN:"),
-                SignatureStatus::Invalid => tl!("Signature is INVALID:"),
-            }
-            .into(),
-        )
+        Child::Status => row(match s.status {
+            SignatureStatus::Valid => tl!("Signature is valid:"),
+            SignatureStatus::Unknown => tl!("Signature validity is UNKNOWN:"),
+            SignatureStatus::Invalid => tl!("Signature is INVALID:"),
+        }
+        .into())
         .strong(true),
         Child::Detail(line) => row(format!("• {line}").into()).ink(RowInk::Muted),
         Child::Heading => row(tl!("Signature Details").into()).section_heading(),

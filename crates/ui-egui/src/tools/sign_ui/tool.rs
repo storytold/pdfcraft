@@ -1,12 +1,13 @@
 //! The Digitally sign and Certify (visible signature) page tool: drag a rectangle on a page.
 
 use craft::behavior::{CancelReason, Cursor, CursorIcon};
+use craft::pages::ui::PlacedPage;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft::ui::primitives::Draw;
 use egui::Pos2;
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{PageBoxDrag, PageXform, PlacedPage};
+use crate::canvas::{PageBoxDrag, PageXform};
 
 /// The least side, in screen points, of a drawn signature area.
 const LEAST_SIDE: f32 = 8.0;

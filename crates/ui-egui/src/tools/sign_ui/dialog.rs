@@ -16,15 +16,17 @@ use craft::ui::form::Field;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::{List, ListRow, ThumbAspect, ThumbSize};
 use craft::ui::notices::{Notice, NoticeAction};
-use craft::ui::patterns::FormDialog;
+use craft::ui::patterns::form_dialogs::FormDialog;
 use craft::ui::pickers::Select;
 use craft::ui::primitives::PaintShape;
 use craft::ui::sections::{DialogRole, FooterButton};
 use craft::ui::style::DataColor;
 use craft::ui::text::TextField;
 
-use super::{Appearance, AppearanceLabels, DigitalIdEntry, KEY_ALGORITHMS, NewIdDraft, PdfCraftApp, SignDraft, SignGraphic, SignStep, StatusCaptions, sign};
-use crate::workflows::FilePurpose;
+use super::{
+    Appearance, AppearanceLabels, DigitalIdEntry, KEY_ALGORITHMS, NewIdDraft, PdfCraftApp, SignDraft, SignGraphic, SignStep, StatusCaptions, sign,
+};
+use crate::FilePurpose;
 
 /// A line of explanatory text.
 fn caption(text: impl Into<String>) -> impl Show {
@@ -254,17 +256,18 @@ fn choose(ui: &mut egui::Ui, d: &mut SignDraft, ids: &[DigitalIdEntry], asked: &
     } else {
         let source = IdRows(ids);
         let mut selection = d.selected.map_or_else(Selection::default, Selection::single);
-        let out = List::<usize>::new(tl!("Digital IDs"))
-            .select(SelectMode::Single)
-            .selection(Bind::bound(&mut selection))
-            .show_items(ui, &source, &mut |_, icx| match ids.get(icx.at) {
+        let out = List::<usize>::new(tl!("Digital IDs")).select(SelectMode::Single).selection(Bind::bound(&mut selection)).show_items(
+            ui,
+            &source,
+            &mut |_, icx| match ids.get(icx.at) {
                 Some(e) => {
                     let sub = details(e);
                     // Names are as long as their owners made them: the row cuts them and the tip says them whole.
                     ListRow::new(e.name.clone()).tooltip(format!("{}\n{sub}", e.name)).below(caption(sub), |_| {})
                 }
                 None => ListRow::new(String::new()),
-            });
+            },
+        );
         for event in out.events {
             match event {
                 CollectionEvent::Selection(SelectionChange::Set(keys)) => {

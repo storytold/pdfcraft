@@ -12,8 +12,7 @@ use pdfcraft_engine::print::{self, Sheet};
 
 use super::draft::{Handling, PrintDraft};
 use super::preview_rasters;
-// PLAN: assumed `PrintPage { page, grayscale }` (pdf-canvas-w10)
-use crate::canvas::PrintPage;
+use crate::canvas::pictures::PrintPage;
 
 fn lbl(text: impl AsRef<str>) -> Label {
     Label::from(text.as_ref().to_owned())
@@ -47,14 +46,7 @@ pub(super) fn build(
 ) -> (PrintSheet, Option<PanePager>) {
     let SheetInput { d, sizes, labels, settings, sheets, too_much_creep } = input;
     let count = sheets.len();
-    let pager = PanePager {
-        shown: d.sheet + 1,
-        count,
-        shown_label: None,
-        back: d.sheet > 0,
-        next: d.sheet + 1 < count,
-        unit: PagerUnit::Sheet,
-    };
+    let pager = PanePager { shown: d.sheet + 1, count, shown_label: None, back: d.sheet > 0, next: d.sheet + 1 < count, unit: PagerUnit::Sheet };
     let paper = vec2(d.paper_size().0 as f32, d.paper_size().1 as f32);
     let sheet = match (settings, sheets.get(d.sheet)) {
         (Err(e), _) => PrintSheet::message(paper, lbl(tl!(e.as_str())), Label::default()),

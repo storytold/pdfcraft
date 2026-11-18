@@ -8,12 +8,16 @@ use craft::behavior::kurbo::{Point, Size};
 use craft::behavior::{CancelReason, CanvasView, PixelSize};
 use craft::theme::variant::{Emphasis, Tone};
 use craft::theme::{TypeRole, Variant};
-use craft::ui::canvas::{AppPaint, Canvas, CanvasTool, RasterDisplay, ToolAction, ToolContext, ToolHost, ToolPointer, ViewTarget, tool_pass};
+use craft::ui::canvas::{
+    AppPaint, Canvas, CanvasTool, RasterDisplay, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, ViewTarget, tool_pass,
+};
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::{Badge, Divider, Shade, Text};
 use craft::ui::layout_components::Row;
 use craft::ui::menu::{Menu, MenuItem};
-use craft::ui::primitives::textures::{Priority, StateLook, TextureState, TextureStoreOptions, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails, texture_side};
+use craft::ui::primitives::textures::{
+    Priority, StateLook, TextureState, TextureStoreOptions, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails, texture_side,
+};
 use craft::ui::primitives::{Draw, PaintShape, StrokeWidth};
 use craft::ui::runtime::memory::Remember as _;
 use egui::{Pos2, Rect, Ui};
@@ -80,7 +84,12 @@ fn word_shapes(app: &PdfCraftApp, info: &pdfcraft_render::PageInfo, page: usize)
             let (o, a, u) = (w.origin, w.across, w.up);
             WordShape {
                 key,
-                quad: [to_view(o), to_view([o[0] + a[0], o[1] + a[1]]), to_view([o[0] + a[0] + u[0], o[1] + a[1] + u[1]]), to_view([o[0] + u[0], o[1] + u[1]])],
+                quad: [
+                    to_view(o),
+                    to_view([o[0] + a[0], o[1] + a[1]]),
+                    to_view([o[0] + a[0] + u[0], o[1] + a[1] + u[1]]),
+                    to_view([o[0] + u[0], o[1] + u[1]]),
+                ],
                 band: w.confidence.map(band_for),
                 removed: v.is_removed(key),
                 selected: v.selected == Some(key),
@@ -238,6 +247,10 @@ impl CanvasTool for RegionTool {
             draw.stroke(&PaintShape::Rect(rect, egui::CornerRadius::ZERO), StrokeWidth::Medium, style.color(style.tokens.color.accent.solid));
         }
     }
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Freehand("the region is dragged on the page; no command takes its numbers")
+    }
 }
 
 /// The source pane: the page picture, the word boxes and the region over it, and the context menu.
@@ -293,7 +306,10 @@ pub(super) fn show(app: &mut PdfCraftApp, ui: &mut Ui, n: &mut Intents) {
             n.reject_page = true;
         }
         Divider::horizontal().show(ui);
-        Text::new(tl!("Click a word to inspect it; drag a rectangle to re-read part of the page")).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+        Text::new(tl!("Click a word to inspect it; drag a rectangle to re-read part of the page"))
+            .role(TypeRole::Caption)
+            .shade(Shade::Faint)
+            .show(ui);
     });
 }
 
@@ -366,7 +382,8 @@ mod tests {
         for (width, height) in [(612.0, 792.0), (792.0, 612.0)] {
             let page = Size::new(width, height);
             let zoom = 0.5;
-            let view = CanvasView::new(Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(500.0, 400.0)), Point::new(width / 2.0, height / 2.0), zoom);
+            let view =
+                CanvasView::new(Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(500.0, 400.0)), Point::new(width / 2.0, height / 2.0), zoom);
             let tool = RegionTool::new(Vec::new(), Some(region), page);
             let outline = tool.outline(&view).expect("the region lies on the page");
             let on_page = tool.page_on_screen(&view);

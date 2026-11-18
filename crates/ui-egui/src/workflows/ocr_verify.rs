@@ -1412,7 +1412,7 @@ fn save_editable(app: &mut PdfCraftApp, bytes: Arc<Vec<u8>>, name: String, doc: 
     #[cfg(not(target_arch = "wasm32"))]
     {
         // PLAN: assumed `PdfCraftApp::pick_file(&mut self, PickRequest, Option<DocId>, impl FnOnce(&mut PdfCraftApp, PathBuf) + 'static)` (pdf-shell-w14 `app/picks.rs`).
-        let request = craft::host::files::PickRequest::save("export").filter("PDF", &["pdf"]).file_name(name.clone());
+        let request = craft::host::PickRequest::save("export").filter("PDF", &["pdf"]).file_name(name.clone());
         app.pick_file(request, None, move |app, picked: std::path::PathBuf| {
             if is_source(&picked, &source) {
                 app.notify_tr("That is the source file; choose another destination");
@@ -1447,7 +1447,7 @@ fn save_editable(app: &mut PdfCraftApp, bytes: Arc<Vec<u8>>, name: String, doc: 
 fn write_editable(app: &mut PdfCraftApp, target: &std::path::Path, bytes: Arc<Vec<u8>>) {
     with_state(app, |v, _| v.phase = Phase::Saving);
     // PLAN: assumed `PdfCraftApp::host: Arc<Host>` (pdf-hub-w1).
-    match app.host.files().write(target, &bytes, craft::host::files::WriteIntent::SaveAs) {
+    match app.host.files().write(target, &bytes, craft::host::WriteIntent::SaveAs) {
         Ok(_) => {
             with_state(app, |v, _| v.finish());
             app.notify(crate::i18n::fmt(tl!("Wrote {name}"), &[("name", &target.to_string_lossy())]));
@@ -1471,8 +1471,8 @@ fn refresh_view(app: &mut PdfCraftApp, doc: DocId) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft::host::Picked;
     use pdfcraft_engine::Session;
-    use craft::host::files::Picked;
     use pdfcraft_engine::ocr::EngineChoice;
 
     /// A word box that sits where a real placed word would (high on the page, reading left
@@ -1968,7 +1968,7 @@ mod tests {
     #[test]
     fn editable_save_lands_and_a_failed_or_cancelled_one_keeps_the_review() {
         // PLAN: assumed `PdfCraftApp::with_files(Arc<dyn Files>)`, an app on a host whose files are the script (pdf-shell-w13/w14); the process-wide `process_picks` is pdf-shell-w14's.
-        let files = Arc::new(craft::host::files::ScriptedFiles::new());
+        let files = Arc::new(craft::host::ScriptedFiles::new());
         let mut app = PdfCraftApp::with_files(files.clone());
         let text = app.session.create_from_text("t", "Recognize these scanned words").expect("fixture");
         let id = app.session.open("t.pdf", None, text, None).expect("fixture");

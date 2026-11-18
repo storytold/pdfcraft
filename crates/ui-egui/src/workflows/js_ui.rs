@@ -456,5 +456,3 @@ impl PdfCraftApp {
         }
     }
 }
-
-

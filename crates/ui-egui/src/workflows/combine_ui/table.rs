@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::time::SystemTime;
 
 use craft::behavior::{Codec, ColumnKey, ColumnWidth, DisplayOrder, EditEvent, ItemSource, NotAValue, ReorderKeys};
-use craft::theme::Tone;
+use craft::theme::variant::Tone;
 use craft::ui::contract::{
     Bind, CollectionEvent, ColumnEvent, ColumnLayout, ColumnSort, ColumnSpec, Props as _, ReorderMove, ReorderRule, ShowCollection as _, SpaceAction,
 };

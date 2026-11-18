@@ -16,8 +16,8 @@ use pdfcraft_engine::ocr::{EngineChoice, LANGUAGES, MergeStrategy, OcrGuard, Ocr
 
 use super::job_count::JobCount;
 // PLAN: assumed `crate::notices::{set_progress, end_progress, ProgressKey, ProgressNotice}` from pdf-chrome-w19 (free functions taking the app).
-use crate::notices::{self, ProgressKey, ProgressNotice};
 use crate::PdfCraftApp;
+use crate::notices::{self, ProgressKey, ProgressNotice};
 
 /// Which pages to read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -268,8 +268,10 @@ fn engine_unavailable_text(engine: EngineChoice) -> Option<String> {
     let why = pdfcraft_engine::ocr::engine_unavailable_reason(engine)?;
     Some(match engine {
         EngineChoice::Tesseract => crate::i18n::t(&why).to_string(),
-        _ => tl!("Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.")
-            .to_string(),
+        _ => tl!(
+            "Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them."
+        )
+        .to_string(),
     })
 }
 
@@ -357,8 +359,12 @@ fn recognize_dialog(fields: &mut DialogFields, count: usize, current: usize) -> 
         EngineChoice::Ocrs => tl!("Built-in"),
         EngineChoice::Tesseract => tl!("Tesseract"),
     };
-    let mut engine_row = Param::new("engine", tl!("Engine"), ParamKind::choice(ENGINES.iter().map(|&c| (c.name().to_string(), engine_names(c).into())).collect(), None))
-        .option_description(EngineChoice::Auto.name(), tl!("Both engines, combined as the Strategy says"));
+    let mut engine_row = Param::new(
+        "engine",
+        tl!("Engine"),
+        ParamKind::choice(ENGINES.iter().map(|&c| (c.name().to_string(), engine_names(c).into())).collect(), None),
+    )
+    .option_description(EngineChoice::Auto.name(), tl!("Both engines, combined as the Strategy says"));
     for choice in ENGINES {
         if let Some(why) = engine_unavailable_text(choice) {
             engine_row = engine_row.disabled_option(choice.name(), why);
@@ -400,7 +406,11 @@ fn recognize_dialog(fields: &mut DialogFields, count: usize, current: usize) -> 
             ParamKind::choice(strategies.iter().map(|(s, name)| (strategy_id(*s).to_string(), (*name).into())).collect(), None),
         ),
         output_row,
-        Param::new("dpi", tl!("Downsample to"), ParamKind::choice(DPI_CHOICES.iter().map(|v| (v.to_string(), format!("{v} dpi").into())).collect(), None)),
+        Param::new(
+            "dpi",
+            tl!("Downsample to"),
+            ParamKind::choice(DPI_CHOICES.iter().map(|v| (v.to_string(), format!("{v} dpi").into())).collect(), None),
+        ),
         flag(
             "text_pages",
             tl!("Also recognize pages that already have text"),
@@ -411,13 +421,21 @@ fn recognize_dialog(fields: &mut DialogFields, count: usize, current: usize) -> 
         flag("denoise", tl!("Remove scan speckle"), None),
         flag("binarize", tl!("Black and white (binarize)"), None),
         Param::section(tl!("Skip")),
-        flag("skip_text_pages", tl!("Skip pages that already have text"), Some(tl!("Pages with renderable text are left alone and reported as skipped"))),
+        flag(
+            "skip_text_pages",
+            tl!("Skip pages that already have text"),
+            Some(tl!("Pages with renderable text are left alone and reported as skipped")),
+        ),
         flag(
             "skip_text_files",
             tl!("Skip files that already have text"),
             Some(tl!("In multiple files: a file with any text is its own skipped bucket, and nothing is written for it")),
         ),
-        flag("force_ocr", tl!("Force OCR (override skip options)"), Some(tl!("Reads pages and files even where the skip options would leave them alone"))),
+        flag(
+            "force_ocr",
+            tl!("Force OCR (override skip options)"),
+            Some(tl!("Reads pages and files even where the skip options would leave them alone")),
+        ),
         Param::custom("output_folder", tl!("Output folder"), |ui, fields, cx| {
             let folder = fields.text("output_folder").unwrap_or_default().to_string();
             ui.horizontal(|ui| {
@@ -436,12 +454,13 @@ fn recognize_dialog(fields: &mut DialogFields, count: usize, current: usize) -> 
 
     // The web build has no model files: it downloads the models the first time they're needed.
     #[cfg(target_arch = "wasm32")]
-    let download_notice = (engine != EngineChoice::Tesseract && pdfcraft_engine::ocr::engine_unavailable_reason(EngineChoice::Ocrs).is_some()).then(|| {
-        match crate::ocr_web::state() {
-            crate::ocr_web::State::Failed(e) => crate::i18n::fmt(tl!("Couldn't download the text recognition models: {e}"), &[("e", &e)]),
-            _ => tl!("Downloading the text recognition models…").to_string(),
-        }
-    });
+    let download_notice =
+        (engine != EngineChoice::Tesseract && pdfcraft_engine::ocr::engine_unavailable_reason(EngineChoice::Ocrs).is_some()).then(|| {
+            match crate::ocr_web::state() {
+                crate::ocr_web::State::Failed(e) => crate::i18n::fmt(tl!("Couldn't download the text recognition models: {e}"), &[("e", &e)]),
+                _ => tl!("Downloading the text recognition models…").to_string(),
+            }
+        });
     #[cfg(not(target_arch = "wasm32"))]
     let download_notice: Option<String> = None;
 
@@ -1411,20 +1430,22 @@ mod tests {
         let recognizers = Recognizers { primary: Arc::new(Fake { confidence: 95.0 }), secondary: None };
         let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let w = writes.clone();
-        let msg = run_batch_files(files, OcrSettings { skip_text_files: true, ..Default::default() }, &recognizers, true, &count, &wake, move |_, _| {
-            w.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        });
+        let msg =
+            run_batch_files(files, OcrSettings { skip_text_files: true, ..Default::default() }, &recognizers, true, &count, &wake, move |_, _| {
+                w.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            });
         assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 0, "nothing is written for skipped files, and the cancel came first");
         assert!(msg.contains("cancelled — 2 files were not run"), "{msg}");
         // Without the cancel, the skipped bucket is named and still nothing is written.
         let files = vec![("a.pdf".into(), pdf.to_vec()), ("b.pdf".into(), pdf.to_vec())];
         let count = JobCount::default();
         let w = writes.clone();
-        let msg = run_batch_files(files, OcrSettings { skip_text_files: true, ..Default::default() }, &recognizers, true, &count, &wake, move |_, _| {
-            w.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        });
+        let msg =
+            run_batch_files(files, OcrSettings { skip_text_files: true, ..Default::default() }, &recognizers, true, &count, &wake, move |_, _| {
+                w.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            });
         assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(msg.contains("; 2 files already had text"), "{msg}");
         assert!(msg.contains("Recognized 0 words in 0 files"), "{msg}");
