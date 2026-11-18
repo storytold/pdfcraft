@@ -1154,7 +1154,16 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         // PLAN: `PresentFrame::hide_pointer` asks for `CursorPriority::Hidden`; the page body has no `BodyCx` to claim
         // it through, so the pointer is not hidden yet (pdf-canvas-w18).
         let (now, pointer) = ui.input(|i| (i.time, i.pointer.hover_pos()));
-        let frame = presenter::frame(&mut session.presenter, body, at, cx.info, ui.painter(), now, cx.animates, pointer);
+        let frame = presenter::frame(
+            &mut session.presenter,
+            presenter::Shown { pages: body.pages, rect: body.rect },
+            at,
+            cx.info,
+            ui.painter(),
+            now,
+            cx.animates,
+            pointer,
+        );
         // A full-screen key's turn first, then the display time's.
         out.turn = out.turn.or(frame.step);
     }
