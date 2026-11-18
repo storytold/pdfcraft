@@ -234,7 +234,8 @@ fn given_widths(doc: &Document, font: &Dict) -> Option<Option<Vec<f64>>> {
 /// How many bytes of content [`Drawn::read`] decodes before it stops and counts every code drawn.
 const MAX_DRAWN_DECODED: usize = 1 << 30;
 
-/// How deeply `q` nests before further saved states are counted rather than kept.
+/// How deeply `q` nests before further saved states are counted rather than kept (and the codes
+/// drawn then count as unknown, since a `Q` can no longer restore the font).
 const MAX_SAVED_STATES: usize = 1024;
 
 /// Fonts by the name a resource dictionary gives them: the font dictionary a reference ends at,
@@ -246,9 +247,9 @@ type ResourceFonts = HashMap<Vec<u8>, Vec<ObjRef>>;
 pub(crate) struct Drawn {
     codes: HashMap<ObjRef, [bool; 256]>,
     /// Whether `codes` is the whole story. Not if a content stream couldn't be read, text was
-    /// shown with a font its content doesn't name (a form XObject using its caller's font), or
-    /// a graphics state sets a font (`/ExtGState /Font`, which `Tf` doesn't show): then any font
-    /// may draw any code.
+    /// shown with a font its content doesn't name (a form XObject using its caller's font), a
+    /// graphics state sets a font (`/ExtGState /Font`, which `Tf` doesn't show), or `q` nests past
+    /// [`MAX_SAVED_STATES`]: then any font may draw any code.
     known: bool,
 }
 
@@ -263,7 +264,7 @@ impl Drawn {
         let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_DRAWN_DECODED, usize::MAX);
         // Every font any resource dictionary names, for content with no resources of its own (a
         // Type 3 glyph, or a form XObject that uses its page's).
-        let mut every = ResourceFonts::new();
+        let mut every: HashMap<Vec<u8>, HashSet<ObjRef>> = HashMap::new();
         for (_, o) in objs {
             if let Some(res) = crate::dict_of(o).and_then(|d| d.get(b"Resources")) {
                 for (name, refs) in drawn.fonts(doc, res) {
@@ -271,6 +272,9 @@ impl Drawn {
                 }
             }
         }
+        // One of each font per name, however many resource dictionaries repeat it, so text is
+        // marked once per font.
+        let every: ResourceFonts = every.into_iter().map(|(name, refs)| (name, refs.into_iter().collect())).collect();
         let mut pages_content = HashSet::new();
         for page in pdfcraft_model::pages(doc) {
             let fonts = page.dict.get(b"Resources").map(|res| drawn.fonts(doc, res)).unwrap_or_default();
@@ -343,6 +347,8 @@ impl Drawn {
                     if saved.len() < MAX_SAVED_STATES {
                         saved.push(font);
                     } else {
+                        // The matching `Q` can't restore the font this one would have saved.
+                        self.known = false;
                         deeper = deeper.saturating_add(1);
                     }
                     continue;

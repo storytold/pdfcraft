@@ -395,6 +395,38 @@ fn a_drawn_code_with_a_zero_missing_or_unassigned_width_is_not_embedded() {
     assert!(render(&doc) == before, "the page changed when its fonts were embedded");
 }
 
+/// #7663 review: `Q` restores the font the matching `q` saved. Past the 1,024 saved states the
+/// scan keeps, a `Q` couldn't, so after selecting Helvetica-Oblique, nesting 1,025 `q`, selecting
+/// Garamond and closing one `Q`, the `@` drawn next was put down to Garamond, and Helvetica-Oblique
+/// (whose substitute widens `@`) was embedded. Nesting that deep now leaves every code drawn.
+#[test]
+fn a_font_restored_past_the_saved_state_limit_counts_as_drawing_anything() {
+    let doc = |depth: usize| {
+        let content = format!("BT /F1 12 Tf ET {}BT /F2 12 Tf ET Q BT 10 100 Td (a@b) Tj ET {}", "q ".repeat(depth), "Q ".repeat(depth - 1));
+        let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+        build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+                stream.as_str(),
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >>",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Garamond >>",
+            ],
+            "",
+        )
+    };
+    let oblique =
+        |doc: &Document| verify(doc, Level::A2b).into_iter().find(|i| i.message == "The font Helvetica-Oblique isn't embedded").map(|i| i.fixable);
+    // Within the limit, `Q` restores Helvetica-Oblique and the `@` is its: not fixable.
+    assert_eq!(oblique(&doc(10)), Some(false));
+    // Past it, the scan can't say which font drew the `@`, so it can't embed Helvetica-Oblique.
+    let mut deep = doc(1025);
+    assert_eq!(oblique(&deep), Some(false));
+    let r = convert(&mut deep, Level::A2b).unwrap();
+    assert!(r.remaining.iter().any(|i| i.message == "The font Helvetica-Oblique isn't embedded" && !i.fixable), "{:?}", r.remaining);
+}
+
 #[test]
 fn embedded_files_differ_between_parts() {
     let doc = build(
