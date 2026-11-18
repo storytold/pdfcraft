@@ -681,7 +681,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("doc_export_data", "Export comments or form data", "Write comments and/or form data to path; the extension picks the format: .xfdf or .fdf (comments and/or fields), .xml, .csv or .txt (form data). For an XFA form, .xml is its data alone (rooted at the form's root data node, as Acrobat exports it) and .xdp an XML Data Package holding the whole datasets. what: all (default), comments, fields.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "what": { "type": "string", "enum": ["all", "comments", "fields"] } }), &["doc", "path"])),
-        t("doc_import_data", "Import comments or form data", "Import comments and/or field values from an XFDF, FDF, XML, CSV or tab-delimited text file (detected from its content), or the comments of another PDF, each onto the page with the same number (comments on pages past this document's last page are left out). Comments with the same name are replaced; values go through the form's formats and validation. For an XFA form, an XDP, datasets or data XML file replaces the form's data: a laid-out form is laid out again from it (rows included) and its calculations run. Undoable.")
+        t("doc_import_data", "Import comments or form data", "Import comments and/or field values from an XFDF, FDF, XML, CSV or tab-delimited text file (detected from its content), or the comments of another PDF, each onto the page with the same number (comments on pages past this document's last page are left out). Comments with the same name are replaced; values go through the form's formats and validation. For an XFA form, an XDP, datasets or data XML file replaces the form's data: a laid-out form is laid out again from it (rows included) and its calculations run. Undoable. The result lists in `import_repairs` what this import left out (values the form refused, comments taken without their appearance); the import fails instead only when the form refuses every value and no comment is taken.")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
         t("form_delete_field", "Delete a field", "Delete a form field and all its widgets, or with widget only that one: one radio button of a group (widget n is the nth of the radio group's options in form_fields), or one copy of a duplicated field. A field's last widget takes the field with it. Undoable.")
             .destructive()
@@ -1184,6 +1184,13 @@ pub fn tools() -> Vec<ToolDef> {
         t("page_duplicate", "Duplicate pages", "Insert copies of pages so the first copy becomes page `at`, or after the last of them when `at` is left out (fonts and images are shared, not copied). Undoable.")
             .cmd("page.duplicate")
             .with(schema(json!({ "doc": doc(), "pages": pages("to duplicate"), "at": { "type": "integer", "minimum": 1 } }), &["doc", "pages"])),
+        t("page_templates", "List page templates", "The document's page templates (ISO 32000-2 §7.7.4: the name dictionary's /Templates, pages kept out of the document, then /Pages, named visible pages): each name, and whether it is hidden. A form's JavaScript adds pages from them (Template.spawn) or shows them (Template.hidden = false).")
+            .ro()
+            .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t("page_template_spawn", "Add a page from a template", "Insert a copy of page template `name` so it becomes page `at` (default: after the last page), as JavaScript's Template.spawn does. With rename (the default, as in Acrobat) the copy's fields are its own, named P<at-1>.<name>.<field>; with rename false they are more widgets of the template's fields and share their values. Undoable.")
+            .with(schema(json!({ "doc": doc(), "name": { "type": "string" }, "at": { "type": "integer", "minimum": 1 }, "rename": { "type": "boolean" } }), &["doc", "name"])),
+        t("page_template_set_hidden", "Show or hide a page template", "Show page template `name` (hidden false: its own page goes at the end of the document, with its fields) or hide it again (hidden true: the page leaves the document and is kept as a template), as JavaScript's Template.hidden does. Undoable.")
+            .with(schema(json!({ "doc": doc(), "name": { "type": "string" }, "hidden": { "type": "boolean" } }), &["doc", "name", "hidden"])),
         t(
             "page_transition_set",
             "Set page transitions",
@@ -1207,7 +1214,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "page_set_box",
             "Set page boxes / crop",
-            "Set a page box (crop by default; also trim, bleed, art, media) on pages: either margins in points from the media box [left, bottom, right, top], or an absolute rect in points from the top-left of the displayed page. Omit both to reset the box to its default. Undoable.",
+            "Set a page box (crop by default; also trim, bleed, art, media) on pages: either margins from the media box [left, bottom, right, top] in default user-space units of the unrotated page (not points when the page has /UserUnit), or an absolute rect in points from the top-left of the displayed page. Omit both to reset the box to its default. Undoable.",
         )
         .cmd("page.boxes")
         .with(schema(
@@ -1755,6 +1762,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "aligns": { "type": "array", "maxItems": 4096, "items": { "type": "string", "enum": ["left", "center", "right", "justify", "inherit"] }, "description": "Each paragraph's (line's) own alignment, by index; inherit (or legacy null) follows align." },
                     "underline": { "type": "boolean" },
                     "line_spacing": { "type": "number", "description": "Multiple of the font size (1.2 is ordinary)." },
+                    "paragraph_spacing": { "type": "number", "description": "Points between paragraphs (a line break in text starts one), beyond the line spacing; unset, half the size for a paragraph the page did not have (rows it had keep their space); 0 is none." },
                     "dx": { "type": "number", "description": "Paragraph only: move right by this many points (negative: left)." },
                     "dy": { "type": "number", "description": "Paragraph only: move up by this many points (negative: down)." },
                     "width": { "type": "number", "description": "Paragraph only: rewrap to this width in points (dragging the box's edge)." },
