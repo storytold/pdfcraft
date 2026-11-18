@@ -63,10 +63,12 @@ impl Budget {
             if output_pixels > MAX_PIXELS {
                 return None;
             }
-            self.raster = self.raster.checked_add(pixels)?.checked_add(output_pixels)?;
-            if self.raster > MAX_RASTER_WORK {
+            let raster = self.raster.checked_add(pixels)?.checked_add(output_pixels)?;
+            if raster > MAX_RASTER_WORK {
                 return None;
             }
+            // Charge only accepted work, but retain the charge if decoding later fails.
+            self.raster = raster;
             let mut limits = image::Limits::default();
             limits.max_image_width = Some(4096);
             limits.max_image_height = Some(4096);
@@ -201,11 +203,14 @@ mod tests {
         let im = sample(0.0);
         let cost = rtf_bytes(im.bytes.len()).expect("small");
         let page = crate::layout::Page { width: 10.0, height: 10.0, blocks: Vec::new(), images: vec![im; 3], background: None, rules: Vec::new() };
+        let mut omitted = Vec::new();
         let doc = super::super::flow_doc_with_budget(
             &[page],
             &super::super::Meta { title: "", language: None, font: "Helvetica" },
             Budget { encoded: MAX_ENCODED - 2 * cost, raster: 0 },
+            &mut omitted,
         );
+        assert_eq!(omitted, [0]);
         let count: usize = doc
             .body
             .iter()
@@ -217,6 +222,32 @@ mod tests {
         assert_eq!(count, 2);
         let rtf = craft_rtf::doc::export_with_generator(&doc, "PdfCraft");
         assert_eq!(rtf.matches("\\pngblip").count(), 2);
+    }
+
+    #[test]
+    fn rejected_raster_charge_leaves_room_for_a_smaller_picture() {
+        let mut budget = Budget { encoded: 0, raster: MAX_RASTER_WORK - 4 };
+        assert!(budget.prepare(&sample(45.0)).is_none());
+        assert_eq!(budget.raster, MAX_RASTER_WORK - 4);
+        assert!(budget.prepare(&sample(90.0)).is_some());
+        assert_eq!(budget.raster, MAX_RASTER_WORK);
+    }
+
+    #[test]
+    fn picture_fits_both_text_area_dimensions() {
+        let mut im = sample(0.0);
+        im.rect = [0.0, 0.0, 100.0, 1000.0];
+        let section = craft_wordmodel::SectionProps {
+            page_w: 600.0,
+            page_h: 400.0,
+            margin_top: 50.0,
+            margin_bottom: 50.0,
+            margin_left: 50.0,
+            margin_right: 50.0,
+            ..Default::default()
+        };
+        let p = super::super::picture(&mut craft_wordmodel::Document::new(), &im, im.bytes.to_vec(), im.ext, &section);
+        assert!(matches!(p.objects.first(), Some(craft_wordmodel::InlineObject::Image { w, h, .. }) if *w == 30.0 && *h == 300.0));
     }
 
     #[test]

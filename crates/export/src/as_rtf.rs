@@ -21,3 +21,11 @@ pub fn rtf(pages: &[Page]) -> String {
 pub fn rtf_with_title(pages: &[Page], title: &str) -> String {
     craft_rtf::doc::export_with_generator(&flow_doc(pages, &Meta { title, language: None, font: FONT }), GENERATOR)
 }
+
+/// RTF plus zero-based pages where nonempty pictures could not be embedded. Page text and
+/// other surviving content are retained; this is partial-output reporting, not a page drop.
+pub fn rtf_with_title_checked(pages: &[Page], title: &str) -> (String, Vec<usize>) {
+    let mut omitted = Vec::new();
+    let doc = super::as_word::flow_doc_with_omissions(pages, &Meta { title, language: None, font: FONT }, &mut omitted);
+    (craft_rtf::doc::export_with_generator(&doc, GENERATOR), omitted)
+}

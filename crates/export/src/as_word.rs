@@ -42,7 +42,7 @@ fn push_text(p: &mut Paragraph, text: &str, props: CharProps) {
 fn table(t: &Table) -> craft_wordmodel::Table {
     let mut edges = t.cols.clone();
     edges.push(t.rect[2]);
-    // Whole twips, at least 3 pt wide (Word's narrowest column), as `as_docx` writes them.
+    // Whole twips, at least 20 pt wide before the Word-range clamp, as `as_docx` writes them.
     let widths: Vec<f32> = edges.windows(2).map(|w| (((w[1] - w[0]).max(20.0) * 20.0).round().clamp(60.0, 31680.0) / 20.0) as f32).collect();
     let [top, left, bottom, right] = t.ruled.unwrap_or_default();
     let inside = t.ruled.is_some();
@@ -138,7 +138,8 @@ fn styles(font: &str, language: Option<&str>) -> StyleSheet {
 fn picture(doc: &mut Document, im: &Image, bytes: Vec<u8>, ext: &str, sec: &SectionProps) -> Paragraph {
     let text_w = f64::from((sec.page_w - sec.margin_left - sec.margin_right).max(1.0));
     let (w, h) = ((im.rect[2] - im.rect[0]).max(1.0), (im.rect[3] - im.rect[1]).max(1.0));
-    let k = (text_w / w).min(1.0);
+    let text_h = f64::from((sec.page_h - sec.margin_top - sec.margin_bottom).max(1.0));
+    let k = (text_w / w).min(text_h / h).min(1.0);
     let media = doc.add_media(bytes, ext);
     let mut p = Paragraph::new();
     p.push_object(
@@ -169,10 +170,14 @@ pub(crate) struct Meta<'a> {
 /// The pages as one flowing document: each page a section of its own size (so a page always
 /// starts a new one, blank pages included), its paragraphs, tables and pictures in reading order.
 pub(crate) fn flow_doc(pages: &[Page], meta: &Meta) -> Document {
-    flow_doc_with_budget(pages, meta, pictures::Budget::default())
+    flow_doc_with_omissions(pages, meta, &mut Vec::new())
 }
 
-fn flow_doc_with_budget(pages: &[Page], meta: &Meta, mut pictures: pictures::Budget) -> Document {
+pub(crate) fn flow_doc_with_omissions(pages: &[Page], meta: &Meta, omitted: &mut Vec<usize>) -> Document {
+    flow_doc_with_budget(pages, meta, pictures::Budget::default(), omitted)
+}
+
+fn flow_doc_with_budget(pages: &[Page], meta: &Meta, mut pictures: pictures::Budget, omitted: &mut Vec<usize>) -> Document {
     let mut doc = Document::new();
     doc.styles = std::sync::Arc::new(styles(meta.font, meta.language));
     doc.core.title = meta.title.to_string();
@@ -200,10 +205,18 @@ fn flow_doc_with_budget(pages: &[Page], meta: &Meta, mut pictures: pictures::Bud
                 body.push(Block::Table(table(&t)));
             }
             Item::Img(im) => {
-                if im.bytes.is_empty() || media >= MAX_MEDIA {
+                if im.bytes.is_empty() {
                     continue;
                 }
-                let Some((bytes, ext)) = pictures.prepare(im) else { continue };
+                let prepared = (media < MAX_MEDIA).then(|| pictures.prepare(im)).flatten();
+                let Some((bytes, ext)) = prepared else {
+                    // Keep readable page content, but tell checked callers which pages lost
+                    // pictures to encoding, transform, or resource limits.
+                    if omitted.last() != Some(&page) {
+                        omitted.push(page);
+                    }
+                    continue;
+                };
                 media += 1;
                 body.push(Block::Para(picture(&mut doc, im, bytes, ext, &sec)));
             }

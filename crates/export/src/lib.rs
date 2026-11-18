@@ -36,7 +36,7 @@ pub use as_html::{html, html_simple, html_simple_with_language, html_with_langua
 pub use as_markdown::markdown;
 #[cfg(test)]
 use as_markdown::{emphasis, paragraph};
-pub use as_rtf::{rtf, rtf_with_title};
+pub use as_rtf::{rtf, rtf_with_title, rtf_with_title_checked};
 pub use clip::{ClipBuilder, ClipSpan, ClipStyle, ClipText, MAX_CLIP_HTML_BYTES, MAX_CLIP_SPANS, MAX_CLIP_TEXT_BYTES, clip_html, font_family};
 #[cfg(test)]
 use flow::list_item;
