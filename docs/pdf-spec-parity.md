@@ -2,7 +2,7 @@
 
 > Integration update 2026-10-30: lossless JBIG2 generic and exact-copy symbol coding are included; no lossy substitution. Combined tests passed at bdf5620; the subsequent review fixes require fresh CI.
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (subset standards: the PDF/A rows name 2b and 3b only, and the PDF/X row says what is there — the identification is carried through Combine and can be removed; no verifier, no converter) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-17 · **Change:** minor (§12.9: geospatial location in viewports; `comment.geospatial` is partial) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How much of ISO 32000-2 (PDF 2.0) and the PDF subset standards PdfCraft implements, set against
 what Acrobat Pro implements. This is PdfCraft's equivalent of a "geometry" or "codec" checklist:
@@ -43,7 +43,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | §12.7 | Interactive forms (AcroForm): fields, appearances, calculation order, JavaScript actions | full | **own**: all field types, regenerated appearances, Acrobat's AF functions and event order, sandboxed JavaScript (boa) | `form.js-host` partial (object-model subset); submit planned |
 | §12.7.8 | XFA (deprecated in PDF 2.0; Acrobat still fills XFA) | static and dynamic | **own**, partial: template layout, FormCalc, XFA JavaScript model, datasets | `form.xfa-*` partial; no flattening |
 | §12.8 | Digital signatures | see table below | | |
-| §12.9 | Measurement and geospatial | full | 2D measuring with viewports and calibration; no geospatial | `comment.geospatial` planned |
+| §12.9 | Measurement and geospatial | full | 2D measuring with viewports and calibration; geospatial location in viewports (GEO measure dictionaries, EPSG/WKT, TM/LCC/Web Mercator), no geospatial measuring | `comment.geospatial` partial |
 | §12.10 | Document requirements | yes | none | |
 | §13 | Multimedia: sound, movies, screen, rich media, 3D (U3D, PRC) | yes | preserved untouched; not played or shown | `misc.rich-media-*`, `misc.3d-view` planned (P3) |
 | §14.3 | Metadata: info dictionary, XMP | full, XMP editor | info dictionary edited, with its XMP counterparts (title, author, subject, keywords, creator tool, producer) kept in step; XMP written for PDF/A; custom properties listed, added, changed and deleted (Document Properties ▸ Custom, `doc_info`, `doc_set_info`); no XMP editor | `organize.custom-properties` partial, `organize.xmp-editor` planned |
@@ -132,6 +132,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | §12.9: geospatial measure dictionaries in viewports are read (GPTS, LPTS, Bounds, GCS by EPSG or WKT) and give the latitude and longitude of a page point, fitted in the Transverse Mercator, Lambert Conformal Conic or Web Mercator plane, else approximately; `comment.geospatial` planned → partial. No geospatial measuring |
 | 2026-11-05 | minor | Subset standards: the PDF/A rows name 2b and 3b only, and the PDF/X row says what is there — the identification is carried through Combine and can be removed; no verifier, no converter. No feature status changed |
 | 2026-10-30 | minor | §7.4: JBIG2 decoding (`hayro-jbig2`) in `pdfcraft-filters`, which `Document::decoded_image` uses with the image's `/JBIG2Globals`: export reads JBIG2 behind other filters too, and redaction clears pixels in JBIG2 images instead of removing them whole (one whose page isn't its size still is) |
 | 2026-10-26 | minor | §7.4: redaction clears pixels in CCITT fax images through the CCITT decoder, instead of removing them whole (Group 4 and Group 3 off bytes; Group 3 on bytes is still removed whole, as the bootstrap renderer may draw it as other rows than the decoder reads) |

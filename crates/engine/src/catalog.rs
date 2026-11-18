@@ -433,7 +433,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 item("Measurement information", "ruler", "measure.info", Ready),
                 item("Snapping", "ruler", "measure.snap", Ready),
                 item("Export measurements", "file-output", "measure.export", Ready),
-                item("Geospatial location", "compass", "measure.geo", Planned("M12")),
+                item("Geospatial location", "compass", "measure.geo", Ready),
             ],
         }],
     },
