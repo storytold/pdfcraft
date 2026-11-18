@@ -33,6 +33,8 @@ pub(crate) struct Host {
     pub(crate) retained: usize,
     /// Alerts, console lines and requests the limits left out.
     pub(crate) dropped: usize,
+    /// Layers a script turned on or off (`ocg.state`), by their places in [`DocInfo::layers`].
+    pub(crate) layers_changed: BTreeSet<usize>,
 }
 
 impl Host {
@@ -80,14 +82,17 @@ impl Host {
             Request::LaunchUrl(u) => Request::LaunchUrl(xfa::clip(u)),
             Request::Submit(u) => Request::Submit(xfa::clip(u)),
             Request::Focus(n) => Request::Focus(xfa::clip(n)),
+            Request::OpenDoc(p) => Request::OpenDoc(xfa::clip(p)),
+            // Template names are looked up exactly, so they are never clipped: a cut name could
+            // name another template. Their whole length is charged below.
             Request::FocusField { name, object_id } => Request::FocusField { name: xfa::clip(name), object_id },
             other => other,
         };
         let bytes = match &r {
             Request::Reset(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
-            Request::LaunchUrl(u) | Request::Submit(u) | Request::Focus(u) => u.len(),
+            Request::LaunchUrl(u) | Request::Submit(u) | Request::Focus(u) | Request::OpenDoc(u) => u.len(),
+            Request::SpawnTemplate { name, .. } | Request::SetTemplateHidden { name, .. } | Request::OpenAttachment { name, .. } => name.len(),
             Request::FocusField { name, .. } => name.len(),
-            Request::OpenAttachment { name, .. } => name.len(),
             _ => 0,
         };
         let kept = self.room(bytes);
