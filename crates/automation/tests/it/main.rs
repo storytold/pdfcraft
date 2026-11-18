@@ -20,6 +20,7 @@ mod model_render;
 mod office;
 mod optimize_content_boundaries;
 mod page_actions;
+mod page_templates;
 mod pdfa4;
 mod pdfa4_metadata;
 mod pdfa_gate;

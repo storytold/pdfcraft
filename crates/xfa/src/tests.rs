@@ -8006,3 +8006,44 @@ two"
         assert_eq!(tree, before, "{structured}");
     }
 }
+
+/// A line draw without a width is vertical; one without a height is horizontal,
+/// even when the template declares a default slope="/".
+#[test]
+fn xfa_line_without_width_is_vertical_and_without_height_is_horizontal() {
+    let items = positioned(
+        r#"
+        <draw name="vert" x="1in" y="0.5in" h="2in"><value><line slope="/"><edge thickness="1pt"/></line></value></draw>
+        <draw name="horiz" x="0.5in" y="1in" w="3in"><value><line slope="/"><edge thickness="1pt"/></line></value></draw>
+        <draw name="narrow_horiz" x="0.5in" y="1in" w="3in" h="1pt"><value><line slope="/"><edge thickness="1pt"/></line></value></draw>
+        <draw name="narrow_vert" x="1in" y="0.5in" w="1pt" h="2in"><value><line slope="/"><edge thickness="1pt"/></line></value></draw>
+        <draw name="thick_diag" x="4in" y="0.5in" w="48pt" h="72pt"><value><line slope="/"><edge thickness="25pt"/></line></value></draw>
+        <draw name="flat" x="5in" y="2in" w="2pt" h="0pt"><value><line slope="/"><edge thickness="1pt"/></line></value></draw>
+    "#,
+    );
+    let lines: Vec<&Item> = items.iter().filter(|i| matches!(i, Item::Line { .. })).collect();
+    assert_eq!(lines.len(), 6);
+    let is_vertical = |item: &Item| match item {
+        Item::Line { from, to, .. } => (from.0 - to.0).abs() < 1e-3,
+        _ => false,
+    };
+    let is_horizontal = |item: &Item| match item {
+        Item::Line { from, to, .. } => (from.1 - to.1).abs() < 1e-3,
+        _ => false,
+    };
+    assert!(is_vertical(lines[0]), "vert without width should be strictly vertical: {:?}", lines[0]);
+    // It is as wide as its stroke, so it sits at its own x (1in into a box at the content
+    // area's 0.5in), not in the middle of the row.
+    assert!(matches!(lines[0], Item::Line { from, .. } if (from.0 - (108.0 + 0.5)).abs() < 1e-3), "vert sits at its x: {:?}", lines[0]);
+    assert!(is_horizontal(lines[1]), "horiz without height should be strictly horizontal: {:?}", lines[1]);
+    assert!(is_horizontal(lines[2]), "a line 1pt high should be horizontal: {:?}", lines[2]);
+    assert!(is_vertical(lines[3]), "a line 1pt wide should be vertical: {:?}", lines[3]);
+    // A 25pt stroke is drawn 20pt wide, so a 48pt by 72pt box still follows its slope.
+    assert!(!is_vertical(lines[4]) && !is_horizontal(lines[4]), "a line wider than twice its drawn stroke follows its slope: {:?}", lines[4]);
+    // A 2pt by 0pt line is a 2pt horizontal stroke, not a zero-length vertical one.
+    assert!(
+        matches!(lines[5], Item::Line { from, to, .. } if (from.1 - to.1).abs() < 1e-3 && (to.0 - from.0).abs() > 1.9),
+        "a zero-height line is horizontal: {:?}",
+        lines[5]
+    );
+}
