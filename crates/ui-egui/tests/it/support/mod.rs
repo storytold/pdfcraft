@@ -2,11 +2,17 @@
 //! input in the frames the platform delivers it in ([`input`]), and the skip for tests whose text
 //! the interface fonts cannot draw ([`skip_without_glyphs`]).
 use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex};
 
 use egui::FontId;
 use egui::epaint::text::{Fonts, TextOptions};
 use egui_kittest::Harness;
-use pdfcraft_ui_egui::{PdfCraftApp, i18n, theme};
+use craft::ui::runtime::commands::{FireSource, fire};
+use craft::ui::runtime::env::WindowKey;
+use craft::ui::runtime::toast;
+use craft::host::{Host, Wake};
+use craft::keymap::CommandRef;
+use pdfcraft_ui_egui::{AppServices, FileIntake, FileWatch, PdfCraftApp, i18n};
 
 pub mod fixtures;
 pub mod input;
@@ -44,12 +50,72 @@ pub fn wait_until(h: &mut Harness<'static, PdfCraftApp>, what: &str, ready: impl
     let held = step_until(h, |h| ready(h.state()));
     assert!(
         held,
-        "timed out waiting for {what}: views={}, active={:?}, password={:?}, toast={:?}",
+        "timed out waiting for {what}: views={}, active={:?}, password={:?}",
         h.state().views.len(),
         h.state().active,
         h.state().password_prompt.as_ref().map(|p| (&p.name, &p.error)),
-        h.state().toast
     );
+}
+
+/// Fire `command` as a menu row does, through the board, and run a frame. For a command with
+/// parameters (`window.document`), pass a `CommandRef` with them.
+pub fn fire_menu(h: &mut Harness<'static, PdfCraftApp>, command: impl Into<CommandRef>) {
+    fire(&h.ctx, command.into(), FireSource::Menu);
+    h.step();
+}
+
+/// The text of the first notice card the main window shows, if any.
+pub fn shown_notice(h: &mut Harness<'static, PdfCraftApp>) -> Option<String> {
+    toast::cards(&h.ctx, &WindowKey::main()).first().map(|card| card.toast.message.as_str().to_owned())
+}
+
+/// An app built over `host`, with no wake, an inline file watch and a test file intake: the one way a
+/// test gives the app a host, so jobs and picked files run when the test steps.
+pub fn host_harness(host: Arc<Host>, clipboard: RecordingClipboard) -> Harness<'static, PdfCraftApp> {
+    // PLAN: assumed `AppServices::new(wake, clipboard, recovery_dir, update_source, intake, watch)`,
+    // `FileIntake::for_tests()`, `FileWatch::inline()` and `PdfCraftApp::with_host(Arc<Host>, AppServices)` (pdf-hub-w1, L-207)
+    let services = AppServices::new(Wake::none(), Box::new(clipboard), None, None, FileIntake::for_tests(), FileWatch::inline());
+    let app = PdfCraftApp::with_host(host, services);
+    Harness::new_ui_state(|ui, app: &mut PdfCraftApp| app.ui(ui), app)
+}
+
+/// A clipboard backend the tests share: what the app copies is read back through the clone the test keeps.
+#[derive(Clone, Default)]
+pub struct RecordingClipboard {
+    text: Arc<Mutex<Option<String>>>,
+}
+
+impl RecordingClipboard {
+    /// The text the app last copied.
+    pub fn copied(&self) -> Option<String> {
+        self.text.lock().ok().and_then(|text| text.clone())
+    }
+}
+
+// PLAN: assumed `ClipboardBackend` with `get_text` and `set_text` (craft::platform::clipboard)
+impl craft::platform::clipboard::ClipboardBackend for RecordingClipboard {
+    fn get_text(&self) -> Option<String> {
+        self.copied()
+    }
+
+    fn set_text(&self, text: &str) {
+        if let Ok(mut held) = self.text.lock() {
+            *held = Some(text.to_owned());
+        }
+    }
+}
+
+/// Step `frames` frames and return every URL the app asked the platform to open, in order.
+pub fn step_collecting_urls(h: &mut Harness<'static, PdfCraftApp>, frames: usize) -> Vec<String> {
+    let mut urls = Vec::new();
+    for _ in 0..frames {
+        h.step();
+        urls.extend(h.output().platform_output.commands.iter().filter_map(|command| match command {
+            egui::OutputCommand::OpenUrl(open) => Some(open.url.clone()),
+            _ => None,
+        }));
+    }
+    urls
 }
 
 /// Open the in-window menu bar's `title` menu (File, Edit, View…).
@@ -83,9 +149,7 @@ pub fn outside_menus<'h>(h: &'h Harness<'static, PdfCraftApp>, label: &str) -> e
 /// panic on a missing glyph, and Japanese, Chinese and Thai faces come only from the optional
 /// craft-fonts build input or a face installed on this machine. Prints the skip line.
 ///
-/// The fonts are those the app installs for `language` and for the default CJK preference: a
-/// switch to Chinese installs its fonts for the next frame, so the first frame in Chinese draws
-/// with the fonts of the language before it.
+/// The fonts are the interface stack of `language`, which already holds the language's faces.
 ///
 /// A build that requires craft-fonts (`CRAFT_FONTS_REQUIRED=1`, as the CI gate sets) never skips:
 /// a missing glyph there is a failure.
@@ -96,13 +160,11 @@ pub fn skip_without_glyphs(name: &str, language: &str, text: &str) -> bool {
     let catalogs: Vec<&str> = i18n::Lang::from_code(language).into_iter().flat_map(i18n::Lang::catalog_texts).collect();
     let translations = catalogs.iter().flat_map(|c| c.lines()).filter(|l| !l.starts_with('#')).filter_map(|l| l.split('\t').nth(2));
     let chars: BTreeSet<char> = std::iter::once(text).chain(translations).flat_map(str::chars).filter(|c| !c.is_control()).collect();
-    let cjk = theme::CjkPreference::for_language(language);
-    let missing = [theme::CjkPreference::Default, cjk].into_iter().find_map(|cjk| {
-        let defs = theme::installed_font_definitions(cjk);
-        let families: Vec<FontId> = defs.families.keys().map(|f| FontId::new(13.0, f.clone())).collect();
-        let mut fonts = Fonts::new(TextOptions::default(), defs);
-        chars.iter().copied().find(|c| families.iter().any(|id| !fonts.has_glyphs(id, &c.to_string())))
-    });
+    // PLAN: assumed `fonts::ui_fonts(language)` (pdf-shell-w10); `fonts` must be `pub mod` for tests.
+    let defs: egui::FontDefinitions = pdfcraft_ui_egui::fonts::ui_fonts(language).stack().flat_definitions();
+    let families: Vec<FontId> = defs.families.keys().map(|f| FontId::new(13.0, f.clone())).collect();
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    let missing = chars.iter().copied().find(|c| families.iter().any(|id| !fonts.has_glyphs(id, &c.to_string())));
     let Some(missing) = missing else {
         return false;
     };
