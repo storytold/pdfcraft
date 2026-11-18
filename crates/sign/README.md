@@ -65,8 +65,9 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   PKCS #11 library runs its code in this process. The token's signature is verified against the
   certificate's key before it is returned, so a different key under the same `CKA_ID` fails here
   instead of producing a file that validates as invalid.
-  Identities are listed without logging in; a card that hides its certificates until the PIN is
-  entered is listed again with it. RSA signs through `CKM_RSA_PKCS` with the `DigestInfo` built
+  Identities are listed without logging in. A card that hides its certificates until the PIN is
+  entered needs an explicit unlock of the selected token, which the dialog does not offer yet: the
+  signer never sends a PIN to every card in every module to find out. RSA signs through `CKM_RSA_PKCS` with the `DigestInfo` built
   here (the card's own `CKM_SHA*_RSA_PKCS` when it has no raw PKCS #1), ECDSA through
   `CKM_ECDSA` with `r ‖ s` re-encoded as DER, and a key marked `CKA_ALWAYS_AUTHENTICATE` (the
   CIE's) gets the context-specific login before each use. The PIN is passed for one signing

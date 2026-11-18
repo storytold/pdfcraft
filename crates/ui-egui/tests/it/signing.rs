@@ -798,7 +798,12 @@ fn a_card_identity_asks_for_its_pin_and_says_it_is_not_saved() {
     h.run_steps(3);
     assert_eq!(h.state().dialog, Some(Dialog::Sign));
     let error = h.state().sign_draft.as_ref().unwrap().error.as_ref().unwrap();
-    assert!(error.contains("PKCS#11"), "{error}");
+    if cfg!(target_os = "macos") {
+        // macOS has no PKCS #11 build: the dialog says so instead of looking for a card.
+        assert!(error.contains("not available"), "{error}");
+    } else {
+        assert!(error.contains("PKCS#11"), "{error}");
+    }
 }
 
 /// Certificate names are as long as their owners made them: the picker cuts both lines of a

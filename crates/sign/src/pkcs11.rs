@@ -88,7 +88,10 @@ impl Identity {
             public: public.clone(),
             always_authenticate: self.always_authenticate,
             protected_path: self.protected_path,
-            login: self.login_required && !self.protected_path,
+            // A card with its own keypad still needs the login: the null PIN is what makes the
+            // middleware prompt on the card. Skipping the login left the key hidden and signing
+            // failed before the keypad could ask.
+            login: self.login_required,
             auth,
         };
         let key = PrivateKey::external(public, Arc::new(key));
@@ -299,21 +302,22 @@ pub fn identities(modules: &[PathBuf], pin: Option<&str>) -> Listing {
 pub fn find(reference_or_name: &str, modules: &[PathBuf], pin: Option<Zeroizing<String>>) -> Result<DigitalId, SignError> {
     let wanted = reference_or_name.trim();
     let name = wanted.strip_prefix("pkcs11:").unwrap_or(wanted);
-    let mut listing = identities(modules, None);
-    let matching = |listing: &Listing| {
-        listing
-            .identities
-            .iter()
-            .position(|id| id.reference() == wanted || id.certificate.display_name() == name || id.certificate.subject.common_name() == Some(name))
-    };
-    let Some(index) = matching(&listing).or_else(|| {
-        let pin = pin.as_deref()?;
-        listing = identities(modules, Some(pin));
-        matching(&listing)
+    // A 64-hex name is a fingerprint, and must be an exact lookup: matching it as a certificate
+    // name would let a card with that common name stand in for the requested certificate.
+    let fingerprint = name.len() == 64 && name.chars().all(|c| c.is_ascii_hexdigit());
+    // Listing never logs in. A card that hides its certificates behind the PIN cannot be found
+    // here: sending the PIN to every token in every module would spend attempts on cards that
+    // are not the one the user chose. That needs an explicit unlock of one selected token.
+    let listing = identities(modules, None);
+    let Some(index) = listing.identities.iter().position(|id| {
+        if id.reference() == wanted {
+            return true;
+        }
+        !fingerprint && (id.certificate.display_name() == name || id.certificate.subject.common_name() == Some(name))
     }) else {
         let why = if listing.problems.is_empty() { String::new() } else { format!(" ({})", listing.problems.join("; ")) };
         return Err(SignError::Crypto(format!(
-            "no PKCS#11 identity {reference_or_name}{why}: is the card in the reader, and is its module configured?"
+            "no PKCS#11 identity {reference_or_name}{why}: is the card in the reader, and is its module configured? A card that hides its certificates until its PIN is entered has to be unlocked first."
         )));
     };
     let Some(identity) = listing.identities.into_iter().nth(index) else {
@@ -331,16 +335,24 @@ fn token_identities(ctx: &Pkcs11, path: &Path, slot: Slot, pin: Option<&str>) ->
     }
     let session = ctx.open_ro_session(slot).map_err(|e| describe(&e))?;
     let auth = pin.filter(|p| !p.is_empty()).map(|p| AuthPin::new(p.into()));
+    let mut logged_in = false;
     if let Some(pin) = &auth {
         // A card that doesn't need a login accepts one all the same; one that does needs it
         // before it shows its private keys.
         match session.login(UserType::User, Some(pin)) {
-            Ok(()) | Err(CryptokiError::Pkcs11(RvError::UserAlreadyLoggedIn, _)) => {}
+            Ok(()) => logged_in = true,
+            Err(CryptokiError::Pkcs11(RvError::UserAlreadyLoggedIn, _)) => {}
             Err(e) => return Err(describe(&e)),
         }
     }
+    // An authenticated listing releases its login however it ends, including on an error: the
+    // login belongs to the token, not to this session, and another session could keep it alive.
+    let _logout = LogoutOnDrop { session: &session, active: logged_in };
     let certs = session.find_objects(&[Attribute::Class(ObjectClass::CERTIFICATE)]).map_err(|e| describe(&e))?;
     let keys = session.find_objects(&[Attribute::Class(ObjectClass::PRIVATE_KEY)]).map_err(|e| describe(&e))?;
+    // The public objects carry CKA_EC_POINT and CKA_MODULUS (the private ones need not), which is
+    // how a certificate is matched to a key when the card's IDs don't line up.
+    let public_keys = session.find_objects(&[Attribute::Class(ObjectClass::PUBLIC_KEY)]).unwrap_or_default();
     let mut parsed: Vec<(Certificate, Vec<u8>)> = Vec::new();
     let mut unusable = Vec::new();
     for handle in certs {
@@ -365,10 +377,10 @@ fn token_identities(ctx: &Pkcs11, path: &Path, slot: Slot, pin: Option<&str>) ->
             }
         }
     }
-    // A card that requires a login normally hides every private key from an anonymous session.
-    // Seeing none then is not a missing key; the card's certificates are listed and the key is
-    // looked up again when signing, after the PIN has been entered.
-    let keys_hidden = keys.is_empty() && token.login_required();
+    // A login-required token may hide some or all private keys from an anonymous session. A
+    // certificate whose key is not visible is therefore unconfirmed, not unusable, until the PIN
+    // is in; the key is looked up again when signing.
+    let unconfirmed = token.login_required() && pin.is_none();
     let pool: Vec<Certificate> = parsed.iter().map(|(c, _)| c.clone()).collect();
     let mut identities = Vec::new();
     for (certificate, id) in &parsed {
@@ -385,9 +397,9 @@ fn token_identities(ctx: &Pkcs11, path: &Path, slot: Slot, pin: Option<&str>) ->
             skip(reason, false);
             continue;
         }
-        let (key_id, always_authenticate) = match match_key(&session, &keys, id, public) {
+        let (key_id, always_authenticate) = match match_key(&session, &keys, &public_keys, id, public) {
             Some((key_id, always)) => (key_id, always),
-            None if keys_hidden => (id.clone(), false),
+            None if unconfirmed => (id.clone(), false),
             None => {
                 skip("the token holds no private key for it".into(), true);
                 continue;
@@ -415,23 +427,48 @@ fn token_identities(ctx: &Pkcs11, path: &Path, slot: Slot, pin: Option<&str>) ->
 /// The private key for `certificate`, matched by `CKA_ID` and else by its public key material.
 /// Returns the key's `CKA_ID` (so the signer finds it again in its own session) and whether the
 /// card wants a context-specific login before each use.
-fn match_key(session: &Session, keys: &[ObjectHandle], id: &[u8], public: &PublicKey) -> Option<(Vec<u8>, bool)> {
-    let always = |h: ObjectHandle| attr(session, h, AttributeType::AlwaysAuthenticate) == Some(Attribute::AlwaysAuthenticate(true));
-    let key_id = |h: ObjectHandle| match attr(session, h, AttributeType::Id) {
+fn match_key(session: &Session, keys: &[ObjectHandle], public_keys: &[ObjectHandle], id: &[u8], public: &PublicKey) -> Option<(Vec<u8>, bool)> {
+    let by_id: Vec<ObjectHandle> = if id.is_empty() { Vec::new() } else { keys.iter().copied().filter(|h| key_id_of(session, *h) == id).collect() };
+    match by_id.len() {
+        1 => return Some((id.to_vec(), key_always_authenticate(session, by_id[0]))),
+        // Two keys under one ID (a card re-issued without clearing the old one): keep the one
+        // whose public half is the certificate's, and fall back to the first, whose signature the
+        // post-sign check will refuse if it is the wrong one.
+        n if n > 1 => {
+            let found = by_id.iter().copied().find(|h| key_material_matches(session, *h, public)).unwrap_or(by_id[0]);
+            return Some((key_id_of(session, found), key_always_authenticate(session, found)));
+        }
+        _ => {}
+    }
+    // Some cards give a certificate and its key different CKA_IDs. Find the public object that is
+    // the certificate's, then the private key carrying its ID.
+    if let Some(public_key) = public_keys.iter().copied().find(|h| key_material_matches(session, *h, public)) {
+        let id = key_id_of(session, public_key);
+        if !id.is_empty()
+            && let Some(found) = keys.iter().copied().find(|h| key_id_of(session, *h) == id)
+        {
+            return Some((id, key_always_authenticate(session, found)));
+        }
+    }
+    // Last, a private key that exposes its own public material (not standard, but some do).
+    let found = keys.iter().copied().find(|h| key_material_matches(session, *h, public))?;
+    Some((key_id_of(session, found), key_always_authenticate(session, found)))
+}
+
+fn key_id_of(session: &Session, handle: ObjectHandle) -> Vec<u8> {
+    match attr(session, handle, AttributeType::Id) {
         Some(Attribute::Id(id)) => id,
         _ => Vec::new(),
-    };
-    let found = keys
-        .iter()
-        .copied()
-        .find(|h| !id.is_empty() && key_id(*h) == id)
-        .or_else(|| keys.iter().copied().find(|h| key_matches(session, *h, public)))?;
-    Some((key_id(found), always(found)))
+    }
+}
+
+fn key_always_authenticate(session: &Session, handle: ObjectHandle) -> bool {
+    attr(session, handle, AttributeType::AlwaysAuthenticate) == Some(Attribute::AlwaysAuthenticate(true))
 }
 
 /// Whether a private key's public half is the certificate's: the modulus for RSA, the point for
 /// EC. A card whose `CKA_ID`s don't line up (some do not) is still matched exactly.
-fn key_matches(session: &Session, handle: ObjectHandle, public: &PublicKey) -> bool {
+fn key_material_matches(session: &Session, handle: ObjectHandle, public: &PublicKey) -> bool {
     match public {
         PublicKey::Rsa { n, .. } => match attr(session, handle, AttributeType::Modulus) {
             Some(Attribute::Modulus(m)) => strip_zeroes(&m) == strip_zeroes(n),
@@ -451,6 +488,20 @@ fn key_matches(session: &Session, handle: ObjectHandle, public: &PublicKey) -> b
 
 fn strip_zeroes(bytes: &[u8]) -> &[u8] {
     bytes.iter().position(|b| *b != 0).and_then(|i| bytes.get(i..)).unwrap_or_default()
+}
+
+/// Logs an authenticated listing out when it ends, by whichever path.
+struct LogoutOnDrop<'a> {
+    session: &'a Session,
+    active: bool,
+}
+
+impl Drop for LogoutOnDrop<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self.session.logout();
+        }
+    }
 }
 
 fn attr(session: &Session, handle: ObjectHandle, kind: AttributeType) -> Option<Attribute> {
@@ -514,24 +565,32 @@ impl TokenKey {
         let key = find_key(session, &self.key_id, &self.public)?;
         // The flag could not be read while the key was hidden behind the login; now it can.
         let always = self.always_authenticate || attr(session, key, AttributeType::AlwaysAuthenticate) == Some(Attribute::AlwaysAuthenticate(true));
+        // PKCS #11 wants C_SignInit before a CKU_CONTEXT_SPECIFIC login, and cryptoki's
+        // single-part `sign` initializes inside the call with no way to log in between, so the
+        // login comes first. A token that enforces the strict order answers with a clear error.
         let mut context_login = false;
         if always && (self.auth.is_some() || self.protected_path) {
             session.login(UserType::ContextSpecific, self.auth.as_ref())?;
             context_login = true;
         }
-        let available = ctx.get_mechanism_list(slot).unwrap_or_default();
+        // The key's own allowed list wins over the slot-wide one: a card can advertise a
+        // mechanism that this key may not use. An unreadable or empty slot list is unknown, not
+        // "nothing".
+        let allowed = allowed_mechanisms(session, key);
+        let slot_list = ctx.get_mechanism_list(slot).ok().filter(|l| !l.is_empty());
+        let available = allowed.as_deref().or(slot_list.as_deref());
         // A CIE (and some CNS cards) wants the PIN again for every operation even when
         // `CKA_ALWAYS_AUTHENTICATE` could not be read before the login. The PIN has just proved
         // correct in the user login above, so this asks the card again with a good one: it can
         // never spend another PIN attempt, and it is done at most once.
-        let raw = match sign_with(session, &self.public, alg, msg, key, &available) {
+        let raw = match sign_with(session, &self.public, alg, msg, key, available) {
             Ok(raw) => raw,
             Err(CryptokiError::Pkcs11(RvError::UserNotLoggedIn, _)) if logged_in && !context_login => {
                 if self.auth.is_none() && !self.protected_path {
                     return Err(SignError::Crypto(describe(&CryptokiError::Pkcs11(RvError::UserNotLoggedIn, cryptoki::context::Function::Sign))));
                 }
                 session.login(UserType::ContextSpecific, self.auth.as_ref())?;
-                sign_with(session, &self.public, alg, msg, key, &available)?
+                sign_with(session, &self.public, alg, msg, key, available)?
             }
             Err(e) => return Err(e.into()),
         };
@@ -564,7 +623,7 @@ fn sign_with(
     alg: DigestAlg,
     msg: &[u8],
     key: ObjectHandle,
-    available: &[MechanismType],
+    available: Option<&[MechanismType]>,
 ) -> Result<Vec<u8>, CryptokiError> {
     match public {
         PublicKey::Rsa { .. } => {
@@ -575,7 +634,20 @@ fn sign_with(
                 RsaMechanism::Unsupported => Err(CryptokiError::Pkcs11(RvError::MechanismInvalid, cryptoki::context::Function::SignInit)),
             }
         }
-        _ => session.sign(&Mechanism::Ecdsa, key, &alg.digest(&[msg])),
+        _ => match ec_mechanism(alg, available) {
+            EcMechanism::Digest => session.sign(&Mechanism::Ecdsa, key, &alg.digest(&[msg])),
+            EcMechanism::HashInside(alg) => session.sign(&hash_ec_mechanism(alg), key, msg),
+            EcMechanism::Unsupported => Err(CryptokiError::Pkcs11(RvError::MechanismInvalid, cryptoki::context::Function::SignInit)),
+        },
+    }
+}
+
+fn allowed_mechanisms(session: &Session, key: ObjectHandle) -> Option<Vec<MechanismType>> {
+    match attr(session, key, AttributeType::AllowedMechanisms) {
+        // An empty list means "not set" on modules that answer the attribute anyway (SoftHSM
+        // does); it is not a key that may sign with nothing.
+        Some(Attribute::AllowedMechanisms(list)) if !list.is_empty() => Some(list),
+        _ => None,
     }
 }
 
@@ -592,8 +664,12 @@ enum RsaMechanism {
 
 /// The first mechanism this card offers, preferring `CKM_RSA_PKCS`: it is the one every card
 /// that signs RSA implements, and it keeps the `DigestInfo` under PdfCraft's control.
-fn rsa_mechanism(alg: DigestAlg, available: &[MechanismType]) -> RsaMechanism {
-    if available.is_empty() || available.contains(&MechanismType::RSA_PKCS) {
+fn rsa_mechanism(alg: DigestAlg, available: Option<&[MechanismType]>) -> RsaMechanism {
+    let Some(list) = available else {
+        // No list to read: the usual raw PKCS #1 path.
+        return RsaMechanism::RawPkcs1;
+    };
+    if list.contains(&MechanismType::RSA_PKCS) {
         return RsaMechanism::RawPkcs1;
     }
     let kind = match alg {
@@ -602,7 +678,39 @@ fn rsa_mechanism(alg: DigestAlg, available: &[MechanismType]) -> RsaMechanism {
         DigestAlg::Sha512 => MechanismType::SHA512_RSA_PKCS,
         _ => return RsaMechanism::Unsupported,
     };
-    if available.contains(&kind) { RsaMechanism::HashInside(alg) } else { RsaMechanism::Unsupported }
+    if list.contains(&kind) { RsaMechanism::HashInside(alg) } else { RsaMechanism::Unsupported }
+}
+
+/// How a card will make an ECDSA signature for a digest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EcMechanism {
+    /// `CKM_ECDSA` over the digest the caller made.
+    Digest,
+    /// The card hashes and signs the message itself (`CKM_ECDSA_SHA*`).
+    HashInside(DigestAlg),
+    Unsupported,
+}
+
+fn ec_mechanism(alg: DigestAlg, available: Option<&[MechanismType]>) -> EcMechanism {
+    let Some(list) = available else { return EcMechanism::Digest };
+    if list.contains(&MechanismType::ECDSA) {
+        return EcMechanism::Digest;
+    }
+    let kind = match alg {
+        DigestAlg::Sha256 => MechanismType::ECDSA_SHA256,
+        DigestAlg::Sha384 => MechanismType::ECDSA_SHA384,
+        DigestAlg::Sha512 => MechanismType::ECDSA_SHA512,
+        _ => return EcMechanism::Unsupported,
+    };
+    if list.contains(&kind) { EcMechanism::HashInside(alg) } else { EcMechanism::Unsupported }
+}
+
+fn hash_ec_mechanism(alg: DigestAlg) -> Mechanism<'static> {
+    match alg {
+        DigestAlg::Sha384 => Mechanism::EcdsaSha384,
+        DigestAlg::Sha512 => Mechanism::EcdsaSha512,
+        _ => Mechanism::EcdsaSha256,
+    }
 }
 
 /// The mechanism for a card that hashes the message itself.
@@ -657,26 +765,40 @@ fn ecdsa_der(public: &PublicKey, raw: &[u8]) -> Result<Vec<u8>, SignError> {
 /// so the serial number is what identifies the card; the stored slot is the fallback.
 fn slot_for(ctx: &Pkcs11, slot: Slot, serial: &str) -> Result<Slot, CryptokiError> {
     let slots = ctx.get_slots_with_token()?;
-    if let Some(found) = slots.iter().copied().find(|s| ctx.get_token_info(*s).is_ok_and(|t| t.serial_number() == serial)) {
-        return Ok(found);
+    // The serial identifies the card. A slot number does not survive a replug, and another card
+    // in the old slot must never be sent this card's PIN.
+    if !serial.is_empty() {
+        return slots
+            .iter()
+            .copied()
+            .find(|s| ctx.get_token_info(*s).is_ok_and(|t| t.serial_number() == serial))
+            .ok_or(CryptokiError::Pkcs11(RvError::TokenNotPresent, cryptoki::context::Function::OpenSession));
     }
-    if slots.contains(&slot) {
-        return Ok(slot);
-    }
-    Err(CryptokiError::Pkcs11(RvError::TokenNotPresent, cryptoki::context::Function::OpenSession))
+    // A token that reports no serial can only be found by its slot.
+    if slots.contains(&slot) { Ok(slot) } else { Err(CryptokiError::Pkcs11(RvError::TokenNotPresent, cryptoki::context::Function::OpenSession)) }
 }
 
 fn find_key(session: &Session, key_id: &[u8], public: &PublicKey) -> Result<ObjectHandle, CryptokiError> {
-    if !key_id.is_empty()
-        && let Ok(found) = session.find_objects(&[Attribute::Class(ObjectClass::PRIVATE_KEY), Attribute::Id(key_id.to_vec())])
-        && let Some(handle) = found.first()
-    {
-        return Ok(*handle);
-    }
-    for handle in session.find_objects(&[Attribute::Class(ObjectClass::PRIVATE_KEY)]).unwrap_or_default() {
-        if key_matches(session, handle, public) {
-            return Ok(handle);
+    let with_id = if key_id.is_empty() {
+        Vec::new()
+    } else {
+        session.find_objects(&[Attribute::Class(ObjectClass::PRIVATE_KEY), Attribute::Id(key_id.to_vec())]).unwrap_or_default()
+    };
+    match with_id.len() {
+        1 => return Ok(with_id[0]),
+        n if n > 1 => {
+            // Several keys under one ID: the certificate's public half says which.
+            if let Some(found) = with_id.iter().copied().find(|h| key_material_matches(session, *h, public)) {
+                return Ok(found);
+            }
+            return Err(CryptokiError::Pkcs11(RvError::KeyHandleInvalid, cryptoki::context::Function::SignInit));
         }
+        _ => {}
+    }
+    // No key under that ID: fall back to the one whose public material is the certificate's.
+    let all = session.find_objects(&[Attribute::Class(ObjectClass::PRIVATE_KEY)]).unwrap_or_default();
+    if let Some(found) = all.into_iter().find(|h| key_material_matches(session, *h, public)) {
+        return Ok(found);
     }
     Err(CryptokiError::Pkcs11(RvError::KeyHandleInvalid, cryptoki::context::Function::SignInit))
 }
@@ -997,14 +1119,26 @@ mod tests {
 
     #[test]
     fn rsa_prefers_raw_pkcs1_and_falls_back_to_the_cards_own_hashing() {
-        assert_eq!(rsa_mechanism(DigestAlg::Sha256, &[]), RsaMechanism::RawPkcs1);
-        assert_eq!(rsa_mechanism(DigestAlg::Sha256, &[MechanismType::RSA_PKCS]), RsaMechanism::RawPkcs1);
-        assert_eq!(rsa_mechanism(DigestAlg::Sha256, &[MechanismType::SHA256_RSA_PKCS]), RsaMechanism::HashInside(DigestAlg::Sha256));
+        // No list at all: the usual raw PKCS #1 path.
+        assert_eq!(rsa_mechanism(DigestAlg::Sha256, None), RsaMechanism::RawPkcs1);
+        assert_eq!(rsa_mechanism(DigestAlg::Sha256, Some(&[MechanismType::RSA_PKCS])), RsaMechanism::RawPkcs1);
+        assert_eq!(rsa_mechanism(DigestAlg::Sha256, Some(&[MechanismType::SHA256_RSA_PKCS])), RsaMechanism::HashInside(DigestAlg::Sha256));
         assert_eq!(
-            rsa_mechanism(DigestAlg::Sha384, &[MechanismType::SHA384_RSA_PKCS, MechanismType::SHA256_RSA_PKCS]),
+            rsa_mechanism(DigestAlg::Sha384, Some(&[MechanismType::SHA384_RSA_PKCS, MechanismType::SHA256_RSA_PKCS])),
             RsaMechanism::HashInside(DigestAlg::Sha384)
         );
-        assert_eq!(rsa_mechanism(DigestAlg::Sha512, &[MechanismType::SHA256_RSA_PKCS]), RsaMechanism::Unsupported);
+        // A list that is present but doesn't allow this digest refuses; it is not "unknown".
+        assert_eq!(rsa_mechanism(DigestAlg::Sha512, Some(&[MechanismType::SHA256_RSA_PKCS])), RsaMechanism::Unsupported);
+        assert_eq!(rsa_mechanism(DigestAlg::Sha256, Some(&[])), RsaMechanism::Unsupported);
+    }
+
+    #[test]
+    fn ecdsa_uses_the_digest_or_the_cards_own_hashing() {
+        assert_eq!(ec_mechanism(DigestAlg::Sha256, None), EcMechanism::Digest);
+        assert_eq!(ec_mechanism(DigestAlg::Sha256, Some(&[MechanismType::ECDSA])), EcMechanism::Digest);
+        assert_eq!(ec_mechanism(DigestAlg::Sha256, Some(&[MechanismType::ECDSA_SHA256])), EcMechanism::HashInside(DigestAlg::Sha256));
+        assert_eq!(ec_mechanism(DigestAlg::Sha384, Some(&[MechanismType::ECDSA_SHA384])), EcMechanism::HashInside(DigestAlg::Sha384));
+        assert_eq!(ec_mechanism(DigestAlg::Sha512, Some(&[MechanismType::ECDSA_SHA256])), EcMechanism::Unsupported);
     }
 
     #[test]

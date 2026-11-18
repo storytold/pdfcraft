@@ -183,6 +183,14 @@ impl Automation {
     pub(crate) fn pkcs11_modules(&self, a: &Args) -> Result<Vec<std::path::PathBuf>> {
         // Loading a PKCS #11 module runs its code in this process, so there is no implicit
         // loading: the call names its modules, or the environment does.
+        // Loading a PKCS #11 module runs its code in this process. Under --root only the
+        // launcher's choice (the environment) may introduce it, never the call: an agent with
+        // read access to a folder must not be able to run a library from it.
+        if (self.root.is_some() || self.roots.is_some()) && a.get("modules").is_some() {
+            return Err(bad(
+                "under --root, PKCS #11 modules come from PDFCRAFT_PKCS11_MODULES (the launcher's choice), not from the call: loading a module runs its code",
+            ));
+        }
         let Some(value) = a.get("modules") else {
             let configured = sign::pkcs11::configured_modules();
             if configured.is_empty() {
@@ -238,8 +246,11 @@ impl Automation {
                 }
                 let pin = Self::pkcs11_pin(a)?;
                 return sign::pkcs11::find(&format!("pkcs11:{r}"), &modules, pin).map_err(|e| match e {
-                    // The two failures an agent can fix are worth saying plainly.
-                    sign::SignError::Crypto(m) if m.contains("PIN") => bad(format!("{m}: pass pin_env naming an environment variable that holds it")),
+                    // Only a card that needs a PIN gets the hint: a missing identity has its own
+                    // message and must not send the agent looking for a PIN.
+                    sign::SignError::Crypto(m) if m.contains("needs the card's PIN") => {
+                        bad(format!("{m}: pass pin_env naming an environment variable that holds it"))
+                    }
                     e => failed(e),
                 });
             }

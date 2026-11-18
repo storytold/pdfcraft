@@ -8431,6 +8431,33 @@ fn digital_ids_signing_and_validation_through_tools() {
     verify_signature_revisions_and_bundle(&mut a, doc, &dir);
 }
 
+/// Without a root, a call may name its modules (as it may name its files), and a module that is
+/// missing is reported by the loader rather than refused up front. Nothing is loaded unless it is
+/// named.
+#[test]
+fn smartcard_tools_load_only_the_modules_they_are_given() {
+    let dir = workdir("smartcard-tools");
+    let mut a = Automation::new().with_clock(|| 1_700_000_000);
+    let doc = ok(&mut a, "doc_open", json!({ "path": dir.join("a.pdf").to_string_lossy() }))["doc"].as_u64().unwrap();
+    let tokens = ok(&mut a, "sign_smartcard_ids", json!({ "modules": ["no-module.so"] }));
+    assert_eq!(tokens["count"], 0, "{tokens}");
+    assert_eq!(tokens["problems"].as_array().unwrap().len(), 1, "{tokens}");
+    assert!(tokens["problems"][0].as_str().unwrap().contains("no-module.so"), "{tokens}");
+    assert_eq!(tokens["modules"].as_array().unwrap().len(), 1);
+    assert!(tokens["available_modules"].is_array());
+    // No module named and none configured: the error says what to do.
+    assert!(matches!(
+        a.call("sign_smartcard_ids", &json!({})),
+        Err(ToolError::InvalidArgs(e)) if e.contains("no PKCS #11 module configured")
+    ));
+    // The PIN is an environment variable's name, never a value.
+    let pin_name =
+        a.call("sign_document", &json!({ "doc": doc, "id": "pkcs11:00", "modules": ["no-module.so"], "pin_env": "NOT A NAME", "out": "c.pdf" }));
+    assert!(matches!(pin_name, Err(ToolError::InvalidArgs(ref e)) if e.contains("pin_env")), "{pin_name:?}");
+    let missing = a.call("sign_document", &json!({ "doc": doc, "id": "pkcs11:00", "modules": ["no-module.so"], "out": "c.pdf" }));
+    assert!(matches!(missing, Err(ToolError::Failed(ref e)) if e.contains("no PKCS#11 identity")), "{missing:?}");
+}
+
 fn create_signing_identity(a: &mut Automation) {
     let id = ok(
         a,
@@ -8450,22 +8477,15 @@ fn sign_document_and_verify_trust(a: &mut Automation, dir: &Path) -> u64 {
     // A Keychain identity that doesn't exist (macOS) or Keychains at all (elsewhere).
     assert!(matches!(a.call("sign_document", &json!({ "doc": doc, "id": "keychain:No Such Signer", "out": "k.pdf" })), Err(ToolError::Failed(_))));
     assert!(matches!(a.call("sign_document", &json!({ "doc": doc, "id": "windows:No Such Signer", "out": "w.pdf" })), Err(ToolError::Failed(_))));
-    // A card's identity: the module is named explicitly, so no test loads the middleware an
-    // installed smart card might come with.
-    let tokens = ok(a, "sign_smartcard_ids", json!({ "modules": ["no-module.so"] }));
-    assert_eq!(tokens["count"], 0, "{tokens}");
-    assert_eq!(tokens["problems"].as_array().unwrap().len(), 1, "{tokens}");
-    assert!(tokens["problems"][0].as_str().unwrap().contains("no-module.so"));
+    // Under --root a module is the launcher's choice, not the call's: it runs code in the
+    // process, so neither a list nor a PIN is even looked at.
     assert!(matches!(
-        a.call("sign_document", &json!({ "doc": doc, "id": "pkcs11:00", "modules": ["no-module.so"], "out": "c.pdf" })),
-        Err(ToolError::Failed(e)) if e.contains("no PKCS#11 identity")
+        a.call("sign_smartcard_ids", &json!({ "modules": ["no-module.so"] })),
+        Err(ToolError::InvalidArgs(e)) if e.contains("PDFCRAFT_PKCS11_MODULES")
     ));
     assert!(matches!(
-        a.call(
-            "sign_document",
-            &json!({ "doc": doc, "id": "pkcs11:00", "modules": ["no-module.so"], "pin_env": "NOT A NAME", "out": "c.pdf" })
-        ),
-        Err(ToolError::InvalidArgs(e)) if e.contains("pin_env")
+        a.call("sign_document", &json!({ "doc": doc, "id": "pkcs11:00", "modules": ["no-module.so"], "out": "c.pdf" })),
+        Err(ToolError::InvalidArgs(e)) if e.contains("PDFCRAFT_PKCS11_MODULES")
     ));
     let store = ok(a, "sign_windows_ids", json!({}));
     let ids = store["ids"].as_array().unwrap();

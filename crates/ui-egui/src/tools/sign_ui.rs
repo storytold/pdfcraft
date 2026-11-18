@@ -486,23 +486,17 @@ impl PdfCraftApp {
             return;
         }
         let listing = sign::pkcs11::identities(&modules, None);
-        // The same certificate may already be listed by the Windows store: the card is one
-        // identity, whichever module found it.
-        let mut seen: std::collections::HashSet<String> =
-            self.digital_ids.iter().filter(|e| !e.sha256.is_empty()).map(|e| e.sha256.clone()).collect();
         for id in listing.identities {
             let mut entry = entry_for(&id.reference(), &id.certificate);
             if let Some(name) = id.friendly_name {
                 entry.name = name;
             }
-            if seen.insert(entry.sha256.clone()) {
-                self.digital_ids.push(entry);
-            }
+            self.add_or_replace_id(entry);
         }
         // Certificates without a private key aren't identities; the others say why they can't
         // sign, greyed, as the Windows store's do.
         for u in listing.unusable.iter().filter(|u| !u.no_private_key) {
-            let entry = DigitalIdEntry {
+            self.add_or_replace_id(DigitalIdEntry {
                 path: format!("pkcs11:{}", u.fingerprint.split(' ').collect::<String>().to_lowercase()),
                 name: u.subject.clone(),
                 issuer: String::new(),
@@ -510,10 +504,20 @@ impl PdfCraftApp {
                 expires: String::new(),
                 unusable: Some(u.reason.clone()),
                 sha256: u.fingerprint.split(' ').collect::<String>().to_lowercase(),
-            };
-            if seen.insert(entry.sha256.clone()) {
-                self.digital_ids.push(entry);
-            }
+            });
+        }
+    }
+
+    /// One row per certificate: the same card can be offered by the Windows store and by its own
+    /// module. A usable entry replaces a greyed-out row for that certificate (the store cannot
+    /// always open a key the card's module can sign with); otherwise the first row stays.
+    fn add_or_replace_id(&mut self, entry: DigitalIdEntry) {
+        let Some(existing) = self.digital_ids.iter_mut().find(|e| !entry.sha256.is_empty() && e.sha256 == entry.sha256) else {
+            self.digital_ids.push(entry);
+            return;
+        };
+        if existing.unusable.is_some() && entry.unusable.is_none() {
+            *existing = entry;
         }
     }
 
