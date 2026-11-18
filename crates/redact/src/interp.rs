@@ -121,8 +121,9 @@ struct Gs {
     /// An ExtGState set a soft mask (`/SMask` other than `/None`), whose group may paint with
     /// patterns of its own: what is painted under it is shaped by them. Only `Q` clears it.
     soft_mask: bool,
-    /// The current font is, or may be, a Type 3 font: its glyph descriptions are content streams
-    /// this pass does not enter, which may paint with the font's own patterns.
+    /// The current font is, or may be, a Type 3 font whose glyph descriptions, content streams
+    /// this pass does not enter, may paint with a pattern of their own choosing
+    /// ([`type3_may_select_pattern`]).
     type3: bool,
 }
 
@@ -160,8 +161,8 @@ pub(crate) struct Output {
     pub keeps_all_patterns: bool,
     /// Something a mark reached may have been painted with a pattern, in this scope or a nested
     /// form: an operator the rewrite changed while a pattern could be a colour or a soft mask was
-    /// set, text shown with either or in a Type 3 font (a glyph a mark only grazes stays, so text
-    /// counts wherever it is), or a form removed unread. When nothing was, no pattern's cell
+    /// set, text shown with either or in a Type 3 font that may select a pattern itself (a glyph
+    /// a mark only grazes stays, so text counts wherever it is), or a form removed unread. When nothing was, no pattern's cell
     /// showed under a mark, so the cells that stay hold nothing the marks cover and
     /// `pattern_guard` has nothing to refuse.
     pub patterns_under_marks: bool,
@@ -232,6 +233,11 @@ pub(crate) struct Scope<'a> {
     /// How many text operators have been shown, for [`Removed::op`].
     shown: usize,
     fonts: HashMap<Vec<u8>, Rc<Metrics>>,
+    /// Type 3 glyph descriptions already read by [`type3_may_select_pattern`], and whether each
+    /// is plain: many fonts may share one, which is then read once.
+    type3_glyphs: HashMap<ObjRef, bool>,
+    /// Bytes of glyph descriptions it may still decode for this page.
+    type3_bytes: usize,
     used_names: Vec<Vec<u8>>,
     depth: usize,
     /// Form entries and decoded bytes left for this page, its content streams already charged:
@@ -264,6 +270,8 @@ impl<'a> Scope<'a> {
             removed: None,
             shown: 0,
             fonts: HashMap::new(),
+            type3_glyphs: HashMap::new(),
+            type3_bytes: MAX_TYPE3_PAGE_BYTES,
             used_names: Vec::new(),
             depth: 0,
             budget,
@@ -555,6 +563,9 @@ struct Walk {
     /// what a reader does with one that is can't be told, so in this scope no device colour
     /// operator proves a pattern left.
     odd_defaults: bool,
+    /// [`type3_may_select_pattern`] for the fonts `Tf` selected, by resource name: a page sets
+    /// the same few fonts again and again.
+    type3_fonts: HashMap<Vec<u8>, bool>,
     fallback: Rc<Metrics>,
     /// The current path: its operators, its bounding box in user space, and whether it clips.
     path: Vec<Op>,
@@ -584,6 +595,7 @@ impl Walk {
             patterns: res_dict(doc, resources, b"Pattern").iter().map(|(n, _)| n.to_vec()).collect(),
             colour_spaces,
             odd_defaults: false,
+            type3_fonts: HashMap::new(),
             fallback: Rc::new(Metrics::fallback()),
             path: Vec::new(),
             path_box: None,
@@ -849,7 +861,7 @@ impl Walk {
                         state.get(b"SMask").map(|m| doc.resolve(m)).is_some_and(|m| !matches!(&*m, Object::Null) && m.as_name() != Some(b"None"));
                     if let Some(font) = state.get(b"Font").map(|f| doc.resolve(f)) {
                         let font = font.as_array().and_then(|a| a.first()).map(|f| doc.resolve(f));
-                        self.gs.type3 = font.as_deref().and_then(Object::as_dict).is_none_or(|d| may_be_type3(doc, d));
+                        self.gs.type3 = font.as_deref().and_then(Object::as_dict).is_none_or(|d| type3_may_select_pattern(doc, scope, d));
                     }
                 }
                 if let Some((font, vertical, size)) = op.last_name().and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
@@ -876,7 +888,14 @@ impl Walk {
         let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
         self.gs.vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
         self.gs.type3_inherits = font_dict.as_ref().is_some_and(|d| type3_without_resources(doc, d));
-        self.gs.type3 = font_dict.as_ref().is_some_and(|d| may_be_type3(doc, d));
+        self.gs.type3 = match self.type3_fonts.get(name) {
+            Some(known) => *known,
+            None => {
+                let may = font_dict.as_ref().is_some_and(|d| type3_may_select_pattern(doc, scope, d));
+                self.type3_fonts.insert(name.to_vec(), may);
+                may
+            }
+        };
         self.gs.font = match scope.fonts.get(name) {
             Some(f) => f.clone(),
             None => {
@@ -1513,6 +1532,113 @@ fn xobject(
 fn may_be_type3(doc: &Document, font: &Dict) -> bool {
     let subtype = font.get(b"Subtype").map(|s| doc.resolve(s));
     !matches!(subtype.as_deref().and_then(Object::as_name), Some(b"Type1" | b"MMType1" | b"TrueType" | b"Type0"))
+}
+
+/// Most glyph descriptions of one Type 3 font read to tell whether it may select a pattern, most
+/// bytes one may decode to, and most bytes a page's may decode to together: past any of them the
+/// font counts as one that may.
+const MAX_TYPE3_GLYPHS: usize = 4096;
+const MAX_TYPE3_GLYPH_BYTES: usize = 1 << 20;
+const MAX_TYPE3_PAGE_BYTES: usize = 16 << 20;
+
+/// Whether `font` is, or may be, a Type 3 font with a glyph description that may paint with a
+/// pattern of its own choosing, whatever the colour it is shown in. A glyph that only constructs
+/// and paints paths (what a font converted to Type 3 holds) paints with the colour in force,
+/// which the caller's own flags cover; it can't select a pattern, set a soft mask, or draw a form
+/// or text that would. Any other operator, a description that isn't a stream given by reference
+/// or can't be read whole, or more of them than the limits above, counts as one that may. A
+/// description is read once for the page, however many fonts list it.
+fn type3_may_select_pattern(doc: &Document, scope: &mut Scope<'_>, font: &Dict) -> bool {
+    if !may_be_type3(doc, font) {
+        return false;
+    }
+    let Some(procs) = font.get(b"CharProcs").map(|p| doc.resolve(p)) else { return true };
+    let Some(procs) = procs.as_dict() else { return true };
+    if procs.len() > MAX_TYPE3_GLYPHS {
+        return true;
+    }
+    for (_, glyph) in procs.iter() {
+        let Some(reference) = glyph.as_ref() else { return true };
+        let plain = match scope.type3_glyphs.get(&reference) {
+            Some(plain) => *plain,
+            None => {
+                let plain = type3_glyph_is_plain(doc, reference, &mut scope.type3_bytes);
+                scope.type3_glyphs.insert(reference, plain);
+                plain
+            }
+        };
+        if !plain {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the Type 3 glyph description `reference` only constructs and paints paths, decoding
+/// no more than `left` allows.
+fn type3_glyph_is_plain(doc: &Document, reference: ObjRef, left: &mut usize) -> bool {
+    let glyph = doc.get(reference);
+    let Object::Stream(glyph) = &*glyph else { return false };
+    // Parameters given by reference aren't read by this decoder: such a description is one
+    // that can't be read.
+    let by_reference = |key: &[u8]| glyph.dict.get(key).is_some_and(holds_reference);
+    if by_reference(b"Filter") || by_reference(b"DecodeParms") || glyph.dict.contains(b"F") {
+        return false;
+    }
+    let Ok(data) = glyph.decoded_strict_within(MAX_TYPE3_GLYPH_BYTES.min(*left)) else { return false };
+    *left = left.saturating_sub(data.len());
+    let parsed = pdfcraft_content::parse(&data);
+    parsed.skipped == 0
+        && parsed.ambiguous_images == 0
+        && parsed.ops.iter().all(|op| {
+            matches!(
+                op.op.as_slice(),
+                b"d0"
+                    | b"d1"
+                    | b"q"
+                    | b"Q"
+                    | b"cm"
+                    | b"w"
+                    | b"J"
+                    | b"j"
+                    | b"M"
+                    | b"d"
+                    | b"ri"
+                    | b"i"
+                    | b"m"
+                    | b"l"
+                    | b"c"
+                    | b"v"
+                    | b"y"
+                    | b"h"
+                    | b"re"
+                    | b"S"
+                    | b"s"
+                    | b"f"
+                    | b"F"
+                    | b"f*"
+                    | b"B"
+                    | b"B*"
+                    | b"b"
+                    | b"b*"
+                    | b"n"
+                    | b"W"
+                    | b"W*"
+                    | b"g"
+                    | b"rg"
+                    | b"k"
+                    | b"G"
+                    | b"RG"
+                    | b"K"
+            )
+        })
+}
+
+/// Whether a filter name or parameter (a name, a dictionary, or an array of them) is, or holds, a
+/// reference. Nothing deeper is a filter parameter the decoders read.
+fn holds_reference(value: &Object) -> bool {
+    let entry = |v: &Object| matches!(v, Object::Ref(_)) || v.as_dict().is_some_and(|d| d.iter().any(|(_, v)| matches!(v, Object::Ref(_))));
+    entry(value) || value.as_array().is_some_and(|a| a.iter().any(entry))
 }
 
 /// Whether the ExtGState `name` sets a Type 3 font that has no `/Resources` of its own.

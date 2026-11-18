@@ -156,9 +156,14 @@ known not to be a Pattern space (a name the resources don't define included), un
 changes nothing, `q`/`Q` save and restore it, and a form starts with its caller's. A soft mask
 set by an ExtGState counts until the `Q` that drops it, and a default colour space that may be
 a Pattern space makes every operator of its scope count. The check then runs if such an
-operator was rewritten, if text was shown at all while a pattern could paint or in a Type 3
-font (a glyph a mark only grazes stays), if a form under a mark was removed unread, if an
-annotation under a mark was removed, or if a pattern was pruned.
+operator was rewritten, if text was shown at all while a pattern could paint (a glyph a mark
+only grazes stays), if a form under a mark was removed unread, if an annotation under a mark was
+removed, or if a pattern was pruned. Text in a Type 3 font counts as well, unless every glyph
+description of the font only constructs and paints paths, as in the Type 3 fonts a browser
+prints web fonts as: such a glyph paints with the colour in force and can select no pattern.
+A description that holds any other operator (a colour space, `gs`, `Do`, text), isn't a stream
+given by reference, has filter parameters by reference or doesn't decode makes the font count;
+so do more than 4,096 descriptions in a font, one over 1 MiB, or 16 MiB of them on a page.
 
 Before changing any page, `apply` prepares the redaction appearances with a shared 8 MiB
 budget for their uncompressed PDF content across the selected pages. It bounds repeated-text
