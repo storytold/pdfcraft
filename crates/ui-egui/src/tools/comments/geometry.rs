@@ -226,9 +226,9 @@ pub fn snug_text_box_rect(at: [f64; 2], text: &str, size: f64, rotation: i64) ->
 }
 
 fn sized_text_box_rect(at: [f64; 2], text: &str, size: f64, rotation: i64, min_width: f64) -> [f64; 4] {
-    use pdfcraft_engine::annot_text::{text_box_width, text_height};
+    use pdfcraft_engine::annot_text::{shaped_width, text_height, text_width};
     let pad = 2.0;
-    let longest = text.lines().map(|l| text_box_width(l, size)).fold(0.0, f64::max);
+    let longest = shaped_width(text, size).unwrap_or_else(|| text.lines().map(|l| text_width(l, size)).fold(0.0, f64::max));
     let w = (longest + 2.0 * pad + 4.0).clamp(min_width, 300.0);
     let h = text_height(text, size, w - 2.0 * pad) + 2.0 * pad + 2.0;
     pdfcraft_engine::text_box_at(rotation, at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]])

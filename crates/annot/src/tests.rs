@@ -2949,6 +2949,66 @@ fn a_text_box_refused_for_its_shape_is_not_told_to_shorten_its_text() {
     assert_eq!(hebrew.to_string(), latin.to_string(), "the same refusal as for Latin text");
 }
 
+/// The advice to shorten the text follows the redraw's own two tries: a callout whose cloudy
+/// border is behind a reference is drawn without the cloud, so there the text is what stops it.
+#[test]
+fn over_budget_text_in_a_callout_with_an_indirect_cloud_is_told_to_shorten() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let cloudy = |border: &str| {
+        let annot = format!(
+            "<< /Type /Annot /Subtype /FreeText /IT /FreeTextCallout /Rect [40 600 300 700] /CL [50 610 80 640 120 650] /RD [80 0 0 0] /BE {border} /DA (0 g /Helv 12 Tf) /Contents (Hi) >>"
+        );
+        let mut doc = document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            annot.as_bytes(),
+            b"<< /S /C /I 1 >>",
+        ]);
+        set_contents(&mut doc, 0, 0, &"\u{628}".repeat(131_073), &meta("")).unwrap_err().to_string()
+    };
+    assert!(cloudy("5 0 R").contains("shorten it"), "{}", cloudy("5 0 R"));
+    assert!(!cloudy("<< /S /C /I 1 >>").contains("shorten"), "a cloud the builder does read is still unsupported");
+}
+
+/// Rich text breaks its paragraphs where the drawing does. Text without Arabic or Hebrew is
+/// drawn as before, on the rows CR and LF give it, so its rich text has those paragraphs; text
+/// the Arabic and Hebrew writer draws also ends a paragraph at U+2029.
+#[test]
+fn rich_text_has_the_paragraphs_the_drawing_has() {
+    let paragraphs = |contents: &str| {
+        let mut annotation = Dict::new();
+        annotation.set(b"Subtype".to_vec(), Object::name("FreeText"));
+        annotation.set(b"DA".to_vec(), Object::String(PdfString::text("0 g /Helv 12 Tf")));
+        annotation.set(b"Contents".to_vec(), PdfString::text(contents));
+        super::modify::rich_text(&mut annotation);
+        text(&annotation, b"RC").matches("<p ").count()
+    };
+    assert_eq!(paragraphs("ABC\u{2029}DEF"), 1, "one row drawn, one paragraph");
+    assert_eq!(paragraphs("ABC\nDEF"), 2);
+    if pdfcraft_fonts::document_hebrew_font(false).is_some() {
+        assert_eq!(paragraphs("\u{5e9}\u{5dc}\u{5d5}\u{5dd}\u{2029}DEF"), 2);
+        assert_eq!(paragraphs("\u{5e9}\u{5dc}\u{5d5}\u{5dd}\u{2028}DEF"), 1, "a line separator stays inside its paragraph");
+    }
+}
+
+/// A text box is measured by the writer that draws all of it: a Latin row under a Hebrew one
+/// is drawn by the Arabic and Hebrew writer, which gives direction marks no width.
+#[test]
+fn a_text_box_is_as_wide_as_the_writer_that_draws_it_makes_it() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        return;
+    }
+    let marks = "\u{200f}".repeat(60);
+    let with_marks = appearance::shaped_width(&format!("\u{5e9}\u{5dc}\u{5d5}\u{5dd}\nA{marks}"), 12.0).unwrap();
+    let without = appearance::shaped_width("\u{5e9}\u{5dc}\u{5d5}\u{5dd}\nA", 12.0).unwrap();
+    assert!((with_marks - without).abs() < 1.0e-6, "{with_marks} vs {without}");
+    // Text the legacy writer draws is not measured here: callers keep their own measure.
+    assert_eq!(appearance::shaped_width("ab\nabcd", 12.0), None);
+}
+
 /// Text past the shaping budget, kept in an indirect `/Contents`: the redraw is refused and the
 /// appearance the comment had stays. Before, the retry that draws from the dictionary as stored
 /// read no text through the reference and replaced the appearance with an empty one.
@@ -6065,7 +6125,7 @@ fn check_4153_hebrew_fill_sign_text_fits_the_box_sized_for_it() {
     for (typed, size) in [("שם: שרה כהן", 10.0), ("ישראל ישראלי, רחוב הרצל 12, תל אביב", 10.0), ("שם: שרה כהן", 18.0), ("שם: שרה כהן", 24.0)]
     {
         let mut doc = fixture();
-        let w = appearance::text_box_width(typed, size) + 8.0;
+        let w = appearance::shaped_width(typed, size).unwrap() + 8.0;
         let h = size * 1.2 + 6.0;
         let shape = Shape::Typewriter { rect: [100.0, 600.0 - h, 100.0 + w, 600.0], font_size: size };
         // Fill & Sign's own style: no border.
@@ -6141,7 +6201,7 @@ fn marked_hebrew_and_arabic_text_boxes_use_shaped_width_and_wrap_count() {
     }
     for typed in ["שָׁלוֹם", "السَّلَامُ"] {
         for size in [10.0, 18.0, 24.0] {
-            let measured = appearance::text_box_width(typed, size);
+            let measured = appearance::shaped_width(typed, size).unwrap();
             let shaped = pdfcraft_fonts::appearance_text::wrap(typed, size, 1.0e6).unwrap();
             assert!((measured - shaped[0].width).abs() < 1.0e-6, "{typed:?} at {size} pt: measured {measured} for {} pt of text", shaped[0].width);
             let height = appearance::text_height(typed, size, shaped[0].width + 1.0);
@@ -6152,7 +6212,7 @@ fn marked_hebrew_and_arabic_text_boxes_use_shaped_width_and_wrap_count() {
         }
     }
     let plain = "Cafe 123";
-    assert_eq!(appearance::text_box_width(plain, 12.0), pdfcraft_fonts::helvetica_width(plain, 12.0));
+    assert_eq!(appearance::shaped_width(plain, 12.0), None, "text the legacy writer draws keeps its own measure");
     assert_eq!(appearance::text_width(plain, 12.0), pdfcraft_fonts::helvetica_width(plain, 12.0));
     assert_eq!(appearance::wrap(plain, 12.0, 35.0), pdfcraft_fonts::wrap(plain, 12.0, 35.0));
 }

@@ -36,28 +36,28 @@ pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), Annot
     let page = appearance::is_drawn_from_points(&d).then(|| page_box_listing(doc, r)).flatten();
     let direct = with_direct_values(doc, &d);
     let Some(stream) = build_appearance(doc, &d, &direct, page) else {
-        return Err(shaped_text_error(doc, &direct).unwrap_or(AnnotError::Unsupported(subtype)));
+        return Err(shaped_text_error(doc, &d).unwrap_or(AnnotError::Unsupported(subtype)));
     };
     let built = Built::new(stream, &direct);
     apply_appearance(doc, r, &d, built)
 }
 
-/// Why a text box `d` (references followed) whose text takes the Arabic and Hebrew writer has no
-/// appearance, when the text is the reason: it is past the shaping or outline budget, which
-/// shortening it fixes. `None` when the box can't be drawn with a short Latin text either (a
-/// cloudy callout): the text is not what stops it, so the caller reports the box as unsupported.
+/// Why a text box `d` whose text takes the Arabic and Hebrew writer has no appearance, when the
+/// text is the reason: it is past the shaping or outline budget, which shortening it fixes.
+/// `None` when the box can't be drawn with a short Latin text either (a cloudy callout): the
+/// text is not what stops it, so the caller reports the box as unsupported. The short text goes
+/// through the redraw's own two tries ([`can_draw`]), so the answer is about the same drawing.
 pub(crate) fn shaped_text_error(doc: &Document, d: &Dict) -> Option<AnnotError> {
     if d.name(b"Subtype") != Some(b"FreeText") {
         return None;
     }
-    let text = d.get(b"Contents").and_then(Object::as_string).map(PdfString::to_text)?;
+    let text = with_direct_values(doc, d).get(b"Contents").and_then(Object::as_string).map(PdfString::to_text)?;
     if !(pdfcraft_fonts::appearance_text::has_shaped_text(&text) && pdfcraft_fonts::appearance_text::can_shape(&text)) {
         return None;
     }
     let mut plain = d.clone();
     plain.set(b"Contents".to_vec(), Object::String(PdfString::text("x")));
-    appearance::build_on_page(doc, &plain, None)
-        .is_some()
+    can_draw(doc, &plain)
         .then(|| AnnotError::Invalid("the comment's text is too long or too complex to draw; shorten it or split it into several comments".into()))
 }
 

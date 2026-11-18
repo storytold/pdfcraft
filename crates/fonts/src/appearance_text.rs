@@ -96,7 +96,7 @@ fn cluster_ink_bounds(cluster: &ShapedCluster) -> Result<[f64; 4], GlyphError> {
 
 fn layout(text: &str, bidi: &ParagraphBidiInfo<'_>, range: Range<usize>, size: f64, rtl: bool, width: f64, latin: Std14) -> Result<Line, GlyphError> {
     let line = layout_pass(text, bidi, range.clone(), size, rtl, false, latin)?;
-    if line.width > width && range.end == text.len() && has_hanging_space(&line.text) {
+    if line.width > width && ends_its_line(text, range.end) && has_hanging_space(&line.text) {
         layout_pass(text, bidi, range, size, rtl, true, latin)
     } else {
         Ok(line)
@@ -112,7 +112,7 @@ fn layout_pass(
     hang_final: bool,
     latin: Std14,
 ) -> Result<Line, GlyphError> {
-    let continued = range.end < text.len() || hang_final;
+    let continued = !ends_its_line(text, range.end) || hang_final;
     let logical = text.get(range.clone()).ok_or(GlyphError::Missing)?;
     let displayed = display_line(logical, continued);
     let text = displayed.as_ref();
@@ -169,6 +169,13 @@ fn layout_pass(
         }
     }
     Ok(Line { text: logical.to_owned(), rtl, width, ascent, descent, latin, pieces })
+}
+
+/// Whether byte `end` of paragraph `text` is where a line ends by itself: the paragraph's end, or
+/// a line separator. A line that ends there was not wrapped, so it shows no discretionary hyphen
+/// and its trailing spaces keep their advance.
+fn ends_its_line(text: &str, end: usize) -> bool {
+    text.get(end..).is_none_or(|rest| rest.is_empty() || rest.starts_with('\u{2028}'))
 }
 
 /// Text used only for measuring/drawing a wrapped line. A soft hyphen is invisible inside a
@@ -264,19 +271,27 @@ pub fn wrap_with_latin(text: &str, size: f64, width: f64, latin: Std14) -> Resul
     if matches!(latin, Std14::Symbol | Std14::ZapfDingbats) {
         return Err(GlyphError::Missing);
     }
-    // A CR, a CRLF pair, a line separator and a paragraph separator each end a paragraph, as a
-    // line feed does (UAX #9 P1 resolves each paragraph on its own).
-    let normalized = text.replace("\r\n", "\n").replace(['\r', '\u{2028}', '\u{2029}'], "\n");
+    // A CR, a CRLF pair and a paragraph separator each end a paragraph, as a line feed does
+    // (UAX #9 P1 resolves each paragraph on its own).
+    let normalized = text.replace("\r\n", "\n").replace(['\r', '\u{2029}'], "\n");
     let mut out = Vec::new();
     for paragraph in normalized.split('\n') {
         let rtl = unicode_bidi::get_base_direction(paragraph) == unicode_bidi::Direction::Rtl;
         // UAX #9 resolves embeddings and isolates for the paragraph, then reorders each line.
         // Re-running it on a detached line loses an opener that was on a previous line.
         let bidi = ParagraphBidiInfo::new(paragraph, Some(if rtl { Level::rtl() } else { Level::ltr() }));
-        let ranges =
-            wrap_ranges(paragraph, width, |range| layout(paragraph, &bidi, range, size, rtl, width, latin).map_or(f64::INFINITY, |l| l.width));
-        for range in ranges {
-            out.push(layout(paragraph, &bidi, range, size, rtl, width, latin)?);
+        // A line separator starts a new line inside the paragraph: to UAX #9 it is whitespace,
+        // so the lines after it keep the paragraph's direction and its open embeddings.
+        let mut from = 0usize;
+        for forced in paragraph.split('\u{2028}') {
+            let within = |range: Range<usize>| from.saturating_add(range.start)..from.saturating_add(range.end);
+            let ranges = wrap_ranges(forced, width, |range| {
+                layout(paragraph, &bidi, within(range), size, rtl, width, latin).map_or(f64::INFINITY, |l| l.width)
+            });
+            for range in ranges {
+                out.push(layout(paragraph, &bidi, within(range), size, rtl, width, latin)?);
+            }
+            from = from.saturating_add(forced.len()).saturating_add('\u{2028}'.len_utf8());
         }
     }
     Ok(out)
@@ -335,20 +350,39 @@ fn wrap_ranges(paragraph: &str, width: f64, measure: impl Fn(Range<usize>) -> f6
         // A single overwide grapheme cannot be split without separating a mark from its base.
         let mut end = fit.max(at + 1);
         if end < count {
-            // A line may end after a space, a zero-width space or a discretionary hyphen, but
-            // not after indentation alone: that would leave a blank row above the text.
+            // Where the row's first character with ink ends. A break before it would leave a row
+            // of indentation or of invisible characters above the text.
+            // (Looked for in this row alone, so rows of spaces don't each read the rest of the text.)
+            let ink = paragraph.get(range(end)).and_then(|row| {
+                let first = row.char_indices().find(|(_, c)| !c.is_whitespace() && !crate::embedding::default_ignorable(*c));
+                first.map(|(i, c)| start.saturating_add(i).saturating_add(c.len_utf8()))
+            });
+            // A line may end after a space, a zero-width space or a discretionary hyphen.
             let breaks_after = |boundary: usize| {
                 let previous = boundaries.get(boundary.saturating_sub(1)).copied().unwrap_or(start);
                 let next = boundaries.get(boundary).copied().unwrap_or(previous);
-                paragraph.get(previous..next).is_some_and(|s| s.chars().all(|c| soft_space(c) || matches!(c, '\u{200b}' | '\u{00ad}')))
-                    && paragraph.get(start..next).is_some_and(|s| !s.chars().all(char::is_whitespace))
+                ink.is_some_and(|ink| next >= ink)
+                    && paragraph.get(previous..next).is_some_and(|s| s.chars().all(|c| soft_space(c) || matches!(c, '\u{200b}' | '\u{00ad}')))
             };
             // The last such place where the line fits as it is drawn when broken there, with its
-            // hyphen; with none, the line is cut between graphemes.
+            // hyphen; with none, the line is cut between graphemes. A hyphen that does not fit
+            // rules out its whole run (each shows the same hyphen after the same text), and after
+            // a few of them only the other places are tried, so a word of hyphens costs a bounded
+            // number of measurements.
+            const HYPHENS_TRIED: usize = 8;
             let mut limit = end;
+            let mut rejected = 0usize;
             loop {
-                match (at + 1..=limit).rev().find(|boundary| breaks_after(*boundary)) {
-                    Some(boundary) if ends_in_hyphen(boundary) && boundary > at + 1 && measure(range(boundary)) > width => limit = boundary - 1,
+                let place =
+                    (at + 1..=limit).rev().find(|boundary| breaks_after(*boundary) && (rejected < HYPHENS_TRIED || !ends_in_hyphen(*boundary)));
+                match place {
+                    Some(boundary) if ends_in_hyphen(boundary) && boundary > at + 1 && measure(range(boundary)) > width => {
+                        rejected += 1;
+                        limit = boundary - 1;
+                        while limit > at + 1 && ends_in_hyphen(limit) {
+                            limit -= 1;
+                        }
+                    }
                     Some(boundary) => {
                         end = boundary;
                         break;
@@ -766,6 +800,81 @@ mod tests {
         // A paragraph of spaces alone is still one intended row.
         let spaces = wrap("    ", 12.0, 1000.0).unwrap();
         assert_eq!(spaces.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["    "]);
+    }
+
+    #[test]
+    fn a_line_separator_breaks_the_line_inside_its_paragraph() {
+        if crate::document_hebrew_font(false).is_none() {
+            return;
+        }
+        // U+2028 is whitespace to UAX #9, not a paragraph boundary: the digits after it stay in
+        // the right-to-left paragraph. After U+2029 they start a paragraph of their own.
+        let same = wrap("\u{5e9}\u{5dc}\u{5d5}\u{5dd}\u{2028}123", 12.0, 1000.0).unwrap();
+        assert_eq!(same.iter().map(|l| (l.text.as_str(), l.rtl)).collect::<Vec<_>>(), [("\u{5e9}\u{5dc}\u{5d5}\u{5dd}", true), ("123", true)]);
+        let apart = wrap("\u{5e9}\u{5dc}\u{5d5}\u{5dd}\u{2029}123", 12.0, 1000.0).unwrap();
+        assert_eq!(apart.iter().map(|l| (l.text.as_str(), l.rtl)).collect::<Vec<_>>(), [("\u{5e9}\u{5dc}\u{5d5}\u{5dd}", true), ("123", false)]);
+        // A line that ends at the separator was not wrapped: no discretionary hyphen is drawn.
+        let unwrapped = wrap("ab\u{00ad}\u{2028}cd", 12.0, 1000.0).unwrap();
+        assert_eq!(unwrapped[0].text, "ab\u{00ad}");
+        assert_eq!(unwrapped[0].width, Std14::Helvetica.text_width("ab", 12.0));
+        // Leading, trailing and doubled separators each give their own (empty) row.
+        let rows = wrap("\u{2028}A\u{2028}\u{2028}B\u{2028}", 12.0, 1000.0).unwrap();
+        assert_eq!(rows.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["", "A", "", "B", ""]);
+    }
+
+    #[test]
+    fn invisible_characters_before_the_text_do_not_make_a_row_of_their_own() {
+        let width = Std14::Helvetica.text_width("AB", 12.0);
+        for invisible in ["\u{200b}", "\u{00ad}", "\u{200b}\u{200b} ", " \u{200b}"] {
+            let text = format!("{invisible}ABCDEF");
+            let lines = wrap(&text, 12.0, width).unwrap();
+            assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>(), text);
+            // (A space before the text has a width, so the first row may hold less of the text.)
+            assert!(lines[0].text.contains('A'), "{invisible:?}: no row without ink above the text: {lines:?}");
+        }
+        // A break inside the text is still taken, and the zero-width space kept.
+        let lines = wrap("one\u{200b}two", 12.0, Std14::Helvetica.text_width("one", 12.0)).unwrap();
+        assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["one\u{200b}", "two"]);
+    }
+
+    #[test]
+    fn rejected_discretionary_hyphens_bound_the_measured_work() {
+        // Break opportunities whose hyphen does not fit: a run of them is one candidate, and a
+        // word of them is given up on after a bounded number, then cut between graphemes.
+        let measured = |text: &str, width: f64| {
+            let work = std::cell::Cell::new(0usize);
+            let lines = wrap_ranges(text, width, |range| {
+                work.set(work.get() + range.len());
+                let shown = &text[range.clone()];
+                let hyphen = if range.end < text.len() && shown.ends_with('\u{00ad}') { 1.5 } else { 0.0 };
+                // A `W` is twice as wide as an `i`, as in Helvetica.
+                shown
+                    .chars()
+                    .map(|c| {
+                        if c == '\u{00ad}' {
+                            0.0
+                        } else if c == 'W' {
+                            2.0
+                        } else {
+                            1.0
+                        }
+                    })
+                    .sum::<f64>()
+                    + hyphen
+            });
+            assert_eq!(lines.iter().map(|range| &text[range.clone()]).collect::<String>(), text);
+            (work.get(), lines.len())
+        };
+        let run = format!("iii{}W", "\u{00ad}".repeat(100_000));
+        let (work, _) = measured(&run, 4.0);
+        assert!(work < run.len() * 40, "measured {work} bytes for {} input bytes", run.len());
+        let alternating = "i\u{00ad}".repeat(50_000);
+        let (work, rows) = measured(&alternating, 4.0);
+        assert!(work < alternating.len() * 200, "measured {work} bytes for {} input bytes", alternating.len());
+        assert!(rows >= 50_000 / 4, "{rows} rows");
+        // One visible hyphen that fits is still taken.
+        let (_, rows) = measured("ii\u{00ad}iiii", 4.0);
+        assert_eq!(rows, 2);
     }
 
     #[test]
