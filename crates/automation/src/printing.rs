@@ -147,6 +147,7 @@ fn spool_job(
             print::add_cups_orientation(&mut options, sheets);
             options
         },
+        driver_settings: None,
     })
 }
 
