@@ -24,6 +24,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::RenameBookmark { .. }
         | Edit::DeleteBookmark { .. }
         | Edit::MoveBookmark { .. }
+        | Edit::MoveBookmarksBatch { .. }
+        | Edit::DeleteBookmarksBatch { .. }
         | Edit::SetBookmarkPage { .. }
         | Edit::SetBookmarkColor { .. }
         | Edit::SetBookmarkStyle { .. }
@@ -604,6 +606,12 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 return Err(EditError::Invalid("no text is set in the chosen styles".into()));
             }
             pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
+        }
+        Edit::MoveBookmarksBatch { paths, target, placement } => {
+            pdfcraft_organize::move_bookmarks_batch(doc, paths, target, *placement)?;
+        }
+        Edit::DeleteBookmarksBatch { paths } => {
+            pdfcraft_organize::delete_bookmarks_batch(doc, paths)?;
         }
         Edit::NumberPages { from, to, style, prefix, first } => pdfcraft_organize::number_pages(doc, *from, *to, *style, prefix, *first)?,
         Edit::AddMeasurement(m) => {

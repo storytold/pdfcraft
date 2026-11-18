@@ -4984,3 +4984,227 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
     assert_eq!(source_bookmarks(&all), [("Chapter one".to_string(), vec!["Section".to_string()])]);
     assert!(attachments(&all));
 }
+
+fn build_multi_page_doc(page_count: usize, objs: &[String]) -> Vec<u8> {
+    let mut b: Vec<String> = Vec::new();
+    let pages_id = 2;
+    let first_page_id = 3;
+    let first_content_id = first_page_id + page_count;
+    let outlines_id = first_content_id + page_count;
+
+    if objs.is_empty() {
+        b.push(format!("<< /Type /Catalog /Pages {pages_id} 0 R >>"));
+    } else {
+        b.push(format!("<< /Type /Catalog /Pages {pages_id} 0 R /Outlines {outlines_id} 0 R >>"));
+    }
+    let kids: String = (0..page_count).map(|i| format!("{} 0 R", first_page_id + i)).collect::<Vec<_>>().join(" ");
+    b.push(format!("<< /Type /Pages /Kids [{kids}] /Count {page_count} /MediaBox [0 0 612 792] >>"));
+    for i in 0..page_count {
+        b.push(format!("<< /Type /Page /Parent {pages_id} 0 R /Contents {} 0 R >>", first_content_id + i));
+    }
+    for _ in 0..page_count {
+        b.push(raw("BT ET"));
+    }
+    b.extend(objs.iter().cloned());
+    build(&b, "/Root 1 0 R")
+}
+
+fn check_qpdf_if_present(bytes: &[u8]) {
+    let qpdf = pdfcraft_oracle::or_skip!(pdfcraft_oracle::qpdf());
+    let path = std::env::temp_dir().join(format!("pdfcraft_outline_arena_test_{}.pdf", std::process::id()));
+    std::fs::write(&path, bytes).expect("write temp pdf");
+    let output = qpdf.command().arg("--check").arg(&path).output().expect("run qpdf");
+    let _ = std::fs::remove_file(&path);
+    assert!(output.status.success(), "qpdf --check failed: {}", String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn arena_level2_caravan_move_touches_minimal_objects_preserves_unknown_keys_and_heals_parent_count() {
+    // Pages: 2 pages -> catalog(1), pages(2), page0(3), page1(4), content0(5), content1(6), Outlines(7)
+    // Nodes starting at obj 8:
+    // 8: Ch1, 9: Ch2, 10: Sec1.1 (child of Ch1, has 50 children 11..=60 + /CustomTag (preserve-me))
+    let first_sub = 11usize;
+    let sub_count = 50usize;
+    let last_sub = first_sub + sub_count - 1;
+    let mut extra = Vec::new();
+    // 7: Outlines (/Count intentionally corrupted as 999)
+    extra.push("<< /Type /Outlines /First 8 0 R /Last 9 0 R /Count 999 >>".to_string());
+    // 8: Ch1 (open, First/Last 10)
+    extra.push("<< /Title (Ch1) /Parent 7 0 R /Next 9 0 R /First 10 0 R /Last 10 0 R /Count 51 /Dest [3 0 R /Fit] >>".to_string());
+    // 9: Ch2 (leaf with URI action)
+    extra.push("<< /Title (Ch2) /Parent 7 0 R /Prev 8 0 R /A << /S /URI /URI (https://example.org/) >> >>".to_string());
+    // 10: Sec1.1 (open, 50 kids + custom COS key)
+    extra.push(format!(
+        "<< /Title (Sec 1.1) /Parent 8 0 R /First {first_sub} 0 R /Last {last_sub} 0 R /Count {sub_count} /CustomTag (preserve-me) /Dest [4 0 R /XYZ 10 700 1.5] >>"
+    ));
+    for i in 0..sub_count {
+        let obj_id = first_sub + i;
+        let prev = if i > 0 { format!(" /Prev {} 0 R", obj_id - 1) } else { String::new() };
+        let next = if i + 1 < sub_count { format!(" /Next {} 0 R", obj_id + 1) } else { String::new() };
+        extra.push(format!("<< /Title (Sub {i}) /Parent 10 0 R{prev}{next} /Dest [3 0 R /Fit] >>"));
+    }
+
+    let raw_bytes = build_multi_page_doc(2, &extra);
+    let mut doc = open(raw_bytes);
+
+    let new_paths = move_bookmarks_batch(&mut doc, &[vec![0, 0]], &[1], OutlinePlacementKind::LastChild).unwrap();
+    assert_eq!(new_paths, vec![vec![1, 0]]);
+
+    // None of the 50 Level-3 children (11..=60) may be dirtied.
+    let modified = doc.modified_objects();
+    for sub_id in first_sub..=last_sub {
+        assert!(!modified.contains(&(sub_id as u32)), "Level-3 child {sub_id} must stay clean during Level-2 move");
+    }
+    assert!(modified.len() <= 4, "expected minimal object diffs, got {modified:?}");
+
+    let sec_obj = doc.get(pdfcraft_cos::ObjRef::new(10, 0));
+    let sec_dict = sec_obj.as_dict().unwrap();
+    assert_eq!(sec_dict.get(b"CustomTag").and_then(|o| o.as_string()).map(|s| s.to_text()).as_deref(), Some("preserve-me"));
+    let ch1_obj = doc.get(pdfcraft_cos::ObjRef::new(8, 0));
+    let ch1_dict = ch1_obj.as_dict().unwrap();
+    assert!(ch1_dict.get(b"Count").is_none(), "parent losing last child must remove /Count rather than write 0");
+    let ch2_obj = doc.get(pdfcraft_cos::ObjRef::new(9, 0));
+    let ch2_dict = ch2_obj.as_dict().unwrap();
+    assert_eq!(ch2_dict.int(b"Count"), Some(51), "auto-expanded new parent holds Sec1.1 (1) + 50 kids = 51");
+    assert!(ch2_dict.get(b"A").is_some(), "non-GoTo action on Ch2 preserved");
+    let root_obj = doc.get(pdfcraft_cos::ObjRef::new(7, 0));
+    let root_dict = root_obj.as_dict().unwrap();
+    assert_eq!(root_dict.int(b"Count"), Some(53), "corrupt /Count 999 healed to 1 (Ch1) + 1 (Ch2) + 51 = 53");
+
+    let reopened = save_and_reopen(&doc);
+    assert_eq!(bookmarks(&reopened).len(), 53);
+
+    let inc_bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    check_qpdf_if_present(&inc_bytes);
+}
+
+#[test]
+fn arena_caravan_prunes_descendants_rejects_self_drops_and_sorts_by_euler_in() {
+    let extra = vec![
+        "<< /Type /Outlines /First 8 0 R /Last 12 0 R /Count 5 >>".to_string(),
+        "<< /Title (A1) /Parent 7 0 R /Next 11 0 R /First 9 0 R /Last 9 0 R /Count 2 /Dest [3 0 R /Fit] >>".to_string(),
+        "<< /Title (A1a) /Parent 8 0 R /First 10 0 R /Last 10 0 R /Count 1 /Dest [3 0 R /Fit] >>".to_string(),
+        "<< /Title (A1a_i) /Parent 9 0 R /Dest [3 0 R /Fit] >>".to_string(),
+        "<< /Title (B1) /Parent 7 0 R /Prev 8 0 R /Next 12 0 R /Dest [4 0 R /Fit] >>".to_string(),
+        "<< /Title (C1) /Parent 7 0 R /Prev 11 0 R /Dest [3 0 R /Fit] >>".to_string(),
+    ];
+    let mut doc = open(build_multi_page_doc(2, &extra));
+
+    assert!(matches!(move_bookmarks_batch(&mut doc, &[vec![0], vec![1]], &[0, 0, 0], OutlinePlacementKind::Before), Err(OutlineError::IntoItself)));
+    assert!(!doc.is_modified());
+
+    // Passing descendant A1a_i BEFORE A1 and B1 must prune A1a_i and place [A1, B1] under C1 in Euler order.
+    let moved = move_bookmarks_batch(&mut doc, &[vec![0, 0, 0], vec![1], vec![0]], &[2], OutlinePlacementKind::LastChild).unwrap();
+    assert_eq!(moved, vec![vec![0, 0], vec![0, 1]]);
+    let tree = outline_tree(&doc, &[]).unwrap();
+    assert_eq!(tree.nodes.len(), 1);
+    assert_eq!(tree.nodes[0].title, "C1");
+    assert!(tree.nodes[0].open);
+    assert_eq!(tree.nodes[0].children.len(), 2);
+    assert_eq!(tree.nodes[0].children[0].title, "A1");
+    assert_eq!(tree.nodes[0].children[1].title, "B1");
+    assert_eq!(tree.nodes[0].children[0].children[0].children[0].title, "A1a_i");
+}
+
+#[test]
+fn arena_cycle_guard_and_deep_chain() {
+    let cyclic = vec![
+        "<< /Type /Outlines /First 6 0 R /Last 7 0 R /Count 2 >>".to_string(),
+        "<< /Title (Loop1) /Parent 5 0 R /Next 7 0 R /Dest [3 0 R /Fit] >>".to_string(),
+        "<< /Title (Loop2) /Parent 5 0 R /Prev 6 0 R /Next 6 0 R /Dest [3 0 R /Fit] >>".to_string(),
+    ];
+    let doc = open(build_multi_page_doc(1, &cyclic));
+    let arena = OutlineArena::from_doc(&doc).unwrap();
+    assert_eq!(arena.preorder_items().len(), 2);
+
+    // 100,000-level deep chain in arena without stack overflow.
+    let depth = 100_000usize;
+    let mut deep = OutlineArena::from_doc(&doc).unwrap();
+    deep.nodes = vec![OutlineArenaNode::default()];
+    deep.nodes[0].is_expanded = true;
+    let mut parent = ArenaNodeId::ROOT;
+    for _ in 0..depth {
+        let id = ArenaNodeId(u32::try_from(deep.nodes.len()).unwrap());
+        let n = OutlineArenaNode { is_expanded: true, parent: Some(parent), ..OutlineArenaNode::default() };
+        if let Some(p) = deep.node_mut(parent) {
+            p.first_child = Some(id);
+            p.last_child = Some(id);
+        }
+        deep.nodes.push(n);
+        parent = id;
+    }
+    deep.recompute_metadata();
+    assert_eq!(deep.preorder_items().len(), depth);
+    assert_eq!(deep.node(parent).map(|n| n.depth), Some(depth as u32));
+}
+
+#[test]
+fn arena_delete_batch_handles_overlaps_empty_and_clears_root_count() {
+    let objs = vec![
+        "<< /Type /Outlines /First 8 0 R /Last 10 0 R /Count 3 >>".to_string(),
+        "<< /Title (A) /Parent 7 0 R /Next 9 0 R /First 11 0 R /Last 11 0 R /Count 1 /Dest [3 0 R /Fit] >>".to_string(),
+        "<< /Title (B) /Parent 7 0 R /Prev 8 0 R /Next 10 0 R /Dest [4 0 R /Fit] >>".to_string(),
+        "<< /Title (C) /Parent 7 0 R /Prev 9 0 R /First 12 0 R /Last 13 0 R /Count -2 /Dest [3 0 R /Fit] >>".to_string(),
+        "<< /Title (A1) /Parent 8 0 R /Dest [4 0 R /Fit] >>".to_string(),
+        "<< /Title (C1) /Parent 10 0 R /Next 13 0 R /Dest [3 0 R /Fit] >>".to_string(),
+        "<< /Title (C2) /Parent 10 0 R /Prev 12 0 R /Dest [4 0 R /Fit] >>".to_string(),
+    ];
+    let mut doc = open(build_multi_page_doc(2, &objs));
+
+    // Empty delete list is a no-op; invalid or empty inner path fails atomically without modifying doc.
+    delete_bookmarks_batch(&mut doc, &[]).unwrap();
+    assert!(matches!(delete_bookmarks_batch(&mut doc, &[vec![0], vec![99]]), Err(OutlineError::NoSuchBookmark(_))));
+    assert!(matches!(delete_bookmarks_batch(&mut doc, &[vec![]]), Err(OutlineError::NoSuchBookmark(_))));
+    assert!(!doc.is_modified());
+
+    // Delete C1 inside collapsed parent C updates C's negative /Count (-2 -> -1).
+    delete_bookmarks_batch(&mut doc, &[vec![2, 0]]).unwrap();
+    let c_dict = doc.get(pdfcraft_cos::ObjRef::new(10, 0)).as_dict().unwrap().clone();
+    assert_eq!(c_dict.int(b"Count"), Some(-1));
+
+    // Delete overlapping [A1, A, B, C] clears root /First, /Last, and /Count cleanly.
+    delete_bookmarks_batch(&mut doc, &[vec![0, 0], vec![0], vec![1], vec![2]]).unwrap();
+    assert!(outline_tree(&doc, &[]).unwrap().nodes.is_empty());
+    let root_obj = doc.get(pdfcraft_cos::ObjRef::new(7, 0));
+    let root_dict = root_obj.as_dict().unwrap();
+    assert!(root_dict.get(b"First").is_none());
+    assert!(root_dict.get(b"Last").is_none());
+    assert!(root_dict.get(b"Count").is_none());
+
+    let reopened = save_and_reopen(&doc);
+    assert!(bookmarks(&reopened).is_empty());
+}
+
+#[test]
+fn arena_move_atomicity_and_many_siblings_cached_lookups() {
+    let n = 400usize;
+    let first_id = 6usize;
+    let mut objs = vec![format!("<< /Type /Outlines /First {first_id} 0 R /Last {} 0 R /Count {n} >>", first_id + n - 1)];
+    for i in 0..n {
+        let obj = first_id + i;
+        let prev = if i > 0 { format!(" /Prev {} 0 R", obj - 1) } else { String::new() };
+        let next = if i + 1 < n { format!(" /Next {} 0 R", obj + 1) } else { String::new() };
+        objs.push(format!("<< /Title (Item {i}) /Parent 5 0 R{prev}{next} /Dest [3 0 R /Fit] >>"));
+    }
+    let mut doc = open(build_multi_page_doc(1, &objs));
+
+    // Invalid targets and root Before/After fail atomically.
+    assert!(matches!(move_bookmarks_batch(&mut doc, &[vec![0]], &[], OutlinePlacementKind::Before), Err(OutlineError::NoSuchBookmark(_))));
+    assert!(matches!(move_bookmarks_batch(&mut doc, &[vec![0]], &[999], OutlinePlacementKind::After), Err(OutlineError::NoSuchBookmark(_))));
+    assert!(matches!(move_bookmarks_batch(&mut doc, &[vec![]], &[1], OutlinePlacementKind::Before), Err(OutlineError::NoSuchBookmark(_))));
+    assert!(!doc.is_modified());
+
+    let paths: Vec<Vec<usize>> = (200..250).map(|i| vec![i]).collect();
+    let moved = move_bookmarks_batch(&mut doc, &paths, &[10], OutlinePlacementKind::Before).unwrap();
+    let expected: Vec<Vec<usize>> = (10..60).map(|i| vec![i]).collect();
+    assert_eq!(moved, expected);
+    let titles: Vec<String> = bookmarks(&doc).into_iter().map(|b| b.title).collect();
+    assert_eq!(titles[10], "Item 200");
+    assert_eq!(titles[59], "Item 249");
+    assert_eq!(titles[60], "Item 10");
+
+    // FirstChild / LastChild relative to root [] also work cleanly.
+    let to_top = move_bookmarks_batch(&mut doc, &[vec![59]], &[], OutlinePlacementKind::FirstChild).unwrap();
+    assert_eq!(to_top, vec![vec![0]]);
+    assert_eq!(bookmarks(&doc)[0].title, "Item 249");
+}

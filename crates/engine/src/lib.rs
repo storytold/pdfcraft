@@ -165,6 +165,7 @@ pub use history::Label;
 use layers::{apply_layer_state, print_layer_states, print_preview_layers, set_default_layer_state, use_layer_choices};
 pub use open::{OpenContext, PreparedDocument};
 pub use page_filter::{PageOrientation, PageParity, filter_pages};
+pub use pdfcraft_organize::OutlinePlacementKind;
 pub use pictures::{MarkFile, image_dimensions};
 use pictures::{embed_image, fit_picture, mark_source, model_poster};
 use protection::unrestricted;

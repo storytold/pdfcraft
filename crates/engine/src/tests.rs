@@ -2285,6 +2285,79 @@ fn bookmark_edits_show_in_the_viewer_undo_and_save() {
     assert_eq!(outline_titles(&again.get(id2).unwrap().info.outline), ["Start→1", "Finish→3"]);
 }
 
+#[test]
+fn bookmark_batch_move_and_delete_undo_and_check_permissions() {
+    let (mut s, id) = session_with(4);
+    for (index, (title, page)) in [("A", 0), ("B", 1), ("C", 2), ("D", 3)].into_iter().enumerate() {
+        s.apply(id, Edit::AddBookmark { parent: vec![], index, title: title.into(), page, left: None, top: None }).unwrap();
+    }
+    let titles = |s: &Session, doc: DocId| outline_titles(&s.get(doc).unwrap().info.outline);
+
+    // Move B and D as last children of A in one undoable step.
+    s.apply(
+        id,
+        Edit::MoveBookmarksBatch { paths: vec![vec![3], vec![1]], target: vec![0], placement: pdfcraft_organize::OutlinePlacementKind::LastChild },
+    )
+    .unwrap();
+    assert_eq!(titles(&s, id), ["A→1[B→2,D→4]", "C→3"]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Move bookmarks"));
+
+    s.undo(id).unwrap();
+    assert_eq!(titles(&s, id), ["A→1", "B→2", "C→3", "D→4"]);
+    s.redo(id).unwrap();
+    assert_eq!(titles(&s, id), ["A→1[B→2,D→4]", "C→3"]);
+
+    // Invalid batch edit fails atomically without changing outline or undo history.
+    assert!(matches!(
+        s.apply(
+            id,
+            Edit::MoveBookmarksBatch { paths: vec![vec![0]], target: vec![0, 0], placement: pdfcraft_organize::OutlinePlacementKind::Before },
+        ),
+        Err(EditError::Bookmark(_))
+    ));
+    assert_eq!(titles(&s, id), ["A→1[B→2,D→4]", "C→3"]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Move bookmarks"));
+
+    // Batch delete (overlapping parent + child) deletes in one step with plural label; single uses singular.
+    s.apply(id, Edit::DeleteBookmarksBatch { paths: vec![vec![0, 0], vec![0]] }).unwrap();
+    assert_eq!(titles(&s, id), ["C→3"]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Delete bookmarks"));
+    s.undo(id).unwrap();
+    assert_eq!(titles(&s, id), ["A→1[B→2,D→4]", "C→3"]);
+
+    s.apply(id, Edit::DeleteBookmarksBatch { paths: vec![vec![1]] }).unwrap();
+    assert_eq!(titles(&s, id), ["A→1[B→2,D→4]"]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Delete bookmark"));
+
+    // Saved output round-trips accurately.
+    let saved = s.save_bytes(id).unwrap();
+    let mut reopened = Session::new();
+    let rid = reopened.open("reopened.pdf", None, saved.clone(), None).unwrap();
+    assert_eq!(titles(&reopened, rid), ["A→1[B→2,D→4]"]);
+
+    // Encrypted PDF without assembly permission refuses batch move and delete.
+    let mut cos = pdfcraft_cos::Document::open(saved).unwrap();
+    cos.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: 0,
+        encrypt_metadata: true,
+        seed: [3; 32],
+    })
+    .unwrap();
+    let locked = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
+    let lid = reopened.open("locked.pdf", None, locked, None).unwrap();
+    assert_eq!(
+        reopened.apply(
+            lid,
+            Edit::MoveBookmarksBatch { paths: vec![vec![0, 0]], target: vec![0], placement: pdfcraft_organize::OutlinePlacementKind::After },
+        ),
+        Err(EditError::NotPermitted("page changes"))
+    );
+    assert_eq!(reopened.apply(lid, Edit::DeleteBookmarksBatch { paths: vec![vec![0, 0]] }), Err(EditError::NotPermitted("page changes")));
+}
+
 /// Two pages tagged with an H1 on the first and an H2 on the second.
 fn tagged_headings_fixture() -> Vec<u8> {
     let objs = [

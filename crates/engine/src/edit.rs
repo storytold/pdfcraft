@@ -104,6 +104,16 @@ pub enum Edit {
         to_parent: Vec<usize>,
         index: usize,
     },
+    /// Move `paths` (0-based outline paths) to `placement` relative to `target` atomically.
+    MoveBookmarksBatch {
+        paths: Vec<Vec<usize>>,
+        target: Vec<usize>,
+        placement: pdfcraft_organize::OutlinePlacementKind,
+    },
+    /// Delete multiple bookmark subtrees atomically in one surgical COS commit.
+    DeleteBookmarksBatch {
+        paths: Vec<Vec<usize>>,
+    },
     /// Point a bookmark at another page.
     SetBookmarkPage {
         path: Vec<usize>,
