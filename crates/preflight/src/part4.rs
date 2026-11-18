@@ -120,11 +120,11 @@ pub(crate) fn annotation(doc: &Document, dict: &Dict, subtype: Option<&[u8]>, na
 const MAX_FIELD_DEPTH: usize = 32;
 
 /// The field type (`/FT`) of the widget `dict`: its own, or inherited from its parents (ISO 32000-2
-/// 12.7.4.1, Table 226).
+/// 12.7.4.1, Table 226). A null `/FT` is no entry (7.3.9), so it is inherited past.
 fn field_type(doc: &Document, dict: &Dict) -> Option<Vec<u8>> {
     let mut current = dict.clone();
     for _ in 0..MAX_FIELD_DEPTH {
-        if let Some(ft) = current.get(b"FT").map(|f| doc.resolve(f)) {
+        if let Some(ft) = current.get(b"FT").map(|f| doc.resolve(f)).filter(|f| !matches!(**f, Object::Null)) {
             return ft.as_name().map(<[u8]>::to_vec);
         }
         let parent = doc.resolve(current.get(b"Parent")?);

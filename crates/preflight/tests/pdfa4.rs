@@ -370,6 +370,23 @@ fn annotations_print_show_and_have_only_a_normal_appearance() {
     reports(&widget("/FT /Tx /AP << /N 7 0 R >> /A << /S /GoTo /D [4 0 R /Fit] >>"), Level::A4, "6.4.1", "widget annotation has an action");
 }
 
+/// A null `/FT` is no entry (ISO 32000-2 7.3.9), so a widget whose `/FT` is null takes its parent's
+/// field type: under a button its normal appearance is a dictionary of appearance states.
+#[test]
+fn a_null_field_type_is_inherited_from_the_parent() {
+    let appearance = stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", b"");
+    let button = File {
+        page: "/Annots [6 0 R]".to_owned(),
+        more: vec![
+            o("<< /Type /Annot /Subtype /Widget /Parent 8 0 R /FT null /T (w) /Rect [0 0 10 10] /F 4 /P 4 0 R /AP << /N << /Off 7 0 R >> >> >>"),
+            appearance,
+            o("<< /FT /Btn /T (choice) /Kids [6 0 R] >>"),
+        ],
+        ..with_catalog("/AcroForm << /Fields [8 0 R] >>")
+    };
+    passes(&button, Level::A4);
+}
+
 #[test]
 fn graphics_states_have_no_halftone_origin() {
     let state = |entry: &str| File {
