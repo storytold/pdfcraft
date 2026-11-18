@@ -1180,7 +1180,7 @@ fn appearance_fonts_are_found_through_gs_and_indirect_decode_parameters() {
     assert_eq!(encoding(&two_page_appearances("8 0 R", "", &by_gs)), Status::Failed);
     // Behind a PNG predictor whose parameters are an indirect dictionary: every byte after a zero.
     let predicted = |doc: &mut Document, text: &str, resources: Dict| {
-        let parms = doc.add(Object::Dict(Dict::from_iter([(b"Predictor".to_vec(), Object::Int(12)), (b"Columns".to_vec(), Object::Int(1))])));
+        let parms = doc.add(Object::Dict(Dict::from_iter([(b"Predictor".to_vec(), Object::Int(10)), (b"Columns".to_vec(), Object::Int(1))])));
         let rows: Vec<u8> = text.bytes().flat_map(|b| [0, b]).collect();
         let mut dict = Dict::new();
         dict.set(b"Subtype".to_vec(), Object::name("Form"));
@@ -1201,6 +1201,28 @@ fn appearance_fonts_are_found_through_gs_and_indirect_decode_parameters() {
     let appearance = predicted(&mut doc, "/Fm Do", outer);
     doc.set(ObjRef::new(11, 0), appearance);
     assert_eq!(encoding(&doc), Status::Failed, "a form the appearance draws");
+}
+
+/// An appearance stream that decodes only up to damage is no pass: the font the damage hid may
+/// be unmapped, so with nothing found the rule is left to a manual check.
+#[test]
+fn a_damaged_appearance_stream_leaves_character_encoding_to_a_manual_check() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let encoding = |doc: &Document| status(&checked(doc, &[Rule::CharacterEncoding]), Rule::CharacterEncoding);
+    let zadb = Dict::from_iter([(b"Font".to_vec(), Object::Dict(Dict::from_iter([(b"ZaDb".to_vec(), Object::Ref(ObjRef::new(7, 0)))])))]);
+    // Paths that paint nothing, then ZapfDingbats text.
+    let text: String = (0..400).map(|i| format!("{} {} m ", i * 7 % 13, i * 11 % 17)).collect::<String>() + "n BT /ZaDb 12 Tf 4 4 Td (4) Tj ET";
+    let mut dict = Dict::new();
+    dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    dict.set(b"Resources".to_vec(), Object::Dict(zadb));
+    let whole = Stream::flate(dict, text.as_bytes());
+    let mut doc = two_page_appearances("8 0 R", "", "null");
+    doc.set(ObjRef::new(11, 0), whole.clone());
+    assert_eq!(encoding(&doc), Status::Failed, "read whole");
+    // Cut off halfway: the ZapfDingbats text is lost with the rest.
+    let cut = whole.raw.get(..whole.raw.len() / 2).unwrap().to_vec();
+    doc.set(ObjRef::new(11, 0), Stream::from_raw(whole.dict.clone(), cut));
+    assert_eq!(encoding(&doc), Status::Manual, "read up to the damage");
 }
 
 /// An appearance is read once per resource context, and again where a walk of it was cut short;
