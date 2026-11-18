@@ -388,9 +388,9 @@ fn recognize_dialog(fields: &mut DialogFields, count: usize, current: usize) -> 
         output_row = output_row.option_description(mode.name(), *about);
     }
     let flag = |key: &str, label: &str, about: Option<&str>| {
-        let row = Param::new(key, label, ParamKind::bool(false));
+        let row = Param::new(key, label.to_string(), ParamKind::bool(false));
         match about {
-            Some(text) => row.tooltip(text),
+            Some(text) => row.tooltip(text.to_string()),
             None => row,
         }
     };
@@ -498,7 +498,7 @@ impl PdfCraftApp {
             return;
         }
         let count = self.session.get(id).map_or(1, |d| d.info.pages.len().max(1));
-        let current = self.views[vi].current + 1;
+        let current = self.views[vi].current() + 1;
         let fields = fields_from(&self.ocr_draft, count);
         let dialog = HostedParamDialog::new(ctx, "ocr.recognize", fields, move |f| recognize_dialog(f, count, current)).held_ok();
         // PLAN: assumed `crate::dialogs::host::open(app: &mut PdfCraftApp, dialog: HostedParamDialog)` from pdf-dialogs-w4.
@@ -553,7 +553,7 @@ impl PdfCraftApp {
         let d = &self.ocr_draft;
         let pages: Vec<usize> = match d.pages {
             OcrPages::All => Vec::new(),
-            OcrPages::Current => vec![self.views[vi].current],
+            OcrPages::Current => vec![self.views[vi].current()],
             OcrPages::Range => (d.from.saturating_sub(1)..d.to).collect(),
         };
         let settings = d.settings();
@@ -628,7 +628,7 @@ impl PdfCraftApp {
             return None;
         }
         let (view, doc) = self.active_ids()?;
-        let page = self.views[view].current;
+        let page = self.views[view].current();
         if self.views[view].auto_ocr_tried.contains(&page) {
             return None;
         }
@@ -1184,7 +1184,7 @@ fn recognize_guarded<T>(recognize: impl FnOnce() -> Result<T, String>) -> Result
 mod tests {
     use super::*;
     use crate::{LeftPanel, Mode, QuickTool};
-    use craft::host::{AppInfo, ManualJobs, Wake};
+    use craft::host::{AppInfo, ManualJobs};
     use pdfcraft_engine::ocr::{Recognizer, Recognizers};
     use pdfcraft_engine::{Edit, Session};
 
@@ -1210,7 +1210,7 @@ mod tests {
     fn app_on_manual_jobs() -> (PdfCraftApp, Arc<ManualJobs>) {
         let jobs = Arc::new(ManualJobs::new());
         let host = craft::host::Host::builder(AppInfo { id: "pdfcraft-test", name: "PdfCraft", version: "0" }).jobs(jobs.clone()).build();
-        let mut app = PdfCraftApp::with_host(host, crate::AppServices { wake: Wake::none(), ..Default::default() });
+        let mut app = PdfCraftApp::for_unit_tests_on(Arc::new(host));
         app.open_bytes("doc.pdf", None, scan()).unwrap();
         app.quick_tool = QuickTool::EditText;
         (app, jobs)

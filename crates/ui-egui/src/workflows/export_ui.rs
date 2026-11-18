@@ -128,7 +128,7 @@ fn fields_of(d: &ExportDraft) -> DialogFields {
 /// Opens the Export dialog for `kind` over the active document.
 pub(crate) fn open(app: &mut PdfCraftApp, ctx: &egui::Context, kind: ExportKind) {
     let (count, current) = match app.active_ids() {
-        Some((i, id)) => (app.session.get(id).map_or(0, |d| d.info.pages.len()), app.views[i].current),
+        Some((i, id)) => (app.session.get(id).map_or(0, |d| d.info.pages.len()), app.views[i].current()),
         None => (0, 0),
     };
     let fields = fields_of(&app.export_draft);
@@ -151,7 +151,7 @@ pub(crate) fn open(app: &mut PdfCraftApp, ctx: &egui::Context, kind: ExportKind)
         };
         ParamDialog::new(kind.key(), title, params(kind, count, current))
             .values(Bind::bound(fields))
-            .ok_label(tl!("Export"))
+            .ok_label(tl!("Export").into())
             .ok_enabled(usable)
             .footer_note(note)
     });
@@ -299,7 +299,7 @@ impl PdfCraftApp {
         let Some(doc) = self.session.get(id) else { return };
         let src = doc.export_source();
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
-        let current = self.views[view].current;
+        let current = self.views[view].current();
         let pages = self.export_draft.range.pages(src.pages, current, &[]);
         let dpi = self.export_draft.dpi;
         let format = self.export_draft.format;

@@ -176,9 +176,7 @@ impl ScriptPromptDialog {
     /// The dialog for `prompt` of document `run`, or `None` for a message box, which the standard prompt answers.
     fn for_prompt(run: DocId, document: String, prompt: ScriptPrompt) -> Option<Self> {
         let body = match prompt {
-            ScriptPrompt::Text { title, question, password, label, default, .. } => {
-                Body::Text { title, question, label, password, text: default }
-            }
+            ScriptPrompt::Text { title, question, password, label, default, .. } => Body::Text { title, question, label, password, text: default },
             ScriptPrompt::Menu(items) => {
                 let mut nodes = Vec::new();
                 flatten(&items, 0, &mut nodes);
@@ -551,7 +549,7 @@ mod review13_ui_tests {
             assert_ne!(new, old);
             let new_before = app.session.save_bytes(new).unwrap();
             app.compare_old = Some(old);
-            app.run_compare();
+            app.run_compare(&egui::Context::default());
             assert!(app.compare.as_ref().unwrap().side_by_side);
             let dir = std::env::temp_dir().join(format!(
                 "pdfcraft-comparison-request-{}-{}",

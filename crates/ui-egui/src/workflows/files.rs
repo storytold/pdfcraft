@@ -870,23 +870,14 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles, Wake};
-    use craft::platform::clipboard::{Clipboard, EventClipboard};
-    use craft::platform::open::FileIntake;
-    use craft::platform::watch::FileWatch;
+    use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles};
 
-    use crate::{AppServices, PdfCraftApp};
+    use crate::PdfCraftApp;
 
     fn app_with(files: Arc<ScriptedFiles>, jobs: Arc<ManualJobs>) -> PdfCraftApp {
         let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files).jobs(jobs).build();
-        let wake = Wake::none();
-        let clipboard = Clipboard::new(EventClipboard::new(|| 0, |_| Ok(0)));
-        let (intake, _) = FileIntake::new(wake.clone());
-        let watch = FileWatch::new(wake.clone()).inline();
-        let services = AppServices::new(wake, clipboard, None, None, intake, watch);
-        // PLAN: assumed `with_host(Arc<Host>, AppServices)` and `AppServices::new(wake, clipboard, recovery_dir, update_source, intake, watch)` (pdf-hub-w1, L-207)
-        let mut app = PdfCraftApp::with_host(Arc::new(host), services);
-        app.set_option("language", "en").unwrap();
+        let mut app = PdfCraftApp::for_unit_tests_on(Arc::new(host));
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
     }
 
