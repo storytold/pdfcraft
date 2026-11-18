@@ -1608,7 +1608,7 @@ fn files_for_combine_are_made_into_pdfs_and_pdfs_pass_through() {
 
 fn protected(user: &str, owner: &str, permissions: i32) -> Arc<Vec<u8>> {
     let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(2))).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes256,
         user_password: user,
         owner_password: owner,
@@ -1631,7 +1631,7 @@ fn protected_with_changes(algorithm: pdfcraft_cos::Algorithm, changes: Changes) 
 fn protected_pages(pages: usize, algorithm: pdfcraft_cos::Algorithm, changes: Changes, seed: u8) -> Arc<Vec<u8>> {
     let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(pages))).unwrap();
     let protection = Protection { permissions_password: Some("boss".into()), changes, algorithm, ..Protection::default() };
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm,
         user_password: "",
         owner_password: "boss",
@@ -1796,7 +1796,7 @@ fn pages_under_the_same_protection_are_inserted_without_page_extraction() {
 fn page_extraction_needs_the_copy_permission_on_every_revision() {
     for algorithm in [pdfcraft_cos::Algorithm::Rc4_40, pdfcraft_cos::Algorithm::Aes256] {
         let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(2))).unwrap();
-        doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
             algorithm,
             user_password: "",
             owner_password: "boss",
@@ -1992,7 +1992,7 @@ fn print_content_pdf() -> Vec<u8> {
 #[test]
 fn low_resolution_printing_prints_only_the_chosen_content() {
     let mut cos = pdfcraft_cos::Document::open(Arc::new(print_content_pdf())).unwrap();
-    cos.set_encryption(&pdfcraft_cos::NewEncryption {
+    cos.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes256,
         user_password: "",
         owner_password: "owner",
@@ -2148,7 +2148,7 @@ fn combining_protected_files_is_refused_clearly() {
 fn owner_password_of_older_revisions_opens_the_viewer_too() {
     for alg in [pdfcraft_cos::Algorithm::Rc4_128, pdfcraft_cos::Algorithm::Aes128] {
         let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
-        doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
             algorithm: alg,
             user_password: "u",
             owner_password: "o",
@@ -2172,7 +2172,7 @@ fn owner_password_of_older_revisions_opens_the_viewer_too() {
 fn render_password_for_recovers_the_user_password_of_older_revisions() {
     for alg in [pdfcraft_cos::Algorithm::Rc4_40, pdfcraft_cos::Algorithm::Rc4_128, pdfcraft_cos::Algorithm::Aes128, pdfcraft_cos::Algorithm::Aes256] {
         let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
-        doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
             algorithm: alg,
             user_password: "u",
             owner_password: "o",
@@ -2431,7 +2431,7 @@ fn bookmarks_from_text_styles_refuse_one_style_for_two_levels() {
 #[test]
 fn bookmarks_from_text_styles_need_copying_permission() {
     let mut doc = pdfcraft_cos::Document::open(Arc::new(styled_headings_fixture())).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes256,
         user_password: "",
         owner_password: "owner",
@@ -2470,6 +2470,165 @@ fn headings_in_two_columns_are_two_bookmarks() {
     let style = s.get(id).unwrap().text_styles()[0].style.clone();
     s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![style] }).unwrap();
     assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Untitled→0[Left heading→1,Right heading→1]"]);
+}
+
+/// #7415: a heading's bookmark goes to the top of the heading as displayed. The same heading is
+/// shown at the same place on four pages turned 0, 90, 180 and 270 degrees; on a quarter turn the
+/// displayed top is a user-space x, so it is the destination's `left` and `top` stays unspecified.
+#[test]
+fn style_bookmarks_go_to_the_displayed_heading_top_on_turned_pages() {
+    // (rotation, media box, text matrix): each shows "Birch Survey" at 90 pt from the left and
+    // 130 pt (baseline) from the top of a 400 x 600 displayed page.
+    let pages = [
+        (0, "0 0 400 600", "1 0 0 1 90 470"),
+        (90, "0 0 600 400", "0 1 -1 0 130 90"),
+        (180, "0 0 400 600", "-1 0 0 -1 310 130"),
+        (270, "0 0 600 400", "0 -1 1 0 470 310"),
+    ];
+    let mut pdf =
+        pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R 9 0 R] /Count 4 >>");
+    for (i, (rotate, media, tm)) in pages.iter().enumerate() {
+        let content = format!("BT /F1 20 Tf {tm} Tm (Birch Survey) Tj ET");
+        pdf = pdf
+            .obj(format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [{media}] /Rotate {rotate} /Resources << /Font << /F1 11 0 R >> >> /Contents {} 0 R >>",
+                4 + 2 * i
+            ))
+            .stream("", &content);
+    }
+    let bytes = pdf.obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>").build();
+    let mut s = Session::new();
+    let id = s.open("turned.pdf", None, Arc::new(bytes), None).unwrap();
+    let style = s.get(id).unwrap().text_styles()[0].style.clone();
+    s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![style] }).unwrap();
+    let doc = s.get(id).unwrap();
+    let kids = &doc.info.outline[0].children;
+    assert_eq!(kids.len(), 4);
+    // The displayed top of the heading, from the upright page.
+    let top_of_heading = {
+        let cos = pdfcraft_cos::Document::open(doc.bytes.clone()).unwrap();
+        let line = &pdfcraft_edit::text_lines(&cos, 0).unwrap()[0];
+        600.0 - line.rect[1].max(line.rect[3]) as f32
+    };
+    assert!((110.0..115.0).contains(&top_of_heading), "{top_of_heading}");
+    for (i, kid) in kids.iter().enumerate() {
+        let page = &doc.info.pages[i];
+        assert_eq!(page.rotation, pages[i].0);
+        let [want_left, want_top] = page.xyz_for_view(None, Some(top_of_heading));
+        match kid.view {
+            pdfcraft_render::DestView::Xyz { left, top, zoom: None } => {
+                let near = |got: Option<f32>, want: Option<f32>| match (got, want) {
+                    (None, None) => true,
+                    (Some(g), Some(w)) => (g - w).abs() < 1.0,
+                    _ => false,
+                };
+                assert!(near(left, want_left) && near(top, want_top), "rotate {}: got {left:?} {top:?}, want {want_left:?} {want_top:?}", pages[i].0);
+            }
+            ref v => panic!("{v:?}"),
+        }
+    }
+}
+
+/// #7415: on a turned page the headings are read in displayed order (top to bottom), a heading
+/// set on two lines is one bookmark, and each goes to the top of its first displayed line. One
+/// layout (two headings and a two-line heading, written to the file out of order) on pages turned
+/// 0, 90, 180 and 270 degrees must give the same bookmarks at the same displayed tops, with and
+/// without a crop box whose origin is not the page's.
+#[test]
+fn style_bookmarks_read_and_join_headings_as_displayed_on_turned_pages() {
+    for cropped in [false, true] {
+        let (mut s, id) = turned_headings_session(cropped);
+        let style = s.get(id).unwrap().text_styles()[0].style.clone();
+        s.apply(id, Edit::BookmarksFromTextStyles { levels: vec![style] }).unwrap();
+        check_turned_headings(&s, id, cropped);
+        // The destinations survive a save and reopen (`/XYZ left null` on the quarter turns).
+        let bytes = s.save_bytes(id).unwrap();
+        let mut s2 = Session::new();
+        let id2 = s2.open("saved.pdf", None, bytes, None).unwrap();
+        check_turned_headings(&s2, id2, cropped);
+    }
+}
+
+/// A document of four pages turned 0, 90, 180 and 270, each showing the same three headings at the
+/// same displayed places on a displayed page of 400 x 600 (or 600 x 600 with `cropped`, where
+/// the crop box does not start at the page's origin), written in an order that is not reading order.
+fn turned_headings_session(cropped: bool) -> (Session, DocId) {
+    // Displayed baselines (x, y from the top).
+    let lines = [("Gamma Three", 50.0, 450.0), ("Beta Cont", 50.0, 274.0), ("Alpha One", 50.0, 100.0), ("Beta Two", 50.0, 250.0)];
+    // (rotation, page boxes, text matrix prefix, user position of a displayed (x, y)).
+    type Place = fn(f64, f64) -> (f64, f64);
+    let plain: [(i32, &str, &str, Place); 4] = [
+        (0, "/MediaBox [0 0 400 600]", "1 0 0 1", |x, y| (x, 600.0 - y)),
+        (90, "/MediaBox [0 0 600 400]", "0 1 -1 0", |x, y| (y, x)),
+        (180, "/MediaBox [0 0 400 600]", "-1 0 0 -1", |x, y| (400.0 - x, y)),
+        (270, "/MediaBox [0 0 600 400]", "0 -1 1 0", |x, y| (600.0 - y, 400.0 - x)),
+    ];
+    let boxes = "/MediaBox [0 0 700 700] /CropBox [50 40 650 640]";
+    let crop: [(i32, &str, &str, Place); 4] = [
+        (0, boxes, "1 0 0 1", |x, y| (50.0 + x, 640.0 - y)),
+        (90, boxes, "0 1 -1 0", |x, y| (50.0 + y, 40.0 + x)),
+        (180, boxes, "-1 0 0 -1", |x, y| (650.0 - x, 40.0 + y)),
+        (270, boxes, "0 -1 1 0", |x, y| (650.0 - y, 640.0 - x)),
+    ];
+    let mut pdf =
+        pdfcraft_testkit::Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R >>").obj("<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R 9 0 R] /Count 4 >>");
+    for (i, (rotate, boxes, prefix, place)) in (if cropped { crop } else { plain }).iter().enumerate() {
+        let content: String = lines
+            .iter()
+            .map(|(text, x, y)| {
+                let (ux, uy) = place(*x, *y);
+                format!("BT /F1 20 Tf {prefix} {ux} {uy} Tm ({text}) Tj ET\n")
+            })
+            .collect();
+        pdf = pdf
+            .obj(format!(
+                "<< /Type /Page /Parent 2 0 R {boxes} /Rotate {rotate} /Resources << /Font << /F1 11 0 R >> >> /Contents {} 0 R >>",
+                4 + 2 * i
+            ))
+            .stream("", &content);
+    }
+    let bytes = pdf.obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>").build();
+    let mut s = Session::new();
+    let id = s.open("turned.pdf", None, Arc::new(bytes), None).unwrap();
+    (s, id)
+}
+
+/// The bookmarks of [`turned_headings_session`] after "from text styles": displayed order, the
+/// two-line heading joined, each at the displayed top of its first line.
+fn check_turned_headings(s: &Session, id: DocId, cropped: bool) {
+    let doc = s.get(id).unwrap();
+    let kids = &doc.info.outline[0].children;
+    let titles: Vec<_> = kids.iter().map(|k| k.title.as_str()).collect();
+    let per_page = ["Alpha One", "Beta Two Beta Cont", "Gamma Three"];
+    assert_eq!(titles, per_page.repeat(4), "displayed order, the two-line heading joined (cropped: {cropped})");
+    // The displayed tops of the three headings, from the text of the upright page.
+    let cos = pdfcraft_cos::Document::open(doc.bytes.clone()).unwrap();
+    let upright = &doc.info.pages[0];
+    let mut found: Vec<_> =
+        pdfcraft_edit::text_lines(&cos, 0).unwrap().into_iter().map(|l| upright.user_to_view(0.0, l.rect[3].max(l.rect[1]) as f32)[1]).collect();
+    found.sort_by(f32::total_cmp);
+    // Alpha, Beta Two (the upper line of its heading), Gamma: three of the four lines.
+    let tops = [found[0], found[1], found[3]];
+    for (i, kid) in kids.iter().enumerate() {
+        let (page, n) = (&doc.info.pages[i / 3], i % 3);
+        let [want_left, want_top] = page.xyz_for_view(None, Some(tops[n]));
+        let near = |got: Option<f32>, want: Option<f32>| match (got, want) {
+            (None, None) => true,
+            (Some(g), Some(w)) => (g - w).abs() < 1.0,
+            _ => false,
+        };
+        match kid.view {
+            pdfcraft_render::DestView::Xyz { left, top, .. } => {
+                assert!(
+                    near(left, want_left) && near(top, want_top),
+                    "rotate {} {} (cropped: {cropped}): got {left:?} {top:?}, want {want_left:?} {want_top:?}",
+                    page.rotation,
+                    kid.title
+                )
+            }
+            ref v => panic!("{v:?}"),
+        }
+    }
 }
 
 /// `style` at another size.
@@ -2586,7 +2745,7 @@ fn converting_colours_of_comments_needs_the_comment_permission() {
         encrypt_metadata: true,
         seed: [7; 32],
     };
-    cos.set_encryption(&params).unwrap();
+    cos.set_encryption_legacy(&params).unwrap();
     let bytes = pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap();
     let mut s = Session::new();
     let id = s.open("locked.pdf", None, Arc::new(bytes), None).unwrap();
@@ -2608,7 +2767,7 @@ fn comment_permission_is_enforced() {
         encrypt_metadata: true,
         seed: [7; 32],
     };
-    cos.set_encryption(&params).unwrap();
+    cos.set_encryption_legacy(&params).unwrap();
     let bytes = pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap();
     let mut s = Session::new();
     let id = s.open("locked.pdf", None, Arc::new(bytes), None).unwrap();
@@ -4716,13 +4875,8 @@ fn flattening_fill_and_sign_keeps_other_comments_fields_and_undoes() {
     s.apply(id, fill_item(Shape::Signature { strokes: vec![vec![[10.0, 40.0], [40.0, 70.0], [70.0, 40.0]]] }, "")).unwrap();
     s.apply(id, fill_item(Shape::TypedSignature { rect: [90.0, 40.0, 150.0, 70.0], contours: vec![vec![[0.1, 0.2], [0.5, 0.9], [0.9, 0.2]]] }, ""))
         .unwrap();
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 8, 8);
-        enc.set_color(png::ColorType::Rgba);
-        let pixel = [40u8, 60, 80, 200];
-        enc.write_header().unwrap().write_image_data(&pixel.repeat(64)).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(8, 8, craft_image_codecs::ChannelLayout::Rgba, [40u8, 60, 80, 200].repeat(64)).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let image = SignatureImage::from_bytes(&png).unwrap();
     let info = s.get(id).unwrap().info.pages[0].clone();
     s.apply(id, image.edit(0, &info, [20.0, 120.0], false, "Ada").unwrap()).unwrap();
@@ -4822,10 +4976,11 @@ fn pages_export_as_png_jpeg_and_tiff() {
     let tif = ex.image(0, 144.0, ImageFormat::Tiff).unwrap();
     let decoded = image::load_from_memory_with_format(&tif, image::ImageFormat::Tiff).unwrap();
     assert_eq!((decoded.width(), decoded.height()), (400, 600));
-    let mut tags = tiff::decoder::Decoder::new(std::io::Cursor::new(&tif)).unwrap();
-    let compression = tags.get_tag_u32(tiff::tags::Tag::Compression).unwrap();
-    let predictor = tags.get_tag_u32(tiff::tags::Tag::Predictor).unwrap();
-    assert_eq!((compression, predictor), (5, 1), "LZW, without a predictor");
+    let tiff = craft_tiff::Tiff::parse(&tif).unwrap();
+    let ifd = &tiff.ifds[0];
+    let compression = ifd.u32(craft_tiff::tags::COMPRESSION).unwrap();
+    let predictor = ifd.u32(craft_tiff::tags::PREDICTOR).unwrap();
+    assert_eq!((compression, predictor), (5, 2), "LZW, with horizontal predictor");
 }
 
 /// Export ▸ Image draws several pages at once: each file is the one exporting that page alone
@@ -4894,14 +5049,11 @@ fn exporting_pages_at_once_stops_at_the_first_error() {
 
 /// A TIFF's resolution unit (2 = inch) and its horizontal and vertical resolution.
 fn tiff_resolution(bytes: &[u8]) -> (u32, f64, f64) {
-    use tiff::{decoder::ifd::Value, tags::Tag};
-    let mut d = tiff::decoder::Decoder::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut res = |tag| match d.get_tag(tag).unwrap() {
-        Value::Rational(n, d) => f64::from(n) / f64::from(d),
-        v => panic!("{tag:?} is {v:?}"),
-    };
-    let (x, y) = (res(Tag::XResolution), res(Tag::YResolution));
-    (d.get_tag_u32(Tag::ResolutionUnit).unwrap(), x, y)
+    let tiff = craft_tiff::Tiff::parse(bytes).unwrap();
+    let ifd = &tiff.ifds[0];
+    let x = ifd.f64(craft_tiff::tags::X_RESOLUTION).unwrap();
+    let y = ifd.f64(craft_tiff::tags::Y_RESOLUTION).unwrap();
+    (ifd.u32(craft_tiff::tags::RESOLUTION_UNIT).unwrap(), x, y)
 }
 
 /// An exported TIFF or JPEG says the resolution it was drawn at, so other programs show and print it
@@ -4918,7 +5070,7 @@ fn exported_pages_record_the_resolution_they_were_drawn_at() {
     // pHYs counts pixels per metre: 72 dpi would read back as 72.009, and a page made from the PNG
     // (doc_create from images) would come out 0.01% small.
     let png = ex.image(0, 72.0, ImageFormat::Png).unwrap();
-    assert!(png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap().info().pixel_dims.is_none(), "a PNG states no resolution");
+    assert!(craft_image_codecs::decode(&png).unwrap().meta.dpi.is_none(), "a PNG states no resolution");
 
     // A page too large for the renderer at the asked resolution says the one it was drawn at.
     let mut s = Session::new().with_clock(|| 1_700_000_000);
@@ -4938,13 +5090,8 @@ fn added_text_and_images_render_and_stay_editable() {
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Add text"));
     assert!(page_texts(&s, id)[0].contains("Added note"), "the renderer's extractor sees page content");
     // A PNG, centred at its natural size.
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 20, 10);
-        enc.set_color(png::ColorType::Rgb);
-        let mut w = enc.write_header().unwrap();
-        w.write_image_data(&[0u8; 600]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(20, 10, craft_image_codecs::ChannelLayout::Rgb, vec![0u8; 600]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     s.apply(id, Edit::AddImage { page: 0, rect: None, name: "dot.png".into(), bytes: Arc::new(png) }).unwrap();
     let d = s.get(id).unwrap();
     assert_eq!(d.added().len(), 2);
@@ -4986,13 +5133,9 @@ fn pasted_added_content_keeps_its_style_and_picture() {
     assert_eq!(doc.added()[1].content, moved, "every part of the style, in the new box");
 
     // An image, turned, flipped and cropped.
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 20, 10);
-        enc.set_color(png::ColorType::Rgb);
-        let px: Vec<u8> = (0..200).flat_map(|i| [(i % 256) as u8, 40, 200]).collect();
-        enc.write_header().unwrap().write_image_data(&px).unwrap();
-    }
+    let px: Vec<u8> = (0..200).flat_map(|i| [(i % 256) as u8, 40, 200]).collect();
+    let img = craft_image_codecs::Image::from_u8(20, 10, craft_image_codecs::ChannelLayout::Rgb, px).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 150.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
     let AddedContent::Image(mut img) = s.get(id).unwrap().added()[1].content.clone() else { panic!("the image is the page's second item") };
     (img.rotation, img.flip_h, img.crop) = (1, true, [0.1, 0.0, 0.2, 0.05]);
@@ -5022,12 +5165,8 @@ fn pasted_added_content_keeps_its_style_and_picture() {
     assert_eq!(again.image, first, "one picture object for both pastes");
     // The object holds another picture of the same size (another document's numbering, an undone
     // add): the file is embedded instead of drawing the wrong picture.
-    let mut other_png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut other_png, 20, 10);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[7u8; 600]).unwrap();
-    }
+    let other_img = craft_image_codecs::Image::from_u8(20, 10, craft_image_codecs::ChannelLayout::Rgb, vec![7u8; 600]).unwrap();
+    let other_png = craft_image_codecs::encode(&other_img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let other_file = Some(("other.png".to_string(), Arc::new(other_png)));
     s.apply(id, Edit::PasteContent { page: 0, content: AddedContent::Image(pasted.clone()), file: other_file }).unwrap();
     let AddedContent::Image(fresh) = s.get(id).unwrap().added()[3].content.clone() else { panic!("an image was pasted") };
@@ -5106,12 +5245,8 @@ fn added_images_rotate_flip_and_crop_as_drawn() {
             px.extend_from_slice(if x < 10 { &[255, 0, 0] } else { &[0, 0, 255] });
         }
     }
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 20, 10);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&px).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(20, 10, craft_image_codecs::ChannelLayout::Rgb, px).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     // A 100×100 box at (50, 100) on the 200×300 page.
     s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "rb.png".into(), bytes: Arc::new(png) }).unwrap();
@@ -5660,7 +5795,7 @@ fn signed_documents_round_trip_behind_a_user_password() {
     let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
     // After the test certificate's start date (2026-10-02).
     let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes128,
         user_password: "user",
         owner_password: "owner",
@@ -5984,7 +6119,7 @@ fn real_layered_signatures_round_trip_behind_a_user_password() {
     let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
     let date = "D:20261002120000+01'00'";
     let mut doc = pdfcraft_cos::Document::open(Arc::new(layered_signable_fixture())).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes128,
         user_password: "user",
         owner_password: "owner",
@@ -6147,7 +6282,7 @@ fn named_layer_signatures_show_their_state_through_trust_save_and_reopen() {
 fn named_layer_signatures_round_trip_behind_a_user_password() {
     let (id, anchor) = test_identity();
     let mut doc = pdfcraft_cos::Document::open(Arc::new(named_layer_signable_fixture())).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm: pdfcraft_cos::Algorithm::Aes128,
         user_password: "user",
         owner_password: "owner",
@@ -6938,7 +7073,7 @@ fn javascript_invalid_field_colour_array_is_refused_without_partial_changes() {
 fn javascript_field_colours_respect_document_fill_permissions() {
     let mut plain = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
     plain
-        .set_encryption(&pdfcraft_cos::NewEncryption {
+        .set_encryption_legacy(&pdfcraft_cos::NewEncryption {
             algorithm: pdfcraft_cos::Algorithm::Aes256,
             user_password: "",
             owner_password: "owner",
@@ -7466,6 +7601,17 @@ fn detecting_fields_on_a_printed_form() {
     let f = &d.form[0];
     assert!(f.widgets[0].rect[0] > 72.0 + 20.0, "{:?}", f.widgets[0].rect);
     assert!(s.detect_fields(id, &[]).is_empty(), "nothing left to detect");
+
+    // #2943: a "label, box, label, box" line names each check box after the label before it.
+    let labels_pdf = paper_form_with(
+        595,
+        842,
+        "BT /F1 10 Tf 100 534 Td (Monsieur) Tj ET 146 532 11 10 re S BT /F1 10 Tf 180 534 Td (Madame) Tj ET 222 532 11 10 re S",
+    );
+    let labels_id = s.open("labels.pdf", None, Arc::new(labels_pdf), None).unwrap();
+    let found = s.detect_fields(labels_id, &[]);
+    let names: Vec<&str> = found.iter().map(|(_, c)| c.name.as_str()).collect();
+    assert_eq!(names, ["Monsieur", "Madame"], "{found:?}");
 }
 
 /// #294, #2831: a detected field sits on a line or box the page already draws, so it gets no border
@@ -7490,18 +7636,11 @@ fn detected_fields_have_no_border_or_fill() {
     assert!(look.border.is_some() && look.fill.is_some(), "{look:?}");
 }
 
-/// A printed form, 420 × 300 pt: a title, a label with a rule to write on, a box with a small
-/// label in its corner, an empty box with its label above, and two check boxes.
-fn paper_form() -> Vec<u8> {
-    let content = "BT /F1 14 Tf 30 270 Td (Gewerbe-Ummeldung) Tj ET \
-        BT /F1 10 Tf 30 230 Td (Name:) Tj ET 0.75 w 80 228 m 380 228 l S \
-        1 w 30 150 350 50 re S BT /F1 7 Tf 34 191 Td (Anschrift) Tj ET \
-        BT /F1 8 Tf 30 124 Td (Telefon) Tj ET 30 90 350 30 re S \
-        30 50 10 10 re S BT /F1 9 Tf 46 51 Td (Haupt) Tj ET 150 50 10 10 re S BT /F1 9 Tf 166 51 Td (Zweig) Tj ET";
+fn paper_form_with(w: u32, h: u32, content: &str) -> Vec<u8> {
     let objs = [
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>").into_bytes(),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
     ];
@@ -7520,6 +7659,20 @@ fn paper_form() -> Vec<u8> {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     out
+}
+
+/// A printed form, 420 × 300 pt: a title, a label with a rule to write on, a box with a small
+/// label in its corner, an empty box with its label above, and two check boxes.
+fn paper_form() -> Vec<u8> {
+    paper_form_with(
+        420,
+        300,
+        "BT /F1 14 Tf 30 270 Td (Gewerbe-Ummeldung) Tj ET \
+        BT /F1 10 Tf 30 230 Td (Name:) Tj ET 0.75 w 80 228 m 380 228 l S \
+        1 w 30 150 350 50 re S BT /F1 7 Tf 34 191 Td (Anschrift) Tj ET \
+        BT /F1 8 Tf 30 124 Td (Telefon) Tj ET 30 90 350 30 re S \
+        30 50 10 10 re S BT /F1 9 Tf 46 51 Td (Haupt) Tj ET 150 50 10 10 re S BT /F1 9 Tf 166 51 Td (Zweig) Tj ET",
+    )
 }
 
 /// How the paper form was scanned.
@@ -10432,7 +10585,7 @@ fn legacy_passwords_with_turkish_characters_open() {
         encrypt_metadata: true,
         seed: [7; 32],
     };
-    cos.set_encryption(&params).unwrap();
+    cos.set_encryption_legacy(&params).unwrap();
     let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap());
     let mut s = Session::new();
     // The renderer used to try only the UTF-8 bytes, and the owner fallback handed it the
@@ -10496,7 +10649,7 @@ fn aes256_files_whose_passwords_saslprep_changes_open_as_typed() {
             encrypt_metadata: true,
             seed: [7; 32],
         };
-        cos.set_encryption(&params).unwrap();
+        cos.set_encryption_legacy(&params).unwrap();
         let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap());
         let mut s = Session::new();
         // pdfcraft-cos accepts the password as typed (it applies SASLprep); the renderer used to
@@ -12690,12 +12843,8 @@ fn a_page_truncated_for_forms_and_pictures_is_listed_once() {
 /// Moving an added image, then rotating it, must keep the moved position.
 #[test]
 fn added_image_move_then_rotate_keeps_position() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
     let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
@@ -12711,12 +12860,8 @@ fn added_image_move_then_rotate_keeps_position() {
 /// Transforming an added image, then rotating it, must keep the moved position.
 #[test]
 fn added_image_transform_then_rotate_keeps_position() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
     let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
@@ -12733,12 +12878,8 @@ fn added_image_transform_then_rotate_keeps_position() {
 /// Moving an added image, then rotating by degrees, must keep the moved position.
 #[test]
 fn added_image_move_then_rotate_by_keeps_position() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
     let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
@@ -12755,12 +12896,8 @@ fn added_image_move_then_rotate_by_keeps_position() {
 /// page image (dropping the PCAdded marker), so no empty shell remains in list_added.
 #[test]
 fn added_image_arrange_converts_to_ordinary_image() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p1.png".into(), bytes: Arc::new(png.clone()) }).unwrap();
     s.apply(id, Edit::AddImage { page: 0, rect: Some([100.0, 100.0, 200.0, 200.0]), name: "p2.png".into(), bytes: Arc::new(png) }).unwrap();
@@ -12773,12 +12910,8 @@ fn added_image_arrange_converts_to_ordinary_image() {
 
 #[test]
 fn added_image_crop_then_move_keeps_crop() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 100.0, 100.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
     s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop([30.0, 30.0, 70.0, 70.0]) }).unwrap();
@@ -12789,12 +12922,8 @@ fn added_image_crop_then_move_keeps_crop() {
 
 #[test]
 fn added_image_move_and_transform_on_rotated_and_user_unit_pages() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let png_bytes = Arc::new(png);
 
     let cases = [(90, 1.0), (180, 1.0), (270, 1.0), (0, 2.0), (90, 2.0)];
@@ -12867,14 +12996,9 @@ fn added_image_move_and_transform_on_rotated_and_user_unit_pages() {
 #[test]
 fn replace_on_added_image_replaces_xobject_and_undo_restores() {
     let make_png = |rgb: [u8; 3]| {
-        let mut png = Vec::new();
-        {
-            let mut enc = png::Encoder::new(&mut png, 2, 2);
-            enc.set_color(png::ColorType::Rgb);
-            let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]];
-            enc.write_header().unwrap().write_image_data(&data).unwrap();
-        }
-        Arc::new(png)
+        let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]].to_vec();
+        let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, data).unwrap();
+        Arc::new(craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap())
     };
     let png1 = make_png([255, 0, 0]);
     let png2 = make_png([0, 0, 255]);
@@ -12909,14 +13033,9 @@ fn replace_on_added_image_replaces_xobject_and_undo_restores() {
 #[test]
 fn mirroring_transform_on_added_image_flips_and_non_finite_is_refused() {
     let make_png = |rgb: [u8; 3]| {
-        let mut png = Vec::new();
-        {
-            let mut enc = png::Encoder::new(&mut png, 2, 2);
-            enc.set_color(png::ColorType::Rgb);
-            let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]];
-            enc.write_header().unwrap().write_image_data(&data).unwrap();
-        }
-        Arc::new(png)
+        let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]].to_vec();
+        let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, data).unwrap();
+        Arc::new(craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap())
     };
     let png1 = make_png([255, 0, 0]);
 
@@ -12969,14 +13088,9 @@ fn mirroring_transform_on_added_image_flips_and_non_finite_is_refused() {
 #[test]
 fn transform_on_added_image_folds_quarter_turns_and_promotes_non_axis_aligned() {
     let make_png = |rgb: [u8; 3]| {
-        let mut png = Vec::new();
-        {
-            let mut enc = png::Encoder::new(&mut png, 2, 2);
-            enc.set_color(png::ColorType::Rgb);
-            let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]];
-            enc.write_header().unwrap().write_image_data(&data).unwrap();
-        }
-        Arc::new(png)
+        let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]].to_vec();
+        let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, data).unwrap();
+        Arc::new(craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap())
     };
     let png1 = make_png([0, 128, 255]);
 
@@ -13042,13 +13156,8 @@ fn test_added_image_transform_reflections_with_rotation() {
                 px.extend_from_slice(&color);
             }
         }
-        let mut png = Vec::new();
-        {
-            let mut enc = png::Encoder::new(&mut png, 20, 20);
-            enc.set_color(png::ColorType::Rgb);
-            enc.write_header().unwrap().write_image_data(&px).unwrap();
-        }
-        Arc::new(png)
+        let img = craft_image_codecs::Image::from_u8(20, 20, craft_image_codecs::ChannelLayout::Rgb, px).unwrap();
+        Arc::new(craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap())
     };
 
     let colour_at = |s: &Session, id: DocId, x: u32, y_from_top: u32| -> [u8; 3] {
@@ -13265,7 +13374,7 @@ fn importing_a_pdf_copies_its_comments() {
     // A PDF that needs a password is refused with that reason, with or without bytes before its header.
     let mut locked = pdfcraft_cos::Document::open(Arc::new(review)).unwrap();
     locked
-        .set_encryption(&pdfcraft_cos::NewEncryption {
+        .set_encryption_legacy(&pdfcraft_cos::NewEncryption {
             algorithm: pdfcraft_cos::Algorithm::Aes256,
             user_password: "u",
             owner_password: "o",
@@ -13804,10 +13913,8 @@ fn original_image_edit_does_not_match_an_added_sibling_of_the_same_xobject() {
 
 #[test]
 fn image_transform_engine_refuses_singular_matrices_without_mutation() {
-    let mut png = Vec::new();
-    let mut enc = png::Encoder::new(&mut png, 1, 1);
-    enc.set_color(png::ColorType::Rgb);
-    enc.write_header().unwrap().write_image_data(&[100, 150, 200]).unwrap();
+    let img = craft_image_codecs::Image::from_u8(1, 1, craft_image_codecs::ChannelLayout::Rgb, vec![100, 150, 200]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let mut s = Session::new();
     let bytes = s.create_from_images(&[("pixel.png".into(), png)]).unwrap();
     let id = s.open("image.pdf", None, bytes, None).unwrap();
@@ -14160,12 +14267,8 @@ fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
 
 #[test]
 fn resizing_an_added_image_back_inside_the_page_keeps_its_identity() {
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 2, 2);
-        enc.set_color(png::ColorType::Rgb);
-        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![255u8; 12]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let (mut s, id) = session_with(1);
     s.apply(id, Edit::AddImage { page: 0, rect: Some([-30.0, -20.0, 70.0, 80.0]), name: "edge.png".into(), bytes: Arc::new(png) }).unwrap();
     let original = s.get(id).unwrap().added()[0].obj;
@@ -14227,7 +14330,8 @@ fn reset_order_session(reset: &str) -> (Session, DocId) {
     })
     .unwrap();
     let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
-    let mut s = Session::new();
+    // Callers compare two saves byte for byte, and each save stamps `/ModDate`: pin the clock.
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
     s.set_javascript(false);
     let id = s.open("reset-order.pdf", None, bytes, None).unwrap();
     s.apply(

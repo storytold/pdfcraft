@@ -122,7 +122,7 @@ fn caller_entropy_makes_the_new_identifier_reproducible() {
 fn an_encrypted_rewrite_keeps_the_first_identifier_string_its_key_depends_on() {
     for algorithm in [Algorithm::Rc4_128, Algorithm::Aes128, Algorithm::Aes256] {
         let mut doc = reopen(source(true));
-        doc.set_encryption(&NewEncryption {
+        doc.set_encryption_legacy(&NewEncryption {
             algorithm,
             user_password: "user",
             owner_password: "owner",
@@ -160,7 +160,7 @@ fn unusable_ids() -> Vec<(&'static str, Option<Object>)> {
 /// An encrypted file whose key is derived from the empty string, with its trailer `/ID` replaced by `id`.
 fn protected_with_id(algorithm: Algorithm, id: Option<Object>) -> Vec<u8> {
     let mut doc = reopen(source_with(Some("/ID [<> <>]")));
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm,
         user_password: "user",
         owner_password: "owner",
