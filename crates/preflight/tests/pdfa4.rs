@@ -1140,19 +1140,29 @@ fn output_intents_past_the_limit_are_reported_as_not_checked() {
 }
 
 /// 6.7.2.1: the header is the processing instruction whose target is `xpacket` (XML 1.0 2.6), and
-/// the text before it is read once: another instruction is skipped whole, whatever it holds.
+/// another instruction before it is skipped whole, whatever it holds.
 #[test]
-fn the_xpacket_header_is_found_by_its_target_in_one_pass() {
+fn the_xpacket_header_is_found_by_its_target() {
     let text = String::from_utf8(packet("4", Some("2020"), None)).unwrap();
     let sized = text.replacen("?>", " bytes=\"10\"?>", 1);
     for before in ["<?xpacket-note ok?>", "<?tool <!-- ?>", "<?tool <?xpacket bytes=\"1\"?>"] {
         reports(&File { packet: format!("{before}{sized}").into_bytes(), ..File::default() }, Level::A4, "6.7.2.1", "bytes or encoding attribute");
     }
     passes(&File { packet: format!("<?tool <?xpacket bytes=\"1\"?>{text}").into_bytes(), ..File::default() }, Level::A4);
-    // Many comments before the header: each is read once (a scan from every comment to the header
-    // would read this some 10^10 bytes).
-    let comments = "<!---->".repeat(200_000);
-    reports(&File { packet: format!("{comments}{sized}").into_bytes(), ..File::default() }, Level::A4, "6.7.2.1", "bytes or encoding attribute");
+}
+
+/// 6.7.2.1: many comments before the `xpacket` header are each read once. A search from every
+/// comment on to the header would read some 10^11 bytes here, and take half a minute rather than a
+/// tenth of a second; the bound leaves a hundredfold for slower machines.
+#[test]
+fn many_comments_before_the_xpacket_header_are_read_once() {
+    let text = String::from_utf8(packet("4", Some("2020"), None)).unwrap();
+    let sized = text.replacen("?>", " bytes=\"10\"?>", 1);
+    let comments = "<!---->".repeat(300_000);
+    let file = File { packet: format!("{comments}{sized}").into_bytes(), ..File::default() };
+    let started = std::time::Instant::now();
+    reports(&file, Level::A4, "6.7.2.1", "bytes or encoding attribute");
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "took {:?}", started.elapsed());
 }
 
 /// 6.2.3: an ICC profile's tag data follows its tag table (ICC.1 7.1, 7.3.4): a tag whose data
