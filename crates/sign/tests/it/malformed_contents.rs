@@ -192,6 +192,19 @@ startxref
     let s = approval(&bytes);
     assert!(s.signed, "{:?}", s.details);
     assert!(!s.details.iter().any(|d| d.message.contains("changes nothing")), "{:?} {:?}", s.modification, s.details);
+    // The update is seen. With no signed object changed the list of changes is empty, and the
+    // detail says what the check found; a check that counts the added object as a change lists it.
+    match &s.modification {
+        Modification::None => panic!("the update after the signature was not seen: {:?}", s.details),
+        Modification::Allowed(changes) if changes.is_empty() => assert!(
+            s.details
+                .iter()
+                .any(|d| d.message == "Data was added to the file since this signature was applied, but no change to the document was found."),
+            "{:?}",
+            s.details
+        ),
+        Modification::Allowed(_) | Modification::Disallowed(_) => {}
+    }
     no_empty_brackets(&s);
 }
 
