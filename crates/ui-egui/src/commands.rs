@@ -131,7 +131,9 @@ impl PdfCraftApp {
         match spec.needs {
             commands::Needs::Undo => tl!("Nothing to undo").to_string(),
             commands::Needs::Redo => tl!("Nothing to redo").to_string(),
-            commands::Needs::FillForms if self.active.is_some() => tl!("This document has no form fields you can fill in").to_string(),
+            commands::Needs::FillForms | commands::Needs::ImportFields if self.active.is_some() => {
+                tl!("This document has no form fields you can fill in").to_string()
+            }
             commands::Needs::HasComments if self.active.is_some() => tl!("This document has no comments to flatten").to_string(),
             commands::Needs::HasFields if self.active.is_some() => tl!("This document has no form fields to flatten").to_string(),
             commands::Needs::HasRedactions if self.active.is_some() => {
@@ -155,7 +157,11 @@ impl PdfCraftApp {
                 }
             }
             commands::Needs::Unlock if self.active.is_some() => tl!("This document has no restrictions to lift").to_string(),
-            commands::Needs::Assembly | commands::Needs::PageExtraction | commands::Needs::Modification | commands::Needs::Annotate
+            commands::Needs::Assembly
+            | commands::Needs::PageExtraction
+            | commands::Needs::Modification
+            | commands::Needs::Annotate
+            | commands::Needs::Import
                 if self.active.is_some() =>
             {
                 tl!("The document's security settings don't allow this change").to_string()

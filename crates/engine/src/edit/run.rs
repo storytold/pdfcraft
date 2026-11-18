@@ -203,6 +203,23 @@ fn check_import_permission(p: Option<&pdfcraft_cos::Permissions>, comments: bool
     Ok(())
 }
 
+/// The comments on the document's pages: every annotation in a page's `/Annots` other than a
+/// widget or a link, by object.
+fn page_comments(doc: &pdfcraft_cos::Document) -> std::collections::HashSet<pdfcraft_cos::ObjRef> {
+    let mut out = std::collections::HashSet::new();
+    for page in pdfcraft_model::pages(doc) {
+        let Some(annots) = page.dict.get(b"Annots").map(|a| doc.resolve(a)) else { continue };
+        for a in annots.as_array().map(Vec::as_slice).unwrap_or_default() {
+            let pdfcraft_cos::Object::Ref(r) = a else { continue };
+            let subtype = doc.get(*r).as_dict().and_then(|d| d.name(b"Subtype").map(<[u8]>::to_vec));
+            if !matches!(subtype.as_deref(), Some(b"Widget" | b"Link")) {
+                out.insert(*r);
+            }
+        }
+    }
+    out
+}
+
 /// What a comment import left out of comments it did import (an appearance it could not read),
 /// in the repair log as one line: said, not slipped in. The first five are named, each in at
 /// most [`SKIPPED_CHARS`] characters with control characters escaped (a name from the file
@@ -1109,12 +1126,22 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 Some(Ok(text)) if is_xfa_data_file(&text) => {
                     let expect_root = cx.xfa.as_ref().and_then(|t| t.root.common.name.clone());
                     check_import_permission(cx.permissions.as_ref(), false, true)?;
+                    // Laying the form out again replaces its pages' annotations with the ones it
+                    // generates, so a comment on them goes too: without the permission to comment
+                    // (or change the document), the import is refused rather than taking it.
+                    let comments_before = cx.permissions.as_ref().filter(|p| !(p.annotate() || p.modify())).map(|_| page_comments(doc));
                     let r = pdfcraft_xfa::import_data(doc, &text, expect_root.as_deref(), cx.xfa_datasets)
                         .map_err(|e| EditError::Write(e.to_string()))?;
                     cx.xfa_datasets = r.stream.or(cx.xfa_datasets);
                     cx.xfa_out.errors.extend(r.warnings);
                     cx.xfa_out.console.push(format!("Imported XFA data: {} node(s)", r.nodes));
                     xfa_after_data_change(doc, cx, true)?;
+                    if let Some(before) = comments_before {
+                        let after = page_comments(doc);
+                        if !before.is_subset(&after) {
+                            return Err(EditError::NotPermitted("removing its comments, which laying the form out again for this data would do"));
+                        }
+                    }
                 }
                 Some(Err(why)) if !bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => return Err(EditError::Invalid(why)),
                 _ => {

@@ -3207,6 +3207,9 @@ fn import_data_follows_the_permission_to_fill_in_fields() {
     let id = s.open("fill.pdf", None, protect(Changes::FillSign), None).unwrap();
     let p = s.get(id).unwrap().permissions().unwrap();
     assert!(p.fill_forms() && !p.modify() && !p.annotate(), "/P={:#x}", p.bits);
+    // The commands that start an import are enabled wherever the import can go ahead.
+    let enabled = |s: &Session, id, c| commands::is_enabled(commands::command(c).unwrap(), s, Some(id));
+    assert!(enabled(&s, id, "form.import_data") && enabled(&s, id, "comment.import"));
     import(&mut s, id, values).expect("field values on a file that allows filling in fields");
     assert_eq!(name(&s, id), vec!["Ada".to_string()]);
     assert_eq!(import(&mut s, id, with_note), Err(EditError::NotPermitted("comments")));
@@ -3215,6 +3218,55 @@ fn import_data_follows_the_permission_to_fill_in_fields() {
     let id = s.open("locked.pdf", None, protect(Changes::None), None).unwrap();
     assert_eq!(import(&mut s, id, values), Err(EditError::NotPermitted("importing form data or comments")));
     assert!(name(&s, id).is_empty());
+    assert!(!enabled(&s, id, "form.import_data") && !enabled(&s, id, "comment.import"));
+}
+
+/// Importing data into a laid-out XFA form lays it out again, which replaces its pages'
+/// annotations with the ones it generates. On a file that allows filling in fields but not
+/// comments (ISO 32000-2 Table 22, bit 9 without 4 or 6), an import that would take a comment
+/// with it is refused, and the comment and the values stay; with the permission to comment the
+/// import goes ahead.
+#[test]
+fn an_xfa_import_that_would_remove_a_comment_needs_the_permission_to_comment() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+    let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template())), None).unwrap();
+    let shape = Shape::Note { at: [50.0, 50.0], icon: NoteIcon::Comment };
+    let style = Style::default_for(&shape);
+    s.apply(id, Edit::AddAnnotation(NewAnnotation { page: 0, style, shape, contents: "keep me".into(), author: "Reviewer".into() })).unwrap();
+    let noted = s.save_bytes(id).unwrap();
+    let protect = |changes: Changes| {
+        let mut doc = pdfcraft_cos::Document::open(noted.clone()).unwrap();
+        let protection = Protection { permissions_password: Some("boss".into()), changes, ..Protection::default() };
+        doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: "",
+            owner_password: "boss",
+            permissions: protection.permission_bits(),
+            encrypt_metadata: true,
+            seed: [3; 32],
+        })
+        .unwrap();
+        Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap())
+    };
+    let notes = |s: &Session, id| s.get(id).unwrap().info.annotations.iter().filter(|a| a.contents.as_deref() == Some("keep me")).count();
+    let qty = |s: &Session, id| s.get(id).unwrap().form.iter().find(|f| f.name == "qty").map(|f| f.value.clone()).unwrap_or_default();
+    let data = "<form><page1><qty>3</qty><table><row><item>a</item><amount>10</amount></row></table></page1></form>";
+    let import = |s: &mut Session, id| s.apply(id, Edit::ImportData { name: "rows.xml".into(), bytes: Arc::new(data.as_bytes().to_vec()) });
+
+    let fill = s.open("fill.pdf", None, protect(Changes::FillSign), None).unwrap();
+    let p = s.get(fill).unwrap().permissions().unwrap();
+    assert!(p.fill_forms() && !p.modify() && !p.annotate(), "/P={:#x}", p.bits);
+    assert_eq!(notes(&s, fill), 1, "the comment is there to lose");
+    let before = qty(&s, fill);
+    match import(&mut s, fill) {
+        Err(EditError::NotPermitted(what)) => assert!(what.contains("comments"), "{what}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!((notes(&s, fill), qty(&s, fill)), (1, before), "the refused import changed nothing");
+
+    let comment = s.open("comment.pdf", None, protect(Changes::CommentFillSign), None).unwrap();
+    import(&mut s, comment).expect("the permission to comment allows it");
+    assert_eq!(qty(&s, comment), vec!["3".to_string()]);
 }
 
 /// Whether `needle` appears in `bytes`, or in any stream of the PDF they hold once decoded (so
