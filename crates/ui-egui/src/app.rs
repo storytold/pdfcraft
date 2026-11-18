@@ -655,7 +655,7 @@ impl PdfCraftApp {
         }
         // PLAN: assumed PdfCraftApp::open_intake(&mut self, &egui::Context), which opens what the intake holds (pdf-shell-w13).
         self.open_intake(ctx);
-        self.present_portfolios();
+        self.present_portfolios(ctx);
         if let Some((_, id)) = self.active_ids() {
             let out = self.session.take_js_output(id);
             self.handle_js(ctx, id, out);

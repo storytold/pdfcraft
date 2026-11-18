@@ -1767,7 +1767,7 @@ mod tests {
         let id = app.active_ids().unwrap().1;
         let bytes = app.session.save_bytes(id).unwrap();
         let mut locked = crate::PdfCraftApp::for_unit_tests();
-        locked.open_bytes("locked.pdf", None, bytes.as_ref().clone()).unwrap();
+        locked.open_bytes(&egui::Context::default(), "locked.pdf", None, bytes.as_ref().clone()).unwrap();
         assert!(!locked.session.get(locked.active_ids().unwrap().1).unwrap().allows_modification());
         locked.last_copied_image = Some((1, 1, vec![0, 255, 0, 255]));
         let before = locked.last_copied_image.clone();

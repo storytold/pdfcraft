@@ -121,10 +121,11 @@ mod tests {
 
     #[test]
     fn confirmed_close_uses_id_and_cancel_keeps_history_empty() {
+        let ctx = &egui::Context::default();
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
             let mut app = app();
-            app.open_bytes("first.pdf", Some("/tmp/first.pdf".into()), PDF.to_vec()).unwrap();
-            app.open_bytes("second.pdf", None, PDF.to_vec()).unwrap();
+            app.open_bytes(ctx, "first.pdf", Some("/tmp/first.pdf".into()), PDF.to_vec()).unwrap();
+            app.open_bytes(ctx, "second.pdf", None, PDF.to_vec()).unwrap();
             app
         });
         h.run_steps(4);
@@ -219,10 +220,11 @@ mod tests {
 
     #[test]
     fn inactive_tab_menu_closes_target_and_disables_unavailable_actions() {
+        let ctx = &egui::Context::default();
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
             let mut app = app();
             for name in ["first.pdf", "second.pdf"] {
-                app.open_bytes(name, None, PDF.to_vec()).unwrap();
+                app.open_bytes(ctx, name, None, PDF.to_vec()).unwrap();
             }
             app
         });

@@ -305,7 +305,7 @@ mod tests {
             );
             let mut app = PdfCraftApp::with_host(Arc::new(host), services);
             let blank = app.session.create_blank(200.0, 300.0, 3).expect("a blank document");
-            app.open_bytes("three.pdf", None, blank.as_ref().clone()).expect("opens");
+            app.open_bytes(&egui::Context::default(), "three.pdf", None, blank.as_ref().clone()).expect("opens");
             app
         });
         settle(&mut h, &jobs);

@@ -160,12 +160,13 @@ mod tests {
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
             let mut app = app(Some(&dir));
             app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-            app.open_bytes("a.pdf", None, pdf("First")).unwrap();
-            app.open_bytes("b.pdf", None, pdf("Second")).unwrap();
+            app.open_bytes(&egui::Context::default(), "a.pdf", None, pdf("First")).unwrap();
+            app.open_bytes(&egui::Context::default(), "b.pdf", None, pdf("Second")).unwrap();
             app
         });
         h.run_steps(4);
-        assert!(h.state_mut().apply_edit(&h.ctx.clone(), Edit::RotatePages { pages: vec![0], degrees: 90 }));
+        let ctx_h = h.ctx.clone();
+        assert!(h.state_mut().apply_edit(&ctx_h, Edit::RotatePages { pages: vec![0], degrees: 90 }));
         if about {
             let ctx = h.ctx.clone();
             h.state_mut().set_option(&ctx, "dialog", "about").unwrap();

@@ -166,7 +166,7 @@ mod picture_tests {
 
     /// The page open with the Select tool on an app whose jobs wait in `jobs`, once it is on screen, and where a point
     /// on it is. The jobs are run only while the page settles.
-    fn open_page() -> (Harness<'static, PdfCraftApp>, Arc<ManualJobs>, impl Fn(f32, f32) -> egui::Pos2) {
+    fn open_page(ctx: &egui::Context) -> (Harness<'static, PdfCraftApp>, Arc<ManualJobs>, impl Fn(f32, f32) -> egui::Pos2) {
         let jobs = Arc::new(ManualJobs::new());
         let host_jobs = jobs.clone();
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
@@ -181,7 +181,7 @@ mod picture_tests {
             );
             let mut app = PdfCraftApp::with_host(Arc::new(host), services);
             app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-            app.open_bytes("marks.pdf", None, page_with_a_comment_and_a_link()).unwrap();
+            app.open_bytes(ctx, "marks.pdf", None, page_with_a_comment_and_a_link()).unwrap();
             app
         });
         let mut on_screen = None;
@@ -219,7 +219,8 @@ mod picture_tests {
     /// taken in the pass after the job has.
     #[test]
     fn a_slow_page_does_not_hold_up_the_window() {
-        let (mut h, jobs, at) = open_page();
+        let ctx = &egui::Context::default();
+        let (mut h, jobs, at) = open_page(ctx);
         click_still_being_looked_into(&mut h, &at);
         assert!(jobs.waiting() > 0, "the search is queued as a job");
         assert_eq!(h.state().views[0].session.picked_image, None);
@@ -231,7 +232,8 @@ mod picture_tests {
     /// Escape takes back a click whose picture isn't known yet: it isn't selected when it is.
     #[test]
     fn escape_cancels_a_click_on_a_page_still_being_read() {
-        let (mut h, _jobs, at) = open_page();
+        let ctx = &egui::Context::default();
+        let (mut h, _jobs, at) = open_page(ctx);
         click_still_being_looked_into(&mut h, &at);
         h.key_press(egui::Key::Escape);
         h.run_steps(2);
@@ -241,7 +243,8 @@ mod picture_tests {
     /// Another tool lets go of the click, even while its page isn't drawn (Organize pages).
     #[test]
     fn another_tool_takes_back_a_click_on_a_page_not_drawn() {
-        let (mut h, _jobs, at) = open_page();
+        let ctx = &egui::Context::default();
+        let (mut h, _jobs, at) = open_page(ctx);
         click_still_being_looked_into(&mut h, &at);
         let ctx = h.ctx.clone();
         assert!(h.state_mut().execute(&ctx, "page.organize"));
@@ -258,7 +261,8 @@ mod picture_tests {
     /// comment is selected.
     #[test]
     fn a_click_on_a_comment_takes_back_the_earlier_click() {
-        let (mut h, _jobs, at) = open_page();
+        let ctx = &egui::Context::default();
+        let (mut h, _jobs, at) = open_page(ctx);
         click_still_being_looked_into(&mut h, &at);
         h.run_steps(30);
         click(&mut h, at(50.0, 50.0));
@@ -269,7 +273,8 @@ mod picture_tests {
     /// A click on a link follows it and lets go of the earlier click too.
     #[test]
     fn a_click_on_a_link_takes_back_the_earlier_click() {
-        let (mut h, _jobs, at) = open_page();
+        let ctx = &egui::Context::default();
+        let (mut h, _jobs, at) = open_page(ctx);
         click_still_being_looked_into(&mut h, &at);
         h.run_steps(30);
         click(&mut h, at(150.0, 250.0));

@@ -785,7 +785,7 @@ mod tests {
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
             let mut app = PdfCraftApp::for_unit_tests();
             app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-            app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), "notes.txt", None, b"hello".to_vec()).unwrap();
             let (_, doc) = app.active_ids().unwrap();
             app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Advanced, destination: None, progress: p, stage: s });
             app

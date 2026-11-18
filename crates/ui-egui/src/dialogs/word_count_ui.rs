@@ -234,7 +234,7 @@ mod tests {
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(move |cc| {
             let mut app = app_on(build_jobs);
             app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-            app.open_bytes("words.pdf", None, bytes.as_ref().clone()).unwrap();
+            app.open_bytes(&egui::Context::default(), "words.pdf", None, bytes.as_ref().clone()).unwrap();
             app.run_command(&cc.egui_ctx, "file.word_count");
             app
         });
@@ -250,7 +250,8 @@ mod tests {
         h.get_by_label("Current page only").click();
         settle(&mut h);
         assert_eq!(words_shown(&h), "2");
-        h.state_mut().apply_edit(&h.ctx.clone(), pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
         settle(&mut h);
         assert_eq!(words_shown(&h), "3");
         h.get_by_label("Close").click();

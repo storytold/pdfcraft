@@ -1372,7 +1372,7 @@ mod tests {
     #[test]
     fn an_edge_goes_to_the_box_the_pointer_is_level_with() {
         let mut app = crate::PdfCraftApp::for_unit_tests();
-        app.open_bytes("two.pdf", None, two_paragraphs()).unwrap();
+        app.open_bytes(&egui::Context::default(), "two.pdf", None, two_paragraphs()).unwrap();
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(move |_cc| app);
         h.run_steps(4);
         let ctx = h.ctx.clone();
@@ -1491,7 +1491,7 @@ mod tests {
     fn preview_app() -> (crate::PdfCraftApp, LineEditor) {
         let mut app = crate::PdfCraftApp::for_unit_tests();
         let bytes = app.session.create_from_text("Preview", "Preview text").unwrap();
-        app.open_bytes("preview.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "preview.pdf", None, bytes.as_ref().clone()).unwrap();
         let doc = app.session.get(app.views[0].id).unwrap();
         let block = doc.text_blocks(0).remove(0);
         let ed = LineEditor {
@@ -1623,7 +1623,7 @@ mod tests {
         let mut app = crate::PdfCraftApp::for_unit_tests();
         let png = pdfcraft_engine::export::encode_png(200, 100, &[235u8; 200 * 100 * 4]).unwrap();
         let bytes = app.session.create_from_images(&[("scan.png".into(), png)]).unwrap();
-        app.open_bytes("scan.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "scan.pdf", None, bytes.as_ref().clone()).unwrap();
         let id = app.views[0].id;
         let words = vec![word("JOHN", 20.0, 45.0, 15.0), word("SMITH", 49.0, 78.0, 9.0), word("EXAMPLE", 82.0, 124.0, 11.0)];
         app.session.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();

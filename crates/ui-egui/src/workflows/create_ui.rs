@@ -419,7 +419,7 @@ mod tests {
             let mut app = PdfCraftApp::for_unit_tests_on(host);
             app.set_option(&cc.egui_ctx, "language", "en").unwrap();
             app.session = std::mem::take(&mut app.session).with_clock(|| 1_700_000_000);
-            app.open_bytes("notes.pdf", None, source).unwrap();
+            app.open_bytes(&egui::Context::default(), "notes.pdf", None, source).unwrap();
             app
         });
         h.run_steps(2);
@@ -474,7 +474,8 @@ mod tests {
         let files = Arc::new(ScriptedFiles::held());
         let jobs = Arc::new(ManualJobs::new());
         let mut h = reducing(files.clone(), jobs.clone(), text_pdf("Minutes of the harbour board"));
-        h.state_mut().reduce_file_size(&h.ctx.clone());
+        let ctx_h = h.ctx.clone();
+        h.state_mut().reduce_file_size(&ctx_h);
         h.run_steps(2);
         assert!(h.state().optimize_run.is_none() && jobs.waiting() == 0, "nothing runs until the answer is in");
         assert_eq!(files.open(), 1, "the question is out");
@@ -496,9 +497,11 @@ mod tests {
         let files = Arc::new(ScriptedFiles::held());
         let jobs = Arc::new(ManualJobs::new());
         let mut h = reducing(files.clone(), jobs.clone(), text_pdf("Minutes of the harbour board"));
-        h.state_mut().reduce_file_size(&h.ctx.clone());
+        let ctx_h = h.ctx.clone();
+        h.state_mut().reduce_file_size(&ctx_h);
         h.run_steps(2);
-        h.state_mut().open_bytes("other.pdf", None, text_pdf("Another document")).unwrap();
+        let ctx_h = h.ctx.clone();
+        h.state_mut().open_bytes(&ctx_h, "other.pdf", None, text_pdf("Another document")).unwrap();
         files.answer(Picked::Paths(vec![out.clone()]));
         h.run_steps(3);
         jobs.run_all();
@@ -518,7 +521,8 @@ mod tests {
         let files = Arc::new(FailingWrites { inner: inner.clone(), fails: Mutex::new(2) });
         let jobs = Arc::new(ManualJobs::new());
         let mut h = reducing(files, jobs.clone(), text_pdf("Minutes of the harbour board"));
-        h.state_mut().reduce_file_size(&h.ctx.clone());
+        let ctx_h = h.ctx.clone();
+        h.state_mut().reduce_file_size(&ctx_h);
         h.run_steps(2);
         jobs.run_all();
         h.run_steps(8);
@@ -534,9 +538,11 @@ mod tests {
         let jobs = Arc::new(ManualJobs::new());
         let mut h = reducing(files.clone(), jobs.clone(), text_pdf("Minutes"));
         // A copy of a plain text file is no smaller.
-        h.state_mut().open_bytes("plain.txt", None, "lorem ipsum ".repeat(500).into_bytes()).unwrap();
+        let ctx_h = h.ctx.clone();
+        h.state_mut().open_bytes(&ctx_h, "plain.txt", None, "lorem ipsum ".repeat(500).into_bytes()).unwrap();
         h.run_steps(2);
-        h.state_mut().reduce_file_size(&h.ctx.clone());
+        let ctx_h = h.ctx.clone();
+        h.state_mut().reduce_file_size(&ctx_h);
         h.run_steps(2);
         jobs.run_all();
         h.run_steps(3);
@@ -550,10 +556,12 @@ mod tests {
         let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![out])]));
         let jobs = Arc::new(ManualJobs::new());
         let mut h = reducing(files.clone(), jobs.clone(), text_pdf("Minutes of the harbour board"));
-        h.state_mut().reduce_file_size(&h.ctx.clone());
+        let ctx_h = h.ctx.clone();
+        h.state_mut().reduce_file_size(&ctx_h);
         h.run_steps(2);
         assert!(h.state().optimize_run.is_some(), "the first run is waiting for its job");
-        h.state_mut().reduce_file_size(&h.ctx.clone());
+        let ctx_h = h.ctx.clone();
+        h.state_mut().reduce_file_size(&ctx_h);
         h.run_steps(2);
         assert_eq!(files.requests().len(), 1, "no second question");
         h.get_by_label_contains("Optimization is already running");

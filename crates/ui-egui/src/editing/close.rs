@@ -376,7 +376,7 @@ mod tests {
     fn the_window_close_holds_while_work_is_at_risk_and_closes_when_clean() {
         let mut app = app();
         let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
-        app.open_bytes("a.pdf", None, bytes.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "a.pdf", None, bytes.to_vec()).unwrap();
         assert_eq!(app.close_requested(&egui::Context::default()), CloseDecision::Close, "nothing to lose");
         assert!(!app.dialogs.is_open::<UnsavedChangesDialog>());
         assert!(app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));

@@ -552,7 +552,7 @@ mod tests {
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(move |cc| {
             let mut app = crate::PdfCraftApp::for_unit_tests();
             app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-            app.open_bytes("silent.pdf", None, bytes.clone()).unwrap();
+            app.open_bytes(&egui::Context::default(), "silent.pdf", None, bytes.clone()).unwrap();
             app.set_option(&cc.egui_ctx, "left", "closed").unwrap();
             app.set_option(&cc.egui_ctx, "panel", "none").unwrap();
             app
