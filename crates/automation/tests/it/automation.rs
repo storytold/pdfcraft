@@ -10128,29 +10128,37 @@ BT /F1 11 Tf 20 20 Td (Total due: 150.00) Tj ET";
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "invoice.pdf" }))["doc"].as_u64().unwrap();
     ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "invoice.docx" }));
-    // Inspect the actual package emitted by the tool, not an intermediate page model.
-    let zip = std::fs::read(dir.join("invoice.docx")).unwrap();
-    let mut at = 0;
-    let mut xml = String::new();
-    while zip[at..].starts_with(b"PK\x03\x04") {
-        let size = u32::from_le_bytes(zip[at + 18..at + 22].try_into().unwrap()) as usize;
-        let len = u16::from_le_bytes(zip[at + 26..at + 28].try_into().unwrap()) as usize;
-        let data = at + 30 + len;
-        if &zip[at + 30..data] == b"word/document.xml" {
-            std::io::Read::read_to_string(&mut flate2::read::DeflateDecoder::new(&zip[data..data + size]), &mut xml).unwrap();
-            break;
-        }
-        at = data + size;
-    }
-    assert!(xml.contains("rotation:315.000"), "diagonal text survives extraction: {xml}");
-    assert!(xml.contains("z-index:-2"), "the large watermark stays behind the invoice");
-    assert!(!xml.contains("<wp:inline>") && !xml.contains("<w:tbl>"));
-    assert!(!xml.contains("w:val=\"single\""));
-    assert_eq!(xml.matches(">DRAFT</w:t>").count(), 1);
-    assert_eq!(xml.matches(">Total due: 150.00</w:t>").count(), 1);
-    assert_eq!(xml.matches("<w:sectPr>").count(), 1);
-    assert!(!xml.contains("w:type=\"page\""));
-    assert!(xml.contains("margin-left:20.000pt"), "invoice fields retain their left edge");
+    // Inspect the actual package emitted by the tool, read back as Word reads it.
+    use craft_wordmodel::InlineObject;
+    use craft_wordmodel::para::Wrap;
+    let word = craft_docx::read(&std::fs::read(dir.join("invoice.docx")).unwrap()).unwrap();
+    assert!(word.body.iter().all(|b| matches!(&**b, craft_wordmodel::Block::Para(_))), "no table");
+    let objects: Vec<&InlineObject> =
+        word.body.iter().filter_map(|b| if let craft_wordmodel::Block::Para(p) = &**b { Some(p) } else { None }).flat_map(|p| &p.objects).collect();
+    let text_of = |o: &InlineObject| match o {
+        InlineObject::Shape { story: Some(id), .. } => word.parts.get(id).map(|p| {
+            p.blocks.iter().filter_map(|b| if let craft_wordmodel::Block::Para(p) = &**b { Some(p.plain_text()) } else { None }).collect::<String>()
+        }),
+        _ => None,
+    };
+    let boxes: Vec<(String, &craft_wordmodel::para::Float)> = objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Shape { float, .. } => text_of(o).map(|t| (t, float)),
+            _ => None,
+        })
+        .collect();
+    let draft: Vec<_> = boxes.iter().filter(|(t, _)| t == "DRAFT").collect();
+    assert_eq!(draft.len(), 1, "{boxes:?}");
+    assert!((draft[0].1.rot - 315.0).abs() < 0.01, "diagonal text survives extraction: {}", draft[0].1.rot);
+    assert_eq!(draft[0].1.wrap, Wrap::BehindText, "the large watermark stays behind the invoice");
+    assert!(boxes.iter().filter(|(t, _)| t != "DRAFT").all(|(_, f)| f.z > draft[0].1.z));
+    assert!(!objects.iter().any(|o| matches!(o, InlineObject::Image { float, .. } if float.wrap == Wrap::Inline)));
+    assert_eq!(boxes.iter().filter(|(t, _)| t == "Total due: 150.00").count(), 1);
+    assert_eq!(word.sections().len(), 1);
+    assert!(!word.body.iter().any(|b| matches!(&**b, craft_wordmodel::Block::Para(p) if p.text.contains(craft_wordmodel::para::PAGE_BREAK))));
+    let description = boxes.iter().find(|(t, _)| t == "Description").expect("the Description field");
+    assert_eq!(description.1.x, 20.0, "invoice fields retain their left edge");
     let rendered = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
     assert!(rendered.iter().any(|c| matches!(c, Content::Png { .. })));
 }
