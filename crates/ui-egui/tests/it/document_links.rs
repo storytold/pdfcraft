@@ -76,7 +76,7 @@ fn remote_harness(source_path: Option<String>, file: &str, destination: &str) ->
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("source.pdf", source_path, remote_fixture(file, destination)).unwrap();
+        app.open_bytes(&egui::Context::default(), "source.pdf", source_path, remote_fixture(file, destination)).unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "panel", "none").unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
@@ -103,7 +103,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("links.pdf", None, fixture()).unwrap();
+        app.open_bytes(&egui::Context::default(), "links.pdf", None, fixture()).unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "panel", "none").unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
@@ -206,7 +206,7 @@ fn bookmark_harness_with(source_path: Option<String>, pdf: Vec<u8>) -> Harness<'
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("source.pdf", source_path, pdf).unwrap();
+        app.open_bytes(&egui::Context::default(), "source.pdf", source_path, pdf).unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
         app
@@ -230,13 +230,13 @@ fn a_web_bookmark_asks_first_like_a_link() {
     click_bookmark(&mut h, "Website");
     assert_eq!(h.state().pending_link, pending(BOOKMARK_URL, LinkOrigin::Link));
     assert!(support::step_collecting_urls(&mut h, 1).is_empty(), "nothing opens before the user answers");
-    assert_eq!(h.state().views[0].current, 0);
+    assert_eq!(h.state().views[0].current(), 0);
     h.get_by_label("Cancel").click();
     assert!(support::step_collecting_urls(&mut h, 3).is_empty());
     assert_eq!(h.state().pending_link, None);
 
     click_bookmark(&mut h, "Appendix");
-    assert_eq!(h.state().views[0].current, 2);
+    assert_eq!(h.state().views[0].current(), 2);
 }
 
 /// A bookmark to another PDF opens that file at its page, as a link does. Its `[1 /Fit]` is the
@@ -251,9 +251,9 @@ fn a_bookmark_to_another_pdf_opens_it_instead_of_moving_here() {
     let mut h = bookmark_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()));
     click_bookmark(&mut h, "Chapter in target");
     support::wait_until(&mut h, "remote document", |app| app.views.len() == 2);
-    assert_eq!(h.state().views[0].current, 0, "the source stays on its page");
+    assert_eq!(h.state().views[0].current(), 0, "the source stays on its page");
     assert_eq!(h.state().active, Some(1));
-    assert_eq!(h.state().views[1].current, 1, "the other file opens at the bookmark's page");
+    assert_eq!(h.state().views[1].current(), 1, "the other file opens at the bookmark's page");
 }
 
 /// Bookmarks go through the link policy, not around it. A script action is named and not run (its
@@ -287,7 +287,7 @@ fn bookmarks_go_through_the_link_policy() {
         assert_eq!(support::shown_notice(&h).as_deref(), notice, "{title}");
         let opened = support::step_collecting_urls(&mut h, 2);
         let s = h.state();
-        assert_eq!((&s.pending_link, s.views.len(), s.views[0].current), (&None, 1, 0), "{title}: nothing opened");
+        assert_eq!((&s.pending_link, s.views.len(), s.views[0].current()), (&None, 1, 0), "{title}: nothing opened");
         assert!(opened.is_empty(), "{title}: no address opened: {opened:?}");
     }
     let mut h = bookmark_harness_with(None, pdf);
@@ -322,7 +322,7 @@ fn a_local_gotor_link_opens_in_a_tab_and_applies_its_destination() {
     support::wait_until(&mut h, "remote document", |app| app.views.len() == 2);
     assert_eq!(h.state().views.len(), 2);
     assert_eq!(h.state().active, Some(1));
-    assert_eq!(h.state().views[1].current, 1, "the remote page destination is applied");
+    assert_eq!(h.state().views[1].current(), 1, "the remote page destination is applied");
     assert!(support::step_collecting_urls(&mut h, 1).is_empty(), "no URL or external launcher is involved");
 }
 
@@ -361,14 +361,14 @@ fn a_gotor_link_to_a_named_destination_opens_at_its_page() {
         let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", destination);
         click_remote_link(&mut h);
         // The name is looked up off the UI thread, so the tab may open before it moves there.
-        support::wait_until(&mut h, "remote document at its destination", |app| app.views.len() == 2 && app.views[1].current == page);
+        support::wait_until(&mut h, "remote document at its destination", |app| app.views.len() == 2 && app.views[1].current() == page);
         assert!(support::shown_notice(&h).is_none(), "{destination}: applied, so nothing to warn about");
     }
     // A name the target doesn't define opens it at its first page, with the warning.
     let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", "/elsewhere");
     click_remote_link(&mut h);
     assert!(support::step_until(&mut h, |h| h.state().views.len() == 2 && support::shown_notice(h).is_some()), "remote document and the warning");
-    assert_eq!(h.state().views[1].current, 0);
+    assert_eq!(h.state().views[1].current(), 0);
     let notice = support::shown_notice(&h);
     assert!(notice.as_deref().is_some_and(|text| text.contains("named destination was not applied")), "{notice:?}");
 }
@@ -394,7 +394,7 @@ fn a_remote_destination_survives_password_retries_and_cancel_opens_no_tab() {
     h.state_mut().submit_password(Some("test-password".into()));
     support::wait_until(&mut h, "authenticated remote document", |app| app.views.len() == 2 && app.password_prompt.is_none());
     assert_eq!(h.state().views.len(), 2);
-    assert_eq!(h.state().views[1].current, 1, "the destination survives a wrong-password retry");
+    assert_eq!(h.state().views[1].current(), 1, "the destination survives a wrong-password retry");
 
     let mut cancelled = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", "[1 /Fit]");
     click_remote_link(&mut cancelled);
@@ -451,7 +451,7 @@ fn unsupported_launch_action_is_reported_without_claiming_javascript() {
     assert_eq!(h.state().pending_link, None);
     assert!(support::step_collecting_urls(&mut h, 1).is_empty());
     assert_eq!(h.state().views.len(), 1);
-    assert_eq!(h.state().views[0].current, 0);
+    assert_eq!(h.state().views[0].current(), 0);
     let toast = support::shown_notice(&h).expect("the unsupported action is reported").to_string();
     assert_eq!(toast, "This PDF uses the unsupported Launch action.");
 }
@@ -492,10 +492,7 @@ fn a_button_script_cannot_open_a_local_program() {
     let _gpu = gpu();
     let mut h = harness();
     click_field(&mut h, "sneaky");
-    assert!(
-        support::step_until(&mut h, |h| h.state().pending_link.is_some() || support::shown_notice(h).is_some()),
-        "script link refusal"
-    );
+    assert!(support::step_until(&mut h, |h| h.state().pending_link.is_some() || support::shown_notice(h).is_some()), "script link refusal");
     assert_eq!(h.state().pending_link, None, "a file: address is never offered");
     assert!(support::step_collecting_urls(&mut h, 1).is_empty());
     let toast = support::shown_notice(&h).expect("the user is told").to_string();
@@ -532,10 +529,7 @@ fn a_script_cannot_open_other_kinds_of_address() {
         let id = h.state().views[0].id;
         let script = format!("app.launchURL({});", serde_json::to_string(url).unwrap());
         h.state_mut().run_button_script(id, "web", &script);
-        assert!(
-            support::step_until(&mut h, |h| h.state().pending_link.is_some() || support::shown_notice(h).is_some()),
-            "script link decision"
-        );
+        assert!(support::step_until(&mut h, |h| h.state().pending_link.is_some() || support::shown_notice(h).is_some()), "script link decision");
         assert_eq!(h.state().pending_link, None, "{url}");
         assert!(support::step_collecting_urls(&mut h, 1).is_empty(), "{url}");
         let notice = support::shown_notice(&h);
@@ -551,10 +545,7 @@ fn an_email_link_cannot_attach_a_local_file() {
         let id = h.state().views[0].id;
         let script = format!("app.launchURL({});", serde_json::to_string(url).unwrap());
         h.state_mut().run_button_script(id, "web", &script);
-        assert!(
-            support::step_until(&mut h, |h| h.state().pending_link.is_some() || support::shown_notice(h).is_some()),
-            "script link decision"
-        );
+        assert!(support::step_until(&mut h, |h| h.state().pending_link.is_some() || support::shown_notice(h).is_some()), "script link decision");
         assert_eq!(h.state().pending_link, None, "{url}");
         assert!(support::step_collecting_urls(&mut h, 1).is_empty(), "{url}");
         let toast = support::shown_notice(&h).expect("the user is told").to_string();
@@ -625,15 +616,16 @@ fn an_absolute_gotor_waits_for_consent_and_keeps_its_destination_across_tabs() {
     // The target only appears AFTER the confirmation is displayed.
     let target_bytes = linked_pages(2, None);
     std::fs::write(&target, &target_bytes).unwrap();
-    h.state_mut().open_bytes("other.pdf", None, fixture()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "other.pdf", None, fixture()).unwrap();
     assert_eq!(h.state().active, Some(1));
     h.run_steps(3);
     h.get_by_label("Allow").click();
     support::wait_until(&mut h, "approved absolute target", |app| app.views.len() == 3);
     assert!(h.state().pending_remote_link.is_none());
     assert_eq!(h.state().views.len(), 3);
-    assert_eq!(h.state().views[2].current, 1);
-    assert_eq!(h.state().views[2].fit, pdfcraft_ui_egui::canvas::Fit::Width);
+    assert_eq!(h.state().views[2].current(), 1);
+    assert_eq!(h.state().views[2].fit(), pdfcraft_ui_egui::canvas::Fit::Width);
     assert_eq!(h.state().active, Some(2));
     let target_doc = h.state().session.get(h.state().views[2].id).unwrap();
     assert_eq!(target_doc.path.as_deref(), Some(file));
@@ -664,7 +656,7 @@ fn cancelling_an_absolute_gotor_by_button_escape_or_dismissal_changes_nothing() 
         assert_eq!(h.state().views.len(), 1);
         assert_eq!(h.state().session.docs().len(), 1);
         assert_eq!(h.state().active, Some(0));
-        assert_eq!(h.state().views[0].current, 0);
+        assert_eq!(h.state().views[0].current(), 0);
         let doc = h.state().session.get(source).unwrap();
         assert_eq!(doc.bytes, before);
         assert!(!doc.dirty);
@@ -715,7 +707,7 @@ fn consenting_to_absolute_gotor_still_validates_the_target() {
         assert!(support::shown_notice(&h).is_some(), "{name} is refused after consent");
         assert_eq!(h.state().session.docs().len(), 1);
         assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(source));
-        assert_eq!(h.state().views[0].current, 0);
+        assert_eq!(h.state().views[0].current(), 0);
         let doc = h.state().session.get(source).unwrap();
         assert_eq!(doc.bytes, before);
         assert!(!doc.dirty);
@@ -757,7 +749,7 @@ fn an_approved_absolute_gotor_preserves_password_retries_and_cancellation() {
             h.state_mut().submit_password(Some("test-password".into()));
             support::wait_until(&mut h, "authenticated absolute target", |app| app.password_prompt.is_none() && app.views.len() == 2);
             assert_eq!(h.state().views.len(), 2);
-            assert_eq!(h.state().views[1].current, 1);
+            assert_eq!(h.state().views[1].current(), 1);
         }
         assert!(h.state().pending_remote_link.is_none());
     }
@@ -825,7 +817,7 @@ fn overlapping_annotation_harness(bytes: Vec<u8>) -> Harness<'static, PdfCraftAp
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("highlighted-link.pdf", None, bytes).unwrap();
+        app.open_bytes(&egui::Context::default(), "highlighted-link.pdf", None, bytes).unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "panel", "none").unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
@@ -842,7 +834,7 @@ fn highlighted_link_still_requires_confirmation() {
     click_link(&mut h);
     assert_eq!(h.state().pending_link, pending(LINK_URL, LinkOrigin::Link));
     assert!(support::step_collecting_urls(&mut h, 1).is_empty());
-    assert!(h.state().views[0].comments.selection().is_empty());
+    assert!(h.state().views[0].session.comments.selection().is_empty());
     h.get_by_label("Open link").click();
     assert_eq!(support::step_collecting_urls(&mut h, 3), [LINK_URL]);
     assert_eq!(h.state().pending_link, None);
@@ -875,9 +867,9 @@ fn highlighted_internal_link_navigates_after_save_and_reopen() {
     let id = session.open("highlighted-link.pdf", None, std::sync::Arc::new(bytes), None).unwrap();
     let saved = session.save_bytes(id).unwrap().as_ref().clone();
     let mut h = overlapping_annotation_harness(saved);
-    assert_eq!(h.state().views[0].current, 0);
+    assert_eq!(h.state().views[0].current(), 0);
     click_link(&mut h);
-    assert_eq!(h.state().views[0].current, 1);
+    assert_eq!(h.state().views[0].current(), 1);
     assert_eq!(h.state().pending_link, None);
     assert!(support::step_collecting_urls(&mut h, 3).is_empty());
 }
@@ -889,7 +881,7 @@ fn highlight_outside_link_remains_selectable() {
     let rect = h.state().views[0].page_screen_rect(0).unwrap();
     let at = egui::pos2(rect.min.x + rect.width() * (60.0 / 300.0), rect.min.y + rect.height() * (1.0 - 325.0 / 400.0));
     click_at(&mut h, at);
-    assert_eq!(h.state().views[0].comments.selection(), [(0, 1)]);
+    assert_eq!(h.state().views[0].session.comments.selection(), [(0, 1)]);
     assert_eq!(h.state().pending_link, None);
     assert!(support::step_collecting_urls(&mut h, 2).is_empty());
 }
@@ -900,7 +892,7 @@ fn other_annotations_over_links_keep_select_click() {
     for subtype in ["Text", "Square"] {
         let mut h = overlapping_annotation_harness(overlapping_annotation_fixture(subtype, false));
         click_link(&mut h);
-        assert_eq!(h.state().views[0].comments.selection(), [(0, 1)], "{subtype}");
+        assert_eq!(h.state().views[0].session.comments.selection(), [(0, 1)], "{subtype}");
         assert_eq!(h.state().pending_link, None, "{subtype}");
         assert!(support::step_collecting_urls(&mut h, 2).is_empty(), "{subtype}");
     }
@@ -953,7 +945,7 @@ fn highlighted_link_context_click_selects_comment_without_opening_url() {
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
     }
     h.run_steps(3);
-    assert_eq!(h.state().views[0].comments.selection(), [(0, 1)]);
+    assert_eq!(h.state().views[0].session.comments.selection(), [(0, 1)]);
     assert_eq!(h.state().pending_link, None);
     assert!(support::step_collecting_urls(&mut h, 2).is_empty());
 }
@@ -1027,7 +1019,7 @@ fn addresses_written_in_the_page_text_open_like_links() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("text-links.pdf", None, text_links_fixture()).unwrap();
+        app.open_bytes(&egui::Context::default(), "text-links.pdf", None, text_links_fixture()).unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "panel", "none").unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
@@ -1067,7 +1059,7 @@ fn a_drag_from_an_address_in_the_page_text_selects_it() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("text-links.pdf", None, text_links_fixture()).unwrap();
+        app.open_bytes(&egui::Context::default(), "text-links.pdf", None, text_links_fixture()).unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "panel", "none").unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
@@ -1132,7 +1124,7 @@ fn relative_links_use_the_base_and_quad_points_limit_where_a_link_is_active() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("base.pdf", None, base_and_quads_fixture()).unwrap();
+        app.open_bytes(&egui::Context::default(), "base.pdf", None, base_and_quads_fixture()).unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "panel", "none").unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();

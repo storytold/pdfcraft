@@ -85,7 +85,14 @@ pub(crate) fn test_app() -> PdfCraftApp {
     use craft::platform::watch::FileWatch;
     let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(std::sync::Arc::new(InlineJobs)).build();
     let clipboard = Clipboard::new(SystemClipboard::new());
-    let services = pdfcraft_ui_egui::AppServices::new(Wake::none(), clipboard, None, None, FileIntake::new(Wake::none()).0, FileWatch::new(Wake::none()).inline());
+    let services = pdfcraft_ui_egui::AppServices::new(
+        Wake::none(),
+        clipboard,
+        None,
+        None,
+        FileIntake::new(Wake::none()).0,
+        FileWatch::new(Wake::none()).inline(),
+    );
     PdfCraftApp::with_host(std::sync::Arc::new(host), services)
 }
 
@@ -183,7 +190,8 @@ mod tests {
         for enabled in [false, true] {
             let mut app = test_app();
             app.set_option("default-layout", "single").unwrap();
-            app.open_bytes("restored.pdf", None, include_bytes!("../../../crates/ui-egui/tests/data/form.pdf").to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), "restored.pdf", None, include_bytes!("../../../crates/ui-egui/tests/data/form.pdf").to_vec())
+                .unwrap();
             let restored = app.views[0].id;
             open_files(&mut app, &[text.into(), second.into()], enabled);
             assert_eq!(app.views.len(), 3);
@@ -226,7 +234,13 @@ mod tests {
                 let args = Arguments::parse(prefix.into_iter().chain(names.iter().take(count).copied()).map(str::to_owned));
                 let mut app = test_app();
                 app.set_option("default-layout", "continuous").unwrap();
-                app.open_bytes("restored.pdf", None, include_bytes!("../../../crates/ui-egui/tests/data/form.pdf").to_vec()).unwrap();
+                app.open_bytes(
+                    &egui::Context::default(),
+                    "restored.pdf",
+                    None,
+                    include_bytes!("../../../crates/ui-egui/tests/data/form.pdf").to_vec(),
+                )
+                .unwrap();
                 open_files(&mut app, &args.files, args.two_paged);
                 for (key, value) in args.options {
                     assert_eq!(key, "layout");

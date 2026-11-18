@@ -69,7 +69,7 @@ fn harness_copying(clipping: bool, background: bool) -> (Harness<'static, PdfCra
         let mut app = clipboard_app(&cc.egui_ctx, &sink);
         app.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("group.pdf", None, fixture_with_background(clipping, background)).unwrap();
+        app.open_bytes(&egui::Context::default(), "group.pdf", None, fixture_with_background(clipping, background)).unwrap();
         let id = app.views[0].id;
         app.session
             .apply(
@@ -165,11 +165,11 @@ fn modifier_clicks_extend_an_ordinary_selection_and_toggle_objects() {
     let mut h = harness();
     let p = at(&h, 55.0, 70.0);
     click(&mut h, p, Modifiers::NONE);
-    assert!(h.state().views[0].line_editor.is_some());
+    assert!(h.state().views[0].session.line_editor.is_some());
     let p = at(&h, 60.0, 145.0);
     click(&mut h, p, Modifiers::SHIFT);
     h.get_by_label("2 objects selected");
-    assert!(h.state().views[0].line_editor.is_none());
+    assert!(h.state().views[0].session.line_editor.is_none());
     let p = at(&h, 155.0, 140.0);
     click(&mut h, p, Modifiers::COMMAND);
     h.get_by_label("3 objects selected");
@@ -215,10 +215,10 @@ fn a_changed_text_editor_is_kept_when_group_selection_is_requested() {
     let before = objects(&h);
     let p = at(&h, 55.0, 70.0);
     click(&mut h, p, Modifiers::NONE);
-    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "A draft still being edited".into();
+    h.state_mut().views[0].session.line_editor.as_mut().unwrap().text = "A draft still being edited".into();
     let p = at(&h, 60.0, 145.0);
     click(&mut h, p, Modifiers::SHIFT);
-    assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().text, "A draft still being edited");
+    assert_eq!(h.state().views[0].session.line_editor.as_ref().unwrap().text, "A draft still being edited");
     assert_eq!(objects(&h), before);
 }
 
@@ -295,7 +295,8 @@ fn group_selection_can_be_extended_by_an_additive_marquee() {
 fn group_drag_respects_document_rotation_and_view_rotation() {
     for document_rotation in [0, 90, 180, 270] {
         let mut h = harness();
-        assert!(h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: document_rotation }));
+        let ctx_h = h.ctx.clone();
+        assert!(h.state_mut().apply_edit(&ctx_h, Edit::RotatePages { pages: vec![0], degrees: document_rotation }));
         h.state_mut().views[0].rotate_view(true);
         h.run_steps(4);
         let before = objects(&h);
@@ -355,7 +356,8 @@ fn group_drags_cancel_on_focus_loss_tab_switch_home_and_modal_dialogs() {
         match case {
             0 => h.input_mut().focused = false,
             1 => {
-                h.state_mut().open_bytes("other.pdf", None, fixture(false)).unwrap();
+                let ctx_h = h.ctx.clone();
+                h.state_mut().open_bytes(&ctx_h, "other.pdf", None, fixture(false)).unwrap();
             }
             2 => h.state_mut().active = None,
             3 => h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::About),
@@ -405,7 +407,7 @@ fn a_shift_click_with_a_changed_paragraph_open_shows_the_notice_and_moves_nothin
     let before = objects(&h);
     let p = at(&h, 55.0, 70.0);
     click(&mut h, p, Modifiers::NONE);
-    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "A draft still being edited".into();
+    h.state_mut().views[0].session.line_editor.as_mut().unwrap().text = "A draft still being edited".into();
     let (a, b) = (at(&h, 60.0, 145.0), at(&h, 120.0, 200.0));
     h.hover_at(a);
     h.run_steps(2);
@@ -422,9 +424,9 @@ fn a_shift_click_with_a_changed_paragraph_open_shows_the_notice_and_moves_nothin
     }
     h.drop_at(b);
     h.run_steps(4);
-    assert_eq!(h.state().views[0].line_editor.as_ref().map(|e| e.text.as_str()), Some("A draft still being edited"));
+    assert_eq!(h.state().views[0].session.line_editor.as_ref().map(|e| e.text.as_str()), Some("A draft still being edited"));
     assert_eq!(objects(&h), before, "nothing moved");
-    assert!(h.state().views[0].image_selection.is_none() && h.state().views[0].content.selected.is_none(), "nothing selected");
+    assert!(h.state().views[0].session.image_selection.is_none() && h.state().views[0].session.content.selected.is_none(), "nothing selected");
     assert!(
         h.query_all_by_label_contains("object selected").next().is_none() && h.query_all_by_label_contains("objects selected").next().is_none(),
         "no objects selected"
@@ -459,7 +461,7 @@ fn a_double_click_on_a_grouped_object_reaches_it() {
     let note = at(&h, 180.0, 137.0);
     crate::support::input::double_click(&mut h, note);
     h.run_steps(2);
-    assert!(h.state().views[0].content.draft.as_ref().is_some_and(|d| d.index == Some(0)), "the added note opens for typing");
+    assert!(h.state().views[0].session.content.draft.as_ref().is_some_and(|d| d.index == Some(0)), "the added note opens for typing");
 }
 
 /// A double-click on a paragraph selected with others opens the one its press was on, though the
@@ -483,7 +485,7 @@ fn a_double_click_on_a_grouped_paragraph_released_just_off_it_opens_it() {
     crate::support::input::one_frame(&mut h, [button(inside, true), button(inside, false)]);
     crate::support::input::one_frame(&mut h, [button(inside, true), egui::Event::PointerMoved(outside), button(outside, false)]);
     h.run_steps(2);
-    assert!(h.state().views[0].line_editor.is_some(), "the paragraph pressed is open for typing");
+    assert!(h.state().views[0].session.line_editor.is_some(), "the paragraph pressed is open for typing");
 }
 
 /// A press counts its own modifiers, whatever the frame's are: Shift in the press event adds to the
@@ -493,7 +495,7 @@ fn a_press_counts_the_modifiers_of_its_own_event() {
     let mut h = harness();
     let p = at(&h, 55.0, 70.0);
     click(&mut h, p, Modifiers::NONE);
-    assert!(h.state().views[0].line_editor.is_some());
+    assert!(h.state().views[0].session.line_editor.is_some());
     let p = at(&h, 60.0, 145.0);
     let button = |pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::SHIFT };
     h.hover_at(p);
@@ -512,7 +514,7 @@ fn a_double_click_on_a_grouped_paragraph_opens_it() {
     let headline = at(&h, 80.0, 65.0);
     crate::support::input::double_click(&mut h, headline);
     h.run_steps(2);
-    assert!(h.state().views[0].line_editor.is_some(), "the paragraph is open for typing");
+    assert!(h.state().views[0].session.line_editor.is_some(), "the paragraph is open for typing");
 }
 
 fn texts(h: &Harness<'static, PdfCraftApp>, view: usize) -> Vec<String> {
@@ -566,10 +568,10 @@ fn command_a_in_an_open_paragraph_selects_its_text_not_the_objects() {
     let mut h = harness();
     let p = at(&h, 55.0, 70.0);
     click(&mut h, p, Modifiers::NONE);
-    assert!(h.state().views[0].line_editor.is_some());
+    assert!(h.state().views[0].session.line_editor.is_some());
     keys(&mut h, Modifiers::COMMAND, Key::A);
     assert!(h.query_all_by_label_contains("objects selected").next().is_none());
-    assert!(h.state().views[0].line_editor.is_some(), "the paragraph stays open");
+    assert!(h.state().views[0].session.line_editor.is_some(), "the paragraph stays open");
 }
 
 /// âŒ˜C, âŒ˜X and âŒ˜V take the objects selected together: a paste onto their own page lands 18 pt down
@@ -593,7 +595,8 @@ fn objects_copy_cut_and_paste_with_the_keys_on_the_page_and_into_another_documen
     assert!((moved[1][0] - moved[0][0] - 18.0).abs() < 0.01 && (moved[0][1] - moved[1][1] - 18.0).abs() < 0.01, "{moved:?}");
 
     // Into another open document, where it was: exactly over its own copy of the same page.
-    h.state_mut().open_bytes("other.pdf", None, fixture(false)).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "other.pdf", None, fixture(false)).unwrap();
     h.run_steps(4);
     let other = h.state().active.unwrap();
     assert_eq!(other, 1);

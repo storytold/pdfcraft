@@ -14,8 +14,8 @@ use pdfcraft_ui_egui::comments::CommentTool;
 use pdfcraft_ui_egui::fill_sign::FillTool;
 use pdfcraft_ui_egui::{AppServices, PdfCraftApp, QuickTool};
 
-use crate::support::input::one_frame;
 use crate::support::AppHarness as _;
+use crate::support::input::one_frame;
 
 /// A PDF of `objects`, numbered from 1 with the catalog first.
 fn pdf(objects: &[&str]) -> Vec<u8> {
@@ -181,7 +181,7 @@ fn open(pdf: Vec<u8>, zoom: &'static str, left_open: bool) -> Harness<'static, P
         let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "test" }).build();
         let mut app = PdfCraftApp::with_host(Arc::new(host), services());
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("test.pdf", None, pdf).unwrap();
+        app.open_bytes(&egui::Context::default(), "test.pdf", None, pdf).unwrap();
         if !left_open {
             app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         }
@@ -381,12 +381,12 @@ fn a_click_on_a_link_over_a_picture_follows_it_and_picks_no_picture() {
     let mut h = open(linked_picture_pdf(), "150", false);
     let beside = at(&h, 70.0, 300.0);
     mouse_click(&mut h, beside);
-    assert!(h.state().views[0].picked_image.is_some(), "the picture beside the link is picked");
-    h.state_mut().views[0].picked_image = None;
+    assert!(h.state().views[0].session.picked_image.is_some(), "the picture beside the link is picked");
+    h.state_mut().views[0].session.picked_image = None;
     let on_link = at(&h, 150.0, 300.0);
     mouse_click(&mut h, on_link);
     assert_eq!(pending_url(&h).as_deref(), Some("https://example.org/"), "the link is followed");
-    assert!(h.state().views[0].picked_image.is_none(), "and no picture is picked");
+    assert!(h.state().views[0].session.picked_image.is_none(), "and no picture is picked");
 }
 
 /// The I-beam drops over a link only where a press would go to it: with the Select tool the link's
@@ -414,7 +414,7 @@ fn a_click_on_stacked_comments_selects_the_one_drawn_on_top() {
     h.run_steps(2);
     assert!(tip_says(&h, "Top note") && !tip_says(&h, "Bottom note"), "the tip names the comment drawn on top");
     mouse_click(&mut h, overlap);
-    assert_eq!(h.state().views[0].comments.primary(), Some((0, 1)), "a click selects it too");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 1)), "a click selects it too");
 }
 
 #[test]
@@ -551,7 +551,7 @@ fn a_check_box_under_a_highlight_takes_the_click() {
     assert_eq!(cursor_at(&mut h, p), egui::CursorIcon::PointingHand);
     mouse_click(&mut h, p);
     assert_eq!(field_value(&h, "agree"), ["Yes"], "the box is ticked");
-    assert_eq!(h.state().views[0].comments.primary(), None, "and the highlight is not selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), None, "and the highlight is not selected");
 }
 
 #[test]
@@ -732,7 +732,7 @@ fn the_link_tool_selects_the_topmost_of_stacked_links() {
     h.state_mut().pending_link = None;
     link_tool(&mut h);
     mouse_click(&mut h, both);
-    assert_eq!(h.state().views[0].links.selected, Some((0, 1)), "the Link tool selects it too");
+    assert_eq!(h.state().views[0].session.links.selected, Some((0, 1)), "the Link tool selects it too");
 }
 
 /// The Link tool edits every link, one that does nothing included. The Select tool, which
@@ -750,7 +750,7 @@ fn the_link_tool_selects_a_link_with_no_action() {
     link_tool(&mut h);
     assert_eq!(cursor_at(&mut h, dead), egui::CursorIcon::PointingHand);
     mouse_click(&mut h, dead);
-    assert_eq!(h.state().views[0].links.selected, Some((0, 0)), "the Link tool selects the link that does nothing");
+    assert_eq!(h.state().views[0].session.links.selected, Some((0, 0)), "the Link tool selects the link that does nothing");
 }
 
 /// With the Link tool a drag that starts on a link draws a new link: the press is the link's, its
@@ -782,13 +782,13 @@ fn a_right_click_beside_a_link_with_the_select_tool_opens_no_link_menu() {
     // The link ends at x 250.
     let beside = at(&h, 250.0, 325.0) + egui::vec2(1.5, 0.0);
     right_click(&mut h, beside);
-    assert_eq!(h.state().views[0].links.context, None, "no link under the right-click");
+    assert_eq!(h.state().views[0].session.links.context, None, "no link under the right-click");
     assert!(h.query_by_label("Remove all links").is_none(), "the page's menu has no link items");
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
     let on_link = at(&h, 245.0, 325.0);
     right_click(&mut h, on_link);
-    assert_eq!(h.state().views[0].links.context, Some((0, 0)), "on the link, its menu");
+    assert_eq!(h.state().views[0].session.links.context, Some((0, 0)), "on the link, its menu");
 }
 
 /// A right-click goes to what a press there would go to: on a note over a link, the note. It used
@@ -799,7 +799,7 @@ fn a_right_click_on_a_note_over_a_link_opens_the_notes_menu() {
     let on_note = at(&h, 150.0, 325.0);
     right_click(&mut h, on_note);
     let v = &h.state().views[0];
-    assert_eq!((v.links.context, v.comments.primary()), (None, Some((0, 1))), "the note is selected, not the link");
+    assert_eq!((v.session.links.context, v.session.comments.primary()), (None, Some((0, 1))), "the note is selected, not the link");
     assert!(h.query_by_label("Remove all links").is_none(), "the menu is the note's");
 }
 
@@ -823,7 +823,7 @@ fn a_right_click_on_a_highlight_over_a_link_opens_the_highlights_menu() {
     let on_both = at(&h, 150.0, 325.0);
     right_click(&mut h, on_both);
     let v = &h.state().views[0];
-    assert_eq!((v.links.context, v.comments.primary()), (None, Some((0, 1))), "the highlight is selected, not the link");
+    assert_eq!((v.session.links.context, v.session.comments.primary()), (None, Some((0, 1))), "the highlight is selected, not the link");
     assert!(h.query_by_label("Remove all links").is_none(), "the menu is the highlight's");
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
@@ -840,7 +840,7 @@ fn a_right_click_on_a_comment_with_a_drawing_tool_opens_its_menu() {
     h.run_steps(4);
     let on_comment = at(&h, 100.0, 305.0);
     right_click(&mut h, on_comment);
-    assert_eq!(h.state().views[0].comments.primary(), Some((0, 0)), "the comment is selected for its menu");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the comment is selected for its menu");
     assert!(h.query_all_by_label("Reply").next().is_some(), "and its menu is open");
 }
 
@@ -863,16 +863,16 @@ fn a_click_on_a_form_field_deselects_the_selected_comment() {
     let mut h = open(comment_and_checkbox_pdf(), "150", false);
     let comment = at(&h, 200.0, 125.0);
     mouse_click(&mut h, comment);
-    assert_eq!(h.state().views[0].comments.primary(), Some((0, 1)), "the comment is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 1)), "the comment is selected");
     let check_box = at(&h, 110.0, 210.0);
     mouse_click(&mut h, check_box);
-    assert_eq!(h.state().views[0].comments.primary(), None, "a click on the check box leaves it unselected");
+    assert_eq!(h.state().views[0].session.comments.primary(), None, "a click on the check box leaves it unselected");
     assert_eq!(agree(&h).len(), 1, "and ticks the box");
 }
 
 /// The camera tool's quadrilateral, corner by corner, in page view points.
 fn camera_corners(h: &Harness<'_, PdfCraftApp>) -> Option<[[f32; 2]; 4]> {
-    h.state().views[0].camera.map(|q| q.corners)
+    h.state().views[0].session.camera.map(|q| q.corners)
 }
 
 /// A corner of the camera tool's quadrilateral is a press of its own: Escape in the middle of its
@@ -949,7 +949,11 @@ fn a_right_click_with_the_link_tool_on_a_note_over_a_link_selects_the_link() {
     let on_both = at(&h, 150.0, 325.0);
     right_click(&mut h, on_both);
     let v = &h.state().views[0];
-    assert_eq!((v.links.selected, v.links.context, v.comments.primary()), (Some((0, 0)), Some((0, 0)), None), "the link, not the note");
+    assert_eq!(
+        (v.session.links.selected, v.session.links.context, v.session.comments.primary()),
+        (Some((0, 0)), Some((0, 0)), None),
+        "the link, not the note"
+    );
 }
 
 /// With Add text a right-click leaves comments alone, as before: Add text takes the page's
@@ -962,7 +966,7 @@ fn a_right_click_with_add_text_selects_no_comment() {
     // Above the line of text the comment covers, where no paragraph is.
     let on_comment = at(&h, 100.0, 317.0);
     right_click(&mut h, on_comment);
-    assert_eq!(h.state().views[0].comments.primary(), None, "the comment under the pointer is not selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), None, "the comment under the pointer is not selected");
 }
 
 /// With the Select tool a right-click finds a link only where a click follows it: a link that
@@ -972,7 +976,7 @@ fn a_right_click_with_the_select_tool_on_a_link_with_no_action_opens_no_link_men
     let mut h = open(dead_link_pdf(), "150", false);
     let dead = at(&h, 25.0, 325.0);
     right_click(&mut h, dead);
-    assert_eq!(h.state().views[0].links.context, None);
+    assert_eq!(h.state().views[0].session.links.context, None);
     assert!(h.query_by_label("Remove all links").is_none(), "the page's menu has no link items");
 }
 
@@ -994,7 +998,7 @@ fn a_right_click_on_a_field_over_a_link_opens_no_link_menu() {
     let mut h = open(field_over_link_pdf(), "150", false);
     let on_field = at(&h, 150.0, 325.0);
     right_click(&mut h, on_field);
-    assert_eq!(h.state().views[0].links.context, None, "the field is on top");
+    assert_eq!(h.state().views[0].session.links.context, None, "the field is on top");
     assert!(h.query_by_label("Remove all links").is_none());
 }
 
@@ -1051,7 +1055,9 @@ fn a_link_rectangle_dragged_off_its_page_is_drawn_on_it() {
 
 #[test]
 fn a_field_dragged_off_its_page_is_drawn_on_it() {
-    let h = drag_seen_only_past_page_ones_edge(|app| assert!(app.execute(&egui::Context::default(), "form.add.text"), "Prepare a form, with the text field tool"));
+    let h = drag_seen_only_past_page_ones_edge(|app| {
+        assert!(app.execute(&egui::Context::default(), "form.add.text"), "Prepare a form, with the text field tool")
+    });
     let s = h.state();
     let doc = s.session.get(s.views[0].id).unwrap();
     assert!(doc.form.iter().any(|f| f.widgets.iter().any(|w| w.page == Some(0))), "a field on page 1");
@@ -1064,13 +1070,13 @@ fn a_right_click_with_the_link_tool_on_a_link_keeps_the_selected_comment() {
     let mut h = open(note_over_link_pdf(), "150", false);
     let on_note = at(&h, 150.0, 325.0);
     mouse_click(&mut h, on_note);
-    assert_eq!(h.state().views[0].comments.primary(), Some((0, 1)), "the note is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 1)), "the note is selected");
     link_tool(&mut h);
     // On the link, away from the note.
     let on_link = at(&h, 70.0, 325.0);
     right_click(&mut h, on_link);
     let v = &h.state().views[0];
-    assert_eq!((v.links.context, v.comments.primary()), (Some((0, 0)), Some((0, 1))), "the link's menu; the note stays selected");
+    assert_eq!((v.session.links.context, v.session.comments.primary()), (Some((0, 0)), Some((0, 1))), "the link's menu; the note stays selected");
 }
 
 /// A 300×400 page with a rectangle comment round the camera tool's first corner (view 15, 20).
@@ -1092,7 +1098,7 @@ fn a_right_click_on_a_comment_under_a_camera_corner_opens_the_comments_menu() {
     h.run_steps(4);
     let corner = at(&h, 15.0, 380.0);
     right_click(&mut h, corner);
-    assert_eq!(h.state().views[0].comments.primary(), Some((0, 0)), "the comment is selected for its menu");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the comment is selected for its menu");
 }
 
 /// A 300×400 page with a web link along its left edge, x 0..100, y 300..350.
@@ -1130,13 +1136,13 @@ fn a_right_click_with_edit_text_on_a_paragraph_under_a_comment_selects_the_comme
     let on_text = at(&h, 100.0, 303.0);
     wait_for_cursor(&mut h, on_text, |c| c != egui::CursorIcon::Default);
     right_click(&mut h, on_text);
-    assert_eq!(h.state().views[0].comments.primary(), Some((0, 0)), "the comment over the paragraph is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the comment over the paragraph is selected");
     assert!(h.query_by_label("Properties…").is_some(), "its menu opens");
-    assert_eq!(h.state().views[0].comments.context_at.map(|(page, _)| page), Some(0), "the menu is anchored on the page");
+    assert_eq!(h.state().views[0].session.comments.context_at.map(|(page, _)| page), Some(0), "the menu is anchored on the page");
     // The rectangle ends at x 200; the line goes on.
     let beside = at(&h, 230.0, 303.0);
     right_click(&mut h, beside);
-    assert_eq!(h.state().views[0].comments.primary(), None, "the paragraph beside the comment leaves it unselected");
+    assert_eq!(h.state().views[0].session.comments.primary(), None, "the paragraph beside the comment leaves it unselected");
 }
 
 /// With Edit text, a right-click on added text over a comment selects no comment: what has no menu
@@ -1145,14 +1151,18 @@ fn a_right_click_with_edit_text_on_a_paragraph_under_a_comment_selects_the_comme
 fn a_right_click_with_edit_text_on_added_text_over_a_comment_selects_no_comment() {
     let mut h = open(comment_on_text_pdf(), "150", false);
     assert!(h.execute("edit.edit_text"));
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
-        page: 0,
-        text: pdfcraft_engine::AddedText { rect: [110.0, 296.0, 190.0, 311.0], text: "Added".into(), ..Default::default() },
-    }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(
+        &ctx_h,
+        pdfcraft_engine::Edit::AddText {
+            page: 0,
+            text: pdfcraft_engine::AddedText { rect: [110.0, 296.0, 190.0, 311.0], text: "Added".into(), ..Default::default() },
+        }
+    ));
     h.run_steps(4);
     let on_added = at(&h, 150.0, 303.0);
     right_click(&mut h, on_added);
-    assert_eq!(h.state().views[0].comments.primary(), None, "the comment under the added text is not selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), None, "the comment under the added text is not selected");
 }
 
 /// With a Prepare field tool a right-click is the tool's, as before: a comment under it is not
@@ -1164,7 +1174,7 @@ fn a_right_click_with_a_field_tool_selects_no_comment() {
     h.run_steps(4);
     let on_comment = at(&h, 200.0, 125.0);
     right_click(&mut h, on_comment);
-    assert_eq!(h.state().views[0].comments.primary(), None);
+    assert_eq!(h.state().views[0].session.comments.primary(), None);
 }
 
 /// With the Link tool a click that began off the page (in the gutter beside it) is no page's: the
@@ -1175,10 +1185,10 @@ fn a_click_that_began_off_the_page_keeps_the_selected_link() {
     link_tool(&mut h);
     let on_link = at(&h, 150.0, 325.0);
     mouse_click(&mut h, on_link);
-    assert_eq!(h.state().views[0].links.selected, Some((0, 0)), "the link is selected");
+    assert_eq!(h.state().views[0].session.links.selected, Some((0, 0)), "the link is selected");
     let left = page(&h).min.x;
     slipping_click(&mut h, egui::pos2(left - 2.0, on_link.y), egui::pos2(left + 3.0, on_link.y));
-    assert_eq!(h.state().views[0].links.selected, Some((0, 0)), "a click that began off the page leaves it selected");
+    assert_eq!(h.state().views[0].session.links.selected, Some((0, 0)), "a click that began off the page leaves it selected");
 }
 
 /// A right-click while a comment is moved leaves the moved comment selected: the move ends on
@@ -1203,7 +1213,7 @@ fn a_right_click_during_a_comment_move_keeps_the_moved_comment_selected() {
     h.run_steps(1);
     h.drop_at(end);
     h.run_steps(3);
-    assert_eq!(h.state().views[0].comments.primary(), Some((0, 0)), "the moved comment stays selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the moved comment stays selected");
 }
 
 /// A click on added text leaves the selected comment unselected, as a click on a form field does
@@ -1211,10 +1221,14 @@ fn a_right_click_during_a_comment_move_keeps_the_moved_comment_selected() {
 #[test]
 fn a_click_on_added_text_deselects_the_selected_comment() {
     let mut h = open(comment_on_text_pdf(), "150", false);
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
-        page: 0,
-        text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
-    }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(
+        &ctx_h,
+        pdfcraft_engine::Edit::AddText {
+            page: 0,
+            text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
+        }
+    ));
     // The Edit panel open, with the Select tool: added text is picked up.
     assert!(h.execute("edit.text"));
     h.run_steps(3);
@@ -1222,10 +1236,10 @@ fn a_click_on_added_text_deselects_the_selected_comment() {
     h.run_steps(3);
     let on_comment = at(&h, 150.0, 315.0);
     mouse_click(&mut h, on_comment);
-    assert_eq!(h.state().views[0].comments.primary(), Some((0, 0)), "the comment is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the comment is selected");
     let on_added = at(&h, 90.0, 202.0);
     mouse_click(&mut h, on_added);
-    assert_eq!(h.state().views[0].comments.primary(), None, "a click on the added text leaves it unselected");
+    assert_eq!(h.state().views[0].session.comments.primary(), None, "a click on the added text leaves it unselected");
 }
 
 /// A comment move made halfway and let go beside the page leaves nothing held: the next
@@ -1247,7 +1261,7 @@ fn a_right_click_selects_its_comment_though_a_gesture_was_left_over() {
     h.drop_at(beside);
     h.run_steps(3);
     right_click(&mut h, top);
-    assert_eq!(h.state().views[0].comments.primary(), Some((0, 1)), "the note under the right-click is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 1)), "the note under the right-click is selected");
 }
 
 /// A click that began off the page (in the gutter beside it) is no page's: the selected comment
@@ -1257,10 +1271,10 @@ fn a_click_that_began_off_the_page_keeps_the_selected_comment() {
     let mut h = open(stacked_comments_pdf(), "150", false);
     let bottom = at(&h, 60.0, 160.0);
     mouse_click(&mut h, bottom);
-    assert_eq!(h.state().views[0].comments.primary(), Some((0, 0)), "the note is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the note is selected");
     let left = page(&h).min.x;
     slipping_click(&mut h, egui::pos2(left - 2.0, bottom.y), egui::pos2(left + 3.0, bottom.y));
-    assert_eq!(h.state().views[0].comments.primary(), Some((0, 0)), "a click that began off the page leaves it selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "a click that began off the page leaves it selected");
 }
 
 /// A touch's long press on a comment selects it for its menu, as a right-click does: egui reports
@@ -1274,7 +1288,7 @@ fn a_long_press_on_a_comment_selects_it_for_its_menu() {
     one_frame(&mut h, [touch(egui::TouchPhase::Start, top), egui::Event::PointerMoved(top), button(top, true)]);
     // Held still, past egui's long-press time.
     h.run_steps(6);
-    assert_eq!(h.state().views[0].comments.primary(), Some((0, 1)), "the note under the finger is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 1)), "the note under the finger is selected");
     one_frame(&mut h, [touch(egui::TouchPhase::End, top), button(top, false), egui::Event::PointerGone]);
     h.run_steps(2);
 }
@@ -1284,7 +1298,7 @@ fn a_long_press_on_a_comment_selects_it_for_its_menu() {
 fn menu_page_after_a_right_click_with_the_button_held(escape: bool) -> Option<usize> {
     let mut h = open(two_pages_pdf(), "100", false);
     h.run_steps(2);
-    h.state_mut().views[0].comments.context_at = Some((0, [10.0, 10.0]));
+    h.state_mut().views[0].session.comments.context_at = Some((0, [10.0, 10.0]));
     let two = h.state().views[0].page_screen_rect(1).expect("page 2 on screen");
     let press = two.min + egui::vec2(50.0, 30.0);
     h.hover_at(press);
@@ -1302,7 +1316,7 @@ fn menu_page_after_a_right_click_with_the_button_held(escape: bool) -> Option<us
         h.event(egui::Event::PointerButton { pos: menu, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
     }
     h.run_steps(1);
-    let page = h.state().views[0].comments.context_at.map(|(page, _)| page);
+    let page = h.state().views[0].session.comments.context_at.map(|(page, _)| page);
     h.drop_at(press + egui::vec2(40.0, 0.0));
     h.run_steps(2);
     page
@@ -1328,16 +1342,20 @@ fn a_right_click_after_escape_cancelled_the_press_anchors_the_menu_on_its_page()
 #[test]
 fn a_right_click_with_edit_text_on_added_text_unselects_the_comment() {
     let mut h = open(comment_on_text_pdf(), "150", false);
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
-        page: 0,
-        text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
-    }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(
+        &ctx_h,
+        pdfcraft_engine::Edit::AddText {
+            page: 0,
+            text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
+        }
+    ));
     h.state_mut().quick_tool = QuickTool::EditText;
     h.run_steps(4);
-    h.state_mut().views[0].comments.select_only((0, 0));
+    h.state_mut().views[0].session.comments.select_only((0, 0));
     let on_added = at(&h, 90.0, 202.0);
     right_click(&mut h, on_added);
-    assert_eq!(h.state().views[0].comments.primary(), None);
+    assert_eq!(h.state().views[0].session.comments.primary(), None);
 }
 
 /// Two pages with their gaps hidden, after `tool` set the tool up, and a point on the row of pixels
@@ -1387,7 +1405,7 @@ fn a_stamp_click_pressed_on_one_page_and_released_on_the_next_places_nothing() {
 fn a_right_click_where_two_pages_touch_is_the_first_pages() {
     let (mut h, seam) = touching_pages(|_| {});
     right_click(&mut h, seam);
-    assert_eq!(h.state().views[0].comments.context_at.map(|(page, _)| page), Some(0));
+    assert_eq!(h.state().views[0].session.comments.context_at.map(|(page, _)| page), Some(0));
 }
 
 /// With Prepare open, a click that began off the page (in the gutter beside it) is no page's: the
@@ -1399,10 +1417,10 @@ fn with_prepare_a_click_that_began_off_the_page_keeps_the_selected_field() {
     h.run_steps(4);
     let on_box = at(&h, 110.0, 210.0);
     mouse_click(&mut h, on_box);
-    assert!(h.state().views[0].prepare.selected.is_some(), "the field is selected");
+    assert!(h.state().views[0].session.prepare.selected.is_some(), "the field is selected");
     let left = page(&h).min.x;
     slipping_click(&mut h, egui::pos2(left - 2.0, on_box.y), egui::pos2(left + 3.0, on_box.y));
-    assert!(h.state().views[0].prepare.selected.is_some(), "a click that began off the page leaves it selected");
+    assert!(h.state().views[0].session.prepare.selected.is_some(), "a click that began off the page leaves it selected");
 }
 
 /// With Prepare open, a drag from a highlight draws the selection rectangle: a highlight lets a drag
@@ -1415,7 +1433,7 @@ fn with_prepare_a_drag_from_a_highlight_draws_the_selection_rectangle() {
     // On the highlight, beside the box; the drag ends past the box's other corner.
     let (from, to) = (at(&h, 97.0, 197.0), at(&h, 130.0, 230.0));
     mouse_drag(&mut h, from, to - from);
-    assert!(h.state().views[0].prepare.selected.is_some(), "the rectangle selects the field inside it");
+    assert!(h.state().views[0].session.prepare.selected.is_some(), "the rectangle selects the field inside it");
 }
 
 /// A right-click while the primary button is held opens the menu of the comment it went to, when that
@@ -1427,7 +1445,7 @@ fn a_right_click_with_the_button_held_opens_the_selected_comments_menu() {
     let edge = at(&h, 30.0, 303.0);
     wait_for_cursor(&mut h, edge, |c| c != egui::CursorIcon::Default);
     mouse_click(&mut h, edge);
-    assert_eq!(h.state().views[0].comments.primary(), Some((0, 0)), "the comment is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the comment is selected");
     h.hover_at(edge);
     h.run_steps(1);
     h.drag_at(edge);
@@ -1440,7 +1458,7 @@ fn a_right_click_with_the_button_held_opens_the_selected_comments_menu() {
     }
     h.run_steps(3);
     assert!(h.query_by_label("Properties…").is_some(), "the comment's menu");
-    assert_eq!(h.state().views[0].comments.primary(), Some((0, 0)), "the selection stays");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the selection stays");
     h.drop_at(moved);
     h.run_steps(2);
 }
@@ -1487,7 +1505,7 @@ fn with_prepare_on_a_locked_document_a_right_click_on_a_field_selects_nothing() 
     assert!(!h.state().session.get(id).unwrap().allows_modification(), "the document can't be changed");
     let on_box = at(&h, 110.0, 210.0);
     right_click(&mut h, on_box);
-    assert!(h.state().views[0].prepare.selected.is_none(), "no field is selected");
+    assert!(h.state().views[0].session.prepare.selected.is_none(), "no field is selected");
     assert!(h.query_by_label("Duplicate…").is_none(), "no field menu");
 }
 
@@ -1501,7 +1519,7 @@ fn with_prepare_a_right_click_beside_the_selected_field_opens_the_pages_menu() {
     h.run_steps(4);
     let on_box = at(&h, 110.0, 210.0);
     mouse_click(&mut h, on_box);
-    assert!(h.state().views[0].prepare.selected.is_some(), "the field is selected");
+    assert!(h.state().views[0].session.prepare.selected.is_some(), "the field is selected");
     let blank = at(&h, 60.0, 300.0);
     right_click(&mut h, blank);
     assert!(h.query_by_label("Duplicate…").is_none(), "no field menu on the empty page");
@@ -1524,7 +1542,7 @@ fn with_a_field_tool_a_right_click_on_a_field_opens_its_menu() {
     h.run_steps(4);
     let on_box = at(&h, 110.0, 210.0);
     right_click(&mut h, on_box);
-    assert!(h.state().views[0].prepare.selected.is_some(), "the field is selected");
+    assert!(h.state().views[0].session.prepare.selected.is_some(), "the field is selected");
     assert!(h.query_by_label("Duplicate…").is_some(), "the field's menu");
 }
 
@@ -1537,7 +1555,7 @@ fn with_edit_text_a_right_click_on_a_picture_under_a_link_selects_the_picture() 
     h.run_steps(4);
     let on_link = at(&h, 150.0, 300.0);
     right_click(&mut h, on_link);
-    let selected = h.state().views[0].image_selection.as_ref().map(|s| (s.page, s.index));
+    let selected = h.state().views[0].session.image_selection.as_ref().map(|s| (s.page, s.index));
     assert_eq!(selected, Some((0, 0)), "the picture is selected for its menu");
 }
 
@@ -1556,7 +1574,7 @@ fn a_drag_past_a_pages_edge_under_its_open_paragraph_is_the_next_pages() {
     };
     let line = egui::pos2(one.min.x + 60.0, one.max.y - 8.0);
     mouse_click(&mut h, line);
-    assert!(h.state().views[0].line_editor.is_some(), "the bottom line is open");
+    assert!(h.state().views[0].session.line_editor.is_some(), "the bottom line is open");
     let below = egui::pos2(one.min.x + 60.0, two.min.y + 3.0);
     mouse_drag(&mut h, below, egui::vec2(200.0, 30.0));
     // What the area selection took, Delete removes.
@@ -1577,11 +1595,11 @@ fn a_click_beside_the_picture_unselects_it_where_objects_cant_be_grouped() {
     let doc = s.session.get(s.views[0].id).unwrap();
     assert_eq!(doc.page_images(0).len(), 1, "the picture");
     assert!(doc.editable_objects(0).is_err(), "and no objects to group");
-    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
+    h.state_mut().views[0].session.image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
     h.run_steps(2);
     let blank = at(&h, 150.0, 100.0);
     mouse_click(&mut h, blank);
-    assert!(h.state().views[0].image_selection.is_none(), "the picture is unselected");
+    assert!(h.state().views[0].session.image_selection.is_none(), "the picture is unselected");
 }
 
 /// With the Select tool a drag that starts on a link lets the picked picture go, as a drag elsewhere
@@ -1591,10 +1609,10 @@ fn a_drag_from_a_link_lets_the_picked_picture_go() {
     let mut h = open(linked_picture_pdf(), "150", false);
     let beside = at(&h, 70.0, 300.0);
     mouse_click(&mut h, beside);
-    assert!(h.state().views[0].picked_image.is_some(), "the picture is picked");
+    assert!(h.state().views[0].session.picked_image.is_some(), "the picture is picked");
     let on_link = at(&h, 150.0, 300.0);
     mouse_drag(&mut h, on_link, egui::vec2(30.0, 0.0));
-    assert!(h.state().views[0].picked_image.is_none(), "the drag lets it go");
+    assert!(h.state().views[0].session.picked_image.is_none(), "the drag lets it go");
 }
 
 /// With the Edit panel open and the Note tool, a click on added text is the added text's: no note is
@@ -1602,17 +1620,21 @@ fn a_drag_from_a_link_lets_the_picked_picture_go() {
 #[test]
 fn a_note_tool_click_on_added_text_starts_no_note() {
     let mut h = open(comment_on_text_pdf(), "150", false);
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
-        page: 0,
-        text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
-    }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(
+        &ctx_h,
+        pdfcraft_engine::Edit::AddText {
+            page: 0,
+            text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
+        }
+    ));
     assert!(h.execute("edit.text"));
     h.run_steps(3);
     h.state_mut().quick_tool = QuickTool::Comment(CommentTool::Note);
     h.run_steps(3);
     let on_added = at(&h, 90.0, 202.0);
     mouse_click(&mut h, on_added);
-    assert!(h.state().views[0].comments.composer.is_none(), "no note is started");
+    assert!(h.state().views[0].session.comments.composer.is_none(), "no note is started");
 }
 
 /// With Fill & Sign, a mark being moved on the page keeps the page's presses, as before: a press
@@ -1649,7 +1671,7 @@ fn a_fill_and_sign_click_places_nothing_while_a_mark_is_moved() {
 fn a_right_click_between_the_pages_anchors_no_pages_menu() {
     let mut h = open(two_pages_pdf(), "100", false);
     h.run_steps(2);
-    h.state_mut().views[0].comments.context_at = Some((0, [10.0, 10.0]));
+    h.state_mut().views[0].session.comments.context_at = Some((0, [10.0, 10.0]));
     let (one, two) = {
         let v = &h.state().views[0];
         (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
@@ -1657,7 +1679,7 @@ fn a_right_click_between_the_pages_anchors_no_pages_menu() {
     let gap = egui::pos2(one.center().x, (one.max.y + two.min.y) / 2.0);
     assert!(!one.contains(gap) && !two.contains(gap), "between the pages: {one:?} {two:?}");
     right_click(&mut h, gap);
-    assert_eq!(h.state().views[0].comments.context_at, None);
+    assert_eq!(h.state().views[0].session.comments.context_at, None);
 }
 
 /// Two 300×400 pages, a rectangle comment on the first.
@@ -1676,9 +1698,9 @@ fn two_pages_and_a_comment_pdf() -> Vec<u8> {
 #[test]
 fn a_right_click_between_the_pages_opens_the_page_menu_not_the_selected_comments() {
     let mut h = open(two_pages_and_a_comment_pdf(), "100", false);
-    h.state_mut().views[0].comments.select_only((0, 0));
+    h.state_mut().views[0].session.comments.select_only((0, 0));
     h.run_steps(2);
-    assert_eq!(h.state().views[0].comments.primary(), Some((0, 0)), "the comment is selected");
+    assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the comment is selected");
     let (one, two) = {
         let v = &h.state().views[0];
         (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
@@ -1686,7 +1708,7 @@ fn a_right_click_between_the_pages_opens_the_page_menu_not_the_selected_comments
     let gap = egui::pos2(one.center().x, (one.max.y + two.min.y) / 2.0);
     assert!(!one.contains(gap) && !two.contains(gap), "between the pages: {one:?} {two:?}");
     right_click(&mut h, gap);
-    assert_eq!(h.state().views[0].comments.primary(), None);
+    assert_eq!(h.state().views[0].session.comments.primary(), None);
     assert!(h.query_by_label("Rotate view counterclockwise").is_some(), "the page menu opens");
     assert!(h.query_by_label("Reply").is_none(), "not the comment's");
 }
@@ -1705,12 +1727,13 @@ fn paste_from_a_right_click_where_two_pages_touch_keeps_to_the_first_page() {
     };
     h.event(picture());
     h.run_steps(1);
-    assert!(h.state_mut().paste_image_at(1, [100.0, 400.0]), "a picture across page 2's top edge");
-    h.state_mut().views[0].image_selection = None;
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().paste_image_at(&ctx_h, 1, [100.0, 400.0]), "a picture across page 2's top edge");
+    h.state_mut().views[0].session.image_selection = None;
     h.run_steps(4);
     right_click(&mut h, seam);
-    assert_eq!(h.state().views[0].comments.context_at.map(|(page, _)| page), Some(0), "page 1 takes the right-click");
-    assert!(h.state().views[0].image_selection.is_none(), "page 2's picture is not selected for its menu");
+    assert_eq!(h.state().views[0].session.comments.context_at.map(|(page, _)| page), Some(0), "page 1 takes the right-click");
+    assert!(h.state().views[0].session.image_selection.is_none(), "page 2's picture is not selected for its menu");
     h.event(picture());
     h.get_by_label_contains("Paste").click();
     h.run_steps(3);
@@ -1733,10 +1756,10 @@ fn a_camera_click_on_another_page_moves_the_quadrilateral_there() {
     let mut h = open(two_pages_pdf(), "100", false);
     h.state_mut().quick_tool = QuickTool::EnhanceCamera;
     h.run_steps(4);
-    assert_eq!(h.state().views[0].camera.map(|q| q.page), Some(0), "it starts on the current page");
+    assert_eq!(h.state().views[0].session.camera.map(|q| q.page), Some(0), "it starts on the current page");
     let two = h.state().views[0].page_screen_rect(1).expect("page 2 on screen");
     mouse_click(&mut h, two.min + egui::vec2(100.0, 60.0));
-    assert_eq!(h.state().views[0].camera.map(|q| q.page), Some(1));
+    assert_eq!(h.state().views[0].session.camera.map(|q| q.page), Some(1));
 }
 
 /// A camera click is located where it came up, not where the pointer went after it in the same
@@ -1746,7 +1769,7 @@ fn a_camera_click_on_another_page_moves_the_quadrilateral_there() {
 #[test]
 fn a_camera_click_released_off_its_page_moves_nothing() {
     let (mut h, seam) = touching_pages(|app| app.quick_tool = QuickTool::EnhanceCamera);
-    assert_eq!(h.state().views[0].camera.map(|q| q.page), Some(0), "it starts on the current page");
+    assert_eq!(h.state().views[0].session.camera.map(|q| q.page), Some(0), "it starts on the current page");
     let (press, release, back) = (seam + egui::vec2(0.0, 2.0), seam - egui::vec2(0.0, 2.0), seam + egui::vec2(0.0, 40.0));
     h.hover_at(press);
     h.run_steps(1);
@@ -1755,7 +1778,7 @@ fn a_camera_click_released_off_its_page_moves_nothing() {
     let up = egui::Event::PointerButton { pos: release, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE };
     one_frame(&mut h, [up, egui::Event::PointerMoved(back)]);
     h.run_steps(2);
-    assert_eq!(h.state().views[0].camera.map(|q| q.page), Some(0));
+    assert_eq!(h.state().views[0].session.camera.map(|q| q.page), Some(0));
 }
 
 /// With a menu of the menu bar open, Delete leaves the picture selected with Edit text: the key is
@@ -1765,12 +1788,12 @@ fn delete_with_a_menu_open_leaves_the_selected_picture() {
     let mut h = open(linked_picture_pdf(), "150", false);
     h.state_mut().quick_tool = QuickTool::EditText;
     h.run_steps(4);
-    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
+    h.state_mut().views[0].session.image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
     h.run_steps(3);
     crate::support::open_menu(&mut h, "View");
     h.key_press(egui::Key::Delete);
     h.run_steps(3);
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), None, "nothing was deleted");
-    assert!(s.views[0].image_selection.is_some(), "and the picture is still selected");
+    assert!(s.views[0].session.image_selection.is_some(), "and the picture is still selected");
 }

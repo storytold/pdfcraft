@@ -30,7 +30,7 @@ fn harness(saved: Option<PdfCraftSettings>) -> Harness<'static, PdfCraftApp> {
         }
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
-        app.open_bytes("pin.pdf", None, PDF.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "pin.pdf", None, PDF.to_vec()).unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "quick", "callout").unwrap();
         app

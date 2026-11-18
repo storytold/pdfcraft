@@ -3,10 +3,10 @@
 //! middle of the window, on pages larger and smaller than the window, and also when a zoom and a
 //! step land in the same frame.
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::canvas::{Fit, PageDisplay};
-use crate::support::AppHarness as _;
 
 /// The word searched for, placed (x, y in PDF user space) on each page.
 const NEEDLE: &str = "needle";
@@ -80,7 +80,7 @@ fn harness_dt(dt: f32) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(dt).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("search.pdf", None, fixture()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "search.pdf", None, fixture()).expect("opens");
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app
     });
@@ -143,10 +143,20 @@ fn assert_match_shown(h: &Harness<'static, PdfCraftApp>, what: &str) {
     let room_y = (page_rect.top() < window.top() - 1.0 || centre.y > window.center().y)
         && (page_rect.bottom() > window.bottom() + 1.0 || centre.y < window.center().y);
     if room_x {
-        assert!((centre.x - window.center().x).abs() < slack, "{what}: match {i} at x {} is not centred in {window:?} (zoom {})", centre.x, v.view.zoom);
+        assert!(
+            (centre.x - window.center().x).abs() < slack,
+            "{what}: match {i} at x {} is not centred in {window:?} (zoom {})",
+            centre.x,
+            v.view.zoom
+        );
     }
     if room_y {
-        assert!((centre.y - window.center().y).abs() < slack, "{what}: match {i} at y {} is not centred in {window:?} (zoom {})", centre.y, v.view.zoom);
+        assert!(
+            (centre.y - window.center().y).abs() < slack,
+            "{what}: match {i} at y {} is not centred in {window:?} (zoom {})",
+            centre.y,
+            v.view.zoom
+        );
     }
 }
 

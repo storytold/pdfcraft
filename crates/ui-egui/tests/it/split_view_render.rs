@@ -1,18 +1,18 @@
 //! Split view: an edit made after both views drew their frame (#3149) leaves neither showing the
 //! old page.
 
-use egui::{Key, Modifiers};
+use crate::support::AppHarness as _;
 use craft::ui::primitives::textures::TextureState; // PLAN: assumed facade path of `TextureState`
+use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
-use crate::support::AppHarness as _;
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.run_inline = true;
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
         app
     });
     h.run_steps(4);
@@ -34,7 +34,7 @@ fn wait(h: &mut Harness<'static, PdfCraftApp>, what: &str, ready: impl Fn(&PdfCr
 /// The size of view `i`'s first page picture once it is drawn; a stand-in for a page still loading
 /// is never counted.
 fn page_size(s: &PdfCraftApp, i: usize) -> Option<egui::Vec2> {
-    match &s.views[i].placed.first()?.picture {
+    match &s.views[i].session.placed.first()?.picture {
         TextureState::Ready(texture) => Some(texture.size_vec2()),
         _ => None,
     }

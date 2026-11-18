@@ -1,11 +1,11 @@
 //! Compare files in the real shell (egui_kittest): the dialog, the Compare panel, marks and
 //! the report.
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::Session;
 use pdfcraft_ui_egui::{PdfCraftApp, RightPanel};
-use crate::support::AppHarness as _;
 
 #[test]
 fn compare_two_versions() {
@@ -15,8 +15,8 @@ fn compare_two_versions() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("v1.pdf", None, v1.clone()).unwrap();
-        app.open_bytes("v2.pdf", None, v2.clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "v1.pdf", None, v1.clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "v2.pdf", None, v2.clone()).unwrap();
         app
     });
     h.run_steps(4);
@@ -33,13 +33,13 @@ fn compare_two_versions() {
     assert_eq!(h.state().compare.as_ref().unwrap().selected, Some(0));
     let id = h.state().active_ids().unwrap().1;
     let i = h.state().active_ids().unwrap().0;
-    assert_eq!(h.state().views[i].compare_marks.len(), 2);
+    assert_eq!(h.state().views[i].session.compare_marks.len(), 2);
     // Side by side: the old file's half shades its side of the changes and follows the new
     // file's zoom; "New file only" ends it.
     assert!(h.state().compare.as_ref().unwrap().side_by_side, "side by side on a wide window");
     let old_i = h.state().views.iter().position(|v| v.id == h.state().compare.as_ref().unwrap().old).unwrap();
-    assert_eq!(h.state().views[old_i].compare_marks.len(), 2, "replaced words shaded on the old file too");
-    assert!(h.state().views[old_i].flash.is_some(), "the old half jumped to the change");
+    assert_eq!(h.state().views[old_i].session.compare_marks.len(), 2, "replaced words shaded on the old file too");
+    assert!(h.state().views[old_i].session.flash.is_some(), "the old half jumped to the change");
     h.state_mut().views[i].view.zoom = 1.5;
     h.state_mut().views[i].view.fit = craft::pages::Fit::None;
     h.run_steps(3);
@@ -68,8 +68,8 @@ fn side_by_side() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("v1.pdf", None, v1.clone()).unwrap();
-        app.open_bytes("v2.pdf", None, v2.clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "v1.pdf", None, v1.clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "v2.pdf", None, v2.clone()).unwrap();
         app
     });
     h.run_steps(4);
@@ -121,8 +121,8 @@ fn compare_filters_hide_text_or_visual_changes() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("v1.pdf", None, v1.clone()).unwrap();
-        app.open_bytes("v2.pdf", None, v2.clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "v1.pdf", None, v1.clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "v2.pdf", None, v2.clone()).unwrap();
         app
     });
     h.run_steps(4);
@@ -134,7 +134,7 @@ fn compare_filters_hide_text_or_visual_changes() {
     // Visual differences are shaded orange (compare_ui::VISUAL), text changes in their kind's colour.
     let visual = egui::Color32::from_rgb(0xF0, 0x8C, 0x1A);
     let kinds = |h: &Harness<'_, PdfCraftApp>, i: usize| {
-        let marks = &h.state().views[i].compare_marks;
+        let marks = &h.state().views[i].session.compare_marks;
         (marks.iter().filter(|m| m.2 != visual).count(), marks.iter().filter(|m| m.2 == visual).count())
     };
     let (text_new, visual_new) = kinds(&h, new_i);
@@ -167,7 +167,7 @@ fn pdfa_dialog_verifies_and_converts() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("keep.pdf", None, doc.clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "keep.pdf", None, doc.clone()).unwrap();
         app
     });
     h.run_steps(4);
@@ -229,7 +229,7 @@ fn pdfa_dialog_shows_a_declared_pdfua() {
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
             let mut app = crate::control::new_app();
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes("ua.pdf", None, doc.clone()).unwrap();
+            app.open_bytes(&egui::Context::default(), "ua.pdf", None, doc.clone()).unwrap();
             app
         });
         h.run_steps(4);
@@ -244,7 +244,7 @@ fn export_to_word_html_and_rtf() {
     let doc = Session::new().create_from_text("t", "Exported words").unwrap().to_vec();
     let mut app = crate::control::new_app();
     app.set_option(&egui::Context::default(), "language", "en").unwrap();
-    app.open_bytes("e.pdf", None, doc).unwrap();
+    app.open_bytes(&egui::Context::default(), "e.pdf", None, doc).unwrap();
     for ext in ["docx", "pptx", "html", "rtf"] {
         // Each save is answered with the suggested name in the suggested folder.
         let files = std::sync::Arc::new(craft::host::ScriptedFiles::new().saving_suggested());

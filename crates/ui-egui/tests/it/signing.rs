@@ -1,12 +1,12 @@
 //! Use a certificate in the real shell: draw a signature, create a digital ID, sign, validate.
 
 use crate::support;
+use crate::support::AppHarness as _;
 use egui::{Pos2, pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_engine::SignatureStatus;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool, RightPanel, SignStep};
-use crate::support::AppHarness as _;
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -33,7 +33,7 @@ fn harness(dir: std::path::PathBuf) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("contract.pdf", None, FIXTURE.to_vec()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "contract.pdf", None, FIXTURE.to_vec()).expect("opens");
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.export_dir_override = Some(dir.to_string_lossy().into_owned());
         app.save_override = Some(dir.join("contract_signed.pdf").to_string_lossy().into_owned());
@@ -341,7 +341,7 @@ fn save_as_keeps_a_signed_document_incremental() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("contract.pdf", None, bytes).expect("opens");
+        app.open_bytes(&egui::Context::default(), "contract.pdf", None, bytes).expect("opens");
         app.session.set_trusted_certificates(vec![cert]);
         app
     });
@@ -352,7 +352,8 @@ fn save_as_keeps_a_signed_document_incremental() {
     };
     assert_eq!(status(&h), Some(SignatureStatus::Valid));
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
-    assert!(h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::As), "a signed document can be saved as a copy");
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().save_active(&ctx_h, pdfcraft_ui_egui::SaveTarget::As), "a signed document can be saved as a copy");
     let saved = std::fs::read(&out).expect("file written");
     assert!(saved.starts_with(&signed), "the signed revision is kept as it was");
     assert_eq!(status(&h), Some(SignatureStatus::Valid));
@@ -392,7 +393,7 @@ fn save_as_appends_to_a_document_whose_field_walk_passes_a_signature_over() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("form.pdf", None, bytes).expect("opens");
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, bytes).expect("opens");
         app
     });
     h.run_steps(4);
@@ -400,9 +401,11 @@ fn save_as_appends_to_a_document_whose_field_walk_passes_a_signature_over() {
     let shape = pdfcraft_engine::Shape::Rectangle { rect: [200.0, 120.0, 260.0, 180.0] };
     let style = pdfcraft_engine::Style::default_for(&shape);
     let note = pdfcraft_engine::NewAnnotation { page: 0, style, shape, contents: "Checked".into(), author: "Tester".into() };
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(note)));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::AddAnnotation(note)));
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
-    assert!(h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::As), "the document can be saved as a copy");
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().save_active(&ctx_h, pdfcraft_ui_egui::SaveTarget::As), "the document can be saved as a copy");
     let saved = std::fs::read(&out).expect("file written");
     assert!(saved.starts_with(&original), "Save As rewrote the file instead of appending to it");
     let mut s = pdfcraft_engine::Session::new();
@@ -441,7 +444,8 @@ fn field_centre(h: &Harness<'static, PdfCraftApp>) -> Pos2 {
 /// Opens `WITH_FIELD` as the second document and signs its empty field with the test ID, by
 /// clicking the field.
 fn sign_the_empty_field(h: &mut Harness<'static, PdfCraftApp>) {
-    h.state_mut().open_bytes("form.pdf", None, WITH_FIELD.to_vec()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "form.pdf", None, WITH_FIELD.to_vec()).unwrap();
     h.state_mut().active = Some(1);
     h.run_steps(6);
     let p = field_centre(h);
@@ -514,7 +518,8 @@ fn signing_an_xfa_box_runs_its_signing_scripts_in_the_app() {
     std::fs::create_dir_all(&dir).unwrap();
     let mut h = harness(dir.clone());
     let bytes = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::signing_events_template());
-    h.state_mut().open_bytes("events.pdf", None, bytes).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "events.pdf", None, bytes).unwrap();
     h.state_mut().active = Some(1);
     crate::support::settle(&mut h);
     let named = |h: &Harness<'static, PdfCraftApp>, n: &str| {
@@ -572,7 +577,8 @@ fn cancelling_signing_takes_back_the_presign_scripts_changes() {
     std::fs::create_dir_all(&dir).unwrap();
     let mut h = harness(dir.clone());
     let bytes = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::signing_events_template());
-    h.state_mut().open_bytes("events.pdf", None, bytes).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "events.pdf", None, bytes).unwrap();
     h.state_mut().active = Some(1);
     crate::support::settle(&mut h);
     let named = |h: &Harness<'static, PdfCraftApp>, n: &str| {
@@ -762,7 +768,6 @@ fn windows_store_identity_does_not_ask_for_a_file_password() {
     assert!(h.state().sign_draft.is_some());
     assert!(h.state().sign_draft.as_ref().unwrap().error.as_ref().unwrap().contains("Windows certificate store"));
 }
-
 
 /// A store certificate that can't sign is shown with its reason (so the user learns why an
 /// identity Acrobat lists is missing, issue #179) but is never selected or chosen.

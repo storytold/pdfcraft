@@ -80,7 +80,7 @@ fn harness(panel: &'static str) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_os(egui::os::OperatingSystem::Nix).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("panels.pdf", None, bytes).expect("opens");
+        app.open_bytes(&egui::Context::default(), "panels.pdf", None, bytes).expect("opens");
         app.set_option(&egui::Context::default(), "panel", panel).unwrap();
         app
     });
@@ -219,8 +219,8 @@ fn open(p: RightPanel) -> (Harness<'static, PdfCraftApp>, &'static str) {
             let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
                 let mut app = crate::control::new_app();
                 app.set_option(&egui::Context::default(), "language", "en").unwrap();
-                app.open_bytes("old.pdf", None, old.clone()).unwrap();
-                app.open_bytes("new.pdf", None, new.clone()).unwrap();
+                app.open_bytes(&egui::Context::default(), "old.pdf", None, old.clone()).unwrap();
+                app.open_bytes(&egui::Context::default(), "new.pdf", None, new.clone()).unwrap();
                 app
             });
             h.run_steps(4);

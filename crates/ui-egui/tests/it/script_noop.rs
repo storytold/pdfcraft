@@ -1,9 +1,9 @@
 //! A script button with no convertible characters must not rewrite hidden source text.
+use crate::support::AppHarness as _;
 use egui_kittest::{Harness, kittest::Queryable};
 use pdfcraft_render::{PageRenderer, RenderRequest};
 use pdfcraft_ui_egui::PdfCraftApp;
 use std::sync::Arc;
-use crate::support::AppHarness as _;
 
 fn hidden_text() -> Vec<u8> {
     let body = "BT /F1 24 Tf 3 Tr 40 150 Td (QQQ) Tj ET";
@@ -42,7 +42,7 @@ fn unsupported_script_buttons_leave_hidden_text_bytes_history_and_saved_pixels_u
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
             let mut app = crate::control::new_app();
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes("hidden.pdf", None, hidden_text()).unwrap();
+            app.open_bytes(&egui::Context::default(), "hidden.pdf", None, hidden_text()).unwrap();
             app
         });
         h.run_steps(4);
@@ -78,7 +78,7 @@ fn unsupported_script_buttons_leave_hidden_text_bytes_history_and_saved_pixels_u
         assert_eq!(doc.bytes.as_ref(), before.as_ref(), "no conversion must leave source bytes untouched");
         assert!(doc.can_undo().is_none(), "no conversion must not create an edit");
         let mut reopened = crate::control::new_app();
-        reopened.open_bytes("reopened.pdf", None, saved.as_ref().clone()).unwrap();
+        reopened.open_bytes(&egui::Context::default(), "reopened.pdf", None, saved.as_ref().clone()).unwrap();
         assert_eq!(reopened.session.get(reopened.views[0].id).unwrap().text_blocks(0)[0].text, "QQQ");
     }
 }

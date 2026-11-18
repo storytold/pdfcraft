@@ -6,10 +6,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{By, Queryable};
 use pdfcraft_ui_egui::{PdfCraftApp, SaveTarget};
-use crate::support::AppHarness as _;
 
 /// An `n`-page document with a proper xref table; page `i` shows "Page i+1", and with `notes`
 /// each page has a sticky note.
@@ -126,7 +126,8 @@ fn dirty(h: &Harness<'static, PdfCraftApp>) -> bool {
 
 fn rotate_first_page(h: &mut Harness<'static, PdfCraftApp>) {
     h.state_mut().views[0].select_pages(&[0]);
-    h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
 }
 
 #[test]
@@ -149,8 +150,8 @@ fn a_rebuilt_file_reloads_in_place_keeping_the_page_and_zoom() {
 
 #[test]
 fn a_watched_label_replacement_keeps_the_display_mode_and_focused_page() {
-    use pdfcraft_engine::{Edit, LabelStyle, Session};
     use craft::pages::display_token;
+    use pdfcraft_engine::{Edit, LabelStyle, Session};
 
     let labelled = |ranges: &[(usize, usize, LabelStyle)]| {
         let mut source = Session::new().with_clock(|| 1_700_000_000);
@@ -257,7 +258,8 @@ fn saving_does_not_reload_or_lose_undo() {
     let file = TempPdf::new("save", &fixture(2));
     let mut h = harness(&file.path);
     rotate_first_page(&mut h);
-    h.state_mut().save_active(SaveTarget::InPlace);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().save_active(&ctx_h, SaveTarget::InPlace);
     h.run_steps(4);
     let app = h.state();
     let doc = app.session.get(app.views[0].id).unwrap();
@@ -323,7 +325,7 @@ fn a_shorter_new_version_drops_what_pointed_into_the_old_one() {
     assert_eq!(pages(&h), 1);
     assert_eq!(view.current(), 0, "the page is clamped");
     // PLAN: assumed `comments.primary()` reads the selected comment (pdf-comments)
-    assert!(view.selected.is_empty() && view.comments.primary().is_none(), "no selection points past the new version");
+    assert!(view.selected.is_empty() && view.session.comments.primary().is_none(), "no selection points past the new version");
 }
 
 /// Save asks before writing over a version of the file the document did not come from (#2166):
@@ -337,14 +339,16 @@ fn saving_over_a_file_changed_by_something_else_asks_first() {
     file.rebuild(&fixture(4));
     h.run_steps(3);
     h.get_by_label_contains("This file changed on disk");
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "not written yet");
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "not written yet");
     h.run_steps(2);
     h.get_by_label("Save over the changed file?");
     h.get_by_label("Cancel").click();
     h.run_steps(2);
     assert_eq!(std::fs::read(&file.path).unwrap(), fixture(4), "Cancel keeps the newer file");
     assert!(dirty(&h) && h.state().pending_overwrite.is_none());
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(2);
     h.get_by_label("Save anyway").click();
     h.run_steps(3);
@@ -353,7 +357,8 @@ fn saving_over_a_file_changed_by_something_else_asks_first() {
     assert_eq!(pages(&h), 2, "the document, not the file, is what is shown");
     // Our own write is the version the document came from now.
     rotate_first_page(&mut h);
-    assert!(h.state_mut().save_active(SaveTarget::InPlace), "written at once");
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "written at once");
 }
 
 /// With the watcher off nothing notices the change until Save looks at the file.
@@ -365,7 +370,8 @@ fn saving_checks_the_file_with_the_watcher_off_too() {
     file.rebuild(&fixture(4));
     h.run_steps(3);
     assert!(h.query_by_label_contains("This file changed on disk").is_none(), "nothing watched");
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(2);
     h.get_by_label("Save over the changed file?");
 }
@@ -377,7 +383,8 @@ fn opening_a_file_that_is_open_focuses_its_tab() {
     let file = TempPdf::new("twice", &fixture(2));
     let mut h = harness(&file.path);
     let id = h.state().views[0].id;
-    h.state_mut().open_bytes("other.pdf", None, fixture(1)).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "other.pdf", None, fixture(1)).unwrap();
     h.run_steps(2);
     assert_eq!((h.state().views.len(), h.state().active), (2, Some(1)));
     let spelled = file.dir.join(".").join("thesis.pdf").to_string_lossy().into_owned();

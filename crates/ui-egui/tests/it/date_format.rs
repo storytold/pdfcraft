@@ -1,11 +1,11 @@
 //! Preferences ▸ Date format: the pattern Fill & Sign dates use.
 
+use crate::support::AppHarness as _;
 use egui::accesskit::Role;
 use egui::{Key, Modifiers, pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
-use crate::support::AppHarness as _;
 
 const PDF: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -35,7 +35,7 @@ fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() 
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("form.pdf", None, PDF.to_vec()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, PDF.to_vec()).expect("opens");
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
         app
@@ -147,7 +147,7 @@ fn a_date_the_pdf_cannot_hold_is_refused_with_a_warning_first() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("form.pdf", None, PDF.to_vec()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, PDF.to_vec()).expect("opens");
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         // Japanese weekday names: Fill & Sign text can't hold them yet.
         app.set_option(&egui::Context::default(), "date-format", "dddd").unwrap();

@@ -530,7 +530,8 @@ fn app_creator<'a>(
         // nothing, so a port that can't be listened on stops the launch before any document opens.
         if let Some((port, token)) = &control {
             let host = craft::ui::runtime::windows::WindowHost::of(&cc.egui_ctx);
-            let (requests, listening) = craft::automation::server::listen(*port, token.clone(), host).map_err(|e| format!("--control {port}: {e}"))?;
+            let (requests, listening) =
+                craft::automation::server::listen(*port, token.clone(), host).map_err(|e| format!("--control {port}: {e}"))?;
             app.attach_control(requests, Some(listening));
         }
         // The OCR Verify screen stores its per-language dictionary in the data folder.
@@ -559,7 +560,7 @@ fn app_creator<'a>(
             }
         } else if combine {
             app.reopen_last_files(&[]);
-            app.combine_paths(&files);
+            app.combine_paths(&ctx, &files);
         } else {
             // With the preference on, last session's files come back first; files named on
             // the command line open after them, in front (#442).
@@ -585,7 +586,6 @@ fn notify_software_renderer(app: &mut PdfCraftApp, device_type: eframe::wgpu::De
         app.notify_tr("PdfCraft is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.");
     }
 }
-
 
 /// How wgpu finds a GPU. Each choice yields to its wgpu environment variable.
 ///

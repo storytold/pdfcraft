@@ -5,6 +5,7 @@
 //! answered by the script. The dialog is the hosted `HostedPrint`; a test drives it as automation
 //! does (`ui.dialog.set`, its action ids, its OK) and reads the result through its `State`.
 
+use crate::support::AppHarness as _;
 use craft::host::{AppInfo, FileIntake, FileWatch, Host, ManualJobs, Picked, ScriptedFiles, Wake};
 use craft::print::ui::{Destination, HostedPrint};
 use craft_ui::dialog::{DialogId, HeldOk};
@@ -16,7 +17,6 @@ use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use crate::support::AppHarness as _;
 
 // PLAN: assumed `Host::builder(AppInfo).jobs(..).files(..).build()`, `PdfCraftApp::with_host(Arc<Host>, AppServices)`,
 // `AppServices::new(wake, intake, watch)` (q171, q184, q187), `FileIntake::new(Wake)`, `FileWatch::inline()`, the dialog's
@@ -55,8 +55,7 @@ pub(crate) fn rig_on(files: ScriptedFiles, setup: impl FnOnce(&mut PdfCraftApp) 
     let (host_jobs, host_files) = (jobs.clone(), files.clone());
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "test" }).jobs(host_jobs).files(host_files).build();
-        let mut app =
-            PdfCraftApp::with_host(Arc::new(host), AppServices::new(Wake::none(), FileIntake::new(Wake::none()), FileWatch::inline()));
+        let mut app = PdfCraftApp::with_host(Arc::new(host), AppServices::new(Wake::none(), FileIntake::new(Wake::none()), FileWatch::inline()));
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         setup(&mut app);
         app
@@ -98,7 +97,7 @@ fn harness_saving(settings: Option<String>, saves_count: usize) -> Rig {
         if let Some(json) = &settings {
             restore(app, json);
         }
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
     })
 }
 
@@ -293,7 +292,7 @@ fn current_print_page_saves_the_viewed_page_when_labels_restart() {
     }
     bytes.extend_from_slice(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
     let mut h = rig_on(saves(2), move |app| {
-        app.open_bytes("labelled.pdf", None, bytes).unwrap();
+        app.open_bytes(&egui::Context::default(), "labelled.pdf", None, bytes).unwrap();
     });
     let id = h.state().views[0].id;
     let labels: Vec<_> = h.state().session.get(id).unwrap().info.pages.iter().map(|p| p.label.as_str()).collect();
@@ -344,7 +343,8 @@ fn print_dialog_prints_the_selected_pages() {
     use pdfcraft_ui_egui::PrintWhich;
     let mut h = harness();
     let bytes = h.state().session.create_blank(200.0, 300.0, 5).unwrap();
-    h.state_mut().open_bytes("five.pdf", None, bytes.as_ref().clone()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "five.pdf", None, bytes.as_ref().clone()).unwrap();
     h.run_steps(3);
     let tab = h.state().views.len() - 1;
     // Nothing picked: the whole document, and no "Selected pages" choice.
@@ -387,7 +387,8 @@ fn cut_stack_dialog_previews_saves_and_refuses_duplex() {
     let mut h = harness();
     // Ten source pages, generated using the headless engine.
     let bytes = h.state().session.create_blank(200.0, 300.0, 10).unwrap();
-    h.state_mut().open_bytes("numbered.pdf", None, bytes.as_ref().clone()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "numbered.pdf", None, bytes.as_ref().clone()).unwrap();
     h.open();
     {
         let d = &mut h.state_mut().print_draft;
@@ -404,7 +405,8 @@ fn cut_stack_dialog_previews_saves_and_refuses_duplex() {
     h.state_mut().print_draft.duplex = Some(Duplex::LongEdge);
     h.run_steps(2);
     assert!(h.has_note("note.duplex"));
-    assert!(h.state_mut().print_now().is_err());
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().print_now(&ctx_h).is_err());
     h.state_mut().print_draft.duplex = Some(Duplex::Off);
     h.pick(None);
     h.ok();
@@ -418,7 +420,8 @@ fn custom_pages_per_sheet_takes_columns_by_rows() {
     use pdfcraft_engine::print::{Layout, PageOrder};
     let mut h = harness();
     let bytes = h.state().session.create_blank(200.0, 300.0, 4).unwrap();
-    h.state_mut().open_bytes("narrow.pdf", None, bytes.as_ref().clone()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "narrow.pdf", None, bytes.as_ref().clone()).unwrap();
     h.open();
     {
         let d = &mut h.state_mut().print_draft;
@@ -444,7 +447,7 @@ fn custom_pages_per_sheet_takes_columns_by_rows() {
 /// A Save as PDF whose pick or write fails leaves the dialog open with its settings, and the held OK refused.
 fn refused_save_keeps_the_dialog(files: ScriptedFiles) {
     let mut h = rig_on(files, |app| {
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
     });
     h.open();
     h.pick(None);
@@ -480,7 +483,7 @@ fn printing_landscape_sheets_tells_cups_to_turn_them() {
     let s = pdfcraft_engine::Session::new();
     let bytes = s.create_blank(842.0, 595.0, 2).unwrap();
     let mut h = rig_on(ScriptedFiles::new(), move |app| {
-        app.open_bytes("landscape.pdf", None, bytes.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "landscape.pdf", None, bytes.to_vec()).unwrap();
     });
     let jobs = record_spooler(&mut h);
     list_printers(&mut h, &["Test_Queue"]);
@@ -591,7 +594,7 @@ fn the_picked_printer_is_kept_for_the_next_print_while_it_is_listed() {
 fn architectural_page_can_be_matched_at_100_percent() {
     let mut h = rig_on(ScriptedFiles::new(), |app| {
         let bytes = app.session.create_blank(2592.0, 1728.0, 1).unwrap();
-        app.open_bytes("architectural.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "architectural.pdf", None, bytes.as_ref().clone()).unwrap();
     });
     h.open();
     h.get_by_label("PDF page: 36.00 × 24.00 in");
@@ -922,7 +925,7 @@ fn print_restricted_documents_say_so_before_the_dialog() {
     .unwrap();
     let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
     let mut h = rig_on(ScriptedFiles::new(), move |app| {
-        app.open_bytes("restricted.pdf", None, bytes).unwrap();
+        app.open_bytes(&egui::Context::default(), "restricted.pdf", None, bytes).unwrap();
     });
     h.ctx.set_os(egui::os::OperatingSystem::Windows);
     h.run_steps(4);
@@ -1220,13 +1223,15 @@ fn print_button_waits_for_automatic_paper_detection_before_submission() {
 
     // While background read is pending and paper is not manually overridden:
     assert!(h.state().print_draft.papers_loading(), "papers_loading must be true while automatic detection is pending");
-    assert!(h.state_mut().print_now().is_err(), "print_now must be refused while paper detection is pending");
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().print_now(&ctx_h).is_err(), "print_now must be refused while paper detection is pending");
     assert!(matches!(h.ok(), Some(HeldOk::Refused(_))), "the dialog keeps the refusal");
 
     // Overriding paper manually resolves the pending state and enables submission immediately
     h.state_mut().print_draft.paper_overridden = true;
     assert!(!h.state().print_draft.papers_loading(), "papers_loading becomes false once paper is overridden");
-    assert!(h.state_mut().print_now().is_ok(), "print_now succeeds when user has chosen a paper");
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().print_now(&ctx_h).is_ok(), "print_now succeeds when user has chosen a paper");
 }
 
 #[test]
@@ -1239,13 +1244,15 @@ fn gated_paper_detection_enables_print_after_worker_finishes() {
     h.open();
     h.list();
     assert!(h.state().print_draft.papers_loading());
-    assert!(h.state_mut().print_now().is_err());
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().print_now(&ctx_h).is_err());
 
     // Run the read.
     h.settle();
     assert!(!h.state().print_draft.papers_loading());
     assert_eq!(h.state().print_draft.paper_size(), (288.0, 432.0));
-    assert!(h.state_mut().print_now().is_ok());
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().print_now(&ctx_h).is_ok());
 }
 
 #[test]
@@ -1253,34 +1260,44 @@ fn gated_paper_detection_blocks_print_on_printer_switch_reuse_until_resolved() {
     let mut h = harness();
     record_spooler(&mut h);
     h.state_mut().printer_source = Some(Arc::new(|| vec![printer("Printer A", true), printer("Printer B", false)]));
-    h.state_mut().printer_papers_source = Some(Arc::new(|p| {
-        if p == "Printer A" { vec![("A-Paper 4x6".into(), (288.0, 432.0))] } else { vec![("B-Paper 5x7".into(), (360.0, 504.0))] }
-    }));
-    h.state_mut().default_paper_source = Some(Arc::new(|p| {
-        if p == "Printer A" { Some(("A-Paper 4x6".into(), (288.0, 432.0))) } else { Some(("B-Paper 5x7".into(), (360.0, 504.0))) }
-    }));
+    h.state_mut().printer_papers_source =
+        Some(Arc::new(
+            |p| {
+                if p == "Printer A" { vec![("A-Paper 4x6".into(), (288.0, 432.0))] } else { vec![("B-Paper 5x7".into(), (360.0, 504.0))] }
+            },
+        ));
+    h.state_mut().default_paper_source =
+        Some(Arc::new(
+            |p| {
+                if p == "Printer A" { Some(("A-Paper 4x6".into(), (288.0, 432.0))) } else { Some(("B-Paper 5x7".into(), (360.0, 504.0))) }
+            },
+        ));
 
     // 1. Open print dialog: Printer A is default and starts reading papers
     h.open();
     h.list();
     assert!(h.state().print_draft.papers_loading());
-    assert!(h.state_mut().print_now().is_err());
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().print_now(&ctx_h).is_err());
 
     // 2. Switch to Printer B
     h.pick(Some("Printer B"));
     assert!(h.state().print_draft.papers_loading());
-    assert!(h.state_mut().print_now().is_err());
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().print_now(&ctx_h).is_err());
 
     // 3. Switch back to Printer A (A's read is still pending)
     h.pick(Some("Printer A"));
     assert!(h.state().print_draft.papers_loading(), "papers_loading must be restored for Printer A while its read is pending");
-    assert!(h.state_mut().print_now().is_err(), "print_now must be refused while Printer A's read is still pending after switch back");
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().print_now(&ctx_h).is_err(), "print_now must be refused while Printer A's read is still pending after switch back");
 
     // 4. The reads run: Printer B's answer is not Printer A's paper.
     h.settle();
     assert!(!h.state().print_draft.papers_loading());
     assert_eq!(h.state().print_draft.paper_size(), (288.0, 432.0));
-    assert!(h.state_mut().print_now().is_ok());
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().print_now(&ctx_h).is_ok());
 }
 
 #[test]
@@ -1481,7 +1498,7 @@ fn printer_papers_and_properties_selection() {
 #[test]
 fn too_much_creep_for_a_thick_booklet_is_explained_in_the_preview() {
     let mut h = rig_on(ScriptedFiles::new(), |app| {
-        app.open_bytes("thick.pdf", None, crate::support::fixtures::pdf_pages(400)).unwrap();
+        app.open_bytes(&egui::Context::default(), "thick.pdf", None, crate::support::fixtures::pdf_pages(400)).unwrap();
     });
     h.open();
     h.state_mut().print_draft.set_handling(pdfcraft_ui_egui::PrintHandling::Booklet);
@@ -1501,7 +1518,7 @@ fn print_opened_with(saved: Option<&str>) -> PdfCraftApp {
     if let Some(saved) = saved {
         restore(&mut app, saved);
     }
-    app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+    app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
     app.open_print();
     app
 }

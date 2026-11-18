@@ -62,7 +62,7 @@ fn named_comments(n: usize) -> Vec<u8> {
 /// The app with `bytes` open and each of `options` set, stepped at 60 frames a second.
 fn harness(bytes: Vec<u8>, options: &'static [(&'static str, &'static str)]) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
+        let mut app = new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("work.pdf", None, bytes).expect("opens");
         for (key, value) in options {
@@ -92,7 +92,12 @@ fn frame_work(h: &mut Harness<'static, PdfCraftApp>, row: Option<&str>) -> (u32,
 
 /// The most runs and passes in one frame over `frames` frames, `each` run before every frame. A frame that replays a settled
 /// region runs nothing, so the maximum over several frames is the work of the frames that did run.
-fn most_work(h: &mut Harness<'static, PdfCraftApp>, row: Option<&str>, frames: usize, mut each: impl FnMut(&mut Harness<'static, PdfCraftApp>, usize)) -> (u32, u64) {
+fn most_work(
+    h: &mut Harness<'static, PdfCraftApp>,
+    row: Option<&str>,
+    frames: usize,
+    mut each: impl FnMut(&mut Harness<'static, PdfCraftApp>, usize),
+) -> (u32, u64) {
     let mut most = (0, 0);
     for frame in 0..frames {
         each(h, frame);
@@ -107,7 +112,7 @@ fn most_work(h: &mut Harness<'static, PdfCraftApp>, row: Option<&str>, frames: u
 fn a_folded_page_builds_no_comment_cards_and_an_open_one_builds_only_the_rows_in_view() {
     const ROOTS: u32 = 10_000;
     let mut h = harness(named_comments(ROOTS as usize), &[("left", "closed"), ("panel", "comments")]);
-    h.state_mut().views[0].comments.panel.collapsed_pages = vec![0];
+    h.state_mut().views[0].session.comments.panel.collapsed_pages = vec![0];
     {
         let state = h.state();
         let info = &state.session.get(state.views[0].id).unwrap().info;
@@ -118,11 +123,11 @@ fn a_folded_page_builds_no_comment_cards_and_an_open_one_builds_only_the_rows_in
             assert!(a.in_reply_to.is_none());
             assert!(a.state.is_none());
         }
-        assert_eq!(state.views[0].comments.panel.collapsed_pages, [0]);
+        assert_eq!(state.views[0].session.comments.panel.collapsed_pages, [0]);
     }
     let (folded, _) = most_work(&mut h, Some("CommentRow"), 6, |_, _| {});
     assert_eq!(folded, 0, "a folded page builds no cards");
-    h.state_mut().views[0].comments.panel.collapsed_pages.clear();
+    h.state_mut().views[0].session.comments.panel.collapsed_pages.clear();
     let (open, _) = most_work(&mut h, Some("CommentRow"), 6, |_, _| {});
     assert!(open > 0, "the open page builds the cards in view");
     assert!(open < ROOTS, "{open} cards for {ROOTS} roots: only the rows in view are built");
@@ -145,13 +150,10 @@ fn jumping_through_pages_builds_only_the_pages_in_view() {
 #[test]
 fn wheel_frames_build_only_the_pages_in_view() {
     let work = |n: usize| {
-        let mut h = harness(
-            big(n),
-            &[("left", "closed"), ("panel", "none"), ("layout", "continuous"), ("zoom", "200"), ("animation_effects", "on")],
-        );
+        let mut h = harness(big(n), &[("left", "closed"), ("panel", "none"), ("layout", "continuous"), ("zoom", "200"), ("animation_effects", "on")]);
         h.hover_at(h.state().views[0].viewport_rect().center());
         h.run_steps(2);
-        let start = h.state().views[0].current;
+        let start = h.state().views[0].current();
         let most = most_work(&mut h, None, 60, |h, frame| {
             if frame % 3 == 0 {
                 h.event(egui::Event::MouseWheel {
@@ -163,7 +165,7 @@ fn wheel_frames_build_only_the_pages_in_view() {
                 });
             }
         });
-        assert!(h.state().views[0].current > start, "wheel events must actually move through the document");
+        assert!(h.state().views[0].current() > start, "wheel events must actually move through the document");
         most
     };
     let (small, large) = (work(50), work(500));
@@ -188,4 +190,23 @@ fn panels_build_only_the_rows_in_view() {
         }
         assert!(large <= small, "{panel}: {large} {row} runs in one frame at 500 pages, {small} at 50");
     }
+}
+
+/// An app on the default host with test services: no wake-ups, no autosave folder, the GitHub update
+/// source, a fresh intake and an inline watch (as `tests/it/control.rs`' `new_app`).
+fn new_app() -> pdfcraft_ui_egui::PdfCraftApp {
+    use craft::host::{AppInfo, Host, Wake};
+    use craft::platform::clipboard::{Clipboard, SystemClipboard};
+    use craft::platform::open::FileIntake;
+    use craft::platform::watch::FileWatch;
+    let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "test" }).build();
+    let services = pdfcraft_ui_egui::AppServices::new(
+        Wake::none(),
+        Clipboard::new(SystemClipboard::new()),
+        None,
+        None,
+        FileIntake::new(Wake::none()).0,
+        FileWatch::new(Wake::none()).inline(),
+    );
+    pdfcraft_ui_egui::PdfCraftApp::with_host(std::sync::Arc::new(host), services)
 }

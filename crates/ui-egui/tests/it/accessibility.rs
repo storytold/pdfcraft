@@ -3,13 +3,13 @@
 
 use std::sync::Arc;
 
+use crate::support::AppHarness as _;
 use craft::host::ScriptedFiles;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::a11y::{Rule, Status};
 use pdfcraft_ui_egui::{PdfCraftApp, RightPanel};
-use crate::support::AppHarness as _;
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -48,7 +48,7 @@ fn automatic_text_tagging_opens_reviewable_tags() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("notes.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "notes.pdf", None, FIXTURE.to_vec()).unwrap();
         app
     });
     h.run_steps(3);
@@ -69,7 +69,7 @@ fn checking_fixing_skipping_and_reporting() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("notes.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "notes.pdf", None, FIXTURE.to_vec()).unwrap();
         // PLAN: assumed `PdfCraftApp::set_files(Arc<dyn Files>)` (pdf-workflows-w13, A-6)
         app.set_files(scripted);
         app
@@ -137,8 +137,8 @@ fn a_rule_skipped_in_one_document_is_not_skipped_in_another() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("a.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes("b.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "a.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "b.pdf", None, FIXTURE.to_vec()).unwrap();
         app.active = Some(0);
         app.a11y_options.show_dialog = false;
         app
@@ -189,7 +189,7 @@ fn checker_summary_does_not_hide_manual_review() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("notes.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "notes.pdf", None, FIXTURE.to_vec()).unwrap();
         app
     });
     h.run_steps(3);
@@ -217,7 +217,7 @@ fn a_saved_page_range_past_the_document_still_checks_its_pages() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("notes.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "notes.pdf", None, FIXTURE.to_vec()).unwrap();
         app
     });
     h.run_steps(3);
@@ -234,7 +234,7 @@ fn tagging_form_fields_opens_the_tags_panel() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("form.pdf", None, FORM_FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, FORM_FIXTURE.to_vec()).unwrap();
         app
     });
     h.run_steps(3);
@@ -275,7 +275,7 @@ fn checker_shows_a_figure_finding_on_its_page() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("figures.pdf", None, FIGURES.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
         app
     });
     h.run_steps(4);
@@ -287,7 +287,7 @@ fn checker_shows_a_figure_finding_on_its_page() {
     h.run_steps(2);
     h.get_by_label_contains("Figure element on page 1: no alternate text").click();
     h.run_steps(1);
-    let flash = h.state().views[0].flash.map(|(page, rect, _)| (page, rect));
+    let flash = h.state().views[0].session.flash.map(|(page, rect, _)| (page, rect));
     assert_eq!(flash, Some((0, [10.0, 150.0, 50.0, 170.0])));
 }
 
@@ -296,7 +296,7 @@ fn setting_alternate_text_figure_by_figure() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("figures.pdf", None, FIGURES.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
         app
     });
     h.run_steps(4);
@@ -328,7 +328,7 @@ fn tags_panel_edits_a_tag_property_and_undoes_it() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("figures.pdf", None, FIGURES.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
         app
     });
     h.run_steps(4);
@@ -369,7 +369,7 @@ fn tags_panel_moves_a_tag_within_its_siblings() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("figures.pdf", None, FIGURES.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
         app
     });
     h.run_steps(4);
@@ -390,7 +390,7 @@ fn tags_panel_marks_a_leaf_tag_as_an_artifact() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("figures.pdf", None, FIGURES.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
         app
     });
     h.run_steps(4);
@@ -411,7 +411,7 @@ fn checker_finding_opens_its_structure_tag() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("figures.pdf", None, FIGURES.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
         app
     });
     h.run_steps(4);
@@ -440,7 +440,7 @@ fn finding_untagged_content_shows_the_focused_accessibility_results() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("notes.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "notes.pdf", None, FIXTURE.to_vec()).unwrap();
         app
     });
     h.run_steps(3);

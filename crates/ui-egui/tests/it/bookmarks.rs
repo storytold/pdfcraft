@@ -1,10 +1,10 @@
 //! Editing bookmarks in the Bookmarks panel (M4.6), driven like a user would.
 
+use crate::support::AppHarness as _;
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
-use crate::support::AppHarness as _;
 
 const PAGES: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -19,7 +19,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("pages.pdf", None, PAGES.to_vec()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "pages.pdf", None, PAGES.to_vec()).expect("opens");
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
         app
@@ -127,7 +127,8 @@ fn search_finds_collapsed_bookmarks_and_keeps_original_paths() {
     for (parent, index, title, page) in
         [(vec![], 0, "Unrelated", 0), (vec![], 1, "Reports", 0), (vec![1], 0, "Other chapter", 1), (vec![1], 1, "Résumé results", 2)]
     {
-        h.state_mut().apply_edit(Edit::AddBookmark { parent, index, title: title.into(), page, left: None, top: None });
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(&ctx_h, Edit::AddBookmark { parent, index, title: title.into(), page, left: None, top: None });
     }
     h.run_steps(3);
     h.get_by_label("Bookmark options").click();
@@ -147,7 +148,7 @@ fn search_finds_collapsed_bookmarks_and_keeps_original_paths() {
     h.get_by_label("Reports");
     h.get_by_label("Résumé results").click();
     h.run_steps(3);
-    assert_eq!(h.state().views[0].current, 2);
+    assert_eq!(h.state().views[0].current(), 2);
     assert!(h.query_by_label("Unrelated").is_none());
     assert!(h.query_by_label("Other chapter").is_none());
     assert_eq!(h.state().session.save_full_bytes(id).unwrap(), before, "search doesn't edit the PDF");
@@ -177,7 +178,8 @@ fn bookmark_search_is_per_document() {
     h.get_by_label("Search").type_text("not found");
     h.run_steps(3);
     h.get_by_label("No matches.");
-    h.state_mut().open_bytes("second.pdf", None, PAGES.to_vec()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "second.pdf", None, PAGES.to_vec()).unwrap();
     h.run_steps(3);
     add(&mut h, "Second document");
     h.get_by_label("Second document");
@@ -202,7 +204,8 @@ fn new_bookmarks_from_structure_nest_the_tagged_headings() {
 trailer << /Root 1 0 R >>
 %%EOF";
     let mut h = harness();
-    h.state_mut().open_bytes("tagged.pdf", None, TAGGED.to_vec()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "tagged.pdf", None, TAGGED.to_vec()).unwrap();
     h.run_steps(3);
     h.get_by_label("Bookmark options").click();
     h.run_steps(2);
@@ -256,7 +259,8 @@ trailer << /Root 1 0 R >>
 #[test]
 fn new_bookmarks_from_text_styles_from_the_bookmark_options() {
     let mut h = harness();
-    h.state_mut().open_bytes("styled.pdf", None, styled_pdf()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "styled.pdf", None, styled_pdf()).unwrap();
     h.run_steps(3);
     let id = h.state().active.and_then(|i| h.state().views.get(i)).unwrap().id;
     let open = |h: &mut Harness<'static, PdfCraftApp>| {
@@ -297,7 +301,8 @@ fn new_bookmarks_from_text_styles_from_the_bookmark_options() {
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("New bookmarks from text styles"));
     assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
     // A document with no text: nothing to choose from.
-    h.state_mut().open_bytes("pages.pdf", None, PAGES.to_vec()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "pages.pdf", None, PAGES.to_vec()).unwrap();
     h.run_steps(3);
     open(&mut h);
     let message = h.get_by_label("This document has no text to make bookmarks from.").rect();
@@ -316,7 +321,8 @@ fn expanding_and_collapsing_all_bookmarks() {
     use pdfcraft_engine::Edit;
     let mut h = harness();
     for (parent, title) in [(vec![], "Part"), (vec![0], "Chapter"), (vec![0, 0], "Section")] {
-        h.state_mut().apply_edit(Edit::AddBookmark { parent, index: 0, title: title.into(), page: 0, left: None, top: None });
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(&ctx_h, Edit::AddBookmark { parent, index: 0, title: title.into(), page: 0, left: None, top: None });
     }
     h.run_steps(3);
     let shown = |h: &Harness<'static, PdfCraftApp>, t: &str| h.query_by_label(t).is_some();
@@ -394,7 +400,8 @@ fn a_closed_top_level_bookmark_opens_closed() {
 trailer << /Root 1 0 R >>
 %%EOF";
     let mut h = harness();
-    h.state_mut().open_bytes("outlined.pdf", None, OUTLINED.to_vec()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "outlined.pdf", None, OUTLINED.to_vec()).unwrap();
     h.run_steps(4);
     let shown = |h: &Harness<'static, PdfCraftApp>, t: &str| h.query_by_label(t).is_some();
     assert!(shown(&h, "Closed parent") && shown(&h, "Open parent") && shown(&h, "Uncounted parent"));
@@ -487,7 +494,8 @@ fn cut_copy_and_paste_a_bookmark_subtree_within_and_between_documents() {
 
     // Into a one-page document: Results' page 3 is not there, so it keeps its place without a
     // destination rather than pointing at the wrong page, and the toast says so.
-    h.state_mut().open_bytes("one.pdf", None, ONE_PAGE.to_vec()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "one.pdf", None, ONE_PAGE.to_vec()).unwrap();
     h.run_steps(3);
     h.get_by_label("Bookmark options").click();
     h.run_steps(2);
@@ -528,7 +536,8 @@ fn deep_outline_pdf(depth: usize) -> Vec<u8> {
 #[test]
 fn cutting_a_subtree_too_deep_to_copy_keeps_it() {
     let mut h = harness();
-    h.state_mut().open_bytes("deep.pdf", None, deep_outline_pdf(40)).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "deep.pdf", None, deep_outline_pdf(40)).unwrap();
     h.run_steps(3);
     let before = active_outline(&h);
     assert_eq!(before.first().map(|b| b.0.as_str()), Some("Top"));

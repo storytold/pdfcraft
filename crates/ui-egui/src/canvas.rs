@@ -1458,6 +1458,9 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     // Whether the clipboard holds a picture, read only when this pass opens the page menu (a clipboard read is slow).
     // PLAN: a menu left open from an earlier pass keeps its row only if `page_menu` reads the clipboard itself.
     let can_paste_image = body_out.context.is_some() && app.can_paste_image();
+    // The clipboard read takes the app; the document is read again after it.
+    let doc = app.session.get(doc_id)?;
+    let info = &doc.info;
     let view = &mut app.views[index];
     // The in-place editors and comment windows over the pages, in their old order, mapped through this pass's
     // placement.

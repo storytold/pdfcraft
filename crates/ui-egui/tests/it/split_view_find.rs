@@ -12,7 +12,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
         let mut app = crate::control::new_app();
         app.run_inline = true;
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app
     });

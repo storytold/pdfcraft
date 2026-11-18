@@ -2,7 +2,6 @@
 
 use egui_kittest::{Harness, kittest::Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
-use crate::support::AppHarness as _;
 
 /// Whether some pixel of the viewport outside every page rectangle differs between the two frames:
 /// the shadow band round the pages.
@@ -43,7 +42,8 @@ fn viewer_shadows_follow_the_preference_without_moving_pages() {
 #[test]
 fn checkbox_and_multiple_documents_do_not_edit_pdf_state() {
     let mut h = harness("light");
-    h.state_mut().open_bytes("second.pdf", None, pdf()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "second.pdf", None, pdf()).unwrap();
     let ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
     h.state_mut().session.apply(ids[0], pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Keep existing edits".into() }).unwrap();
     assert!(h.state().session.get(ids[0]).unwrap().dirty);
@@ -144,7 +144,7 @@ fn rendered_page_content_is_identical_with_and_without_decoration() {
 fn harness(theme: &str) -> Harness<'static, PdfCraftApp> {
     let theme = theme.to_string();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
-        let mut app = crate::control::new_app();
+        let mut app = new_app();
         // Save comparisons must not depend on crossing a /ModDate second boundary.
         app.session = app.session.with_clock(|| 1_700_000_000);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
@@ -189,14 +189,14 @@ fn pdf() -> Vec<u8> {
 
 #[test]
 fn page_shadow_preference_round_trips_and_ignores_invalid_settings() {
-    let mut app = crate::control::new_app();
+    let mut app = new_app();
     let enabled = |app: &PdfCraftApp| serde_json::from_str::<serde_json::Value>(&app.persist()).unwrap()["show_page_edge_shadows"].clone();
     assert_eq!(enabled(&app), true);
     app.restore("{}");
     assert_eq!(enabled(&app), true);
     for value in [false, true] {
         app.set_option(&egui::Context::default(), "show_page_edge_shadows", if value { "true" } else { "false" }).unwrap();
-        let mut restored = crate::control::new_app();
+        let mut restored = new_app();
         restored.restore(&app.persist());
         assert_eq!(enabled(&restored), value);
     }
@@ -208,4 +208,41 @@ fn page_shadow_preference_round_trips_and_ignores_invalid_settings() {
     assert_eq!(enabled(&app), true);
     assert!(app.set_option(&egui::Context::default(), "show_page_edge_shadows", "maybe").is_err());
     assert_eq!(enabled(&app), true);
+}
+
+/// An app on the default host with test services: no wake-ups, no autosave folder, the GitHub update
+/// source, a fresh intake and an inline watch (as `tests/it/control.rs`' `new_app`).
+fn new_app() -> pdfcraft_ui_egui::PdfCraftApp {
+    use craft::host::{AppInfo, Host, Wake};
+    use craft::platform::clipboard::{Clipboard, SystemClipboard};
+    use craft::platform::open::FileIntake;
+    use craft::platform::watch::FileWatch;
+    let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "test" }).build();
+    let services = pdfcraft_ui_egui::AppServices::new(
+        Wake::none(),
+        Clipboard::new(SystemClipboard::new()),
+        None,
+        None,
+        FileIntake::new(Wake::none()).0,
+        FileWatch::new(Wake::none()).inline(),
+    );
+    pdfcraft_ui_egui::PdfCraftApp::with_host(std::sync::Arc::new(host), services)
+}
+
+/// The app's command and option entry points with the harness's own context (L-208).
+trait AppHarness {
+    fn execute(&mut self, id: &str) -> bool;
+    fn set_option(&mut self, key: &str, value: &str) -> Result<(), String>;
+}
+
+impl AppHarness for egui_kittest::Harness<'_, pdfcraft_ui_egui::PdfCraftApp> {
+    fn execute(&mut self, id: &str) -> bool {
+        let ctx = self.ctx.clone();
+        self.state_mut().execute(&ctx, id)
+    }
+
+    fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
+        let ctx = self.ctx.clone();
+        self.state_mut().set_option(&ctx, key, value)
+    }
 }

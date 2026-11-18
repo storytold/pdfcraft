@@ -52,7 +52,7 @@ fn replace_all_from_the_find_bar_is_one_undo_step() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("cats.pdf", None, fixture()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "cats.pdf", None, fixture()).expect("opens");
         app
     });
     h.run_steps(4);
@@ -105,7 +105,7 @@ fn replace_changes_the_highlighted_match() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("cats.pdf", None, fixture()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "cats.pdf", None, fixture()).expect("opens");
         app
     });
     h.run_steps(4);

@@ -1,17 +1,17 @@
 //! Redact a PDF in the real shell (egui_kittest): the Redact tool, Redact pages, the apply
 //! confirmation and Clear all.
 
+use crate::support::AppHarness as _;
 use egui::Pos2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, SaveTarget};
-use crate::support::AppHarness as _;
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
@@ -107,7 +107,8 @@ fn saving_after_applying_redactions_asks_where() {
     assert_eq!(h.state().views[0].redactions_applied, 1);
     let copy = dir.join("contract_Redacted.pdf");
     h.state_mut().pick_override = Some(vec![copy.to_string_lossy().into_owned()]);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "Save asks where first");
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "Save asks where first");
     h.run_steps(3);
     assert_eq!(std::fs::read(&original).unwrap(), source, "the opened file is left as it was");
     assert!(copy.exists(), "the redacted copy is written where the user chose");
@@ -115,7 +116,8 @@ fn saving_after_applying_redactions_asks_where() {
     assert_eq!(s.session.get(s.views[0].id).unwrap().name, "contract_Redacted.pdf");
     assert_eq!(s.views[0].redactions_applied, 0);
     h.state_mut().pick_override = None;
-    assert!(h.state_mut().save_active(SaveTarget::InPlace), "the next Save writes the copy in place");
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "the next Save writes the copy in place");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -146,7 +148,8 @@ fn undoing_saved_redactions_does_not_save_over_the_redacted_copy() {
     h.run_steps(4);
     let copy = dir.join("contract_Redacted.pdf");
     h.state_mut().pick_override = Some(vec![copy.to_string_lossy().into_owned()]);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(3);
     h.state_mut().pick_override = None;
     assert!(copy.exists());
@@ -156,14 +159,16 @@ fn undoing_saved_redactions_does_not_save_over_the_redacted_copy() {
     h.execute("edit.redo");
     h.run_steps(3);
     assert_eq!((h.state().views[0].redactions_applied, h.state().views[0].redactions_undone_after_save), (0, 0));
-    assert!(h.state_mut().save_active(SaveTarget::InPlace), "with the redactions back, Save writes the copy in place");
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "with the redactions back, Save writes the copy in place");
     let saved = std::fs::read(&copy).unwrap();
     h.execute("edit.undo");
     h.run_steps(3);
     assert_eq!(h.state().views[0].redactions_undone_after_save, 1);
     let elsewhere = dir.join("contract_restored.pdf");
     h.state_mut().pick_override = Some(vec![elsewhere.to_string_lossy().into_owned()]);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "Save asks where instead of writing over the copy");
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "Save asks where instead of writing over the copy");
     h.run_steps(3);
     h.state_mut().pick_override = None;
     assert_eq!(std::fs::read(&copy).unwrap(), saved, "the redacted copy is left as it was");
@@ -203,7 +208,8 @@ fn redoing_a_new_apply_after_undoing_saved_redactions_still_asks_where() {
     h.run_steps(4);
     let copy = dir.join("contract_Redacted.pdf");
     h.state_mut().pick_override = Some(vec![copy.to_string_lossy().into_owned()]);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(3);
     h.state_mut().pick_override = None;
     let saved = std::fs::read(&copy).unwrap();
@@ -222,7 +228,8 @@ fn redoing_a_new_apply_after_undoing_saved_redactions_still_asks_where() {
     h.run_steps(3);
     let elsewhere = dir.join("contract_again.pdf");
     h.state_mut().pick_override = Some(vec![elsewhere.to_string_lossy().into_owned()]);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "Save asks where instead of writing over the copy");
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "Save asks where instead of writing over the copy");
     h.run_steps(3);
     h.state_mut().pick_override = None;
     assert_eq!(std::fs::read(&copy).unwrap(), saved, "the redacted copy is left as it was");
@@ -262,7 +269,8 @@ fn undoing_delivered_redactions_asks_where() {
     h.run_steps(3);
     let elsewhere = dir.join("contract_restored.pdf");
     h.state_mut().pick_override = Some(vec![elsewhere.to_string_lossy().into_owned()]);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "Save asks where after Undo past a delivered step");
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "Save asks where after Undo past a delivered step");
     h.run_steps(3);
     h.state_mut().pick_override = None;
     assert!(elsewhere.exists());
@@ -308,7 +316,8 @@ fn delivered_redactions_save_in_place() {
     h.run_steps(4);
     // The state a web save leaves: the step is delivered and stays counted.
     h.state_mut().views[0].redactions_downloaded = 1;
-    assert!(h.state_mut().save_active(SaveTarget::InPlace), "Save writes in place after the step is delivered");
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "Save writes in place after the step is delivered");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -342,13 +351,15 @@ fn undoing_saved_redactions_while_the_save_dialog_is_open_asks_again() {
     apply(&mut h);
     let copy = dir.join("contract_Redacted.pdf");
     h.state_mut().pick_override = Some(vec![copy.to_string_lossy().into_owned()]);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(3);
     let saved = std::fs::read(&copy).unwrap();
     // A second Apply redactions makes Save ask where. Before the answer, Undo takes back the
     // second Apply, its marks and the saved Apply.
     apply(&mut h);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     for _ in 0..3 {
         h.execute("edit.undo");
     }
@@ -389,7 +400,8 @@ fn undoing_apply_redactions_while_the_save_dialog_is_open_asks_again() {
     h.run_steps(4);
     let copy = dir.join("contract_Redacted.pdf");
     h.state_mut().pick_override = Some(vec![copy.to_string_lossy().into_owned()]);
-    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    let ctx_h = h.ctx.clone();
+    assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.execute("edit.undo");
     assert_eq!(h.state().views[0].redactions_applied, 0);
     let elsewhere = dir.join("contract_copy.pdf");
@@ -443,7 +455,8 @@ fn undoing_apply_redactions_saves_in_place_again() {
     assert_eq!(h.state().views[0].redactions_applied, 1);
     h.execute("edit.undo");
     h.run_steps(3);
-    assert!(h.state_mut().save_active(SaveTarget::InPlace), "with the redactions undone, Save writes in place");
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "with the redactions undone, Save writes in place");
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().name, "contract.pdf");
     let _ = std::fs::remove_dir_all(&dir);
@@ -479,7 +492,8 @@ fn reverting_after_apply_redactions_saves_in_place_again() {
     h.get_all_by_label("Revert").last().expect("the button").click();
     h.run_steps(3);
     assert_eq!(h.state().views[0].redactions_applied, 0);
-    assert!(h.state_mut().save_active(SaveTarget::InPlace), "after Revert, Save writes in place");
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "after Revert, Save writes in place");
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().name, "contract.pdf");
     let _ = std::fs::remove_dir_all(&dir);
@@ -612,7 +626,7 @@ fn redacting_an_imported_word_list() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("memo.pdf", None, memo.clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "memo.pdf", None, memo.clone()).unwrap();
         app
     });
     h.run_steps(4);
@@ -620,7 +634,8 @@ fn redacting_an_imported_word_list() {
     h.run_steps(2);
     h.get_by_label("Multiple words or phrases");
     let list = b"  Ada \n\nprivate\nAda\nabsent\n".to_vec();
-    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::RedactWords, vec![("names.txt".into(), list)]);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().use_files(&ctx_h, pdfcraft_ui_egui::FilePurpose::RedactWords, vec![("names.txt".into(), list)]);
     let d = &h.state().redact_search;
     assert_eq!((d.mode, d.words.as_str()), (pdfcraft_ui_egui::RedactSearchMode::Words, "Ada\nprivate\nabsent"));
     h.run_steps(2);
@@ -629,7 +644,8 @@ fn redacting_an_imported_word_list() {
     h.run_steps(3);
     assert_eq!((marks(&h), h.state().redact_search.found), (3, Some(3)));
     let too_big = vec![b'a'; 2 << 20];
-    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::RedactWords, vec![("huge.txt".into(), too_big)]);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().use_files(&ctx_h, pdfcraft_ui_egui::FilePurpose::RedactWords, vec![("huge.txt".into(), too_big)]);
     assert_eq!(h.state().redact_search.words, "Ada\nprivate\nabsent", "an oversized list changes nothing");
 }
 
@@ -639,7 +655,7 @@ fn redaction_search_can_match_case_and_whole_words() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("memo.pdf", None, memo.clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "memo.pdf", None, memo.clone()).unwrap();
         app
     });
     h.run_steps(4);
@@ -718,7 +734,7 @@ fn applying_says_where_the_removed_text_is_still_held() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("bluefin.pdf", None, bookmarked_pdf()).unwrap();
+        app.open_bytes(&egui::Context::default(), "bluefin.pdf", None, bookmarked_pdf()).unwrap();
         app
     });
     crate::support::settle(&mut h);
@@ -772,7 +788,7 @@ fn applying_says_the_pdfa_identification_was_written_back() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("pdfa.pdf", None, bytes).unwrap();
+        app.open_bytes(&egui::Context::default(), "pdfa.pdf", None, bytes).unwrap();
         app
     });
     crate::support::settle(&mut h);

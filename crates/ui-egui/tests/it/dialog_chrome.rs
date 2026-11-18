@@ -1,10 +1,10 @@
 //! The page cursor stays off while a dialog is open, and the Space Audit tab measures when the app says it does.
 
+use crate::support::AppHarness as _;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
-use crate::support::AppHarness as _;
 
 /// A one-page file.
 fn fixture() -> Vec<u8> {
@@ -43,7 +43,7 @@ fn space_audit_harness() -> Harness<'static, PdfCraftApp> {
     Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, fixture()).unwrap();
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture()).unwrap();
         app.set_option(&egui::Context::default(), "dialog", "space-audit").unwrap();
         app
     })
@@ -71,14 +71,9 @@ fn space_audit_tab_measures_again_after_an_edit() {
     h.run_steps(2);
     assert_eq!(audit(h.state()), before);
     // An edit while the tab is open is measured again.
-    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark {
-        parent: vec![],
-        index: 0,
-        title: "Chapter".into(),
-        page: 0,
-        left: None,
-        top: None,
-    });
+    let ctx_h = h.ctx.clone();
+    h.state_mut()
+        .apply_edit(&ctx_h, pdfcraft_engine::Edit::AddBookmark { parent: vec![], index: 0, title: "Chapter".into(), page: 0, left: None, top: None });
     crate::support::wait_until(&mut h, "the new outline to be counted", |app| bookmarks(app) > 0);
     h.run_steps(2);
     // The table shows the new row (the rail's Bookmarks button has the same label).
@@ -91,7 +86,7 @@ fn page_hover_cursors_stay_off_while_a_dialog_is_open() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
         // Large enough that the drop-down sits outside the dialog.
         app.set_option(&egui::Context::default(), "zoom", "300").unwrap();
         app

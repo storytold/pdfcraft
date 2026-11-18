@@ -1,5 +1,6 @@
 //! Shared properties and multi-selection through the real Prepare-a-form shell.
 
+use crate::support::AppHarness as _;
 use craft::ui::dialog::StackDialog;
 use egui::accesskit::Role;
 use egui_kittest::{Harness, kittest::Queryable};
@@ -7,7 +8,6 @@ use pdfcraft_engine::{Edit, FieldFont, FieldProps, FieldValue, NewField, Session
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::bulk_fields::SharedFieldPropsDialog;
 use pdfcraft_ui_egui::prepare::FieldPropsDialog;
-use crate::support::AppHarness as _;
 
 fn fixture() -> Vec<u8> {
     let mut s = Session::new();
@@ -54,7 +54,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         // Saves stamp /ModDate from the clock; pinned, two saves compare equal across a second.
         app.session = std::mem::take(&mut app.session).with_clock(|| 1_700_000_000);
-        app.open_bytes("form.pdf", None, fixture()).unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, fixture()).unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app.execute(&egui::Context::default(), "form.prepare");
         app
@@ -73,7 +73,7 @@ fn bytes(h: &Harness<'static, PdfCraftApp>) -> Vec<u8> {
 }
 
 fn select(h: &mut Harness<'static, PdfCraftApp>, names: &[&str]) {
-    let p = &mut h.state_mut().views[0].prepare;
+    let p = &mut h.state_mut().views[0].session.prepare;
     p.selected = names.first().map(|n| (n.to_string(), 0));
     p.also = names.iter().skip(1).map(|n| (n.to_string(), 0)).collect();
     h.execute("form.field.properties");
@@ -156,7 +156,7 @@ fn shared_properties_preserve_mixed_values_and_undo_the_whole_change() {
         assert_eq!((new.fill, new.font, new.text, new.border), (look.fill, look.font, look.text, look.border));
     }
     assert_eq!(doc(&h).can_undo(), Some("Change field properties"));
-    assert_eq!(h.state().views[0].prepare.names(), ["alpha", "beta"]);
+    assert_eq!(h.state().views[0].session.prepare.names(), ["alpha", "beta"]);
     h.execute("edit.undo");
     h.run_steps(4);
     assert_eq!(bytes(&h), before);
@@ -188,13 +188,15 @@ fn cancelling_shared_properties_discards_only_the_draft() {
     h.run_steps(4);
     assert_eq!(bytes(&h), before);
     assert!(!shared_open(&h));
-    assert_eq!(h.state().views[0].prepare.names(), ["alpha", "beta", "consent"]);
+    assert_eq!(h.state().views[0].session.prepare.names(), ["alpha", "beta", "consent"]);
 }
 
 #[test]
 fn locked_field_refuses_the_entire_batch_and_keeps_the_draft_for_correction() {
     let mut h = harness();
-    h.state_mut().apply_edit(Edit::SetFieldProps { name: "beta".into(), props: Box::new(FieldProps { locked: Some(true), ..Default::default() }) });
+    let ctx_h = h.ctx.clone();
+    h.state_mut()
+        .apply_edit(&ctx_h, Edit::SetFieldProps { name: "beta".into(), props: Box::new(FieldProps { locked: Some(true), ..Default::default() }) });
     let before = bytes(&h);
     select(&mut h, &["alpha", "beta"]);
     set_tooltip(&mut h, "Shared help");
@@ -230,7 +232,8 @@ fn shared_properties_cannot_apply_to_a_different_active_document() {
     select(&mut h, &["alpha", "beta"]);
     h.get_by_label("Required").click();
     h.run_steps(4);
-    h.state_mut().open_bytes("other.pdf", None, fixture()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "other.pdf", None, fixture()).unwrap();
     h.run_steps(4);
     h.get_by_label("OK").click();
     h.run_steps(4);
@@ -246,7 +249,8 @@ fn deleting_a_field_while_properties_are_open_does_not_partly_apply_the_draft() 
     let mut h = harness();
     select(&mut h, &["alpha", "beta"]);
     set_tooltip(&mut h, "New help");
-    h.state_mut().apply_edit(Edit::DeleteField { name: "beta".into() });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::DeleteField { name: "beta".into() });
     let before = bytes(&h);
     h.get_by_label("OK").click();
     h.run_steps(4);
@@ -259,13 +263,13 @@ fn select_all_in_prepare_a_form_selects_only_the_current_pages_fields() {
     let mut h = harness();
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.run_steps(4);
-    assert_eq!(h.state().views[0].prepare.names(), ["alpha", "beta", "consent"]);
+    assert_eq!(h.state().views[0].session.prepare.names(), ["alpha", "beta", "consent"]);
     assert!(!doc(&h).dirty);
     h.state_mut().views[0].go_to_page(1);
     h.run_steps(4);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.run_steps(4);
-    assert_eq!(h.state().views[0].prepare.names(), ["gamma"]);
+    assert_eq!(h.state().views[0].session.prepare.names(), ["gamma"]);
 }
 
 #[test]
@@ -275,7 +279,7 @@ fn fields_panel_selects_multiple_fields_and_opens_their_shared_properties() {
     h.run_steps(4);
     h.get_by_label("beta").click_modifiers(egui::Modifiers::SHIFT);
     h.run_steps(4);
-    assert_eq!(h.state().views[0].prepare.names(), ["alpha", "beta"]);
+    assert_eq!(h.state().views[0].session.prepare.names(), ["alpha", "beta"]);
     h.get_by_label("Properties…").click();
     h.run_steps(4);
     h.get_by_label("Shared Field Properties");
@@ -283,7 +287,7 @@ fn fields_panel_selects_multiple_fields_and_opens_their_shared_properties() {
     h.run_steps(4);
     h.get_by_label("beta").click_modifiers(egui::Modifiers::COMMAND);
     h.run_steps(4);
-    assert_eq!(h.state().views[0].prepare.names(), ["alpha"]);
+    assert_eq!(h.state().views[0].session.prepare.names(), ["alpha"]);
 }
 
 #[test]
@@ -304,14 +308,18 @@ fn double_clicking_a_field_in_the_panel_opens_its_individual_properties() {
 fn selecting_several_widgets_of_one_radio_group_does_not_duplicate_field_edits() {
     let mut h = harness();
     for (export, x) in [("A", 100.0), ("B", 150.0)] {
-        h.state_mut().apply_edit(Edit::AddField {
-            page: 0,
-            rect: [x, 180.0, x + 14.0, 194.0],
-            kind: NewField::Radio { group: Some("group".into()), export: export.into() },
-            name: None,
-        });
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(
+            &ctx_h,
+            Edit::AddField {
+                page: 0,
+                rect: [x, 180.0, x + 14.0, 194.0],
+                kind: NewField::Radio { group: Some("group".into()), export: export.into() },
+                name: None,
+            },
+        );
     }
-    let p = &mut h.state_mut().views[0].prepare;
+    let p = &mut h.state_mut().views[0].session.prepare;
     p.selected = Some(("group".into(), 0));
     p.also = vec![("group".into(), 1), ("alpha".into(), 0)];
     h.execute("form.field.properties");
@@ -336,13 +344,17 @@ fn shared_properties_preserve_unchecked_changes_made_after_the_dialog_opened() {
     h.run_steps(4);
     type_in_next_field(&mut h, "2");
     assert_eq!(shared(&h)["width"]["value"], 2.0);
-    h.state_mut().apply_edit(Edit::SetFieldProps {
-        name: "beta".into(),
-        props: Box::new(FieldProps {
-            appearance: Some(pdfcraft_engine::FieldLookPatch { fill: Some(Some([0.3, 0.7, 0.1])), ..Default::default() }),
-            ..Default::default()
-        }),
-    });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(
+        &ctx_h,
+        Edit::SetFieldProps {
+            name: "beta".into(),
+            props: Box::new(FieldProps {
+                appearance: Some(pdfcraft_engine::FieldLookPatch { fill: Some(Some([0.3, 0.7, 0.1])), ..Default::default() }),
+                ..Default::default()
+            }),
+        },
+    );
     let before = bytes(&h);
     h.run_steps(4);
     h.get_by_label("OK").click();

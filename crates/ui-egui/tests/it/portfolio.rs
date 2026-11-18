@@ -4,11 +4,11 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::support::AppHarness as _;
 use craft::host::{AppInfo, Host, ManualJobs, ScriptedFiles};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
-use crate::support::AppHarness as _;
 
 /// A one-page PDF.
 const PAGE: &[u8] = b"%PDF-1.7
@@ -79,7 +79,8 @@ fn harness_with(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> (Harness<'sta
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let (jobs, setup) = parts.lock().unwrap().take().unwrap();
         // PLAN: `AppInfo` fields assumed (pdf-hub-w1, L-71).
-        let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(jobs).files(Arc::new(ScriptedFiles::held())).build();
+        let host =
+            Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(jobs).files(Arc::new(ScriptedFiles::held())).build();
         let mut app = PdfCraftApp::with_host(Arc::new(host));
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         setup(&mut app);
@@ -96,7 +97,7 @@ fn opened(pdf: Vec<u8>, panel_closed: bool) -> Harness<'static, PdfCraftApp> {
             // PLAN: the `panel` option's value for a closed right panel is assumed (pdf-chrome-w13).
             app.set_option(&egui::Context::default(), "panel", "closed").unwrap();
         }
-        app.open_bytes("portfolio.pdf", None, pdf).unwrap();
+        app.open_bytes(&egui::Context::default(), "portfolio.pdf", None, pdf).unwrap();
     })
     .0
 }
@@ -192,8 +193,8 @@ fn a_file_opened_after_the_portfolio_keeps_the_front() {
     let pdf = portfolio("/Collection << /D (form.pdf) >>", &[("form.pdf", PAGE)]);
     let (mut h, _jobs) = harness_with(move |app| {
         app.set_option(&egui::Context::default(), "panel", "closed").unwrap();
-        app.open_bytes("portfolio.pdf", None, pdf).unwrap();
-        app.open_bytes("other.pdf", None, PAGE.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "portfolio.pdf", None, pdf).unwrap();
+        app.open_bytes(&egui::Context::default(), "other.pdf", None, PAGE.to_vec()).unwrap();
     });
     assert_eq!(tabs(&h), (vec!["portfolio.pdf".into(), "other.pdf".into()], Some("other.pdf".into())));
     assert!(!panel_shown(&h, "Attachments"));
@@ -209,8 +210,8 @@ fn a_password_asked_for_a_file_opened_with_the_portfolio_stays_asked() {
     for answer in [Some("pw"), None] {
         let pdf = portfolio("/Collection << /D (form.pdf) >>", &[("form.pdf", PAGE)]);
         let (mut h, jobs) = harness_with(move |app| {
-            app.open_bytes("portfolio.pdf", None, pdf).unwrap();
-            app.open_bytes("locked.pdf", None, locked()).unwrap();
+            app.open_bytes(&egui::Context::default(), "portfolio.pdf", None, pdf).unwrap();
+            app.open_bytes(&egui::Context::default(), "locked.pdf", None, locked()).unwrap();
         });
         assert!(h.query_all_by_label("Password").next().is_some(), "the prompt for locked.pdf is still up");
         assert_eq!(tabs(&h).0, ["portfolio.pdf"]);
@@ -230,10 +231,11 @@ fn a_password_asked_for_a_file_opened_with_the_portfolio_stays_asked() {
 fn a_deleted_attachment_doesnt_change_which_document_opens() {
     let pdf = portfolio("/Collection << /D (form.pdf) >>", &[("intro.pdf", PAGE), ("form.pdf", PAGE)]);
     let (mut h, _jobs) = harness_with(move |app| {
-        app.open_bytes("portfolio.pdf", None, pdf).unwrap();
-        app.open_bytes("locked.pdf", None, locked()).unwrap();
+        app.open_bytes(&egui::Context::default(), "portfolio.pdf", None, pdf).unwrap();
+        app.open_bytes(&egui::Context::default(), "locked.pdf", None, locked()).unwrap();
     });
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::DeleteAttachment { key: "intro.pdf".into() }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeleteAttachment { key: "intro.pdf".into() }));
     answer_password(&mut h, None);
     h.run_steps(4);
     assert_eq!(tabs(&h), (vec!["portfolio.pdf".into(), "form.pdf".into()], Some("form.pdf".into())));
@@ -244,7 +246,8 @@ fn a_deleted_attachment_doesnt_change_which_document_opens() {
 #[test]
 fn read_mode_gives_back_the_panel_the_file_list_replaced() {
     let mut h = opened(portfolio("/Collection << /View /D >>", &[("form.pdf", PAGE)]), true);
-    h.state_mut().open_bytes("other.pdf", None, PAGE.to_vec()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "other.pdf", None, PAGE.to_vec()).unwrap();
     h.run_steps(2);
     select(&mut h, 0);
     assert!(panel_shown(&h, "Attachments"));
@@ -261,7 +264,8 @@ fn read_mode_gives_back_the_panel_the_file_list_replaced() {
 #[test]
 fn a_panel_picked_in_read_mode_stays_when_the_tab_changes() {
     let mut h = opened(portfolio("/Collection << /View /D >>", &[("form.pdf", PAGE)]), true);
-    h.state_mut().open_bytes("other.pdf", None, PAGE.to_vec()).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "other.pdf", None, PAGE.to_vec()).unwrap();
     h.run_steps(2);
     select(&mut h, 0);
     assert!(h.execute("view.read_mode"));

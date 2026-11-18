@@ -4,15 +4,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::support::AppHarness as _;
 use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles, Wake};
 use craft::platform::autosave::RecoveryStore;
-use egui::accesskit::Role;
 use egui::Key;
+use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_engine::Edit;
 use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
-use crate::support::AppHarness as _;
 
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
@@ -105,12 +105,14 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>, rig: &Rig, what: &str, done: im
 fn crashed_session(dir: &Path, bytes: Vec<u8>, password: Option<&str>, path: Option<&str>) {
     let (app, rig) = new_app(dir);
     let mut h = harness_of(app);
-    h.state_mut().open_bytes("work.pdf", path.map(str::to_string), bytes).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "work.pdf", path.map(str::to_string), bytes).unwrap();
     if let Some(pw) = password {
         h.state_mut().submit_password(Some(pw.to_string()));
     }
     settle(&mut h, &rig, "the document opening", |app| app.views.len() == 1);
-    assert!(h.state_mut().apply_edit(Edit::DeletePages { pages: vec![0] }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, Edit::DeletePages { pages: vec![0] }));
     h.state_mut().autosave_now();
     // Dropped without a clean quit: the recovery entry stays.
 }
@@ -162,19 +164,23 @@ fn saving_or_closing_clears_the_entry_and_nothing_is_written_for_clean_documents
     let dir = folder("save");
     let (app, rig) = new_app(&dir);
     let mut h = harness_of(app);
-    h.state_mut().open_bytes("a.pdf", None, fixture(2)).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "a.pdf", None, fixture(2)).unwrap();
     settle(&mut h, &rig, "the document opening", |app| app.views.len() == 1);
     h.state_mut().autosave_now();
     assert_eq!(files_in(&dir), 0, "no changes, no autosave");
-    h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::RotatePages { pages: vec![0], degrees: 90 });
     h.state_mut().autosave_now();
     assert_eq!(files_in(&dir), 2);
     let out = std::env::temp_dir().join(format!("pdfcraft-recovery-saved-{}.pdf", std::process::id()));
     rig.files.queue(Picked::Paths(vec![out.clone()]));
-    h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::InPlace);
+    let ctx_h = h.ctx.clone();
+    h.state_mut().save_active(&ctx_h, pdfcraft_ui_egui::SaveTarget::InPlace);
     settle(&mut h, &rig, "the save clearing the entry", |_| files_in(&dir) == 0);
     // Edit again, autosave, then close and discard.
-    h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::RotatePages { pages: vec![0], degrees: 90 });
     h.state_mut().autosave_now();
     assert_eq!(files_in(&dir), 2);
     h.state_mut().close_tab(0);
@@ -201,9 +207,11 @@ fn applying_redactions_replaces_the_recovery_snapshot_at_once() {
     let dir = folder("redact");
     let (app, rig) = new_app(&dir);
     let mut h = harness_of(app);
-    h.state_mut().open_bytes("a.pdf", None, fixture(1)).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "a.pdf", None, fixture(1)).unwrap();
     settle(&mut h, &rig, "the document opening", |app| app.views.len() == 1);
-    assert!(h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, Edit::RotatePages { pages: vec![0], degrees: 90 }));
     h.state_mut().autosave_now();
     assert!(snapshot_holds(&dir, b"Confidential"), "the autosave before the redaction holds the page's text");
     // Redact pages: the current page, then apply.
@@ -229,9 +237,11 @@ fn a_failed_autosave_is_written_by_the_next_one() {
     let dir = folder("retry");
     let (app, rig) = new_app(&dir);
     let mut h = harness_of(app);
-    h.state_mut().open_bytes("a.pdf", None, fixture(1)).unwrap();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().open_bytes(&ctx_h, "a.pdf", None, fixture(1)).unwrap();
     settle(&mut h, &rig, "the document opening", |app| app.views.len() == 1);
-    assert!(h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, Edit::RotatePages { pages: vec![0], degrees: 90 }));
     // A file where the folder belongs: the folder can't be made, so nothing can be written.
     std::fs::remove_dir_all(&dir).unwrap();
     std::fs::write(&dir, b"").unwrap();
@@ -246,10 +256,11 @@ fn a_failed_autosave_is_written_by_the_next_one() {
 fn quitting_cleanly_leaves_nothing_behind() {
     let dir = folder("quit");
     let (mut app, rig) = new_app(&dir);
-    app.open_bytes("q.pdf", None, fixture(2)).unwrap();
+    app.open_bytes(&egui::Context::default(), "q.pdf", None, fixture(2)).unwrap();
     let mut h = harness_of(app);
     settle(&mut h, &rig, "the document opening", |app| app.views.len() == 1);
-    h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 });
+    let ctx_h = h.ctx.clone();
+    h.state_mut().apply_edit(&ctx_h, Edit::RotatePages { pages: vec![0], degrees: 90 });
     h.state_mut().autosave_now();
     assert_eq!(files_in(&dir), 2);
     // The window's close → the question → "Don't save" → the app closes and the autosave is removed.
@@ -340,7 +351,7 @@ fn a_cancelled_recovery_password_does_not_attach_to_the_next_unlocked_document()
     assert!(h.state().views.is_empty());
 
     let app = h.state_mut();
-    app.open_bytes("B.pdf", Some("/docs/B.pdf".into()), encrypted(fixture(1), "pw-b")).unwrap();
+    app.open_bytes(&egui::Context::default(), "B.pdf", Some("/docs/B.pdf".into()), encrypted(fixture(1), "pw-b")).unwrap();
     app.submit_password(Some("pw-b".into()));
     settle(&mut h, &rig, "unlocked B", |app| app.views.len() == 1);
     let app = h.state();

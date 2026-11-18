@@ -3,11 +3,11 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::support::AppHarness as _;
 use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
-use crate::support::AppHarness as _;
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -26,7 +26,7 @@ fn export_dialogs_write_images_and_text() {
         // PLAN: assumed `PdfCraftApp::with_host(host: Host) -> PdfCraftApp` (L-71)
         let mut app = PdfCraftApp::with_host(host);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, FIXTURE.to_vec()).unwrap();
         app
     });
     h.run_steps(4);

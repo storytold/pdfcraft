@@ -45,7 +45,8 @@ fn a_second_run_is_refused_while_one_is_going() {
 #[test]
 fn enhancing_scans_refuses_optimizing() {
     let (_jobs, mut h) = held();
-    h.state_mut().start_scan_clean();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().start_scan_clean(&ctx_h);
     h.run_steps(2);
     assert!(h.state().scan_clean_run.is_some(), "the enhancement is going");
     assert!(h.execute("optimize.reduce"));
@@ -60,7 +61,8 @@ fn optimizing_refuses_enhancing_scans() {
     assert!(h.execute("optimize.reduce"));
     h.run_steps(2);
     assert!(h.state().optimize_run.is_some(), "the run is going");
-    h.state_mut().start_scan_clean();
+    let ctx_h = h.ctx.clone();
+    h.state_mut().start_scan_clean(&ctx_h);
     h.run_steps(2);
     assert!(support::shown_notice(&h).is_some());
     assert!(h.state().scan_clean_run.is_none());
