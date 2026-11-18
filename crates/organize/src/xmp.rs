@@ -542,12 +542,21 @@ mod tests {
     fn a_line_break_in_an_attribute_value_is_written_as_a_character_reference() {
         let packet = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"r\"><rdf:Description rdf:about=\"\" \
                       xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\" pdf:Keywords=\"Summer\" pdf:Producer='Old'/></rdf:RDF></x:xmpmeta>";
+        // What an XML reader makes of the attribute; this crate's own reader does not normalise.
+        let parsed = |xmp: &str, name: &str| {
+            let root = craft_xml::parse(xmp.as_bytes()).unwrap();
+            root.find(craft_xml::Local("Description")).and_then(|d| d.attr(name)).map(str::to_owned)
+        };
+        let literal = packet.replace("Summer", "garden\nspring");
+        assert_eq!(parsed(&literal, "pdf:Keywords").as_deref(), Some("garden spring"), "a literal line feed reads as a space");
         let out = set_property(packet, "pdf:Keywords", PDF, Shape::Text, "garden\nspring").unwrap();
         assert!(out.contains("pdf:Keywords=\"garden&#xA;spring\""), "{out}");
+        assert_eq!(parsed(&out, "pdf:Keywords").as_deref(), Some("garden\nspring"));
         assert_eq!(get_property(&out, "pdf:Keywords", Shape::Text).as_deref(), Some("garden\nspring"));
         // A tab and a carriage return are normalised the same way; the other quote style too.
         let out = set_property(packet, "pdf:Producer", PDF, Shape::Text, "a\tb\r\nit's").unwrap();
         assert!(out.contains("pdf:Producer='a&#x9;b&#xD;&#xA;it&apos;s'"), "{out}");
+        assert_eq!(parsed(&out, "pdf:Producer").as_deref(), Some("a\tb\r\nit's"));
         assert_eq!(get_property(&out, "pdf:Producer", Shape::Text).as_deref(), Some("a\tb\r\nit's"));
         // The element form holds a line break as it is.
         let element = "<rdf:RDF xmlns:rdf=\"r\"><rdf:Description rdf:about=\"\"><pdf:Keywords>Summer</pdf:Keywords></rdf:Description></rdf:RDF>";
