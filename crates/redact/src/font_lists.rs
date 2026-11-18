@@ -16,7 +16,7 @@ use pdfcraft_cos::{CosError, Dict, Document, ObjRef, Object, Stream};
 pub(crate) fn prune(doc: &mut Document, before: Option<HashMap<ObjRef, HashSet<u32>>>) -> Result<(), CosError> {
     let Some(before) = before.filter(|b| !b.is_empty()) else { return Ok(()) };
     let Some(after) = crate::type3::shown_codes(doc, None) else { return Ok(()) };
-    let fields = form_fonts(doc);
+    let Some(fields) = form_fonts(doc) else { return Ok(()) };
     for (font, codes) in before {
         let gone: HashSet<u32> = codes.into_iter().filter(|c| !after.get(&font).is_some_and(|a| a.contains(c))).collect();
         if !gone.is_empty() && !fields.contains(&font) {
@@ -26,11 +26,15 @@ pub(crate) fn prune(doc: &mut Document, before: Option<HashMap<ObjRef, HashSet<u
     Ok(())
 }
 
-/// The fonts in `/AcroForm /DR`: form fields write new text with them.
-fn form_fonts(doc: &Document) -> HashSet<ObjRef> {
-    let dict = |d: Option<&Object>| d.and_then(|v| doc.resolve(v).as_dict().cloned()).unwrap_or_default();
-    let catalog = doc.root().and_then(|r| doc.get(r).as_dict().cloned()).unwrap_or_default();
-    dict(dict(dict(catalog.get(b"AcroForm")).get(b"DR")).get(b"Font")).iter().filter_map(|(_, v)| v.as_ref()).collect()
+/// The fonts in `/AcroForm /DR`: form fields write new text with them. `None` when the catalog,
+/// `/AcroForm`, `/DR` or its `/Font` is there but can't be read as a dictionary.
+fn form_fonts(doc: &Document) -> Option<HashSet<ObjRef>> {
+    let mut dict = doc.get(doc.root()?).as_dict()?.clone();
+    for key in [&b"AcroForm"[..], b"DR", b"Font"] {
+        let Some(entry) = dict.get(key) else { return Some(HashSet::new()) };
+        dict = doc.resolve(entry).as_dict()?.clone();
+    }
+    Some(dict.iter().filter_map(|(_, v)| v.as_ref()).collect())
 }
 
 /// A simple font loses `gone` from its `/ToUnicode` map (written as a new object, since another
@@ -42,7 +46,10 @@ fn simple_font(doc: &mut Document, font: ObjRef, gone: &HashSet<u32>) -> Result<
         return Ok(());
     }
     let map = d.get(b"ToUnicode").map(|m| doc.resolve(m)).and_then(|m| match &*m {
-        Object::Stream(s) => doc.with_direct_parms(s).decoded().ok().and_then(|data| pdfcraft_fonts::pdf::to_unicode_without(&data, gone)),
+        // A map built on another (`/UseCMap`) can't be written again without its base: it stays.
+        Object::Stream(s) if !s.dict.contains(b"UseCMap") => {
+            doc.with_direct_parms(s).decoded().ok().and_then(|data| pdfcraft_fonts::pdf::to_unicode_without(&data, gone))
+        }
         _ => None,
     });
     if let Some(map) = map {
