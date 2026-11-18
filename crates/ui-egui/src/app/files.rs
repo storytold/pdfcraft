@@ -1,5 +1,11 @@
 use super::*;
-use crate::file_filter::AddFilterAnyCase as _;
+use craft::docpath::names::safe_file_name;
+#[cfg(not(target_arch = "wasm32"))]
+use craft::host::queue::Priority;
+use craft::host::{FileFilter, PickRequest, Picked};
+#[cfg(not(target_arch = "wasm32"))]
+use craft::platform::watch::FileStamp;
+use craft::ui::patterns::form_dialogs::{PasswordDialog, PasswordPurpose};
 
 /// Whether an open's reply asks for a password: the file is encrypted and none, or a wrong one,
 /// was given.
@@ -12,13 +18,21 @@ fn asks_for_password(kind: &open_worker::ResultKind) -> bool {
     )
 }
 
-/// Whether `a` and `b` name the same file: equal, or equal once made absolute against the
-/// current directory (links are not resolved, as in `last_session`).
-pub(crate) fn same_file(a: &str, b: &str) -> bool {
-    a == b || matches!((std::path::absolute(a), std::path::absolute(b)), (Ok(x), Ok(y)) if x == y)
-}
-
 impl PdfCraftApp {
+    /// Shows `panel` as the right panel, or closes the one showing for `None`.
+    fn set_right(&mut self, panel: Option<RightPanel>) {
+        use crate::side_panels::{PanelId, set_panel_visible};
+        // PLAN: assumed `PanelId::from(RightPanel)` (pdf-chrome-w13)
+        match panel {
+            Some(panel) => set_panel_visible(self, PanelId::from(panel), true),
+            None => {
+                if let Some(open) = self.right() {
+                    set_panel_visible(self, PanelId::from(open), false);
+                }
+            }
+        }
+    }
+
     /// Open a document the way it asks to be opened: navigation panel, layout, magnification,
     /// page and the place on it (Document Properties ▸ Initial View, `/OpenAction`). With Always
     /// use my default zoom and page layout on, the layout and magnification stay at the defaults
@@ -31,13 +45,18 @@ impl PdfCraftApp {
         // (`/NonFullScreenPageMode`, Table 147), there when the prompt is declined or full
         // screen is left.
         let navigation = if v.full_screen { v.non_full_screen } else { v.navigation };
-        if self.active == Some(index) && !self.right_panel_closed {
-            match navigation {
-                N::PageOnly => {}
-                N::Bookmarks => self.right = Some(RightPanel::Bookmarks),
-                N::Pages => self.right = Some(RightPanel::Pages),
-                N::Attachments => self.right = Some(RightPanel::Attachments),
-                N::Layers => self.right = Some(RightPanel::Layers),
+        // PLAN: `right_panel_closed()` is a read-only view assumed from pdf-chrome-w13 (L-136); canvas-w11's
+        // `view.view` setters below land with that set.
+        if self.active == Some(index) && !self.right_panel_closed() {
+            let panel = match navigation {
+                N::PageOnly => None,
+                N::Bookmarks => Some(RightPanel::Bookmarks),
+                N::Pages => Some(RightPanel::Pages),
+                N::Attachments => Some(RightPanel::Attachments),
+                N::Layers => Some(RightPanel::Layers),
+            };
+            if panel.is_some() {
+                self.set_right(panel);
             }
         }
         let view = &mut self.views[index];
@@ -103,46 +122,19 @@ impl PdfCraftApp {
         self.try_open(name, path, std::sync::Arc::new(bytes), None, activate)
     }
 
-    /// Hand `request` to the background open worker (started on first use); the result arrives
-    /// later as a pending open, under the returned token.
+    /// Hand `request` to the open queue; the result arrives later as a pending open, under the
+    /// returned token.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn schedule_open(&mut self, request: OpenRequest) -> Result<u64, String> {
-        self.schedule_open_with_priority(request, false)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn schedule_open_priority(&mut self, request: OpenRequest) -> Result<u64, String> {
-        self.schedule_open_with_priority(request, true)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn schedule_open_with_priority(&mut self, request: OpenRequest, priority: bool) -> Result<u64, String> {
-        if self.open_worker.is_none() {
-            self.open_worker = Some(
-                open_worker::OpenWorker::new(
-                    #[cfg(test)]
-                    self.open_prepare_gate.clone(),
-                )
-                .map_err(|e| format!("couldn't start the document-open worker: {e}"))?,
-            );
-        }
+    pub(crate) fn schedule_open(&mut self, request: OpenRequest) -> u64 {
         let token = self.next_open_token.wrapping_add(1);
-        let worker = self.open_worker.as_ref().ok_or("the document-open worker is unavailable")?;
-        if let Some(ctx) = &self.ctx {
-            worker.set_context(ctx);
-        }
+        self.next_open_token = token;
         // A new document opens with the remembered Highlight fields, which its scripts read; the
         // session keeps the document in front's.
-        let context = self.session.open_context().with_highlight(self.view_defaults.highlight_fields);
-        let receiver = if priority {
-            worker.submit_priority(token, context, request.name.clone(), request.path.clone(), request.password, request.input)?
-        } else {
-            worker.submit(token, context, request.name.clone(), request.path.clone(), request.password, request.input)?
-        };
-        self.next_open_token = token;
+        let context = self.session.open_context().with_highlight(self.highlight_fields); // PLAN: `highlight_fields` on the app (pdf-canvas-w8)
+        let job = open_worker::Job { context, name: request.name.clone(), path: request.path.clone(), password: request.password, input: request.input };
+        self.opens.submit(token, request.priority, move |cancel| open_worker::run(job, cancel));
         self.pending_opens.push(PendingOpen {
             token,
-            receiver,
             name: request.name,
             path: request.path,
             stamp: request.stamp,
@@ -153,31 +145,18 @@ impl PdfCraftApp {
             display_override: None,
             ready: None,
         });
-        Ok(token)
-    }
-
-    /// How many opens may wait for the worker: its bound, less one place while a password prompt
-    /// is open, so the prompt's retry fits even before the worker has taken any of the others.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn open_slots(&self) -> usize {
-        open_worker::MAX_QUEUED_OPENS - usize::from(self.password_prompt.is_some())
-    }
-
-    /// Hand waiting files to the worker, oldest first, while its queue has room. Every queued
-    /// job has a `pending_opens` entry, so fewer entries than [`Self::open_slots`] means room.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn submit_deferred_opens(&mut self) {
-        let mut queue = std::mem::take(&mut self.deferred_opens);
-        while self.deferred_opens.is_empty() && self.pending_opens.len() < self.open_slots() {
-            let Some(next) = queue.pop_front() else { break };
-            self.open_file_request(&next.path, next.after_open, next.then, next.display_override);
-        }
-        // A file put back (the queue filled again) stays ahead of the ones behind it.
-        self.deferred_opens.append(&mut queue);
+        token
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn poll_pending_opens(&mut self) {
+        // The queue delivers in the order jobs finish; each result goes to its entry, so the list
+        // keeps the order the files were asked for.
+        while let Some(finished) = self.opens.try_recv() {
+            if let Some(pending) = self.pending_opens.iter_mut().find(|pending| pending.token == finished.key) {
+                pending.ready = Some(finished.result);
+            }
+        }
         let pending_opens = std::mem::take(&mut self.pending_opens);
         // A retry that is no longer waiting holds nothing back.
         if let Some(token) = self.password_retry
@@ -190,28 +169,15 @@ impl PdfCraftApp {
         while let Some(mut pending) = remaining.next() {
             // A tool, password prompt or file picker belongs to the document just admitted.
             // Keep later replies queued so another open cannot change its recipient.
-            if self.modal_open() || self.pickers.pending() {
+            if self.modal_open() || self.picks_pending() {
                 waiting.push(pending);
                 waiting.extend(remaining);
                 break;
             }
             let retry = self.password_retry == Some(pending.token);
-            let kind = match pending.ready.take() {
-                Some(kind) => kind,
-                None => match pending.receiver.try_recv() {
-                    Ok(result) if result.token == pending.token => result.kind,
-                    Ok(_) | Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        waiting.push(pending);
-                        continue;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        if retry {
-                            self.password_retry = None;
-                        }
-                        self.notify_fmt("Couldn't open {name}: the background worker stopped", &[("name", &pending.name)]);
-                        continue;
-                    }
-                },
+            let Some(kind) = pending.ready.take() else {
+                waiting.push(pending);
+                continue;
             };
             // While a closed prompt's password is being tried, a later file that asks for its own
             // password keeps its reply: its prompt would hide the retry's outcome. Others admit.
@@ -229,7 +195,6 @@ impl PdfCraftApp {
         // earlier waiting replies, without consuming a blocked receiver's result.
         waiting.append(&mut self.pending_opens);
         self.pending_opens = waiting;
-        self.submit_deferred_opens();
         self.settle_launch_layout();
     }
 
@@ -268,8 +233,8 @@ impl PdfCraftApp {
             open_worker::ResultKind::Prepared { bytes, result } => match *result {
                 Ok(prepared) => match self.finish_open(&pending.name, pending.path.clone(), bytes.len(), prepared, pending.activate) {
                     Ok(id) => {
-                        if pending.path.is_some() {
-                            self.watch.known_as(id, pending.stamp);
+                        if let Some(path) = pending.path.as_deref() {
+                            self.watch.known_as(id, std::path::Path::new(path), pending.stamp);
                         }
                         if let Some(destination) = pending.after_open {
                             self.apply_remote_destination(destination);
@@ -297,7 +262,6 @@ impl PdfCraftApp {
                         path: pending.path,
                         bytes,
                         stamp: pending.stamp,
-                        input: String::new(),
                         error: password_error,
                         activate: pending.activate,
                         recovered: pending.recovered,
@@ -324,20 +288,19 @@ impl PdfCraftApp {
         use pdfcraft_render::OpenError;
         // A new document opens with the remembered Highlight fields, which its scripts read; the
         // session keeps the document in front's.
-        let context = self.session.open_context().with_highlight(self.view_defaults.highlight_fields);
+        let context = self.session.open_context().with_highlight(self.highlight_fields);
         let prepared = match context.prepare_open(name, path.clone(), bytes.clone(), password) {
             Ok(prepared) => prepared,
             Err(e @ (OpenError::NeedsPassword | OpenError::WrongPassword)) => {
                 let error = matches!(e, OpenError::WrongPassword).then(|| "Incorrect password. Try again.".to_string());
                 #[cfg(not(target_arch = "wasm32"))]
-                let stamp = path.as_deref().and_then(file_watch::Stamp::at);
+                let stamp = path.as_deref().and_then(|path| FileStamp::at(std::path::Path::new(path)));
                 self.password_prompt = Some(PasswordPrompt {
                     name: name.to_string(),
                     path,
                     bytes,
                     #[cfg(not(target_arch = "wasm32"))]
                     stamp,
-                    input: String::new(),
                     error,
                     activate,
                     recovered: None,
@@ -370,7 +333,7 @@ impl PdfCraftApp {
         if activate {
             self.leave_portfolio();
         }
-        let right_before = self.right;
+        let right_before = self.right();
         // The reading-colours preference is app-wide: a newly opened document starts with it.
         // Idempotent: the engine returns `false` when the document has the setting already.
         self.session.set_reading_colors(id, self.reading_colors);
@@ -388,8 +351,8 @@ impl PdfCraftApp {
                 pdfcraft_render::AttachmentSource::Document { key } => Some(key.clone()),
                 pdfcraft_render::AttachmentSource::Annotation { .. } => None,
             });
-        if activate && self.right.is_none() && !self.right_panel_closed && opening_mode != Mode::Read {
-            self.right = if !doc.info.annotations.is_empty() {
+        let opens_with = if activate && self.right().is_none() && !self.right_panel_closed() && opening_mode != Mode::Read {
+            if !doc.info.annotations.is_empty() {
                 Some(RightPanel::Comments)
             // A full-screen document names its panel for outside full screen, and with
             // `/NonFullScreenPageMode /UseNone` (the default) no outline is visible (Table 147).
@@ -397,9 +360,14 @@ impl PdfCraftApp {
                 Some(RightPanel::Bookmarks)
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
+        let view = DocView::new(id, &doc.info, self.view_defaults, self.highlight_fields); // PLAN: assumed signature (pdf-canvas-w8)
+        if opens_with.is_some() {
+            self.set_right(opens_with);
         }
-        let view = DocView::new(id, &doc.info, self.view_defaults);
         self.views.push(view);
         if activate {
             self.active = Some(self.views.len() - 1);
@@ -410,15 +378,15 @@ impl PdfCraftApp {
         // viewer preferences open at (#1767).
         self.apply_last_view(self.views.len() - 1);
         // After all of them, so full screen shows one fitted page and leaving it comes back to them.
-        if self.full_screen
+        if self.full_screen()
             && let Some(view) = self.views.last_mut()
         {
             view.enter_presentation();
         }
         // Full screen is asked for, never taken: a document can't put the app in full screen on
-        // its own (the prompt is `dialogs::full_screen_prompt`).
+        // its own (the prompt is `ask_full_screen`'s).
         if activate && initial.full_screen {
-            self.pending_full_screen = Some(id);
+            self.ask_full_screen(id);
         }
         if activate {
             // A portfolio's tab shows its files from the start, in place of the panel there was
@@ -431,7 +399,7 @@ impl PdfCraftApp {
             self.portfolio_initial = portfolio_initial.map(|key| (id, key));
         }
         if activate
-            && self.left_open
+            && self.left_open()
             && self.left == LeftPanel::Tool("organize")
             && let Some(view) = self.views.last_mut()
         {
@@ -447,9 +415,12 @@ impl PdfCraftApp {
         } else if activate && self.mode != self.default_mode {
             // Switch workspace like the mode bar, but a left panel the user (or `--left closed`)
             // closed stays closed, and an unchanged mode keeps the tool panel the user chose.
-            let left_open = self.left_open;
+            let (left, left_open) = (self.left, self.left_open());
             self.select_mode(self.default_mode);
-            self.left_open = left_open;
+            if self.left_open() != left_open {
+                // PLAN: assumed `PanelId::from(LeftPanel)` (pdf-chrome-w13)
+                crate::side_panels::set_panel_visible(self, crate::side_panels::PanelId::from(left), left_open);
+            }
         }
         if let Some(p) = path {
             #[cfg(target_os = "macos")]
@@ -481,9 +452,9 @@ impl PdfCraftApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Attach a file").to_string());
+            // PLAN: `pick_first(request, target, continuation)` assumed from pdf-shell-w14; the continuation gets the path.
             let target = self.active_ids().map(|(_, id)| id);
-            self.ask_one(pickers::Ask::File(dialog), target, |app, path| app.attach_file(&path));
+            self.pick_first(PickRequest::open("attachment").title(tl!("Attach a file").to_string()), target, |app, path| app.attach_file(&path));
         }
         #[cfg(target_arch = "wasm32")]
         self.notify_tr("Attaching files is not available on the web yet");
@@ -502,7 +473,7 @@ impl PdfCraftApp {
         };
         let mime = pdfcraft_engine::mime_for_name(&name).map(str::to_string);
         if self.apply_edit(pdfcraft_engine::Edit::AddAttachment { name, bytes, description: None, mime }) {
-            self.choose_right_panel(Some(RightPanel::Attachments));
+            self.set_right(Some(RightPanel::Attachments));
         }
     }
 
@@ -519,7 +490,7 @@ impl PdfCraftApp {
             (Err(e), _) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]),
             (Ok(bytes), true) if looks_like_pdf(&bytes) => {
                 // The tab name later names files written from the tab (Split, Extract pages).
-                let name = crate::files::attachment_file_name(&att.name);
+                let name = safe_file_name(&att.name, "attachment");
                 // Already open: the tab opened from this attachment of this document (its bytes
                 // may have grown since, as a form laid out on open appends its layout).
                 let origin = (doc, att.name.clone());
@@ -542,10 +513,10 @@ impl PdfCraftApp {
             }
             (Ok(bytes), _) => {
                 #[cfg(not(target_arch = "wasm32"))]
-                self.ask_one(
-                    pickers::Ask::Save(rfd::AsyncFileDialog::new().set_file_name(crate::files::attachment_file_name(&att.name))),
+                self.pick_first(
+                    PickRequest::save("attachment").file_name(safe_file_name(&att.name, "attachment")),
                     None,
-                    move |app, path| match crate::editing::write_atomically(&path.to_string_lossy(), &bytes) {
+                    move |app, path| match craft::atomic::atomic_write(&path, &bytes) {
                         Ok(()) => {
                             // Windows: the file keeps the document's Mark-of-the-Web (#3990). Best
                             // effort: a volume without alternate data streams can't carry it.
@@ -573,10 +544,11 @@ impl PdfCraftApp {
         // waits for its answer, and opening it then would close the prompt. A file still
         // opening in the background (in the open worker, or a browser read of a drop or a
         // picked file) comes to the front when it arrives, so it is waited for too.
+        // On the web a drop or pick arrives as bytes and opens at once, so nothing is in flight.
         #[cfg(not(target_arch = "wasm32"))]
-        let busy = self.modal_open() || self.pickers.pending() || self.pending_opens.iter().any(|p| p.activate);
+        let busy = self.modal_open() || self.picks_pending() || self.pending_opens.iter().any(|p| p.activate);
         #[cfg(target_arch = "wasm32")]
-        let busy = self.modal_open() || self.web_reads.load(std::sync::atomic::Ordering::Relaxed) > 0;
+        let busy = self.modal_open();
         if !busy
             && let Some((doc, key)) = self.portfolio_initial.take()
             && self.active_ids().is_some_and(|(_, id)| id == doc)
@@ -594,10 +566,10 @@ impl PdfCraftApp {
         self.leave_portfolio();
         if let Some(id) = active
             && self.mode != Mode::Read
-            && self.right != Some(RightPanel::Attachments)
+            && self.right() != Some(RightPanel::Attachments)
             && self.lists_files(id)
         {
-            self.show_portfolio_files(id, self.right);
+            self.show_portfolio_files(id, self.right());
         }
         self.portfolio_seen = active;
     }
@@ -613,7 +585,7 @@ impl PdfCraftApp {
     fn show_portfolio_files(&mut self, id: DocId, before: Option<RightPanel>) {
         self.portfolio_seen = Some(id);
         self.portfolio_panel = Some(before);
-        self.right = Some(RightPanel::Attachments);
+        self.set_right(Some(RightPanel::Attachments));
     }
 
     /// Where in `doc`'s attachments now the file its name tree keys `key` is: an attachment
@@ -636,7 +608,7 @@ impl PdfCraftApp {
         if pdfcraft_engine::source_kind(&att.name, &bytes) != Some(pdfcraft_engine::SourceKind::Pdf) {
             return;
         }
-        if let Err(e) = self.open_bytes(&crate::files::attachment_file_name(&att.name), None, bytes) {
+        if let Err(e) = self.open_bytes(&safe_file_name(&att.name, "attachment"), None, bytes) {
             self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
         }
     }
@@ -652,8 +624,8 @@ impl PdfCraftApp {
             if self.right_before_read == Some(RightPanel::Attachments) {
                 self.right_before_read = before;
             }
-        } else if self.right == Some(RightPanel::Attachments) {
-            self.right = before;
+        } else if self.right() == Some(RightPanel::Attachments) {
+            self.set_right(before);
         }
     }
 
@@ -666,10 +638,33 @@ impl PdfCraftApp {
         }
     }
 
+    /// Shows the password dialog for the open prompt, else the permissions prompt, and answers the
+    /// prompt on the pass the dialog closes. Called by the window body every pass while either is
+    /// set.
+    pub(crate) fn password_pass(&mut self, ui: &mut egui::Ui) {
+        let (purpose, error, unlock) = if let Some(prompt) = &self.password_prompt {
+            (PasswordPurpose::open(prompt.name.clone()), prompt.error.clone(), false)
+        } else if let Some(prompt) = &self.unlock_prompt {
+            (PasswordPurpose::permissions(prompt.name.clone()), prompt.error.clone(), true)
+        } else {
+            return;
+        };
+        let output = PasswordDialog::new(purpose).error(error.map(craft::ui::runtime::env::Label::from)).show(ui);
+        let password = match (output.answer, output.closed) {
+            (Some(answer), _) => Some(answer.secret.expose().to_string()),
+            (None, Some(_)) => None,
+            (None, None) => return,
+        };
+        if unlock {
+            self.submit_unlock(password);
+        } else {
+            self.submit_password(password);
+        }
+    }
+
     /// Answer the password prompt (`None` cancels).
     pub fn submit_password(&mut self, password: Option<String>) {
         let Some(mut p) = self.password_prompt.take() else { return };
-        zeroize::Zeroize::zeroize(&mut p.input);
         let Some(pw) = password.map(zeroize::Zeroizing::new) else {
             // A cancelled recovery goes back on offer; its snapshot stays in the store and must
             // not attach itself to whatever document is unlocked next (#813).
@@ -681,8 +676,8 @@ impl PdfCraftApp {
             return;
         };
         #[cfg(not(target_arch = "wasm32"))]
-        if self.ctx.is_some() && !self.run_inline {
-            let result = self.schedule_open_priority(OpenRequest {
+        {
+            let token = self.schedule_open(OpenRequest {
                 name: p.name.clone(),
                 path: p.path.clone(),
                 stamp: p.stamp,
@@ -692,24 +687,21 @@ impl PdfCraftApp {
                 after_open: p.after_open.clone(),
                 recovered: p.recovered.clone(),
                 then: p.then,
+                priority: Priority::VISIBLE,
             });
-            if let Ok(token) = &result
-                && let Some(pending) = self.pending_opens.iter_mut().find(|pending| pending.token == *token)
-            {
+            if let Some(pending) = self.pending_opens.iter_mut().find(|pending| pending.token == token) {
                 pending.display_override = p.display_override;
-                // Replies behind it that ask for a password wait for its outcome
-                // (`poll_pending_opens`).
-                self.password_retry = Some(*token);
             }
-            if let Err(error) = result {
-                let mut prompt = p;
-                prompt.error = Some(error);
-                self.password_prompt = Some(prompt);
-            }
-            return;
+            // Replies behind it that ask for a password wait for its outcome (`poll_pending_opens`).
+            self.password_retry = Some(token);
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        let (path_for_watch, stamp_for_watch) = (p.path.clone(), p.stamp);
+        #[cfg(target_arch = "wasm32")]
+        self.retry_inline(p, pw);
+    }
+
+    /// The web has no queue: the retry opens the held bytes at once.
+    #[cfg(target_arch = "wasm32")]
+    fn retry_inline(&mut self, mut p: PasswordPrompt, pw: zeroize::Zeroizing<String>) {
         let after_open = p.after_open.clone();
         let opened = self.try_open(&p.name, p.path.take(), p.bytes.clone(), Some(&pw), p.activate);
         drop(pw);
@@ -717,16 +709,6 @@ impl PdfCraftApp {
             Err(e) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &p.name), ("e", &e.to_string())]),
             // A recovered encrypted document is open once its prompt is gone.
             Ok(()) if self.password_prompt.is_none() => {
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(path) = path_for_watch.as_deref()
-                    && let Some(id) = self
-                        .views
-                        .iter()
-                        .rev()
-                        .find_map(|view| self.session.get(view.id).and_then(|doc| (doc.path.as_deref() == Some(path)).then_some(view.id)))
-                {
-                    self.watch.known_as(id, stamp_for_watch);
-                }
                 if let Some(destination) = after_open {
                     self.apply_remote_destination(destination);
                 }
@@ -734,10 +716,6 @@ impl PdfCraftApp {
                     && let Some(view) = self.views.last_mut()
                 {
                     view.set_display(layout, continuous);
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        self.launch_display_target = Some(view.id);
-                    }
                 }
                 if let Some(meta) = &p.recovered {
                     self.finish_recovery(meta);
@@ -757,8 +735,6 @@ impl PdfCraftApp {
                 }
             }
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        self.settle_launch_layout();
     }
 
     /// Ask for the active document's permissions password, then run `then` (if any).
@@ -770,7 +746,6 @@ impl PdfCraftApp {
     /// Answer the permissions password prompt (`None` cancels).
     pub fn submit_unlock(&mut self, password: Option<String>) {
         let Some(mut p) = self.unlock_prompt.take() else { return };
-        zeroize::Zeroize::zeroize(&mut p.input);
         let Some(mut pw) = password else { return };
         let unlocked = self.session.unlock(p.doc, &pw);
         zeroize::Zeroize::zeroize(&mut pw);
@@ -793,7 +768,12 @@ impl PdfCraftApp {
     /// The tab already showing the file at `path` (the same path, or one that names the same
     /// file once made absolute).
     pub(crate) fn tab_showing(&self, path: &str) -> Option<usize> {
-        self.views.iter().position(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()).is_some_and(|p| same_file(p, path)))
+        self.views.iter().position(|v| {
+            self.session
+                .get(v.id)
+                .and_then(|d| d.path.as_deref())
+                .is_some_and(|p| craft::platform::open::same_file(std::path::Path::new(p), std::path::Path::new(path), None))
+        })
     }
 
     /// Open a file from a recent list: focus the tab already showing it, else open it (File ▸
@@ -861,7 +841,11 @@ impl PdfCraftApp {
             }
             return OpenOutcome::Focused;
         }
-        if let Some(pending) = self.pending_opens.iter_mut().find(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
+        if let Some(pending) = self
+            .pending_opens
+            .iter_mut()
+            .find(|p| p.path.as_deref().is_some_and(|p| craft::platform::open::same_file(std::path::Path::new(p), std::path::Path::new(path), None)))
+        {
             if display_override.is_some() {
                 pending.display_override = display_override;
             }
@@ -874,7 +858,11 @@ impl PdfCraftApp {
         // The same file named again while its password is being asked for joins that prompt
         // instead of queuing a second one; a display override, a place to open at or a tool it
         // brings is kept.
-        if let Some(prompt) = self.password_prompt.as_mut().filter(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
+        if let Some(prompt) = self
+            .password_prompt
+            .as_mut()
+            .filter(|p| p.path.as_deref().is_some_and(|p| craft::platform::open::same_file(std::path::Path::new(p), std::path::Path::new(path), None)))
+        {
             if display_override.is_some() {
                 prompt.display_override = display_override;
             }
@@ -886,102 +874,26 @@ impl PdfCraftApp {
             }
             return OpenOutcome::Pending;
         }
-        if let Some(deferred) = self.deferred_opens.iter_mut().find(|d| same_file(&d.path, path)) {
-            if display_override.is_some() {
-                deferred.display_override = display_override;
-            }
-            if after_open.is_some() {
-                deferred.after_open = after_open;
-            }
-            if then.is_some() {
-                deferred.then = then;
-            }
-            return OpenOutcome::Pending;
-        }
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
         // Taken before reading: a build that rewrites the file meanwhile still counts as a change.
-        let stamp = file_watch::Stamp::at(path);
-        // Before the first frame there is no interaction to keep responsive; this also preserves
-        // deterministic inline startup and test flows. Once live, reading and preparation use
-        // the bounded worker and commit on the UI thread.
-        // Keep later files behind an open password prompt: it belongs to an earlier file, and an
-        // inline open would clear it. Keep flagged launch files behind any dialog or picker too.
-        let held = self.password_prompt.is_some() || (display_override.is_some() && (self.modal_open() || self.pickers.pending()));
-        if (self.ctx.is_none() || self.run_inline) && !held {
-            match std::fs::read(path) {
-                Ok(bytes) => {
-                    let before = self.views.len();
-                    let previous_prompt = self.password_prompt.as_ref().map(|p| p.bytes.clone());
-                    if let Err(error) = self.open_bytes(&name, Some(path.to_string()), bytes) {
-                        self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
-                        return OpenOutcome::Failed;
-                    }
-                    if let Some(prompt) = self.password_prompt.as_mut().filter(|p| {
-                        p.path.as_deref() == Some(path) && previous_prompt.as_ref().is_none_or(|bytes| !std::sync::Arc::ptr_eq(bytes, &p.bytes))
-                    }) {
-                        // Encrypted: the destination, the layout and the tool wait for the password.
-                        prompt.then = then;
-                        prompt.display_override = display_override;
-                        prompt.after_open = after_open;
-                    } else if self.views.len() > before {
-                        if let Some((layout, continuous)) = display_override
-                            && let Some(view) = self.views.last_mut()
-                        {
-                            view.set_display(layout, continuous);
-                            self.launch_display_target = Some(view.id);
-                        }
-                        if let Some(doc) = self.views.last().map(|view| view.id) {
-                            self.watch.known_as(doc, stamp);
-                        }
-                        if let Some(destination) = after_open {
-                            self.apply_remote_destination(destination);
-                        }
-                        if let Some(command) = then {
-                            self.execute(command);
-                        }
-                    } else {
-                        // Open reported success but added no tab and raised no prompt; the
-                        // control channel answers this as a failure to open.
-                        return OpenOutcome::Failed;
-                    }
-                    OpenOutcome::Opened
-                }
-                Err(error) => {
-                    self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &error.to_string())]);
-                    OpenOutcome::Failed
-                }
-            }
-        } else {
-            self.startup_superseded = true;
-            // The worker queue is bounded. A long file list (a launch behind a password prompt,
-            // or many files at once) waits here, in order, and is submitted as opens finish.
-            if self.pending_opens.len() >= self.open_slots() || !self.deferred_opens.is_empty() {
-                self.deferred_opens.push_back(DeferredOpen { path: path.to_string(), after_open, then, display_override });
-                return OpenOutcome::Pending;
-            }
-            match self.schedule_open(OpenRequest {
-                name: name.clone(),
-                path: Some(path.to_string()),
-                stamp,
-                input: open_worker::Input::Path(std::path::PathBuf::from(path)),
-                password: None,
-                activate: true,
-                after_open,
-                recovered: None,
-                then,
-            }) {
-                Ok(token) => {
-                    if let Some(pending) = self.pending_opens.iter_mut().find(|pending| pending.token == token) {
-                        pending.display_override = display_override;
-                    }
-                    OpenOutcome::Pending
-                }
-                Err(error) => {
-                    self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
-                    OpenOutcome::Failed
-                }
-            }
+        let stamp = FileStamp::at(std::path::Path::new(path));
+        self.startup_superseded = true;
+        let token = self.schedule_open(OpenRequest {
+            name,
+            path: Some(path.to_string()),
+            stamp,
+            input: open_worker::Input::Path(std::path::PathBuf::from(path)),
+            password: None,
+            activate: true,
+            after_open,
+            recovered: None,
+            then,
+            priority: Priority::NEAR,
+        });
+        if let Some(pending) = self.pending_opens.iter_mut().find(|pending| pending.token == token) {
+            pending.display_override = display_override;
         }
+        OpenOutcome::Pending
     }
 
     /// Apply an explicit launch layout after the command-line display overrides settle.
@@ -996,7 +908,6 @@ impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn settle_launch_layout(&mut self) {
         if self.pending_opens.iter().any(|open| open.display_override.is_some())
-            || self.deferred_opens.iter().any(|open| open.display_override.is_some())
             || self.password_prompt.as_ref().is_some_and(|prompt| prompt.display_override.is_some())
         {
             return;
@@ -1021,44 +932,68 @@ impl PdfCraftApp {
     /// and (on the desktop, through LibreOffice) Office documents open as new, unsaved PDFs.
     /// No "All files" in the browser or on macOS, whose panel merges every type into one list
     /// rather than offering a choice.
-    pub(crate) fn open_filters() -> Vec<(String, Vec<&'static str>)> {
-        let mut filters = vec![("PDF".to_string(), vec!["pdf"]), (tl!("Images").to_string(), pdfcraft_engine::IMAGE_EXTENSIONS.to_vec())];
+    pub(crate) fn open_filters() -> Vec<FileFilter> {
+        let mut filters = vec![FileFilter::new("PDF", &["pdf"]), FileFilter::new(tl!("Images").to_string(), &pdfcraft_engine::IMAGE_EXTENSIONS)];
         #[cfg(not(target_arch = "wasm32"))]
-        filters.push((tl!("Office documents").to_string(), pdfcraft_engine::OFFICE_EXTENSIONS.to_vec()));
-        filters.push((tl!("Text").to_string(), pdfcraft_engine::TEXT_EXTENSIONS.to_vec()));
+        filters.push(FileFilter::new(tl!("Office documents").to_string(), pdfcraft_engine::OFFICE_EXTENSIONS));
+        filters.push(FileFilter::new(tl!("Text").to_string(), &pdfcraft_engine::TEXT_EXTENSIONS));
         #[cfg(not(any(target_arch = "wasm32", target_os = "macos")))]
-        filters.push((tl!("All files").to_string(), vec!["*"]));
+        filters.push(FileFilter::new(tl!("All files").to_string(), &["*"]));
         filters
     }
 
-    /// The File ▸ Open picker ([`Self::open_filters`]), each type matched in any letter case.
-    pub(super) fn open_picker() -> rfd::AsyncFileDialog {
-        Self::open_filters().into_iter().fold(rfd::AsyncFileDialog::new(), |dialog, (name, extensions)| dialog.add_filter_any_case(name, &extensions))
+    /// The File ▸ Open request: [`Self::open_filters`], one `filter` per type.
+    fn open_request() -> PickRequest {
+        Self::open_filters().iter().fold(PickRequest::open_many("document"), |request, filter| {
+            let extensions: Vec<&str> = filter.extensions.iter().map(String::as_str).collect();
+            request.filter(&filter.name, &extensions)
+        })
     }
 
     pub fn open_dialog(&mut self) {
         self.startup_superseded = true;
-        #[cfg(not(target_arch = "wasm32"))]
-        self.pick(pickers::PickFor::Open, Self::open_picker(), true);
-        // Browsers pick files asynchronously; the bytes arrive through `inbox`.
-        #[cfg(target_arch = "wasm32")]
-        {
-            let inbox = self.inbox.clone();
-            let ctx = self.ctx.clone();
-            let read = super::input::WebRead::start(&self.web_reads);
-            wasm_bindgen_futures::spawn_local(async move {
-                let _read = read;
-                if let Some(h) = Self::open_picker().pick_file().await {
-                    let bytes = h.read().await;
-                    if let Ok(mut q) = inbox.lock() {
-                        q.push((h.file_name(), bytes));
-                    }
-                    // The read may finish while the app is idle: wake it to open the file.
-                    if let Some(ctx) = ctx {
-                        ctx.request_repaint();
+        // PLAN: `pick_file(request, target, continuation)` assumed from pdf-shell-w14; the continuation gets the `Picked`.
+        // The web answers `Picked::Contents`, the desktop `Picked::Paths`.
+        self.pick_file(Self::open_request(), None, |app, picked| match picked {
+            #[cfg(not(target_arch = "wasm32"))]
+            Picked::Paths(paths) => {
+                for path in paths {
+                    app.open_path(&path.to_string_lossy());
+                }
+            }
+            Picked::Contents(files) => {
+                for (name, bytes) in files {
+                    if let Err(error) = app.open_bytes(&name, None, bytes) {
+                        app.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
                     }
                 }
-            });
+            }
+            _ => {}
+        });
+    }
+
+    /// Opens what a picker answered and runs the command `then` on each opened document, as a tool
+    /// chosen from Home does once its file is ready.
+    pub fn open_picked_then(&mut self, picked: Picked, then: &'static str) {
+        self.startup_superseded = true;
+        match picked {
+            #[cfg(not(target_arch = "wasm32"))]
+            Picked::Paths(paths) => {
+                for path in paths {
+                    self.open_path_then(&path.to_string_lossy(), Some(then));
+                }
+            }
+            Picked::Contents(files) => {
+                for (name, bytes) in files {
+                    match self.open_bytes(&name, None, bytes) {
+                        Ok(()) => {
+                            self.execute(then);
+                        }
+                        Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]),
+                    }
+                }
+            }
+            _ => {}
         }
     }
 

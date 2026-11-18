@@ -47,7 +47,6 @@ fn load_ocr_verify(app: &mut PdfCraftApp) -> Result<(), String> {
     app.ocr_draft.engine = settings.engine;
     app.ocr_draft.strategy = settings.strategy;
     app.open_bytes("scan.pdf", None, scan).map_err(|e| e.to_string())?;
-    app.run_inline = true;
     if !app.execute("ocr.correct") {
         return Err("ocr.correct did not run".into());
     }
