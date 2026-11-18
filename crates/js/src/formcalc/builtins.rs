@@ -19,6 +19,7 @@ impl Interp<'_> {
         Ok(v)
     }
 
+    /// The FormCalc built-in function `name` (in any case) on `args`.
     fn builtin_inner(&mut self, name: &str, args: &[Expr]) -> R<Val> {
         let lower = name.to_ascii_lowercase();
         let n = |v: f64| Ok(Val::Num(v));
@@ -54,7 +55,10 @@ impl Interp<'_> {
                 // Non-null values and objects: an empty field doesn't count, a subform does.
                 let vals = self.arg_values_keeping(args, true)?;
                 let counts = |v: &Val| match v {
-                    Val::Node(i) => self.node(*i).is_some_and(|n| !matches!(n.kind, XfaKind::Field | XfaKind::ExclGroup) || !n.value.is_empty()),
+                    Val::Node(i) => {
+                        self.h.read(*i);
+                        self.node(*i).is_some_and(|n| !matches!(n.kind, XfaKind::Field | XfaKind::ExclGroup) || !n.value.is_empty())
+                    }
                     other => !self.is_null(other),
                 };
                 Val::Num(vals.iter().filter(|v| counts(v)).count() as f64)

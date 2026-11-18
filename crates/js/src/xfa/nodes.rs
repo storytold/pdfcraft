@@ -194,8 +194,8 @@ pub(crate) fn descendants_named(h: &XHost, from: usize, name: &str, depth: usize
     out
 }
 
-/// A property read on a form node's Proxy: its value (and `formattedValue` as its picture shows
-/// it), attributes, relatives, methods, instance managers and children by name.
+/// A property read on a form node's Proxy: its value (noted as read, and `formattedValue` as its
+/// picture shows it), attributes, relatives, methods, instance managers and children by name.
 fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let idx = node_index(&arg(args, 0), ctx)?;
     let key = arg(args, 1);
@@ -217,15 +217,26 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
     }
     Ok(match key.as_str() {
         IDX => JsValue::from(idx as f64),
-        "rawValue" | "value" => host(ctx)?.borrow().nodes.get(idx).map_or(JsValue::null(), value_js),
-        "formattedValue" => s(&host(ctx)?.borrow().nodes.get(idx).and_then(|n| n.formatted.as_deref().map(str::to_string)).unwrap_or(value)),
+        "rawValue" | "value" => {
+            let h = host(ctx)?.borrow();
+            h.read(idx);
+            h.nodes.get(idx).map_or(JsValue::null(), value_js)
+        }
+        "formattedValue" => {
+            let h = host(ctx)?.borrow();
+            h.read(idx);
+            s(&h.nodes.get(idx).and_then(|n| n.formatted.as_deref().map(str::to_string)).unwrap_or(value))
+        }
         "name" => s(&name),
         "somExpression" => s(&som),
         "className" => s(kind.class_name()),
         "index" | "instanceIndex" => JsValue::from(index as f64),
         "presence" => s(&presence),
         "access" => s(&access),
-        "isNull" => JsValue::from(value.is_empty()),
+        "isNull" => {
+            host(ctx)?.borrow().read(idx);
+            JsValue::from(value.is_empty())
+        }
         "mandatory" => s(&props::node_mandatory(&host(ctx)?.borrow(), idx)),
         "fillColor" | "fontColor" | "borderColor" => {
             let path = props::shorthand_color(&key).unwrap_or_default();
@@ -294,6 +305,8 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
     })
 }
 
+/// A property set on a form node's Proxy: a value, presence or access becomes an effect;
+/// anything else is taken and ignored.
 fn node_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let idx = node_index(&arg(args, 0), ctx)?;
     let key = arg(args, 1);
@@ -336,9 +349,12 @@ fn node_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
     Ok(JsValue::from(true))
 }
 
+/// A form node as text, for `toString` and `valueOf`: its value, noted as read.
 fn node_to_string(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let idx = node_index(this, ctx)?;
-    Ok(s(&host(ctx)?.borrow().nodes.get(idx).map(|n| n.value.clone()).unwrap_or_default()))
+    let h = host(ctx)?.borrow();
+    h.read(idx);
+    Ok(s(&h.nodes.get(idx).map(|n| n.value.clone()).unwrap_or_default()))
 }
 
 /// Node members not modelled yet: a read gives an object that takes any read or write
@@ -372,6 +388,7 @@ fn node_method(ctx: &mut Context, idx: usize, f: fn(&JsValue, &[JsValue], &JsObj
     function(ctx, NativeFunction::from_copy_closure_with_captures(f, r)).into()
 }
 
+/// A method that does nothing here, for parts of the object model PdfCraft doesn't keep.
 pub(super) fn noop(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::undefined())
 }

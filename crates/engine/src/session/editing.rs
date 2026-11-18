@@ -157,6 +157,8 @@ impl Session {
         let mut cx = EditCtx::new(now, doc.generation ^ (id.0 << 48));
         if !js_off {
             cx.xfa = doc.xfa_template.clone();
+            // Shared until the edit runs a script, which copies it; kept only if the edit succeeds.
+            cx.xfa_deps = doc.xfa_calc_deps.clone();
         }
         cx.xfa_time_scale = xfa_time_scale;
         cx.pages = doc.info.pages.len();
@@ -245,7 +247,7 @@ impl Session {
             _ => edit.label(),
         };
         // An XFA form's scripts answer the change: exit and validate scripts of the field, then
-        // every calculation (and a reset recalculates). They read the data, so it is brought up
+        // the calculations that read what changed (a reset recalculates them all). They read the data, so it is brought up
         // to date first. The fields whose exit scripts ran are noted once the edit is kept.
         let mut exited: Vec<String> = Vec::new();
         if let Some(tpl) = cx.xfa.clone() {
@@ -271,17 +273,19 @@ impl Session {
             collect(&edit, &mut changed, &mut reset);
             if !changed.is_empty() || reset {
                 let highlight = cx.highlight();
+                let deps = Arc::make_mut(&mut cx.xfa_deps);
                 let mut run = xfa::XfaRun {
                     page_count: cx.pages,
                     out: &mut cx.xfa_out,
                     datasets: cx.xfa_datasets,
                     ran_away: false,
+                    deps,
                     highlight,
                     time_scale: cx.xfa_time_scale,
                 };
-                // Every changed field's scripts, then the calculations once (after a reset,
-                // only those).
-                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run, &mut exited))
+                // Every changed field's scripts, then the calculations that read what changed
+                // (every one after a reset).
+                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, reset, &mut run, &mut exited))
                     .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;
@@ -367,6 +371,7 @@ impl Session {
         }
         doc.generation += 1;
         doc.edit_notices = notices;
+        doc.xfa_calc_deps = cx.xfa_deps.clone();
         // Only this edit's exits are skipped on the next focus loss: one an earlier change ran is
         // no reason to skip a later one.
         doc.xfa_exited.clear();
@@ -396,6 +401,8 @@ impl Session {
         let current_keys = std::mem::replace(&mut editor.keys, keys);
         editor.redo.push((label.clone(), current, current_keys, scope));
         Self::adopt_keys(doc);
+        // The form is back in an earlier state: what its calculations read is learned again.
+        doc.xfa_calc_deps = Arc::default();
         let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             if let Some(ed) = doc.editor.as_mut()
@@ -433,6 +440,7 @@ impl Session {
         let current_keys = std::mem::replace(&mut editor.keys, keys);
         editor.undo.push((label.clone(), current, current_keys, scope));
         Self::adopt_keys(doc);
+        doc.xfa_calc_deps = Arc::default();
         let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             if let Some(ed) = doc.editor.as_mut()
