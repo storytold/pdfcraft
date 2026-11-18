@@ -238,7 +238,7 @@ fn a_badge_tip_stays_hidden_while_a_dialog_covers_the_page() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
     let id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
     let mut h = harness(signed(&id), "en");
-    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::About);
+    h.state_mut().set_option("dialog", "about").unwrap();
     h.run_steps(2);
     let label = "Signature validity is unknown";
     assert_eq!(hovered(&mut h, label), h.query_all_by_label(label).count(), "no badge tip over a dialog");
