@@ -1,8 +1,8 @@
-//! The Crop tool (Acrobat: Edit ▸ Crop pages): drag a rectangle on a page to crop it to that
-//! rectangle; double-click a page to open Set Page Boxes for it.
+//! The Crop tool (Acrobat: Edit ▸ Crop pages): drag a rectangle on a page and Set Page Boxes
+//! opens with its margins taken from that rectangle, to adjust before anything is cropped
+//! (#5695); double-click a page to open Set Page Boxes for it as it is.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use pdfcraft_engine::{BoxSpec, Edit, PageBox};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
@@ -18,7 +18,8 @@ fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
     [u[0] as f64, u[1] as f64]
 }
 
-/// Crop gestures on one page. Returns `Some(true)` to open Set Page Boxes for this page.
+/// Crop gestures on one page. Returns `true` to open Set Page Boxes for this page: after a
+/// double-click, or after a rectangle is drawn, which it leaves in [`DocView::crop_marquee`].
 pub(crate) struct CropPageInput<'a> {
     pub(crate) resp: &'a egui::Response,
     pub(crate) xf: &'a PageXform,
@@ -70,7 +71,9 @@ pub(crate) fn page_input(ui: &egui::Ui, input: CropPageInput<'_>) -> bool {
             if r.width() >= 4.0 && r.height() >= 4.0 {
                 let (a, b) = (to_user(xf, info, page, r.left_top()), to_user(xf, info, page, r.right_bottom()));
                 let rect = [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])];
-                view.pending_edit = Some(Edit::SetPageBox { pages: vec![page], which: PageBox::Crop, spec: BoxSpec::Rect(rect) });
+                // Nothing is cropped yet: Set Page Boxes opens on these margins (#5695).
+                view.crop_marquee = Some(rect);
+                return true;
             }
         }
     }

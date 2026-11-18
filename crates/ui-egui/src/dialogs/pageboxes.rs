@@ -47,6 +47,24 @@ impl BoxesDraft {
         }
     }
 
+    /// Seeds the draft from a rectangle drawn on `page` with the Crop tool: the crop box of that
+    /// page alone, its margins measured in from `media` (both in user space) and kept in physical
+    /// points by the page's `user_unit`, as [`margins_of`] does, so they can be fine-tuned before
+    /// anything is cropped (#5695). An edge of the rectangle past the media box gives a zero margin,
+    /// as the crop box can't reach past it.
+    pub fn seed_crop_rect(&mut self, page: usize, media: [f64; 4], rect: [f64; 4], user_unit: f64, unit: Unit) {
+        let user_unit = if user_unit.is_finite() && user_unit > 0.0 { user_unit } else { 1.0 };
+        let m = [media[0].min(media[2]), media[1].min(media[3]), media[0].max(media[2]), media[1].max(media[3])];
+        let r = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+        self.which = PageBox::Crop;
+        self.unit = unit;
+        self.range = Range::Current;
+        self.margins = [r[0] - m[0], r[1] - m[1], m[2] - r[2], m[3] - r[3]]
+            .map(|v| if v.is_finite() { (v.max(0.0) * user_unit * 100.0).round() / 100.0 } else { 0.0 });
+        // Seeded for this page and box, so the dialog keeps these margins instead of the page's.
+        self.seeded = Some((page, PageBox::Crop));
+    }
+
     /// The edit for the draft. `user_units` is each page's `/UserUnit` (points per user-space unit):
     /// the margins are physical, the page box is written in user space, so pages with different
     /// units get their own margins in one undo step.
@@ -300,5 +318,25 @@ mod tests {
         boxes[1] = [18.0, 18.0, 414.0, 342.0];
         assert_eq!(margins_of(&boxes, PageBox::Crop, 2.0), [36.0; 4], "18 user units on a UserUnit 2 page are half an inch");
         assert_eq!(margins_of(&boxes, PageBox::Media, 2.0), [0.0; 4]);
+    }
+
+    #[test]
+    fn a_drawn_crop_rectangle_seeds_margins_for_its_page_alone() {
+        let mut d = BoxesDraft { which: PageBox::Trim, range: Range::All, ..Default::default() };
+        // A rectangle drawn backwards, past the media box's left edge, on an off-origin page.
+        d.seed_crop_rect(3, [10.0, 20.0, 310.0, 420.0], [250.333, 380.0, -5.0, 60.0], 1.0, Unit::Millimetres);
+        assert_eq!(d.which, PageBox::Crop);
+        assert_eq!(d.unit, Unit::Millimetres);
+        assert_eq!(d.range, Range::Current);
+        assert_eq!(d.margins, [0.0, 40.0, 59.67, 40.0]);
+        assert_eq!(d.seeded, Some((3, PageBox::Crop)));
+        assert_eq!(d.edit(3, 5, &[]), Edit::SetPageBox { pages: vec![3], which: PageBox::Crop, spec: BoxSpec::Margins([0.0, 40.0, 59.67, 40.0]) });
+        // A coordinate that is not a number never gives a margin the engine refuses.
+        d.seed_crop_rect(0, [0.0, 0.0, 300.0, 400.0], [f64::NAN, 10.0, 290.0, f64::INFINITY], f64::NAN, Unit::Points);
+        assert!(d.margins.iter().all(|m| m.is_finite() && *m >= 0.0), "{:?}", d.margins);
+        // On a `/UserUnit` 2 page the margins are physical points, and the edit writes the rectangle back.
+        d.seed_crop_rect(1, [0.0, 0.0, 432.0, 360.0], [18.0, 18.0, 414.0, 342.0], 2.0, Unit::Points);
+        assert_eq!(d.margins, [36.0; 4]);
+        assert_eq!(d.edit(1, 2, &[1.0, 2.0]), Edit::SetPageBox { pages: vec![1], which: PageBox::Crop, spec: BoxSpec::Margins([18.0; 4]) });
     }
 }
