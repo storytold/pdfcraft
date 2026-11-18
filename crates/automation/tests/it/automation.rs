@@ -14597,6 +14597,52 @@ fn comments_copy_and_paste_between_documents_through_tools() {
     assert_eq!(ok(&mut a, "comment_list", json!({ "doc": src }))["comments"].as_array().unwrap().len(), 2, "the source is untouched");
 }
 
+/// #7684: a sticky note is NoRotate, so on a turned page it is drawn upright about its upper-left
+/// corner, not where its `/Rect` lies. A note pasted `at` a point is centred there as it is drawn,
+/// on a page turned any quarter (with a crop box off the origin), not one icon away from it.
+#[test]
+fn a_pasted_sticky_note_is_centred_at_the_point_on_a_turned_page() {
+    let page = |turn: u16| format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 270] /CropBox [20 35 260 235] /Rotate {turn} >>");
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R] /Count 4 >>".into(),
+        page(0),
+        page(90),
+        page(180),
+        page(270),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let dir = workdir("paste-turned-note");
+    std::fs::write(dir.join("turned.pdf"), bytes).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "turned.pdf" }))["doc"].as_u64().unwrap();
+    // The note is made and copied on the unturned page 1.
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "note", "at": [20, 20], "contents": "Inspection note" }));
+    let listed = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let pairs: Vec<Value> = listed["comments"].as_array().unwrap().iter().map(|c| json!([c["page"], c["index"]])).collect();
+    let xfdf = ok(&mut a, "comments_copy", json!({ "doc": doc, "comments": pairs }))["xfdf"].as_str().unwrap().to_owned();
+    assert!(xfdf.contains("norotate"), "a sticky note is NoRotate: {xfdf}");
+    for page in 1..=4 {
+        ok(&mut a, "comments_paste", json!({ "doc": doc, "page": page, "xfdf": xfdf, "at": [70, 65] }));
+        let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": page }));
+        let r: Vec<f64> =
+            list["comments"].as_array().unwrap().last().unwrap()["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        let centre = [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0];
+        assert!((centre[0] - 70.0).abs() < 0.01 && (centre[1] - 65.0).abs() < 0.01, "page {page}: drawn at {r:?}, centre {centre:?}");
+    }
+}
+
 /// A bitmap Type 3 font drawn with a flipped font matrix under a flipped text matrix (as TeX's
 /// bitmap fonts are): `text_lines` boxes a line by its glyphs' `d1` boxes (ISO 32000-2 §9.6.4),
 /// as high as the ink, not a 0.09-point sliver.

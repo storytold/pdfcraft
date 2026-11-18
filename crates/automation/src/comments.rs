@@ -856,8 +856,13 @@ impl Automation {
             Some([x, y]) => {
                 let info = self.doc(a)?.info.pages.get(page).cloned().ok_or_else(|| failed(format!("no page {}", page + 1)))?;
                 let [cx, cy] = to_user(&info, x, y);
-                let b =
-                    pdfcraft_engine::comments_bounds(&xfdf).ok_or_else(|| ToolError::InvalidArgs("xfdf: no comment with a rect to place".into()))?;
+                // The box the copies are drawn in on this page: a NoRotate note (a sticky note)
+                // turned upright about its upper-left corner on a turned page, as it shows (#7684).
+                let b = pdfcraft_engine::comment_rects(&xfdf)
+                    .into_iter()
+                    .map(|(r, no_rotate)| if no_rotate { pdfcraft_render::upright_rect(r, info.rotation) } else { r })
+                    .reduce(|a, r| [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])])
+                    .ok_or_else(|| ToolError::InvalidArgs("xfdf: no comment with a rect to place".into()))?;
                 Some([cx - (b[0] + b[2]) / 2.0, cy - (b[1] + b[3]) / 2.0])
             }
             None => None,

@@ -34,7 +34,9 @@ use fdf::{ImportBudget, fdf_body, import_fdf, walk_fdf};
 use fdf::{MAX_FDF_BYTES, MAX_FDF_OBJECTS};
 #[cfg(test)]
 use xfdf::{LOCKED, find_by_name};
-pub use xfdf::{Outline, comment_count, comment_outlines, comments_bounds, export_xfdf, export_xfdf_comments, import_comments, is_xfdf_comments};
+pub use xfdf::{
+    Outline, comment_count, comment_outlines, comment_rects, comments_bounds, export_xfdf, export_xfdf_comments, import_comments, is_xfdf_comments,
+};
 use xfdf::{apply_values, import_xfdf};
 
 #[cfg(test)]

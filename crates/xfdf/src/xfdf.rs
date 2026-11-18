@@ -808,6 +808,26 @@ pub fn comments_bounds(text: &str) -> Option<[f64; 4]> {
     bounds
 }
 
+/// Each comment's rect in an XFDF text (replies left out, as [`comments_bounds`] leaves them out),
+/// with whether it is NoRotate (`norotate` in its `flags`): such a comment is drawn turned upright
+/// about its upper-left corner on a turned page, so a paste centres where it is drawn, not its
+/// rect (#7684).
+pub fn comment_rects(text: &str) -> Vec<([f64; 4], bool)> {
+    let mut out = Vec::new();
+    with_comment_nodes(text, |node| {
+        if node.attr("inreplyto").is_some() {
+            return;
+        }
+        if let [x0, y0, x1, y1] = node.attr("rect").map(csv).unwrap_or_default().as_slice()
+            && [x0, y0, x1, y1].iter().all(|v| v.is_finite())
+        {
+            let no_rotate = node.attr("flags").is_some_and(|f| f.split(',').any(|f| f.trim().eq_ignore_ascii_case("norotate")));
+            out.push(([x0.min(*x1), y0.min(*y1), x0.max(*x1), y0.max(*y1)], no_rotate));
+        }
+    });
+    out
+}
+
 /// Move an annotation's geometry by (dx, dy) in user space: its rect, quads, vertices, ink,
 /// line ends and callout leader (what a copy placed elsewhere needs).
 fn translate(d: &mut Dict, dx: f64, dy: f64) {
