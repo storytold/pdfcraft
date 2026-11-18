@@ -87,7 +87,23 @@ fn rich_text_in(d: &mut Dict, style: TextStyle) {
         Some(2) => "right",
         _ => "left",
     };
-    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
+    // XML 1.0 has no way to write the C0 controls other than tab, LF and CR, or U+FFFE and U+FFFF,
+    // not even as character references (`Char`, §2.2), so `/RC` leaves them out; `/Contents`
+    // keeps them.
+    let esc = |s: &str| {
+        let mut out = String::with_capacity(s.len());
+        for c in s.chars() {
+            match c {
+                '&' => out.push_str("&amp;"),
+                '<' => out.push_str("&lt;"),
+                '>' => out.push_str("&gt;"),
+                '"' => out.push_str("&quot;"),
+                '\0'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}' => {}
+                c => out.push(c),
+            }
+        }
+        out
+    };
     let body: String = text.split('\n').map(|line| format!("<p dir=\"ltr\">{}</p>", esc(line.trim_end_matches('\r')))).collect();
     let style = format!(
         "font-size:{}pt;text-align:{align};color:{hex};font-weight:{weight};font-style:{slant};font-family:{family};font-stretch:normal",

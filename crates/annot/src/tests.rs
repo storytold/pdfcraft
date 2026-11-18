@@ -830,6 +830,27 @@ fn text_box_text_and_colour_changes_are_drawn() {
     assert!(rc.starts_with("<?xml") && rc.contains("<p dir=\"ltr\">Caf\u{e9} (draft) \u{2014} 100%</p>") && rc.contains("color:#FF0000"), "{rc}");
 }
 
+/// `/RC` is XML 1.0, which has no way to write most C0 controls, U+FFFE or U+FFFF, even as character
+/// references (`Char`, XML 1.0 §2.2): the rich text leaves them out, and `/Contents` keeps them.
+#[test]
+fn text_box_rich_text_leaves_out_what_xml_cannot_hold() {
+    let xml_char = |c: char| matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..);
+    let mut doc = fixture();
+    let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [0.0, 0.0, 300.0, 100.0], font_size: 12.0 }), &meta("t")).unwrap();
+    let typed = "A\u{b}B\u{0}C\u{c}\u{1f}D\u{fffe}\u{ffff}E\r\nF & <G> \"H\" I\u{2029}\u{1d11e}\u{7f}\u{85}";
+    set_contents(&mut doc, 0, t, typed, &meta("")).unwrap();
+    let doc = reopen(&doc);
+    let d = &list(&doc, 0)[t];
+    assert_eq!(text(d, b"Contents"), typed);
+    let rc = text(d, b"RC");
+    assert!(rc.chars().all(xml_char), "{rc:?}");
+    // What XML allows is kept and escaped as before, one paragraph per line (CRLF ends one).
+    assert!(
+        rc.contains("<p dir=\"ltr\">ABCDE</p><p dir=\"ltr\">F &amp; &lt;G&gt; &quot;H&quot; I\u{2029}\u{1d11e}\u{7f}\u{85}</p></body>"),
+        "{rc:?}"
+    );
+}
+
 /// The rectangle a text box needs for `text` (the appearance's padding plus the 2 pt slack):
 /// the wrap width and top edge stay, the height fits the wrapped lines.
 fn expected_box(top: f64, w: f64, text: &str, size: f64, border: f64) -> [f64; 4] {
