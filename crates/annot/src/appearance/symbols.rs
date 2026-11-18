@@ -1,4 +1,6 @@
-use super::{Dict, Object, PartOpacity, PdfString, Rgb, Stream, color, ext_gstate, form, literal, n, nums, rg, rg_stroke, text_width, win_ansi};
+use super::{
+    Dict, Object, PartOpacity, PdfString, Rgb, Stream, by_line_width, color, ext_gstate, form, literal, n, nums, rg, rg_stroke, text_width, win_ansi,
+};
 
 /// The label and colour of a standard rubber stamp name (ISO 32000-2 Table 184), for a stamp
 /// another program wrote without an appearance. Names are matched byte for byte, as PDF names
@@ -366,11 +368,11 @@ pub(super) fn stamp(label: &str, sign_here: bool, rect: [f64; 4], col: Rgb, by: 
     out.extend_from_slice(b" Tj\n");
     if let Some(b) = by {
         let mut s = by_h;
-        let bw = text_width(b, s);
+        let bw = by_line_width(b, s);
         if bw > text_area.1 - text_area.0 - 4.0 {
             s *= (text_area.1 - text_area.0 - 4.0) / bw;
         }
-        let bw = text_width(b, s);
+        let bw = by_line_width(b, s);
         out.extend(
             format!("/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(s), n(text_area.0 + (text_area.1 - text_area.0 - bw) / 2.0), n(y0 + h * 0.18)).bytes(),
         );

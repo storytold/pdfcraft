@@ -614,7 +614,7 @@ pub const CUSTOM_LINE_TEXT: f64 = 0.62;
 pub fn custom_stamp_size(picture: (f64, f64), line: Option<&str>) -> (f64, f64) {
     let Some(line) = line else { return picture };
     let h = picture.1 / (1.0 - CUSTOM_LINE_BAND);
-    let text = appearance::text_width(line, h * CUSTOM_LINE_BAND * CUSTOM_LINE_TEXT) + 8.0;
+    let text = appearance::by_line_width(line, h * CUSTOM_LINE_BAND * CUSTOM_LINE_TEXT) + 8.0;
     (picture.0.max(text), h)
 }
 

@@ -2741,6 +2741,90 @@ fn a_text_box_stores_hangul_and_marks_it() {
     assert!(ap_content(&doc, d).contains("(?? Ada)"), "{}", ap_content(&doc, d));
 }
 
+/// A stamp by-line is painted as WinAnsi `?`, so the band is sized and centred on those
+/// question marks. Japanese advances, which a text box measures, would shrink the line and
+/// shift it when this build has a Japanese face.
+#[test]
+fn a_stamp_by_line_is_sized_to_the_question_marks_it_paints() {
+    let line = "あいうえおかきくけこ";
+    let shown = String::from_utf8(pdfcraft_fonts::literal(&pdfcraft_fonts::win_ansi(line))).expect("the stand-in is ASCII");
+    assert_eq!(shown, "(??????????)");
+
+    // Ten question marks fit in this box at the by-line's usual size. Ten full-width
+    // Japanese advances do not, so measuring those would shrink and shift the line.
+    let rect: [f64; 4] = [0.0, 0.0, 160.0, 100.0];
+    let rubber_at = |measure: fn(&str, f64) -> f64| {
+        let [x0, y0, x1, y1] = rect;
+        let h = y1 - y0;
+        let lw = (h * 0.07).clamp(1.0, 3.0);
+        let (left, right) = (x0 + lw * 2.0, x1 - lw * 2.0);
+        let mut size = h * 0.22;
+        let mut width = measure(line, size);
+        let room = right - left - 4.0;
+        if width > room {
+            size *= room / width;
+        }
+        width = measure(line, size);
+        format!("/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(size), n(left + (right - left - width) / 2.0), n(y0 + h * 0.18))
+    };
+    let mut rubber = Dict::new();
+    rubber.set(b"Type".to_vec(), Object::name("Annot"));
+    rubber.set(b"Subtype".to_vec(), Object::name("Stamp"));
+    rubber.set(b"Rect".to_vec(), num_array(&rect));
+    rubber.set(b"Name".to_vec(), Object::name("PCDynApproved"));
+    rubber.set(b"PCStamp".to_vec(), Object::Bool(true));
+    rubber.set(b"PCByLine".to_vec(), PdfString::text(line));
+    let content = String::from_utf8_lossy(&appearance::build(&bare_doc(), &rubber).expect("rubber stamp").decoded().expect("decoded")).into_owned();
+    let painted = rubber_at(appearance::by_line_width);
+    assert!(content.contains(&shown) && content.contains(&painted), "by-line placed on the question marks:\n{content}");
+    if pdfcraft_fonts::document_japanese_font().is_some() {
+        let shaped = rubber_at(appearance::text_width);
+        assert_ne!(shaped, painted, "a Japanese face must measure this by-line wider than the question marks");
+        assert!(!content.contains(&shaped), "the by-line was centred on Japanese advances:\n{content}");
+    }
+
+    let custom_rect: [f64; 4] = [10.0, 20.0, 110.0, 120.0];
+    let mut doc = bare_doc();
+    let pic = doc.add(Object::Dict(Dict::new()));
+    let mut custom = Dict::new();
+    custom.set(b"Type".to_vec(), Object::name("Annot"));
+    custom.set(b"Subtype".to_vec(), Object::name("Stamp"));
+    custom.set(b"Rect".to_vec(), num_array(&custom_rect));
+    custom.set(b"PCPicture".to_vec(), Object::Ref(pic));
+    custom.set(b"PCPictureImage".to_vec(), Object::Bool(true));
+    custom.set(b"PCPictureSize".to_vec(), num_array(&[40.0, 40.0]));
+    custom.set(b"PCByLine".to_vec(), PdfString::text(line));
+    let content = String::from_utf8_lossy(&appearance::build(&doc, &custom).expect("custom stamp").decoded().expect("decoded")).into_owned();
+    let [x0, y0, x1, y1] = custom_rect;
+    let band = (y1 - y0) * CUSTOM_LINE_BAND;
+    let width = x1 - x0;
+    let custom_at = |measure: fn(&str, f64) -> f64| {
+        let mut size = band * CUSTOM_LINE_TEXT;
+        let mut tw = measure(line, size);
+        if tw > width - 4.0 && tw > 0.0 {
+            size *= ((width - 4.0) / tw).max(0.0);
+        }
+        tw = measure(line, size);
+        format!("/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(size), n(x0 + (width - tw) / 2.0), n(y0 + (band - size * 0.72) / 2.0))
+    };
+    let painted = custom_at(appearance::by_line_width);
+    assert!(content.contains(&shown) && content.contains(&painted), "custom by-line:\n{content}");
+    if pdfcraft_fonts::document_japanese_font().is_some() {
+        let shaped = custom_at(appearance::text_width);
+        assert_ne!(shaped, painted, "a Japanese face must measure this by-line wider than the question marks");
+        assert!(!content.contains(&shaped), "the custom by-line was centred on Japanese advances:\n{content}");
+    }
+
+    let (stamp_w, stamp_h) = custom_stamp_size((1.0, 40.0), Some(line));
+    let at = stamp_h * CUSTOM_LINE_BAND * CUSTOM_LINE_TEXT;
+    let painted_w = appearance::by_line_width(line, at) + 8.0;
+    assert!((stamp_w - painted_w).abs() < 1e-6, "stamp width {stamp_w} is not the question-mark width {painted_w}");
+    if pdfcraft_fonts::document_japanese_font().is_some() {
+        let shaped_w = appearance::text_width(line, at) + 8.0;
+        assert!(shaped_w > painted_w + 1.0, "Japanese advances {shaped_w} should exceed the question marks {painted_w}");
+    }
+}
+
 /// Content edits rebuild the display copy on every commit but leave annotations alone: the
 /// cached appearance is drawn once and reused after that, byte-identical.
 #[test]

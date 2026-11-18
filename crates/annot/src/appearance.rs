@@ -18,8 +18,8 @@ use pdfcraft_cos::{Dict, Object, PdfString, Stream};
 use pdfcraft_fonts::shaped_text;
 use pdfcraft_fonts::{first_undrawable, literal, win_ansi, wrap_with};
 
-/// The width of `text` at `size` as appearances draw it: Helvetica, with Thai shaped in the Thai
-/// face that text boxes draw it with.
+/// The width of `text` at `size` as a text box draws it: Helvetica, with Thai and Japanese
+/// shaped from the craft-fonts faces.
 pub fn text_width(text: &str, size: f64) -> f64 {
     text_width_in(pdfcraft_fonts::Std14::Helvetica, text, size)
 }
@@ -27,6 +27,14 @@ pub fn text_width(text: &str, size: f64) -> f64 {
 /// [`text_width`] in the standard `face` a text box draws its other text in.
 pub fn text_width_in(face: pdfcraft_fonts::Std14, text: &str, size: f64) -> f64 {
     shaped_text::markup_width(text, size, |s, size| face.text_width(s, size))
+}
+
+/// The width of `text` at `size` as a stamp by-line paints it. The line is Helvetica with
+/// WinAnsi, so a character that encoding cannot draw counts as `?`. Measuring it with
+/// [`text_width`] would use Japanese advances when that face is present, and the band would
+/// then shrink and centre around glyphs that are still the narrower question marks.
+pub(crate) fn by_line_width(text: &str, size: f64) -> f64 {
+    pdfcraft_fonts::Std14::Helvetica.text_width(text, size)
 }
 
 /// `text` wrapped `width` wide as [`text_width`] measures it; a Thai mark stays on its letter.
@@ -1306,11 +1314,11 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
         if let Some(l) = &line {
             // Centred in the band, at its usual size unless the stamp was made narrower.
             let mut size = band * crate::CUSTOM_LINE_TEXT;
-            let tw = text_width(l, size);
+            let tw = by_line_width(l, size);
             if tw > w - 4.0 && tw > 0.0 {
                 size *= ((w - 4.0) / tw).max(0.0);
             }
-            let tw = text_width(l, size);
+            let tw = by_line_width(l, size);
             let ty = y0 + (band - size * 0.72) / 2.0;
             content.extend(format!("BT\n0.2 0.2 0.2 rg\n/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(size), n(x0 + (w - tw) / 2.0), n(ty)).bytes());
             content.extend(literal(&win_ansi(l)));
