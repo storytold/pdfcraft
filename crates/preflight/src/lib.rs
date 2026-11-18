@@ -2072,12 +2072,15 @@ fn check_stream(
             issue("6.2.8", "An image has alternates or OPI information", None, None, true);
         }
     }
+    // An XObject's /Subtype may be given by reference, as any value may (ISO 32000-2 7.3.10): it is
+    // resolved once for the PostScript and form XObject checks.
+    let resolved = stream.dict.get(b"Subtype").map(|s| doc.resolve(s));
+    let xobject = resolved.as_deref().and_then(Object::as_name);
     // ISO 32000-2 no longer defines PostScript XObjects, and PDF/A-4 says nothing of them.
-    if subtype == Some(b"PS") && level.part() != 4 {
+    if xobject == Some(b"PS") && level.part() != 4 {
         issue("6.2.9", "PostScript XObjects aren't allowed", None, None, false);
     }
-    // A form XObject's /Subtype may be given by reference, as any value may (ISO 32000-2 7.3.10).
-    if stream.dict.get(b"Subtype").is_some_and(|s| doc.resolve(s).as_name() == Some(b"Form")) {
+    if xobject == Some(b"Form") {
         check_form_xobject(doc, &stream.dict, level.part() == 4, issue);
     }
     if level.part() == 4 {

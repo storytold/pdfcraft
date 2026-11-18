@@ -2965,6 +2965,23 @@ fn form_xobjects_have_no_opi_reference_or_postscript_clause_6_2_9() {
         let found: Vec<_> = verify(&doc, level).into_iter().filter(|i| i.message == opi).map(|i| i.clause).collect();
         assert_eq!(found, [clause], "{level:?}");
     }
+    // So is a standalone PostScript XObject's (object 6 is `/PS`): reported at 2b and 3b, allowed
+    // in PDF/A-4.
+    let doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /X 4 0 R >> >> /Contents 5 0 R >>",
+            "<< /Type /XObject /Subtype 6 0 R /Length 0 >>\nstream\n\nendstream",
+            "<< /Length 6 >>\nstream\n/X Do\nendstream",
+            "/PS",
+        ],
+        "",
+    );
+    for (level, reported) in [(Level::A2b, true), (Level::A3b, true), (Level::A4, false)] {
+        let found = verify(&doc, level).iter().any(|i| i.message == "PostScript XObjects aren't allowed");
+        assert_eq!(found, reported, "{level:?}");
+    }
 }
 
 /// A PDF/A-4 file (ISO 19005-4) without pages whose objects from 4 on are `more`. With nothing
