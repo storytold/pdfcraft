@@ -321,7 +321,7 @@ mod tests {
         assert!(["Hant-HK", "Hans", "Jpan", "Hang"].iter().all(|s| is_cjk_script(s)));
         assert!(!["Latn", "Arab", "Hebr"].iter().any(|s| is_cjk_script(s)));
         let cjk = CRAFT_FONTS.iter().filter(|f| f.scripts.iter().any(|s| is_cjk_script(s)));
-        let (whole, other): (Vec<_>, Vec<_>) = cjk.partition(|f| WHOLE_CJK_FAMILIES.contains(&f.family));
+        let (whole, other): (Vec<&EmbeddedFace>, Vec<&EmbeddedFace>) = cjk.partition(|f| WHOLE_CJK_FAMILIES.contains(&f.family));
         for face in &other {
             let len = face.bytes.len();
             let native_ui = NATIVE_UI_CJK_FAMILIES.contains(&face.family);
