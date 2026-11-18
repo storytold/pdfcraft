@@ -323,16 +323,20 @@ fn actual_text_across_several_lines_replaces_all_of_them() {
 
 /// A superscript on the replacement's first line (text rise, ISO 32000-2 §9.3.7) stays in its
 /// box, and so do the glyphs after it; so do the first line's glyphs drawn after a run on the
-/// next line, which stays out.
+/// next line, which stays out. A small first line with a larger one set close below it (`Td`,
+/// no text rise) is no superscript: the larger line stays out.
 #[test]
 fn actual_text_boxes_keep_superscripts_and_glyphs_drawn_after_another_line() {
     let sup = "/F1 20 Tf 1 0 0 1 20 200 Tm (ab) Tj /F1 8 Tf 12 Ts (2) Tj /F1 20 Tf 0 Ts (cd) Tj";
     let back = "/F1 20 Tf 1 0 0 1 20 200 Tm (ab) Tj 1 0 0 1 20 160 Tm (xy) Tj 1 0 0 1 60 200 Tm (ef) Tj";
+    let small_first = "1 0 0 1 20 200 Tm /F1 8 Tf (ab) Tj /F1 20 Tf 0 -15 Td (cd) Tj";
     let pages = [
         format!("BT /Span <</ActualText (Sup)>> BDC {sup} EMC ET"),
         format!("BT {sup} ET"),
         format!("BT /Span <</ActualText (Back)>> BDC {back} EMC ET"),
         format!("BT {back} ET"),
+        format!("BT /Span <</ActualText (Small)>> BDC {small_first} EMC ET"),
+        format!("BT {small_first} ET"),
     ];
     let pdf = marked_pages(&pages.iter().map(String::as_str).collect::<Vec<_>>());
     let boxed = |page: usize, text: &str| {
@@ -347,6 +351,9 @@ fn actual_text_boxes_keep_superscripts_and_glyphs_drawn_after_another_line() {
     let (back_box, f, y) = (boxed(2, "Back"), glyph(3, "f"), glyph(3, "y"));
     assert!((back_box[2] - f[2]).abs() < 0.01, "the first line's last run is in: {back_box:?}, f at {f:?}");
     assert!(back_box[3] < y[1], "the next line stays out: {back_box:?}, y at {y:?}");
+    let (small_box, b, c, d) = (boxed(4, "Small"), glyph(5, "b"), glyph(5, "c"), glyph(5, "d"));
+    assert!((small_box[2] - b[2]).abs() < 0.01, "up to the first line's end: {small_box:?}, b at {b:?}, d at {d:?}");
+    assert!((small_box[3] - b[3]).abs() < 0.01, "the larger line below stays out: {small_box:?}, b at {b:?}, c at {c:?}");
 }
 
 /// A vertical glyph is as wide across its column as its horizontal width, centred on the column

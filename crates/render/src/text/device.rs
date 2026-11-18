@@ -116,6 +116,12 @@ fn merge(drawn: &[Drawn], vertical: &[bool], text: String) -> Option<Drawn> {
         (near + at * (far - near), (near - far).abs())
     };
     let (line, line_height) = baseline(0, first);
+    // A glyph's extent along the line.
+    let span = |d: &Drawn| d.2.quad.iter().map(along).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
+    let first_span = span(first);
+    // Baselines (with their glyph's extent) shown to be another line's; a few are enough, as only
+    // a line within a raised glyph's reach of the first can be mistaken for one.
+    let mut other_lines: Vec<(f64, f64)> = Vec::new();
     let (mut s0, mut s1, mut t0, mut t1) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
     for (i, d) in drawn.iter().enumerate() {
         // A glyph is on the first one's line when its baseline lies within half the taller
@@ -126,8 +132,29 @@ fn merge(drawn: &[Drawn], vertical: &[bool], text: String) -> Option<Drawn> {
         // baseline is on no line.
         let (at, h) = baseline(i, d);
         let horizontal = !vertical.first().copied().unwrap_or(false) && !vertical.get(i).copied().unwrap_or(false);
-        if !(compatible(u, d.1) && same_line((line, line_height), (at, h), horizontal)) {
+        if !compatible(u, d.1) {
             continue;
+        }
+        match line_of((line, line_height), (at, h), horizontal) {
+            Line::Other => continue,
+            Line::Same => {}
+            // Raised or lowered off the first glyph's baseline: a superscript follows its base
+            // along the line, while the next line starts back where the first did. A glyph over
+            // the first one's place along the line is on another line, and so is every glyph on
+            // that line's baseline (a small first line, then a larger one set close below it).
+            Line::Shifted => {
+                if other_lines.iter().any(|&(b, hb)| (at - b).abs() <= 0.5 * h.max(hb)) {
+                    continue;
+                }
+                let g = span(d);
+                let overlap = g.1.min(first_span.1) - g.0.max(first_span.0);
+                if overlap > 0.5 * (g.1 - g.0).min(first_span.1 - first_span.0) {
+                    if other_lines.len() < MAX_OTHER_LINES {
+                        other_lines.push((at, h));
+                    }
+                    continue;
+                }
+            }
         }
         for p in &d.2.quad {
             (s0, s1) = (s0.min(along(p)), s1.max(along(p)));
@@ -147,24 +174,39 @@ fn merge(drawn: &[Drawn], vertical: &[bool], text: String) -> Option<Drawn> {
     Some((quarter, u, TextGlyph { text, rect, quad, direction: first.2.direction }))
 }
 
-/// Whether two glyphs, each at `(position across the line, extent across it)` as [`merge`]
-/// measures them (larger is further down the line's across direction), are on one line: their
-/// baselines lie within half the taller one's extent of each other, or, for `horizontal` glyphs,
-/// the smaller one (under 0.9 of the taller) sits on the taller one's line raised by up to 0.8 of
-/// its extent, as far as its ascender, or lowered by up to half of it. A vertical glyph's extent
-/// across its column is its width, not its height, so a narrower one is no superscript.
-fn same_line((a, ha): (f64, f64), (b, hb): (f64, f64), horizontal: bool) -> bool {
+/// How many other lines' baselines [`merge`] keeps to tell raised glyphs from them.
+const MAX_OTHER_LINES: usize = 8;
+
+/// Where a glyph sits against the first glyph's line, by [`line_of`].
+enum Line {
+    /// On the same baseline.
+    Same,
+    /// Off the baseline by as much as text rise moves a smaller glyph (a superscript or a
+    /// subscript), or the larger glyph is the one moved.
+    Shifted,
+    /// On another line.
+    Other,
+}
+
+/// Where two glyphs, each at `(position across the line, extent across it)` as [`merge`]
+/// measures them (larger is further down the line's across direction), sit against each other:
+/// on one line when their baselines lie within half the taller one's extent of each other, or,
+/// for `horizontal` glyphs, shifted when the smaller one (under 0.9 of the taller) sits on the
+/// taller one's line raised by up to 0.8 of its extent, as far as its ascender, or lowered by up
+/// to half of it. A vertical glyph's extent across its column is its width, not its height, so a
+/// narrower one is no superscript.
+fn line_of((a, ha): (f64, f64), (b, hb): (f64, f64), horizontal: bool) -> Line {
     let tall = ha.max(hb);
     if (a - b).abs() <= 0.5 * tall {
-        return true;
+        return Line::Same;
     }
     if !horizontal {
-        return false;
+        return Line::Other;
     }
     let ((big, big_h), (small, small_h)) = if ha >= hb { ((a, ha), (b, hb)) } else { ((b, hb), (a, ha)) };
     // Raised is towards the line's top: a smaller position across it.
     let rise = big - small;
-    small_h < 0.9 * big_h && (-0.5 * big_h..=0.8 * big_h).contains(&rise)
+    if small_h < 0.9 * big_h && (-0.5 * big_h..=0.8 * big_h).contains(&rise) { Line::Shifted } else { Line::Other }
 }
 
 /// The widest or tallest box (view-space points) a glyph, or the paint standing in for one, may
