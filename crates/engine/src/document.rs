@@ -132,7 +132,7 @@ impl std::fmt::Display for EditNotice {
                 let which = if pages.len() == 1 { "page" } else { "pages" };
                 write!(
                     f,
-                    "{entries} {what} in the content list of {which} {} named no content stream (an object missing from the file, or not a stream) and {was} left out; {} drew nothing",
+                    "{entries} {what} in the content list of {which} {} {was} left out: {} named an object missing from the file, one that is not a stream, or one that could not be read",
                     page_runs(pages),
                     if *entries == 1 { "it" } else { "they" }
                 )

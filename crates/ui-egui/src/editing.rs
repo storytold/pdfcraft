@@ -1860,9 +1860,9 @@ mod notice_tests {
         assert!(lines[0].starts_with("Page 2 changed after the background was added"), "{said}");
         assert_eq!(
             lines[1],
-            "4 entries in the content lists of pages 1-3 named no content stream (objects missing from the file, or not streams) and were left out. They drew nothing."
+            "4 entries in the content lists of pages 1-3 were left out. They named objects missing from the file, objects that are not streams, or objects that could not be read."
         );
         let one = super::edit_notices_message(&[EditNotice::ContentsLeftOut { pages: vec![4], entries: 1 }]).unwrap();
-        assert!(one.starts_with("1 entry in the content list of page 5 named no content stream"), "{one}");
+        assert!(one.starts_with("1 entry in the content list of page 5 was left out."), "{one}");
     }
 }

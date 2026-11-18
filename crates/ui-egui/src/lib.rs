@@ -411,6 +411,11 @@ pub struct PdfCraftApp {
     /// Documents with a Fill & Sign signature placed since their last save, asked about on
     /// saving (#2149). Not part of the recovery data: a recovered document isn't asked.
     pub(crate) placed_signatures: std::collections::HashSet<pdfcraft_engine::DocId>,
+    /// What locking Fill & Sign into a document's pages said (content-list entries left out), not
+    /// yet shown with a save: the Lock answer bakes before its save, and a save that fails after
+    /// baking leaves the document baked. Kept with the edit generation it is true for, so an undo
+    /// or a later edit drops it rather than replaying it.
+    pub(crate) bake_notice: Option<(pdfcraft_engine::DocId, u64, String)>,
     /// A save waiting behind [`Dialog::LockSignatures`], and its Don't ask again box.
     pub(crate) pending_lock: Option<editing::PendingLock>,
     /// The document whose lock question was just answered: the save that follows the answer

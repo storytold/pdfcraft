@@ -118,8 +118,10 @@ fn streams_only(prev: &Document, next: &mut Document) -> Result<Vec<LeftOut>, pd
 mod tests {
     use std::sync::Arc;
 
+    use super::after_edit;
+    use crate::history::Scope;
     use crate::{Edit, EditNotice, Session, Watermark};
-    use pdfcraft_cos::{Document, Object};
+    use pdfcraft_cos::{Document, ObjRef, Object};
 
     /// A two-page file with a cross-reference table. Page 1 lists `/Contents [4 0 R n 0 R null
     /// 5 0 R]` and page 2 `[6 0 R n 0 R]`: object 90 is not in the file, or (with `listed`)
@@ -209,7 +211,7 @@ mod tests {
             s.apply(id, watermark()).unwrap();
             let said: Vec<String> = s.get(id).unwrap().edit_notices.iter().map(ToString::to_string).collect();
             assert_eq!(s.get(id).unwrap().edit_notices, [EditNotice::ContentsLeftOut { pages: vec![0], entries: 2 }], "xref {xref}");
-            assert!(said[0].starts_with("2 entries in the content list of page 1 named no content stream"), "{said:?}");
+            assert!(said[0].starts_with("2 entries in the content list of page 1 were left out"), "{said:?}");
             for bytes in [s.save_bytes(id).unwrap(), s.save_full_bytes(id).unwrap()] {
                 let doc = Document::open_with_password(bytes.clone(), None).unwrap();
                 let [first, second] = <[Vec<Object>; 2]>::try_from(lists(&bytes)).unwrap();
@@ -243,5 +245,21 @@ mod tests {
         let Some(Object::Array(list)) = page.dict.get(b"Contents") else { panic!("{:?}", page.dict) };
         assert!(list.iter().any(|o| matches!(o, Object::Ref(r) if r.num == 9)), "{list:?}");
         assert!(!list.iter().any(|o| matches!(o, Object::Null)), "{list:?}");
+    }
+
+    /// When the next save rewrites the file, an object the file lists but that can't be read
+    /// goes from a rewritten list too. It is not known to be missing or to draw nothing, so the
+    /// notice names it as one that could not be read.
+    #[test]
+    fn an_unreadable_object_left_out_is_said_to_be_unreadable() {
+        let prev = Document::open_with_password(Arc::new(damaged(true, true)), None).unwrap();
+        let mut next = prev.clone();
+        next.require_full_save();
+        let page = pdfcraft_model::pages(&next).swap_remove(0).obj;
+        next.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(ObjRef::new(9, 0))])))
+            .unwrap();
+        let said = after_edit(Scope::Content, &prev, &mut next).unwrap().map(|n| n.to_string()).unwrap_or_default();
+        assert!(said.starts_with("1 entry in the content list of page 1 was left out"), "{said}");
+        assert!(said.contains("could not be read") && !said.contains("drew nothing"), "{said}");
     }
 }

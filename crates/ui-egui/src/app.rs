@@ -119,6 +119,7 @@ impl PdfCraftApp {
             flatten_fill_sign_on_save: false,
             ask_to_lock_signatures: true,
             placed_signatures: Default::default(),
+            bake_notice: None,
             pending_lock: None,
             lock_answered: None,
             lock_remember: false,

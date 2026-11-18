@@ -1603,7 +1603,7 @@ trailer << /Root 1 0 R >>
     assert!(app.save_active(SaveTarget::InPlace));
     let toast = app.toast.as_ref().map(|(t, _)| t.clone()).unwrap_or_default();
     assert!(toast.starts_with("Saved"), "{toast}");
-    assert!(toast.contains("1 entry in the content list of page 1 named no content stream"), "{toast}");
+    assert!(toast.contains("1 entry in the content list of page 1 was left out."), "{toast}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
