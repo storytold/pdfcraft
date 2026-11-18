@@ -2604,3 +2604,28 @@ fn a_stream_without_endstream_still_has_its_keyword_judged_clause_6_1_7_1() {
     assert_eq!(one("<< /Length 5 >>\nstream\rHELLO"), ["The stream keyword of object 4 isn't followed by CR LF or by LF alone"]);
     assert_eq!(one("<< /Length 5 >>\nstream\nHELLO"), Vec::<String>::new());
 }
+
+/// Whether an object is a stream is read from the file too: an unsaved edit of only the object
+/// an indirect `/Length` refers to, to a length the document can't read the stream with, leaves
+/// the file's stream judged as before, its `stream` keyword included when no `endstream` follows.
+#[test]
+fn a_stream_left_unreadable_by_an_edited_indirect_length_is_still_judged_clause_6_1_7_1() {
+    let file = |stream: &str, edited: Option<i64>| {
+        let mut doc = laid_out(&[("\n", CATALOG), ("\n", PAGES), ("\n", PAGE), ("\n", stream), ("\n", "5 0 obj\n5\nendobj")]);
+        if let Some(edited) = edited {
+            doc.set(ObjRef::new(5, 0), Object::Int(edited));
+        }
+        let read = doc.get(ObjRef::new(4, 0));
+        let said = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.7.1").map(|i| i.message).collect::<Vec<_>>();
+        (matches!(&*read, Object::Stream(_)), said)
+    };
+    let keyword = ["The stream keyword of object 4 isn't followed by CR LF or by LF alone".to_string()];
+    let open = "4 0 obj\n<< /Length 5 0 R >>\nstream\rHELLO\nendobj";
+    assert_eq!(file(open, None), (true, keyword.to_vec()));
+    let (readable, said) = file(open, Some(-1));
+    assert!(!readable, "the fixture's edit leaves the stream unreadable to the document");
+    assert_eq!(said, keyword);
+    // With `endstream` too, all of the stream's findings are those of the file.
+    let closed = "4 0 obj\n<< /Length 5 0 R >>\nstream\rHELLO\nendstream\nendobj";
+    assert_eq!(file(closed, Some(-1)).1, file(closed, None).1);
+}

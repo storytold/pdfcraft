@@ -128,7 +128,11 @@ pub(crate) fn check(doc: &Document) -> Findings {
         // when the object is a stream, else past its value and any comments after it, so `endobj`
         // in a string, name or comment isn't taken for it.
         let layout = match &*doc.get(ObjRef::new(num, doc.generation(num))) {
-            Object::Stream(s) => stream_layout(doc, num, data, body, end, s.raw.len()),
+            Object::Stream(s) => stream_layout(doc, num, data, body, end, Some(s.raw.len())),
+            // An unsaved edit of the object an indirect `/Length` refers to can leave the stream
+            // unreadable to the document, which then reads it as null; the file's bytes still
+            // hold a stream, and they are what is judged.
+            Object::Null => stream_layout(doc, num, data, body, end, None),
             _ => None,
         };
         if let Some(layout) = &layout {
@@ -212,9 +216,11 @@ struct Endstream {
 
 /// How the stream object `num`, whose body starts at `body`, is laid out, read from the file's
 /// bytes up to `end`, the next object. `raw_len` is how long the document reads its data to be,
-/// which finds `endstream` when `/Length` doesn't. `None` when the dictionary or the `stream`
-/// keyword isn't there to read.
-fn stream_layout(doc: &Document, num: u32, data: &[u8], body: usize, end: usize, raw_len: usize) -> Option<StreamLayout> {
+/// which finds `endstream` when `/Length` doesn't; `None` when the document can't read the object,
+/// which is then judged only when its `/Length` refers to an object with an unsaved edit, and with
+/// the length the file gives. `None` when the dictionary or the `stream` keyword isn't there to
+/// read.
+fn stream_layout(doc: &Document, num: u32, data: &[u8], body: usize, end: usize, raw_len: Option<usize>) -> Option<StreamLayout> {
     // The dictionary as written: the document's own copy has `/Length` set to what it read.
     let mut lx = Lexer::new(data.get(..end)?, body);
     let Ok(Object::Dict(dict)) = lx.object() else { return None };
@@ -233,26 +239,26 @@ fn stream_layout(doc: &Document, num: u32, data: &[u8], body: usize, end: usize,
         _ => (keyword_end, false),
     };
     let (declared, raw_len) = match dict.get(b"Length") {
-        Some(Object::Int(n)) => (Some(*n), raw_len),
+        Some(Object::Int(n)) => (Some(*n), raw_len?),
         // An unsaved edit of the object an indirect `/Length` refers to isn't in the bytes judged:
         // the length, and the data the document reads with it, are then those of the file.
         Some(Object::Ref(r)) if doc.is_edited(r.num) => {
             let mut saved = doc.scan_original_objects_subset(vec![num, r.num]);
             let raw_len = match saved.next() {
                 Some((_, Ok(o))) => match &*o {
-                    Object::Stream(s) => s.raw.len(),
+                    Object::Stream(s) => Some(s.raw.len()),
                     _ => raw_len,
                 },
                 _ => raw_len,
-            };
+            }?;
             let declared = match saved.next() {
                 Some((at, Ok(o))) if at.generation == r.generation => int(&o),
                 _ => None,
             };
             (declared, raw_len)
         }
-        Some(Object::Ref(r)) => (int(&doc.get(*r)), raw_len),
-        _ => (None, raw_len),
+        Some(Object::Ref(r)) => (int(&doc.get(*r)), raw_len?),
+        _ => (None, raw_len?),
     };
     // Where `/Length` puts the end of the data, when an end-of-line marker and `endstream`, or
     // `endstream` alone, follow it there; and how long that marker is.
