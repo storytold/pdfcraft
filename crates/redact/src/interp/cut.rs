@@ -10,10 +10,11 @@
 //! - a stroked straight segment loses the part within reach of a mark (the mark grown by the
 //!   stroke's reach); a stroked curve that comes within reach goes whole.
 //!
-//! Anything else a mark reaches (a filled curve, a filled shape under a rotating CTM) returns
-//! `None`, and the caller removes the path whole, as before. The pieces are written as several
-//! paths, none of whose boxes meets a mark, so the proof (`verify::geometry`), which measures a
-//! path by its box, finds nothing under the marks. Filled pieces whose boxes overlap stay in one
+//! Anything else a mark reaches (a filled curve, a filled shape under a rotating CTM, a dashed
+//! stroke) returns `None`, as does a cut too large to make, and the caller removes the path
+//! whole, as before. The pieces are written as several paths, none of whose boxes meets a mark,
+//! so the proof (`verify::geometry`), which measures a path by its box, finds nothing under the
+//! marks. Filled pieces whose boxes overlap stay in one
 //! path, so their fill rule still sees them together.
 
 use pdfcraft_content::{Matrix, Op, num, overlaps};
@@ -22,6 +23,9 @@ use pdfcraft_content::{Matrix, Op, num, overlaps};
 const MAX_OPS: usize = 1 << 14;
 /// Pieces are grouped pairwise; more than this and the path goes whole.
 const MAX_PIECES: usize = 4096;
+/// Box tests grouping pieces into paths may make (each piece against each path so far and
+/// every region); more and the path goes whole, so many marks over a path can't stall it.
+const MAX_WORK: usize = 1 << 26;
 
 type P = (f64, f64);
 
@@ -37,6 +41,9 @@ pub(super) struct Reach {
     pub half: f64,
     /// The miter limit, when joins are mitred.
     pub miter: Option<f64>,
+    /// The stroke is dashed. Each subpath restarts the dashes, so a subpath cut into new ones
+    /// would move them along what is kept: such a path goes whole.
+    pub dashed: bool,
 }
 
 impl Reach {
@@ -53,7 +60,8 @@ impl Reach {
         }
         let cos = -(u.0 * v.0 + u.1 * v.1) / (lu * lv);
         let ratio = 1.0 / ((1.0 - cos) / 2.0).max(0.0).sqrt();
-        if ratio.is_finite() && ratio <= limit { self.half * ratio } else { self.half }
+        // Taken as mitred a hair past the limit, where a renderer's own arithmetic may still mitre it.
+        if ratio.is_finite() && ratio <= limit * (1.0 + 1e-9) { self.half * ratio } else { self.half }
     }
 }
 
@@ -181,23 +189,27 @@ fn keeps_axes(m: &Matrix) -> bool {
     (b.abs() <= 1e-9 * s && c.abs() <= 1e-9 * s) || (a.abs() <= 1e-9 * s && d.abs() <= 1e-9 * s)
 }
 
-/// `d` (device space, normalised) less every region: disjoint rectangles.
-fn subtract(d: [f64; 4], regions: &[[f64; 4]]) -> Vec<[f64; 4]> {
+/// `d` (device space, normalised) less every region: disjoint rectangles, `None` past
+/// `budget` of them (they can grow as the product of the marks crossing it).
+fn subtract(d: [f64; 4], regions: &[[f64; 4]], budget: usize) -> Option<Vec<[f64; 4]>> {
     let mut left = vec![d];
     for r in regions {
-        let mut next = Vec::new();
+        let mut next = Vec::with_capacity(left.len());
         for p in left {
             if !overlaps(*r, p, 0.0) {
                 next.push(p);
                 continue;
             }
             let (y0, y1) = (p[1].max(r[1]), p[3].min(r[3]));
-            next.extend([[p[0], p[1], p[2], r[1]], [p[0], r[3], p[2], p[3]], [p[0], y0, r[0], y1], [r[2], y0, p[2], y1]]);
-            next.retain(|q| q[2] - q[0] > 1e-9 && q[3] - q[1] > 1e-9);
+            let strips = [[p[0], p[1], p[2], r[1]], [p[0], r[3], p[2], p[3]], [p[0], y0, r[0], y1], [r[2], y0, p[2], y1]];
+            next.extend(strips.into_iter().filter(|q| q[2] - q[0] > 1e-9 && q[3] - q[1] > 1e-9));
+            if next.len() > budget {
+                return None;
+            }
         }
         left = next;
     }
-    left
+    Some(left)
 }
 
 /// The parameter intervals of the segment `a`–`b` (device space) outside every region.
@@ -225,6 +237,13 @@ fn outside(a: P, b: P, regions: &[[f64; 4]]) -> Vec<(f64, f64)> {
     kept
 }
 
+/// `p` as [`point`] writes it: a join is decided by the angle the written operands make, and
+/// near the miter limit the rounding can turn a bevel into a mitre.
+fn rounded(p: P) -> P {
+    let r = |v: f64| num(v).as_f64().unwrap_or(v);
+    (r(p.0), r(p.1))
+}
+
 fn point(op: &str, p: P) -> Op {
     Op::new(op, vec![num(p.0), num(p.1)])
 }
@@ -233,8 +252,10 @@ fn point(op: &str, p: P) -> Op {
 /// path's box meeting a region, each ended by `paint`.
 fn group(pieces: Vec<(Vec<Op>, [f64; 4])>, regions: &[[f64; 4]], paint: &str, out: &mut Vec<Op>) -> Option<bool> {
     let mut paths: Vec<(Vec<Op>, [f64; 4])> = Vec::new();
+    let mut work = 0usize;
     for (ops, b) in pieces {
-        if meets(regions, b) {
+        work += (paths.len() + 1) * regions.len();
+        if meets(regions, b) || work > MAX_WORK {
             return None;
         }
         match paths.iter_mut().find(|(_, pb)| !meets(regions, union(*pb, b))) {
@@ -303,11 +324,14 @@ fn cut_fill(subs: &[Sub], rule: &str, ctm: &Matrix, regions: &[[f64; 4]], margin
         let b = bbox(s.pts.iter().map(|p| dev(*p)))?;
         if !meets(&near, b) {
             pieces.push((s.ops.clone(), b));
+            if pieces.len() > MAX_PIECES {
+                return None;
+            }
             continue;
         }
         let [x, y, w, h] = s.rect.filter(|_| keeps_axes(ctm))?;
         let d = bbox([dev((x, y)), dev((x + w, y + h))])?;
-        for p in subtract(d, &regions) {
+        for p in subtract(d, &regions, MAX_PIECES.saturating_sub(pieces.len()))? {
             let u = bbox([inverse.apply(p[0], p[1]), inverse.apply(p[2], p[3])])?;
             // The orientation `re` gave it, so the non-zero rule still counts it the same way.
             let op = if w * h >= 0.0 {
@@ -375,6 +399,9 @@ fn cut_stroke(subs: &[Sub], ctm: &Matrix, regions: &[[f64; 4]], reach: Reach, ma
             pieces.push((s.ops.clone(), b));
             continue;
         }
+        if reach.dashed {
+            return None;
+        }
         // What is kept, in runs: a run goes on through a shared point (keeping its join)
         // while that join can't reach a region and the run's box stays clear of them, and
         // starts again with `m` otherwise. A run holds its operators, its box (device space)
@@ -401,21 +428,14 @@ fn cut_stroke(subs: &[Sub], ctm: &Matrix, regions: &[[f64; 4]], reach: Reach, ma
         for seg in &s.segs {
             match seg {
                 Seg::Line(a, e) => {
-                    let dir = Some((e.0 - a.0, e.1 - a.1));
                     for (t0, t1) in outside(dev(*a), dev(*e), &regions) {
-                        let at = |t: f64| {
-                            if t == 0.0 {
-                                *a
-                            } else if t == 1.0 {
-                                *e
-                            } else {
-                                (a.0 + t * (e.0 - a.0), a.1 + t * (e.1 - a.1))
-                            }
-                        };
+                        let at = |t: f64| rounded(if t == 1.0 { *e } else { (a.0 + t * (e.0 - a.0), a.1 + t * (e.1 - a.1)) });
                         let (p0, p1) = (at(t0), at(t1));
+                        // The direction as written, which is what decides a join's miter.
+                        let dir = Some((p1.0 - p0.0, p1.1 - p0.1));
                         keep(p0, point("l", p1), &[p0, p1], dir, &mut pen, &mut last)?;
                     }
-                    if pen != Some(*e) {
+                    if pen != Some(rounded(*e)) {
                         pen = None;
                     }
                 }
@@ -433,13 +453,14 @@ fn cut_stroke(subs: &[Sub], ctm: &Matrix, regions: &[[f64; 4]], reach: Reach, ma
         // A closed subpath comes back to where it began. Kept in one run, it is closed again
         // with `h`, keeping that join; cut somewhere, its last run goes on into its first there,
         // keeping the join too, when it can.
-        let starts_at_start = |run: &(Vec<Op>, [f64; 4], Option<P>)| run.0.first().and_then(|m| m.nums::<2>()) == Some([s.start.0, s.start.1]);
+        let start = rounded(s.start);
+        let starts_at_start = |run: &(Vec<Op>, [f64; 4], Option<P>)| run.0.first().and_then(|m| m.nums::<2>()) == Some([start.0, start.1]);
         let back =
-            s.closed && pen == Some(s.start) && runs.first().is_some_and(starts_at_start) && joinable(s.start, last, runs.first().and_then(|r| r.2));
+            s.closed && pen == Some(start) && runs.first().is_some_and(starts_at_start) && joinable(start, last, runs.first().and_then(|r| r.2));
         if back && runs.len() == 1 {
             if let Some((ops, ..)) = runs.first_mut() {
                 // The closing segment is drawn by `h` instead of the `l` back to the start.
-                if ops.last().is_some_and(|o| o.op.as_slice() == b"l" && o.nums::<2>() == Some([s.start.0, s.start.1])) {
+                if ops.last().is_some_and(|o| o.op.as_slice() == b"l" && o.nums::<2>() == Some([start.0, start.1])) {
                     ops.pop();
                 }
                 ops.push(Op::new("h", vec![]));

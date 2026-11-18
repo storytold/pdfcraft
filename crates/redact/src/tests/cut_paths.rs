@@ -2,7 +2,8 @@
 //! fills the cells of one colour with one path of `re`s and strokes its grid lines in one go;
 //! a mark over one cell wiped the whole table. Rectangles and straight segments are now cut
 //! around the mark; what can't be cut exactly (a filled curve, a filled shape under a rotation,
-//! a clip) still goes whole, and nothing of a cut path paints under a mark (F-008).
+//! a dashed stroke, a path that paints and clips) still goes whole, and nothing of a cut path
+//! paints under a mark (F-008).
 
 use pdfcraft_content::{Matrix, overlaps, parse};
 
@@ -77,7 +78,11 @@ pub(super) fn painted_under(doc: &Document, overlays: &[pdfcraft_cos::ObjRef], m
 
 /// Mark `rect`, apply, and check nothing paints under it, by [`painted_under`] and by the proof.
 fn cut_under(src: &[u8], rect: [f64; 4]) -> (Report, String) {
-    let mut doc = one_page(src, "", vec![]);
+    cut_doc(one_page(src, "", vec![]), rect)
+}
+
+/// [`cut_under`] on a document of its own.
+fn cut_doc(mut doc: Document, rect: [f64; 4]) -> (Report, String) {
     mark(&mut doc, 0, &[rect], "");
     let mut snap = Snapshot::capture(&doc, None).unwrap();
     let r = apply(&mut doc, None).unwrap();
@@ -136,6 +141,10 @@ fn a_sharp_corner_near_the_mark_is_not_left_mitred() {
     let (r, c) = cut_under(b"20 M 4 w 50 90 m 150 100 l 50 110 l S", mark);
     assert_eq!((r.paths_removed, r.paths_cut), (0, 1), "{r:?}");
     assert!(!c.contains("50 90 m\n150 100 l\n50 110 l"), "the mitred tip is no longer a join: {c}");
+    // Just past the limit as given, the tip is bevelled; as written (four decimals) it is
+    // within it, mitred, and its spike would reach the mark: the join is decided as written.
+    let (_, c) = cut_under(b"4 w 50 89.94964 m 150 100 l 50 110.05036 l S", mark);
+    assert!(!c.contains("150 100 l\n50 110.0504 l"), "the tip mitred as written is no longer a join: {c}");
 }
 
 #[test]
@@ -169,15 +178,64 @@ fn what_cannot_be_cut_exactly_still_goes_whole() {
         (&b"0 g 100 100 m 150 150 l 200 100 l h f"[..], "a filled triangle"),
         (b"0 g 100 100 m 150 150 160 120 200 100 c f", "a filled curve"),
         (b"q 0.7071 0.7071 -0.7071 0.7071 150 150 cm 0 g -20 -20 40 40 re f Q", "a filled square under a rotation"),
-        (b"0 g 100 100 100 100 re W n", "a clip"),
+        (b"0 g 100 100 100 100 re W f", "a clip that also paints"),
+        (b"q 10 w [6 4] 0 d 100 145 m 200 145 l S Q", "a dashed stroke"),
+        (b"q /Dash gs 10 w 100 145 m 200 145 l S Q", "a stroke dashed by its ExtGState"),
+        (b"q /Half gs 4 w 0 g 100 100 100 100 re B Q", "a box filled and stroked half see-through"),
+        (b"q /Multiply gs 4 w 0 g 100 100 100 100 re B Q", "a box filled and stroked with a blend mode"),
     ] {
-        let mut doc = one_page(src, "", vec![]);
+        let mut doc = one_page(src, "/ExtGState << /Dash << /D [[6 4] 0] >> /Half << /CA 0.5 >> /Multiply << /BM /Multiply >> >>", vec![]);
         mark(&mut doc, 0, &[[130.0, 130.0, 160.0, 160.0]], "");
         let r = apply(&mut doc, None).unwrap();
-        assert_eq!(r.paths_cut, 0, "{why}: {r:?}");
-        assert!(r.paths_removed <= 1, "{why}: {r:?}");
-        assert!(painted_under(&doc, &r.overlays, [130.0, 130.0, 160.0, 160.0]).is_empty(), "{why}: {}", content(&doc, 0));
+        assert_eq!((r.paths_removed, r.paths_cut), (1, 0), "{why}: {r:?}");
+        let c = content(&doc, 0);
+        assert!(!c.contains("100 100 100 100 re"), "{why}: nothing of it stays: {c}");
+        assert!(painted_under(&doc, &r.overlays, [130.0, 130.0, 160.0, 160.0]).is_empty(), "{why}: {c}");
     }
+}
+
+/// A clip that paints nothing (`W n`) is no paint for the mark to take: it stays as written.
+#[test]
+fn a_clip_that_paints_nothing_stays() {
+    let mut doc = one_page(b"q 100 100 100 100 re W n 0 g 10 10 20 20 re f Q", "", vec![]);
+    mark(&mut doc, 0, &[[130.0, 130.0, 160.0, 160.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.paths_removed, r.paths_cut), (0, 0), "{r:?}");
+    assert!(content(&doc, 0).contains("100 100 100 100 re W n"), "{}", content(&doc, 0));
+}
+
+/// A path may begin in one `/Contents` stream and end in the next. What the first holds of it
+/// goes too, or the cut's paint (or the next path's) would paint it under the mark.
+#[test]
+fn a_path_split_between_content_streams_is_cut_whole() {
+    let two = |head: &[u8], tail: &[u8]| {
+        pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents [4 0 R 5 0 R] >>".to_vec(),
+            stream("", head),
+            stream("", tail),
+        ])
+    };
+    let mark = [110.0, 110.0, 140.0, 140.0];
+    let (r, c) = cut_doc(two(b"0 g 100 100 50 50 re", b"200 100 50 50 re f"), mark);
+    assert_eq!((r.paths_removed, r.paths_cut), (0, 1), "{r:?}");
+    assert!(!c.contains("100 100 50 50 re") && c.contains("200 100 50 50 re"), "{c}");
+    // Removed whole, the curve's start must not run on into the stroke after it.
+    let (r, c) = cut_doc(two(b"0 g 100 100 m 110 160 140 160 150 100 c", b"h f 0 G 10 10 m 20 10 l S"), mark);
+    assert_eq!((r.paths_removed, r.paths_cut), (1, 0), "{r:?}");
+    assert!(!c.contains(" c\n") && c.contains("10 10 m\n20 10 l\nS"), "{c}");
+}
+
+/// 400 marks across one rectangle and 400 down it would cut it into 160,000 pieces, each
+/// strip checked against all made so far: past the budget it goes whole, at once.
+#[test]
+fn a_rectangle_under_a_grid_of_marks_goes_whole() {
+    let mut doc = one_page(b"0 g 0 0 300 300 re f", "", vec![]);
+    let grid: Vec<[f64; 4]> = (0..400).map(|i| 0.25 + 0.75 * i as f64).flat_map(|v| [[v, 0.0, v + 0.25, 300.0], [0.0, v, 300.0, v + 0.25]]).collect();
+    mark(&mut doc, 0, &grid, "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.paths_removed, r.paths_cut), (1, 0), "{r:?}");
 }
 
 #[test]

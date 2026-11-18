@@ -101,6 +101,12 @@ struct Gs {
     line_join: i64,
     /// `J` / ExtGState `/LC`: a projecting square cap (2) reaches past the endpoint's corner.
     line_cap: i64,
+    /// `d` / ExtGState `/D` set a dash pattern: each subpath restarts it, so a stroke cut into
+    /// new subpaths would move its dashes (#7300).
+    dashed: bool,
+    /// ExtGState `/CA` below 1, a `/BM` other than Normal, or an `/SMask`: a `B` then
+    /// composites its fill and stroke as one object, which separate `f` and `S` don't (#7300).
+    composited: bool,
     /// The tiling or shading pattern selected as the fill colour (`/Name scn`), and as the stroke
     /// colour (`/Name SCN`). Part of the graphics state, so `q`/`Q` save and restore them with
     /// everything else. A pattern's cell is a content stream of its own and this pass does not
@@ -378,6 +384,12 @@ struct Glyph {
     rects: Vec<usize>,
 }
 
+/// Does a dash array (`d`'s first operand, `/D`'s first element) dash? An empty one, or one
+/// of zeros, draws solid lines.
+fn dashes(doc: &Document, array: &Object) -> bool {
+    doc.resolve(array).as_array().is_some_and(|a| a.iter().any(|v| doc.resolve(v).as_f64().is_some_and(|v| v > 0.0)))
+}
+
 /// Record the patterns an operator paints with, so [`prune_patterns`] keeps them. Only path
 /// painting knows exactly what it draws and whether the paint survived; text, images and forms
 /// are recorded as they are met, which can keep a pattern whose paint was in fact all redacted,
@@ -411,6 +423,8 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         miter_limit: 10.0,
         line_join: 0,
         line_cap: 0,
+        dashed: false,
+        composited: false,
         fill_pattern: None,
         stroke_pattern: None,
         type3_inherits: false,
@@ -447,15 +461,31 @@ fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], 
         }
     }
     let (pieces, rewrite) = split_into_pieces(&joined, parsed.ops, streams.len(), forced_change);
-    let mut processed = Vec::new();
+    let mut processed: Vec<(Vec<Op>, bool)> = Vec::new();
+    // Where the open path's operators begin in each earlier piece it was written to: the tail of
+    // each, so taking them out leaves the rest of the piece as it was.
+    let mut head_at: Vec<(usize, usize)> = Vec::new();
     for (piece, changed) in pieces.into_iter().zip(rewrite) {
         let mut done = Piece { ops: Vec::with_capacity(piece.len()), changed };
         for op in piece {
             walk.step(doc, scope, resources, op, &mut done);
+            if std::mem::take(&mut walk.drop_head) {
+                for (k, at) in head_at.drain(..) {
+                    processed[k].0.truncate(at);
+                    processed[k].1 = true;
+                }
+            }
+            if walk.head.is_empty() {
+                head_at.clear();
+            }
         }
-        if !walk.path.is_empty() {
-            done.ops.append(&mut walk.path);
+        if !walk.path.is_empty() || !walk.head.is_empty() {
+            // The path runs on into the next piece. Its line state goes first: it applies only to
+            // the stroke that ends the path, so the path's operators stay last, to be taken out.
             done.ops.append(&mut walk.pending);
+            head_at.push((processed.len(), done.ops.len()));
+            walk.head.extend(walk.path.iter().cloned());
+            done.ops.append(&mut walk.path);
         }
         processed.push((done.ops, done.changed));
     }
@@ -527,6 +557,11 @@ struct Walk {
     /// the stroke that ends it, so the path stays whole for the hit test, and they are written
     /// after it, kept even when the path goes.
     pending: Vec<Op>,
+    /// The current path's operators already written to earlier pieces of the content stream, which
+    /// it began in and ran on from; set `drop_head` to have [`process_from`] take them out of
+    /// those pieces when the path is removed or cut (#7300).
+    head: Vec<Op>,
+    drop_head: bool,
     /// Painting operators written again under a clip that cuts the regions out: unchanged as
     /// operators, but what they paint is no longer all there.
     clipped: HashSet<usize>,
@@ -549,6 +584,8 @@ impl Walk {
             path_box: None,
             clip: false,
             pending: Vec::new(),
+            head: Vec::new(),
+            drop_head: false,
             clipped: HashSet::new(),
             out: Output::default(),
         }
@@ -565,20 +602,22 @@ impl Walk {
             self.paint_path(scope, op, piece);
             return;
         }
-        if !self.path.is_empty() && matches!(o, b"w" | b"M" | b"j" | b"J" | b"d" | b"gs") {
+        let open = !self.path.is_empty() || !self.head.is_empty();
+        if open && matches!(o, b"w" | b"M" | b"j" | b"J" | b"d" | b"gs") {
             self.graphics_state(doc, scope, &op);
             self.pending.push(op);
             return;
         }
-        if !self.path.is_empty() {
+        if open {
             // A path not ended by a painting operator: pass it through.
             piece.ops.append(&mut self.path);
             piece.ops.append(&mut self.pending);
+            self.head.clear();
             self.path_box = None;
             self.clip = false;
         }
         let kept = match o {
-            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" | b"w" | b"M" | b"j" | b"J" => {
+            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" | b"w" | b"M" | b"j" | b"J" | b"d" => {
                 self.graphics_state(doc, scope, &op);
                 Some(op)
             }
@@ -676,7 +715,7 @@ impl Walk {
         let half = (self.gs.line_width.max(1.0) / 2.0 * scale).max(0.5);
         let cap = if self.gs.line_cap == 2 { std::f64::consts::SQRT_2 } else { 1.0 };
         let miter = (self.gs.line_join == 0).then(|| self.gs.miter_limit.max(1.0));
-        cut::Reach { all: self.stroke_pad(), line: half * cap, half, miter }
+        cut::Reach { all: self.stroke_pad(), line: half * cap, half, miter, dashed: self.gs.dashed }
     }
 
     /// How far the current path's stroke reaches from its outline, in device space.
@@ -693,6 +732,14 @@ impl Walk {
     /// A painting operator ends the path; one under a region is removed (or kept as a clip).
     fn paint_path(&mut self, scope: &mut Scope<'_>, op: Op, piece: &mut Piece) {
         let strokes = matches!(op.op.as_slice(), b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
+        // The whole path, with what of it earlier pieces hold, is what is tested and cut; only
+        // this piece's part is written again when it survives.
+        let ran_on = self.head.len();
+        if ran_on > 0 {
+            let mut path = std::mem::take(&mut self.head);
+            path.append(&mut self.path);
+            self.path = path;
+        }
         // A `W`/`W*` makes the path as constructed the clip; the stroke expansion only describes
         // what the painting itself covers.
         let path_box = self.path_box.take();
@@ -709,22 +756,28 @@ impl Walk {
             let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
             let fills = matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*");
             uses_patterns(&mut self.out, &self.gs, fills, strokes);
-            piece.ops.extend(body);
+            piece.ops.extend(body.into_iter().skip(ran_on));
             piece.ops.extend(pending);
             piece.ops.push(op);
             return;
         }
         let b = bbox.unwrap_or_default();
         piece.changed = true;
+        // What earlier pieces hold of the path goes with it, or it would be painted by this
+        // piece's paint, or by the next path's, which it would begin.
+        self.drop_head = ran_on > 0;
         // Cut the path down to what it paints outside the marks when that can be done exactly
         // (#7300); otherwise it goes whole. A clipping path's outline stays as the clip, so it
         // is never cut; nor is a path painting with a pattern, whose cell (text and all) would
-        // stay in use and in the file: it goes whole, and the pattern with it once unused.
+        // stay in use and in the file: it goes whole, and the pattern with it once unused. Nor is
+        // a path that fills and strokes under transparency: `B` composites its fill and stroke as
+        // one object (ISO 32000-2 §11.7.4.4), which the separate `f` and `S` it is cut into don't.
         let o = op.op.as_slice();
-        let patterned = (matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*") && self.gs.fill_pattern.is_some())
-            || (strokes && self.gs.stroke_pattern.is_some());
+        let fills = matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*");
+        let patterned = (fills && self.gs.fill_pattern.is_some()) || (strokes && self.gs.stroke_pattern.is_some());
         if !clips
             && !patterned
+            && !(fills && strokes && self.gs.composited)
             && let Some(cut) = cut::cut(&body, o, &self.gs.ctm, scope.rects, reach)
         {
             uses_patterns(&mut self.out, &self.gs, cut.fills, cut.strokes);
@@ -773,6 +826,7 @@ impl Walk {
             b"M" => self.gs.miter_limit = last.unwrap_or(self.gs.miter_limit),
             b"j" => self.gs.line_join = last.map_or(self.gs.line_join, |j| j as i64),
             b"J" => self.gs.line_cap = last.map_or(self.gs.line_cap, |j| j as i64),
+            b"d" => self.gs.dashed = op.operands.first().is_some_and(|a| dashes(doc, a)),
             _ => {
                 if let Some((font, vertical, size)) = op.last_name().and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
@@ -785,6 +839,13 @@ impl Walk {
                     self.gs.miter_limit = num(b"ML").unwrap_or(self.gs.miter_limit);
                     self.gs.line_join = num(b"LJ").map_or(self.gs.line_join, |j| j as i64);
                     self.gs.line_cap = num(b"LC").map_or(self.gs.line_cap, |j| j as i64);
+                    if let Some(d) = state.get(b"D").and_then(|d| doc.resolve(d).as_array().cloned()) {
+                        self.gs.dashed = d.first().is_some_and(|a| dashes(doc, a));
+                    }
+                    // Only ever set here, so a later `/CA 1` can't hide a blend mode still in force.
+                    let plain = |key: &[u8], ok: &[&[u8]]| state.get(key).is_none_or(|v| doc.resolve(v).as_name().is_some_and(|n| ok.contains(&n)));
+                    self.gs.composited |=
+                        num(b"CA").is_some_and(|a| a < 1.0) || !plain(b"BM", &[b"Normal", b"Compatible"]) || !plain(b"SMask", &[b"None"]);
                 }
             }
         }
