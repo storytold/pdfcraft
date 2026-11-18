@@ -675,13 +675,17 @@ pub fn check_custom_key(name: &str) -> Result<(), OrganizeError> {
 /// Read a document-information entry as text: `/Info`, else the XMP packet (Title, Author,
 /// Subject, Keywords, Creator and Producer, see `xmp`).
 pub fn info(doc: &Document, key: &str) -> Option<String> {
-    let in_info = doc
-        .trailer()
+    // Files that state it only in their XMP packet (#2373).
+    info_entry(doc, key).or_else(|| xmp::info_value(doc, key))
+}
+
+/// The document information's own text for `key`: `None` without an entry, or with only blanks.
+fn info_entry(doc: &Document, key: &str) -> Option<String> {
+    doc.trailer()
         .get(b"Info")
         .map(|o| doc.resolve(o))
-        .and_then(|info| info.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text())));
-    // Files that state it only in their XMP packet (#2373).
-    in_info.filter(|v| !v.trim_matches('\0').trim().is_empty()).or_else(|| xmp::info_value(doc, key))
+        .and_then(|info| info.as_dict()?.get(key.as_bytes()).and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text())))
+        .filter(|v| !v.trim_matches('\0').trim().is_empty())
 }
 
 /// Whether the document information has an entry `key`, of any type.
