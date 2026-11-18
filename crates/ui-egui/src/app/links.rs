@@ -77,12 +77,10 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.pending_destinations.retain(|pending| pending.doc != id);
         let destination = match destination {
-            pdfcraft_render::RemoteDestination::Named(name) => {
-                match self.look_up_named_destination(id, name) {
-                    Some(destination) => destination,
-                    None => return,
-                }
-            }
+            pdfcraft_render::RemoteDestination::Named(name) => match self.look_up_named_destination(id, name) {
+                Some(destination) => destination,
+                None => return,
+            },
             other => other,
         };
         self.show_destination_at(index, destination);
@@ -111,7 +109,6 @@ impl PdfCraftApp {
     /// Show each named destination whose lookup has finished, in its document's tab.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn poll_pending_destinations(&mut self) {
-        // PLAN: `named_destinations` is `JobQueue<DocId, Option<(usize, DestView)>>` (pdf-hub-w1)
         while let Some(done) = self.named_destinations.try_recv() {
             let Some(at) = self.pending_destinations.iter().position(|pending| pending.doc == done.key) else { continue };
             let pending = self.pending_destinations.remove(at);

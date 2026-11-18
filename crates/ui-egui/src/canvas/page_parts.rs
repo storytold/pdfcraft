@@ -367,9 +367,11 @@ impl Component for PageParts<'_> {
     /// Reads the press, the hover, the focused part's key and the focus that arrived. The press machine reports a
     /// press's phases one per pass, so a second pass of a frame reads only its own phase.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        let pressed = self.parts.iter().filter_map(|part| part.owner.part_ref(part.page)).any(|at| {
-            cx.part_if_declared(at).is_some_and(|result| result.press.phase.is_press())
-        });
+        let pressed = self
+            .parts
+            .iter()
+            .filter_map(|part| part.owner.part_ref(part.page))
+            .any(|at| cx.part_if_declared(at).is_some_and(|result| result.press.phase.is_press()));
         if let Some(owner) = self.focus
             && (cx.is_focused() || pressed)
             && let Some(at) = self.parts.iter().filter(|part| part.focusable && part.owner == owner).find_map(|part| part.owner.part_ref(part.page))
@@ -403,5 +405,3 @@ impl Component for PageParts<'_> {
         PagePartsOutput { response: cx.response.clone(), press, key, hovered, focused }
     }
 }
-
-

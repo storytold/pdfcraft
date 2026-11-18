@@ -14,10 +14,11 @@ use craft::ui::contract::Show;
 use craft::ui::dialog::{DialogResult, dialog_id};
 use craft::ui::display::Text;
 use craft::ui::patterns::form_dialogs::{
-    DialogFields, FieldValue, HostedParamDialog, PagerStep, PagerUnit, PanePager, Param, ParamDialog, ParamKind, ParamResult, PreviewState, SharedOverlay,
+    DialogFields, FieldValue, HostedParamDialog, PagerStep, PagerUnit, PanePager, Param, ParamDialog, ParamKind, ParamResult, PreviewState,
+    SharedOverlay,
 };
 use craft::ui::primitives::ContentPainterCx;
-use craft::ui::primitives::textures::{ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails, TextureState};
+use craft::ui::primitives::textures::{TextureState, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails};
 use craft::ui::runtime::env::UnitKind;
 use craft::ui::runtime::requests::PathKind;
 use craft::ui::style::DataColor;
@@ -528,7 +529,11 @@ fn boxes_row() -> Param {
             let key = format!("hf.text.{k}");
             let before = fields.text(&key).unwrap_or_default().to_owned();
             let mut text = before.clone();
-            let r = ui.push_id(("hf-box", k), |ui| TextField::new(tl!(BOX_NAMES[k]), craft::ui::contract::Bind::bound(&mut text)).lines(2).show(ui).response).inner;
+            let r = ui
+                .push_id(("hf-box", k), |ui| {
+                    TextField::new(tl!(BOX_NAMES[k]), craft::ui::contract::Bind::bound(&mut text)).lines(2).show(ui).response
+                })
+                .inner;
             if r.gained_focus() || r.has_focus() {
                 fields.set("hf.focused", FieldValue::Int(k as i64));
             }
@@ -572,10 +577,16 @@ fn rows(kind: MarkKind, g: &Geometry) -> Vec<Param> {
             let m = g.units;
             for (k, label) in [(0, tl!("Top margin")), (1, tl!("Bottom margin")), (2, tl!("Left margin")), (3, tl!("Right margin"))] {
                 // Up to 10 inches, whatever the unit.
-                rows.push(Param::number(format!("hf.margin.{k}"), label, 0.0, m.kind.step(), m.decimals).unit(m.kind).bounds(Some(0.0), Some(720.0 * m.per)));
+                rows.push(
+                    Param::number(format!("hf.margin.{k}"), label, 0.0, m.kind.step(), m.decimals)
+                        .unit(m.kind)
+                        .bounds(Some(0.0), Some(720.0 * m.per)),
+                );
             }
             rows.push(boxes_row());
-            let list = |formats: &[&str]| formats.iter().enumerate().map(|(k, f)| (k.to_string(), f.trim_matches(['<', '>']).to_string())).collect::<Vec<_>>();
+            let list = |formats: &[&str]| {
+                formats.iter().enumerate().map(|(k, f)| (k.to_string(), f.trim_matches(['<', '>']).to_string())).collect::<Vec<_>>()
+            };
             rows.push(Param::new("page_format", tl!("Page number format"), choice(list(&PAGE_FORMATS), "0")));
             rows.push(Param::new("date_format", tl!("Date format"), choice(list(&DATE_FORMATS), "0")));
             rows.push(Param::new("hf.start", tl!("Start page number"), ParamKind::int(Some(1), Some(999_999), 1)));
@@ -585,18 +596,19 @@ fn rows(kind: MarkKind, g: &Geometry) -> Vec<Param> {
             let source = [("text".to_string(), tl!("Text").to_string()), ("file".to_string(), tl!("File").to_string())];
             rows.push(Param::new("source", tl!("Source"), ParamKind::radio(source.map(|(i, l)| (i, l.into())).to_vec(), Some("text".into()))));
             file_rows(&mut rows);
-            rows.push(
-                Param::new("wm.text", tl!("Text"), ParamKind::text("")).multiline(2).hint("CONFIDENTIAL").enabled_when("source", "text"),
-            );
+            rows.push(Param::new("wm.text", tl!("Text"), ParamKind::text("")).multiline(2).hint("CONFIDENTIAL").enabled_when("source", "text"));
             rows.push(Param::new("wm.fit", tl!("Fit to page"), ParamKind::bool(true)).enabled_when("source", "text"));
             rows.push(Param::number("wm.size", tl!("Size"), 72.0, 1.0, 0).bounds(Some(6.0), Some(300.0)).enabled_when("wm.fit", false));
             rows.push(Param::new("marks.wm.colour", tl!("Colour"), ParamKind::color(None)));
             rows.push(Param::new("wm.rotation", tl!("Rotation"), ParamKind::angle(0.0)));
             rows.push(percent("wm.opacity", tl!("Opacity"), 100.0));
-            let place = [("behind".to_string(), tl!("Appear behind page").to_string()), ("above".to_string(), tl!("Appear on top of page").to_string())];
+            let place =
+                [("behind".to_string(), tl!("Appear behind page").to_string()), ("above".to_string(), tl!("Appear on top of page").to_string())];
             rows.push(Param::new("wm.behind", tl!("Location"), ParamKind::radio(place.map(|(i, l)| (i, l.into())).to_vec(), Some("behind".into()))));
             for (k, label) in [(0, tl!("Horizontal offset from centre")), (1, tl!("Vertical offset from centre"))] {
-                rows.push(Param::number(format!("wm.offset.{k}"), label, 0.0, 1.0, 1).unit(UnitKind::Points).bounds(Some(-MAX_OFFSET), Some(MAX_OFFSET)));
+                rows.push(
+                    Param::number(format!("wm.offset.{k}"), label, 0.0, 1.0, 1).unit(UnitKind::Points).bounds(Some(-MAX_OFFSET), Some(MAX_OFFSET)),
+                );
             }
         }
         MarkKind::Background => {
@@ -897,10 +909,7 @@ impl PdfCraftApp {
                 .previews(true)
                 .ok_enabled(notes.ready)
                 .extra_buttons(if kind == MarkKind::HeaderFooter {
-                    vec![
-                        ("insert.page".to_string(), tl!("Insert Page Number").into()),
-                        ("insert.date".to_string(), tl!("Insert Date").into()),
-                    ]
+                    vec![("insert.page".to_string(), tl!("Insert Page Number").into()), ("insert.date".to_string(), tl!("Insert Date").into())]
                 } else {
                     Vec::new()
                 })
@@ -1030,8 +1039,8 @@ impl PdfCraftApp {
             Some(state) => state,
             None => thumbnail_picture(ctx, &source, target, &near),
         };
-        let tint = (kind == MarkKind::Background && !d.use_file)
-            .then(|| DataColor::new(background_tint(d, d.backdrops.found(doc, target).flatten())));
+        let tint =
+            (kind == MarkKind::Background && !d.use_file).then(|| DataColor::new(background_tint(d, d.backdrops.found(doc, target).flatten())));
 
         let pager = PanePager { shown: target + 1, count, shown_label: None, back: back.is_some(), next: next.is_some(), unit: PagerUnit::Page };
         let overlay = size.map(|size| overlay(kind, d, size));
@@ -1074,7 +1083,14 @@ impl PdfCraftApp {
 
 impl MarksPreview {
     /// [`Self::unmarked_picture`] when the dialog is Update.
-    fn unmarked_picture_for(&mut self, ctx: &egui::Context, doc: &pdfcraft_engine::Document, replace: bool, page: usize, near: &[usize]) -> Option<PreviewState> {
+    fn unmarked_picture_for(
+        &mut self,
+        ctx: &egui::Context,
+        doc: &pdfcraft_engine::Document,
+        replace: bool,
+        page: usize,
+        near: &[usize],
+    ) -> Option<PreviewState> {
         if replace { self.unmarked_picture(ctx, doc, page, near) } else { None }
     }
 }

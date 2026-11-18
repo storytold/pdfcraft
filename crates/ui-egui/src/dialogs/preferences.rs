@@ -215,7 +215,9 @@ impl Texts {
             String::new()
         } else {
             i18n::fmt(
-                tl!("{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy."),
+                tl!(
+                    "{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy."
+                ),
                 &[("chars", &bad)],
             )
         };
@@ -459,7 +461,8 @@ impl PreferencesModel for Prefs<'_> {
         let suite = self.app.suite_view();
         let favorites = self.app.favorite_themes();
         let system_dark = self.app.system_dark();
-        let shown = AppearancePage::new(&suite, Bind::bound(&mut *self.selection)).favorites(&favorites).text_size(false).system_dark(system_dark).show(ui);
+        let shown =
+            AppearancePage::new(&suite, Bind::bound(&mut *self.selection)).favorites(&favorites).text_size(false).system_dark(system_dark).show(ui);
         if let Some(theme) = shown.favorite_toggled {
             self.app.toggle_favorite_theme(theme);
         }
@@ -611,7 +614,9 @@ impl Prefs<'_> {
         let language = if Lang::from_code(&d.language).is_some() { d.language.as_str() } else { i18n::AUTO };
         let mut scales = vec![Entry::new(AUTO_ID, t.auto_scale.as_str())];
         scales.extend(t.scale_ids.iter().map(|(id, label)| Entry::new(id.as_str(), label.as_str())));
-        let scale = d.ui_scale.map_or(AUTO_ID, |f| t.scale_ids.iter().find(|(id, _)| id.parse::<u32>().is_ok_and(|p| p == ui_scale::percent(f))).map_or(AUTO_ID, |(id, _)| id.as_str()));
+        let scale = d.ui_scale.map_or(AUTO_ID, |f| {
+            t.scale_ids.iter().find(|(id, _)| id.parse::<u32>().is_ok_and(|p| p == ui_scale::percent(f))).map_or(AUTO_ID, |(id, _)| id.as_str())
+        });
         let mut rows = vec![
             RowSpec::new("general.language", tl!("Interface language"), RowKind::choice(language, languages)),
             RowSpec::new("general.scale", tl!("Interface size"), RowKind::choice(scale, scales))
@@ -622,7 +627,11 @@ impl Prefs<'_> {
         ];
         #[cfg(not(target_arch = "wasm32"))]
         {
-            rows.push(RowSpec::new("general.reopen", tl!("Reopen the files that were open when PdfCraft last closed"), RowKind::Bool(d.reopen_last_session)));
+            rows.push(RowSpec::new(
+                "general.reopen",
+                tl!("Reopen the files that were open when PdfCraft last closed"),
+                RowKind::Bool(d.reopen_last_session),
+            ));
             rows.push(RowSpec::new(
                 "general.restore_view",
                 tl!("Restore the last view (page, zoom and page display) when a document is opened again"),
@@ -655,13 +664,16 @@ impl Prefs<'_> {
         let mut modes: Vec<_> = presets.iter().map(|(id, label, _)| Entry::new(*id, *label)).collect();
         modes.push(Entry::new("custom", tl!("Custom")));
         let custom = mode == "custom";
-        let (text, background, only_black, line_art) = d.reading_colors.params.map_or(([0, 0, 0], [255, 255, 255], false, true), |p| (p.text, p.background, p.only_black, p.line_art));
+        let (text, background, only_black, line_art) =
+            d.reading_colors.params.map_or(([0, 0, 0], [255, 255, 255], false, true), |p| (p.text, p.background, p.only_black, p.line_art));
         let reading = vec![
             RowSpec::new("appearance.reading.mode", tl!("Reading colours"), RowKind::choice(mode, modes)),
             RowSpec::new("appearance.reading.text", tl!("Text"), RowKind::Color(rgb(text))).enabled(custom),
             RowSpec::new("appearance.reading.background", tl!("Page background"), RowKind::Color(rgb(background))).enabled(custom),
-            RowSpec::new("appearance.reading.only_black", tl!("Only change the colour of black text or line art"), RowKind::Bool(only_black)).enabled(custom),
-            RowSpec::new("appearance.reading.line_art", tl!("Change the colour of line art as well as text"), RowKind::Bool(line_art)).enabled(custom),
+            RowSpec::new("appearance.reading.only_black", tl!("Only change the colour of black text or line art"), RowKind::Bool(only_black))
+                .enabled(custom),
+            RowSpec::new("appearance.reading.line_art", tl!("Change the colour of line art as well as text"), RowKind::Bool(line_art))
+                .enabled(custom),
         ];
         let display = vec![
             RowSpec::new("appearance.edge_shadows", tl!("Show Page Edge Shadows"), RowKind::Bool(d.show_page_edge_shadows)),
@@ -701,7 +713,11 @@ impl Prefs<'_> {
         let d = &*self.draft;
         let rows = vec![
             RowSpec::new("comment.author", tl!("Name on new comments"), RowKind::Text(d.author.as_str())),
-            RowSpec::new("comment.hide_hover", tl!("Hide hover previews for highlights without comment text"), RowKind::Bool(d.hide_empty_highlight_hover)),
+            RowSpec::new(
+                "comment.hide_hover",
+                tl!("Hide hover previews for highlights without comment text"),
+                RowKind::Bool(d.hide_empty_highlight_hover),
+            ),
         ];
         PageSpec::new("comment", tl!("Comment"), rows)
     }
@@ -719,8 +735,12 @@ impl Prefs<'_> {
         let rows = vec![
             RowSpec::new("fill.flatten", tl!("Flatten Fill & Sign when saving"), RowKind::Bool(d.flatten_fill_sign_on_save))
                 .help(tl!("Text, marks and signatures become part of the page. Other comments stay editable.")),
-            RowSpec::new("fill.ask_lock", tl!("Otherwise, ask on the first save after a signature is placed"), RowKind::Bool(d.ask_to_lock_signatures))
-                .enabled(!d.flatten_fill_sign_on_save),
+            RowSpec::new(
+                "fill.ask_lock",
+                tl!("Otherwise, ask on the first save after a signature is placed"),
+                RowKind::Bool(d.ask_to_lock_signatures),
+            )
+            .enabled(!d.flatten_fill_sign_on_save),
             RowSpec::new("fill.date_preset", tl!("Fill & Sign dates"), RowKind::choice(preset, presets)).keywords(tl!("Date format")),
             RowSpec::new("fill.date_pattern", tl!("Pattern"), RowKind::Custom).keywords(tl!("Date format")).help(t.date_help.as_str()),
             RowSpec::new("fill.date_language", tl!("Language"), RowKind::choice(language, languages)).keywords(tl!("Date format")),

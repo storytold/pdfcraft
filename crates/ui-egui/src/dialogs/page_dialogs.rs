@@ -179,19 +179,12 @@ fn rotate_dialog<'b>(fields: &'b mut DialogFields, count: usize, current: usize)
             "orientation",
             tl!("Rotate:"),
             ParamKind::choice(
-                options(&[
-                    ("both", tl!("Landscape and Portrait Pages")),
-                    ("landscape", tl!("Landscape Pages")),
-                    ("portrait", tl!("Portrait Pages")),
-                ]),
+                options(&[("both", tl!("Landscape and Portrait Pages")), ("landscape", tl!("Landscape Pages")), ("portrait", tl!("Portrait Pages"))]),
                 Some("both".into()),
             ),
         ),
     ];
-    ParamDialog::new(ROTATE, tl!("Rotate Pages"), params)
-        .ok_enabled(valid)
-        .remember(SaveKey::new("pdfcraft.page_rotate"))
-        .values(Bind::bound(fields))
+    ParamDialog::new(ROTATE, tl!("Rotate Pages"), params).ok_enabled(valid).remember(SaveKey::new("pdfcraft.page_rotate")).values(Bind::bound(fields))
 }
 
 /// The label styles Number pages offers.
@@ -374,11 +367,8 @@ impl PdfCraftApp {
         let opening = (pages.first().map_or(1, |p| p + 1), pages.last().map_or(1, |p| p + 1));
         let target = self.pick_target(Some(id));
         let source = Arc::new(ReplaceSource { name, bytes, src_pages, count, pages, opening, target });
-        let seeds = vec![
-            ("from", FieldValue::from(opening.0 as i64)),
-            ("to", FieldValue::from(opening.1 as i64)),
-            ("src_from", FieldValue::from(1i64)),
-        ];
+        let seeds =
+            vec![("from", FieldValue::from(opening.0 as i64)), ("to", FieldValue::from(opening.1 as i64)), ("src_from", FieldValue::from(1i64))];
         self.replace_source = Some(source.clone());
         self.open_page_dialog(ctx, REPLACE, seeds, move |fields| source.dialog(fields));
     }

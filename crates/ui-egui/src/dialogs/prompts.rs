@@ -92,10 +92,8 @@ impl PdfCraftApp {
         if let Some(host) = pdfcraft_engine::links::display_host(&pending.url) {
             prompt = prompt.paragraph(host.ascii.clone());
             if host.mixed_scripts {
-                prompt = prompt.tone(
-                    Tone::Bad,
-                    tl!("This web address mixes letters from different alphabets, a common way to imitate another site's name."),
-                );
+                prompt = prompt
+                    .tone(Tone::Bad, tl!("This web address mixes letters from different alphabets, a common way to imitate another site's name."));
             } else if host.international {
                 prompt = prompt.tone(Tone::Warn, tl!("This web address uses letters from another alphabet, which can look like familiar ones."));
             }

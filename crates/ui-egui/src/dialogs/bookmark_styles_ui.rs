@@ -62,7 +62,8 @@ impl PdfCraftApp {
         let draft = &self.text_style_draft;
         if draft.styles.is_empty() {
             // A form dialog always has two buttons; a notice with only Close is an alert.
-            let alert = Alert::new(tl!("New bookmarks from text styles"), tl!("This document has no text to make bookmarks from.")).ok_label(tl!("Close"));
+            let alert =
+                Alert::new(tl!("New bookmarks from text styles"), tl!("This document has no text to make bookmarks from.")).ok_label(tl!("Close"));
             self.dialogs.open(HostedAlert::new(alert));
             return;
         }

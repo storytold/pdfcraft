@@ -443,8 +443,11 @@ fn security_rows(doc: &Document) -> Vec<PropertyRow> {
     } else {
         tl!("User password")
     };
-    let mut rows =
-        vec![value("Security method", tl!("Password security").to_string()), value("Encryption", sec.method.clone()), value("Opened with", opened.to_string())];
+    let mut rows = vec![
+        value("Security method", tl!("Password security").to_string()),
+        value("Encryption", sec.method.clone()),
+        value("Opened with", opened.to_string()),
+    ];
     // A restricted document asks for its permissions password first.
     if doc.allows_security_change() || doc.can_unlock() {
         let mut actions = Vec::new();

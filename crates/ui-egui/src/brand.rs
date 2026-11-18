@@ -7,7 +7,7 @@
 use craft::theme::Mode;
 use craft::ui::display::{Picture, PictureSize};
 use craft::ui::list::ThumbAspect;
-use craft::ui::runtime::Env;
+use craft::ui::runtime::env::Env;
 
 const MARK: &[u8] = include_bytes!("../../../docs/brand/artcraft-mark.svg");
 const LOGO: &[u8] = include_bytes!("../../../docs/brand/artcraft-logo.svg");

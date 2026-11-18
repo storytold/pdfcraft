@@ -9,8 +9,7 @@ use craft::keymap::Mods;
 use craft::pages::ui::{PageTexts, PlacedPage, TextSelectState};
 use craft::review::SavedSignature;
 use craft::ui::canvas::{
-    CanvasTool, HandTool, NavigationOptions, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer, ToolRegion,
-    ZoomTool,
+    CanvasTool, HandTool, NavigationOptions, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer, ToolRegion, ZoomTool,
 };
 use craft::ui::primitives::Draw;
 use pdfcraft_engine::{Document, Edit, FormField};
@@ -295,9 +294,7 @@ pub(crate) fn page_tool<'a>(
             };
             Arm::Area(Box::new(FillSignTool::new(&cx, input, fill)))
         }
-        QuickTool::Field(field_tool) => {
-            Arm::Area(Box::new(PrepareTool::new(Some(field_tool), cx.can_modify, cx.form, session)))
-        }
+        QuickTool::Field(field_tool) => Arm::Area(Box::new(PrepareTool::new(Some(field_tool), cx.can_modify, cx.form, session))),
         // PLAN: assumed `AddTextTool::new(session, doc, info)` in `content_ui` (pdf-edit-w7 gives no argument list).
         QuickTool::AddText => Arm::Area(Box::new(crate::tools::content_ui::AddTextTool::new(session, cx.doc, cx.info))),
         // PLAN: pdf-edit-w10's `EditTextTool::new(view, doc, info)` takes no placed pages, which the review asked to hand over.

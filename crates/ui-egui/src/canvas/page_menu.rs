@@ -2,8 +2,8 @@
 
 use craft::behavior::IconId;
 use craft::ui::canvas::ContextRequest;
-use craft::ui::contract::overlay::Anchor;
 use craft::ui::contract::Show as _;
+use craft::ui::contract::overlay::Anchor;
 use craft::ui::display::Divider;
 use craft::ui::menu::{Menu, MenuIcon, MenuIconRow, MenuItem};
 use pdfcraft_engine::Edit;
@@ -343,10 +343,9 @@ fn rows(ui: &mut egui::Ui, view: &mut DocView, cx: &PageMenuCx<'_>, menu_for: Op
     }
     let (page, at) = view.comments.context_at.unwrap_or((view.current, [0.0, 0.0]));
     // On a page still being read, the picture rows appear when the answer comes.
-    let picture_under = view
-        .comments
-        .context_at
-        .and_then(|(page, at)| view.pictures.get(ui.ctx(), cx.doc, page).and_then(|pictures| pdfcraft_engine::picture_at(pictures, at)).map(|(index, _)| *index));
+    let picture_under = view.comments.context_at.and_then(|(page, at)| {
+        view.pictures.get(ui.ctx(), cx.doc, page).and_then(|pictures| pdfcraft_engine::picture_at(pictures, at)).map(|(index, _)| *index)
+    });
     // A text selection whose pages are still being read copies once they are.
     let has_text = view.selected_text().is_some() || view.selection_waits_for_text().is_some();
     let can_copy_items = cx.can_copy && (view.image_selection.is_some() || has_text || picture_under.is_some());

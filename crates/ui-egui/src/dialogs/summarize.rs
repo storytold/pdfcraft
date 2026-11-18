@@ -18,10 +18,8 @@ const SORT: &str = "sort";
 fn build(fields: &mut DialogFields) -> ParamDialog<'_> {
     let layout = ParamKind::radio(vec![(COMMENTS_ONLY.to_string(), tl!("Comments only").into())], Some(COMMENTS_ONLY.to_string()));
     let sorts = SummarySort::ALL.into_iter().map(|s| (s.name().to_string(), tl!(s.name()).into())).collect();
-    let params = vec![
-        Param::new(LAYOUT, tl!("Choose a layout:"), layout),
-        Param::new(SORT, tl!("Sort comments by:"), ParamKind::choice(sorts, None)),
-    ];
+    let params =
+        vec![Param::new(LAYOUT, tl!("Choose a layout:"), layout), Param::new(SORT, tl!("Sort comments by:"), ParamKind::choice(sorts, None))];
     ParamDialog::command(KEY, tl!("Summarize Options"), params).values(Bind::bound(fields)).ok_label(tl!("Create PDF Comment Summary"))
 }
 
