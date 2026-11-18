@@ -23,6 +23,7 @@ mod outline;
 mod outline_io;
 mod pdfx;
 mod prune;
+mod structure;
 mod templates;
 mod transition;
 pub mod view;
@@ -285,7 +286,8 @@ pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Organiz
     labels::drop_deleted_pages(doc, indices)?;
     // The deleted pages go for good: bookmarks, links and widgets that still point at one would
     // otherwise keep it, with its content, in the saved file. Their form widgets leave the form,
-    // and bookmarks and links that went to them lose that destination.
+    // bookmarks and links that went to them lose that destination, and their tagged content
+    // leaves the structure tree.
     let gone: Vec<ObjRef> = all.iter().map(|(r, _)| *r).filter(|r| !keep.iter().any(|(k, _)| k == r)).collect();
     let mut widgets = Vec::new();
     for r in &gone {
@@ -298,6 +300,7 @@ pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Organiz
     }
     drop_widgets(doc, widgets)?;
     drop_destinations_to(doc, &gone, &keep)?;
+    structure::drop_structure_of(doc, &gone)?;
     for r in gone {
         doc.free(r);
     }

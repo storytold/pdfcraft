@@ -1,0 +1,140 @@
+//! The tagged structure of deleted pages (ISO 32000-2 14.7). Delete Pages takes their content out
+//! of the structure tree: otherwise their elements, alternate and actual text included, stay
+//! reachable from the structure tree root, its parent tree and its ID tree, and even a full
+//! rewrite keeps them.
+
+use std::collections::HashSet;
+
+use pdfcraft_cos::{Document, ObjRef, Object};
+
+use crate::OrganizeError;
+
+/// Structure elements and tree nodes visited at most; past it, the rest stays as it is.
+const MAX_NODES: usize = 200_000;
+/// Nesting followed at most.
+const MAX_DEPTH: usize = 256;
+
+/// Drop from the structure tree every marked-content and object reference on the pages `gone`,
+/// every element left with nothing, the parent-tree entries of those pages and their annotations,
+/// and the ID-tree entries of the dropped elements. An element with content on a kept page stays.
+/// The pages are not freed yet: their parent-tree keys are read from them.
+pub(crate) fn drop_structure_of(doc: &mut Document, gone: &[ObjRef]) -> Result<(), OrganizeError> {
+    let Some(root) = doc.root() else { return Ok(()) };
+    let Some(tree_ref) = doc.get(root).as_dict().and_then(|c| c.reference(b"StructTreeRoot")) else { return Ok(()) };
+    let Some(tree) = doc.get(tree_ref).as_dict().cloned() else { return Ok(()) };
+    let gone: HashSet<ObjRef> = gone.iter().copied().collect();
+    let mut keys = HashSet::new();
+    for r in &gone {
+        let Some(page) = doc.get(*r).as_dict().cloned() else { continue };
+        keys.extend(page.int(b"StructParents"));
+        let annots = page.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        keys.extend(annots.iter().filter_map(|a| doc.resolve(a).as_dict().and_then(|d| d.int(b"StructParent"))));
+    }
+    let mut p = Pruner { gone: &gone, seen: HashSet::new(), dropped: HashSet::new(), budget: MAX_NODES };
+    if let Some(k) = tree.get(b"K") {
+        let kept = p.kids(doc, k, None, 0)?;
+        if kept.as_ref() != Some(k) {
+            doc.update_dict(tree_ref, |t| match kept {
+                Some(k) => t.set(b"K".to_vec(), k),
+                None => {
+                    t.remove(b"K");
+                }
+            })?;
+        }
+    }
+    for (name, list) in [(&b"ParentTree"[..], &b"Nums"[..]), (&b"IDTree"[..], &b"Names"[..])] {
+        if let Some(node) = tree.get(name) {
+            p.tree(doc, node, list, &keys, 0)?;
+        }
+    }
+    Ok(())
+}
+
+struct Pruner<'a> {
+    gone: &'a HashSet<ObjRef>,
+    seen: HashSet<ObjRef>,
+    dropped: HashSet<ObjRef>,
+    budget: usize,
+}
+
+impl Pruner<'_> {
+    fn spend(&mut self, depth: usize) -> bool {
+        self.budget = self.budget.saturating_sub(1);
+        self.budget > 0 && depth <= MAX_DEPTH
+    }
+
+    /// `k` (an element's `/K`: one kid or an array of them) without the kids on deleted pages;
+    /// `None` when nothing is left. `page` is the page the kids inherit (`/Pg`).
+    fn kids(&mut self, doc: &mut Document, k: &Object, page: Option<ObjRef>, depth: usize) -> Result<Option<Object>, OrganizeError> {
+        let Object::Array(list) = k else { return self.kid(doc, k, page, depth) };
+        let mut out = Vec::new();
+        for kid in list {
+            out.extend(self.kid(doc, kid, page, depth)?);
+        }
+        Ok((!out.is_empty()).then_some(Object::Array(out)))
+    }
+
+    /// One kid: a marked-content id, a marked-content or object reference, or an element.
+    fn kid(&mut self, doc: &mut Document, kid: &Object, page: Option<ObjRef>, depth: usize) -> Result<Option<Object>, OrganizeError> {
+        if !self.spend(depth) {
+            return Ok(Some(kid.clone()));
+        }
+        let on_gone = |p: Option<ObjRef>| p.is_some_and(|p| self.gone.contains(&p));
+        if kid.as_int().is_some() {
+            return Ok((!on_gone(page)).then(|| kid.clone()));
+        }
+        let Some(d) = doc.resolve(kid).as_dict().cloned() else { return Ok(Some(kid.clone())) };
+        let own = d.reference(b"Pg").or(page);
+        if !d.contains(b"S") {
+            // A marked-content or object reference.
+            return Ok((!on_gone(own)).then(|| kid.clone()));
+        }
+        // Elements are indirect objects; one reached twice is decided once.
+        let Some(r) = kid.as_ref() else { return Ok(Some(kid.clone())) };
+        if !self.seen.insert(r) {
+            return Ok((!self.dropped.contains(&r)).then(|| kid.clone()));
+        }
+        let kept = match d.get(b"K") {
+            Some(k) => self.kids(doc, k, own, depth + 1)?,
+            None if on_gone(own) => None,
+            None => return Ok(Some(kid.clone())),
+        };
+        let Some(kept) = kept else {
+            self.dropped.insert(r);
+            return Ok(None);
+        };
+        if d.get(b"K") != Some(&kept) {
+            doc.update_dict(r, |e| e.set(b"K".to_vec(), kept))?;
+        }
+        Ok(Some(kid.clone()))
+    }
+
+    /// Remove from the number or name tree `node` (`list` is `Nums` or `Names`) the entries keyed
+    /// by one of `keys` and those naming only dropped elements.
+    fn tree(&mut self, doc: &mut Document, node: &Object, list: &[u8], keys: &HashSet<i64>, depth: usize) -> Result<(), OrganizeError> {
+        if !self.spend(depth) {
+            return Ok(());
+        }
+        let Some(r) = node.as_ref() else { return Ok(()) };
+        let Some(d) = doc.get(r).as_dict().cloned() else { return Ok(()) };
+        for kid in d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default() {
+            self.tree(doc, &kid, list, keys, depth + 1)?;
+        }
+        let Some(pairs) = d.get(list).map(|n| doc.resolve(n)).and_then(|n| n.as_array().cloned()) else { return Ok(()) };
+        let dropped = |o: &Object| o.as_ref().is_some_and(|r| self.dropped.contains(&r));
+        let names_dropped = |v: &Object| match doc.resolve(v).as_array() {
+            Some(a) => !a.is_empty() && a.iter().all(dropped),
+            None => dropped(v),
+        };
+        let kept: Vec<Object> = pairs
+            .chunks(2)
+            .filter(|pair| matches!(pair, [k, v] if !k.as_int().is_some_and(|k| keys.contains(&k)) && !names_dropped(v)))
+            .flatten()
+            .cloned()
+            .collect();
+        if kept.len() != pairs.len() {
+            doc.update_dict(r, |n| n.set(list.to_vec(), Object::Array(kept)))?;
+        }
+        Ok(())
+    }
+}

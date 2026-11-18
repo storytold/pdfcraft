@@ -188,6 +188,36 @@ fn rotate_uses_inherited_rotation_and_round_trips() {
     assert_eq!(rot(2), Some(270), "normalised into 0..360");
 }
 
+/// Delete Pages takes a deleted page's tagged content out of the structure tree. Its element, with
+/// alternate and actual text, stayed reachable from the tree, its parent tree and its ID tree, so
+/// even a full rewrite kept it. What the kept page shows stays tagged.
+#[test]
+fn deleting_a_page_drops_its_tagged_structure() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R /MarkInfo << /Marked true >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /StructParents 0 /Contents 9 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R /StructParents 1 /Contents 10 0 R >>".into(),
+        "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 11 0 R /IDTree 12 0 R >>".into(),
+        "<< /Type /StructElem /S /Document /P 5 0 R /K [7 0 R 8 0 R] >>".into(),
+        // A paragraph that goes on to page 2, and a figure on page 2 only.
+        "<< /Type /StructElem /S /P /P 6 0 R /Pg 3 0 R /K [0 << /Type /MCR /Pg 4 0 R /MCID 1 >>] /Alt (Kept words) >>".into(),
+        "<< /Type /StructElem /S /Figure /P 6 0 R /Pg 4 0 R /K 0 /ID (fig1) /Alt (SECRET alt) /ActualText (SECRET actual) >>".into(),
+        body("one"),
+        body("two"),
+        "<< /Nums [0 [7 0 R] 1 [8 0 R 7 0 R]] >>".into(),
+        "<< /Names [(fig1) 8 0 R] >>".into(),
+    ];
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    delete_pages(&mut doc, &[1]).unwrap();
+    let saved = open(write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap());
+    let dicts: Vec<Dict> = saved.scan_objects().filter_map(|(_, o)| o.as_dict().cloned()).collect();
+    let strings: Vec<String> = dicts.iter().flat_map(|d| d.iter().filter_map(|(_, v)| v.as_string().map(|s| s.to_text()))).collect();
+    assert!(!strings.iter().any(|s| s.starts_with("SECRET")), "the deleted page's tags are still in the file: {strings:?}");
+    let p = dicts.iter().find(|d| d.name(b"S") == Some(b"P")).unwrap();
+    assert_eq!((p.get(b"K").and_then(Object::as_array).map(Vec::len), p.get(b"Alt").is_some()), (Some(1), true), "{p:?}");
+}
+
 #[test]
 fn delete_keeps_inherited_attributes_on_survivors() {
     let mut doc = open(fixture());
