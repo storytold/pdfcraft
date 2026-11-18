@@ -246,7 +246,7 @@ pub const WORDINGS: &[&str] = &[
     "The font {} isn't embedded",
     "A font isn't embedded",
     "A stream uses LZW compression",
-    "A stream refers to an external file",
+    "A stream dictionary has an external-file entry (F, FFilter or FDecodeParms)",
     "An image asks to be interpolated",
     "An image has alternates or OPI information",
     "PostScript XObjects aren't allowed",
@@ -296,7 +296,9 @@ pub const WORDINGS: &[&str] = &[
     "The XMP packet header has a bytes or encoding attribute",
     "An output intent names an external profile (DestOutputProfileRef)",
     "The output intents have different destination profiles",
+    "Some output intents weren't checked: there are more of them than one verification reads",
     "Data follows the last end-of-file marker (%%EOF)",
+    "The file has no end-of-file marker (%%EOF) on a line of its own",
     "A 3D stream's Subtype isn't U3D or PRC",
     "A button's normal appearance isn't a dictionary of appearance states",
     "A {} annotation's normal appearance isn't an appearance stream",
@@ -447,7 +449,7 @@ fn pdfa_intent_profile(doc: &Document) -> Option<Option<i64>> {
 }
 
 /// [`pdfa_intent_profile`] for the output intents of `holder`: the catalog, or a page.
-pub(crate) fn pdfa_intent_profile_in(doc: &Document, holder: &Dict) -> Option<Option<i64>> {
+fn pdfa_intent_profile_in(doc: &Document, holder: &Dict) -> Option<Option<i64>> {
     let list = holder.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
     list.iter().find_map(|oi| {
         let d = doc.resolve(oi).as_dict().cloned()?;
@@ -568,13 +570,21 @@ fn page_contents(doc: &Document, page: &Dict) -> Vec<ObjRef> {
             let r = terminal_ref(doc, *r);
             match &*doc.get(r) {
                 Object::Array(a) => a.clone(),
-                _ => vec![Object::Ref(r)],
+                // Followed once: an object still a reference here is what `contents_cut` reports.
+                _ => return vec![r],
             }
         }
         Some(Object::Array(a)) => a.clone(),
         _ => Vec::new(),
     };
     contents.iter().filter_map(Object::as_ref).map(|r| terminal_ref(doc, r)).collect()
+}
+
+/// Whether a page's `/Contents` leads to an object that, past [`MAX_ALIAS_CHAIN`] steps or in a
+/// cycle, still only refers to another: content [`page_contents`] can't name, which the font and
+/// colour checks take as content they couldn't read.
+fn contents_cut(doc: &Document) -> bool {
+    pdfcraft_model::pages(doc).iter().any(|p| page_contents(doc, &p.dict).iter().any(|r| matches!(*doc.get(*r), Object::Ref(_))))
 }
 
 /// How many objects that are only a reference to another [`terminal_ref`] follows.
@@ -681,7 +691,16 @@ fn drawing_fonts(
         // joined, a space between them, as renderers join them.
         let mut joined = Some(Vec::new());
         for r in &contents {
-            let Object::Stream(s) = &*doc.get(*r) else { continue };
+            let object = doc.get(*r);
+            let s = match &*object {
+                Object::Stream(s) => s,
+                // An alias chain [`page_contents`] couldn't follow to its end: unread content.
+                Object::Ref(_) => {
+                    joined = None;
+                    break;
+                }
+                _ => continue,
+            };
             let Ok(data) = fonts.budget.decode(s) else {
                 joined = None;
                 break;
@@ -1190,7 +1209,9 @@ fn mark_cs_object(doc: &Document, cs: &Object, used: &mut DeviceColour, depth: u
 fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> DeviceColour {
     let referenced = referenced_content(doc, objs);
     let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_COLOUR_DECODED, usize::MAX);
-    uses_device_colour_in(doc, objs, &referenced, &mut budget)
+    let mut used = uses_device_colour_in(doc, objs, &referenced, &mut budget);
+    used.incomplete |= contents_cut(doc);
+    used
 }
 
 /// [`uses_device_colour`] for `objs`, some of the document's objects, with the content streams
@@ -1570,7 +1591,7 @@ fn check_output_intent_part4(
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
     let pages = pdfcraft_model::pages(doc);
-    let document = part4::plain_intent(pdfa_intent_profile(doc));
+    let document = part4::plain_intent(part4::intent_components(doc, &catalog(doc), profiles));
     let page_places: Vec<part4::Place> = pages.iter().map(|p| part4::page_place(doc, &p.dict, document, profiles)).collect();
     // Where no page leads: the intent every page has, unknown components when their intents differ
     // and none when a page has none; the blending space every page has, else none.
@@ -1598,7 +1619,7 @@ fn check_output_intent_part4(
     // as at the other levels.
     let default_rgb = found.iter().any(|(_, used)| used.default_rgb);
     let default_cmyk = found.iter().any(|(_, used)| used.default_cmyk);
-    if found.iter().any(|(_, used)| used.incomplete) {
+    if found.iter().any(|(_, used)| used.incomplete) || contents_cut(doc) {
         issue("6.2.4.3", "Some content could not be read for device colour", None, None, false);
     }
     let (mut no_intent, mut no_cmyk_intent, mut cmyk, mut rgb) = (false, false, false, false);
@@ -2040,7 +2061,7 @@ fn check_stream(
     }
     // An external file's name, its filters or their parameters (ISO 32000-2 7.3.8.2, Table 5).
     if [b"F".as_slice(), b"FFilter", b"FDecodeParms"].iter().any(|key| present(doc, &stream.dict, key)) {
-        issue("6.1.7.1", "A stream refers to an external file", None, None, false);
+        issue("6.1.7.1", "A stream dictionary has an external-file entry (F, FFilter or FDecodeParms)", None, None, false);
     }
     if subtype == Some(b"Image") {
         if matches!(stream.dict.get(b"Interpolate"), Some(Object::Bool(true))) {
