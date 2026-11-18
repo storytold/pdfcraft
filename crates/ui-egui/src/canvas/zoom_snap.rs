@@ -224,7 +224,7 @@ impl PdfCraftApp {
             .and_then(|(_, id)| self.session.get(id))
             .map_or_else(String::new, |d| d.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string());
         let name = format!("{stem} area.png");
-        self.pick_first(PickRequest::save("snapshot").file_name(name).filter("PNG", &["png"]), None, move |app, path| {
+        self.pick_first(PickRequest::save("snapshot").file_name(name).filter("PNG", &["png"]), None, move |app, _, path| {
             match craft::atomic::atomic_write(&path, &png) {
                 Ok(()) => app.notify_fmt("Exported to {path}", &[("path", &path.display().to_string())]),
                 Err(e) => app.notify_fmt("Couldn't write {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),

@@ -305,8 +305,11 @@ pub fn legacy_image(v: &serde_json::Value) -> Option<SavedImage> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum FillOutcome {
     Edit(Box<Edit>),
-    /// Place once, then select the new signature or initials for adjustment.
-    Signature(Box<Edit>),
+    /// Place once on `page`, then select the new signature or initials there for adjustment.
+    Signature {
+        edit: Box<Edit>,
+        page: usize,
+    },
     /// No signature yet: open the signature pad.
     CreateSignature,
     /// No initials yet.
@@ -395,11 +398,11 @@ impl<'a> FillSignTool<'a> {
                 Err(why) => FillOutcome::Refused(why.clone()),
             }),
             FillTool::Signature => match signature {
-                Some(s) => place(page, p, at, s, false, author).map(|e| FillOutcome::Signature(Box::new(e))),
+                Some(s) => place(page, p, at, s, false, author).map(|e| FillOutcome::Signature { edit: Box::new(e), page }),
                 None => Some(FillOutcome::CreateSignature),
             },
             FillTool::Initials => match initials {
-                Some(s) => place(page, p, at, s, true, author).map(|e| FillOutcome::Signature(Box::new(e))),
+                Some(s) => place(page, p, at, s, true, author).map(|e| FillOutcome::Signature { edit: Box::new(e), page }),
                 None => Some(FillOutcome::CreateInitials),
             },
             mark => {

@@ -687,7 +687,7 @@ impl PdfCraftApp {
     fn save_print_pdf(&mut self, name: &str, bytes: Vec<u8>) -> Result<PrintStart, String> {
         let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF");
         let request = craft::host::PickRequest::save("print").file_name(format!("{stem} (print).pdf")).filter("PDF", &["pdf"]);
-        self.pick_file(request, None, move |app, picked| {
+        self.pick_file(request, None, move |app, _, picked| {
             let answer = match picked {
                 // A picker that can't open refuses the held OK; only a cancel gives it back.
                 craft::host::Picked::Unavailable(reason) => Err(reason),

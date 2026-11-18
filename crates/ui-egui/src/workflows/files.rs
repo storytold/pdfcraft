@@ -176,33 +176,33 @@ pub(crate) fn dropped_name(f: &OsFile) -> String {
 
 impl PdfCraftApp {
     /// Ask for files to add to the Combine files list (its Add files… button).
-    pub fn combine_dialog(&mut self, ctx: &egui::Context) {
-        self.pick_files(ctx, FilePurpose::Combine, true);
+    pub fn combine_dialog(&mut self) {
+        self.pick_files(FilePurpose::Combine, true);
     }
 
     /// Create a PDF ▸ Multiple files: ask for the files to convert.
-    pub fn create_multiple_dialog(&mut self, ctx: &egui::Context) {
-        self.pick_files(ctx, FilePurpose::CreateMultiple, true);
+    pub fn create_multiple_dialog(&mut self) {
+        self.pick_files(FilePurpose::CreateMultiple, true);
     }
 
     /// Create a PDF ▸ Separate PDFs: pick source files, then a destination folder.
-    pub fn create_multiple_separate_dialog(&mut self, ctx: &egui::Context) {
-        self.pick_files(ctx, FilePurpose::CreateMultipleSeparate, true);
+    pub fn create_multiple_separate_dialog(&mut self) {
+        self.pick_files(FilePurpose::CreateMultipleSeparate, true);
     }
 
     /// Scan & OCR ▸ Recognize text ▸ In multiple files: ask for the PDFs.
-    pub fn ocr_files_dialog(&mut self, ctx: &egui::Context) {
-        self.pick_files(ctx, FilePurpose::Ocr, true);
+    pub fn ocr_files_dialog(&mut self) {
+        self.pick_files(FilePurpose::Ocr, true);
     }
 
     /// Ask for files whose pages to insert after the selection (Organize ▸ Insert from file).
-    pub fn insert_from_file_dialog(&mut self, ctx: &egui::Context) {
-        self.insert_from_file_at(ctx, None);
+    pub fn insert_from_file_dialog(&mut self) {
+        self.insert_from_file_at(None);
     }
 
     /// Ask for files to insert at grid gap `at` (0 = before the first page), or after the
     /// selection.
-    pub(crate) fn insert_from_file_at(&mut self, ctx: &egui::Context, at: Option<usize>) {
+    pub(crate) fn insert_from_file_at(&mut self, at: Option<usize>) {
         let Some(i) = self.active else {
             self.notify_tr("Open a document first");
             return;
@@ -210,15 +210,15 @@ impl PdfCraftApp {
         if let Some(v) = self.views.get_mut(i) {
             v.insert_at = at;
         }
-        self.pick_files(ctx, FilePurpose::InsertPages, true);
+        self.pick_files(FilePurpose::InsertPages, true);
     }
 
     /// Ask for files for `purpose`; they are used when the pick is answered.
-    pub(crate) fn pick_files(&mut self, ctx: &egui::Context, purpose: FilePurpose, multiple: bool) {
+    pub(crate) fn pick_files(&mut self, purpose: FilePurpose, multiple: bool) {
         // The document to edit is the one active now, not whichever is active when the pick is
         // answered (#167).
         let target = purpose.edits_active_document().then(|| self.pick_target(self.active_ids().map(|(_, id)| id))).flatten();
-        self.pick_file(picker_request(purpose, multiple), target, move |app, picked| app.use_picked(ctx, purpose, picked));
+        self.pick_file(picker_request(purpose, multiple), target, move |app, ctx, picked| app.use_picked(ctx, purpose, picked));
     }
 
     /// Use what a pick for `purpose` answered. A cancelled or unavailable picker changes nothing
@@ -301,7 +301,7 @@ impl PdfCraftApp {
         I: IntoIterator<Item = Result<(String, Vec<u8>), (String, String)>> + 'static,
     {
         #[cfg(not(target_arch = "wasm32"))]
-        self.pick_file(PickRequest::folder("export.separate").title(tl!("Choose a folder for the exported files")), None, move |app, picked| {
+        self.pick_file(PickRequest::folder("export.separate").title(tl!("Choose a folder for the exported files")), None, move |app, _, picked| {
             if let Some(dir) = picked.first_path() {
                 app.stage_create_separate(sources, Some(dir));
             }
@@ -404,12 +404,12 @@ impl PdfCraftApp {
         }
     }
 
-    pub fn replace_pages_dialog(&mut self, ctx: &egui::Context) {
+    pub fn replace_pages_dialog(&mut self) {
         if self.active.is_none() {
             self.notify_tr("Open a document first");
             return;
         }
-        self.pick_files(ctx, FilePurpose::ReplacePages, false);
+        self.pick_files(FilePurpose::ReplacePages, false);
     }
 
     /// Insert the pages of `files` (PDFs, images, text), in order, at the gap a "+" in the page
@@ -499,7 +499,7 @@ impl PdfCraftApp {
             // document must be unedited since (page numbers shift, and edits to those pages
             // aren't in the files) and still the active one (deleting edits the active document).
             let generation = self.session.get(id).map(|d| d.edit_generation());
-            self.write_files_then(named, tl!("Choose a folder for the extracted pages"), move |app| {
+            let delete = move |app: &mut Self, ctx: &egui::Context| {
                 if !opts.delete {
                     return;
                 }
@@ -509,7 +509,14 @@ impl PdfCraftApp {
                 } else {
                     app.notify_tr("The pages were extracted but not deleted, because the document changed while you were choosing a folder.");
                 }
-            });
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            self.write_files_then(named, tl!("Choose a folder for the extracted pages"), delete);
+            // The web has no folder to ask for: the files download now, and the pages go with them.
+            #[cfg(target_arch = "wasm32")]
+            if self.download_files(&named) {
+                delete(self, ctx);
+            }
             return;
         }
         match self.session.extract(id, &pages) {
@@ -537,21 +544,31 @@ impl PdfCraftApp {
 
     /// Write named files into a chosen folder (desktop) or as downloads (web).
     pub(crate) fn write_files(&mut self, named: &[(String, Arc<Vec<u8>>)], title: &str) {
-        self.write_files_then(named.to_vec(), title, |_| {});
+        #[cfg(not(target_arch = "wasm32"))]
+        self.write_files_then(named.to_vec(), title, |_, _| {});
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = title;
+            self.download_files(named);
+        }
     }
 
-    /// [`Self::write_files`], then `after` once every file is written: now, or on a later frame
-    /// when the user chooses the folder. `after` never runs when writing fails or is cancelled.
+    /// [`Self::write_files`], then `after` once every file is written, on the later frame when
+    /// the user chooses the folder. `after` never runs when writing fails or is cancelled.
     /// Every name must be a plain file name ([`is_plain_file_name`]); otherwise nothing is written
     /// and no folder is asked for.
-    pub(crate) fn write_files_then(&mut self, named: Vec<(String, Arc<Vec<u8>>)>, title: &str, after: impl FnOnce(&mut Self) + 'static) {
-        if let Some((name, _)) = named.iter().find(|(name, _)| !is_plain_file_name(name)) {
-            self.notify_fmt("Couldn't write {name}: {e}", &[("name", name), ("e", tl!("the name is not a plain file name"))]);
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn write_files_then(
+        &mut self,
+        named: Vec<(String, Arc<Vec<u8>>)>,
+        title: &str,
+        after: impl FnOnce(&mut Self, &egui::Context) + 'static,
+    ) {
+        if !self.plain_file_names(&named) {
             return;
         }
-        #[cfg(not(target_arch = "wasm32"))]
         {
-            let write = move |app: &mut Self, picked: Picked| {
+            let write = move |app: &mut Self, ctx: &egui::Context, picked: Picked| {
                 let Some(dir) = picked.first_path() else { return };
                 for (name, bytes) in &named {
                     if let Err(e) = app.host.files().write(&dir.join(name), bytes, WriteIntent::SaveAs) {
@@ -564,21 +581,34 @@ impl PdfCraftApp {
                 } else {
                     app.notify_fmt("Wrote {n} files to {dir}", &[("n", &named.len().to_string()), ("dir", &dir.display().to_string())]);
                 }
-                after(app);
+                after(app, ctx);
             };
             self.pick_file(PickRequest::folder("export.folder").title(title), None, write);
         }
-        // The web has no folder to ask for: each file is a download.
-        #[cfg(target_arch = "wasm32")]
-        {
-            for (name, bytes) in &named {
-                if let Err(e) = self.host.files().write(std::path::Path::new(name), bytes, WriteIntent::SaveAs) {
-                    self.notify_fmt("Couldn't download {name}: {e}", &[("name", name), ("e", &e.to_string())]);
-                    return;
-                }
-            }
-            after(self);
+    }
+
+    /// The web's [`Self::write_files`]: there is no folder to ask for, so each file is a download.
+    /// Returns `true` once every file is handed over.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn download_files(&mut self, named: &[(String, Arc<Vec<u8>>)]) -> bool {
+        if !self.plain_file_names(named) {
+            return false;
         }
+        for (name, bytes) in named {
+            if let Err(e) = self.host.files().write(std::path::Path::new(name), bytes, WriteIntent::SaveAs) {
+                self.notify_fmt("Couldn't download {name}: {e}", &[("name", name), ("e", &e.to_string())]);
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Whether every name in `named` is a plain file name ([`is_plain_file_name`]); otherwise the
+    /// user is told which one is not.
+    fn plain_file_names(&mut self, named: &[(String, Arc<Vec<u8>>)]) -> bool {
+        let Some((name, _)) = named.iter().find(|(name, _)| !is_plain_file_name(name)) else { return true };
+        self.notify_fmt("Couldn't write {name}: {e}", &[("name", name), ("e", tl!("the name is not a plain file name"))]);
+        false
     }
 
     /// Pages ▸ Rotate Pages: rotate the pages of `base` that pass the parity and orientation
@@ -725,24 +755,24 @@ impl PdfCraftApp {
     }
 
     /// Prepare a form ▸ Import data: XFDF, FDF, XML, CSV or text.
-    pub fn import_data_dialog(&mut self, ctx: &egui::Context) {
-        self.import_dialog(ctx, false);
+    pub fn import_data_dialog(&mut self) {
+        self.import_dialog(false);
     }
 
     /// Comments ▸ Import comments: the files Import data takes, or another PDF to copy the
     /// comments of.
-    pub fn import_comments_dialog(&mut self, ctx: &egui::Context) {
-        self.import_dialog(ctx, true);
+    pub fn import_comments_dialog(&mut self) {
+        self.import_dialog(true);
     }
 
-    fn import_dialog(&mut self, ctx: &egui::Context, pdf: bool) {
+    fn import_dialog(&mut self, pdf: bool) {
         let mut extensions = vec!["xfdf", "fdf", "xml", "xdp", "csv", "txt"];
         if pdf {
             extensions.insert(2, "pdf");
         }
         let request = PickRequest::open("import.data").title(tl!("Import data")).filter(tl!("Comment and form data"), &extensions);
         let target = self.pick_target(self.active_ids().map(|(_, id)| id));
-        self.pick_file(request, target, |app, picked| match app.read_picked(picked) {
+        self.pick_file(request, target, |app, ctx, picked| match app.read_picked(picked) {
             Ok(files) => {
                 for (name, bytes) in files {
                     app.apply_edit(ctx, pdfcraft_engine::Edit::ImportData { name, bytes: Arc::new(bytes) });
@@ -772,7 +802,7 @@ impl PdfCraftApp {
         if let Some(folder) = folder {
             request = request.default_directory(folder);
         }
-        self.pick_file(request, None, move |app, picked| {
+        self.pick_file(request, None, move |app, _, picked| {
             let Some(path) = picked.first_path() else { return };
             match app.host.files().write(&path, &bytes, WriteIntent::SaveAs) {
                 Ok(_) => app.notify_fmt("Exported to {path}", &[("path", &path.display().to_string())]),
@@ -787,7 +817,7 @@ impl PdfCraftApp {
         let request = PickRequest::open_many("merge.data")
             .title(tl!("Select data files to merge"))
             .filter(tl!("Form data and PDF forms"), &["fdf", "xfdf", "pdf"]);
-        self.pick_file(request, None, |app, picked| match app.read_picked(picked) {
+        self.pick_file(request, None, |app, _, picked| match app.read_picked(picked) {
             // Asks where to save: a second picker, now that the first one has closed.
             Ok(files) if !files.is_empty() => app.merge_data_files(files),
             Ok(_) => {}
@@ -803,7 +833,7 @@ impl PdfCraftApp {
         };
         let count = files.len();
         let request = PickRequest::save("export.data").title(tl!("Save the spreadsheet")).filter("CSV", &["csv"]).file_name("report.csv");
-        self.pick_file(request, None, move |app, picked| {
+        self.pick_file(request, None, move |app, _, picked| {
             let Some(path) = picked.first_path() else { return };
             match app.host.files().write(&path, csv.as_bytes(), WriteIntent::SaveAs) {
                 Ok(_) if count == 1 => app.notify_fmt("Merged 1 file into {path}", &[("path", &path.display().to_string())]),
@@ -844,7 +874,7 @@ impl PdfCraftApp {
         if let Some(folder) = folder {
             request = request.default_directory(folder);
         }
-        self.pick_file(request, None, move |app, picked| {
+        self.pick_file(request, None, move |app, ctx, picked| {
             let Some(path) = picked.first_path() else { return };
             // Include what was typed while the save panel was open (#166).
             if !app.commit_typing_in(ctx, id) {
@@ -896,8 +926,7 @@ mod tests {
         assert!(files.requests().is_empty(), "no folder is asked for");
         assert!(files.file(&out.join("ok.pdf")).is_none());
         app.write_files(&[("x.pdf".into(), pdf())], "t");
-        // PLAN: assumed `process_picks(&mut self)` (pdf-shell-w14) hands the answer to the continuation
-        app.process_picks();
+        app.process_picks(&egui::Context::default());
         assert_eq!(files.requests().len(), 1);
         assert_eq!(files.file(&out.join("x.pdf")).as_deref(), Some(&b"%PDF"[..]));
     }

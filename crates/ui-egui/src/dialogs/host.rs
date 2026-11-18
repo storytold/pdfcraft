@@ -71,7 +71,7 @@ fn results(app: &mut PdfCraftApp, ctx: &egui::Context) {
     app.create_stamp_pass(ctx);
     app.summarize_pass();
 
-    crate::colour_picker::colour_picker_pass(app);
+    crate::colour_picker::colour_picker_pass(app, ctx);
     // Forms.
     if let Some(result) = app.dialogs.take::<SignaturePadDialog>() {
         super::signature::finish(app, result);

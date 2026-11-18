@@ -1211,32 +1211,32 @@ impl crate::PdfCraftApp {
     /// Pick an image file for the active document, read it, and call `then` with its name and
     /// bytes on the frame the answer arrives, and only if that document is still the active one.
     #[cfg(not(target_arch = "wasm32"))]
-    fn pick_image(&mut self, title: &str, then: impl FnOnce(&mut Self, String, Vec<u8>) + 'static) {
+    fn pick_image(&mut self, title: &str, then: impl FnOnce(&mut Self, &egui::Context, String, Vec<u8>) + 'static) {
         let request = craft::host::PickRequest::open("image")
             .title(title)
             .filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"]);
         let target = self.pick_target(self.active_ids().map(|(_, id)| id));
-        self.pick_first(request, target, move |app: &mut Self, path: std::path::PathBuf| match std::fs::read(&path) {
+        self.pick_first(request, target, move |app: &mut Self, ctx: &egui::Context, path: std::path::PathBuf| match std::fs::read(&path) {
             Ok(bytes) => {
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                then(app, name, bytes);
+                then(app, ctx, name, bytes);
             }
             Err(e) => app.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
         });
     }
 
     /// Edit a PDF ▸ Add content ▸ Image: pick a file and place it in the middle of the current page.
-    pub fn add_image_dialog(&mut self, ctx: &egui::Context) {
+    pub fn add_image_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        self.pick_image(tl!("Choose an image"), |app, name, bytes| app.add_image(ctx, name, bytes));
+        self.pick_image(tl!("Choose an image"), |app, ctx, name, bytes| app.add_image(ctx, name, bytes));
         #[cfg(target_arch = "wasm32")]
         self.notify_tr("Adding images arrives on the web with file pickers for images");
     }
 
     /// Edit text & images ▸ Replace Image: pick a file to draw in a page image's place.
-    pub(crate) fn replace_page_image_dialog(&mut self, ctx: &egui::Context, page: usize, index: usize) {
+    pub(crate) fn replace_page_image_dialog(&mut self, page: usize, index: usize) {
         #[cfg(not(target_arch = "wasm32"))]
-        self.pick_image(tl!("Replace image"), move |app, name, bytes| {
+        self.pick_image(tl!("Replace image"), move |app, ctx, name, bytes| {
             app.apply_edit(
                 ctx,
                 Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Replace { name, bytes: std::sync::Arc::new(bytes) } },
@@ -1347,12 +1347,12 @@ impl crate::PdfCraftApp {
     }
 
     /// Click an image field: pick a picture for it.
-    pub fn choose_field_image(&mut self, ctx: &egui::Context, name: &str) {
+    pub fn choose_field_image(&mut self, name: &str) {
         let Some((_, id)) = self.active_ids() else { return };
-        self.choose_field_image_target(ctx, id, name, None);
+        self.choose_field_image_target(id, name, None);
     }
     /// Keep the clicked document and field identity through the asynchronous image picker.
-    pub fn choose_field_image_target(&mut self, ctx: &egui::Context, id: pdfcraft_engine::DocId, name: &str, identity: Option<u64>) {
+    pub fn choose_field_image_target(&mut self, id: pdfcraft_engine::DocId, name: &str, identity: Option<u64>) {
         if identity.is_some_and(|key| key >= 1u64 << 48) {
             self.notify("The selected image field identity is invalid");
             return;
@@ -1361,7 +1361,7 @@ impl crate::PdfCraftApp {
         {
             let name = name.to_string();
             let Some(generation) = self.session.get(id).map(|d| d.edit_generation()) else { return };
-            self.pick_image(tl!("Select Icon"), move |app, _, bytes| {
+            self.pick_image(tl!("Select Icon"), move |app, ctx, _, bytes| {
                 if app.session.get(id).is_none_or(|d| d.edit_generation() != generation) {
                     app.notify("The document changed while choosing the image; the picture was not applied");
                     return;
@@ -1392,9 +1392,9 @@ impl crate::PdfCraftApp {
     }
 
     /// Edit image ▸ Replace: pick a file for the selected image.
-    pub fn replace_image_dialog(&mut self, ctx: &egui::Context, page: usize, index: usize) {
+    pub fn replace_image_dialog(&mut self, page: usize, index: usize) {
         #[cfg(not(target_arch = "wasm32"))]
-        self.pick_image(tl!("Replace image"), move |app, name, bytes| {
+        self.pick_image(tl!("Replace image"), move |app, ctx, name, bytes| {
             app.apply_edit(ctx, Edit::ReplaceImage { page, index, name, bytes: std::sync::Arc::new(bytes) });
         });
         #[cfg(target_arch = "wasm32")]

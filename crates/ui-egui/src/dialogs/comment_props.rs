@@ -329,9 +329,9 @@ fn comment_props_dialog<'b>(
 
 impl PdfCraftApp {
     /// Attach file: ask for a file and attach it at `at`, on the document the pick started on.
-    pub fn attach_file_comment(&mut self, ctx: &egui::Context, page: usize, at: [f64; 2]) {
+    pub fn attach_file_comment(&mut self, page: usize, at: [f64; 2]) {
         let target = self.pick_target(self.active_ids().map(|(_, id)| id));
-        self.pick_file(PickRequest::open("attach").title(tl!("Attach a file")), target, move |app, picked| match picked {
+        self.pick_file(PickRequest::open("attach").title(tl!("Attach a file")), target, move |app, ctx, picked| match picked {
             Picked::Paths(paths) => {
                 let Some(p) = paths.into_iter().next() else { return };
                 match std::fs::read(&p) {
@@ -500,7 +500,7 @@ impl PdfCraftApp {
         let requested = self.dialogs.get_mut_by_id::<HostedParamDialog>(id).and_then(HostedParamDialog::pick_color);
         if let Some(request) = requested {
             let key = request.key.clone();
-            self.open_colour_picker(PickerHost::App, request, move |app, color: Srgba| {
+            self.open_colour_picker(PickerHost::App, request, move |app, _: &egui::Context, color: Srgba| {
                 if let Some(d) = app.dialogs.get_mut_by_id::<HostedParamDialog>(id) {
                     d.set_field(key, FieldValue::Color([color.r, color.g, color.b]));
                 }

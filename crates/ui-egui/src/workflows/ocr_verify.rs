@@ -1412,7 +1412,7 @@ fn save_editable(app: &mut PdfCraftApp, bytes: Arc<Vec<u8>>, name: String, doc: 
     #[cfg(not(target_arch = "wasm32"))]
     {
         let request = craft::host::PickRequest::save("export").filter("PDF", &["pdf"]).file_name(name.clone());
-        app.pick_file(request, None, move |app, picked| {
+        app.pick_file(request, None, move |app, _, picked| {
             // A cancelled or unavailable picker leaves the review as it was.
             let Some(picked) = picked.first_path() else { return };
             if is_source(&picked, &source) {
@@ -1984,13 +1984,13 @@ mod tests {
         // in ReviewReady with the edit, Accept is enabled again.
         files.answer(Picked::Paths(vec![PathBuf::from("t.pdf")]));
         with_state(&mut app, |v, app| do_accept(v, app, &egui::Context::default()));
-        app.process_picks();
+        app.process_picks(&egui::Context::default());
         assert_eq!(app.ocr_verify.phase, Phase::ReviewReady, "a refused destination keeps the review");
         assert_eq!(app.ocr_verify.text_of((0, 0)), Some("Edited"), "the edits are kept");
         // A cancelled save dialog: nothing is written, nothing changes.
         files.answer(Picked::Cancelled);
         with_state(&mut app, |v, app| do_accept(v, app, &egui::Context::default()));
-        app.process_picks();
+        app.process_picks(&egui::Context::default());
         assert_eq!(app.ocr_verify.phase, Phase::ReviewReady, "a cancelled save keeps the review");
         assert_eq!(app.ocr_verify.text_of((0, 0)), Some("Edited"));
         assert_eq!(app.ocr_verify.doc, Some(id), "the review still belongs to its document");
@@ -1998,7 +1998,7 @@ mod tests {
         let target = PathBuf::from("out/t_ocr.pdf");
         files.answer(Picked::Paths(vec![target.clone()]));
         with_state(&mut app, |v, app| do_accept(v, app, &egui::Context::default()));
-        app.process_picks();
+        app.process_picks(&egui::Context::default());
         assert!(files.file(&target).is_some(), "the editable copy is written");
         assert_eq!(app.ocr_verify.phase, Phase::Idle, "a successful save ends the review");
     }

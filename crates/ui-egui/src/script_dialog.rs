@@ -524,10 +524,9 @@ mod review13_ui_tests {
     /// Refused clicks and execution/prompt timeouts are visible, while stale runs stay silent.
     #[test]
     fn busy_and_timeout_notices_do_not_claim_worker_termination() {
-        let ctx = &egui::Context::default();
         let ctx = egui::Context::default();
         for (timeout, prompt) in [(true, false), (true, true), (false, false)] {
-            let (mut app, id) = app(ctx);
+            let (mut app, id) = app(&ctx);
             app.start_ui_script(id, "app.response({cQuestion:'Wait'});", None, None);
             app.start_ui_script(id, "var shouldNotRun=1;", None, None);
             assert!(app.posted_notices.contains(&PostedNotice::new("Another form script is active; this click was not run")));
@@ -558,7 +557,6 @@ mod review13_ui_tests {
     #[test]
     fn non_active_comparison_document_completes_native_script() {
         let ctx = &egui::Context::default();
-        let ctx = &egui::Context::default();
         for request in ["", "app.execMenuItem('SaveAs');", "print();"] {
             let saved = PathBuf::from("/scripted/source.pdf");
             let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![saved.clone()])]));
@@ -582,7 +580,7 @@ mod review13_ui_tests {
             }
             assert!(app.script_pending.is_none());
             // The Save As the script asked for takes the queued answer on this pass.
-            app.save_flow_pass(ctx, &ctx);
+            app.save_flow_pass(&ctx, &ctx);
             assert_eq!(app.session.run_javascript(old, "comparisonKept", None).unwrap().result.as_deref(), Some("42"));
             assert_eq!(app.session.save_bytes(new).unwrap(), new_before);
             assert!(app.session.get(new).unwrap().path.is_none());

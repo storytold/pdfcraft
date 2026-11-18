@@ -14,8 +14,8 @@ use craft::host::{PickId, PickRequest, Picked};
 use crate::PdfCraftApp;
 use crate::files::PickTarget;
 
-/// What runs with a pick's answer.
-type Then = Box<dyn FnOnce(&mut PdfCraftApp, Picked)>;
+/// What runs with a pick's answer, given the context of the pass that takes it.
+type Then = Box<dyn FnOnce(&mut PdfCraftApp, &egui::Context, Picked)>;
 
 /// The picks asked for and not answered yet, each with the document it acts on and its
 /// continuation. Keyed by ticket, in the order they were asked (tickets grow).
@@ -42,7 +42,7 @@ impl PdfCraftApp {
         &mut self,
         request: PickRequest,
         target: Option<PickTarget>,
-        then: impl FnOnce(&mut PdfCraftApp, Picked) + 'static,
+        then: impl FnOnce(&mut PdfCraftApp, &egui::Context, Picked) + 'static,
     ) -> PickId {
         let id = self.host.files().pick(request);
         self.picks.waiting.insert(id, (target, Box::new(then)));
@@ -55,11 +55,11 @@ impl PdfCraftApp {
         &mut self,
         request: PickRequest,
         target: Option<PickTarget>,
-        then: impl FnOnce(&mut PdfCraftApp, PathBuf) + 'static,
+        then: impl FnOnce(&mut PdfCraftApp, &egui::Context, PathBuf) + 'static,
     ) -> PickId {
-        self.pick_file(request, target, move |app, picked| {
+        self.pick_file(request, target, move |app, ctx, picked| {
             if let Some(path) = picked.first_path() {
-                then(app, path);
+                then(app, ctx, path);
             }
         })
     }
@@ -68,7 +68,7 @@ impl PdfCraftApp {
     /// pass. It reads the file service's answers, not the frame's input, so a second pass in one
     /// frame finds only what was answered since the first and nothing runs twice. A continuation
     /// that asks again gets a new ticket, taken on a later pass.
-    pub(crate) fn process_picks(&mut self) {
+    pub(crate) fn process_picks(&mut self, ctx: &egui::Context) {
         let asked: Vec<PickId> = self.picks.waiting.keys().copied().collect();
         for id in asked {
             let Some(picked) = self.host.files().take_answer(id) else { continue };
@@ -82,7 +82,7 @@ impl PdfCraftApp {
             }
             // Last-resort guard (AGENTS.md §4), as for commands: this work runs on behalf of the
             // command that asked, and a panic in it must not take the app down.
-            if let Err(m) = pdfcraft_engine::guard(|| then(self, picked)) {
+            if let Err(m) = pdfcraft_engine::guard(|| then(self, ctx, picked)) {
                 self.notify_fmt("That didn't work: an internal error stopped it ({m}).", &[("m", m.as_str())]);
             }
         }

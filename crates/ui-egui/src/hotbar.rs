@@ -173,7 +173,11 @@ fn from_srgba(color: Srgba) -> Rgb {
 }
 
 /// Opens the colour picker in the main window, the window the rail's footer lives in, and runs `then` with the answer.
-fn open_picker(app: &mut PdfCraftApp, request: craft::ui::runtime::requests::ColorRequest, then: impl FnOnce(&mut PdfCraftApp, Srgba) + 'static) {
+fn open_picker(
+    app: &mut PdfCraftApp,
+    request: craft::ui::runtime::requests::ColorRequest,
+    then: impl FnOnce(&mut PdfCraftApp, &egui::Context, Srgba) + 'static,
+) {
     app.open_colour_picker(crate::colour_picker::PickerHost::App, request, then);
 }
 
@@ -250,11 +254,11 @@ fn fill_text_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
     let picked = selected_fill_text(app);
     let well = Swatch::new(tl!("Text colour").to_string(), to_srgba(app.fill_text_color)).picker("hotbar.fill-text-colour").well().show(ui);
     if let Some(request) = well.pick_color {
-        open_picker(app, request, move |app: &mut PdfCraftApp, picked_colour: Srgba| {
+        open_picker(app, request, move |app: &mut PdfCraftApp, ctx: &egui::Context, picked_colour: Srgba| {
             let color = from_srgba(picked_colour);
             app.fill_text_color = color;
             if let Some((page, index)) = selected_fill_text(app) {
-                app.apply_edit(ui.ctx(), Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None });
+                app.apply_edit(ctx, Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None });
             }
         });
     }
@@ -313,11 +317,11 @@ fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: O
             .show(ui);
         if let Some(request) = well.pick_color {
             let target = selected.map(|(page, index, _)| (page, index));
-            open_picker(app, request, move |app: &mut PdfCraftApp, picked_colour: Srgba| {
+            open_picker(app, request, move |app: &mut PdfCraftApp, ctx: &egui::Context, picked_colour: Srgba| {
                 let color = from_srgba(picked_colour);
                 match target {
                     Some((page, index)) => {
-                        app.apply_edit(ui.ctx(), Edit::BorderColorAnnotation { page, index, color: Some(color) });
+                        app.apply_edit(ctx, Edit::BorderColorAnnotation { page, index, color: Some(color) });
                     }
                     None => app.fill_text_border_color = Some(color),
                 }
@@ -382,11 +386,11 @@ fn comment_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, tool: comments::Co
         let well = Swatch::new(tl!("Border colour").to_string(), to_srgba(shown)).picker("hotbar.comment-border-colour").well().show(ui);
         if let Some(request) = well.pick_color {
             let target = selected.map(|(page, annotation, _)| (page, annotation));
-            open_picker(app, request, move |app: &mut PdfCraftApp, picked_colour: Srgba| {
+            open_picker(app, request, move |app: &mut PdfCraftApp, ctx: &egui::Context, picked_colour: Srgba| {
                 let color = from_srgba(picked_colour);
                 app.comment_prefs.set_border_color(tool, Some(color));
                 if let Some((page, annotation)) = target {
-                    app.apply_edit(ui.ctx(), Edit::BorderColorAnnotation { page, index: annotation, color: Some(color) });
+                    app.apply_edit(ctx, Edit::BorderColorAnnotation { page, index: annotation, color: Some(color) });
                 }
             });
         }
@@ -400,10 +404,10 @@ fn comment_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, tool: comments::Co
         app.colour_selection(ui.ctx(), color, |a| comments::made_by(a, tool));
     }
     if let Some(request) = pick.request {
-        open_picker(app, request, move |app: &mut PdfCraftApp, picked_colour: Srgba| {
+        open_picker(app, request, move |app: &mut PdfCraftApp, ctx: &egui::Context, picked_colour: Srgba| {
             let color = from_srgba(picked_colour);
             if app.active_ids().and_then(|(_, id)| app.session.get(id)).is_some_and(|doc| doc.allows_annotation()) {
-                app.colour_selection(ui.ctx(), color, |a| comments::made_by(a, tool));
+                app.colour_selection(ctx, color, |a| comments::made_by(a, tool));
             }
         });
     }

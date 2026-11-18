@@ -439,12 +439,12 @@ impl PdfCraftApp {
 
     /// Add every PDF, image and text file in a folder the user picks (and its subfolders, if
     /// `recursive`).
-    pub fn combine_add_folder(&mut self, ctx: &egui::Context, recursive: bool) {
+    pub fn combine_add_folder(&mut self, recursive: bool) {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let title = if recursive { tl!("Add folder and subfolders") } else { tl!("Add folder") };
 
-            self.pick_first(PickRequest::folder("combine.folder").title(title), None, move |app, dir| {
+            self.pick_first(PickRequest::folder("combine.folder").title(title), None, move |app, ctx, dir| {
                 app.add_folder_to_combine(ctx, &dir, recursive)
             });
         }

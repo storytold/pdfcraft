@@ -507,7 +507,7 @@ impl PdfCraftApp {
         let name = self.session.get(doc_id).map(|d| d.name.clone()).unwrap_or_default();
         let folder = self.session.get(doc_id).and_then(|d| d.path.clone());
         let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
-        let sign_and_save = move |app: &mut Self, path: PathBuf| -> Result<(), String> {
+        let sign_and_save = move |app: &mut Self, ctx: &egui::Context, path: PathBuf| -> Result<(), String> {
             // Sign what was typed while the save panel was open, too (#166); a refused value
             // has said why already.
             if !app.commit_typing_in(ctx, doc_id) {
@@ -559,8 +559,8 @@ impl PdfCraftApp {
             request = request.default_directory(parent);
         }
         let target = self.pick_target(Some(doc_id));
-        self.pick_first(request, target, move |app: &mut Self, path: PathBuf| {
-            if let Err(e) = sign_and_save(app, path)
+        self.pick_first(request, target, move |app: &mut Self, ctx: &egui::Context, path: PathBuf| {
+            if let Err(e) = sign_and_save(app, ctx, path)
                 && !e.is_empty()
             {
                 app.notify(e);
@@ -577,8 +577,7 @@ impl PdfCraftApp {
     /// Sign as ▸ Choose image…: answered only into the signing dialog that asked.
     pub(crate) fn pick_sign_graphic_image(&mut self) {
         let request = PickRequest::open(FilePurpose::SignGraphic.key()).filter(tl!("Image"), &["png", "jpg", "jpeg"]);
-        // PLAN: assumed `pick_first(PickRequest, Option<target>, FnOnce(&mut Self, PathBuf))` (pdf-shell-w14).
-        self.pick_first(request, None, |app: &mut Self, path: PathBuf| {
+        self.pick_first(request, None, |app: &mut Self, _: &egui::Context, path: PathBuf| {
             if app.sign_draft.is_none() {
                 return;
             }
@@ -787,7 +786,7 @@ mod tests {
         let key = PrivateKey::generate_p256().unwrap();
         let cert = Certificate::self_signed(&Name::build("../x", "", "", "", ""), &key, sign::Time::from_unix(0), 1, &[1]).unwrap();
         app.export_certificate(&cert);
-        app.process_picks();
+        app.process_picks(&egui::Context::default());
         let pem = String::from_utf8(files.file(&out.join(".._x.cer")).unwrap()).unwrap();
         assert!(pem.starts_with("-----BEGIN CERTIFICATE-----"), "{pem}");
     }
@@ -1087,7 +1086,7 @@ mod tests {
         sign_draft.password = "secret12".into();
         import_app.sign_draft = Some(sign_draft);
         assert_eq!(import_app.finish_signing(&egui::Context::default()), Ok(()));
-        import_app.process_picks();
+        import_app.process_picks(&egui::Context::default());
         assert!(out_pdf.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }

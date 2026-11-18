@@ -324,7 +324,7 @@ impl PdfCraftApp {
 
     fn run_file_command(&mut self, ctx: &egui::Context, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
-            "file.open" => self.open_dialog(ctx),
+            "file.open" => self.open_dialog(),
             "file.open_recent" => match self.recent.first().map(|r| r.path.clone()) {
                 // The palette runs commands without a submenu: open the most recent file.
                 Some(p) => self.open_recent(&p),
@@ -379,10 +379,10 @@ impl PdfCraftApp {
             "actions.distribution" => crate::actions_ui::open_wizard(self, ctx, Some("Prepare for Distribution")),
             "actions.optimize_scans" => crate::actions_ui::open_wizard(self, ctx, Some("Optimize Scanned Documents")),
             "create.blank" => self.create_blank(),
-            "create.file" => self.open_dialog(ctx),
-            "create.multiple" => self.create_multiple_dialog(ctx),
-            "create.multiple_separate" => self.create_multiple_separate_dialog(ctx),
-            "create.images" => self.create_from_images_dialog(ctx),
+            "create.file" => self.open_dialog(),
+            "create.multiple" => self.create_multiple_dialog(),
+            "create.multiple_separate" => self.create_multiple_separate_dialog(),
+            "create.images" => self.create_from_images_dialog(),
             "create.clipboard" => self.create_from_clipboard(),
             "optimize.reduce" => self.reduce_file_size(ctx),
             "help.shortcuts" => self.open_shortcuts(ctx),
@@ -546,8 +546,8 @@ impl PdfCraftApp {
                     self.apply_edit(ctx, Edit::InsertBlankPage { at: last + 1, width: w, height: h });
                 }
             }
-            "page.insert" => self.insert_from_file_dialog(ctx),
-            "page.replace" => self.replace_pages_dialog(ctx),
+            "page.insert" => self.insert_from_file_dialog(),
+            "page.replace" => self.replace_pages_dialog(),
             "page.copy" => self.copy_pages(ctx, false),
             "page.cut" => self.copy_pages(ctx, true),
             "page.paste" => self.paste_pages(ctx),
@@ -578,7 +578,7 @@ impl PdfCraftApp {
 
     fn run_edit_command(&mut self, ctx: &egui::Context, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
-            "edit.attach" => self.attach_file_dialog(ctx),
+            "edit.attach" => self.attach_file_dialog(),
             "edit.undo" => self.undo(ctx),
             "edit.redo" => self.redo(ctx),
             "edit.find" => {
@@ -662,7 +662,7 @@ impl PdfCraftApp {
             "export.text" => crate::export_ui::open(self, ctx, crate::export_ui::ExportKind::Text),
             "ocr.recognize" => self.open_recognize_text(ctx),
             "ocr.enhance" => self.open_enhance_scan(ctx),
-            "ocr.recognize_batch" => self.ocr_files_dialog(ctx),
+            "ocr.recognize_batch" => self.ocr_files_dialog(),
             "ocr.correct" => self.ocr_verify.open = true,
             "edit.edit_text" => {
                 self.quick_tool = crate::QuickTool::EditText;
@@ -684,15 +684,15 @@ impl PdfCraftApp {
                 self.left = crate::LeftPanel::Tool("edit");
                 self.reveal_tools();
             }
-            "edit.image" => self.add_image_dialog(ctx),
+            "edit.image" => self.add_image_dialog(),
             "edit.link" => {
                 self.quick_tool = crate::QuickTool::Link;
                 self.notify_tr("Drag a rectangle to create a link; double-click a link to edit it");
             }
             "edit.links_from_urls" => self.links_from_urls(ctx),
             "edit.remove_links" => self.remove_all_links(ctx),
-            "comment.import" => self.import_comments_dialog(ctx),
-            "form.import_data" => self.import_data_dialog(ctx),
+            "comment.import" => self.import_comments_dialog(),
+            "form.import_data" => self.import_data_dialog(),
             "comment.stamp" => {
                 self.left = crate::LeftPanel::Tool("stamp");
                 self.reveal_tools();

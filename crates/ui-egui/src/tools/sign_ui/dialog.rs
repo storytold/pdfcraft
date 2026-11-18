@@ -151,11 +151,10 @@ fn run(ctx: &egui::Context, app: &mut PdfCraftApp, step: SignStep, picked: Optio
         app.remove_digital_id(i);
     }
     if asked.browse {
-        // PLAN: assumed `pick_first(PickRequest, Option<target>, FnOnce(&mut Self, PathBuf))` (pdf-shell-w14).
         app.pick_first(
             PickRequest::open(FilePurpose::DigitalId.key()).filter(tl!("Digital ID"), &["p12", "pfx"]),
             None,
-            |app: &mut PdfCraftApp, path: std::path::PathBuf| {
+            |app: &mut PdfCraftApp, _: &egui::Context, path: std::path::PathBuf| {
                 // The answer belongs to the dialog that asked: none open now, nothing to fill.
                 if let Some(d) = app.sign_draft.as_mut() {
                     d.new_id.file = path.to_string_lossy().into_owned();

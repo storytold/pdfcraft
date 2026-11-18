@@ -309,7 +309,9 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         task(self, PathBuf::new());
         #[cfg(not(target_arch = "wasm32"))]
-        self.pick_first(PickRequest::folder("export.folder").title(tl!("Choose a folder for the exported files")), None, task);
+        self.pick_first(PickRequest::folder("export.folder").title(tl!("Choose a folder for the exported files")), None, move |app, _, dir| {
+            task(app, dir)
+        });
     }
 
     /// Submits the export of `task` into `dir` (empty on the web).

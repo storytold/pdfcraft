@@ -270,6 +270,7 @@ impl PdfCraftApp {
             hotbar: Default::default(),
             // A fresh install follows the desktop's appearance (#1248); saved settings override.
             theme_preference: craft::theme::ModeChoice::System,
+            suite: craft::theme_store::SuiteClient::memory(),
             reading_colors: Default::default(),
             show_page_edge_shadows: true,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
@@ -655,6 +656,7 @@ impl PdfCraftApp {
         }
         // PLAN: assumed PdfCraftApp::open_intake(&mut self, &egui::Context), which opens what the intake holds (pdf-shell-w13).
         self.open_intake(ctx);
+        self.process_picks(ctx);
         self.present_portfolios(ctx);
         if let Some((_, id)) = self.active_ids() {
             let out = self.session.take_js_output(id);

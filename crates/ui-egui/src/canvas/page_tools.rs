@@ -436,9 +436,9 @@ impl ToolFinish {
         }
         match fill {
             Some(FillOutcome::Edit(edit)) => session.pending_edit = Some(*edit),
-            Some(FillOutcome::Signature(edit)) => {
+            Some(FillOutcome::Signature { edit, page }) => {
                 session.pending_edit = Some(*edit);
-                session.fill_signature = true;
+                session.fill_signature = Some(page);
             }
             Some(FillOutcome::CreateSignature) => self.open_signature = Some(false),
             Some(FillOutcome::CreateInitials) => self.open_signature = Some(true),

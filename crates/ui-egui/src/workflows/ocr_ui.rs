@@ -524,7 +524,7 @@ impl PdfCraftApp {
         // The Output folder row's Choose… asks for a folder; the answer fills the row.
         #[cfg(not(target_arch = "wasm32"))]
         if self.dialogs.get_mut::<HostedParamDialog>().and_then(|d| d.take_action()).is_some_and(|action| action == CHOOSE_FOLDER) {
-            self.pick_first(output_folder_request(), None, |app, dir| {
+            self.pick_first(output_folder_request(), None, |app, _, dir| {
                 if let Some(dialog) = app.dialogs.get_mut::<HostedParamDialog>() {
                     dialog.answer_path("output_folder", dir);
                 }
@@ -729,7 +729,7 @@ impl PdfCraftApp {
         match self.ocr_draft.output_folder.clone() {
             Some(d) => self.ocr_files_into(ctx, files, settings, d.into()),
             None => {
-                self.pick_first(output_folder_request(), None, move |app, dir| app.ocr_files_into(ctx, files, settings, dir));
+                self.pick_first(output_folder_request(), None, move |app, ctx, dir| app.ocr_files_into(ctx, files, settings, dir));
             }
         }
         #[cfg(target_arch = "wasm32")]

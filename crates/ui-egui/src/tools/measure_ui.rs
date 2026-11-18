@@ -847,9 +847,8 @@ fn export_csv(app: &mut PdfCraftApp) {
                     &[("n", &listing.unsupported.len().to_string())],
                 ));
             }
-            // PLAN: assumed `PdfCraftApp::pick_file(PickRequest, Option<_>, impl FnOnce(&mut PdfCraftApp, Picked) + 'static)` (pdf-shell-w14)
             let request = PickRequest::save("measurements").file_name("measurements.csv").filter("CSV", &["csv"]);
-            app.pick_file(request, None, move |app: &mut PdfCraftApp, picked: Picked| {
+            app.pick_file(request, None, move |app: &mut PdfCraftApp, _: &egui::Context, picked: Picked| {
                 let Some(path) = picked.first_path() else { return };
                 // A browser answers with a name, not a path to write: the files service hands the bytes over as a download.
                 let written = match picked {

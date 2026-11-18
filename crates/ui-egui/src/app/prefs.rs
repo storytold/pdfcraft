@@ -64,6 +64,25 @@ impl PdfCraftApp {
         self.animation_effects = motion;
     }
 
+    /// The suite as Preferences ▸ Appearance shows it: the app's own mode and motion over the
+    /// in-memory suite's themes.
+    pub(crate) fn suite_view(&self) -> craft::theme_store::SuiteView {
+        let mut view = self.suite.view();
+        view.shown.mode = Some(self.theme_preference);
+        view.shown.motion = Some(self.animation_effects);
+        view
+    }
+
+    /// Applies what the Appearance page changed to the app's own settings.
+    pub(crate) fn apply_selection(&mut self, change: craft::theme_store::SelectionChange) {
+        if let Some(mode) = change.mode {
+            self.set_theme_preference(mode);
+        }
+        if let Some(motion) = change.motion {
+            self.set_motion(motion);
+        }
+    }
+
     /// Hands the preferences to the settings store and writes them if they changed. A write that
     /// fails is logged: the preferences stay in the app and the next save tries again.
     pub(crate) fn save_settings(&mut self) {

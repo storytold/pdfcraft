@@ -276,8 +276,7 @@ impl PdfCraftApp {
         self.active = Some(index);
         // `save_then` returns false both for a save that waits for the user and for one that did
         // not start, so the failure end is its `failed` continuation, never the return value.
-        // PLAN: assumed `save_then(index, target, after, failed)` with `failed` run when the save fails or is cancelled (pdf-shell-w14)
-        self.save_then(ctx, index, SaveTarget::InPlace, move |app| app.guard_saved(ctx, doc), move |app| app.guard_save_failed(ctx, doc));
+        self.save_then(ctx, index, SaveTarget::InPlace, move |app, ctx| app.guard_saved(ctx, doc), move |app, ctx| app.guard_save_failed(ctx, doc));
     }
 
     /// The save `doc`'s question waited for failed or was cancelled: the guard ends the whole

@@ -390,7 +390,7 @@ pub(crate) fn finish(ctx: &egui::Context, app: &mut PdfCraftApp) {
     let filed = dialog.held.take();
     if let Some(request) = request {
         let key = request.key.clone();
-        app.open_colour_picker(crate::colour_picker::PickerHost::App, request, move |app: &mut PdfCraftApp, colour: Srgba| {
+        app.open_colour_picker(crate::colour_picker::PickerHost::App, request, move |app: &mut PdfCraftApp, _: &egui::Context, colour: Srgba| {
             if let Some(dialog) = app.dialogs.get_mut::<SharedFieldPropsDialog>() {
                 dialog.set_colour(&key, colours::to_rgb(colour));
             }

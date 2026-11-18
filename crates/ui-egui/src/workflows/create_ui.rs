@@ -172,13 +172,11 @@ impl PdfCraftApp {
     }
 
     /// Create ▸ Images: several images, one page each, in one new document.
-    // PLAN: the `create.images` command in `commands.rs:259` (pdf-hub-w3) must pass the `egui::Context` its execution receives (L-208)
-    pub(crate) fn create_from_images_dialog(&mut self, ctx: &egui::Context) {
+    pub(crate) fn create_from_images_dialog(&mut self) {
         let request = PickRequest::open_many("create.images")
             .title(tl!("Choose images"))
             .filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"]);
-        let ctx = ctx.clone();
-        self.pick_file(request, None, move |app, picked| {
+        self.pick_file(request, None, move |app, ctx, picked| {
             let images = match picked {
                 // The browser hands over the bytes with the names.
                 Picked::Contents(files) => files,
@@ -197,7 +195,7 @@ impl PdfCraftApp {
                 }
                 Picked::Cancelled | Picked::Unavailable(_) => return,
             };
-            app.begin_image_import(&ctx, images);
+            app.begin_image_import(ctx, images);
         });
     }
 
@@ -273,7 +271,7 @@ impl PdfCraftApp {
         }
         // With the target, a document closed, switched from or edited meanwhile isn't compressed.
         let target = self.pick_target(Some(id));
-        self.pick_file(request, target, move |app, picked| {
+        self.pick_file(request, target, move |app, ctx, picked| {
             if let Some(path) = picked.paths().into_iter().next() {
                 app.run_optimize(ctx, id, Reduce, &settings, &[], Some(path.to_string_lossy().into_owned()));
             }
@@ -362,7 +360,7 @@ impl PdfCraftApp {
         if let Some(folder) = &folder {
             request = request.default_directory(folder.clone());
         }
-        self.pick_file(request, None, move |app, picked| {
+        self.pick_file(request, None, move |app, _, picked| {
             if let Some(path) = picked.paths().into_iter().next() {
                 app.write_optimized(path.to_string_lossy().into_owned(), name, folder, bytes, saved);
             }
