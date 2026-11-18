@@ -26,7 +26,7 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`,
   drawn in visual order, and their ToUnicode gives each glyph's own letters, so a reader that
   ignores ActualText reads the letters in drawing order. Latin beside them keeps the box's
   standard face. Wrapping preserves spaces and breaks long words only at grapheme boundaries;
-  LF, CR, CRLF and U+2029 each end a paragraph, and U+2028 starts a new line inside one. Other
+  LF, CR, CRLF, U+0085 and U+2029 each end a paragraph, and U+2028 starts a new line inside one. Other
   text it can't
   draw (in a text box, callout, Fill & Sign text, line caption, measurement label or dynamic
   stamp's by-line; `appearance::undrawable_text`) is kept as typed and drawn as `?`, and the comment is marked with

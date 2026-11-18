@@ -58,7 +58,7 @@ pub fn paragraph_rtl(text: &str) -> bool {
 /// Characters that cannot be drawn are still kept in the annotation's original Contents.
 pub fn first_undrawable(text: &str) -> Option<char> {
     text.chars().find(|&c| {
-        if crate::embedding::default_ignorable(c) || matches!(c, '\n' | '\r' | '\t') {
+        if crate::embedding::default_ignorable(c) || matches!(c, '\n' | '\r' | '\t' | '\u{0085}' | '\u{2028}' | '\u{2029}') {
             false
         } else if let Some(kind) = script(c) {
             !has(kind, c)
@@ -275,9 +275,9 @@ pub fn wrap_with_latin(text: &str, size: f64, width: f64, latin: Std14) -> Resul
     if matches!(latin, Std14::Symbol | Std14::ZapfDingbats) {
         return Err(GlyphError::Missing);
     }
-    // A CR, a CRLF pair and a paragraph separator each end a paragraph, as a line feed does
-    // (UAX #9 P1 resolves each paragraph on its own).
-    let normalized = text.replace("\r\n", "\n").replace(['\r', '\u{2029}'], "\n");
+    // A CR, a CRLF pair, a next line (NEL) and a paragraph separator each end a paragraph, as a
+    // line feed does (UAX #9 P1 resolves each paragraph on its own).
+    let normalized = text.replace("\r\n", "\n").replace(['\r', '\u{0085}', '\u{2029}'], "\n");
     let mut out = Vec::new();
     for paragraph in normalized.split('\n') {
         let rtl = unicode_bidi::get_base_direction(paragraph) == unicode_bidi::Direction::Rtl;
@@ -886,9 +886,10 @@ mod tests {
         if crate::document_hebrew_font(false).is_none() {
             return;
         }
-        // NEL and the information separators are paragraph separators to UAX #9, but not places
-        // this writer starts a paragraph at: they stay in the line's text, without ink.
-        for control in ['\u{0085}', '\u{001c}', '\u{001d}', '\u{001e}', '\u{001f}', '\u{000b}', '\u{000c}'] {
+        // The information separators, VT and FF are not places this writer starts a line at:
+        // they stay in the line's text (and are drawn and reported as any character the
+        // standard font lacks is).
+        for control in ['\u{001c}', '\u{001d}', '\u{001e}', '\u{001f}', '\u{000b}', '\u{000c}'] {
             let text = format!("\u{5d0}{control}\u{5d1} 123{control}abc");
             let lines = wrap(&text, 12.0, 1000.0).unwrap();
             assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>(), text, "U+{:04X}", control as u32);
@@ -897,6 +898,23 @@ mod tests {
             assert_eq!(narrow.iter().map(|l| l.text.as_str()).collect::<String>(), text, "U+{:04X}", control as u32);
             draw(&lines, 12.0, [0.0, 0.0, 1000.0, 100.0], 0, [0.0; 3]).unwrap();
         }
+    }
+
+    #[test]
+    fn a_next_line_control_ends_the_paragraph_and_is_not_drawn() {
+        if crate::document_hebrew_font(false).is_none() {
+            return;
+        }
+        // U+0085 (NEL) is a new line function, a paragraph separator to UAX #9. WinAnsi has no
+        // code for it, so drawn it would be a `?`.
+        let text = "\u{5d0}\u{5d1}\u{0085}123\u{0085}abc";
+        assert_eq!(first_undrawable(text), None);
+        // Nor is a line or a paragraph separator a character the box fails to draw.
+        assert_eq!(first_undrawable("\u{5d0}\u{2028}\u{5d1}\u{2029}\u{5d2}"), None);
+        let lines = wrap(text, 12.0, 1000.0).unwrap();
+        assert_eq!(lines.iter().map(|l| (l.text.as_str(), l.rtl)).collect::<Vec<_>>(), [("\u{5d0}\u{5d1}", true), ("123", false), ("abc", false)]);
+        let (content, _) = draw(&lines, 12.0, [0.0, 0.0, 1000.0, 100.0], 0, [0.0; 3]).unwrap();
+        assert!(!String::from_utf8(content).unwrap().contains("(?)"));
     }
 
     #[test]

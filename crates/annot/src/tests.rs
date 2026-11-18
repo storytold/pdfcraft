@@ -6189,7 +6189,7 @@ fn rich_text_cr_crlf_and_lf_break_paragraphs_once_and_keep_empty_paragraphs() {
         return;
     }
     let mut annotation = Dict::new();
-    annotation.set(b"Contents".to_vec(), PdfString::text("\u{5d0}\rTwo\r\nThree\n\nFour\r"));
+    annotation.set(b"Contents".to_vec(), PdfString::text("\u{5d0}\rTwo\r\nThree\n\u{0085}Four\r"));
     super::modify::rich_text(&mut annotation);
     let rc = text(&annotation, b"RC");
     let paragraphs = "<p dir=\"rtl\" style=\"text-align:right\">\u{5d0}</p><p dir=\"ltr\">Two</p><p dir=\"ltr\">Three</p><p dir=\"ltr\"></p><p dir=\"ltr\">Four</p><p dir=\"ltr\"></p>";

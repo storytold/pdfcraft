@@ -95,7 +95,7 @@ fn rich_text_in(d: &mut Dict, style: TextStyle) {
     let shaped = pdfcraft_fonts::appearance_text::has_shaped_text(&text) && pdfcraft_fonts::appearance_text::can_shape(&text);
     let body: String = if shaped {
         text.replace("\r\n", "\n")
-            .split(['\r', '\n', '\u{2029}'])
+            .split(['\r', '\n', '\u{0085}', '\u{2029}'])
             .map(|line| {
                 let rtl = pdfcraft_fonts::appearance_text::paragraph_rtl(line);
                 let direction = if rtl { "rtl" } else { "ltr" };
