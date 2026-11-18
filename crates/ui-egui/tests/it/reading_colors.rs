@@ -36,13 +36,15 @@ fn pending_pages_use_document_reading_background() {
             app.views[0].go_to_page(page);
             // Draw the real canvas without finishing the render frame, so no texture can
             // race the assertion or hide the pending-page background.
+            let mut textures = usize::MAX;
             let mut output =
                 ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 600.0))), ..Default::default() }, |ui| {
-                    pdfcraft_ui_egui::canvas::document_area(&mut app, 0, ui);
+                    let rect = ui.max_rect();
+                    textures = pdfcraft_ui_egui::canvas::document_area_at(&mut app, 0, rect, ui).textures.entries;
                 });
             output.textures_delta.clear();
             let view = &app.views[0];
-            assert_eq!(view.raster_memory().page_count, 0, "the page must still be waiting for its raster");
+            assert_eq!(textures, 0, "the page must still be waiting for its picture");
             let rect = view.page_screen_rect(page).expect("target page visible");
             let fill = output.shapes.iter().find_map(|s| match &s.shape {
                 Shape::Rect(r) if r.rect == rect && r.stroke.width == 0.0 => Some(r.fill),
@@ -84,16 +86,17 @@ fn reading_colours_preference_round_trips() {
 
     // The choice survives a restart through the same path the settings file uses.
     let mut restored = PdfCraftApp::new();
-    restored.restore(&h.state().persist());
+    restored.apply_settings(&h.state().settings_snapshot());
     assert_eq!(restored.reading_colors, ReadingColors::WHITE_ON_BLACK);
     // A settings file without the field keeps Off.
+    let restore = |app: &mut PdfCraftApp, json: &str| app.apply_settings(&pdfcraft_ui_egui::settings::import_json(json).0);
     let mut fresh = PdfCraftApp::new();
-    fresh.restore(r#"{"theme": "dark"}"#);
+    restore(&mut fresh, r#"{"theme": "dark"}"#);
     assert_eq!(fresh.reading_colors, ReadingColors::default());
-    // A corrupt value fails to deserialize and falls back to Off instead of panicking.
-    fresh.restore(r#"{"reading_colors": {"params": {"text": "zzz", "background": [0, 0, 0], "only_black": false, "line_art": true}}}"#);
+    // A corrupt value falls back to Off instead of panicking.
+    restore(&mut fresh, r#"{"reading_colors": {"params": {"text": "zzz", "background": [0, 0, 0], "only_black": false, "line_art": true}}}"#);
     assert_eq!(fresh.reading_colors, ReadingColors::default());
-    fresh.restore(r#"{"reading_colors": 7}"#);
+    restore(&mut fresh, r#"{"reading_colors": 7}"#);
     assert_eq!(fresh.reading_colors, ReadingColors::default());
 }
 
@@ -170,7 +173,7 @@ fn reading_colours_seed_on_open() {
     assert_eq!(h.state().session.reading_colors(signed), Some(ReadingColors::YELLOW_ON_BLACK));
 
     // Created documents open through their own session calls too — a comment summary via
-    // `open_created`, an image import via `open_created_bytes` — and seed the same way.
+    // `open_created`, an image import via `open_new_document` — and seed the same way.
     h.state_mut().summarize_comments();
     let summary = h.state().views.last().unwrap().id;
     assert_ne!(summary, signed);
