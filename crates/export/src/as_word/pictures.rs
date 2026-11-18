@@ -7,11 +7,13 @@ use std::io::{self, Write};
 const MAX_ENCODED: usize = 512 << 20;
 const MAX_PIXELS: u64 = 16 << 20;
 const MAX_RASTER_WORK: u64 = 64 << 20;
+const MAX_PROBE_INPUT: usize = 512 << 20;
 
 #[derive(Default)]
 pub(super) struct Budget {
     encoded: usize,
     raster: u64,
+    probe_input: usize,
 }
 
 fn rtf_bytes(bytes: usize) -> Option<usize> {
@@ -31,6 +33,13 @@ impl Budget {
         let (bytes, ext) = if rotation == 0.0 {
             (im.bytes.to_vec(), im.ext)
         } else {
+            // JPEG dimension probes copy the input. Charge every attempt before probing,
+            // including failures, so repeated rejected placements cannot multiply that work.
+            let probe_input = self.probe_input.checked_add(im.bytes.len())?;
+            if probe_input > MAX_PROBE_INPUT {
+                return None;
+            }
+            self.probe_input = probe_input;
             let (w, h) = image::ImageReader::new(io::Cursor::new(&im.bytes)).with_guessed_format().ok()?.into_dimensions().ok()?;
             let pixels = u64::from(w).checked_mul(u64::from(h))?;
             if w == 0 || h == 0 || w > 4096 || h > 4096 || pixels > MAX_PIXELS {
@@ -190,7 +199,7 @@ mod tests {
     fn repeated_allocations_pay_each_hex_expansion_before_copying() {
         let im = sample(0.0);
         let cost = rtf_bytes(im.bytes.len()).expect("small");
-        let mut budget = Budget { encoded: MAX_ENCODED - cost * 2, raster: 0 };
+        let mut budget = Budget { encoded: MAX_ENCODED - cost * 2, raster: 0, ..Default::default() };
         assert_eq!(budget.prepare(&im).expect("first").0, im.bytes.as_ref());
         assert!(budget.prepare(&im).is_some());
         assert!(budget.prepare(&im).is_none());
@@ -206,7 +215,7 @@ mod tests {
         let (doc, omitted) = super::super::flow_doc_with_budget(
             &[page],
             &super::super::Meta { title: "", language: None, font: "Helvetica" },
-            Budget { encoded: MAX_ENCODED - 2 * cost, raster: 0 },
+            Budget { encoded: MAX_ENCODED - 2 * cost, raster: 0, ..Default::default() },
         );
         assert_eq!(omitted, [0]);
         let count: usize = doc
@@ -224,11 +233,30 @@ mod tests {
 
     #[test]
     fn rejected_raster_charge_leaves_room_for_a_smaller_picture() {
-        let mut budget = Budget { encoded: 0, raster: MAX_RASTER_WORK - 4 };
+        let mut budget = Budget { encoded: 0, raster: MAX_RASTER_WORK - 4, ..Default::default() };
         assert!(budget.prepare(&sample(45.0)).is_none());
         assert_eq!(budget.raster, MAX_RASTER_WORK - 4);
         assert!(budget.prepare(&sample(90.0)).is_some());
         assert_eq!(budget.raster, MAX_RASTER_WORK);
+    }
+
+    #[test]
+    fn rejected_probes_pay_input_budget_before_retrying() {
+        let mut im = sample(90.0);
+        im.ext = "jpg";
+        im.bytes = vec![0xff, 0xd8, 0xff, 0xe0, 0, 2, 0xff, 0xd9].into();
+        let cost = im.bytes.len();
+        let mut budget = Budget { probe_input: MAX_PROBE_INPUT - 2 * cost, ..Default::default() };
+        assert!(budget.prepare(&im).is_none());
+        assert_eq!(budget.probe_input, MAX_PROBE_INPUT - cost);
+        assert!(budget.prepare(&im).is_none());
+        assert_eq!(budget.probe_input, MAX_PROBE_INPUT);
+        assert!(budget.prepare(&im).is_none());
+        assert_eq!(budget.probe_input, MAX_PROBE_INPUT);
+        assert_eq!(budget.encoded, 0);
+        assert_eq!(budget.raster, 0);
+        // Exhausting rotated probes must not suppress unrotated byte-preserving pictures.
+        assert!(budget.prepare(&sample(0.0)).is_some());
     }
 
     #[test]
@@ -250,7 +278,7 @@ mod tests {
 
     #[test]
     fn raster_work_and_encoded_writer_are_bounded() {
-        assert!(Budget { encoded: 0, raster: MAX_RASTER_WORK }.prepare(&sample(45.0)).is_none());
+        assert!(Budget { encoded: 0, raster: MAX_RASTER_WORK, ..Default::default() }.prepare(&sample(45.0)).is_none());
         assert!(Budget::default().prepare(&sample(f64::NAN)).is_none());
         let mut bad = sample(45.0);
         bad.size[0] = f64::INFINITY;
