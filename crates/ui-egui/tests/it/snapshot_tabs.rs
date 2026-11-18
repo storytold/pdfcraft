@@ -13,7 +13,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
         app.set_option("language", "en").unwrap();
         app.open_bytes("a.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
         app.open_bytes("b.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
-        app.system_clipboard = false;
+        // PLAN: the injected clipboard of pdf-shell-w17 replaces `system_clipboard`.
         app
     });
     crate::support::settle(&mut h);
@@ -49,6 +49,7 @@ fn save_as_image_writes_this_tabs_area() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-snapshot-tabs-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("a area.png");
+    // PLAN: `save_override` goes (pdf-shell-w16): answer the pick through `ScriptedFiles` on the host given to `with_host`.
     h.state_mut().save_override = Some(file.to_string_lossy().into_owned());
     h.get_by_label("Save as image…").click();
     h.run_steps(3);
@@ -69,7 +70,7 @@ fn the_area_stays_after_print_area() {
     snapshot_in(&mut h, 0, area);
     h.get_by_label("Print area…").click();
     h.run_steps(4);
-    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Print));
+    assert!(h.state().dialogs.is_open::<craft::print::ui::HostedPrint>());
     assert_eq!(h.state().views[0].area_pick, Some((0, area)));
 }
 

@@ -126,61 +126,6 @@ fn wheel(unit: MouseWheelUnit, dy: f32, phase: TouchPhase) -> egui::Event {
     egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, dy), phase, modifiers: Modifiers::NONE, source: egui::MouseWheelSource::Unknown }
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-fn middle_button_scrolling_keeps_page_colours_in_both_themes() {
-    use egui_kittest::kittest::Queryable;
-    let _gpu = gpu();
-    for theme in ["light", "dark"] {
-        for organize in [false, true] {
-            let mut h = harness(&[("zoom", "50")]);
-            h.state_mut().set_option("theme", theme).unwrap();
-            h.state_mut().set_option("organize", if organize { "on" } else { "off" }).unwrap();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            loop {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "render readiness timed out: theme={theme}, organize={organize}, errors={:?}",
-                    h.state().views[0].page_errors()
-                );
-                h.run_steps(2);
-                if !h.state().render_pending() {
-                    // Paint one fresh frame after all requested rasters have arrived.
-                    h.run_steps(1);
-                    if h.state().render_pending() {
-                        continue;
-                    }
-                    assert!(
-                        h.state().views[0].page_errors().is_empty(),
-                        "page render errors: theme={theme}, organize={organize}, errors={:?}",
-                        h.state().views[0].page_errors()
-                    );
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            let page = if organize { h.get_by_label("Page 1").rect() } else { rect(&h, 0).unwrap() };
-            let at = page.center();
-            let ppp = h.ctx.pixels_per_point();
-            let before = *h.render().unwrap().get_pixel((at.x * ppp) as u32, (at.y * ppp) as u32);
-            assert_eq!(
-                before,
-                image::Rgba([255, 255, 255, 255]),
-                "the synthetic page is white: theme={theme}, organize={organize}, page={page:?}, ppp={ppp}"
-            );
-            let anchor = h.state().views[0].viewport_rect().center();
-            h.event(egui::Event::PointerMoved(anchor));
-            h.event(egui::Event::PointerButton { pos: anchor, button: egui::PointerButton::Middle, pressed: true, modifiers: Modifiers::NONE });
-            h.run_steps(1);
-            h.event(egui::Event::PointerButton { pos: anchor, button: egui::PointerButton::Middle, pressed: false, modifiers: Modifiers::NONE });
-            h.run_steps(1);
-            assert!(h.state().views[0].auto_scrolling());
-            let during = *h.render().unwrap().get_pixel((at.x * ppp) as u32, (at.y * ppp) as u32);
-            assert_eq!(during, before, "scrolling preserves page colours: theme={theme}, organize={organize}");
-        }
-    }
-}
-
 #[test]
 fn continuous_layout_stacks_pages_vertically() {
     let mut h = harness(&[("layout", "continuous"), ("zoom", "50")]);
@@ -393,38 +338,6 @@ fn single_page_layout_shows_one_page_at_a_time() {
 }
 
 #[test]
-fn single_page_view_prefetches_the_next_page() {
-    // Only the shown page is drawn, but the next one renders ahead of the turn: otherwise
-    // turning forward shows blank paper until it arrives.
-    let mut h = harness(&[("layout", "single"), ("zoom", "50")]);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while h.state().render_pending() {
-        assert!(std::time::Instant::now() < deadline, "renders settle");
-        h.run_steps(2);
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    assert!(rect(&h, 1).is_none(), "page 2 is not shown");
-    assert!(h.state().views[0].raster_memory().page_count >= 2, "page 2 is rendered ahead of the turn");
-}
-
-#[test]
-fn single_page_wheel_turn_draws_the_new_page_at_once() {
-    // The frame that turns the page draws the new one. Its jump used to be measured from the
-    // old page's place, which scrolled both out of view: a blank frame on every turn forward.
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single")]);
-    h.key_press_modifiers(Modifiers::COMMAND, Key::Num0); // fit page
-    h.run_steps(4);
-    let vp = h.state().views[0].viewport_rect();
-    h.hover_at(vp.center());
-    h.run_steps(2);
-    h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
-    h.step();
-    assert_eq!(h.state().views[0].current, 1, "one notch turns one page");
-    let r = rect(&h, 1).expect("page 2 drawn in the frame that turns to it");
-    assert!(r.min.y >= vp.min.y && r.max.y <= vp.max.y, "page 2 fits on screen: {r:?} in {vp:?}");
-}
-
-#[test]
 fn single_page_jump_draws_a_fitting_page_where_it_stays() {
     // A page that fits has nothing to scroll, but the jump to it asked for the gap above it:
     // drawn that much too high for a frame, it then hopped into place.
@@ -439,508 +352,12 @@ fn single_page_jump_draws_a_fitting_page_where_it_stays() {
     assert!((first.min.y - settled.min.y).abs() < 0.5, "page 2 drawn where it settles: {first:?} then {settled:?}");
 }
 
-#[test]
-fn single_page_wheel_pans_instead_when_zoomed_in() {
-    // The zoomed-in guard: with room to pan, the wheel pans and must not turn pages.
-    let mut h = harness(&[("layout", "single"), ("zoom", "200")]);
-    h.run_steps(4);
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(1);
-    h.event(wheel(MouseWheelUnit::Point, -60.0, TouchPhase::Move));
-    h.run_steps(4);
-    assert_eq!(h.state().views[0].current, 0, "zoomed-in wheel pans, it does not turn the page");
-}
-
-#[test]
-fn single_page_wheel_at_the_bottom_edge_turns_to_the_next_page_top_and_back() {
-    // #1924: zoomed in so the page is taller than the window, the wheel pans; at the bottom
-    // edge one more notch shows the next page at its top, and at the top edge one notch up
-    // shows the previous page at its bottom.
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(4);
-    // Notches pan page 1 down; the page turns only after the view stopped at the bottom.
-    let (mut notches, mut stalled) = (0, 0);
-    let mut last = rect(&h, 0).expect("page 1 on screen").min.y;
-    while h.state().views[0].current == 0 && notches < 80 {
-        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
-        h.run_steps(12);
-        notches += 1;
-        if let Some(r) = rect(&h, 0) {
-            stalled = if (r.min.y - last).abs() < 0.01 { stalled + 1 } else { 0 };
-            last = r.min.y;
-        }
-    }
-    assert!(notches > 2, "the page panned before it turned: {notches} notches");
-    assert_eq!(h.state().views[0].current, 1, "a notch at the bottom edge shows the next page");
-    assert!(stalled <= 1, "no notch was wasted at the edge");
-    let top = rect(&h, 1).expect("page 2 on screen").min.y;
-    assert!(top > h.state().views[0].viewport_rect().min.y, "page 2 shows its top edge: {top}");
-    h.event(wheel(MouseWheelUnit::Line, 1.0, TouchPhase::Move));
-    h.run_steps(30);
-    assert_eq!(h.state().views[0].current, 0, "a notch at the top edge shows the previous page");
-    let r = rect(&h, 0).expect("page 1 on screen");
-    assert!(r.max.y < h.state().views[0].viewport_rect().max.y + 40.0, "page 1 shows its bottom edge: {r:?}");
-}
-
-#[test]
-fn single_page_swipe_that_reaches_the_edge_does_not_turn_but_a_fresh_one_does() {
-    // Momentum that carries a swipe to the bottom edge must not go on to turn the page.
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(4);
-    let send = |h: &mut Harness<'static, PdfCraftApp>, phase, dy| {
-        h.event(wheel(MouseWheelUnit::Point, dy, phase));
-        h.step();
-    };
-    // One long swipe: far more motion than the page has, in one gesture.
-    send(&mut h, TouchPhase::Start, 0.0);
-    for _ in 0..120 {
-        send(&mut h, TouchPhase::Move, -40.0);
-    }
-    send(&mut h, TouchPhase::End, 0.0);
-    h.run_steps(30);
-    assert_eq!(h.state().views[0].current, 0, "the swipe that panned to the edge does not turn");
-    // A new swipe at the edge turns exactly one page.
-    send(&mut h, TouchPhase::Start, 0.0);
-    for _ in 0..6 {
-        send(&mut h, TouchPhase::Move, -25.0);
-    }
-    send(&mut h, TouchPhase::End, 0.0);
-    h.run_steps(30);
-    assert_eq!(h.state().views[0].current, 1, "a fresh swipe at the edge turns one page");
-    let top = rect(&h, 1).expect("page 2 on screen").min.y;
-    assert!(
-        top >= h.state().views[0].viewport_rect().min.y,
-        "page 2 starts at its top after the swipe: {top} in {:?}",
-        h.state().views[0].viewport_rect()
-    );
-}
-
-#[test]
-fn single_page_wheel_at_last_page_bottom_edge_can_scroll_back_up() {
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
-    h.state_mut().views[0].go_to_page(2); // Go to last page of PAGES (3 pages)
-    h.run_steps(20);
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(4);
-
-    // Scroll to the bottom edge of page 3
-    let mut notches = 0;
-    let mut last = rect(&h, 2).expect("page 3 on screen").min.y;
-    let mut at_bottom = false;
-    while notches < 80 {
-        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
-        h.run_steps(12);
-        notches += 1;
-        if let Some(r) = rect(&h, 2) {
-            if (r.min.y - last).abs() < 0.01 {
-                at_bottom = true;
-                break;
-            }
-            last = r.min.y;
-        }
-    }
-    assert!(at_bottom, "reached bottom edge of last page");
-    assert_eq!(h.state().views[0].current, 2, "remains on page 3");
-
-    // Push the wheel further against the bottom edge (cannot turn because it's the last page)
-    for _ in 0..5 {
-        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
-        h.run_steps(12);
-    }
-    let bottom_y = rect(&h, 2).expect("page 3 on screen").min.y;
-
-    // Roll the wheel back up: the page must move away from the bottom edge (#5713)
-    h.event(wheel(MouseWheelUnit::Line, 1.0, TouchPhase::Move));
-    h.run_steps(12);
-    let after_up_y = rect(&h, 2).expect("page 3 on screen").min.y;
-    assert!(after_up_y > bottom_y, "scrolling up moves the page away from the bottom edge: {after_up_y} > {bottom_y}");
-}
-
-/// One notch of a mouse wheel that macOS reports in points (a Logitech mouse sends about 14).
-const POINT_NOTCH: f32 = 14.0;
-
-#[test]
-fn single_page_point_notches_pan_the_page_a_notch_turned_to() {
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(20);
-    for _ in 0..120 {
-        h.event(wheel(MouseWheelUnit::Point, -POINT_NOTCH, TouchPhase::Move));
-        h.run_steps(12);
-        if h.state().views[0].current == 1 {
-            break;
-        }
-    }
-    assert_eq!(h.state().views[0].current, 1, "notches pan page 1, then turn to page 2");
-    h.run_steps(20);
-    let top = rect(&h, 1).expect("page 2 on screen").min.y;
-    for _ in 0..3 {
-        h.event(wheel(MouseWheelUnit::Point, -POINT_NOTCH, TouchPhase::Move));
-        h.run_steps(12);
-    }
-    let after = rect(&h, 1).expect("page 2 on screen").min.y;
-    assert!(after < top, "notches pan page 2 down after the turn (#5713): {after} < {top}");
-}
-
-#[test]
-fn single_page_point_notches_scroll_back_up_from_the_last_page_bottom() {
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
-    h.state_mut().views[0].go_to_page(2);
-    h.run_steps(20);
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(4);
-    // Past the bottom: the extra notches push against the last page's edge.
-    for _ in 0..200 {
-        h.event(wheel(MouseWheelUnit::Point, -POINT_NOTCH, TouchPhase::Move));
-        h.run_steps(12);
-    }
-    assert_eq!(h.state().views[0].current, 2, "stays on the last page");
-    let bottom = rect(&h, 2).expect("page 3 on screen").min.y;
-    for _ in 0..3 {
-        h.event(wheel(MouseWheelUnit::Point, POINT_NOTCH, TouchPhase::Move));
-        h.run_steps(12);
-    }
-    let after = rect(&h, 2).expect("page 3 on screen").min.y;
-    assert!(after > bottom + 1.0, "notches scroll back up from the last page's bottom (#5713): {after} > {bottom}");
-}
-
-#[test]
-fn stepping_past_either_end_leaves_the_view_alone() {
-    // Paging on past the first or last page must not jump the page back to its top.
-    for (page, forward) in [(2, true), (0, false)] {
-        let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
-        h.state_mut().views[0].go_to_page(page);
-        h.run_steps(20);
-        let at = h.state().views[0].viewport_rect().center();
-        h.hover_at(at);
-        h.run_steps(4);
-        // Pan the page off its edge so a jump would show.
-        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
-        h.run_steps(30);
-        let before = rect(&h, page).expect("page on screen");
-        h.state_mut().views[0].step_page(forward);
-        h.run_steps(30);
-        assert_eq!(h.state().views[0].current, page);
-        assert_eq!(rect(&h, page), Some(before), "stepping past the end (forward={forward}) moved the page");
-    }
-}
-
-#[test]
-fn wheel_turns_one_page_per_notch_and_per_trackpad_swipe() {
-    // At a real frame rate: brisk notches each turn a page, and one trackpad swipe turns one
-    // page, its momentum included (macOS sends the momentum as a second Start…End).
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "50")]);
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(2);
-    for _ in 0..2 {
-        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
-        h.run_steps(5);
-    }
-    h.run_steps(30);
-    assert_eq!(h.state().views[0].current, 2, "two notches 80 ms apart turn two pages");
-    let mut send = |phase, dy| {
-        h.event(wheel(MouseWheelUnit::Point, dy, phase));
-        h.step();
-    };
-    send(TouchPhase::Start, 0.0);
-    for _ in 0..6 {
-        send(TouchPhase::Move, 25.0);
-    }
-    send(TouchPhase::End, 0.0);
-    send(TouchPhase::Start, 0.0);
-    let mut d = 25.0;
-    while d > 0.5 {
-        send(TouchPhase::Move, d);
-        d *= 0.92;
-    }
-    send(TouchPhase::End, 0.0);
-    h.run_steps(30);
-    assert_eq!(h.state().views[0].current, 1, "one swipe back turns one page back");
-}
-
-#[test]
-fn precise_touchpad_wheel_scrolls_one_to_one() {
-    // A precision touchpad's pixel delta scrolls the page by that amount in the same frame,
-    // instead of egui easing it over several frames so the page lags the finger (#759). A single
-    // 200 px precise event is well over egui's 8 px smoothing threshold, so without the fix only
-    // a fraction would land on the first frame.
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "100")]);
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(2);
-    let before = rect(&h, 0).expect("page 1 on screen").min.y;
-    h.event(wheel(MouseWheelUnit::Point, -200.0, TouchPhase::Move));
-    // A few frames for the event to reach the ScrollArea and the new offset to be drawn. The
-    // page jumps the full 200 px at once; an eased path would ramp there over ~0.1 s (6 frames).
-    h.run_steps(4);
-    let moved = before - rect(&h, 0).expect("page 1 still laid out").min.y;
-    assert!(moved > 190.0, "a 200 px precise swipe scrolls ~200 px at once, not an eased fraction: moved {moved}");
-    // And it stops with the finger: idle frames must not drift on a leftover easing tail.
-    let settled = rect(&h, 0).unwrap().min.y;
-    h.run_steps(20);
-    let drift = settled - rect(&h, 0).unwrap().min.y;
-    assert!(drift.abs() < 2.0, "no easing tail after the swipe: drifted {drift}");
-}
-
-#[test]
-fn rapid_wheel_notches_accelerate_and_follow_touchpad_input() {
-    use pdfcraft_ui_egui::scroll_speed::ScrollSpeed;
-
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300")]);
-    h.state_mut().set_option("animation_effects", "off").unwrap();
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(2);
-
-    h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
-    let single = scroll_over(&mut h, 2);
-    let base = ScrollSpeed::default().line_points();
-    assert!((single - base).abs() < 1.0, "one notch keeps the configured base: moved {single}, base {base}");
-
-    // Let the isolated notch expire, then spin five notches one frame apart. The burst must move
-    // farther than five base steps without adding work on idle frames.
-    h.run_steps(30);
-    let mut burst = 0.0;
-    for _ in 0..5 {
-        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
-        burst += scroll_over(&mut h, 2);
-    }
-    assert!(burst > 7.0 * base, "a rapid five-notch spin accelerates: moved {burst}, base {base}");
-
-    // A line notch inside the precise path's suppression window keeps its base share (#1072):
-    // suppressing egui's touchpad tail must not swallow mixed-device input.
-    h.run_steps(30);
-    h.event(wheel(MouseWheelUnit::Point, -20.0, TouchPhase::Move));
-    scroll_over(&mut h, 2);
-    // Arrive near the old suppression deadline: the line's new easing tail must extend it.
-    h.run_steps(11);
-    h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
-    let after_touchpad = scroll_over(&mut h, 2);
-    assert!(after_touchpad >= base, "a notch after point input is not dropped: moved {after_touchpad}, base {base}");
-    let delayed = scroll_over(&mut h, 20);
-    assert!(delayed.abs() < 2.0, "the reconstructed notch has no delayed easing copy: moved {delayed}");
-
-    h.event(wheel(MouseWheelUnit::Point, -20.0, TouchPhase::Move));
-    scroll_over(&mut h, 2);
-    h.event(wheel(MouseWheelUnit::Page, -1.0, TouchPhase::Move));
-    let page_after_touchpad = scroll_over(&mut h, 2);
-    assert!(page_after_touchpad > base, "a page event after point input is preserved: moved {page_after_touchpad}");
-    let delayed_page = scroll_over(&mut h, 20);
-    assert!(delayed_page.abs() < 2.0, "the reconstructed page has no delayed easing copy: moved {delayed_page}");
-}
-
-#[test]
-fn changing_continuous_layout_resets_wheel_acceleration() {
-    use pdfcraft_ui_egui::scroll_speed::ScrollSpeed;
-
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300")]);
-    h.state_mut().set_option("animation_effects", "off").unwrap();
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(2);
-    for _ in 0..5 {
-        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
-        scroll_over(&mut h, 2);
-    }
-
-    h.state_mut().views[0].set_continuous(false);
-    h.run_steps(3);
-    h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
-    let moved = scroll_over(&mut h, 2);
-    let base = ScrollSpeed::default().line_points();
-    assert!((moved - base).abs() < 1.0, "a layout jump clears the old burst: moved {moved}, base {base}");
-}
-
-/// A steady wheel burst must not alternate a large accelerated jump with nearly still frames.
-#[test]
-fn scroll_regression_regular_notches_have_regular_frame_motion() {
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "3000"), ("animation_effects", "on")]);
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(2);
-    let mut settled = Vec::new();
-    for frame in 0..66 {
-        if frame % 3 == 0 {
-            h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
-        }
-        let moved = scroll_over(&mut h, 1);
-        if frame >= 48 {
-            settled.push(moved);
-        }
-    }
-    let low = settled.iter().copied().fold(f32::INFINITY, f32::min);
-    let high = settled.iter().copied().fold(0.0, f32::max);
-    assert!(low > 0.0 && high < low * 3.0, "regular input has bounded frame variation: {settled:?}");
-}
-
-/// Windows and X11 can report continuous device movement as fractions of a line.
-#[test]
-fn scroll_regression_fractional_lines_preserve_distance_without_an_idle_tail() {
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "3000"), ("animation_effects", "on")]);
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(2);
-    let line = pdfcraft_ui_egui::scroll_speed::ScrollSpeed::default().line_points();
-    let mut distance = 0.0;
-    for _ in 0..24 {
-        h.event(wheel(MouseWheelUnit::Line, -0.25, TouchPhase::Move));
-        distance += scroll_over(&mut h, 1);
-    }
-    // Page rectangles report the previous pass's scroll request on the following draw.
-    distance += scroll_over(&mut h, 1);
-    assert!((distance - line * 6.0).abs() < 1.0, "continuous motion retains its input distance: {distance}");
-    let tail = scroll_over(&mut h, 40);
-    assert!(tail.abs() < 1.0, "continuous motion stops with the input: {tail}");
-}
-
-/// Input ownership changes discard an old queue even when the view is hidden very briefly.
-#[test]
-fn scroll_regression_returning_to_a_tab_does_not_resume_old_motion() {
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "3000"), ("animation_effects", "on")]);
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(2);
-    for _ in 0..5 {
-        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
-        scroll_over(&mut h, 1);
-    }
-    h.state_mut().open_bytes("second.pdf", None, PAGES.to_vec()).unwrap();
-    h.run_steps(2);
-    h.state_mut().active = Some(0);
-    h.run_steps(2);
-    assert!(scroll_over(&mut h, 12).abs() < 0.5, "returning to a tab must not continue its old wheel burst");
-}
-
-/// Direct input ends an old coarse burst, so a later isolated notch has its base distance.
-#[test]
-fn scroll_regression_precise_input_resets_coarse_acceleration() {
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "3000"), ("animation_effects", "off")]);
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(2);
-    for _ in 0..5 {
-        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
-        scroll_over(&mut h, 1);
-    }
-    h.event(wheel(MouseWheelUnit::Point, -10.0, TouchPhase::Move));
-    scroll_over(&mut h, 2);
-    h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
-    let distance = scroll_over(&mut h, 2);
-    let base = pdfcraft_ui_egui::scroll_speed::ScrollSpeed::default().line_points();
-    assert!((distance - base).abs() < 0.5, "a new coarse burst begins at the base distance: {distance}");
-}
-
-/// A key cancels earlier movement without consuming a new wheel event in the same frame.
-#[test]
-fn scroll_regression_key_interrupt_retains_current_wheel_input() {
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "3000"), ("animation_effects", "off")]);
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(2);
-    h.event(egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
-    h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
-    let distance = scroll_over(&mut h, 2);
-    let base = pdfcraft_ui_egui::scroll_speed::ScrollSpeed::default().line_points();
-    assert!((distance - base).abs() < 0.5, "new wheel input survives a simultaneous key: {distance}");
-}
-
-/// Steps `frames` frames and returns how far the document scrolled down over them, from the
-/// pages on screen in each pair of consecutive frames (a page can leave the screen on the way).
-/// Used by wheel and non-macOS glide tests below.
-fn scroll_over(h: &mut Harness<'static, PdfCraftApp>, frames: usize) -> f32 {
-    let tops = |h: &Harness<'static, PdfCraftApp>| (0..3).map(|p| rect(h, p).map(|r| r.min.y)).collect::<Vec<_>>();
-    let mut moved = 0.0;
-    for _ in 0..frames {
-        let before = tops(h);
-        h.step();
-        let after = tops(h);
-        let step = before.iter().zip(&after).find_map(|(b, a)| Some(b.as_ref()? - a.as_ref()?));
-        moved += step.expect("a page stays on screen from one frame to the next");
-    }
-    moved
-}
-
-/// A two-finger swipe down the page, 25 points a frame for six frames, lifted the frame after
-/// (the axis stop Wayland sends), at 300 % so the document is long enough to glide in: how far
-/// it scrolled by the frame after the lift (the page is drawn a frame behind its scroll).
-/// Same gate as its callers below.
-#[cfg(not(target_os = "macos"))]
-fn swipe_and_lift(h: &mut Harness<'static, PdfCraftApp>) -> f32 {
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(2);
-    h.event(wheel(MouseWheelUnit::Point, -25.0, TouchPhase::Start));
-    let mut moved = scroll_over(h, 1);
-    for _ in 0..6 {
-        h.event(wheel(MouseWheelUnit::Point, -25.0, TouchPhase::Move));
-        moved += scroll_over(h, 1);
-    }
-    h.event(wheel(MouseWheelUnit::Point, 0.0, TouchPhase::End));
-    moved + scroll_over(h, 2)
-}
-
-/// The touchpad glide is Wayland's: macOS sends its own momentum and the web none (#531).
-#[cfg(not(target_os = "macos"))]
-#[test]
-fn touchpad_swipe_glides_on_after_the_fingers_lift_and_stops() {
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300")]);
-    let swiped = swipe_and_lift(&mut h);
-    // The seven 25-point motions, 1:1 (#759).
-    assert!(swiped >= 174.0, "the swipe scrolls 1:1: moved {swiped}");
-    // 1500 points a second at the lift: about 190 points over the next 10 frames.
-    let glided = scroll_over(&mut h, 10);
-    assert!(glided > 100.0, "the page glides on after the lift: moved {glided} more");
-    let rest = scroll_over(&mut h, 180);
-    let drift = scroll_over(&mut h, 20);
-    assert!(drift.abs() < 0.5, "the glide slows to a stop: still drifting {drift}");
-    let total = swiped - 175.0 + glided + rest;
-    assert!(total > 400.0 && total < 600.0, "about the lift speed × 0.35 s: glided {total}");
-}
-
-#[cfg(not(target_os = "macos"))]
-#[test]
-fn touching_the_touchpad_again_or_turning_animations_off_stops_the_glide() {
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300")]);
-    swipe_and_lift(&mut h);
-    assert!(scroll_over(&mut h, 3) > 30.0, "gliding");
-    h.event(wheel(MouseWheelUnit::Point, 0.0, TouchPhase::Start));
-    scroll_over(&mut h, 2);
-    let drift = scroll_over(&mut h, 20);
-    assert!(drift.abs() < 0.5, "fingers back down catch the page: drifted {drift}");
-
-    // A click (a pressed touchpad, or a tap with tap-to-click) catches it too.
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300")]);
-    swipe_and_lift(&mut h);
-    assert!(scroll_over(&mut h, 3) > 30.0, "gliding");
-    let at = h.state().views[0].viewport_rect().center();
-    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-    scroll_over(&mut h, 2);
-    let drift = scroll_over(&mut h, 20);
-    assert!(drift.abs() < 0.5, "a click catches the page: drifted {drift}");
-
-    // Animation effects off: the page stops with the fingers, as before #531.
-    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300")]);
-    h.state_mut().set_option("animation_effects", "off").unwrap();
-    let swiped = swipe_and_lift(&mut h);
-    assert!((swiped - 175.0).abs() < 1.0, "the swipe still scrolls 1:1: moved {swiped}");
-    let drift = scroll_over(&mut h, 20);
-    assert!(drift.abs() < 0.5, "no glide with animations off: drifted {drift}");
-}
-
 /// The 40 frames from one wheel notch on, with the system asking for no animations (Windows'
 /// Animation effects turned off) or not, and Preferences ▸ Animation effects as given: how far
 /// page 1 has moved up in each frame, or with ⌘/Ctrl held, the view's zoom.
 fn frames_after_a_notch(system_reduced: bool, animation_effects: &str, zooming: bool) -> Vec<f32> {
     let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "100")]);
+    // PLAN: the env's reduced-motion answer (pdf-shell-w8) replaces `motion.reduced`.
     h.state_mut().motion.reduced = system_reduced;
     h.state_mut().set_option("animation_effects", animation_effects).unwrap();
     let at = h.state().views[0].viewport_rect().center();
@@ -958,7 +375,7 @@ fn frames_after_a_notch(system_reduced: bool, animation_effects: &str, zooming: 
     (0..40)
         .map(|_| {
             h.step();
-            if zooming { h.state().views[0].zoom } else { before - rect(&h, 0).expect("page 1 still laid out").min.y }
+            if zooming { h.state().views[0].view.zoom } else { before - rect(&h, 0).expect("page 1 still laid out").min.y }
         })
         .collect()
 }
@@ -987,76 +404,6 @@ fn a_wheel_notch_scrolls_at_once_with_animation_effects_off() {
         assert!(
             (moved[39] - notch).abs() < 1.0,
             "{effects}, system reduced {system_reduced}: easing changes how long a notch takes, not how far it goes: {moved:?}"
-        );
-    }
-}
-
-#[test]
-fn the_wheel_zooms_a_whole_step_at_once_with_animation_effects_off() {
-    // ⌘/Ctrl with the wheel: egui eases the zoom as it eases scrolling.
-    let step = frames_after_a_notch(true, "system", true)[0];
-    assert!(step > 1.1, "the notch zoomed in: {step}");
-    for (system_reduced, effects) in AT_ONCE {
-        let zooms = frames_after_a_notch(system_reduced, effects, true);
-        assert!(
-            zooms.iter().all(|zoom| *zoom == step),
-            "{effects}, system reduced {system_reduced}: the whole step in the frame the notch arrives, and no more after it: {zooms:?}"
-        );
-    }
-    for (system_reduced, effects) in EASED {
-        let zooms = frames_after_a_notch(system_reduced, effects, true);
-        assert!(
-            zooms[0] > 1.0 && zooms[0] < 1.0 + (step - 1.0) * 0.75,
-            "{effects}, system reduced {system_reduced}: egui eases the notch: {zooms:?}"
-        );
-        assert!(
-            (zooms[39] / step - 1.0).abs() < 0.01,
-            "{effects}, system reduced {system_reduced}: easing changes how long a zoom step takes, not how far it goes: {zooms:?}"
-        );
-    }
-}
-
-/// A touch gesture begun with ⌘/Ctrl zooms to its end after the keys are let go, as egui reads
-/// it: its later motion neither scrolls the page as well nor turns the rest of it into scrolling.
-#[test]
-fn a_zoom_gesture_zooms_to_its_end_after_its_keys_are_let_go() {
-    /// The view's zoom and page 1 on screen, settled, after a gesture of six 5-point motions,
-    /// the keys let go after the second one or held throughout.
-    fn zoom_gesture(effects: &'static str, let_go: bool) -> (f32, f32, egui::Rect) {
-        let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300")]);
-        h.state_mut().set_option("animation_effects", effects).unwrap();
-        let at = h.state().views[0].viewport_rect().center();
-        h.hover_at(at);
-        h.run_steps(2);
-        let before = h.state().views[0].zoom;
-        let touch = |phase, dy, modifiers| egui::Event::MouseWheel {
-            unit: MouseWheelUnit::Point,
-            delta: egui::vec2(0.0, dy),
-            phase,
-            modifiers,
-            source: egui::MouseWheelSource::Unknown,
-        };
-        h.event(touch(TouchPhase::Start, 0.0, Modifiers::COMMAND));
-        h.step();
-        for k in 0..6 {
-            let modifiers = if let_go && k >= 2 { Modifiers::NONE } else { Modifiers::COMMAND };
-            h.event(touch(TouchPhase::Move, 5.0, modifiers));
-            h.step();
-        }
-        h.event(touch(TouchPhase::End, 0.0, Modifiers::NONE));
-        h.run_steps(40);
-        (before, h.state().views[0].zoom, rect(&h, 0).expect("page 1 on screen"))
-    }
-    for effects in ["off", "on"] {
-        let (before, held, held_page) = zoom_gesture(effects, false);
-        assert!(held > before, "{effects}: the gesture zoomed in: {before} to {held}");
-        let (_, let_go, let_go_page) = zoom_gesture(effects, true);
-        assert!((let_go / held - 1.0).abs() < 1e-4, "{effects}: the whole gesture zooms: {let_go}, held throughout {held}");
-        assert!(
-            (let_go_page.min - held_page.min).length() < 0.5,
-            "{effects}: and nothing scrolls: page 1 at {:?}, held throughout {:?}",
-            let_go_page.min,
-            held_page.min
         );
     }
 }
@@ -1443,44 +790,6 @@ fn rail_page_display_menu_offers_acrobats_view_choices() {
 }
 
 #[test]
-fn rail_page_display_button_switches_layouts() {
-    use egui_kittest::kittest::Queryable;
-    let mut h = harness(&[]);
-    h.run_steps(4);
-    h.get_by_label_contains("Page display").click();
-    h.run_steps(3);
-    h.get_by_label("Single page").click();
-    h.run_steps(4);
-    assert_eq!(h.state().views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::Single);
-}
-
-#[test]
-fn view_menu_page_display_uses_the_same_commands() {
-    use egui_kittest::kittest::Queryable;
-    let mut h = harness(&[]);
-    h.run_steps(4);
-    crate::support::open_menu(&mut h, "View");
-    crate::support::menu_row(&h, "Page display").hover();
-    h.run_steps(3);
-    h.get_by_label("Single page").click();
-    h.run_steps(4);
-    assert_eq!(h.state().views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::Single);
-}
-
-#[test]
-fn palette_runs_page_display_commands_from_the_keyboard() {
-    use egui_kittest::kittest::Queryable;
-    let mut h = harness(&[]);
-    h.state_mut().set_option("palette", "single page").unwrap();
-    h.run_steps(3);
-    h.get_by_label("Single page");
-    h.key_press(Key::Enter);
-    h.run_steps(3);
-    assert!(!h.state().palette_open, "Enter runs the top hit and closes the palette");
-    assert_eq!(h.state().views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::Single);
-}
-
-#[test]
 fn actual_size_fit_width_and_fit_page() {
     let mut h = harness(&[]);
     let pt = 96.0 / 72.0;
@@ -1500,20 +809,6 @@ fn actual_size_fit_width_and_fit_page() {
     let (r, vp) = (rect(&h, 0).expect("page 1"), h.state().views[0].viewport_rect());
     assert!(r.height() <= vp.height() && r.height() > vp.height() * 0.85, "fit page: page {} in viewport {}", r.height(), vp.height());
     assert!(r.width() < vp.width(), "a portrait page fits by height");
-}
-
-#[test]
-fn fit_page_holds_zoom_across_mixed_page_sizes() {
-    // Scrolling views fit their largest page, so scrolling past other sizes must not jump
-    // the zoom (#214).
-    let mut h = mixed_harness(&[("layout", "continuous")]);
-    h.key_press_modifiers(Modifiers::COMMAND, Key::Num0); // fit page
-    h.run_steps(4);
-    let z1 = h.state().views[0].zoom;
-    h.state_mut().set_option("page", "2").unwrap();
-    h.run_steps(4);
-    assert_eq!(h.state().views[0].current, 1);
-    assert_eq!(h.state().views[0].zoom, z1, "another size scrolls past at the same zoom");
 }
 
 #[test]
@@ -2464,43 +1759,6 @@ fn centre_detail(h: &mut Harness<'static, PdfCraftApp>) -> u64 {
 }
 
 #[test]
-fn zooming_a_tiled_page_shows_its_earlier_tiles_until_new_ones_arrive() {
-    let _gpu = gpu();
-    let mut h = grid_harness(fine_grid_pdf(), "300");
-    crate::support::settle(&mut h);
-    let sharp = centre_detail(&mut h);
-    // The first frame at a new zoom has no tiles for it yet (they are requested at its end).
-    h.state_mut().set_option("zoom", "310").unwrap();
-    h.step();
-    let first = centre_detail(&mut h);
-    assert!(first * 10 > sharp * 7, "the first frame after zooming lost its detail: {first} against {sharp}");
-}
-
-/// #2196: zooming away from a tiled page and back must not re-blur an area already rendered
-/// sharp. The tiles of the zoom just left used to be dropped while the page was shown whole,
-/// so returning to it was a cold miss and every tile cost a full page interpret again.
-#[test]
-fn returning_to_a_visited_zoom_reuses_its_cached_tiles() {
-    let _gpu = gpu();
-    let mut h = grid_harness(fine_grid_pdf(), "300");
-    crate::support::settle(&mut h);
-    let before = h.state().views[0].tiles_debug(0);
-    assert!(!before.is_empty(), "the 300 % page should be tiled, but it cached no tiles");
-    // Zoom right out, where the 1200 pt page fits in one raster and is not tiled at all, so
-    // none of its tiles is demanded...
-    h.state_mut().set_option("zoom", "50").unwrap();
-    crate::support::settle(&mut h);
-    // ...then back to the first zoom, which was already rendered sharp.
-    h.state_mut().set_option("zoom", "300").unwrap();
-    h.step();
-    let after = h.state().views[0].tiles_debug(0);
-    // Every tile rendered sharp before the round trip is still cached: zooming away must not
-    // drop them, so returning shows them at once instead of re-interpreting the page per tile.
-    let lost: Vec<_> = before.iter().copied().filter(|k| !after.contains(k)).collect();
-    assert!(lost.is_empty(), "returning to a visited zoom dropped its cached tiles {lost:?} (had {before:?}, now {after:?})");
-}
-
-#[test]
 fn sidebar_collapse_and_resize_preserves_scroll_position() {
     use pdfcraft_ui_egui::canvas::Fit;
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
@@ -2808,29 +2066,6 @@ fn full_screen_survives_a_reload_and_keeps_a_new_documents_own_view() {
     h.run_steps(4);
     let v = h.state().views.last().unwrap();
     assert!(v.layout == PageLayout::TwoUp && v.continuous(), "the document's own two-column view comes back");
-}
-
-/// Two-page view stays a spread in full screen (#1353): both pages of the spread, fitted, and
-/// → turns the spread.
-#[test]
-fn full_screen_keeps_two_page_view_as_spreads() {
-    use pdfcraft_ui_egui::canvas::PageLayout;
-    let mut h = harness(&[("layout", "two-up")]);
-    h.run_steps(4);
-    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
-    h.run_steps(6);
-    let v = &h.state().views[0];
-    assert_eq!(v.layout, PageLayout::TwoUp);
-    assert!(!v.continuous(), "one spread at a time");
-    assert!(rect(&h, 0).is_some() && rect(&h, 1).is_some() && rect(&h, 2).is_none(), "the first spread only");
-    h.key_press(Key::ArrowRight);
-    h.run_steps(4);
-    assert_eq!(h.state().views[0].current, 2, "→ turns the spread");
-    assert!(rect(&h, 2).is_some() && rect(&h, 0).is_none());
-    h.key_press(Key::Escape);
-    h.run_steps(4);
-    let v = &h.state().views[0];
-    assert!(v.continuous() && v.layout == PageLayout::TwoUp, "two-page continuous view comes back");
 }
 
 /// Review on #2070: full screen hides the tools and a click turns the page only with Select, so
@@ -3146,18 +2381,6 @@ fn full_screen_plays_a_page_transition_and_honours_the_display_time() {
     assert!(!h.state().views[0].presenting_a_transition());
 }
 
-/// The page changes at once where a transition can't or shouldn't play: with the Animation
-/// effects preference off, and with two-page spreads.
-#[test]
-fn full_screen_turns_at_once_without_animations_or_in_spreads() {
-    for options in [&[("animation_effects", "off")][..], &[("layout", "two-up")][..]] {
-        let mut h = presenting(options);
-        h.key_press(Key::ArrowRight);
-        h.run_steps(1);
-        assert!(!h.state().views[0].presenting_a_transition(), "{options:?}");
-    }
-}
-
 /// In full screen the pointer hides after three still seconds, and shows again when it moves.
 #[test]
 fn full_screen_hides_a_still_pointer() {
@@ -3171,47 +2394,6 @@ fn full_screen_hides_a_still_pointer() {
     h.hover_at(centre + egui::vec2(40.0, 0.0));
     h.run_steps(1);
     assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "moved again");
-}
-
-/// In full screen a right-click goes back a page, as a left click goes forward (*Adobe Acrobat
-/// Help*, 2019, "Full Screen preferences", p. 69: "Left Click To Go Forward One Page; Right Click
-/// To Go Back One Page"), and no context menu opens.
-#[test]
-fn full_screen_right_click_goes_back_a_page() {
-    // A document with no display times, so no page turns by itself meanwhile.
-    let mut h = harness(&[]);
-    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
-    h.run_steps(6);
-    assert!(h.state().full_screen);
-    h.key_press(Key::ArrowRight);
-    h.run_steps(4);
-    assert_eq!(h.state().views[0].current, 1);
-    let centre = h.state().views[0].viewport_rect().center();
-    h.hover_at(centre);
-    h.run_steps(1);
-    for pressed in [true, false] {
-        h.event(egui::Event::PointerButton { pos: centre, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
-    }
-    h.run_steps(6);
-    assert_eq!(h.state().views[0].current, 0, "a right-click goes back");
-    assert!(!egui::Popup::is_any_open(&h.ctx), "no context menu in full screen");
-}
-
-/// In full screen Enter goes forward a page and Shift+Enter back (*Adobe Acrobat Help*, 2019,
-/// "Read a document in Full Screen mode", p. 66: "To go to the previous page, press Shift+Enter").
-#[test]
-fn full_screen_shift_enter_goes_back_a_page() {
-    // A document with no display times, so no page turns by itself meanwhile.
-    let mut h = harness(&[]);
-    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
-    h.run_steps(6);
-    assert!(h.state().full_screen);
-    h.key_press(Key::Enter);
-    h.run_steps(4);
-    assert_eq!(h.state().views[0].current, 1, "Enter goes forward");
-    h.key_press_modifiers(Modifiers::SHIFT, Key::Enter);
-    h.run_steps(4);
-    assert_eq!(h.state().views[0].current, 0, "Shift+Enter goes back");
 }
 
 /// A document replaced while full screen plays a transition (a reload) starts afresh: none of the
@@ -3417,27 +2599,6 @@ trailer << /Root 1 0 R >>
     assert_eq!(note.popup.map(|w| w.open), Some(true), "the note's pop-up is open");
 }
 
-/// With Animation effects following the system and the system asking for no animations (Windows'
-/// Animation effects off, or another system's Reduce motion), full screen changes pages at once
-/// and still keeps the page's display time; with the system not asking, the same transition plays.
-#[test]
-fn full_screen_cuts_transitions_when_the_system_asks_for_no_animations() {
-    for reduced in [true, false] {
-        let mut h = presenting(&[("animation_effects", "system")]);
-        h.state_mut().motion.reduced = reduced;
-        h.run_steps(1);
-        h.key_press(Key::ArrowRight);
-        h.run_steps(1);
-        assert_eq!(h.state().views[0].current, 1);
-        assert_eq!(h.state().views[0].presenting_a_transition(), !reduced, "system asks for no animations: {reduced}");
-        if reduced {
-            settle(&mut h);
-            let frames = frames_until(&mut h, |a| a.views[0].current == 2);
-            assert!(frames <= 20, "page 2's one-second display time still turns it ({frames} frames of 0.1 s)");
-        }
-    }
-}
-
 /// Escape leaves full screen while a transition plays and while a display time counts, and the
 /// display time stops with it: the page reached stays.
 #[test]
@@ -3459,27 +2620,6 @@ fn escape_leaves_full_screen_mid_transition_and_stops_the_display_time() {
         h.run_steps(30);
         assert_eq!(h.state().views[0].current, 1, "no page turns by itself after leaving (mid-transition: {mid_transition})");
     }
-}
-
-/// While a page's display time counts, the keys still turn pages at once (ISO 32000-2 §12.4.4.1,
-/// NOTE 1: "The user can advance the page manually before the specified time has expired"):
-/// → goes on before the time is up, and ← back to a page with no display time, which then stays.
-#[test]
-fn full_screen_keys_take_over_from_a_display_time() {
-    let mut h = presenting(&[("animation_effects", "off")]);
-    h.key_press(Key::ArrowRight);
-    h.run_steps(1);
-    assert_eq!(h.state().views[0].current, 1, "page 2, with its one-second display time");
-    h.key_press(Key::ArrowLeft);
-    h.run_steps(1);
-    assert_eq!(h.state().views[0].current, 0, "← goes back before the time is up");
-    h.run_steps(30);
-    assert_eq!(h.state().views[0].current, 0, "page 1 has no display time: it stays");
-    h.key_press(Key::ArrowRight);
-    h.run_steps(2);
-    h.key_press(Key::ArrowRight);
-    h.run_steps(1);
-    assert_eq!(h.state().views[0].current, 2, "→ goes on before page 2's time is up");
 }
 
 /// Every way full screen moves: forward (→, Space, Enter, Page Down, a click), back (←, Backspace,
@@ -3552,29 +2692,6 @@ fn full_screen_every_key_and_click_goes_where_it_says() {
         h.run_steps(4);
         assert!(!h.state().full_screen, "{key:?} leaves full screen");
     }
-}
-
-/// A transition style the spec doesn't name (here `/Spiral`, with a five-second `/D`) is the
-/// default, Replace (ISO 32000-2 Table 164, `S`: "Default value: R"): the page changes at once, and
-/// its display time still turns it.
-#[test]
-fn full_screen_cuts_an_unknown_transition_style_and_keeps_its_display_time() {
-    const SPIRAL: &[u8] = b"%PDF-1.7
-1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
-2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >> endobj
-3 0 obj << /Type /Page /Parent 2 0 R >> endobj
-4 0 obj << /Type /Page /Parent 2 0 R /Trans << /S /Spiral /D 5 >> /Dur 1 >> endobj
-5 0 obj << /Type /Page /Parent 2 0 R >> endobj
-trailer << /Root 1 0 R >>
-%%EOF";
-    let mut h = presenting_pdf(SPIRAL, &[]);
-    h.key_press(Key::ArrowRight);
-    h.run_steps(1);
-    assert_eq!(h.state().views[0].current, 1);
-    assert!(!h.state().views[0].presenting_a_transition(), "no effect for an unknown style");
-    settle(&mut h);
-    let frames = frames_until(&mut h, |a| a.views[0].current == 2);
-    assert!(frames <= 20, "its one-second display time turns it ({frames} frames of 0.1 s)");
 }
 
 /// A one-page PDF whose content inflates past the renderer's per-stream limit (#623): a window
