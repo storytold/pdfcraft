@@ -224,9 +224,9 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let pages: usize = checks.iter().filter_map(|c| c.as_ref().ok()).sum();
                 // Each file's size once, however many parts it is in.
                 let mut counted = BTreeSet::new();
-                let size: usize = app.combine_draft.iter().filter(|f| counted.insert(f.group)).map(|f| f.bytes.len()).sum();
+                let size: usize = app.combine_draft.iter().filter(|f| counted.insert(f.file)).map(|f| f.bytes.len()).sum();
                 // A file split into parts counts once.
-                let n = app.combine_draft.iter().map(|f| f.group).collect::<BTreeSet<u64>>().len();
+                let n = app.combine_draft.iter().map(|f| f.file).collect::<BTreeSet<u64>>().len();
                 let files = if n == 1 { tl!("1 file").to_string() } else { crate::i18n::fmt(tl!("{n} files"), &[("n", &n.to_string())]) };
                 let pages = if pages == 1 { tl!("1 page").to_string() } else { crate::i18n::fmt(tl!("{n} pages"), &[("n", &pages.to_string())]) };
                 ui.label(egui::RichText::new(format!("{files} · {pages} · {}", crate::panels::human_size(size))).color(t.text_muted));
@@ -235,7 +235,7 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     .iter()
                     .zip(&checks)
                     .filter(|(f, c)| f.problem.is_some() || c.is_err())
-                    .map(|(f, _)| f.group)
+                    .map(|(f, _)| f.file)
                     .collect::<BTreeSet<u64>>()
                     .len();
                 if bad > 0 {
@@ -286,7 +286,7 @@ fn skip_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut left_out: Vec<(&str, &str)> = Vec::new();
     let mut seen = BTreeSet::new();
-    for f in app.combine_draft.iter().filter(|f| f.unreadable() && seen.insert(f.group)) {
+    for f in app.combine_draft.iter().filter(|f| f.unreadable() && seen.insert(f.file)) {
         left_out.push((f.name.as_str(), f.problem.as_deref().unwrap_or_default()));
     }
     let mut choice: Option<bool> = None;
@@ -442,7 +442,7 @@ pub(super) fn expandable(f: &mut CombineFile) -> bool {
 fn blocker(files: &[CombineFile], checks: &[Result<usize, String>]) -> Option<String> {
     // (A file split into parts is still one file.) Files that can't be read are left out, so
     // they don't count.
-    if files.iter().filter(|f| !f.unreadable()).map(|f| f.group).collect::<BTreeSet<u64>>().len() < 2 {
+    if files.iter().filter(|f| !f.unreadable()).map(|f| f.file).collect::<BTreeSet<u64>>().len() < 2 {
         return Some(match files.iter().find(|f| f.unreadable()) {
             Some(f) => {
                 crate::i18n::fmt(tl!("{name} can't be combined: {why}"), &[("name", &f.name), ("why", f.problem.as_deref().unwrap_or_default())])

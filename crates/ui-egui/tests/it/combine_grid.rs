@@ -6,7 +6,7 @@ use std::time::Duration;
 use egui::{Key, Modifiers, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
+use pdfcraft_render::{DestView, LinkTarget, PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::{CombineThumb, CombineView, FilePurpose, PdfCraftApp};
 
 /// An `n`-page document with a proper xref table; page `i` shows "Page i+1".
@@ -1908,4 +1908,146 @@ fn open_documents_already_in_the_list_are_not_added_again() {
     h.run_steps(2);
     add_all(&mut h);
     assert_eq!(names(&h), ["a.pdf", "report.pdf", "report.pdf", "b.pdf"]);
+}
+
+#[test]
+fn rotating_a_file_card_or_an_expanded_page_card_updates_thumbnails_and_the_combined_pdf() {
+    let mut h =
+        grid_of(vec![("portrait.pdf", fixture_sized(1, 200.0, 300.0)), ("landscape.pdf", fixture_sized(2, 300.0, 200.0))], vec2(1400.0, 900.0));
+    assert!(settle(&mut h, |app| app.combine_thumbnails().iter().all(ready)));
+    assert!(matches!(h.state().combine_thumbnails()[1], CombineThumb::Ready { width, height, .. } if width > height));
+
+    // Rotate the whole landscape file clockwise from its collapsed card: both pages become portrait.
+    hover_card(&mut h, "landscape.pdf");
+    h.get_by_label("Rotate clockwise").click();
+    assert!(settle(&mut h, |app| matches!(app.combine_thumbnails()[1], CombineThumb::Ready { width, height, .. } if height > width)));
+
+    // Undo and redo restore the orientation.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    assert!(settle(&mut h, |app| matches!(app.combine_thumbnails()[1], CombineThumb::Ready { width, height, .. } if width > height)));
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+    assert!(settle(&mut h, |app| matches!(app.combine_thumbnails()[1], CombineThumb::Ready { width, height, .. } if height > width)));
+
+    // Expand the file and rotate only Page 2 counterclockwise back to landscape.
+    expand(&mut h, "landscape.pdf");
+    assert!(settle(&mut h, |app| app
+        .combine_page_thumbnails(1)
+        .iter()
+        .all(|(_, t)| matches!(t, CombineThumb::Ready { width, height, .. } if height > width))));
+    hover_card(&mut h, &page_card(2, "landscape.pdf"));
+    h.get_by_label("Rotate counterclockwise").click();
+    assert!(settle(&mut h, |app| {
+        let pages = app.combine_page_thumbnails(1);
+        matches!(pages.first(), Some((_, CombineThumb::Ready { width, height, .. })) if height > width)
+            && matches!(pages.get(1), Some((_, CombineThumb::Ready { width, height, .. })) if width > height)
+    }));
+
+    // Undo and redo restore the orientation of the single rotated page.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    assert!(settle(&mut h, |app| {
+        let pages = app.combine_page_thumbnails(1);
+        matches!(pages.first(), Some((_, CombineThumb::Ready { width, height, .. })) if height > width)
+            && matches!(pages.get(1), Some((_, CombineThumb::Ready { width, height, .. })) if height > width)
+    }));
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+    assert!(settle(&mut h, |app| {
+        let pages = app.combine_page_thumbnails(1);
+        matches!(pages.first(), Some((_, CombineThumb::Ready { width, height, .. })) if height > width)
+            && matches!(pages.get(1), Some((_, CombineThumb::Ready { width, height, .. })) if width > height)
+    }));
+
+    // Repeating a source page ("1, 1") and rotating the second card turns only that occurrence.
+    h.state_mut().combine_draft[0].range = "1, 1".into();
+    h.run_steps(2);
+    expand(&mut h, "portrait.pdf");
+    assert!(settle(&mut h, |app| app
+        .combine_page_thumbnails(0)
+        .iter()
+        .all(|(_, t)| matches!(t, CombineThumb::Ready { width, height, .. } if height > width))));
+    let second = h.get_all_by_label(&page_card(1, "portrait.pdf")).nth(1).unwrap().rect().center();
+    h.hover_at(second);
+    h.run_steps(2);
+    h.get_by_label("Rotate clockwise").click();
+    assert!(settle(&mut h, |app| {
+        matches!(app.combine_page_thumbnails(0).as_slice(), [(0, CombineThumb::Ready { width: w0, height: h0, .. })] if h0 > w0)
+            && matches!(app.combine_page_thumbnails(1).as_slice(), [(0, CombineThumb::Ready { width: w1, height: h1, .. })] if w1 > h1)
+    }));
+
+    // Combining produces the final document with each page's chosen orientation.
+    h.hover_at(egui::pos2(5.0, 890.0));
+    h.run_steps(2);
+    h.get_by_label("Combine").click();
+    h.run_steps(3);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let pages: Vec<(f32, f32, u16)> = doc.info.pages.iter().map(|p| (p.width, p.height, p.rotation)).collect();
+    assert_eq!(pages, [(200.0, 300.0, 0), (300.0, 200.0, 90), (200.0, 300.0, 90), (300.0, 200.0, 0)]);
+}
+
+#[test]
+fn rotating_repeated_page_preserves_file_count_and_does_not_warn_duplicates() {
+    let mut h = grid_of(vec![("repeated.pdf", fixture_sized(1, 200.0, 300.0))], vec2(1400.0, 900.0));
+    h.state_mut().combine_draft[0].range = "1, 1".into();
+    h.run_steps(2);
+    expand(&mut h, "repeated.pdf");
+    assert!(settle(&mut h, |app| app.combine_thumbnails().iter().all(ready)));
+
+    // Rotate the second occurrence of page 1.
+    let second = h.get_all_by_label(&page_card(1, "repeated.pdf")).nth(1).unwrap().rect().center();
+    h.hover_at(second);
+    h.run_steps(2);
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(2);
+
+    // It is still only 1 file: no duplicate warning, totals show 1 file, and Combine is blocked.
+    assert_eq!(h.query_all_by_label_contains("Added more than once").count(), 0);
+    h.get_by_label_contains("1 file · 2 pages");
+    assert!(disabled(&h, "Combine"));
+}
+
+#[test]
+fn rotating_repeated_page_keeps_cross_page_link_destinations() {
+    let mut linked = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture_sized(2, 200.0, 300.0))).unwrap();
+    let annot = linked.add(pdfcraft_cos::Object::Dict({
+        let mut d = pdfcraft_cos::Dict::new();
+        d.set(b"Type".to_vec(), pdfcraft_cos::Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), pdfcraft_cos::Object::name("Link"));
+        d.set(b"Rect".to_vec(), pdfcraft_cos::Object::Array(vec![20, 20, 100, 50].into_iter().map(pdfcraft_cos::Object::Int).collect()));
+        d.set(
+            b"Dest".to_vec(),
+            pdfcraft_cos::Object::Array(vec![pdfcraft_cos::Object::Ref(pdfcraft_cos::ObjRef::new(6, 0)), pdfcraft_cos::Object::name("Fit")]),
+        );
+        d
+    }));
+    linked
+        .update_dict(pdfcraft_cos::ObjRef::new(4, 0), |d| {
+            d.set(b"Annots".to_vec(), pdfcraft_cos::Object::Array(vec![pdfcraft_cos::Object::Ref(annot)]))
+        })
+        .unwrap();
+    let linked = pdfcraft_cos::write_full(&linked, &Default::default()).unwrap();
+
+    let mut h = grid_of(vec![("linked.pdf", linked), ("tail.pdf", fixture_sized(1, 200.0, 300.0))], vec2(1400.0, 900.0));
+    h.state_mut().combine_draft[0].range = "1, 1, 2".into();
+    h.run_steps(2);
+    expand(&mut h, "linked.pdf");
+    assert!(settle(&mut h, |app| app.combine_thumbnails().iter().all(ready)));
+
+    // Rotate only the second occurrence of Page 1 clockwise.
+    let second = h.get_all_by_label(&page_card(1, "linked.pdf")).nth(1).unwrap().rect().center();
+    h.hover_at(second);
+    h.run_steps(2);
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(2);
+
+    // Combine: both the unrotated and rotated copies of Page 1 keep their link to Page 2 (now index 2).
+    h.hover_at(egui::pos2(5.0, 890.0));
+    h.run_steps(2);
+    h.get_by_label("Combine").click();
+    h.run_steps(3);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let pages: Vec<(f32, f32, u16)> = doc.info.pages.iter().map(|p| (p.width, p.height, p.rotation)).collect();
+    assert_eq!(pages, [(200.0, 300.0, 0), (300.0, 200.0, 90), (200.0, 300.0, 0), (200.0, 300.0, 0)]);
+    let links: Vec<(usize, &LinkTarget)> = doc.info.links.iter().map(|l| (l.page, &l.target)).collect();
+    assert_eq!(links, [(0, &LinkTarget::Page(2, DestView::Fit)), (1, &LinkTarget::Page(2, DestView::Fit))]);
 }

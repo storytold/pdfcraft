@@ -145,6 +145,16 @@ impl Thumbs {
         }
     }
 
+    /// Keep thumbnails of pages of `group` that were not among `rotated` when its bytes changed.
+    pub(crate) fn keep_unrotated(&mut self, group: u64, old_auth: u64, source: usize, auth: u64, rotated: &[usize]) {
+        for ((g, page), e) in &mut self.entries {
+            if *g == group && e.key.auth == old_auth && rotated.binary_search(page).is_err() {
+                e.key.source = source;
+                e.key.auth = auth;
+            }
+        }
+    }
+
     /// Render threads that exist now (real threads, not pools): those of pools at work, of pools
     /// keeping a document open, and of pools let go of.
     pub(super) fn threads(&mut self) -> usize {
