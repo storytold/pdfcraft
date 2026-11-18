@@ -40,23 +40,27 @@ fn prepare_ocr_text_edit(editor: &mut crate::history::Editor, info: &pdfcraft_re
 /// another `/Rect`, or another `/F` (hidden, printed, locked…), which the signature check counts
 /// as a change to the page, not a form fill. `None` when every widget kept both.
 fn widgets_moved(before: &pdfcraft_cos::Document, after: &pdfcraft_cos::Document) -> Option<&'static str> {
-    let placed = |doc: &pdfcraft_cos::Document| {
-        let flags = |obj| doc.get(obj).as_dict().and_then(|d| d.get(b"F").map(|f| doc.resolve(f).as_int()));
-        pdfcraft_forms::fields(doc)
-            .into_iter()
-            .flat_map(|f| f.widgets.into_iter().map(|w| (w.obj, (w.rect, flags(w.obj)))))
-            .collect::<std::collections::HashMap<_, _>>()
-    };
-    let was = placed(before);
-    let now = placed(after);
-    let changed = |differs: &dyn Fn(&([f64; 4], _), &([f64; 4], _)) -> bool| now.iter().any(|(obj, n)| was.get(obj).is_some_and(|w| differs(w, n)));
-    if changed(&|w, n| w.0 != n.0) {
+    let was = widget_places(before);
+    let (mut moved, mut shown) = (false, false);
+    for (obj, (rect, flags)) in widget_places(after) {
+        if let Some((r, f)) = was.get(&obj) {
+            moved |= *r != rect;
+            shown |= *f != flags;
+        }
+    }
+    if moved {
         Some("moving or resizing form fields")
-    } else if changed(&|w, n| w.1 != n.1) {
+    } else if shown {
         Some("hiding or showing form fields")
     } else {
         None
     }
+}
+
+/// Each widget of `doc`'s form: its `/Rect` and its `/F` (`None` when it has none).
+fn widget_places(doc: &pdfcraft_cos::Document) -> std::collections::HashMap<pdfcraft_cos::ObjRef, ([f64; 4], Option<i64>)> {
+    let flags = |obj| doc.get(obj).as_dict().and_then(|d| d.get(b"F")).and_then(|f| doc.resolve(f).as_int());
+    pdfcraft_forms::fields(doc).into_iter().flat_map(|f| f.widgets.into_iter().map(|w| (w.obj, (w.rect, flags(w.obj))))).collect()
 }
 
 /// Whether the edit, or any edit inside a batch, deletes pages.

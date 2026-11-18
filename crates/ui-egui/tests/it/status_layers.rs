@@ -458,7 +458,9 @@ fn an_edit_a_no_changes_certification_forbids_is_refused() {
             h.run_steps(3);
         }
         let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-        let said = format!("certified with no changes allowed: {what} would invalidate the certification, so the document was not changed");
+        let said = format!(
+            "certified with no changes allowed but to its document information: {what} would invalidate the certification, so the document was not changed"
+        );
         assert!(toast.contains(&said), "{toast}");
         let doc = h.state().session.get(doc_id).unwrap();
         assert!(doc.info.annotations.iter().all(|a| a.page != 1), "{what}: no comment added");
