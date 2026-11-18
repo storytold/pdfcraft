@@ -181,9 +181,7 @@ fn advanced_rows(ui: &mut Ui, d: &mut ProtectDraft) {
         }
     });
     Checkbox::new(Bind::bound(&mut p.copy)).label(text("Enable copying of text, images, and other content")).show(ui);
-    Checkbox::new(Bind::bound(&mut p.accessibility))
-        .label(text("Enable text access for screen reader devices for the visually impaired"))
-        .show(ui);
+    Checkbox::new(Bind::bound(&mut p.accessibility)).label(text("Enable text access for screen reader devices for the visually impaired")).show(ui);
 }
 
 impl StackDialog for ProtectDialog {

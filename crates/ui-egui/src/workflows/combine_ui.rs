@@ -20,15 +20,16 @@ mod session;
 mod table;
 mod view;
 
+use files::CombineList;
 pub(crate) use files::Incoming;
 pub use files::{CombineFile, CombineView, ConflictPreview, Lock, SortKey};
 pub(crate) use files::{CombineKey, Preview, RowAction, UnlockAsk};
-use files::CombineList;
 pub(crate) use parts::range_of;
 #[cfg(test)]
 pub(crate) use parts::{Part, moved_order, moved_pages, removed_pages};
 #[cfg(test)]
 use parts::{title_of, utc_stamp};
+pub(crate) use table::columns_from_legacy;
 pub(crate) use view::page;
 
 /// Same reds and ambers as the signature status (`sign_ui`).

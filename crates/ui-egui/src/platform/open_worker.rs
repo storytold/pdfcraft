@@ -52,6 +52,15 @@ pub(crate) fn run(job: Job, cancel: &Cancel) -> ResultKind {
     pdfcraft_engine::guard(|| prepare(job, cancel)).unwrap_or_else(|_| ResultKind::Failed("opening failed unexpectedly in the background".into()))
 }
 
+/// The bytes of a recovery copy. Only a regular file is read: a FIFO planted in the recovery
+/// folder would block the worker forever, and a folder has nothing to read.
+pub(crate) fn read_recovery_copy(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    if !std::fs::symlink_metadata(path)?.file_type().is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "a recovery copy is a regular file"));
+    }
+    std::fs::read(path)
+}
+
 fn prepare(job: Job, cancel: &Cancel) -> ResultKind {
     let bytes = match &job.input {
         Input::Path(path) => match std::fs::read(path) {
@@ -62,7 +71,7 @@ fn prepare(job: Job, cancel: &Cancel) -> ResultKind {
             Ok(bytes) => Arc::new(bytes),
             Err(error) => return ResultKind::RemoteFailed(error.to_string()),
         },
-        Input::Recovery(path) => match std::fs::read(path) {
+        Input::Recovery(path) => match read_recovery_copy(path) {
             Ok(bytes) => Arc::new(bytes),
             Err(error) => return ResultKind::RecoveryFailed(error.to_string()),
         },

@@ -61,7 +61,7 @@ use page_overlays::{LinkEvent, LinkMode, PageLinks, PageOverlays, overlay_parts}
 use page_parts::{Owner, PagePart, PageParts, PagePress};
 use page_tools::{PageToolCx, page_tool};
 use pictures::{DocPages, PageRevisions, RenderReports};
-pub(crate) use selection::ToolMarks;
+pub(crate) use selection::{TextSpan, ToolMarks};
 pub use xform::PageXform;
 
 /// Logical pixels per PDF point at 100% (96 dpi, like browsers).

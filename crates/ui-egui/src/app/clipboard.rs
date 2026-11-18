@@ -126,7 +126,8 @@ impl PdfCraftApp {
         }
         // A selection across pages still being read has no text yet, but is selected all the
         // same: its copy starts rather than copying the selected comments.
-        let text_selected = self.views.get(i).is_some_and(|v| v.selection_waits_for_text().is_some() || v.selected_text().is_some_and(|t| !t.is_empty()));
+        let text_selected =
+            self.views.get(i).is_some_and(|v| v.selection_waits_for_text().is_some() || v.selected_text().is_some_and(|t| !t.is_empty()));
         if (text_selected || !self.copy_selected_comments(i))
             && !self.copy_selected_text(i)
             && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())

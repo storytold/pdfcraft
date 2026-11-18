@@ -356,9 +356,8 @@ mod idle_tests {
         let info = AppInfo { id: "pdfcraft", name: "PdfCraft", version: env!("CARGO_PKG_VERSION") };
         let host = Host::builder(info).jobs(jobs.clone()).files(files.clone()).build();
         let wake = craft::host::Wake::none();
-        // PLAN: assumed `crate::{Clipboard, FileIntake}` and `Clipboard::new(SystemClipboard::new())` as in `AppServices::system` (pdf-hub-w1)
-        let clipboard = crate::Clipboard::new(craft::platform::clipboard::SystemClipboard::new());
-        let (intake, _) = crate::FileIntake::new(wake.clone());
+        let clipboard = craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::SystemClipboard::new());
+        let (intake, _) = craft::platform::open::FileIntake::new(wake.clone());
         let watch = craft::platform::watch::FileWatch::new(wake.clone());
         let services = crate::AppServices::new(wake, clipboard, recovery.map(Path::to_path_buf), None, intake, watch);
         let mut app = PdfCraftApp::with_host(Arc::new(host), services);
@@ -415,7 +414,6 @@ mod idle_tests {
             let (tx, rx) = std::sync::mpsc::channel();
             let path = entry.path.clone();
             std::thread::spawn(move || {
-                // PLAN: assumed `open_worker::read_recovery_copy(&Path) -> io::Result<Vec<u8>>`, the read `prepare` makes of `Input::Recovery` (pdf-shell-w13)
                 let _ = tx.send(crate::open_worker::read_recovery_copy(&path).map(|b| b.len()));
             });
             let read = rx.recv_timeout(Duration::from_secs(5)).expect("the read returned instead of waiting on the FIFO");
@@ -499,6 +497,7 @@ mod sidecar_tests {
     use crate::SaveTarget;
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
+    use std::time::Duration;
 
     /// #3923: a sidecar names a file the user can write (here, one that is not the document's).
     /// After Recover, Save asks where instead of writing that file; the file the user picks is

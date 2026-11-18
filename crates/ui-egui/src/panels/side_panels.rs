@@ -405,6 +405,11 @@ fn show_panel(app: &mut PdfCraftApp, panel: PanelId, visible: bool) -> Result<()
     app.dock.set_visible(panel, visible, fallback, false, permissions).map_err(|_| refused())
 }
 
+/// The side panel `workspace` has open, `None` when every side panel is closed.
+pub(crate) fn right_of(workspace: &Workspace<PanelId>) -> Option<RightPanel> {
+    SIDE.iter().find(|panel| workspace.layout.contains(panel)).and_then(|panel| panel.side())
+}
+
 /// Opens or closes `panel`, telling the user when the dock refuses.
 pub(crate) fn set_panel_visible(app: &mut PdfCraftApp, panel: PanelId, visible: bool) {
     if let Err(error) = show_panel(app, panel, visible) {

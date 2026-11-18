@@ -242,30 +242,57 @@ impl Settings for PdfCraftSettings {
     const PORTABLE_DIR: &'static str = "PdfCraftData";
 }
 
+/// The settings store the app reads its preferences from and writes them to.
+pub type Store = craft::settings::SettingsStore<PdfCraftSettings>;
+
+/// How the data folder was chosen (portable marker, environment, platform folder). Resolved once:
+/// it is a fact of how the app was installed, and the settings store opens at the same folder.
+/// Native only: the web has no folder rules.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn resolution() -> &'static craft::settings::Resolved {
+    use craft::settings::paths::{self, Portable, Probe};
+    static RESOLVED: std::sync::OnceLock<craft::settings::Resolved> = std::sync::OnceLock::new();
+    RESOLVED.get_or_init(|| {
+        let portable = Portable { markers: PdfCraftSettings::PORTABLE_MARKERS, dir: PdfCraftSettings::PORTABLE_DIR };
+        paths::resolve_named(PdfCraftSettings::APP_ID, PdfCraftSettings::FOLDER_NAME, &portable, &craft::settings::Location::Auto, &Probe::default())
+    })
+}
+
 /// The data folder beside the executable, when a portable marker sits there and the folder can be
-/// written; `None` otherwise, and always on the web. Resolved once: it is a fact of how the app
-/// was installed, and the settings store opens at the same folder.
+/// written; `None` otherwise, and always on the web.
 pub fn portable_dir() -> Option<PathBuf> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use craft::settings::paths::{self, Portable, Probe, Resolved, Rule};
-        static RESOLVED: std::sync::OnceLock<Resolved> = std::sync::OnceLock::new();
-        let resolved = RESOLVED.get_or_init(|| {
-            let portable = Portable { markers: PdfCraftSettings::PORTABLE_MARKERS, dir: PdfCraftSettings::PORTABLE_DIR };
-            paths::resolve_named(
-                PdfCraftSettings::APP_ID,
-                PdfCraftSettings::FOLDER_NAME,
-                &portable,
-                &craft::settings::Location::Auto,
-                &Probe::default(),
-            )
-        });
-        if resolved.rule == Rule::Portable { resolved.dir.clone() } else { None }
+        let resolved = resolution();
+        if resolved.rule == craft::settings::Rule::Portable { resolved.dir.clone() } else { None }
     }
     #[cfg(target_arch = "wasm32")]
     {
         None
     }
+}
+
+/// Opens the settings store at the folder [`resolution`] chose (in memory when it chose none),
+/// importing the last release's `app.ron` on first run; on the web, over the browser's storage.
+pub fn open() -> Store {
+    #[cfg(not(target_arch = "wasm32"))]
+    let options = {
+        let location = match &resolution().dir {
+            Some(dir) => craft::settings::Location::Dir(dir.clone()),
+            None => craft::settings::Location::Memory,
+        };
+        craft::settings::OpenOptions::new(location).legacy(legacy_files())
+    };
+    #[cfg(target_arch = "wasm32")]
+    let options = craft::settings::OpenOptions::new(craft::settings::Location::Dir(PathBuf::from(PdfCraftSettings::APP_ID)))
+        .files(std::sync::Arc::new(craft::settings::BrowserFiles));
+    Store::open_with(options).0
+}
+
+/// The OCR Verify screen's user dictionary folder: the portable data folder's, else the
+/// platform's per-user one; `None` where files are not kept (the web).
+pub fn dictionary_dir() -> Option<PathBuf> {
+    crate::recovery::default_dictionary_dir()
 }
 
 /// The folders the last releases kept `app.ron` in, nearest first.
@@ -459,7 +486,6 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
             }
             motion
         });
-        // PLAN: assumed `combine_ui::columns_from_legacy(&Value) -> Option<ColumnLayout>` (workflows-w6): the last release kept `{order, widths}` by sort key
         let combine_columns = r.value("combine_columns").and_then(crate::combine_ui::columns_from_legacy);
         Layout {
             reopen_last_session: r.bool("reopen_last_session"),
@@ -622,11 +648,14 @@ fn session_text(value: &Value) -> Option<String> {
     } else {
         let files = value.get("files").and_then(Value::as_array).cloned().unwrap_or_default();
         let active = match &value["active"] {
-            Value::Number(n) => n.as_u64().and_then(|i| usize::try_from(i).ok()).and_then(|i| files.get(i)).and_then(|f| f["path"].as_str()).map(str::to_string),
+            Value::Number(n) => {
+                n.as_u64().and_then(|i| usize::try_from(i).ok()).and_then(|i| files.get(i)).and_then(|f| f["path"].as_str()).map(str::to_string)
+            }
             Value::String(path) => Some(path.clone()),
             _ => None,
         };
-        let documents: Vec<Value> = files.iter().map(|f| serde_json::json!({ "path": f["path"], "view": f.get("view").cloned().unwrap_or(Value::Null) })).collect();
+        let documents: Vec<Value> =
+            files.iter().map(|f| serde_json::json!({ "path": f["path"], "view": f.get("view").cloned().unwrap_or(Value::Null) })).collect();
         Session::from_json(&serde_json::json!({ "documents": documents, "active": active }))
     };
     serde_json::to_string(&session).ok()

@@ -20,6 +20,9 @@ use pdfcraft_engine::export::{ExportSource, Exporter, ImageFormat};
 use crate::notices::{self, ProgressKey, ProgressNotice};
 use crate::{JobCount, PdfCraftApp};
 
+/// The queue of exports, keyed by document, each answering with its summary line.
+pub(crate) type ExportJobs = craft::host::queue::JobQueue<crate::DocId, String>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExportKind {
     Image,
@@ -77,10 +80,8 @@ fn params(kind: ExportKind, count: usize, current: usize) -> Vec<Param> {
     let mut rows = Vec::new();
     match kind {
         ExportKind::Image => {
-            let dpis = DPIS
-                .iter()
-                .map(|n| (n.to_string(), Label::from(crate::i18n::fmt(tl!("{dpi} pixels/inch"), &[("dpi", &n.to_string())]))))
-                .collect();
+            let dpis =
+                DPIS.iter().map(|n| (n.to_string(), Label::from(crate::i18n::fmt(tl!("{dpi} pixels/inch"), &[("dpi", &n.to_string())])))).collect();
             rows.push(Param::new("dpi", tl!("Resolution"), ParamKind::choice(dpis, Some("150".into()))));
             let formats = ["png", "jpeg", "tiff"]
                 .iter()
@@ -307,7 +308,6 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         task(self, PathBuf::new());
         #[cfg(not(target_arch = "wasm32"))]
-
         self.pick_first(PickRequest::folder("export.folder").title(tl!("Choose a folder for the exported files")), None, task);
     }
 
