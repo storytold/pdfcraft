@@ -161,38 +161,70 @@ lto = "thin"
 codegen-units = 1
 
 # Vendored, patched third-party crates (see vendor/README.md). Each patch is meant to go upstream.
-[patch.crates-io]
-hayro-interpret = { path = "vendor/hayro-interpret" }
-hayro = { path = "vendor/hayro" }
-hayro-syntax = { path = "vendor/hayro-syntax" }
-hayro-cmap = { path = "vendor/hayro-cmap" }
-hayro-postscript = { path = "vendor/hayro-postscript" }
-hayro-jbig2 = { path = "vendor/hayro-jbig2" }
-lopdf = { path = "vendor/lopdf" }
-vello_common = { path = "vendor/vello_common" }
-vello_cpu = { path = "vendor/vello_cpu" }
-# The egui and winit crates below are pinned to immutable storytold git revisions (egui
-# 725a39fca940f77149ffbb9c58eef405a16997bc, winit a517b3846ee8457d84ee4975110bfda6797c44dc).
-# Only the retained `vendor/winit` and `vendor/egui-wgpu` copies are provenance for the app's
-# earlier patches and their source guards, not path patches; the other `vendor/` entries above
-# remain real path patches. See vendor/README.md and the migration plan.
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "725a39fca940f77149ffbb9c58eef405a16997bc" }
-winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
-
 [workspace.metadata.cl]
 selection = ["pdfcraft", "pdfcraft-ui-egui", "pdfcraft-web"]
 tracked = ["egui", "eframe"]
 unset_env = ["CRAFT_FONTS_DIR", "CRAFT_FONTS_REQUIRED", "CRAFT_I18N_DIR", "CRAFT_I18N_REQUIRED", "PDFCRAFT_REQUIRE_WINRES"]
+
+# BEGIN port-kit framework patch
+[patch.crates-io]
+krilla = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/vendor/krilla" }
+hayro = { path = "vendor/hayro" }
+hayro-interpret = { path = "vendor/hayro-interpret" }
+hayro-syntax = { path = "vendor/hayro-syntax" }
+hayro-jbig2 = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/vendor/hayro-jbig2" }
+hayro-cmap = { path = "vendor/hayro-cmap" }
+hayro-postscript = { path = "vendor/hayro-postscript" }
+linesweeper = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/vendor/linesweeper" }
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "e9711ca9b69772f875ae0d1cef1977ff8c16234d" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "e9711ca9b69772f875ae0d1cef1977ff8c16234d" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "e9711ca9b69772f875ae0d1cef1977ff8c16234d" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "e9711ca9b69772f875ae0d1cef1977ff8c16234d" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "e9711ca9b69772f875ae0d1cef1977ff8c16234d" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "e9711ca9b69772f875ae0d1cef1977ff8c16234d" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "e9711ca9b69772f875ae0d1cef1977ff8c16234d" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "e9711ca9b69772f875ae0d1cef1977ff8c16234d" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "e9711ca9b69772f875ae0d1cef1977ff8c16234d" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "e9711ca9b69772f875ae0d1cef1977ff8c16234d" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "e9711ca9b69772f875ae0d1cef1977ff8c16234d" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "e9711ca9b69772f875ae0d1cef1977ff8c16234d" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "e9711ca9b69772f875ae0d1cef1977ff8c16234d" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "e9711ca9b69772f875ae0d1cef1977ff8c16234d" }
+winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+lopdf = { path = "vendor/lopdf" }
+vello_common = { path = "vendor/vello_common" }
+vello_cpu = { path = "vendor/vello_cpu" }
+
+[patch."https://github.com/storytold/craft-libs"]
+craft-cms = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/cms" }
+craft-codepage = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/codepage" }
+craft-csv = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/csv" }
+craft-docpath = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/docpath" }
+craft-flow = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/flow" }
+craft-fonts-build = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/fonts-build" }
+craft-html = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/html" }
+craft-i18n = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/i18n" }
+craft-image-codecs = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/image-codecs" }
+craft-jpeg = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/jpeg" }
+craft-keymap = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/keymap" }
+craft-markdown = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/markdown" }
+craft-math = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/math" }
+craft-menu = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/menu" }
+craft-mime = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/mime" }
+craft-opc = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/opc" }
+craft-pdf = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/pdf" }
+craft-pkcs7 = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/pkcs7" }
+craft-prc = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/prc" }
+craft-print = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/print" }
+craft-quit = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/quit" }
+craft-rtf = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/rtf" }
+craft-stream-codecs = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/stream-codecs" }
+craft-tiff = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/tiff" }
+craft-ui = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/ui" }
+craft-update = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/update" }
+craft-web-api = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/web-api" }
+craft-web-host = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/web-host" }
+craft-wordmodel = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/wordmodel" }
+craft-xml = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/xml" }
+craft-zip = { path = "/var/home/dylan/Projects/pdfcraft-port/trees/racheck-fw/crates/zip" }
+# END port-kit framework patch
