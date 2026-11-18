@@ -62,6 +62,10 @@ const EXTRA: &[(&str, &str, Option<Shortcut>)] = &[
     (ZOOM_OUT, "Zoom out", Some(crate::commands::ZOOM_OUT)),
     (ROTATE_CW, "Rotate view clockwise", Some(crate::commands::ROTATE_CW)),
     (ROTATE_CCW, "Rotate view counterclockwise", Some(crate::commands::ROTATE_CCW)),
+    // Plug-ins ▸ (RFC-0046): the window, and one installed plug-in's command (`{"id", "command"}`,
+    // labelled with the plug-in's own name).
+    (crate::plugins_ui::MANAGE, "Manage plug-ins…", None),
+    (crate::plugins_ui::RUN, "Run plug-in", None),
 ];
 
 /// View ▸ Side panels: the panel, its id in [`PANEL`] commands and its English label.
@@ -101,6 +105,7 @@ const TITLES: &[&str] = &[
     "Display theme",
     "Tools",
     "Fill & Sign",
+    "Plug-ins",
 ];
 
 /// Separator.
@@ -340,6 +345,7 @@ impl PdfCraftApp {
                 .collect(),
         )];
         sign.extend(list(SIGN, &mut used));
+        let plugins = self.plugins_menu();
         let window = list(WINDOW, &mut used);
         let help = list(HELP, &mut used);
         let mut view = vec![
@@ -372,9 +378,11 @@ impl PdfCraftApp {
                 Menu::new(tl!("Edit"), craft_menu::tidy(edit)).role(MenuRole::Edit),
                 Menu::new(tl!("View"), craft_menu::tidy(view)).role(MenuRole::View),
                 Menu::new(tl!("Sign"), craft_menu::tidy(sign)),
-                Menu::new(tl!("Window"), window).role(MenuRole::Window),
-                Menu::new(tl!("Help"), craft_menu::tidy(help)).role(MenuRole::Help),
-            ],
+            ]
+            .into_iter()
+            .chain(plugins.map(|nodes| Menu::new(tl!("Plug-ins"), nodes)))
+            .chain([Menu::new(tl!("Window"), window).role(MenuRole::Window), Menu::new(tl!("Help"), craft_menu::tidy(help)).role(MenuRole::Help)])
+            .collect(),
             documents: self.menu_documents(),
         };
         bar.tag_item(&CommandRef::new("help.about"), ItemRole::About);
@@ -502,6 +510,8 @@ impl PdfCraftApp {
                 SELECT_ALL | DELETE => has_doc,
                 ACTUAL_SIZE | PAGE_LEVEL | FIT_WIDTH | FIT_HEIGHT | ZOOM_IN | ZOOM_OUT | ROTATE_CW | ROTATE_CCW => has_doc,
                 PANEL => panel(command).is_some(),
+                crate::plugins_ui::MANAGE => self.plugins.available(),
+                crate::plugins_ui::RUN => self.plugins.available() && has_doc,
                 id => enabled_id(id),
             };
         let checked = match command.id.as_str() {
@@ -558,6 +568,7 @@ impl PdfCraftApp {
             SELECT_ALL => self.menu_input.extend(key(egui::Key::A, egui::Modifiers::COMMAND)),
             DELETE => self.menu_input.extend(key(egui::Key::Delete, egui::Modifiers::NONE)),
             PANEL => self.choose_right_panel(panel(command)),
+            crate::plugins_ui::MANAGE | crate::plugins_ui::RUN => self.run_plugin_menu(command),
             ACTUAL_SIZE | PAGE_LEVEL | FIT_WIDTH | FIT_HEIGHT | ZOOM_IN | ZOOM_OUT | ROTATE_CW | ROTATE_CCW => {
                 let Some(v) = self.active.and_then(|i| self.views.get_mut(i)) else { return };
                 match command.id.as_str() {

@@ -41,6 +41,7 @@ mod decorations;
 mod logging;
 #[cfg(target_os = "windows")]
 mod motion;
+mod plugins;
 mod reopen;
 mod settings;
 mod single_instance;
@@ -462,6 +463,8 @@ fn app_creator<'a>(
     Box::new(move |cc| {
         started.set(true);
         let mut app = PdfCraftApp::new();
+        // Plug-ins (RFC-0046), kept in the settings folder's `Plug-ins`.
+        app.set_plugin_backend(Box::new(plugins::Backend::new(settings_dir().as_deref())));
         // First start (or settings from before Units existed): the region's unit.
         app.units = pdfcraft_ui_egui::units::Unit::system();
         #[cfg(target_os = "linux")]

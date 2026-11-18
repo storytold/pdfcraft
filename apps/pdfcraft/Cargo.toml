@@ -16,6 +16,10 @@ pdfcraft-ui-egui = { workspace = true }
 pdfcraft-engine = { workspace = true }
 # `owner_only`: the --control file is restricted to its user on Windows (#3922).
 pdfcraft-platform = { workspace = true }
+# Plug-ins (RFC-0046): the Plug-ins menu and window run automation's `plugin_*` tools over the
+# window's session (src/plugins.rs); downloads go through craft-update's HTTPS client.
+pdfcraft-automation = { workspace = true }
+craft-update = { workspace = true }
 # wgpu draws; OpenGL (glow) is the fallback when wgpu can't start on an old or unusual GPU or
 # driver (#461, #435, #392), and can be chosen with PDFCRAFT_RENDERER=gl.
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "persistence", "links", "clipboard"] }
@@ -73,5 +77,3 @@ winit = { version = "0.30", default-features = false }
 # Icon + VERSIONINFO for pdfcraft.exe; build.rs only uses it when targeting Windows.
 winresource = "0.1"
 
-[target.'cfg(windows)'.dependencies]
-craft-update = { workspace = true }

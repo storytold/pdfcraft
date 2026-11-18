@@ -126,6 +126,8 @@ use dialogs::hairlines_ui;
 use dialogs::marks_ui;
 use dialogs::pageboxes;
 use dialogs::palette;
+pub use dialogs::plugins_ui;
+pub use dialogs::plugins_ui::PluginBackend;
 use dialogs::printer_marks_ui;
 use dialogs::protect;
 use dialogs::standards_ui;
@@ -798,6 +800,8 @@ pub struct PdfCraftApp {
     /// Number pages dialog settings (1-based pages).
     pub number_draft: NumberDraft,
     pub(crate) word_count_draft: word_count_ui::Draft,
+    /// Plug-ins (RFC-0046): the Plug-ins menu and window, run through the desktop app's backend.
+    pub(crate) plugins: plugins_ui::Plugins,
     pub printer_marks_draft: printer_marks_ui::PrinterMarksDraft,
     pub convert_colours_draft: convert_colours_ui::ConvertColoursDraft,
     pub hairlines_draft: hairlines_ui::HairlinesDraft,

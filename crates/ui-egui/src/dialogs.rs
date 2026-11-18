@@ -16,6 +16,7 @@ pub(super) mod hairlines_ui;
 pub(super) mod marks_ui;
 pub(super) mod pageboxes;
 pub(super) mod palette;
+pub mod plugins_ui;
 pub(super) mod preferences;
 pub(super) mod printer_marks_ui;
 mod prompts;
@@ -113,6 +114,8 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     remote_link_prompt(app, ctx);
     full_screen_prompt(app, ctx);
     crate::updates::dialog(app, ctx);
+    // Plug-ins: a movable window, never on the pages.
+    app.show_plugins(ctx);
     if app.dialog != Some(Dialog::WordCount) {
         app.word_count_draft.cancel();
     }
