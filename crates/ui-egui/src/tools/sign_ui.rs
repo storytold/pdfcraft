@@ -799,7 +799,7 @@ mod tests {
         }
         let mut app = PdfCraftApp::for_unit_tests();
         let plain = app.session.create_from_text("t", "No signatures here.").unwrap();
-        app.open_bytes("plain.pdf", None, plain.as_ref().clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "plain.pdf", None, plain.as_ref().clone()).unwrap();
         app.views[0].session.texts.insert(0, std::sync::Arc::new(pdfcraft_render::PageText::default()));
         app.apply_status_captions(crate::i18n::Lang::from_code("de").unwrap());
         assert!(!app.views[0].session.texts.is_empty(), "its text, selection and search results stay");
@@ -1081,7 +1081,7 @@ mod tests {
         assert_eq!(import_app.digital_ids[0].name, "Grace Hopper");
 
         let bytes = pdfcraft_engine::Session::new().create_blank(200.0, 200.0, 1).unwrap();
-        import_app.open_bytes("unsigned.pdf", None, bytes.as_ref().clone()).unwrap();
+        import_app.open_bytes(&egui::Context::default(), "unsigned.pdf", None, bytes.as_ref().clone()).unwrap();
         let mut sign_draft = SignDraft::new(0, None, None, None, &import_app.digital_ids);
         sign_draft.step = SignStep::SignAs;
         sign_draft.password = "secret12".into();

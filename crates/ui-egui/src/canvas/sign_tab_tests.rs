@@ -228,11 +228,11 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 /// The real shell with `bytes` open, the side panes closed, after the first frames.
-fn shell(bytes: &'static [u8]) -> egui_kittest::Harness<'static, PdfCraftApp> {
+fn shell(ctx: &egui::Context, bytes: &'static [u8]) -> egui_kittest::Harness<'static, PdfCraftApp> {
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(move |cc| {
         let mut app = PdfCraftApp::for_unit_tests();
         app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-        app.open_bytes("sign-fields.pdf", None, bytes.to_vec()).unwrap();
+        app.open_bytes(ctx, "sign-fields.pdf", None, bytes.to_vec()).unwrap();
         app.set_option(&cc.egui_ctx, "left", "closed").unwrap();
         app.set_option(&cc.egui_ctx, "panel", "none").unwrap();
         app
@@ -262,7 +262,8 @@ fn click_at(h: &mut egui_kittest::Harness<'static, PdfCraftApp>, at: Pos2) {
 /// have no tab: a click where theirs would be starts no signing.
 #[test]
 fn empty_signature_fields_show_a_sign_tab_that_signs_them() {
-    let mut h = shell(SIGN_FIELDS);
+    let ctx = &egui::Context::default();
+    let mut h = shell(ctx, SIGN_FIELDS);
     let (witness, locked) = (tab_on_screen(&h, "Witness"), tab_on_screen(&h, "Locked"));
     for (what, spot) in [("a signed field", witness), ("a read-only field", locked)] {
         click_at(&mut h, spot.center());
@@ -282,7 +283,8 @@ fn empty_signature_fields_show_a_sign_tab_that_signs_them() {
 /// tab, the overlapping field still takes clicks as before.
 #[test]
 fn a_sign_tab_signs_its_field_where_an_earlier_field_overlaps_it() {
-    let mut h = shell(SIGN_UNDER_TEXT);
+    let ctx = &egui::Context::default();
+    let mut h = shell(ctx, SIGN_UNDER_TEXT);
     let (name, approver) = (field_on_screen(&h, "Name"), field_on_screen(&h, "Approver"));
     let tab = tab_on_screen(&h, "Approver");
     assert!(name.contains_rect(tab), "the text field covers the tab: {tab:?} in {name:?}");

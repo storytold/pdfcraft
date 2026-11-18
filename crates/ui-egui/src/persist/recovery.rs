@@ -487,6 +487,7 @@ mod sidecar_tests {
     #[test]
     fn the_first_save_after_recovering_asks_instead_of_writing_the_sidecars_path() {
         let ctx = &egui::Context::default();
+        let ctx = &egui::Context::default();
         let dir = TestDir::new();
         let folder = dir.path().join("recovery");
         let named = dir.path().join("named.pdf");
@@ -494,7 +495,7 @@ mod sidecar_tests {
         {
             let (mut crashed, ..) = app_in(Some(&folder));
             let bytes = crashed.session.create_blank(200.0, 300.0, 1).unwrap();
-            crashed.open_bytes("work.pdf", Some(named.to_string_lossy().into_owned()), bytes.to_vec()).unwrap();
+            crashed.open_bytes(ctx, "work.pdf", Some(named.to_string_lossy().into_owned()), bytes.to_vec()).unwrap();
             assert!(crashed.apply_edit(ctx, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
             crashed.autosave_now();
         }
@@ -526,7 +527,8 @@ mod sidecar_tests {
         assert!(std::fs::read(&chosen).unwrap().starts_with(b"%PDF"), "the document went where the user chose");
 
         // The chosen file is the document's file now: the next Save writes it without asking.
-        assert!(h.state_mut().apply_edit(&h.ctx.clone(), pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+        let ctx_h = h.ctx.clone();
+        assert!(h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
         assert!(h.state_mut().save_active(ctx, SaveTarget::InPlace));
     }
 }

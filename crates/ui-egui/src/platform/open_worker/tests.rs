@@ -107,7 +107,7 @@ impl Rig {
             let mut app = PdfCraftApp::with_host(Arc::new(host), services);
             app.set_option(&cc.egui_ctx, "language", "en").expect("language preference");
             app.attach_control(ControlChannel::new(rx), None);
-            app.open_bytes("existing.pdf", None, fixture(3)).expect("existing document");
+            app.open_bytes(&egui::Context::default(), "existing.pdf", None, fixture(3)).expect("existing document");
             app
         });
         h.run_steps(3);
@@ -220,7 +220,8 @@ fn chosen_tool_runs_after_preparation(extension: &str, bytes: Vec<u8>) {
     rig.choose("export.text", &file);
     assert_eq!(rig.tabs(), 0);
     assert!(!rig.export_open(), "the tool cannot run before its document exists");
-    rig.h.state_mut().open_bytes("other.pdf", None, fixture(3)).expect("another document opens while preparation is held");
+    let ctx_h = h.ctx.clone();
+    rig.h.state_mut().open_bytes(&ctx_h, "other.pdf", None, fixture(3)).expect("another document opens while preparation is held");
     let other = rig.h.state().active_ids().expect("the other document is active").1;
     rig.release();
     let app = rig.h.state();
@@ -293,7 +294,8 @@ fn cancelling_a_chosen_tools_picker_or_password_never_runs_it_on_another_documen
     rig.release();
     assert!(rig.password_dialog());
     rig.press("Cancel");
-    rig.h.state_mut().open_bytes("other.pdf", None, fixture(3)).expect("a different document opens after cancellation");
+    let ctx_h = h.ctx.clone();
+    rig.h.state_mut().open_bytes(&ctx_h, "other.pdf", None, fixture(3)).expect("a different document opens after cancellation");
     rig.h.run_steps(3);
     assert!(!rig.password_dialog());
     assert_eq!(rig.tabs(), 1);
@@ -316,7 +318,8 @@ fn a_chosen_tool_does_not_run_when_native_preparation_rejects_the_file() {
 #[test]
 fn startup_intake_waits_for_local_authentication_and_keeps_its_own_background_password_prompt() {
     let mut rig = Rig::new();
-    rig.h.state_mut().open_bytes("local-secret.pdf", None, encrypted_fixture()).expect("the local PDF asks for its password");
+    let ctx_h = h.ctx.clone();
+    rig.h.state_mut().open_bytes(&ctx_h, "local-secret.pdf", None, encrypted_fixture()).expect("the local PDF asks for its password");
     rig.h.run_steps(2);
     rig.intake.open_bytes("startup-secret.pdf".into(), Arc::from(encrypted_fixture()));
     rig.h.run_steps(2);
@@ -338,7 +341,8 @@ fn startup_intake_waits_for_local_authentication_and_keeps_its_own_background_pa
 #[test]
 fn startup_intake_waits_through_wrong_password_retry_and_cancel_preserves_the_existing_document() {
     let mut rig = Rig::new();
-    rig.h.state_mut().open_bytes("local-secret.pdf", None, encrypted_fixture()).expect("the local PDF asks for its password");
+    let ctx_h = h.ctx.clone();
+    rig.h.state_mut().open_bytes(&ctx_h, "local-secret.pdf", None, encrypted_fixture()).expect("the local PDF asks for its password");
     rig.h.run_steps(2);
     rig.enter_password("wrong-password");
     rig.intake.open_bytes("startup.pdf".into(), Arc::from(fixture(1)));
@@ -455,7 +459,8 @@ fn tool_picker_keeps_picked_recipient_when_other_open_is_ready() {
         let inserted = TempFile::new("picker-insert", "pdf", &fixture(1));
         let other = TempFile::new("picker-other", "pdf", &fixture(1));
         // The tool's second picker is out while another file finishes opening.
-        rig.h.state_mut().pick_files(&h.ctx.clone(), crate::FilePurpose::InsertPages, true);
+        let ctx_h = h.ctx.clone();
+        rig.h.state_mut().pick_files(&ctx_h, crate::FilePurpose::InsertPages, true);
         rig.h.run_steps(2);
         rig.h.state_mut().open_path(&other.path());
         rig.release();
@@ -500,7 +505,8 @@ fn startup_files_wait_for_absolute_link_consent_and_preparation() {
         target.path()
     );
     let mut rig = Rig::empty();
-    rig.h.state_mut().open_bytes("source.pdf", None, source.into_bytes()).expect("the source document");
+    let ctx_h = h.ctx.clone();
+    rig.h.state_mut().open_bytes(&ctx_h, "source.pdf", None, source.into_bytes()).expect("the source document");
     rig.h.run_steps(3);
     let page = rig.h.state().views[0].page_screen_rect(0).expect("the page is on screen");
     rig.h.event(egui::Event::PointerMoved(page.center()));

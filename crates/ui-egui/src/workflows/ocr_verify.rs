@@ -1728,7 +1728,7 @@ mod tests {
     fn app_review(words: Vec<Vec<PlacedWord>>) -> (PdfCraftApp, DocId) {
         let blank = Session::new().create_blank(612.0, 792.0, words.len()).expect("fixture").to_vec();
         let mut app = PdfCraftApp::for_unit_tests();
-        app.open_bytes("blank.pdf", None, blank).expect("fixture");
+        app.open_bytes(&egui::Context::default(), "blank.pdf", None, blank).expect("fixture");
         let id = app.active_ids().expect("open").1;
         let job = app.session.ocr_job(id, &[], OcrSettings::default()).expect("fixture");
         let pages = words
@@ -2253,7 +2253,7 @@ mod tests {
         let mut app = PdfCraftApp::for_unit_tests();
         let bytes = Session::new().create_from_text("t", "Recognize these scanned words").expect("fixture").to_vec();
         for name in ["a.pdf", "b.pdf", "c.pdf"] {
-            app.open_bytes(name, None, bytes.clone()).expect("fixture");
+            app.open_bytes(&egui::Context::default(), name, None, bytes.clone()).expect("fixture");
         }
         let a = app.views.first().expect("a is open").id;
         let job = app.session.ocr_job(a, &[0], OcrSettings::default()).expect("fixture");
@@ -2285,7 +2285,7 @@ mod tests {
         let mut app = PdfCraftApp::for_unit_tests();
         let bytes = Session::new().create_from_text("t", "Recognize these scanned words").expect("fixture").to_vec();
         for name in ["a.pdf", "b.pdf", "c.pdf"] {
-            app.open_bytes(name, None, bytes.clone()).expect("fixture");
+            app.open_bytes(&egui::Context::default(), name, None, bytes.clone()).expect("fixture");
         }
         let a = app.views.first().expect("a is open").id;
         let job = app.session.ocr_job(a, &[0], OcrSettings::default()).expect("fixture");
@@ -2365,7 +2365,7 @@ mod tests {
         let mut app = PdfCraftApp::for_unit_tests();
         let bytes = Session::new().create_from_text("t", "Recognize these scanned words").expect("fixture").to_vec();
         for name in ["a.pdf", "b.pdf"] {
-            app.open_bytes(name, None, bytes.clone()).expect("fixture");
+            app.open_bytes(&egui::Context::default(), name, None, bytes.clone()).expect("fixture");
         }
         let a = app.views[0].id;
         let job = app.session.ocr_job(a, &[0], OcrSettings::default()).expect("fixture");

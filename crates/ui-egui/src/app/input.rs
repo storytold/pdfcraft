@@ -50,13 +50,13 @@ impl PdfCraftApp {
                 }
                 Intake::Bytes { name, bytes } => {
                     let name = if name.is_empty() { DROPPED_NAME.to_string() } else { name };
-                    if let Err(error) = self.open_bytes(&name, None, bytes.to_vec()) {
+                    if let Err(error) = self.open_bytes(ctx, &name, None, bytes.to_vec()) {
                         self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
                     }
                 }
                 Intake::Dropped { files, .. } => {
                     for file in files {
-                        self.open_dropped_file(file.name, file.path, file.bytes);
+                        self.open_dropped_file(ctx, file.name, file.path, file.bytes);
                     }
                 }
             }
@@ -65,15 +65,15 @@ impl PdfCraftApp {
 
     /// Opens the files dropped on the window: a file with a path like File ▸ Open, one that
     /// arrived as bytes (the web) as a new tab.
-    pub(crate) fn open_dropped(&mut self, files: Vec<OsFile>) {
+    pub(crate) fn open_dropped(&mut self, ctx: &egui::Context, files: Vec<OsFile>) {
         for file in files {
-            self.open_dropped_file(file.name, file.path, file.bytes);
+            self.open_dropped_file(ctx, file.name, file.path, file.bytes);
         }
     }
 
     /// Opens one dropped file, from the window or from the OS's file intake: by its path when it has one, else from
     /// its bytes under `name`.
-    fn open_dropped_file(&mut self, name: String, path: Option<std::path::PathBuf>, bytes: Option<std::sync::Arc<[u8]>>) {
+    fn open_dropped_file(&mut self, ctx: &egui::Context, name: String, path: Option<std::path::PathBuf>, bytes: Option<std::sync::Arc<[u8]>>) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = &path {
             self.open_path(&path.to_string_lossy());
@@ -86,7 +86,7 @@ impl PdfCraftApp {
             self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", "the file has no contents")]);
             return;
         };
-        if let Err(error) = self.open_bytes(&name, None, bytes.to_vec()) {
+        if let Err(error) = self.open_bytes(ctx, &name, None, bytes.to_vec()) {
             self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
         }
     }

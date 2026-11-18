@@ -106,7 +106,7 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, cx: &mut BodyCx<'_>,
         app.make_comment_default(p, i);
     }
     if let Some((p, i, open)) = app.views.get_mut(index).and_then(|v| v.session.comments.attachment_request.take()) {
-        app.comment_attachment_action(id, p, i, open);
+        app.comment_attachment_action(ui.ctx(), id, p, i, open);
     }
     if let Some((p, i)) = app.views.get_mut(index).and_then(|v| v.session.comments.props_request.take()) {
         app.open_comment_props(&ctx, p, i);
@@ -121,7 +121,7 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, cx: &mut BodyCx<'_>,
         app.bookmark_action(ui.ctx(), a);
     }
     if let Some((ai, open)) = result.attachment {
-        app.attachment_action(id, ai, open);
+        app.attachment_action(ui.ctx(), id, ai, open);
     }
     if let Some((layer, visible)) = result.layer
         && app.session.set_layer_visible(id, layer, visible)

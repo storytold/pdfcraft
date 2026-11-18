@@ -1602,7 +1602,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
     }
     if let Some((p, i, open)) = app.views[index].session.comments.attachment_request.take() {
         let doc = app.views[index].id;
-        app.comment_attachment_action(doc, p, i, open);
+        app.comment_attachment_action(ctx, doc, p, i, open);
     }
     if let Some((name, w)) = field_props {
         crate::prepare::dialog::open(app, &name, w, crate::prepare::FieldTab::General);

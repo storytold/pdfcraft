@@ -531,7 +531,7 @@ mod tests {
         let mut app = PdfCraftApp::for_unit_tests();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         for name in docs {
-            app.open_bytes(name, None, PDF.to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), name, None, PDF.to_vec()).unwrap();
         }
         (app, egui::Context::default())
     }

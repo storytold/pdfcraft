@@ -1212,7 +1212,7 @@ mod tests {
 
     fn app_with(pdf: Vec<u8>) -> PdfCraftApp {
         let mut app = PdfCraftApp::for_unit_tests();
-        app.open_bytes("doc.pdf", None, pdf).unwrap();
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf).unwrap();
         app.quick_tool = QuickTool::EditText;
         app
     }
@@ -1226,7 +1226,7 @@ mod tests {
         let jobs = Arc::new(ManualJobs::new());
         let host = craft::host::Host::builder(AppInfo { id: "pdfcraft-test", name: "PdfCraft", version: "0" }).jobs(jobs.clone()).build();
         let mut app = PdfCraftApp::for_unit_tests_on(Arc::new(host));
-        app.open_bytes("doc.pdf", None, scan()).unwrap();
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, scan()).unwrap();
         app.quick_tool = QuickTool::EditText;
         (app, jobs)
     }
@@ -1588,7 +1588,7 @@ mod tests {
     fn a_result_that_arrives_after_the_document_changed_is_refused() {
         let mut app = PdfCraftApp::for_unit_tests();
         let pdf = pdfcraft_engine::Session::new().create_from_text("t", "Typed text").expect("fixture");
-        app.open_bytes("a.pdf", None, pdf.to_vec()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "a.pdf", None, pdf.to_vec()).expect("opens");
         let id = app.active_ids().expect("a document").1;
         let guard = app.session.ocr_guard(id).expect("a guard");
         app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).expect("an edit while the worker runs");

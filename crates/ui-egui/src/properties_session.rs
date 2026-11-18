@@ -331,7 +331,7 @@ mod tests {
         let mut app = PdfCraftApp::for_unit_tests();
         let ctx = egui::Context::default();
         let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
-        app.open_bytes("properties.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "properties.pdf", None, bytes.as_ref().clone()).unwrap();
         app.open_properties(&ctx, PropsTab::Description);
         assert!(app.prepare_properties(&ctx));
         set_field(&mut app, &ctx, "title", json!("Draft title"));
@@ -397,7 +397,7 @@ mod tests {
         let (mut app, ctx) = app();
         let (_, id) = app.active_ids().unwrap();
         let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
-        app.open_bytes("other.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "other.pdf", None, bytes.as_ref().clone()).unwrap();
         let (_, other) = app.active_ids().unwrap();
         assert_ne!(id, other);
         assert!(app.finish_properties(&ctx));

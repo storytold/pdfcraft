@@ -491,7 +491,7 @@ impl PdfCraftApp {
     /// Save an attachment to disk, or open a PDF attachment in a new tab (or go to the tab it is
     /// already open in). Only bytes that are a PDF open, whatever the file's name says; anything
     /// else asked to open is offered to save.
-    pub fn attachment_action(&mut self, doc: DocId, index: usize, open: bool) {
+    pub fn attachment_action(&mut self, ctx: &egui::Context, doc: DocId, index: usize, open: bool) {
         let Some(d) = self.session.get(doc) else { return };
         let Some(att) = d.info.attachments.get(index).cloned() else { return };
         let data = pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att);
@@ -511,7 +511,7 @@ impl PdfCraftApp {
                     return;
                 }
                 let before = self.views.len();
-                match self.open_bytes(&name, None, bytes) {
+                match self.open_bytes(ctx, &name, None, bytes) {
                     // Opening bytes adds their tab at once (unless a password is asked for first).
                     Ok(()) if self.views.len() > before => {
                         if let Some(v) = self.views.last_mut() {
@@ -547,7 +547,7 @@ impl PdfCraftApp {
     /// with the right panel closed, unless the portfolio keeps the list hidden (`/View /H`).
     /// Leaving the tab gives back the panel the list replaced, unless the reader changed panels
     /// meanwhile. Called every frame.
-    pub(crate) fn present_portfolios(&mut self) {
+    pub(crate) fn present_portfolios(&mut self, ctx: &egui::Context) {
         // A prompt or picker over the window belongs to the document it was raised for (the
         // password of a file opened together with the portfolio, say): the initial document
         // waits for its answer, and opening it then would close the prompt. A file still
@@ -563,7 +563,7 @@ impl PdfCraftApp {
             && self.active_ids().is_some_and(|(_, id)| id == doc)
             && let Some(index) = self.portfolio_attachment(doc, &key)
         {
-            self.open_portfolio_initial(doc, index);
+            self.open_portfolio_initial(ctx, doc, index);
             // A portfolio inside the portfolio waits until the reader opens it, so a nested
             // file can't open tab after tab on its own.
             self.portfolio_initial = None;
@@ -610,14 +610,14 @@ impl PdfCraftApp {
 
     /// Open portfolio `doc`'s attachment `index` in a tab of its own when its bytes are a PDF,
     /// whatever its name. A file of another kind, or one that can't be read, stays in the list.
-    fn open_portfolio_initial(&mut self, doc: DocId, index: usize) {
+    fn open_portfolio_initial(&mut self, ctx: &egui::Context, doc: DocId, index: usize) {
         let Some(d) = self.session.get(doc) else { return };
         let Some(att) = d.info.attachments.get(index).cloned() else { return };
         let Ok(bytes) = pdfcraft_render::attachment_data(&d.bytes, d.password.as_deref(), &att) else { return };
         if pdfcraft_engine::source_kind(&att.name, &bytes) != Some(pdfcraft_engine::SourceKind::Pdf) {
             return;
         }
-        if let Err(e) = self.open_bytes(&safe_file_name(&att.name, "attachment"), None, bytes) {
+        if let Err(e) = self.open_bytes(ctx, &safe_file_name(&att.name, "attachment"), None, bytes) {
             self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
         }
     }
@@ -639,11 +639,11 @@ impl PdfCraftApp {
     }
 
     /// [`Self::attachment_action`] for the file of the attachment comment at (page, index).
-    pub fn comment_attachment_action(&mut self, doc: DocId, page: usize, index: usize, open: bool) {
+    pub fn comment_attachment_action(&mut self, ctx: &egui::Context, doc: DocId, page: usize, index: usize, open: bool) {
         let source = pdfcraft_render::AttachmentSource::Annotation { page, index };
         // The menus offer the items only for a listed file, so a miss is a comment gone since.
         if let Some(i) = self.session.get(doc).and_then(|d| d.info.attachments.iter().position(|a| a.source == source)) {
-            self.attachment_action(doc, i, open);
+            self.attachment_action(ctx, doc, i, open);
         }
     }
 
@@ -952,7 +952,7 @@ impl PdfCraftApp {
         })
     }
 
-    pub fn open_dialog(&mut self) {
+    pub fn open_dialog(&mut self, ctx: &egui::Context) {
         self.startup_superseded = true;
         // PLAN: `pick_file(request, target, continuation)` assumed from pdf-shell-w14; the continuation gets the `Picked`.
         // The web answers `Picked::Contents`, the desktop `Picked::Paths`.
@@ -965,7 +965,7 @@ impl PdfCraftApp {
             }
             Picked::Contents(files) => {
                 for (name, bytes) in files {
-                    if let Err(error) = app.open_bytes(&name, None, bytes) {
+                    if let Err(error) = app.open_bytes(ctx, &name, None, bytes) {
                         app.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
                     }
                 }
@@ -987,7 +987,7 @@ impl PdfCraftApp {
             }
             Picked::Contents(files) => {
                 for (name, bytes) in files {
-                    match self.open_bytes(&name, None, bytes) {
+                    match self.open_bytes(ctx, &name, None, bytes) {
                         Ok(()) => {
                             self.execute(ctx, then);
                         }

@@ -159,7 +159,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
     for action in actions {
         match action {
-            StartAction::Open => app.open_dialog(),
+            StartAction::Open => app.open_dialog(ui.ctx()),
             StartAction::OpenRecent(path) | StartAction::OpenPinnedFile(path) => app.open_recent(&path.to_string_lossy()),
             StartAction::RemoveRecent(path) => {
                 let path = path.to_string_lossy();

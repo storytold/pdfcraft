@@ -88,7 +88,7 @@ fn no_changes_pdf() -> Vec<u8> {
 fn a_refused_text_box_is_put_back_whole() {
     let mut app = crate::PdfCraftApp::for_unit_tests();
     app.set_option(&egui::Context::default(), "language", "en").unwrap();
-    app.open_bytes("a.pdf", None, no_changes_pdf()).unwrap();
+    app.open_bytes(&egui::Context::default(), "a.pdf", None, no_changes_pdf()).unwrap();
     let style = crate::content_ui::default_style();
     app.views[0].session.content.draft = Some(crate::content_ui::TextDraft::new(0, None, [20.0, 20.0, 120.0, 40.0], "Typed".into(), style));
     app.undo(&egui::Context::default());
@@ -104,7 +104,7 @@ fn save_commits_the_open_text_box() {
     let dest = dir.join("out.pdf");
     let (mut h, files) = shown_with_picks();
     let app = h.state_mut();
-    app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
+    app.open_bytes(&egui::Context::default(), "a.pdf", None, one_page_pdf()).unwrap();
     let style = crate::content_ui::default_style();
     let mut draft = crate::content_ui::TextDraft::new(0, None, [20.0, 20.0, 120.0, 40.0], "Typed text".into(), style);
     draft.focus = true;
@@ -164,7 +164,7 @@ fn moving_pages_cancels_an_in_progress_drawing() {
 
     let mut app = crate::PdfCraftApp::for_unit_tests();
     app.set_option(&egui::Context::default(), "language", "en").unwrap();
-    app.open_bytes("a.pdf", None, pdf).unwrap();
+    app.open_bytes(&egui::Context::default(), "a.pdf", None, pdf).unwrap();
     app.views[0].session.comments.tool = tool;
     assert!(app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
     assert_eq!(app.views[0].session.comments.tool.drawing().len(), 2, "rotating the page keeps the drawing on it");
@@ -184,7 +184,7 @@ fn save_asks_where_to_keep_an_email_attachment_and_leaves_the_temporary_copy_alo
 
     let (mut h, files) = shown_with_picks();
     let app = h.state_mut();
-    app.open_bytes("Quote.pdf", Some(attachment.to_string_lossy().into_owned()), original.clone()).unwrap();
+    app.open_bytes(&egui::Context::default(), "Quote.pdf", Some(attachment.to_string_lossy().into_owned()), original.clone()).unwrap();
     assert!(app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
 
     assert!(!app.save_active(&egui::Context::default(), SaveTarget::InPlace), "Save asks instead of writing the temporary copy");
@@ -209,7 +209,7 @@ fn recolouring_print_ink_text_in_its_box_drops_the_ink_without_an_empty_step() {
     let open = || {
         let mut app = crate::PdfCraftApp::for_unit_tests();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
+        app.open_bytes(&egui::Context::default(), "a.pdf", None, one_page_pdf()).unwrap();
         let mut text = pdfcraft_engine::AddedText { rect: [20.0, 200.0, 180.0, 220.0], text: "Proof".into(), ..Default::default() };
         text.set_ink(Some(pdfcraft_engine::TextInk::Cmyk([0.0, 0.0, 0.0, 1.0])));
         assert!(app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::AddText { page: 0, text }));

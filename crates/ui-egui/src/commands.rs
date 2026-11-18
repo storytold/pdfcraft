@@ -324,7 +324,7 @@ impl PdfCraftApp {
 
     fn run_file_command(&mut self, ctx: &egui::Context, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
-            "file.open" => self.open_dialog(),
+            "file.open" => self.open_dialog(ctx),
             "file.open_recent" => match self.recent.first().map(|r| r.path.clone()) {
                 // The palette runs commands without a submenu: open the most recent file.
                 Some(p) => self.open_recent(&p),
@@ -379,7 +379,7 @@ impl PdfCraftApp {
             "actions.distribution" => crate::actions_ui::open_wizard(self, ctx, Some("Prepare for Distribution")),
             "actions.optimize_scans" => crate::actions_ui::open_wizard(self, ctx, Some("Optimize Scanned Documents")),
             "create.blank" => self.create_blank(),
-            "create.file" => self.open_dialog(),
+            "create.file" => self.open_dialog(ctx),
             "create.multiple" => self.create_multiple_dialog(ctx),
             "create.multiple_separate" => self.create_multiple_separate_dialog(ctx),
             "create.images" => self.create_from_images_dialog(ctx),

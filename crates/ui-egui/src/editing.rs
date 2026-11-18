@@ -1408,7 +1408,7 @@ mod revert_draft_tests {
 
     fn app() -> PdfCraftApp {
         let mut app = PdfCraftApp::for_unit_tests();
-        app.open_bytes("source.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+        app.open_bytes(&egui::Context::default(), "source.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
         app
     }
 
@@ -1444,7 +1444,7 @@ mod revert_draft_tests {
         for queued in [false, true] {
             let mut app = app();
             let id = app.views[0].id;
-            app.open_bytes("other.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), "other.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
             if queued {
                 queue_draft(&mut app, 0, "Unsaved typing");
             } else {
@@ -1534,7 +1534,7 @@ mod revert_draft_tests {
             let bytes = include_bytes!("../tests/data/form.pdf").to_vec();
             std::fs::write(&path, &bytes).unwrap();
             let mut app = PdfCraftApp::for_unit_tests();
-            app.open_bytes("source.pdf", Some(path.clone()), bytes).unwrap();
+            app.open_bytes(&egui::Context::default(), "source.pdf", Some(path.clone()), bytes).unwrap();
             let rect = [72.0, 72.0, 272.0, 92.0];
             let mut draft = TextDraft::new(0, None, rect, "Typed".into(), default_style());
             draft.focus = true;
@@ -1544,7 +1544,8 @@ mod revert_draft_tests {
             if quit {
                 assert!(!h.state_mut().request_quit(&ctx));
             } else {
-                h.state_mut().request_close_tab(&h.ctx.clone(), 0);
+                let ctx_h = h.ctx.clone();
+                h.state_mut().request_close_tab(&ctx_h, 0);
             }
             assert!(h.state().close_guard.is_some(), "the typed box holds the close");
             h.run_steps(2);
@@ -1552,7 +1553,7 @@ mod revert_draft_tests {
             assert!(h.state().views.is_empty(), "the tab closes once saved");
 
             let mut reopened = PdfCraftApp::for_unit_tests();
-            reopened.open_bytes("source.pdf", Some(path.clone()), std::fs::read(&path).unwrap()).unwrap();
+            reopened.open_bytes(&egui::Context::default(), "source.pdf", Some(path.clone()), std::fs::read(&path).unwrap()).unwrap();
             let doc = reopened.session.get(reopened.views[0].id).unwrap();
             assert!(doc.added().iter().any(|a| matches!(&a.content, AddedContent::Text(t) if t.text == "Typed")), "quit: {quit}");
             let _ = std::fs::remove_dir_all(&dir);
@@ -1564,7 +1565,8 @@ mod revert_draft_tests {
     #[test]
     fn revert_runs_no_exit_for_the_field_that_had_the_focus() {
         let mut app = PdfCraftApp::for_unit_tests();
-        app.open_bytes("focus.pdf", None, pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::focus_template())).unwrap();
+        app.open_bytes(&egui::Context::default(), "focus.pdf", None, pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::focus_template()))
+            .unwrap();
         let id = app.views[0].id;
         let count = |app: &PdfCraftApp, name: &str| {
             app.session.get(id).unwrap().form.iter().find(|f| f.name == name).and_then(|f| f.value.first().cloned()).unwrap_or_default()
@@ -1585,7 +1587,8 @@ mod revert_draft_tests {
     #[test]
     fn committing_the_form_runs_the_focus_scripts_of_a_move_not_yet_run() {
         let mut app = PdfCraftApp::for_unit_tests();
-        app.open_bytes("focus.pdf", None, pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::focus_template())).unwrap();
+        app.open_bytes(&egui::Context::default(), "focus.pdf", None, pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::focus_template()))
+            .unwrap();
         let hint = |app: &PdfCraftApp| {
             app.session
                 .get(app.views[0].id)
@@ -1630,7 +1633,7 @@ mod revert_draft_tests {
         pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
         for (typed, shown) in [(false, "new"), (true, "typed")] {
             let mut app = PdfCraftApp::for_unit_tests();
-            app.open_bytes("hot.pdf", None, pdf.clone()).unwrap();
+            app.open_bytes(&egui::Context::default(), "hot.pdf", None, pdf.clone()).unwrap();
             let hot = app.session.get(app.views[0].id).unwrap().form.iter().find(|f| f.name == "hot").unwrap().obj;
             let text = if typed { "typed" } else { "old" };
             app.views[0].session.forms.focus = Some(Focus { text: text.into(), picked: vec!["old".into()], ..focus("") });
@@ -1655,7 +1658,7 @@ mod revert_draft_tests {
             } else {
                 app.views[0].session.forms.focus = Some(focus("Focused source draft"));
             }
-            app.open_bytes("other.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), "other.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
             let other = app.views[1].id;
             assert!(app.apply_edit(
                 &egui::Context::default(),

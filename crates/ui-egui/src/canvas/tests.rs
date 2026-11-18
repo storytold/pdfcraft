@@ -243,7 +243,7 @@ fn edit_text_boxes_stay_drawn_while_page_input_is_blocked() {
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::for_unit_tests();
         let bytes = app.session.create_blank(300.0, 400.0, 1).unwrap();
-        app.open_bytes("blank.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "blank.pdf", None, bytes.as_ref().clone()).unwrap();
         app.quick_tool = QuickTool::EditText;
         app
     });
@@ -251,7 +251,8 @@ fn edit_text_boxes_stay_drawn_while_page_input_is_blocked() {
     // Block page input the way the window losing focus does.
     h.state_mut().palette_open = true;
     h.run_steps(2);
-    assert!(h.state_mut().apply_edit(&h.ctx.clone(), Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(&ctx_h, Edit::RotatePages { pages: vec![0], degrees: 90 }));
     h.run_steps(3);
     let app = h.state();
     let generation = app.session.get(app.views[0].id).unwrap().edit_generation();
@@ -268,7 +269,7 @@ fn a_cut_page_is_named_beside_an_xfa_form_notice() {
         let mut app = PdfCraftApp::for_unit_tests();
         app.set_option(&cc.egui_ctx, "language", "en").unwrap();
         let bytes = pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name></page1></form1>");
-        app.open_bytes("form.pdf", None, bytes).unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, bytes).unwrap();
         app
     });
     h.run_steps(4);
@@ -289,7 +290,7 @@ fn a_page_found_cut_after_a_dismissal_is_still_named() {
         let mut app = PdfCraftApp::for_unit_tests();
         app.set_option(&cc.egui_ctx, "language", "en").unwrap();
         let bytes = app.session.create_blank(300.0, 400.0, 2).unwrap();
-        app.open_bytes("blank.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.open_bytes(&egui::Context::default(), "blank.pdf", None, bytes.as_ref().clone()).unwrap();
         app
     });
     h.run_steps(3);
@@ -613,7 +614,7 @@ fn replace_all_is_one_undo_step_and_counts_pages_whose_matches_had_no_paragraph(
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|cc| {
         let mut app = PdfCraftApp::for_unit_tests();
         app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-        app.open_bytes("fox.pdf", None, fox_pages_pdf()).unwrap();
+        app.open_bytes(&egui::Context::default(), "fox.pdf", None, fox_pages_pdf()).unwrap();
         app
     });
     h.run_steps(3);

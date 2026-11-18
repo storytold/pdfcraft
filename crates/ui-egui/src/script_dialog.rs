@@ -464,9 +464,10 @@ mod review_tests {
     /// The central shortcut/page-input gate must see a real hosted script prompt.
     #[test]
     fn a_script_prompt_blocks_document_input_until_answered() {
+        let ctx = &egui::Context::default();
         let mut app = PdfCraftApp::for_unit_tests();
         let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
-        app.open_bytes("synthetic.pdf", None, bytes.to_vec()).unwrap();
+        app.open_bytes(ctx, "synthetic.pdf", None, bytes.to_vec()).unwrap();
         let id = app.active_ids().unwrap().1;
         app.start_ui_script(id, "app.response({cQuestion:'Wait'});", None, None);
         let ctx = egui::Context::default();
@@ -505,7 +506,7 @@ mod review13_ui_tests {
     use std::sync::Arc;
 
     /// Create a native app over `files` with a visible synthetic blank document and no renderer.
-    fn app_over(files: Arc<ScriptedFiles>) -> (PdfCraftApp, DocId) {
+    fn app_over(ctx: &egui::Context, files: Arc<ScriptedFiles>) -> (PdfCraftApp, DocId) {
         let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files).build();
         let (intake, _) = FileIntake::new(Wake::none());
         let clipboard = Clipboard::new(EventClipboard::new(|| 0, |_| Ok(0)));
@@ -513,19 +514,20 @@ mod review13_ui_tests {
         let mut app = PdfCraftApp::with_host(Arc::new(host), services);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         let bytes = app.session.create_blank(200.0, 300.0, 2).unwrap();
-        app.open_bytes("synthetic.pdf", None, bytes.to_vec()).unwrap();
+        app.open_bytes(ctx, "synthetic.pdf", None, bytes.to_vec()).unwrap();
         let id = app.active_ids().unwrap().1;
         (app, id)
     }
-    fn app() -> (PdfCraftApp, DocId) {
-        app_over(Arc::new(ScriptedFiles::new()))
+    fn app(ctx: &egui::Context) -> (PdfCraftApp, DocId) {
+        app_over(ctx, Arc::new(ScriptedFiles::new()))
     }
     /// Refused clicks and execution/prompt timeouts are visible, while stale runs stay silent.
     #[test]
     fn busy_and_timeout_notices_do_not_claim_worker_termination() {
+        let ctx = &egui::Context::default();
         let ctx = egui::Context::default();
         for (timeout, prompt) in [(true, false), (true, true), (false, false)] {
-            let (mut app, id) = app();
+            let (mut app, id) = app(ctx);
             app.start_ui_script(id, "app.response({cQuestion:'Wait'});", None, None);
             app.start_ui_script(id, "var shouldNotRun=1;", None, None);
             assert!(app.posted_notices.contains(&PostedNotice::new("Another form script is active; this click was not run")));
@@ -556,13 +558,14 @@ mod review13_ui_tests {
     #[test]
     fn non_active_comparison_document_completes_native_script() {
         let ctx = &egui::Context::default();
+        let ctx = &egui::Context::default();
         for request in ["", "app.execMenuItem('SaveAs');", "print();"] {
             let saved = PathBuf::from("/scripted/source.pdf");
             let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![saved.clone()])]));
-            let (mut app, old) = app_over(files.clone());
+            let (mut app, old) = app_over(ctx, files.clone());
             app.views.iter_mut().find(|v| v.id == old).unwrap().view.current = 1;
             let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
-            app.open_bytes("new.pdf", None, bytes.to_vec()).unwrap();
+            app.open_bytes(ctx, "new.pdf", None, bytes.to_vec()).unwrap();
             let new = app.active_ids().unwrap().1;
             assert_ne!(new, old);
             let new_before = app.session.save_bytes(new).unwrap();
@@ -604,7 +607,8 @@ mod review13_ui_tests {
     #[test]
     fn script_focus_reveals_an_offscreen_widget() {
         let ctx = &egui::Context::default();
-        let (mut app, id) = app();
+        let ctx = &egui::Context::default();
+        let (mut app, id) = app(ctx);
         app.session
             .apply(
                 id,
@@ -657,12 +661,13 @@ mod link_script_tests {
     #[test]
     fn a_javascript_link_asks_its_menu_and_applies_its_result() {
         let ctx = &egui::Context::default();
+        let ctx = &egui::Context::default();
         // An absolute path on this system (the document has no folder): on Windows, Acrobat's
         // `/C/…` form, which reads as `C:/…`.
         let path = if cfg!(windows) { "/C/abs/other.pdf" } else { "/abs/other.pdf" };
         let script = format!("getField\\('log'\\).value = app.popUpMenuEx\\({{cName:'A', cReturn:'a'}}\\) + event.type; app.openDoc\\('{path}'\\);");
         let mut app = PdfCraftApp::for_unit_tests();
-        app.open_bytes("link.pdf", None, linked(&script)).unwrap();
+        app.open_bytes(ctx, "link.pdf", None, linked(&script)).unwrap();
         let id = app.active_ids().unwrap().1;
         app.run_link_script(ctx, id, 0, 0);
         // The worker's question is read from its reply channel, before any pass hosts it.
