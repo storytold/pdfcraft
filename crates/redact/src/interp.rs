@@ -104,9 +104,12 @@ struct Gs {
     /// `d` / ExtGState `/D` set a dash pattern: each subpath restarts it, so a stroke cut into
     /// new subpaths would move its dashes (#7300).
     dashed: bool,
-    /// ExtGState `/CA` below 1, a `/BM` other than Normal, or an `/SMask`: a `B` then
-    /// composites its fill and stroke as one object, which separate `f` and `S` don't (#7300).
-    composited: bool,
+    /// ExtGState `/CA`, a `/BM` other than Normal and an `/SMask` other than `/None`: under any
+    /// of them a `B` composites its fill and stroke as one object, which separate `f` and `S`
+    /// don't (#7300). Each is set only by a dictionary that names it.
+    stroke_alpha: f64,
+    blends: bool,
+    soft_mask: bool,
     /// The tiling or shading pattern selected as the fill colour (`/Name scn`), and as the stroke
     /// colour (`/Name SCN`). Part of the graphics state, so `q`/`Q` save and restore them with
     /// everything else. A pattern's cell is a content stream of its own and this pass does not
@@ -424,7 +427,9 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         line_join: 0,
         line_cap: 0,
         dashed: false,
-        composited: false,
+        stroke_alpha: 1.0,
+        blends: false,
+        soft_mask: false,
         fill_pattern: None,
         stroke_pattern: None,
         type3_inherits: false,
@@ -777,7 +782,7 @@ impl Walk {
         let patterned = (fills && self.gs.fill_pattern.is_some()) || (strokes && self.gs.stroke_pattern.is_some());
         if !clips
             && !patterned
-            && !(fills && strokes && self.gs.composited)
+            && !(fills && strokes && (self.gs.stroke_alpha < 1.0 || self.gs.blends || self.gs.soft_mask))
             && let Some(cut) = cut::cut(&body, o, &self.gs.ctm, scope.rects, reach)
         {
             uses_patterns(&mut self.out, &self.gs, cut.fills, cut.strokes);
@@ -826,7 +831,13 @@ impl Walk {
             b"M" => self.gs.miter_limit = last.unwrap_or(self.gs.miter_limit),
             b"j" => self.gs.line_join = last.map_or(self.gs.line_join, |j| j as i64),
             b"J" => self.gs.line_cap = last.map_or(self.gs.line_cap, |j| j as i64),
-            b"d" => self.gs.dashed = op.operands.first().is_some_and(|a| dashes(doc, a)),
+            // The array and phase are the last two operands, as the renderer reads them; it
+            // ignores a `d` whose operands aren't those.
+            b"d" => {
+                if let (Some(a), Some(_)) = (op.back(1).filter(|a| a.as_array().is_some()), op.num_back(0)) {
+                    self.gs.dashed = dashes(doc, a);
+                }
+            }
             _ => {
                 if let Some((font, vertical, size)) = op.last_name().and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
@@ -842,10 +853,11 @@ impl Walk {
                     if let Some(d) = state.get(b"D").and_then(|d| doc.resolve(d).as_array().cloned()) {
                         self.gs.dashed = d.first().is_some_and(|a| dashes(doc, a));
                     }
-                    // Only ever set here, so a later `/CA 1` can't hide a blend mode still in force.
-                    let plain = |key: &[u8], ok: &[&[u8]]| state.get(key).is_none_or(|v| doc.resolve(v).as_name().is_some_and(|n| ok.contains(&n)));
-                    self.gs.composited |=
-                        num(b"CA").is_some_and(|a| a < 1.0) || !plain(b"BM", &[b"Normal", b"Compatible"]) || !plain(b"SMask", &[b"None"]);
+                    self.gs.stroke_alpha = num(b"CA").unwrap_or(self.gs.stroke_alpha);
+                    // A blend mode or soft mask other than these names (an array, a dictionary) counts as one in force.
+                    let other = |key: &[u8], plain: &[&[u8]]| state.get(key).map(|v| !doc.resolve(v).as_name().is_some_and(|n| plain.contains(&n)));
+                    self.gs.blends = other(b"BM", &[b"Normal", b"Compatible"]).unwrap_or(self.gs.blends);
+                    self.gs.soft_mask = other(b"SMask", &[b"None"]).unwrap_or(self.gs.soft_mask);
                 }
             }
         }

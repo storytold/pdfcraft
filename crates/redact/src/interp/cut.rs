@@ -212,11 +212,16 @@ fn subtract(d: [f64; 4], regions: &[[f64; 4]], budget: usize) -> Option<Vec<[f64
     Some(left)
 }
 
-/// The parameter intervals of the segment `a`–`b` (device space) outside every region.
-fn outside(a: P, b: P, regions: &[[f64; 4]]) -> Vec<(f64, f64)> {
+/// The parameter intervals of the segment `a`–`b` (device space) outside every region, `None`
+/// once `work` (intervals tested against regions) passes [`MAX_WORK`].
+fn outside(a: P, b: P, regions: &[[f64; 4]], work: &mut usize) -> Option<Vec<(f64, f64)>> {
     let mut kept: Vec<(f64, f64)> = vec![(0.0, 1.0)];
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     for r in regions {
+        *work += kept.len();
+        if *work > MAX_WORK {
+            return None;
+        }
         // Liang–Barsky: the part of the segment inside `r`, if any.
         let (mut t0, mut t1) = (0.0f64, 1.0f64);
         let mut inside = true;
@@ -234,7 +239,7 @@ fn outside(a: P, b: P, regions: &[[f64; 4]]) -> Vec<(f64, f64)> {
         }
         kept = kept.into_iter().flat_map(|(s, e)| [(s, e.min(t0)), (s.max(t1), e)]).filter(|(s, e)| e - s > 1e-9).collect();
     }
-    kept
+    Some(kept)
 }
 
 /// `p` as [`point`] writes it: a join is decided by the angle the written operands make, and
@@ -333,13 +338,15 @@ fn cut_fill(subs: &[Sub], rule: &str, ctm: &Matrix, regions: &[[f64; 4]], margin
         let d = bbox([dev((x, y)), dev((x + w, y + h))])?;
         for p in subtract(d, &regions, MAX_PIECES.saturating_sub(pieces.len()))? {
             let u = bbox([inverse.apply(p[0], p[1]), inverse.apply(p[2], p[3])])?;
+            // Each edge rounded once, so neighbouring pieces write the same edge and no seam
+            // opens between them.
+            let ((x0, y0), (x1, y1)) = (rounded((u[0], u[1])), rounded((u[2], u[3])));
             // The orientation `re` gave it, so the non-zero rule still counts it the same way.
-            let op = if w * h >= 0.0 {
-                Op::new("re", vec![num(u[0]), num(u[1]), num(u[2] - u[0]), num(u[3] - u[1])])
-            } else {
-                Op::new("re", vec![num(u[0]), num(u[3]), num(u[2] - u[0]), num(u[1] - u[3])])
-            };
-            pieces.push((vec![op], p));
+            let (y, h) = if w * h >= 0.0 { (y0, y1 - y0) } else { (y1, y0 - y1) };
+            // Its box as written and painted: under a CTM that only nearly keeps axes, a very
+            // wide or tall rectangle's edge leans further than the margin, so it is measured again.
+            let b = bbox([(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(dev))?;
+            pieces.push((vec![Op::new("re", vec![num(x0), num(y), num(x1 - x0), num(h)])], b));
         }
     }
     if pieces.len() > MAX_PIECES {
@@ -393,12 +400,16 @@ fn cut_stroke(subs: &[Sub], ctm: &Matrix, regions: &[[f64; 4]], reach: Reach, ma
         !marks.iter().any(|r| meets(&[grow(*r, by)], [x, y, x, y]))
     };
     let mut pieces: Vec<(Vec<Op>, [f64; 4])> = Vec::new();
+    // Many subpaths crossed by many marks: the budgets are spent as the pieces are made, so
+    // the path goes whole before the work is done, not after.
+    let mut work = 0usize;
     for s in subs {
         let b = bbox(s.pts.iter().map(|p| dev(*p)))?;
         if !meets(&whole, b) {
             pieces.push((s.ops.clone(), b));
             continue;
         }
+        let before = pieces.len();
         if reach.dashed {
             return None;
         }
@@ -419,6 +430,7 @@ fn cut_stroke(subs: &[Sub], ctm: &Matrix, regions: &[[f64; 4]], reach: Reach, ma
                         *rb = u;
                     }
                 }
+                _ if before + runs.len() >= MAX_PIECES => return None,
                 _ => runs.push((vec![point("m", from), op], b, dir)),
             }
             *pen = pts.last().copied();
@@ -428,7 +440,7 @@ fn cut_stroke(subs: &[Sub], ctm: &Matrix, regions: &[[f64; 4]], reach: Reach, ma
         for seg in &s.segs {
             match seg {
                 Seg::Line(a, e) => {
-                    for (t0, t1) in outside(dev(*a), dev(*e), &regions) {
+                    for (t0, t1) in outside(dev(*a), dev(*e), &regions, &mut work)? {
                         let at = |t: f64| rounded(if t == 1.0 { *e } else { (a.0 + t * (e.0 - a.0), a.1 + t * (e.1 - a.1)) });
                         let (p0, p1) = (at(t0), at(t1));
                         // The direction as written, which is what decides a join's miter.

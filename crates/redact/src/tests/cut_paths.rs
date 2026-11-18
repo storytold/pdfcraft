@@ -143,8 +143,9 @@ fn a_sharp_corner_near_the_mark_is_not_left_mitred() {
     assert!(!c.contains("50 90 m\n150 100 l\n50 110 l"), "the mitred tip is no longer a join: {c}");
     // Just past the limit as given, the tip is bevelled; as written (four decimals) it is
     // within it, mitred, and its spike would reach the mark: the join is decided as written.
-    let (_, c) = cut_under(b"4 w 50 89.94964 m 150 100 l 50 110.05036 l S", mark);
-    assert!(!c.contains("150 100 l\n50 110.0504 l"), "the tip mitred as written is no longer a join: {c}");
+    let (r, c) = cut_under(b"4 w 50 89.94964 m 150 100 l 50 110.05036 l S", mark);
+    assert_eq!((r.paths_removed, r.paths_cut), (0, 1), "{r:?}");
+    assert!(c.contains("50 89.9496 m\n150 100 l\n") && c.contains("150 100 m\n50 110.0504 l\n"), "both legs, the join broken: {c}");
 }
 
 #[test]
@@ -181,6 +182,8 @@ fn what_cannot_be_cut_exactly_still_goes_whole() {
         (b"0 g 100 100 100 100 re W f", "a clip that also paints"),
         (b"q 10 w [6 4] 0 d 100 145 m 200 145 l S Q", "a dashed stroke"),
         (b"q /Dash gs 10 w 100 145 m 200 145 l S Q", "a stroke dashed by its ExtGState"),
+        (b"q 10 w [] [6 4] 0 d 100 145 m 200 145 l S Q", "a stroke dashed by d's last two operands"),
+        (b"q 1 -0.0000000009 0 1 0 0 cm 0 g -10000000 100 20000000 100 re f Q", "a rectangle so wide a near-axis CTM leans it into the mark"),
         (b"q /Half gs 4 w 0 g 100 100 100 100 re B Q", "a box filled and stroked half see-through"),
         (b"q /Multiply gs 4 w 0 g 100 100 100 100 re B Q", "a box filled and stroked with a blend mode"),
     ] {
@@ -234,6 +237,34 @@ fn a_rectangle_under_a_grid_of_marks_goes_whole() {
     let mut doc = one_page(b"0 g 0 0 300 300 re f", "", vec![]);
     let grid: Vec<[f64; 4]> = (0..400).map(|i| 0.25 + 0.75 * i as f64).flat_map(|v| [[v, 0.0, v + 0.25, 300.0], [0.0, v, 300.0, v + 0.25]]).collect();
     mark(&mut doc, 0, &grid, "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.paths_removed, r.paths_cut), (1, 0), "{r:?}");
+}
+
+/// A `B` is split once its stroke is opaque again: a later `/CA 1` undoes an earlier `/CA 0.5`.
+#[test]
+fn a_box_filled_and_stroked_opaque_again_is_cut() {
+    let res = "/ExtGState << /Half << /CA 0.5 >> /Whole << /CA 1 >> >>";
+    let (r, _) = cut_doc(one_page(b"/Half gs /Whole gs 4 w 0 g 100 100 100 100 re B", res, vec![]), [130.0, 130.0, 160.0, 160.0]);
+    assert_eq!((r.paths_removed, r.paths_cut), (0, 1), "{r:?}");
+}
+
+/// Strips that meet write their shared edge once: rounded separately, origin and size left a
+/// seam (0.0299 for 0.03 here, a tenth of a point at this scale) between neighbours.
+#[test]
+fn neighbouring_pieces_of_a_cut_rectangle_share_their_edge() {
+    let (_, c) = cut_under(b"q 1000 0 0 1000 0 0 cm 0 g 0.1 0.10004 0.1 0.1 re f Q", [130.0, 130.161, 160.0, 170.0]);
+    assert!(c.contains("0.1 0.1 0.1 0.03 re") && c.contains("0.1 0.13 0.0298 "), "{c}");
+}
+
+/// 2,000 lines crossed by 800 marks, far enough apart that each line is cut 800 times: the
+/// budgets are spent as the pieces are made, so the path goes whole after a few lines.
+#[test]
+fn many_lines_under_many_marks_go_whole() {
+    let lines: String = (0..2000).map(|i| format!("0 {y} m 2400 {y} l ", y = 0.1 * i as f64)).collect();
+    let mut doc = one_page(format!("{lines}S").as_bytes(), "", vec![]);
+    let marks: Vec<[f64; 4]> = (0..800).map(|i| 1.0 + 3.0 * i as f64).map(|x| [x, -1.0, x + 0.1, 201.0]).collect();
+    mark(&mut doc, 0, &marks, "");
     let r = apply(&mut doc, None).unwrap();
     assert_eq!((r.paths_removed, r.paths_cut), (1, 0), "{r:?}");
 }
