@@ -2055,8 +2055,9 @@ fn check_stream(
     if subtype == Some(b"PS") && level.part() != 4 {
         issue("6.2.9", "PostScript XObjects aren't allowed", None, None, false);
     }
-    if subtype == Some(b"Form") {
-        check_form_xobject(&stream.dict, level.part() == 4, issue);
+    // A form XObject's /Subtype may be given by reference, as any value may (ISO 32000-2 7.3.10).
+    if stream.dict.get(b"Subtype").is_some_and(|s| doc.resolve(s).as_name() == Some(b"Form")) {
+        check_form_xobject(doc, &stream.dict, level.part() == 4, issue);
     }
     if level.part() == 4 {
         part4::stream(doc, &stream.dict, subtype, &filters, issue);
@@ -2067,23 +2068,30 @@ fn check_stream(
 /// 6.2.8.1 and 6.2.8.2): an OPI dictionary (ISO 32000-2 14.11.7), or a reference to another file
 /// that makes it a reference XObject (`/Ref`, 8.10.4). PDF/A-2 and 3 also forbid the PostScript
 /// that ISO 32000-1 8.8.2 let a form XObject carry, `/Subtype2 /PS` or a `/PS` stream; ISO
-/// 32000-2 no longer defines them, and PDF/A-4 says nothing of them.
-fn check_form_xobject(dict: &Dict, part4: bool, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
-    if dict.get(b"OPI").is_some() {
+/// 32000-2 no longer defines them, and PDF/A-4 says nothing of them. Values are read through
+/// references, and a null one is no entry (ISO 32000-2 7.3.9).
+fn check_form_xobject(
+    doc: &Document,
+    dict: &Dict,
+    part4: bool,
+    issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
+) {
+    if present(doc, dict, b"OPI") {
         if part4 {
             issue("6.2.8.1", "A form XObject has OPI information", None, None, false);
         } else {
             issue("6.2.9", "A form XObject has OPI information", None, None, false);
         }
     }
-    if dict.get(b"Ref").is_some() {
+    if present(doc, dict, b"Ref") {
         if part4 {
             issue("6.2.8.2", "A form XObject refers to another file (Ref)", None, None, false);
         } else {
             issue("6.2.9", "A form XObject refers to another file (Ref)", None, None, false);
         }
     }
-    if !part4 && (dict.name(b"Subtype2") == Some(b"PS") || dict.get(b"PS").is_some()) {
+    let postscript = dict.get(b"Subtype2").is_some_and(|s| doc.resolve(s).as_name() == Some(b"PS")) || present(doc, dict, b"PS");
+    if !part4 && postscript {
         issue("6.2.9", "A form XObject holds PostScript (Subtype2 PS or PS)", None, None, false);
     }
 }

@@ -2918,6 +2918,8 @@ fn form_xobjects_have_no_opi_reference_or_postscript_clause_6_2_9() {
                 &format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {form} /Length 0 >>\nstream\n\nendstream"),
                 "<< /Length 6 >>\nstream\n/X Do\nendstream",
                 "<< /Length 0 >>\nstream\n\nendstream",
+                "/PS",
+                "null",
             ],
             "",
         );
@@ -2939,6 +2941,29 @@ fn form_xobjects_have_no_opi_reference_or_postscript_clause_6_2_9() {
         assert_eq!(found("/PS 6 0 R", level), [("6.2.9", postscript.clone())]);
         // Another Subtype2 is no PostScript.
         assert_eq!(found("/Subtype2 /Other", level), []);
+        // Given by reference (object 7 is `/PS`), the value is what counts.
+        assert_eq!(found("/Subtype2 7 0 R", level), [("6.2.9", postscript.clone())]);
+        // A null value, written so or through a reference to null or to no object, is no entry
+        // (ISO 32000-2 7.3.9).
+        for null in ["null", "8 0 R", "99 0 R"] {
+            assert_eq!(found(&format!("/OPI {null} /Ref {null} /PS {null} /Subtype2 {null}"), level), [], "{null}");
+        }
+    }
+    // A /Subtype given by reference (object 9 is `/Form`) is a form XObject's all the same.
+    let doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /X 4 0 R >> >> /Contents 5 0 R >>",
+            "<< /Type /XObject /Subtype 6 0 R /BBox [0 0 10 10] /OPI << /1.3 << >> >> /Length 0 >>\nstream\n\nendstream",
+            "<< /Length 6 >>\nstream\n/X Do\nendstream",
+            "/Form",
+        ],
+        "",
+    );
+    for (level, clause) in [(Level::A2b, "6.2.9"), (Level::A4, "6.2.8.1")] {
+        let found: Vec<_> = verify(&doc, level).into_iter().filter(|i| i.message == opi).map(|i| i.clause).collect();
+        assert_eq!(found, [clause], "{level:?}");
     }
 }
 
