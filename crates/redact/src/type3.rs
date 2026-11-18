@@ -301,6 +301,9 @@ struct ScanContext<'a> {
     /// When collecting them ([`shown_codes`]), the bytes each font's text shows, and the scan
     /// follows every font; otherwise only Type 3 fonts.
     codes: Option<&'a mut HashMap<ObjRef, HashSet<u32>>>,
+    /// When collecting codes, what the forms it reads may decode: a form is read again for each
+    /// font text can be in when it is drawn.
+    budget: Option<DecodeBudget>,
 }
 
 impl ScanContext<'_> {
@@ -421,7 +424,7 @@ fn scan_xobject(
 ) -> Result<(), CosError> {
     let xo = res_dict(ctx.doc, res, b"XObject");
     let Some(r) = xo.get(name).and_then(Object::as_ref) else { return Ok(()) };
-    if !matches!(&*ctx.doc.get(r), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form")) {
+    if !matches!(&*ctx.doc.get(r), Object::Stream(s) if crate::subtype(ctx.doc, &s.dict).as_deref() == Some(b"Form")) {
         return Ok(());
     }
     scan_stream_object(ctx, res, holder_ref, r, current_font, depth)
@@ -451,14 +454,21 @@ fn scan_soft_mask(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, nam
 /// full, or when a Type 3 font shows text: its glyphs can show text of their own, not read here.
 pub(crate) fn shown_codes(doc: &Document, pages: Option<&[usize]>) -> Option<HashMap<ObjRef, HashSet<u32>>> {
     let (font_maps, mut used_glyphs, mut seen_forms, mut codes) = (HashMap::new(), HashMap::new(), HashSet::new(), HashMap::new());
-    let mut ctx = ScanContext { doc, font_maps: &font_maps, used_glyphs: &mut used_glyphs, seen_forms: &mut seen_forms, codes: Some(&mut codes) };
+    let mut ctx = ScanContext {
+        doc,
+        font_maps: &font_maps,
+        used_glyphs: &mut used_glyphs,
+        seen_forms: &mut seen_forms,
+        codes: Some(&mut codes),
+        budget: Some(DecodeBudget::page()),
+    };
     for (pi, p) in pdfcraft_model::pages(doc).iter().enumerate().filter(|(pi, _)| pages.is_none_or(|marked| marked.contains(pi))) {
         let (_, content) = page_streams(doc, &p.dict, pi).ok()?;
         let res = res_dict(doc, &p.dict, b"Resources");
         scan_content_stream(&mut ctx, &content, p.obj, &res, None, 0).ok()?;
         scan_appearances(&mut ctx, &p.dict, p.obj, &res).ok()?;
     }
-    let type3 = |r: &ObjRef| doc.get(*r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type3"));
+    let type3 = |r: &ObjRef| doc.get(*r).as_dict().is_some_and(|d| crate::subtype(doc, d).as_deref() == Some(b"Type3"));
     (!codes.keys().any(type3)).then_some(codes)
 }
 
@@ -573,7 +583,10 @@ fn scan_stream_object(
     if !ctx.seen_forms.insert((r, current_font, through)) {
         return Ok(());
     }
-    let data = ctx.doc.with_direct_parms(s).decoded()?;
+    let data = match ctx.budget.as_mut() {
+        Some(budget) => budget.decode_strict(ctx.doc, s)?,
+        None => ctx.doc.with_direct_parms(s).decoded()?,
+    };
     match own_res {
         Some(own) => scan_content_stream(ctx, std::slice::from_ref(&data), r, &own, current_font, depth + 1),
         None => scan_content_stream(ctx, std::slice::from_ref(&data), holder_ref, res, current_font, depth + 1),
@@ -750,7 +763,8 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
     let mut used_glyphs: HashMap<FontKey, HashSet<Vec<u8>>> = HashMap::new();
     let mut seen_drawn_forms = HashSet::new();
 
-    let mut ctx = ScanContext { doc, font_maps: &font_maps, used_glyphs: &mut used_glyphs, seen_forms: &mut seen_drawn_forms, codes: None };
+    let mut ctx =
+        ScanContext { doc, font_maps: &font_maps, used_glyphs: &mut used_glyphs, seen_forms: &mut seen_drawn_forms, codes: None, budget: None };
 
     for (pi, p) in page_list.iter().enumerate() {
         let (_, content) = page_streams(ctx.doc, &p.dict, pi)?;

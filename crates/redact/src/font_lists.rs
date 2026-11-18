@@ -42,7 +42,7 @@ fn simple_font(doc: &mut Document, font: ObjRef, gone: &HashSet<u32>) -> Result<
         return Ok(());
     }
     let map = d.get(b"ToUnicode").map(|m| doc.resolve(m)).and_then(|m| match &*m {
-        Object::Stream(s) => s.decoded().ok().and_then(|data| pdfcraft_fonts::pdf::to_unicode_without(&data, gone)),
+        Object::Stream(s) => doc.with_direct_parms(s).decoded().ok().and_then(|data| pdfcraft_fonts::pdf::to_unicode_without(&data, gone)),
         _ => None,
     });
     if let Some(map) = map {
