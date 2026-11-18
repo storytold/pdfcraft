@@ -280,7 +280,9 @@ impl Session {
         let generation = self.get(id).map(Document::edit_generation);
         let layers = |s: &Session| s.get(id).map(|d| d.info.layers.iter().map(|l| l.visible).collect::<Vec<_>>());
         let layers_before = layers(self);
-        match self.apply_script_outcome(id, &states, o, false) {
+        // Page actions and timers run while the document is read: they add or show no template
+        // pages (#1429), which would change the document as the reader moves through it.
+        match self.apply_script_outcome(id, &states, o, false, false) {
             Ok(o) => {
                 run.output.absorb(&o);
                 // Only now: a script whose edits are refused shows nothing it did either.
