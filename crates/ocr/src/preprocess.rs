@@ -227,7 +227,7 @@ type QuarterTurns = u32;
 /// upright text lines band sharply, turned text does not). The best-banding axis wins when it
 /// beats the other axis by a factor of 1.3; within the winning axis the line bands'
 /// bottom-heaviness (real text carries more ink below each line's middle — baselines and
-/// descenders) picks the quarter turn, with a 4%-of-ink margin. Anything less clear is a
+/// descenders) picks the quarter turn, with a 15%-of-ink margin. Anything less clear is a
 /// no-op (`0`), and images under 32 px are never judged.
 fn detect_orientation(image: &OcrImage) -> QuarterTurns {
     if image.min_side() < 32 {
