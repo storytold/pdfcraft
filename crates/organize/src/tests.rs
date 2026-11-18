@@ -215,7 +215,63 @@ fn deleting_a_page_drops_its_tagged_structure() {
     let strings: Vec<String> = dicts.iter().flat_map(|d| d.iter().filter_map(|(_, v)| v.as_string().map(|s| s.to_text()))).collect();
     assert!(!strings.iter().any(|s| s.starts_with("SECRET")), "the deleted page's tags are still in the file: {strings:?}");
     let p = dicts.iter().find(|d| d.name(b"S") == Some(b"P")).unwrap();
-    assert_eq!((p.get(b"K").and_then(Object::as_array).map(Vec::len), p.get(b"Alt").is_some()), (Some(1), true), "{p:?}");
+    assert_eq!((p.get(b"K"), p.get(b"Alt").is_some()), (Some(&Object::Array(vec![Object::Int(0)])), true), "{p:?}");
+    // The parent tree keeps page 1's entry only, and the ID tree loses the figure.
+    let tree = dicts.iter().find(|d| d.name(b"Type") == Some(b"StructTreeRoot")).unwrap();
+    let entries = |key: &[u8], list: &[u8]| {
+        saved.resolve(tree.get(key).unwrap()).as_dict().and_then(|t| t.get(list).and_then(Object::as_array).cloned()).unwrap()
+    };
+    assert_eq!(
+        (entries(b"ParentTree", b"Nums").first(), entries(b"ParentTree", b"Nums").len(), entries(b"IDTree", b"Names").len()),
+        (Some(&Object::Int(0)), 2, 0)
+    );
+}
+
+/// The deleted page's tags also leave when the tree reaches them another way: a kids array in an
+/// object of its own, a parent-tree key written as a reference, a kept element's `/Ref`. An
+/// element that stays loses a `/Pg` naming the deleted page.
+#[test]
+fn deleting_a_page_drops_tags_the_tree_reaches_another_way() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /StructParents 0 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /StructParents 1 >>".into(),
+        "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 11 0 R >>".into(),
+        "<< /Type /StructElem /S /Document /P 5 0 R /K 9 0 R >>".into(),
+        // Its /Pg is page 2, it has content on page 1 too, and it refers to the note.
+        "<< /Type /StructElem /S /P /P 6 0 R /Pg 4 0 R /K [<< /Type /MCR /Pg 3 0 R /MCID 0 >> 1] /Ref [8 0 R] >>".into(),
+        "<< /Type /StructElem /S /Note /P 6 0 R /Pg 4 0 R /K 0 /ActualText (SECRET note) >>".into(),
+        "[7 0 R 8 0 R]".into(),
+        "1".into(),
+        "<< /Nums [0 [7 0 R] 10 0 R [8 0 R 7 0 R]] >>".into(),
+    ];
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    delete_pages(&mut doc, &[1]).unwrap();
+    let saved = open(write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap());
+    let dicts: Vec<Dict> = saved.scan_objects().filter_map(|(_, o)| o.as_dict().cloned()).collect();
+    assert!(!dicts.iter().any(|d| d.name(b"S") == Some(b"Note")), "the deleted page's note is still in the file");
+    let p = dicts.iter().find(|d| d.name(b"S") == Some(b"P")).unwrap();
+    assert_eq!((p.get(b"Pg"), p.get(b"Ref").and_then(Object::as_array).map(Vec::len)), (None, Some(0)), "{p:?}");
+}
+
+/// A structure tree nested deeper than Delete Pages follows is refused rather than left with the
+/// deleted page's tags below that depth.
+#[test]
+fn deleting_a_page_refuses_a_structure_tree_too_deep_to_clean() {
+    let mut b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /StructTreeRoot /K 6 0 R >>".into(),
+    ];
+    // Objects 6 to 305, each element the only kid of the one before; the last has content on page 2.
+    b.extend(
+        (6..306).map(|i| format!("<< /Type /StructElem /S /Div /Pg 4 0 R /K {} >>", if i < 305 { format!("{} 0 R", i + 1) } else { "0".into() })),
+    );
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    assert!(matches!(delete_pages(&mut doc, &[1]), Err(OrganizeError::Invalid(_))));
 }
 
 #[test]
