@@ -296,6 +296,26 @@ fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnIm
                 }
             }
         }
+        // Inline images (`BI … ID … EI`) have no object or resource name: each placement is
+        // listed as one, measured like an XObject's (#7731).
+        if let Ok(inline) = pdfcraft_edit::page_inline_images(doc, i) {
+            for image in inline {
+                let ppi = matrix_ppi(image.matrix, image.width, image.height);
+                if !ppi.is_finite() {
+                    unknown = unknown.saturating_add(1);
+                    continue;
+                }
+                let [a, b, c, d, ..] = image.matrix;
+                let (w, h) = ((a.abs() + c.abs()), (b.abs() + d.abs()));
+                out.push(DrawnImage {
+                    page: page_no,
+                    name: "inline image".into(),
+                    ppi,
+                    pixels: [image.width, image.height],
+                    size_mm: [mm(w), mm(h)],
+                });
+            }
+        }
         // Images drawn inside a form XObject are not listed above. Their resolution is the
         // smallest use on this page, which is what the optimizer already measures.
         for (object, ppi) in pdfcraft_optimize::effective_resolutions(doc, &[page.obj]) {
@@ -434,6 +454,27 @@ mod tests {
         assert_eq!(report.resolution_unknown, 0);
         assert!(report.text().contains("50 ppi"));
         assert!(report.text().contains("verification only"));
+    }
+
+    /// #7731: an inline image (`BI … ID … EI`) is listed and measured like an image XObject, and
+    /// one whose placement can't be measured is counted, not passed.
+    #[test]
+    fn an_inline_image_is_listed_and_measured() {
+        let mut doc = Document::new_empty();
+        let unused = image(&mut doc, 1, 1);
+        // 8 px across 720 pt (10 in) is 0.8 ppi, as in the issue.
+        let pixels = "A".repeat(64);
+        page(&mut doc, "Unused", unused, &format!("q 720 0 0 400 0 0 cm BI /W 8 /H 8 /CS /G /BPC 8 ID {pixels} EI Q"));
+        // The long keys, and a placement squashed to nothing.
+        page(&mut doc, "Unused", unused, "q 72 0 0 0 0 0 cm BI /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 ID AAAA EI Q");
+        let report = inspect(&doc);
+        let inline: Vec<_> = report.images.iter().filter(|i| i.name == "inline image").collect();
+        assert_eq!(inline.len(), 1, "{:?}", report.images);
+        assert_eq!((inline[0].page, inline[0].pixels), (1, [8, 8]));
+        assert!((inline[0].ppi - 0.8).abs() < 0.01, "{}", inline[0].ppi);
+        assert!((inline[0].size_mm[0] - 254.0).abs() < 0.1 && (inline[0].size_mm[1] - 141.1).abs() < 0.1, "{:?}", inline[0].size_mm);
+        assert!(report.findings.iter().any(|f| f.id == "image-ppi" && f.severity == "fail" && f.page == Some(1)), "{:?}", report.findings);
+        assert_eq!(report.resolution_unknown, 1, "the squashed one");
     }
 
     #[test]

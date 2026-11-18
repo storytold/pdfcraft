@@ -363,6 +363,36 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
     Ok(out)
 }
 
+/// An inline image (`BI … ID … EI`) a page's own content draws: where it is placed and its size
+/// in pixels, as its dictionary gives them (`/W` or `/Width`, `/H` or `/Height`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct InlineImage {
+    /// The placement: image unit square → user space, as for [`PageImage::matrix`].
+    pub matrix: [f64; 6],
+    pub width: u32,
+    pub height: u32,
+}
+
+/// The inline images page `page` (0-based) draws in its own content, in drawing order (not those
+/// inside form XObjects). Read-only, and apart from [`page_images`], which lists what can be
+/// edited.
+pub fn page_inline_images(doc: &Document, page: usize) -> Result<Vec<InlineImage>, EditError> {
+    let p = page_of(doc, page)?;
+    let mut out = Vec::new();
+    let mut state = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
+    let pieces = joined(&content_streams(doc, &p.dict)?);
+    for op in &pieces.parse().ops {
+        state.apply(op)?;
+        let Some((dict, _)) = op.inline.as_ref().filter(|_| op.is("BI")) else { continue };
+        let side = |short: &[u8], long: &[u8]| dict.int(short).or_else(|| dict.int(long)).unwrap_or(0).clamp(0, i64::from(u32::MAX)) as u32;
+        if out.len() >= MAX_PAGE_IMAGES {
+            return Err(too_many_images());
+        }
+        out.push(InlineImage { matrix: state.placement.matrix.0, width: side(b"W", b"Width"), height: side(b"H", b"Height") });
+    }
+    Ok(out)
+}
+
 /// The images page `page` (0-based) shows, in drawing order, including those drawn inside form
 /// XObjects (Export to Word, HTML and RTF). Read-only: indexes into this list are not
 /// [`page_images`] indexes, so they can't be passed to [`change_image`].
