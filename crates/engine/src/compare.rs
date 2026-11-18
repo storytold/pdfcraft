@@ -197,8 +197,10 @@ pub struct OfficeExport {
     /// Pages (0-based) that draw forms nested deeper than [`MAX_FORM_DEPTH`] or more of them
     /// than [`MAX_FORM_VISITS`], or pictures past [`MAX_EXPORT_IMAGE_BYTES`] or past what one export
     /// may decode: export stops reading there to stay bounded on hostile files, so the text and images of those forms, or
-    /// those pictures, are missing from `bytes`. RTF also reports pages whose pictures could
-    /// not be encoded or fit its output/raster budgets; remaining page content is preserved.
+    /// those pictures, are missing from `bytes`. RTF also lists the pages that lost a picture to
+    /// its own limits (it repeats a picture's data at every placement) or one whose rotation it
+    /// couldn't bake in; their other content is kept. A picture no format can encode (a JPX image,
+    /// say) is left out of every format without being listed.
     pub truncated_pages: Vec<usize>,
 }
 

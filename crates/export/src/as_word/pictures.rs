@@ -178,7 +178,7 @@ mod tests {
     fn flow_document_embeds_rotated_pixels_not_original_bytes() {
         let page =
             crate::layout::Page { width: 10.0, height: 10.0, blocks: Vec::new(), images: vec![sample(90.0)], background: None, rules: Vec::new() };
-        let doc = super::super::flow_doc(&[page], &super::super::Meta { title: "", language: None, font: "Helvetica" });
+        let (doc, _) = super::super::flow_doc(&[page], &super::super::Meta { title: "", language: None, font: "Helvetica" });
         let bytes = doc.media.values().next().expect("picture retained");
         let pixels = image::load_from_memory(bytes).expect("PNG").into_rgba8();
         assert_eq!(pixels.dimensions(), (1, 2));
@@ -203,12 +203,10 @@ mod tests {
         let im = sample(0.0);
         let cost = rtf_bytes(im.bytes.len()).expect("small");
         let page = crate::layout::Page { width: 10.0, height: 10.0, blocks: Vec::new(), images: vec![im; 3], background: None, rules: Vec::new() };
-        let mut omitted = Vec::new();
-        let doc = super::super::flow_doc_with_budget(
+        let (doc, omitted) = super::super::flow_doc_with_budget(
             &[page],
             &super::super::Meta { title: "", language: None, font: "Helvetica" },
             Budget { encoded: MAX_ENCODED - 2 * cost, raster: 0 },
-            &mut omitted,
         );
         assert_eq!(omitted, [0]);
         let count: usize = doc
@@ -246,7 +244,7 @@ mod tests {
             margin_right: 50.0,
             ..Default::default()
         };
-        let p = super::super::picture(&mut craft_wordmodel::Document::new(), &im, im.bytes.to_vec(), im.ext, &section);
+        let p = super::super::picture(String::new(), &im, &section);
         assert!(matches!(p.objects.first(), Some(craft_wordmodel::InlineObject::Image { w, h, .. }) if *w == 30.0 && *h == 300.0));
     }
 
