@@ -1449,6 +1449,61 @@ endbfrange
         assert_eq!(cmap.lookup_bf_string(0x0005), None);
     }
 
+    /// PdfCraft patch test (5): ranges that overlap (calibre writes ToUnicode maps like this, #6740)
+    /// are all found. Sorted by start alone, the binary search stepped past every range holding
+    /// 0x4A and 0x5B, and copied text lost each `g` and `x`.
+    #[test]
+    fn overlapping_bfranges_are_all_found() {
+        let cmap = parse_with_preamble(
+            br#"
+2 beginbfchar
+<0044> <0061>
+<005A> <0077>
+endbfchar
+6 beginbfrange
+<0044> <005C> <0061>
+<0044> <004C> <0061>
+<0046> <004C> <0063>
+<004B> <0053> <0068>
+<0055> <005D> <0072>
+<005C> <005D> <0079>
+endbfrange
+"#,
+        );
+
+        for (code, c) in [(0x44, 'a'), (0x4A, 'g'), (0x4B, 'h'), (0x5A, 'w'), (0x5B, 'x'), (0x5C, 'y'), (0x5D, 'z')] {
+            assert_eq!(cmap.lookup_bf_string(code), Some(BfString::Char(c)), "{code:#06x}");
+        }
+        assert_eq!(cmap.lookup_bf_string(0x43), None);
+        assert_eq!(cmap.lookup_bf_string(0x5E), None);
+    }
+
+    /// PdfCraft patch test (5): where mappings overlap, the one declared later wins, as pdf.js,
+    /// poppler and PdfCraft's own ToUnicode reader (`pdfcraft-fonts`) read it.
+    #[test]
+    fn a_later_overlapping_mapping_wins() {
+        let cmap = parse_with_preamble(
+            br#"
+1 beginbfrange
+<0041> <0045> <0061>
+endbfrange
+1 beginbfchar
+<0042> <005A>
+endbfchar
+1 beginbfrange
+<0044> <0046> <0031>
+endbfrange
+1 beginbfchar
+<0045> <0058>
+endbfchar
+"#,
+        );
+
+        let text: Vec<_> = (0x41..=0x47).map(|code| cmap.lookup_bf_string(code)).collect();
+        let want = [Some('a'), Some('Z'), Some('c'), Some('1'), Some('X'), Some('3'), None];
+        assert_eq!(text, want.map(|c| c.map(BfString::Char)).to_vec());
+    }
+
     #[test]
     fn bfrange_array() {
         let cmap = parse_with_preamble(

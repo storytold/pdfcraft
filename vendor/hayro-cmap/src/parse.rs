@@ -1,4 +1,5 @@
 use alloc::boxed::Box;
+use alloc::collections::BinaryHeap;
 use alloc::vec::Vec;
 
 use hayro_postscript::{Object, Scanner};
@@ -173,6 +174,10 @@ pub(crate) fn parse_inner<'a>(
         }
     }
 
+
+    // PdfCraft patch (5): overlapping mappings become disjoint, the later declaration winning,
+    // so the binary search below finds every code.
+    let mut bf_entries = disjoint(bf_entries);
 
     // Since we will use binary search for finding the correct entry, sort now.
     ranges.sort();
@@ -486,4 +491,61 @@ fn bytes_to_u32(bytes: &[u8]) -> Option<u32> {
 
 fn name_matches(obj: &Object<'_>, expected: &str) -> bool {
     matches!(obj, Object::Name(name) if !name.is_literal() && name.as_str() == Some(expected))
+}
+
+/// PdfCraft patch (5): `bfchar`/`bfrange` mappings (in declaration order) rewritten so that no
+/// two overlap, each code keeping the mapping declared last, as pdf.js, poppler and
+/// `pdfcraft-fonts` read them. The lookup binary-searches mappings sorted by their first code,
+/// which only works when they are disjoint: in a ToUnicode map with overlapping ranges (calibre
+/// writes them) the search could step past every range holding a code, and the text of `g` and
+/// `x` was lost on copy (#6740). Disjoint mappings come back unchanged.
+pub(crate) fn disjoint(entries: Vec<BfRange>) -> Vec<BfRange> {
+    let mut order: Vec<usize> = (0..entries.len()).filter(|&i| entries[i].range.start <= entries[i].range.end).collect();
+    order.sort_by_key(|&i| (entries[i].range.start, i));
+    let mut reach: Option<u32> = None;
+    let overlap = order.iter().any(|&i| {
+        let r = &entries[i].range;
+        let hit = reach.is_some_and(|end| r.start <= end);
+        reach = Some(reach.map_or(r.end, |end| end.max(r.end)));
+        hit
+    });
+    if !overlap {
+        return entries;
+    }
+    // The codes where some mapping starts or stops, and between each two the mapping that owns
+    // that stretch: of those covering it, the one declared last (the largest index).
+    let mut edges: Vec<u64> = order.iter().flat_map(|&i| [u64::from(entries[i].range.start), u64::from(entries[i].range.end) + 1]).collect();
+    edges.sort_unstable();
+    edges.dedup();
+    let mut live = BinaryHeap::new();
+    let mut next = order.iter().peekable();
+    let mut out: Vec<(usize, u32, u32)> = Vec::new();
+    for pair in edges.windows(2) {
+        let (Ok(lo), Ok(hi)) = (u32::try_from(pair[0]), u32::try_from(pair[1] - 1)) else { continue };
+        while let Some(&&i) = next.peek().filter(|&&&i| entries[i].range.start <= lo) {
+            live.push(i);
+            next.next();
+        }
+        while live.peek().is_some_and(|&i| entries[i].range.end < lo) {
+            live.pop();
+        }
+        let Some(&owner) = live.peek() else { continue };
+        match out.last_mut() {
+            Some((o, _, end)) if *o == owner && end.checked_add(1) == Some(lo) => *end = hi,
+            _ => out.push((owner, lo, hi)),
+        }
+    }
+    out.into_iter()
+        .filter_map(|(i, lo, hi)| {
+            let e = &entries[i];
+            // A piece starting `k` codes into its mapping starts `k` units on, as the lookup counts.
+            let offset = u16::try_from(lo - e.range.start).ok()?;
+            let mut dst_base = e.dst_base.clone();
+            if offset > 0 {
+                let last = dst_base.last_mut()?;
+                *last = last.checked_add(offset)?;
+            }
+            Some(BfRange { range: Range { start: lo, end: hi }, dst_base, code_len: e.code_len })
+        })
+        .collect()
 }
