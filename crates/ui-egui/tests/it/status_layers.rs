@@ -379,7 +379,11 @@ fn a_value_typed_against_a_no_changes_certification_is_refused() {
     assert!(!doc.dirty, "nothing to save");
     assert!(h.state().views[0].forms.unbaked.is_empty(), "no value waits to be drawn");
     let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-    assert!(toast.contains("certified with no changes allowed: filling in form fields would invalidate the certification"), "{toast}");
+    assert!(
+        toast
+            .contains("certified with no changes allowed but to its document information: filling in form fields would invalidate the certification"),
+        "{toast}"
+    );
 }
 
 #[test]

@@ -108,6 +108,11 @@ fn no_changes_allowed_refuses_every_edit_and_leaves_the_document_as_signed() {
     assert_eq!(s.save_bytes(id).unwrap(), before, "a save writes the signed file as it is");
     let message = EditError::Certified { level: 1, what: "comments" }.to_string();
     assert!(message.contains("certified with no changes allowed") && message.contains("comments"), "{message}");
+    // Each level names the document information, which stays open under every one of them.
+    for level in [1, 2, 3] {
+        let message = EditError::Certified { level, what: "page changes" }.to_string();
+        assert!(message.contains("document information"), "{level}: {message}");
+    }
 }
 
 #[test]
@@ -318,6 +323,62 @@ fn a_fill_that_moves_a_field_is_refused_under_a_certification() {
     s.apply(id, Edit::ApplyScriptChanges { changes: vec![valued] }).expect("a value is filling in");
     let verdict = saved_verdict(&mut s, id);
     assert!(matches!(verdict, Modification::Allowed(_)), "the certification stays valid: {verdict:?}");
+}
+
+/// A script can hide or show a field's widget while filling the form in (its `/F`), which changes
+/// what the page shows: refused under a certification that allows filling in, as the signature
+/// check would count it as a page change.
+#[test]
+fn a_fill_that_hides_a_field_is_refused_under_a_certification() {
+    let (mut s, id) = certified(Some(2));
+    let hidden = pdfcraft_engine::FieldChange { name: "name".into(), display: Some(1), ..Default::default() };
+    assert_eq!(refused(s.apply(id, Edit::ApplyScriptChanges { changes: vec![hidden] })), "hiding or showing form fields");
+    assert!(s.get(id).unwrap().can_undo().is_none(), "nothing was changed");
+    assert!(matches!(saved_verdict(&mut s, id), Modification::None), "the certification is as signed");
+}
+
+/// A form whose initialize script changes its field `flip` each time it is opened.
+fn flipping_template() -> String {
+    r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="master"><occur max="-1"/>
+  <contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><medium short="612pt" long="792pt"/>
+ </pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <field name="flip" w="200pt" h="20pt"><ui><textEdit/></ui>
+   <event activity="initialize"><script contentType="application/x-javascript">this.rawValue = (this.rawValue == "a") ? "b" : "a";</script></event>
+  </field>
+ </subform>
+</subform></template>
+</xdp:xdp>"#
+        .to_string()
+}
+
+/// Opening a form certified with no changes allowed runs its scripts, but what they change on
+/// opening isn't kept: the document stays the signed file, so saving it keeps the certification as
+/// signed, and a warning says so. A certification that allows filling in keeps the values they set.
+#[test]
+fn opening_a_form_certified_with_no_changes_keeps_the_signed_file() {
+    for level in [1, 2] {
+        let mut s = Session::new().with_clock(|| 1_800_000_000);
+        let id = s.open("flip.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&flipping_template())), None).unwrap();
+        let flip = |s: &Session, id| s.get(id).unwrap().form.iter().find(|f| f.name.ends_with("flip")).map(|f| f.value.clone()).unwrap_or_default();
+        let first = flip(&s, id);
+        let opts = SignOptions { page: 0, rect: Some([20.0, 20.0, 160.0, 50.0]), certify: Some(level), ..SignOptions::default() };
+        let signed = s.sign(id, &digital_id(), opts).unwrap();
+        let mut again = Session::new().with_clock(|| 1_800_000_000);
+        let reopened = again.open("flip.pdf", None, signed.clone(), None).unwrap();
+        let doc = again.get(reopened).unwrap();
+        if level == 1 {
+            assert_eq!(flip(&again, reopened), first, "the value the script would set isn't kept");
+            assert_eq!(doc.bytes, signed, "the document is the signed file");
+            assert!(doc.info.warnings.iter().any(|w| w.contains("certification allows no changes")), "{:?}", doc.info.warnings);
+            assert!(matches!(saved_verdict(&mut again, reopened), Modification::None), "the certification is as signed");
+        } else {
+            assert_ne!(flip(&again, reopened), first, "a certification that allows filling in keeps the value");
+            assert!(matches!(saved_verdict(&mut again, reopened), Modification::Allowed(_)), "the certification stays valid");
+        }
+    }
 }
 
 /// A certified scripted XFA form, filled and signed with certification `level` 2, its text field

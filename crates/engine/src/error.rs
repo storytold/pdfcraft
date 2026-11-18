@@ -80,12 +80,13 @@ pub enum EditError {
 /// The sentence for [`EditError::Certified`]: what the certification allows, and that `what`
 /// isn't among it.
 fn certified_message(level: u8, what: &str) -> String {
+    // The document information (`/Info`) is metadata, which every level leaves open.
     let allows = match level {
-        1 => "no changes",
-        2 => "only filling in forms, page templates and signing",
-        _ => "only filling in forms, page templates, signing and comments",
+        1 => "no changes allowed but to its document information",
+        2 => "only filling in forms, page templates, signing and document information allowed",
+        _ => "only filling in forms, page templates, signing, comments and document information allowed",
     };
-    format!("the document is certified with {allows} allowed: {what} would invalidate the certification, so the document was not changed")
+    format!("the document is certified with {allows}: {what} would invalidate the certification, so the document was not changed")
 }
 
 impl From<pdfcraft_sign::SignError> for EditError {

@@ -36,16 +36,27 @@ fn prepare_ocr_text_edit(editor: &mut crate::history::Editor, info: &pdfcraft_re
     })
 }
 
-/// Whether a widget of `before`'s form has another `/Rect` in `after`.
-fn widgets_moved(before: &pdfcraft_cos::Document, after: &pdfcraft_cos::Document) -> bool {
-    let rects = |doc: &pdfcraft_cos::Document| {
+/// What a widget of `before`'s form has changed of where it sits or whether it shows in `after`:
+/// another `/Rect`, or another `/F` (hidden, printed, locked…), which the signature check counts
+/// as a change to the page, not a form fill. `None` when every widget kept both.
+fn widgets_moved(before: &pdfcraft_cos::Document, after: &pdfcraft_cos::Document) -> Option<&'static str> {
+    let placed = |doc: &pdfcraft_cos::Document| {
+        let flags = |obj| doc.get(obj).as_dict().and_then(|d| d.get(b"F").map(|f| doc.resolve(f).as_int()));
         pdfcraft_forms::fields(doc)
             .into_iter()
-            .flat_map(|f| f.widgets.into_iter().map(|w| (w.obj, w.rect)))
+            .flat_map(|f| f.widgets.into_iter().map(|w| (w.obj, (w.rect, flags(w.obj)))))
             .collect::<std::collections::HashMap<_, _>>()
     };
-    let was = rects(before);
-    rects(after).into_iter().any(|(obj, rect)| was.get(&obj).is_some_and(|r| *r != rect))
+    let was = placed(before);
+    let now = placed(after);
+    let changed = |differs: &dyn Fn(&([f64; 4], _), &([f64; 4], _)) -> bool| now.iter().any(|(obj, n)| was.get(obj).is_some_and(|w| differs(w, n)));
+    if changed(&|w, n| w.0 != n.0) {
+        Some("moving or resizing form fields")
+    } else if changed(&|w, n| w.1 != n.1) {
+        Some("hiding or showing form fields")
+    } else {
+        None
+    }
 }
 
 /// Whether the edit, or any edit inside a batch, deletes pages.
@@ -350,14 +361,14 @@ impl Session {
         if !signed && deletes_pages(&edit) {
             next.require_full_save();
         }
-        // A script run by a fill (a value's callbacks, or the changes it handed back) can move or
-        // resize a field's widget, which changes the page it is on: no certification allows
-        // that (ISO 32000-2 Table 257). Checked on what the edit did, whatever ran it.
+        // A script run by a fill (a value's callbacks, or the changes it handed back) can move,
+        // resize, hide or show a field's widget, which changes the page it is on: no
+        // certification allows that (ISO 32000-2 Table 257). Checked on what the edit did, whatever ran it.
         if let Some(level) = cx.certification
-            && widgets_moved(&editor.cos, &next)
+            && let Some(what) = widgets_moved(&editor.cos, &next)
         {
             discard_edit_callbacks(&cx);
-            return Err(EditError::Certified { level, what: "moving or resizing form fields" });
+            return Err(EditError::Certified { level, what });
         }
         let rewrites = |c: &pdfcraft_cos::Document| c.full_save_required() || c.encryption_changed();
         if signed && ((rewrites(&next) && !rewrites(&editor.cos)) || (next.is_modified() && next.revisions().is_empty())) {

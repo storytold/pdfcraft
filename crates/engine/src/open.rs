@@ -218,10 +218,13 @@ impl Session {
                     let mut work = cos.clone();
                     let pages = info.pages.len();
                     // A certified form keeps its signed pages here as in an edit: its scripts
-                    // run, but don't lay it out again (ISO 32000-2 Table 257).
-                    let certified = pdfcraft_sign::pdf::list_cached(&cos, &bytes, &context.trust, &pdfcraft_sign::DigestCache::default())
+                    // run, but don't lay it out again (ISO 32000-2 Table 257). Under a
+                    // certification that allows no changes, what they change isn't kept either.
+                    let certification = pdfcraft_sign::pdf::list_cached(&cos, &bytes, &context.trust, &pdfcraft_sign::DigestCache::default())
                         .iter()
-                        .any(|s| s.signed && s.certify.is_some());
+                        .filter(|s| s.signed)
+                        .filter_map(|s| s.certify)
+                        .min();
                     let ran = guard(|| {
                         let mut run = xfa::XfaRun {
                             page_count: pages,
@@ -230,7 +233,7 @@ impl Session {
                             ran_away: false,
                             highlight: context.highlight,
                             time_scale: context.xfa_time_scale,
-                            keep_layout: certified,
+                            keep_layout: certification.is_some(),
                         };
                         let changes = xfa::on_open(&mut work, &tpl, &mut run);
                         if run.ran_away {
@@ -240,6 +243,14 @@ impl Session {
                     })
                     .unwrap_or_else(|m| Err(format!("its scripts failed unexpectedly ({m})")));
                     match ran {
+                        Ok(changes) if work.is_modified() && certification == Some(1) => {
+                            let mut info = info;
+                            let what = if changes.is_empty() { String::new() } else { format!(" ({})", changes.describe()) };
+                            info.warnings.push(format!(
+                                "This form's scripts would change it on opening{what}, but its certification allows no changes: those changes were not kept"
+                            ));
+                            (bytes, info, Ok(Ok(cos)))
+                        }
                         Ok(changes) if work.is_modified() => match rebase(&work) {
                             Ok((b, mut i, c)) => {
                                 // The file as saved differs from what opening shows: say so.
