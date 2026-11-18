@@ -7,6 +7,7 @@ pub(super) mod create_multiple_ui;
 pub(super) mod create_ui;
 pub(super) mod export_ui;
 pub(super) mod files;
+pub(super) mod js_dialogs;
 pub(super) mod js_ui;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(super) mod ocr_route;
