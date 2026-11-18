@@ -883,7 +883,7 @@ impl PdfCraftApp {
     /// user has been told why, so the typing isn't lost and the caller can stop.
     fn apply_queued_edit(&mut self, i: usize) -> bool {
         let Some(edit) = self.views.get_mut(i).and_then(|v| v.session.pending_edit.take()) else { return true };
-        let signature_page = self.views.get_mut(i).and_then(|v| v.fill_signature_page.take());
+        let signature = self.views.get_mut(i).is_some_and(|v| std::mem::take(&mut v.session.fill_signature));
         let doc_id = self.views.get(i).map(|v| v.id);
         let committed = self.views.get_mut(i).and_then(|v| v.session.forms.committed.take());
         let typed = match (&edit, &committed) {
@@ -891,9 +891,7 @@ impl PdfCraftApp {
             _ => false,
         };
         if self.apply_edit(edit) {
-            if signature_page.is_some()
-                && let Some(id) = doc_id
-            {
+            if signature && let Some(id) = doc_id {
                 self.placed_signatures.insert(id);
                 // A new signature shows the Lock now notice again, even if the last was dismissed.
                 if let Some(view) = self.views.get_mut(i) {

@@ -275,9 +275,11 @@ impl SignatureDrag {
         }
     }
 
-    pub fn paint(&self, draw: &Draw<'_>, cx: &PageCx<'_>, cv: &CommentView, pending: Option<&Edit>) {
+    /// The comment being dragged, drawn from its layers under `tool`, the quick tool the page sees: only Select and the
+    /// Fill & Sign tools move comments.
+    pub fn paint(&self, draw: &Draw<'_>, cx: &PageCx<'_>, tool: QuickTool, cv: &CommentView, pending: Option<&Edit>) {
         let (Some((_, page, index)), Some(layers)) = (self.key, &self.layers) else { return };
-        if page != cx.page || !matches!(cx.tool, QuickTool::Select | QuickTool::Fill(_)) || cx.hidden {
+        if page != cx.page || !matches!(tool, QuickTool::Select | QuickTool::Fill(_)) || cx.hidden {
             return;
         }
         let in_flight = cv.tool.in_flight();

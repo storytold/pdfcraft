@@ -1,7 +1,7 @@
 use craft::ui::runtime::drag::OsFile; // PLAN: assumed path of `OsFile` in the facade (ui-contract `runtime/drag.rs`)
 
 use super::PdfCraftApp;
-use craft::platform::open::{DroppedFile, Intake};
+use craft::platform::open::Intake;
 
 /// The name a dropped file is opened under when the OS gave none.
 const DROPPED_NAME: &str = "dropped.pdf";
@@ -14,10 +14,6 @@ const COMBINE_ACTION: &str = "combine";
 fn bring_to_front(ctx: &egui::Context) {
     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-}
-
-fn os_file(file: DroppedFile) -> OsFile {
-    OsFile { name: file.name, path: file.path, mime: String::new(), bytes: file.bytes }
 }
 
 impl PdfCraftApp {
@@ -58,7 +54,11 @@ impl PdfCraftApp {
                         self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
                     }
                 }
-                Intake::Dropped { files, .. } => self.open_dropped(files.into_iter().map(os_file).collect()),
+                Intake::Dropped { files, .. } => {
+                    for file in files {
+                        self.open_dropped_file(file.name, file.path, file.bytes);
+                    }
+                }
             }
         }
     }
@@ -67,19 +67,27 @@ impl PdfCraftApp {
     /// arrived as bytes (the web) as a new tab.
     pub(crate) fn open_dropped(&mut self, files: Vec<OsFile>) {
         for file in files {
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some(path) = &file.path {
-                self.open_path(&path.to_string_lossy());
-                continue;
-            }
-            let name = if file.name.is_empty() { DROPPED_NAME.to_string() } else { file.name.clone() };
-            let Some(bytes) = file.bytes else {
-                self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", "the file has no contents")]);
-                continue;
-            };
-            if let Err(error) = self.open_bytes(&name, None, bytes.to_vec()) {
-                self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
-            }
+            self.open_dropped_file(file.name, file.path, file.bytes);
+        }
+    }
+
+    /// Opens one dropped file, from the window or from the OS's file intake: by its path when it has one, else from
+    /// its bytes under `name`.
+    fn open_dropped_file(&mut self, name: String, path: Option<std::path::PathBuf>, bytes: Option<std::sync::Arc<[u8]>>) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = &path {
+            self.open_path(&path.to_string_lossy());
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        drop(path);
+        let name = if name.is_empty() { DROPPED_NAME.to_string() } else { name };
+        let Some(bytes) = bytes else {
+            self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", "the file has no contents")]);
+            return;
+        };
+        if let Err(error) = self.open_bytes(&name, None, bytes.to_vec()) {
+            self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
         }
     }
 

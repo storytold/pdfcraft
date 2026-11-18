@@ -11,11 +11,13 @@ use std::sync::Arc;
 use craft::behavior::{CanvasView, PointerButton, PressPhase, Selection};
 use craft::host::queue::{JobQueue, QueueOptions};
 use craft::pages::ui::{PageBody, PageView, PageViewOutput, PageViewState, PlacedPage, TextMark, TextMarks, TextSelectState, TextSelection};
+use craft::review::ui::annotate::AnnotateWords;
 use craft::ui::canvas::{ContextRequest, Momentary, NavigationOptions, PageBorder, ToolHost};
 use craft::ui::contract::Show as _;
 use craft::ui::display::Text;
 use craft::ui::list::OpenSet;
 use craft::ui::primitives::TextureStatistics;
+use craft::ui::runtime::env::Env;
 use craft::ui::style::DataColor;
 use egui::{Color32, Pos2, Rect, Vec2, pos2, vec2};
 use pdfcraft_engine::text_links::TextLink;
@@ -259,8 +261,6 @@ pub struct DocView {
     /// `redactions_applied` is below it, a delivered step is undone and Save asks where. A desktop
     /// save leaves it at 0.
     pub redactions_downloaded: usize,
-    /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
-    pub(crate) fill_signature_page: Option<usize>,
     /// The "Signature added … Lock now" notice was dismissed; placing another signature shows it
     /// again (#2149).
     pub(crate) lock_offer_dismissed: bool,
@@ -302,6 +302,8 @@ pub struct PageSession {
     pub(crate) presenter: presenter::Presenter,
     /// An edit requested by the view (organize toolbar, keys), applied by the app this frame.
     pub pending_edit: Option<Edit>,
+    /// The pending edit is a Fill & Sign signature or initials: the app notes the document as signed once it applies.
+    pub(crate) fill_signature: bool,
     /// The page a press or key made the current one (Edit text's objects selected on it, a radio button stepped to),
     /// with the user-space rectangle on it to scroll into view (a field Tab moved to), gone to by the app after the
     /// pass: the page view holds the view state while the body runs.
@@ -396,6 +398,7 @@ impl PageSession {
             compare_marks: Vec::new(),
             presenter: Default::default(),
             pending_edit: None,
+            fill_signature: false,
             pending_page: None,
             pending_redaction: None,
             redaction_refused: false,
@@ -574,7 +577,6 @@ impl DocView {
             redactions_undone_after_save: 0,
             saved_redactions_cut_off: false,
             redactions_downloaded: 0,
-            fill_signature_page: None,
             lock_offer_dismissed: false,
         }
     }
@@ -879,6 +881,8 @@ struct BodyOut {
     copy_selected: bool,
     /// What the Camera image controls asked the app for.
     action: Option<ViewAction>,
+    /// The comment under the pointer (page, index): its pop-up's connector shows while it is.
+    hovered_comment: Option<(usize, usize)>,
 }
 
 /// The part list of a pass, in paint order: pictures, paragraphs and added items, links and text links (only under
@@ -908,7 +912,13 @@ fn page_parts_of(
         links_of(session, cx, body).parts(&mut parts);
     }
     if cx.tool == QuickTool::Select && !cx.comments_hidden {
-        crate::comments::parts(&mut parts, session, cx.info, body.pages, cx.rotation, cx.unobstructed);
+        // The comment a press under the pointer would take, hit within the theme's reach and with its markers at the
+        // icon size, both as the tools on the canvas read them.
+        let env = Env::of(ui);
+        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation);
+        let pointer = ui.input(|i| i.pointer.hover_pos()).map(|p| craft::behavior::kurbo::Point::new(p.x.into(), p.y.into()));
+        let (tolerance, icon_side) = (map.doc_len(env.hit_reach()), map.doc_len(env.tokens.size.icon.md));
+        parts.extend(comments::parts(cx.info, &map, cx.prefs, cx.tool, pointer, &session.comments.tool, tolerance, icon_side));
     }
     if !cx.preparing {
         let can_fill = cx.doc.allows_form_filling();
@@ -949,7 +959,7 @@ fn pressed_by(phase: &PressPhase, button: PointerButton) -> bool {
 }
 
 /// What a press on a part does, routed by its owner.
-fn route_press(ctx: &egui::Context, session: &mut PageSession, press: &PagePress, cx: &PageBodyCx<'_>, body: &PageBody<'_>, out: &mut BodyOut) {
+fn route_press(ui: &egui::Ui, session: &mut PageSession, press: &PagePress, cx: &PageBodyCx<'_>, body: &PageBody<'_>, out: &mut BodyOut) {
     let geo = cx.geometry(body);
     if pressed_by(&press.phase, PointerButton::Secondary) {
         // The page's menu reads what the secondary press went to.
@@ -970,9 +980,15 @@ fn route_press(ctx: &egui::Context, session: &mut PageSession, press: &PagePress
                 }
             }
         }
-        // PLAN: assumed `comments::tool::part_pressed(session, info, press)` (pdf-comments-w8).
-        Owner::Comment { .. } => crate::comments::part_pressed(session, cx.info, press),
-        Owner::Field { .. } => crate::forms_ui::field_press(ctx, session, cx.doc, cx.info, cx.doc.allows_form_filling(), press, geo),
+        Owner::Comment { .. } => {
+            if let Some(xf) = session.page_xform(press.page, geo) {
+                let page_cx =
+                    comments::PageCx { page: press.page, xf: &xf, info: cx.info, prefs: cx.prefs, allowed: cx.allowed, hidden: cx.comments_hidden };
+                let words = Env::of(ui).words::<AnnotateWords>();
+                comments::part_pressed(&mut session.comments, press, &page_cx, &words);
+            }
+        }
+        Owner::Field { .. } => crate::forms_ui::field_press(ui.ctx(), session, cx.doc, cx.info, cx.doc.allows_form_filling(), press, geo),
         Owner::SignTab { field } => {
             if clicked && let Some(field) = cx.form.get(*field) {
                 session.sign.field = Some(field.name.clone());
@@ -1000,20 +1016,22 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
 
     // 2-3. Every part on the pages, in one control: hit priority ranks parts inside one control only.
     let (parts, tabs) = page_parts_of(ui, body, &mut *session, cx);
-    // PLAN: assumed `forms_ui::focus_owner(&FormView) -> Option<Owner>` for the focused field (pdf-forms-w7 AP-6).
-    let focus = crate::forms_ui::focus_owner(&session.forms);
+    let focus = crate::forms_ui::focus_owner(&session.forms, cx.form);
     let parts_out = PageParts::new(&parts).focus(focus).show_at(ui, body.rect);
+    out.hovered_comment = match parts_out.hovered {
+        Some((Owner::Comment { index }, page)) => Some((page, index)),
+        _ => None,
+    };
     if let Some(press) = &parts_out.press {
         // Any press on a page ends Select All of the document, on a link too.
         if matches!(press.phase, PressPhase::Down { .. }) {
             session.all_text = false;
         }
-        route_press(ui.ctx(), session, press, cx, body, out);
+        route_press(ui, session, press, cx, body, out);
     }
-    if let Some((owner, page)) = &parts_out.focused {
+    if let Some((owner, _)) = &parts_out.focused {
         // Focus arrived on a field (Tab, a request or a click): the field opens, a text field with its text selected.
-        // PLAN: assumed `forms_ui::field_focused(session, doc, form, owner, page)` (pdf-forms-w5 AP-6).
-        crate::forms_ui::field_focused(session, cx.doc, cx.form, owner, *page);
+        crate::forms_ui::field_focused(session, cx.form, owner);
     }
     if let Some((Owner::Field { .. }, key)) = &parts_out.key
         && let Some(edit) = crate::forms_ui::field_key(session, cx.info, cx.form, key, cx.geometry(body))
@@ -1041,7 +1059,12 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         out.context = reply.context;
         out.back_to_select = finish.back_to_select;
         out.snapshot = finish.snapshot;
-        out.open_boxes = finish.open_boxes;
+        // Set Page Boxes opens on the current page: the page double-clicked becomes it first.
+        if let Some(page) = finish.open_boxes {
+            session.pending_page = Some((page, None));
+            out.open_boxes = true;
+        }
+        out.turn = finish.turn;
         out.open_signature = finish.open_signature;
         let outcome = session.prepare.take_outcome();
         out.back_to_select |= outcome.placed;
@@ -1094,22 +1117,20 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
             _ => None,
         };
         let selected = session.prepare.selected.as_ref().map(|(name, _)| name.as_str());
-        // PLAN: assumed `CalcOrderOverlay::new(&CalcOrderView, pages, rotation, generation, selected, hovered,
-        // viewport)` (pdf-forms-w12 gives `new(.., viewport: body.rect)`).
-        crate::calc_order_ui::CalcOrderOverlay::new(
-            &session.calc_order,
-            body.pages,
-            cx.rotation,
-            cx.doc.edit_generation(),
-            selected,
-            hovered,
-            body.rect,
-        )
-        .show_at(ui, body.rect);
+        crate::calc_order_ui::CalcOrderOverlay::new(&session.calc_order, cx.form, cx.info)
+            .placed(body.pages)
+            .rotation(cx.rotation)
+            .generation(cx.doc.edit_generation())
+            .selected(selected)
+            .hovered(hovered.as_ref())
+            .viewport(body.rect)
+            .show_at(ui, body.rect);
     }
-    if let Some(preview) = cx.table_preview {
-        // PLAN: assumed `field_table_ui::TablePreview::new(&Preview, pages, rotation)` (pdf-forms-w11).
-        crate::field_table_ui::TablePreview::new(preview, body.pages, cx.rotation).show_at(ui, body.rect);
+    // The table being set up, on its page when that page is placed.
+    if let Some(preview) = cx.table_preview
+        && let Some(xf) = session.page_xform(preview.page(), cx.geometry(body))
+    {
+        crate::field_table_ui::TablePreview::new(tl!("Table cells"), preview, xf).show_at(ui, body.rect);
     }
     // The find marks under any tool, and the text selection where the Select tool is not the one painting it.
     let texts = selection::DocTexts::new(&session.texts, &session.text_failed, cx.rotation, cx.sizes);
@@ -1126,7 +1147,8 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         // it through, so the pointer is not hidden yet (pdf-canvas-w18).
         let (now, pointer) = ui.input(|i| (i.time, i.pointer.hover_pos()));
         let frame = presenter::frame(&mut session.presenter, body, at, cx.info, ui.painter(), now, cx.animates, pointer);
-        out.turn = frame.step;
+        // A full-screen key's turn first, then the display time's.
+        out.turn = out.turn.or(frame.step);
     }
     if cx.tool == QuickTool::EnhanceCamera {
         let quad = crate::camera_ui::show_quad(ui, body, session, cx.can_modify, cx.current);
@@ -1315,6 +1337,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         host: &app.host,
         wake: &app.wake,
         author: &app.comment_prefs.author,
+        comment_prefs: &app.comment_prefs,
         date_text: &date_text,
         fill: page_tools::FillPrefs {
             text_size: app.fill_text_size,
@@ -1424,8 +1447,9 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     if let Some(e) = crate::comments::composer(ui, view, info, &app.comment_prefs) {
         view.session.pending_edit = Some(e);
     }
-    let session = &mut view.session;
-    if let Some(e) = crate::comments::note_popups(ui, session, info, &app.comment_prefs, doc.comments_hidden(), allowed) {
+    let popups = crate::comments::note_popups(ui, view, info, &app.comment_prefs, doc.comments_hidden(), allowed, body_out.hovered_comment);
+    if let Some(e) = popups {
+        let session = &mut view.session;
         // A click on the composer's Post also takes the focus from a pop-up's box, saving what
         // was typed there: both edits land in this pass, so both are kept, in one batch.
         session.pending_edit = Some(match session.pending_edit.take() {
