@@ -704,7 +704,7 @@ fn inside(polygon: &[Point], p: Point) -> bool {
 
 impl Registration {
     /// Read a geospatial measure dictionary of a viewport with `bbox` (user space).
-    pub fn read(doc: &Document, bbox: [f64; 4], measure: &Object, budget: &mut usize) -> Result<Self> {
+    pub(crate) fn read(doc: &Document, bbox: [f64; 4], measure: &Object, budget: &mut usize) -> Result<Self> {
         let o = doc.resolve(measure);
         let d = o.as_dict().ok_or_else(|| invalid("its measure dictionary is invalid"))?;
         if d.get(b"Subtype").map(|o| doc.resolve(o)).as_deref().and_then(Object::as_name) != Some(b"GEO".as_slice()) {
@@ -734,7 +734,9 @@ impl Registration {
             (None, false) => Method::Geographic,
             (None, true) => Method::Approximate,
         };
-        // Longitudes of a map across the antimeridian are fitted from 0 to 360.
+        // Longitudes are read as -180..180 whichever way they are written (242 is -118), and those
+        // of a map across the antimeridian are then fitted from 0 to 360.
+        let geo: Vec<Point> = geo.iter().map(|g| [g[0], (g[1] + 180.0).rem_euclid(360.0) - 180.0]).collect();
         let (lo, hi) = geo.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), g| (lo.min(g[1]), hi.max(g[1])));
         let east = projection.is_none() && hi - lo > 180.0;
         let mut model = Vec::with_capacity(geo.len());
@@ -790,11 +792,6 @@ impl Registration {
         };
         let p = apply(self.unfit, m);
         (p.iter().all(|v| v.is_finite()) && inside(&self.bounds, p)).then_some(p)
-    }
-
-    /// The registered area in user space.
-    pub fn bounds(&self) -> &[Point] {
-        &self.bounds
     }
 }
 
@@ -913,7 +910,7 @@ impl GeoPage {
         if !at.iter().all(|v| v.is_finite()) {
             return None;
         }
-        let v = self.viewports.iter().rev().find(|v| at[0] >= v.bbox[0] && at[0] <= v.bbox[2] && at[1] >= v.bbox[1] && at[1] <= v.bbox[3])?;
+        let v = self.viewports.get(self.top(at)?)?;
         let ViewportKind::Geo(r) = &v.kind else { return None };
         let (lat, lon) = r.locate(at)?;
         Some(Location {
@@ -928,12 +925,18 @@ impl GeoPage {
     }
 
     /// The user-space point of a latitude and longitude: the topmost registered viewport that
-    /// holds it, if any.
+    /// holds it, if any, and only where that viewport is the one the page shows (not covered by a
+    /// later viewport).
     pub fn find(&self, lat: f64, lon: f64) -> Option<Point> {
-        self.viewports.iter().rev().find_map(|v| match &v.kind {
-            ViewportKind::Geo(r) => r.find(lat, lon).filter(|p| self.locate(*p).is_some()),
+        self.viewports.iter().enumerate().rev().find_map(|(i, v)| match &v.kind {
+            ViewportKind::Geo(r) => r.find(lat, lon).filter(|p| self.top(*p) == Some(i)),
             _ => None,
         })
+    }
+
+    /// The index of the last viewport containing a user-space point: the one that decides there.
+    fn top(&self, at: Point) -> Option<usize> {
+        self.viewports.iter().rposition(|v| at[0] >= v.bbox[0] && at[0] <= v.bbox[2] && at[1] >= v.bbox[1] && at[1] <= v.bbox[3])
     }
 }
 
