@@ -362,7 +362,7 @@ impl Walk<'_> {
         let doc = self.doc;
         let f = held(doc, f);
         let Some(d) = f.as_dict() else { return };
-        if !d.get(b"Subtype").is_some_and(|s| held(doc, s).as_name() == Some(b"Type3")) {
+        if d.get(b"Subtype").is_none_or(|s| held(doc, s).as_name() != Some(b"Type3")) {
             return;
         }
         if let Some(r) = d.get(b"Resources") {

@@ -80,6 +80,15 @@ impl Default for OcrDraft {
 }
 
 impl OcrDraft {
+    /// A newly selected language must start with an engine that can read its script.
+    pub(super) fn select_language(&mut self, language: &str) {
+        self.language = language.to_string();
+        if pdfcraft_engine::ocr::requires_tesseract(language) && self.engine == EngineChoice::Ocrs {
+            self.engine = EngineChoice::Auto;
+            self.strategy = self.engine.default_strategy();
+        }
+    }
+
     /// The recognition settings these choices make.
     pub fn settings(&self) -> OcrSettings {
         OcrSettings {
@@ -103,7 +112,7 @@ impl OcrDraft {
     /// defaults, like every other restored setting.
     pub fn apply_pref(&mut self, v: &serde_json::Value) {
         if let Some(l) = v["language"].as_str().filter(|l| LANGUAGES.iter().any(|x| x.0 == *l)) {
-            self.language = l.to_string();
+            self.select_language(l);
         }
         if let Some(e) = v["engine"].as_str() {
             self.engine = EngineChoice::parse(e);
@@ -204,7 +213,7 @@ pub struct OcrRun {
     /// still does (the dialog closes on Go, so the user can edit, or redact, while this runs).
     pub guard: pdfcraft_engine::ocr::OcrGuard,
     /// Set for a run Edit started on a scanned page, not asked for: it shows no progress, says nothing
-    /// when it found no words (a page with text of its own is skipped, and Edit must not make noise),
+    /// when it found no words unless recognition failed (a page with text of its own stays quiet),
     /// and its result waits for Read mode and dialogs and is dropped if the document changed.
     pub automatic: Option<AutoOcr>,
     /// The dialog promised an editable document: the result goes to the OCR Verify screen
@@ -286,7 +295,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
                     craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).show_ui(ui, |ui| {
                         for (code, name) in LANGUAGES {
-                            ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
+                            if ui.selectable_label(d.language == *code, tl!(*name)).clicked() {
+                                d.select_language(code);
+                            }
                         }
                     });
                     ui.end_row();
@@ -300,7 +311,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                         let choices: [(EngineChoice, &str); 3] =
                             [(EngineChoice::Auto, "Automatic"), (EngineChoice::Ocrs, "Built-in"), (EngineChoice::Tesseract, "Tesseract")];
                         for (choice, name) in choices {
-                            ui.selectable_value(&mut d.engine, choice, tl!(name));
+                            let incompatible = choice == EngineChoice::Ocrs && pdfcraft_engine::ocr::requires_tesseract(&d.language);
+                            let response = ui.add_enabled(!incompatible, egui::Button::selectable(d.engine == choice, tl!(name)));
+                            if response.clicked() {
+                                d.engine = choice;
+                            }
+                            if incompatible {
+                                response.on_disabled_hover_text(tl!("The built-in OCR engine reads only English"));
+                            }
                         }
                     });
                     ui.end_row();
@@ -382,7 +400,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     keep_asking_while_probing(ui.ctx());
     // The web build has no model files: it downloads the models the first time they're needed.
     #[cfg(target_arch = "wasm32")]
-    let downloading = d.engine != EngineChoice::Tesseract && pdfcraft_engine::ocr::engine_unavailable_reason(EngineChoice::Ocrs).is_some();
+    let downloading = !pdfcraft_engine::ocr::requires_tesseract(&d.language)
+        && d.engine != EngineChoice::Tesseract
+        && pdfcraft_engine::ocr::engine_unavailable_reason(EngineChoice::Ocrs).is_some();
     #[cfg(not(target_arch = "wasm32"))]
     let downloading = false;
     #[cfg(target_arch = "wasm32")]
@@ -409,20 +429,21 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         }
         ui.add_space(6.0);
     }
-    if let Some(why) = pdfcraft_engine::ocr::engine_unavailable_reason(d.engine).filter(|_| !downloading) {
+    if let Some(why) = pdfcraft_engine::ocr::language_unavailable_reason(d.engine, &d.language).filter(|_| !downloading) {
         // Said in the interface's language: the built-in engine's missing models get the
         // notice users know; Tesseract's reasons are catalog keys of their own.
-        let text = match d.engine {
-            pdfcraft_engine::ocr::EngineChoice::Tesseract => crate::i18n::t(&why).to_string(),
-            _ => tl!("Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.")
-                .to_string(),
+        let text = if d.engine == EngineChoice::Tesseract || pdfcraft_engine::ocr::requires_tesseract(&d.language) {
+            crate::i18n::t(&why).to_string()
+        } else {
+            tl!("Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.")
+                .to_string()
         };
         ui.label(egui::RichText::new(text).small().color(t.text_muted));
         ui.add_space(6.0);
     }
     ui.add_space(6.0);
     let (mut go, mut cancel) = (false, false);
-    let can_run = pdfcraft_engine::ocr::engine_unavailable_reason(d.engine).is_none();
+    let can_run = pdfcraft_engine::ocr::language_unavailable_reason(d.engine, &d.language).is_none();
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.add_enabled_ui(can_run, |ui| widgets::pill_button(ui, tl!("Recognize text"), true)).inner.clicked() {
@@ -449,6 +470,11 @@ impl PdfCraftApp {
             return;
         }
         #[cfg(target_arch = "wasm32")]
+        if pdfcraft_engine::ocr::requires_tesseract(&self.ocr_draft.language) {
+            self.notify_tr("Tesseract is not available in the web app");
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
         if self.web_models_missing(self.ocr_draft.engine) {
             return;
         }
@@ -472,10 +498,12 @@ impl PdfCraftApp {
     /// is one undoable step, "Recognize text", and is not run again for that page after Undo.
     /// Without an engine the page waits for one (see [`Self::await_ocr_models`]).
     pub(crate) fn auto_ocr_scanned_page(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.retry_auto_ocr_models(pdfcraft_engine::ocr::language_unavailable_reason);
         let Some(scan) = self.scan_to_read() else { return };
         // the engine this run will use, not always the built-in one
         let mut settings = self.ocr_draft.settings();
-        if pdfcraft_engine::ocr::engine_unavailable_reason(settings.engine).is_some() {
+        if pdfcraft_engine::ocr::language_unavailable_reason(settings.engine, &settings.language).is_some() {
             self.await_ocr_models(&scan);
             return;
         }
@@ -494,8 +522,13 @@ impl PdfCraftApp {
     /// Text does, and the page is read once the models are in.
     fn await_ocr_models(&mut self, scan: &ScanToRead) {
         self.views[scan.view].auto_ocr_awaiting_models.insert(scan.page, scan.generation);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(ctx) = &self.ctx {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
         #[cfg(target_arch = "wasm32")]
-        if crate::ocr_web::state() == crate::ocr_web::State::NotStarted
+        if !pdfcraft_engine::ocr::requires_tesseract(&self.ocr_draft.language)
+            && crate::ocr_web::state() == crate::ocr_web::State::NotStarted
             && let Some(ctx) = self.ctx.clone()
         {
             crate::ocr_web::start(ctx);
@@ -503,9 +536,24 @@ impl PdfCraftApp {
         }
     }
 
-    /// The OCR models have just loaded: the scans Edit set aside for want of them may be read.
-    /// Only the web build loads them while running.
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    /// Keep native language readiness moving even while every scan is parked. The engine's
+    /// cached, nonblocking probe refreshes installed language packs as well as model files.
+    /// Only a ready answer releases the pages, so a missing pack never retries OCR every frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn retry_auto_ocr_models(&mut self, unavailable: impl FnOnce(EngineChoice, &str) -> Option<String>) {
+        if !self.views.iter().any(|v| !v.auto_ocr_awaiting_models.is_empty()) {
+            return;
+        }
+        if unavailable(self.ocr_draft.engine, &self.ocr_draft.language).is_none() {
+            self.ocr_models_loaded();
+        } else if let Some(ctx) = &self.ctx {
+            // A background probe does not wake egui, and its cached answer expires even when
+            // no dialog is open. Wake occasionally without re-rendering or recognizing a page.
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+    }
+
+    /// The OCR models or selected language packs are ready: parked scans may be read again.
     pub(crate) fn ocr_models_loaded(&mut self) {
         for view in &mut self.views {
             view.auto_ocr_awaiting_models.clear();
@@ -687,6 +735,10 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         {
+            if pdfcraft_engine::ocr::requires_tesseract(&settings.language) {
+                self.notify_tr("Tesseract is not available in the web app");
+                return;
+            }
             // The files wait for the models rather than having to be chosen again.
             if self.web_models_missing(settings.engine) {
                 self.ocr_web_waiting = Some((files, settings));
@@ -963,7 +1015,8 @@ impl PdfCraftApp {
             return;
         }
         let read = found.iter().filter(|p| p.skipped.is_none()).count();
-        let skipped = found.len() - read;
+        let skipped = found.iter().filter(|p| p.skipped.as_deref() == Some("the page already contains text")).count();
+        let failures = page_failures(&found);
         // The guard refuses a result that no longer fits its document (the user edited, or
         // redacted, while the worker was out); its reason says so.
         match self.session.apply_ocr_checked(doc, &found, &guard) {
@@ -973,8 +1026,8 @@ impl PdfCraftApp {
                 {
                     view.document_changed(&info);
                 }
-                // An automatic run that found nothing (a page that has text of its own) says nothing.
-                if automatic && words == 0 {
+                // An automatic run that found nothing says nothing, unless recognition failed.
+                if automatic && words == 0 && failures.is_empty() {
                     return;
                 }
                 let words_part = if words == 1 {
@@ -990,6 +1043,9 @@ impl PdfCraftApp {
                     } else {
                         crate::i18n::fmt(tl!("; {n} pages already had text"), &[("n", &skipped.to_string())])
                     });
+                }
+                if !failures.is_empty() {
+                    msg.push_str(&crate::i18n::fmt(tl!("; failed: {list}"), &[("list", &failures.join("; "))]));
                 }
                 // The pages' own notes (the editable output's unrenderable-character warning,
                 // for one) are part of the result: said here, not dropped.
@@ -1031,21 +1087,59 @@ pub(crate) fn run_batch_files(
         }
         let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), recognizers, javascript, |_, _| true);
         match r {
-            Ok(res) if res.skipped() => skipped += 1,
-            Ok(res) => match write(&name, &res) {
-                Ok(()) => {
-                    ok += 1;
-                    words += res.words();
-                    if let Some(note) = low_confidence_note(&name, &res, settings.low_confidence_threshold) {
-                        notes.push(note);
-                    }
+            Ok(res) => {
+                if !batch_file_ready(&name, &res, &mut skipped, &mut failed) {
+                    continue;
                 }
-                Err(e) => failed.push(format!("{name}: {e}")),
-            },
+                match write(&name, &res) {
+                    Ok(()) => {
+                        ok += 1;
+                        words += res.words();
+                        if let Some(note) = low_confidence_note(&name, &res, settings.low_confidence_threshold) {
+                            notes.push(note);
+                        }
+                    }
+                    Err(e) => failed.push(format!("{name}: {e}")),
+                }
+            }
             Err(e) => failed.push(format!("{name}: {e}")),
         }
     }
     batch_summary(ok, words, skipped, &failed, &notes, not_run)
+}
+
+/// A skipped text page is deliberate; every other skip keeps its own page number and reason.
+fn page_failures(pages: &[OcrPage]) -> Vec<String> {
+    pages
+        .iter()
+        .filter_map(|p| {
+            p.skipped
+                .as_deref()
+                .filter(|why| !matches!(*why, "the page already contains text" | "the file already contains text"))
+                .map(|why| crate::i18n::fmt(tl!("Page {n}: {reason}"), &[("n", &p.page.saturating_add(1).to_string()), ("reason", why)]))
+        })
+        .collect()
+}
+
+/// Native writes and web downloads share the same accounting. Original bytes from a file
+/// with no page read are never exported or counted as recognized; partial failures stay visible.
+pub(crate) fn batch_file_ready(name: &str, res: &pdfcraft_engine::ocr::FileResult, skipped: &mut usize, failed: &mut Vec<String>) -> bool {
+    if res.skipped() {
+        *skipped += 1;
+        return false;
+    }
+    let failures = page_failures(&res.pages);
+    let had_failures = !failures.is_empty();
+    failed.extend(failures.into_iter().map(|why| format!("{name}: {why}")));
+    if res.pages.iter().any(|p| p.skipped.is_none()) {
+        return true;
+    }
+    if res.pages.is_empty() {
+        failed.push(format!("{name}: no pages were recognized"));
+    } else if !had_failures {
+        *skipped += 1;
+    }
+    false
 }
 
 /// The batch's low-confidence note for one file: its words at or under `threshold` (60 by
@@ -1098,6 +1192,24 @@ mod tests {
     use crate::{Dialog, LeftPanel, Mode, QuickTool};
     use pdfcraft_engine::ocr::{Recognizer, Recognizers};
     use pdfcraft_engine::{Edit, Session};
+
+    #[test]
+    fn russian_language_selection_and_preferences_choose_a_capable_engine() {
+        for language in ["ru", "en+ru"] {
+            let mut draft = OcrDraft::default();
+            draft.select_language(language);
+            assert_eq!(draft.language, language);
+            assert_eq!(draft.engine, EngineChoice::Auto);
+            assert_eq!(draft.strategy, EngineChoice::Auto.default_strategy());
+            let mut restored = OcrDraft::default();
+            restored.apply_pref(&draft.to_pref());
+            assert_eq!(restored.settings().language, language);
+            assert_eq!(restored.settings().engine, EngineChoice::Auto);
+            restored.apply_pref(&serde_json::json!({ "language": language, "engine": "ocrs" }));
+            assert_eq!(restored.engine, EngineChoice::Ocrs, "explicit preferences remain explicit");
+            assert!(pdfcraft_engine::ocr::language_unavailable_reason(restored.engine, language).unwrap().contains("only English"));
+        }
+    }
 
     /// A one-page PDF that is one picture covering the page.
     fn scan() -> Vec<u8> {
@@ -1183,6 +1295,138 @@ mod tests {
         assert_eq!(found(&mut app), Some(0), "read once they are in");
         assert!(app.views[0].auto_ocr_skipped.is_empty(), "never taken for no scan");
     }
+
+    /// A native scan resumes after the selected language becomes ready, without an edit or
+    /// opening Recognize Text. Missing and pending probes keep it parked, with a timed wake.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_auto_ocr_retries_after_language_packs_become_ready() {
+        for language in ["ru", "en+ru"] {
+            let mut app = app_with(scan());
+            app.ocr_draft.select_language(language);
+            let ctx = egui::Context::default();
+            app.ctx = Some(ctx.clone());
+            for _ in 0..2 {
+                let _ = ctx.run_logic(&egui::RawInput::default(), |_| {});
+            }
+            let scan = app.scan_to_read().unwrap();
+            let mut out = ctx.run_ui(egui::RawInput::default(), |_| app.await_ocr_models(&scan));
+            out.textures_delta.clear();
+            assert!(out.viewport_output[&egui::ViewportId::ROOT].repaint_delay <= std::time::Duration::from_secs(1));
+            for reason in ["missing rus", "still checking"] {
+                let mut out = ctx.run_ui(egui::RawInput::default(), |_| {
+                    app.retry_auto_ocr_models(|engine, requested| {
+                        assert_eq!(engine, EngineChoice::Auto);
+                        assert_eq!(requested, language);
+                        Some(reason.into())
+                    });
+                });
+                out.textures_delta.clear();
+                assert!(out.viewport_output[&egui::ViewportId::ROOT].repaint_delay <= std::time::Duration::from_secs(1));
+                assert_eq!(found(&mut app), None, "unavailable pages are not retried every frame");
+                assert!(app.views[0].auto_ocr_tried.is_empty());
+            }
+            app.retry_auto_ocr_models(|_, _| None);
+            assert_eq!(app.session.get(scan.doc).unwrap().edit_generation(), scan.generation, "no edit was needed");
+            assert_eq!(found(&mut app), Some(0), "the new language readiness releases the scan");
+            assert!(app.views[0].auto_ocr_awaiting_models.is_empty());
+            app.retry_auto_ocr_models(|_, _| panic!("no parked scan needs another readiness check"));
+            app.views[0].auto_ocr_tried.insert(0);
+            assert_eq!(found(&mut app), None, "a completed attempt still stays completed");
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_parked_scan_is_reconsidered_when_its_document_changes() {
+        let mut app = app_with(scan());
+        let scan = app.scan_to_read().unwrap();
+        app.await_ocr_models(&scan);
+        app.retry_auto_ocr_models(|_, _| Some("missing rus".into()));
+        app.session.apply(scan.doc, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+        assert_ne!(app.session.get(scan.doc).unwrap().edit_generation(), scan.generation);
+        assert_eq!(found(&mut app), Some(0), "a stale waiting generation does not suppress an edited page");
+    }
+
+    fn finish_pages(app: &mut PdfCraftApp, pages: Vec<OcrPage>, automatic: bool) {
+        let id = app.active_ids().unwrap().1;
+        let generation = app.session.get(id).unwrap().edit_generation();
+        let guard = app.session.ocr_guard(id).unwrap();
+        let total = pages.len();
+        let progress = Arc::new(Mutex::new(OcrProgress { done: total, total, result: Some(Ok(pages)), cancel: false }));
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: automatic.then_some(AutoOcr { page: 0, generation }), editable: false });
+        app.toast = None;
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none());
+    }
+
+    #[test]
+    fn failed_pages_are_reported_in_manual_and_automatic_runs() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        for automatic in [false, true] {
+            let mut app = app_with(scan());
+            let pages = vec![OcrPage { page: 0, words: Vec::new(), already_on_page: 0, skipped: Some("missing rus data".into()), notes: Vec::new() }];
+            finish_pages(&mut app, pages, automatic);
+            let toast = app.toast.take().unwrap().0;
+            assert!(toast.contains("Recognized 0 words on 0 pages"), "{toast}");
+            assert!(toast.contains("failed: Page 1: missing rus data"), "{toast}");
+            assert!(!toast.contains("already had text"), "{toast}");
+            assert_eq!(app.session.get(app.active_ids().unwrap().1).unwrap().can_undo(), None);
+        }
+    }
+
+    #[test]
+    fn the_summary_separates_success_text_skips_and_page_failures() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let pdf = Session::new().create_blank(100.0, 100.0, 3).unwrap();
+        let mut app = app_with(pdf.to_vec());
+        let word = pdfcraft_engine::ocr::PlacedWord {
+            text: "word".into(),
+            origin: [10.0, 10.0],
+            across: [20.0, 0.0],
+            up: [0.0, 12.0],
+            confidence: Some(95.0),
+            source: "fake".into(),
+        };
+        finish_pages(
+            &mut app,
+            vec![
+                OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() },
+                OcrPage { page: 1, words: Vec::new(), already_on_page: 0, skipped: Some("the page already contains text".into()), notes: Vec::new() },
+                OcrPage { page: 2, words: Vec::new(), already_on_page: 0, skipped: Some("recognizer timed out".into()), notes: Vec::new() },
+            ],
+            false,
+        );
+        let toast = app.toast.take().unwrap().0;
+        assert!(toast.contains("Recognized 1 word on 1 page"), "{toast}");
+        assert!(toast.contains("; 1 page already had text"), "{toast}");
+        assert!(toast.contains("failed: Page 3: recognizer timed out"), "{toast}");
+        assert!(!toast.contains("2 pages already had text"), "{toast}");
+        assert_eq!(app.session.get(app.active_ids().unwrap().1).unwrap().can_undo(), Some("Recognize text"));
+    }
+
+    #[test]
+    fn intentional_text_skips_keep_their_message_and_automatic_silence() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let pdf = Session::new().create_from_text("t", "Existing text").unwrap();
+        for automatic in [false, true] {
+            let mut app = app_with(pdf.to_vec());
+            let id = app.active_ids().unwrap().1;
+            let recognizers = Recognizers { primary: Arc::new(Fake { confidence: 95.0 }), secondary: None };
+            let pages = app.session.ocr_job(id, &[], OcrSettings::default()).unwrap().run(&recognizers, |_, _| true);
+            assert_eq!(pages[0].skipped.as_deref(), Some("the page already contains text"));
+            finish_pages(&mut app, pages, automatic);
+            if automatic {
+                assert!(app.toast.is_none(), "a deliberate text skip remains quiet");
+            } else {
+                let toast = app.toast.take().unwrap().0;
+                assert!(toast.contains("; 1 page already had text"), "{toast}");
+                assert!(!toast.contains("failed:"), "{toast}");
+            }
+            assert_eq!(app.session.get(id).unwrap().can_undo(), None);
+        }
+    }
+
     /// A finished run Edit started is applied only once Read mode and dialogs are gone; one the user
     /// asked for is applied at once. The result is made up, so no OCR models are needed.
     #[test]
@@ -1334,6 +1578,72 @@ mod tests {
                 words: vec![pdfcraft_ocr::Word::new("word", [1.0, 1.0, 9.0, 9.0], "fake").with_confidence(self.confidence)],
             }])
         }
+    }
+
+    /// Deterministically fail one page, then recognize the remaining pages without models.
+    struct FirstPageFails(std::sync::atomic::AtomicUsize);
+
+    impl Recognizer for FirstPageFails {
+        fn id(&self) -> &'static str {
+            "fake"
+        }
+        fn available(&self) -> bool {
+            true
+        }
+        fn languages(&self) -> Vec<(String, String)> {
+            vec![("en".into(), "English".into())]
+        }
+        fn recognize(
+            &self,
+            image: &pdfcraft_ocr::OcrImage,
+            options: &pdfcraft_ocr::RecognizeOptions,
+        ) -> Result<Vec<pdfcraft_ocr::Line>, pdfcraft_engine::ocr::OcrError> {
+            if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                Err(pdfcraft_engine::ocr::OcrError::Recognize("missing rus data".into()))
+            } else {
+                Fake { confidence: 95.0 }.recognize(image, options)
+            }
+        }
+    }
+
+    #[test]
+    fn batch_failure_keeps_page_reasons_and_only_writes_partially_successful_files() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        for count in [1, 2] {
+            let pdf = Session::new().create_blank(100.0, 100.0, count).unwrap();
+            let recognizers = Recognizers { primary: Arc::new(FirstPageFails(Default::default())), secondary: None };
+            let files = vec![("scan.pdf".into(), pdf.to_vec())];
+            let progress = Mutex::new(BatchProgress { total: 1, ..Default::default() });
+            let mut writes = 0;
+            let settings = OcrSettings { dpi: 72.0, ..Default::default() };
+            let msg = run_batch_files(files, settings, &recognizers, true, &progress, |_, _| {
+                writes += 1;
+                Ok(())
+            });
+            assert!(msg.contains("scan.pdf: Page 1: text recognition failed: missing rus data"), "{msg}");
+            assert!(!msg.contains("already had text"), "{msg}");
+            if count == 1 {
+                assert_eq!(writes, 0, "a fully failed file must not be exported");
+                assert!(msg.contains("Recognized 0 words in 0 files"), "{msg}");
+            } else {
+                assert_eq!(writes, 1, "successful pages still produce an output");
+                assert!(msg.contains("Recognized 1 words in 1 file"), "{msg}");
+            }
+        }
+    }
+
+    #[test]
+    fn batch_of_text_pages_is_skipped_without_an_output_or_failure() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let pdf = Session::new().create_from_text("t", "Already typed here").unwrap();
+        let recognizers = Recognizers { primary: Arc::new(FirstPageFails(Default::default())), secondary: None };
+        let progress = Mutex::new(BatchProgress { total: 1, ..Default::default() });
+        let msg = run_batch_files(vec![("text.pdf".into(), pdf.to_vec())], OcrSettings::default(), &recognizers, true, &progress, |_, _| {
+            panic!("text-only pages must not be exported as a recognized file")
+        });
+        assert!(msg.contains("Recognized 0 words in 0 files"), "{msg}");
+        assert!(msg.contains("; 1 files already had text"), "{msg}");
+        assert!(!msg.contains("failed:"), "{msg}");
     }
 
     /// A batch over two text files (the engine never runs on them: they are skipped files):

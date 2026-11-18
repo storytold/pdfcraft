@@ -343,6 +343,29 @@ For distinct PDF fields sharing a name, form_fields exposes a document-local int
 
 ## Reviewing OCR headlessly
 
+`ocr_recognize`, `ocr_words`, `ocr_recognize_files` and `doc_batch` accept `language:
+"ru"` for Russian or `"en+ru"` for Russian and English. These languages use an installed
+Tesseract and require its `rus.traineddata`, or both `rus.traineddata` and `eng.traineddata`
+for the mixed mode. With no engine argument, English keeps the built-in engine and the
+Russian modes select Automatic. Automatic uses Tesseract alone for these modes; the
+Latin-only built-in engine cannot contribute Cyrillic text. Explicit `engine: "ocrs"`
+is refused for Russian before editing the document. The browser has no Tesseract support.
+
+`ocr_status` reports `available` and an `unavailable` reason for each language. On Windows,
+discovery checks the usual Tesseract-OCR installation directories after `PATH`; an explicit
+`PDFCRAFT_TESSERACT` path still takes precedence and is never silently replaced. Tesseract
+uses its installed data directory or `TESSDATA_PREFIX` when set. Language data is checked
+again before recognition, so installing or removing a pack does not require restarting.
+The UI refreshes its cached availability in the background. The mixed review dictionary
+uses `ocr-dictionary-en+ru.txt`.
+
+`ocr_recognize_files` counts a file as `recognized` only if at least one page completed
+OCR, even if it found no words. Files whose pages were all skipped produce no output:
+text-only skips count in `skipped_files`, while recognition failures return a per-file
+`error`. When page results are available, `pages` keeps 1-based page numbers and
+individual `skipped` reasons, including failures in a partly recognized file;
+`skipped_pages` remains the list of skipped page numbers.
+
 `ocr_words {doc, retain_review: true}` reads words without editing the document and returns
 `review`, plus pages and word boxes/confidences. Page and word positions are 1-based.
 `region` can restrict recognition to one named page, using displayed-page points. Without

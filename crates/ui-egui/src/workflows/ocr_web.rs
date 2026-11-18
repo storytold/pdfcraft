@@ -505,12 +505,15 @@ impl Batch {
         let Some(found) = pages.pump(false, ctx) else { return false };
         let name = std::mem::take(name);
         let Some((_, file, _)) = self.current.take() else { return false };
-        let saved = file.finish(found).and_then(|r| {
-            crate::editing::download(&name, &r.bytes)?;
-            Ok(r)
-        });
-        match saved {
+        match file.finish(found) {
             Ok(r) => {
+                if !crate::ocr_ui::batch_file_ready(&name, &r, &mut self.skipped, &mut self.failed) {
+                    return false;
+                }
+                if let Err(e) = crate::editing::download(&name, &r.bytes) {
+                    self.failed.push(format!("{name}: {e}"));
+                    return false;
+                }
                 self.ok += 1;
                 self.words += r.words();
                 if let Some(note) = crate::ocr_ui::low_confidence_note(&name, &r, self.settings.low_confidence_threshold) {

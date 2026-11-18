@@ -281,7 +281,7 @@ pub struct OcrVerify {
 }
 
 fn dictionary_path(dir: &std::path::Path, language: &str) -> Result<PathBuf, String> {
-    if language.is_empty() || language.len() > 32 || !language.bytes().all(|b| b.is_ascii_alphabetic() || b == b'-') {
+    if language != "en+ru" && (language.is_empty() || language.len() > 32 || !language.bytes().all(|b| b.is_ascii_alphabetic() || b == b'-')) {
         return Err("invalid OCR dictionary language".into());
     }
     Ok(dir.join(format!("ocr-dictionary-{language}.txt")))
@@ -932,6 +932,11 @@ impl OcrVerify {
         let Some(doc) = self.doc else { return };
         let settings = self.reread_settings(&app.ocr_draft);
         #[cfg(target_arch = "wasm32")]
+        if pdfcraft_engine::ocr::requires_tesseract(&settings.language) {
+            self.message = tl!("Tesseract is not available in the web app").to_string();
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
         if app.web_models_missing(settings.engine) {
             self.wait_for_models(AwaitingModels::Reread { page, region });
             return;
@@ -1221,6 +1226,11 @@ impl OcrVerify {
         };
         let settings = d.settings();
         #[cfg(target_arch = "wasm32")]
+        if pdfcraft_engine::ocr::requires_tesseract(&settings.language) {
+            self.message = tl!("Tesseract is not available in the web app").to_string();
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
         if app.web_models_missing(settings.engine) {
             self.wait_for_models(AwaitingModels::Run);
             return;
@@ -1449,17 +1459,18 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
     let v = &app.ocr_verify;
     let d = &mut app.ocr_draft;
     let review = v.phase == Phase::ReviewReady;
-    let run_enabled = v.can_run() && v.reread.is_none();
     let accept_enabled = review && v.word_count() + v.review.applied_pages.len() > 0;
 
     // Row 1: the settings (each written back into the persisted draft).
     ui.horizontal_wrapped(|ui| {
         craft_ui::ComboBox::from_id_salt("ocr-verify-language").width(150.0).selected_text(language_name(&d.language)).show_ui(ui, |ui| {
             for (code, name) in pdfcraft_engine::ocr::LANGUAGES {
-                ui.selectable_value(&mut d.language, (*code).to_string(), *name);
+                if ui.selectable_label(d.language == *code, *name).clicked() {
+                    d.select_language(code);
+                }
             }
         });
-        engine_combo(ui, &mut d.engine, &mut d.strategy);
+        engine_combo(ui, &mut d.engine, &mut d.strategy, &d.language);
         strategy_combo(ui, &mut d.strategy);
         output_combo(ui, &mut d.output_mode);
         for (flag, label, why) in [
@@ -1474,6 +1485,15 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
 
     // Row 2: scope and actions.
     ui.add_space(4.0);
+    // The English built-in path may start a model download on the web when Run is clicked.
+    // Cyrillic needs an external engine, which downloading the Latin models cannot supply.
+    let unavailable = (pdfcraft_engine::ocr::requires_tesseract(&d.language) || d.engine == EngineChoice::Tesseract)
+        .then(|| pdfcraft_engine::ocr::language_unavailable_reason(d.engine, &d.language))
+        .flatten();
+    let run_enabled = v.can_run() && v.reread.is_none() && unavailable.is_none();
+    if let Some(reason) = unavailable {
+        ui.label(crate::i18n::t(&reason));
+    }
     ui.horizontal_wrapped(|ui| {
         crate::widgets::radio_value(ui, &mut d.pages, super::ocr_ui::OcrPages::All, tl!("All pages"));
         crate::widgets::radio_value(ui, &mut d.pages, super::ocr_ui::OcrPages::Current, tl!("Current page"));
@@ -1558,11 +1578,11 @@ fn strategy_label(strategy: MergeStrategy) -> &'static str {
 /// says why (a tooltip names the missing models or program). The choice feeds the next run.
 /// Choosing Automatic while the strategy is "Primary only" (which would never run the second
 /// engine) moves the strategy to Automatic's own default, Confidence weighted.
-fn engine_combo(ui: &mut egui::Ui, engine: &mut EngineChoice, strategy: &mut MergeStrategy) {
+fn engine_combo(ui: &mut egui::Ui, engine: &mut EngineChoice, strategy: &mut MergeStrategy, language: &str) {
     ocr_ui::keep_asking_while_probing(ui.ctx());
     craft_ui::ComboBox::from_id_salt("ocr-verify-engine").width(120.0).selected_text(engine_label(*engine)).show_ui(ui, |ui| {
         for (choice, label) in [(EngineChoice::Auto, tl!("Automatic")), (EngineChoice::Ocrs, "ocrs"), (EngineChoice::Tesseract, "Tesseract")] {
-            let why = pdfcraft_engine::ocr::engine_unavailable_reason(choice);
+            let why = pdfcraft_engine::ocr::language_unavailable_reason(choice, language);
             let resp = ui.add_enabled(why.is_none(), egui::Button::selectable(*engine == choice, label));
             let clicked = resp.clicked();
             match why {
@@ -1571,6 +1591,7 @@ fn engine_combo(ui: &mut egui::Ui, engine: &mut EngineChoice, strategy: &mut Mer
                 }
                 None => {
                     resp.on_hover_text(match choice {
+                        EngineChoice::Auto if pdfcraft_engine::ocr::requires_tesseract(language) => tl!("Tesseract"),
                         EngineChoice::Auto => tl!("Both engines, combined as the Strategy says"),
                         EngineChoice::Ocrs => tl!("The built-in engine (pure Rust)"),
                         EngineChoice::Tesseract => tl!("The tesseract program, run as an external process"),
@@ -2980,6 +3001,15 @@ mod tests {
         assert!(v.add_to_dictionary("Added", language));
         assert!(std::fs::read_to_string(path).unwrap().contains("added\n"));
         assert_eq!(std::fs::read_to_string(dir.join(format!("ocr-dictionary-{locale}.txt"))).unwrap(), "wrong\n");
+    }
+
+    #[test]
+    fn mixed_dictionary_language_is_a_safe_single_filename() {
+        let dir = std::path::Path::new("dictionaries");
+        assert_eq!(dictionary_path(dir, "en+ru").unwrap(), dir.join("ocr-dictionary-en+ru.txt"));
+        for language in ["../en+ru", "en/ru", "en\\ru", "en+ru.txt/elsewhere"] {
+            assert!(dictionary_path(dir, language).is_err(), "{language}");
+        }
     }
 
     #[test]
