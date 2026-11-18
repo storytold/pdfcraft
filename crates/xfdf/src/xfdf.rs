@@ -847,9 +847,10 @@ pub fn export_xfdf(doc: &Document, comments: bool, fields: bool, file: &str) -> 
 // ── import ──────────────────────────────────────────────────────────────────────────────────
 
 /// Set the values of fields named in `values` (full names), counting what took. The values are
-/// filled in one batch ([`pdfcraft_forms::set_values`]): the form is read once and recalculated
-/// once, where filling them one by one read the whole form twice per value, which took minutes on
-/// a form with thousands of fields.
+/// filled in one batch ([`pdfcraft_forms::set_values`]): the form is read a fixed number of times
+/// and recalculated once, after the last value, where filling them one by one read the whole form
+/// twice per value and recalculated it after each, which took minutes on a form with thousands of
+/// fields.
 pub(crate) fn apply_values(doc: &mut Document, values: &[(String, Vec<String>)], report: &mut Report) {
     let all = pdfcraft_forms::fields(doc);
     // The first field of a name, as the scan it replaces found it.
