@@ -30,6 +30,9 @@ pub const SOM_KEY: &[u8] = b"PCSom";
 /// Private key on the AcroForm: what laying the form out produced, so a reopened file is not
 /// laid out again.
 pub const LAYOUT_KEY: &[u8] = b"PCXfaLayout";
+/// Private key on the widgets of protected fields (`/PCXfaNoTab true`): read-only like those of
+/// read-only fields, but out of the tab order, as XFA says of `access="protected"`.
+pub const NO_TAB_KEY: &[u8] = b"PCXfaNoTab";
 /// Private key on generated push buttons whose template has a click script: the button has no
 /// PDF action (the script is XFA's, not Acrobat JavaScript); PdfCraft runs the script by the
 /// field's SOM path.
@@ -250,6 +253,7 @@ impl FieldQueue {
 }
 
 impl Emitter<'_> {
+    /// The default appearance (`/DA`) for text in `face`: its font resource, size and color.
     fn da(face: &Face) -> Vec<u8> {
         format!("/{} {} Tf {} rg", face.resource_name(), n(face.size), rgb(face.color)).into_bytes()
     }
@@ -470,9 +474,9 @@ impl Emitter<'_> {
         Ok((ff, top_level, under))
     }
 
-    /// Write laid-out widget `w` on `page` as an AcroForm widget annotation (and its field), with
-    /// its border, background and kind, its flags saying whether it shows on screen and in print,
-    /// and return the annotation's object.
+    /// Write laid-out widget `w` on `page` as an AcroForm widget annotation, with its border,
+    /// background and kind (a field of its own, or a kid of its radio group's field), its flags
+    /// saying whether it shows on screen and in print, and return the annotation's object.
     fn widget(&mut self, w: &Widget, page: &Page, page_ref: ObjRef) -> Result<Option<ObjRef>, XfaError> {
         let r = w.rect;
         let (x0, y0, x1, y1) = (r.x, page.height - r.bottom(), r.right(), page.height - r.y);
@@ -510,6 +514,10 @@ impl Emitter<'_> {
         d.set(b"BS".to_vec(), Object::Dict(bs));
         if matches!(w.kind, WidgetKind::CheckBox { round: true, .. } | WidgetKind::Radio { round: true, .. }) {
             d.set(ROUND_KEY.to_vec(), Object::Bool(true));
+        }
+        // On the widget, so a protected button of an exclusion group is passed over on its own.
+        if !w.tab_stop {
+            d.set(NO_TAB_KEY.to_vec(), Object::Bool(true));
         }
         let (ff, top_level, under) = self.populate_widget_kind(w, &mut d, &mut mk)?;
         if !mk.is_empty() {

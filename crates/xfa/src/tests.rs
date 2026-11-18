@@ -8,8 +8,8 @@ use crate::data::{
 };
 use crate::data::{add_data_instances, remove_data_instance, write_data_value};
 use crate::fixtures::{
-    TINY_GIF, bound_date_template, fields_template, scripted_template, shell, static_shell, template, template_with_data, tiny_bmp, tiny_png,
-    tiny_tiff, traversal_targets_template, traversal_template, unnamed_hidden_template,
+    TINY_GIF, access_template, bound_date_template, fields_template, scripted_template, shell, static_shell, template, template_with_data, tiny_bmp,
+    tiny_png, tiny_tiff, traversal_targets_template, traversal_template, unnamed_hidden_template,
 };
 use crate::layout::Item;
 use crate::layout::WidgetKind;
@@ -393,6 +393,8 @@ fn a_page_area_keeps_at_most_a_hundred_and_twenty_eight_content_areas() {
     assert!(warnings[0].contains("content areas"), "kept first: {:?}", warnings.first());
 }
 
+/// A rich-text value's `maxLength` becomes the field's character limit, in the parsed template
+/// and in the layout, for each way the attribute is written.
 #[test]
 fn rich_text_max_length_reaches_the_field_and_layout() {
     for (attribute, expected) in [
@@ -419,6 +421,7 @@ fn rich_text_max_length_reaches_the_field_and_layout() {
     }
 }
 
+/// The template is the one in the xfa-template namespace, not the config packet's `<template>`.
 #[test]
 fn the_xdp_template_wins_over_the_config_packets_template_element() {
     // The config packet has a <template> too; the real one is in the xfa-template namespace.
@@ -426,6 +429,8 @@ fn the_xdp_template_wins_over_the_config_packets_template_element() {
     assert_eq!(tpl.root.common.name.as_deref(), Some("form"));
 }
 
+/// Layout draws captions and page numbers, places fields under them, and sizes containers to
+/// their content, breaking to a second page where the template says.
 #[test]
 fn layout_places_captions_fields_and_sizes_containers_to_their_content() {
     let form = layout_xml(&template(1)).unwrap();
@@ -484,6 +489,7 @@ fn layout_places_captions_fields_and_sizes_containers_to_their_content() {
     );
 }
 
+/// A long table breaks across pages between whole rows and repeats its header row on each page.
 #[test]
 fn tables_break_across_pages_and_repeat_their_header_row() {
     let form = layout_xml(&template(40)).unwrap();
@@ -544,6 +550,49 @@ fn rendering_into_the_pdf_replaces_the_placeholder_page_and_adds_fields() {
     assert!(first.as_dict().unwrap().contains(SOM_KEY));
     // Not dynamic twice: a second pass is refused rather than doubling the pages.
     assert!(!is_dynamic(&doc));
+}
+
+/// Read-only and protected fields are both written read-only (`/Ff` 1), but only a protected one
+/// is marked as no Tab stop (`PCXfaNoTab`), as XFA keeps a read-only field in the tab order.
+/// In an exclusion group the mark is on the protected button's own widget. Stripping the XFA
+/// takes the mark out with the other private keys.
+#[test]
+fn protected_fields_are_written_as_no_tab_stops_and_read_only_ones_are_not() {
+    let mut doc = Document::open(Arc::new(shell(&access_template()))).unwrap();
+    render_into(&mut doc).unwrap();
+    let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut doc = Document::open(Arc::new(bytes)).unwrap();
+    let marked = |doc: &Document| -> Vec<(String, bool, bool)> {
+        let mut out = Vec::new();
+        for (name, d) in pdfcraft_forms_free_fields(doc) {
+            let kids = d.get(b"Kids").map(|k| doc.resolve(k).as_array().unwrap().clone()).unwrap_or_default();
+            let widgets: Vec<pdfcraft_cos::Dict> =
+                if kids.is_empty() { vec![d.clone()] } else { kids.iter().map(|k| doc.resolve(k).as_dict().unwrap().clone()).collect() };
+            for (i, w) in widgets.iter().enumerate() {
+                let read_only = (d.int(b"Ff").unwrap_or(0) | w.int(b"Ff").unwrap_or(0)) & 1 != 0;
+                out.push((
+                    format!("{name}{}", if kids.is_empty() { String::new() } else { format!("#{i}") }),
+                    read_only,
+                    w.get(NO_TAB_KEY) == Some(&Object::Bool(true)),
+                ));
+            }
+        }
+        out
+    };
+    let rows = |rows: &[(&str, bool, bool)]| -> Vec<(String, bool, bool)> { rows.iter().map(|(n, r, t)| (n.to_string(), *r, *t)).collect() };
+    assert_eq!(
+        marked(&doc),
+        rows(&[
+            ("first", false, false),
+            ("locked", true, false),
+            ("guarded", true, true),
+            ("pick#0", false, false),
+            ("pick#1", true, true),
+            ("last", false, false)
+        ])
+    );
+    crate::pdf::strip(&mut doc).unwrap();
+    assert!(marked(&doc).iter().all(|m| !m.2), "{:?}", marked(&doc));
 }
 
 /// A field or exclusion group that must be filled in (`<validate nullTest="error">`) becomes a

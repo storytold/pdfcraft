@@ -5,7 +5,8 @@
 //! Space once Tab or a click has focused them. List boxes are directly selectable in-place on the
 //! page (clicking picks an option; Ctrl-click toggles on multi-select lists). Combo boxes open a
 //! list of their options; an editable one (Edit flag) also takes typed text in a box over the
-//! field. Every change is one undoable engine edit.
+//! field. Every change is one undoable engine edit. Read-only fields are Tab stops too: they take
+//! the focus, but typing, Space and the arrows change nothing in them.
 
 use std::collections::HashSet;
 
@@ -127,6 +128,7 @@ pub enum FormNotice {
     NoAction(String),
 }
 
+/// Where a widget's `/Rect` (user space) is on screen, on page `page` as `xf` draws it.
 fn widget_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
     xf.user_rect(info, page, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32])
 }
@@ -272,16 +274,24 @@ fn turned_caret_and_paint(ui: &egui::Ui, r: &egui::Response, rect: Rect, frame: 
     }
 }
 
+/// Whether `f` can be filled in: it isn't read-only, a push button or a signature.
 fn fillable(f: &FormField) -> bool {
-    !f.read_only() && !matches!(f.kind, FormFieldKind::PushButton | FormFieldKind::Signature)
+    !f.read_only() && tab_kind(f)
 }
 
-/// The fillable widgets in the order Tab and Shift+Tab visit them.
+/// Whether Tab can stop on a field of this kind: not a push button or a signature. A read-only
+/// field is a stop too, as XFA's read-only fields are in another viewer.
+fn tab_kind(f: &FormField) -> bool {
+    !matches!(f.kind, FormFieldKind::PushButton | FormFieldKind::Signature)
+}
+
+/// The widgets in the order Tab and Shift+Tab visit them: those of a read-only field included,
+/// those with no place in the tab order (a protected XFA field's) left out.
 pub fn tab_order(form: &[FormField], info: &DocInfo) -> Vec<(usize, usize)> {
     let mut order: Vec<(usize, usize, usize)> = form
         .iter()
         .enumerate()
-        .filter(|(_, field)| fillable(field))
+        .filter(|(_, field)| tab_kind(field))
         .flat_map(|(fi, field)| {
             field
                 .widgets
@@ -292,7 +302,7 @@ pub fn tab_order(form: &[FormField], info: &DocInfo) -> Vec<(usize, usize)> {
                     let [x0, y0, x1, y1] = widget.rect;
                     let [cx0, cy0, cx1, cy1] = page.crop.map(f64::from);
                     !widget.hidden
-                        && !widget.read_only
+                        && widget.tab != usize::MAX
                         && [x0, y0, x1, y1].into_iter().all(f64::is_finite)
                         && x0 < x1
                         && y0 < y1
@@ -324,6 +334,13 @@ pub(crate) fn draft_text(f: &FormField) -> String {
         return shown.clone();
     }
     value
+}
+
+/// Whether Tab stops on widget `w` of field `f`: one shown on a page, of any field but a push
+/// button or a signature. Read-only fields are stops, as XFA's read-only fields are in another
+/// viewer; a widget with no place in the tab order (a protected XFA field's) is not.
+fn tab_stop(f: &FormField, w: &FormWidget) -> bool {
+    w.page.is_some() && !w.hidden && w.tab != usize::MAX && !matches!(f.kind, FormFieldKind::PushButton | FormFieldKind::Signature)
 }
 
 impl Focus {
@@ -1133,7 +1150,7 @@ fn tab_to_next_field(
 ) -> Option<Edit> {
     commit(view, form);
     let pending = view.pending_edit.take();
-    // The next field that can be filled in, check boxes and radio buttons included (#2223), in
+    // The next Tab stop, check boxes, radio buttons (#2223) and read-only fields included, in
     // the document's tab order (each page's /Tabs: rows, columns or structure), wrapping.
     let order = tab_order(form, info);
     let exact = order.iter().position(|(fi, wi)| form.get(*fi).is_some_and(|x| x.obj == f.obj && *wi == widget));
@@ -1177,10 +1194,12 @@ fn tab_to_next_field(
     edit.or(pending)
 }
 
-/// The arrows move to the group's next or previous button and select it, wrapping.
+/// The arrows move to the group's next or previous button that Tab stops at and that can be
+/// chosen (never a protected or read-only one) and select it, wrapping.
 fn step_radio(view: &mut DocView, f: &FormField, widget: usize, forward: bool) -> Option<Edit> {
     let mut edit = None;
-    let stops: Vec<usize> = f.widgets.iter().enumerate().filter(|(_, w)| w.page.is_some() && !w.hidden).map(|(i, _)| i).collect();
+    // A read-only button stays a Tab stop, but the arrows pass it by.
+    let stops: Vec<usize> = f.widgets.iter().enumerate().filter(|(_, w)| tab_stop(f, w) && !w.read_only).map(|(i, _)| i).collect();
     if let Some(pos) = stops.iter().position(|&i| i == widget) {
         let k = if forward { (pos + 1) % stops.len() } else { (pos + stops.len() - 1) % stops.len() };
         if let Some((wi, target)) = stops.get(k).and_then(|&wi| Some((wi, f.widgets.get(wi)?))) {
@@ -1270,11 +1289,13 @@ pub(crate) fn overlay(
     };
     let w = f.widgets.get(focus.widget)?;
     let page = w.page?;
+    // A read-only field (or radio button) Tab stopped on: focused, but nothing changes it.
+    let read_only = f.read_only() || w.read_only;
     let Some(xf) = view.page_xform(page) else {
-        // A check box or radio button scrolled out of view lets go (it has no draft to keep):
-        // taking the keyboard back when its page returns would turn scrolling arrows into
-        // choices, or pull the keyboard from wherever the user went meanwhile.
-        if matches!(f.kind, FormFieldKind::CheckBox | FormFieldKind::Radio) {
+        // A check box, radio button or read-only field scrolled out of view lets go (it has no
+        // draft to keep): taking the keyboard back when its page returns would turn scrolling
+        // arrows into choices, or pull the keyboard from wherever the user went meanwhile.
+        if read_only || matches!(f.kind, FormFieldKind::CheckBox | FormFieldKind::Radio) {
             view.forms.focus = None;
         }
         return None;
@@ -1288,7 +1309,6 @@ pub(crate) fn overlay(
     let mut edit = None;
     let mut close = false;
     let mut next: Option<bool> = None; // Tab / Shift+Tab
-    let read_only = f.read_only() || w.read_only;
     match f.kind {
         FormFieldKind::Text if !read_only => {
             let multiline = f.has(field_flags::MULTILINE);
