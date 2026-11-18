@@ -1,8 +1,9 @@
 //! Export a PDF ▸ Image and Text (execution plan M10.3, the first formats).
 //!
-//! [`Exporter`] renders pages to PNG, JPEG or TIFF at a resolution and extracts reading-order
-//! text, from the copy a document displays ([`Document::export_source`]): its working file, so
-//! unsaved edits and hidden layers are respected, with what is drawn for display only.
+//! [`Exporter`] renders pages to PNG, JPEG or TIFF at a resolution, or draws them as SVG, and
+//! extracts reading-order text, from the copy a document displays ([`Document::export_source`]):
+//! its working file, so unsaved edits and hidden layers are respected, with what is drawn for
+//! display only.
 
 use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -15,13 +16,18 @@ use crate::Document;
 
 /// At most this many pages are drawn at once by [`Exporter::images`].
 const MAX_IMAGE_WORKERS: usize = 8;
-/// Bytes of rasters [`Exporter::images`] may hold at once: 1 GiB, about 16 Letter pages at 300 dpi.
+/// Bytes of rasters (or SVG text) [`Exporter::images`] may hold at once: 1 GiB, about 16 Letter
+/// pages at 300 dpi.
 /// Each worker holds one page (the raster, its RGB copy and the encoded file), so large pages run
 /// on fewer workers; a page over the cap still exports, on one worker, as it did before.
 const IMAGE_MEMORY: f64 = 1024.0 * 1024.0 * 1024.0;
 
-/// Page `page` drawn at `dpi` and encoded as `format`, saying it was drawn at `used` dpi.
+/// Page `page` drawn at `dpi` and encoded as `format`, saying it was drawn at `used` dpi. SVG is
+/// drawn from the page as vector, so `dpi` and `used` don't apply.
 fn draw_image(renderer: &mut PageRenderer, page: usize, dpi: f64, format: ImageFormat, used: f64) -> Result<Vec<u8>, String> {
+    if format == ImageFormat::Svg {
+        return renderer.svg(page).map(String::into_bytes).map_err(|e| format!("page {}: {e}", page + 1));
+    }
     let r = renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });
     if let Some(e) = r.error {
         return Err(format!("page {}: {e}", page + 1));
@@ -139,11 +145,20 @@ impl Exporter {
         encode_png(r.width, r.height, &r.rgba)
     }
 
-    /// Page `page` as an image file of `format`, which says the resolution it was drawn at.
+    /// Page `page` as an image file of `format`. A JPEG or TIFF says the resolution it was drawn
+    /// at (see [`encode_image`]); SVG is vector, so it ignores `dpi`.
     pub fn image(&mut self, page: usize, dpi: f64, format: ImageFormat) -> Result<Vec<u8>, String> {
         self.check(page)?;
         let used = self.dpi_used(page, dpi);
         draw_image(&mut self.renderer, page, dpi, format, used)
+    }
+
+    /// The area `rect` of page `page` as a standalone SVG: `rect` is in points from the top-left
+    /// of the displayed page (after `/Rotate`), and the SVG is sized in points. See
+    /// [`PageRenderer::svg_region`] for what it keeps and its errors.
+    pub fn svg_region(&mut self, page: usize, rect: [f32; 4]) -> Result<Vec<u8>, String> {
+        self.check(page)?;
+        self.renderer.svg_region(page, rect).map(String::into_bytes).map_err(|e| format!("page {}: {e}", page.saturating_add(1)))
     }
 
     /// Pages `pages` as image files of `format`, handed to `sink` in order with their page
@@ -160,7 +175,7 @@ impl Exporter {
         format: ImageFormat,
         sink: impl FnMut(usize, Vec<u8>) -> Result<(), String>,
     ) -> Result<(), String> {
-        let workers = self.image_workers(pages, dpi);
+        let workers = self.image_workers(pages, dpi, format);
         self.images_on(workers, pages, dpi, format, sink)
     }
 
@@ -262,23 +277,29 @@ impl Exporter {
     }
 
     /// How many pages [`Exporter::images`] draws at once: one per core but one, up to
-    /// [`MAX_IMAGE_WORKERS`], as many as [`IMAGE_MEMORY`] holds of the largest page, and one
-    /// when there is nothing to share or no threads (wasm).
-    fn image_workers(&self, pages: &[usize], dpi: f64) -> usize {
+    /// [`MAX_IMAGE_WORKERS`], as many as [`IMAGE_MEMORY`] holds of the largest page (an SVG page
+    /// as much as the renderer lets one become), and one when there is nothing to share or no
+    /// threads (wasm).
+    pub(crate) fn image_workers(&self, pages: &[usize], dpi: f64, format: ImageFormat) -> usize {
         if cfg!(target_arch = "wasm32") || pages.len() < 2 {
             return 1;
         }
         // One core is left for the interface, which keeps drawing while an export runs.
         let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get).saturating_sub(1).min(MAX_IMAGE_WORKERS);
-        // The raster (RGBA), the RGB copy the encoders take, and room for the encoded file.
-        let largest = pages
-            .iter()
-            .filter_map(|p| {
-                let (w, h) = *self.sizes.get(*p)?;
-                let k = self.dpi_used(*p, dpi) / 72.0;
-                Some((f64::from(w) * k).ceil() * (f64::from(h) * k).ceil() * 8.0)
-            })
-            .fold(0.0, f64::max);
+        // The raster (RGBA), the RGB copy the encoders take, and room for the encoded file. SVG
+        // text grows with what a page draws, not its size.
+        let largest = if format == ImageFormat::Svg {
+            pdfcraft_render::MAX_SVG_BYTES as f64
+        } else {
+            pages
+                .iter()
+                .filter_map(|p| {
+                    let (w, h) = *self.sizes.get(*p)?;
+                    let k = self.dpi_used(*p, dpi) / 72.0;
+                    Some((f64::from(w) * k).ceil() * (f64::from(h) * k).ceil() * 8.0)
+                })
+                .fold(0.0, f64::max)
+        };
         // A float-to-integer cast saturates (and NaN is 0).
         let by_memory = if largest > 0.0 { (IMAGE_MEMORY / largest) as usize } else { cores };
         cores.min(by_memory).min(pages.len()).max(1)
@@ -316,6 +337,7 @@ pub fn encode_image(width: u32, height: u32, premultiplied: &[u8], format: Image
         ImageFormat::Png => encode_png(width, height, premultiplied),
         ImageFormat::Jpeg { quality } => encode_jpeg(width, height, premultiplied, quality, dpi),
         ImageFormat::Tiff => encode_tiff(width, height, premultiplied, dpi),
+        ImageFormat::Svg => Err("SVG is drawn from the page, not encoded from pixels".into()),
     }
 }
 
@@ -328,6 +350,12 @@ pub fn encode_image(width: u32, height: u32, premultiplied: &[u8], format: Image
 /// (4.46 → 4.47 MB), a text page at 220 dpi 70 → 40 ms (0.85 → 0.89 MB), and an annual
 /// report page at 150 dpi 179 → 64 ms (1.41 → 1.38 MB).
 pub fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>, String> {
+    encode_png_at(width, height, premultiplied, None)
+}
+
+/// [`encode_png`] that also says its resolution (a `pHYs` chunk) when `pixels_per_metre` is
+/// given, so an application it is pasted into sizes it as the area it was drawn from.
+pub fn encode_png_at(width: u32, height: u32, premultiplied: &[u8], pixels_per_metre: Option<u32>) -> Result<Vec<u8>, String> {
     check_raster(width, height, premultiplied)?;
     let pixels = premultiplied.as_chunks::<4>().0;
     let opaque = pixels.iter().all(|px| px[3] == 255);
@@ -347,7 +375,43 @@ pub fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u
     };
     let img = craft_image_codecs::Image::from_u8(width, height, layout, data).map_err(|e| e.to_string())?;
     let opts = craft_image_codecs::EncodeOptions { png_compression: craft_image_codecs::PngCompression::Fast, ..Default::default() };
-    craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &opts).map_err(|e| e.to_string())
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &opts).map_err(|e| e.to_string())?;
+    Ok(match pixels_per_metre {
+        Some(ppm) => with_phys(png, ppm),
+        None => png,
+    })
+}
+
+/// `png` with a `pHYs` chunk of `ppm` pixels per metre on both axes right after `IHDR`, which
+/// always ends at byte 33. Returned unchanged if it is not that shape.
+fn with_phys(png: Vec<u8>, ppm: u32) -> Vec<u8> {
+    const IHDR_END: usize = 8 + 4 + 4 + 13 + 4;
+    if png.get(12..16) != Some(b"IHDR".as_slice()) || png.len() < IHDR_END {
+        return png;
+    }
+    let mut chunk = b"pHYs".to_vec();
+    chunk.extend(ppm.to_be_bytes());
+    chunk.extend(ppm.to_be_bytes());
+    chunk.push(1); // the unit is the metre
+    let mut out = Vec::with_capacity(png.len().saturating_add(21));
+    out.extend(png.get(..IHDR_END).unwrap_or_default());
+    out.extend(9u32.to_be_bytes());
+    out.extend(&chunk);
+    out.extend(crc32(&chunk).to_be_bytes());
+    out.extend(png.get(IHDR_END..).unwrap_or_default());
+    out
+}
+
+/// The CRC-32 a PNG chunk ends with (reflected polynomial 0xEDB88320).
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for &b in bytes {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    !crc
 }
 
 /// Image file formats for Export ▸ Image.
@@ -359,6 +423,8 @@ pub enum ImageFormat {
         quality: u8,
     },
     Tiff,
+    /// Vector, one file per page; resolution and quality do not apply.
+    Svg,
 }
 
 impl ImageFormat {
@@ -367,6 +433,7 @@ impl ImageFormat {
             ImageFormat::Png => "png",
             ImageFormat::Jpeg { .. } => "jpg",
             ImageFormat::Tiff => "tif",
+            ImageFormat::Svg => "svg",
         }
     }
 
@@ -375,6 +442,7 @@ impl ImageFormat {
             ImageFormat::Png => "PNG",
             ImageFormat::Jpeg { .. } => "JPEG",
             ImageFormat::Tiff => "TIFF",
+            ImageFormat::Svg => "SVG",
         }
     }
 }
@@ -459,7 +527,7 @@ mod image_name_tests {
 
 #[cfg(test)]
 mod raster_tests {
-    use super::{ImageFormat, encode_image, encode_png};
+    use super::{ImageFormat, encode_image, encode_png, encode_png_at};
 
     const FORMATS: [ImageFormat; 3] = [ImageFormat::Png, ImageFormat::Jpeg { quality: 90 }, ImageFormat::Tiff];
 
@@ -486,6 +554,34 @@ mod raster_tests {
         let (color, pixels) = decode(&encode_png(3, 1, rgba.as_flattened()).unwrap());
         assert_eq!(color, craft_image_codecs::ChannelLayout::Rgba);
         assert_eq!(pixels, [128, 0, 64, 128, 0, 0, 0, 0, 10, 20, 30, 255]);
+    }
+
+    /// A PNG for the clipboard says its resolution, so an application sizes it as the area it
+    /// was drawn from; an exported page's PNG doesn't (see [`encode_image`]).
+    #[test]
+    fn a_png_says_its_resolution_only_when_asked() {
+        // The pHYs chunk's data, every chunk's CRC checked on the way.
+        let phys = |png: &[u8]| {
+            let mut at = 8;
+            let mut found = None;
+            while at + 12 <= png.len() {
+                let len = u32::from_be_bytes(png[at..at + 4].try_into().unwrap()) as usize;
+                let (kind_data, crc) = (&png[at + 4..at + 8 + len], &png[at + 8 + len..at + 12 + len]);
+                assert_eq!(super::crc32(kind_data).to_be_bytes(), crc, "chunk CRC");
+                if &kind_data[..4] == b"pHYs" {
+                    found = Some(kind_data[4..].to_vec());
+                }
+                at += 12 + len;
+            }
+            found
+        };
+        let px = [0, 0, 0, 255];
+        let png = encode_png_at(1, 1, &px, Some(5906)).unwrap();
+        let mut want = [5906u32.to_be_bytes(), 5906u32.to_be_bytes()].concat();
+        want.push(1);
+        assert_eq!(phys(&png), Some(want));
+        assert_eq!(decode(&png).1, [0, 0, 0], "still decodes");
+        assert!(phys(&encode_png(1, 1, &px).unwrap()).is_none());
     }
 
     /// A buffer that is not exactly `width × height` RGBA pixels is an error in every format,
