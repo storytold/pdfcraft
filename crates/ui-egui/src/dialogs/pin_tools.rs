@@ -71,11 +71,7 @@ impl PinTools {
                 icon: g.icon,
                 hue: g.hue,
                 label: tl!(g.label).to_string(),
-                detail: g
-                    .sections
-                    .first()
-                    .map(|s| s.items.iter().take(4).map(|i| tl!(i.label)).collect::<Vec<_>>().join(" • "))
-                    .unwrap_or_default(),
+                detail: g.sections.first().map(|s| s.items.iter().take(4).map(|i| tl!(i.label)).collect::<Vec<_>>().join(" • ")).unwrap_or_default(),
             })
             .collect();
         PinTools { id: dialog_id("pin-tool"), rows, query: String::new(), pinned, toggled: None }
@@ -89,8 +85,8 @@ impl StackDialog for PinTools {
         self.id
     }
 
-    fn key(&self) -> Option<String> {
-        Some("pin-tool".to_owned())
+    fn key(&self) -> Option<&str> {
+        Some("pin-tool")
     }
 
     fn show(&mut self, ui: &mut Ui, _stack: &DialogStack) -> Option<DialogResult<()>> {
@@ -103,10 +99,12 @@ impl StackDialog for PinTools {
                 let texts = |i: &usize| {
                     rows.get(*i).map(|r| vec![Label::from(r.label.clone()), Label::from(r.detail.clone()), Label::from(r.id)]).unwrap_or_default()
                 };
-                List::<usize>::new(tl!("Tools")).select(SelectMode::Single).sizing(Sizing::Content).max_rows(8).filter(query.trim(), texts).show_items(
-                    ui,
-                    &Listed(rows),
-                    &mut |key, _| {
+                List::<usize>::new(tl!("Tools"))
+                    .select(SelectMode::Single)
+                    .sizing(Sizing::Content)
+                    .max_rows(8)
+                    .filter(query.trim(), texts)
+                    .show_items(ui, &Listed(rows), &mut |key, _| {
                         let Some(row) = rows.get(*key) else {
                             return ListRow::new("");
                         };
@@ -124,8 +122,7 @@ impl StackDialog for PinTools {
                                     pressed.set(Some(at));
                                 }
                             })
-                    },
-                );
+                    });
             });
         });
         if let Some(at) = pressed.get() {

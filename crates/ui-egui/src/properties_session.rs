@@ -48,7 +48,7 @@ pub(crate) fn percent_id(p: f64) -> String {
     format!("percent:{p}")
 }
 
-fn magnification_id(m: Magnification) -> String {
+pub(crate) fn magnification_id(m: Magnification) -> String {
     match (MAGNIFICATIONS.iter().find(|(_, named, _)| *named == m), m) {
         (Some((id, ..)), _) => (*id).to_owned(),
         (None, Magnification::Percent(p)) => percent_id(p),
@@ -71,11 +71,7 @@ pub(crate) fn description_key(key: &str) -> String {
 /// The custom properties the `custom` field holds.
 pub(crate) fn custom_pairs(fields: &DialogFields) -> Option<Vec<(String, String)>> {
     let value = serde_json::to_value(fields.get("custom")?).ok()?;
-    value
-        .as_array()?
-        .iter()
-        .map(|entry| Some((entry.get("name")?.as_str()?.to_owned(), entry.get("value")?.as_str()?.to_owned())))
-        .collect()
+    value.as_array()?.iter().map(|entry| Some((entry.get("name")?.as_str()?.to_owned(), entry.get("value")?.as_str()?.to_owned()))).collect()
 }
 
 /// The `custom` field for `props`.

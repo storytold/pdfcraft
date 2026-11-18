@@ -65,9 +65,9 @@ pub(crate) fn ask_lock(app: &mut PdfCraftApp, pending: PendingLock) {
     .button(PromptChoice::Alternate, tl!("Keep editable").to_string())
     .button(PromptChoice::Cancel, tl!("Cancel").to_string())
     .dont_show_again()
-    .tag(id);
-    // PLAN: assumed `dialogs::host::open` as above (pdf-hub-w2).
-    crate::dialogs::host::open(app, prompt);
+    .tag(id)
+    .instance("lock-signatures");
+    app.prompts.lock_signatures = Some(crate::dialogs::host::open(app, prompt));
 }
 
 /// The lock question's answer. Lock and Keep editable save as asked, and the box remembers the choice; Cancel drops

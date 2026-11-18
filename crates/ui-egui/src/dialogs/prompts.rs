@@ -16,6 +16,12 @@ pub(crate) struct OpenPrompts {
     pub(crate) link: Option<DialogId>,
     /// The question about opening `pending_remote_link`.
     pub(crate) remote_link: Option<DialogId>,
+    /// The Apply redactions question.
+    pub(crate) apply_redactions: Option<DialogId>,
+    /// The Sanitize question.
+    pub(crate) sanitize: Option<DialogId>,
+    /// The question about locking placed signatures into the page before a save (`pending_lock`).
+    pub(crate) lock_signatures: Option<DialogId>,
 }
 
 /// `name` cut to at most `max` characters by replacing its middle with "…", keeping the start and
@@ -92,10 +98,8 @@ impl PdfCraftApp {
         if let Some(host) = pdfcraft_engine::links::display_host(&pending.url) {
             prompt = prompt.paragraph(host.ascii.clone());
             if host.mixed_scripts {
-                prompt = prompt.tone(
-                    Tone::Bad,
-                    tl!("This web address mixes letters from different alphabets, a common way to imitate another site's name."),
-                );
+                prompt = prompt
+                    .tone(Tone::Bad, tl!("This web address mixes letters from different alphabets, a common way to imitate another site's name."));
             } else if host.international {
                 prompt = prompt.tone(Tone::Warn, tl!("This web address uses letters from another alphabet, which can look like familiar ones."));
             }
@@ -162,6 +166,31 @@ impl PdfCraftApp {
             } else if self.pending_remote_link.is_none() {
                 self.dialogs.cancel_by_id(ctx, dialog);
                 self.prompts.remote_link = None;
+            }
+        }
+        if let Some(dialog) = self.prompts.apply_redactions
+            && let Some(go) = proceeded(self.dialogs.take_by_id::<StandardPrompt>(dialog))
+        {
+            self.prompts.apply_redactions = None;
+            if go {
+                crate::redact_ui::finish_apply(self);
+            }
+        }
+        if let Some(dialog) = self.prompts.sanitize
+            && let Some(go) = proceeded(self.dialogs.take_by_id::<StandardPrompt>(dialog))
+        {
+            self.prompts.sanitize = None;
+            if go {
+                crate::redact_ui::finish_sanitize(self);
+            }
+        }
+        if let Some(dialog) = self.prompts.lock_signatures
+            && let Some(result) = self.dialogs.take_by_id::<StandardPrompt>(dialog)
+        {
+            self.prompts.lock_signatures = None;
+            match result {
+                DialogResult::Ok(answer) => super::signature::finish_lock(self, answer),
+                DialogResult::Cancel => self.pending_lock = None,
             }
         }
         if self.pending_link.is_some() && self.prompts.link.is_none() {

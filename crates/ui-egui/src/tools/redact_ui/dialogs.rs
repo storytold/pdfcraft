@@ -107,7 +107,10 @@ fn props_rows(ui: &mut Ui, d: &mut RedactPrefs) {
         }
         Text::new(tl!("Shown while the pointer is over a mark.")).shade(Shade::Muted).show(ui);
         Field::new(tl!("Opacity:")).show(ui, |ui, _| {
-            let field = NumberField::new(tl!("Opacity:"), Bind::given(Some(d.opacity * 100.0))).range(10.0..=100.0).commit_decimals(0).unit_kind(UnitKind::Percent);
+            let field = NumberField::new(tl!("Opacity:"), Bind::given(Some(d.opacity * 100.0)))
+                .range(10.0..=100.0)
+                .commit_decimals(0)
+                .unit_kind(UnitKind::Percent);
             if let Some(Some(pct)) = field.show(ui).value().copied() {
                 d.opacity = (pct / 100.0).clamp(0.1, 1.0);
             }
@@ -171,7 +174,10 @@ fn search_rows(ui: &mut Ui, d: &mut SearchDraft, import: &mut bool) {
     FieldGroup::new(tl!("Find text and redact")).show(ui, |ui, _| {
         RadioGroup::new(tl!("Search for"), Bind::bound(&mut d.mode)).show(ui, |ui, _| {
             Radio::new(SearchMode::Phrase).label(tl!("Single word or phrase")).show(ui);
-            TextField::new(tl!("Text to find"), Bind::bound(&mut d.text)).placeholder(tl!("Text to find")).enabled(mode == SearchMode::Phrase).show(ui);
+            TextField::new(tl!("Text to find"), Bind::bound(&mut d.text))
+                .placeholder(tl!("Text to find"))
+                .enabled(mode == SearchMode::Phrase)
+                .show(ui);
             Radio::new(SearchMode::Words).label(tl!("Multiple words or phrases")).show(ui);
             TextField::new(tl!("Words or phrases to redact"), Bind::bound(&mut d.words))
                 .placeholder(tl!("One word or phrase per line"))
@@ -193,7 +199,11 @@ fn search_rows(ui: &mut Ui, d: &mut SearchDraft, import: &mut bool) {
         Checkbox::new(Bind::bound(&mut d.case_sensitive)).label(tl!("Case-sensitive")).enabled(phrase_or_words).show(ui);
         Text::new(tl!("Text in images isn't found; recognise text (OCR) first.")).shade(Shade::Muted).show(ui);
         if let Some(n) = d.found {
-            let line = if n == 0 { tl!("No matches.").to_string() } else { crate::i18n::fmt(tl!("{n} match(es) marked for redaction."), &[("n", &n.to_string())]) };
+            let line = if n == 0 {
+                tl!("No matches.").to_string()
+            } else {
+                crate::i18n::fmt(tl!("{n} match(es) marked for redaction."), &[("n", &n.to_string())])
+            };
             Text::new(line).show(ui);
         }
     });
@@ -230,32 +240,37 @@ pub(crate) fn show_search(app: &mut PdfCraftApp, ui: &mut Ui) {
     }
 }
 
-/// Opens the Apply redactions prompt; the host routes a Proceed to `finish_apply`.
+/// Opens the Apply redactions prompt; `prompts_pass` routes a Proceed to `finish_apply`.
 pub(crate) fn open_apply(app: &mut PdfCraftApp) {
     let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
     let message = if marks == 1 {
         tl!("You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.").to_string()
     } else {
-        crate::i18n::fmt(tl!("You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently."), &[("n", &marks.to_string())])
+        crate::i18n::fmt(
+            tl!(
+                "You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently."
+            ),
+            &[("n", &marks.to_string())],
+        )
     };
     let prompt = StandardPrompt::custom(message)
         .title(tl!("Apply redactions"))
         .paragraph(tl!("Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it."))
         .button(PromptChoice::Proceed, tl!("Apply"))
         .button(PromptChoice::Cancel, tl!("Cancel"))
-        .tag("redact.apply");
-    crate::dialogs::host::open(app, prompt);
+        .instance("redact-apply");
+    app.prompts.apply_redactions = Some(crate::dialogs::host::open(app, prompt));
 }
 
-/// Opens the Sanitize prompt; the host routes a Proceed to `finish_sanitize`.
+/// Opens the Sanitize prompt; `prompts_pass` routes a Proceed to `finish_sanitize`.
 pub(crate) fn open_sanitize(app: &mut PdfCraftApp) {
     let prompt = StandardPrompt::custom(tl!("Sanitizing removes hidden information from the document: metadata, file attachments, comments, form fields (flattened), hidden text and layers, bookmarks, links, actions and scripts, and private application data."))
         .title(tl!("Sanitize document"))
         .paragraph(tl!("Save the document afterwards; saving rewrites the whole file so nothing removed stays in it."))
         .button(PromptChoice::Proceed, tl!("Sanitize"))
         .button(PromptChoice::Cancel, tl!("Cancel"))
-        .tag("redact.sanitize");
-    crate::dialogs::host::open(app, prompt);
+        .instance("redact-sanitize");
+    app.prompts.sanitize = Some(crate::dialogs::host::open(app, prompt));
 }
 
 /// Remove hidden information while `app.hidden_draft` holds the categories found.
