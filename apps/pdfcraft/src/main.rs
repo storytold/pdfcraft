@@ -252,7 +252,8 @@ fn main() -> eframe::Result {
     // answers (src/display_backend.rs). Chosen once, so the frame and both runs below agree.
     let backend = display_backend::from_env();
     // GNOME on Wayland leaves the window frame to the app (src/decorations.rs).
-    let window_controls = if cfg!(any(target_os = "macos", target_os = "windows")) { None } else { decorations::app_drawn() };
+    let window_controls =
+        if cfg!(any(target_os = "macos", target_os = "windows")) { None } else { decorations::app_drawn(backend == display_backend::Backend::X11) };
     migrate_legacy_folders();
     // The log file stays in the data folder; opened after the arguments (so `--version` leaves
     // no file behind) and after the PrintCraft migration (which a fresh folder would block).
