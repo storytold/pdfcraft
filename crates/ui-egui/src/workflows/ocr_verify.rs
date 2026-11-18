@@ -2261,21 +2261,21 @@ mod tests {
         app.ocr_verify.load(a, job.guard.clone(), vec![page]);
         assert!(app.ocr_verify.correct((0, 0), "Edited"));
         app.active = Some(2);
-        app.request_close_tab(0);
+        app.request_close_tab(&egui::Context::default(), 0);
         assert_eq!(app.views.len(), 3, "the reviewed document stays open");
         assert_eq!(app.active, Some(0), "and comes to the front");
         assert!(app.ocr_verify.open, "with its review");
         assert_eq!(app.ocr_verify.text_of((0, 0)), Some("Edited"), "as it was");
         assert!(!said(&mut app).is_empty(), "a notice says to accept or reject it first");
         app.ocr_verify.open = false;
-        app.request_close_tab(2);
+        app.request_close_tab(&egui::Context::default(), 2);
         assert_eq!(app.views.len(), 2, "another document closes as usual");
         app.active = Some(1);
-        app.close_all();
+        app.close_all(&egui::Context::default());
         assert_eq!(app.views.len(), 2, "Close all closes nothing while the review is open");
         assert_eq!(app.active, Some(0));
         assert!(app.ocr_verify.reject());
-        app.request_close_tab(0);
+        app.request_close_tab(&egui::Context::default(), 0);
         assert_eq!(app.views.len(), 1, "after Reject the document closes");
         assert!(app.views.iter().all(|v| v.id != a));
     }
@@ -2373,12 +2373,12 @@ mod tests {
         app.ocr_verify.load(a, job.guard.clone(), vec![page]);
         assert!(app.first_dirty().is_none(), "nothing is unsaved");
         app.active = Some(1);
-        assert!(matches!(app.close_requested(), CloseDecision::Hold), "the close is held");
+        assert!(matches!(app.close_requested(&egui::Context::default()), CloseDecision::Hold), "the close is held");
         assert_eq!(app.active, Some(0), "the reviewed document comes to the front");
         assert!(app.ocr_verify.open, "with its review");
         assert!(!said(&mut app).is_empty(), "a notice says to accept or reject it first");
         assert_eq!(app.views.len(), 2, "nothing closed");
         assert!(app.ocr_verify.reject());
-        assert!(matches!(app.close_requested(), CloseDecision::Close), "after Reject, the close goes ahead");
+        assert!(matches!(app.close_requested(&egui::Context::default()), CloseDecision::Close), "after Reject, the close goes ahead");
     }
 }

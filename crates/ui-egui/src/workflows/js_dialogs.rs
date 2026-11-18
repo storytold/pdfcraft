@@ -161,10 +161,10 @@ fn document_scripts(app: &mut PdfCraftApp, ui: &mut egui::Ui, open: &mut bool, d
     let picked = shown.output.picked.and_then(|at| actions.get(at)).map(|(a, _)| *a);
     match picked {
         Some(Action::Save) if !name.is_empty() => {
-            app.apply_edit(Edit::SetDocumentScript { name, script: Some(draft.script.clone()) });
+            app.apply_edit(ui.ctx(), Edit::SetDocumentScript { name, script: Some(draft.script.clone()) });
         }
         Some(Action::Delete) if scripts.iter().any(|(n, _)| *n == name) => {
-            app.apply_edit(Edit::SetDocumentScript { name, script: None });
+            app.apply_edit(ui.ctx(), Edit::SetDocumentScript { name, script: None });
             *draft = DocJsDraft::default();
         }
         _ => {}

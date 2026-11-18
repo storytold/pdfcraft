@@ -129,7 +129,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         });
     if let Some(id) = chosen {
         app.left_open = true;
-        app.select_tool(id);
+        app.select_tool(ui.ctx(), id);
     }
 }
 

@@ -194,14 +194,14 @@ pub(crate) fn open_pages(app: &mut PdfCraftApp, ctx: &egui::Context) {
 
 /// Mark Page Range was confirmed with `fields`: marks the pages the range names.
 // PLAN: pdf-hub-w2 routes the "redact.pages" result here.
-pub(crate) fn finish_pages(app: &mut PdfCraftApp, fields: &DialogFields) {
+pub(crate) fn finish_pages(ctx: &egui::Context, app: &mut PdfCraftApp, fields: &DialogFields) {
     let Some(range) = PageRangeOptions::value(fields, "pages") else { return };
     let Some((i, id)) = app.active_ids() else { return };
     let Some(doc) = app.session.get(id) else { return };
     let count = doc.info.pages.len();
     let current = app.views.get(i).map_or(0, |v| v.current());
     let pages = range.pages(count, current, &[]);
-    app.redact_pages(&pages);
+    app.redact_pages(ctx, &pages);
 }
 
 fn search_rows(ui: &mut Ui, d: &mut SearchDraft, import: &mut bool) {
@@ -266,13 +266,13 @@ pub(crate) fn show_search(app: &mut PdfCraftApp, ui: &mut Ui) {
         });
     app.redact_search = draft;
     if shown.accepted.is_some() {
-        let n = app.redact_search();
+        let n = app.redact_search(ui.ctx());
         app.redact_search.found = Some(n);
     } else if shown.closed.is_some() {
         app.redact_search_open = false;
     }
     if import {
-        app.pick_files(FilePurpose::RedactWords, false);
+        app.pick_files(ui.ctx(), FilePurpose::RedactWords, false);
     }
 }
 
@@ -332,7 +332,7 @@ pub(crate) fn show_hidden(app: &mut PdfCraftApp, ui: &mut Ui) {
         (Some(d), _) => {
             let which: Vec<pdfcraft_engine::Hidden> = d.found.iter().filter(|f| f.2 && f.1 > 0).map(|f| f.0).collect();
             let n: usize = d.found.iter().filter(|f| f.2).map(|f| f.1).sum();
-            if app.apply_edit(Edit::RemoveHidden { which }) {
+            if app.apply_edit(ui.ctx(), Edit::RemoveHidden { which }) {
                 if let Some((_, id)) = app.active_ids() {
                     app.renew_recovery(id);
                 }

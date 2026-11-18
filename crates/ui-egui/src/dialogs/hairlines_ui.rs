@@ -98,16 +98,16 @@ impl PdfCraftApp {
     }
 
     /// Fixes the hairlines when the dialog was answered with OK.
-    pub(crate) fn fix_hairlines_pass(&mut self, _ctx: &egui::Context) {
+    pub(crate) fn fix_hairlines_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
         let Some(answer) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
         let Some(result) = answer.ok() else { return };
         let per_point = self.units.per_point();
         self.hairlines_draft.read(&result.fields, per_point);
-        self.fix_hairlines();
+        self.fix_hairlines(ctx);
     }
 
     /// Fix: count first (the edit refuses when there is nothing to fix), then apply and say.
-    pub(crate) fn fix_hairlines(&mut self) {
+    pub(crate) fn fix_hairlines(&mut self, ctx: &egui::Context) {
         let Some((i, id)) = self.active_ids() else { return };
         let count = self.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
         let pages = self.hairlines_draft.range.pages(count, self.views[i].current(), &[]);
@@ -117,7 +117,7 @@ impl PdfCraftApp {
             self.notify_tr("No hairlines found on those pages");
             return;
         }
-        if self.apply_edit(Edit::FixHairlines { pages, settings }) {
+        if self.apply_edit(ctx, Edit::FixHairlines { pages, settings }) {
             let (n, p) = (found.lines.to_string(), found.pages.to_string());
             match (found.lines, found.pages) {
                 // One stroke can only be on one page.

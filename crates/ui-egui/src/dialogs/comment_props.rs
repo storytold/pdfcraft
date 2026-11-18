@@ -329,14 +329,14 @@ fn comment_props_dialog<'b>(
 
 impl PdfCraftApp {
     /// Attach file: ask for a file and attach it at `at`, on the document the pick started on.
-    pub fn attach_file_comment(&mut self, page: usize, at: [f64; 2]) {
+    pub fn attach_file_comment(&mut self, ctx: &egui::Context, page: usize, at: [f64; 2]) {
         let target = self.pick_target(self.active_ids().map(|(_, id)| id));
         self.pick_file(PickRequest::open("attach").title(tl!("Attach a file")), target, move |app, picked| match picked {
             Picked::Paths(paths) => {
                 let Some(p) = paths.into_iter().next() else { return };
                 match std::fs::read(&p) {
                     Ok(data) => {
-                        app.add_attachment_comment(page, at, p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), data)
+                        app.add_attachment_comment(ctx, page, at, p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), data)
                     }
                     Err(e) => app.notify_fmt("Couldn't read {name}: {e}", &[("name", &p.display().to_string()), ("e", &e.to_string())]),
                 }
@@ -344,7 +344,7 @@ impl PdfCraftApp {
 
             Picked::Contents(files) => {
                 if let Some((file, data)) = files.into_iter().next() {
-                    app.add_attachment_comment(page, at, file, data);
+                    app.add_attachment_comment(ctx, page, at, file, data);
                 }
             }
             _ => {}
@@ -352,7 +352,7 @@ impl PdfCraftApp {
     }
 
     /// Add a file attachment comment at `at` on `page` of the active document.
-    fn add_attachment_comment(&mut self, page: usize, at: [f64; 2], file: String, data: Vec<u8>) {
+    fn add_attachment_comment(&mut self, ctx: &egui::Context, page: usize, at: [f64; 2], file: String, data: Vec<u8>) {
         let tool = crate::comments::CommentTool::Attach;
         let shape = pdfcraft_engine::Shape::Attachment { at, icon: pdfcraft_engine::AttachIcon::PushPin, file, data };
         let edit = Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
@@ -366,7 +366,7 @@ impl PdfCraftApp {
         if let Some((i, _)) = self.active_ids() {
             self.views[i].session.comments.tool_done = true;
         }
-        self.apply_edit(edit);
+        self.apply_edit(ctx, edit);
     }
 
     /// Make Current Properties Default: new comments of this kind take this one's colour,
@@ -430,13 +430,13 @@ impl PdfCraftApp {
     }
 
     /// Give every selected comment of the active document `color`, as one undo step.
-    pub fn colour_selected_comments(&mut self, color: pdfcraft_engine::Rgb) {
-        self.colour_selection(color, |_| true);
+    pub fn colour_selected_comments(&mut self, ctx: &egui::Context, color: pdfcraft_engine::Rgb) {
+        self.colour_selection(ctx, color, |_| true);
     }
 
     /// Give the selected comments that `only` picks `color`, as one undo step: those whose look can
     /// change and that aren't locked (a locked one would refuse the whole step).
-    pub(crate) fn colour_selection(&mut self, color: pdfcraft_engine::Rgb, only: impl Fn(&pdfcraft_render::Annotation) -> bool) {
+    pub(crate) fn colour_selection(&mut self, ctx: &egui::Context, color: pdfcraft_engine::Rgb, only: impl Fn(&pdfcraft_render::Annotation) -> bool) {
         let Some((i, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let keys = self.views.get(i).map(|v| v.session.comments.selection()).unwrap_or_default();
@@ -449,10 +449,10 @@ impl PdfCraftApp {
         match edits.len() {
             0 => {}
             1 => {
-                self.apply_edit(edits.remove(0));
+                self.apply_edit(ctx, edits.remove(0));
             }
             _ => {
-                self.apply_edit(Edit::Batch { label: "Change comment properties".into(), edits });
+                self.apply_edit(ctx, Edit::Batch { label: "Change comment properties".into(), edits });
             }
         }
     }
@@ -495,7 +495,7 @@ impl PdfCraftApp {
 
     /// One pass over the open Comment Properties dialog: forwards a colour row's request to the
     /// colour picker, and on OK applies the edits (one undo step) and Make Properties Default.
-    pub fn comment_props_pass(&mut self) {
+    pub fn comment_props_pass(&mut self, ctx: &egui::Context) {
         let Some(id) = self.comment_props.as_ref().map(|d| d.id) else { return };
         let requested = self.dialogs.get_mut_by_id::<HostedParamDialog>(id).and_then(HostedParamDialog::pick_color);
         if let Some(request) = requested {
@@ -516,10 +516,10 @@ impl PdfCraftApp {
                 match edits.len() {
                     0 => {}
                     1 => {
-                        self.apply_edit(edits.remove(0));
+                        self.apply_edit(ctx, edits.remove(0));
                     }
                     _ => {
-                        self.apply_edit(Edit::Batch { label: "Change comment properties".into(), edits });
+                        self.apply_edit(ctx, Edit::Batch { label: "Change comment properties".into(), edits });
                     }
                 }
                 // Make Properties Default: the look chosen here, even when it was already the comment's.

@@ -134,7 +134,7 @@ impl PdfCraftApp {
                 }
                 // What the form's scripts said while it opened, as on opening.
                 let out = self.session.take_js_output(id);
-                self.handle_js(id, out);
+                self.handle_js(ctx, id, out);
             }
             Err(e) => {
                 let name = self.session.get(id).map(|d| d.name.clone()).unwrap_or_default();
@@ -289,10 +289,10 @@ mod tests {
 
         let app = r.app();
         app.views[0].select_pages(&[0]);
-        app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+        app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
         // B is on disk, not the A the document came from: Save asks first (#2166), and the
         // user saves C over it.
-        assert!(!app.save_active(SaveTarget::InPlace), "asks before writing over B");
+        assert!(!app.save_active(&egui::Context::default(), SaveTarget::InPlace), "asks before writing over B");
         r.steps(2);
         assert_eq!(r.doc().info.pages.len(), 2, "B waits while the question is open");
         r.h.get_by_label("Replace").click();

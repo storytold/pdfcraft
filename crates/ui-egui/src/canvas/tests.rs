@@ -251,7 +251,7 @@ fn edit_text_boxes_stay_drawn_while_page_input_is_blocked() {
     // Block page input the way the window losing focus does.
     h.state_mut().palette_open = true;
     h.run_steps(2);
-    assert!(h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    assert!(h.state_mut().apply_edit(&h.ctx.clone(), Edit::RotatePages { pages: vec![0], degrees: 90 }));
     h.run_steps(3);
     let app = h.state();
     let generation = app.session.get(app.views[0].id).unwrap().edit_generation();

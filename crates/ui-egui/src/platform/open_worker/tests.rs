@@ -455,7 +455,7 @@ fn tool_picker_keeps_picked_recipient_when_other_open_is_ready() {
         let inserted = TempFile::new("picker-insert", "pdf", &fixture(1));
         let other = TempFile::new("picker-other", "pdf", &fixture(1));
         // The tool's second picker is out while another file finishes opening.
-        rig.h.state_mut().pick_files(crate::FilePurpose::InsertPages, true);
+        rig.h.state_mut().pick_files(&h.ctx.clone(), crate::FilePurpose::InsertPages, true);
         rig.h.run_steps(2);
         rig.h.state_mut().open_path(&other.path());
         rig.release();

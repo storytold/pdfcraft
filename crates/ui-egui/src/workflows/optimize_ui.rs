@@ -557,7 +557,7 @@ pub(crate) fn pass(app: &mut PdfCraftApp, ctx: &egui::Context) {
         open_space_audit(app, ctx, true);
     }
     if let Some(DialogResult::Ok(result)) = app.dialogs.take_by_id::<HostedParamDialog>(optimizer) {
-        app.optimize_with_draft(&OptimizeDraft::from_fields(&result.fields));
+        app.optimize_with_draft(ctx, &OptimizeDraft::from_fields(&result.fields));
     }
     // The audit only reads: its answer, OK or Cancel, closes it and nothing else.
     // The Optimizer's audit is an instance, whose id differs from its key's.
@@ -669,21 +669,29 @@ impl PdfCraftApp {
     }
 
     /// Optimize PDF with the dialog's choices in the background; the copy is saved when done.
-    pub(crate) fn optimize_with_draft(&mut self, draft: &OptimizeDraft) {
-        self.start_optimize(OptimizeKind::Advanced, &draft.settings, &draft.discard);
+    pub(crate) fn optimize_with_draft(&mut self, ctx: &egui::Context, draft: &OptimizeDraft) {
+        self.start_optimize(ctx, OptimizeKind::Advanced, &draft.settings, &draft.discard);
     }
 
     /// Run an optimization of the active document in the background, showing its progress; the
     /// copy is saved when it is done.
-    pub(crate) fn start_optimize(&mut self, kind: OptimizeKind, settings: &Settings, discard: &[Hidden]) {
+    pub(crate) fn start_optimize(&mut self, ctx: &egui::Context, kind: OptimizeKind, settings: &Settings, discard: &[Hidden]) {
         let Some((_, id)) = self.active_ids() else { return };
-        self.run_optimize(id, kind, settings, discard, None);
+        self.run_optimize(ctx, id, kind, settings, discard, None);
     }
 
     /// [`Self::start_optimize`] for document `id`, saving to `destination` if that's known already.
-    pub(crate) fn run_optimize(&mut self, id: DocId, kind: OptimizeKind, settings: &Settings, discard: &[Hidden], destination: Option<String>) {
+    pub(crate) fn run_optimize(
+        &mut self,
+        ctx: &egui::Context,
+        id: DocId,
+        kind: OptimizeKind,
+        settings: &Settings,
+        discard: &[Hidden],
+        destination: Option<String>,
+    ) {
         // What's typed in a form field is part of the document (#166).
-        if !self.commit_form_typing() {
+        if !self.commit_form_typing(ctx) {
             return;
         }
         if self.optimize_run.is_some() {

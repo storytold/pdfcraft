@@ -522,20 +522,20 @@ impl PdfCraftApp {
     /// Print (or save) with the dialog's settings. `Err` is the reason the held OK shows. Save as
     /// PDF without a preset path answers [`PrintStart::Picking`] once the save picker is showing;
     /// the file is written when the user has chosen where, and that write answers the held OK.
-    pub fn print_now(&mut self) -> Result<PrintStart, String> {
+    pub fn print_now(&mut self, ctx: &egui::Context) -> Result<PrintStart, String> {
         let discovering = self.dialogs.get::<HostedPrint>().is_some_and(|p| p.state().discovering());
         if still_looking(&self.print_draft, discovering) || self.print_draft.papers_loading() {
             return Err(tl!("Looking for printers…").to_string());
         }
         // What's typed in a form field is part of what's printed (#166).
-        if !self.commit_form_typing() {
+        if !self.commit_form_typing(ctx) {
             return Err(tl!("A form field has text that can't be kept yet.").to_string());
         }
         let Some((_, id)) = self.active_ids() else { return Err(tl!("There is no document to print.").to_string()) };
         // A form's Will Print script runs first: what it changes is printed.
         if self.session.get(id).is_some_and(|d| d.allows_printing()) {
             let before = self.session.get(id).map(|d| d.edit_generation());
-            self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillPrint);
+            self.run_document_actions(ctx, id, pdfcraft_engine::js::DocumentScriptEvent::WillPrint);
             // What it showed may lie outside the printed areas Label printing found: find them again.
             if self.session.get(id).map(|d| d.edit_generation()) != before && self.print_draft.handling == Handling::Label {
                 self.print_draft.crop_pages = None;

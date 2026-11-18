@@ -16,7 +16,7 @@ fn close_root_window(ctx: &egui::Context) {
 impl PdfCraftApp {
     /// Close a tab, asking first if it has unsaved changes. A document under OCR review stays
     /// open until the review is accepted or rejected.
-    pub fn request_close_tab(&mut self, index: usize) {
+    pub fn request_close_tab(&mut self, ctx: &egui::Context, index: usize) {
         if self.hold_close_for_ocr_review(index) {
             return;
         }
@@ -29,7 +29,7 @@ impl PdfCraftApp {
                 // The question is about this tab of the document (`asking_tab`).
                 self.active = Some(index);
             }
-            self.begin_close(CloseScope::Close, vec![id]);
+            self.begin_close(ctx, CloseScope::Close, vec![id]);
         } else {
             self.close_tab(index);
         }
@@ -37,7 +37,7 @@ impl PdfCraftApp {
 
     /// File ▸ Close all: clean documents close at once; each one with unsaved changes asks.
     /// While a document is under OCR review, nothing closes: the review comes forward first.
-    pub fn close_all(&mut self) {
+    pub fn close_all(&mut self, ctx: &egui::Context) {
         if self.hold_for_any_ocr_review() {
             return;
         }
@@ -47,14 +47,14 @@ impl PdfCraftApp {
             }
         }
         let dirty = self.dirty_documents();
-        self.begin_close(CloseScope::Close, dirty);
+        self.begin_close(ctx, CloseScope::Close, dirty);
     }
 
     /// File ▸ Revert on the active document: asks, and reverts it unless the user cancels.
     // PLAN: the `file.revert` command (commands.rs, owner pdf-hub) calls this in place of the `Dialog::Revert` confirmation.
-    pub fn request_revert(&mut self) {
+    pub fn request_revert(&mut self, ctx: &egui::Context) {
         let Some((_, id)) = self.active_ids() else { return };
-        self.begin_close(CloseScope::Revert, vec![id]);
+        self.begin_close(ctx, CloseScope::Revert, vec![id]);
     }
 
     /// A document whose OCR review is still open (a run, or a reading not yet accepted or
@@ -85,7 +85,7 @@ impl PdfCraftApp {
     }
 
     /// The reversion itself, once the user confirmed it through the close guard's Revert question.
-    pub fn revert_active(&mut self) {
+    pub fn revert_active(&mut self, ctx: &egui::Context) {
         let Some((_, id)) = self.active_ids() else { return };
         match self.session.revert(id) {
             Ok(()) => {
@@ -93,7 +93,7 @@ impl PdfCraftApp {
                     && let Some(d) = self.session.get(id)
                 {
                     let view = &mut self.views[i];
-                    view.document_changed(&d.info);
+                    view.document_changed(ctx, &d.info);
                     // Revert discards this source's uncommitted typing as well as model edits.
                     // Otherwise a later Save could write a rejected draft back into the file.
                     view.session.forms.focus = None;
@@ -142,13 +142,13 @@ impl PdfCraftApp {
 
     /// Starts the unsaved-changes question for `docs` under `scope`. A newer operation replaces
     /// one still asking; a quit it replaces is called off.
-    fn begin_close(&mut self, scope: CloseScope, docs: Vec<DocId>) {
+    fn begin_close(&mut self, ctx: &egui::Context, scope: CloseScope, docs: Vec<DocId>) {
         let Some(first) = docs.first().copied() else { return };
         if self.close_guard.as_ref().is_some_and(|g| g.scope() == CloseScope::Quit) {
             self.session_keeper.quit_cancelled();
         }
         self.close_guard = Some(CloseGuard::new(scope, docs));
-        self.run_guard_step(GuardStep::Ask(first));
+        self.run_guard_step(ctx, GuardStep::Ask(first));
     }
 
     /// Request a normal application exit, preserving every unsaved document until answered.
@@ -164,7 +164,7 @@ impl PdfCraftApp {
             close_root_window(ctx);
             return true;
         }
-        self.begin_close(CloseScope::Quit, dirty);
+        self.begin_close(ctx, CloseScope::Quit, dirty);
         ctx.request_repaint();
         false
     }
@@ -172,7 +172,7 @@ impl PdfCraftApp {
     /// The window's close, the one exit decision: held while an OCR review is open or a document
     /// has unsaved changes (text typed into a field counts), with the question asked; otherwise
     /// the window closes and nothing is left to recover.
-    pub(crate) fn close_requested(&mut self) -> CloseDecision {
+    pub(crate) fn close_requested(&mut self, ctx: &egui::Context) -> CloseDecision {
         if self.hold_for_any_ocr_review() {
             if self.close_guard.as_ref().is_some_and(|g| g.scope() == CloseScope::Quit) {
                 self.close_guard = None;
@@ -184,7 +184,7 @@ impl PdfCraftApp {
         if !dirty.is_empty() {
             // A second close of the window while the quit is asking leaves the question as it is.
             if !self.close_guard.as_ref().is_some_and(|g| g.scope() == CloseScope::Quit) {
-                self.begin_close(CloseScope::Quit, dirty);
+                self.begin_close(ctx, CloseScope::Quit, dirty);
             }
             return CloseDecision::Hold;
         }
@@ -197,12 +197,12 @@ impl PdfCraftApp {
     pub(crate) fn close_guard_pass(&mut self, ctx: &egui::Context) {
         let Some(result) = self.dialogs.take::<UnsavedChangesDialog>() else { return };
         let (answer, all) = result.ok().map_or((CloseAnswer::Cancel, false), |a| (a.answer, a.apply_to_all));
-        self.answer_close(answer, all);
+        self.answer_close(ctx, answer, all);
         ctx.request_repaint();
     }
 
     /// Gives the guard the user's answer for the document it asks about.
-    fn answer_close(&mut self, answer: CloseAnswer, all: bool) {
+    fn answer_close(&mut self, ctx: &egui::Context, answer: CloseAnswer, all: bool) {
         let Some(scope) = self.close_guard.as_ref().map(|g| g.scope()) else { return };
         // Quitting closes the unsaved tabs one by one (and brings each forward to save it):
         // remember what was open, and which tab was active, before the first one goes (#442).
@@ -212,36 +212,36 @@ impl PdfCraftApp {
         }
         let Some(guard) = self.close_guard.as_mut() else { return };
         let step = if all { guard.answer_all(answer) } else { guard.answer(answer) };
-        self.run_guard_step(step);
+        self.run_guard_step(ctx, step);
     }
 
     /// Runs the guard's steps until one waits for the user or a save.
-    fn run_guard_step(&mut self, first: GuardStep<DocId>) {
+    fn run_guard_step(&mut self, ctx: &egui::Context, first: GuardStep<DocId>) {
         let mut step = first;
         loop {
             match step {
                 GuardStep::Ask(doc) => {
-                    self.ask_close(doc);
+                    self.ask_close(ctx, doc);
                     return;
                 }
                 GuardStep::Save(doc) => {
-                    self.save_for_guard(doc);
+                    self.save_for_guard(ctx, doc);
                     return;
                 }
                 GuardStep::Discard(doc) => {
-                    if self.discard_for_guard(doc) {
-                        self.end_close_guard(false);
+                    if self.discard_for_guard(ctx, doc) {
+                        self.end_close_guard(ctx, false);
                         return;
                     }
                     let Some(guard) = self.close_guard.as_mut() else { return };
                     step = guard.discarded();
                 }
                 GuardStep::Cancelled => {
-                    self.end_close_guard(false);
+                    self.end_close_guard(ctx, false);
                     return;
                 }
                 GuardStep::Finished => {
-                    self.end_close_guard(true);
+                    self.end_close_guard(ctx, true);
                     return;
                 }
             }
@@ -250,11 +250,11 @@ impl PdfCraftApp {
 
     /// Opens the question about `doc`. A document that has no tab left, or was saved by other
     /// means meanwhile, is answered as discarded: there is nothing to ask.
-    fn ask_close(&mut self, doc: DocId) {
+    fn ask_close(&mut self, ctx: &egui::Context, doc: DocId) {
         let Some(scope) = self.close_guard.as_ref().map(|g| g.scope()) else { return };
         let asks = self.asking_tab(doc).is_some_and(|i| scope == CloseScope::Revert || self.has_unsaved_work(i));
         if !asks {
-            self.answer_close(CloseAnswer::DontSave, false);
+            self.answer_close(ctx, CloseAnswer::DontSave, false);
             return;
         }
         let name = self.session.get(doc).map(|d| d.name.clone()).unwrap_or_default();
@@ -264,10 +264,10 @@ impl PdfCraftApp {
 
     /// Saves `doc`, then lets the guard go on. The save may finish on a later frame (the user
     /// choosing where); a failed or cancelled one ends the whole operation.
-    fn save_for_guard(&mut self, doc: DocId) {
+    fn save_for_guard(&mut self, ctx: &egui::Context, doc: DocId) {
         let Some(index) = self.asking_tab(doc) else {
             if let Some(step) = self.close_guard.as_mut().map(|g| g.saved()) {
-                self.run_guard_step(step);
+                self.run_guard_step(ctx, step);
             }
             return;
         };
@@ -277,17 +277,17 @@ impl PdfCraftApp {
         // `save_then` returns false both for a save that waits for the user and for one that did
         // not start, so the failure end is its `failed` continuation, never the return value.
         // PLAN: assumed `save_then(index, target, after, failed)` with `failed` run when the save fails or is cancelled (pdf-shell-w14)
-        self.save_then(index, SaveTarget::InPlace, move |app| app.guard_saved(doc), move |app| app.guard_save_failed(doc));
+        self.save_then(ctx, index, SaveTarget::InPlace, move |app| app.guard_saved(ctx, doc), move |app| app.guard_save_failed(ctx, doc));
     }
 
     /// The save `doc`'s question waited for failed or was cancelled: the guard ends the whole
     /// operation and the document stays open.
-    fn guard_save_failed(&mut self, doc: DocId) {
+    fn guard_save_failed(&mut self, ctx: &egui::Context, doc: DocId) {
         if self.close_guard.as_ref().and_then(|g| g.current()) != Some(&doc) {
             return;
         }
         let Some(step) = self.close_guard.as_mut().map(|g| g.save_failed()) else { return };
-        self.run_guard_step(step);
+        self.run_guard_step(ctx, step);
     }
 
     /// Whether a quit is waiting on the user's answers.
@@ -297,28 +297,28 @@ impl PdfCraftApp {
 
     /// The save `doc`'s question waited for was written: its tab closes and the guard goes on.
     /// An OCR review started meanwhile holds the close as it holds a new one.
-    fn guard_saved(&mut self, doc: DocId) {
+    fn guard_saved(&mut self, ctx: &egui::Context, doc: DocId) {
         if self.close_guard.as_ref().and_then(|g| g.current()) != Some(&doc) {
             return;
         }
         if let Some(i) = self.asking_tab(doc) {
             if self.hold_close_for_ocr_review(i) {
-                self.end_close_guard(false);
+                self.end_close_guard(ctx, false);
                 return;
             }
             self.close_tab(i);
         }
         let Some(step) = self.close_guard.as_mut().map(|g| g.saved()) else { return };
-        self.run_guard_step(step);
+        self.run_guard_step(ctx, step);
     }
 
     /// Closes `doc`'s tab without saving (a revert keeps the tab and goes back to the saved file).
     /// Whether an OCR review held it.
-    fn discard_for_guard(&mut self, doc: DocId) -> bool {
+    fn discard_for_guard(&mut self, ctx: &egui::Context, doc: DocId) -> bool {
         let Some(index) = self.asking_tab(doc) else { return false };
         if self.close_guard.as_ref().is_some_and(|g| g.scope() == CloseScope::Revert) {
             self.active = Some(index);
-            self.revert_active();
+            self.revert_active(ctx);
             return false;
         }
         if self.hold_close_for_ocr_review(index) {
@@ -330,15 +330,13 @@ impl PdfCraftApp {
 
     /// The guard is done. A finished quit closes the window, which asks `close_requested` again
     /// and finds nothing left at risk; a quit that ended cancelled or held is called off.
-    fn end_close_guard(&mut self, finished: bool) {
+    fn end_close_guard(&mut self, ctx: &egui::Context, finished: bool) {
         let Some(guard) = self.close_guard.take() else { return };
         if guard.scope() != CloseScope::Quit {
             return;
         }
         if finished {
-            if let Some(ctx) = self.ctx.clone() {
-                close_root_window(&ctx);
-            }
+            close_root_window(ctx);
         } else {
             self.session_keeper.quit_cancelled();
         }
@@ -379,10 +377,10 @@ mod tests {
         let mut app = app();
         let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
         app.open_bytes("a.pdf", None, bytes.to_vec()).unwrap();
-        assert_eq!(app.close_requested(), CloseDecision::Close, "nothing to lose");
+        assert_eq!(app.close_requested(&egui::Context::default()), CloseDecision::Close, "nothing to lose");
         assert!(!app.dialogs.is_open::<UnsavedChangesDialog>());
-        assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
-        assert_eq!(app.close_requested(), CloseDecision::Hold, "unsaved changes hold the close");
+        assert!(app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+        assert_eq!(app.close_requested(&egui::Context::default()), CloseDecision::Hold, "unsaved changes hold the close");
         assert!(app.dialogs.is_open::<UnsavedChangesDialog>(), "and the question is asked");
         assert_eq!(app.views.len(), 1);
     }

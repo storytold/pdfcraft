@@ -948,7 +948,7 @@ impl PdfCraftApp {
         let id = dialog_id(dialog_key(kind));
         if let Some(result) = self.dialogs.take_by_id::<HostedParamDialog>(id) {
             if let DialogResult::Ok(answer) = result {
-                self.finish_marks(kind, &answer);
+                self.finish_marks(ctx, kind, &answer);
             }
             return;
         }
@@ -1054,7 +1054,7 @@ impl PdfCraftApp {
     }
 
     /// OK answered: the values go into the draft and the edit is applied.
-    fn finish_marks(&mut self, kind: MarkKind, answer: &ParamResult) {
+    fn finish_marks(&mut self, ctx: &egui::Context, kind: MarkKind, answer: &ParamResult) {
         let Some((index, id)) = self.active_ids() else { return };
         let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
         let current = self.views.get(index).map_or(0, |v| v.current());
@@ -1062,7 +1062,7 @@ impl PdfCraftApp {
         let units = MarginUnits::of(self.units);
         read_fields(&mut self.marks_draft, &answer.fields, kind, &units);
         let edit = edit(&self.marks_draft, kind, count, current, &selection);
-        self.apply_edit(edit);
+        self.apply_edit(ctx, edit);
     }
 
     /// The file Browse picked, for the dialog that asked: dropped when that dialog is closed, or

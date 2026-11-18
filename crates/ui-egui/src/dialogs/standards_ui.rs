@@ -98,9 +98,9 @@ impl PdfCraftApp {
     }
 
     /// Converts, then what is left to fix; `None` when the conversion did not apply.
-    fn pdfa_convert(&mut self) -> Option<Vec<Issue>> {
+    fn pdfa_convert(&mut self, ctx: &egui::Context) -> Option<Vec<Issue>> {
         let level = self.pdfa.level;
-        if !self.apply_edit(pdfcraft_engine::Edit::ConvertPdfA { level }) {
+        if !self.apply_edit(ctx, pdfcraft_engine::Edit::ConvertPdfA { level }) {
             return None;
         }
         let issues = self.pdfa_verify().unwrap_or_default();
@@ -119,15 +119,15 @@ impl PdfCraftApp {
     }
 
     /// Runs what the open PDF/A dialog asked for and refreshes what it shows of the document.
-    pub(crate) fn pdfa_pass(&mut self) {
+    pub(crate) fn pdfa_pass(&mut self, ctx: &egui::Context) {
         // PLAN: assumed `self.dialogs: DialogHost` with `fn get_mut<D: StackDialog>(&mut self) -> Option<&mut D>` (pdf-hub-w1 field, pdf-hub-w2 host)
         let Some((level, action)) = self.dialogs.get_mut::<PdfaDialog>().map(|d| (d.form.level, d.action.take())) else { return };
         self.pdfa.level = level;
         // `Some(x)` replaces the shown issues with `x`.
         let issues = match action {
             Some(Action::Verify) => Some(self.pdfa_verify()),
-            Some(Action::Convert) => self.pdfa_convert().map(Some),
-            Some(Action::Remove) => self.apply_edit(removal()).then_some(None),
+            Some(Action::Convert) => self.pdfa_convert(ctx).map(Some),
+            Some(Action::Remove) => self.apply_edit(ctx, removal()).then_some(None),
             None => None,
         };
         let current = self.pdfa_declared();

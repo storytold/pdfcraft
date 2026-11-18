@@ -176,33 +176,33 @@ pub(crate) fn dropped_name(f: &OsFile) -> String {
 
 impl PdfCraftApp {
     /// Ask for files to add to the Combine files list (its Add files… button).
-    pub fn combine_dialog(&mut self) {
-        self.pick_files(FilePurpose::Combine, true);
+    pub fn combine_dialog(&mut self, ctx: &egui::Context) {
+        self.pick_files(ctx, FilePurpose::Combine, true);
     }
 
     /// Create a PDF ▸ Multiple files: ask for the files to convert.
-    pub fn create_multiple_dialog(&mut self) {
-        self.pick_files(FilePurpose::CreateMultiple, true);
+    pub fn create_multiple_dialog(&mut self, ctx: &egui::Context) {
+        self.pick_files(ctx, FilePurpose::CreateMultiple, true);
     }
 
     /// Create a PDF ▸ Separate PDFs: pick source files, then a destination folder.
-    pub fn create_multiple_separate_dialog(&mut self) {
-        self.pick_files(FilePurpose::CreateMultipleSeparate, true);
+    pub fn create_multiple_separate_dialog(&mut self, ctx: &egui::Context) {
+        self.pick_files(ctx, FilePurpose::CreateMultipleSeparate, true);
     }
 
     /// Scan & OCR ▸ Recognize text ▸ In multiple files: ask for the PDFs.
-    pub fn ocr_files_dialog(&mut self) {
-        self.pick_files(FilePurpose::Ocr, true);
+    pub fn ocr_files_dialog(&mut self, ctx: &egui::Context) {
+        self.pick_files(ctx, FilePurpose::Ocr, true);
     }
 
     /// Ask for files whose pages to insert after the selection (Organize ▸ Insert from file).
-    pub fn insert_from_file_dialog(&mut self) {
-        self.insert_from_file_at(None);
+    pub fn insert_from_file_dialog(&mut self, ctx: &egui::Context) {
+        self.insert_from_file_at(ctx, None);
     }
 
     /// Ask for files to insert at grid gap `at` (0 = before the first page), or after the
     /// selection.
-    pub(crate) fn insert_from_file_at(&mut self, at: Option<usize>) {
+    pub(crate) fn insert_from_file_at(&mut self, ctx: &egui::Context, at: Option<usize>) {
         let Some(i) = self.active else {
             self.notify_tr("Open a document first");
             return;
@@ -210,31 +210,31 @@ impl PdfCraftApp {
         if let Some(v) = self.views.get_mut(i) {
             v.insert_at = at;
         }
-        self.pick_files(FilePurpose::InsertPages, true);
+        self.pick_files(ctx, FilePurpose::InsertPages, true);
     }
 
     /// Ask for files for `purpose`; they are used when the pick is answered.
-    pub(crate) fn pick_files(&mut self, purpose: FilePurpose, multiple: bool) {
+    pub(crate) fn pick_files(&mut self, ctx: &egui::Context, purpose: FilePurpose, multiple: bool) {
         // The document to edit is the one active now, not whichever is active when the pick is
         // answered (#167).
         let target = purpose.edits_active_document().then(|| self.pick_target(self.active_ids().map(|(_, id)| id))).flatten();
-        self.pick_file(picker_request(purpose, multiple), target, move |app, picked| app.use_picked(purpose, picked));
+        self.pick_file(picker_request(purpose, multiple), target, move |app, picked| app.use_picked(ctx, purpose, picked));
     }
 
     /// Use what a pick for `purpose` answered. A cancelled or unavailable picker changes nothing
     /// (`process_picks` reports it).
-    pub(crate) fn use_picked(&mut self, purpose: FilePurpose, picked: Picked) {
+    pub(crate) fn use_picked(&mut self, ctx: &egui::Context, purpose: FilePurpose, picked: Picked) {
         match picked {
             #[cfg(not(target_arch = "wasm32"))]
-            Picked::Paths(paths) => self.use_paths(purpose, &paths),
-            Picked::Contents(files) if !files.is_empty() => self.use_files(purpose, files),
+            Picked::Paths(paths) => self.use_paths(ctx, purpose, &paths),
+            Picked::Contents(files) if !files.is_empty() => self.use_files(ctx, purpose, files),
             _ => {}
         }
     }
 
     /// Read the picked files and use them.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn use_paths(&mut self, purpose: FilePurpose, paths: &[std::path::PathBuf]) {
+    pub(crate) fn use_paths(&mut self, ctx: &egui::Context, purpose: FilePurpose, paths: &[std::path::PathBuf]) {
         if matches!(purpose, FilePurpose::DigitalId | FilePurpose::SignGraphic | FilePurpose::SignedCopy) {
             return;
         }
@@ -290,7 +290,7 @@ impl PdfCraftApp {
                 .collect();
             self.stage_combine_with(incoming);
         } else {
-            self.use_files(purpose, files);
+            self.use_files(ctx, purpose, files);
         }
     }
 
@@ -312,7 +312,7 @@ impl PdfCraftApp {
 
     /// Files dropped on the Combine files tab join its list in the order dropped (see
     /// [`Self::add_dropped_to_combine`]); a folder adds the files in it and its subfolders.
-    pub(crate) fn drop_into_combine(&mut self, files: Vec<OsFile>) {
+    pub(crate) fn drop_into_combine(&mut self, ctx: &egui::Context, files: Vec<OsFile>) {
         let mut incoming = Vec::new();
         for f in files {
             let name = dropped_name(&f);
@@ -322,7 +322,7 @@ impl PdfCraftApp {
                 if path.is_dir() {
                     // After the files dropped before it.
                     self.add_dropped_to_combine(std::mem::take(&mut incoming));
-                    self.add_folder_to_combine(path, true);
+                    self.add_folder_to_combine(ctx, path, true);
                     continue;
                 }
                 let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
@@ -360,12 +360,12 @@ impl PdfCraftApp {
     }
 
     /// Use picked files (also the entry point for tests and automation).
-    pub fn use_files(&mut self, purpose: FilePurpose, files: Vec<(String, Vec<u8>)>) {
+    pub fn use_files(&mut self, ctx: &egui::Context, purpose: FilePurpose, files: Vec<(String, Vec<u8>)>) {
         match purpose {
             FilePurpose::TextFont { page } => {
                 let Some((_, bytes)) = files.into_iter().next() else { return };
                 let bytes = Arc::new(bytes);
-                if !self.apply_edit(Edit::RegisterTextFont { page, bytes: bytes.clone() }) {
+                if !self.apply_edit(ctx, Edit::RegisterTextFont { page, bytes: bytes.clone() }) {
                     return;
                 }
                 let Some((index, id)) = self.active_ids() else { return };
@@ -377,17 +377,17 @@ impl PdfCraftApp {
                 });
                 if resource.is_some() {
                     ed.font_resource = resource;
-                    self.apply_line_format(index, ed);
+                    self.apply_line_format(ctx, index, ed);
                 }
             }
             FilePurpose::Combine => self.stage_combine(files),
-            FilePurpose::InsertPages => self.insert_files(files),
+            FilePurpose::InsertPages => self.insert_files(ctx, files),
             FilePurpose::ReplacePages => {
                 if let Some((name, bytes)) = files.into_iter().next() {
-                    self.start_replace(name, bytes);
+                    self.start_replace(ctx, name, bytes);
                 }
             }
-            FilePurpose::Ocr => self.ocr_files(files),
+            FilePurpose::Ocr => self.ocr_files(ctx, files),
             FilePurpose::CreateMultiple => self.stage_create_multiple(files.into_iter().map(Ok)),
             FilePurpose::CreateMultipleSeparate => self.ask_separate_folder(files.into_iter().map(Ok)),
             FilePurpose::RedactWords => {
@@ -404,23 +404,23 @@ impl PdfCraftApp {
         }
     }
 
-    pub fn replace_pages_dialog(&mut self) {
+    pub fn replace_pages_dialog(&mut self, ctx: &egui::Context) {
         if self.active.is_none() {
             self.notify_tr("Open a document first");
             return;
         }
-        self.pick_files(FilePurpose::ReplacePages, false);
+        self.pick_files(ctx, FilePurpose::ReplacePages, false);
     }
 
     /// Insert the pages of `files` (PDFs, images, text), in order, at the gap a "+" in the page
     /// grid chose, or else after the selection (or the current page); then select them.
-    pub fn insert_files(&mut self, files: Vec<(String, Vec<u8>)>) {
-        self.insert_each(files.into_iter().map(Ok));
+    pub fn insert_files(&mut self, ctx: &egui::Context, files: Vec<(String, Vec<u8>)>) {
+        self.insert_each(ctx, files.into_iter().map(Ok));
     }
 
     /// [`Self::insert_files`] for files read as their turn comes: one that can't be read is skipped
     /// and named.
-    pub(crate) fn insert_each<I>(&mut self, files: I)
+    pub(crate) fn insert_each<I>(&mut self, ctx: &egui::Context, files: I)
     where
         I: IntoIterator<Item = Result<(String, Vec<u8>), (String, String)>>,
     {
@@ -440,13 +440,10 @@ impl PdfCraftApp {
             };
             match self.session.insert_source_inline(id, &name, &Arc::new(bytes)) {
                 Ok((pages, bytes)) => {
-                    if self.apply_edit(Edit::InsertPagesFrom {
-                        name,
-                        bytes,
-                        pages: None,
-                        at,
-                        field_conflicts: pdfcraft_engine::FieldConflicts::Rename,
-                    }) {
+                    if self.apply_edit(
+                        ctx,
+                        Edit::InsertPagesFrom { name, bytes, pages: None, at, field_conflicts: pdfcraft_engine::FieldConflicts::Rename },
+                    ) {
                         at = at.saturating_add(pages);
                     }
                 }
@@ -462,9 +459,9 @@ impl PdfCraftApp {
 
     /// Copy the pages typed in Extract pages, else the selected pages (or the current page), into
     /// a new unsaved document tab.
-    pub fn extract_selection(&mut self, opts: ExtractOptions) {
+    pub fn extract_selection(&mut self, ctx: &egui::Context, opts: ExtractOptions) {
         // What's typed in a form field is part of the document (#166).
-        if !self.commit_form_typing() {
+        if !self.commit_form_typing(ctx) {
             return;
         }
         let Some((i, id)) = self.active_ids() else { return };
@@ -508,7 +505,7 @@ impl PdfCraftApp {
                 }
                 let unchanged = app.session.get(id).map(|d| d.edit_generation()) == generation;
                 if unchanged && app.active_ids().map(|(_, active)| active) == Some(id) {
-                    app.apply_edit(pdfcraft_engine::Edit::DeletePages { pages: doomed });
+                    app.apply_edit(ctx, pdfcraft_engine::Edit::DeletePages { pages: doomed });
                 } else {
                     app.notify_tr("The pages were extracted but not deleted, because the document changed while you were choosing a folder.");
                 }
@@ -534,7 +531,7 @@ impl PdfCraftApp {
         if opts.delete {
             // Back on the original document.
             self.active = Some(i);
-            self.apply_edit(pdfcraft_engine::Edit::DeletePages { pages: doomed });
+            self.apply_edit(ctx, pdfcraft_engine::Edit::DeletePages { pages: doomed });
         }
     }
 
@@ -588,6 +585,7 @@ impl PdfCraftApp {
     /// filters.
     pub fn rotate_pages(
         &mut self,
+        ctx: &egui::Context,
         degrees: i64,
         base: Vec<usize>,
         parity: pdfcraft_engine::PageParity,
@@ -600,14 +598,14 @@ impl PdfCraftApp {
             self.notify_tr("No pages match those choices");
             return;
         }
-        self.apply_edit(pdfcraft_engine::Edit::RotatePages { pages, degrees });
+        self.apply_edit(ctx, pdfcraft_engine::Edit::RotatePages { pages, degrees });
     }
 
     /// Split the active document and write the parts: into a chosen folder (desktop, written on
     /// a later frame once the user has chosen it) or as downloads (web).
-    pub fn split_active(&mut self, plan: &SplitPlan) {
+    pub fn split_active(&mut self, ctx: &egui::Context, plan: &SplitPlan) {
         // What's typed in a form field is part of the document (#166).
-        if !self.commit_form_typing() {
+        if !self.commit_form_typing(ctx) {
             return;
         }
         let Some((_, id)) = self.active_ids() else { return };
@@ -727,17 +725,17 @@ impl PdfCraftApp {
     }
 
     /// Prepare a form ▸ Import data: XFDF, FDF, XML, CSV or text.
-    pub fn import_data_dialog(&mut self) {
-        self.import_dialog(false);
+    pub fn import_data_dialog(&mut self, ctx: &egui::Context) {
+        self.import_dialog(ctx, false);
     }
 
     /// Comments ▸ Import comments: the files Import data takes, or another PDF to copy the
     /// comments of.
-    pub fn import_comments_dialog(&mut self) {
-        self.import_dialog(true);
+    pub fn import_comments_dialog(&mut self, ctx: &egui::Context) {
+        self.import_dialog(ctx, true);
     }
 
-    fn import_dialog(&mut self, pdf: bool) {
+    fn import_dialog(&mut self, ctx: &egui::Context, pdf: bool) {
         let mut extensions = vec!["xfdf", "fdf", "xml", "xdp", "csv", "txt"];
         if pdf {
             extensions.insert(2, "pdf");
@@ -747,7 +745,7 @@ impl PdfCraftApp {
         self.pick_file(request, target, |app, picked| match app.read_picked(picked) {
             Ok(files) => {
                 for (name, bytes) in files {
-                    app.apply_edit(pdfcraft_engine::Edit::ImportData { name, bytes: Arc::new(bytes) });
+                    app.apply_edit(ctx, pdfcraft_engine::Edit::ImportData { name, bytes: Arc::new(bytes) });
                 }
             }
             Err((name, e)) => app.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e)]),
@@ -755,9 +753,9 @@ impl PdfCraftApp {
     }
 
     /// Export a PDF ▸ Word, HTML or RTF: ask where, then write.
-    pub fn export_office_dialog(&mut self, format: pdfcraft_engine::compare::OfficeFormat) {
+    pub fn export_office_dialog(&mut self, ctx: &egui::Context, format: pdfcraft_engine::compare::OfficeFormat) {
         // What's typed in a form field is part of the document (#166).
-        if !self.commit_form_typing() {
+        if !self.commit_form_typing(ctx) {
             return;
         }
         let Some((_, id)) = self.active_ids() else { return };
@@ -816,9 +814,9 @@ impl PdfCraftApp {
     }
 
     /// Export all comments / form data: the format follows the file name's extension.
-    pub fn export_data_dialog(&mut self, comments: bool, fields: bool) {
+    pub fn export_data_dialog(&mut self, ctx: &egui::Context, comments: bool, fields: bool) {
         // What's typed in a form field is part of the document (#166).
-        if !self.commit_form_typing() {
+        if !self.commit_form_typing(ctx) {
             return;
         }
         let Some((_, id)) = self.active_ids() else { return };
@@ -849,7 +847,7 @@ impl PdfCraftApp {
         self.pick_file(request, None, move |app, picked| {
             let Some(path) = picked.first_path() else { return };
             // Include what was typed while the save panel was open (#166).
-            if !app.commit_typing_in(id) {
+            if !app.commit_typing_in(ctx, id) {
                 return;
             }
             let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();

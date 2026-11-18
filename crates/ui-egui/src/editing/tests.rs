@@ -110,7 +110,7 @@ fn save_commits_the_open_text_box() {
     draft.focus = true;
     app.views[0].session.content.draft = Some(draft);
 
-    assert!(!app.save_active(SaveTarget::InPlace), "a new document asks where to save");
+    assert!(!app.save_active(&egui::Context::default(), SaveTarget::InPlace), "a new document asks where to save");
     let id = app.views[0].id;
     let added = app.session.get(id).unwrap().added();
     assert_eq!(added.len(), 1, "the open text box was committed before the save");
@@ -166,9 +166,9 @@ fn moving_pages_cancels_an_in_progress_drawing() {
     app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app.open_bytes("a.pdf", None, pdf).unwrap();
     app.views[0].session.comments.tool = tool;
-    assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    assert!(app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
     assert_eq!(app.views[0].session.comments.tool.drawing().len(), 2, "rotating the page keeps the drawing on it");
-    assert!(app.apply_edit(pdfcraft_engine::Edit::MovePages { pages: vec![1], to: 0 }));
+    assert!(app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::MovePages { pages: vec![1], to: 0 }));
     assert!(app.views[0].session.comments.tool.drawing().is_empty(), "the drawing's page index would now be a different page");
 }
 
@@ -185,17 +185,17 @@ fn save_asks_where_to_keep_an_email_attachment_and_leaves_the_temporary_copy_alo
     let (mut h, files) = shown_with_picks();
     let app = h.state_mut();
     app.open_bytes("Quote.pdf", Some(attachment.to_string_lossy().into_owned()), original.clone()).unwrap();
-    assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    assert!(app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
 
-    assert!(!app.save_active(SaveTarget::InPlace), "Save asks instead of writing the temporary copy");
+    assert!(!app.save_active(&egui::Context::default(), SaveTarget::InPlace), "Save asks instead of writing the temporary copy");
     answer_save(&mut h, &files, &kept);
     assert_eq!(std::fs::read(&attachment).unwrap(), original, "the attachment's copy is untouched");
     assert!(std::fs::read(&kept).unwrap().starts_with(b"%PDF"), "the document went where the user chose");
 
     // The chosen file is the document's file now: the next Save writes it without asking.
     let app = h.state_mut();
-    assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
-    assert!(app.save_active(SaveTarget::InPlace));
+    assert!(app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    assert!(app.save_active(&egui::Context::default(), SaveTarget::InPlace));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -212,7 +212,7 @@ fn recolouring_print_ink_text_in_its_box_drops_the_ink_without_an_empty_step() {
         app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
         let mut text = pdfcraft_engine::AddedText { rect: [20.0, 200.0, 180.0, 220.0], text: "Proof".into(), ..Default::default() };
         text.set_ink(Some(pdfcraft_engine::TextInk::Cmyk([0.0, 0.0, 0.0, 1.0])));
-        assert!(app.apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+        assert!(app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::AddText { page: 0, text }));
         let stored = item(&app);
         assert!(stored.painted_ink().is_some());
         let mut draft = crate::content_ui::TextDraft::new(0, Some(0), stored.rect, stored.text.clone(), stored);
@@ -229,7 +229,7 @@ fn recolouring_print_ink_text_in_its_box_drops_the_ink_without_an_empty_step() {
     // The box's style with another colour, set as the Format panel hands it over.
     let recolour = |app: &mut crate::PdfCraftApp, color: [f64; 3]| {
         let style = app.views[0].session.content.draft.as_ref().map(|d| d.style.clone()).unwrap();
-        app.restyle_draft(0, pdfcraft_engine::AddedText { color, ..style });
+        app.restyle_draft(&egui::Context::default(), 0, pdfcraft_engine::AddedText { color, ..style });
     };
     let finish = |app: &mut crate::PdfCraftApp| {
         let added = app.session.get(app.views[0].id).unwrap().added().to_vec();

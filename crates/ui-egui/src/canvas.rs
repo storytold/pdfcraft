@@ -723,11 +723,11 @@ fn apply_notice(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, notice
 /// tab is looked up by its view key (indices may have shifted since the click, and split view can
 /// show one document in two tabs), and the flag rides its own view, so a stale flag can never
 /// close the wrong tab. Whether a tab was closed (or asked about).
-fn close_requested_tab(app: &mut PdfCraftApp, index: usize) -> bool {
+fn close_requested_tab(ctx: &egui::Context, app: &mut PdfCraftApp, index: usize) -> bool {
     let pending = app.views.get(index).filter(|v| v.close_requested).map(|v| v.view_key()).and_then(|key| app.tab_with_key(key));
     let Some(i) = pending else { return false };
     app.views[i].close_requested = false;
-    app.request_close_tab(i);
+    app.request_close_tab(ctx, i);
     true
 }
 
@@ -1210,7 +1210,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     {
         f.in_panel = false;
     }
-    if close_requested_tab(app, index) {
+    if close_requested_tab(ui.ctx(), app, index) {
         return None;
     }
     let doc_id = app.views.get(index)?.id;
@@ -1523,7 +1523,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     }
     let remote_open = follow_link(app, index, clicked_link);
     if let Some((page, link)) = javascript_link {
-        app.run_link_script(doc_id, page, link);
+        app.run_link_script(ui.ctx(), doc_id, page, link);
     }
     let tool = finish_sign_requests(app, ui.ctx(), index, tool, body_out.area_choice);
     app.quick_tool = tool;
@@ -1589,13 +1589,13 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
         generation,
     } = requests;
     if let Some((page, at)) = app.views[index].session.comments.attach_at.take() {
-        app.attach_file_comment(page, at);
+        app.attach_file_comment(ctx, page, at);
     }
     if let Some((p, i)) = open_props {
         app.open_comment_props(ctx, p, i);
     }
     if let Some(c) = recolour {
-        app.colour_selected_comments(c);
+        app.colour_selected_comments(ctx, c);
     }
     if let Some((p, i)) = app.views[index].session.comments.default_request.take() {
         app.make_comment_default(p, i);
@@ -1643,26 +1643,26 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
         app.views[index].session.pending_edit = edit;
     }
     match image_action {
-        Some(crate::edit_text_ui::ImageAction::Replace(page, index)) => app.replace_page_image_dialog(page, index),
+        Some(crate::edit_text_ui::ImageAction::Replace(page, index)) => app.replace_page_image_dialog(ctx, page, index),
         Some(crate::edit_text_ui::ImageAction::Save(page, index)) => app.save_page_image(page, index),
         Some(crate::edit_text_ui::ImageAction::Copy(page, index)) => {
             app.copy_page_image(page, index);
         }
         Some(crate::edit_text_ui::ImageAction::CopyFile(page, index)) => app.copy_page_image_file(page, index),
         Some(crate::edit_text_ui::ImageAction::Cut(page, image)) => {
-            app.cut_page_image(page, image);
+            app.cut_page_image(ctx, page, image);
         }
         Some(crate::edit_text_ui::ImageAction::Paste(page, at)) => {
             if let Some(pt) = at {
-                app.paste_image_at(page, pt);
+                app.paste_image_at(ctx, page, pt);
             } else {
-                app.paste_image(page, None);
+                app.paste_image(ctx, page, None);
             }
         }
         Some(crate::edit_text_ui::ImageAction::DrawFreehand) => {
             app.quick_tool = crate::QuickTool::Comment(crate::comments::CommentTool::Ink);
         }
-        Some(crate::edit_text_ui::ImageAction::Redact(page, index)) => app.redact_page_image(page, index),
+        Some(crate::edit_text_ui::ImageAction::Redact(page, index)) => app.redact_page_image(ctx, page, index),
         Some(crate::edit_text_ui::ImageAction::Link(page, index)) => app.link_page_image(page, index),
         Some(crate::edit_text_ui::ImageAction::Recognize(page)) => app.recognize_text_on_page(ctx, page),
         Some(crate::edit_text_ui::ImageAction::AddComment(page, i)) => {
@@ -1698,10 +1698,10 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
             }
         }
         Some(PageMenuAction::Paste(page, at)) => {
-            app.paste_image_at(page, at);
+            app.paste_image_at(ctx, page, at);
         }
         Some(PageMenuAction::PasteComments(page, at)) => {
-            app.paste_comments(index, None, Some((page, at)));
+            app.paste_comments(ctx, index, None, Some((page, at)));
         }
         // A quarter turn either way; the next pass makes the rotation one of the four and keeps the current page in
         // view.
@@ -1734,7 +1734,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
             app.views[index].session.pending_edit = Some(pdfcraft_engine::Edit::Flatten { comments: true, fields: false });
         }
         Some(PageMenuAction::AddBookmark) => {
-            app.bookmark_action(crate::panels::BmAction::New);
+            app.bookmark_action(ctx, crate::panels::BmAction::New);
         }
         Some(PageMenuAction::TakeSnapshot) => {
             app.quick_tool = QuickTool::Snapshot;
@@ -1746,13 +1746,13 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
             app.quick_tool = QuickTool::AddText;
         }
         Some(PageMenuAction::AddImage) => {
-            app.add_image_dialog();
+            app.add_image_dialog(ctx);
         }
         Some(PageMenuAction::DeletePage(page)) => {
             app.views[index].session.pending_edit = Some(pdfcraft_engine::Edit::DeletePages { pages: vec![page] });
         }
         Some(PageMenuAction::ExportPdf) => {
-            app.select_tool("export");
+            app.select_tool(ctx, "export");
         }
         Some(PageMenuAction::Find) => {
             app.views[index].open_find();
@@ -1797,7 +1797,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
         app.execute(ctx, "comment.copy");
     }
     if let Some(at) = app.views[index].session.comments.paste_request.take() {
-        app.paste_comments(index, None, Some(at));
+        app.paste_comments(ctx, index, None, Some(at));
     }
     if let Some(notice) = app.views[index].session.comments.notice.take() {
         app.notify_tr(notice);

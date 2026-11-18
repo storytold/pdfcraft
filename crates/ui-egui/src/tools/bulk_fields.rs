@@ -382,7 +382,7 @@ impl StackDialog for SharedFieldPropsDialog {
 /// Applies a filed draft to the document the dialog was opened on, once per pass from the dialogs' results: refreshes the
 /// recent colours, opens a colour picker a row asked for, and answers the held OK. A refusal keeps the dialog open with
 /// everything typed.
-pub(crate) fn finish(app: &mut PdfCraftApp) {
+pub(crate) fn finish(ctx: &egui::Context, app: &mut PdfCraftApp) {
     let recent = app.recent_colours.clone();
     let Some(dialog) = app.dialogs.get_mut::<SharedFieldPropsDialog>() else { return };
     dialog.recent = recent;
@@ -397,14 +397,14 @@ pub(crate) fn finish(app: &mut PdfCraftApp) {
         });
     }
     let Some(draft) = filed else { return };
-    let answer = apply(app, &draft);
+    let answer = apply(ctx, app, &draft);
     if let Some(dialog) = app.dialogs.get_mut::<SharedFieldPropsDialog>() {
         dialog.held.answer(answer);
     }
 }
 
 /// The draft's chosen changes as one edit; an empty draft changes nothing and is accepted.
-fn apply(app: &mut PdfCraftApp, draft: &Draft) -> Result<(), Label> {
+fn apply(ctx: &egui::Context, app: &mut PdfCraftApp, draft: &Draft) -> Result<(), Label> {
     if app.active_ids().map(|(_, id)| id) != Some(draft.doc) {
         return Err(tl!("The document changed while you were editing field properties.").to_owned().into());
     }
@@ -414,7 +414,7 @@ fn apply(app: &mut PdfCraftApp, draft: &Draft) -> Result<(), Label> {
         return Ok(());
     }
     // `apply_edit` posts its own reason as a notice; the dialog's refusal is this fixed text.
-    if app.apply_edit(Edit::Batch { label: "Change field properties".into(), edits }) {
+    if app.apply_edit(ctx, Edit::Batch { label: "Change field properties".into(), edits }) {
         Ok(())
     } else {
         Err(tl!("The field properties could not be changed.").to_owned().into())

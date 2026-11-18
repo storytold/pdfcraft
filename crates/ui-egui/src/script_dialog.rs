@@ -429,6 +429,7 @@ impl PdfCraftApp {
                                 self.views[i].document_changed(ctx, &info);
                             }
                             self.handle_js(
+                                ctx,
                                 id,
                                 JsOutput {
                                     alerts: Vec::new(),
@@ -554,6 +555,7 @@ mod review13_ui_tests {
     /// Comparison completion preserves globals and sends Save As/Print to its source document.
     #[test]
     fn non_active_comparison_document_completes_native_script() {
+        let ctx = &egui::Context::default();
         for request in ["", "app.execMenuItem('SaveAs');", "print();"] {
             let saved = PathBuf::from("/scripted/source.pdf");
             let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![saved.clone()])]));
@@ -577,7 +579,7 @@ mod review13_ui_tests {
             }
             assert!(app.script_pending.is_none());
             // The Save As the script asked for takes the queued answer on this pass.
-            app.save_flow_pass(&ctx);
+            app.save_flow_pass(ctx, &ctx);
             assert_eq!(app.session.run_javascript(old, "comparisonKept", None).unwrap().result.as_deref(), Some("42"));
             assert_eq!(app.session.save_bytes(new).unwrap(), new_before);
             assert!(app.session.get(new).unwrap().path.is_none());
@@ -601,6 +603,7 @@ mod review13_ui_tests {
     /// Script focus reveals the requested field page before opening its editor.
     #[test]
     fn script_focus_reveals_an_offscreen_widget() {
+        let ctx = &egui::Context::default();
         let (mut app, id) = app();
         app.session
             .apply(
@@ -613,7 +616,7 @@ mod review13_ui_tests {
                 },
             )
             .unwrap();
-        app.handle_js(id, JsOutput { requests: vec![pdfcraft_engine::js::Request::Focus("later".into())], ..Default::default() });
+        app.handle_js(ctx, id, JsOutput { requests: vec![pdfcraft_engine::js::Request::Focus("later".into())], ..Default::default() });
         let view = app.views.iter().find(|v| v.id == id).unwrap();
         assert_eq!(view.current(), 1);
         assert_eq!(view.session.forms.focus.as_ref().unwrap().name, "later");
@@ -653,6 +656,7 @@ mod link_script_tests {
     /// window's prompt, the answer resumes it, and its field change and openDoc consent apply.
     #[test]
     fn a_javascript_link_asks_its_menu_and_applies_its_result() {
+        let ctx = &egui::Context::default();
         // An absolute path on this system (the document has no folder): on Windows, Acrobat's
         // `/C/…` form, which reads as `C:/…`.
         let path = if cfg!(windows) { "/C/abs/other.pdf" } else { "/abs/other.pdf" };
@@ -660,7 +664,7 @@ mod link_script_tests {
         let mut app = PdfCraftApp::for_unit_tests();
         app.open_bytes("link.pdf", None, linked(&script)).unwrap();
         let id = app.active_ids().unwrap().1;
-        app.run_link_script(id, 0, 0);
+        app.run_link_script(ctx, id, 0, 0);
         // The worker's question is read from its reply channel, before any pass hosts it.
         let deadline = Instant::now() + Duration::from_secs(5);
         let (prompt, reply) = loop {

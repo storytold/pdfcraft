@@ -173,7 +173,7 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     });
 
     if let Some(files) = dropped {
-        app.drop_into_combine(files);
+        app.drop_into_combine(ui.ctx(), files);
     }
     unlock_dialog(app, ui);
     for action in action.into_iter().chain(grid_actions) {
@@ -199,12 +199,12 @@ fn add_files(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     ];
     let out = SplitButton::new(tl!("Add files…"), &entries).arrow_label(tl!("More ways to add files")).icon(IconId::new("plus")).show(ui);
     if out.response.clicked() {
-        app.combine_dialog();
+        app.combine_dialog(ui.ctx());
     }
     match out.chosen {
-        Some(AddHow::Files) => app.combine_dialog(),
-        Some(AddHow::Folder) => app.combine_add_folder(false),
-        Some(AddHow::Subfolders) => app.combine_add_folder(true),
+        Some(AddHow::Files) => app.combine_dialog(ui.ctx()),
+        Some(AddHow::Folder) => app.combine_add_folder(ui.ctx(), false),
+        Some(AddHow::Subfolders) => app.combine_add_folder(ui.ctx(), true),
         None => {}
     }
 }

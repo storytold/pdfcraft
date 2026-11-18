@@ -49,7 +49,7 @@ impl PdfCraftApp {
         match self.dialogs.take_by_id::<HostedParamDialog>(dialog) {
             Some(DialogResult::Ok(result)) => {
                 self.attachment_description = None;
-                self.apply_attachment_description(&open, &result);
+                self.apply_attachment_description(ctx, &open, &result);
             }
             Some(_) => self.attachment_description = None,
             None => {
@@ -65,7 +65,7 @@ impl PdfCraftApp {
 
     /// Edits the description when the trimmed text differs from the attachment's, or is empty over an existing
     /// description, and the document is as the dialog opened it.
-    fn apply_attachment_description(&mut self, open: &AttachmentOpen, result: &ParamResult) {
+    fn apply_attachment_description(&mut self, ctx: &egui::Context, open: &AttachmentOpen, result: &ParamResult) {
         let still_current = self.session.get(open.doc).is_some_and(|doc| doc.edit_generation() == open.generation);
         let active = self.active_ids().is_some_and(|(_, active)| active == open.doc);
         if !still_current || !active {
@@ -81,7 +81,7 @@ impl PdfCraftApp {
                 .map(|attachment| attachment.description.as_deref().unwrap_or_default().trim().to_owned())
         });
         if current.is_some_and(|current| current != normalized || (normalized.is_empty() && open.has_description)) {
-            self.apply_edit(Edit::EditAttachmentDescription { key: open.key.clone(), description: Some(normalized) });
+            self.apply_edit(ctx, Edit::EditAttachmentDescription { key: open.key.clone(), description: Some(normalized) });
         }
     }
 }

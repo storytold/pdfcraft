@@ -76,7 +76,7 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, cx: &mut BodyCx<'_>,
         }
     }
     if let Some(e) = result.edit {
-        app.apply_edit(e);
+        app.apply_edit(ui.ctx(), e);
     }
     if let Some((name, widget)) = result.field_properties {
         crate::prepare::dialog::open(app, &name, widget, crate::prepare::FieldTab::General);
@@ -118,7 +118,7 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, cx: &mut BodyCx<'_>,
         app.run_command(&ctx, command);
     }
     if let Some(a) = result.bookmark {
-        app.bookmark_action(a);
+        app.bookmark_action(ui.ctx(), a);
     }
     if let Some((ai, open)) = result.attachment {
         app.attachment_action(id, ai, open);

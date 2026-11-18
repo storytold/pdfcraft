@@ -37,7 +37,7 @@ impl PdfCraftApp {
                     {
                         let paths: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
                         if action == COMBINE_ACTION {
-                            self.combine_paths(&paths);
+                            self.combine_paths(ctx, &paths);
                         } else {
                             for path in &paths {
                                 self.open_path(path);
@@ -94,7 +94,7 @@ impl PdfCraftApp {
     /// Inserts the pages of the dropped `files` into the active document before page `at`, and
     /// selects them. Each file is read here (its bytes, else its path); one that can't be read is
     /// named and skipped by [`Self::insert_each`], the rest are inserted.
-    pub(crate) fn insert_dropped(&mut self, files: Vec<OsFile>, at: usize) {
+    pub(crate) fn insert_dropped(&mut self, ctx: &egui::Context, files: Vec<OsFile>, at: usize) {
         let read: Vec<Result<(String, Vec<u8>), (String, String)>> = files
             .into_iter()
             .map(|file| {
@@ -109,6 +109,6 @@ impl PdfCraftApp {
             .collect();
         let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) else { return };
         view.insert_at = Some(at);
-        self.insert_each(read);
+        self.insert_each(ctx, read);
     }
 }

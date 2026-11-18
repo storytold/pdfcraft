@@ -113,15 +113,15 @@ impl PdfCraftApp {
     }
 
     /// Converts when the dialog was answered with OK.
-    pub(crate) fn convert_colours_pass(&mut self, _ctx: &egui::Context) {
+    pub(crate) fn convert_colours_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
         let Some(answer) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
         let Some(result) = answer.ok() else { return };
         self.convert_colours_draft.read(&result.fields);
-        self.convert_colours();
+        self.convert_colours(ctx);
     }
 
     /// Convert: count first (the edit refuses when nothing changes), then apply and say.
-    pub(crate) fn convert_colours(&mut self) {
+    pub(crate) fn convert_colours(&mut self, ctx: &egui::Context) {
         let Some((i, id)) = self.active_ids() else { return };
         let count = self.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
         let pages = self.convert_colours_draft.range.pages(count, self.views[i].current(), &[]);
@@ -131,7 +131,7 @@ impl PdfCraftApp {
             self.notify_tr("Nothing on those pages needed converting");
             return;
         }
-        if self.apply_edit(Edit::ConvertColours { pages, settings }) {
+        if self.apply_edit(ctx, Edit::ConvertColours { pages, settings }) {
             self.notify_fmt(
                 "Converted {c} colours and {i} pictures on {p} pages",
                 &[("c", &found.colours.to_string()), ("i", &found.images.to_string()), ("p", &found.pages.to_string())],

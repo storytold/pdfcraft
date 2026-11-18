@@ -71,10 +71,10 @@ pub(crate) fn ask_lock(app: &mut PdfCraftApp, pending: PendingLock) {
 
 /// The lock question's answer. Lock and Keep editable save as asked, and the box remembers the choice; Cancel drops
 /// the save.
-pub(crate) fn finish_lock(app: &mut PdfCraftApp, answer: PromptAnswer) {
+pub(crate) fn finish_lock(ctx: &egui::Context, app: &mut PdfCraftApp, answer: PromptAnswer) {
     match answer.choice {
-        PromptChoice::Proceed => app.answer_lock_signatures(true, answer.skip),
-        PromptChoice::Alternate => app.answer_lock_signatures(false, answer.skip),
+        PromptChoice::Proceed => app.answer_lock_signatures(ctx, true, answer.skip),
+        PromptChoice::Alternate => app.answer_lock_signatures(ctx, false, answer.skip),
         _ => app.pending_lock = None,
     }
 }

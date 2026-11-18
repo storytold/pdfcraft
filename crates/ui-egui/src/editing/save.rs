@@ -46,9 +46,9 @@ impl PendingSave {
 
 impl PdfCraftApp {
     /// Save the active document. Returns `true` if it was written.
-    pub fn save_active(&mut self, target: SaveTarget) -> bool {
+    pub fn save_active(&mut self, ctx: &egui::Context, target: SaveTarget) -> bool {
         match self.active {
-            Some(i) => self.save_view(i, target),
+            Some(i) => self.save_view(ctx, i, target),
             None => false,
         }
     }
@@ -56,8 +56,8 @@ impl PdfCraftApp {
     /// Save the document shown in tab `index`. Returns `true` if it was written now. When it has
     /// to ask (where to save, or whether to replace a file changed on disk) it returns `false`
     /// and saves on a later pass, once the user has answered.
-    pub fn save_view(&mut self, index: usize, target: SaveTarget) -> bool {
-        self.save_then(index, target, |_| {}, |_| {})
+    pub fn save_view(&mut self, ctx: &egui::Context, index: usize, target: SaveTarget) -> bool {
+        self.save_then(ctx, index, target, |_| {}, |_| {})
     }
 
     /// [`Self::save_view`], then `after` once the document is written: now, or on a later pass
@@ -66,6 +66,7 @@ impl PdfCraftApp {
     // PLAN: `editing/close.rs:160` (pdf-shell-w15) passes the new `failed` argument
     pub(crate) fn save_then(
         &mut self,
+        ctx: &egui::Context,
         index: usize,
         target: SaveTarget,
         after: impl FnOnce(&mut Self) + 'static,
@@ -73,7 +74,7 @@ impl PdfCraftApp {
     ) -> bool {
         // What's typed in a field is part of what's saved (#166).
         if let Some(id) = self.views.get(index).map(|v| v.id)
-            && !self.commit_typing_in(id)
+            && !self.commit_typing_in(ctx, id)
         {
             failed(self);
             return false;
@@ -140,15 +141,15 @@ impl PdfCraftApp {
             redactions: (redacted, unredacted),
             prompt: None,
         });
-        self.run_save_step(step)
+        self.run_save_step(ctx, step)
     }
 
     /// Each pass: the save picker's answer, and the changed-on-disk question's. Neither is the
     /// frame's input: both are taken once from where they wait, so a second pass in a frame finds
     /// nothing the first took, and no answer is applied twice.
-    pub(crate) fn save_flow_pass(&mut self, _ctx: &egui::Context) {
+    pub(crate) fn save_flow_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
         if let Some(step) = self.save_flow.take_pick(self.host.files(), &self.watch) {
-            self.run_save_step(step);
+            self.run_save_step(ctx, step);
         }
         let Some(prompt) = self.pending_save.as_ref().and_then(|p| p.prompt) else { return };
         let Some(result) = self.dialogs.take_by_id::<StandardPrompt>(prompt) else { return };
@@ -165,13 +166,13 @@ impl PdfCraftApp {
                 None => return,
             },
         };
-        self.run_save_step(step);
+        self.run_save_step(ctx, step);
     }
 
     /// Carry out what the save flow asked for next. Returns `true` if the document was written.
-    fn run_save_step(&mut self, step: SaveStep<DocId>) -> bool {
+    fn run_save_step(&mut self, ctx: &egui::Context, step: SaveStep<DocId>) -> bool {
         match step {
-            SaveStep::Write { key, path, target } => self.write_step(key, &path, target),
+            SaveStep::Write { key, path, target } => self.write_step(ctx, key, &path, target),
             SaveStep::AskChangedOnDisk { key, .. } => {
                 // The file on disk is another version than the document came from (#2166).
                 let name = self.session.get(key).map(|d| d.name.clone()).unwrap_or_default();
@@ -192,7 +193,7 @@ impl PdfCraftApp {
     }
 
     /// The flow's Write step: write document `id` to `path`, then run what waited on the save.
-    fn write_step(&mut self, id: DocId, path: &Path, target: SaveTarget) -> bool {
+    fn write_step(&mut self, ctx: &egui::Context, id: DocId, path: &Path, target: SaveTarget) -> bool {
         // An Apply redactions or an Undo of one while the picker was open makes the name it
         // proposed wrong: ask again with the name for the current content.
         let asked = self.pending_save.as_ref().filter(|p| p.key == id).map(|p| p.redactions);
@@ -202,6 +203,7 @@ impl PdfCraftApp {
             let (after, failed) = self.pending_save.take().map(|p| (p.after, p.failed)).unwrap_or_default();
             let _ = self.save_flow.cancel(self.host.files());
             return self.save_then(
+                ctx,
                 index,
                 SaveTarget::As,
                 move |app| {
@@ -216,7 +218,7 @@ impl PdfCraftApp {
                 },
             );
         }
-        let saved = self.save_doc_to(id, path, target);
+        let saved = self.save_doc_to(ctx, id, path, target);
         if !saved {
             self.save_flow.failed(&id);
         }
@@ -237,9 +239,9 @@ impl PdfCraftApp {
     /// fails: the document still counts as holding a placed signature, so the next save asks
     /// again, and the answer isn't remembered. The placed-signature mark stays until the save
     /// succeeds, so a save that fails or is cancelled asks again too.
-    pub(crate) fn answer_lock_signatures(&mut self, lock: bool, remember: bool) {
+    pub(crate) fn answer_lock_signatures(&mut self, ctx: &egui::Context, lock: bool, remember: bool) {
         let Some(p) = self.pending_lock.take() else { return };
-        if lock && !self.flatten_fill_sign_on_save && !self.flatten_fill_sign_in(p.id) {
+        if lock && !self.flatten_fill_sign_on_save && !self.flatten_fill_sign_in(ctx, p.id) {
             (p.failed)(self);
             return;
         }
@@ -252,7 +254,7 @@ impl PdfCraftApp {
             }
         }
         if let Some(index) = self.views.iter().position(|v| v.id == p.id) {
-            self.save_then(index, p.target, p.after, p.failed);
+            self.save_then(ctx, index, p.target, p.after, p.failed);
         } else {
             (p.failed)(self);
         }
@@ -263,18 +265,18 @@ impl PdfCraftApp {
     /// saving. Undoable. The next save doesn't ask, as no Fill & Sign mark is left to lock; the
     /// placed-signature mark itself stays, so undoing the lock brings back both the notice and the
     /// save-time question. Never on a digitally signed document.
-    pub(crate) fn lock_signatures_now(&mut self, id: DocId) {
+    pub(crate) fn lock_signatures_now(&mut self, ctx: &egui::Context, id: DocId) {
         if self.session.get(id).is_none_or(|d| d.is_signed()) {
             return;
         }
-        if self.flatten_fill_sign_in(id) {
+        if self.flatten_fill_sign_in(ctx, id) {
             self.notify_tr("Signature locked into the page.");
         }
     }
 
     /// Lock document `id`'s Fill & Sign marks into its pages (an undoable edit). Returns false,
     /// having told the user why, when that fails.
-    fn flatten_fill_sign_in(&mut self, id: DocId) -> bool {
+    fn flatten_fill_sign_in(&mut self, ctx: &egui::Context, id: DocId) -> bool {
         let before = self.session.get(id).map(|d| d.edit_generation());
         if let Err(e) = self.session.apply(id, pdfcraft_engine::Edit::FlattenFillSign) {
             self.notify_error(e);
@@ -284,7 +286,7 @@ impl PdfCraftApp {
             && let Some(doc) = self.session.get(id)
             && let Some(view) = self.views.iter_mut().find(|v| v.id == id)
         {
-            view.document_changed(&doc.info);
+            view.document_changed(ctx, &doc.info);
             // The marks left the comments: a selected one is gone, and its (page, index) could
             // now name another comment.
             view.session.comments.clear_selection();
@@ -296,10 +298,10 @@ impl PdfCraftApp {
     /// the document's own file kept as it is, make `dest` the document's file. Returns `true` if
     /// written. The service writes atomically on the desktop and hands the bytes to the page or
     /// the browser's downloads on the web.
-    fn save_doc_to(&mut self, id: DocId, dest: &Path, target: SaveTarget) -> bool {
+    fn save_doc_to(&mut self, ctx: &egui::Context, id: DocId, dest: &Path, target: SaveTarget) -> bool {
         // Save As answers on a later pass: commit what was typed meanwhile, too (#166), even if
         // another tab is active by then.
-        if !self.commit_typing_in(id) || !self.flatten_fill_sign_for_save(id) {
+        if !self.commit_typing_in(ctx, id) || !self.flatten_fill_sign_for_save(ctx, id) {
             return false;
         }
         let dest_text = dest.to_string_lossy().into_owned();
@@ -317,7 +319,7 @@ impl PdfCraftApp {
             self.notify_tr("The document was closed before it could be saved.");
             return false;
         };
-        self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillSave);
+        self.run_document_actions(ctx, id, pdfcraft_engine::js::DocumentScriptEvent::WillSave);
         let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) };
         let bytes = match bytes.and_then(|b| self.session.check_save(id, &b).map(|()| b)) {
             Ok(b) => b,
@@ -344,7 +346,7 @@ impl PdfCraftApp {
                 if let Some(doc) = self.session.get(id)
                     && let Some(view) = self.asking_tab(id).and_then(|i| self.views.get_mut(i))
                 {
-                    view.document_changed(&doc.info);
+                    view.document_changed(ctx, &doc.info);
                 }
                 // Saving over a version that changed on disk keeps this one: nothing to ask.
                 for view in self.views.iter_mut().filter(|v| v.id == id) {

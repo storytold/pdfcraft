@@ -60,7 +60,7 @@ impl PdfCraftApp {
         if self.updater.take_save_request() {
             let mut saved = true;
             for &i in &dirty {
-                saved &= self.save_view(i, crate::editing::SaveTarget::InPlace);
+                saved &= self.save_view(ctx, i, crate::editing::SaveTarget::InPlace);
             }
             if !saved {
                 // The save path has told the user why.

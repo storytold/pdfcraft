@@ -159,16 +159,16 @@ impl PdfCraftApp {
     }
 
     /// Adds the marks when the dialog was answered with OK.
-    pub(crate) fn printer_marks_pass(&mut self, _ctx: &egui::Context) {
+    pub(crate) fn printer_marks_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
         let Some(answer) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
         let Some(result) = answer.ok() else { return };
         let per_point = self.units.per_point();
         self.printer_marks_draft.read(&result.fields, per_point);
-        self.add_printer_marks();
+        self.add_printer_marks(ctx);
     }
 
     /// Add: the marks on the chosen pages, labelled with the file's name and today's date.
-    pub(crate) fn add_printer_marks(&mut self) {
+    pub(crate) fn add_printer_marks(&mut self, ctx: &egui::Context) {
         let Some((i, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let (count, label) = (doc.info.pages.len(), doc.name.clone());
@@ -176,7 +176,7 @@ impl PdfCraftApp {
         let date = format!("{y:04}-{m:02}-{d:02}");
         let pages = self.printer_marks_draft.range.pages(count, self.views[i].current(), &[]);
         let edit = self.printer_marks_draft.edit(pages, &label, &date);
-        if self.apply_edit(edit) {
+        if self.apply_edit(ctx, edit) {
             self.notify_tr("Printer marks added");
         }
     }

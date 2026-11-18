@@ -165,9 +165,9 @@ impl PdfCraftApp {
                     v.organize = false;
                 }
                 self.left = crate::LeftPanel::AllTools;
-                self.enter_mode(Mode::AllTools);
+                self.enter_mode(ctx, Mode::AllTools);
             }
-            "bookmark.paste" => self.bookmark_action(crate::panels::BmAction::Paste { parent: Vec::new(), index: usize::MAX }),
+            "bookmark.paste" => self.bookmark_action(ctx, crate::panels::BmAction::Paste { parent: Vec::new(), index: usize::MAX }),
             "bookmark.expand_all" | "bookmark.collapse_all" | "bookmark.expand_level" => {
                 let level = match id {
                     "bookmark.expand_all" => usize::MAX,
@@ -202,7 +202,7 @@ impl PdfCraftApp {
             }
             tool if tool.strip_prefix("tools.").and_then(pdfcraft_engine::catalog::group).is_some() => {
                 if let Some(g) = tool.strip_prefix("tools.").and_then(pdfcraft_engine::catalog::group) {
-                    self.select_tool(g.id);
+                    self.select_tool(ctx, g.id);
                 }
             }
             _ => return false,
@@ -334,17 +334,17 @@ impl PdfCraftApp {
             "file.clear_recent" => self.recent.clear(),
             "file.pin_folder" => self.pin_folder_dialog(),
             "file.save" => {
-                self.save_active(SaveTarget::InPlace);
+                self.save_active(ctx, SaveTarget::InPlace);
             }
             "file.save_as" => {
-                self.save_active(SaveTarget::As);
+                self.save_active(ctx, SaveTarget::As);
             }
             "file.close" => {
                 if let Some(i) = active {
-                    self.request_close_tab(i);
+                    self.request_close_tab(ctx, i);
                 }
             }
-            "file.close_all" => self.close_all(),
+            "file.close_all" => self.close_all(ctx),
             // PLAN: assumed the dialog openers are `PdfCraftApp` methods named as the sheet gives them (dialogs A-3..A-10), taking no argument unless the sheet names one.
             "file.revert" => self.ask_revert(),
             "file.properties" => self.open_properties(ctx, PropsTab::Description),
@@ -360,7 +360,7 @@ impl PdfCraftApp {
             "prepress.convert_colors" => self.open_convert_colours(ctx),
             "prepress.hairlines" => self.open_fix_hairlines(ctx),
             "protect.remove" => {
-                if self.apply_edit(Edit::RemoveProtection) {
+                if self.apply_edit(ctx, Edit::RemoveProtection) {
                     self.notify_tr("Security will be removed when you save");
                 }
             }
@@ -380,11 +380,11 @@ impl PdfCraftApp {
             "actions.optimize_scans" => crate::actions_ui::open_wizard(self, ctx, Some("Optimize Scanned Documents")),
             "create.blank" => self.create_blank(),
             "create.file" => self.open_dialog(),
-            "create.multiple" => self.create_multiple_dialog(),
-            "create.multiple_separate" => self.create_multiple_separate_dialog(),
+            "create.multiple" => self.create_multiple_dialog(ctx),
+            "create.multiple_separate" => self.create_multiple_separate_dialog(ctx),
             "create.images" => self.create_from_images_dialog(ctx),
             "create.clipboard" => self.create_from_clipboard(),
-            "optimize.reduce" => self.reduce_file_size(),
+            "optimize.reduce" => self.reduce_file_size(ctx),
             "help.shortcuts" => self.open_shortcuts(ctx),
             "help.about" => self.open_about(craft::ui::patterns::form_dialogs::AboutTab::default()),
             "help.check_updates" => self.check_for_updates(),
@@ -471,7 +471,7 @@ impl PdfCraftApp {
                 let on = !self.full_screen();
                 self.set_full_screen(on);
             }
-            "view.read_mode" => self.switch_mode(if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
+            "view.read_mode" => self.switch_mode(ctx, if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
             "view.split" => self.toggle_split(ctx),
             crate::viewer_prefs::TOGGLE => self.toggle_interface(),
             "view.previous_view" | "view.next_view" => {
@@ -517,9 +517,9 @@ impl PdfCraftApp {
                     self.open_page_props(ctx, draft);
                 }
             }
-            "bookmark.add" => self.bookmark_action(crate::panels::BmAction::New),
-            "bookmark.from_structure" => self.bookmark_action(crate::panels::BmAction::FromStructure),
-            "bookmark.from_text_styles" => self.bookmark_action(crate::panels::BmAction::FromTextStyles),
+            "bookmark.add" => self.bookmark_action(ctx, crate::panels::BmAction::New),
+            "bookmark.from_structure" => self.bookmark_action(ctx, crate::panels::BmAction::FromStructure),
+            "bookmark.from_text_styles" => self.bookmark_action(ctx, crate::panels::BmAction::FromTextStyles),
             "page.organize" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     if v.organize {
@@ -530,35 +530,35 @@ impl PdfCraftApp {
                 }
             }
             "page.rotate" => {
-                self.apply_edit(Edit::RotatePages { pages: targets, degrees: 90 });
+                self.apply_edit(ctx, Edit::RotatePages { pages: targets, degrees: 90 });
             }
             "page.rotate_ccw" => {
-                self.apply_edit(Edit::RotatePages { pages: targets, degrees: -90 });
+                self.apply_edit(ctx, Edit::RotatePages { pages: targets, degrees: -90 });
             }
             "page.delete" => {
-                self.apply_edit(Edit::DeletePages { pages: targets });
+                self.apply_edit(ctx, Edit::DeletePages { pages: targets });
             }
             "page.insert_blank" => {
                 if let (Some(i), Some(&last)) = (active, targets.last())
                     && let Some(p) = self.session.get(self.views[i].id).and_then(|d| d.info.pages.get(last))
                 {
                     let (w, h) = ((p.crop[2] - p.crop[0]).abs().max(1.0) as f64, (p.crop[3] - p.crop[1]).abs().max(1.0) as f64);
-                    self.apply_edit(Edit::InsertBlankPage { at: last + 1, width: w, height: h });
+                    self.apply_edit(ctx, Edit::InsertBlankPage { at: last + 1, width: w, height: h });
                 }
             }
-            "page.insert" => self.insert_from_file_dialog(),
-            "page.replace" => self.replace_pages_dialog(),
-            "page.copy" => self.copy_pages(false),
-            "page.cut" => self.copy_pages(true),
-            "page.paste" => self.paste_pages(),
+            "page.insert" => self.insert_from_file_dialog(ctx),
+            "page.replace" => self.replace_pages_dialog(ctx),
+            "page.copy" => self.copy_pages(ctx, false),
+            "page.cut" => self.copy_pages(ctx, true),
+            "page.paste" => self.paste_pages(ctx),
             "page.duplicate" => {
-                self.apply_edit(Edit::DuplicatePages { pages: targets, at: None });
+                self.apply_edit(ctx, Edit::DuplicatePages { pages: targets, at: None });
             }
             // Two or more selected pages reverse among themselves; otherwise the whole document.
             "page.reverse" => {
                 let all = active.and_then(|i| self.views.get(i)).map_or(0, |v| v.page_count());
                 let pages = if targets.len() >= 2 { targets } else { (0..all).collect() };
-                self.apply_edit(Edit::ReversePages { pages });
+                self.apply_edit(ctx, Edit::ReversePages { pages });
             }
             "page.crop" => {
                 self.quick_tool = crate::QuickTool::Crop;
@@ -578,7 +578,7 @@ impl PdfCraftApp {
 
     fn run_edit_command(&mut self, ctx: &egui::Context, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
-            "edit.attach" => self.attach_file_dialog(),
+            "edit.attach" => self.attach_file_dialog(ctx),
             "edit.undo" => self.undo(ctx),
             "edit.redo" => self.redo(ctx),
             "edit.find" => {
@@ -614,13 +614,13 @@ impl PdfCraftApp {
                             .collect();
                         if let Some(edit) = self.views[i].selection_marks_edit(edits, head) {
                             self.views[i].clear_selection();
-                            self.apply_edit(edit);
+                            self.apply_edit(ctx, edit);
                         }
                     }
                 }
             }
             "comment.flatten" => {
-                self.apply_edit(Edit::Flatten { comments: true, fields: false });
+                self.apply_edit(ctx, Edit::Flatten { comments: true, fields: false });
             }
             "edit.header_footer"
             | "edit.watermark"
@@ -656,13 +656,13 @@ impl PdfCraftApp {
                     "prepress.marks.remove" => K::PrinterMarks,
                     _ => K::Background,
                 };
-                self.apply_edit(Edit::RemoveMarks { kind });
+                self.apply_edit(ctx, Edit::RemoveMarks { kind });
             }
             "export.image" => crate::export_ui::open(self, ctx, crate::export_ui::ExportKind::Image),
             "export.text" => crate::export_ui::open(self, ctx, crate::export_ui::ExportKind::Text),
             "ocr.recognize" => self.open_recognize_text(ctx),
             "ocr.enhance" => self.open_enhance_scan(ctx),
-            "ocr.recognize_batch" => self.ocr_files_dialog(),
+            "ocr.recognize_batch" => self.ocr_files_dialog(ctx),
             "ocr.correct" => self.ocr_verify.open = true,
             "edit.edit_text" => {
                 self.quick_tool = crate::QuickTool::EditText;
@@ -684,20 +684,20 @@ impl PdfCraftApp {
                 self.left = crate::LeftPanel::Tool("edit");
                 self.reveal_tools();
             }
-            "edit.image" => self.add_image_dialog(),
+            "edit.image" => self.add_image_dialog(ctx),
             "edit.link" => {
                 self.quick_tool = crate::QuickTool::Link;
                 self.notify_tr("Drag a rectangle to create a link; double-click a link to edit it");
             }
-            "edit.links_from_urls" => self.links_from_urls(),
-            "edit.remove_links" => self.remove_all_links(),
-            "comment.import" => self.import_comments_dialog(),
-            "form.import_data" => self.import_data_dialog(),
+            "edit.links_from_urls" => self.links_from_urls(ctx),
+            "edit.remove_links" => self.remove_all_links(ctx),
+            "comment.import" => self.import_comments_dialog(ctx),
+            "form.import_data" => self.import_data_dialog(ctx),
             "comment.stamp" => {
                 self.left = crate::LeftPanel::Tool("stamp");
                 self.reveal_tools();
             }
-            "comment.export" => self.export_data_dialog(true, false),
+            "comment.export" => self.export_data_dialog(ctx, true, false),
             "comment.summarize" => self.open_summarize(ctx),
             "edit.column_select" => self.quick_tool = crate::QuickTool::ColumnSelect,
             "edit.snapshot" => {
@@ -716,7 +716,7 @@ impl PdfCraftApp {
             }
             "comment.paste" => {
                 let Some(i) = active else { return Some(false) };
-                return Some(self.paste_comments(i, None, None));
+                return Some(self.paste_comments(ctx, i, None, None));
             }
             "comment.hide_all" => {
                 if let Some(i) = active {
@@ -727,10 +727,10 @@ impl PdfCraftApp {
                     }
                 }
             }
-            "export.docx" => self.export_office_dialog(pdfcraft_engine::compare::OfficeFormat::Docx),
-            "export.pptx" => self.export_office_dialog(pdfcraft_engine::compare::OfficeFormat::Pptx),
-            "export.html" => self.export_office_dialog(pdfcraft_engine::compare::OfficeFormat::Html),
-            "export.rtf" => self.export_office_dialog(pdfcraft_engine::compare::OfficeFormat::Rtf),
+            "export.docx" => self.export_office_dialog(ctx, pdfcraft_engine::compare::OfficeFormat::Docx),
+            "export.pptx" => self.export_office_dialog(ctx, pdfcraft_engine::compare::OfficeFormat::Pptx),
+            "export.html" => self.export_office_dialog(ctx, pdfcraft_engine::compare::OfficeFormat::Html),
+            "export.rtf" => self.export_office_dialog(ctx, pdfcraft_engine::compare::OfficeFormat::Rtf),
             "ocr.enhance_camera" => {
                 // The corners start on the document's edges when they can be found, else
                 // inset on the current page (camera_ui::page_input).
@@ -766,15 +766,15 @@ impl PdfCraftApp {
             }
             "form.flatten" => {
                 // Flatten what's typed in a field too (#166); a refused value flattens nothing.
-                if self.commit_form_typing() {
-                    self.apply_edit(Edit::Flatten { comments: false, fields: true });
+                if self.commit_form_typing(ctx) {
+                    self.apply_edit(ctx, Edit::Flatten { comments: false, fields: true });
                 }
             }
             "form.clear" => {
                 if let Some(i) = active {
                     self.views[i].session.forms.focus = None;
                 }
-                self.apply_edit(Edit::ResetForm { names: None });
+                self.apply_edit(ctx, Edit::ResetForm { names: None });
             }
             "form.tab_order.row" | "form.tab_order.column" | "form.tab_order.structure" => {
                 let order = match id {
@@ -783,7 +783,7 @@ impl PdfCraftApp {
                     _ => pdfcraft_engine::TabOrder::Structure,
                 };
                 let n = active.and_then(|i| self.session.get(self.views[i].id)).map_or(0, |d| d.info.pages.len());
-                self.apply_edit(Edit::SetTabOrder { pages: (0..n).collect(), order });
+                self.apply_edit(ctx, Edit::SetTabOrder { pages: (0..n).collect(), order });
             }
             "sign.digital" | "sign.certify" => {
                 let certify = id == "sign.certify";
@@ -800,7 +800,7 @@ impl PdfCraftApp {
                 self.choose_right_panel(Some(RightPanel::Signatures));
             }
             "sign.panel" => self.choose_right_panel(Some(RightPanel::Signatures)),
-            "form.export_data" => self.export_data_dialog(false, true),
+            "form.export_data" => self.export_data_dialog(ctx, false, true),
             "form.merge_data" => self.merge_data_dialog(),
             "form.prepare" => {
                 self.left = crate::LeftPanel::Tool("form");
@@ -862,12 +862,12 @@ impl PdfCraftApp {
             "tools.document_js" => crate::js_dialogs::open_document_scripts(self),
             "a11y.report" => self.show_accessibility_report(),
             "a11y.autotag" => {
-                if self.apply_edit(pdfcraft_engine::Edit::AutoTagText) {
+                if self.apply_edit(ctx, pdfcraft_engine::Edit::AutoTagText) {
                     self.choose_right_panel(Some(RightPanel::Tags));
                 }
             }
             "a11y.alt_text" => crate::a11y_ui::open_alt_text(self, ctx),
-            "a11y.autotag_fields" => self.autotag_form_fields(),
+            "a11y.autotag_fields" => self.autotag_form_fields(ctx),
             "a11y.tags" => self.choose_right_panel(Some(RightPanel::Tags)),
             "a11y.reading_options" => self.open_properties(ctx, PropsTab::Advanced),
             "redact.mark" => {
@@ -887,7 +887,7 @@ impl PdfCraftApp {
                             let edits: Vec<Edit> = marks.into_iter().map(|(page, quads)| self.redact_prefs.mark(page, quads, &author)).collect();
                             if let Some(edit) = self.views[i].selection_marks_edit(edits, head) {
                                 self.views[i].clear_selection();
-                                self.apply_edit(edit);
+                                self.apply_edit(ctx, edit);
                             }
                         }
                         crate::canvas::ToolMarks::Unreadable => {
@@ -913,7 +913,7 @@ impl PdfCraftApp {
             }
             "redact.sanitize" => crate::redact_ui::dialogs::open_sanitize(self),
             "redact.clear" => {
-                self.apply_edit(Edit::ClearRedactions);
+                self.apply_edit(ctx, Edit::ClearRedactions);
             }
             _ => return None,
         }
