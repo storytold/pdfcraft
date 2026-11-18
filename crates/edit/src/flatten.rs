@@ -746,7 +746,8 @@ fn widget_roots(doc: &Document) -> Vec<(ObjRef, ObjRef)> {
 /// `/Parent`. Each link counts only when the parent's `/Kids` lists the node climbed from (the
 /// parent is "the field whose Kids array includes this field", ISO 32000-2 §12.7.4.1, Table 226).
 /// `None` when the climb does not reach a top: a cycle, a link to something that is not a field
-/// dictionary or does not list the node, or more than [`MAX_PARENT_DEPTH`] links.
+/// dictionary (a page-tree node is not one) or does not list the node, or more than
+/// [`MAX_PARENT_DEPTH`] links.
 fn field_top(doc: &Document, node: ObjRef) -> Option<ObjRef> {
     let mut top = node;
     let mut climbed = HashSet::from([node]);
@@ -758,7 +759,14 @@ fn field_top(doc: &Document, node: ObjRef) -> Option<ObjRef> {
         if !climbed.insert(parent) {
             return None;
         }
-        let kids = doc.get(parent).as_dict()?.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned())?;
+        let parent_obj = doc.get(parent);
+        let parent_dict = parent_obj.as_dict()?;
+        // A page-tree node is not a field, even one whose /Kids lists the widget (a malformed
+        // page tree): taking it for one would prune its pages as drawn-away kids.
+        if matches!(parent_dict.name(b"Type"), Some(b"Pages" | b"Page")) {
+            return None;
+        }
+        let kids = parent_dict.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned())?;
         if !kids.iter().any(|k| k.as_ref() == Some(top)) {
             return None;
         }

@@ -822,6 +822,34 @@ endstream"
     assert!(listed(&reopen(&doc)).is_empty(), "a node with a /Parent is not a root field");
 }
 
+/// A malformed page tree whose `/Pages` node also lists a widget in its `/Kids`, the widget's
+/// `/Parent` naming that node. A `/Pages` node is not a field (ISO 32000-2 §7.7.3.2, Table 30;
+/// §12.7.4.1, Table 226), so flattening does not treat it as the widget's field tree: the page
+/// stays in the page tree.
+#[test]
+fn flattening_does_not_take_the_page_tree_for_a_field() {
+    let o = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [] >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R] >>".into(),
+        stream("", " "),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (shown) /Parent 2 0 R /P 3 0 R /Rect [10 10 150 40] /F 4 /AP << /N 6 0 R >> >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>
+stream
+
+endstream"
+            .into(),
+    ];
+    let mut doc = build(&o.iter().map(String::as_str).collect::<Vec<_>>());
+    let count = page_list(&doc).len();
+    let all: Vec<usize> = (0..count).collect();
+    let _ = flatten(&mut doc, &all, false, true);
+    let doc = reopen(&doc);
+    let kids = doc.get(pdfcraft_cos::ObjRef::new(2, 0)).as_dict().unwrap().get(b"Kids").cloned().unwrap();
+    assert!(kids.as_array().unwrap().contains(&Object::Ref(pdfcraft_cos::ObjRef::new(3, 0))), "the page stays in /Kids: {kids:?}");
+    assert!(!page_list(&doc).is_empty());
+}
+
 /// #1794: a form field whose widget has no usable appearance (none stored, or none for its
 /// selected state) has nothing to draw. Flattening used to remove it anyway, losing its value
 /// with no ink in its place. It stays, in the page and in the form, like a comment that can't be
