@@ -25,9 +25,8 @@ pub(crate) fn same_file(open: &str, path: &str) -> bool {
 
 impl PdfCraftApp {
     /// Shows `panel` as the right panel, or closes the one showing for `None`.
-    fn set_right(&mut self, panel: Option<RightPanel>) {
+    pub(crate) fn set_right(&mut self, panel: Option<RightPanel>) {
         use crate::side_panels::{PanelId, set_panel_visible};
-        // PLAN: assumed `PanelId::from(RightPanel)` (pdf-chrome-w13)
         match panel {
             Some(panel) => set_panel_visible(self, PanelId::from(panel), true),
             None => {
@@ -50,9 +49,7 @@ impl PdfCraftApp {
         // (`/NonFullScreenPageMode`, Table 147), there when the prompt is declined or full
         // screen is left.
         let navigation = if v.full_screen { v.non_full_screen } else { v.navigation };
-        // PLAN: `right_panel_closed()` is a read-only view assumed from pdf-chrome-w13 (L-136); canvas-w11's
-        // `view.view` setters below land with that set.
-        if self.active == Some(index) && !self.right_panel_closed() {
+        if self.active == Some(index) && !self.right_panel_closed {
             let panel = match navigation {
                 N::PageOnly => None,
                 N::Bookmarks => Some(RightPanel::Bookmarks),
@@ -83,11 +80,11 @@ impl PdfCraftApp {
             match v.magnification {
                 // The view opened at the default zoom already.
                 M::Default => {}
-                M::ActualSize => view.set_zoom(1.0),
-                M::Percent(p) => view.set_zoom((p / 100.0) as f32),
-                M::FitPage | M::FitVisible => view.fit = canvas::Fit::Page,
-                M::FitWidth => view.fit = canvas::Fit::Width,
-                M::FitHeight => view.fit = canvas::Fit::Height,
+                M::ActualSize => (view.view.zoom, view.view.fit) = (1.0, canvas::Fit::None),
+                M::Percent(p) => (view.view.zoom, view.view.fit) = (f64::from(p) / 100.0, canvas::Fit::None),
+                M::FitPage | M::FitVisible => view.view.fit = canvas::Fit::Page,
+                M::FitWidth => view.view.fit = canvas::Fit::Width,
+                M::FitHeight => view.view.fit = canvas::Fit::Height,
             }
         }
         // The opening destination (`/OpenAction`, named destinations resolved): its page, and
@@ -155,7 +152,7 @@ impl PdfCraftApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn poll_pending_opens(&mut self) {
+    pub(crate) fn poll_pending_opens(&mut self, ctx: &egui::Context) {
         // The queue delivers in the order jobs finish; each result goes to its entry, so the list
         // keeps the order the files were asked for.
         while let Some(finished) = self.opens.try_recv() {
@@ -195,7 +192,7 @@ impl PdfCraftApp {
             if retry {
                 self.password_retry = None;
             }
-            self.finish_pending_open(pending, kind);
+            self.finish_pending_open(ctx, pending, kind);
         }
         // A completion may schedule another open; preserve those requests as well as the
         // earlier waiting replies, without consuming a blocked receiver's result.
@@ -205,7 +202,7 @@ impl PdfCraftApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn finish_pending_open(&mut self, pending: PendingOpen, kind: open_worker::ResultKind) {
+    fn finish_pending_open(&mut self, ctx: &egui::Context, pending: PendingOpen, kind: open_worker::ResultKind) {
         match kind {
             open_worker::ResultKind::ReadFailed(reason) => {
                 self.notify_fmt("Couldn't read {name}: {e}", &[("name", &pending.name), ("e", &reason)]);
@@ -222,7 +219,7 @@ impl PdfCraftApp {
             open_worker::ResultKind::Conversion(bytes) => match self.open_converted(&pending.name, &bytes) {
                 Some(Ok(())) => {
                     if let Some(command) = pending.then {
-                        self.execute(command);
+                        self.execute(ctx, command);
                     }
                 }
                 Some(Err(error)) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
@@ -231,7 +228,7 @@ impl PdfCraftApp {
             open_worker::ResultKind::Converted(created) => match self.open_converted_pdf(&pending.name, created) {
                 Ok(()) => {
                     if let Some(command) = pending.then {
-                        self.execute(command);
+                        self.execute(ctx, command);
                     }
                 }
                 Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
@@ -248,14 +245,14 @@ impl PdfCraftApp {
                         if let Some((layout, continuous)) = pending.display_override
                             && let Some(view) = self.views.iter_mut().find(|view| view.id == id)
                         {
-                            view.set_display(layout, continuous);
+                            (view.view.display, view.view.continuous) = (layout, continuous);
                             self.launch_display_target = Some(id);
                         }
                         if let Some(meta) = &pending.recovered {
                             self.finish_recovery(meta);
                         }
                         if let Some(command) = pending.then {
-                            self.execute(command);
+                            self.execute(ctx, command);
                         }
                     }
                     Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
@@ -357,7 +354,7 @@ impl PdfCraftApp {
                 pdfcraft_render::AttachmentSource::Document { key } => Some(key.clone()),
                 pdfcraft_render::AttachmentSource::Annotation { .. } => None,
             });
-        let opens_with = if activate && self.right().is_none() && !self.right_panel_closed() && opening_mode != Mode::Read {
+        let opens_with = if activate && self.right().is_none() && !self.right_panel_closed && opening_mode != Mode::Read {
             if !doc.info.annotations.is_empty() {
                 Some(RightPanel::Comments)
             // A full-screen document names its panel for outside full screen, and with
@@ -405,7 +402,7 @@ impl PdfCraftApp {
             self.portfolio_initial = portfolio_initial.map(|key| (id, key));
         }
         if activate
-            && self.left_open()
+            && self.left_open
             && self.left == LeftPanel::Tool("organize")
             && let Some(view) = self.views.last_mut()
         {
@@ -421,10 +418,10 @@ impl PdfCraftApp {
         } else if activate && self.mode != self.default_mode {
             // Switch workspace like the mode bar, but a left panel the user (or `--left closed`)
             // closed stays closed, and an unchanged mode keeps the tool panel the user chose.
-            let (left, left_open) = (self.left, self.left_open());
+            let (left, left_open) = (self.left, self.left_open);
             self.select_mode(self.default_mode);
-            if self.left_open() != left_open {
-                // PLAN: assumed `PanelId::from(LeftPanel)` (pdf-chrome-w13)
+            if self.left_open != left_open {
+                self.left_open = left_open;
                 crate::side_panels::set_panel_visible(self, crate::side_panels::PanelId::from(left), left_open);
             }
         }
@@ -660,20 +657,20 @@ impl PdfCraftApp {
             (None, None) => return,
         };
         if unlock {
-            self.submit_unlock(password);
+            self.submit_unlock(ui.ctx(), password);
         } else {
-            self.submit_password(password);
+            self.submit_password(ui.ctx(), password);
         }
     }
 
     /// Answer the password prompt (`None` cancels).
-    pub fn submit_password(&mut self, password: Option<String>) {
+    pub fn submit_password(&mut self, ctx: &egui::Context, password: Option<String>) {
         let Some(mut p) = self.password_prompt.take() else { return };
         let Some(pw) = password.map(zeroize::Zeroizing::new) else {
             // A cancelled recovery goes back on offer; its snapshot stays in the store and must
             // not attach itself to whatever document is unlocked next (#813).
             if let Some(meta) = p.recovered.take() {
-                self.recoverable.push(meta);
+                self.recovered.push(meta);
             }
             #[cfg(not(target_arch = "wasm32"))]
             self.settle_launch_layout();
@@ -700,12 +697,12 @@ impl PdfCraftApp {
             self.password_retry = Some(token);
         }
         #[cfg(target_arch = "wasm32")]
-        self.retry_inline(p, pw);
+        self.retry_inline(ctx, p, pw);
     }
 
     /// The web has no queue: the retry opens the held bytes at once.
     #[cfg(target_arch = "wasm32")]
-    fn retry_inline(&mut self, mut p: PasswordPrompt, pw: zeroize::Zeroizing<String>) {
+    fn retry_inline(&mut self, ctx: &egui::Context, mut p: PasswordPrompt, pw: zeroize::Zeroizing<String>) {
         let after_open = p.after_open.clone();
         let opened = self.try_open(&p.name, p.path.take(), p.bytes.clone(), Some(&pw), p.activate);
         drop(pw);
@@ -719,13 +716,13 @@ impl PdfCraftApp {
                 if let Some((layout, continuous)) = p.display_override
                     && let Some(view) = self.views.last_mut()
                 {
-                    view.set_display(layout, continuous);
+                    (view.view.display, view.view.continuous) = (layout, continuous);
                 }
                 if let Some(meta) = &p.recovered {
                     self.finish_recovery(meta);
                 }
                 if let Some(command) = p.then {
-                    self.execute(command);
+                    self.execute(ctx, command);
                 }
             }
             // Wrong password: the new prompt is for the same bytes, so it keeps the snapshot
@@ -748,7 +745,7 @@ impl PdfCraftApp {
     }
 
     /// Answer the permissions password prompt (`None` cancels).
-    pub fn submit_unlock(&mut self, password: Option<String>) {
+    pub fn submit_unlock(&mut self, ctx: &egui::Context, password: Option<String>) {
         let Some(mut p) = self.unlock_prompt.take() else { return };
         let Some(mut pw) = password else { return };
         let unlocked = self.session.unlock(p.doc, &pw);
@@ -757,7 +754,7 @@ impl PdfCraftApp {
             // Carry on with what asked for the password, if its document is still the one shown.
             Ok(()) => match p.then {
                 Some(command) if self.active_ids().is_some_and(|(_, id)| id == p.doc) => {
-                    self.execute(command);
+                    self.execute(ctx, command);
                 }
                 _ => self.notify_tr("Restrictions lifted"),
             },
@@ -790,15 +787,20 @@ impl PdfCraftApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_path(&mut self, path: &str) -> OpenOutcome {
-        self.open_path_then(path, None)
+        self.open_path_request(path, None, None)
     }
 
     /// Keep a chosen tool with its file until preparation and any password entry finish. The
     /// return value is the programmatic open contract (#1620): callers that must know whether
     /// the file opened, focused its tab, was handed to the background worker, or failed.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn open_path_then(&mut self, path: &str, then: Option<&'static str>) -> OpenOutcome {
-        self.open_path_request(path, then, None)
+    pub(crate) fn open_path_then(&mut self, ctx: &egui::Context, path: &str, then: Option<&'static str>) -> OpenOutcome {
+        let outcome = self.open_path_request(path, then, None);
+        // A file that was open already is focused at once, and the tool it was opened for runs on it.
+        if let (OpenOutcome::Focused, Some(command)) = (&outcome, then) {
+            self.execute(ctx, command);
+        }
+        outcome
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -829,14 +831,11 @@ impl PdfCraftApp {
             if let Some((layout, continuous)) = display_override
                 && let Some(view) = self.views.get_mut(i)
             {
-                view.set_display(layout, continuous);
+                (view.view.display, view.view.continuous) = (layout, continuous);
                 self.launch_display_target = Some(view.id);
             }
             if let Some(destination) = after_open {
                 self.apply_destination_at(i, destination);
-            }
-            if let Some(command) = then {
-                self.execute(command);
             }
             return OpenOutcome::Focused;
         }
@@ -909,7 +908,7 @@ impl PdfCraftApp {
             && let Some(id) = self.launch_display_target
             && let Some(view) = self.views.iter_mut().find(|view| view.id == id)
         {
-            view.set_display(layout, continuous);
+            (view.view.display, view.view.continuous) = (layout, continuous);
         }
     }
 
@@ -965,20 +964,20 @@ impl PdfCraftApp {
 
     /// Opens what a picker answered and runs the command `then` on each opened document, as a tool
     /// chosen from Home does once its file is ready.
-    pub fn open_picked_then(&mut self, picked: Picked, then: &'static str) {
+    pub fn open_picked_then(&mut self, ctx: &egui::Context, picked: Picked, then: &'static str) {
         self.startup_superseded = true;
         match picked {
             #[cfg(not(target_arch = "wasm32"))]
             Picked::Paths(paths) => {
                 for path in paths {
-                    self.open_path_then(&path.to_string_lossy(), Some(then));
+                    self.open_path_then(ctx, &path.to_string_lossy(), Some(then));
                 }
             }
             Picked::Contents(files) => {
                 for (name, bytes) in files {
                     match self.open_bytes(&name, None, bytes) {
                         Ok(()) => {
-                            self.execute(then);
+                            self.execute(ctx, then);
                         }
                         Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]),
                     }

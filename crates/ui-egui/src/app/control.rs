@@ -51,7 +51,7 @@ impl PdfCraftApp {
                 self.set_motion(motion);
             }
             ("panel", _) => {
-                self.right = match value {
+                let panel = match value {
                     "comments" => Some(RightPanel::Comments),
                     "bookmarks" => Some(RightPanel::Bookmarks),
                     "pages" => Some(RightPanel::Pages),
@@ -65,7 +65,8 @@ impl PdfCraftApp {
                     "compare" => Some(RightPanel::Compare),
                     "none" => None,
                     other => return Err(format!("unknown panel {other}")),
-                }
+                };
+                self.set_right(panel);
             }
             ("mode", _) => {
                 let mode = Mode::parse(value).unwrap_or(Mode::AllTools);
@@ -105,14 +106,18 @@ impl PdfCraftApp {
             // The palette opens empty: typing reaches it through the runtime's input, as a user's.
             ("palette", _) => self.palette_open = true,
             ("page", Some(v)) => v.go_to_page(value.parse::<usize>().map_err(|e| e.to_string())?.saturating_sub(1)),
-            ("zoom", Some(v)) => v.set_zoom(DocView::parse_zoom_percent(value).ok_or("zoom must be a percentage above 0")?),
+            ("zoom", Some(v)) => {
+                let zoom = DocView::parse_zoom_percent(value).ok_or("zoom must be a percentage above 0")?;
+                v.view.zoom = f64::from(zoom);
+                v.view.fit = canvas::Fit::None;
+            }
             ("layout", Some(v)) => {
-                let (layout, continuous) = canvas::parse_display_token(value).ok_or("layout must be single, continuous, two-up or two-page")?;
-                v.set_display(layout, continuous);
+                let (display, continuous) = canvas::parse_display_token(value).ok_or("layout must be single, continuous, two-up or two-page")?;
+                (v.view.display, v.view.continuous) = (display, continuous);
             }
             ("continuous", Some(v)) => match value {
-                "on" => v.set_continuous(true),
-                "off" => v.set_continuous(false),
+                "on" => v.view.continuous = true,
+                "off" => v.view.continuous = false,
                 _ => return Err("continuous must be on or off".into()),
             },
             ("page-gaps", Some(_)) => {
@@ -124,7 +129,7 @@ impl PdfCraftApp {
                 self.set_active_page_gaps(show);
             }
             ("default-page-gaps", _) => {
-                self.view_defaults.show_page_gaps = match value {
+                self.view_defaults.page_gaps = match value {
                     "on" => true,
                     "off" => false,
                     _ => return Err("default-page-gaps must be on or off".into()),
@@ -145,12 +150,12 @@ impl PdfCraftApp {
                 if on && !v.cover_applies() {
                     return Err("switch to two-page view first to show the cover page".into());
                 }
-                v.set_cover(on);
+                v.view.cover = on;
             }
             ("default-layout", _) => {
-                let (layout, continuous) =
+                let (display, continuous) =
                     canvas::parse_display_token(value).ok_or("default-layout must be single, continuous, two-up or two-page")?;
-                (self.view_defaults.layout, self.view_defaults.continuous) = (layout, continuous);
+                (self.view_defaults.display, self.view_defaults.continuous) = (display, continuous);
             }
             ("default-continuous", _) => {
                 self.view_defaults.continuous = match value {
@@ -191,8 +196,7 @@ impl PdfCraftApp {
                 if !percent.is_finite() || !craft::pages::ui::THUMBNAIL_ZOOM.range().contains(&(percent / 100.0)) {
                     return Err("thumbnail-zoom must be between 50 and 150".into());
                 }
-                // PLAN: assumed `set_thumbnail_zoom(f64)` (the canvas owner of `zoom.rs`, CV-C27).
-                v.set_thumbnail_zoom(percent / 100.0);
+                v.set_thumbnail_zoom((percent / 100.0) as f32);
             }
             // `--grid-zoom 150`: the size of the pages in the organize grid, in percent. The
             // grid's size is one for every document, as it is remembered.
@@ -239,8 +243,14 @@ impl PdfCraftApp {
                 v.select_pages(&pages);
             }
             // `--select-text 2:10-40`: characters 10 to 40 of page 2 selected, as a drag would.
-            // PLAN: assumed `DocView::select_text_spec(&mut self, &str) -> Result<(), String>` (pdf-canvas-w8, canvas-02 CH-1).
-            ("select-text", Some(v)) => v.select_text_spec(value)?,
+            ("select-text", Some(v)) => {
+                const USAGE: &str = "select-text: PAGE:FROM-TO";
+                let (page, span) = value.split_once(':').ok_or(USAGE)?;
+                let (from, to) = span.split_once('-').ok_or(USAGE)?;
+                let number = |text: &str| text.trim().parse::<usize>().map_err(|_| USAGE);
+                let page = number(page)?.checked_sub(1).filter(|page| *page < v.page_count()).ok_or("select-text: no such page")?;
+                v.select_text(page, number(from)?, number(to)?);
+            }
             // `--prepare-select NAME[:WIDGET]`: one form field selected in Prepare a form.
             ("prepare-select", Some(v)) => {
                 let (name, widget) = match value.rsplit_once(':') {
@@ -249,11 +259,36 @@ impl PdfCraftApp {
                 };
                 v.session.prepare.selected = Some((name.to_string(), widget));
             }
-            // PLAN: assumed `CommentPrefs::set_recent_colours(&mut self, &str) -> Result<(), String>` (pdf-comments, H-18).
-            ("recent-colours", _) => self.comment_prefs.set_recent_colours(value)?,
+            // `progress-hold 0.4` shows the card of a held fake job at that fraction, with Cancel;
+            // `null` takes it away.
             ("progress-hold", _) => {
-                // PLAN: assumed the field `progress_hold: bool` that keeps progress cards up (pdf-chrome-w19, chrome-03 :146).
-                self.progress_hold = value.parse::<bool>().map_err(|_| "progress-hold must be true or false")?;
+                use crate::notices::{ProgressKey, ProgressNotice, end_progress, set_progress};
+                if value == "null" {
+                    end_progress(self, ProgressKey::Export);
+                } else {
+                    let fraction = value.parse::<f32>().map_err(|_| "progress-hold must be a fraction or null")?;
+                    set_progress(
+                        self,
+                        ProgressKey::Export,
+                        ProgressNotice { label: tl!("Held for a capture").to_owned(), fraction, cancellable: true },
+                    );
+                }
+            }
+            // `--recent-colours ff0000,00ff00`: the custom colours the pickers remember, as hex, the
+            // first ending up newest.
+            ("recent-colours", _) => {
+                let hex = |text: &str| -> Result<[f64; 3], String> {
+                    let digits = text.trim().trim_start_matches('#');
+                    let channel = |at: usize| digits.get(at..at + 2).and_then(|pair| u8::from_str_radix(pair, 16).ok()).map(|v| f64::from(v) / 255.0);
+                    match (digits.len(), channel(0), channel(2), channel(4)) {
+                        (6, Some(r), Some(g), Some(b)) => Ok([r, g, b]),
+                        _ => Err(format!("recent-colours: `{text}` is not a hex colour (rrggbb)")),
+                    }
+                };
+                let colours = value.split(',').filter(|text| !text.trim().is_empty()).map(hex).collect::<Result<Vec<_>, _>>()?;
+                for colour in colours.into_iter().rev() {
+                    self.recent_colours.remember(colour);
+                }
             }
             #[cfg(feature = "capture")]
             // PLAN: assumed `Updates::set_source(&mut self, &str) -> Result<(), String>` (pdf-shell, shell-03 :119).
@@ -340,9 +375,9 @@ impl PdfCraftApp {
                 };
             }
             ("system-title-bar", _) => {
-                self.system_title_bar = match value {
-                    "true" => true,
-                    "false" => false,
+                self.title_bar_choice = match value {
+                    "true" => craft::window::policy::TitleBarPref::System,
+                    "false" => craft::window::policy::TitleBarPref::Integrated,
                     _ => return Err("system-title-bar must be true or false".into()),
                 };
             }
@@ -360,8 +395,7 @@ impl PdfCraftApp {
                     (p.trim().parse().map_err(|_| "comment: PAGE:INDEX")?, i.trim().parse().map_err(|_| "comment: PAGE:INDEX")?);
                 let thread = (p.saturating_sub(1), i.saturating_sub(1));
                 v.session.comments.select_only(thread);
-                // PLAN: assumed `CommentsPanel::reveal(&mut self, (usize, usize))` (pdf-comments-w12).
-                v.session.comments.panel.reveal(thread);
+                v.session.comments.reveal = true;
             }
             // `--combine-view list`: Combine files as thumbnails (grid) or as the table (list).
             ("combine-view", _) => {
@@ -428,7 +462,7 @@ impl PdfCraftApp {
             "header-footer" => self.open_marks(ctx, MarkKind::HeaderFooter, false),
             "watermark" => self.open_marks(ctx, MarkKind::Watermark, false),
             "background" => self.open_marks(ctx, MarkKind::Background, false),
-            "printer-marks" => self.open_printer_marks(),
+            "printer-marks" => self.open_printer_marks(ctx),
             "export-image" => export_ui::open(self, ctx, export_ui::ExportKind::Image),
             "word-count" => self.open_word_count(),
             "export-text" => export_ui::open(self, ctx, export_ui::ExportKind::Text),
@@ -453,8 +487,8 @@ impl PdfCraftApp {
                 let page = self.active.and_then(|i| self.views.get(i)).map_or(0, |v| v.current());
                 self.start_signing(page, None, None, (value == "certify").then_some(2));
             }
-            "number-pages" => self.open_number_pages(),
-            "convert-colours" => self.open_convert_colours(),
+            "number-pages" => self.open_number_pages(ctx),
+            "convert-colours" => self.open_convert_colours(ctx),
             // Through the command, so it is refused with no document or none that can be
             // modified, as the menu is.
             "fix-hairlines" => {
@@ -481,7 +515,7 @@ impl PdfCraftApp {
                 prepare::dialog::open(self, &name, widget, prepare::FieldTab::General);
             }
             "none" => {
-                self.cancel_dialogs();
+                self.cancel_dialogs(ctx);
                 self.redact_props = None;
                 self.redact_search_open = false;
                 self.hidden_draft = None;

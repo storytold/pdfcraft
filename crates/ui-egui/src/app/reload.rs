@@ -34,9 +34,9 @@ impl PdfCraftApp {
     /// it found. Nothing here reads the frame's input: the reload request and the changes are
     /// taken once from where they wait, so a second pass in a frame finds only what arrived since
     /// the first.
-    pub(crate) fn watch_files(&mut self) {
+    pub(crate) fn watch_files(&mut self, ctx: &egui::Context) {
         if let Some(id) = self.reload_request.take() {
-            self.reload_from_disk(id);
+            self.reload_from_disk(ctx, id);
         }
         // Every open document with a file, while the preference is on. Turning it off stops the
         // watching; the versions recorded stay, so a save still asks about a file changed on disk.
@@ -60,7 +60,7 @@ impl PdfCraftApp {
             return;
         }
         for change in self.watch.take_changes() {
-            self.file_changed(change);
+            self.file_changed(ctx, change);
         }
     }
 
@@ -69,12 +69,12 @@ impl PdfCraftApp {
     /// holds until the save has taken its answer, since replacing the document first would save
     /// another version than the one the user was asked about.
     fn holds_reload(&self) -> bool {
-        self.modal_open() || self.pending_full_screen.is_some() || self.pending_save.as_ref().is_some_and(|p| p.asking())
+        self.modal_open() || self.pending_save.as_ref().is_some_and(|p| p.asking())
     }
 
     /// A watched file has a new version: reload its document, or say so when it has unsaved
     /// changes. Stale versions never reach here: [`FileWatch::take_changes`] drops them.
-    fn file_changed(&mut self, change: Changed<DocId>) {
+    fn file_changed(&mut self, ctx: &egui::Context, change: Changed<DocId>) {
         let Some(i) = self.views.iter().position(|v| v.id == change.key) else { return };
         // LaunchServices recovery (and Finder metadata edits) changes ctime. The watch already
         // read the stable file: identical saved bytes are not a document change.
@@ -91,16 +91,16 @@ impl PdfCraftApp {
             return;
         }
         match change.bytes {
-            Some(bytes) => self.reload_view(i, bytes),
+            Some(bytes) => self.reload_view(ctx, i, bytes),
             // The watch reads every change whole (`document_watch`); one reported by its stamp
             // alone is read here.
-            None => self.reload_from_disk(change.key),
+            None => self.reload_from_disk(ctx, change.key),
         }
     }
 
     /// The notice bar's Reload: read the file now and replace the document, unsaved changes and
     /// all.
-    fn reload_from_disk(&mut self, doc: DocId) {
+    fn reload_from_disk(&mut self, ctx: &egui::Context, doc: DocId) {
         let Some(i) = self.views.iter().position(|v| v.id == doc) else { return };
         let Some(path) = self.session.get(doc).and_then(|d| d.path.clone()) else { return };
         let path = Path::new(&path);
@@ -109,7 +109,7 @@ impl PdfCraftApp {
         match std::fs::read(path) {
             Ok(bytes) => {
                 self.watch.known_as(doc, path, stamp);
-                self.reload_view(i, Arc::new(bytes));
+                self.reload_view(ctx, i, Arc::new(bytes));
             }
             Err(e) => {
                 let name = self.session.get(doc).map(|d| d.name.clone()).unwrap_or_default();
@@ -121,7 +121,7 @@ impl PdfCraftApp {
     /// Open `bytes` in place of tab `i`'s document, keeping the tab and the reader's place. A
     /// version that can't be opened leaves the document as it was, and says so. The one place a
     /// reload resets what the view holds about the old version.
-    fn reload_view(&mut self, i: usize, bytes: Arc<Vec<u8>>) {
+    fn reload_view(&mut self, ctx: &egui::Context, i: usize, bytes: Arc<Vec<u8>>) {
         let Some(id) = self.views.get(i).map(|v| v.id) else { return };
         match self.session.reload(id, bytes) {
             Ok(()) => {
@@ -130,7 +130,7 @@ impl PdfCraftApp {
                 self.forget_recovery(id);
                 self.placed_signatures.remove(&id);
                 if let (Some(view), Some(doc)) = (self.views.get_mut(i), self.session.get(id)) {
-                    view.document_replaced(&doc.info);
+                    view.document_replaced(ctx, &doc.info);
                 }
                 // What the form's scripts said while it opened, as on opening.
                 let out = self.session.take_js_output(id);
@@ -223,9 +223,9 @@ mod tests {
             // PLAN: assumed `AppServices::new(wake, clipboard, recovery_dir, update_source, intake, watch)` (L-207, pdf-hub-w1)
             let services = crate::AppServices::new(Wake::none(), clipboard, None, None, intake, document_watch(Wake::none()).inline());
             let path = path.to_owned();
-            let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
                 let mut app = PdfCraftApp::with_host(host, services);
-                app.set_option("language", "en").unwrap();
+                app.set_option(&cc.egui_ctx, "language", "en").unwrap();
                 app.open_path(&path);
                 app
             });

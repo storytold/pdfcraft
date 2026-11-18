@@ -429,7 +429,7 @@ mod review_tests {
     /// One frame's paste events offered, then Paste run as its command; the images on page 1.
     fn paste(app: &mut PdfCraftApp, events: Vec<egui::Event>) -> usize {
         app.offer_pasted(&egui::RawInput { events, ..Default::default() });
-        assert!(app.execute("edit.paste"));
+        assert!(app.execute(&egui::Context::default(), "edit.paste"));
         app.session.get(app.views[0].id).unwrap().page_images(0).len()
     }
 
@@ -467,7 +467,7 @@ mod review_tests {
     fn review_failed_keyboard_cut_keeps_the_image_selection() {
         let (mut app, _) = app_with_clipboard();
         app.views[0].session.image_selection = Some(crate::edit_text_ui::ImageSelection::at(0, 0));
-        app.execute("edit.cut");
+        app.execute(&egui::Context::default(), "edit.cut");
         assert!(app.views[0].session.image_selection.is_some());
     }
 
@@ -487,7 +487,7 @@ mod review_tests {
         app.views[0].session.texts.clear();
         app.views[0].select_text(0, 0, 0);
         assert!(app.views[0].selection_waits_for_text().is_some());
-        assert!(app.execute("edit.copy"));
+        assert!(app.execute(&egui::Context::default(), "edit.copy"));
         assert_eq!(jobs.waiting(), 1, "the selection's copy started");
         assert!(app.comment_clipboard.is_none(), "the comment was not copied");
         assert!(writes.lock().unwrap().is_empty(), "no comment payload reached the clipboard");

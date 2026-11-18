@@ -204,7 +204,7 @@ struct PendingOpen {
     after_open: Option<pdfcraft_render::RemoteDestination>,
     recovered: Option<craft::platform::autosave::RecoveryEntry>,
     then: Option<&'static str>,
-    display_override: Option<craft::pages::PageDisplay>,
+    display_override: Option<(craft::pages::PageDisplay, bool)>,
     /// An answer taken from the queue and kept back for later (a password prompt waiting for an
     /// earlier file's password retry).
     ready: Option<open_worker::ResultKind>,
@@ -435,7 +435,7 @@ pub struct PdfCraftApp {
     next_open_token: u64,
     /// Explicit CLI layout waits for flagged launch opens, never targeting restored tabs.
     #[cfg(not(target_arch = "wasm32"))]
-    launch_layout: Option<craft::pages::PageDisplay>,
+    launch_layout: Option<(craft::pages::PageDisplay, bool)>,
     #[cfg(not(target_arch = "wasm32"))]
     launch_display_target: Option<DocId>,
     /// The file picks asked of the host's file service, by ticket, with what each is for.
@@ -684,8 +684,13 @@ pub struct PdfCraftApp {
     pub(crate) document_fonts: Option<files::InstalledFonts>,
     /// The installed fonts being listed off the UI thread.
     pub(crate) font_scan: Queue<(), Vec<pdfcraft_engine::text_fonts::FontFile>>,
-    /// The last web link the app asked the system to open (tests and automation).
-    pub last_opened_url: Option<String>,
+    /// Web links the app asked the system to open, waiting for the pass that hands them to the
+    /// runtime.
+    pub(crate) pending_urls: Vec<String>,
+    /// A file the user opened, or a dialog or document that came up, since the app started: the
+    /// browser's startup `?file=` download then opens in the background instead of in front
+    /// (#171).
+    pub(crate) startup_superseded: bool,
     /// The home screen's community card was closed; it comes back next launch (not remembered).
     pub community_card_closed: bool,
     /// A document asked to open this address; the user hasn't answered yet (#90, #91).

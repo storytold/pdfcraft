@@ -1267,7 +1267,7 @@ impl PdfCraftApp {
                 self.apply_edit(Edit::AddBookmark { parent: vec![], index: n, title: "Untitled".into(), page, left, top });
                 // Like Acrobat: the new bookmark starts in rename mode.
                 self.bookmark_rename = Some((vec![n], "Untitled".into()));
-                self.right = Some(crate::RightPanel::Bookmarks);
+                self.set_right(Some(crate::RightPanel::Bookmarks));
                 return;
             }
             A::StartRename(path) => {
@@ -1317,7 +1317,7 @@ impl PdfCraftApp {
                 return;
             }
             A::FromStructure => {
-                self.right = Some(crate::RightPanel::Bookmarks);
+                self.set_right(Some(crate::RightPanel::Bookmarks));
                 Edit::BookmarksFromStructure
             }
             // A dialog chooses the styles; it makes the edit.
