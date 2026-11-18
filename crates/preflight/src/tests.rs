@@ -212,6 +212,74 @@ fn convert_embeds_the_standard_fonts_a_document_does_not() {
     assert_eq!(saved, left);
 }
 
+/// #7663 review: `Helvetica-Narrow` and `Helvetica-Condensed` read as aliases of Helvetica, so
+/// convert embedded regular Helvetica and replaced their own narrower `/Widths` with its advances,
+/// and every line set in them grew 15–22% wider. A font is now embedded only when the widths it
+/// gives are the substitute's or the standard face's; any other stays not fixable, as it was.
+#[test]
+fn a_font_whose_own_widths_are_not_the_standard_ones_is_not_embedded() {
+    use pdfcraft_fonts::Std14;
+    let widths = |face: Std14, scale: f64, change: Option<(u8, f64)>| -> String {
+        let w = (32..=255u8).map(|c| match change {
+            Some((code, w)) if code == c => w,
+            _ => (face.width(c) * scale).round(),
+        });
+        format!("/FirstChar 32 /LastChar 255 /Widths [{}]", w.map(|w| w.to_string()).collect::<Vec<_>>().join(" "))
+    };
+    let font = |name: &str, widths: &str| format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name} /Encoding /WinAnsiEncoding {widths} >>");
+    let fonts = [
+        // The reviewer's files: narrow and condensed widths, under names that alias Helvetica.
+        font("Helvetica-Narrow", &widths(Std14::Helvetica, 0.82, None)),
+        font("Helvetica-Condensed-Bold", &widths(Std14::HelveticaBold, 0.85, None)),
+        // One glyph that is neither the substitute's width nor the standard one.
+        font("Times-Roman", &widths(Std14::TimesRoman, 1.0, Some((b'e', 520.0)))),
+        // Widths that can't be read can't be compared.
+        font("Times-Bold", "/FirstChar 32 /Widths [250 (x)]"),
+        // The standard metrics, € (556, where the substitute's is 667) and zeros for unused codes
+        // included, are Helvetica's and Times-Italic's own, so they're embedded.
+        font("Helvetica", &widths(Std14::Helvetica, 1.0, None)),
+        font("Times-Italic", &widths(Std14::TimesItalic, 1.0, Some((b'Q', 0.0)))),
+    ];
+    let content = "BT /F1 12 Tf (a) Tj /F2 12 Tf (a) Tj /F3 12 Tf (a) Tj /F4 12 Tf (a) Tj /F5 12 Tf (a) Tj /F6 12 Tf (a) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R /F4 8 0 R /F5 9 0 R /F6 10 0 R >> >> >>"
+            .to_string(),
+        stream,
+    ];
+    objects.extend(fonts);
+    let mut doc = build(&objects.iter().map(String::as_str).collect::<Vec<_>>(), "");
+    let original = |r: u32| doc.get(ObjRef::new(r, 0)).as_dict().cloned().unwrap();
+    let kept: Vec<Dict> = (5..=8).map(original).collect();
+
+    let not_fixable: Vec<String> = ["Helvetica-Narrow", "Helvetica-Condensed-Bold", "Times-Roman", "Times-Bold"]
+        .iter()
+        .map(|n| format!("The font {n} isn't embedded"))
+        .collect();
+    let fixable = |issues: &[Issue]| -> Vec<(String, bool)> {
+        let mut f: Vec<_> = issues.iter().filter(|i| i.clause == "6.2.11.4").map(|i| (i.message.clone(), i.fixable)).collect();
+        f.sort();
+        f
+    };
+    let mut want: Vec<(String, bool)> = not_fixable.iter().map(|m| (m.clone(), false)).collect();
+    want.extend(["Helvetica", "Times-Italic"].iter().map(|n| (format!("The font {n} isn't embedded"), true)));
+    want.sort();
+    assert_eq!(fixable(&verify(&doc, Level::A2b)), want);
+
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.fixed.contains(&"Embedded PdfCraft's substitute font programs for Helvetica, Times-Italic".to_string()), "{:?}", r.fixed);
+    let mut left: Vec<(String, bool)> = not_fixable.iter().map(|m| (m.clone(), false)).collect();
+    left.sort();
+    assert_eq!(fixable(&r.remaining), left);
+    for (r, before) in (5..=8).zip(kept) {
+        assert_eq!(doc.get(ObjRef::new(r, 0)).as_dict().cloned().unwrap(), before, "object {r} is left as it was");
+    }
+    let (_, widths, _) = embedded_font(&doc, 9);
+    assert_eq!(widths[128], 667.0, "Helvetica's € is the substitute's, as PDF/A asks (6.2.11.5)");
+}
+
 #[test]
 fn embedded_files_differ_between_parts() {
     let doc = build(

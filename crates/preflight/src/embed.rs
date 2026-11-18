@@ -13,6 +13,11 @@
 //! has: WinAnsi, MacRoman or the built-in StandardEncoding, with `/Differences` naming glyphs the
 //! program holds. Symbol and ZapfDingbats are left alone, since their substitutes' encodings and
 //! advances don't match the standard ones, and so are TrueType and composite fonts.
+//!
+//! A name that reads as an alias isn't always the standard face (`Helvetica-Narrow`), so a font
+//! that gives `/Widths` is embedded only if each is the substitute's advance or the standard
+//! metric (see [`plan`]). Where a file gives the standard metric for one of the few glyphs the
+//! substitute differs on, the text after that glyph moves by the difference.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -140,8 +145,20 @@ impl OutlinePen for Extent {
     fn close(&mut self) {}
 }
 
+/// How far, in thousandths of an em, a width the document gives may be from the one embedding
+/// writes and still count as the same: generators round widths, or write them as reals.
+const WIDTH_TOLERANCE: f64 = 1.0;
+
 /// The substitute to embed into the font dictionary `font`, if it is a simple standard-14 Latin
-/// text font with no program of its own, under an encoding the substitute covers.
+/// text font with no program of its own, under an encoding the substitute covers, and with no
+/// `/Widths` of its own that embedding would change.
+///
+/// The name alone doesn't say the font is the standard face: `Helvetica-Narrow` and
+/// `Helvetica-Condensed` read as aliases of Helvetica, but their widths are 15–22% narrower, and
+/// writing Helvetica's would spread every line set in them. So each width the document gives,
+/// for a code its encoding maps to a glyph, must be the substitute's advance or the standard
+/// face's own metric for that character (a file giving the standard metric for the euro sign,
+/// where the substitute's differs, still names the standard font).
 pub(crate) fn plan(doc: &Document, font: &Dict) -> Option<Embedding> {
     if font.name(b"Subtype") != Some(b"Type1") || crate::font_embedded(doc, font) {
         return None;
@@ -152,17 +169,48 @@ pub(crate) fn plan(doc: &Document, font: &Dict) -> Option<Embedding> {
         (face, Std14Match::Alias) => face,
     };
     let encoding = FontEncoding::read(doc, font)?;
+    let given = given_widths(doc, font)?;
     let metrics = substitute(face)?;
     let mut widths = Vec::with_capacity(256);
     for code in 0..=u8::MAX {
-        let advance = match encoding.differences.get(&code) {
+        let (advance, ch) = match encoding.differences.get(&code) {
             // A glyph the program lacks would be drawn as .notdef: not this font's to fix.
-            Some(name) => Some(*metrics.by_name.get(name)?),
-            None => pdfcraft_fonts::base_encoding_char(&encoding.base, code).and_then(|c| metrics.by_char.get(&c).copied()),
+            Some(name) => {
+                let ch = std::str::from_utf8(name).ok().and_then(pdfcraft_fonts::pdf::glyph_unicode);
+                (Some(*metrics.by_name.get(name)?), ch)
+            }
+            None => {
+                let ch = pdfcraft_fonts::base_encoding_char(&encoding.base, code);
+                (ch.and_then(|c| metrics.by_char.get(&c).copied()), ch)
+            }
         };
+        if let (Some(w), Some(a)) = (given.get(usize::from(code)).copied().flatten(), advance) {
+            let close = |v: f64| (w - v).abs() <= WIDTH_TOLERANCE;
+            let standard = ch.and_then(pdfcraft_fonts::win_ansi_byte).map(|b| face.width(b)).filter(|&s| s != 0.0);
+            if !close(a) && !standard.is_some_and(close) {
+                return None;
+            }
+        }
         widths.push(advance.unwrap_or(metrics.notdef));
     }
     Some(Embedding { face, widths, metrics })
+}
+
+/// The width `font`'s `/Widths` gives each code 0–255: `None` for a code it gives none or zero
+/// for (generators write zero for codes a page doesn't use). `None` overall if `/Widths` is there
+/// but can't be read, so a font whose widths can't be compared isn't embedded.
+fn given_widths(doc: &Document, font: &Dict) -> Option<Vec<Option<f64>>> {
+    let mut given = vec![None; 256];
+    let Some(list) = font.get(b"Widths").map(|w| doc.resolve(w)) else { return Some(given) };
+    let Object::Int(first) = *doc.resolve(font.get(b"FirstChar")?) else { return None };
+    for (i, w) in list.as_array()?.iter().take(256).enumerate() {
+        let w = doc.resolve(w).as_f64()?;
+        let code = i64::try_from(i).ok().and_then(|i| first.checked_add(i)).and_then(|c| usize::try_from(c).ok());
+        if let Some(slot) = code.and_then(|c| given.get_mut(c)) {
+            *slot = Some(w).filter(|&w| w != 0.0);
+        }
+    }
+    Some(given)
 }
 
 /// Read the substitute `program`; `None` if it can't be read, or a glyph has no advance.
