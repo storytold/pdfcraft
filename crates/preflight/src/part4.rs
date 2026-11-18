@@ -434,13 +434,34 @@ fn packet(bytes: &[u8], object: Option<pdfcraft_cos::ObjRef>, issue: &mut Report
             None => issue("6.7.2.1", "The XMP metadata isn't well-formed XML", None, None, false),
         }
     }
-    if let Some(start) = text.find("<?xpacket")
+    if let Some(start) = packet_header(text)
         && let Some(header) = text.get(start..).and_then(|rest| rest.find("?>").and_then(|end| rest.get(..end)))
         && (declares_pseudo_attribute(header, "bytes") || declares_pseudo_attribute(header, "encoding"))
     {
         match named {
             Some(o) => issue("6.7.2.1", "The XMP packet header in metadata stream {} has a bytes or encoding attribute", Some(o), None, false),
             None => issue("6.7.2.1", "The XMP packet header has a bytes or encoding attribute", None, None, false),
+        }
+    }
+}
+
+/// Where the packet's `xpacket` header (ISO 16684-1 7.3.2) starts in `text`: the first `<?xpacket`
+/// processing instruction that isn't inside a comment (XML 1.0 2.5), whose text is no markup.
+fn packet_header(text: &str) -> Option<usize> {
+    let mut at = 0;
+    loop {
+        let rest = text.get(at..)?;
+        let header = rest.find("<?xpacket");
+        let comment = rest.find("<!--");
+        match (header, comment) {
+            (Some(h), Some(c)) if c < h => {
+                // Past the comment's end; one that never ends hides everything after it.
+                let open = at.checked_add(c)?.checked_add(4)?;
+                let end = text.get(open..)?.find("-->")?;
+                at = open.checked_add(end)?.checked_add(3)?;
+            }
+            (Some(h), _) => return at.checked_add(h),
+            (None, _) => return None,
         }
     }
 }
@@ -511,7 +532,7 @@ enum ProfileHeader {
     Read(Vec<u8>),
     /// Larger than [`MAX_ICC_HEADER_READ`] decoded: not read, and no fault of its data.
     TooLarge,
-    /// Data that can't be decoded.
+    /// Data that can't be decoded, or a profile cut short ([`icc_extent_fits`]).
     Broken,
 }
 
@@ -539,7 +560,8 @@ impl Profiles {
         #[cfg(test)]
         PROFILE_DECODES.with(|n| n.set(n.get().saturating_add(1)));
         let header = match s.decoded_within(MAX_ICC_HEADER_READ) {
-            Ok(data) => ProfileHeader::Read(data.get(..20).unwrap_or(&data).to_vec()),
+            Ok(data) if icc_extent_fits(&data) => ProfileHeader::Read(data.get(..20).unwrap_or(&data).to_vec()),
+            Ok(_) => ProfileHeader::Broken,
             Err(e) if over_limit(&e) => ProfileHeader::TooLarge,
             Err(_) => ProfileHeader::Broken,
         };
@@ -550,13 +572,36 @@ impl Profiles {
     }
 }
 
+/// Whether the ICC profile `data` holds all it says it does: its 128-byte header and tag count,
+/// at least the profile size its header gives (ICC.1 7.2.2), and every tag's data within that size
+/// (7.3.1 to 7.3.5: a count, then an offset and size per tag). A profile cut short isn't one.
+fn icc_extent_fits(data: &[u8]) -> bool {
+    let word = |at: usize| data.get(at..at.saturating_add(4)).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_be_bytes);
+    let (Some(size), Some(count)) = (word(0), word(128)) else { return false };
+    let (Ok(size), Ok(count)) = (usize::try_from(size), usize::try_from(count)) else { return false };
+    if size > data.len() || size < 132 {
+        return false;
+    }
+    // Each tag's entry is 12 bytes after the count; the table has to fit in the profile first.
+    if count.checked_mul(12).and_then(|n| n.checked_add(132)).is_none_or(|end| end > size) {
+        return false;
+    }
+    (0..count).all(|i| {
+        let entry = 132usize.saturating_add(i.saturating_mul(12));
+        match (word(entry.saturating_add(4)), word(entry.saturating_add(8))) {
+            (Some(offset), Some(len)) => usize::try_from(u64::from(offset).saturating_add(u64::from(len))).is_ok_and(|end| end <= size),
+            _ => false,
+        }
+    })
+}
+
 /// 6.2.3: in the output intents of `holder`, the catalog or the page `page` (ISO 32000-2 14.11.5
 /// lets both have them), none names an external profile (`/DestOutputProfileRef`, Table 401), all
 /// that have a `/DestOutputProfile` share one profile object, and the PDF/A one's profile is an
 /// output (`prtr`) or monitor (`mntr`) profile of gray, RGB or CMYK (the ICC header's device class
-/// and data colour space, ICC.1 7.2.5 and 7.2.6). A profile stream that can't be decoded is none of
-/// those; one too large to read the header of within [`MAX_ICC_HEADER_READ`] is left alone, and a
-/// profile that is no stream at all is taken as missing.
+/// and data colour space, ICC.1 7.2.5 and 7.2.6). A profile stream that can't be decoded, or is cut
+/// short, is none of those; one too large to read the header of within [`MAX_ICC_HEADER_READ`] is
+/// left alone, and a profile that is no stream at all is taken as missing.
 fn output_intents(doc: &Document, holder: &Dict, page: Option<usize>, headers: &mut Profiles, issue: &mut Report<'_>) {
     let Some(list) = holder.get(b"OutputIntents").map(|o| doc.resolve(o)) else { return };
     let Some(list) = list.as_array() else { return };
@@ -598,7 +643,16 @@ fn end_of_file(doc: &Document, issue: &mut Report<'_>) {
         return;
     }
     let data = doc.bytes();
-    let Some(end) = data.windows(5).rposition(|w| w == b"%%EOF") else { return };
+    // The marker is a line of its own (ISO 32000-2 7.5.5): `%%EOF` inside other data is data.
+    let Some(end) = data
+        .windows(5)
+        .enumerate()
+        .rev()
+        .find(|(at, w)| *w == b"%%EOF" && (*at == 0 || matches!(data.get(at.saturating_sub(1)), Some(b'\r' | b'\n'))))
+        .map(|(at, _)| at)
+    else {
+        return;
+    };
     let after = data.get(end.saturating_add(5)..).unwrap_or_default();
     let rest = match after {
         [b'\r', b'\n', rest @ ..] | [b'\r', rest @ ..] | [b'\n', rest @ ..] => rest,
@@ -627,7 +681,7 @@ pub(crate) fn embedded_files_named(doc: &Document, catalog: &Dict, issue: &mut R
 pub(crate) fn embedded_file(doc: &Document, level: Level, spec: &Dict, checked: &mut EmbeddedChecks, issue: &mut Report<'_>) {
     let streams = embedded_streams(doc, spec);
     if level == Level::A4 {
-        let found = checked.conformance(&streams, &[1, 2, 4]);
+        let found = checked.conformance(doc, &streams, &[1, 2, 4]);
         for label in found.fails {
             issue("6.9", "An embedded file declares {} but doesn't conform to it", Some(label.to_owned()), None, false);
         }
@@ -635,10 +689,11 @@ pub(crate) fn embedded_file(doc: &Document, level: Level, spec: &Dict, checked: 
             issue("6.9", "Embedded files must be PDF/A-1, PDF/A-2 or PDF/A-4 files themselves (use PDF/A-4f for others)", None, None, false);
         }
     }
-    if spec.get(b"AFRelationship").is_none() {
+    // A null value is no entry (ISO 32000-2 7.3.9).
+    if !crate::present(doc, spec, b"AFRelationship") {
         issue("6.9", "An embedded file has no AFRelationship", None, None, false);
     }
-    if spec.get(b"F").is_none() || spec.get(b"UF").is_none() {
+    if !crate::present(doc, spec, b"F") || !crate::present(doc, spec, b"UF") {
         issue("6.9", "An embedded file's file specification lacks F or UF", None, None, false);
     }
     for (_, stream) in &streams {
@@ -650,10 +705,12 @@ pub(crate) fn embedded_file(doc: &Document, level: Level, spec: &Dict, checked: 
 }
 
 /// The streams of the embedded file specification `spec` (`/EF`, ISO 32000-2 7.11.4), each
-/// resolved, with the reference that gives it when one does.
+/// resolved, with the reference that gives it when one does. An entry that refers to the stream
+/// through objects that only refer on (7.3.10) is known by the stream it ends at, so its aliases
+/// share one verdict.
 pub(crate) fn embedded_streams(doc: &Document, spec: &Dict) -> Vec<(Option<pdfcraft_cos::ObjRef>, std::sync::Arc<Object>)> {
     let entries = spec.get(b"EF").map(|ef| doc.resolve(ef)).and_then(|ef| ef.as_dict().cloned()).unwrap_or_default();
-    entries.iter().map(|(_, s)| (s.as_ref(), doc.resolve(s))).collect()
+    entries.iter().map(|(_, s)| (s.as_ref().map(|r| crate::terminal_ref(doc, r)), doc.resolve(s))).collect()
 }
 
 /// What [`EmbeddedChecks::conformance`] finds of an embedded file's streams.
@@ -736,14 +793,19 @@ impl EmbeddedChecks {
     /// A value that isn't a stream isn't one. A stream given by reference is judged once per
     /// verification, which asks for the same parts each time; one left unread is kept for
     /// [`report`](Self::report).
-    pub(crate) fn conformance(&mut self, streams: &[(Option<pdfcraft_cos::ObjRef>, std::sync::Arc<Object>)], parts: &[u8]) -> Conformance {
+    pub(crate) fn conformance(
+        &mut self,
+        doc: &Document,
+        streams: &[(Option<pdfcraft_cos::ObjRef>, std::sync::Arc<Object>)],
+        parts: &[u8],
+    ) -> Conformance {
         let mut found = Conformance { not_pdfa: false, fails: Vec::new() };
         for (at, stream) in streams {
             let verdict = match &**stream {
                 Object::Stream(s) => match at.and_then(|r| self.verdicts.get(&r).copied()) {
                     Some(known) => known,
                     None => {
-                        let verdict = embedded_pdfa(s, parts);
+                        let verdict = embedded_pdfa(doc, s, parts);
                         if let Some(r) = at {
                             self.verdicts.insert(*r, verdict);
                         }
@@ -815,10 +877,11 @@ impl Drop for NestedGuard {
     }
 }
 
-/// The embedded file `s` decoded, charged to the top-level verification's allowance: `None` when
-/// the allowance can't pay for it or it decodes to more than [`MAX_EMBEDDED_PDF`], `Some(None)`
-/// when its data can't be decoded.
-fn read_embedded(s: &pdfcraft_cos::Stream) -> Option<Option<Vec<u8>>> {
+/// The embedded file `s` of `doc` decoded, charged to the top-level verification's allowance:
+/// `None` when the allowance can't pay for it or it decodes to more than [`MAX_EMBEDDED_PDF`],
+/// `Some(None)` when its data can't be decoded, or only in part: what decodes before damage isn't
+/// the file. Its `/Filter` and `/DecodeParms` are read through `doc`, given by reference or not.
+fn read_embedded(doc: &Document, s: &pdfcraft_cos::Stream) -> Option<Option<Vec<u8>>> {
     EMBEDDED_ALLOWANCE.with(|a| {
         // The cell is borrowed only here, and nothing in here reenters it; were it busy, the file
         // would be left unchecked, not passed.
@@ -831,12 +894,30 @@ fn read_embedded(s: &pdfcraft_cos::Stream) -> Option<Option<Vec<u8>>> {
         EMBEDDED_READ.with(|n| n.set(n.get().saturating_add(1)));
         // A limit reached, the file's own or the allowance's, leaves the file unread: its size is
         // no fault of its data, but its verdict isn't known.
-        match a.bytes.decode_within(s, MAX_EMBEDDED_PDF) {
-            Ok(bytes) => Some(Some(bytes)),
+        let s = with_direct_filters(doc, s);
+        match a.bytes.decode_with_damage(doc, &s, MAX_EMBEDDED_PDF) {
+            Ok((bytes, false)) => Some(Some(bytes)),
+            Ok((_, true)) => Some(None),
             Err(e) if over_limit(&e) => None,
             Err(_) => Some(None),
         }
     })
+}
+
+/// `s` with its `/Filter`, a reference or an array holding references, made direct, so the stream
+/// decodes with the filters it names (ISO 32000-2 7.3.8.2, Table 5).
+fn with_direct_filters<'s>(doc: &Document, s: &'s pdfcraft_cos::Stream) -> std::borrow::Cow<'s, pdfcraft_cos::Stream> {
+    let Some(filter) = s.dict.get(b"Filter") else { return std::borrow::Cow::Borrowed(s) };
+    let direct = match &*doc.resolve(filter) {
+        Object::Array(list) => Object::Array(list.iter().map(|f| (*doc.resolve(f)).clone()).collect()),
+        other => other.clone(),
+    };
+    if &direct == filter {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut made = s.clone();
+    made.dict.set(b"Filter".to_vec(), direct);
+    std::borrow::Cow::Owned(made)
 }
 
 /// What the embedded file `s` is: a PDF whose metadata declares a level of a PDF/A part of
@@ -844,8 +925,8 @@ fn read_embedded(s: &pdfcraft_cos::Stream) -> Option<Option<Vec<u8>>> {
 /// 2u are judged by their declaration alone. PdfCraft doesn't verify PDF/A-1, but ISO 19005-1 6.1.2
 /// asks for the file header PDF/A-2 and 3 do (`%PDF-1.n` at the first byte, then a comment of four
 /// bytes above 127), so a file that declares PDF/A-1 is held to that.
-fn embedded_pdfa(s: &pdfcraft_cos::Stream, parts: &[u8]) -> Embedded {
-    let Some(bytes) = read_embedded(s) else { return Embedded::Unchecked };
+fn embedded_pdfa(doc: &Document, s: &pdfcraft_cos::Stream, parts: &[u8]) -> Embedded {
+    let Some(bytes) = read_embedded(doc, s) else { return Embedded::Unchecked };
     let Some(bytes) = bytes else { return Embedded::NotPdfa };
     let Ok(inner) = Document::open(std::sync::Arc::new(bytes)) else { return Embedded::NotPdfa };
     let Some((part, conformance)) = crate::declared(&inner).pdfa.filter(|(part, _)| parts.contains(part)) else {
