@@ -484,8 +484,12 @@ pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRe
     // With `/BaseState /OFF`, a layer is hidden unless `/ON` lists it (§8.11.4.3, Table 101).
     let base_off = src_config.get(b"BaseState").map(|b| src.resolve(b)).is_some_and(|b| b.as_name() == Some(b"OFF".as_slice()));
     let hidden = |r: &Object| src_off.contains(r) || (base_off && !src_on.contains(r));
-    // An explicit `/Order` presents only the groups it lists (an empty one presents none).
-    let src_order: Option<HashSet<ObjRef>> = src_config.get(b"Order").map(|o| order_members(src, o));
+    // An explicit `/Order` presents only the groups it lists (an empty one presents none), each
+    // at its place in the list. A null one is no `/Order` at all (§7.3.9).
+    let src_order: Option<HashMap<ObjRef, usize>> = src_config
+        .get(b"Order")
+        .filter(|o| !matches!(&*src.resolve(o), Object::Null))
+        .map(|o| order_members(src, o).into_iter().enumerate().map(|(i, r)| (r, i)).collect());
     let root = dst.root().ok_or(OrganizeError::NoPageTree)?;
     let catalog = dst.get(root).as_dict().cloned().ok_or(OrganizeError::NoPageTree)?;
     let (props_ref, mut props) = match catalog.get(b"OCProperties") {
@@ -496,32 +500,50 @@ pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRe
     let list = |d: &Dict, k: &[u8], doc: &Document| d.get(k).map(|v| doc.resolve(v)).and_then(|v| v.as_array().cloned()).unwrap_or_default();
     let mut all = list(&props, b"OCGs", dst);
     let mut config = props.get(b"D").map(|d| dst.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap_or_default();
-    let (mut on, mut off, mut order) = (list(&config, b"ON", dst), list(&config, b"OFF", dst), list(&config, b"Order", dst));
-    // The groups this call adds, source reference to destination reference.
-    let mut added: HashMap<ObjRef, ObjRef> = HashMap::new();
+    let (mut on, mut off) = (list(&config, b"ON", dst), list(&config, b"OFF", dst));
+    // The destination's own presentation order. Without one (or a null one), its layers were
+    // presented in the order of /OCGs, as the source's are without one: they stay listed, first,
+    // and the copied ones follow.
+    let mut order = match config.get(b"Order").map(|o| dst.resolve(o)) {
+        Some(o) if !matches!(&*o, Object::Null) => o.as_array().cloned().unwrap_or_default(),
+        _ => all.clone(),
+    };
+    // The groups this call adds, source reference to destination references: a page copied twice
+    // copies its layers twice, and both copies keep the source's settings.
+    let mut added: HashMap<ObjRef, Vec<ObjRef>> = HashMap::new();
+    // The copied groups to present, with their place in the source's `/Order` when it has one.
+    let mut presented: Vec<(usize, Object)> = Vec::new();
     for (from, to) in ocgs {
         let r = Object::Ref(*to);
         if all.contains(&r) {
             continue;
         }
         all.push(r.clone());
-        if src_order.as_ref().is_none_or(|listed| listed.contains(from)) {
-            order.push(r.clone());
+        match &src_order {
+            None => presented.push((presented.len(), r.clone())),
+            Some(listed) => {
+                if let Some(&at) = listed.get(from) {
+                    presented.push((at, r.clone()));
+                }
+            }
         }
         if hidden(&Object::Ref(*from)) {
             off.push(r)
         } else {
             on.push(r)
         }
-        added.insert(*from, *to);
+        added.entry(*from).or_default().push(*to);
     }
+    // Stable: copies of one group keep the order they were made in.
+    presented.sort_by_key(|(at, _)| *at);
+    order.extend(presented.into_iter().map(|(_, r)| r));
     // The source's groups among `list`, as the destination's references; the others drop out.
     let mapped = |value: &Object| -> Vec<Object> {
         let refs: Vec<ObjRef> = match value {
             Object::Ref(r) if src.get(*r).as_dict().is_some() => vec![*r],
             other => src.resolve(other).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect()).unwrap_or_default(),
         };
-        refs.into_iter().filter_map(|r| added.get(&r)).map(|r| Object::Ref(*r)).collect()
+        refs.into_iter().filter_map(|r| added.get(&r)).flatten().map(|r| Object::Ref(*r)).collect()
     };
     let mut auto_state = list(&config, b"AS", dst);
     for usage in src_list(b"AS") {
@@ -531,8 +553,14 @@ pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRe
         let mut applied = Dict::new();
         applied.set(b"Event".to_vec(), (*event).clone());
         applied.set(b"OCGs".to_vec(), Object::Array(groups));
+        // The category names, read through any reference: a reference of the source means
+        // nothing in the destination.
         if let Some(category) = usage.get(b"Category") {
-            applied.set(b"Category".to_vec(), (*src.resolve(category)).clone());
+            let category = match &*src.resolve(category) {
+                Object::Array(names) => Object::Array(names.iter().map(|n| (*src.resolve(n)).clone()).collect()),
+                other => other.clone(),
+            };
+            applied.set(b"Category".to_vec(), category);
         }
         auto_state.push(Object::Dict(applied));
     }
@@ -558,22 +586,30 @@ pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRe
 }
 
 /// The optional content groups an `/Order` array lists, at any depth of its nested arrays
-/// (label strings aside). Nesting is bounded and each indirect array is read once.
-fn order_members(src: &Document, order: &Object) -> HashSet<ObjRef> {
+/// (label strings aside), each once, in the order the list presents them. Nesting is bounded; an
+/// indirect array is read again only from a shallower depth than before (the bound may have cut
+/// it short there), so at most once per depth.
+fn order_members(src: &Document, order: &Object) -> Vec<ObjRef> {
     const MAX_DEPTH: usize = 64;
-    let mut found = HashSet::new();
-    let mut seen = HashSet::new();
+    let mut found = Vec::new();
+    let mut listed = HashSet::new();
+    let mut seen: HashMap<ObjRef, usize> = HashMap::new();
     let mut pending: Vec<(Object, usize)> = vec![(order.clone(), 0)];
     while let Some((o, depth)) = pending.pop() {
         match o {
             Object::Ref(r) => match &*src.get(r) {
-                Object::Array(a) if depth < MAX_DEPTH && seen.insert(r) => pending.extend(a.iter().map(|x| (x.clone(), depth + 1))),
+                Object::Array(a) if depth < MAX_DEPTH && seen.get(&r).is_none_or(|&at| depth < at) => {
+                    seen.insert(r, depth);
+                    pending.extend(a.iter().rev().map(|x| (x.clone(), depth + 1)));
+                }
                 Object::Dict(_) => {
-                    found.insert(r);
+                    if listed.insert(r) {
+                        found.push(r);
+                    }
                 }
                 _ => {}
             },
-            Object::Array(a) if depth < MAX_DEPTH => pending.extend(a.into_iter().map(|x| (x, depth + 1))),
+            Object::Array(a) if depth < MAX_DEPTH => pending.extend(a.into_iter().rev().map(|x| (x, depth + 1))),
             _ => {}
         }
     }

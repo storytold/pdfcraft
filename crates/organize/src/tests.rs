@@ -5029,6 +5029,119 @@ endstream"
     );
     assert_eq!(arr(b"RBGroups"), [Object::Array(ocgs.clone())]);
     assert_eq!(arr(b"Locked"), ocgs);
-    assert_eq!(arr(b"Order"), [], "an explicit empty /Order presents no layer");
+    let order = d.get(b"Order").map(|o| out.resolve(o)).and_then(|o| o.as_array().cloned());
+    assert_eq!(order, Some(vec![]), "an explicit empty /Order presents no layer, and is kept");
     assert_eq!(arr(b"ON"), ocgs);
+}
+
+/// The default configuration's `/D` of `doc`'s `/OCProperties`, and its `/OCGs`.
+fn layer_config(doc: &Document) -> (Dict, Vec<Object>) {
+    let props = doc.resolve(catalog(doc).get(b"OCProperties").unwrap()).as_dict().cloned().unwrap();
+    let ocgs = props.get(b"OCGs").and_then(Object::as_array).cloned().unwrap();
+    (doc.resolve(props.get(b"D").unwrap()).as_dict().cloned().unwrap(), ocgs)
+}
+
+/// `/Order` as written: `None` when it is missing or not an array.
+fn order_of(doc: &Document, d: &Dict) -> Option<Vec<Object>> {
+    d.get(b"Order").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())
+}
+
+/// A one-page source whose page draws layers 5 and 6 (`/MC0`, `/MC1`), with `config` as its
+/// default configuration and `extra` objects from 7 on.
+fn layered_source(config: &str, extra: &[&str]) -> Document {
+    let mut b: Vec<String> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R] /D {config} >> >>"),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Properties << /MC0 5 0 R /MC1 6 0 R >> >> >>".into(),
+        "<< /Length 67 >>\nstream\n/OC /MC0 BDC 0 0 m 100 100 l S EMC /OC /MC1 BDC 0 0 m 50 50 l S EMC\nendstream".into(),
+        "<< /Type /OCG /Name (A) >>".into(),
+        "<< /Type /OCG /Name (B) >>".into(),
+    ];
+    b.extend(extra.iter().map(|e| e.to_string()));
+    open(build(&b, "/Root 1 0 R"))
+}
+
+/// The copied layers' names in the order `/Order` presents them.
+fn ordered_names(doc: &Document, d: &Dict) -> Vec<String> {
+    order_of(doc, d)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|o| doc.resolve(o).as_dict().and_then(|g| g.get(b"Name").and_then(Object::as_string)).map(|n| n.to_text()))
+        .collect()
+}
+
+/// How copied layers are presented (ISO 32000-2 §8.11.4.3, Table 99):
+/// - a null `/Order` is no `/Order` (§7.3.9): the copied layers are listed, as without one;
+/// - an explicit `/Order` presents them in its sequence, not in the order the copy met them;
+/// - a group an indirect array lists is found however deep another path first reaches it.
+#[test]
+fn copied_layers_are_presented_in_the_source_order() {
+    let out = full_roundtrip(&extract_pages(&layered_source("<< /ON [5 0 R 6 0 R] /Order null >>", &[]), &[0]).unwrap());
+    let (d, _) = layer_config(&out);
+    assert_eq!(ordered_names(&out, &d), ["A", "B"], "a null /Order lists them, as an omitted one does");
+
+    let out = full_roundtrip(&extract_pages(&layered_source("<< /ON [5 0 R 6 0 R] /Order [6 0 R 5 0 R] >>", &[]), &[0]).unwrap());
+    let (d, _) = layer_config(&out);
+    assert_eq!(ordered_names(&out, &d), ["B", "A"], "in the source's sequence");
+
+    // Object 7 lists [[6 0 R]]; one path reaches it at depth 1, the other 63 arrays deep.
+    let deep = format!("{}7 0 R{}", "[".repeat(62), "]".repeat(62));
+    for order in [format!("5 0 R 7 0 R {deep}"), format!("5 0 R {deep} 7 0 R")] {
+        let config = format!("<< /ON [5 0 R 6 0 R] /Order [{order}] >>");
+        let out = full_roundtrip(&extract_pages(&layered_source(&config, &["[[6 0 R]]"]), &[0]).unwrap());
+        let (d, _) = layer_config(&out);
+        assert_eq!(ordered_names(&out, &d), ["A", "B"], "the shallower path reaches B: {}", &order[..12]);
+    }
+}
+
+/// Copied layers' auto state names its categories (`/Category`, Table 101) as names, even when
+/// the source reaches one through a reference, which would mean nothing in the copy.
+#[test]
+fn copied_layer_auto_state_names_its_categories() {
+    let src = layered_source("<< /ON [5 0 R 6 0 R] /AS [<< /Event /View /Category [7 0 R] /OCGs [5 0 R] >>] >>", &["/View"]);
+    let out = full_roundtrip(&extract_pages(&src, &[0]).unwrap());
+    let (d, _) = layer_config(&out);
+    let usage = d.get(b"AS").map(|a| out.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap();
+    let usage = out.resolve(&usage[0]).as_dict().cloned().unwrap();
+    assert_eq!(usage.get(b"Category"), Some(&Object::Array(vec![Object::name("View")])));
+}
+
+/// A destination with layers and no `/Order` of its own presented them all: inserting pages with
+/// layers keeps them listed, first, and lists the copied ones after them.
+#[test]
+fn inserting_layers_keeps_the_destinations_own_listed() {
+    let dst_b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R] /D << /ON [4 0 R] >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /OCG /Name (Own) >>".into(),
+    ];
+    let mut dst = open(build(&dst_b, "/Root 1 0 R"));
+    crate::import_pages(&mut dst, &layered_source("<< /ON [5 0 R 6 0 R] >>", &[]), &[0], 1).unwrap();
+    let out = full_roundtrip(&dst);
+    let (d, _) = layer_config(&out);
+    assert_eq!(ordered_names(&out, &d), ["Own", "A", "B"]);
+}
+
+/// A page extracted twice copies the layer one of its comments uses twice: both copies keep the
+/// source's auto state and lock, so a rule that hides the comment hides it on both pages.
+#[test]
+fn a_page_copied_twice_keeps_its_layer_settings_on_both_copies() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << /ON [5 0 R] /AS [<< /Event /View /Category [/View] /OCGs [5 0 R] >>] /Locked [5 0 R] >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Square /Rect [10 10 50 50] /OC 5 0 R >>".into(),
+        "<< /Type /OCG /Name (Comments) /Usage << /View << /ViewState /OFF >> >> >>".into(),
+    ];
+    let out = full_roundtrip(&extract_pages(&open(build(&b, "/Root 1 0 R")), &[0, 0]).unwrap());
+    let (d, ocgs) = layer_config(&out);
+    let arr = |k: &[u8]| d.get(k).map(|v| out.resolve(v)).and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let usage = out.resolve(&arr(b"AS")[0]).as_dict().cloned().unwrap();
+    let ruled = usage.get(b"OCGs").and_then(Object::as_array).cloned().unwrap();
+    for g in &ocgs {
+        assert!(ruled.contains(g), "{g:?} has the view rule: {ruled:?}");
+        assert!(arr(b"Locked").contains(g), "{g:?} is locked");
+    }
+    assert_eq!(ocgs.len(), 2, "each page's comment has its own copy of the layer: {ocgs:?}");
 }
