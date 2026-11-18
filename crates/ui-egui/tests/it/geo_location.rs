@@ -83,3 +83,34 @@ fn a_page_without_a_map_says_so() {
     h.run_steps(3);
     assert!(h.query_by_label("This page has no geospatial information.").is_some());
 }
+
+#[test]
+fn a_kept_location_stays_to_copy_on_a_page_without_a_map() {
+    let mut h = harness();
+    h.state_mut().run_command("measure.geo");
+    h.run_steps(3);
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let at = page.center();
+    h.hover_at(at);
+    h.run_steps(2);
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(3);
+    assert!(h.state().views[0].measure.pinned.is_some());
+    // Another tool, on the blank page: the kept location is still there to copy.
+    h.state_mut().run_command("measure.distance");
+    h.state_mut().views[0].current = 1;
+    h.run_steps(3);
+    assert!(h.query_by_label("Kept location").is_some());
+    assert!(h.query_by_label("Copy").is_some());
+}

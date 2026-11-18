@@ -790,7 +790,8 @@ fn geo_section(ui: &mut egui::Ui, state: &mut MeasureView, doc: &Document, page:
         }
         Err(e) => (false, Some(e.clone())),
     };
-    if !on && !georeferenced && unusable.is_empty() {
+    // Hidden off a map unless the tool is on or a location was kept (it stays to copy).
+    if !on && !georeferenced && unusable.is_empty() && state.pinned.is_none() {
         return false;
     }
     let picked = ui.selectable_label(on, tl!("Geospatial location")).clicked();

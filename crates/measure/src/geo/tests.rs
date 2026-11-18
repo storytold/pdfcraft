@@ -308,3 +308,28 @@ fn degrees_minutes_and_seconds_round_and_carry() {
     assert_eq!(dms(0.0, 0.0), "0°00'00.0\"N 0°00'00.0\"E");
     assert_eq!(dms(f64::INFINITY, -1e300), "360°00'00.0\"N 360°00'00.0\"W");
 }
+
+#[test]
+fn longitudes_written_from_0_to_360_find_their_page_point() {
+    // 242°E is 118°W: locate reports -117.5, and find must accept the -180..180 form it reports.
+    let doc = page_with(&geo_viewport("/GPTS [34 242 35 242 35 243 34 243] /GCS << /Type /GEOGCS /EPSG 4326 >>"));
+    let page = GeoPage::read(&doc, 0).unwrap();
+    let centre = located(&page, [300.0, 400.0]);
+    near(centre.lon, -117.5, 1e-9);
+    let at = page.find(34.5, -117.5).expect("the page shows 34.5°N 117.5°W");
+    near(at[0], 300.0, 1e-6);
+    near(at[1], 400.0, 1e-6);
+    near(page.find(34.5, 242.5).unwrap()[0], 300.0, 1e-6);
+}
+
+#[test]
+fn find_skips_a_location_another_viewport_covers() {
+    // Two maps in the same rectangle: the upper one is what the page shows there.
+    let lower = geo_viewport(&format!("{CORNERS} /GCS << /Type /GEOGCS /EPSG 4326 >>"));
+    let upper = geo_viewport("/GPTS [40 -120 41 -120 41 -119 40 -119] /GCS << /Type /GEOGCS /EPSG 4326 >>");
+    let page = GeoPage::read(&page_with(&format!("{lower} {upper}")), 0).unwrap();
+    assert!(page.find(34.5, -117.5).is_none(), "the lower map is hidden");
+    let at = page.find(40.5, -119.5).unwrap();
+    near(at[0], 300.0, 1e-6);
+    near(located(&page, at).lat, 40.5, 1e-9);
+}
