@@ -44,7 +44,7 @@ function Invoke-SignTool([string[]] $Arguments) {
   if ($LASTEXITCODE -ne 0) { throw "signtool $($Arguments[0]) failed with exit code $LASTEXITCODE" }
 }
 
-$Files = $Files | ForEach-Object { (Resolve-Path $_).Path }
+$Files = $Files | ForEach-Object { (Resolve-Path -LiteralPath $_).Path }
 $haveCert = [bool]$env:WINDOWS_CERTIFICATE
 $azureVars = 'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT', 'AZURE_CERT_PROFILE'
 $haveAzure = -not ($azureVars | Where-Object { -not [Environment]::GetEnvironmentVariable($_) })
