@@ -1,5 +1,5 @@
-use super::marks::{MarkKind, matrix_number, n};
-use super::{Dict, Document, EditError, ObjRef, Object, Stream, literal, win_ansi};
+use super::marks::{MarkKind, matrix_number};
+use super::{Dict, Document, EditError, ObjRef, Object, Stream};
 
 pub(crate) fn page_list(doc: &Document) -> Vec<pdfcraft_model::Page> {
     pdfcraft_model::pages(doc)
@@ -66,6 +66,19 @@ pub(crate) fn free_font_name(doc: &Document, fonts: &Dict, preferred: &str, base
         return preferred.to_string();
     }
     (1..=fonts.len().saturating_add(1)).map(|k| format!("{preferred}_{k}")).find(|name| usable(name)).unwrap_or_else(|| preferred.to_string())
+}
+
+/// Add `fonts` (resource name, font) to the page's own resources.
+pub(crate) fn add_page_fonts(doc: &mut Document, page: &pdfcraft_model::Page, fonts: &Dict) -> Result<(), EditError> {
+    let mut res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let mut all = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
+    for (name, font) in fonts.iter() {
+        all.set(name.clone(), font.clone());
+    }
+    res.set(b"Font".to_vec(), Object::Dict(all));
+    // The page gets its own (possibly copied) resources; shared dictionaries stay untouched.
+    doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
+    Ok(())
 }
 
 /// Add the standard `faces` (resource name, base font) and an opacity state to the page's own
@@ -574,11 +587,4 @@ pub(crate) fn undrawable(c: char) -> EditError {
 /// The wording of the refusal for text with `c`, which the standard fonts can't draw.
 pub fn undrawable_message(c: char) -> String {
     format!("the standard fonts can't draw \"{c}\" (U+{:04X}); only Western European characters can be added as text for now", u32::from(c))
-}
-
-pub(crate) fn text_op(x: f64, y: f64, text: &str) -> Vec<u8> {
-    let mut v = format!("1 0 0 1 {} {} Tm ", n(x), n(y)).into_bytes();
-    v.extend(literal(&win_ansi(text)));
-    v.extend_from_slice(b" Tj\n");
-    v
 }
