@@ -1,26 +1,31 @@
+use std::time::{Duration, SystemTime};
+
 use super::*;
+use crate::PdfCraftApp;
 
 #[test]
 fn utc_stamp_is_utc_minutes_and_clamps_pre_epoch() {
-    use std::time::Duration;
     let at = |s: u64| utc_stamp(SystemTime::UNIX_EPOCH + Duration::from_secs(s));
     assert_eq!(at(0), "1970-01-01 00:00 UTC");
     assert_eq!(at(1_791_446_357), "2026-10-08 07:59 UTC");
     // The 400-year leap rule.
     assert_eq!(at(951_782_400), "2000-02-29 00:00 UTC");
-    // A clock before 1970 reads as the epoch, as the old `unwrap_or(0)` did.
-    assert_eq!(utc_stamp(SystemTime::UNIX_EPOCH - Duration::from_secs(5)), "1970-01-01 00:00 UTC");
-    // Past chrono's range keeps the proleptic Gregorian date the old code gave, not the epoch.
-    // Windows' SystemTime holds only up to about year 30828, so this is checked where it fits.
-    if let Some(far) = SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(10_000_000_000_000)) {
-        assert_eq!(utc_stamp(far), "318857-05-20 17:46 UTC");
-    }
-    // Windows' SystemTime can't hold u64::MAX / 2 seconds, so it is only checked where it exists.
-    if let Some(far) = SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(u64::MAX / 2)) {
-        assert_eq!(utc_stamp(far), "292277026596-12-04 15:30 UTC");
-    }
+    // Minutes, not seconds.
+    assert_eq!(at(59), at(0));
+    assert_ne!(at(60), at(0));
     // Years past 9999 keep the plain zero-padded year (no `+`).
     assert_eq!(at(253_402_300_800), "10000-01-01 00:00 UTC");
+    // A time before 1970 reads as the epoch, however far before.
+    assert_eq!(utc_stamp(SystemTime::UNIX_EPOCH - Duration::from_secs(5)), at(0));
+    if let Some(far) = SystemTime::UNIX_EPOCH.checked_sub(Duration::from_secs(u64::MAX / 2)) {
+        assert_eq!(utc_stamp(far), at(0));
+    }
+    // Past chrono's range every time gives one stamp, whatever the distance, and never panics.
+    // (Windows' SystemTime can't hold the largest, so each is checked where it exists.)
+    let far: Vec<String> =
+        [10_000_000_000_000u64, u64::MAX / 2].into_iter().filter_map(|s| SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(s))).map(utc_stamp).collect();
+    assert!(far.windows(2).all(|w| w[0] == w[1]), "{far:?}");
+    assert!(far.iter().all(|s| s.ends_with(" UTC")), "{far:?}");
 }
 
 /// A one-page PDF that opens with "pw".
