@@ -534,7 +534,7 @@ pub(super) fn selection_actions(
             let Some(kind) = tool.markup() else { return false };
             // Each page's highlight copies that page's part of the selection, read before it clears.
             let marks: Vec<_> =
-                marks.into_iter().map(|(page, quads)| (page, quads, prefs.markup_contents(kind, || view.selected_text_on(page)))).collect();
+                marks.into_iter().map(|(page, quads)| (page, quads, prefs.markup_contents(kind, can_copy, || view.selected_text_on(page)))).collect();
             view.clear_selection();
             let edits = marks.into_iter().map(|(page, quads, contents)| {
                 Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {

@@ -350,9 +350,10 @@ impl Default for CommentPrefs {
 
 impl CommentPrefs {
     /// The comment a new text markup of `kind` starts with: the text it marks (`text`), for a
-    /// highlight when Preferences ▸ Commenting asks for it (#2605), and otherwise nothing.
-    pub(crate) fn markup_contents(&self, kind: Markup, text: impl FnOnce() -> String) -> String {
-        if self.copy_selected_into_highlight && kind == Markup::Highlight { text() } else { String::new() }
+    /// highlight when Preferences ▸ Commenting asks for it (#2605) and the document allows
+    /// copying (`can_copy`, as Copy does), and otherwise nothing.
+    pub(crate) fn markup_contents(&self, kind: Markup, can_copy: bool, text: impl FnOnce() -> String) -> String {
+        if self.copy_selected_into_highlight && can_copy && kind == Markup::Highlight { text() } else { String::new() }
     }
 }
 

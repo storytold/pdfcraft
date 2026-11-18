@@ -265,7 +265,11 @@ impl PdfCraftApp {
                     view.document_changed(info);
                 }
                 if matches!(edit, Edit::AddAnnotation(_)) || across_pages.is_some() {
-                    view.comments.comment_added();
+                    // A note still open with just what its comment holds has nothing unsaved.
+                    let saved = view.comments.editing.as_ref().is_some_and(|(page, index, text)| {
+                        info.annotations.iter().any(|x| x.page == *page && x.index == *index && x.contents.as_deref().unwrap_or_default() == text)
+                    });
+                    view.comments.comment_added(saved);
                 }
                 // A deletion moves the pop-ups' state with its comments (`annotation_deleted`).
                 if !matches!(edit, Edit::DeleteAnnotation { .. }) {

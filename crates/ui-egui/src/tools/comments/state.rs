@@ -410,10 +410,11 @@ impl CommentView {
     }
 
     /// A comment was just added. The editor open on another one must not keep the keyboard, or
-    /// the tool keys pressed next are typed into it (#2669): an empty editor closes, and one
-    /// holding text stays open with it, without the keyboard.
-    pub(crate) fn comment_added(&mut self) {
-        if self.editing.as_ref().is_some_and(|(_, _, text)| !text.is_empty()) {
+    /// the tool keys pressed next are typed into it (#2669): an empty editor closes, and so does
+    /// one holding only what its comment already says (`saved`, such as the text a highlight
+    /// copied, #2605); one holding typed text stays open with it, without the keyboard.
+    pub(crate) fn comment_added(&mut self, saved: bool) {
+        if !saved && self.editing.as_ref().is_some_and(|(_, _, text)| !text.is_empty()) {
             self.editor_focus = Some(EditorFocus::Release);
         } else {
             self.editing = None;
@@ -573,6 +574,8 @@ pub(crate) struct PageCx<'a> {
     pub redact_mark: ([f64; 3], f64),
     /// The document allows commenting.
     pub allowed: bool,
+    /// The document allows copying its text (what a new highlight may copy, #2605).
+    pub can_copy: bool,
     /// Comments are hidden (Hide all comments): nothing to select.
     pub hidden: bool,
     /// This frame's keys as the pages see them.

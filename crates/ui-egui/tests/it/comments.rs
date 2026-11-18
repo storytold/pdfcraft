@@ -3144,6 +3144,53 @@ fn copy_selected_into_highlight_preference_seeds_highlight_comment() {
 }
 
 #[test]
+fn copy_selected_into_highlight_respects_a_no_copy_document() {
+    // Commenting allowed, copying (bit 5) not: the highlight is made, but the text stays out of it.
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(TEXT_FIXTURE.to_vec())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1 ^ 0b1_0000,
+        encrypt_metadata: true,
+        seed: [4; 32],
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = harness_with_bytes(bytes, |app| {
+        app.set_option("copy-selected-into-highlight", "true").unwrap();
+    });
+
+    h.state_mut().views[0].select_text(0, 4, 9);
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(2);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1, "the highlight is still made");
+    assert_eq!(c[0].contents, None, "a document that forbids copying keeps its text out of the comment");
+}
+
+#[test]
+fn copied_text_left_in_a_note_does_not_block_the_next_highlights_note() {
+    let mut h = harness(|app| {
+        app.set_option("copy-selected-into-highlight", "true").unwrap();
+    });
+    h.state_mut().views[0].select_text(0, 4, 9);
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 0, "quick".to_string())));
+
+    // The first note is left as it opened; the second highlight's note opens in its place.
+    h.state_mut().views[0].select_text(0, 10, 15);
+    assert!(h.state_mut().execute("comment.highlight"));
+    // With the tool already picked, the marks wait for the page's next pass.
+    h.run_steps(6);
+    let c = comments(&h);
+    assert_eq!(c.len(), 2);
+    assert_eq!(c[1].contents.as_deref(), Some("brown"));
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 1, "brown".to_string())), "the new highlight's note opens");
+}
+
+#[test]
 fn copy_selected_into_highlight_disabled_by_default() {
     let mut h = harness(|_| {});
     assert!(!h.state().comment_prefs.copy_selected_into_highlight);

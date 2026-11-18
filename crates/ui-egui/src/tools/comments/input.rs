@@ -450,8 +450,10 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
     // of them are read.
     if let crate::canvas::ToolMarks::Marks(marks, head) = view.tool_marks(cx.tool, finished, Some(cx.page), false, cx.info) {
         // Each page's highlight copies that page's part of the selection, read before it clears.
-        let marks: Vec<_> =
-            marks.into_iter().map(|(page, quads)| (page, quads, cx.prefs.markup_contents(kind, || view.selected_text_on(page)))).collect();
+        let marks: Vec<_> = marks
+            .into_iter()
+            .map(|(page, quads)| (page, quads, cx.prefs.markup_contents(kind, cx.can_copy, || view.selected_text_on(page))))
+            .collect();
         view.clear_selection();
         let edits = marks.into_iter().map(|(page, quads, contents)| {
             Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {

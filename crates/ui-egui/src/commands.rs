@@ -498,12 +498,13 @@ impl PdfCraftApp {
                     // Pages still to be read are marked when they are, by the tool now picked.
                     let tool_now = self.quick_tool;
                     if let crate::canvas::ToolMarks::Marks(marks, head) = self.views[i].tool_marks(tool_now, true, None, false, &doc.info) {
+                        let can_copy = doc.allows_copying();
                         let edits: Vec<Edit> = marks
                             .into_iter()
                             .map(|(page, quads)| {
                                 let style = self.comment_prefs.style(tool);
                                 let author = self.comment_prefs.author.clone();
-                                let contents = self.comment_prefs.markup_contents(kind, || self.views[i].selected_text_on(page));
+                                let contents = self.comment_prefs.markup_contents(kind, can_copy, || self.views[i].selected_text_on(page));
                                 let shape = pdfcraft_engine::Shape::TextMarkup { kind, quads };
                                 Edit::AddAnnotation(pdfcraft_engine::NewAnnotation { page, shape, style, contents, author })
                             })
