@@ -6331,8 +6331,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.certify"]
 tools = ["sign_document"]
-evidence = ["crates/sign/tests/it/pdf.rs::later_changes_are_classified_under_the_signature_permissions"]
-notes = "DocMDP P=1/2/3 enforced when validating"
+evidence = ["crates/sign/tests/it/pdf.rs::later_changes_are_classified_under_the_signature_permissions", "crates/sign/tests/it/page_templates.rs::a_page_from_a_signed_template_is_permitted_at_levels_2_and_3", "crates/engine/tests/it/page_templates.rs::pages_from_a_certified_forms_template_keep_its_certification"]
+notes = "DocMDP P=1/2/3 enforced when validating. A page added from a page template the signed revision names (a copy that shows what the template shows, or a hidden template shown in place) is permitted at P=2 and P=3. A copy added without renaming its fields, whose template field is its own widget, splits that signed field into a parent and a widget, which still reads as a disallowed change."
 
 [[feature]]
 id = "sign.field-mdp"
