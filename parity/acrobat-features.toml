@@ -2538,8 +2538,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.watermark"]
 tools = ["doc_watermark"]
-evidence = ["crates/engine/src/tests.rs::backgrounds_and_watermarks_from_files"]
-notes = "an image or a page of a PDF, scaled relative to the page, rotated, with opacity, behind or on top; the dialog's preview shows its frame and file name over the page, not the picture itself"
+evidence = ["crates/engine/src/tests.rs::backgrounds_and_watermarks_from_files", "crates/automation/tests/it/automation.rs::pdf_watermark_uses_visible_source_crop_through_tools"]
+notes = "an image or a page of a PDF (source CropBox clipped to MediaBox, #7687), scaled relative to the page, rotated, with opacity, behind or on top; the dialog's preview shows its frame and file name over the page, not the picture itself"
 
 [[feature]]
 id = "edit.watermark-update-remove"

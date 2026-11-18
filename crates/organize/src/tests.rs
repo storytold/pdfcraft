@@ -4984,3 +4984,35 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
     assert_eq!(source_bookmarks(&all), [("Chapter one".to_string(), vec!["Section".to_string()])]);
     assert!(attachments(&all));
 }
+
+/// #7687: a watermark source must clip and size the same visible area as the page.
+#[test]
+fn page_form_clips_crop_to_media_before_rotation() {
+    for (rotation, matrix, size) in [
+        (0, [1., 0., 0., 1., -20., -30.], (80., 120.)),
+        (90, [0., -1., 1., 0., -30., 100.], (120., 80.)),
+        (180, [-1., 0., 0., -1., 100., 150.], (80., 120.)),
+        (270, [0., 1., -1., 0., 150., -20.], (120., 80.)),
+    ] {
+        for inherited in [false, true] {
+            let mut src = open(fixture());
+            let page = pages(&src).unwrap()[0].obj;
+            let target = if inherited { src.get(page).as_dict().unwrap().reference(b"Parent").unwrap() } else { page };
+            src.update_dict(target, |d| {
+                d.set(b"MediaBox".to_vec(), Object::Array(vec![20.into(), 30.into(), 100.into(), 150.into()]));
+                d.set(b"CropBox".to_vec(), Object::Array(vec![10.into(), 20.into(), 140.into(), 170.into()]));
+                d.set(b"Rotate".to_vec(), Object::Int(rotation));
+            })
+            .unwrap();
+            let mut dst = Document::new_empty();
+            let (form, actual_size) = page_as_form(&mut dst, &src, 0).unwrap();
+            assert_eq!(actual_size, size);
+            let obj = dst.get(form);
+            let Object::Stream(stream) = &*obj else { panic!("form stream") };
+            let numbers =
+                |key: &[u8]| -> Vec<f64> { stream.dict.get(key).unwrap().as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect() };
+            assert_eq!(numbers(b"BBox"), [20., 30., 100., 150.]);
+            assert_eq!(numbers(b"Matrix"), matrix);
+        }
+    }
+}

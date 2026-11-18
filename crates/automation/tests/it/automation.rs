@@ -14787,3 +14787,63 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
     assert_eq!(page_text(&mut a, reopened), [new, old]);
     assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
 }
+
+/// #7687: an oversized source CropBox must not expose hidden artwork or change fit.
+#[test]
+fn pdf_watermark_uses_visible_source_crop_through_tools() {
+    use pdfcraft_cos::{Document, Object, SaveOptions, Stream, write_full};
+    use std::sync::Arc;
+    let dir = workdir("watermark-visible-crop");
+    let mut source = Document::open(Arc::new(fixture(2))).unwrap();
+    for (index, crop_right) in [100, 140].into_iter().enumerate() {
+        let page = pdfcraft_model::page_at(&source, index).unwrap().obj;
+        let content = source.add(Object::Stream(Stream::flate(
+            Default::default(),
+            b"1 0 0 rg 20 30 80 120 re f 0 0 1 rg 20 30 20 50 re f 1 0 1 rg 100 30 40 120 re f",
+        )));
+        source
+            .update_dict(page, |d| {
+                d.set(b"MediaBox".to_vec(), Object::Array(vec![20.into(), 30.into(), 100.into(), 150.into()]));
+                d.set(b"CropBox".to_vec(), Object::Array(vec![20.into(), 30.into(), crop_right.into(), 150.into()]));
+                d.set(b"Rotate".to_vec(), Object::Int(90));
+                d.set(b"Contents".to_vec(), Object::Ref(content));
+            })
+            .unwrap();
+    }
+    std::fs::write(dir.join("source.pdf"), write_full(&source, &SaveOptions::default()).unwrap()).unwrap();
+    let mut target = Document::open(Arc::new(fixture(3))).unwrap();
+    let first = pdfcraft_model::page_at(&target, 0).unwrap().obj;
+    target
+        .update_dict(first, |d| {
+            d.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 215.into(), 280.into()]));
+            d.set(b"CropBox".to_vec(), Object::Array(vec![24.into(), 18.into(), 184.into(), 258.into()]));
+        })
+        .unwrap();
+    std::fs::write(dir.join("a.pdf"), write_full(&target, &SaveOptions::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    for rotation in [0, 270] {
+        let mut rendered = Vec::new();
+        for source_page in [1, 2] {
+            let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+            if rotation != 0 {
+                ok(&mut a, "page_rotate", json!({"doc": doc, "pages": [1], "degrees": rotation}));
+            }
+            let untouched = a.call("page_render", &json!({"doc": doc, "page": 2, "dpi": 72})).unwrap();
+            ok(
+                &mut a,
+                "doc_watermark",
+                json!({"doc": doc, "pages": [1], "file": "source.pdf", "file_page": source_page,
+                "scale": 0.5, "rotation": 0, "opacity": 1, "offset_x": 22, "offset_y": 10}),
+            );
+            let path = format!("marked-{rotation}-{source_page}.pdf");
+            ok(&mut a, "doc_save", json!({"doc": doc, "path": path}));
+            let copy = ok(&mut a, "doc_open", json!({"path": path}))["doc"].as_u64().unwrap();
+            assert_eq!(a.call("page_render", &json!({"doc": copy, "page": 2, "dpi": 72})).unwrap(), untouched);
+            let (w, _, rgba) = a.render_pixels(copy, 1, 1.0).unwrap();
+            assert!(rgba.as_ref().as_chunks::<4>().0.iter().any(|p| p[0] > 240 && p[1] < 10 && p[2] < 10), "visible red artwork remains");
+            assert!(!rgba.as_ref().as_chunks::<4>().0.iter().any(|p| p[0] > 240 && p[1] < 10 && p[2] > 240), "hidden magenta stays clipped");
+            rendered.push((w, rgba.as_ref().to_vec()));
+        }
+        assert_eq!(rendered[0], rendered[1], "same displayed source gives identical saved watermark at target rotation {rotation}");
+    }
+}
