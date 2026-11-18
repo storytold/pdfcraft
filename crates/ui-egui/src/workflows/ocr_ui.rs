@@ -9,7 +9,12 @@ use pdfcraft_engine::DocId;
 use pdfcraft_engine::ocr::{EngineChoice, LANGUAGES, MergeStrategy, ModelProfile, OcrPage, OcrSettings, OutputMode};
 
 use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
+use crate::{PdfCraftApp, i18n, widgets};
+
+/// Use the active catalog's language name when it has no separate OCR label for itself.
+pub(super) fn language_label<'a>(lang: i18n::Lang, code: &str, english: &'a str) -> &'a str {
+    if lang.code() == code && !i18n::has(lang, english) { lang.name() } else { i18n::tr(lang, english) }
+}
 
 /// One profile control for Recognize and Verify. Language/engine changes never rewrite
 /// an explicit choice; the shared preflight names incompatible settings or missing models.
@@ -327,10 +332,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             group(ui, "Settings", &mut |ui| {
                 egui::Grid::new("ocr-settings").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
                     ui.label(tl!("Document language"));
-                    let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
-                    craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).show_ui(ui, |ui| {
+                    let lang = i18n::current();
+                    let name = LANGUAGES
+                        .iter()
+                        .find(|(code, _)| *code == d.language)
+                        .map_or_else(|| i18n::tr(lang, "English"), |(code, name)| language_label(lang, code, name));
+                    craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(name).width(220.0).show_ui(ui, |ui| {
                         for (code, name) in LANGUAGES {
-                            ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
+                            ui.selectable_value(&mut d.language, (*code).to_string(), language_label(lang, code, name));
                         }
                     });
                     ui.end_row();
@@ -1190,6 +1199,31 @@ mod tests {
     use crate::{Dialog, LeftPanel, Mode, QuickTool};
     use pdfcraft_engine::ocr::{Recognizer, Recognizers};
     use pdfcraft_engine::{Edit, Session};
+
+    #[test]
+    fn recognize_ocr_language_label_uses_turkish_catalog() {
+        use egui_kittest::kittest::Queryable;
+
+        let Some(turkish) = crate::i18n::Lang::from_code("tr") else { return };
+        let mut app = PdfCraftApp::new();
+        app.ocr_draft.language = "tr".into();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(700.0, 1100.0)).build_ui_state(
+            move |ui, app: &mut PdfCraftApp| {
+                if !fonts {
+                    ui.ctx().set_fonts(theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                crate::i18n::set_current(turkish);
+                body(ui, app, &Tokens::get(ui.ctx()));
+            },
+            app,
+        );
+        h.run();
+        h.get_by_value("Türkçe");
+        assert_eq!(h.state().ocr_draft.settings().language, "tr");
+    }
 
     fn assert_ocr_modal_layout_at_height(height: f32) {
         use egui_kittest::kittest::{NodeT, Queryable};

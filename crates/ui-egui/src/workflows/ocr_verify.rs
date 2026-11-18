@@ -1502,9 +1502,10 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
 
     // Row 1: the settings (each written back into the persisted draft).
     ui.horizontal_wrapped(|ui| {
-        craft_ui::ComboBox::from_id_salt("ocr-verify-language").width(150.0).selected_text(language_name(&d.language)).show_ui(ui, |ui| {
+        let lang = crate::i18n::current();
+        craft_ui::ComboBox::from_id_salt("ocr-verify-language").width(150.0).selected_text(language_name(lang, &d.language)).show_ui(ui, |ui| {
             for (code, name) in pdfcraft_engine::ocr::LANGUAGES {
-                ui.selectable_value(&mut d.language, (*code).to_string(), *name);
+                ui.selectable_value(&mut d.language, (*code).to_string(), ocr_ui::language_label(lang, code, name));
             }
         });
         engine_combo(ui, d);
@@ -1588,8 +1589,11 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
 }
 
 /// A language code's dropdown text: its name and its code ("English (en)").
-fn language_name(code: &str) -> String {
-    pdfcraft_engine::ocr::LANGUAGES.iter().find(|l| l.0 == code).map_or_else(|| code.to_owned(), |l| format!("{} ({})", l.1, l.0))
+fn language_name(lang: crate::i18n::Lang, code: &str) -> String {
+    pdfcraft_engine::ocr::LANGUAGES
+        .iter()
+        .find(|(candidate, _)| *candidate == code)
+        .map_or_else(|| code.to_owned(), |(_, name)| format!("{} ({code})", ocr_ui::language_label(lang, code, name)))
 }
 
 /// The Engine dropdown's text.
@@ -2395,6 +2399,31 @@ mod tests {
         h.get_by_label("the ocrs engine does not support Turkish; choose Tesseract or Automatic with Turkish (tur) language data installed");
         assert!(h.get_by_label("Run OCR").accesskit_node().is_disabled());
         assert_eq!(h.state().ocr_draft.engine, EngineChoice::Ocrs);
+    }
+
+    #[test]
+    fn verify_ocr_language_label_uses_turkish_catalog() {
+        use egui_kittest::kittest::Queryable;
+
+        let Some(turkish) = crate::i18n::Lang::from_code("tr") else { return };
+        let mut app = PdfCraftApp::new();
+        app.ocr_draft.language = "tr".into();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(1400.0, 400.0)).build_ui_state(
+            move |ui, app: &mut PdfCraftApp| {
+                if !fonts {
+                    ui.ctx().set_fonts(theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                crate::i18n::set_current(turkish);
+                toolbar(app, ui, &mut Intents::default());
+            },
+            app,
+        );
+        h.run();
+        h.get_by_value("Türkçe (tr)");
+        assert_eq!(h.state().ocr_draft.settings().language, "tr");
     }
 
     /// A word box that sits where a real placed word would (high on the page, reading left
