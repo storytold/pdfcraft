@@ -1226,9 +1226,8 @@ mod tests {
     }
 
     /// The text of the notices posted so far.
-    fn posted(app: &PdfCraftApp) -> String {
-        // PLAN: assumed `Notices::posted(&self) -> Vec<String>` on the app's `notices` (pdf-chrome-w19).
-        app.notices.posted().join("; ")
+    fn posted(app: &mut PdfCraftApp) -> String {
+        crate::notices::texts(app, &egui::Context::default()).join("; ")
     }
 
     /// A page of one confident word.
@@ -1538,7 +1537,7 @@ mod tests {
         app.ocr_files(vec![("scan.pdf".into(), pdf.to_vec()), ("other.pdf".into(), pdf.to_vec()), ("Scan.PDF".into(), pdf.to_vec())]);
         assert!(app.ocr_batch.is_none(), "the batch never starts");
         assert_eq!(app.ocr_batches.counts().running + app.ocr_batches.counts().queued, 0, "nothing was submitted");
-        let toast = posted(&app);
+        let toast = posted(&mut app);
         assert!(toast.contains("same name") && toast.contains("Scan.PDF"), "{toast}");
         assert_eq!(std::fs::read_dir(&dir).expect("fixture").count(), 0, "nothing was written");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1557,7 +1556,7 @@ mod tests {
         let pdf = s.create_from_text("t", "scanned words here").expect("fixture");
         app.ocr_files(vec![("a.pdf".into(), pdf.to_vec()), ("b.pdf".into(), pdf.to_vec())]);
         assert!(app.ocr_batch.is_none(), "the collision stops the batch before anything is read");
-        let toast = posted(&app);
+        let toast = posted(&mut app);
         assert!(toast.contains("already holds files of these names"), "{toast}");
         assert!(toast.contains("a.pdf"), "the colliding names are in the error: {toast}");
         assert_eq!(app.ocr_draft.output_folder.as_deref(), Some(dir.to_string_lossy().as_ref()), "the folder stays remembered for the next batch");
@@ -1578,7 +1577,7 @@ mod tests {
         let after_edit = app.session.get(id).and_then(|d| d.can_undo().map(str::to_owned));
         let page = one_word_page(Some(95.0), Vec::new());
         app.land_ocr(id, guard, None, false, Ok(vec![page]));
-        let toast = posted(&app);
+        let toast = posted(&mut app);
         assert!(toast.contains("changed since recognition started"), "{toast}");
         assert_eq!(
             app.session.get(id).and_then(|d| d.can_undo().map(str::to_owned)),
@@ -1598,7 +1597,7 @@ mod tests {
         let page = one_word_page(Some(95.0), vec![note.into()]);
         let guard = app.session.ocr_guard(id).unwrap();
         app.land_ocr(id, guard, None, false, Ok(vec![page]));
-        let toast = posted(&app);
+        let toast = posted(&mut app);
         assert!(toast.contains(note), "{toast}");
     }
 

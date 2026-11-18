@@ -291,16 +291,20 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
                 Some((_, parent)) if !parent.is_empty() => item_at(outline, parent).map_or(0, |p| p.children.len()),
                 _ => outline.len(),
             };
-            let mut pick = |ui: &mut egui::Ui, label: &str, enabled: bool, action: BmAction| {
+            // Held apart from `result` so the style and colour submenus can set the choice too.
+            let picked = std::cell::Cell::new(None);
+            let pick = |ui: &mut egui::Ui, label: &'static str, enabled: bool, action: BmAction| {
                 if MenuItem::new(label).enabled(enabled).show(ui).ran {
-                    result.bookmark = Some(action);
+                    picked.set(Some(action));
                 }
             };
             if MenuItem::new(tl!("Rename")).show(ui).ran {
                 request_rename(ui.ctx(), list_id, &path);
             }
             let set_page = crate::i18n::fmt(tl!("Set to current page ({n})"), &[("n", &(current + 1).to_string())]);
-            pick(ui, &set_page, true, BmAction::SetToCurrentPage(path.clone()));
+            if MenuItem::new(set_page).show(ui).ran {
+                picked.set(Some(BmAction::SetToCurrentPage(path.clone())));
+            }
             if let Some(item) = item_at(outline, &path) {
                 // The title's style and colour (ISO 32000-2 §12.3.3, Tables 151 and 152).
                 let style = MenuItem::new(tl!("Style")).show(ui);
@@ -322,7 +326,7 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
                     }
                 });
                 if styled.is_some() {
-                    result.bookmark = styled;
+                    picked.set(styled);
                 }
             }
             pick(ui, tl!("Move up"), i > 0, BmAction::MoveUp(path.clone()));
@@ -334,6 +338,9 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
             let parent = path.get(..depth).unwrap_or_default().to_vec();
             pick(ui, tl!("Paste"), can_paste, BmAction::Paste { parent, index: i.saturating_add(1) });
             pick(ui, tl!("Delete"), true, BmAction::Delete(path.clone()));
+            if let Some(action) = picked.take() {
+                result.bookmark = Some(action);
+            }
         });
         if menu.output.closed.is_some() {
             target = None;

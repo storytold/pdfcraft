@@ -891,7 +891,9 @@ mod tests {
         for bad in ["../x.pdf", "..", ".", "", "sub/x.pdf", "sub\\x.pdf", "C:x.pdf", "x.pdf.", absolute] {
             // A plain name first: nothing is written when any name in the batch is refused.
             app.write_files(&[("ok.pdf".into(), pdf()), (bad.into(), pdf())], "t");
-            assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("not a plain file name")), "{bad}");
+            // A fresh context each time: it holds only the notice this attempt posted.
+            let said = crate::notices::texts(&mut app, &egui::Context::default());
+            assert!(said.iter().any(|t| t.contains("not a plain file name")), "{bad}");
         }
         assert!(files.requests().is_empty(), "no folder is asked for");
         assert!(files.file(&out.join("ok.pdf")).is_none());

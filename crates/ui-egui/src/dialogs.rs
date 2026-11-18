@@ -53,7 +53,7 @@ mod password_draft_tests {
     use super::*;
 
     fn seed_password_drafts(app: &mut PdfCraftApp) {
-        app.start_signing(0, None, None, None);
+        app.start_signing(&egui::Context::default(), 0, None, None, None);
         let sign = app.sign_draft.as_mut().unwrap();
         sign.step = crate::sign_ui::SignStep::Choose;
         sign.password = "sign password".into();

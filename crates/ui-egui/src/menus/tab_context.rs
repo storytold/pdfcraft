@@ -116,7 +116,7 @@ mod tests {
         let dialog = craft::ui::dialog::DialogWords::english();
         let common = craft::ui::runtime::words::CommonWords::english();
         let dont_save = if cfg!(target_os = "macos") { dialog.unsaved_dont_save } else { dialog.unsaved_no };
-        (dont_save.as_str().to_string(), common.cancel.to_string())
+        (dont_save.as_str().to_string(), common.cancel.as_str().to_string())
     }
 
     #[test]
