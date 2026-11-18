@@ -478,4 +478,5 @@ Build rilis juga menyertakan font Jepang dari [craft-fonts](https://github.com/s
 
 Nama, wordmark, dan logo ArtCraft dalam [docs/brand/](docs/brand/) adalah merek dagang ArtCraft Team dan tidak tercakup dalam lisensi kode.
 Penggunaannya hanya diizinkan tanpa perubahan, sebagai bagian dari repo ini dan PdfCraft, sesuai [LICENSE-brand.txt](docs/brand/LICENSE-brand.txt).
-Fork dan versi modifikasi harus menghapus merek tersebut.
+Jika Anda menerbitkan atau mendistribusikan versi modifikasi, hapus merek ArtCraft atau ganti dengan merek Anda sendiri.
+Fork yang hanya digunakan untuk mengajukan perubahan ke repositori ini boleh mempertahankan merek ArtCraft tanpa mengubahnya.
