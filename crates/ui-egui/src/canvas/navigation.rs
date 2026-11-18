@@ -41,27 +41,50 @@ impl DocView {
         // of pages of different heights, whose shorter page can start below it), else the
         // nearest one below.
         let top = self.viewport_screen.top();
+        let (page, xf) = self.topmost_visible_page()?;
+        let p = info.pages.get(page)?;
+        // Above the page (in the gap before it) is the page's own top. The window's vertical is
+        // the view's y, or its x when the view is turned a quarter.
+        let (x, y) = xf.screen_to_view(pos2(xf.rect.center().x, top.max(xf.rect.top())));
+        let at = if xf.rot.is_multiple_of(180) {
+            p.xyz_for_view(None, Some(y.clamp(0.0, p.height.max(0.0))))
+        } else {
+            p.xyz_for_view(Some(x.clamp(0.0, p.width.max(0.0))), None)
+        };
+        Some((page, at))
+    }
+
+    /// Topmost visible page transform in the active viewport (not in page-grid organize mode).
+    fn topmost_visible_page(&self) -> Option<(usize, &super::PageXform)> {
+        if self.organize || !self.viewport_screen.is_positive() || self.screen_xforms.is_empty() {
+            return None;
+        }
+        let top = self.viewport_screen.top();
         // A page showing less than a pixel is rounding, not what the reader is looking at: a jump
         // to the next page leaves the previous one's bottom edge within a pixel of the top. Such a
         // sliver still counts when nothing else shows (the last page at the very end).
         let pick = |slack: f32| {
-            let showing = || self.screen_xforms.iter().filter(move |(_, xf)| xf.rect.bottom() > top + slack);
+            let showing = || self.screen_xforms.iter().filter(move |(_, xf)| xf.rect.is_positive() && xf.rect.bottom() > top + slack);
             showing()
                 .filter(|(_, xf)| xf.rect.top() <= top)
                 .min_by_key(|(p, _)| *p)
                 .or_else(|| showing().min_by(|a, b| a.1.rect.top().total_cmp(&b.1.rect.top()).then(a.0.cmp(&b.0))))
         };
-        let (page, xf) = pick(sliver(self.screen_ppp)).or_else(|| pick(0.0))?;
-        let p = info.pages.get(*page)?;
-        // Above the page (in the gap before it) is the page's own top. The window's vertical is
-        // the view's y, or its x when the view is turned a quarter.
-        let (x, y) = xf.screen_to_view(pos2(xf.rect.center().x, top.max(xf.rect.top())));
-        let at = if xf.rot.is_multiple_of(180) {
-            p.xyz_for_view(None, Some(y.clamp(0.0, p.height)))
-        } else {
-            p.xyz_for_view(Some(x.clamp(0.0, p.width)), None)
+        pick(sliver(self.screen_ppp)).or_else(|| pick(0.0)).map(|(p, xf)| (*p, xf))
+    }
+
+    /// Topmost visible `(page_index, vertical_fraction_0_to_1)` for Scroll-Spy highlighting.
+    pub(crate) fn current_top_position(&self, info: &DocInfo) -> (usize, f32) {
+        let top = self.viewport_screen.top();
+        let Some((page, xf)) = self.topmost_visible_page() else {
+            return (self.current, 0.0);
         };
-        Some((*page, at))
+        let Some(_) = info.pages.get(page) else {
+            return (page, 0.0);
+        };
+        let y = top.clamp(xf.rect.top(), xf.rect.bottom());
+        let frac = ((y - xf.rect.top()) / xf.rect.height().max(1.0)).clamp(0.0, 1.0);
+        (page, frac)
     }
 
     /// The user-space `[left, top]` at the window's top-left (where `/XYZ` puts its point), on the

@@ -1302,7 +1302,7 @@ impl PdfCraftApp {
         use crate::panels::BmAction as A;
         let Some((i, id)) = self.active_ids() else { return };
         let current = self.views[i].current;
-        let parent_of = |p: &[usize]| p[..p.len() - 1].to_vec();
+        let parent_of = |p: &[usize]| p[..p.len().saturating_sub(1)].to_vec();
         let edit = match action {
             A::New => {
                 let n = self.session.get(id).map_or(0, |d| d.info.outline.len());
@@ -1325,25 +1325,46 @@ impl PdfCraftApp {
             A::SetToCurrentPage(path) => Edit::SetBookmarkPage { path, page: current },
             A::SetStyle(path, bold, italic) => Edit::SetBookmarkStyle { path, bold, italic },
             A::SetColor(path, color) => Edit::SetBookmarkColor { path, color: Some(color) },
-            A::Delete(path) => Edit::DeleteBookmark { path },
+            A::Delete(path) => {
+                if self.apply_edit(Edit::DeleteBookmark { path }) {
+                    self.views[i].bookmarks_ui.selected_keys.clear();
+                    self.views[i].bookmarks_ui.focused_key = None;
+                }
+                return;
+            }
+            A::DeleteBatch(paths) => {
+                if self.apply_edit(Edit::DeleteBookmarksBatch { paths }) {
+                    self.views[i].bookmarks_ui.selected_keys.clear();
+                    self.views[i].bookmarks_ui.focused_key = None;
+                }
+                return;
+            }
             A::MoveUp(path) => {
-                let at = path[path.len() - 1].saturating_sub(1);
+                let at = path.last().copied().unwrap_or(0).saturating_sub(1);
                 Edit::MoveBookmark { to_parent: parent_of(&path), from: path, index: at }
             }
             A::MoveDown(path) => {
-                let at = path[path.len() - 1] + 1;
+                let at = path.last().copied().unwrap_or(0).saturating_add(1);
                 Edit::MoveBookmark { to_parent: parent_of(&path), from: path, index: at }
             }
             A::Indent(path) => {
                 let mut to_parent = parent_of(&path);
-                to_parent.push(path[path.len() - 1].saturating_sub(1));
+                to_parent.push(path.last().copied().unwrap_or(0).saturating_sub(1));
                 Edit::MoveBookmark { from: path, to_parent, index: usize::MAX }
             }
             A::Outdent(path) => {
                 let parent = parent_of(&path);
                 let grand = parent_of(&parent);
-                let at = parent[parent.len() - 1] + 1;
+                let at = parent.last().copied().unwrap_or(0).saturating_add(1);
                 Edit::MoveBookmark { from: path, to_parent: grand, index: at }
+            }
+            A::MoveBatch { paths, target, placement, expand_parent } => {
+                if self.apply_edit(Edit::MoveBookmarksBatch { paths, target, placement })
+                    && let Some(parent_key) = expand_parent
+                {
+                    self.views[i].bookmarks_ui.set_expanded(parent_key, true);
+                }
+                return;
             }
             A::Copy(path) => {
                 self.copy_bookmark(id, &path);

@@ -1319,11 +1319,11 @@ title = "Highlight the current bookmark"
 area = "B"
 tier = "P2"
 milestone = "M4"
-status = "planned"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/src/panels/bookmarks.rs::scroll_spy_highlights_collapsed_ancestor_and_resolves_ties"]
+notes = "Scroll-Spy marks the bookmark matching the reader's current page and vertical position with an accent bar, walking up to the closest visible ancestor when nested items are collapsed."
 
 [[feature]]
 id = "view.attachments-panel"
@@ -3346,7 +3346,7 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = ["bookmark_delete"]
-evidence = ["crates/ui-egui/tests/it/bookmarks.rs::new_rename_reorder_indent_delete_and_undo", "crates/organize/src/tests.rs::bookmarks_add_rename_move_delete", "crates/engine/src/tests.rs::bookmark_edits_show_in_the_viewer_undo_and_save"]
+evidence = ["crates/ui-egui/tests/it/bookmarks.rs::new_rename_reorder_indent_delete_and_undo", "crates/ui-egui/tests/it/bookmarks.rs::multi_select_caravan_drag_ctrl_a_delete_escape_and_read_only", "crates/organize/src/tests.rs::bookmarks_add_rename_move_delete", "crates/organize/src/tests.rs::arena_delete_batch_handles_overlaps_empty_and_clears_root_count", "crates/engine/src/tests.rs::bookmark_edits_show_in_the_viewer_undo_and_save", "crates/engine/src/tests.rs::bookmark_batch_move_and_delete_undo_and_check_permissions"]
 notes = ""
 
 [[feature]]
@@ -3358,8 +3358,8 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = ["bookmark_move"]
-evidence = ["crates/ui-egui/tests/it/bookmarks.rs::new_rename_reorder_indent_delete_and_undo", "crates/organize/src/tests.rs::bookmarks_add_rename_move_delete", "crates/engine/src/tests.rs::bookmark_edits_show_in_the_viewer_undo_and_save", "crates/automation/tests/it/automation.rs::bookmarks_through_tools"]
-notes = ""
+evidence = ["crates/ui-egui/tests/it/bookmarks.rs::new_rename_reorder_indent_delete_and_undo", "crates/ui-egui/tests/it/bookmarks.rs::drag_top_center_bottom_outdent_and_undo", "crates/ui-egui/tests/it/bookmarks.rs::multi_select_caravan_drag_ctrl_a_delete_escape_and_read_only", "crates/organize/src/tests.rs::bookmarks_add_rename_move_delete", "crates/organize/src/tests.rs::arena_caravan_prunes_descendants_rejects_self_drops_and_sorts_by_euler_in", "crates/engine/src/tests.rs::bookmark_edits_show_in_the_viewer_undo_and_save", "crates/engine/src/tests.rs::bookmark_batch_move_and_delete_undo_and_check_permissions", "crates/automation/tests/it/automation.rs::bookmarks_through_tools"]
+notes = "Single and multi-selected bookmarks can be dragged directly in the Bookmarks tree (before/after siblings, nested into a row, or outdented horizontally) with undo support."
 
 [[feature]]
 id = "organize.bookmark-set-destination"

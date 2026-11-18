@@ -21,8 +21,8 @@ pub(super) mod search_ui;
 pub mod side_panels;
 mod tools;
 
-pub use bookmarks::BmAction;
-pub(crate) use bookmarks::ellipsized_prefix;
+pub use bookmarks::{BmAction, BookmarkPanelState};
+pub(crate) use bookmarks::{ellipsized_prefix, visible_bookmark_keys};
 pub use right::right_panel;
 pub use tools::left_panel;
 pub(crate) use tools::panel_header;

@@ -219,11 +219,14 @@ impl<'a> Inspector<'a> {
                 levels.pop();
                 continue;
             };
-            if let Object::Reference(id) = o
-                && !seen.insert(*id)
-            {
-                continue; // cycle: this run of siblings ends here
-            }
+            let obj = if let Object::Reference(id) = o {
+                if !seen.insert(*id) {
+                    continue; // cycle: this run of siblings ends here
+                }
+                Some(*id)
+            } else {
+                None
+            };
             let Some(d) = self.dict(o) else { continue };
             if listed.len() >= OUTLINE_WINDOW {
                 more = true;
@@ -257,7 +260,7 @@ impl<'a> Inspector<'a> {
             };
             let flags = d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0);
             let (italic, bold) = (flags & 1 != 0, flags & 2 != 0);
-            listed.push((depth, OutlineItem { title, page, view, action, children: Vec::new(), open, color, italic, bold }));
+            listed.push((depth, OutlineItem { obj, title, page, view, action, children: Vec::new(), open, color, italic, bold }));
         }
         (nest_outline(listed), more)
     }

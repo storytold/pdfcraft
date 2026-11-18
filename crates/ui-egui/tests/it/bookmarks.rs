@@ -602,3 +602,151 @@ fn cutting_a_subtree_too_deep_to_copy_keeps_it() {
     assert!(toast.contains("so nothing was cut"), "{toast}");
     assert!(h.state().bookmark_clipboard.is_some(), "the copy is still on the bookmark clipboard");
 }
+
+fn pointer_drag(h: &mut Harness<'static, PdfCraftApp>, from: egui::Pos2, to: egui::Pos2) {
+    h.hover_at(from);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for step in 1..=6 {
+        h.hover_at(from + (to - from) * (step as f32 / 6.0));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(4);
+}
+
+#[test]
+fn drag_top_center_bottom_outdent_and_undo() {
+    let mut h = harness();
+    for (i, title) in ["Ch1", "Ch2", "Ch3"].iter().enumerate() {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark {
+            parent: vec![],
+            index: i,
+            title: (*title).into(),
+            page: i,
+            left: None,
+            top: None,
+        });
+    }
+    h.run_steps(3);
+
+    // Center 50% of Ch2 -> nests Ch3 inside Ch2.
+    let from = h.get_by_label("Ch3").rect().center();
+    let into_ch2 = h.get_by_label("Ch2").rect().center();
+    pointer_drag(&mut h, from, into_ch2);
+    assert_eq!(outline(&h), [("Ch1".into(), Some(0), 0), ("Ch2".into(), Some(1), 0), ("Ch3".into(), Some(2), 1)]);
+
+    // Top 25% of Ch1 -> moves Ch3 before Ch1 at depth 1.
+    let ch3_rect = h.get_by_label("Ch3").rect();
+    let ch1_top = h.get_by_label("Ch1").rect();
+    pointer_drag(&mut h, ch3_rect.center(), egui::pos2(ch1_top.left() + 4.0, ch1_top.top() + 2.0));
+    assert_eq!(outline(&h), [("Ch3".into(), Some(2), 0), ("Ch1".into(), Some(0), 0), ("Ch2".into(), Some(1), 0)]);
+
+    // Undo restores previous nested state in one step.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(outline(&h), [("Ch1".into(), Some(0), 0), ("Ch2".into(), Some(1), 0), ("Ch3".into(), Some(2), 1)]);
+
+    // Dragged item cancelled with Escape before release commits nothing.
+    let ch3_rect = h.get_by_label("Ch3").rect();
+    let ch1_top = h.get_by_label("Ch1").rect();
+    h.hover_at(ch3_rect.center());
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: ch3_rect.center(), button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.hover_at(egui::pos2(ch1_top.left() + 4.0, ch1_top.top() + 2.0));
+    h.run_steps(1);
+    h.key_press(Key::Escape);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton {
+        pos: egui::pos2(ch1_top.left() + 4.0, ch1_top.top() + 2.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(3);
+    assert_eq!(outline(&h), [("Ch1".into(), Some(0), 0), ("Ch2".into(), Some(1), 0), ("Ch3".into(), Some(2), 1)]);
+
+    // Bottom blank space at far left X outdents Ch3 back to top level after Ch2.
+    let ch3_rect = h.get_by_label("Ch3").rect();
+    let below_ch3_left = egui::pos2(ch3_rect.left() + 2.0, ch3_rect.bottom() + 24.0);
+    pointer_drag(&mut h, ch3_rect.center(), below_ch3_left);
+    assert_eq!(outline(&h), [("Ch1".into(), Some(0), 0), ("Ch2".into(), Some(1), 0), ("Ch3".into(), Some(2), 0)]);
+}
+
+#[test]
+fn multi_select_caravan_drag_ctrl_a_delete_escape_and_read_only() {
+    let mut h = harness();
+    let long_title = format!("Alpha {}", "W".repeat(80));
+    for (i, title) in [long_title.as_str(), "Beta", "Gamma"].iter().enumerate() {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::AddBookmark {
+            parent: vec![],
+            index: i,
+            title: (*title).into(),
+            page: i,
+            left: None,
+            top: None,
+        });
+    }
+    h.run_steps(3);
+
+    // Single-line truncation preserves fixed 28.0 px row height.
+    let long_rect = h.get_by_label(&long_title).rect();
+    assert!((long_rect.height() - 28.0).abs() <= 0.5, "expected single-line 28px row, got {}", long_rect.height());
+
+    // Click Alpha, Ctrl-click Beta, drag caravan onto Gamma.
+    h.get_by_label(&long_title).click();
+    h.run_steps(2);
+    let beta_pos = h.get_by_label("Beta").rect().center();
+    h.event(egui::Event::ModifiersChanged(Modifiers::COMMAND));
+    h.hover_at(beta_pos);
+    h.event(egui::Event::PointerButton { pos: beta_pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::COMMAND });
+    h.event(egui::Event::PointerButton { pos: beta_pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::COMMAND });
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+
+    let gamma_pos = h.get_by_label("Gamma").rect().center();
+    pointer_drag(&mut h, beta_pos, gamma_pos);
+    assert_eq!(outline(&h), [("Gamma".into(), Some(2), 0), (long_title.clone(), Some(0), 1), ("Beta".into(), Some(1), 1)]);
+
+    // Ctrl+A while panel has focus selects all visible bookmarks; Delete removes them atomically and Ctrl+Z restores.
+    h.get_by_label("Gamma").click();
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(1);
+    h.key_press(Key::Delete);
+    h.run_steps(3);
+    assert!(outline(&h).is_empty(), "Ctrl+A then Delete clears all visible bookmarks: {:?}", outline(&h));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(outline(&h), [("Gamma".into(), Some(2), 0), (long_title.clone(), Some(0), 1), ("Beta".into(), Some(1), 1)]);
+
+    // Read-only PDF (assemble_document = false) disables mutation while preserving collapse & nav without dirtying COS.
+    let id = h.state().views[0].id;
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    let mut cos_doc = pdfcraft_cos::Document::open(bytes).unwrap();
+    cos_doc
+        .set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: "",
+            owner_password: "owner",
+            permissions: 0,
+            encrypt_metadata: true,
+            seed: [9u8; 32],
+        })
+        .unwrap();
+    let locked = pdfcraft_cos::write_full(&cos_doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    h.state_mut().open_bytes("locked.pdf", None, locked).unwrap();
+    h.run_steps(3);
+    assert!(h.query_by_label("New bookmark (Ctrl+B)").is_none());
+    let g_row = h.get_all_by_label("Gamma").next().unwrap().rect();
+    let tri = egui::pos2(g_row.left() + 8.0, g_row.top() + 14.0);
+    h.hover_at(tri);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: tri, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.event(egui::Event::PointerButton { pos: tri, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    let locked_id = h.state().views[1].id;
+    assert!(h.state().session.get(locked_id).unwrap().can_undo().is_none());
+}
