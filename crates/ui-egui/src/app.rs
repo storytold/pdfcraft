@@ -190,7 +190,7 @@ impl PdfCraftApp {
             integrated_titlebar: false,
             titlebar_lights_right: None,
             window_controls: None,
-            system_title_bar: false,
+            system_title_bar: window_controls::SYSTEM_TITLE_BAR_DEFAULT,
             app_frame_shown: None,
             password_prompt: None,
             document_copy: None,

@@ -7,15 +7,24 @@ impl PdfCraftApp {
         self.window_controls.is_some() && !self.system_title_bar
     }
 
-    /// Follow Use system title bar at once: the window starts without winit's frame wherever the
-    /// app may draw its own, and gets it back (or loses it again) when the preference changes.
+    /// The window buttons the app may draw, and whether the window was opened without winit's
+    /// frame (the launcher reads the saved preference before it creates the window, so the frame
+    /// is right from the first frame).
+    pub fn set_window_controls(&mut self, controls: Option<super::window_controls::Layout>, app_frame: bool) {
+        self.window_controls = controls;
+        self.app_frame_shown = Some(app_frame);
+    }
+
+    /// Follow Use system title bar at once: the window gets winit's frame back (or loses it
+    /// again) when the preference changes.
     pub(super) fn sync_window_frame(&mut self, ctx: &egui::Context) {
         if self.window_controls.is_none() {
             return;
         }
         let app_frame = self.draws_window_frame();
         if self.app_frame_shown != Some(app_frame) {
-            // The window opens undecorated, so only a change from that needs a command.
+            // Without `set_window_controls` the window opened undecorated, so only a change from
+            // that needs a command.
             if self.app_frame_shown.is_some() || !app_frame {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(!app_frame));
             }

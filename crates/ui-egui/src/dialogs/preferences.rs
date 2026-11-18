@@ -672,10 +672,19 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
         ctx.label_secondary(ui, tl!("Lowering this forgets the oldest files. At 0 there is no list."), t);
     }
 
+    // Only where the app may draw the title bar (GNOME on Wayland, Windows); elsewhere the
+    // desktop draws it.
     if app.window_controls.is_some() {
-        ctx.checkbox(ui, &mut app.system_title_bar, tl!("Use system title bar"), t).on_hover_text(tl!(
-            "Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme."
-        ));
+        let tip = if cfg!(target_os = "windows") {
+            tl!(
+                "Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar."
+            )
+        } else {
+            tl!(
+                "Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme."
+            )
+        };
+        ctx.checkbox(ui, &mut app.system_title_bar, tl!("Use system title bar"), t).on_hover_text(tip);
     }
 }
 

@@ -549,7 +549,8 @@ pub struct PdfCraftApp {
     /// carries these window buttons and the window's edges resize it.
     pub window_controls: Option<window_controls::Layout>,
     /// Preferences ▸ Use system title bar: where `window_controls` is set, give the window back
-    /// winit's frame instead of drawing the header bar (#1001).
+    /// winit's frame instead of drawing the header bar (#1001). Off by default on GNOME, whose
+    /// frame winit only imitates, and on by default on Windows, whose own title bar is the norm.
     pub system_title_bar: bool,
     /// Whether the window currently has the app's header bar (`None` until the first frame).
     app_frame_shown: Option<bool>,
