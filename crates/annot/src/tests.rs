@@ -2090,16 +2090,14 @@ fn ink_drawing_lock_flags_and_eraser() {
     let shape = Shape::Ink { strokes: vec![line(500.0), line(400.0)] };
     let i = add_annotation(&mut doc, &new(0, shape), &meta("i")).unwrap();
 
-    // LockedContents: erasing ink strokes is refused because it alters drawn contents and appearance.
+    // LockedContents: erasing ink strokes is refused.
     set_locked_contents(&mut doc, 0, i, true).unwrap();
     assert!(erase_ink(&mut doc, 0, i, &[[200.0, 550.0], [200.0, 350.0]], 5.0, &meta("e")).is_err());
 
-    // Locked without LockedContents: erasing ink strokes is permitted, keeping original Rect unchanged.
+    // Locked: erasing ink strokes is also refused (stroke geometry is annotation shape/properties per Table 167).
     set_locked_contents(&mut doc, 0, i, false).unwrap();
     set_locked(&mut doc, 0, i, true).unwrap();
-    let initial_rect = rect(&list(&doc, 0)[i]);
-    assert!(erase_ink(&mut doc, 0, i, &[[200.0, 550.0], [200.0, 350.0]], 5.0, &meta("e")).unwrap());
-    assert_eq!(rect(&list(&doc, 0)[i]), initial_rect, "locked ink drawing keeps original rect");
+    assert!(erase_ink(&mut doc, 0, i, &[[200.0, 550.0], [200.0, 350.0]], 5.0, &meta("e")).is_err());
 }
 
 /// A document holding only a catalog, for appearance builds from a bare dictionary whose

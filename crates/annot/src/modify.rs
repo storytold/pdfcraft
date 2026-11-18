@@ -1488,6 +1488,7 @@ pub fn add_text_replacement(doc: &mut Document, replacement: TextReplacement<'_>
 /// Returns whether anything was erased.
 pub fn erase_ink(doc: &mut Document, page: usize, index: usize, path: &[[f64; 2]], radius: f64, meta: &Meta) -> Result<bool, AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
+    unlocked(doc, r)?;
     unlocked_contents(doc, r)?;
     let d = annot_dict(doc, r);
     if d.name(b"Subtype") != Some(b"Ink") {
@@ -1560,12 +1561,9 @@ pub fn erase_ink(doc: &mut Document, page: usize, index: usize, path: &[[f64; 2]
     }
     let width = d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0);
     let rect = grow(bounds(kept.iter().flatten().copied()).unwrap_or_default(), width / 2.0 + 1.0);
-    let is_locked = flags(doc, r) & FLAG_LOCKED != 0;
     doc.update_dict(r, |d| {
         d.set(b"InkList".to_vec(), Object::Array(kept.iter().map(|s| num_array(&s.concat())).collect()));
-        if !is_locked {
-            d.set(b"Rect".to_vec(), num_array(&rect));
-        }
+        d.set(b"Rect".to_vec(), num_array(&rect));
         touch(d, meta);
     })?;
     set_appearance(doc, r)?;
