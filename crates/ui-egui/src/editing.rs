@@ -1,29 +1,18 @@
 //! Editing glue: apply engine edits from the UI, undo/redo, save/save-as, and the
 //! "save changes?" prompt when closing a tab or quitting with unsaved edits.
 
+use craft::behavior::edit_history::Step;
 use pdfcraft_engine::Edit;
-use pdfcraft_platform::staging::{StagingName, staging_suffixes};
 
 use crate::PdfCraftApp;
 
 mod close;
-mod save;
+pub(crate) mod save;
 
-pub use close::CloseRequest;
+pub use craft::dialogs::save::SaveTarget;
 pub use save::PendingLock;
-#[cfg(not(target_arch = "wasm32"))]
-pub use save::PendingOverwrite;
-#[cfg(target_arch = "wasm32")]
-pub(crate) use save::download;
-#[doc(hidden)]
-pub use save::download_mime_type;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use save::in_document_folder;
-pub use save::{SaveTarget, write_atomically};
 #[cfg(test)]
-pub(crate) use save::{is_mail_temp_copy, save_dialog_folder};
-#[cfg(test)]
-use save::{unredacted_file_name, write_atomically_syncing, write_atomically_with};
+use save::unredacted_file_name;
 
 /// Text typed into a new text box that isn't added to the page yet.
 fn new_text_typed(v: &crate::DocView) -> bool {
@@ -32,8 +21,9 @@ fn new_text_typed(v: &crate::DocView) -> bool {
 
 /// Clear an unfinished page-anchored drawing or composer when a page edit shifts or removes `page`.
 fn clear_shifted_page_comment_state(view: &mut crate::DocView, shifted_from: usize) {
-    if matches!(view.comments.gesture, Some(crate::comments::Gesture::Draw { page, .. }) if page >= shifted_from) {
-        view.comments.gesture = None;
+    // The shape being clicked out is on the tool's page.
+    if !view.comments.tool.drawing().is_empty() && view.comments.tool.page >= shifted_from {
+        view.comments.tool.cancel_drawing();
     }
     if view.comments.composer.as_ref().is_some_and(|c| !matches!(c.kind, crate::comments::ComposerKind::Edit(_)) && c.page >= shifted_from) {
         view.comments.composer = None;
@@ -89,13 +79,15 @@ fn select_after_edit(
             // Select the new comment alone (appended last among the page's comments).
             let newest = info.annotations.iter().filter(|x| x.page == a.page && !x.is_reply()).map(|x| x.index).max();
             view.comments.clear_selection();
-            view.comments.selected = newest.map(|n| (a.page, n));
+            if let Some(n) = newest {
+                view.comments.select_keys(&[(a.page, n)]);
+            }
             view.comments.reveal = true;
             // A new highlight opens its note for typing straight away, as in Acrobat,
             // unless a note typed into another card is still unsaved.
             if let (pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, .. }, Some(n)) = (&a.shape, newest)
                 && a.contents.is_empty()
-                && view.comments.editing.is_none()
+                && view.comments.panel.editing.is_none()
             {
                 view.comments.open_editor(a.page, n, String::new());
             }
@@ -118,7 +110,7 @@ fn select_after_edit(
         Edit::Batch { .. } => view.comments.clear_selection(),
         // The copies the paste added (and nothing that was there before): select them all.
         Edit::PasteComments { page, .. } => {
-            let mut new: Vec<(usize, usize)> = info
+            let new: Vec<(usize, usize)> = info
                 .annotations
                 .iter()
                 .filter(|x| x.page == *page && !x.is_reply() && !annots_before.iter().any(|b| b.name == x.name))
@@ -126,8 +118,8 @@ fn select_after_edit(
                 .collect();
             view.comments.clear_selection();
             if !new.is_empty() {
-                view.comments.selected = Some(new.remove(0));
-                view.comments.also = new;
+                // The first copy leads, as it did when it was the primary.
+                view.comments.select_keys(&new);
                 view.comments.reveal = true;
             }
         }
@@ -286,9 +278,9 @@ impl PdfCraftApp {
                     self.notify(match &n {
                         pdfcraft_engine::EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
                         pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
-                        pdfcraft_engine::EditNotice::RedactionElsewhere(e) => crate::dialogs::still_holding_note(e).unwrap_or_else(|| n.to_string()),
+                        pdfcraft_engine::EditNotice::RedactionElsewhere(e) => crate::redact_ui::still_holding_note(e).unwrap_or_else(|| n.to_string()),
                         pdfcraft_engine::EditNotice::RedactionIdentification(id) => {
-                            crate::dialogs::identification_note(id).unwrap_or_else(|| n.to_string())
+                            crate::redact_ui::identification_note(id).unwrap_or_else(|| n.to_string())
                         }
                     });
                 }
@@ -325,7 +317,7 @@ impl PdfCraftApp {
         // While a polygon, cloud or run of connected lines is being drawn, Undo takes back its
         // last point instead of the last finished edit.
         if let Some((i, _)) = self.active_ids()
-            && self.views[i].comments.undo_point()
+            && self.views[i].comments.tool.undo_point()
         {
             return;
         }
@@ -341,24 +333,12 @@ impl PdfCraftApp {
     /// Applying the typing first was a new edit, which dropped the document's Redo, and then the
     /// typing was taken back all at once. True when the box took the step.
     fn undo_in_page_box(&mut self) -> bool {
-        let Some(ctx) = self.ctx.clone() else { return false };
         let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) else { return false };
-        let (doc, place) = (view.id, view.place());
         if let Some(ed) = view.line_editor.as_mut().filter(|ed| ed.has_unsaved_text()) {
-            ed.claim_typing(&ctx, doc, place);
-            let Some(text) = typing_step(&ctx, crate::edit_text_ui::input_id(place), &ed.text, true) else { return false };
-            let before = std::mem::replace(&mut ed.text, text);
-            ed.selection = None;
-            ed.follow_typed_rows(&ctx, &before, place);
-            return true;
+            return step_typing(&mut ed.history, &mut ed.text, &mut ed.selection, &mut ed.look.aligns, Step::Undo);
         }
         if let Some(d) = view.content.draft.as_mut().filter(|d| d.has_unapplied_typing()) {
-            d.claim_typing(&ctx, doc);
-            let Some(text) = typing_step(&ctx, crate::content_ui::input_id(), &d.text, true) else { return false };
-            let before = std::mem::replace(&mut d.text, text);
-            d.selection = None;
-            crate::edit_text_ui::follow_typing(&ctx, crate::content_ui::input_id(), &before, &d.text, &mut [&mut d.style.aligns]);
-            return true;
+            return step_typing(&mut d.history, &mut d.text, &mut d.selection, &mut d.style.aligns, Step::Undo);
         }
         false
     }
@@ -376,24 +356,12 @@ impl PdfCraftApp {
     /// doesn't have yet stays as it is, since applying it first is a new edit, which drops the
     /// document's Redo. True when the box took the step.
     fn redo_in_page_box(&mut self) -> bool {
-        let Some(ctx) = self.ctx.clone() else { return false };
         let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) else { return false };
-        let (doc, place) = (view.id, view.place());
         if let Some(ed) = view.line_editor.as_mut() {
-            ed.claim_typing(&ctx, doc, place);
-            let Some(text) = typing_step(&ctx, crate::edit_text_ui::input_id(place), &ed.text, false) else { return ed.has_unsaved_text() };
-            let before = std::mem::replace(&mut ed.text, text);
-            ed.selection = None;
-            ed.follow_typed_rows(&ctx, &before, place);
-            return true;
+            return step_typing(&mut ed.history, &mut ed.text, &mut ed.selection, &mut ed.look.aligns, Step::Redo) || ed.has_unsaved_text();
         }
         if let Some(d) = view.content.draft.as_mut() {
-            d.claim_typing(&ctx, doc);
-            let Some(text) = typing_step(&ctx, crate::content_ui::input_id(), &d.text, false) else { return d.has_unapplied_typing() };
-            let before = std::mem::replace(&mut d.text, text);
-            d.selection = None;
-            crate::edit_text_ui::follow_typing(&ctx, crate::content_ui::input_id(), &before, &d.text, &mut [&mut d.style.aligns]);
-            return true;
+            return step_typing(&mut d.history, &mut d.text, &mut d.selection, &mut d.style.aligns, Step::Redo) || d.has_unapplied_typing();
         }
         false
     }
@@ -492,42 +460,32 @@ impl PdfCraftApp {
 
     /// Whether the keyboard is in a box typed into on the page: a paragraph being edited, or added
     /// text.
-    pub(crate) fn page_box_focused(&self, ctx: &egui::Context) -> bool {
-        let focused = ctx.memory(|m| m.focused());
-        let paragraph = self.active.and_then(|i| self.views.get(i)).map(|v| crate::edit_text_ui::input_id(v.place()));
-        focused.is_some() && (focused == paragraph || focused == Some(crate::content_ui::input_id()))
+    // PLAN: callers still pass a ctx (`commands.rs:880`, `:882`, owner pdf-hub-w3): drop the argument there
+    pub(crate) fn page_box_focused(&self) -> bool {
+        self.active.and_then(|i| self.views.get(i)).is_some_and(|v| {
+            v.line_editor.as_ref().is_some_and(|ed| ed.focus) || v.content.draft.as_ref().is_some_and(|d| d.focus)
+        })
     }
 
     /// Whether the focused box on the page has typing its own Redo would put back: after Undo in
-    /// the box restores what the page has, Redo still belongs to the box, not the document. The
-    /// same test egui makes when it handles the key.
-    pub(crate) fn page_box_can_redo(&self, ctx: &egui::Context) -> bool {
+    /// the box restores what the page has, Redo still belongs to the box, not the document.
+    pub(crate) fn page_box_can_redo(&self) -> bool {
         let Some(view) = self.active.and_then(|i| self.views.get(i)) else { return false };
-        let focused = ctx.memory(|m| m.focused());
-        let (id, text) = if focused == Some(crate::edit_text_ui::input_id(view.place()))
-            && let Some(ed) = &view.line_editor
-        {
-            (crate::edit_text_ui::input_id(view.place()), &ed.text)
-        } else if focused == Some(crate::content_ui::input_id())
-            && let Some(d) = &view.content.draft
-        {
-            (crate::content_ui::input_id(), &d.text)
-        } else {
-            return false;
-        };
-        has_typing_to_redo(ctx, id, text)
+        if let Some(ed) = view.line_editor.as_ref().filter(|ed| ed.focus) {
+            return ed.history.can_redo();
+        }
+        view.content.draft.as_ref().filter(|d| d.focus).is_some_and(|d| d.history.can_redo())
     }
 
     /// Whether the box open on the page has a Redo of its own, the step
     /// [`Self::redo_in_page_box`] takes for Redo from the menu or toolbar: focus has moved to the
     /// menu by then, so unlike [`Self::page_box_can_redo`] this doesn't ask for it.
     pub(crate) fn open_box_can_redo(&self) -> bool {
-        let Some(ctx) = &self.ctx else { return false };
         let Some(view) = self.active.and_then(|i| self.views.get(i)) else { return false };
         if let Some(ed) = &view.line_editor {
-            return has_typing_to_redo(ctx, crate::edit_text_ui::input_id(view.place()), &ed.text);
+            return ed.history.can_redo();
         }
-        view.content.draft.as_ref().is_some_and(|d| has_typing_to_redo(ctx, crate::content_ui::input_id(), &d.text))
+        view.content.draft.as_ref().is_some_and(|d| d.history.can_redo())
     }
 
     /// Typing in a box on the page (a paragraph being edited, added text) that the page doesn't
@@ -574,11 +532,9 @@ impl PdfCraftApp {
                 self.save_active(SaveTarget::InPlace);
             }
             Some(crate::canvas::ViewAction::Extract) => self.open_extract_dialog(),
-            Some(crate::canvas::ViewAction::Split) => self.dialog = Some(crate::Dialog::Split),
-            Some(crate::canvas::ViewAction::SplitBeforeSelected) => {
-                self.split_draft.mode = crate::SplitMode::Selection;
-                self.dialog = Some(crate::Dialog::Split);
-            }
+            Some(crate::canvas::ViewAction::Split) => self.open_split(false),
+            // Split before the selected pages: the dialog opens over the selection scope.
+            Some(crate::canvas::ViewAction::SplitBeforeSelected) => self.open_split(true),
             Some(crate::canvas::ViewAction::CopyPages { cut }) => self.copy_pages(cut),
             Some(crate::canvas::ViewAction::PastePages) => self.paste_pages(),
             Some(crate::canvas::ViewAction::EnhanceCamera) => self.enhance_camera(i),
@@ -835,9 +791,8 @@ impl PdfCraftApp {
             self.run_focus_scripts(i);
             return true;
         }
+        // The refused draft goes back as it is: its editor shows again while `forms.focus` holds it.
         if let Some(view) = self.views.get_mut(i) {
-            let mut draft = draft;
-            draft.request_focus = true;
             view.forms.focus = Some(draft);
         }
         false
@@ -953,7 +908,6 @@ impl PdfCraftApp {
             if typed
                 && let Some(view) = self.views.get_mut(i)
                 && let Some(focus) = view.forms.focus.as_mut()
-                && focus.request_focus
                 && committed.as_ref().is_some_and(|draft| draft.name == focus.name)
                 && let Some(field) = self.session.get(view.id).and_then(|doc| doc.form.iter().find(|field| field.name == focus.name))
             {
@@ -978,8 +932,7 @@ impl PdfCraftApp {
         if !typed {
             return true;
         }
-        if let (Some(mut draft), Some(view)) = (committed, self.views.get_mut(i)) {
-            draft.request_focus = true;
+        if let (Some(draft), Some(view)) = (committed, self.views.get_mut(i)) {
             view.forms.focus = Some(draft);
         }
         false
@@ -1419,25 +1372,25 @@ fn bookmark_at<'a>(items: &'a [pdfcraft_render::OutlineItem], path: &[usize]) ->
     if rest.is_empty() { Some(item) } else { bookmark_at(&item.children, rest) }
 }
 
-/// Whether the page text box `id`, showing `text`, has typing its own Redo would put back: the
-/// test egui makes when it handles the key.
-fn has_typing_to_redo(ctx: &egui::Context, id: egui::Id, text: &str) -> bool {
-    egui::TextEdit::load_state(ctx, id)
-        .is_some_and(|state| state.cursor.char_range().is_some_and(|range| state.undoer().has_redo(&(range, text.to_owned()))))
+/// The open box's own Undo or Redo, as its keys do it: the box's text, selection and line
+/// alignments one step back (or forward) in its typing history. False when the history has no
+/// such step, and then nothing changes.
+// PLAN: assumed `edit_text_ui::Typed { text: String, selection: Option<Range<usize>>, aligns: Vec<Option<TextAlign>> }` with fields the crate can build (pdf-edit-w8, A-3)
+fn step_typing(
+    history: &mut crate::edit_text_ui::TypingHistory,
+    text: &mut String,
+    selection: &mut Option<std::ops::Range<usize>>,
+    aligns: &mut Vec<Option<pdfcraft_engine::TextAlign>>,
+    step: Step,
+) -> bool {
+    let mut now = crate::edit_text_ui::Typed { text: std::mem::take(text), selection: selection.take(), aligns: std::mem::take(aligns) };
+    let stepped = history.step(&mut now, step);
+    *text = now.text;
+    *selection = now.selection;
+    *aligns = now.aligns;
+    stepped
 }
 
-/// The box's own Undo (or Redo), as the key does it: the box's text one step back (or forward) in
-/// its typing, with the box's history and cursor moved along. None when there is no such step.
-fn typing_step(ctx: &egui::Context, id: egui::Id, text: &str, undo: bool) -> Option<String> {
-    let mut state = egui::TextEdit::load_state(ctx, id)?;
-    let mut undoer = state.undoer();
-    let current = (state.cursor.char_range()?, text.to_owned());
-    let (range, stepped) = if undo { undoer.undo(&current) } else { undoer.redo(&current) }?.clone();
-    state.set_undoer(undoer);
-    state.cursor.set_char_range(Some(range));
-    egui::TextEdit::store_state(ctx, id, state);
-    Some(stepped)
-}
 
 #[cfg(test)]
 mod tests;
@@ -1456,14 +1409,10 @@ mod revert_draft_tests {
             widget: 0,
             text: text.into(),
             picked: Vec::new(),
-            request_focus: false,
-            select_all: false,
-            press: None,
-            calendar: None,
-            calendar_rect: None,
-            calendar_text: None,
-            list: Default::default(),
-            had_focus: false,
+            // PLAN: assumed forms-w7's new fields `selection: TextSelection` (with `Default`), `list_open`, `calendar_open` (pdf-forms-w7 sheet :14)
+            selection: Default::default(),
+            list_open: false,
+            calendar_open: false,
         }
     }
 
@@ -1471,6 +1420,21 @@ mod revert_draft_tests {
         let mut app = PdfCraftApp::new();
         app.open_bytes("source.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
         app
+    }
+
+    /// `app` in a window, so its dialogs are drawn and answered by their buttons.
+    fn shown(app: PdfCraftApp) -> egui_kittest::Harness<'static, PdfCraftApp> {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| app);
+        h.run_steps(2);
+        h
+    }
+
+    /// Presses the button called `label` of the dialog on top (the last such node drawn: the
+    /// toolbar may have one of the same name), then lets the app take the answer.
+    fn press(h: &mut egui_kittest::Harness<'static, PdfCraftApp>, label: &str) {
+        use egui_kittest::kittest::Queryable;
+        h.get_all_by_label(label).last().unwrap_or_else(|| panic!("no {label:?} button on screen")).click();
+        h.run_steps(3);
     }
 
     fn queue_draft(app: &mut PdfCraftApp, index: usize, text: &str) {
@@ -1493,12 +1457,14 @@ mod revert_draft_tests {
             }
             assert!(!app.session.get(id).unwrap().dirty);
             assert_eq!(app.active, Some(1));
-            let ctx = egui::Context::default();
-            assert!(!app.request_quit(&ctx));
-            assert_eq!(app.close_request, Some(CloseRequest::Quit));
-            assert!(!app.allow_quit);
-            app.resolve_close(&ctx, None);
-            assert!(app.close_request.is_none());
+            let mut h = shown(app);
+            let ctx = h.ctx.clone();
+            assert!(!h.state_mut().request_quit(&ctx), "the typing holds the quit");
+            assert_eq!(h.state().close_guard.as_ref().and_then(|g| g.current()), Some(&id), "the question is about the typed document");
+            h.run_steps(2);
+            press(&mut h, "Cancel");
+            let app = h.state();
+            assert!(app.close_guard.is_none(), "Cancel ends the quit");
             assert_eq!(app.views.len(), 2);
             assert!(app.has_unsaved_work(0));
             assert_eq!(app.views[0].id, id);
@@ -1539,34 +1505,16 @@ mod revert_draft_tests {
         assert!(app.toast.is_none(), "{:?}", app.toast);
     }
 
-    #[test]
-    fn unsaved_flag_follows_dirty_state() {
-        use std::sync::atomic::Ordering;
-        // `guard_quit` runs every frame, also on the web, where no close request ever arrives.
-        let ctx = egui::Context::default();
-        let mut app = app();
-        app.guard_quit(&ctx);
-        assert!(!app.unsaved_flag.load(Ordering::Relaxed));
-        assert!(app.apply_edit(Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text("Changed".into()) }));
-        app.guard_quit(&ctx);
-        assert!(app.unsaved_flag.load(Ordering::Relaxed));
-    }
-
     /// Text typed into a new text box is lost on close unless the save prompt appears; an empty
     /// box has nothing to lose.
     #[test]
     fn text_typed_into_a_new_text_box_counts_as_unsaved_work() {
         use crate::content_ui::{TextDraft, default_style};
         let mut app = app();
-        let draft = |text: &str| TextDraft {
-            page: 0,
-            index: None,
-            rect: [0.0; 4],
-            text: text.into(),
-            style: default_style(),
-            focus: true,
-            selection: None,
-            typing_from: None,
+        let draft = |text: &str| {
+            let mut draft = TextDraft::new(0, None, [0.0; 4], text.into(), default_style());
+            draft.focus = true;
+            draft
         };
         assert!(!app.has_unsaved_work(0));
         app.views[0].content.draft = Some(draft("  \n"));
@@ -1592,25 +1540,20 @@ mod revert_draft_tests {
             let mut app = PdfCraftApp::new();
             app.open_bytes("source.pdf", Some(path.clone()), bytes).unwrap();
             let rect = [72.0, 72.0, 272.0, 92.0];
-            app.views[0].content.draft = Some(TextDraft {
-                page: 0,
-                index: None,
-                rect,
-                text: "Typed".into(),
-                style: default_style(),
-                focus: true,
-                selection: None,
-                typing_from: None,
-            });
-            let ctx = egui::Context::default();
+            let mut draft = TextDraft::new(0, None, rect, "Typed".into(), default_style());
+            draft.focus = true;
+            app.views[0].content.draft = Some(draft);
+            let mut h = shown(app);
+            let ctx = h.ctx.clone();
             if quit {
-                assert!(!app.request_quit(&ctx));
+                assert!(!h.state_mut().request_quit(&ctx));
             } else {
-                app.request_close_tab(0);
+                h.state_mut().request_close_tab(0);
             }
-            assert!(app.close_request.is_some());
-            app.resolve_close(&ctx, Some(true));
-            assert!(app.views.is_empty(), "the tab closes once saved");
+            assert!(h.state().close_guard.is_some(), "the typed box holds the close");
+            h.run_steps(2);
+            press(&mut h, "Save");
+            assert!(h.state().views.is_empty(), "the tab closes once saved");
 
             let mut reopened = PdfCraftApp::new();
             reopened.open_bytes("source.pdf", Some(path.clone()), std::fs::read(&path).unwrap()).unwrap();
@@ -1773,47 +1716,5 @@ mod content_page_tests {
         assert_eq!(content_page(&moved), Some(3));
         assert_eq!(content_page(&Edit::RotatePages { pages: vec![0], degrees: 90 }), None);
         assert_eq!(content_page(&Edit::SetInfo { key: "Title".into(), value: "x".into() }), None);
-    }
-}
-
-#[cfg(test)]
-mod attention_tests {
-    use super::CloseRequest;
-    use crate::PdfCraftApp;
-
-    /// The attention requests one frame of `attend_save_prompt` sends, with the window `focused`
-    /// or not.
-    fn attend(app: &mut PdfCraftApp, ctx: &egui::Context, focused: bool) -> Vec<egui::UserAttentionType> {
-        let mut out = ctx.run_ui(egui::RawInput { focused, ..Default::default() }, |ui| app.attend_save_prompt(ui.ctx()));
-        // The frame's font texture isn't uploaded anywhere in a unit test.
-        out.textures_delta.clear();
-        out.viewport_output
-            .values()
-            .flat_map(|v| v.commands.iter())
-            .filter_map(|c| if let egui::ViewportCommand::RequestUserAttention(a) = c { Some(*a) } else { None })
-            .collect()
-    }
-
-    /// A save that finishes after a newer "save changes?" question opened in front, and after the
-    /// user went to another app, asks for no attention: the user saw that question.
-    #[test]
-    fn a_save_finishing_behind_a_newer_question_the_user_saw_asks_for_nothing() {
-        let ctx = egui::Context::default();
-        let mut app = PdfCraftApp::new();
-        for name in ["a.pdf", "b.pdf", "c.pdf"] {
-            let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
-            app.open_bytes(name, None, bytes.as_ref().clone()).unwrap();
-            app.active = Some(app.views.len() - 1);
-            assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
-        }
-        // a.pdf was answered with Save while quitting. While that save is pending, the user closes
-        // c.pdf's tab, and its question opens in front.
-        let c = app.views[2].id;
-        app.close_request = Some(CloseRequest::Tab(c));
-        assert!(attend(&mut app, &ctx, true).is_empty());
-        // a.pdf's save finishes once the user has gone to another app.
-        app.close_and_continue(&ctx, 0, CloseRequest::Quit);
-        assert_eq!(app.close_request, Some(CloseRequest::Tab(c)), "the newer question stands");
-        assert!(attend(&mut app, &ctx, false).is_empty(), "the user has seen it");
     }
 }
