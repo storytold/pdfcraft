@@ -50,6 +50,10 @@ pub enum DataError {
     Malformed(String),
     #[error("nothing in the file matches this document")]
     NothingImported,
+    /// Every value the file gave for this document's fields was refused ([`Report::rejected`]):
+    /// the names, as the caller wants them said.
+    #[error("the form refused every value in the file, so nothing was imported: {0}")]
+    Refused(String),
     #[error("FDF export exceeds the {0} limit; no data was exported")]
     ExportLimit(&'static str),
     #[error(transparent)]
