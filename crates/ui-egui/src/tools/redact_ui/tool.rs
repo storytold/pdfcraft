@@ -39,6 +39,8 @@ pub(crate) struct RedactTool<'a> {
     select: PageSelectTool<'a>,
     drag: PageBoxDrag,
     placed: &'a [PlacedPage],
+    /// The view's rotation, in degrees clockwise.
+    rotation: u16,
     info: &'a DocInfo,
     over_text: Box<dyn Fn(Pos2) -> bool + 'a>,
     gesture: Gesture,
@@ -49,11 +51,18 @@ pub(crate) struct RedactTool<'a> {
 impl<'a> RedactTool<'a> {
     /// The tool over the placed pages, with the select tool that runs text selections and the
     /// test of whether a screen point is over text (the same one the I-beam uses).
-    pub(crate) fn new(select: PageSelectTool<'a>, placed: &'a [PlacedPage], info: &'a DocInfo, over_text: impl Fn(Pos2) -> bool + 'a) -> Self {
+    pub(crate) fn new(
+        select: PageSelectTool<'a>,
+        placed: &'a [PlacedPage],
+        rotation: u16,
+        info: &'a DocInfo,
+        over_text: impl Fn(Pos2) -> bool + 'a,
+    ) -> Self {
         Self {
             select,
             drag: PageBoxDrag::default(),
             placed,
+            rotation,
             info,
             over_text: Box::new(over_text),
             gesture: Gesture::Idle,
@@ -89,9 +98,10 @@ impl<'a> RedactTool<'a> {
 
     /// A screen point of `placed` in the page's user space.
     fn to_user(&self, placed: &PlacedPage, p: Pos2) -> Option<[f64; 2]> {
-        let xf = PageXform::of(placed, self.info);
+        let page = self.info.pages.get(placed.page)?;
+        let xf = PageXform::of(placed, self.rotation, (page.width, page.height));
         let (vx, vy) = xf.screen_to_view(p);
-        let u = self.info.pages.get(placed.page)?.view_to_user(vx, vy);
+        let u = page.view_to_user(vx, vy);
         Some([u[0] as f64, u[1] as f64])
     }
 }

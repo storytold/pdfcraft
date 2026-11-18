@@ -116,7 +116,7 @@ impl PdfCraftApp {
                         Panel::Layers => crate::RightPanel::Layers,
                     };
                     // Show/Hide: a panel already showing closes.
-                    self.right = (self.right != Some(panel)).then_some(panel);
+                    self.set_right((self.right() != Some(panel)).then_some(panel));
                 }
                 Request::Zoom(z) => {
                     if let Some(i) = view {
@@ -149,19 +149,13 @@ impl PdfCraftApp {
     }
 
     /// Show form script messages `messages` in order, each as a notice with its title and tone.
-    /// The first is posted at once when no script notice is on screen; otherwise it waits, like the
-    /// rest, for the one shown to end ([`Self::script_notice_ended`]). With no window context yet,
-    /// [`Self::script_tick`] posts it on the first pass.
+    /// The first is posted on the next pass ([`Self::script_tick`]) when no script notice is on
+    /// screen; otherwise it waits, like the rest, for the one shown to end ([`Self::script_notice_ended`]).
     pub fn show_script_messages(&mut self, messages: Vec<Message>) {
         let room = MAX_WAITING_MESSAGES.saturating_sub(self.script_messages.len());
         let left_out = u64::try_from(messages.len().saturating_sub(room)).unwrap_or(u64::MAX);
         self.script_messages_dropped = self.script_messages_dropped.saturating_add(left_out);
         self.script_messages.extend(messages.into_iter().take(room));
-        if self.script_shown.is_none()
-            && let Some(ctx) = self.ctx.clone()
-        {
-            self.next_script_message(&ctx);
-        }
     }
 
     /// A form button's `exportDataObject`: the attached file `name` (its key in the document's
@@ -187,7 +181,7 @@ impl PdfCraftApp {
         if let Some(v) = self.views.iter_mut().find(|v| v.id == id) {
             v.session.highlight_fields = on;
         }
-        self.view_defaults.highlight_fields = on;
+        self.highlight_fields = on;
         self.session.set_field_highlight(on);
     }
 
@@ -275,7 +269,7 @@ impl PdfCraftApp {
             }
             if run.edited {
                 if let Some(info) = self.session.get(id).map(|d| d.info.clone()) {
-                    self.views[i].document_changed(&info);
+                    self.views[i].document_changed(ctx, &info);
                 }
                 if let Some(before) = &before
                     && let Some(draft) = self.views[i].session.forms.focus.as_mut()
@@ -302,14 +296,14 @@ impl PdfCraftApp {
     /// Run document `id`'s catalog JavaScript for `event` (Will Save before a save, Will Print
     /// before printing) and show what it said. What it changed is part of what is saved or
     /// printed. A failing script is reported and the save or print still goes ahead.
-    pub(crate) fn run_document_actions(&mut self, id: DocId, event: pdfcraft_engine::js::DocumentScriptEvent) {
+    pub(crate) fn run_document_actions(&mut self, ctx: &egui::Context, id: DocId, event: pdfcraft_engine::js::DocumentScriptEvent) {
         let before = self.session.get(id).map(|d| d.edit_generation());
         let out = self.session.run_document_actions(id, event);
         if self.session.get(id).map(|d| d.edit_generation()) != before
             && let Some(i) = self.views.iter().position(|v| v.id == id)
             && let Some(info) = self.session.get(id).map(|d| d.info.clone())
         {
-            self.views[i].document_changed(&info);
+            self.views[i].document_changed(ctx, &info);
         }
         if !out.is_empty() {
             self.handle_js(id, out);
@@ -317,11 +311,11 @@ impl PdfCraftApp {
     }
 
     /// Run a push button's JavaScript (its Mouse Up action).
-    pub fn run_button_script(&mut self, id: DocId, field: &str, script: &str) {
-        self.run_button_script_target(id, field, None, script);
+    pub fn run_button_script(&mut self, ctx: &egui::Context, id: DocId, field: &str, script: &str) {
+        self.run_button_script_target(ctx, id, field, None, script);
     }
     /// Run the action of the exact clicked button, preserving legacy name-only entry points.
-    pub fn run_button_script_target(&mut self, id: DocId, field: &str, identity: Option<u64>, script: &str) {
+    pub fn run_button_script_target(&mut self, ctx: &egui::Context, id: DocId, field: &str, identity: Option<u64>, script: &str) {
         // A script reads the fields: include what's still being typed in one (#166).
         if !self.commit_form_typing() {
             return;
@@ -336,7 +330,7 @@ impl PdfCraftApp {
                 if let Some(i) = self.views.iter().position(|v| v.id == id)
                     && let Some(info) = self.session.get(id).map(|d| d.info.clone())
                 {
-                    self.views[i].document_changed(&info);
+                    self.views[i].document_changed(ctx, &info);
                 }
                 let out = JsOutput {
                     alerts: o.alerts,
@@ -397,7 +391,7 @@ impl PdfCraftApp {
                 if let Some(i) = self.views.iter().position(|v| v.id == id)
                     && let Some(info) = self.session.get(id).map(|d| d.info.clone())
                 {
-                    self.views[i].document_changed(&info);
+                    self.views[i].document_changed(ctx, &info);
                 }
                 let out = JsOutput {
                     alerts: o.alerts,
@@ -413,13 +407,13 @@ impl PdfCraftApp {
     }
 
     /// Prepare a form ▸ detect fields from the page's blanks, lines and boxes.
-    pub fn detect_fields(&mut self) {
+    pub fn detect_fields(&mut self, ctx: &egui::Context) {
         let Some((i, id)) = self.active_ids() else { return };
         match self.session.auto_detect_fields(id, &[]) {
             Ok(names) if names.is_empty() => self.notify_tr("No form fields were detected"),
             Ok(names) => {
                 if let Some(info) = self.session.get(id).map(|d| d.info.clone()) {
-                    self.views[i].document_changed(&info);
+                    self.views[i].document_changed(ctx, &info);
                 }
                 if names.len() == 1 {
                     self.notify_tr("Detected 1 form field");
@@ -432,7 +426,7 @@ impl PdfCraftApp {
     }
 
     /// The console's Run: evaluate the input in the active document.
-    pub fn run_console(&mut self) {
+    pub fn run_console(&mut self, ctx: &egui::Context) {
         let Some((i, id)) = self.active_ids() else { return };
         let script = self.js_console.input.clone();
         if script.trim().is_empty() {
@@ -442,7 +436,7 @@ impl PdfCraftApp {
         match self.session.run_javascript(id, &script, None) {
             Ok(o) => {
                 if let Some(info) = self.session.get(id).map(|d| d.info.clone()) {
-                    self.views[i].document_changed(&info);
+                    self.views[i].document_changed(ctx, &info);
                 }
                 let (error, result) = (o.error.clone(), o.result.clone());
                 let out = JsOutput { alerts: o.alerts, console: o.console, requests: o.requests, errors: Vec::new(), doc_errors: Vec::new() };
