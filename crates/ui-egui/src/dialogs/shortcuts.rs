@@ -19,18 +19,20 @@ pub(crate) struct ShortcutsSession {
 
 /// The keys the document view handles itself, which no catalog command binds.
 fn fixed_rows(ctx: &egui::Context) -> Vec<FixedRow> {
-    let key = |s| crate::commands::shortcut_label(ctx, s);
+    let mac = crate::commands::mac_shortcuts(ctx);
+    let key = |s: pdfcraft_engine::commands::Shortcut| s.label(mac);
     let pair = |a, b| format!("{} / {}", key(a), key(b));
     // Key names, translated where a catalog has them (not scanned as UI literals).
     let named = |k: &str| tl!(k).to_string();
     // Alt+← / Alt+→ (`canvas::shortcuts`): not a registered command, which has no Alt.
-    let alt_arrows = if crate::commands::mac_shortcuts(ctx) {
+    let alt_arrows = if mac {
         "⌥← / ⌥→".to_owned()
     } else {
         let alt = crate::i18n::key_name("Alt");
         format!("{alt}+← / {alt}+→")
     };
-    let scroll = crate::i18n::fmt(tl!("Zoom in / out (also pinch or {key}-scroll)"), &[("key", crate::commands::command_modifier_label(ctx))]);
+    let scroll =
+        crate::i18n::fmt(tl!("Zoom in / out (also pinch or {key}-scroll)"), &[("key", pdfcraft_engine::commands::Shortcut::command_name(mac))]);
     let first_last = format!("{} / {}, {}", crate::i18n::key_name("Home"), crate::i18n::key_name("End"), pair(FIRST_PAGE, LAST_PAGE));
     let group = tl!("Document view");
     // PLAN: `.chord(Trigger)` where a catalog binding could clash needs the engine `Shortcut` to `Trigger` conversion (pdf-chrome-w9's catalog)
