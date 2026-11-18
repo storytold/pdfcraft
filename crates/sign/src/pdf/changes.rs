@@ -79,6 +79,10 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
     let old_info = old.trailer().get(b"Info").and_then(Object::as_ref).map(|r| r.num);
     // The signed catalog's /AcroForm, when it is an object of its own.
     let old_form = old.root().and_then(|c| old.get(c).as_dict().and_then(|c| c.get(b"AcroForm").and_then(Object::as_ref))).map(|r| r.num);
+    // Its /Fields, when that is an array object of its own (#4817).
+    let old_fields = acroform(&old).and_then(|f| f.get(b"Fields").and_then(Object::as_ref)).map(|r| r.num);
+    // And the later revision's: the array must still be the form's /Fields, not moved elsewhere.
+    let new_fields = acroform(doc).and_then(|f| f.get(b"Fields").and_then(Object::as_ref)).map(|r| r.num);
     let signed_role = |num: u32| old_content.contains(&num) || signed_pages.contains(&num) || signed_resources.contains_key(&num);
     let (mut allowed, mut disallowed): (Vec<&'static str>, Vec<&'static str>) = (Vec::new(), Vec::new());
     if annots_unbounded {
@@ -132,6 +136,8 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         page_nodes: &page_nodes,
         kids_arrays: &kids_arrays,
         old_form,
+        old_fields,
+        new_fields,
         placed_annots: &placed_annots,
         annot_budget: &annot_budget,
         signed_resources: &signed_resources,
@@ -298,6 +304,8 @@ struct ChangedObjectClassifier<'a> {
     signed_resources: &'a HashMap<u32, bool>,
     old_info: Option<u32>,
     old_form: Option<u32>,
+    old_fields: Option<u32>,
+    new_fields: Option<u32>,
     dss: &'a HashSet<u32>,
 }
 
@@ -313,6 +321,20 @@ impl ChangedObjectClassifier<'_> {
             // A signed page-tree node's /Kids array of its own lists the pages.
             Object::Array(_) if before.is_some() && self.kids_arrays.contains(&r.num) => Some(kind::PAGES),
             Object::Array(_) if self.is_signed_annotation_array(r, before) => self.annotation_array_change(new, before),
+            // The signed AcroForm's /Fields as an array object of its own: a writer that signs may
+            // append its field there and leave the AcroForm itself as it was (#4817). Only when
+            // nothing else refers to the array, before or after: one a page also uses (as its
+            // /Contents, a page box) or anything else names is judged as before, since rewriting
+            // it changes more than the form's listing.
+            Object::Array(_)
+                if before.is_some()
+                    && self.old_fields == Some(r.num)
+                    && self.new_fields == Some(r.num)
+                    && listed_only_as_fields(self.old, r.num)
+                    && listed_only_as_fields(self.doc, r.num) =>
+            {
+                before.map(|b| appended_fields_kind(self.doc, self.old, b, new))
+            }
             Object::Dict(dict) => self.dictionary_change(r, dict, before),
             Object::Stream(stream) => self.stream_change(r, stream, before),
             _ if before.is_none() => None,
@@ -632,6 +654,41 @@ fn references(doc: &Document) -> Option<HashSet<ObjRef>> {
     doc.trailer().iter().all(|(_, v)| walk(v, 0, &mut found)).then_some(found)
 }
 
+/// Whether object `num` is referred to exactly once in `doc`, which for the signed AcroForm's
+/// `/Fields` array is that entry itself: nothing else uses the array. `false` when anything else
+/// does, or past the walk's bounds, so the array is then judged by the stricter general rule.
+fn listed_only_as_fields(doc: &Document, num: u32) -> bool {
+    const MAX_VISITS: usize = 1 << 22;
+    const MAX_DEPTH: u8 = 64;
+    fn walk(o: &Object, num: u32, depth: u8, refs: &mut usize, visits: &mut usize) -> bool {
+        *visits += 1;
+        if depth > MAX_DEPTH || *visits > MAX_VISITS {
+            return false;
+        }
+        match o {
+            Object::Ref(r) => {
+                if r.num == num {
+                    *refs += 1;
+                }
+                // A second reference already settles it.
+                *refs <= 1
+            }
+            Object::Dict(d) => d.iter().all(|(_, v)| walk(v, num, depth + 1, refs, visits)),
+            Object::Stream(s) => s.dict.iter().all(|(_, v)| walk(v, num, depth + 1, refs, visits)),
+            Object::Array(a) => a.iter().all(|v| walk(v, num, depth + 1, refs, visits)),
+            _ => true,
+        }
+    }
+    let (mut refs, mut visits) = (0, 0);
+    for n in doc.object_numbers() {
+        let Ok(o) = doc.try_get(n) else { return false };
+        if !walk(&o, num, 0, &mut refs, &mut visits) {
+            return false;
+        }
+    }
+    doc.trailer().iter().all(|(_, v)| walk(v, num, 0, &mut refs, &mut visits)) && refs == 1
+}
+
 fn refs(doc: &Document, o: Option<&Object>) -> Vec<ObjRef> {
     o.map(|o| doc.resolve(o)).and_then(|a| a.as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
 }
@@ -657,6 +714,67 @@ fn acroform_kind(doc: &Document, old: &Document, now: &Dict, before: Option<&Dic
     let old_fields = refs(old, before.get(b"Fields"));
     let added: Vec<ObjRef> = refs(doc, now.get(b"Fields")).into_iter().filter(|r| !old_fields.contains(r)).collect();
     if added.is_empty() || added_annots(doc, &added) == kind::SIGNATURE { kind::SIGNATURE } else { kind::FORM_FILL }
+}
+
+/// A change of the signed AcroForm's `/Fields` when that is an array object of its own (#4817),
+/// judged by what a signer does to it. The signed entries stay as they were, in order, and each
+/// entry appended is a new signature field. That is signing; anything else is refused, since a
+/// reader can't tell it from tampering.
+fn appended_fields_kind(doc: &Document, old: &Document, was: &Object, now: &Object) -> &'static str {
+    const MAX_APPENDED: usize = 4096;
+    let (Some(was), Some(now)) = (was.as_array(), now.as_array()) else { return kind::OTHER };
+    let Some(appended) = now.get(was.len()..) else { return kind::OTHER };
+    if appended.is_empty() || appended.len() > MAX_APPENDED || !was.iter().zip(now).all(|(a, b)| same_object(a, b)) {
+        return kind::OTHER;
+    }
+    // A signed entry that resolved to nothing then must resolve to nothing now: the same
+    // reference would otherwise list a field the signature never saw.
+    if was.iter().filter_map(Object::as_ref).any(|r| !holds(old, r.num) && holds(doc, r.num)) {
+        return kind::OTHER;
+    }
+    // Numbers anything signed refers to, which a new object would give a meaning they lacked.
+    let Some(referred) = references(old).map(|found| found.into_iter().map(|r| r.num).collect::<HashSet<u32>>()) else {
+        return kind::OTHER;
+    };
+    let mut seen = HashSet::new();
+    for entry in appended {
+        // Written in place, listed twice, an object that was there when signed or that something
+        // signed refers to, or not a new signature field.
+        let Some(r) = entry.as_ref() else { return kind::OTHER };
+        if !seen.insert(r.num) || holds(old, r.num) || referred.contains(&r.num) || !new_signature_field(doc, old, &referred, r) {
+            return kind::OTHER;
+        }
+    }
+    kind::SIGNATURE
+}
+
+/// Whether object `num` holds something, not null, in `doc`.
+fn holds(doc: &Document, num: u32) -> bool {
+    doc.try_get(num).ok().is_some_and(|o| !matches!(*o, Object::Null))
+}
+
+/// Whether `r` is a signature field in a single widget, as a signer writes one. It has no `/Kids`
+/// and no `/Parent`, so it takes over or joins no field of the signed form, and no actions: a
+/// signer's widget has no use for them. Its value, if it has one, is a new object at a number
+/// nothing signed refers to (`referred`).
+fn new_signature_field(doc: &Document, old: &Document, referred: &HashSet<u32>, r: ObjRef) -> bool {
+    let field = doc.get(r);
+    let Some(d) = field.as_dict() else { return false };
+    // An entry whose value is null, or a reference to a number that holds nothing, is no entry
+    // (ISO 32000-1 §7.3.7). A reference by a generation its number doesn't have is still an
+    // entry: it is null here, but a reader that ignores generations reaches the object.
+    let entry = |key: &[u8]| {
+        d.get(key).filter(|o| match o {
+            Object::Null => false,
+            Object::Ref(r) => holds(doc, r.num),
+            _ => true,
+        })
+    };
+    let value_is_new = entry(b"V").is_none_or(|v| v.as_ref().is_some_and(|v| !holds(old, v.num) && !referred.contains(&v.num)));
+    d.name(b"Subtype") == Some(b"Widget")
+        && d.name(b"FT") == Some(b"Sig")
+        && [&b"Kids"[..], b"Parent", b"AA", b"A"].iter().all(|k| entry(k).is_none())
+        && value_is_new
 }
 
 /// Whether two page dictionaries are the same apart from `/Annots`. Dictionaries are compared
@@ -972,6 +1090,8 @@ mod tests {
             signed_resources: &resources,
             old_info: None,
             old_form: None,
+            old_fields: None,
+            new_fields: None,
             dss: &none,
         };
         classifier.page_change_kind(d, before)
