@@ -11,6 +11,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::folders_ui::{MAX_PINNED, folder_name, location};
+use crate::support::AppHarness as _;
 
 /// A one-page PDF.
 const FIXTURE: &[u8] = b"%PDF-1.7
@@ -107,7 +108,7 @@ fn a_pinned_folder_lists_its_newest_pdfs_on_home() {
     let mut s = session(ScriptedFiles::answering([picked]), |_| {});
     s.h.get_by_label("Pin Folder…");
     let ctx = s.h.ctx.clone();
-    assert!(s.h.state_mut().execute(&ctx, "file.pin_folder"));
+    assert!(s.h.execute(&ctx, "file.pin_folder"));
     s.settle();
     assert_eq!(s.h.state().pinned.folders, std::slice::from_ref(&folder));
     assert_eq!(listed(&s, &folder), ["newer.PDF", "older.pdf"], "newest first; no text files, hidden files or folders");
@@ -194,7 +195,7 @@ fn a_pinned_folder_collapses_to_its_heading_and_stays_collapsed_after_a_restart(
     s.h.get_by_label_contains("beta.pdf");
     assert_eq!(s.h.state().pinned.collapsed, std::slice::from_ref(&a));
 
-    let mut restarted = PdfCraftApp::new();
+    let mut restarted = crate::control::new_app();
     restarted.apply_settings(&s.h.state().settings_snapshot());
     assert_eq!(restarted.pinned.collapsed, std::slice::from_ref(&a));
 
@@ -240,11 +241,11 @@ fn folders_of_the_same_name_have_buttons_that_tell_them_apart() {
 fn pinned_folders_survive_a_restart() {
     let dir = TempFolder::new("restart");
     let folder = dir.path();
-    let mut a = PdfCraftApp::new();
-    a.set_option("language", "en").unwrap();
+    let mut a = crate::control::new_app();
+    a.set_option(&egui::Context::default(), "language", "en").unwrap();
     assert!(a.pin_folder(&folder));
-    let mut b = PdfCraftApp::new();
-    b.set_option("language", "en").unwrap();
+    let mut b = crate::control::new_app();
+    b.set_option(&egui::Context::default(), "language", "en").unwrap();
     b.apply_settings(&a.settings_snapshot());
     assert_eq!(b.pinned.folders, [folder]);
     for hostile in ["{\"pinned_folders\": [5, \"relative/path\"]}", "{not json"] {

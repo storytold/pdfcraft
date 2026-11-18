@@ -89,7 +89,7 @@ mod tests {
     /// (CodeRabbit on #5692).
     #[test]
     fn a_file_opened_while_the_check_is_pending_stays() {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         // No lanes: a job runs only when the test runs it.
         let queue = JobQueue::new(Arc::new(ManualJobs::new()), Wake::none(), QueueOptions { lanes: 0, ..QueueOptions::default() });
         app.recent_check = RecentCheck::new(queue);

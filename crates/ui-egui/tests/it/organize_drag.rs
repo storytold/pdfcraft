@@ -29,10 +29,10 @@ fn document(prefix: &str) -> std::sync::Arc<Vec<u8>> {
 fn organize() -> Harness<'static, PdfCraftApp> {
     let bytes = document("Page");
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("pages.pdf", None, bytes.as_ref().clone()).unwrap();
-        app.set_option("organize", "on").unwrap();
+        app.set_option(&egui::Context::default(), "organize", "on").unwrap();
         app
     });
     h.run_steps(4);
@@ -86,7 +86,7 @@ fn release(h: &mut Harness<'static, PdfCraftApp>, to: Pos2, modifiers: Modifiers
 fn assert_saved_order(h: &Harness<'static, PdfCraftApp>, expected: &[&str]) {
     let app = h.state();
     let bytes = app.session.save_bytes(app.views[0].id).unwrap();
-    let mut reopened = PdfCraftApp::new();
+    let mut reopened = crate::control::new_app();
     reopened.open_bytes("saved.pdf", None, bytes.as_ref().clone()).unwrap();
     assert_eq!(page_texts(&reopened), expected, "save/reopen preserves the post-edit order");
 }

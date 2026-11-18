@@ -5,6 +5,7 @@ use crate::support;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{By, NodeT, Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
+use crate::support::AppHarness as _;
 
 /// A tiny PDF with two pages, two bookmarks and one sticky note.
 const FIXTURE: &[u8] = b"%PDF-1.7
@@ -21,8 +22,8 @@ trailer << /Root 1 0 R >>
 
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         setup(&mut app);
         app
     });
@@ -48,7 +49,7 @@ fn side(h: &mut Harness<'static, PdfCraftApp>, key: &str) -> String {
 #[test]
 fn tools_panel_side_preference_moves_and_persists() {
     let mut h = harness(|_| {});
-    h.state_mut().set_option("dialog", "preferences").unwrap();
+    h.set_option("dialog", "preferences").unwrap();
     h.run_steps(3);
     h.get_by_label("Tools panel side");
     h.get_by_label("Right").click();
@@ -58,7 +59,7 @@ fn tools_panel_side_preference_moves_and_persists() {
     let saved = h.state().settings_snapshot();
     let mut restored = harness(move |app| app.apply_settings(&saved));
     assert_eq!(side(&mut restored, "tools_side"), "right");
-    h.state_mut().set_option("dialog", "preferences").unwrap();
+    h.set_option("dialog", "preferences").unwrap();
     h.run_steps(3);
     h.get_by_label("Left").click();
     h.get_by_label("OK").click();
@@ -100,8 +101,8 @@ fn long_recent_names_and_paths_are_cut_before_the_page_count() {
 fn home_removes_one_recent_file_or_clears_them_all() {
     // Tall enough that the Recent list is on screen without scrolling.
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         for name in ["first.pdf", "second.pdf", "third.pdf"] {
             app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0 });
         }
@@ -164,7 +165,7 @@ fn expanded_all_tools_lists_every_tool_by_category_and_searches() {
 
 #[test]
 fn collapse_and_escape_close_the_expanded_all_tools() {
-    let mut h = harness(|app| app.set_option("tools", "full").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "tools", "full").unwrap());
     h.get_by_label("Collapse all tools").click();
     h.run_steps(3);
     assert!(!h.state().all_tools_full);
@@ -178,8 +179,8 @@ fn collapse_and_escape_close_the_expanded_all_tools() {
 
 #[test]
 fn escape_in_a_dialog_over_the_expanded_all_tools_leaves_the_view_open() {
-    let mut h = harness(|app| app.set_option("tools", "full").unwrap());
-    h.state_mut().set_option("dialog", "about").unwrap();
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "tools", "full").unwrap());
+    h.set_option("dialog", "about").unwrap();
     h.run_steps(3);
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
@@ -188,7 +189,7 @@ fn escape_in_a_dialog_over_the_expanded_all_tools_leaves_the_view_open() {
 
 #[test]
 fn escape_in_the_command_palette_over_the_expanded_all_tools_leaves_the_view_open() {
-    let mut h = harness(|app| app.set_option("tools", "full").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "tools", "full").unwrap());
     h.state_mut().palette_open = true;
     h.run_steps(3);
     h.key_press(egui::Key::Escape);
@@ -199,12 +200,12 @@ fn escape_in_the_command_palette_over_the_expanded_all_tools_leaves_the_view_ope
 
 #[test]
 fn another_workspace_from_the_mode_option_puts_the_expanded_all_tools_away() {
-    let mut app = PdfCraftApp::new();
-    app.set_option("tools", "full").unwrap();
-    app.set_option("mode", "all").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "tools", "full").unwrap();
+    app.set_option(&egui::Context::default(), "mode", "all").unwrap();
     assert!(app.all_tools_full, "All tools itself keeps the view");
-    app.set_option("mode", "read").unwrap();
-    app.set_option("mode", "all").unwrap();
+    app.set_option(&egui::Context::default(), "mode", "read").unwrap();
+    app.set_option(&egui::Context::default(), "mode", "all").unwrap();
     assert!(!app.all_tools_full, "coming back shows the sidebar, as the mode bar does");
 }
 
@@ -212,14 +213,14 @@ fn another_workspace_from_the_mode_option_puts_the_expanded_all_tools_away() {
 fn opening_a_document_puts_the_expanded_all_tools_away() {
     use pdfcraft_ui_egui::Mode;
     // All tools as the default workspace: no workspace change, but the document must show.
-    let mut app = PdfCraftApp::new();
-    app.set_option("tools", "full").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "tools", "full").unwrap();
     app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
     assert!(!app.all_tools_full, "the document shows, not the catalogue over it");
     // Read as the default workspace: coming back to All tools later shows the sidebar.
-    let mut app = PdfCraftApp::new();
-    app.set_option("default-mode", "read").unwrap();
-    app.set_option("tools", "full").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "default-mode", "read").unwrap();
+    app.set_option(&egui::Context::default(), "tools", "full").unwrap();
     app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
     assert_eq!(app.mode, Mode::Read);
     assert!(!app.all_tools_full);
@@ -228,8 +229,8 @@ fn opening_a_document_puts_the_expanded_all_tools_away() {
 #[test]
 fn choosing_a_tool_puts_the_expanded_all_tools_away() {
     use pdfcraft_ui_egui::LeftPanel;
-    let mut h = harness(|app| app.set_option("tools", "full").unwrap());
-    h.state_mut().set_option("tool", "organize").unwrap();
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "tools", "full").unwrap());
+    h.set_option("tool", "organize").unwrap();
     h.run_steps(3);
     assert!(!h.state().all_tools_full, "the tool's panel shows, not the catalogue");
     assert_eq!(h.state().left, LeftPanel::Tool("organize"));
@@ -239,10 +240,10 @@ fn choosing_a_tool_puts_the_expanded_all_tools_away() {
 fn another_tab_coming_forward_puts_the_expanded_all_tools_away() {
     // Home, through the control option.
     let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
-    h.state_mut().set_option("tools", "full").unwrap();
+    h.set_option("tools", "full").unwrap();
     h.run_steps(3);
     assert!(h.state().all_tools_full, "the document's own tab keeps it");
-    h.state_mut().set_option("home", "").unwrap();
+    h.set_option("home", "").unwrap();
     h.run_steps(3);
     assert!(!h.state().all_tools_full);
     h.get_by_label_contains("Welcome to PdfCraft");
@@ -251,7 +252,7 @@ fn another_tab_coming_forward_puts_the_expanded_all_tools_away() {
         app.open_bytes("one.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
         app.open_bytes("two.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
     });
-    h.state_mut().set_option("tools", "full").unwrap();
+    h.set_option("tools", "full").unwrap();
     h.run_steps(3);
     h.state_mut().active = Some(0);
     h.run_steps(3);
@@ -261,8 +262,8 @@ fn another_tab_coming_forward_puts_the_expanded_all_tools_away() {
 #[test]
 fn going_home_with_no_document_puts_the_expanded_all_tools_away() {
     // Home is already the tab in front, so only the option itself can put the view away.
-    let mut h = harness(|app| app.set_option("tools", "full").unwrap());
-    h.state_mut().set_option("home", "").unwrap();
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "tools", "full").unwrap());
+    h.set_option("home", "").unwrap();
     h.run_steps(3);
     assert!(!h.state().all_tools_full);
     h.get_by_label_contains("Welcome to PdfCraft");
@@ -272,11 +273,11 @@ fn going_home_with_no_document_puts_the_expanded_all_tools_away() {
 fn expanding_all_tools_from_read_mode_restores_the_right_panel() {
     use pdfcraft_ui_egui::{Mode, RightPanel};
     let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
-    h.state_mut().set_option("panel", "bookmarks").unwrap();
-    h.state_mut().execute("view.read_mode");
+    h.set_option("panel", "bookmarks").unwrap();
+    h.execute("view.read_mode");
     h.run_steps(3);
     assert_eq!((h.state().mode, h.state().right), (Mode::Read, None), "Read mode hides the panel");
-    h.state_mut().set_option("tools", "full").unwrap();
+    h.set_option("tools", "full").unwrap();
     h.run_steps(3);
     assert!(h.state().all_tools_full);
     assert_eq!((h.state().mode, h.state().right), (Mode::AllTools, Some(RightPanel::Bookmarks)));
@@ -289,7 +290,7 @@ fn expanding_all_tools_from_edit_puts_edit_text_down() {
     support::outside_menus(&h, "Edit").click();
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::EditText);
-    h.state_mut().set_option("tools", "full").unwrap();
+    h.set_option("tools", "full").unwrap();
     h.run_steps(3);
     assert!(h.state().all_tools_full);
     assert_eq!((h.state().mode, h.state().quick_tool), (Mode::AllTools, QuickTool::Select));
@@ -316,7 +317,7 @@ fn closed_side_panes_stay_closed_after_a_restart_and_opening_a_pdf() {
     assert_eq!(h.state().right, Some(RightPanel::Comments));
     assert!(h.state().left_open);
     h.state_mut().choose_right_panel(None);
-    h.state_mut().set_option("left", "closed").unwrap();
+    h.set_option("left", "closed").unwrap();
     h.run_steps(3);
     let saved = h.state().settings_snapshot();
     let mut h = harness(move |app| {
@@ -363,13 +364,13 @@ fn navigation_rail_toggles_between_right_and_left_and_persists() {
     let saved = h.state().settings_snapshot();
     let mut h2 = harness(move |app| app.apply_settings(&saved));
     assert_eq!(side(&mut h2, "rail_side"), "left");
-    h2.state_mut().set_option("dialog", "preferences").unwrap();
+    h2.set_option("dialog", "preferences").unwrap();
     h2.run_steps(3);
     h2.get_by_label("Navigation rail side: Right").click();
     h2.get_by_label("OK").click();
     h2.run_steps(3);
     assert_eq!(side(&mut h2, "rail_side"), "right");
-    h2.state_mut().set_option("dialog", "preferences").unwrap();
+    h2.set_option("dialog", "preferences").unwrap();
     h2.run_steps(3);
     h2.get_by_label("Navigation rail side: Left").click();
     h2.get_by_label("OK").click();
@@ -494,15 +495,15 @@ fn edit_a_pdf_from_all_tools_turns_on_editing() {
     h.run_steps(3);
     assert_eq!(h.state().mode, Mode::AllTools, "the workspace stays All tools, with its way back");
     assert_eq!(h.state().quick_tool, QuickTool::EditText, "Edit text & images is on at once");
-    h.state_mut().set_option("tool", "organize").unwrap();
+    h.set_option("tool", "organize").unwrap();
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::Select, "another tool puts editing down");
     // In the Edit workspace, another tool from its panel leaves editing on, as before.
-    h.state_mut().set_option("mode", "edit").unwrap();
-    h.state_mut().set_option("tool", "edit").unwrap();
+    h.set_option("mode", "edit").unwrap();
+    h.set_option("tool", "edit").unwrap();
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::EditText);
-    h.state_mut().set_option("tool", "organize").unwrap();
+    h.set_option("tool", "organize").unwrap();
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::EditText);
     // Read mode hides the quick toolbar and keeps the tools down, so the control channel's
@@ -510,7 +511,7 @@ fn edit_a_pdf_from_all_tools_turns_on_editing() {
     h.state_mut().run_command("view.read_mode");
     h.run_steps(2);
     assert_eq!(h.state().mode, Mode::Read);
-    h.state_mut().set_option("tool", "edit").unwrap();
+    h.set_option("tool", "edit").unwrap();
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Select, "no editing tool in Read mode");
 }
@@ -522,8 +523,8 @@ fn opening_into_read_mode_puts_the_tool_down() {
     use pdfcraft_ui_egui::{Mode, QuickTool};
     let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     assert_eq!(h.state().mode, Mode::AllTools);
-    h.state_mut().set_option("quick", "hand").unwrap();
-    h.state_mut().set_option("default-mode", "read").unwrap();
+    h.set_option("quick", "hand").unwrap();
+    h.set_option("default-mode", "read").unwrap();
     h.state_mut().open_bytes("again.pdf", None, FIXTURE.to_vec()).unwrap();
     h.run_steps(3);
     assert_eq!(h.state().mode, Mode::Read, "the new document opens in the default mode");
@@ -662,8 +663,8 @@ fn tabs_shrink_to_fit_then_arrows_step_through_them_and_open_stays_in_sight() {
 
 #[test]
 fn garbage_input_is_rejected_without_panicking() {
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     assert!(app.open_bytes("junk.pdf", None, b"this is not a pdf".to_vec()).is_err());
     assert!(app.open_bytes("empty.pdf", None, Vec::new()).is_err());
     let mut truncated = FIXTURE.to_vec();
@@ -676,13 +677,13 @@ fn garbage_input_is_rejected_without_panicking() {
 fn theme_and_view_options_apply() {
     let mut h = harness(|app| {
         app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
-        app.set_option("theme", "dark").unwrap();
-        app.set_option("panel", "pages").unwrap();
-        app.set_option("page", "2").unwrap();
+        app.set_option(&egui::Context::default(), "theme", "dark").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "pages").unwrap();
+        app.set_option(&egui::Context::default(), "page", "2").unwrap();
     });
     h.run_steps(3);
     h.get_by_label("Page 2");
-    assert!(h.state_mut().set_option("panel", "nope").is_err());
+    assert!(h.set_option("panel", "nope").is_err());
 }
 
 /// Two pages of real text.
@@ -705,7 +706,7 @@ trailer << /Root 1 0 R >>
 fn find_counts_matches_across_pages() {
     let mut h = harness(|app| {
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
-        app.set_option("find", "brown").unwrap();
+        app.set_option(&egui::Context::default(), "find", "brown").unwrap();
     });
     crate::support::settle(&mut h);
     h.get_by_label_contains("of 2");
@@ -718,7 +719,7 @@ fn find_counts_matches_across_pages() {
 fn find_reports_no_matches() {
     let mut h = harness(|app| {
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
-        app.set_option("find", "zebra").unwrap();
+        app.set_option(&egui::Context::default(), "find", "zebra").unwrap();
     });
     crate::support::settle(&mut h);
     h.get_by_label("No matches");
@@ -728,7 +729,7 @@ fn find_reports_no_matches() {
 fn drag_selects_text_and_copy_returns_it() {
     let mut h = harness(|app| {
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
-        app.set_option("left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
     });
     crate::support::settle(&mut h);
     // "The quick brown fox": glyph 4 = 'q', glyph 14 = 'n' of "brown".
@@ -751,11 +752,11 @@ fn drag_selects_text_and_copy_returns_it() {
 
 #[test]
 fn persistence_round_trips_and_tolerates_garbage() {
-    let mut a = PdfCraftApp::new();
-    a.set_option("language", "en").unwrap();
-    a.set_option("theme", "dark").unwrap();
-    let mut b = PdfCraftApp::new();
-    b.set_option("language", "en").unwrap();
+    let mut a = crate::control::new_app();
+    a.set_option(&egui::Context::default(), "language", "en").unwrap();
+    a.set_option(&egui::Context::default(), "theme", "dark").unwrap();
+    let mut b = crate::control::new_app();
+    b.set_option(&egui::Context::default(), "language", "en").unwrap();
     b.apply_settings(&a.settings_snapshot());
     assert_eq!(b.theme, pdfcraft_ui_egui::theme::ThemeKind::Dark);
     b.apply_settings(&pdfcraft_ui_egui::settings::import_json("{not json").0);
@@ -774,16 +775,16 @@ fn a_saved_no_fill_clears_a_comment_tool_default_fill() {
         s.fill = Some([0.2, 0.4, 0.6]);
         a.comment_prefs.set_style(CommentTool::Rectangle, s);
     };
-    let mut a = PdfCraftApp::new();
+    let mut a = crate::control::new_app();
     filled(&mut a);
     restore(&mut a, r#"{"comment_styles":[{"tool":"comment.square","fill":null}]}"#);
     assert_eq!(a.comment_prefs.style(CommentTool::Rectangle).fill, None, "null clears the fill");
-    let mut b = PdfCraftApp::new();
+    let mut b = crate::control::new_app();
     filled(&mut b);
     restore(&mut b, r#"{"comment_styles":[{"tool":"comment.square","color":[0,0,1]},{"tool":"comment.square","fill":"red"}]}"#);
     assert_eq!(b.comment_prefs.style(CommentTool::Rectangle).fill, Some([0.2, 0.4, 0.6]), "missing or malformed keeps it");
     // A round trip keeps a cleared fill cleared.
-    let mut c = PdfCraftApp::new();
+    let mut c = crate::control::new_app();
     c.apply_settings(&a.settings_snapshot());
     assert_eq!(c.comment_prefs.style(CommentTool::Rectangle).fill, None);
 }
@@ -794,14 +795,14 @@ fn a_saved_no_fill_clears_a_comment_tool_default_fill() {
 fn a_saved_same_as_text_clears_a_comment_tool_border_colour() {
     use pdfcraft_ui_egui::comments::CommentTool;
     let red = Some([0.89, 0.13, 0.13]);
-    let mut a = PdfCraftApp::new();
+    let mut a = crate::control::new_app();
     let restore = |app: &mut PdfCraftApp, json: &str| app.apply_settings(&pdfcraft_ui_egui::settings::import_json(json).0);
     a.comment_prefs.set_border_color(CommentTool::TextBox, red);
     restore(&mut a, r#"{"comment_styles":[{"tool":"comment.freetext","border_color":"red"}]}"#);
     assert_eq!(a.comment_prefs.style(CommentTool::TextBox).border_color, red, "malformed keeps it");
     restore(&mut a, r#"{"comment_styles":[{"tool":"comment.freetext","border_color":null}]}"#);
     assert_eq!(a.comment_prefs.style(CommentTool::TextBox).border_color, None, "null clears it");
-    let mut b = PdfCraftApp::new();
+    let mut b = crate::control::new_app();
     b.comment_prefs.set_border_color(CommentTool::TextBox, red);
     b.apply_settings(&a.settings_snapshot());
     assert_eq!(b.comment_prefs.style(CommentTool::TextBox).border_color, None, "a round trip keeps it cleared");
@@ -812,7 +813,7 @@ fn a_saved_same_as_text_clears_a_comment_tool_border_colour() {
 #[test]
 fn comment_style_settings_clamp_and_refuse_hostile_values() {
     use pdfcraft_ui_egui::comments::CommentTool;
-    let mut a = PdfCraftApp::new();
+    let mut a = crate::control::new_app();
     a.apply_settings(
         &pdfcraft_ui_egui::settings::import_json(
             r#"{"comment_styles":[
@@ -837,11 +838,11 @@ fn comment_style_settings_clamp_and_refuse_hostile_values() {
 #[test]
 fn part_opacity_defaults_persist_and_clamp() {
     use pdfcraft_ui_egui::comments::CommentTool;
-    let mut a = PdfCraftApp::new();
+    let mut a = crate::control::new_app();
     a.comment_prefs.set_part_opacity(CommentTool::Rectangle, Some(0.3), None);
     a.comment_prefs.set_part_opacity(CommentTool::TextBox, Some(0.2), Some(1.0));
     a.comment_prefs.set_part_opacity(CommentTool::Line, Some(0.5), Some(0.5));
-    let mut b = PdfCraftApp::new();
+    let mut b = crate::control::new_app();
     b.apply_settings(&a.settings_snapshot());
     let parts = |app: &PdfCraftApp, tool| {
         let s = app.comment_prefs.style(tool);
@@ -859,8 +860,8 @@ fn part_opacity_defaults_persist_and_clamp() {
 fn trackpad_pinch_zooms_the_pdf_under_the_pointer() {
     let mut h = harness(|app| {
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "none").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
     });
     crate::support::settle(&mut h);
     let before = h.state().views[0].glyph_screen_pos(0, 4).expect("glyph on screen");
@@ -884,10 +885,10 @@ fn selection_works_in_every_view_rotation() {
     for deg in ["90", "180", "270"] {
         let mut h = harness(move |app| {
             app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
-            app.set_option("left", "closed").unwrap();
-            app.set_option("rotate", deg).unwrap();
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "rotate", deg).unwrap();
             // Keep the whole rotated page on screen.
-            app.set_option("zoom", "60").unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "60").unwrap();
         });
         crate::support::settle(&mut h);
         let (a, b) = {
@@ -927,8 +928,8 @@ impl egui::DroppedFile for Dropped {
 #[test]
 fn dropping_a_pdf_on_the_window_opens_it() {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
     });
     h.run_steps(3);
@@ -952,8 +953,8 @@ fn dropping_an_open_pdf_again_focuses_its_tab() {
     let path = dir.join("dropped.pdf");
     std::fs::write(&path, FIXTURE).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
     });
     h.run_steps(3);
@@ -975,12 +976,12 @@ fn a_file_dropped_on_the_page_grid_is_read_from_disk_and_inserted() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-grid-drop-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("dropped.pdf");
-    let setup = PdfCraftApp::new();
+    let setup = crate::control::new_app();
     let pdf = setup.session.create_from_text("dropped", "from disk").unwrap();
     std::fs::write(&path, pdf.as_slice()).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         let grid = app.session.create_from_text("grid", "one page").unwrap();
         app.open_bytes("grid.pdf", None, grid.to_vec()).unwrap();
         app.views[0].organize = true;
@@ -1008,13 +1009,13 @@ fn a_file_dropped_on_the_page_grid_is_read_from_disk_and_inserted() {
 #[test]
 fn pdfs_dropped_on_the_combine_tab_join_its_list() {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
     });
     h.run_steps(3);
-    h.state_mut().set_option("combine-view", "list").unwrap();
-    h.state_mut().execute("page.combine");
+    h.set_option("combine-view", "list").unwrap();
+    h.execute("page.combine");
     h.run_steps(2);
     // An absolute path is read from disk, with its modified time.
     let path = std::env::temp_dir().join(format!("pdfcraft-combine-drop-{}.pdf", std::process::id()));
@@ -1038,12 +1039,12 @@ fn a_folder_dropped_on_the_combine_tab_adds_its_pdfs() {
     std::fs::write(dir.join("one.pdf"), FIXTURE).unwrap();
     std::fs::write(dir.join("inner").join("two.pdf"), FIXTURE).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
     });
     h.run_steps(3);
-    h.state_mut().execute("page.combine");
+    h.execute("page.combine");
     h.run_steps(2);
     let folder: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: dir.clone(), bytes: Vec::new() });
     h.input_mut().dropped_files.push(folder);
@@ -1056,13 +1057,13 @@ fn a_folder_dropped_on_the_combine_tab_adds_its_pdfs() {
 /// The Combine files tab, showing, with one file in its list already.
 fn combine_tab_with_one_file() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
     });
     h.run_steps(3);
-    h.state_mut().set_option("combine-view", "list").unwrap();
-    h.state_mut().execute("page.combine");
+    h.set_option("combine-view", "list").unwrap();
+    h.execute("page.combine");
     h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("first.pdf".into(), FIXTURE.to_vec())]);
     h.run_steps(2);
     h
@@ -1096,7 +1097,7 @@ fn files_dropped_on_the_combine_tab_join_the_end_of_its_list_in_the_order_droppe
     assert!(draft[3].pages == 1, "the text file became a page");
     assert!(draft[1].modified.is_some() && draft[2].modified.is_none());
     // One drop, one step to undo.
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(2);
     assert_eq!(combine_names(&h), ["first.pdf"]);
 }
@@ -1160,7 +1161,7 @@ fn intake_harness() -> (Harness<'static, PdfCraftApp>, craft::platform::open::In
     let (intake, sender) = FileIntake::new(Wake::none());
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = host_app(std::sync::Arc::new(craft::host::ManualJobs::new()), intake);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
     });
     h.run_steps(4);
@@ -1269,20 +1270,20 @@ fn an_open_finishing_after_combine_keeps_the_combine_tab() {
 fn default_workspace_mode_persists_and_tolerates_invalid_settings() {
     use pdfcraft_ui_egui::Mode;
     for mode in [Mode::AllTools, Mode::Read, Mode::Edit, Mode::Convert, Mode::Sign] {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.default_mode = mode;
-        app.set_option("mode", "sign").unwrap();
-        let mut restored = PdfCraftApp::new();
-        restored.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "mode", "sign").unwrap();
+        let mut restored = crate::control::new_app();
+        restored.set_option(&egui::Context::default(), "language", "en").unwrap();
         restored.apply_settings(&app.settings_snapshot());
         assert_eq!(restored.default_mode, mode);
         restored.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).unwrap();
         assert_eq!(restored.mode, mode, "session override must not be persisted");
     }
     for json in ["{}", "{not json", r#"{"default_mode": null}"#, r#"{"default_mode": 5}"#, r#"{"default_mode": "unknown"}"#] {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.apply_settings(&pdfcraft_ui_egui::settings::import_json(json).0);
         assert_eq!(app.default_mode, Mode::AllTools);
         app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).unwrap();
@@ -1290,7 +1291,7 @@ fn default_workspace_mode_persists_and_tolerates_invalid_settings() {
     }
     // Chosen in Preferences, the default applies to the next open.
     use egui::accesskit::Role;
-    let mut h = harness(|app| app.set_option("dialog", "preferences").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap());
     h.get_by_label("Default workspace mode");
     h.get_by_role_and_label(Role::RadioButton, "Read").scroll_to_me();
     h.run_steps(4);
@@ -1307,8 +1308,8 @@ fn default_workspace_mode_persists_and_tolerates_invalid_settings() {
 #[test]
 fn newly_opened_pdfs_use_the_default_workspace() {
     use pdfcraft_ui_egui::{LeftPanel, Mode};
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app.apply_settings(&pdfcraft_ui_egui::settings::import_json(r#"{"default_mode": "edit"}"#).0);
     app.open_bytes("first.pdf", None, FIXTURE.to_vec()).unwrap();
     assert_eq!(app.mode, Mode::Edit);
@@ -1331,19 +1332,19 @@ fn explicit_mode_overrides_default_before_and_after_open() {
     use pdfcraft_ui_egui::Mode;
     for before in [false, true] {
         for (value, mode) in [("all", Mode::AllTools), ("read", Mode::Read), ("edit", Mode::Edit), ("convert", Mode::Convert), ("sign", Mode::Sign)] {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.default_mode = Mode::Read;
             if before {
-                app.set_option("mode", value).unwrap();
+                app.set_option(&egui::Context::default(), "mode", value).unwrap();
             }
             app.open_bytes("first.pdf", None, FIXTURE.to_vec()).unwrap();
             if !before {
                 // Desktop startup applies CLI options after the initial files open.
-                app.set_option("mode", value).unwrap();
+                app.set_option(&egui::Context::default(), "mode", value).unwrap();
             }
             assert_eq!(app.mode, mode);
-            app.set_option("default-mode", "edit").unwrap();
+            app.set_option(&egui::Context::default(), "default-mode", "edit").unwrap();
             app.open_bytes("second.pdf", None, FIXTURE.to_vec()).unwrap();
             assert_eq!(app.mode, mode);
             assert_eq!(app.default_mode, Mode::Edit);
@@ -1358,7 +1359,7 @@ fn explicit_mode_overrides_default_before_and_after_open() {
 fn preferences_choose_animation_effects_and_the_choice_is_saved() {
     use egui::accesskit::Role;
     use craft::theme::MotionChoice;
-    let mut h = harness(|app| app.set_option("dialog", "preferences").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap());
     // PLAN: assumed the app keeps the choice in `animation_effects: MotionChoice` and the settings JSON key `animation_effects` (pdf-shell-w9)
     assert_eq!(h.state().animation_effects, MotionChoice::System);
     h.get_by_label("Animation effects");
@@ -1375,33 +1376,33 @@ fn preferences_choose_animation_effects_and_the_choice_is_saved() {
         h.get_by_label("OK").click();
         h.run_steps(2);
         assert_eq!(h.state().animation_effects, choice, "{label}");
-        h.state_mut().set_option("dialog", "preferences").unwrap();
+        h.set_option("dialog", "preferences").unwrap();
         h.run_steps(2);
     }
     let saved = serde_json::to_string(&h.state().settings_snapshot()).unwrap();
     assert!(saved.contains(r#""animation_effects":"off""#), "{saved}");
-    let mut restored = PdfCraftApp::new();
+    let mut restored = crate::control::new_app();
     restored.apply_settings(&pdfcraft_ui_egui::settings::import_json(&saved).0);
     assert_eq!(restored.animation_effects, MotionChoice::Off);
-    let mut fresh = PdfCraftApp::new();
+    let mut fresh = crate::control::new_app();
     let hostile = saved.replace(r#""animation_effects":"off""#, r#""animation_effects":"sideways""#);
     fresh.apply_settings(&pdfcraft_ui_egui::settings::import_json(&hostile).0);
     assert_eq!(fresh.animation_effects, MotionChoice::System);
     // The control channel and the command line take the same three names.
-    fresh.set_option("animation_effects", "ON").unwrap();
+    fresh.set_option(&egui::Context::default(), "animation_effects", "ON").unwrap();
     assert_eq!(fresh.animation_effects, MotionChoice::Full);
-    assert!(fresh.set_option("animation_effects", "sideways").unwrap_err().contains("system, on, or off"));
+    assert!(fresh.set_option(&egui::Context::default(), "animation_effects", "sideways").unwrap_err().contains("system, on, or off"));
     assert_eq!(fresh.animation_effects, MotionChoice::Full);
 }
 
 #[test]
 fn explicit_mode_preserves_independent_tool_and_panel_options() {
     use pdfcraft_ui_egui::LeftPanel;
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
-    app.set_option("tool", "export").unwrap();
-    app.set_option("left", "closed").unwrap();
-    app.set_option("mode", "edit").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
+    app.set_option(&egui::Context::default(), "tool", "export").unwrap();
+    app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+    app.set_option(&egui::Context::default(), "mode", "edit").unwrap();
     assert_eq!(app.left, LeftPanel::Tool("export"));
     assert!(!app.left_open);
     app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).unwrap();
@@ -1413,17 +1414,17 @@ fn explicit_mode_preserves_independent_tool_and_panel_options() {
 fn opening_a_pdf_keeps_a_closed_left_panel_and_the_chosen_tool() {
     use pdfcraft_ui_egui::{LeftPanel, Mode};
     // `--left closed` without `--mode`, default workspace Edit: the panel stays closed.
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app.default_mode = Mode::Edit;
-    app.set_option("left", "closed").unwrap();
+    app.set_option(&egui::Context::default(), "left", "closed").unwrap();
     app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).unwrap();
     assert_eq!(app.mode, Mode::Edit);
     assert!(!app.left_open);
     // Default All Tools: opening another PDF leaves the tool panel the user picked.
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
-    app.set_option("tool", "export").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
+    app.set_option(&egui::Context::default(), "tool", "export").unwrap();
     app.open_bytes("first.pdf", None, FIXTURE.to_vec()).unwrap();
     app.open_bytes("second.pdf", None, FIXTURE.to_vec()).unwrap();
     assert_eq!(app.mode, Mode::AllTools);
@@ -1527,17 +1528,17 @@ fn long_german_tool_labels_stay_within_the_sidebar() {
         return;
     }
     let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
-    h.state_mut().set_option("language", "de").unwrap();
-    h.state_mut().set_option("mode", "all").unwrap();
-    h.state_mut().set_option("left", "open").unwrap();
+    h.set_option("language", "de").unwrap();
+    h.set_option("mode", "all").unwrap();
+    h.set_option("left", "open").unwrap();
     // The tool heading has to leave room for Back and Close even when translated.
-    h.state_mut().set_option("tool", "fill_sign").unwrap();
+    h.set_option("tool", "fill_sign").unwrap();
     h.run_steps(4);
     let heading =
         painted_text(&h).into_iter().find(|(s, ..)| s.starts_with("Ausfüllen und")).expect("translated heading is painted, whole or elided");
     assert!(heading.2.right() <= 272.0, "translated heading runs past the sidebar: {:?}", heading.2);
     // A long sub-tool name must stop before its status chip, not paint over the PDF.
-    h.state_mut().set_option("tool", "protect").unwrap();
+    h.set_option("tool", "protect").unwrap();
     h.run_steps(4);
     let item =
         painted_text(&h).into_iter().find(|(s, ..)| s == "Ausgeblendete Informationen entfernen").expect("long translated sub-tool is painted");
@@ -1570,7 +1571,7 @@ fn combine_tab_uses_tab_interaction_without_changing_close_or_document_state() {
     use egui::accesskit::Role;
     let mut h = three_tab_harness();
     let document_ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
-    h.state_mut().execute("page.combine");
+    h.execute("page.combine");
     h.run_steps(3);
     assert_eq!(h.get_by_role_and_label(Role::Tab, "Combine files").accesskit_node().is_selected(), Some(true));
     h.get_by_role_and_label(Role::Tab, "first.pdf").click();
@@ -1650,7 +1651,7 @@ fn a_tab_dropped_where_it_was_stays_and_a_click_still_selects_it() {
 fn the_combine_tab_does_not_move_and_documents_stay_in_order() {
     let mut h = three_tab_harness();
     let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
-    h.state_mut().execute("page.combine");
+    h.execute("page.combine");
     h.run_steps(3);
     let first = h.get_by_role_and_label(egui::accesskit::Role::Tab, "first.pdf").rect();
     drag_named_tab(&mut h, "Combine files", first.left_center() - egui::vec2(10.0, 0.0), true);
@@ -1725,8 +1726,8 @@ fn short_window_rail_buttons_scroll_clear_of_page_navigation() {
     for on_left in [false, true] {
         let (width, height) = (1000.0, 560.0);
         let mut h = Harness::builder().with_size(egui::vec2(width, height)).build_eframe(move |_cc| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes("short.pdf", None, FIXTURE.to_vec()).unwrap();
             app
         });
@@ -1806,7 +1807,7 @@ fn a_file_opened_again_shows_its_last_view() {
     assert!(h.state().restore_last_view, "on by default");
     {
         let app = h.state_mut();
-        app.set_option("zoom", "50").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "50").unwrap();
         let view = &mut app.views[0];
         view.view.display = PageDisplay::TwoUp;
         view.view.continuous = false;
@@ -1844,7 +1845,7 @@ fn a_file_opened_again_shows_its_last_view() {
     let v = &h.state().views[0];
     assert_eq!((v.current(), v.fit(), v.view.display, v.view.continuous, v.view.cover), (0, Fit::Width, PageDisplay::Single, true, false));
     // Garbage in the settings is ignored, a usable entry among it is kept.
-    let mut app = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
     app.apply_settings(&pdfcraft_ui_egui::settings::import_json(&format!(
         r#"{{"restore_last_view": "yes", "last_views": [5, {{"path": ""}}, {{"path": "{}", "page": -1, "zoom": "huge", "display": "single"}}, {{"path": "{}", "page": 1, "zoom": "fit-page", "display": "two-up"}}]}}"#,
         path.replace('\\', "/"),
@@ -1887,7 +1888,7 @@ fn full_screen_neither_is_remembered_nor_hides_the_last_view() {
     let mut h = harness(move |app| app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens"));
     {
         let app = h.state_mut();
-        app.set_option("zoom", "50").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "50").unwrap();
         let view = &mut app.views[0];
         view.view.display = PageDisplay::TwoUp;
         view.view.continuous = false;
@@ -1929,7 +1930,7 @@ fn home_recent_context_menu_reveals_the_target_without_opening_or_removing_it() 
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(move |_| {
         let (intake, _sender) = craft::platform::open::FileIntake::new(craft::host::Wake::none());
         let mut app = host_app(jobs, intake);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         for (name, path) in [("first.pdf", ".".to_owned()), ("target.pdf", target)] {
             app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path, pages: 1, size: 0 });
         }

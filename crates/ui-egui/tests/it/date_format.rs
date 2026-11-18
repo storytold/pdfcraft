@@ -5,6 +5,7 @@ use egui::{Key, Modifiers, pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
+use crate::support::AppHarness as _;
 
 const PDF: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -32,11 +33,11 @@ fn retype(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
 #[test]
 fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("form.pdf", None, PDF.to_vec()).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app.set_option("dialog", "preferences").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
         app
     });
     h.run_steps(4);
@@ -68,9 +69,9 @@ fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() 
     assert_eq!(h.state().session.date_format(), "yyyy.mm.dd.");
 
     // Fill & Sign ▸ Date stamps today in it.
-    h.state_mut().set_option("dialog", "none").unwrap();
+    h.set_option("dialog", "none").unwrap();
     h.run_steps(2);
-    assert!(h.state_mut().execute("sign.fill.date"));
+    assert!(h.execute("sign.fill.date"));
     h.run_steps(2);
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
     let p = pos2(r.left() + r.width() * 0.2, r.top() + r.height() * 0.2);
@@ -87,15 +88,15 @@ fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() 
     assert!(expected.ends_with('.') && expected.matches('.').count() == 3, "{expected}");
 
     // It survives a restart; an unusable saved pattern keeps the default; the control channel checks it too.
-    let mut restored = PdfCraftApp::new();
+    let mut restored = crate::control::new_app();
     restored.restore(&h.state().persist());
     assert_eq!(restored.session.date_format(), "yyyy.mm.dd.");
-    let mut fresh = PdfCraftApp::new();
+    let mut fresh = crate::control::new_app();
     fresh.restore(&format!(r#"{{"date_format": "{}"}}"#, "d".repeat(10_000)));
     fresh.restore(r#"{"date_format": "HH:MM"}"#);
     assert_eq!(fresh.session.date_format(), "m/d/yyyy");
-    assert!(fresh.set_option("date-format", "Year").is_err());
-    fresh.set_option("date-format", "dd/mm/yyyy").unwrap();
+    assert!(fresh.set_option(&egui::Context::default(), "date-format", "Year").is_err());
+    fresh.set_option(&egui::Context::default(), "date-format", "dd/mm/yyyy").unwrap();
     assert_eq!(fresh.session.date_format(), "dd/mm/yyyy");
 }
 
@@ -105,11 +106,11 @@ fn month_names_follow_the_date_language_or_else_the_interface_language() {
         return;
     }
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.set_option("date-format", "d mmmm yyyy").unwrap();
-        app.set_option("language", "cs").unwrap();
-        app.set_option("dialog", "preferences").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "date-format", "d mmmm yyyy").unwrap();
+        app.set_option(&egui::Context::default(), "language", "cs").unwrap();
+        app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
         app
     });
     h.run_steps(3);
@@ -117,20 +118,20 @@ fn month_names_follow_the_date_language_or_else_the_interface_language() {
     assert_eq!(text(&h), h.state().session.today_text(None, Some("cs")).unwrap(), "follows the interface (Czech)");
     // The picker offers following the interface first, then the interface languages.
     assert!(shows(&h, "Stejný jako rozhraní (Čeština)"));
-    h.state_mut().set_option("date-language", "es").unwrap();
+    h.set_option("date-language", "es").unwrap();
     h.run_steps(2);
     assert_eq!(text(&h), h.state().session.today_text(None, Some("es")).unwrap());
     assert!(shows(&h, "Español"));
 
     // Remembered; an unknown saved language is ignored; auto follows the interface again.
-    let mut restored = PdfCraftApp::new();
+    let mut restored = crate::control::new_app();
     restored.restore(&h.state().persist());
     assert_eq!(restored.session.date_language(), Some("es"));
-    let mut fresh = PdfCraftApp::new();
+    let mut fresh = crate::control::new_app();
     fresh.restore(r#"{"date_language": "klingon"}"#);
     assert_eq!(fresh.session.date_language(), None);
-    assert!(fresh.set_option("date-language", "klingon").is_err());
-    h.state_mut().set_option("date-language", "auto").unwrap();
+    assert!(fresh.set_option(&egui::Context::default(), "date-language", "klingon").is_err());
+    h.set_option("date-language", "auto").unwrap();
     assert_eq!(h.state().session.date_language(), None);
 }
 
@@ -144,22 +145,22 @@ fn a_date_the_pdf_cannot_hold_is_refused_with_a_warning_first() {
         return;
     }
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("form.pdf", None, PDF.to_vec()).expect("opens");
-        app.set_option("left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         // Japanese weekday names: Fill & Sign text can't hold them yet.
-        app.set_option("date-format", "dddd").unwrap();
-        app.set_option("date-language", "ja").unwrap();
-        app.set_option("dialog", "preferences").unwrap();
+        app.set_option(&egui::Context::default(), "date-format", "dddd").unwrap();
+        app.set_option(&egui::Context::default(), "date-language", "ja").unwrap();
+        app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
         app
     });
     h.run_steps(3);
     h.get_by_label_contains("can't be written into the PDF yet");
 
-    h.state_mut().set_option("dialog", "none").unwrap();
+    h.set_option("dialog", "none").unwrap();
     h.run_steps(2);
-    assert!(h.state_mut().execute("sign.fill.date"));
+    assert!(h.execute("sign.fill.date"));
     h.run_steps(2);
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
     let p = pos2(r.left() + r.width() * 0.2, r.top() + r.height() * 0.2);

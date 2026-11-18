@@ -10,6 +10,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::{CombineView, FilePurpose, PdfCraftApp};
+use crate::support::AppHarness as _;
 
 /// An `n`-page document with a proper xref table; page `i` shows "Page i+1".
 fn fixture(n: usize) -> Vec<u8> {
@@ -79,8 +80,8 @@ fn grid_of(files: Vec<(&str, Vec<u8>)>, size: egui::Vec2) -> Harness<'static, Pd
 fn grid_after(files: Vec<(&str, Vec<u8>)>, size: egui::Vec2, steps: usize) -> Harness<'static, PdfCraftApp> {
     let files: Vec<(String, Vec<u8>)> = files.into_iter().map(|(n, b)| (n.to_string(), b)).collect();
     let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.use_files(FilePurpose::Combine, files);
         app
     });
@@ -103,7 +104,7 @@ fn check_duplicate_warnings(view: &str) {
     assert_eq!(first.len(), other.len());
     assert_ne!(first, other);
     let mut h = grid_of(vec![("report.pdf", first.clone()), ("report.pdf", other)], vec2(1400.0, 900.0));
-    h.state_mut().set_option("combine-view", view).unwrap();
+    h.set_option("combine-view", view).unwrap();
     h.run_steps(2);
     let warnings = |h: &Harness<'static, PdfCraftApp>| h.query_all_by_label_contains("Added more than once").count();
     assert_eq!(warnings(&h), 0, "different equal-sized PDFs are not duplicates in {view}");
@@ -221,19 +222,19 @@ fn combine_shows_a_grid_by_default_and_the_view_is_kept_in_the_settings() {
     h.get_by_label("File name");
     // Kept in the settings, and read back.
     let saved = h.state().persist();
-    let mut fresh = PdfCraftApp::new();
+    let mut fresh = crate::control::new_app();
     assert_eq!(fresh.combine_view, CombineView::Grid);
     fresh.restore(&saved);
     assert_eq!(fresh.combine_view, CombineView::List);
     // A damaged setting keeps the default.
-    let mut damaged = PdfCraftApp::new();
+    let mut damaged = crate::control::new_app();
     damaged.restore(r#"{"combine_view": "tiles"}"#);
     assert_eq!(damaged.combine_view, CombineView::Grid);
     // Scriptable, with a clear refusal for anything else.
     let app = h.state_mut();
-    app.set_option("combine-view", "grid").unwrap();
+    app.set_option(&egui::Context::default(), "combine-view", "grid").unwrap();
     assert_eq!(app.combine_view, CombineView::Grid);
-    assert_eq!(app.set_option("combine-view", "tiles"), Err("combine-view must be grid or list".into()));
+    assert_eq!(app.set_option(&egui::Context::default(), "combine-view", "tiles"), Err("combine-view must be grid or list".into()));
 }
 
 #[test]
@@ -544,7 +545,7 @@ fn the_toolbar_sizes_the_cards_within_limits_and_the_size_is_kept_in_the_setting
     assert!(smallest_card.width() < before.width() && smallest_card.height() < before.height(), "{smallest_card:?}");
     // Kept in the settings, and read back; a damaged setting is clamped or ignored.
     let saved = h.state().persist();
-    let mut fresh = PdfCraftApp::new();
+    let mut fresh = crate::control::new_app();
     fresh.restore(&saved);
     assert_eq!(fresh.combine_zoom, smallest);
     fresh.restore(r#"{"combine_zoom": 99}"#);
@@ -553,15 +554,15 @@ fn the_toolbar_sizes_the_cards_within_limits_and_the_size_is_kept_in_the_setting
     assert_eq!(fresh.combine_zoom, largest);
     // Scriptable in percent, with a clear refusal outside the range.
     let app = h.state_mut();
-    app.set_option("combine-zoom", "150%").unwrap();
+    app.set_option(&egui::Context::default(), "combine-zoom", "150%").unwrap();
     assert_eq!(app.combine_zoom, 1.5);
     // #2531: 200% was not enough to read a value off a card; 500% has to be reachable.
     for pct in ["200", "300", "400", "500"] {
-        app.set_option("combine-zoom", pct).unwrap();
+        app.set_option(&egui::Context::default(), "combine-zoom", pct).unwrap();
         assert_eq!(app.combine_zoom, pct.parse::<f64>().unwrap() / 100.0);
     }
     for bad in ["59", "501", "big", "NaN", "inf", ""] {
-        assert!(app.set_option("combine-zoom", bad).is_err(), "{bad:?}");
+        assert!(app.set_option(&egui::Context::default(), "combine-zoom", bad).is_err(), "{bad:?}");
     }
     assert_eq!(app.combine_zoom, largest, "a refused value leaves the size alone");
     // The list has no card size.
@@ -863,15 +864,15 @@ fn open_documents_already_in_the_list_are_not_added_again() {
     // #1356: Add open documents left out none of the open documents, but added again the ones
     // already listed. Two documents with the same name and the same bytes are still two documents.
     let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         for (name, pages) in [("a.pdf", 1), ("b.pdf", 2), ("report.pdf", 3)] {
             app.open_bytes(name, None, fixture(pages)).unwrap();
         }
         app
     });
     h.run_steps(4);
-    h.state_mut().execute("page.combine");
+    h.execute("page.combine");
     h.run_steps(3);
     let add_all = |h: &mut Harness<'static, PdfCraftApp>| {
         h.get_by_label("Add open documents").click();
@@ -885,7 +886,7 @@ fn open_documents_already_in_the_list_are_not_added_again() {
     assert_eq!(names(&h), ["a.pdf", "b.pdf", "report.pdf"], "nothing is added twice");
     // Another report.pdf, opened while the first is listed: a different document all the same.
     h.state_mut().open_bytes("report.pdf", None, fixture(3)).unwrap();
-    h.state_mut().execute("page.combine");
+    h.execute("page.combine");
     h.run_steps(3);
     add_all(&mut h);
     assert_eq!(names(&h), ["a.pdf", "b.pdf", "report.pdf", "report.pdf"]);

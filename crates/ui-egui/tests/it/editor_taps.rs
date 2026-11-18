@@ -9,6 +9,7 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
 
 use crate::support::input::touch_tap;
+use crate::support::AppHarness as _;
 
 /// A PDF of `objects`, numbered from 1 with the catalog first.
 fn pdf(objects: &[&str]) -> Vec<u8> {
@@ -60,11 +61,11 @@ fn text_pdf() -> Vec<u8> {
 /// The app with `pdf` open at 150 % and its first frames run.
 fn open(pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("test.pdf", None, pdf).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     for _ in 0..30 {
@@ -306,7 +307,7 @@ fn touch_tap_on_a_radio_button_keeps_the_group_focused() {
 
 /// Opens the line of `text_pdf` for typing with Edit text.
 fn edit_paragraph(h: &mut Harness<'_, PdfCraftApp>) {
-    assert!(h.state_mut().execute("edit.edit_text"));
+    assert!(h.execute("edit.edit_text"));
     h.run_steps(2);
     let r = h.state().views[0].page_screen_rect(0).expect("page on screen");
     let k = r.width() / 300.0;

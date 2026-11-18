@@ -3,6 +3,7 @@
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
+use crate::support::AppHarness as _;
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -14,11 +15,11 @@ trailer << /Root 1 0 R >>
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(6);
@@ -34,7 +35,7 @@ fn size(h: &Harness<'static, PdfCraftApp>, page: usize) -> (f32, f32) {
 #[test]
 fn the_crop_tool_crops_to_the_dragged_rectangle_then_returns_to_select() {
     let mut h = harness();
-    assert!(h.state_mut().execute("page.crop"));
+    assert!(h.execute("page.crop"));
     assert_eq!(h.state().quick_tool, QuickTool::Crop);
     h.run_steps(2);
     crop_middle_half(&mut h);
@@ -43,10 +44,10 @@ fn the_crop_tool_crops_to_the_dragged_rectangle_then_returns_to_select() {
 #[test]
 fn quick_toolbar_crop_is_hidden_on_home_and_in_read_mode() {
     let mut h = harness();
-    h.state_mut().execute("view.read_mode");
+    h.execute("view.read_mode");
     h.run_steps(3);
     assert!(h.query_by_label("Crop pages").is_none());
-    h.state_mut().execute("view.read_mode");
+    h.execute("view.read_mode");
     h.run_steps(3);
     h.get_by_label("Crop pages");
     h.state_mut().active = None;
@@ -78,7 +79,7 @@ fn crop_middle_half(h: &mut Harness<'static, PdfCraftApp>) {
 #[test]
 fn set_page_boxes_dialog_applies_margins_to_the_chosen_pages() {
     let mut h = harness();
-    assert!(h.state_mut().execute("page.boxes"));
+    assert!(h.execute("page.boxes"));
     h.run_steps(3);
     h.get_by_label("Set Page Boxes");
     // One inch off every side (the units default to inches).
@@ -95,7 +96,7 @@ fn set_page_boxes_dialog_applies_margins_to_the_chosen_pages() {
     assert_eq!(size(&h, 0), (156.0, 256.0));
     assert_eq!(size(&h, 1), (156.0, 256.0), "All pages by default");
     // Set to zero resets the box.
-    h.state_mut().execute("page.boxes");
+    h.execute("page.boxes");
     h.run_steps(3);
     h.get_by_label("Set to zero").click();
     h.run_steps(1);
@@ -112,7 +113,7 @@ fn the_crop_tool_leaves_the_page_grid_so_a_page_can_be_cropped() {
     // "Crop pages" from it must leave the grid so the canvas handles a drag on
     // a page instead of returning early to organize_grid.
     h.state_mut().views[0].organize = true;
-    assert!(h.state_mut().execute("page.crop"));
+    assert!(h.execute("page.crop"));
     assert_eq!(h.state().quick_tool, QuickTool::Crop);
     assert!(!h.state().views[0].organize, "\"page.crop\" must clear view.organize");
     h.run_steps(2);

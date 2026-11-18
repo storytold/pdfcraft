@@ -8,6 +8,7 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{LinkOrigin, PdfCraftApp, PendingLink};
 
 use crate::gpu;
+use crate::support::AppHarness as _;
 
 const LINK_URL: &str = "https://example.org/from-a-link";
 const BUTTON_URL: &str = "https://example.org/from-a-button";
@@ -73,12 +74,12 @@ fn remote_fixture(file: &str, destination: &str) -> Vec<u8> {
 
 fn remote_harness(source_path: Option<String>, file: &str, destination: &str) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("source.pdf", source_path, remote_fixture(file, destination)).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "none").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(8);
@@ -100,12 +101,12 @@ fn linked_pages(count: usize, password: Option<&str>) -> Vec<u8> {
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("links.pdf", None, fixture()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "none").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(8);
@@ -203,11 +204,11 @@ fn bookmark_harness(source_path: Option<String>) -> Harness<'static, PdfCraftApp
 /// showing.
 fn bookmark_harness_with(source_path: Option<String>, pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("source.pdf", source_path, pdf).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "bookmarks").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
         app
     });
     h.run_steps(8);
@@ -822,12 +823,12 @@ fn overlapping_annotation_fixture_with_form(subtype: &str, internal: bool, with_
 
 fn overlapping_annotation_harness(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("highlighted-link.pdf", None, bytes).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "none").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(8);
@@ -1024,12 +1025,12 @@ fn click_text_until_pending(h: &mut Harness<'static, PdfCraftApp>, y: f32) -> bo
 fn addresses_written_in_the_page_text_open_like_links() {
     let _gpu = gpu();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("text-links.pdf", None, text_links_fixture()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "none").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(8);
@@ -1050,7 +1051,7 @@ fn addresses_written_in_the_page_text_open_like_links() {
     click_link_at(&mut h, 154.0);
     assert_eq!(h.state().pending_link, None, "text without an address");
     // Preferences can turn it off; the link annotation still works.
-    h.state_mut().set_option("text-links", "false").unwrap();
+    h.set_option("text-links", "false").unwrap();
     h.run_steps(2);
     click_link_at(&mut h, 354.0);
     assert_eq!(h.state().pending_link, None, "turned off");
@@ -1064,12 +1065,12 @@ fn addresses_written_in_the_page_text_open_like_links() {
 fn a_drag_from_an_address_in_the_page_text_selects_it() {
     let _gpu = gpu();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("text-links.pdf", None, text_links_fixture()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "none").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(8);
@@ -1129,12 +1130,12 @@ fn base_and_quads_fixture() -> Vec<u8> {
 fn relative_links_use_the_base_and_quad_points_limit_where_a_link_is_active() {
     let _gpu = gpu();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("base.pdf", None, base_and_quads_fixture()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "none").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(8);

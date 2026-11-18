@@ -4,6 +4,7 @@
 use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
+use crate::support::AppHarness as _;
 
 /// One 300×200 page with a three-row table, "Name Qty / Apple 12 / Pear 7". Its columns sit far
 /// enough apart that reading order takes one column, then the other: glyphs 0–3 "Name", 4–8
@@ -36,10 +37,10 @@ fn harness_on(clipboard: crate::support::RecordingClipboard, setup: impl FnOnce(
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
         // PLAN: assumed support::app_with_clipboard(RecordingClipboard) -> PdfCraftApp (pdf-chrome-w9: `PdfCraftApp::with_host` over `AppServices` holding the clipboard)
         let mut app = crate::support::app_with_clipboard(clipboard);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("table.pdf", None, table()).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app.set_option("author", "Tester").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
         setup(&mut app);
         app
     });
@@ -105,7 +106,7 @@ fn alt_drag_selects_only_the_text_inside_the_rectangle() {
 
 #[test]
 fn the_column_select_tool_needs_no_modifier() {
-    let mut h = harness(|app| assert!(app.execute("edit.column_select")));
+    let mut h = harness(|app| assert!(app.execute(&egui::Context::default(), "edit.column_select")));
     assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::ColumnSelect);
     let (from, to) = top_two_rows(&h);
     drag(&mut h, from, to, Modifiers::NONE);
@@ -143,7 +144,7 @@ fn shift_click_clears_a_column_selection() {
 /// of a line. The drag starts on text, since off text the highlighter draws an area highlight.
 #[test]
 fn alt_drag_with_the_highlighter_marks_only_the_column() {
-    let mut h = harness(|app| assert!(app.execute("comment.highlight")));
+    let mut h = harness(|app| assert!(app.execute(&egui::Context::default(), "comment.highlight")));
     // Just above-left of the centre of "N", still on the glyph.
     let (from, to) = (glyph(&h, 0) - vec2(2.0, 2.0), below_right_of_row_two(&h));
     drag(&mut h, from, to, Modifiers::ALT);
@@ -162,7 +163,7 @@ fn a_column_selection_copies_plain_text_only() {
     let mut h = harness_on(clipboard.clone(), |_| {});
     let (from, to) = top_two_rows(&h);
     drag(&mut h, from, to, Modifiers::ALT);
-    assert!(h.state_mut().execute("edit.copy"));
+    assert!(h.execute("edit.copy"));
     h.step();
     // PLAN: assumed RecordingClipboard::writes() -> Vec<Vec<Flavor>> (each write's flavours, `mime` and `data`).
     let html = clipboard.writes().iter().flatten().any(|flavor| flavor.mime.to_string() == "text/html");
@@ -186,7 +187,7 @@ fn a_plain_drag_along_one_table_row_selects_only_that_row() {
         assert_eq!(text(&h).as_deref(), Some("Apple\t12"));
     }
 
-    let mut h = harness(|app| assert!(app.execute("comment.highlight")));
+    let mut h = harness(|app| assert!(app.execute(&egui::Context::default(), "comment.highlight")));
     // The highlighter starts on text: the centre of "A".
     let (from, to) = (glyph(&h, 4), glyph(&h, 17) + vec2(12.0, 0.0));
     drag(&mut h, from, to, Modifiers::NONE);
@@ -268,8 +269,8 @@ fn uneven_harness() -> Harness<'static, PdfCraftApp> {
 /// A harness with the one-page PDF `bytes` open, its text layer ready.
 fn opened(name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(name, None, bytes).expect("opens");
         app
     });

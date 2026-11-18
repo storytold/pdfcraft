@@ -3,18 +3,19 @@
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
+use crate::support::AppHarness as _;
 
 #[test]
 fn choosing_and_placing_stamps() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(6);
-    assert!(h.state_mut().execute("comment.stamp"));
+    assert!(h.execute("comment.stamp"));
     h.run_steps(2);
     h.get_by_label("Add a stamp");
     h.get_all_by_label("APPROVED").next().expect("dynamic approved").click();
@@ -41,16 +42,16 @@ fn choosing_and_placing_stamps() {
 fn natural_image_stamps_keep_displayed_bounds_on_rotated_pages() {
     for degrees in [0, 90, 180, 270] {
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
             let id = app.views[0].id;
             app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees }).unwrap();
-            app.set_option("zoom", "100").unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
             app
         });
         h.run_steps(6);
-        assert!(h.state_mut().execute("comment.stamp"));
+        assert!(h.execute("comment.stamp"));
         let mut png = Vec::new();
         image::RgbImage::from_pixel(80, 40, image::Rgb([20, 120, 220]))
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
@@ -84,14 +85,14 @@ fn natural_image_stamps_keep_displayed_bounds_on_rotated_pages() {
 #[test]
 fn creating_placing_and_keeping_custom_stamps() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(6);
-    assert!(h.state_mut().execute("comment.stamp"));
+    assert!(h.execute("comment.stamp"));
     h.run_steps(2);
     // An image becomes a stamp: Create ▸ category and name.
     let mut png = Vec::new();
@@ -131,8 +132,8 @@ fn creating_placing_and_keeping_custom_stamps() {
     assert_eq!(doc.can_undo(), Some("Add stamp"));
     // The library is kept with the app's settings.
     let saved = s.persist();
-    let mut again = PdfCraftApp::new();
-    again.set_option("language", "en").unwrap();
+    let mut again = crate::control::new_app();
+    again.set_option(&egui::Context::default(), "language", "en").unwrap();
     again.restore(&saved);
     assert_eq!(again.custom_stamps.len(), 1);
     assert_eq!((again.custom_stamps[0].category.as_str(), again.custom_stamps[0].name.as_str()), ("Company", "logo"));
@@ -144,15 +145,15 @@ fn creating_placing_and_keeping_custom_stamps() {
 #[test]
 fn a_dynamic_custom_stamp_keeps_its_line_and_fills_it_in_when_placed() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        app.set_option("zoom", "150").unwrap();
-        app.set_option("author", "Ada").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "author", "Ada").unwrap();
         app
     });
     h.run_steps(6);
-    assert!(h.state_mut().execute("comment.stamp"));
+    assert!(h.execute("comment.stamp"));
     h.run_steps(2);
     let mut png = Vec::new();
     image::RgbImage::from_pixel(60, 20, image::Rgb([20, 120, 220])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
@@ -196,7 +197,7 @@ fn a_dynamic_custom_stamp_keeps_its_line_and_fills_it_in_when_placed() {
     let aspect = (r[2] - r[0]) / (r[3] - r[1]);
     // A band under the 3:1 picture (so less wide than 3:1), at least as wide as the picture.
     assert!(aspect > 3.0 * (1.0 - 0.22) - 0.05 && aspect < 3.0 - 0.05, "a band under the 3:1 picture: {r:?}");
-    let mut again = PdfCraftApp::new();
+    let mut again = crate::control::new_app();
     again.restore(&s.persist());
     assert_eq!(again.custom_stamps[0].line, s.custom_stamps[0].line, "kept with the library");
 }

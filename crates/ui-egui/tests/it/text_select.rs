@@ -6,6 +6,7 @@ use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
 
 use crate::support::RecordingClipboard;
+use crate::support::AppHarness as _;
 
 /// One 300×200 page with two lines of Helvetica text.
 fn two_lines() -> Vec<u8> {
@@ -44,10 +45,10 @@ fn harness_with(pdf: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'static) ->
 fn harness_clip(pdf: Vec<u8>, clipboard: RecordingClipboard, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> (Harness<'static, PdfCraftApp>, Pos2) {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
         let mut app = app_on(clipboard);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("lines.pdf", None, pdf).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app.set_option("author", "Tester").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
         setup(&mut app);
         app
     });
@@ -89,7 +90,7 @@ fn click(h: &mut Harness<'static, PdfCraftApp>, pos: Pos2) {
 
 #[test]
 fn quick_clicks_with_the_highlighter_mark_only_the_word() {
-    let (mut h, at) = harness(|app| assert!(app.execute("comment.highlight")));
+    let (mut h, at) = harness(|app| assert!(app.execute(&egui::Context::default(), "comment.highlight")));
     for _ in 0..4 {
         click(&mut h, at);
         // The double-click's highlight re-renders the page; give its text layer up to 8 frames
@@ -136,7 +137,7 @@ fn text_back(h: &mut Harness<'static, PdfCraftApp>, g: usize) {
 /// double-click's mark has used up the selection.
 #[test]
 fn a_markup_drag_right_after_a_double_click_marks_what_it_drags_over() {
-    let (mut h, at) = harness(|app| assert!(app.execute("comment.underline")));
+    let (mut h, at) = harness(|app| assert!(app.execute(&egui::Context::default(), "comment.underline")));
     click(&mut h, at);
     click(&mut h, at);
     // A glyph inside "jumps over the dog", on the second line.
@@ -211,14 +212,14 @@ fn selected_text_copy_edit_and_context_menus() {
 #[test]
 fn selected_text_copy_command_requires_selection() {
     let (mut h, at) = harness(|_| {});
-    assert!(!h.state_mut().execute("edit.copy"));
+    assert!(!h.execute("edit.copy"));
     click(&mut h, at);
     click(&mut h, at);
-    assert!(h.state_mut().execute("edit.copy"));
+    assert!(h.execute("edit.copy"));
     h.step();
     assert!(copied(&h, "quick"));
-    let mut app = PdfCraftApp::new();
-    assert!(!app.execute("edit.copy"));
+    let mut app = crate::control::new_app();
+    assert!(!app.execute(&egui::Context::default(), "edit.copy"));
 }
 
 #[test]
@@ -238,10 +239,10 @@ fn selected_text_copy_floating_button_honours_permissions() {
         let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
             let mut app = app_on(RecordingClipboard::default());
-            app.set_option("language", "en").unwrap();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes("no-copy.pdf", None, bytes).unwrap();
             app.submit_password(Some(password.into()));
-            app.set_option("left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
             app
         });
         let mut loaded = false;
@@ -262,7 +263,7 @@ fn selected_text_copy_floating_button_honours_permissions() {
             did_copy |= copied(&h, "The quick brown fox\njumps over the dog");
         }
         assert_eq!(did_copy, password == "owner", "floating Copy with {password} password");
-        assert_eq!(h.state_mut().execute("edit.copy"), password == "owner");
+        assert_eq!(h.execute("edit.copy"), password == "owner");
     }
 }
 
@@ -280,7 +281,7 @@ fn selected_text_copy_keeps_the_formatting_as_html() {
     let (mut h, at) = harness_clip(two_lines(), clipboard.clone(), |_| {});
     click(&mut h, at);
     click(&mut h, at);
-    assert!(h.state_mut().execute("edit.copy"));
+    assert!(h.execute("edit.copy"));
     h.step();
     assert_eq!(
         html_sets(&clipboard).as_slice(),
@@ -292,7 +293,7 @@ fn selected_text_copy_keeps_the_formatting_as_html() {
     for _ in 0..3 {
         click(&mut h, at);
     }
-    assert!(h.state_mut().execute("edit.copy"));
+    assert!(h.execute("edit.copy"));
     let last = html_sets(&clipboard).last().cloned().unwrap_or_default();
     assert!(last.0.contains(">The quick brown fox</span>"), "{last:?}");
     assert_eq!(last.1, "The quick brown fox");
@@ -306,7 +307,7 @@ fn selected_text_copy_falls_back_to_plain_text_when_html_is_refused() {
     let (mut h, at) = harness_clip(two_lines(), clipboard.clone(), |_| {});
     click(&mut h, at);
     click(&mut h, at);
-    assert!(h.state_mut().execute("edit.copy"));
+    assert!(h.execute("edit.copy"));
     h.step();
     assert_eq!(html_sets(&clipboard).len(), 1, "the HTML was offered");
     assert!(copied(&h, "quick"), "the plain text goes out the usual way");
@@ -320,7 +321,7 @@ fn selected_text_copy_without_system_clipboard_builds_no_html() {
     let (mut h, at) = harness_clip(two_lines(), clipboard.clone(), |_| {});
     click(&mut h, at);
     click(&mut h, at);
-    assert!(h.state_mut().execute("edit.copy"));
+    assert!(h.execute("edit.copy"));
     h.step();
     assert!(html_sets(&clipboard).is_empty());
     assert!(copied(&h, "quick"));
@@ -345,7 +346,7 @@ fn selected_text_copy_with_formatting_honours_permissions() {
     click(&mut h, at);
     click(&mut h, at);
     assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
-    assert!(!h.state_mut().execute("edit.copy"));
+    assert!(!h.execute("edit.copy"));
     h.step();
     assert!(!any_copy_text(&h));
     assert!(html_sets(&clipboard).is_empty());
@@ -355,7 +356,7 @@ fn selected_text_copy_with_formatting_honours_permissions() {
 fn selected_text_copy_preserves_unicode_and_page_clipboard() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = app_on(RecordingClipboard::default());
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("unicode.pdf", None, text_pdf(r"BT /F1 14 Tf 20 150 Td (caf\351) Tj ET")).unwrap();
         app
     });
@@ -370,14 +371,14 @@ fn selected_text_copy_preserves_unicode_and_page_clipboard() {
     }
     assert!(loaded);
     assert_eq!(h.state().views[0].selected_text().as_deref(), Some("café"));
-    assert!(h.state_mut().execute("edit.copy"));
+    assert!(h.execute("edit.copy"));
     h.step();
     assert!(copied(&h, "café"));
     assert!(h.state().page_clipboard.is_none());
-    assert!(h.state_mut().execute("page.organize"));
+    assert!(h.execute("page.organize"));
     h.run_steps(2);
-    assert!(!h.state_mut().execute("edit.copy"), "Organize retains page clipboard ownership");
-    assert!(h.state_mut().execute("page.copy"));
+    assert!(!h.execute("edit.copy"), "Organize retains page clipboard ownership");
+    assert!(h.execute("page.copy"));
     assert_eq!(h.state().page_clipboard.as_ref().map(|c| c.pages.clone()), Some(vec![0]));
 }
 
@@ -464,8 +465,8 @@ fn page_top(h: &Harness<'static, PdfCraftApp>, page: usize) -> f32 {
 #[test]
 fn a_selection_drag_keeps_scrolling_over_the_gap_and_the_next_page() {
     let (mut h, _) = harness_with(bottom_lines(3), |app| {
-        app.set_option("layout", "continuous").unwrap();
-        app.set_option("zoom", "200").unwrap();
+        app.set_option(&egui::Context::default(), "layout", "continuous").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "200").unwrap();
     });
     let glyph = |h: &Harness<'static, PdfCraftApp>, g: usize| h.state().views[0].glyph_screen_pos(0, g).expect("glyph on screen");
     // "ends" (glyphs 7..=10) in "Page 1 ends with this line".
@@ -500,8 +501,8 @@ fn a_selection_drag_keeps_scrolling_over_the_gap_and_the_next_page() {
 /// `bottom_lines(3)` at 75 %, every page on screen with its text layer read.
 fn three_pages() -> Harness<'static, PdfCraftApp> {
     let (mut h, _) = harness_with(bottom_lines(3), |app| {
-        app.set_option("layout", "continuous").unwrap();
-        app.set_option("zoom", "75").unwrap();
+        app.set_option(&egui::Context::default(), "layout", "continuous").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "75").unwrap();
     });
     crate::support::wait_until(&mut h, "every page's text layer", |app| {
         (0..3).all(|p| app.views[0].glyph_screen_pos(p, 10).is_some()) && !app.render_pending()
@@ -670,7 +671,7 @@ fn markup_tools_mark_a_selection_across_pages_on_every_page() {
     for (command, kind) in [("comment.strikeout", "StrikeOut"), ("redact.mark", "Redact")] {
         // Dragging with the tool.
         let mut h = three_pages();
-        assert!(h.state_mut().execute(command));
+        assert!(h.execute(command));
         h.run_steps(2);
         let (from, to) = (glyph_on(&h, 0, 7), glyph_on(&h, 1, 10));
         drag(&mut h, from, to);
@@ -685,7 +686,7 @@ fn markup_tools_mark_a_selection_across_pages_on_every_page() {
         let (from, to) = (glyph_on(&h, 0, 7), glyph_on(&h, 1, 10));
         drag(&mut h, from, to);
         assert!(h.state().views[0].selected_text().is_some());
-        assert!(h.state_mut().execute(command));
+        assert!(h.execute(command));
         h.run_steps(3);
         assert_eq!(marks(&h), both(kind), "{command}: picked after selecting");
     }
@@ -697,7 +698,7 @@ fn markup_tools_mark_a_selection_across_pages_on_every_page() {
 #[test]
 fn an_area_highlight_ended_with_escape_stays_a_highlight() {
     let mut h = three_pages();
-    assert!(h.state_mut().execute("comment.highlight"));
+    assert!(h.execute("comment.highlight"));
     h.run_steps(2);
     // A box in the empty top of page 1 (its text is at the bottom).
     let page = h.state().views[0].page_screen_rect(0).expect("page on screen");
@@ -729,7 +730,7 @@ fn a_highlight_across_pages_selects_its_last_part_and_opens_its_note() {
     let (from, to) = (glyph_on(&h, 0, 7), glyph_on(&h, 1, 10));
     drag(&mut h, from, to);
     h.run_steps(3);
-    assert!(h.state_mut().execute("comment.highlight"));
+    assert!(h.execute("comment.highlight"));
     h.run_steps(3);
     let app = h.state();
     let doc = app.session.get(app.views[0].id).unwrap();
@@ -746,7 +747,7 @@ fn a_highlight_dragged_back_across_pages_selects_its_part_where_the_drag_ended()
     let (from, to) = (glyph_on(&h, 0, 7), glyph_on(&h, 1, 10));
     drag(&mut h, to, from);
     h.run_steps(3);
-    assert!(h.state_mut().execute("comment.highlight"));
+    assert!(h.execute("comment.highlight"));
     h.run_steps(3);
     let app = h.state();
     let doc = app.session.get(app.views[0].id).unwrap();

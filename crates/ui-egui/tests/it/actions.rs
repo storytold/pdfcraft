@@ -12,6 +12,7 @@ use pdfcraft_engine::Session;
 use pdfcraft_ui_egui::PdfCraftApp;
 
 use crate::support;
+use crate::support::AppHarness as _;
 
 /// An app over the scripted file service and manual jobs.
 fn harness(files: &Arc<ScriptedFiles>, jobs: &Arc<ManualJobs>) -> Harness<'static, PdfCraftApp> {
@@ -19,7 +20,7 @@ fn harness(files: &Arc<ScriptedFiles>, jobs: &Arc<ManualJobs>) -> Harness<'stati
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         // PLAN: assumed `PdfCraftApp::with_host(host: Host) -> PdfCraftApp` (L-71)
         let mut app = PdfCraftApp::with_host(host);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
     });
     h.run_steps(2);
@@ -40,7 +41,7 @@ fn run_and_create_actions() {
     let files = Arc::new(ScriptedFiles::answering(picks().into_iter().chain(picks())).with_file("/in/r.pdf", src.to_vec()));
     let jobs = Arc::new(ManualJobs::new());
     let mut h = harness(&files, &jobs);
-    assert!(h.state_mut().execute("actions.distribution"));
+    assert!(h.execute("actions.distribution"));
     h.run_steps(2);
     h.get_by_label("Action Wizard");
     h.get_by_label("1. Remove hidden information");
@@ -50,7 +51,7 @@ fn run_and_create_actions() {
     assert!(files.file(Path::new("/out/r.pdf")).unwrap().starts_with(b"%PDF"));
 
     // A new action of our own, made with the controls.
-    assert!(h.state_mut().execute("actions.wizard"));
+    assert!(h.execute("actions.wizard"));
     h.run_steps(2);
     let name = h.get_by_role_and_label(Role::TextInput, "Action name");
     name.focus();
@@ -73,8 +74,8 @@ fn run_and_create_actions() {
     assert_eq!(h.state().custom_actions.len(), 1);
     h.get_by_label("1. Add watermark: DRAFT");
     let saved = h.state().persist();
-    let mut fresh = PdfCraftApp::new();
-    fresh.set_option("language", "en").unwrap();
+    let mut fresh = crate::control::new_app();
+    fresh.set_option(&egui::Context::default(), "language", "en").unwrap();
     fresh.restore(&saved);
     assert_eq!(fresh.custom_actions, h.state().custom_actions);
     h.get_by_label("Start").click();
@@ -98,7 +99,7 @@ fn desktop_actions_preserve_duplicate_names_and_results_from_earlier_runs() {
     let mut h = harness(&files, &jobs);
     for (first, second) in [(2, 3), (4, 5)] {
         // Start closes the wizard: reopen it just as a user does for the next run.
-        h.state_mut().execute("actions.distribution");
+        h.execute("actions.distribution");
         h.run_steps(2);
         h.get_by_label("Start").click();
         finish(&mut h, &jobs);

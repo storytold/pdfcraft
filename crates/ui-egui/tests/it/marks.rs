@@ -15,6 +15,7 @@ use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
 use serde_json::json;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use crate::support::AppHarness as _;
 
 const BOX_LABELS: [&str; 6] =
     ["Header left text", "Header center text", "Header right text", "Footer left text", "Footer center text", "Footer right text"];
@@ -107,7 +108,7 @@ fn harness_with(pdf: Vec<u8>) -> Rig {
     let on = jobs.clone();
     let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).renderer(uploads.clone()).build_eframe(move |_cc| {
         let mut app = app_on(on.clone());
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("doc.pdf", None, pdf.clone()).unwrap();
         app
     });
@@ -165,8 +166,8 @@ fn ok_disabled(h: &Rig) -> bool {
 #[test]
 fn header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset() {
     let mut h = harness();
-    assert!(!h.state_mut().execute("edit.header_footer.remove"), "nothing to remove yet");
-    assert!(h.state_mut().execute("edit.header_footer"));
+    assert!(!h.execute("edit.header_footer.remove"), "nothing to remove yet");
+    assert!(h.execute("edit.header_footer"));
     h.steps(3);
     assert!(is_open(&h));
     // The right footer box takes the page-number token.
@@ -181,12 +182,12 @@ fn header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset() {
     assert!(!is_open(&h));
     assert_eq!(marks(&h), [MarkKind::HeaderFooter]);
     // Update and Remove are now available.
-    assert!(h.state_mut().execute("edit.header_footer.update"));
+    assert!(h.execute("edit.header_footer.update"));
     h.steps(2);
     h.get_by_label("Update Header and Footer");
     h.get_by_label("Cancel").click();
     h.steps(2);
-    assert!(h.state_mut().execute("edit.header_footer.remove"));
+    assert!(h.execute("edit.header_footer.remove"));
     assert!(marks(&h).is_empty());
 }
 
@@ -195,7 +196,7 @@ fn header_and_footer_dialog_draws_in_the_chosen_face() {
     // #3754: the dialog offers Helvetica, Times and Courier (it only said "Font: Helvetica"),
     // and the face chosen is the one the page's header is drawn in.
     let mut h = harness();
-    assert!(h.state_mut().execute("edit.header_footer"));
+    assert!(h.execute("edit.header_footer"));
     h.steps(3);
     h.get_by_label("Font:");
     h.get_by_value("Helvetica").click();
@@ -218,7 +219,7 @@ fn header_and_footer_dialog_draws_in_the_chosen_face() {
 #[test]
 fn header_and_footer_dialog_can_shrink_the_page_content() {
     let mut h = harness();
-    assert!(h.state_mut().execute("edit.bates"));
+    assert!(h.execute("edit.bates"));
     h.steps(3);
     assert_eq!(fields(&h, MarkKind::HeaderFooter).bool("shrink"), Some(false), "off by default, as in Acrobat");
     h.get_by_label("Shrink the page content to make room for the header and footer").click();
@@ -233,14 +234,14 @@ fn header_and_footer_dialog_can_shrink_the_page_content() {
 #[test]
 fn watermark_and_background_dialogs() {
     let mut h = harness();
-    h.state_mut().execute("edit.watermark");
+    h.execute("edit.watermark");
     h.steps(2);
     assert!(ok_disabled(&h), "OK waits for text");
     h.get_by_label("Offset from centre");
     type_into(&mut h, WATERMARK_TEXT, "DRAFT");
     h.get_by_label("OK").click();
     h.steps(3);
-    h.state_mut().execute("edit.background");
+    h.execute("edit.background");
     h.steps(2);
     h.get_by_label("OK").click();
     h.steps(3);
@@ -250,7 +251,7 @@ fn watermark_and_background_dialogs() {
 #[test]
 fn backgrounds_and_watermarks_from_a_file() {
     let mut h = harness();
-    h.state_mut().execute("edit.background");
+    h.execute("edit.background");
     h.steps(2);
     support::outside_menus(&h, "File").click();
     h.steps(2);
@@ -309,7 +310,7 @@ fn the_background_dialog_offers_to_replace_a_white_backdrop_and_warns_about_scan
         s.session.get(s.views[0].id).unwrap().page_backdrop(page)
     };
     assert_eq!(backdrop(&h, 0), Some(pdfcraft_engine::Backdrop::Fill));
-    h.state_mut().execute("edit.background");
+    h.execute("edit.background");
     h.steps(3);
     h.get_by_label("A picture covers page 2 (a scan?), so the background won't show there.");
     assert_eq!(fields(&h, MarkKind::Background).bool("replace_backdrop"), Some(true), "on by default");
@@ -320,11 +321,11 @@ fn the_background_dialog_offers_to_replace_a_white_backdrop_and_warns_about_scan
     h.get_by_label("OK").click();
     h.steps(3);
     assert_eq!(backdrop(&h, 0), Some(pdfcraft_engine::Backdrop::Fill));
-    assert!(h.state_mut().execute("edit.undo"));
+    assert!(h.execute("edit.undo"));
     h.steps(2);
     // Reopened, the choice starts on again; ticked, the backdrop is replaced and the scan is
     // reported, not touched.
-    h.state_mut().execute("edit.background");
+    h.execute("edit.background");
     h.steps(3);
     h.get_by_label(REPLACE);
     assert_eq!(fields(&h, MarkKind::Background).bool("replace_backdrop"), Some(true), "on again when the dialog opens");
@@ -333,7 +334,7 @@ fn the_background_dialog_offers_to_replace_a_white_backdrop_and_warns_about_scan
     assert_eq!(backdrop(&h, 0), None);
     assert_eq!(backdrop(&h, 1), Some(pdfcraft_engine::Backdrop::Image));
     // Nothing left to replace: the offer is gone, and Update keeps the backdrop replaced.
-    h.state_mut().execute("edit.background.update");
+    h.execute("edit.background.update");
     h.steps(3);
     assert!(h.query_by_label(REPLACE).is_none());
     h.get_by_label("OK").click();
@@ -346,7 +347,7 @@ fn the_background_dialog_offers_to_replace_a_white_backdrop_and_warns_about_scan
 #[test]
 fn the_background_preview_follows_the_replace_checkbox() {
     let mut h = harness_with(backdrop_fixture());
-    assert!(h.state_mut().execute("edit.background"));
+    assert!(h.execute("edit.background"));
     h.steps(3);
     h.get_by_label(REPLACE);
     let [red, green, blue] = pdfcraft_engine::Background::default().color.map(|c| (c * 255.0).round() as u8);
@@ -385,7 +386,7 @@ fn remove_background_says_which_pages_keep_their_own_backdrop_off() {
     );
     let mut h = harness_with(fixture.into_bytes());
     assert_eq!(marks(&h), [MarkKind::Background]);
-    h.state_mut().execute("edit.background.remove");
+    h.execute("edit.background.remove");
     h.steps(2);
     assert!(marks(&h).is_empty());
     assert_eq!(
@@ -516,7 +517,7 @@ fn near(a: f32, b: f32, what: &str) {
 #[test]
 fn the_preview_shows_the_page_the_range_selects_under_the_marks() {
     let mut h = harness_with(content_fixture());
-    assert!(h.state_mut().execute("edit.header_footer"));
+    assert!(h.execute("edit.header_footer"));
     h.steps(2);
     type_into(&mut h, BOX_LABELS[1], "TOP");
     type_into(&mut h, BOX_LABELS[5], "END");
@@ -540,7 +541,7 @@ fn the_preview_shows_the_page_the_range_selects_under_the_marks() {
     h.steps(2);
 
     // The watermark sits on the page's centre.
-    assert!(h.state_mut().execute("edit.watermark"));
+    assert!(h.execute("edit.watermark"));
     h.steps(2);
     type_into(&mut h, WATERMARK_TEXT, "DRAFT");
     set_field(&mut h, MarkKind::Watermark, "wm.rotation", json!(0.0));
@@ -554,7 +555,7 @@ fn the_preview_shows_the_page_the_range_selects_under_the_marks() {
     h.steps(2);
 
     // A background colour shows where the page is white: it tints the page's picture.
-    assert!(h.state_mut().execute("edit.background"));
+    assert!(h.execute("edit.background"));
     h.steps(2);
     show_page(&mut h, 1);
     let tint = wait_for_preview(&mut h, "page 2 under the background", |_| true).tint;
@@ -567,7 +568,7 @@ fn the_preview_steps_through_the_pages_and_starts_at_the_current_one() {
     let mut h = harness();
     h.state_mut().views[0].go_to_page(1);
     h.steps(2);
-    assert!(h.state_mut().execute("edit.watermark"));
+    assert!(h.execute("edit.watermark"));
     h.steps(2);
     assert_eq!(pager(&h), (2, 3));
     press_step(&mut h, "Next page");
@@ -582,7 +583,7 @@ fn the_preview_steps_through_the_pages_and_starts_at_the_current_one() {
     // Opened again, the preview is back at the current page.
     h.get_by_label("Cancel").click();
     h.steps(2);
-    assert!(h.state_mut().execute("edit.watermark"));
+    assert!(h.execute("edit.watermark"));
     h.steps(2);
     assert_eq!(pager(&h), (2, 3));
 }
@@ -610,7 +611,7 @@ fn update_previews_the_page_without_the_marks_it_replaces() {
     let blue = |c: egui::Color32| c.b() > 150 && c.r() < 100 && c.g() < 100;
     let dark = |c: egui::Color32| c.r() < 60 && c.g() < 60 && c.b() < 60;
     let apply = |h: &mut Rig, command: &str, kind: MarkKind, values: &[(&str, serde_json::Value)]| {
-        assert!(h.state_mut().execute(command));
+        assert!(h.execute(command));
         h.steps(2);
         for (field, value) in values {
             set_field(h, kind, field, value.clone());
@@ -634,14 +635,14 @@ fn update_previews_the_page_without_the_marks_it_replaces() {
         &[("hf.text.1", json!("OLD")), ("marks.hf.colour", json!([0.0, 0.0, 1.0])), ("hf.size", json!(40.0))],
     );
     // Add keeps the marks there, and previews on the thumbnail, which has all three.
-    assert!(h.state_mut().execute("edit.watermark"));
+    assert!(h.execute("edit.watermark"));
     h.steps(2);
     let all = |i: &egui::ColorImage| at(i, 0.5, 0.75) == yellow && count(i, red) > 200 && count(i, blue) > 40;
     wait_for_preview(&mut h, "the page with its marks", all);
     h.get_by_label("Cancel").click();
     h.steps(2);
 
-    assert!(h.state_mut().execute("edit.background.update"));
+    assert!(h.execute("edit.background.update"));
     h.steps(2);
     set_field(&mut h, MarkKind::Background, "marks.bg.colour", json!([0.6, 0.8, 1.0]));
     // Update shows the page without the marks: neither a blank sheet nor the old marks while it renders.
@@ -655,7 +656,7 @@ fn update_previews_the_page_without_the_marks_it_replaces() {
     h.get_by_label("Cancel").click();
     h.steps(2);
 
-    assert!(h.state_mut().execute("edit.watermark.update"));
+    assert!(h.execute("edit.watermark.update"));
     h.steps(2);
     set_field(&mut h, MarkKind::Watermark, "wm.text", json!("NEW"));
     let page = wait_for_preview(&mut h, "the page without the old watermark", |i| count(i, red) == 0).image;
@@ -663,7 +664,7 @@ fn update_previews_the_page_without_the_marks_it_replaces() {
     h.get_by_label("Cancel").click();
     h.steps(2);
 
-    assert!(h.state_mut().execute("edit.header_footer.update"));
+    assert!(h.execute("edit.header_footer.update"));
     h.steps(2);
     let page = wait_for_preview(&mut h, "the page without the old header", |i| count(i, blue) == 0).image;
     assert!(at(&page, 0.5, 0.75) == yellow && count(&page, red) > 200, "the background and watermark stay");

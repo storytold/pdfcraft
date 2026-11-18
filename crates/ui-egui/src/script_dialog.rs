@@ -466,7 +466,7 @@ mod review_tests {
     /// The central shortcut/page-input gate must see a real hosted script prompt.
     #[test]
     fn a_script_prompt_blocks_document_input_until_answered() {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
         app.open_bytes("synthetic.pdf", None, bytes.to_vec()).unwrap();
         let id = app.active_ids().unwrap().1;
@@ -500,7 +500,7 @@ mod review13_ui_tests {
     use super::*;
     /// Create a native app with a visible synthetic blank document and no renderer.
     fn app() -> (PdfCraftApp, DocId) {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.set_option("language", "en").unwrap();
         let bytes = app.session.create_blank(200.0, 300.0, 2).unwrap();
         app.open_bytes("synthetic.pdf", None, bytes.to_vec()).unwrap();
@@ -654,7 +654,7 @@ mod link_script_tests {
         // `/C/…` form, which reads as `C:/…`.
         let path = if cfg!(windows) { "/C/abs/other.pdf" } else { "/abs/other.pdf" };
         let script = format!("getField\\('log'\\).value = app.popUpMenuEx\\({{cName:'A', cReturn:'a'}}\\) + event.type; app.openDoc\\('{path}'\\);");
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.open_bytes("link.pdf", None, linked(&script)).unwrap();
         let id = app.active_ids().unwrap().1;
         app.run_link_script(id, 0, 0);

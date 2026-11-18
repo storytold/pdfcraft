@@ -21,8 +21,8 @@ struct Case {
 
 fn harness() -> H {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("form.pdf", None, PDF.to_vec()).unwrap();
         app.recent.extend((0..5).map(|n| pdfcraft_ui_egui::RecentFile { name: format!("{n}.pdf"), path: format!("/nowhere/{n}.pdf"), pages: 1, size: 0 }));
         app
@@ -58,7 +58,7 @@ fn cases() -> Vec<Case> {
             },
             applied: |a| {
                 let v = &a.views[0].view;
-                v.display == craft::pages::PageDisplay::TwoUp && v.continuous != PdfCraftApp::new().views.first().map_or(true, |_| true)
+                v.display == craft::pages::PageDisplay::TwoUp && v.continuous != crate::control::new_app().views.first().map_or(true, |_| true)
             },
         },
         Case { name: "units", page: "Documents and view", edit: |h| click(h, Unit::Millimetres.label()), applied: |a| a.units == Unit::Millimetres },

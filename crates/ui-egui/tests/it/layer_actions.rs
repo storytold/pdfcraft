@@ -51,9 +51,9 @@ fn harness_with(pdf: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'static) ->
         // PLAN: assumed `crate::support::test_app(Arc<Host>) -> PdfCraftApp`, the shared harness (pdf-chrome-w9, w9-1).
         let host = Arc::new(craft::host::Host::builder(craft::host::AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).build());
         let mut app = crate::support::test_app(host);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("layers.pdf", None, pdf).unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         setup(&mut app);
         app
     });
@@ -108,7 +108,7 @@ fn links_set_layer_visibility() {
 #[test]
 fn push_buttons_set_layer_visibility() {
     // Both on, as the Layers panel can leave them.
-    let mut h = harness(|app| app.set_option("layer", "Green=on").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "layer", "Green=on").unwrap());
     assert_eq!(shown(&h), layers(true, true));
     // Turning Red on (it already is) turns Green, its radio-button partner, off.
     let button = at(&h, 70.0, 35.0);
@@ -122,9 +122,9 @@ fn push_buttons_set_layer_visibility() {
 fn layer_options_reset_to_initial_visibility() {
     // Red off and Green on: the opposite of how the file opens.
     let mut h = harness(|app| {
-        app.set_option("layer", "Red=off").unwrap();
-        app.set_option("layer", "Green=on").unwrap();
-        app.set_option("panel", "layers").unwrap();
+        app.set_option(&egui::Context::default(), "layer", "Red=off").unwrap();
+        app.set_option(&egui::Context::default(), "layer", "Green=on").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "layers").unwrap();
     });
     assert_eq!(shown(&h), layers(false, true));
     // The Layers panel's menu holds the catalog command (`layers.reset_visibility`, L-87).
@@ -145,7 +145,7 @@ fn layer_options_reset_to_initial_visibility() {
 /// `/Order` it presents none.
 #[test]
 fn the_layers_panel_shows_the_order_tree() {
-    let mut h = harness_with(fixture_with("/Order [[(Colours) 5 0 R]]"), |app| app.set_option("panel", "layers").unwrap());
+    let mut h = harness_with(fixture_with("/Order [[(Colours) 5 0 R]]"), |app| app.set_option(&egui::Context::default(), "panel", "layers").unwrap());
     h.run_steps(2);
     let label = h.get_by_label("Colours").rect();
     let red = h.get_by_label("Red").rect();
@@ -160,7 +160,7 @@ fn the_layers_panel_shows_the_order_tree() {
     h.run_steps(3);
     assert_eq!(shown(&h), layers(false, false));
 
-    let h = harness(|app| app.set_option("panel", "layers").unwrap());
+    let h = harness(|app| app.set_option(&egui::Context::default(), "panel", "layers").unwrap());
     assert!(h.query_by_label("Red").is_none() && h.query_by_label("Green").is_none(), "no /Order: none presented");
     h.get_by_label("This document lists no layers to show.");
 }

@@ -8,6 +8,7 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 
 use crate::support;
+use crate::support::AppHarness as _;
 
 /// Two 300×200 pages of Helvetica text: "cat and cat" and "a cat".
 fn fixture() -> Vec<u8> {
@@ -49,8 +50,8 @@ fn has_field(h: &Harness<'static, PdfCraftApp>, placeholder: &str) -> bool {
 #[test]
 fn replace_all_from_the_find_bar_is_one_undo_step() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("cats.pdf", None, fixture()).expect("opens");
         app
     });
@@ -91,7 +92,7 @@ fn replace_all_from_the_find_bar_is_one_undo_step() {
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Replace all"));
     // One Undo puts every page back.
-    assert!(h.state_mut().execute("edit.undo"));
+    assert!(h.execute("edit.undo"));
     h.run_steps(2);
     assert_eq!(texts(&h), ["cat and cat", "a cat"]);
     let s = h.state();
@@ -102,13 +103,13 @@ fn replace_all_from_the_find_bar_is_one_undo_step() {
 #[test]
 fn replace_changes_the_highlighted_match() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("cats.pdf", None, fixture()).expect("opens");
         app
     });
     h.run_steps(4);
-    assert!(h.state_mut().execute("edit.replace"));
+    assert!(h.execute("edit.replace"));
     h.run_steps(3);
     h.query_by(|n| n.placeholder() == Some("Find text")).expect("find field").type_text("cat");
     for _ in 0..400 {

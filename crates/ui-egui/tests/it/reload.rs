@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{By, Queryable};
 use pdfcraft_ui_egui::{PdfCraftApp, SaveTarget};
+use crate::support::AppHarness as _;
 
 /// An `n`-page document with a proper xref table; page `i` shows "Page i+1", and with `notes`
 /// each page has a sticky note.
@@ -89,7 +90,7 @@ fn app_with(jobs: Arc<craft::host::ManualJobs>) -> PdfCraftApp {
     let services = AppServices::new(Wake::none(), Clipboard::new(SystemClipboard::new()), None, None, intake, watch);
     let mut app = PdfCraftApp::with_host(Arc::new(host), services);
     // The labels looked for are English, whatever the machine's language.
-    app.set_option("language", "en").unwrap();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app
 }
 
@@ -165,9 +166,9 @@ fn a_watched_label_replacement_keeps_the_display_mode_and_focused_page() {
         let file = TempPdf::new(&format!("focused-label-{display}"), &original);
         let mut h = harness(&file.path);
         let id = h.state().views[0].id;
-        h.state_mut().set_option("layout", display).unwrap();
-        h.state_mut().set_option("zoom", "100").unwrap();
-        h.state_mut().set_option("page", "4").unwrap();
+        h.set_option("layout", display).unwrap();
+        h.set_option("zoom", "100").unwrap();
+        h.set_option("page", "4").unwrap();
         h.run_steps(3);
         let view = &h.state().views[0];
         assert_eq!((view.current(), display_token(view.view.display, view.view.continuous)), (3, display));
@@ -175,7 +176,7 @@ fn a_watched_label_replacement_keeps_the_display_mode_and_focused_page() {
         assert_eq!(doc.bytes, original);
         assert!(!doc.dirty);
         assert_eq!((doc.can_undo(), doc.can_redo()), (None, None));
-        assert!(h.state_mut().execute("view.focus_page_input"));
+        assert!(h.execute("view.focus_page_input"));
         h.run_steps(3);
         h.get(By::new().role(egui::accesskit::Role::TextInput).value("2"));
         let editor = h.ctx.memory(|m| m.focused()).expect("the page editor is focused");
@@ -293,7 +294,7 @@ fn a_deleted_file_leaves_the_document_open() {
 
 #[test]
 fn nothing_reloads_with_the_preference_off() {
-    assert!(PdfCraftApp::new().reload_changed_files, "on by default");
+    assert!(crate::control::new_app().reload_changed_files, "on by default");
     let file = TempPdf::new("off", &fixture(2));
     let mut h = harness(&file.path);
     h.state_mut().reload_changed_files = false;
@@ -301,7 +302,7 @@ fn nothing_reloads_with_the_preference_off() {
     file.rebuild(&fixture(3));
     h.run_steps(4);
     assert_eq!(pages(&h), 2);
-    let mut restarted = PdfCraftApp::new();
+    let mut restarted = crate::control::new_app();
     restarted.apply_settings(&h.state().settings_snapshot());
     assert!(!restarted.reload_changed_files, "the choice is kept");
 }
@@ -393,7 +394,7 @@ fn a_file_rebuilt_under_an_open_dialog_reloads_when_the_dialog_closes() {
     // open would apply the dialog (Rotate, Protect, Comment Properties…) to the new version.
     let file = TempPdf::new("under-dialog", &fixture(2));
     let mut h = harness(&file.path);
-    h.state_mut().set_option("dialog", "page.rotate_dialog").unwrap();
+    h.set_option("dialog", "page.rotate_dialog").unwrap();
     h.run_steps(2);
     file.rebuild(&fixture(4));
     h.run_steps(4);
@@ -412,7 +413,7 @@ fn a_version_held_under_preferences_is_dropped_when_reloading_is_turned_off_ther
     // change on disk" must not still apply the version found while it was open.
     let file = TempPdf::new("held-pref-off", &fixture(2));
     let mut h = harness(&file.path);
-    h.state_mut().set_option("dialog", "preferences").unwrap();
+    h.set_option("dialog", "preferences").unwrap();
     h.run_steps(2);
     file.rebuild(&fixture(4));
     h.run_steps(4);
@@ -429,7 +430,7 @@ fn a_newer_version_found_as_the_dialog_closes_replaces_the_held_one() {
     // edit generation: one is expected.
     let file = TempPdf::new("held-coalesced", &fixture(2));
     let mut h = harness(&file.path);
-    h.state_mut().set_option("dialog", "page.rotate_dialog").unwrap();
+    h.set_option("dialog", "page.rotate_dialog").unwrap();
     h.run_steps(2);
     file.rebuild(&fixture(4));
     h.run_steps(4);

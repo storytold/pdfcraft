@@ -16,6 +16,7 @@ use crate::workflows::FilePurpose;
 pub(crate) mod dialog;
 mod panel;
 pub(crate) mod tool;
+pub(crate) mod cert_viewer;
 
 #[cfg(test)]
 use dialog::detail_lines;
@@ -760,7 +761,7 @@ mod tests {
     /// Create a digital ID named "Grace Hopper" in `dir`, as Configure New Digital ID ▸ Create
     /// does. Returns where it was saved.
     fn create_in(dir: &std::path::Path) -> Result<PathBuf, String> {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.export_dir_override = Some(dir.to_string_lossy().into_owned());
         let mut draft = SignDraft::new(0, None, None, None, &[]);
         // P-256 keeps the test fast.
@@ -781,7 +782,7 @@ mod tests {
         std::fs::create_dir_all(&out).unwrap();
         let key = PrivateKey::generate_p256().unwrap();
         let cert = Certificate::self_signed(&Name::build("../x", "", "", "", ""), &key, sign::Time::from_unix(0), 1, &[1]).unwrap();
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.export_dir_override = Some(out.to_string_lossy().into_owned());
         app.export_certificate(&cert);
         let written: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
@@ -797,7 +798,7 @@ mod tests {
         if !crate::i18n::needs_catalogs() {
             return;
         }
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         let plain = app.session.create_from_text("t", "No signatures here.").unwrap();
         app.open_bytes("plain.pdf", None, plain.as_ref().clone()).unwrap();
         app.views[0].texts.insert(0, std::sync::Arc::new(pdfcraft_render::PageText::default()));
@@ -894,7 +895,7 @@ mod tests {
         let dir = scratch();
         let file = dir.join("old.p12");
         std::fs::write(&file, b"not opened").unwrap();
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.digital_ids = vec![listed("windows:abc", "Store"), listed(&file.to_string_lossy(), "Old"), listed("/ids/new.p12", "New")];
         let mut draft = SignDraft::new(0, None, None, None, &app.digital_ids);
         draft.selected = Some(2);
@@ -913,7 +914,7 @@ mod tests {
         // leaves only the store ID, which isn't saved.
         assert!(app.remove_digital_id(1));
         assert_eq!(app.sign_draft.as_ref().unwrap().selected, Some(0));
-        let mut fresh = PdfCraftApp::new();
+        let mut fresh = PdfCraftApp::for_unit_tests();
         fresh.restore(&app.persist());
         assert!(fresh.digital_ids.is_empty(), "the removal survives a restart: {:?}", fresh.digital_ids);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1022,7 +1023,7 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_| {
-            let mut app = PdfCraftApp::new();
+            let mut app = PdfCraftApp::for_unit_tests();
             app.set_option("language", "en").unwrap();
             app.digital_ids = vec![listed("/ids/grace.p12", "Grace Hopper")];
             let mut draft = SignDraft::new(0, None, None, None, &app.digital_ids);
@@ -1064,7 +1065,7 @@ mod tests {
         // Importing a digital ID file and signing work by borrowing the draft in place.
         let dir = scratch();
         let saved = create_in(&dir).unwrap();
-        let mut import_app = PdfCraftApp::new();
+        let mut import_app = PdfCraftApp::for_unit_tests();
         let mut import_draft = SignDraft::new(0, None, None, None, &[]);
         import_draft.new_id.create = false;
         import_draft.new_id.file = saved.to_string_lossy().into_owned();

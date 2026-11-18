@@ -5,6 +5,7 @@
 //! `PdfCraftApp::execute`: the runtime routes a fired command to [`PdfCraftApp::run_fired`], and
 //! one a key fired while it is disabled to [`PdfCraftApp::run_declined`].
 
+pub(crate) mod catalog;
 use craft::theme::ModeChoice;
 use craft::ui::runtime::commands::Fired;
 use pdfcraft_engine::Edit;

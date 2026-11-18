@@ -7,6 +7,7 @@ use pdfcraft_engine::{Edit, FieldFont, FieldProps, FieldValue, NewField, Session
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::bulk_fields::SharedFieldPropsDialog;
 use pdfcraft_ui_egui::prepare::FieldPropsDialog;
+use crate::support::AppHarness as _;
 
 fn fixture() -> Vec<u8> {
     let mut s = Session::new();
@@ -49,13 +50,13 @@ fn fixture() -> Vec<u8> {
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         // Saves stamp /ModDate from the clock; pinned, two saves compare equal across a second.
         app.session = std::mem::take(&mut app.session).with_clock(|| 1_700_000_000);
         app.open_bytes("form.pdf", None, fixture()).unwrap();
-        app.set_option("zoom", "150").unwrap();
-        app.execute("form.prepare");
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+        app.execute(&egui::Context::default(), "form.prepare");
         app
     });
     h.run_steps(4);
@@ -75,7 +76,7 @@ fn select(h: &mut Harness<'static, PdfCraftApp>, names: &[&str]) {
     let p = &mut h.state_mut().views[0].prepare;
     p.selected = names.first().map(|n| (n.to_string(), 0));
     p.also = names.iter().skip(1).map(|n| (n.to_string(), 0)).collect();
-    h.state_mut().execute("form.field.properties");
+    h.execute("form.field.properties");
     h.run_steps(4);
 }
 
@@ -156,10 +157,10 @@ fn shared_properties_preserve_mixed_values_and_undo_the_whole_change() {
     }
     assert_eq!(doc(&h).can_undo(), Some("Change field properties"));
     assert_eq!(h.state().views[0].prepare.names(), ["alpha", "beta"]);
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(4);
     assert_eq!(bytes(&h), before);
-    h.state_mut().execute("edit.redo");
+    h.execute("edit.redo");
     h.run_steps(4);
     assert_eq!(doc(&h).field_look("beta").unwrap().width, 4.0);
     // The regenerated look also survives a real Save/open round trip.
@@ -217,7 +218,7 @@ fn locked_field_refuses_the_entire_batch_and_keeps_the_draft_for_correction() {
             .filter(|f| ["alpha", "beta"].contains(&f.name.as_str()))
             .all(|f| !f.locked() && f.tooltip.as_deref() == Some("Shared help"))
     );
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(4);
     assert_eq!(bytes(&h), before, "unlock and changes undo together");
 }
@@ -313,7 +314,7 @@ fn selecting_several_widgets_of_one_radio_group_does_not_duplicate_field_edits()
     let p = &mut h.state_mut().views[0].prepare;
     p.selected = Some(("group".into(), 0));
     p.also = vec![("group".into(), 1), ("alpha".into(), 0)];
-    h.state_mut().execute("form.field.properties");
+    h.execute("form.field.properties");
     h.run_steps(4);
     assert_eq!(shared(&h)["names"], serde_json::json!(["group", "alpha"]), "the group is listed once");
     h.get_by_label("Tooltip:");
@@ -348,7 +349,7 @@ fn shared_properties_preserve_unchecked_changes_made_after_the_dialog_opened() {
     h.run_steps(4);
     assert_eq!(doc(&h).field_look("beta").unwrap().fill, Some([0.3, 0.7, 0.1]));
     assert_eq!(doc(&h).field_look("beta").unwrap().width, 2.0);
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(4);
     assert_eq!(bytes(&h), before);
 }

@@ -15,6 +15,7 @@ use pdfcraft_ui_egui::fill_sign::FillTool;
 use pdfcraft_ui_egui::{AppServices, PdfCraftApp, QuickTool};
 
 use crate::support::input::one_frame;
+use crate::support::AppHarness as _;
 
 /// A PDF of `objects`, numbered from 1 with the catalog first.
 fn pdf(objects: &[&str]) -> Vec<u8> {
@@ -179,12 +180,12 @@ fn open(pdf: Vec<u8>, zoom: &'static str, left_open: bool) -> Harness<'static, P
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "test" }).build();
         let mut app = PdfCraftApp::with_host(Arc::new(host), services());
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("test.pdf", None, pdf).unwrap();
         if !left_open {
-            app.set_option("left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         }
-        app.set_option("zoom", zoom).unwrap();
+        app.set_option(&egui::Context::default(), "zoom", zoom).unwrap();
         app
     });
     for _ in 0..30 {
@@ -449,7 +450,7 @@ fn a_comments_tip_shows_with_every_tool_beside_its_cursor() {
 /// left of the edge. Returns the cursor shown at the press point and the line count after.
 fn narrow_from_left(dx: f32) -> (egui::CursorIcon, usize) {
     let mut h = open(text_pdf(), "150", false);
-    assert!(h.state_mut().execute("edit.edit_text"));
+    assert!(h.execute("edit.edit_text"));
     for _ in 0..20 {
         h.run_steps(2);
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -1050,7 +1051,7 @@ fn a_link_rectangle_dragged_off_its_page_is_drawn_on_it() {
 
 #[test]
 fn a_field_dragged_off_its_page_is_drawn_on_it() {
-    let h = drag_seen_only_past_page_ones_edge(|app| assert!(app.execute("form.add.text"), "Prepare a form, with the text field tool"));
+    let h = drag_seen_only_past_page_ones_edge(|app| assert!(app.execute(&egui::Context::default(), "form.add.text"), "Prepare a form, with the text field tool"));
     let s = h.state();
     let doc = s.session.get(s.views[0].id).unwrap();
     assert!(doc.form.iter().any(|f| f.widgets.iter().any(|w| w.page == Some(0))), "a field on page 1");
@@ -1143,7 +1144,7 @@ fn a_right_click_with_edit_text_on_a_paragraph_under_a_comment_selects_the_comme
 #[test]
 fn a_right_click_with_edit_text_on_added_text_over_a_comment_selects_no_comment() {
     let mut h = open(comment_on_text_pdf(), "150", false);
-    assert!(h.state_mut().execute("edit.edit_text"));
+    assert!(h.execute("edit.edit_text"));
     assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
         page: 0,
         text: pdfcraft_engine::AddedText { rect: [110.0, 296.0, 190.0, 311.0], text: "Added".into(), ..Default::default() },
@@ -1159,7 +1160,7 @@ fn a_right_click_with_edit_text_on_added_text_over_a_comment_selects_no_comment(
 #[test]
 fn a_right_click_with_a_field_tool_selects_no_comment() {
     let mut h = open(comment_and_checkbox_pdf(), "150", false);
-    assert!(h.state_mut().execute("form.add.text"));
+    assert!(h.execute("form.add.text"));
     h.run_steps(4);
     let on_comment = at(&h, 200.0, 125.0);
     right_click(&mut h, on_comment);
@@ -1215,7 +1216,7 @@ fn a_click_on_added_text_deselects_the_selected_comment() {
         text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
     }));
     // The Edit panel open, with the Select tool: added text is picked up.
-    assert!(h.state_mut().execute("edit.text"));
+    assert!(h.execute("edit.text"));
     h.run_steps(3);
     h.state_mut().quick_tool = QuickTool::Select;
     h.run_steps(3);
@@ -1394,7 +1395,7 @@ fn a_right_click_where_two_pages_touch_is_the_first_pages() {
 #[test]
 fn with_prepare_a_click_that_began_off_the_page_keeps_the_selected_field() {
     let mut h = open(comment_and_checkbox_pdf(), "150", false);
-    assert!(h.state_mut().execute("form.prepare"));
+    assert!(h.execute("form.prepare"));
     h.run_steps(4);
     let on_box = at(&h, 110.0, 210.0);
     mouse_click(&mut h, on_box);
@@ -1409,7 +1410,7 @@ fn with_prepare_a_click_that_began_off_the_page_keeps_the_selected_field() {
 #[test]
 fn with_prepare_a_drag_from_a_highlight_draws_the_selection_rectangle() {
     let mut h = open(highlighted_checkbox_pdf(), "150", false);
-    assert!(h.state_mut().execute("form.prepare"));
+    assert!(h.execute("form.prepare"));
     h.run_steps(4);
     // On the highlight, beside the box; the drag ends past the box's other corner.
     let (from, to) = (at(&h, 97.0, 197.0), at(&h, 130.0, 230.0));
@@ -1450,7 +1451,7 @@ fn a_right_click_with_the_button_held_opens_the_selected_comments_menu() {
 fn a_shift_click_where_two_pages_touch_keeps_what_it_selected() {
     let mut h = open(bottom_line_pages_pdf(), "100", false);
     h.state_mut().views[0].show_page_gaps = false;
-    assert!(h.state_mut().execute("edit.edit_text"));
+    assert!(h.execute("edit.edit_text"));
     h.run_steps(4);
     let (one, two) = {
         let v = &h.state().views[0];
@@ -1496,7 +1497,7 @@ fn with_prepare_on_a_locked_document_a_right_click_on_a_field_selects_nothing() 
 #[test]
 fn with_prepare_a_right_click_beside_the_selected_field_opens_the_pages_menu() {
     let mut h = open(comment_and_checkbox_pdf(), "150", false);
-    assert!(h.state_mut().execute("form.prepare"));
+    assert!(h.execute("form.prepare"));
     h.run_steps(4);
     let on_box = at(&h, 110.0, 210.0);
     mouse_click(&mut h, on_box);
@@ -1517,9 +1518,9 @@ fn with_prepare_a_right_click_beside_the_selected_field_opens_the_pages_menu() {
 #[test]
 fn with_a_field_tool_a_right_click_on_a_field_opens_its_menu() {
     let mut h = open(comment_and_checkbox_pdf(), "150", false);
-    assert!(h.state_mut().execute("form.prepare"));
+    assert!(h.execute("form.prepare"));
     h.run_steps(4);
-    assert!(h.state_mut().execute("form.add.text"));
+    assert!(h.execute("form.add.text"));
     h.run_steps(4);
     let on_box = at(&h, 110.0, 210.0);
     right_click(&mut h, on_box);
@@ -1605,7 +1606,7 @@ fn a_note_tool_click_on_added_text_starts_no_note() {
         page: 0,
         text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
     }));
-    assert!(h.state_mut().execute("edit.text"));
+    assert!(h.execute("edit.text"));
     h.run_steps(3);
     h.state_mut().quick_tool = QuickTool::Comment(CommentTool::Note);
     h.run_steps(3);

@@ -230,7 +230,7 @@ trailer << /Root 1 0 R >>
 /// The real shell with `bytes` open, the side panes closed, after the first frames.
 fn shell(bytes: &'static [u8]) -> egui_kittest::Harness<'static, PdfCraftApp> {
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.set_option("language", "en").unwrap();
         app.open_bytes("sign-fields.pdf", None, bytes.to_vec()).unwrap();
         app.set_option("left", "closed").unwrap();

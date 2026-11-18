@@ -47,7 +47,7 @@ fn load_ocr_verify(app: &mut PdfCraftApp) -> Result<(), String> {
     app.ocr_draft.engine = settings.engine;
     app.ocr_draft.strategy = settings.strategy;
     app.open_bytes("scan.pdf", None, scan).map_err(|e| e.to_string())?;
-    if !app.execute("ocr.correct") {
+    if !app.execute(&egui::Context::default(), "ocr.correct") {
         return Err("ocr.correct did not run".into());
     }
     let Some((_, id)) = app.active_ids() else { return Err("no open document".into()) };
@@ -96,7 +96,7 @@ fn main() -> Result<(), String> {
             }
         }
         for (k, v) in &opts {
-            if let Err(e) = app.set_option(k, v) {
+            if let Err(e) = app.set_option(&egui::Context::default(), k, v) {
                 eprintln!("shot: --{k} {v}: {e}");
             }
         }

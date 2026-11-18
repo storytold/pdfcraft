@@ -14,6 +14,7 @@ use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::settings::import_json;
 use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
 use serde_json::{Value, json};
+use crate::support::AppHarness as _;
 
 /// Where a test sends its requests: the other end is attached to the app with `attach_control`.
 pub(crate) type ControlClient = Sender<ControlRequest>;
@@ -139,7 +140,7 @@ fn harness_on(app: PdfCraftApp, pages: usize, width: f32, scale: f32) -> (Harnes
     let (tx, rx) = std::sync::mpsc::channel();
     let mut h = Harness::builder().with_size(egui::vec2(width, 900.0)).with_pixels_per_point(scale).build_eframe(move |_cc| {
         let mut app = app;
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.attach_control(rx, None);
         app.open_bytes("doc.pdf", None, fixture(pages)).unwrap();
         app
@@ -548,7 +549,7 @@ impl CanvasPosition {
 fn middle_click_autoscroll_latches_has_a_dead_zone_and_scrolls_both_directions() {
     let (mut h, c) = harness();
     // Keep the tracked page visible through the downward leg and reversal.
-    h.state_mut().set_option("zoom", "400").unwrap();
+    h.set_option("zoom", "400").unwrap();
     h.run_steps(3);
     h.state_mut().views[0].go_to_page(0);
     h.run_steps(2);
@@ -583,7 +584,7 @@ fn middle_click_autoscroll_latches_has_a_dead_zone_and_scrolls_both_directions()
 fn moving_before_middle_button_release_keeps_scrolling_without_starting_page_tools() {
     let (mut h, c) = harness();
     // Keep the tracked page on screen while the faster gesture continues after release.
-    h.state_mut().set_option("zoom", "400").unwrap();
+    h.set_option("zoom", "400").unwrap();
     h.run_steps(3);
     h.state_mut().views[0].go_to_page(0);
     h.run_steps(2);
@@ -637,7 +638,7 @@ fn autoscroll_uses_elapsed_frame_time_and_preserves_fractional_motion_in_both_vi
         for frames in [30, 60, 120, 144] {
             let (mut h, c) = harness_pages(40);
             h.set_pixels_per_point(scale);
-            h.state_mut().set_option("zoom", zoom).unwrap();
+            h.set_option("zoom", zoom).unwrap();
             h.state_mut().views[0].organize = organize;
             h.run_steps(3);
             assert_eq!(h.ctx.pixels_per_point(), scale);
@@ -761,7 +762,7 @@ fn autoscroll_is_scoped_to_the_active_view_and_cannot_start_under_a_dialog() {
 fn the_click_that_stops_autoscroll_preserves_the_page_selection() {
     use egui_kittest::kittest::Queryable;
     let (mut h, c) = harness_pages(40);
-    h.state_mut().execute("page.organize");
+    h.execute("page.organize");
     h.state_mut().views[0].select_pages(&[0]);
     h.run_steps(3);
     let page_two = h.get_by_label("Page 2").rect().center();
@@ -790,7 +791,7 @@ fn middle_button_pans_while_held_outside_linux() {
     }
     // A drag pans while the button is held, and the Crop tool never sees it.
     let (mut h, c) = harness();
-    h.state_mut().set_option("zoom", "400").unwrap();
+    h.set_option("zoom", "400").unwrap();
     h.run_steps(3);
     h.state_mut().views[0].go_to_page(1);
     h.run_steps(2);
@@ -812,7 +813,7 @@ fn middle_button_pans_while_held_outside_linux() {
 #[test]
 fn inverted_middle_drag_moves_the_view_the_way_the_pointer_goes() {
     let (mut h, c) = harness();
-    h.state_mut().set_option("zoom", "400").unwrap();
+    h.set_option("zoom", "400").unwrap();
     ok(&mut h, &c, "ui.set", json!({ "key": "invert_middle_drag", "value": "true" }));
     h.run_steps(3);
     h.state_mut().views[0].go_to_page(1);
@@ -1247,7 +1248,7 @@ fn measurement_tools_draw_live_calibrate_save_and_export() {
     let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![csv.clone()])]));
     let (mut h, c) = harness_with_files(1, files.clone());
     let doc = h.state().views[0].id;
-    h.state_mut().set_option("zoom", "100").unwrap();
+    h.set_option("zoom", "100").unwrap();
     ok(&mut h, &c, "ui.command", json!({"id":"measure.scale"}));
     h.run_steps(3);
     h.state_mut().views[0].measure.drawing_points = 10.0;
@@ -1294,7 +1295,7 @@ fn measurement_tools_draw_live_calibrate_save_and_export() {
     // left the file in the folder.
     let written = files.file(&csv).or_else(|| std::fs::read(&csv).ok()).expect("the CSV was written where the pick said");
     assert!(String::from_utf8(written).unwrap().contains("m^2"));
-    h.state_mut().set_option("quick", "measure-calibrate").unwrap();
+    h.set_option("quick", "measure-calibrate").unwrap();
     click(&mut h, &c, 30.0, 50.0);
     click(&mut h, &c, 130.0, 50.0);
     assert!((h.state().views[0].measure.drawing_points - 100.0).abs() < 0.01);
@@ -1308,7 +1309,7 @@ fn a_1_to_50_scale_in_millimetres_measures_a_10_mm_line_as_500_mm() {
     use pdfcraft_engine::measure::{self, Kind};
     let (mut h, c) = harness_pages(1);
     let doc = h.state().views[0].id;
-    h.state_mut().set_option("zoom", "100").unwrap();
+    h.set_option("zoom", "100").unwrap();
     ok(&mut h, &c, "ui.command", json!({"id":"measure.scale"}));
     h.run_steps(3);
     let m = &mut h.state_mut().views[0].measure;
@@ -1606,7 +1607,7 @@ fn control_open_of_an_already_open_file_replies_ok_and_focuses_its_tab() {
     let (mut app, jobs) = app_with_manual_jobs();
     let (tx, rx) = std::sync::mpsc::channel();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.attach_control(rx, None);
         app
     });
@@ -1642,7 +1643,7 @@ fn control_open_replies_pending_while_the_worker_opens_and_focuses_once_it_has()
     let (mut app, jobs) = app_with_manual_jobs();
     let (tx, rx) = std::sync::mpsc::channel();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.attach_control(rx, None);
         app
     });
@@ -1748,7 +1749,7 @@ fn initial_zoom_option_is_applied_before_the_first_viewport_layout() {
         let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
             let mut app = new_app();
             app.open_bytes("initial-zoom.pdf", None, fixture(3)).unwrap();
-            app.set_option("zoom", &percent.to_string()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", &percent.to_string()).unwrap();
             assert_eq!(app.views[0].zoom, percent as f32 / 100.0, "initial options must work before the viewport exists");
             app
         });
@@ -1864,7 +1865,7 @@ fn control_collapses_and_expands_a_pinned_folder() {
     let (mut app, jobs) = app_with_manual_jobs();
     let pin = folder.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(move |_cc| {
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.pin_folder(&pin);
         app.attach_control(rx, None);
         app

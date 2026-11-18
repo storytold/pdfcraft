@@ -78,7 +78,7 @@ pub(super) fn open_files(app: &mut PdfCraftApp, files: &[String], two_paged: boo
 
 /// An app on an in-memory host whose jobs run inline, so an open has finished when it returns.
 #[cfg(test)]
-fn test_app() -> PdfCraftApp {
+pub(crate) fn test_app() -> PdfCraftApp {
     use craft::host::{AppInfo, Host, InlineJobs, Wake};
     use craft::platform::clipboard::{Clipboard, SystemClipboard};
     use craft::platform::open::FileIntake;

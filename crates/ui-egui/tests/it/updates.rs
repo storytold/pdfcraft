@@ -16,6 +16,7 @@ use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::settings::import_json;
 
 use crate::control::{info, services_asking};
+use crate::support::AppHarness as _;
 
 fn release(tag: &str) -> craft::update::Release {
     craft::update::Release {
@@ -45,7 +46,7 @@ fn counting_source(calls: &Arc<AtomicUsize>) -> CheckSource {
 fn app_asking(source: CheckSource) -> PdfCraftApp {
     let host = Arc::new(Host::builder(info()).build());
     let mut app = PdfCraftApp::with_host(host, services_asking(Some(source)));
-    app.set_option("language", "en").unwrap();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app
 }
 
@@ -103,7 +104,7 @@ fn a_newer_release_is_offered_for_download() {
         }
     }
     let mut h = harness(Ok(Some("v99.0.0")));
-    assert!(h.state_mut().execute("help.check_updates"));
+    assert!(h.execute("help.check_updates"));
     settle(&mut h);
     assert!(update_dialog_open(&h), "the found release is offered in a dialog");
     h.key_press(egui::Key::Escape);
@@ -160,7 +161,7 @@ fn the_preference_keeps_the_check_at_start_from_reaching_the_network() {
     assert!(!check_at_start_saved(&restarted), "the choice is kept");
 
     // Help ▸ Check for updates still asks.
-    assert!(h.state_mut().execute("help.check_updates"));
+    assert!(h.execute("help.check_updates"));
     settle(&mut h);
     assert_eq!(calls.load(SeqCst), 1);
     assert!(update_dialog_open(&h), "the release the source offered is on screen");
@@ -188,7 +189,7 @@ fn app_with_unsaved_file(test: &str) -> (Harness<'static, PdfCraftApp>, PathBuf)
     let app = h.state_mut();
     app.open_bytes("source.pdf", Some(path.to_string_lossy().into_owned()), bytes).unwrap();
     assert!(app.apply_edit(Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text("Changed".into()) }));
-    assert!(h.state_mut().execute("help.check_updates"));
+    assert!(h.execute("help.check_updates"));
     settle(&mut h);
     assert!(h.state().dialogs.is_open::<UpdateCheckDialog>(), "the check's result is on screen");
     (h, path)

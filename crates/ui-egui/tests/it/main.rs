@@ -58,6 +58,7 @@ mod min_window;
 mod object_selection;
 mod ocr;
 mod open_action;
+mod optimize;
 mod organize_drag;
 mod page_view;
 mod pageboxes;

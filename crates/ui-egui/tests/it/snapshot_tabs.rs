@@ -5,19 +5,20 @@
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
+use crate::support::AppHarness as _;
 
 /// Two tabs, a.pdf (0) and b.pdf (1), with Snapshot chosen and the system clipboard left alone.
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("a.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
         app.open_bytes("b.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
         // PLAN: the injected clipboard of pdf-shell-w17 replaces `system_clipboard`.
         app
     });
     crate::support::settle(&mut h);
-    assert!(h.state_mut().execute("edit.snapshot"));
+    assert!(h.execute("edit.snapshot"));
     h.run_steps(2);
     h
 }

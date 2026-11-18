@@ -547,7 +547,7 @@ mod tests {
     fn a_comment_with_nothing_to_draw_is_prepared_once_per_drag() {
         let bytes = silent();
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-            let mut app = crate::PdfCraftApp::new();
+            let mut app = crate::PdfCraftApp::for_unit_tests();
             app.set_option("language", "en").unwrap();
             app.open_bytes("silent.pdf", None, bytes.clone()).unwrap();
             app.set_option("left", "closed").unwrap();

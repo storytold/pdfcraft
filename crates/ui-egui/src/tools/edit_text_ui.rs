@@ -1354,7 +1354,7 @@ mod tests {
     /// side edge level with one paragraph rewraps that paragraph and no other.
     #[test]
     fn an_edge_goes_to_the_box_the_pointer_is_level_with() {
-        let mut app = crate::PdfCraftApp::new();
+        let mut app = crate::PdfCraftApp::for_unit_tests();
         app.open_bytes("two.pdf", None, two_paragraphs()).unwrap();
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(move |_cc| app);
         h.run_steps(4);
@@ -1471,7 +1471,7 @@ mod tests {
 
     /// An app with one text document open, and an editor on its first paragraph.
     fn preview_app() -> (crate::PdfCraftApp, LineEditor) {
-        let mut app = crate::PdfCraftApp::new();
+        let mut app = crate::PdfCraftApp::for_unit_tests();
         let bytes = app.session.create_from_text("Preview", "Preview text").unwrap();
         app.open_bytes("preview.pdf", None, bytes.as_ref().clone()).unwrap();
         let doc = app.session.get(app.views[0].id).unwrap();
@@ -1606,7 +1606,7 @@ mod tests {
             confidence: None,
             source: "ocrs".into(),
         };
-        let mut app = crate::PdfCraftApp::new();
+        let mut app = crate::PdfCraftApp::for_unit_tests();
         let png = pdfcraft_engine::export::encode_png(200, 100, &[235u8; 200 * 100 * 4]).unwrap();
         let bytes = app.session.create_from_images(&[("scan.png".into(), png)]).unwrap();
         app.open_bytes("scan.pdf", None, bytes.as_ref().clone()).unwrap();

@@ -38,9 +38,9 @@ fn fixture(catalog: &str) -> Vec<u8> {
 fn harness(catalog: &str) -> Harness<'static, PdfCraftApp> {
     let bytes = fixture(catalog);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.set_option("left", "closed").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.open_bytes("open.pdf", None, bytes).expect("opens");
         app
     });
@@ -136,9 +136,9 @@ fn a_named_open_destination_opens_its_page() {
 fn always_my_default_view_keeps_the_zoom_and_goes_to_the_page_top() {
     let bytes = fixture("/OpenAction [5 0 R /XYZ 100 500 2]");
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.set_option("left", "closed").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.always_default_view = true;
         app.open_bytes("open.pdf", None, bytes).expect("opens");
         app
@@ -209,8 +209,8 @@ fn manual(test: &str) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 fn bare_window() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
     });
     h.run_steps(4);
@@ -252,8 +252,8 @@ fn open_parameters_handed_to_the_running_app_show_their_destination() {
     // A second launch hands `manual.pdf#…` to the running app, which opens it in the background.
     let path = manual("running");
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
     });
     h.run_steps(4);
@@ -298,8 +298,8 @@ fn open_parameters_wait_with_their_file_behind_a_password_prompt_and_a_full_queu
     let manual = file("manual.pdf", fixture(NAMED));
     let (first, rest, last) = (locked.clone(), others.clone(), manual.clone());
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_path(&first);
         for path in &rest {
             app.open_path(path);

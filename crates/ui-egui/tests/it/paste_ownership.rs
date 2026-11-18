@@ -6,6 +6,7 @@ use egui_kittest::{
 };
 use pdfcraft_engine::{AddedContent, AddedImage, Edit};
 use pdfcraft_ui_egui::PdfCraftApp;
+use crate::support::AppHarness as _;
 
 fn fixture(rotation: u16, cropped: bool, shared: bool) -> Vec<u8> {
     fixture_at(rotation, cropped, shared, false)
@@ -43,7 +44,7 @@ fn harness(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let copies = crate::editing::Copies::default();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(move |cc| {
         let mut app = crate::editing::clipboard_app(&cc.egui_ctx, &copies);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("ownership.pdf", None, bytes.clone()).unwrap();
         app
     });
@@ -78,7 +79,7 @@ fn right_click(h: &mut Harness<'static, PdfCraftApp>, user: [f64; 2]) {
 fn reopened(app: &mut PdfCraftApp) -> PdfCraftApp {
     let id = app.views[0].id;
     let bytes = app.session.save_bytes(id).unwrap();
-    let mut saved = PdfCraftApp::new();
+    let mut saved = crate::control::new_app();
     saved.open_bytes("saved.pdf", None, bytes.as_ref().clone()).unwrap();
     saved
 }
@@ -166,7 +167,7 @@ fn check_delete_owner(original: bool, shared_added: bool) {
         }));
         assert_eq!(h.state().session.get(id).unwrap().page_images(0).len(), 2);
         assert!(h.state().session.get(id).unwrap().page_images(0).iter().all(|image| image.object == Some(object)));
-        h.state_mut().execute("edit.edit_text");
+        h.execute("edit.edit_text");
         h.state_mut().views[0].content.selected = Some((0, 0));
     } else {
         let mut png = Vec::new();
@@ -223,7 +224,7 @@ fn whole_page_actions_do_not_require_a_selection() {
 
 #[test]
 fn whole_page_actions_still_require_copy_permission() {
-    let mut app = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
     app.open_bytes("source.pdf", None, fixture(0, false, false)).unwrap();
     assert!(app.apply_edit(Edit::Protect(pdfcraft_engine::Protection { permissions_password: Some("owner".into()), ..Default::default() })));
     let bytes = app.session.save_bytes(app.views[0].id).unwrap();
@@ -236,7 +237,7 @@ fn whole_page_actions_still_require_copy_permission() {
 #[test]
 fn legacy_text_delete_survives_switching_out_of_the_image_tool() {
     let mut h = harness(fixture(0, false, false));
-    h.state_mut().execute("edit.edit_text");
+    h.execute("edit.edit_text");
     right_click(&mut h, [35.0, 35.0]);
     h.get_by_label("Copy Image").click();
     h.run_steps(2);

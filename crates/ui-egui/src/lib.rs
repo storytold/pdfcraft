@@ -96,6 +96,12 @@ mod script_dialog;
 mod state;
 mod tools;
 mod workflows;
+pub(crate) mod brand;
+pub(crate) mod colour_picker;
+pub(crate) mod credits_data;
+pub mod fonts;
+pub(crate) mod icons;
+pub(crate) mod notices;
 
 pub use app::settings;
 #[cfg(not(target_arch = "wasm32"))]

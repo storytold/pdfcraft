@@ -6,6 +6,7 @@
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::canvas::{Fit, PageDisplay};
+use crate::support::AppHarness as _;
 
 /// The word searched for, placed (x, y in PDF user space) on each page.
 const NEEDLE: &str = "needle";
@@ -77,10 +78,10 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 /// [`harness`] with frames `dt` seconds apart.
 fn harness_dt(dt: f32) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(dt).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("search.pdf", None, fixture()).expect("opens");
-        app.set_option("left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app
     });
     h.run_steps(4);
@@ -224,7 +225,7 @@ fn zooming_and_stepping_in_any_order_shows_the_match() {
 #[test]
 fn a_step_during_a_wheel_zoom_keeps_the_match_on_screen() {
     let mut h = harness();
-    h.state_mut().set_option("animation_effects", "on").unwrap();
+    h.set_option("animation_effects", "on").unwrap();
     set_zoom(&mut h, 3.0);
     settle(&mut h);
     let n = needles();
@@ -260,7 +261,7 @@ fn a_step_during_a_wheel_zoom_keeps_the_match_on_screen() {
 fn a_step_during_a_wheel_zoom_keeps_the_match_when_the_pointer_leaves_and_returns() {
     for (dy, out) in [(120.0, 2), (240.0, 4), (480.0, 3)] {
         let mut h = harness_dt(1.0 / 60.0);
-        h.state_mut().set_option("animation_effects", "on").unwrap();
+        h.set_option("animation_effects", "on").unwrap();
         set_zoom(&mut h, 3.0);
         settle(&mut h);
         let w = h.state().views[0].viewport_rect();

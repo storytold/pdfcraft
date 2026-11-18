@@ -17,7 +17,7 @@ fn harness_with(settings: Option<&'static str>, system: Option<egui::Theme>, run
     let (tx, rx) = std::sync::mpsc::channel();
     let mut h = Harness::builder().with_size(egui::vec2(1100.0, 800.0)).build_eframe(move |_cc| {
         let mut app = new_app();
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         if let Some(json) = settings {
             app.apply_settings(&import_json(json).0);
         }

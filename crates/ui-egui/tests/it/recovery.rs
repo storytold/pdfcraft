@@ -12,6 +12,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_engine::Edit;
 use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
+use crate::support::AppHarness as _;
 
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
@@ -76,7 +77,7 @@ fn new_app(dir: &Path) -> (PdfCraftApp, Rig) {
     let watch = craft::platform::watch::FileWatch::new(wake.clone());
     let services = AppServices::new(wake, clipboard, Some(dir.to_path_buf()), None, intake, watch);
     let mut app = PdfCraftApp::with_host(Arc::new(host), services);
-    app.set_option("language", "en").unwrap();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app.enable_recovery();
     (app, Rig { files, jobs })
 }
@@ -206,13 +207,13 @@ fn applying_redactions_replaces_the_recovery_snapshot_at_once() {
     h.state_mut().autosave_now();
     assert!(snapshot_holds(&dir, b"Confidential"), "the autosave before the redaction holds the page's text");
     // Redact pages: the current page, then apply.
-    assert!(h.state_mut().execute("redact.mark"));
+    assert!(h.execute("redact.mark"));
     h.run_steps(2);
-    h.state_mut().execute("redact.pages");
+    h.execute("redact.pages");
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
-    h.state_mut().execute("redact.apply");
+    h.execute("redact.apply");
     h.run_steps(2);
     h.get_by_label("Apply").click();
     h.run_steps(4);
@@ -351,7 +352,7 @@ fn a_cancelled_recovery_password_does_not_attach_to_the_next_unlocked_document()
     assert!(h.query_by_label("Recover").is_some(), "and on offer again");
 
     // Closing B (clean, so no prompt) must not remove A's snapshot either.
-    h.state_mut().execute("file.close");
+    h.execute("file.close");
     h.run_steps(3);
     assert!(h.state().views.is_empty());
     assert_eq!(files_in(&dir), 2, "A's snapshot survives closing B");

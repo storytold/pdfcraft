@@ -11,6 +11,7 @@ use egui_kittest::kittest::{Queryable, by};
 use pdfcraft_ui_egui::field_table_ui::FieldTableDialog;
 use pdfcraft_ui_egui::prepare::FieldPropsDialog;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
+use crate::support::AppHarness as _;
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     harness_with("form.pdf", include_bytes!("../data/form.pdf").to_vec())
@@ -19,10 +20,10 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 fn harness_with(name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         cc.egui_ctx.options_mut(|options| options.warn_on_id_clash = true);
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(name, None, bytes).unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     crate::support::settle(&mut h);
@@ -62,7 +63,7 @@ fn rect_of(h: &Harness<'static, PdfCraftApp>, name: &str) -> [f64; 4] {
 /// Opens Field Properties of widget 0 of `name` through the control key, as a script or the Fields
 /// panel does.
 fn open_props(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
-    h.state_mut().set_option("dialog", &format!("field-properties:{name}")).unwrap();
+    h.set_option("dialog", &format!("field-properties:{name}")).unwrap();
     h.run_steps(2);
 }
 
@@ -157,7 +158,7 @@ fn shift_selected_small_widgets_have_blue_tags_and_visible_outlines() {
         session.apply(id, Edit::AddField { name: Some(name.into()), page: 0, rect, kind }).unwrap();
     }
     let mut h = harness_with("selection.pdf", session.save_bytes(id).unwrap().as_ref().clone());
-    assert!(h.state_mut().execute("form.prepare"));
+    assert!(h.execute("form.prepare"));
     h.run_steps(3);
     for (x, modifiers) in [(47.0, Modifiers::NONE), (97.0, Modifiers::SHIFT)] {
         let pos = at(&h, x, 103.0);
@@ -220,7 +221,7 @@ fn shift_selected_small_widgets_have_blue_tags_and_visible_outlines() {
 fn placing_moving_editing_and_deleting_a_field() {
     let mut h = harness();
     let before = names(&h).len();
-    assert!(h.state_mut().execute("form.add.text"));
+    assert!(h.execute("form.add.text"));
     h.run_steps(2);
     h.get_by_label("Prepare a form");
     // Drag out a text field in the empty lower part of the page.
@@ -241,7 +242,7 @@ fn placing_moving_editing_and_deleting_a_field() {
     let m = rect_of(&h, "Text1");
     assert!((m[0] - r[0] - 20.0).abs() < 1.5, "moved: {r:?} → {m:?}");
     // Field Properties: rename and make it required (one undo step).
-    h.state_mut().execute("form.field.properties");
+    h.execute("form.field.properties");
     h.run_steps(2);
     h.get_by_label("Text Field Properties");
     assert!(props_open(&h));
@@ -263,7 +264,7 @@ fn placing_moving_editing_and_deleting_a_field() {
     h.run_steps(3);
     assert_eq!(names(&h).len(), before);
     // A click with the check box tool places a default-size one.
-    h.state_mut().execute("form.add.checkbox");
+    h.execute("form.add.checkbox");
     h.run_steps(1);
     let p = at(&h, 40.0, 250.0);
     h.hover_at(p);
@@ -282,7 +283,7 @@ fn placing_moving_editing_and_deleting_a_field() {
 fn format_validate_and_calculate_tabs() {
     use pdfcraft_engine::form_scripts::{Calculate, Format, Validate};
     let mut h = harness();
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(2);
     open_props(&mut h, "city");
     tab(&mut h, "Format");
@@ -319,7 +320,7 @@ const MAX_EDITED_SCRIPT: usize = 256 * 1024;
 fn with_calculate_script(js: &str) -> Harness<'static, PdfCraftApp> {
     let mut h = harness();
     set_calculate_script(&mut h, js);
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(2);
     h
 }
@@ -534,7 +535,7 @@ fn a_script_past_256_kib_shows_its_start_and_is_kept() {
 fn renaming_a_field_says_how_many_calculations_now_use_the_new_name() {
     use pdfcraft_engine::form_scripts::Calculate;
     let mut h = harness();
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(2);
     let rename = |h: &mut Harness<'static, PdfCraftApp>, from: &str, to: &str| {
         open_props(h, from);
@@ -560,8 +561,8 @@ fn renaming_a_field_says_how_many_calculations_now_use_the_new_name() {
     rename(&mut h, "city", "town");
     assert!(names(&h).contains(&"town".to_string()));
     assert_eq!(notices(&h), after, "no formula reads the calculated field itself, so no new card");
-    h.state_mut().execute("edit.undo");
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(2);
     assert!(names(&h).contains(&"name".to_string()));
     assert_eq!(calculation(&h), Calculate::Notation("name * 2".into()), "undone with the rename");
@@ -571,7 +572,7 @@ fn renaming_a_field_says_how_many_calculations_now_use_the_new_name() {
 fn appearance_tab_restyles_the_field() {
     use pdfcraft_engine::{BorderStyle, FieldFont};
     let mut h = harness();
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(2);
     let before = {
         let s = h.state();
@@ -609,7 +610,7 @@ fn appearance_tab_restyles_the_field() {
 #[test]
 fn appearance_tab_keeps_auto_font_size() {
     let mut h = harness();
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(2);
     open_props(&mut h, "city");
     tab(&mut h, "Appearance");
@@ -645,7 +646,7 @@ fn position_tab_rotates_a_field() {
     assert_eq!(turned.rotation, 90);
     // The field stays where it was placed; only its content turns (#4296).
     assert!(turned.rect.iter().zip(before.rect).all(|(a, b)| (a - b).abs() < 0.05), "{:?} moved from {:?}", turned.rect, before.rect);
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
     let back = widget(&h);
     assert_eq!(back.rotation, 0);
@@ -773,10 +774,10 @@ fn choice_alignment(kind: pdfcraft_engine::NewField, label: &str, quadding: i64)
     let mut reopened = pdfcraft_engine::Session::new();
     let reopened_id = reopened.open("saved.pdf", None, bytes, None).unwrap();
     assert_eq!(reopened.get(reopened_id).unwrap().form.iter().find(|f| f.name == "aligned_choice").unwrap().quadding, quadding);
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
     assert_eq!(field(&h).quadding, 2);
-    h.state_mut().execute("edit.redo");
+    h.execute("edit.redo");
     h.run_steps(3);
     assert_eq!(field(&h).quadding, quadding);
 }
@@ -804,8 +805,8 @@ fn options_tab_sets_flags_alignment_and_defaults() {
 #[test]
 fn the_fields_panel_orders_tabs_manually() {
     let mut h = harness();
-    h.state_mut().execute("form.prepare");
-    h.state_mut().set_option("panel", "fields").unwrap();
+    h.execute("form.prepare");
+    h.set_option("panel", "fields").unwrap();
     h.run_steps(3);
     let order = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> {
         let s = h.state();
@@ -827,7 +828,7 @@ fn the_fields_panel_orders_tabs_manually() {
 #[test]
 fn tab_numbers_follow_fill_order_without_dirtying_the_document() {
     let mut h = harness();
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(2);
     h.get_by_label("Show tab numbers").click();
     h.run_steps(3);
@@ -878,7 +879,7 @@ fn tab_numbers_follow_fill_order_without_dirtying_the_document() {
 #[test]
 fn tab_badge_tracks_its_widget_during_a_drag() {
     let mut h = harness();
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(2);
     h.get_by_label("Show tab numbers").click();
     h.run_steps(3);
@@ -921,7 +922,7 @@ fn tab_badge_tracks_its_widget_during_a_drag() {
 fn duplicating_a_field_onto_every_page() {
     let mut h = harness();
     h.state_mut().apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 300.0, height: 400.0 });
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(3);
     let (n, p) = {
         let s = h.state();
@@ -995,7 +996,7 @@ fn deleting_several_selected_fields_and_detecting_fields_from_the_panel() {
             name: Some(name.into()),
         });
     }
-    assert!(h.state_mut().execute("form.prepare"));
+    assert!(h.execute("form.prepare"));
     h.run_steps(2);
     // #93: field detection is in the panel, not only run when a form has no fields.
     h.get_by_label("Detect form fields");
@@ -1016,7 +1017,7 @@ fn deleting_several_selected_fields_and_detecting_fields_from_the_panel() {
 #[test]
 fn preview_fills_the_form_and_locked_fields_keep_their_properties() {
     let mut h = harness();
-    assert!(h.state_mut().execute("form.prepare"));
+    assert!(h.execute("form.prepare"));
     h.run_steps(2);
     assert!(h.state().is_preparing());
     h.get_by_label("Preview").click();
@@ -1048,7 +1049,7 @@ fn preview_fills_the_form_and_locked_fields_keep_their_properties() {
 #[test]
 fn image_fields_take_a_picture_when_clicked() {
     let mut h = harness();
-    assert!(h.state_mut().execute("form.add.image"));
+    assert!(h.execute("form.add.image"));
     h.run_steps(2);
     let (a, b) = (at(&h, 40.0, 220.0), at(&h, 140.0, 290.0));
     drag(&mut h, a, b);
@@ -1089,7 +1090,7 @@ fn add_action(h: &mut Harness<'static, PdfCraftApp>, trigger: &str, kind: &str, 
 fn actions_tab_adds_and_removes_actions() {
     use pdfcraft_engine::{FieldAction, FieldTrigger};
     let mut h = harness();
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(2);
     open_props(&mut h, "city");
     tab(&mut h, "Actions");
@@ -1115,7 +1116,7 @@ fn actions_tab_adds_and_removes_actions() {
 fn actions_tab_edits_the_script_of_an_existing_action() {
     use pdfcraft_engine::{FieldAction, FieldTrigger};
     let mut h = harness();
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(2);
     let script = "if (event.value > 10) {\n  app.alert('Too many');\n}";
     let actions = |h: &Harness<'static, PdfCraftApp>| {
@@ -1221,7 +1222,7 @@ fn two_radio_groups_fixture() -> Vec<u8> {
 #[test]
 fn a_radio_button_joining_a_group_by_name_stays_selected() {
     let mut h = harness_with("radios.pdf", two_radio_groups_fixture());
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(2);
     let rects = |h: &Harness<'static, PdfCraftApp>| {
         let s = h.state();
@@ -1240,13 +1241,13 @@ fn a_radio_button_joining_a_group_by_name_stays_selected() {
     let nudged = rects(&h);
     assert_eq!(nudged[0], start[0], "the group's own button stays");
     assert!((nudged[1][0] - start[1][0] - 1.0).abs() < 0.01, "{:?} → {:?}", start[1], nudged[1]);
-    h.state_mut().execute("edit.undo");
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(2);
     assert_eq!(names(&h), ["Group1", "Group2"]);
     assert_eq!(rects(&h), start);
-    h.state_mut().execute("edit.redo");
-    h.state_mut().execute("edit.redo");
+    h.execute("edit.redo");
+    h.execute("edit.redo");
     h.run_steps(2);
     assert_eq!(names(&h), ["Group1"]);
     assert_eq!(rects(&h), nudged);
@@ -1256,7 +1257,7 @@ fn a_radio_button_joining_a_group_by_name_stays_selected() {
 fn actions_tab_shows_a_chain_and_keeps_it_when_the_first_action_is_replaced() {
     use egui_kittest::kittest::NodeT;
     let mut h = harness_with("chain.pdf", chained_action_fixture());
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(2);
     let open = |h: &mut Harness<'static, PdfCraftApp>| {
         open_props(h, "go");
@@ -1285,7 +1286,7 @@ fn actions_tab_shows_a_chain_and_keeps_it_when_the_first_action_is_replaced() {
 /// Text field table: pick the tool and drag out an area in the empty lower part of page 1, 200 by
 /// 120 points from (40, 240) as displayed. The table's window opens for it.
 fn draw_table(h: &mut Harness<'static, PdfCraftApp>) {
-    assert!(h.state_mut().execute("form.add.text_table"));
+    assert!(h.execute("form.add.text_table"));
     h.run_steps(2);
     let (a, b) = (at(h, 40.0, 240.0), at(h, 240.0, 360.0));
     drag(h, a, b);
@@ -1320,7 +1321,7 @@ fn a_text_field_table_is_drawn_set_up_and_added_in_one_step() {
     let r = rect_of(&h, "price_2");
     assert!([140.0, 40.0, 240.0, 100.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "{r:?}");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Add text field table"));
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(2);
     assert_eq!(names(&h), before, "one undo takes the whole table back");
 }
@@ -1413,7 +1414,7 @@ fn the_table_window_closes_when_its_document_is_left() {
 fn a_table_drawn_with_the_panel_closed_opens_it_again() {
     let mut h = harness();
     let before = names(&h).len();
-    assert!(h.state_mut().execute("form.add.text_table"));
+    assert!(h.execute("form.add.text_table"));
     h.run_steps(2);
     h.state_mut().left_open = false;
     h.run_steps(2);
@@ -1470,7 +1471,7 @@ fn escape_in_a_name_field_leaves_the_field_not_the_table() {
 #[test]
 fn a_table_clicked_near_the_page_edge_stays_on_the_page() {
     let mut h = harness();
-    assert!(h.state_mut().execute("form.add.text_table"));
+    assert!(h.execute("form.add.text_table"));
     h.run_steps(2);
     let p = at(&h, 295.0, 300.0);
     h.hover_at(p);
@@ -1496,7 +1497,7 @@ fn a_table_clicked_near_the_page_edge_stays_on_the_page() {
 #[test]
 fn the_calculation_order_is_a_page_of_prepare_a_form() {
     let mut h = harness();
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(3);
     assert!(h.query_by_label("Field list").is_some());
     h.get_by_label("Calculation order").click();
@@ -1518,10 +1519,10 @@ fn the_calculation_order_is_a_page_of_prepare_a_form() {
     h.run_steps(3);
     assert!(h.state().is_preparing() && !h.state().form_preview, "Preview ends, so a row can select its field");
     // Opened (from ⌘K) while the page grid shows, the grid closes and the page shows.
-    h.state_mut().execute("page.organize");
+    h.execute("page.organize");
     h.run_steps(3);
     assert!(h.state().views[0].organize);
-    h.state_mut().execute("form.calculation_order");
+    h.execute("form.calculation_order");
     h.run_steps(3);
     assert!(!h.state().views[0].organize);
     assert!(h.query_by_label_contains("No field in this form calculates its value yet").is_some());
@@ -1555,7 +1556,7 @@ fn the_calculation_order_is_moved_dragged_and_fixed() {
     h.state_mut()
         .apply_edit(Edit::SetFieldProps { name: "other".into(), props: Box::new(FieldProps { format: Some(currency), ..Default::default() }) });
     h.state_mut().apply_edit(Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("3".into()) });
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(3);
     h.get_by_label("Calculation order").click();
     h.run_steps(3);
@@ -1584,10 +1585,10 @@ fn the_calculation_order_is_moved_dragged_and_fixed() {
     h.run_steps(3);
     assert_eq!(order(&h), ["total", "sub", "other"]);
     assert_eq!(undo_label(&h).as_deref(), Some("Set calculation order"));
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
     assert_eq!(order(&h), ["sub", "total", "other"], "the key press was one undo step");
-    h.state_mut().execute("edit.redo");
+    h.execute("edit.redo");
     h.run_steps(3);
     assert_eq!(order(&h), ["total", "sub", "other"]);
     // Dragging other onto the first row puts it first.
@@ -1636,7 +1637,7 @@ fn a_loop_has_its_own_card_that_opens_the_formula() {
         let props = Box::new(FieldProps { calculate: Some(Calculate::Notation(formula.into())), ..Default::default() });
         h.state_mut().apply_edit(Edit::SetFieldProps { name: name.into(), props });
     }
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(3);
     h.get_by_label("Calculation order").click();
     h.run_steps(3);
@@ -1663,7 +1664,7 @@ fn radio_group_harness() -> Harness<'static, PdfCraftApp> {
     }
     h.state_mut()
         .apply_edit(pdfcraft_engine::Edit::SetFieldValue { name: "shirt".into(), value: pdfcraft_engine::FieldValue::Radio(Some("L".into())) });
-    assert!(h.state_mut().execute("form.prepare"));
+    assert!(h.execute("form.prepare"));
     h.run_steps(3);
     h
 }
@@ -1697,7 +1698,7 @@ fn deleting_one_radio_button_keeps_the_rest_of_its_group() {
     h.run_steps(3);
     assert_eq!(buttons(&h), (vec!["S".into(), "L".into()], vec!["L".into()]), "only M is gone; L stays chosen");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Delete field"));
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(2);
     assert_eq!(buttons(&h).0, ["S", "M", "L"]);
 }
@@ -1757,13 +1758,13 @@ fn fields_sharing_a_name_each_show_their_own_formula() {
     }
     bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("dup.pdf", None, bytes.clone()).unwrap();
         app
     });
     h.run_steps(4);
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(3);
     h.get_by_label("Calculation order").click();
     h.run_steps(3);
@@ -1830,7 +1831,7 @@ fn a_formula_reading_a_missing_field_has_its_own_card() {
     h.state_mut().apply_edit(Edit::SetFieldProps { name: "sub".into(), props });
     let script = Some("event.value = getField(\"row\" + 1).value;".to_owned());
     h.state_mut().apply_edit(Edit::SetFieldScript { name: "rows".into(), event: "calculate".into(), script });
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(3);
     h.get_by_label("Calculation order").click();
     h.run_steps(3);
@@ -1862,7 +1863,7 @@ fn a_formula_reading_a_missing_field_has_its_own_card() {
 #[test]
 fn button_export_properties_apply_cancel_and_undo() {
     let mut h = harness();
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(2);
     open_props(&mut h, "agree");
     tab(&mut h, "Options");
@@ -1881,7 +1882,7 @@ fn button_export_properties_apply_cancel_and_undo() {
         let f = s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "agree").unwrap();
         assert_eq!(f.export_of(0), Some("Accepted"));
     }
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
     {
         let s = h.state();
@@ -1904,7 +1905,7 @@ fn field_rect(h: &Harness<'static, PdfCraftApp>, name: &str) -> egui::Rect {
 #[test]
 fn a_right_click_during_a_field_drag_moves_the_dragged_field() {
     let mut h = harness();
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(3);
     let (name, city) = (field_rect(&h, "name"), field_rect(&h, "city"));
     let a = name.center();
@@ -1932,9 +1933,9 @@ fn a_right_click_during_a_field_drag_moves_the_dragged_field() {
 #[test]
 fn with_prepare_open_a_shape_tool_drag_draws_no_comment() {
     let mut h = harness();
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(3);
-    assert!(h.state_mut().execute("comment.square"));
+    assert!(h.execute("comment.square"));
     h.run_steps(3);
     assert!(h.state().is_preparing(), "picking the tool leaves Prepare open");
     // Below the fields.
@@ -1950,9 +1951,9 @@ fn with_prepare_open_a_shape_tool_drag_draws_no_comment() {
 #[test]
 fn with_prepare_open_a_double_click_on_a_field_leaves_the_polygon_unfinished() {
     let mut h = harness();
-    h.state_mut().execute("form.prepare");
+    h.execute("form.prepare");
     h.run_steps(3);
-    assert!(h.state_mut().execute("comment.polygon"));
+    assert!(h.execute("comment.polygon"));
     h.run_steps(3);
     // Three points below the fields.
     for (x, y) in [(40.0, 260.0), (200.0, 260.0), (120.0, 360.0)] {

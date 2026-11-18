@@ -190,3 +190,22 @@ pub fn open_shortcuts_from_the_help_menu(h: &mut Harness<'static, PdfCraftApp>) 
     h.run_steps(4);
     assert!(h.state().dialog.is_some(), "Keyboard shortcuts is open");
 }
+
+/// The app's command and option entry points, called with the harness's own context (L-208: they take the
+/// `ctx` the openers need, and the harness holds it).
+pub trait AppHarness {
+    fn execute(&mut self, id: &str) -> bool;
+    fn set_option(&mut self, key: &str, value: &str) -> Result<(), String>;
+}
+
+impl AppHarness for Harness<'_, PdfCraftApp> {
+    fn execute(&mut self, id: &str) -> bool {
+        let ctx = self.ctx.clone();
+        self.state_mut().execute(&ctx, id)
+    }
+
+    fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
+        let ctx = self.ctx.clone();
+        self.state_mut().set_option(&ctx, key, value)
+    }
+}

@@ -105,7 +105,7 @@ mod tests {
         let mut h = egui_kittest::Harness::builder()
             .with_size(egui::vec2(1000.0, 700.0))
             .with_pixels_per_point(2.0)
-            .build_eframe(|_cc| crate::PdfCraftApp::new());
+            .build_eframe(|_cc| crate::PdfCraftApp::for_unit_tests());
         h.run_steps(3);
         assert_eq!(h.ctx.pixels_per_point(), 2.0, "Auto follows the display's scale");
         h.state_mut().set_option("ui-scale", "100%").expect("a valid size");

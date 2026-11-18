@@ -2,6 +2,7 @@
 
 use egui_kittest::{Harness, kittest::Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
+use crate::support::AppHarness as _;
 
 /// Whether some pixel of the viewport outside every page rectangle differs between the two frames:
 /// the shadow band round the pages.
@@ -20,18 +21,18 @@ fn viewer_shadows_follow_the_preference_without_moving_pages() {
     for theme in ["light", "dark"] {
         for layout in ["single", "two-page", "continuous", "two-up"] {
             let mut h = harness(theme);
-            h.state_mut().set_option("layout", layout).unwrap();
+            h.set_option("layout", layout).unwrap();
             h.run_steps(3);
             let rectangles = h.state().views[0].visible_page_rects().to_vec();
             let pages: Vec<_> = rectangles.iter().map(|(_, rect)| *rect).collect();
             let viewport = h.state().views[0].viewport_rect();
             let on = h.render().unwrap();
-            h.state_mut().set_option("show_page_edge_shadows", "false").unwrap();
+            h.set_option("show_page_edge_shadows", "false").unwrap();
             h.run_steps(2);
             let off = h.render().unwrap();
             assert_eq!(h.state().views[0].visible_page_rects(), rectangles, "{theme} {layout}: pages stay where they are");
             assert!(differs_outside_pages(&on, &off, viewport, &pages), "{theme} {layout}: the shadow is drawn only while the preference is on");
-            h.state_mut().set_option("show_page_edge_shadows", "true").unwrap();
+            h.set_option("show_page_edge_shadows", "true").unwrap();
             h.run_steps(2);
             let back = h.render().unwrap();
             assert!(!differs_outside_pages(&on, &back, viewport, &pages), "{theme} {layout}: turning it on again restores the shadow");
@@ -63,7 +64,7 @@ fn checkbox_and_multiple_documents_do_not_edit_pdf_state() {
             )
         })
         .collect();
-    h.state_mut().set_option("dialog", "preferences").unwrap();
+    h.set_option("dialog", "preferences").unwrap();
     h.run_steps(3);
     // PLAN: assumed `PdfCraftSettings::show_page_edge_shadows` (pdf-shell-w9's typed settings)
     assert!(h.state().settings_snapshot().show_page_edge_shadows);
@@ -75,9 +76,9 @@ fn checkbox_and_multiple_documents_do_not_edit_pdf_state() {
     h.key_press(egui::Key::Space);
     h.run_steps(2);
     assert!(h.state().settings_snapshot().show_page_edge_shadows, "Space turns it on");
-    h.state_mut().set_option("show_page_edge_shadows", "false").unwrap();
+    h.set_option("show_page_edge_shadows", "false").unwrap();
     h.run_steps(2);
-    h.state_mut().set_option("dialog", "none").unwrap();
+    h.set_option("dialog", "none").unwrap();
     for tab in [0, 1] {
         h.state_mut().active = Some(tab);
         h.run_steps(2);
@@ -96,8 +97,8 @@ fn checkbox_and_multiple_documents_do_not_edit_pdf_state() {
 #[test]
 fn rendered_page_content_is_identical_with_and_without_decoration() {
     let mut h = harness("dark");
-    h.state_mut().set_option("panel", "pages").unwrap();
-    h.state_mut().set_option("zoom", "175").unwrap();
+    h.set_option("panel", "pages").unwrap();
+    h.set_option("zoom", "175").unwrap();
     h.run_steps(3);
     for _ in 0..400 {
         h.run_steps(2);
@@ -109,7 +110,7 @@ fn rendered_page_content_is_identical_with_and_without_decoration() {
     assert!(!h.state().render_pending(), "the actual PDF raster must be ready");
     let rects = h.state().views[0].visible_page_rects().to_vec();
     let enabled = h.render().unwrap();
-    h.state_mut().set_option("show_page_edge_shadows", "false").unwrap();
+    h.set_option("show_page_edge_shadows", "false").unwrap();
     h.run_steps(2);
     let disabled = h.render().unwrap();
     assert_eq!(h.state().views[0].visible_page_rects(), rects);
@@ -143,13 +144,13 @@ fn rendered_page_content_is_identical_with_and_without_decoration() {
 fn harness(theme: &str) -> Harness<'static, PdfCraftApp> {
     let theme = theme.to_string();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
-        let mut app = PdfCraftApp::new();
+        let mut app = crate::control::new_app();
         // Save comparisons must not depend on crossing a /ModDate second boundary.
         app.session = app.session.with_clock(|| 1_700_000_000);
-        app.set_option("language", "en").unwrap();
-        app.set_option("theme", &theme).unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "theme", &theme).unwrap();
         app.open_bytes("pages.pdf", None, pdf()).unwrap();
-        app.set_option("zoom", "100").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
         app
     });
     h.run_steps(3);
@@ -188,14 +189,14 @@ fn pdf() -> Vec<u8> {
 
 #[test]
 fn page_shadow_preference_round_trips_and_ignores_invalid_settings() {
-    let mut app = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
     let enabled = |app: &PdfCraftApp| serde_json::from_str::<serde_json::Value>(&app.persist()).unwrap()["show_page_edge_shadows"].clone();
     assert_eq!(enabled(&app), true);
     app.restore("{}");
     assert_eq!(enabled(&app), true);
     for value in [false, true] {
-        app.set_option("show_page_edge_shadows", if value { "true" } else { "false" }).unwrap();
-        let mut restored = PdfCraftApp::new();
+        app.set_option(&egui::Context::default(), "show_page_edge_shadows", if value { "true" } else { "false" }).unwrap();
+        let mut restored = crate::control::new_app();
         restored.restore(&app.persist());
         assert_eq!(enabled(&restored), value);
     }
@@ -205,6 +206,6 @@ fn page_shadow_preference_round_trips_and_ignores_invalid_settings() {
     }
     app.restore("not json");
     assert_eq!(enabled(&app), true);
-    assert!(app.set_option("show_page_edge_shadows", "maybe").is_err());
+    assert!(app.set_option(&egui::Context::default(), "show_page_edge_shadows", "maybe").is_err());
     assert_eq!(enabled(&app), true);
 }

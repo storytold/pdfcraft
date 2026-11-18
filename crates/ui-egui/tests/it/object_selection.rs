@@ -6,6 +6,7 @@ use pdfcraft_engine::{AddedText, Edit, EditableObject};
 use pdfcraft_ui_egui::PdfCraftApp;
 
 use crate::editing::{Copies, clipboard_app, copied_text};
+use crate::support::AppHarness as _;
 
 fn fixture(clipping: bool) -> Vec<u8> {
     fixture_with_background(clipping, false)
@@ -67,7 +68,7 @@ fn harness_copying(clipping: bool, background: bool) -> (Harness<'static, PdfCra
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         let mut app = clipboard_app(&cc.egui_ctx, &sink);
         app.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("group.pdf", None, fixture_with_background(clipping, background)).unwrap();
         let id = app.views[0].id;
         app.session
@@ -78,8 +79,8 @@ fn harness_copying(clipping: bool, background: bool) -> (Harness<'static, PdfCra
             .unwrap();
         let saved = app.session.save_bytes(id).unwrap();
         app.session.mark_saved(id, saved, None).unwrap();
-        app.set_option("zoom", "100").unwrap();
-        assert!(app.execute("edit.edit_text"));
+        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
+        assert!(app.execute(&egui::Context::default(), "edit.edit_text"));
         app
     });
     crate::support::settle(&mut h);
@@ -203,7 +204,7 @@ fn escaping_a_group_drag_and_switching_tools_do_not_edit() {
     h.run_steps(4);
     assert_eq!(objects(&h), before);
     marquee(&mut h);
-    assert!(h.state_mut().execute("edit.text"));
+    assert!(h.execute("edit.text"));
     h.run_steps(4);
     assert_eq!(objects(&h), before);
 }

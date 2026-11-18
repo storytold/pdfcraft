@@ -16,6 +16,7 @@ use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use crate::support::AppHarness as _;
 
 // PLAN: assumed `Host::builder(AppInfo).jobs(..).files(..).build()`, `PdfCraftApp::with_host(Arc<Host>, AppServices)`,
 // `AppServices::new(wake, intake, watch)` (q171, q184, q187), `FileIntake::new(Wake)`, `FileWatch::inline()`, the dialog's
@@ -56,7 +57,7 @@ pub(crate) fn rig_on(files: ScriptedFiles, setup: impl FnOnce(&mut PdfCraftApp) 
         let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "test" }).jobs(host_jobs).files(host_files).build();
         let mut app =
             PdfCraftApp::with_host(Arc::new(host), AppServices::new(Wake::none(), FileIntake::new(Wake::none()), FileWatch::inline()));
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         setup(&mut app);
         app
     });
@@ -109,7 +110,7 @@ pub(crate) fn printer(name: &str, default: bool) -> spool::Printer {
 impl Rig {
     /// Opens the Print dialog.
     pub(crate) fn open(&mut self) {
-        assert!(self.state_mut().execute("print.dialog"));
+        assert!(self.execute("print.dialog"));
         self.run_steps(3);
     }
 
@@ -298,7 +299,7 @@ fn current_print_page_saves_the_viewed_page_when_labels_restart() {
     let labels: Vec<_> = h.state().session.get(id).unwrap().info.pages.iter().map(|p| p.label.as_str()).collect();
     assert_eq!(labels, ["i", "ii", "iii", "1", "2"]);
     for (current, expected) in [[255, 0, 0], [0, 255, 0]].into_iter().enumerate() {
-        h.state_mut().set_option("page", &(current + 1).to_string()).unwrap();
+        h.set_option("page", &(current + 1).to_string()).unwrap();
         h.run_steps(3);
         h.open();
         h.state_mut().print_draft.which = pdfcraft_ui_egui::PrintWhich::Current;
@@ -929,7 +930,7 @@ fn print_restricted_documents_say_so_before_the_dialog() {
     h.get_by_label("Print (Ctrl+P)").hover();
     h.run_steps(30);
     h.get_by_label_contains("don't allow printing");
-    assert!(!h.state_mut().execute("print.dialog"));
+    assert!(!h.execute("print.dialog"));
     h.run_steps(2);
     assert!(!h.is_open());
     assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("The document's security settings don't allow printing"));
@@ -974,7 +975,7 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     assert_eq!(snapshot.print.paper.as_deref(), Some("A4"), "store the canonical name, not its position");
     assert!(snapshot.print.paper_overridden, "explicitly chosen paper records override flag");
     let saved = saved_json(h.state());
-    let mut app = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
     restore(&mut app, &saved);
     // Grayscale is one of the preferences remembered across restarts (#2001); copies, pages and
     // orientation are this job's and are not saved.
@@ -982,8 +983,8 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     assert_eq!(app.print_draft, expected, "only the paper and the remembered preferences persist");
 
     // Default draft without override round-trips with paper_overridden remaining false.
-    let default_saved = saved_json(&PdfCraftApp::new());
-    let mut restored_default = PdfCraftApp::new();
+    let default_saved = saved_json(&crate::control::new_app());
+    let mut restored_default = crate::control::new_app();
     restore(&mut restored_default, &default_saved);
     assert!(!restored_default.print_draft.paper_overridden);
 
@@ -1013,7 +1014,7 @@ fn paper_choice_survives_cancel_and_settings_restore() {
 fn paper_restore_accepts_canonical_names_and_ignores_invalid_settings() {
     use pdfcraft_engine::print::PAPERS;
     for (index, (name, _)) in PAPERS.iter().enumerate() {
-        let mut app = PdfCraftApp::new();
+        let mut app = crate::control::new_app();
         restore(&mut app, &json!({"print_paper": name}).to_string());
         assert_eq!(app.print_draft.paper, index);
         assert!(!app.print_draft.paper_overridden);
@@ -1034,7 +1035,7 @@ fn paper_restore_accepts_canonical_names_and_ignores_invalid_settings() {
         r#"{"print_paper":18446744073709551615}"#,
         r#"{"print_paper":1e100}"#,
     ] {
-        let mut app = PdfCraftApp::new();
+        let mut app = crate::control::new_app();
         let factory = app.print_draft.paper;
         restore(&mut app, invalid);
         assert_eq!(app.print_draft.paper, factory, "{invalid}");
@@ -1043,7 +1044,7 @@ fn paper_restore_accepts_canonical_names_and_ignores_invalid_settings() {
         restore(&mut app, invalid);
         assert_eq!(app.print_draft.paper, selected, "invalid input must not replace a valid choice: {invalid}");
     }
-    let mut app = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
     app.print_draft.paper = usize::MAX;
     assert_eq!(app.settings_snapshot().print.paper, None);
 }
@@ -1495,8 +1496,8 @@ fn too_much_creep_for_a_thick_booklet_is_explained_in_the_preview() {
 
 /// An app restored from `saved` settings (if any), with a form open and its Print dialog shown.
 fn print_opened_with(saved: Option<&str>) -> PdfCraftApp {
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     if let Some(saved) = saved {
         restore(&mut app, saved);
     }

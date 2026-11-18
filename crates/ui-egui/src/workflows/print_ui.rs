@@ -931,7 +931,7 @@ mod tests {
     #[test]
     fn the_progress_card_counts_the_sheets_of_a_print_job() {
         let jobs = Arc::new(craft::host::ManualJobs::new());
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.set_option("language", "en").unwrap();
         app.print_tasks = PrintTasks::new(jobs.clone(), Wake::none());
         // PLAN: assumed `Notices::progress(&self, ProgressKey) -> Option<ProgressNotice>` and `Notices::posted(&self) -> Vec<String>` (the posted messages, oldest first), read through `app.notices` (pdf-chrome-w19, L-206).

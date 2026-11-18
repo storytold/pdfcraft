@@ -8,6 +8,7 @@ use craft::host::{AppInfo, Host, ManualJobs, ScriptedFiles};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
+use crate::support::AppHarness as _;
 
 /// A one-page PDF.
 const PAGE: &[u8] = b"%PDF-1.7
@@ -80,7 +81,7 @@ fn harness_with(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> (Harness<'sta
         // PLAN: `AppInfo` fields assumed (pdf-hub-w1, L-71).
         let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(jobs).files(Arc::new(ScriptedFiles::held())).build();
         let mut app = PdfCraftApp::with_host(Arc::new(host));
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         setup(&mut app);
         app
     });
@@ -93,7 +94,7 @@ fn opened(pdf: Vec<u8>, panel_closed: bool) -> Harness<'static, PdfCraftApp> {
     harness_with(move |app| {
         if panel_closed {
             // PLAN: the `panel` option's value for a closed right panel is assumed (pdf-chrome-w13).
-            app.set_option("panel", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "closed").unwrap();
         }
         app.open_bytes("portfolio.pdf", None, pdf).unwrap();
     })
@@ -124,7 +125,7 @@ fn panel_shown(h: &Harness<'static, PdfCraftApp>, label: &str) -> bool {
 /// Run the panel command `id`.
 fn panel_command(h: &mut Harness<'static, PdfCraftApp>, id: &str) {
     // PLAN: the right-panel command ids are assumed (pdf-chrome-w13).
-    assert!(h.state_mut().execute(id), "{id}");
+    assert!(h.execute(id), "{id}");
     h.run_steps(2);
 }
 
@@ -190,7 +191,7 @@ fn a_file_opened_after_the_portfolio_keeps_the_front() {
     // portfolio's initial document waits for the reader, whose list shows on the portfolio's tab.
     let pdf = portfolio("/Collection << /D (form.pdf) >>", &[("form.pdf", PAGE)]);
     let (mut h, _jobs) = harness_with(move |app| {
-        app.set_option("panel", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "closed").unwrap();
         app.open_bytes("portfolio.pdf", None, pdf).unwrap();
         app.open_bytes("other.pdf", None, PAGE.to_vec()).unwrap();
     });
@@ -247,11 +248,11 @@ fn read_mode_gives_back_the_panel_the_file_list_replaced() {
     h.run_steps(2);
     select(&mut h, 0);
     assert!(panel_shown(&h, "Attachments"));
-    assert!(h.state_mut().execute("view.read_mode"));
+    assert!(h.execute("view.read_mode"));
     h.run_steps(2);
     assert!(!panel_shown(&h, "Attachments"));
     select(&mut h, 1);
-    assert!(h.state_mut().execute("view.read_mode"));
+    assert!(h.execute("view.read_mode"));
     h.run_steps(2);
     assert!(!panel_shown(&h, "Attachments"), "the panel was closed before the list showed");
 }
@@ -263,7 +264,7 @@ fn a_panel_picked_in_read_mode_stays_when_the_tab_changes() {
     h.state_mut().open_bytes("other.pdf", None, PAGE.to_vec()).unwrap();
     h.run_steps(2);
     select(&mut h, 0);
-    assert!(h.state_mut().execute("view.read_mode"));
+    assert!(h.execute("view.read_mode"));
     h.run_steps(2);
     panel_command(&mut h, "panel.right.attachments");
     select(&mut h, 1);

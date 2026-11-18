@@ -6,6 +6,7 @@ use std::sync::Arc;
 use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles};
 use egui_kittest::{Harness, kittest::Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
+use crate::support::AppHarness as _;
 
 fn png() -> Vec<u8> {
     let img = craft_image_codecs::Image::from_u8(8, 4, craft_image_codecs::ChannelLayout::Rgb, vec![120u8; 8 * 4 * 3]).unwrap();
@@ -24,7 +25,7 @@ fn scripted(
     let services = pdfcraft_ui_egui::AppServices::new(craft::host::Wake::none(), None, None, None, None, None);
     Harness::builder().with_size(size).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::with_host(host, services);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         setup(&mut app);
         app
     })
@@ -34,8 +35,8 @@ fn scripted(
 fn image_import_dialog_chooses_dpi_and_cancels() {
     use egui::{Key, Modifiers};
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.begin_image_import(&cc.egui_ctx, vec![("scan.png".into(), png())]);
         app
     });
@@ -76,12 +77,12 @@ fn image_import_dialog_chooses_dpi_and_cancels() {
 
 #[test]
 fn opening_images_and_text_converts_them_to_new_pdfs() {
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app.open_bytes("photo.png", Some("/tmp/photo.png".into()), png()).unwrap();
     app.open_bytes("notes.txt", None, b"first line\nsecond line".to_vec()).unwrap();
     app.create_from_images(vec![("a.png".into(), png()), ("b.png".into(), png())]);
-    assert!(app.execute("create.blank"));
+    assert!(app.execute(&egui::Context::default(), "create.blank"));
     let docs = app.session.docs();
     let summary: Vec<(String, usize, bool)> = docs.iter().map(|d| (d.name.clone(), d.info.pages.len(), d.dirty)).collect();
     assert_eq!(
@@ -103,7 +104,7 @@ fn reduce(name: &'static str, bytes: Vec<u8>) -> (Harness<'static, PdfCraftApp>,
         app.open_bytes(name, None, bytes).unwrap();
     });
     h.run_steps(2);
-    assert!(h.state_mut().execute("optimize.reduce"));
+    assert!(h.execute("optimize.reduce"));
     h.run_steps(2);
     jobs.run_all();
     h.run_steps(3);
@@ -137,8 +138,8 @@ fn reduce_file_size_saves_nothing_when_the_file_is_already_small() {
 #[test]
 fn clipboard_images_and_text_become_new_pdfs() {
     use pdfcraft_ui_egui::Clip;
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app.create_from_clip(Clip::Image { width: 40, height: 20, rgba: [10u8, 20, 30, 255].repeat(40 * 20) }).unwrap();
     app.create_from_clip(Clip::Text("Pasted\nlines".into())).unwrap();
     let docs = app.session.docs();
@@ -159,7 +160,7 @@ fn the_pdf_optimizer_dialog_saves_an_optimized_copy() {
         app.open_bytes("notes.txt", None, "lorem ipsum ".repeat(500).into_bytes()).unwrap();
     });
     h.run_steps(4);
-    assert!(h.state_mut().execute("optimize.advanced"));
+    assert!(h.execute("optimize.advanced"));
     h.run_steps(2);
     h.get_by_label("PDF Optimizer");
     h.get_by_label("Color Images");
@@ -186,13 +187,13 @@ fn the_pdf_optimizer_dialog_saves_an_optimized_copy() {
 #[test]
 fn the_pdf_optimizer_dialog_picks_a_preset() {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("notes.txt", None, b"lorem ipsum".to_vec()).unwrap();
         app
     });
     h.run_steps(4);
-    assert!(h.state_mut().execute("optimize.advanced"));
+    assert!(h.execute("optimize.advanced"));
     h.run_steps(2);
     h.get_by_value("Standard");
     assert_eq!(h.get_by_label("Merge image fragments").toggled(), Some(true));
@@ -263,7 +264,7 @@ fn separate_batch_command_picks_files_and_writes_to_the_chosen_folder() {
     );
     let jobs = Arc::new(ManualJobs::new());
     let mut h = scripted(files.clone(), jobs.clone(), egui::vec2(1000.0, 720.0), |_| {});
-    assert!(h.state_mut().execute("create.multiple_separate"));
+    assert!(h.execute("create.multiple_separate"));
     h.run_steps(4);
     jobs.run_all();
     h.run_steps(3);
@@ -326,8 +327,8 @@ fn multiple_files_that_cannot_be_converted_open_nothing() {
 
 #[test]
 fn multiple_files_past_a_thousand_are_all_used() {
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     let pdf = app.session.create_from_text("a", "from a pdf").unwrap();
     let files: Vec<(String, Vec<u8>)> = (0..1001).map(|i| (format!("f{i}.pdf"), pdf.to_vec())).collect();
     app.use_files(pdfcraft_ui_egui::FilePurpose::CreateMultiple, files);
@@ -342,11 +343,11 @@ fn multiple_files_past_a_thousand_are_all_used() {
 #[test]
 fn a_blank_page_is_on_the_system_regions_paper() {
     use pdfcraft_ui_egui::paper::Paper;
-    assert_eq!(PdfCraftApp::new().blank_paper, Paper::system());
+    assert_eq!(crate::control::new_app().blank_paper, Paper::system());
     for paper in [Paper::A4, Paper::Letter] {
-        let mut app = PdfCraftApp::new();
+        let mut app = crate::control::new_app();
         app.blank_paper = paper;
-        assert!(app.execute("create.blank"));
+        assert!(app.execute(&egui::Context::default(), "create.blank"));
         let docs = app.session.docs();
         let crop = docs.last().and_then(|d| d.info.pages.first()).map(|p| p.crop).unwrap();
         let (w, h) = paper.points();

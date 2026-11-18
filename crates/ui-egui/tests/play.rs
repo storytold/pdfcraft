@@ -25,6 +25,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
 use serde::Deserialize;
+use crate::support::AppHarness as _;
 
 #[derive(Debug, Deserialize)]
 struct Session {
@@ -134,7 +135,7 @@ fn play_file(path: &Path) -> Result<(), String> {
 
 fn play_desk(session: &Session, desk: &Desk) -> Result<(), String> {
     let mut h = open_letter(&session.name, &session.content, desk);
-    if let Err(e) = h.state_mut().set_option("zoom", &desk.zoom) {
+    if let Err(e) = h.set_option("zoom", &desk.zoom) {
         return Err(format!("{name} at {desk:?}: zoom: {e}", name = session.name));
     }
     h.run_steps(4);
@@ -161,7 +162,7 @@ impl Step {
     fn run(&self, h: &mut Harness<'static, PdfCraftApp>, session: &Session) -> Result<(), String> {
         match self {
             Step::Command { id } => {
-                if !h.state_mut().execute(id) {
+                if !h.execute(id) {
                     return Err(format!("command {id:?} did not run"));
                 }
                 h.run_steps(2);
@@ -338,8 +339,8 @@ fn open_letter(name: &str, content: &str, desk: &Desk) -> Harness<'static, PdfCr
     let bytes = letter_pdf(content);
     let title = name.to_string();
     let mut h = Harness::builder().with_size(egui::vec2(desk.width, desk.height)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        let _ = app.set_option("language", "en");
+        let mut app = crate::control::new_app();
+        let _ = app.set_option(&egui::Context::default(), "language", "en");
         let _ = app.open_bytes(&title, None, bytes);
         app
     });

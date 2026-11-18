@@ -442,13 +442,13 @@ mod tests {
 
         // The floating bar's options are gone from the control channel.
         // PLAN: the app is built through `with_host` (pdf-shell-w9); the options error once pdf-hub-w3 removes them.
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         for key in ["hotbar-size", "hotbar-side", "hotbar-full-side"] {
             assert!(app.set_option(key, "left").is_err(), "{key} is removed");
         }
         app.set_option("hotbar-tools", "comment.freehand_highlight,comment.ink").unwrap();
         let saved = app.persist();
-        let mut fresh = PdfCraftApp::new();
+        let mut fresh = PdfCraftApp::for_unit_tests();
         fresh.restore(&saved);
         assert_eq!(fresh.hotbar.tools, app.hotbar.tools);
     }
@@ -460,7 +460,7 @@ mod tests {
         let (tools, _) = migrate_legacy(&serde_json::json!({ "tools": ["invalid", "comment.ink", "comment.ink"] }));
         assert_eq!(tools, ["comment.ink"]);
 
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.hotbar.set_tools("comment.ink").unwrap();
         assert!(app.set_option("hotbar-tools", "does.not.exist").is_err());
         assert_eq!(app.hotbar.tools, ["comment.ink"]);

@@ -7,6 +7,7 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::Edit;
 use pdfcraft_ui_egui::PdfCraftApp;
 use serde_json::{Value, json};
+use crate::support::AppHarness as _;
 
 /// Set one row of the open Properties dialog, as automation does.
 fn set_field(h: &mut Harness<'static, PdfCraftApp>, field: &str, value: Value) {
@@ -25,11 +26,11 @@ fn type_into(h: &mut Harness<'static, PdfCraftApp>, label: &str, text: &str) {
 /// Open the real Properties dialog and type a title that has not entered document history.
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(|_| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
         app.open_bytes("properties.pdf", None, bytes.as_ref().clone()).unwrap();
-        app.set_option("dialog", "properties").unwrap();
+        app.set_option(&egui::Context::default(), "dialog", "properties").unwrap();
         app
     });
     h.run_steps(4);
@@ -89,12 +90,12 @@ fn properties_session_inspection_tabs_do_not_rebase_pending_input() {
         if unaccepted_custom {
             // Name/Value are typed input, even before Add has accepted a property.
             set_field(&mut h, "title", json!(""));
-            h.state_mut().set_option("dialog", "custom").unwrap();
+            h.set_option("dialog", "custom").unwrap();
             h.run_steps(3);
             type_into(&mut h, "Name:", "Project");
             type_into(&mut h, "Value:", "Unaccepted");
         }
-        h.state_mut().set_option("dialog", "space-audit").unwrap();
+        h.set_option("dialog", "space-audit").unwrap();
         h.run_steps(3);
         h.state_mut().session.apply(id, Edit::SetInfo { key: "Title".into(), value: "Newer title".into() }).unwrap();
         let generation = h.state().session.get(id).unwrap().edit_generation();
@@ -114,13 +115,13 @@ fn properties_session_clean_inspection_tab_follows_a_newer_edit() {
     let id = h.state().views[0].id;
     // No pending input: the typed title is cleared again before switching tabs.
     set_field(&mut h, "title", json!(""));
-    h.state_mut().set_option("dialog", "space-audit").unwrap();
+    h.set_option("dialog", "space-audit").unwrap();
     h.run_steps(3);
     h.state_mut().session.apply(id, Edit::SetInfo { key: "Title".into(), value: "Newer title".into() }).unwrap();
     let generation = h.state().session.get(id).unwrap().edit_generation();
     h.run_steps(3);
     assert!(!h.state().dialogs.is_empty(), "a clean inspection tab stays open");
-    h.state_mut().set_option("dialog", "properties").unwrap();
+    h.set_option("dialog", "properties").unwrap();
     h.run_steps(3);
     let title = h.get_by_role_and_label(Role::TextInput, "Title").value();
     assert_eq!(title.as_deref(), Some("Newer title"), "the draft is reseeded from the newer revision");

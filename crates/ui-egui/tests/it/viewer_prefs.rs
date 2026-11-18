@@ -7,6 +7,7 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::canvas::Fit;
 use pdfcraft_ui_egui::viewer_prefs::HiddenInterface;
+use crate::support::AppHarness as _;
 
 /// Two 200 × 300 pages; `catalog` is added to the catalog dictionary.
 fn fixture(catalog: &str) -> Vec<u8> {
@@ -36,8 +37,8 @@ const HIDE_ALL: &str = "/ViewerPreferences << /HideToolbar true /HideMenubar tru
 /// A plain document in the first tab and `files` after it, the last one active.
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static, files: &'static [&'static str]) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         setup(&mut app);
         for (i, catalog) in files.iter().enumerate() {
             app.open_bytes(&format!("{i}.pdf"), None, fixture(catalog)).unwrap();
@@ -96,7 +97,7 @@ fn a_document_that_hides_the_interface_opens_without_it_and_f8_brings_it_back() 
     assert_eq!(shown(&h), (false, false, false));
 
     // The command (palette, menus, automation) does what F8 does.
-    assert!(h.state_mut().execute("view.toggle_interface"));
+    assert!(h.execute("view.toggle_interface"));
     h.run_steps(3);
     assert_eq!(shown(&h), (true, true, true));
 }
@@ -192,7 +193,7 @@ fn hiding_the_interface_is_never_saved() {
 
 /// The fit a document with `catalog` opens at, with the user's defaults (fit width).
 fn opening_fit(catalog: &str, own_view: bool) -> Fit {
-    let mut app = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
     app.always_default_view = own_view;
     app.open_bytes("x.pdf", None, fixture(catalog)).unwrap();
     app.views[0].fit()
@@ -213,7 +214,7 @@ fn one_page_at_a_time_opens_at_fit_page() {
     }
     // A zoom the document names wins.
     assert_eq!(opening_fit("/PageLayout /SinglePage /OpenAction [3 0 R /FitH 300]", false), Fit::Width);
-    let mut app = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
     app.open_bytes("x.pdf", None, fixture("/PageLayout /SinglePage /OpenAction [3 0 R /XYZ 0 300 2]")).unwrap();
     assert_eq!((app.views[0].fit(), app.views[0].zoom()), (Fit::None, 2.0));
 }
@@ -223,7 +224,7 @@ fn one_page_at_a_time_opens_at_fit_page() {
 #[test]
 fn a_remembered_zoom_wins_over_the_layouts_fit_page() {
     let path = std::env::temp_dir().join(format!("pdfcraft-viewer-prefs-last-view-{}.pdf", std::process::id())).to_string_lossy().into_owned();
-    let mut app = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
     let json_path = serde_json::to_string(&path).unwrap();
     app.apply_settings(&pdfcraft_ui_egui::settings::import_json(&format!(r#"{{"last_views": [{{"path": {json_path}, "page": 1, "zoom": "62.5%", "display": "single"}}]}}"#)).0);
     assert!(app.restore_last_view);
@@ -235,7 +236,7 @@ fn a_remembered_zoom_wins_over_the_layouts_fit_page() {
 #[test]
 fn always_default_view_wins_over_a_remembered_view() {
     let path = std::env::temp_dir().join(format!("pdfcraft-viewer-prefs-always-default-{}.pdf", std::process::id())).to_string_lossy().into_owned();
-    let mut app = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
     let json_path = serde_json::to_string(&path).unwrap();
     app.apply_settings(
         &pdfcraft_ui_egui::settings::import_json(&format!(
@@ -277,8 +278,8 @@ fn on_monitor(h: &mut Harness<'static, PdfCraftApp>) {
 /// frames.
 fn windowed(files: &'static [&'static str]) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
     });
     on_monitor(&mut h);
@@ -318,7 +319,7 @@ fn center_window_centres_the_window_on_the_monitor() {
 
 #[test]
 fn a_maximized_window_or_a_second_tab_is_left_alone() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| PdfCraftApp::new());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| crate::control::new_app());
     on_monitor(&mut h);
     h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().maximized = Some(true);
     h.run_steps(2);

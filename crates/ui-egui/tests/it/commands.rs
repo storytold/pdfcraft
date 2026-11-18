@@ -16,6 +16,7 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::commands::COMMANDS;
 use pdfcraft_ui_egui::PdfCraftApp;
 use serde_json::json;
+use crate::support::AppHarness as _;
 
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
@@ -47,7 +48,7 @@ fn harness_controlled() -> (Harness<'static, PdfCraftApp>, ControlClient) {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = new_app();
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.attach_control(rx, None);
         app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
         app
@@ -117,7 +118,7 @@ fn every_registered_command_is_implemented() {
         // open a real file dialog on the desktop running the tests: the scripted files answer it
         // as a cancel, which is what a service with nothing queued does.
         let mut app = app_with_files(Arc::new(ScriptedFiles::new()));
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         if spec.id.starts_with("form.") || spec.id == "comment.flatten" {
             app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
         } else if spec.id == "protect.unlock" {
@@ -208,7 +209,7 @@ fn every_registered_command_is_implemented() {
         }
         // The cover toggle needs two-page view first (it is disabled elsewhere).
         if spec.id == "view.layout.cover" {
-            app.set_option("layout", "two-up").unwrap();
+            app.set_option(&egui::Context::default(), "layout", "two-up").unwrap();
         }
         // History commands need a real jump (and Back first to make Forward available).
         if matches!(spec.id, "view.previous_view" | "view.next_view") {
@@ -217,7 +218,7 @@ fn every_registered_command_is_implemented() {
                 assert!(app.views[0].view_history(false));
             }
         }
-        assert!(app.execute(spec.id), "{} is registered but not implemented (or wrongly disabled)", spec.id);
+        assert!(app.execute(&egui::Context::default(), spec.id), "{} is registered but not implemented (or wrongly disabled)", spec.id);
     }
 }
 
@@ -227,7 +228,7 @@ fn every_registered_command_is_implemented() {
 fn disabled_commands_explain_themselves() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = new_app();
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
     });
     h.run_steps(3);
@@ -240,10 +241,10 @@ fn disabled_commands_explain_themselves() {
     h.run_steps(3);
     assert_eq!(support::shown_notice(&h).as_deref(), Some("Nothing to undo"));
     // View state counts too: the cover page exists only in two-page view.
-    assert!(!h.state_mut().execute("view.layout.cover"));
+    assert!(!h.execute("view.layout.cover"));
     h.run_steps(3);
     assert_eq!(support::shown_notice(&h).as_deref(), Some("Switch to two-page view first to show the cover page"));
-    assert!(!h.state_mut().execute("no.such.command"));
+    assert!(!h.execute("no.such.command"));
 }
 
 /// An app on a file service that answers the first pick with `picked`, none queued when `None`.
@@ -255,7 +256,7 @@ fn harness_picking(picked: Option<&std::path::Path>, setup: impl FnOnce(&mut Pdf
     let files = Arc::new(files);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = app_with_files(files);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         setup(&mut app);
         app
     });
@@ -397,7 +398,7 @@ fn ctrl_tab_steps_and_wraps(h: &mut Harness<'static, PdfCraftApp>, _c: &ControlC
     press(h, ctrl);
     assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[0]));
     // Combine files comes after the documents.
-    h.state_mut().execute("page.combine");
+    h.execute("page.combine");
     h.run_steps(2);
     assert!(h.state().combine_showing());
     assert_eq!(press(h, ctrl), Some(0), "Combine files wraps to the first document");
@@ -447,7 +448,7 @@ fn the_open_recent_menu_lists_files_and_opens_one() {
         let path = path.clone();
         move |_cc| {
             let mut app = new_app();
-            app.set_option("language", "en").unwrap();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
             app.recent.push(pdfcraft_ui_egui::RecentFile { name: "recent.pdf".into(), path, pages: 2, size: 0 });
             app
@@ -478,18 +479,18 @@ fn recent_file(name: &str) -> pdfcraft_ui_egui::RecentFile {
 fn clear_recent_files_runs_from_the_palette_and_is_saved() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = new_app();
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.recent.extend([recent_file("first.pdf"), recent_file("second.pdf")]);
         app
     });
     h.run_steps(3);
-    assert!(h.state_mut().execute("file.clear_recent"));
+    assert!(h.execute("file.clear_recent"));
     assert!(h.state().recent.is_empty());
     let mut restarted = new_app();
     restarted.recent.push(recent_file("stale.pdf"));
     restarted.apply_settings(&h.state().settings_snapshot());
     assert!(restarted.recent.is_empty(), "the empty list is what's saved");
-    h.state_mut().execute("file.clear_recent");
+    h.execute("file.clear_recent");
     h.run_steps(3);
     assert!(support::shown_notice(&h).is_some_and(|m| m.contains("No recent files")), "nothing to clear is said, not silent");
 }
@@ -501,14 +502,14 @@ fn localized_shortcuts_update_immediately_and_keep_command_ids_and_key_bindings(
     }
     let mut h = harness();
     h.ctx.set_os(OperatingSystem::Windows);
-    h.state_mut().set_option("language", "de").unwrap();
-    h.state_mut().execute("help.shortcuts");
+    h.set_option("language", "de").unwrap();
+    h.execute("help.shortcuts");
     h.run_steps(3);
     h.get_by_label("Strg+Umschalt+S");
-    h.state_mut().set_option("language", "en").unwrap();
+    h.set_option("language", "en").unwrap();
     h.run_steps(2);
     h.get_by_label("Ctrl+Shift+S");
-    h.state_mut().set_option("language", "de").unwrap();
+    h.set_option("language", "de").unwrap();
     h.ctx.set_os(OperatingSystem::Mac);
     h.run_steps(2);
     h.get_by_label("⇧⌘S");
@@ -544,7 +545,7 @@ fn quit_shortcut_requires_exact_modifiers_and_preserves_unsaved_work() {
             let mut h = harness();
             h.ctx.set_os(os);
             if dirty {
-                assert!(h.state_mut().execute("page.insert_blank"));
+                assert!(h.execute("page.insert_blank"));
                 h.run_steps(2);
             }
             h.event(egui::Event::Key { key: Key::Q, physical_key: None, pressed: true, repeat: false, modifiers: modifiers | extra });
