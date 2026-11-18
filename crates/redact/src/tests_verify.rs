@@ -1581,12 +1581,12 @@ fn page_content(doc: &Document) -> String {
     data.iter().map(|d| String::from_utf8_lossy(d).into_owned()).collect::<Vec<_>>().join("\n")
 }
 
-/// A page turned `rotate` degrees with "Public" at the top, and object 7, an annotation of
+/// A page turned `/Rotate rotate` with "Public" at the top, and object 7, an annotation of
 /// `subtype` with flags `flags` (20 is Print and NoRotate) whose appearance (object 8) shows
 /// NOTETEXT or, with `paint`, fills a box; the page lists it when `listed`. Its `/Rect` is
 /// [100 100 160 120]: a reader keeping it upright turns it about (100, 120), its upper-left
-/// corner, into the box [`TURNED`] gives for the turn.
-fn turned_page(subtype: &str, rotate: i64, flags: i64, paint: bool, listed: bool) -> Document {
+/// corner, into a box that holds the mark [`TURNED`] gives for the turn.
+fn turned_page(subtype: &str, rotate: &str, flags: i64, paint: bool, listed: bool) -> Document {
     let content: &[u8] = if paint { b"0 0 1 rg 0 0 60 20 re f" } else { b"BT /F1 10 Tf 2 5 Td (NOTETEXT) Tj ET" };
     let ap = stream("/Type /XObject /Subtype /Form /BBox [0 0 60 20] /Resources << /Font << /F1 5 0 R >> >>", content);
     let annot = format!("<< /Type /Annot /Subtype /{subtype} /Rect [100 100 160 120] /F {flags} /DA (/F1 10 Tf 0 g) /AP << /N 8 0 R >> >>");
@@ -1596,9 +1596,10 @@ fn turned_page(subtype: &str, rotate: i64, flags: i64, paint: bool, listed: bool
 
 /// A mark inside the box the annotation of [`turned_page`] is drawn in when kept upright on a page
 /// turned 90, 180 or 270 degrees, clear of its `/Rect`.
-const TURNED: [(i64, [f64; 4]); 3] = [(90, [104.0, 130.0, 118.0, 170.0]), (180, [45.0, 122.0, 95.0, 138.0]), (270, [82.0, 65.0, 98.0, 115.0])];
+const TURNED: [(&str, [f64; 4]); 3] = [("90", [104.0, 130.0, 118.0, 170.0]), ("180", [45.0, 122.0, 95.0, 138.0]), ("270", [82.0, 65.0, 98.0, 115.0])];
 
-/// How many of the glyphs the renderer draws on page 1 of `bytes` have their centre inside `region`.
+/// How many of the glyphs the renderer draws on page 1 of `bytes` have their centre inside `region`,
+/// mapped back to user space with the page's turn as pdfcraft-model reads it.
 fn drawn_inside(bytes: Vec<u8>, region: [f64; 4]) -> usize {
     let doc = open(bytes.clone());
     let page = &pdfcraft_model::pages(&doc)[0];
@@ -1616,29 +1617,38 @@ fn drawn_inside(bytes: Vec<u8>, region: [f64; 4]) -> usize {
 
 /// An annotation with the NoRotate flag on a turned page is drawn turned about its `/Rect`'s
 /// upper-left corner (ISO 32000-2 §12.5.3), here over the mark while its `/Rect` misses it:
-/// applying removes it, and nothing of it is then drawn under the mark. Without the flag, or on a
-/// page that isn't turned, it is drawn in its `/Rect` and stays. A link with the flag goes too:
-/// the renderer leaves it in `/Rect`, but flattening turns it. So does a text note without the
-/// flag, which printing turns.
+/// applying removes it, and once flattened nothing of it is drawn under the mark.
+/// Without the flag, or on a page that isn't turned, it is drawn in its `/Rect` and stays. On a
+/// page whose `/Rotate` is past a 32-bit integer (2147483970), which the renderer reads as no turn
+/// but flattening and printing read as turned 90 degrees, it goes too. A link with the flag goes
+/// too: the renderer leaves it in `/Rect`, but printing turns it. So does a text note without the
+/// flag, which printing turns, and an annotation whose `/F` is outside the 32-bit unsigned range, which the
+/// renderer reads as no flags but flattening and printing read with the flag (2^32 + 20, and
+/// -2^32 + 20).
 #[test]
 fn an_annotation_kept_upright_on_a_turned_page_goes_where_it_is_drawn_under_a_mark() {
-    let mut rows: Vec<(&str, i64, i64, [f64; 4], usize)> = TURNED.iter().map(|&(rotate, mark)| ("FreeText", rotate, 20, mark, 1)).collect();
+    let mut rows: Vec<_> = TURNED.iter().map(|&(rotate, mark)| ("FreeText", rotate, 20_i64, mark, 1_usize, true)).collect();
+    let upright_mark = TURNED[0].1;
     rows.extend([
-        ("FreeText", 90, 4, TURNED[0].1, 0),
-        ("FreeText", 0, 20, TURNED[0].1, 0),
-        ("Link", 90, 20, TURNED[0].1, 1),
-        ("Text", 90, 4, TURNED[0].1, 1),
+        ("FreeText", "90", 4, upright_mark, 0, false),
+        ("FreeText", "0", 20, upright_mark, 0, false),
+        ("FreeText", "2147483970", 20, upright_mark, 1, false),
+        ("Link", "90", 20, upright_mark, 1, false),
+        ("Text", "90", 4, upright_mark, 1, false),
+        ("FreeText", "90", 4294967316, upright_mark, 1, false),
+        ("FreeText", "90", -4294967276, upright_mark, 1, false),
     ]);
-    for (subtype, rotate, flags, region, removed) in rows {
+    for (subtype, rotate, flags, region, removed, shown) in rows {
         let row = format!("/{subtype}, /Rotate {rotate}, /F {flags}");
         let mut doc = turned_page(subtype, rotate, flags, false, true);
         let before = drawn_inside(write_full(&doc, &SaveOptions::default()).unwrap(), region);
-        assert_eq!(before > 0, subtype == "FreeText" && removed == 1, "{row}: drawn under the mark before: {before}");
+        assert_eq!(before > 0, shown, "{row}: drawn under the mark before: {before}");
         mark(&mut doc, &[region]);
         let (result, proof) = run(&mut doc);
         assert_eq!(result.unwrap().annotations, removed, "{row}");
         assert!(proof.passed(), "{row}: {}", proof.to_text());
-        assert_eq!(drawn_inside(write_full(&doc, &SaveOptions::default()).unwrap(), region), 0, "{row}: drawn under the mark after");
+        pdfcraft_edit::flatten(&mut doc, &[0], true, true).unwrap();
+        assert_eq!(drawn_inside(write_full(&doc, &SaveOptions::default()).unwrap(), region), 0, "{row}: drawn under the mark after, flattened");
     }
 }
 
@@ -1654,7 +1664,7 @@ fn the_proof_places_an_annotation_kept_upright_on_a_turned_page_where_it_is_draw
             [("FreeText", 20, TURNED[0].1, false), ("FreeText", 4, TURNED[0].1, true), ("Link", 20, in_rect, false)]
         {
             let row = format!("/{subtype}, /F {flags}, paint {paint}");
-            let mut doc = turned_page(subtype, 90, flags, paint, false);
+            let mut doc = turned_page(subtype, "90", flags, paint, false);
             mark(&mut doc, &[region]);
             let mut snap = Snapshot::capture(&doc, None).unwrap();
             applied(&mut doc, &mut snap).unwrap();

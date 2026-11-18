@@ -1027,11 +1027,14 @@ fn remove_page_annotations(
             continue;
         }
         // Where it is drawn: in its `/Rect`, and with the NoRotate flag on a turned page, turned
-        // about the rectangle's upper-left corner, where the renderer draws it. A form field or a
-        // link with the flag counts turned too: the renderer leaves it in `/Rect`, but flattening
-        // turns it, and ISO 32000-2 §12.5.3 makes no exception for it. So does a text note without
-        // the flag, which printing turns.
-        let upright = pdfcraft_annot::drawn_upright(doc, d) || kind == b"Text";
+        // about the rectangle's upper-left corner, where the renderer draws it. A link or a form
+        // field with the flag counts turned too: the renderer leaves it in `/Rect`, but printing
+        // turns it (flattening a form field too), and ISO 32000-2 §12.5.3 makes no exception for
+        // it. So does a text note without the flag, which printing turns. The flag counts as the
+        // renderer reads `/F`, and as flattening and printing read it (any 64-bit integer).
+        let upright = pdfcraft_annot::drawn_upright(doc, d)
+            || d.get(b"F").and_then(|f| doc.resolve(f).as_int()).is_some_and(|f| f & 16 != 0)
+            || kind == b"Text";
         let drawn = rect_of(doc, d.get(b"Rect")).map(|b| {
             let turned = if upright { upright_turn(rotation, b).bbox(b) } else { b };
             [b, turned]
