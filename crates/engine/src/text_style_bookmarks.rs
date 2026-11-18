@@ -109,12 +109,20 @@ fn without_subset_tag(name: &str) -> &str {
 /// The text lines of `doc`'s first [`MAX_PAGES`] pages, each page's in reading order. Text that
 /// is only whitespace, or whose size can't be read, is left out.
 pub(crate) fn lines(doc: &Document) -> Vec<Line> {
+    read_lines(doc).0
+}
+
+/// [`lines`], and how many pages' text was read: a page whose text can't be read (its content
+/// past the page's decode allowance, say) is skipped and not counted.
+pub(crate) fn read_lines(doc: &Document) -> (Vec<Line>, usize) {
     let pages = pdfcraft_organize::page_count(doc).unwrap_or(0).min(MAX_PAGES);
     let rotations = pdfcraft_organize::page_rotations(doc).unwrap_or_default();
     let mut out = Vec::new();
+    let mut read = 0usize;
     for page in 0..pages {
         let rotation = rotations.get(page).copied().unwrap_or(0);
         let Ok(found) = pdfcraft_edit::text_lines(doc, page) else { continue };
+        read = read.saturating_add(1);
         let mut on_page: Vec<Line> = found
             .into_iter()
             .filter_map(|l| {
@@ -147,7 +155,7 @@ pub(crate) fn lines(doc: &Document) -> Vec<Line> {
         on_page.sort_by(|a, b| (b.top * 10.0).round().total_cmp(&(a.top * 10.0).round()).then(a.left.total_cmp(&b.left)));
         out.extend(on_page);
     }
-    out
+    (out, read)
 }
 
 /// The styles `doc`'s text is set in, the largest size first (then the most used): headings

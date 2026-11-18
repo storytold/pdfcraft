@@ -76,7 +76,7 @@ impl Automation {
             "headings": s.entries.len(),
             "pages": s.pages,
             "pages_read": s.pages_read,
-            "truncated": s.pages_read < s.pages,
+            "truncated": s.truncated,
         });
         if s.entries.is_empty() {
             out["note"] = json!(
