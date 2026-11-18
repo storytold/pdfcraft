@@ -198,7 +198,9 @@ fn a_page_moved_or_copied_keeps_the_turn_it_inherited_over_its_own_unreadable_ro
         let mut doc = doc_a();
         import_pages(&mut doc, &lone, &[0], 0).unwrap();
         let copy = pages(&doc).unwrap()[0].obj;
-        assert!(doc.get(copy).as_dict().unwrap().get(b"Rotate").is_some(), "imported, nothing inherited, {value:?}");
+        let copied = doc.get(copy).as_dict().unwrap().get(b"Rotate").cloned().expect("a /Rotate of its own");
+        let source = lone.get(page).as_dict().unwrap().get(b"Rotate").cloned().unwrap();
+        assert_eq!(*doc.resolve(&copied), *lone.resolve(&source), "imported, nothing inherited, {value:?}");
         assert_eq!(shown(&doc), [0, 0, 0, 0], "imported, nothing inherited, {value:?}");
         // Drawn as a form, turned upright as it is shown.
         let mut dst = Document::new_empty();
