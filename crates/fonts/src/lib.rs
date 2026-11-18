@@ -337,6 +337,12 @@ mod tests {
         assert_eq!(lines.concat(), "น้ำปั้นบุญฤทธิ์");
         assert_eq!(lines, ["น้ำ", "ปั้", "น", "บุ", "ญฤ", "ท", "ธิ์"]);
         assert!(lines.iter().all(|l| l.chars().next().is_some_and(|c| !shaped_text::joins_previous(c))), "{lines:?}");
+        // Arabic vowel marks and Hebrew points stay on their letters too, whoever draws them.
+        for word in ["مُحَمَّدٌ مُحَمَّدٌ", "שָׁלוֹם שָׁלוֹם"] {
+            let lines = wrap_with(word, 10.0, 12.0, |s, size| s.chars().count() as f64 * size);
+            assert!(lines.len() > 2 && lines.iter().all(|l| l.chars().next().is_some_and(|c| !shaped_text::joins_previous(c))), "{lines:?}");
+            assert_eq!(lines.concat(), word.replace(' ', ""), "nothing is lost");
+        }
     }
 
     #[test]
